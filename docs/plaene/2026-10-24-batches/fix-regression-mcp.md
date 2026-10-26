@@ -328,6 +328,8 @@ Eigene Änderungen:
 - `native/src/mcp_launcher/os/shared/generator.rs`.
 - `native/src/mcp_launcher/os/shared/installation.rs`.
 - `native/src/mcp_launcher/os/shared/installer_cli.rs`.
+- `native/src/mcp_launcher/os/shared/installer_cli_removal.rs` — neu im Strukturfolgefix.
+- `native/src/mcp_launcher/os/shared/installer_cli_inventory.rs` — neu im Strukturfolgefix.
 - `native/src/mcp_launcher/os/shared/provision.rs`.
 - `native/src/mcp_launcher/os/shared/transaction.rs`.
 - `native/src/updater/mod.rs` — ausschließlich interner Guard-Re-Export.
@@ -605,3 +607,202 @@ Fläche benötigt. Main registriert die sechs neuen konkreten Fallnamen und den
 um die Lesermehrzahl erweiterten bisherigen Sperrfall in seiner gemeinsamen
 Remote-Suite. Main besitzt weiterhin Integration, Typ-/Compilerbeleg, Git,
 Graphrefresh und den einzigen terminalen Release.
+
+## Fortsetzung nach Remote-Strukturbefund 40332971455
+
+Der übernommene Stand ist `10988167`, einschließlich der kandidatengebundenen
+Remoteformatierung. Die Remote-Vorbereitung meldet `installer_cli.rs` mit
+541 normal formatierten Zeilen. Compiler- und Gerätejobs wurden nach diesem
+Vorbereitungsfehler übersprungen; daraus folgt kein Laufzeit- oder Typbefund.
+Der frühere lokale Größenbeleg dieses Autors zählte die damaligen kompakten
+Quellzeilen und genügte damit nicht zum Nachweis der Projektgrenze in normaler
+Rustformatierung. Diese Strukturabweichung wird im selben Autorzyklus behoben.
+
+### Funktionsbefund und erweiterte Kettenkarte vor dem Strukturfix
+
+Das fehlerhafte Modul vereint drei Verantwortlichkeiten: `provision` verarbeitet
+den expliziten Installeraufruf; `retire_current_installation` und `retire_mcp`
+führen die selektive Entfernung aus; `RemovalFile`, `RemovalRecord`,
+`load_removal`, `write_removal_record`, `inventory`, `remaining_managed_files`,
+`generation_hash`, `removal_top_file`, `removal_directory_allowed` und
+`removal_file_allowed` bestimmen und persistieren den Entfernungsnachweis.
+`exists`, `verify_removal_file`, `remove_proved_file` und `remove_empty` bilden
+die vorhandenen nichtrekursiven Dateioperationen dieser beiden letzten Ketten.
+Die Funktionen müssen fachlich getrennt werden; Zeilenverdichtung und eine
+Gateausnahme sind keine Lösung.
+
+Erweiterte vollständige betroffene Kette:
+
+1. `se-mcp-launcher --provision` → `launcher::run_launcher` →
+   `installer_cli::provision` →
+   Argumentprüfung → vorhandene Identität oder neue Identität → idempotente
+   Produkt-/Runtimeprüfung beziehungsweise `stage_generation` →
+   `commit_initial_generation`. Die bestehende Entfernenzustandssperre bleibt
+   vor jeder Provisionierung erhalten.
+2. NSIS → `plugin retire-installation` → unveränderter Re-Export in
+   `mcp_launcher/mod.rs` → `installer_cli::retire_current_installation` →
+   laufendes installiertes CLI-Image, Stamm und Prozessbesitzer prüfen →
+   Entfernungsrecord laden oder vorhandenes Manifest prüfen →
+   `retire_mcp` → Owner-/Control-/Operationslocks und Recoveryprüfung →
+   vorhandener Record oder neues Inventar → Hash-/Prozess-/Lifetimenachweise →
+   dauerhaften Record schreiben → bewiesene Dateien entfernen → Leases
+   freigeben → Lockdateien entfernen → ausschließlich leere Ordner entfernen.
+3. Inventar → feste Top-Level-Dateien und zugelassene Hashgenerationen
+   einschließlich eigener Runtimequarantänen → OS-Pfad-/ACL-/Linkprüfung →
+   Imagehash und Metadaten-/Identitätsprüfung → unverändertes schema-1-Record
+   mit ursprünglichen Dateihashes. Laden prüft dieselbe Pfadmenge, eindeutige
+   Dateinamen und Pflichtbelege. Wiederaufnahme prüft diese Originalhashes;
+   fehlende Locks bleiben ausschließlich nach dem bereits belegten Ende der
+   Programmentfernung zulässig. Fremde Kinder und zweckentfremdetes
+   `install-last-applied.txt` bleiben erhalten.
+4. Der unveränderte Testmodulpfad
+   `mcp_launcher::installer_cli::batches_uninstall_task_tests` benötigt private
+   Zugänge zu Ausführung, Inventar, Recordkonstruktion und den bestehenden
+   Fixturehelfern. Eine Extraktion darf diesen Pfad und keinen Fallnamen
+   verändern. Admission, Installation, Generator und Updatetransaktion lesen
+   weiterhin denselben `mcp/uninstall.v1.json`-Zustand; dessen Schema und
+   Veröffentlichungspunkt werden durch die Strukturänderung nicht berührt.
+
+Quellen dieses Folgeblocks: `installer_cli.rs` und der Testmodulverbraucher im
+Stand `10988167`, die Aufrufer in `mcp_launcher/mod.rs`, `launcher.rs`, `admission.rs` und
+`cli/plugin.rs`, `/tmp/smartexplorer-rv1-40332971455/format.json` sowie der
+zugewiesene Moduleintrag in `/tmp/smartexplorer-rv1-size-inventory.json`.
+Die erneute nur lesende Graphabfrage findet die bisherigen Funktionsknoten;
+ihre Zeilenpositionen stammen noch aus dem Stand vor der Remoteformatierung.
+Der Graph wurde nicht verändert.
+
+### Konkreter Strukturplan und zweiter Rechercheabgleich vor Änderung
+
+| Schritt | Zuständigkeit und Dateien | Erhaltungsvertrag und erwartetes Ergebnis |
+|---|---|---|
+| ST1 | `installer_cli.rs` bleibt Fassade und Provisionierung. | Der vorhandene `provision`-Funktionskörper bleibt identisch. Der bisherige `retire_current_installation`-Name bleibt als crate-interner Re-Export erreichbar. |
+| ST2 | Neues `installer_cli_removal.rs` übernimmt tatsächlichen CLI-Einstieg, Sperren, Löschreihenfolge, unmittelbare Hashprüfung und Leerordnerentfernung. | Sämtliche bisherigen Funktionskörper, Fehlertexte und Dropzeitpunkte bleiben identisch; keine rekursive oder neue Dateientfernung. |
+| ST3 | Neues `installer_cli_inventory.rs` übernimmt Recordtypen, Laden/Schreiben, Inventar, verbleibende eigene Dateien und feste Pfadregeln. | Serdeattribute, Feldreihenfolge, Schema, Recordbudget, Pfadmengen, Pflichtdateien und Retrybelege bleiben identisch. Gemeinsame interne Zugriffe werden auf `pub(super)` begrenzt. |
+| ST4 | Bestehendes Testmodul bleibt in `installer_cli.rs`; eng benannte Importe unter seinem bestehenden Test-/Desktopfilter versorgen es. | Vollständige Fallpfade und Fallnamen bleiben erhalten; es entsteht keine neue Fallregistrierung. Normale Rustformatierung bleibt erhalten und jede der drei Dateien bleibt mit deutlichem Abstand unter 500 Zeilen und 50 KiB. |
+| ST5 | Eigene anschließende statische Kettenreview und Quellvergleich gegen `10988167`. | AST-Parse, Modulauflösung, private Sichtbarkeit, identische Funktionskörper/Recorddefinitionen, unveränderte Testquelle und Whitespace werden nachvollziehbar geprüft. Keine lokale Ausführung; Main bestätigt über denselben Remote-Suiteeinstieg. |
+
+Entscheidung: Zwei fachliche Extraktionen erhalten die kleine vorhandene
+Installerfassade. Eine bloße Aufteilung nach Zeilenbereichen oder die
+Verschiebung aller Inhalte in ein neues Sammelmodul würde die Verantwortungen
+nicht trennen. Neue Persistenztypen, zusätzliche Abhängigkeiten und geänderte
+OS-Adapter sind für diesen Strukturfix nicht erforderlich.
+
+Der zweite Rechercheabgleich betrifft ausschließlich Modulpfade und
+Sichtbarkeit. Die [Rust-Modulreferenz](https://doc.rust-lang.org/reference/items/modules.html#the-path-attribute)
+bestätigt, dass `#[path]` außerhalb eines Inlineblocks relativ zum Verzeichnis
+der Quelldatei auflöst. Die [Rust-Sichtbarkeitsreferenz](https://doc.rust-lang.org/reference/visibility-and-privacy.html#pubin-path-pubcrate-pubsuper-and-pubself)
+belegt die Begrenzung auf das Elternmodul durch `pub(super)` und die
+Weitergabe eines bestehenden Einstiegs durch Re-Export. Abruf: 2026-10-26.
+Diese vorhandenen Sprachmittel genügen; OS-, Serde- und Dateisystemverträge
+bleiben unverändert und benötigen keine neue Ausführungsabhängigkeit.
+
+### Umgesetzte Modulgrenzen
+
+`installer_cli.rs` enthält weiterhin den unveränderten Provisionierungskörper.
+Es bindet die beiden fachlichen Kindmodule über die freigegebenen relativen
+Pfade ein und reicht ausschließlich den bisherigen crate-internen
+`retire_current_installation`-Einstieg weiter. Das bestehende Testmodul bleibt
+mit identischem Desktop-/Testfilter an derselben Stelle im Modulbaum. Seine
+benannten Hilfsimporte gelten ausschließlich unter demselben Filter.
+
+`installer_cli_removal.rs` enthält den tatsächlichen CLI-Einstieg,
+`retire_mcp`, die unmittelbare Dateihashprüfung, die bewiesene Dateientfernung
+und die Leerordnerentfernung. Die Reihenfolge der vorhandenen Prüfung,
+Lockübernahme, Recordveröffentlichung, Entfernung und expliziten Drops bleibt
+im Funktionskörper identisch zum übernommenen Stand.
+
+`installer_cli_inventory.rs` enthält die beiden Recordtypen, Lesen und
+Schreiben des Entfernungsnachweises, die Inventarbildung, die Prüfung eigener
+Restdateien und die feste Pfadmenge. `exists` ist die bereits vorhandene
+nichtmutierende Existenzprüfung beider Entfernungsketten. Benötigte Typen,
+Felder und Hilfsfunktionen sind ausschließlich für das Elternmodul sichtbar;
+die Pfadprädikate und das Schemafeld bleiben innerhalb des Inventarmoduls
+privat. Es gibt keinen neuen öffentlichen Produktvertrag und keine neue
+Ausführungsabhängigkeit.
+
+| Datei | Vorliegende normal gegliederte Zeilen | Dateigröße |
+|---|---:|---:|
+| `installer_cli.rs` | 102 | 3.973 Byte |
+| `installer_cli_removal.rs` | 170 | 6.316 Byte |
+| `installer_cli_inventory.rs` | 304 | 11.197 Byte |
+
+Die Funktionskörper stammen unverändert aus der übernommenen Remoteformatierung.
+Attribute, Imports, Moduldeklarationen und Recordfelder stehen auf üblichen
+getrennten Zeilen. Es wurde kein Formatter ausgeführt, keine Zeile zur
+Grenzumgehung verdichtet und keine Größenregel geändert.
+
+### Eigene anschließende Anti-Regressionsreview des Strukturfixes
+
+Prüfbasis ist der nach der Extraktion vorliegende Quellbestand gegen
+`10988167`. Derselbe Autor hat sämtliche ursprünglichen Funktionen ihrer
+neuen Verantwortung zugeordnet und danach folgende Integrationen erneut
+statisch abgeglichen:
+
+- Provisionierung: Der vollständige `provision`-Körper ist bytegleich.
+  Argumentmenge, Missing-/Duplicatefehler, Entfernenzustandssperre,
+  Idempotenzprüfung, native Vertragsprobe, Stage und Initialcommit behalten
+  denselben Aufrufer und dieselbe Reihenfolge.
+- Selektive Entfernung: Alle ursprünglichen Funktionskörper sind als Menge
+  genau einmal vorhanden und bytegleich. Das umfasst laufendes CLI-Image,
+  installierten Stamm, tatsächliche Prozessbesitzer, Owner-/Control-/Operations-
+  und Lifetimebelege, Recoveryfehler, unmittelbare Hashprüfung und ausschließlich
+  nichtrekursive Datei-/Leerordnerentfernung. Die Modulverschiebung erzeugt
+  keine zusätzliche Operation und verschiebt keinen Dropzeitpunkt.
+- Persistenz und Retry: Recordfeldnamen, Feldreihenfolge, Feldtypen,
+  Derive-/Serdeattribute, Schemawert, erlaubte Pfade, Pflichtbelege und
+  Recordbudget bleiben erhalten. Das Schemafeld ist weiterhin privat.
+  Die Wiederaufnahme benutzt dieselben Originalhashes, dieselben Regeln für
+  fehlende Locks und denselben abschließenden Recordentfernungspunkt.
+  Zusätzliche Kinddateien und Benutzerprofile werden durch die Aufteilung
+  weder gelesen noch zur Löschung freigegeben.
+- Modulzugriffe: Die drei relativen `#[path]`-Ziele einschließlich des
+  unveränderten Testmoduls existieren an den erwarteten Orten. Die
+  crate-interne Einstiegskette in `mcp_launcher/mod.rs`, der Launcheraufruf
+  und der Pluginaufruf bleiben unverändert. Die neuen Kindmodule benutzen
+  die vorhandene ausgewählte `os`-Grenze und keine direkten OS-Imports.
+  Die erforderlichen internen Namen und Recordfelder sind innerhalb von
+  `installer_cli` erreichbar; dessen Persistenztypen werden nicht aus dem
+  Modul exportiert.
+- Bestehende Fallnamen: `batches_uninstall_task_tests.rs` ist vollständig
+  bytegleich zu `10988167`. Sein vollständiger Modulpfad und sein bestehender
+  Desktop-/Testfilter sind erhalten. Damit bleiben sämtliche in der
+  vorstehenden Falltabelle genannten Deinstallationsfälle an derselben
+  Registrierungsgrenze. Es wurden keine neuen Fälle angelegt und keine
+  bestehenden Fälle entfernt oder umbenannt.
+- Syntax und Struktur: Ein reiner Tree-sitter-Parse der drei vorliegenden
+  Dateien meldet keinen Syntaxfehler. Der AST-Abgleich bestätigt die
+  vollständige Funktionsmenge mit identischen Körperbytes sowie identische
+  Recordfeldnamen, Feldreihenfolge und Feldtypen. Die eigene getrackte und
+  neue Dateimenge enthält keine Whitespacefehler. Das ist kein Typ-/Compiler-
+  oder Laufzeitnachweis.
+
+### Dateiumfang und verbleibender Nachweis
+
+Für diesen Folgefix zusätzlich gelesen: aktualisierte Scope-JSON;
+Remoteformatierungsbericht und zugewiesener Größeninventareintrag;
+`installer_cli.rs` vollständig; `batches_uninstall_task_tests.rs` vollständig;
+die drei entstandenen Module vollständig; `mcp_launcher/mod.rs`;
+`launcher.rs` am Provisionierungseinstieg; `cli/plugin.rs` am
+Entfernungseinstieg; `admission.rs`, `installation.rs`, `generator.rs`,
+`provision.rs` und `transaction.rs` an ihren bestehenden
+Entfernenzustandssperren; vorhandener Graph per nur lesender Abfrage;
+die beiden oben verlinkten Rust-Referenzen. Die bisherige Funktionskarte und
+die vorher dokumentierten Readonly-/Host-/Envgrenzen bleiben erhalten.
+
+Geändert in diesem Folgefix: ausschließlich
+`native/src/mcp_launcher/os/shared/installer_cli.rs` und dieser Bericht.
+Erstellt: ausschließlich
+`native/src/mcp_launcher/os/shared/installer_cli_removal.rs` und
+`native/src/mcp_launcher/os/shared/installer_cli_inventory.rs`.
+Die Testquelle, das Suite-Manifest, die CI-Orchestrierung, der Hauptarbeitsbaum
+und der Graph wurden von diesem Autor nicht verändert. Es gab keine Änderung
+des Gitindex, keinen Commit und keinen Push durch diesen Autor.
+
+Offener Nachweis ist ausschließlich Mains Wiederholung desselben Remote-
+Suiteeinstiegs einschließlich dessen normaler Format-/Größenprüfung und
+Compiler-/Laufzeitstufen. Die angegebene Dateigröße und der Quellvergleich
+stammen aus statischem Lesen, nicht aus einem ausgeführten Formatter oder
+einer Kompilierung. Dieser Autor hat keine Builds, Compiler, Tests, Formatter,
+Unteragenten, Hostaufrufe, produktiven Profileingriffe oder Remotejobs
+ausgeführt. Es besteht kein zusätzlicher Produkt- oder Zugriffbedarf
+außerhalb der freigegebenen vier Schreibpfade.
