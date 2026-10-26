@@ -4,12 +4,14 @@
 
 Stand und Primärquellen erneut geprüft am 2026-10-26. Der bestehende Einstieg
 `.github/workflows/review-task.yml` → `native/test-review-task.sh` wird für den
-vollständigen laufenden Gesamtbatch verwendet. Der erste Lauf ist am 2026-10-26 in der Remote-Vorbereitung beendet;
-Kompilierung und funktionale Ausführung haben noch nicht begonnen. Maßgeblich sind `docs/plaene/2026-10-24-batches/batches.md`,
+vollständigen laufenden Gesamtbatch verwendet. Der letzte vollständig beendete
+Lauf `40406246032` bestätigt Desktopkompilierung sowie Android-Appbau und liefert
+die unten dokumentierten Funktions- und Fixturefehler. Die zugehörige
+Korrekturrunde ist aktiv. Maßgeblich sind `docs/plaene/2026-10-24-batches/batches.md`,
 `vertraege.md`, `umsetzung.md` und `native/review-task-manifest.json`.
-Vor dem ersten Lauf müssen der normale frische Astra/xhigh-Gesamtreview und die
-zusätzlichen unabhängigen Astra/max- und Sol-6.1/max-Regressionsreviews erfolgt
-sein. Alle Agenten laufen über Codex. Die Regressionen werden gegen den
+Vor dem ersten Lauf sind der normale frische Astra/xhigh-Gesamtreview und die
+zusätzlichen unabhängigen Astra/max- und Sol-6.1/max-Regressionsreviews erfolgt.
+Alle Agenten laufen über Codex. Die Regressionen werden gegen den
 veröffentlichten Tag v0.5.184 geprüft; Scope, API-Beleg und Fixvertrag stehen in
 `docs/plaene/2026-10-24-batches/regressionsreview.md`. Jeder aus diesen beiden
 Reviews hervorgehende Fix einschließlich Verknüpfungskarte, Plan und anschließender
@@ -41,7 +43,9 @@ Rampenfrist, Nutzdurchsatz, Steuerlatenz und Queuealter werden nach V7 ausgewert
 Rohdateien halten Referenz und Screenmessung getrennt. Der gemeinsame Runner
 prüft Kandidat, genaue Profile und erfolgreichen Ergebnisstatus und schreibt
 `p27-acceptance.json`. Das ist kein physischer Encoder-, Display- oder
-öffentlicher Relaynachweis. Es liegen noch keine ausgeführten Messwerte vor.
+öffentlicher Relaynachweis. Lauf `40406246032` enthält Rohdaten des ersten
+Profils; die vollständige Leistungsabnahme fehlt nach dem dort dokumentierten
+Fehler beim Wechsel zum zweiten Netzprofil.
 
 Die für diesen privaten Relay erforderlichen Iroh-Devfeatures können den
 Lockbestand erweitern. Deshalb beginnt derselbe Remote-Suiteeinstieg mit einer
@@ -620,4 +624,13 @@ Mediengeometriefälle am Offsetvergleich. A01–A03 im Funktionsplan enthalten
 Quellbeleg, Erhaltungsvertrag und versionsgebundene Primärquellen.
 Instrumentation-APK und Handoffprovenienz fehlen; die Geräteprüfung startet
 nach der Workflowbedingung deshalb nicht. Der Job war nur noch in der
-Cache-Nachbereitung. Das vollständige Workflowende war noch nicht abgerufen.
+Cache-Nachbereitung. Das vollständige Workflowende war zu diesem Zeitpunkt
+noch nicht abgerufen.
+
+### Finaler Status desselben Laufs, Abruf 23:10:44 UTC
+
+Der GitHub-API-Abruf bestätigt `completed/failure`: Vorbereitung erfolgreich;
+Windows, Linux und Android-Build fehlgeschlagen; Gerätejob übersprungen.
+Alle Arbeits- und Nachbereitungsstufen sind beendet. Die Korrekturen bleiben
+im selben Taskbatch und verwenden anschließend denselben Remote-Einstieg.
+Es wurde kein Release gestartet.

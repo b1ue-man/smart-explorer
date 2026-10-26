@@ -1272,6 +1272,16 @@ Compose-Memberimport korrigiert, isolierte Loginbitmap-Application und exakte
 geometrische x/y-Vergleiche mit Delta null. Main bestätigt den begrenzten Diff,
 statische Syntax und unveränderte bestehende Auswahl. Keine Produktionsdatei
 oder Rotationspolitik ist verändert, kein Laufzeitergebnis vorweggenommen.
-Die nächste aktive Grenze ist M07; gleichzeitig bleiben M01/M02/M03/M05/M06/M13
-in ihrem jeweiligen eigenen Fixzyklus. Alle Fixautoren sind ausdrücklich mit
+Dieser Absatz beschreibt den Integrationsstand von M14; der folgende Nachtrag
+führt den aktuellen Fortschritt. Alle Fixautoren sind ausdrücklich mit
 Sol 6.1/max über Codex konfiguriert; Antwortmodellmetadaten fehlen im Host.
+
+M05 (`515e8286`), M07 (`da059df3`) und M02 (`4d931637`) sind nach vollständigem
+eigenem Autorenzyklus statisch integriert und auf Main/Fixbranch gepusht.
+Die Registrykorrektur vermeidet ein künstliches Nullfeld, die P27-Fixture
+ersetzt nur ihre eigene Profilwurzel, und relative Ordneraliase behalten ihre
+gültige Bedeutung. Vorhandene Quittungs-, Konflikt- und Schreibschutzgrenzen
+bleiben erhalten. Die Laufzeitbestätigung erfolgt gemeinsam nach sämtlichen
+M01–M14-Korrekturen. M01/M03/M06/M08/M11/M12/M13 arbeiten; M04/M09/M10 sind
+noch eingeplant. Der finale Abruf des bisherigen Laufs um 23:10:44 UTC
+bestätigt dessen Ende und den übersprungenen Gerätejob.

@@ -25,13 +25,15 @@ Messabschlusskorrekturen sind integriert. Lauf `40406246032` für `1ffbf4b0`
 bestätigt die Vorbereitung und erfolgreiche Windows-/Linux-Kompilierung.
 Die Desktop-Funktionsstufen scheitern an konkreten
 [Funktions- und Fixturebefunden F01–F57](plaene/2026-10-24-batches/rv1-funktionsplan.md).
-Android hat beim Abruf 22:40:17 UTC seine Build-/JVM-Stufe beendet: native
+Android hat seine Build-/JVM-Stufe beendet: native
 Bibliothek und App gebaut, Instrumentation-Import sowie Login-/Medienfixtures
 fehlgeschlagen (A01–A03). Die Geräteprüfung konnte ohne Instrumentation-APK
-nicht starten. Der vollständige Korrekturplan umfasst M01–M14. M14 ist
-quellseitig samt eigener Autorenreview integriert; seine Laufzeitbestätigung
-steht aus. M01, M02, M03, M05, M06, M07 und M13 sind in Bearbeitung.
-M04 und M08–M12 folgen innerhalb derselben Korrekturrunde.
+nicht starten. Der finale API-Abruf um 23:10:44 UTC bestätigt den vollständig
+fehlgeschlagenen Lauf und den übersprungenen Gerätejob. Der vollständige
+Korrekturplan umfasst M01–M14. M14, M05, M07 und M02 sind quellseitig samt
+eigener Autorenreview integriert und bis `4d931637` gepusht; die gemeinsame
+Laufzeitbestätigung steht aus. M01, M03, M06, M08, M11, M12 und M13 sind in
+Bearbeitung. M04, M09 und M10 folgen innerhalb derselben Korrekturrunde.
 Autorenkorrekturen, erfolgreiche Auswertung über denselben Remote-Einstieg
 und der eine terminale Remote-Release stehen aus.
 Compilererfolg ist kein Funktions- oder Leistungsnachweis.
