@@ -1153,3 +1153,23 @@ Einbindung geprüft; statische Rustsyntax und Whitespace sind ohne Befund.
 Die Änderung betrifft ausschließlich Vendorcode und Dokumentation, daher
 bleibt der auf `native/src` begrenzte Rootgraph unverändert gültig.
 Compiler- und Funktionsbestätigung stehen weiterhin im selben Remote-Fixloop aus.
+
+### Native Compilerkorrekturen, 2026-10-26
+
+Lauf `40354605251` für `d95dc404` bestätigt die erfolgreiche Vorbereitung und
+die Beseitigung des Noq-proto-Konstruktorfehlers. Windows, Linux und Android
+erreichen die Produktquellen und liefern dort weitere Compilerdiagnosen.
+Alle Jobs sind beendet; die Gerätestufe wurde übersprungen. Main hat die
+vollständigen nativen JSONL-Ausgaben und das Androidlog an den Kandidaten
+gebunden ausgewertet. Die [Korrekturgruppen](rv1-compilerplan.md) bleiben
+im selben RV1-Fixloop. Jeder vollständige Fixzyklus bleibt bei einem Autor;
+die gemeinsame Login-/Familyviewerregistrierung gehört vollständig zum
+Captureautor. Kein Release wurde gestartet.
+
+Die sechs Korrekturgruppen sind in `e841a579`, `5070f5ad`, `34d8c0d3`,
+`1d9ba2db`, `b47507ec` und `2143299f` separat integriert. Jeder Autor hat
+seine eigene anschließende Anti-Regressionsreview dokumentiert. Main hat die
+Integrationsgrenzen und die zulässigen statischen Prüfungen ausgewertet.
+Die direkt betroffenen vorhandenen Vertragsfälle sind im selben Manifest unter
+`R20-Compiler-Integrationen` ergänzt. Compiler- und Funktionsbestätigung bleiben
+bis zum nächsten erfolgreichen Lauf dieses Suiteeinstiegs offen.

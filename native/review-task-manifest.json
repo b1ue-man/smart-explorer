@@ -91,7 +91,27 @@
       "screen_task_registry_session_view_json_shape",
       "drive_task_restore_runs_after_recovery_audit",
       "drive_task_vault_locked_start_fails_vault_locked",
-      "drive_task_update_stop_exit_clean_journal_counts_as_unmount"
+      "drive_task_update_stop_exit_clean_journal_counts_as_unmount",
+      "gui_design_task_drive_empty_intermediate_pages_continue_and_empty_children_scan",
+      "screen_task_session_state_moves_and_keyframe_requests",
+      "screen_task_viewer_state_texts_complete",
+      "screen_task_gui_indicator_lines",
+      "perm_task_completions_access",
+      "screen_task_cli_windows_json_shape",
+      "screen_task_ipc_still_client_lists_windows_and_ends_the_session",
+      "screen_task_window_list_keeps_more_than_4096_entries",
+      "screen_task_window_list_frame_bytes_bound_the_list",
+      "screen_task_window_list_keeps_whole_texts_and_all_limit_notes",
+      "screen_task_window_list_drops_oversized_entry_and_refuses_bad_ids",
+      "perm_task_port_full_shell_0_5_180",
+      "perm_task_port_program_list_0_5_182",
+      "perm_task_port_run_as_root_worker",
+      "perm_task_port_disabled_keeps_settings",
+      "perm_task_write_legacy_form_bytes_unchanged",
+      "perm_task_old_reader_sees_new_grant_off",
+      "perm_task_unknown_access_version_fail_closed",
+      "desktop_task_screen_target_json",
+      "screen_task_viewer_target_parse"
     ],
     "linux_integrations": [
       "batches_task_b6_linux_cgroup_ancestors_constrain_session_headroom",
@@ -1703,6 +1723,45 @@
       "native_cases": [
         "remote_drive_task_dokany_msi_outcomes_preserve_actionable_exit_codes",
         "remote_drive_task_dokany_library_and_driver_versions_use_separate_domains"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R20-Compiler-Integrationen",
+      "milestones": [
+        "P3",
+        "P4",
+        "P6",
+        "P18",
+        "P24"
+      ],
+      "expected": "Die korrigierten Modul- und Typgrenzen erhalten Gerätezugriff, gespeicherte Rechte, Bildschirmmetadaten und Zielidentität. Versteckte Sitzungen bleiben pausierbar, fortsetzbar und im Freigabeindikator beendbar; leere GDrive-Zwischenseiten beenden keinen laufenden Scan.",
+      "scope": "Bestehende direkt betroffene Vertragsfälle; keine physische Geräte-, Providerkonto- oder grafische Desktopabnahme. Die Typbestätigung für Windows, Linux und Android gehört zu den bestehenden Compilerstufen desselben Einstiegs.",
+      "native_platforms": [
+        "linux",
+        "windows"
+      ],
+      "native_cases": [
+        "gui_design_task_drive_empty_intermediate_pages_continue_and_empty_children_scan",
+        "screen_task_session_state_moves_and_keyframe_requests",
+        "screen_task_viewer_state_texts_complete",
+        "screen_task_gui_indicator_lines",
+        "perm_task_completions_access",
+        "screen_task_cli_windows_json_shape",
+        "screen_task_ipc_still_client_lists_windows_and_ends_the_session",
+        "screen_task_window_list_keeps_more_than_4096_entries",
+        "screen_task_window_list_frame_bytes_bound_the_list",
+        "screen_task_window_list_keeps_whole_texts_and_all_limit_notes",
+        "screen_task_window_list_drops_oversized_entry_and_refuses_bad_ids",
+        "perm_task_port_full_shell_0_5_180",
+        "perm_task_port_program_list_0_5_182",
+        "perm_task_port_run_as_root_worker",
+        "perm_task_port_disabled_keeps_settings",
+        "perm_task_write_legacy_form_bytes_unchanged",
+        "perm_task_old_reader_sees_new_grant_off",
+        "perm_task_unknown_access_version_fail_closed",
+        "desktop_task_screen_target_json",
+        "screen_task_viewer_target_parse"
       ],
       "device_cases": []
     }
