@@ -1201,3 +1201,9 @@ und Versionsnachweis über den bestehenden Diagnosebereich. Main hat Diffs,
 Berichte und statische Syntax-/Größenbefunde ausgewertet und die vorhandenen
 verbundenen Fälle im selben Manifest ergänzt. Der nächste Kandidat folgt nach
 Rootgraphrefresh und Push demselben Remote-Suiteeinstieg; noch kein Funktionspass.
+
+Lauf `40379623936` hat am Kandidaten `5609ce9f` nur eine Formatabweichung
+in der JNI-Capturefunktion gemeldet. Der kandidatengebundene Patch ist ohne
+inhaltliche Änderung übernommen; alle syntaktischen Blatttoken bleiben exakt
+gleich. Die Lockdatei ist unverändert, die Größenprüfung ohne Befund.
+Compiler- und Funktionsstufen dieses Versuchs wurden übersprungen.

@@ -53,11 +53,7 @@ pub extern "system" fn Java_app_smartexplorer_android_core_NativeBridge_screenCa
                 return Ok(0);
             };
             Ok(smart_explorer::mobile::screen_capture_claim(
-                session,
-                generation,
-                owner,
-                bytes,
-                buffer,
+                session, generation, owner, bytes, buffer,
             ) as jlong)
         })
         .into_outcome()

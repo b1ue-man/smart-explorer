@@ -498,3 +498,18 @@ Version, Administrator-Fallback, Desktopdateiaktionen und absolute Execfrist.
 Keine frühere Auswahl wurde entfernt. Der Eintritt und die Auswertung bleiben
 bei `native/test-review-task.sh`; die Ergänzung behauptet keinen bereits
 ausgeführten Nachweis.
+
+## Lauf 40379623936: JNI-Formatvorbereitung
+
+Der [Lauf](https://github.com/b1ue-man/smart-explorer/actions/runs/40379623936)
+ist für `5609ce9f834e0a8e32b1f076415b586ae427da68` ausschließlich in
+der Formatvorbereitung gestoppt. Das gebundene Archiv
+`12678821405` hat SHA256
+`a1ee8add9280add5132cd6ba29d43dcd3905c93e7045ae9c3cb97db9ef61b29b`;
+sein Formatpatch hat SHA256
+`a3e1a34e6faacd3d5fe2f01ab63d43d7a5a9bd6b3e6b0e4214e17afa8e98630f`.
+Der Patch fasst ausschließlich fünf Argumente in `screen_capture_jni.rs`
+zusammen. Er ist unverändert übernommen; statisch bleiben sämtliche
+syntaktischen Blatttoken identisch. Lockauflösung unverändert, keine
+Größenprobleme. Windows-, Linux-, Android-Build- und Gerätestufen wurden
+übersprungen. Kein lokaler Formatter oder Compiler wurde ausgeführt.

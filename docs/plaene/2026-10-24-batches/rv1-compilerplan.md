@@ -193,3 +193,14 @@ vorherigen Auswahlen bleiben erhalten; es gibt keinen zusätzlichen Suiteeinstie
 Nach dem vollständigen Rootgraphrefresh und gemeinsamen Push wird ausschließlich
 derselbe Remote-Einstieg für den exakten neuen Kandidaten wiederholt. Compiler-,
 Funktions- und Veröffentlichungserfolg sind zu diesem Zeitpunkt nicht bestätigt.
+
+### Formatvorbereitung des D/J-Kandidaten
+
+Lauf `40379623936` für `5609ce9f834e0a8e32b1f076415b586ae427da68`
+fordert ausschließlich eine Zeilenzusammenfassung der fünf Argumente in
+`native/android-bridge/src/screen_capture_jni.rs`. Main hat Archiv, Kandidat
+und Patchhash geprüft und den Remote-Patch unverändert übernommen. Der
+statische Tree-sitter-Vergleich erhält jedes syntaktische Blatttoken exakt;
+die Datei ist syntaktisch gültig und hat 143 Zeilen. Lockdatei und Modulgrößen
+melden keinen Befund. Keine Compiler- oder Funktionsstufe dieses Versuchs
+wurde ausgeführt. Es folgt weiterhin ausschließlich derselbe Remote-Einstieg.
