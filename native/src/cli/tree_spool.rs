@@ -117,8 +117,8 @@ impl SourceSpool {
                 let mut bounded = observer.reader(reader, Counter::Read).take(limit);
                 let mut writer = EncryptingWriter::new(&mut spool, cryptor.clone())
                     .map_err(|error| error.to_string())?;
-                let copied =
-                    io::copy(&mut bounded, &mut writer).map_err(|error| observer.explain(error))?;
+                let copied = io::copy(&mut bounded, &mut writer)
+                    .map_err(|error| observer.explain(error.to_string()))?;
                 writer.finish().map_err(|error| error.to_string())?;
                 copied
             };

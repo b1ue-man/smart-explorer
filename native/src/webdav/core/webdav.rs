@@ -120,7 +120,11 @@ impl WebdavBackend {
     }
 
     /// Explicit Depth-0 properties through the verified metadata transport.
-    pub(super) fn propfind_properties(&self, path: &str, body: &str) -> VfsResult<String> {
+    pub(super) fn propfind_properties(
+        &self,
+        path: &str,
+        body: &str,
+    ) -> VfsResult<super::listing_body::Body> {
         let response = metadata_request::send(self, path, "0", body).map_err(request_err)?;
         if response.status() != 207 {
             return Err(io::Error::new(

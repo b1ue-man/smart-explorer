@@ -3,7 +3,10 @@ use std::{fs::File, io};
 
 pub(super) fn local_file_identity(path: &str) -> io::Result<Option<String>> {
     let path = super::local_platform::to_os(path);
-    let _permit = super::local_optical::guard(&path)?;
+    let _permit = crate::source_media::acquire_current(
+        &path,
+        crate::source_media::Priority::Foreground,
+    )?;
     let Some(name) = path.file_name() else {
         return Ok(None);
     };
