@@ -25,6 +25,32 @@ pub(crate) fn identity()->Result<Option<RuntimeIdentity>,String> {
     let contract=RuntimeContract {runtime_sha256:installation.manifest.runtime_sha256.clone(),ipc_contract_id:installation.manifest.ipc_contract_id.clone(),shared_state_contract_id:installation.manifest.shared_state_contract_id.clone()};
     Ok(Some(RuntimeIdentity {executable:installation.runtime_path(),installation,contract}))
 }
+/// Legacy terminal updates have no managed manifest. Their local CLI remains
+/// usable offline, but an already replaced running generator must not publish
+/// templates for a different image now occupying its pathname.
+pub(crate) fn legacy_entry_path()->Result<PathBuf,String> {
+    let image=ENTRY.get().ok_or("integration_generator_entry_missing")?.as_ref().map_err(|error|error.clone())?;
+    verified_legacy_entry(&image.path,&image.sha256)
+}
+pub(in crate::mcp_launcher) fn verified_legacy_entry(path:&Path,hash:&str)->Result<PathBuf,String> {
+    let root=path.parent().ok_or("generator_parent_missing")?;
+    if root.join("mcp/uninstall.v1.json").exists() {return Err("installation_uninstall_in_progress".into());}
+    if ["current.v1.json","installation.id","legacy.v1.json","update.v1.json"].iter().any(|name|root.join("mcp").join(name).exists()) {
+        return Err("integration_legacy_entry_has_managed_state: retry through the installation or recover its managed state".into());
+    }
+    let mut current=std::fs::File::open(path).map_err(|e|e.to_string())?;
+    crate::mcp_launcher::installation::verify_handle(&mut current,hash)?;
+    Ok(path.into())
+}
+pub(crate) fn legacy_profile_guard()->Result<Option<crate::updater::LegacyIntegrationGuard>,String> {
+    let image=ENTRY.get().ok_or("integration_generator_entry_missing")?.as_ref().map_err(|error|error.clone())?;
+    if image.root.join("mcp/current.v1.json").exists() {return Ok(None);}
+    verified_legacy_entry(&image.path,&image.sha256)?;
+    let guard=crate::updater::lock_cli_for_integration(&image.path)?;
+    verified_legacy_entry(&image.path,&image.sha256)?;
+    guard.verify_current()?;
+    Ok(Some(guard))
+}
 /// Always execute the confirmed installed code after Commit; never invoke old
 /// templates in the updating process, even when its original path was replaced.
 pub fn refresh_installed_profile(root:&Path)->Result<(),String> {

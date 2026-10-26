@@ -91,3 +91,14 @@ mod tests {
         assert!(render(ConfigHost::Claude, path).contains("smart-explorer -- "));
     }
 }
+
+#[cfg(test)]
+#[test]
+fn batches_p13_historical_generic_config_uses_only_the_local_cli() {
+    let root=tempfile::tempdir().unwrap();let cli=root.path().join("se");
+    std::fs::write(&cli,b"local historical CLI").unwrap();
+    let value:serde_json::Value=serde_json::from_str(&render(ConfigHost::Generic,&cli)).unwrap();
+    assert_eq!(value["mcpServers"]["smart-explorer"]["command"],serde_json::json!(cli));
+    assert_eq!(value["mcpServers"]["smart-explorer"]["args"],serde_json::json!(["mcp"]));
+    assert!(!root.path().join("mcp").exists());
+}

@@ -10,6 +10,14 @@ pub(in crate::mcp_launcher) use spawn::*;
 
 pub(in crate::mcp_launcher) const CLI_NAME: &str = "se";
 pub(in crate::mcp_launcher) const LAUNCHER_NAME: &str = "se-mcp-launcher";
+pub(in crate::mcp_launcher) fn uninstall_programs_idle(root:&Path)->Result<(),String> {
+    for name in [CLI_NAME,"smart_explorer","Smart Explorer","smart_explorer_updater","Smart Explorer Updater"] {
+        if processes_for(&root.join(name))?.iter().any(|owner|owner.pid!=std::process::id()) {
+            return Err(format!("uninstall_busy: {} has active program owners",root.join(name).display()));
+        }
+    }
+    Ok(())
+}
 
 pub(in crate::mcp_launcher) fn validate_tree(root: &Path, path: &Path) -> Result<(), String> {
     if !root.is_absolute() || !path.starts_with(root) {
@@ -77,6 +85,19 @@ pub(in crate::mcp_launcher) fn lock(path: &Path, exclusive: bool) -> Result<File
         return Err(format!("{}: {}: {error}",if error.raw_os_error()==Some(libc::EWOULDBLOCK) {"lock_busy"} else {"lock_denied"},path.display()));
     }
     Ok(file)
+}
+pub(in crate::mcp_launcher) fn legacy_profile_image(path:&Path)->Result<File,String> {lock(path,false)}
+pub(in crate::mcp_launcher) fn legacy_update_image(path:&Path)->Result<Option<File>,String> {
+    match std::fs::symlink_metadata(path) {
+        Err(error) if error.kind()==std::io::ErrorKind::NotFound=>return Ok(None),
+        Err(error)=>return Err(error.to_string()),Ok(_)=>{},
+    }
+    lock(path,true).map(Some)
+}
+pub(in crate::mcp_launcher) fn same_image_file(file:&File,path:&Path)->Result<bool,String> {
+    let held=file.metadata().map_err(|e|e.to_string())?;
+    let named=std::fs::symlink_metadata(path).map_err(|e|e.to_string())?;
+    Ok(held.is_file() && named.is_file() && held.dev()==named.dev() && held.ino()==named.ino())
 }
 pub(in crate::mcp_launcher) fn protect(path: &Path, executable: bool) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;

@@ -29,7 +29,9 @@ Claude Code: se writes a local plugin marketplace into its app data and runs
 `claude plugin marketplace add` and `claude plugin install
 smart-explorer@smart-explorer`. Codex: a format-preserving MCP entry and a skill in
 ~/.agents/skills/smart-explorer. Both hosts use the verified installation
-launcher. New MCP processes select its confirmed runtime generation; an
+launcher when this installation has a managed runtime. Historical terminal-only
+updates keep their absolute local se entry usable offline until a managed update
+provides the launcher. New managed MCP processes select its confirmed runtime generation; an
 existing compatible process retains its catalog. Use the host's documented
 MCP restart action to load new capabilities.
 
@@ -49,6 +51,9 @@ pub(super) struct PluginArgs {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Installer-only cleanup of the current installation's MCP program files.
+    #[command(hide = true)]
+    RetireInstallation,
     #[command(hide = true)]
     Refresh,
     #[command(about = "Install into Claude Code and/or Codex (default: every host found)")]
@@ -93,18 +98,24 @@ impl Host {
 }
 
 pub(super) fn run(args: PluginArgs) -> Result<i32, String> {
+    if matches!(&args.command,Command::RetireInstallation) {
+        crate::mcp_launcher::retire_current_installation()?;
+        return Ok(0);
+    }
     if matches!(&args.command, Command::Install(_) | Command::Uninstall(_) | Command::Refresh) && crate::mcp_launcher::current_runtime().is_some() {
         return Err("integration_maintenance_handoff_required: use the registered installation".into());
     }
     let _generator=if matches!(&args.command,Command::Install(_)|Command::Uninstall(_)|Command::Refresh) {
         crate::mcp_launcher::generator_operation()?
     }else{None};
+    let _legacy_update=if matches!(&args.command,Command::Install(_)) {crate::mcp_launcher::legacy_profile_guard()?}else{None};
     let (executable, launcher_error) = match files::executable() {
         Ok(path)=>(path,None),
         Err(error) if matches!(&args.command,Command::Status {..}|Command::Uninstall(_)) => (std::env::current_exe().map_err(|e|e.to_string())?,Some(error)),
         Err(error)=>return Err(error),
     };
     match args.command {
+        Command::RetireInstallation=>Ok(0),
         Command::Refresh => { files::refresh()?; Ok(0) },
         Command::Install(selection) => {
             let mut reports = Vec::new();
@@ -211,7 +222,11 @@ pub(super) fn refresh_generated_files() {
         if let Err(error) = crate::mcp_launcher::refresh_current_profile() { eprintln!("se plugin: {error}"); }
         return;
     }
-    if let Err(error)=crate::mcp_launcher::refresh_entry_installation() {eprintln!("se plugin: {error}");}
+    let refreshed=match crate::mcp_launcher::Installation::current() {
+        Ok(None)=>files::refresh(),
+        _=>crate::mcp_launcher::refresh_entry_installation(),
+    };
+    if let Err(error)=refreshed {eprintln!("se plugin: {error}");}
 }
 
 /// Generated-file state for the MCP `status` tool (no host commands run).

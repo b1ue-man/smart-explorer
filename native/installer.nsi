@@ -307,11 +307,17 @@ Function .onInstSuccess
 FunctionEnd
 
 Section "Uninstall"
-  ; Kill every variant (see the install section) so the exe isn't left locked.
-  nsExec::Exec 'taskkill /F /T /FI "IMAGENAME eq Smart Explorer*"'
-  nsExec::Exec 'taskkill /F /T /IM "smart_explorer.exe"'
-  nsExec::Exec 'taskkill /F /T /IM "se.exe"'
-  Sleep 1000
+  ; Exact installation paths, actual process identities and independent runtime
+  ; lifetime/operation locks protect active owners and separate installations.
+  ; No profile directory or unknown user file receives recursive delete rights.
+  ClearErrors
+  ExecWait '"$INSTDIR\${CLI_EXE_NAME}" plugin retire-installation' $1
+  IfErrors mcp_remove_failed
+  IntCmp $1 0 mcp_removed
+  mcp_remove_failed:
+    MessageBox MB_OK|MB_ICONSTOP "Die MCP-Programmbestandteile konnten nicht sicher entfernt werden (Exitcode $1).$\r$\nBitte Smart Explorer, seine Hintergrundprozesse und die MCP-Sitzungen dieser Installation regulär schließen und die Deinstallation erneut ausführen. Bei einem offenen Update zuerst dessen Wiederherstellung abschließen.$\r$\nDiagnose: $INSTDIR\${CLI_EXE_NAME} plugin retire-installation" /SD IDOK
+    Abort
+  mcp_removed:
 
   ; S5 C8: se Desktop removes its own traces (autostart, navigation pane,
   ; jump list entries) before --unregister; a failure is reported, not fatal.
@@ -372,9 +378,17 @@ Section "Uninstall"
   DeleteRegKey HKCU "Software\Classes\Directory\Background\shell\${VERB}"
   nsExec::Exec 'netsh advfirewall firewall delete rule name="Smart Explorer Share Peer Listener"'
 
+  ClearErrors
   Delete "$INSTDIR\${EXE_NAME}"
   Delete "$INSTDIR\${UPDATER_EXE_NAME}"
+  IfErrors program_remove_failed
   Delete "$INSTDIR\${CLI_EXE_NAME}"
+  IfErrors program_remove_failed
+  Goto programs_removed
+  program_remove_failed:
+    MessageBox MB_OK|MB_ICONSTOP "Die Programmdateien konnten nicht vollständig entfernt werden. Bitte die Prozesse dieser Installation regulär schließen und die Deinstallation erneut ausführen. Der Deinstallationseintrag bleibt erhalten." /SD IDOK
+    Abort
+  programs_removed:
   Delete "$INSTDIR\install-login-service.ps1"
   Delete "$INSTDIR\LICENSE"
   Delete "$INSTDIR\licenses\Dokany\NOTICE.txt"

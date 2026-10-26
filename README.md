@@ -936,6 +936,17 @@ Neue Fähigkeiten stehen nach einem tatsächlichen MCP-Neustart bereit.
 `se plugin status --json` zeigt Generation, Profilkonflikte und erforderliches
 Neuverbinden. Details: [`docs/AI_AGENT_PLUGIN.md`](docs/AI_AGENT_PLUGIN.md).
 
+Nach einem historischen reinen Terminalupdate ohne Installationsmanifest bleiben
+Plugininstallation und Konfigurationsausgabe über den lokal geprüften `se`-Pfad
+verfügbar; dafür ist kein zusätzlicher Download oder Schreibzugriff auf den
+Installationsordner nötig. Unveränderte bisherige
+Claude-/Codex-Einträge lassen sich auch vor einer Migration entfernen.
+Die Windows-Deinstallation verlangt, dass die Prozesse dieser Installation
+regulär geschlossen sind. Sie entfernt die nachgewiesen eigenen MCP-Programme
+und erhält fremde Dateien im MCP-Verzeichnis. Bei belegter Nutzung, offener
+Updatewiederherstellung oder einem Löschfehler bleiben Deinstallationseintrag
+und Wiederholungsweg erhalten.
+
 **Dauerhafte Shells, Terminalsitzungen und Anhängen (Befehlssitzungen ab 0.5.178):**
 `se shell @label[:/ordner]` oder `se shell PEER` öffnet eine Shell auf einer
 gespeicherten SSH-Verbindung oder einem Share-Peer mit Exec-Freigabe. Status der

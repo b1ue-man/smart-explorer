@@ -63,6 +63,7 @@ pub(super) fn install(executable: &Path) -> Result<Value, String> {
 
 pub(super) fn uninstall() -> Result<Value, String> {
     let root = files::claude_marketplace_dir();
+    if files::generated_files_absent(&root)? {return Ok(json!({"host":"claude","removed_files":false,"steps":[]}));}
     files::verify_owned(&root)?;
     let mut host = Vec::new();
     if let Some(claude) = host_cli::find("claude") {
@@ -72,6 +73,9 @@ pub(super) fn uninstall() -> Result<Value, String> {
             &["plugin", "marketplace", "remove", MARKETPLACE][..],
         ] {
             let output = host_cli::run(&claude, args)?;
+            if !output.success {
+                return Err(format!("Claude removal failed ({}); generated ownership files retained for retry",output.detail()));
+            }
             host.push(json!({
                 "command": format!("claude {}", args.join(" ")),
                 "ok": output.success,

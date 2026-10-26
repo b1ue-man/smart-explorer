@@ -60,6 +60,28 @@ pub(in crate::mcp_launcher) fn lock(path: &Path, exclusive: bool) -> Result<File
     }
     Ok(file)
 }
+pub(in crate::mcp_launcher) fn legacy_profile_image(path:&Path)->Result<File,String> {
+    let file=OpenOptions::new().read(true).share_mode(FILE_SHARE_READ)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT).open(path).map_err(|e|e.to_string())?;
+    let metadata=file.metadata().map_err(|e|e.to_string())?;
+    if !metadata.is_file() || metadata.file_attributes() & 0x400!=0 {return Err("integration_legacy_image_not_regular".into());}
+    Ok(file)
+}
+pub(in crate::mcp_launcher) fn legacy_update_image(_path:&Path)->Result<Option<File>,String> {
+    // The Windows terminal-only updater refuses replacement before UpdateLock.
+    // Its test-only swap helper retains the existing namespace-lock behavior.
+    Ok(None)
+}
+pub(in crate::mcp_launcher) fn same_image_file(file:&File,path:&Path)->Result<bool,String> {
+    use windows_sys::Win32::Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION,GetFileInformationByHandle};
+    let identity=|file:&File|->Result<(u32,u32,u32),String> {
+        let mut info:BY_HANDLE_FILE_INFORMATION=unsafe {std::mem::zeroed()};
+        if unsafe {GetFileInformationByHandle(file.as_raw_handle() as _,&mut info)}==0 {return Err(std::io::Error::last_os_error().to_string());}
+        Ok((info.dwVolumeSerialNumber,info.nFileIndexHigh,info.nFileIndexLow))
+    };
+    let named=legacy_profile_image(path)?;
+    Ok(identity(file)?==identity(&named)?)
+}
 pub(in crate::mcp_launcher) fn protect(path: &Path, _executable: bool) -> Result<(), String> {
     security::protect(path)
 }
@@ -116,4 +138,16 @@ pub(in crate::mcp_launcher) fn stop_identity(path: &Path) -> Result<StopIdentity
 
 pub(in crate::mcp_launcher) fn process_matches(expected:&ProcessIdentity)->bool {
     process_identity(expected.pid).is_ok_and(|actual|actual==*expected)
+}
+
+/// Uninstall never terminates a process by its basename. Keep every active
+/// owner alive and let the user close this installation before retrying.
+pub(in crate::mcp_launcher) fn uninstall_programs_idle(root:&Path)->Result<(),String> {
+    for name in [CLI_NAME,"Smart Explorer.exe","smart_explorer.exe","Smart Explorer Updater.exe","smart_explorer_updater.exe"] {
+        let owners=processes_for(&root.join(name))?;
+        if owners.iter().any(|owner|owner.pid!=std::process::id()) {
+            return Err(format!("uninstall_busy: {} has active program owners; close Smart Explorer, its background worker and this installation's terminal commands, then retry",root.join(name).display()));
+        }
+    }
+    Ok(())
 }

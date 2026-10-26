@@ -19,6 +19,11 @@ pub fn current_runtime() -> Option<RuntimeIdentity> {
 /// child locks are acknowledged before the parent's admission is released.
 pub fn admit_cli_process() -> Result<ProcessAdmission, String> {
     crate::mcp_launcher::generator::capture_entry();
+    let image=std::env::current_exe().map_err(|e|e.to_string())?;
+    if image.parent().is_some_and(|root|root.join("mcp/uninstall.v1.json").exists()) {
+        let arguments=std::env::args().skip(1).collect::<Vec<_>>();
+        if arguments!=["plugin","retire-installation"] {return Err("installation_uninstall_in_progress".into());}
+    }
     let runtime = RuntimeIdentity::discover()?;
     let _ = RUNTIME.set(runtime.clone());
     let Some(runtime) = runtime else {
@@ -63,6 +68,7 @@ fn check_start(installation: &Installation) -> Result<(), String> {
     Ok(())
 }
 pub(crate) fn check_state(installation: &Installation) -> Result<(), String> {
+    if installation.root.join("mcp/uninstall.v1.json").exists() {return Err("installation_uninstall_in_progress".into());}
     if let Some(state) = installation.state()? {
         if state.blocks_work() || (state.retire_managed && state.phase==crate::mcp_launcher::core::lifecycle::Phase::Committed && installation.manifest==state.previous) {
             return Err(if installation.owner_alive(&state) { "update_in_progress" } else { "update_recovery_required" }.into());
