@@ -1253,3 +1253,246 @@ Graphabfragen und statischen Syntax-/TOML-/Quellvergleiche sind keine
 Produkt- oder Testausführung. Reale Windows-Shell-/Konten-/Geräte- und
 Desktopausführung bleibt hier ungeprüft; ein erfolgreicher Remotelauf
 wird nicht behauptet.
+
+## Fortsetzung: Android-Iconmodelle K01 und K03–K09
+
+### Erstplan aus dem Auftrag
+
+Dieser begrenzte Fixzyklus beginnt am Kandidaten
+`0425aa4608d7e27eb95ee0a37e3bc13dca2ce8bf` nach dem laut Main vollständig
+beendeten Lauf 40381452096. Der erneute wörtliche Nutzervertrag und die
+aktuelle Scope-Datei wurden vollständig gelesen. Die aktuelle Phase
+ersetzt die vorige D/J-Schreibfläche vollständig.
+
+Ergebnisauftrag ist der korrekte Konsum der gemeinsamen Android-
+Iconmodelle in Hostvoraussetzungen, Familienmenü und Fensterauswahl.
+Reale Programmsymbole und ein zugänglicher neutraler Ersatz bleiben
+erhalten. Drahtnamen, Peer-/Appidentität, Rechte, Hash-/Größenprüfung,
+Abbruch und die vorhandenen Bedienwege dürfen sich nicht ändern.
+Schreibbar sind ausschließlich `ScreenApi.kt`, `FamilyScreen.kt`,
+`ScreenIcons.kt`, `ic_apps.xml` und dieser vorhandene Bericht.
+
+Die vollständige Kotlin-Diagnosedatei nennt diese eigenen Fehler:
+
+| Diagnose | Fehler vor der Bestandsklärung |
+| --- | --- |
+| K01 | Der Hostvoraussetzungsaufruf liest `png_base64` von einem `ScreenIconReply`, der dieses Kotlinfeld nicht besitzt. |
+| K03–K06 | Das Familienmenü liest `app_id` von `ScreenIconRef`; die fehlerhafte Eigenschaft erzeugt Folgefehler der Typinferenz. |
+| K07 | Der Iconloader des Familienmenüs sieht trotz gleicher Kurztypenamen inkompatible Request-/Replytypen. Die konkreten Typdefinitionen und Imports sind vor dem Fix zu vergleichen. |
+| K08, K09 | Der neutrale Ersatz in `ScreenIcons.kt` verwendet das nicht verfügbare `Icons.Outlined.Apps`. Die vorhandene Iconinfrastruktur und die bereitgestellte Material-Vektorquelle bestimmen den Ersatz. |
+
+K02 sowie K10/K11 gehören zum gleichzeitig arbeitenden Budgetautor.
+`ScreenHostControl.kt`, `ScreenSession.kt` und `BatchesScreenBudgetTest.kt`
+werden von diesem Autor nicht geändert. Main besitzt die gemeinsame
+Fallregistrierung, Remoteausführung, Integration, Git und Release.
+Lokale Builds, Compiler, Formatter, Tests, Server, Installationen,
+lange Prozesse, Graphupdates und Unteragenten bleiben ausgeschlossen.
+
+Vorläufige Planungstiefe ist 2: gekoppelte vorhandene Kotlin-/Wiremodelle
+und ihre beiden UIverbraucher. Noch zu klären sind die kanonischen
+Eigenschafts-/Serialnamen, die tatsächliche Request-/Replyidentität,
+Bitmapvalidierung und Abbruchfolge sowie der zugängliche vorhandene
+Iconersatz. Eine nur vom Nutzer zu liefernde Angabe ist nicht erkennbar.
+Nächster Schritt ist die konkrete Definition-/Aufruferlektüre und danach
+der eigene regressionsschützende Plan vor den Produktänderungen.
+
+### Zweitplan und vollständige direkte/indirekte Verknüpfungskarte
+
+Die gelesenen Definitionen bestätigen Planungstiefe 2. Alle Iconreferenzen,
+Targets, Requests und Replies stammen bereits aus
+`app.smartexplorer.android.screen.AppIcons.kt`. `ScreenIconRef.appId`
+behält `@SerialName("app_id")`, `ScreenIconReply.pngBase64` behält
+`@SerialName("png_base64")`. Es gibt an den betroffenen Funktionen keinen
+zweiten Request- oder Replytyp. Insbesondere importieren `ScreenSession`
+und `ScreenIcons` dieselben Klassen; `iconFetch` und `fetch` verwenden
+denselben suspend-Funktionstyp. Annahme aus diesem Quellbefund: K07 und
+K04–K06 sind Folgefehler des fehlerhaften `app_id`-Zugriffs. Die endgültige
+Bestätigung dieser Einordnung benötigt den erneuten Kotlincompilerlauf.
+
+| Betroffene Funktion und Grenze | Vollständige Kette der tatsächlich berührten Fähigkeit |
+| --- | --- |
+| K01: `ScreenApi.prereqs` | `ScreenHostControl.reportPrereqs` → vorhandene Accessibility-/Usagevoraussetzungen und `RunningApps.list` → PackageManager-/Fenster-/Usageidentität → `AppIcons.reference` mit tatsächlichen installierten Symbolbytes → `ScreenAppEntry.icon` → `AppIcons.contentFor` prüft dieselbe vollständige Referenz → `ScreenApi.prereqs` schreibt unverändert `icon` und `iconPngBase64` → `Core.request("screen.hostPrereqs")` → native Hostregistrierung. Nur der Kotlin-Eigenschaftszugriff ist falsch. |
+| Indirekte lokale Iconregistrierung | `screen_host.rs` übernimmt Package-/Labelwerte, verlangt `icon.app_id == package` und das Base64budget → `android_app_icons::replace_registered` → `IconReply::bytes_for` prüft Referenz, Hash und Dimensionen → begrenzter PNGdecoder → aktuelle begrenzte Registry. Ersetzen entfernt nicht mehr sichtbare Pakete. Ein unbrauchbares Symbol verhindert weder Hostregistrierung noch Projektion. |
+| K03–K07: `FamilyWindowMenu` | Bestätigte `FamilyListEntry` → `FamilyApi.validate(entry)` im FamilySession-Konstruktor → `FamilySession.open` mit derselben ScreenSession → aktueller `FamilyState.snapshot` → tatsächlich gebundenes Rootmitglied → Icon-App-ID als `ScreenIconTarget.app` oder unveränderter Window-Fallback → nur bei Iconversion 1 dieselbe Referenz → `ScreenAppIcon` und der bereits gemeinsame `iconFetch`-Callback. Familien-/Mitgliedsidentität, Generation, Menüstatus und Steuerrechte werden nicht umgeformt. |
+| Indirekter Familien-/Viewerabruf | `ScreenSessionState.iconFetch` bindet die reale laufende Session → `ScreenBackend.icon` → `CoreScreenBackend` → `ScreenApi.viewIcon` mit demselben gemeinsamen serialisierten Request → native Session-Iconstate → begrenzte eindeutige Pendinganfrage und `ViewerFrame::IconRequest` → korrelierte, validierte Antwort → dieselben gemeinsamen Kotlinmodelle. Leeres Ergebnis und Fehler bleiben neutraler Ersatz. |
+| K08/K09: `ScreenAppIcon` und Fensterauswahl | Familienmenü sowie `ScreenViewBars.WindowsMenu` bilden konkrete Window-/Appzeilen mit Ziel und Referenz → `ScreenAppIcon(peer, target, reference, fetch)` → rekey nach Peer, Target und vollständiger Referenz → begrenzter Cache oder vorhandener Abruf → validiertes Bitmap als echtes Symbol. Nur der fehlende Ersatzglyph wird auf die vorhandene lokale `SeIcon`-/VectorDrawableinfrastruktur umgestellt. |
+| Validierung, Abbruch und Besitz | `ScreenIconContent.fetch` verwendet dieselbe Semaphore → `accept` verlangt Peer, identische Referenz, Version, App-ID, Hashform, Pixel-/Bytegrenzen, statisches PNG, SHA-256 und tatsächliche Decoderdimensionen → Cache nach Peer/App/Hash und Löschung überholter Referenzen. CancellationException wird erneut geworfen; Schlüsselwechsel startet frischen Composezustand. Sessionclose vergisst den Peer und beendet seinen bisherigen Collector-/Scopeweg. |
+| Bedienung und Eingabegrenze | `FamilyScreen` besitzt dieselbe konkrete FamilySession; Dispose/Zurück trennen sie. `FamilyWindowMenu` meldet geöffnete lokale UI an `ScreenViewScreen`, sodass Menütaps nicht an die entfernte Eingabe gehen. Focus, Resize, Close, Refresh, Keyboard und Disconnect behalten dieselben Bedingungen und Aufrufe. Die gewöhnliche Fensterauswahl behält Systemauswahl-/Waylandgrenzen und Quellwechsel. |
+
+Die native Session-Iconstate übernimmt ausschließlich den bestehenden
+Sessionkontext. Sie bindet die Antwort an den vollständigen Request,
+prüft die Antwort und hält Cache/Pendingbestand begrenzt; fehlgeschlagener
+Send oder Ablauf entfernen den Pendingeintrag. Die dortige Referenz-/
+Hashprüfung sowie die lokale Androidregistry werden nicht geändert.
+
+Die vorhandenen Appkatalog-/Startverbraucher `AppCatalog`, `AppLaunch`
+und `AppsApi` verwenden dieselben Iconmodelle bereits mit `appId` und
+`pngBase64`. `FamilyWindow.app_id` und `FamilyMember.app_id` sind dagegen
+eigenständige gültige Kotlin-Eigenschaften ihrer bestehenden Wiremodelle.
+Eine globale Umbenennung oder Änderung dieser Modelle ist ausdrücklich
+keine Lösung.
+
+### Entscheidungsrecherche und endgültiger Fixplan
+
+Das Projekt bindet Kotlin 2.4.20, kotlinx.serialization 1.11.0 und den
+bestehenden Compose-BOM 2026.06.01. Die am 2026-10-26 selbst gelesene
+versionsgebundene Primärquelle bestätigt, dass `SerialName` den Namen im
+SerialDescriptor und damit im JSON ändert
+([Annotations.kt, Version 1.11.0](https://raw.githubusercontent.com/Kotlin/kotlinx.serialization/v1.11.0/core/commonMain/src/kotlinx/serialization/Annotations.kt)).
+Die aktuelle APIseite zeigt bereits Version 1.12.0; sie wurde nicht als
+Versionsbeleg für die Projektbindung verwendet. Der deklarierte Kotlin-
+Eigenschaftsname bleibt der Zugriff im Quellcode.
+
+Die Android-Primärdokumentation beschreibt den vorhandenen Weg
+`Icon(painterResource(...), contentDescription = ...)` und dessen
+Materialfarbe/-größe
+([Compose Icons](https://developer.android.com/develop/ui/compose/graphics/images/material)).
+`ui/common/Icons.kt::SeIcon` verwendet genau diesen Weg bereits mit
+`LocalContentColor`. Die lokale `ic_tab.xml` belegt die Ressourcen-
+und Lizenzkonvention. Das von Main tatsächlich beschaffte 24-px-Apps-SVG
+ist die Originalgeometrie des neutralen Ersatzes
+([Google Material Icons Outlined](https://github.com/google/material-design-icons/blob/master/src/navigation/apps/materialiconsoutlined/24px.svg)).
+
+Gewählt sind zwei gezielte Kotlin-Eigenschaftskorrekturen und eine kleine
+lokale VectorDrawable-Ressource über `SeIcon`. Eine Umbenennung der
+gemeinsamen Modelle würde funktionierende Verbraucher und Drahtverträge
+unnötig berühren. Neue Adapter, doppelte Requesttypen oder Casts würden
+die identischen Typen verdecken. Eine zusätzliche große Materialicon-
+Abhängigkeit ist für die vorhandene Ressourcendarstellung nicht nötig.
+Reale Bitmapanzeige, Validierung und Coroutines bleiben unverändert.
+
+| Punkt | Konkrete Änderung | Erhalt und prüfbares Ergebnis |
+| --- | --- | --- |
+| F1 | In `ScreenApi.prereqs` ausschließlich `content.png_base64` auf `content.pngBase64` korrigieren. | Weiterhin derselbe über `contentFor` gebundene Inhalt unter dem unveränderten JSONfeld `iconPngBase64`; gemeinsamer Serializer und native Prüfung bleiben erhalten. |
+| F2 | In `FamilyWindowMenu` ausschließlich `root?.icon?.app_id` auf `root?.icon?.appId` korrigieren. | Derselbe aktuelle App-/Windowtarget, Iconversionscheck und Callbacktyp; kein Cast oder neuer Loader, keine Änderung von Menü-/Steuerbedingungen. K07 bleibt bis zum Remotecompiler als Folgefehlerannahme gekennzeichnet. |
+| F3 | In `ScreenIcons.kt` fehlende Material-Apps-Imports/-Nutzung durch `R.drawable.ic_apps` und den vorhandenen `SeIcon` ersetzen. `ic_apps.xml` mit exakter sichtbarer SVGgeometrie, 24-dp-Größe und Quellen-/Lizenzkommentar ergänzen. | Echter Bitmapzweig bleibt bytegleich; neutraler Appsersatz erhält denselben Modifier, Materialtint und exakt dieselbe zugängliche Beschreibung „Programmsymbol nicht verfügbar“. Keine Gradleänderung. |
+| F4 | Eigenen vollständigen Diff nach der Umsetzung gegen 0425aa46 lesen, zusätzliche Quellen-/Kotlin-/XMLkontrolle und eigene Anti-Regressionsreview der gesamten Tabelle ausführen und dokumentieren. | Nur F1–F3 unterscheiden sich; Models, Wireliteralnamen, Validierung, Rechte, Abbruch, Cache und alle Bedienaktionen bleiben erhalten. Reale Kotlin-/Ressourcen-/UIbestätigung erfolgt ausschließlich durch Main im gleichen Remoteeinstieg. |
+
+Die zweite Lückenprüfung bestätigt den vollständigen gemeinsamen
+Request-/Replytyp, die kanonischen Eigenschaften, die native Registry-
+und Sessionprüfung sowie den vorhandenen Ressourcenweg. Die beiden
+zusätzlichen nativen Registry-/Fixturedateien wurden vor ihrer Lektüre
+konkret bei Main angefordert und ausdrücklich freigegeben. Die freigegebene
+Produkt-Schreibfläche reicht aus; keine Scopeabhängigkeit bleibt offen.
+
+### Umsetzung und eigene anschließende Anti-Regressionsreview
+
+F1 bis F3 sind umgesetzt. Anschließend wurde F4 durch denselben Autor
+ausgeführt: vollständiger eigener Diff gegen 0425aa46, erneute Prüfung
+der gesamten oben dokumentierten Kette und statische Syntax-/XML-/
+Quellidentitätskontrolle. Der Reviewumfang folgt den tatsächlichen
+Eigenschafts-, Ressourcen-, Rechte- und Besitzgrenzen.
+
+| Eigene Prüffrage | Befund nach der Umsetzung |
+| --- | --- |
+| Behält die Hostregistrierung reale installierte Symbole? | `ScreenApi.prereqs` liest jetzt die existierende Eigenschaft `pngBase64`. `AppIcons.contentFor` erhält dieselbe Referenz, und der JSONschlüssel bleibt exakt `iconPngBase64`. RunningApps, PackageManagerquelle, Referenzprüfung, Hashbildung, Iconbudget und native Ersetzung der aktuellen Pakete sind unverändert. |
+| Bleiben sämtliche Drahtnamen und Modelle erhalten? | `AppIcons.kt` und alle gemeinsamen Datenklassen sind bytegleich. `app_id` und `png_base64` bleiben Serialnamen; gültige gleichnamige FamilyWindow-/FamilyMember-Eigenschaften bleiben bestehen. Kein Serializer, keine Protokollversion und keine Bibliotheksbindung wurde geändert. |
+| Behält das Familienmenü dieselbe konkrete App-/Fensterbindung? | Der korrigierte `appId`-Zugriff verwendet weiterhin ausschließlich die Iconreferenz des aktuellen Rootmitglieds. Derselbe Appfactory-Aufruf, derselbe Window-Fallback, derselbe Iconversionscheck und derselbe Fetchcallback bleiben bestehen. Es wurde kein Cast, Adapter oder paralleler Modelltyp eingeführt. Die Einordnung K07 als Inferenzfolgefehler ist weiterhin eine noch remote zu bestätigende Annahme. |
+| Bleiben echte Bitmaps und ein zugänglicher neutraler Ersatz sichtbar vorgesehen? | Der vollständige Bitmapzweig von `ScreenAppIcon` ist bytegleich. Nur der nicht verfügbare Materialglyph ist durch die lokale Appsressource über das vorhandene `SeIcon` ersetzt. Derselbe Modifier bleibt erhalten; `SeIcon` nutzt den bestehenden Materialtint. Die neutrale Beschreibung bleibt exakt „Programmsymbol nicht verfügbar“. Die echte Grafik bleibt dekorativ neben Menü-/Zeilentext. |
+| Ist die neue Vektorressource die beauftragte Geometrie? | XML ist syntaktisch gültig. Größe ist 24 × 24 dp, Viewport 24 × 24, und der einzige sichtbare Pfad ist exakt der sichtbare Pfad des bereitgestellten Original-SVG. Weißes Fill wird vom vorhandenen Iconpainter getönt; der unsichtbare SVGhintergrundpfad erzeugt keine zusätzliche Geometrie. Quellen-/Apache-2.0-Kommentar folgt der bestehenden Ressourcenkonvention. |
+| Bleiben Hash-/Größenprüfung und Cachebindung erhalten? | Der komplette `ScreenIconContent` ist unverändert: Peer und vollständige Referenz, Version, App-ID, SHA-256-Form/Inhalt, Byte-/Pixelgrenze, PNGsignatur/IHDR, APNG-Abweisung, Decoderdimensionen und reale Bitmapallokation werden weiter geprüft. Cachekeys und Entfernung überholter Appreferenzen bleiben identisch. Native Referenz-, Sessionantwort- und Registryvalidierung sind ebenfalls bytegleich. |
+| Bleiben Abbruch und Ressourcenbesitz erhalten? | Fetchsemaphore, `produceState`, dessen Rekey, CancellationException-Weitergabe und Default-Dispatcherdecodierung sind unverändert. Die Session vergisst ihren bisherigen Peercache beim Close; FamilySession beendet ihren bestehenden Screen-/Coroutineweg. Für die Iconkorrektur wurde kein Capture-, Decoder-, Puffer- oder Sessionbesitzer ergänzt oder entfernt. |
+| Bleiben Rechte und Bedienwege erhalten? | FamilyScreen, FamilySession, FamilyApi, WindowsMenu und ScreenViewScreen behalten ihre bisherigen Ziel-/Generations-/Operationsbedingungen. Lokales Menü blockiert weiterhin entfernte Eingabe. Steuerung anfordern/abgeben, Focus, Keyboard, Resize, Close, Refresh, Diagnose, Disconnect und gewöhnliche Quellwahl behalten ihre Aufrufe. Systemauswahl und Waylandbeschränkungen der Fensterauswahl bleiben unverändert. |
+| Bleibt die gleichzeitige Budgetarbeit getrennt? | Dieser Autor änderte weder ScreenHostControl noch ScreenSession oder BatchesScreenBudgetTest. Ihre benötigten Icon-Aufrufer-/Typstellen wurden ausschließlich gelesen. Die eigene ScreenApi-Änderung betrifft genau einen Eigenschaftszugriff im bestehenden Icon-JSONblock. |
+
+Der vorhandene Tree-sitter-Kotlinparser liest alle drei bearbeiteten
+Kotlindateien ohne Syntaxfehlerknoten. Die Liste ihrer Funktionsnamen
+bleibt gleich. Der vollständige Quellvergleich ergibt nach Rücknahme
+genau der geplanten Eigenschafts-/Import-/Ersatzaufrufänderungen wieder
+0425aa46. Damit sind sämtliche übrigen Zeilen einschließlich der
+Validierung, Coroutines, Menuaktionen, Requestfelder und Literalnamen
+erhalten.
+
+Der XMLparser bestätigt Namespace, Attribute und Pfadstruktur der neuen
+Ressource; ihr sichtbarer Pfad wurde direkt mit dem gelieferten SVG
+verglichen. Der Androidnamespace ist der bereits bestehende Namespace
+`app.smartexplorer.android`. Gemeinsame Modelle, Registry, Validatoren,
+Appkatalog-/Startverbraucher, FamilyApi/FamilySession, Fensterauswahl,
+Core sowie Gradledateien sind bytegleich zum Ausgangskandidaten. Der
+fertige eigene Diff hat bei `git diff --check` keinen Whitespacebefund.
+Diese Kontrollen führen weder Kotlincode noch Androidressourcenbau oder
+Tests aus.
+
+Ein weiterer Fehler wurde bei der eigenen abschließenden Prüfung der
+betroffenen Kette nicht belegt. Der Compiler muss insbesondere K04–K07
+nach der korrigierten Eigenschaftsinferenz noch bestätigen. Ein geparster
+Quelltext oder XMLpfad beweist keine tatsächliche Bitmap-/TalkBackanzeige.
+
+### Geänderte und neue Dateien
+
+Geändert wurden die drei bestehenden Kotlinverbraucher und dieser
+bestehende Bericht. Neu angelegt wurde ausschließlich die ausdrücklich
+freigegebene VectorDrawable-Ressource.
+
+| Datei unter `android/app/src/main/` | Art | Zeilen | Bytes |
+| --- | --- | ---: | ---: |
+| `java/app/smartexplorer/android/api/ScreenApi.kt` | geändert | 441 | 17493 |
+| `java/app/smartexplorer/android/ui/screen/FamilyScreen.kt` | geändert | 86 | 6159 |
+| `java/app/smartexplorer/android/ui/screen/ScreenIcons.kt` | geändert | 112 | 5816 |
+| `res/drawable/ic_apps.xml` | neu | 12 | 564 |
+
+Es wurden keine Rustdateien geändert. Es gibt keine Größenregel-Ausnahme,
+neue Abhängigkeit, Versionsänderung oder Zeilenverdichtung.
+
+### Vorhandene Fälle und Anschluss durch Main
+
+Es gibt keine neuen oder umbenannten Testfälle. Die vorhandenen drei
+Iconvertragsfälle bleiben unverändert:
+
+- `batches_task_b6_icon_authorizes_only_unique_current_identity`
+- `batches_task_b6_icon_reply_binds_app_hash_dimensions_and_decoded_pixels`
+- `batches_task_b6_icon_rejects_oversized_ihdr_before_decoding`
+
+Das gelesene gemeinsame Manifest wählt diese Fälle über `batches_` aus;
+sie sind nicht ausgeschlossen. Für diese Fortsetzung ist keine neue
+Fallregistrierung notwendig. Kotlin- und Androidressourcenstufe desselben
+Remoteeinstiegs müssen zusätzlich die korrigierten Eigenschaften,
+gemeinsamen Callbacktypen und die neue Drawable-ID bestätigen. Diese
+nativen Iconfälle ersetzen keinen Android-UI- oder TalkBacknachweis.
+
+### Vollständige Leseübersicht dieser Fortsetzung
+
+Gelesen wurden sämtliche vier Produktdateien der obigen Übersicht,
+der bestehende Bericht, der vollständige wörtliche Nutzervertrag, die
+aktuelle Scope-Datei und die vollständige Kotlin-Diagnosedatei. Die neue
+Ressource wurde nach ihrer Erstellung statisch gelesen; ihr Ausgangspfad
+war vorher nicht vorhanden. Zusätzlich wurden folgende Quellen
+vollständig oder an den konkret betroffenen Definitionen und Aufrufern
+gelesen:
+
+- `docs/plaene/2026-10-24-batches/rv1-compilerplan.md`: Android-Kotlinkorrekturen, Primärquellen und abgegrenzte Integrationsmeilensteine.
+- `docs/ARCHITEKTUR.md`, `docs/oberflaechen/bildschirm.md`: konkrete Android-Screen-/Iconanschlüsse.
+- `android/app/build.gradle.kts`, `android/gradle/libs.versions.toml`: Namespace und vorhandene Kotlin-/Serialization-/Composebindung.
+- `android/app/src/main/java/app/smartexplorer/android/core/Core.kt`: bestehende Jsonkonfiguration und Request-/Serializergrenze.
+- `android/app/src/main/java/app/smartexplorer/android/screen/AppIcons.kt`: vollständige gemeinsame Modelle, PackageManagerquelle und publizierte Inhalte.
+- `android/app/src/main/java/app/smartexplorer/android/screen/RunningApps.kt`: vollständige Sichtbarkeits-/Usagequelle, Packagebindung und aktueller Registerbestand.
+- `android/app/src/main/java/app/smartexplorer/android/screen/ScreenHostControl.kt`: ausschließlich vorhandener Iconvoraussetzungs-/RunningApps-Aufruf.
+- `android/app/src/main/java/app/smartexplorer/android/api/AppsApi.kt`, `android/app/src/main/java/app/smartexplorer/android/screen/AppCatalog.kt`, `android/app/src/main/java/app/smartexplorer/android/screen/AppLaunch.kt`: bestehende korrekte gemeinsame Iconkonsumenten.
+- `android/app/src/main/java/app/smartexplorer/android/api/FamilyApi.kt`, `android/app/src/main/java/app/smartexplorer/android/ui/screen/FamilySession.kt`: vollständige Familymodelle, Identität, Sessionbesitz und Operationen.
+- `android/app/src/main/java/app/smartexplorer/android/ui/screen/ScreenSession.kt`: gemeinsame Icon-Request-/Replyimports, Callback, Backend, Iconversion und Abschlussweg; keine Änderung.
+- `android/app/src/main/java/app/smartexplorer/android/ui/screen/ScreenViewBars.kt`, `android/app/src/main/java/app/smartexplorer/android/ui/screen/ScreenViewScreen.kt`: tatsächliche Iconaufrufer, Fensterauswahl und lokale Menü-/Eingabegrenze.
+- `android/app/src/main/java/app/smartexplorer/android/ui/common/Icons.kt`, `android/app/src/main/res/drawable/ic_tab.xml`: vollständiger vorhandener SeIcon-/VectorDrawableweg und Ressourcen-/Lizenzkonvention.
+- `/tmp/smartexplorer-rv1-40381452096/material-apps-24px.svg`: tatsächlich bereitgestellter Originalpfad des neutralen Ersatzes.
+- `native/src/mobile/os/shared/domains/screen_host.rs`, `native/src/mobile/os/shared/domains/screen_icons.rs`: konkrete native Hostregistrierung und vollständige sessiongebundene Anfrage-/Antwortgrenze.
+- `native/src/screen/core/app_icon.rs`, `native/src/screen/os/android/app_icons.rs`: gemeinsame native Referenz-/PNGprüfung und vollständige lokale Androidregistry.
+- `native/src/screen/core/batches_icon_task_tests.rs`, `native/review-task-manifest.json`: vollständige vorhandene Iconvertragsfälle und konkrete Auswahl.
+
+Die zentralen Arbeitsanweisungen wurden für diese Fortsetzung geladen
+beziehungsweise als unverändert wiederverwendet. Die eigene Recherche
+und Entscheidungen stehen mit den konkreten offiziellen URLs oben.
+
+### Entscheidungen und verbleibende Grenzen
+
+Der eigene vollständige Fünfteiler ist abgeschlossen. Die Umsetzung
+verwendet die tatsächlichen Kotlin-Eigenschaften und denselben lokalen
+Iconpfad; Modelle, Wireformat, Rechte, Validierung und Besitzer bleiben
+erhalten. Es bleibt keine konkrete Scopeabhängigkeit oder weitere
+erforderliche Produktkorrektur dieser Zuweisung offen.
+
+Main übernimmt die praktische Bestätigung im selben Remoteeinstieg sowie
+Integration, Manifest, CI, Git und Release. K07 bleibt bis dahin als
+Inferenzfolgefehlerannahme gekennzeichnet. Reale Hostregistrierung,
+Iconübertragung, Geräteanzeige, Ressourcenauflösung und TalkBackausgabe
+wurden hier nicht ausgeführt. Kein lokaler Build, Compiler, Formatter,
+Test, Server, Installation, langer Prozess, Graphupdate oder Unteragent
+wurde gestartet; ein bestandener Remotelauf wird nicht behauptet.
