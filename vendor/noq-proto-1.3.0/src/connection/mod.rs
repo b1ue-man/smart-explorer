@@ -371,10 +371,7 @@ impl Connection {
 
         let application_policy_connection = if config.application_path_policy { rng.random() } else { 0 };
         let mut this = Self {
-            application_path_policy: ApplicationPathPolicy {
-                connection: application_policy_connection,
-                ..ApplicationPathPolicy::default()
-            },
+            application_path_policy: ApplicationPathPolicy::new(application_policy_connection),
             endpoint_config,
             crypto_state: CryptoState::new(crypto, init_cid, side, &mut rng),
             handshake_cid: local_cid,

@@ -165,6 +165,16 @@ pub(super) struct ApplicationPathPolicy {
     pub(super) path_payload_bytes: BTreeMap<PathId, (u64, u64)>,
 }
 
+impl ApplicationPathPolicy {
+    /// Bind default policy state to the connection's already generated identity.
+    pub(super) fn new(connection: u64) -> Self {
+        Self {
+            connection,
+            ..Self::default()
+        }
+    }
+}
+
 impl Connection {
     /// Observe current policy, NAT-round and path-validation facts atomically.
     ///

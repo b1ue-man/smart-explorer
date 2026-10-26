@@ -1128,3 +1128,28 @@ korrigiert. R19 bindet die bereits bestehenden reinen Mount-Runtimevertragsfäll
 an dieselbe Suite. Rootgraphrefresh und der neue Kandidat führen ausschließlich
 zur Wiederholung dieses einen Remoteeinstiegs; Typ- und Laufzeitnachweis bleiben
 bis zu dessen tatsächlicher Auswertung offen. Die Version wurde nicht geändert.
+
+### Gemeinsamer Compilerbefund im Remote-Fixloop, 2026-10-26
+
+Nach Übernahme des gebundenen Formatpatches ist die Vorbereitung von Lauf
+`40344852826` für `7fb96ef0` erfolgreich. Die anschließenden Linux-, Windows-
+und Androidjobs sind vollständig beendet und scheitern am selben E0451 im
+vendorten Noq-proto-Konstruktor. Die komplette Suite ist damit nicht bestanden;
+die isolierten Glow-Ergebnisse sind nur Teilnachweise. Ein begrenzter Fixautor
+ist mit `gpt-6.1-sol`/`max` als Startparametern für Initialisierungsgrenze,
+Verknüpfungskarte, Erhaltungsplan, Umsetzung und eigene Nachreview beauftragt.
+Antwortseitige Modellmetadaten stellt das Agentwerkzeug nicht bereit.
+Die Arbeitsweise-Selektion nennt für diesen kleinen, belegten Compilerfix
+Grad 6 und Sol 6.1/low; der vom Nutzer verlangte Max-Effort hat Vorrang.
+Der nächste Schritt bleibt die Korrektur und Wiederholung desselben
+Remote-Suiteeinstiegs. Ein terminaler Release wurde noch nicht gestartet.
+
+Der zuständige Autor hat die Korrektur und seine eigene Anti-Regressionsreview
+abgeschlossen: [Konstruktorbericht](fix-path-policy-construction.md). Der neue
+modulinterne Konstruktor erhält den abgeleiteten Default und die bereits
+berechnete Verbindungskennung; öffentliche Verträge, private Zähler und
+RNG-Verbrauch bleiben unverändert. Main hat beide Quellhunks und ihre
+Einbindung geprüft; statische Rustsyntax und Whitespace sind ohne Befund.
+Die Änderung betrifft ausschließlich Vendorcode und Dokumentation, daher
+bleibt der auf `native/src` begrenzte Rootgraph unverändert gültig.
+Compiler- und Funktionsbestätigung stehen weiterhin im selben Remote-Fixloop aus.
