@@ -76,7 +76,7 @@ impl Reservations {
                     }
                     saved.relative.clone()
                 }
-                _ => join_rel(
+                _ => super::relative_child(
                     parent,
                     &if index == 1 {
                         name.to_string()

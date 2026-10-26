@@ -16,6 +16,16 @@ pub(crate) struct Reservations {
     store: Mutex<AliasStore>,
 }
 
+// `join_rel` also joins absolute backend roots. A relative alias or stage
+// below an empty scaffold must remain a name, without a leading slash.
+fn relative_child(parent: &str, name: &str) -> String {
+    if parent.is_empty() {
+        name.to_string()
+    } else {
+        join_rel(parent, name)
+    }
+}
+
 impl Reservations {
     pub fn saved_move(&self, source: &str) -> bool {
         self.store
@@ -161,7 +171,7 @@ impl Reservations {
             } else {
                 format!("{name} ({index})")
             };
-            let relative = join_rel(parent, &name);
+            let relative = relative_child(parent, &name);
             match backend.stat(&join_rel(root, &relative)) {
                 Ok(_) if renumber => continue,
                 Ok(_) => {
@@ -176,7 +186,7 @@ impl Reservations {
             let stage = if direct {
                 String::new()
             } else {
-                join_rel(parent, &format!(".se-folder-{}", super::new_job_id()))
+                relative_child(parent, &format!(".se-folder-{}", super::new_job_id()))
             };
             let mut saved = FolderAlias {
                 wanted: wanted.to_string(),

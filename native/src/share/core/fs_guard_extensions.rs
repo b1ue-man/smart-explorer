@@ -293,12 +293,18 @@ mod reservation_compatibility_tests {
             TargetPolicy::new(ExportAccess::ReadOnly, false, false),
             None,
         );
+        assert!(readonly.stat("/owned").is_ok());
         assert_eq!(
             vfs::rename_reserved_directory(&readonly, "/owned", "/final")
                 .unwrap_err()
                 .kind(),
-            io::ErrorKind::PermissionDenied
+            io::ErrorKind::ReadOnlyFilesystem
+        );
+        assert_eq!(
+            readonly.rename_no_replace("/old", "/new").unwrap_err().kind(),
+            io::ErrorKind::ReadOnlyFilesystem
         );
         assert_eq!(provider.strict.load(Ordering::SeqCst), 1);
+        assert_eq!(provider.ordinary.load(Ordering::SeqCst), 1);
     }
 }

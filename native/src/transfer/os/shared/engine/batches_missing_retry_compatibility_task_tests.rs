@@ -4,6 +4,7 @@ use crate::transfer::engine::{
     batches_backend_compatibility_task_tests::Limited,
     test_backend::{fwd, job, run, write},
 };
+use crate::transfer::folder_alias::FolderAliases;
 use crate::transfer::{Endpoint, JobItems, PairItem, RecoveryMode, ResolvedRoot, TransferJob};
 use crate::types::CopyMode;
 use std::{
@@ -286,4 +287,128 @@ fn batches_task_transfer_compat_missing_only_never_discards_unknown_move_quarant
     assert_eq!(fs::read(&quarantine).unwrap(), b"ours");
     assert_eq!(fs::read(&destination).unwrap(), b"ours");
     assert!(!source.exists());
+}
+
+#[test]
+fn batches_task_transfer_compat_missing_only_literal_folder_aliases_survive_repeated_clicks() {
+    for (proofs, refuse_reserved) in [(false, false), (true, false), (true, true)] {
+        for scaffold in ["", "scaffold#% 子"] {
+            let root = tempfile::tempdir().unwrap();
+            let from = root.path().join("from");
+            let name = "Fotos.2026#% 子";
+            let source = from.join(scaffold).join(name);
+            let target = root.path().join("target");
+            let parent = target.join(scaffold);
+            let destination = parent.join(format!("{name} (2)"));
+            write(&source.join("a%2Fb#.bin"), b"aaa");
+            write(&source.join("b.bin"), b"bbb");
+            write(&source.join("c.bin"), b"ccc");
+            write(&parent.join(name).join("foreign"), b"foreign");
+            let mut limited = Limited::new("literal-folder-retries");
+            limited.proofs = proofs;
+            limited.refuse_reserved = refuse_reserved;
+            let backend = Arc::new(limited);
+            let mut candidate = job(
+                Endpoint::Local,
+                Endpoint::Remote(backend.clone()),
+                &target,
+                &[&source],
+            );
+            candidate.items = JobItems::Roots {
+                paths: vec![fwd(&source)],
+                base: Some(fwd(&from)),
+            };
+            let first = run(candidate.clone());
+            assert!(first.issues.is_empty(), "{:?}", first.issues);
+            let expected = destination.strip_prefix(&target).unwrap();
+            assert_eq!(first.roots[0].rel, fwd(expected));
+            let alias_path = crate::support_dirs::app_data_file("transfer-aliases")
+                .join(format!("{}.json", candidate.id));
+            let aliases: FolderAliases = crate::transfer::read_record(
+                &alias_path,
+                crate::transfer::RecordKind::Alias,
+                &candidate.id,
+                u64::MAX,
+                false,
+            )
+            .unwrap();
+            crate::transfer::engine::folder_alias_store::validate_aliases(&aliases).unwrap();
+            let saved = &aliases.roots[&fwd(&source)];
+            assert_eq!(saved.relative, fwd(expected));
+            assert!(!saved.stage.starts_with('/'));
+            fs::remove_file(destination.join("a%2Fb#.bin")).unwrap();
+            write(&destination.join("b.bin"), b"foreign changed length");
+            let previous = backend.promotes.load(Ordering::SeqCst);
+            repeat(&mut candidate, first.roots);
+            let partial = run(candidate.clone());
+            assert_eq!(partial.progress.errors, 1, "{:?}", partial.issues);
+            assert_eq!(fs::read(destination.join("a%2Fb#.bin")).unwrap(), b"aaa");
+            assert_eq!(
+                fs::read(destination.join("b.bin")).unwrap(),
+                b"foreign changed length"
+            );
+            fs::remove_file(destination.join("b.bin")).unwrap();
+            repeat(&mut candidate, partial.roots);
+            let done = run(candidate.clone());
+            assert!(done.issues.is_empty(), "{:?}", done.issues);
+            assert_eq!(done.roots[0].rel, fwd(expected));
+            assert_eq!(backend.promotes.load(Ordering::SeqCst) - previous, 2);
+            for (file, bytes) in [
+                ("a%2Fb#.bin", b"aaa"),
+                ("b.bin", b"bbb"),
+                ("c.bin", b"ccc"),
+            ] {
+                assert_eq!(fs::read(destination.join(file)).unwrap(), bytes);
+                assert_eq!(fs::read(source.join(file)).unwrap(), bytes);
+            }
+            assert_eq!(
+                fs::read(parent.join(name).join("foreign")).unwrap(),
+                b"foreign"
+            );
+            assert_eq!(fs::read_dir(&parent).unwrap().count(), 2);
+            repeat(&mut candidate, done.roots);
+            candidate.target = Endpoint::Remote(Arc::new(Limited::new("foreign-account")));
+            assert!(
+                !run(candidate).issues.is_empty(),
+                "same paths do not identify an account"
+            );
+        }
+    }
+}
+
+#[test]
+fn batches_task_transfer_compat_missing_only_whole_folder_move_keeps_relative_alias() {
+    for scaffold in ["", "scaffold#% 子"] {
+        let root = tempfile::tempdir().unwrap();
+        let from = root.path().join("from");
+        let name = "Fotos.2026#% 子";
+        let source = from.join(scaffold).join(name);
+        let target = root.path().join("target");
+        let parent = target.join(scaffold);
+        let destination = parent.join(format!("{name} (2)"));
+        write(&source.join("a.bin"), b"ours");
+        write(&parent.join(name).join("foreign"), b"foreign");
+        let mut candidate = job(Endpoint::Local, Endpoint::Local, &target, &[&source]);
+        candidate.mode = CopyMode::Move;
+        candidate.items = JobItems::Roots {
+            paths: vec![fwd(&source)],
+            base: Some(fwd(&from)),
+        };
+        let first = run(candidate.clone());
+        assert!(first.issues.is_empty(), "{:?}", first.issues);
+        let expected = fwd(destination.strip_prefix(&target).unwrap());
+        assert_eq!(first.roots[0].rel, expected);
+        assert!(!source.exists());
+        repeat(&mut candidate, first.roots);
+        let done = run(candidate);
+        assert!(done.issues.is_empty(), "{:?}", done.issues);
+        assert_eq!(done.roots[0].rel, expected);
+        assert!(!source.exists());
+        assert_eq!(fs::read(destination.join("a.bin")).unwrap(), b"ours");
+        assert_eq!(
+            fs::read(parent.join(name).join("foreign")).unwrap(),
+            b"foreign"
+        );
+        assert_eq!(fs::read_dir(&parent).unwrap().count(), 2);
+    }
 }
