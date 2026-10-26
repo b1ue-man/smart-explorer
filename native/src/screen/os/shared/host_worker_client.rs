@@ -414,11 +414,14 @@ impl ScreenSource for WorkerSource {
 
     /// One raw picture (still images); video goes through `host_stage`.
     fn capture(&mut self, frame_id: u64, _keyframe: bool) -> io::Result<SourceFrame> {
+        self.capture_snapshot(frame_id,None)
+    }
+    fn capture_snapshot(&mut self,frame_id:u64,frame_contract:Option<crate::screen::core::frame_budget::FrameContract>)->io::Result<SourceFrame> {
         let answer = self
             .link()
-            .ask(&WorkerRequest::Capture { frame_id }, FRAME_TIMEOUT);
+            .ask(&WorkerRequest::Capture { frame_id,frame_contract }, FRAME_TIMEOUT);
         match answer {
-            Ok(WorkerReply::Raw(image)) => {self.size=image.size();Ok(SourceFrame::Frame(image))},
+            Ok(WorkerReply::Raw(image)) => {if frame_contract.is_none() {self.size=image.size();}Ok(SourceFrame::Frame(image))},
             Ok(WorkerReply::Frame(StageFrame::Paused(state))) => Ok(SourceFrame::Paused(state)),
             Ok(WorkerReply::Failed { message, .. }) => Err(io::Error::other(message)),
             Ok(_) => Err(self.unexpected("CAPTURE").error),

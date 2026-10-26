@@ -13,15 +13,14 @@
 //! of the group arrives its records are skipped.
 use std::io;
 use std::collections::BTreeMap;
-use std::sync::{mpsc, Arc};
+use std::sync::Arc;
 use std::time::Instant;
 
 use super::screen_session::{
-    refusal_end, Backend, DecoderOpener, EndInfo, Outgoing, Picture, PictureData, Shared,
-    StreamLink,
+    DecoderOpener, EndInfo, Picture, PictureData, Shared,
 };
 use super::screen_texts::{end_text, error_text};
-use crate::daemon::{StreamEvent, StreamRequest};
+use crate::daemon::StreamEvent;
 use crate::screen::core::gop_stream::now_us;
 use crate::screen::core::decoded_frame::{DecodedFrame, DecoderFallback, MAX_PENDING_FRAMES};
 use crate::screen::core::host_backend::ScreenDecoder;
@@ -31,109 +30,9 @@ use crate::screen::core::wire_binary::{FrameRecord, GopHeader, FLAG_KEYFRAME};
 use crate::screen::core::wire_control::{
     ControlAction, ControlRequest, HostFrame, KeyframeReason, KeyframeRequest, ViewerFrame,
 };
-use crate::share::PeerOpenTarget;
 
-type SendFrame = Arc<dyn Fn(&ViewerFrame) -> io::Result<()> + Send + Sync>;
-
-/// Starts the session's threads; the stream opens on the first of them.
-pub(crate) fn spawn(
-    backend: Backend,
-    peer: PeerOpenTarget,
-    request: StreamRequest,
-    shared: Arc<Shared>,
-    (outbox, inbox): (mpsc::Sender<Outgoing>, mpsc::Receiver<Outgoing>),
-    take_control: bool,
-) {
-    let (failed, wake) = (shared.clone(), backend.wake.clone());
-    let started = std::thread::Builder::new()
-        .name("screen-viewer-decode".into())
-        .spawn(move || {
-            run(
-                backend,
-                peer,
-                request,
-                shared,
-                (outbox, inbox),
-                take_control,
-            )
-        });
-    if let Err(error) = started {
-        failed.end(EndInfo {
-            text: format!("Die Sitzung konnte nicht starten: {error}"),
-            code: None,
-        });
-        wake();
-    }
-}
-
-fn run(
-    backend: Backend,
-    peer: PeerOpenTarget,
-    request: StreamRequest,
-    shared: Arc<Shared>,
-    (outbox, inbox): (mpsc::Sender<Outgoing>, mpsc::Receiver<Outgoing>),
-    take_control: bool,
-) {
-    let wake = backend.wake.clone();
-    let link = match (backend.open)(peer, request) {
-        Ok(link) => link,
-        Err(message) => {
-            shared.end(refusal_end(&message));
-            wake();
-            return;
-        }
-    };
-    let StreamLink {
-        mut next,
-        send,
-        close,
-    } = link;
-    spawn_sender(inbox, send.clone(), close, shared.clone());
-    let mut state = DecodeState::new(shared, backend.decoder.clone(), send, take_control);
-    loop {
-        match next() {
-            Ok(event) => {
-                let last = state.on_event(event);
-                wake();
-                if last {
-                    break;
-                }
-            }
-            Err(_) => {
-                state.connection_lost();
-                wake();
-                break;
-            }
-        }
-    }
-    // Lets the sender thread go.
-    let _ = outbox.send(Outgoing::Close);
-}
-
-/// Writes the queued frames to the host; ends with the session.
-fn spawn_sender(
-    inbox: mpsc::Receiver<Outgoing>,
-    send: SendFrame,
-    close: Arc<dyn Fn() -> io::Result<()> + Send + Sync>,
-    shared: Arc<Shared>,
-) {
-    let _ = std::thread::Builder::new()
-        .name("screen-viewer-send".into())
-        .spawn(move || {
-            while let Ok(item) = inbox.recv() {
-                match item {
-                    Outgoing::Frame(mut frame) => {
-                        shared.decoder_mode(&mut frame);
-                        if send(&frame).is_err() {
-                            break;
-                        }
-                    }
-                    Outgoing::Close => break,
-                }
-            }
-            let _ = close();
-        });
-}
+pub(crate) use super::screen_decode_run::spawn;
+use super::screen_decode_run::SendFrame;
 
 /// One picture group with its decoder.
 struct Gop {
@@ -147,7 +46,6 @@ struct Gop {
 
 /// What the decode thread keeps between two events.
 pub(crate) struct DecodeState {
-    shared: Arc<Shared>,
     open_decoder: DecoderOpener,
     send: SendFrame,
     take_control: bool,
@@ -163,6 +61,9 @@ pub(crate) struct DecodeState {
     seq: u64,
     last_shown: Option<Instant>,
     started: Instant,
+    // Declared last: decoder/pending pictures must die before the session lease.
+    shared: Arc<Shared>,
+    memory: crate::screen::core::frame_memory::MemoryHold,
 }
 
 impl DecodeState {
@@ -172,7 +73,9 @@ impl DecodeState {
         send: SendFrame,
         take_control: bool,
     ) -> Self {
+        let memory=shared.memory.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
         Self {
+            memory,
             shared,
             open_decoder,
             send,
@@ -191,11 +94,15 @@ impl DecodeState {
 
     /// Applies one event; `true` when it was the session's last.
     pub(crate) fn on_event(&mut self, event: StreamEvent) -> bool {
+        if self.shared.presentation.lock().unwrap_or_else(std::sync::PoisonError::into_inner).closed {self.gop=None;return true;}
         match event {
             StreamEvent::Pending(_) => self
                 .shared
                 .update(|info| info.state = SessionState::WaitingForApproval),
             StreamEvent::Accepted { hello, path } => {
+                let exceeds=self.shared.memory.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref()
+                    .is_some_and(|memory|hello.frame_contract.is_some_and(|contract|contract.limits.working_bytes>memory.bytes()));
+                if hello.validate().is_err() || exceeds {self.connection_lost();return true;}
                 if self.shared.info().family.is_some() && (hello.family_version != Some(1)
                     || hello.frame_contract.is_none_or(|contract|contract.version!=crate::screen::core::frame_budget::FRAME_PROTOCOL)) {
                     self.shared.end(EndInfo { text:"Der Host bestätigt den Familien-/Bildvertrag nicht.".into(), code:None });
@@ -250,6 +157,7 @@ impl DecodeState {
             }
             StreamEvent::Clock(offset) => self.shared.update(|info| info.clock_offset_us = offset),
             StreamEvent::End(end) => {
+                self.gop=None;
                 self.shared.stop_presentation();
                 let text = end_text(&end.code, end.detail.as_deref());
                 self.shared.update(|info| {
@@ -267,6 +175,7 @@ impl DecodeState {
 
     /// The reading side broke without an end from the relay.
     pub(crate) fn connection_lost(&mut self) {
+        self.gop=None;
         self.shared.end(EndInfo {
             text: end_text("connection_lost", None),
             code: Some("connection_lost".into()),
@@ -277,7 +186,7 @@ impl DecodeState {
         match frame {
             HostFrame::State(report) => {
                 if report.state != SessionState::Streaming && self.shared.info().state != report.state {
-                    self.shared.cancel_presentation();
+                    self.shared.suspend_presentation();
                 }
                 self.shared.update(|info| {
                 info.state = report.state;
@@ -363,6 +272,12 @@ impl DecodeState {
     }
 
     fn record(&mut self, header: GopHeader, record: FrameRecord) {
+        let admitted=self.shared.info().hello.as_ref().is_some_and(|hello|
+            crate::screen::core::frame_budget::contract_matches(header.frame_contract,hello.frame_contract));
+        let exceeds=self.shared.memory.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref().is_some_and(|memory| {
+            let owners=if header.frame_contract.is_some() {24} else {8};header.size.pixels().saturating_mul(4*owners)>memory.bytes()
+        });
+        if !admitted || exceeds {self.connection_lost();return;}
         if self.shared.lossless_fallback.load(std::sync::atomic::Ordering::Acquire)
             && header.codec != crate::screen::core::negotiate::CodecKind::Tiles { return; }
         if let Some(family)=&self.shared.info().family {
@@ -472,6 +387,7 @@ impl DecodeState {
         self.seq += 1;
         self.last_shown = Some(Instant::now());
         self.shared.put_picture(Picture {
+            memory:self.memory.clone(),
             seq: self.seq,
             presented,
             size,
@@ -479,3 +395,6 @@ impl DecodeState {
         });
     }
 }
+#[cfg(test)]
+#[path="batches_decode_lifetime_task_tests.rs"]
+mod lifetime_tests;

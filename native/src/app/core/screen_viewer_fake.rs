@@ -90,7 +90,7 @@ impl Fake {
 
     pub(super) fn backend(&self) -> Backend {
         let inner = self.inner.clone();
-        let open: Opener = Arc::new(move |_peer: PeerOpenTarget, request: StreamRequest| {
+        let open: Opener = Arc::new(move |_peer: PeerOpenTarget, request: StreamRequest, _shared:&super::screen_session::Shared| {
             let (sender, receiver) = mpsc::channel();
             inner.requests.lock().unwrap().push(request);
             // The test sees the connection once its events can be sent.
@@ -102,6 +102,7 @@ impl Fake {
             inner.opens.fetch_add(1, Ordering::SeqCst);
             let (frames, closer) = (inner.clone(), inner.clone());
             Ok::<StreamLink, String>(StreamLink {
+                memory: None,
                 next: Box::new(move || {
                     receiver
                         .recv()

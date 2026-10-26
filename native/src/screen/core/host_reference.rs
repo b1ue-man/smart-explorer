@@ -1,4 +1,8 @@
 //! Source identity and bounded proof that a current-reference frame reached presentation.
+#[cfg(test)]
+#[path = "batches_reference_task_tests.rs"]
+mod batches_task_tests;
+
 use super::*;
 use std::collections::VecDeque;
 
@@ -23,6 +27,11 @@ impl ReferencePresentation {
         if self.sent.len()==PRESENTATION_HISTORY {self.sent.pop_front();}
         self.sent.push_back(frame);
     }
+    fn presented(&mut self,gop:u64,frame:u64)->bool {
+        if self.gop!=Some(gop) || !self.sent.contains(&frame) {return false;}
+        self.ready=true;
+        true
+    }
 }
 impl Pipeline {
     pub(crate) fn presentation_supported(&self)->bool {self.negotiated_contract.is_some_and(|c|c.version==crate::screen::core::frame_budget::FRAME_PROTOCOL)}
@@ -35,10 +44,8 @@ impl Pipeline {
     pub(crate) fn input_reference_generation(&self)->u64 {self.source_generation}
     pub(crate) fn reference_floor(&self)->u64 {self.presentation.floor}
     pub(crate) fn on_presented(&mut self,gop:u64,frame:u64)->bool {
-        if self.presentation_supported() && self.source_reference_current() && self.presentation.gop==Some(gop) && self.presentation.sent.contains(&frame) {
-            self.presentation.ready=true;return true;
-        }
-        false
+        self.presentation_supported() && self.source_reference_current()
+            && self.presentation.presented(gop,frame)
     }
     /// Also called after paused/unchanged capture and snapshots, before consuming their result.
     pub(super) fn sync_source_reference(&mut self)->bool {

@@ -9,7 +9,13 @@ use super::screen_prefs::Fit;
 use crate::screen::core::session_state::SessionState;
 const LABEL_HEIGHT: f32 = 24.0;
 
-use super::screen_texts::error_text;
+use super::screen_texts::{error_text,state_text};
+use crate::share::access_grant::CapabilityDecision;
+use std::time::Duration;
+/// A tile that got no picture this long after the host accepted it says so
+/// (the preview interval is at most 5 s, plus transfer: twice that).
+const NO_ANSWER: Duration = Duration::from_secs(10);
+
 
 /// What a tile shows.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -57,8 +63,8 @@ impl Face {
 
 /// Draws one tile; its target when the user clicked a tile that can be opened.
 pub(crate) fn draw_tile(ui: &mut egui::Ui, tile: &mut Tile, width: f32, fit: Fit) -> Option<ScreenTarget> {
-    let window = ui.ctx().data(|data| data.get_temp::<super::screen_visibility::WindowVisibility>(egui::Id::new("screen_window_visibility"))).unwrap_or_default();
-    if window.hidden() { tile.picture = None; tile.texture = super::screen_texture_cpu::CpuTexture::default(); tile.wait_frame = true; }
+    let mut window = ui.ctx().data(|data| data.get_temp::<super::screen_visibility::WindowVisibility>(egui::Id::new("screen_window_visibility"))).unwrap_or_default();
+    if window.hidden() { tile.picture = None; tile.texture.reset(); tile.wait_frame = true; }
     let face = tile.face();
     let image_height = width * 9.0 / 16.0;
     let (rect, response) = ui.allocate_exact_size(
@@ -67,22 +73,38 @@ pub(crate) fn draw_tile(ui: &mut egui::Ui, tile: &mut Tile, width: f32, fit: Fit
     );
     let painter = ui.painter_at(rect);
     let image_area = Rect::from_min_size(rect.min, Vec2::new(width, image_height));
+    if !ui.is_rect_visible(image_area)||!image_area.intersect(ui.clip_rect()).is_positive() {
+        window.shown=Some(false);tile.picture=None;tile.texture.reset();tile.wait_frame=true;
+    }
     painter.rect_filled(image_area, 4.0, Color32::from_gray(24));
+    if fit==Fit::Actual && response.dragged() && tile.picture.is_some() {
+        tile.pan-=ui.input(|input|input.pointer.delta());
+    }
+    if let Some(session) = &tile.session {
+        session.refresh_visibility();
+        let geometry = tile.picture.or_else(||session.info().stream.as_ref().map(|stream|stream.size)).map(|size| super::screen_input_map::Geometry {
+            rect:super::screen_view_widget::image_rect(image_area,size,fit,ui.ctx().pixels_per_point(),tile.pan), size });
+        if let Some(report) = tile.visibility.report(&window,image_area.intersect(ui.clip_rect()),geometry.as_ref(),ui.ctx().pixels_per_point()) {
+            if report.state == crate::screen::core::visibility::VisibilityState::Hidden {
+                tile.picture = None; tile.texture.reset(); tile.wait_frame = true;
+            }
+            session.set_visibility(report);
+        }
+    }
     if let Some(size) = tile.picture {
         let dest = super::screen_view_widget::image_rect(image_area,size,fit,ui.ctx().pixels_per_point(),tile.pan);
         let ppp = ui.ctx().pixels_per_point();
         tile.texture.prepare(ui.ctx(), if fit == Fit::Actual { [size.width as usize,size.height as usize] }
             else { [(dest.width()*ppp).round().max(1.0) as usize,(dest.height()*ppp).round().max(1.0) as usize] });
     }
-    match (&face, tile.picture, tile.texture.id()) {
-        (Face::Picture, Some(size), Some(texture)) => {
-            if fit == Fit::Actual && response.dragged() {
-                tile.pan -= ui.input(|input| input.pointer.delta());
-            }
+    match (&face, tile.picture) {
+        (Face::Picture, Some(size)) => {
             let dest = super::screen_view_widget::image_rect(image_area,size,fit,ui.ctx().pixels_per_point(),tile.pan);
             let painter = ui.painter_at(image_area.intersect(ui.clip_rect()));
-            let uv = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
-            painter.image(texture, dest, uv, Color32::WHITE);
+            if let Some(session)=&tile.session {
+                let drawn=!window.hidden()&&ui.is_rect_visible(dest)&&dest.intersect(painter.clip_rect()).is_positive();
+                tile.texture.paint(&painter,dest,|frame|preview_receipt(session,frame,drawn));
+            }
             let streaming = tile
                 .session
                 .as_ref()
@@ -100,17 +122,6 @@ pub(crate) fn draw_tile(ui: &mut egui::Ui, tile: &mut Tile, width: f32, fit: Fit
             );
             let at = image_area.center() - galley.size() / 2.0;
             painter.galley(at, galley, Color32::from_gray(200));
-        }
-    }
-    if let Some(session) = &tile.session {
-        session.refresh_visibility();
-        let geometry = tile.picture.map(|size| super::screen_input_map::Geometry {
-            rect:super::screen_view_widget::image_rect(image_area,size,fit,ui.ctx().pixels_per_point(),tile.pan), size });
-        if let Some(report) = tile.visibility.report(&window,image_area.intersect(ui.clip_rect()),geometry.as_ref(),ui.ctx().pixels_per_point()) {
-            if report.state == crate::screen::core::visibility::VisibilityState::Hidden {
-                tile.picture = None; tile.texture = super::screen_texture_cpu::CpuTexture::default(); tile.wait_frame = true;
-            }
-            session.set_visibility(report);
         }
     }
     let label_center = Pos2::new(rect.min.x + 6.0, rect.max.y - LABEL_HEIGHT / 2.0);
@@ -142,12 +153,70 @@ pub(crate) fn draw_tile(ui: &mut egui::Ui, tile: &mut Tile, width: f32, fit: Fit
         return None;
     }
     if retry {
+        retry(tile);
+        return None;
+    }
+    openable.then(|| tile.entry.target.clone())
+}
+
+/// Called only after the uploaded texture was added to a visible paint pass.
+pub(super) fn preview_presented(session:&super::screen_session::ViewerSession,
+    texture:&super::screen_texture_cpu::CpuTexture,drawn:bool)->Option<super::screen_presented::Presented> {
+    if !drawn || texture.failed() {return None;}
+    texture.presented_frame().and_then(|frame|preview_receipt(session,frame,drawn))
+}
+
+fn preview_receipt(session:&super::screen_session::ViewerSession,frame:super::screen_presented::PresentedFrame,drawn:bool)->Option<super::screen_presented::Presented> {
+    (drawn&&session.can_present(frame.clone())).then(||session.presented_callback(frame))
+}
+
+/// The click path and controlled fixture use exactly the same retry retirement.
+pub(super) fn retry(tile:&mut Tile) {
         tile.probe = Probe::Idle;
         tile.failed = None;
         tile.limit = false;
         tile.session = None;
-        tile.picture = None;
-        return None;
+        tile.picture = None;tile.texture.reset();tile.visibility.invalidate();tile.wait_frame=false;
+}
+
+impl Tile {
+    pub(super) fn face(&self) -> Face {
+        if !self.entry.online {
+            return Face::Offline;
+        }
+        match &self.probe {
+            Probe::Idle | Probe::Running(_) => return Face::Probing,
+            Probe::Failed(error) => return Face::ProbeFailed(error.clone()),
+            Probe::Done(info) if !info.supported => return Face::Unsupported,
+            Probe::Done(info) if info.view == CapabilityDecision::Off => return Face::NotShared,
+            Probe::Done(info) if info.view == CapabilityDecision::Ask => return Face::Ask,
+            Probe::Done(_) => {}
+        }
+        if self.limit {
+            return Face::Limit;
+        }
+        if let Some(error) = &self.failed {
+            return Face::Failed(error.clone());
+        }
+        if self.picture.is_some() {
+            return Face::Picture;
+        }
+        if self.wait_frame { return Face::Waiting("Warte auf ein vollständiges aktuelles Bild …".into()); }
+        let Some(session) = &self.session else {
+            return Face::Waiting(state_text(SessionState::Connecting, None));
+        };
+        let info = session.info();
+        if self
+            .accepted_at
+            .is_some_and(|accepted| accepted.elapsed() >= NO_ANSWER)
+        {
+            return Face::NoAnswer;
+        }
+        let text = state_text(info.state, info.reason.as_deref());
+        Face::Waiting(if text.is_empty() {
+            "Warte auf das erste Bild …".to_string()
+        } else {
+            text
+        })
     }
-    openable.then(|| tile.entry.target.clone())
 }

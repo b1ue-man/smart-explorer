@@ -21,6 +21,7 @@ use super::wire_hello::HostPlatform;
 use crate::share::access_approval::{ApprovalBroker, ApprovalSummary, ApprovalTicket};
 use crate::share::access_grant::Capability;
 use crate::share::relation_proof::ProvenPrincipal;
+pub(crate) use super::capture_source_contract::{PreparedSource, PreparedSourceInfo, HostOutputPlan};
 
 /// What one capture delivered.
 pub(crate) enum SourceFrame {
@@ -53,6 +54,10 @@ pub(crate) trait ScreenInputSink:Send+Sync {
 /// One capture source; its SourceId determines whether it contains screen content.
 pub(crate) trait ScreenSource: Send {
     fn legacy_input_invalid(&self)->bool {false}
+    /// Prepared capture implementations return their active bound grant.
+    /// None supplies no allocation permission and is only a transitional
+    /// state until every productive source uses prepare/activate.
+    fn capture_grant(&self) -> Option<super::capture_admission::CaptureGrant> {None}
     /// Runs in the original capture worker after the admitted request waited
     /// in IPC. Platform sources may additionally verify their live geometry.
     fn inject_input(&mut self,backend:&dyn ScreenHostBackend,reference_generation:u64,_presented:bool,events:&[InputEvent])
@@ -71,7 +76,7 @@ pub(crate) trait ScreenSource: Send {
     /// The allocation bound for this negotiated session; legacy adapters may
     /// retain a distinct surface-backed path without changing their v2 offer.
     fn frame_limits_for_contract(&self, contract: Option<super::frame_budget::FrameContract>) -> super::frame_budget::FrameLimits {
-        contract.map_or_else(||self.frame_limits(),|contract|self.frame_limits().intersect(contract.limits))
+        contract.map_or_else(||self.frame_limits(),|contract|contract.limits.for_capture(self.frame_limits()))
     }
     /// Matching raw/video pixels permit hybrid reconstruction; false retains the v2 size contract without hybrid operations.
     fn supports_frame_regions(&self) -> bool { true }
@@ -85,6 +90,22 @@ pub(crate) trait ScreenSource: Send {
     /// the id into its barcode). With `keyframe` a source delivers its last
     /// picture even when nothing changed, so a key frame always has one.
     fn capture(&mut self, frame_id: u64, keyframe: bool) -> io::Result<SourceFrame>;
+    /// A still image leaves the capture adapter only within the session's
+    /// geometry. The raw source allocation retains its separate capture limit.
+    fn capture_snapshot(&mut self,frame_id:u64,contract:Option<super::frame_budget::FrameContract>)->io::Result<SourceFrame> {
+        if let Some(contract)=contract {contract.validate()?;}
+        let limits=self.frame_limits_for_contract(contract);
+        match self.capture(frame_id,true)? {
+            SourceFrame::Frame(image)=>{
+                let size=limits.fit(image.size());limits.check(size)?;
+                Ok(SourceFrame::Frame(if size==image.size() {image} else {
+                    super::pixel_convert::downscale_bgra_with_limits(&image.view(),size,limits)?
+                }))
+            }
+            frame=>Ok(frame),
+        }
+    }
+
     /// The stage of a source whose capture and encoding run in the host
     /// process (SCR-M3, `os::host_worker_client`); `None` keeps both here.
     fn host_stage(&mut self) -> Option<&mut dyn super::host_stage::HostStage> {
@@ -179,6 +200,9 @@ impl SourceRefusal {
 /// The screen host of one platform.
 pub(crate) trait ScreenHostBackend: Send + Sync {
     fn platform(&self) -> HostPlatform;
+    fn memory_facts(&self)->Option<super::frame_memory::MemoryFacts> {None}
+    /// Android's separately observed Java heap bound remains a session ceiling.
+    fn session_memory_ceiling(&self)->u64 {super::frame_budget::MAX_SESSION_WORKING_BYTES}
     fn icon(&self, _entry: super::app_icon::AuthorizedIconEntry<'_>) -> io::Result<Option<super::app_icon::IconReply>> {Ok(None)}
     /// A graphical session exists in which the screen can be shown.
     fn graphical_session(&self) -> bool;
@@ -188,6 +212,22 @@ pub(crate) trait ScreenHostBackend: Send + Sync {
     /// Platform limits for `HELLO_OK` (`consent_each_session`, …).
     fn limits(&self) -> Vec<String>;
     fn windows(&self) -> io::Result<WindowList>;
+    /// Metadata-only source preparation. The additive default refuses this
+    /// boundary; it must never open a legacy source without its capture grant.
+    fn prepare_session_source(&self, _owner: &str, _session: &str, _source: &SourceId,
+        _wanted: Option<FrameSize>, _control: bool,
+        _admission: std::sync::Arc<super::capture_admission::SessionAdmission>)
+        -> Result<Box<dyn PreparedSource>, SourceRefusal> {
+        Err(SourceRefusal::new("capture_preparation_unavailable"))
+    }
+    /// Family metadata keeps the exact member identity and the same local or
+    /// delegated admission. Activation still requires its bound member grant.
+    fn prepare_family_member(&self, _owner: &str, _session: &str,
+        _native: crate::remote_window::NativeWindowId,
+        _admission: std::sync::Arc<super::capture_admission::SessionAdmission>)
+        -> Result<Box<dyn PreparedSource>, SourceRefusal> {
+        Err(SourceRefusal::new("family_capture_preparation_unavailable"))
+    }
     fn family_windows(&self, _owner: &str) -> io::Result<super::family_protocol::FamilyListing> {
         Err(io::Error::new(io::ErrorKind::Unsupported, "window_family_listing_unavailable"))
     }

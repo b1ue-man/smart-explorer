@@ -91,3 +91,7 @@ pub(crate) fn reserve_control(peer: String, bytes: usize) -> Option<ControlPermi
 impl Drop for ControlPermit {
     fn drop(&mut self) { if let Ok(mut state)=self.shared.lock() {state.control_bytes=state.control_bytes.saturating_sub(self.bytes);} }
 }
+
+#[cfg(test)]
+#[path = "batches_sender_task_tests.rs"]
+mod batches_task_tests;

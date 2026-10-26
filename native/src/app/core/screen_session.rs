@@ -6,28 +6,24 @@
 //! picture out of a slot and reads the state, so decoding and a slow
 //! connection never block it. Picture contents are never logged.
 use std::collections::VecDeque;
-use std::io;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, MutexGuard, PoisonError};
 
 use eframe::egui;
 
+pub(crate) use super::screen_session_backend::{Backend,StreamLink,Opener,DecoderOpener,ProbeInfo,Prober,Wake};
 use super::screen_target::ScreenTarget;
 use super::screen_visibility::ResumeGate;
 use crate::screen::core::visibility::ViewerVisibility;
-use crate::daemon::{StreamEvent, StreamRequest};
-use crate::screen::core::host_backend::{ScreenDecoder, YuvPicture};
-use crate::screen::core::negotiate::CodecOffer;
+use crate::daemon::StreamRequest;
+use crate::screen::core::host_backend::YuvPicture;
 use crate::screen::core::pixel_convert::{BgraImage, FrameSize};
 use crate::screen::core::session_state::SessionState;
 use crate::screen::core::window_list::WindowList;
-use crate::screen::core::wire_binary::GopHeader;
 use crate::screen::core::wire_control::{
     ControlBlock, ControlHolder, HostStats, SetMode, StreamInfo, StreamMode, ViewerFrame,
 };
 use crate::screen::core::wire_hello::{ScreenErrorCode, ScreenHelloOk, SessionMode};
-use crate::share::access_grant::CapabilityDecision;
-use crate::share::PeerOpenTarget;
 
 /// Samples the latency figures of the statistics are taken from. It only
 /// smooths the display: the figures follow the latest frames.
@@ -47,6 +43,7 @@ pub(crate) struct Picture {
     pub presented: super::screen_presented::PresentedFrame,
     pub size: FrameSize,
     pub data: PictureData,
+    pub memory: Option<Arc<crate::screen::core::frame_memory::MemoryLease>>,
 }
 
 /// Why a session ended, as the status line shows it.
@@ -149,89 +146,9 @@ impl SessionInfo {
     }
 }
 
-/// Wakes the GUI thread (production: `Context::request_repaint`).
-pub(crate) type Wake = Arc<dyn Fn() + Send + Sync>;
-
-/// A relayed session as plain functions, so the daemon's `ScreenStream`
-/// need not be named and a test can stand in for the host.
-pub(crate) struct StreamLink {
-    /// The next event; blocks until one arrives.
-    pub next: Box<dyn FnMut() -> io::Result<StreamEvent> + Send>,
-    /// Sends a control frame to the host.
-    pub send: Arc<dyn Fn(&ViewerFrame) -> io::Result<()> + Send + Sync>,
-    /// Ends the session.
-    pub close: Arc<dyn Fn() -> io::Result<()> + Send + Sync>,
-}
-
-pub(crate) type Opener =
-    Arc<dyn Fn(PeerOpenTarget, StreamRequest) -> Result<StreamLink, String> + Send + Sync>;
-pub(crate) type DecoderOpener =
-    Arc<dyn Fn(&GopHeader) -> io::Result<Box<dyn ScreenDecoder>> + Send + Sync>;
-
-/// What a probe of a device tells the group view.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ProbeInfo {
-    /// The device knows the screen protocol of this version.
-    pub supported: bool,
-    pub view: CapabilityDecision,
-}
-
-pub(crate) type Prober = Arc<dyn Fn(PeerOpenTarget) -> Result<ProbeInfo, String> + Send + Sync>;
-
-/// Everything a session needs from outside.
-#[derive(Clone)]
-pub(crate) struct Backend {
-    pub open: Opener,
-    pub decoder: DecoderOpener,
-    pub probe: Prober,
-    pub wake: Wake,
-    /// The decoders this process offers the host.
-    pub offers: Vec<CodecOffer>,
-}
-
-impl Backend {
-    /// The daemon's relay and the codecs of this process.
-    pub(crate) fn production(ctx: &egui::Context) -> Self {
-        let registry = Arc::new(crate::screen::os::codec_inventory::registry());
-        let offers = registry.decoder_offers();
-        let renderer=ctx.clone();
-        let open: Opener = Arc::new(
-            move |target: PeerOpenTarget, mut request: StreamRequest| -> Result<StreamLink, String> {
-                request.frame_capabilities=Some(super::screen_render_caps::capabilities(&renderer));
-                let mut stream = crate::daemon::screen_stream(target, request)?;
-                let control = stream.control();
-                let (sender, closer) = (control.clone(), control);
-                Ok(StreamLink {
-                    next: Box::new(move || stream.next_event()),
-                    send: Arc::new(move |frame: &ViewerFrame| sender.send(frame)),
-                    close: Arc::new(move || closer.close()),
-                })
-            },
-        );
-        let renderer=ctx.clone();
-        let decoder: DecoderOpener = Arc::new(move |header:&GopHeader| {
-            super::screen_render_caps::check(&renderer,header.size)?;
-            registry.open_decoder(header)
-        });
-        let probe: Prober = Arc::new(|target| {
-            crate::daemon::screen_probe(target).map(|report| ProbeInfo {
-                supported: report.supported,
-                view: report.view,
-            })
-        });
-        let ctx = ctx.clone();
-        Backend {
-            open,
-            decoder,
-            probe,
-            wake: Arc::new(move || ctx.request_repaint()),
-            offers,
-        }
-    }
-}
-
 /// What the GUI thread and the session's threads share.
 pub(crate) struct Shared {
+    pub(super) retirement: Arc<super::screen_render_owner::RenderSlot>,
     info: Mutex<SessionInfo>,
     pub(super) picture: Mutex<Option<Picture>>,
     /// The draw code takes planes (GPU path) instead of BGRA.
@@ -244,6 +161,7 @@ pub(crate) struct Shared {
     visibility: Mutex<Option<(ViewerVisibility, bool)>>,
     decoder_mode: Mutex<SetMode>,
     pub(super) lossless_fallback: AtomicBool,
+    pub(super) memory: Mutex<Option<Arc<crate::screen::core::frame_memory::MemoryLease>>>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -253,8 +171,9 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 impl Shared {
     pub(crate) fn new(prefer_yuv: bool, present_gap_ms: u64) -> Arc<Self> {
         Arc::new(Self {
+            retirement:Arc::default(),
             info: Mutex::new(SessionInfo::new()),
-            picture: Mutex::new(None),
+            picture: Mutex::new(None), memory:Mutex::new(None),
             prefer_yuv: AtomicBool::new(prefer_yuv),
             present_gap_ms: AtomicU64::new(present_gap_ms),
             resume: Mutex::new(ResumeGate::default()),
@@ -280,7 +199,8 @@ impl Shared {
 
     /// Replaces the shown picture; the previous one that nobody took is gone.
     pub(crate) fn put_picture(&self, picture: Picture) {
-        *lock(&self.picture) = Some(picture);
+        let presentation=lock(&self.presentation);
+        if presentation.matches(&picture.presented) {*lock(&self.picture) = Some(picture);}
     }
 
     pub(crate) fn visibility_ack(&self, geometry_generation: u64, min_frame_id: u64) {
@@ -350,7 +270,7 @@ pub(crate) struct ViewerSession {
     /// The mode the session runs in (a preview raised to the full view
     /// becomes `View`).
     pub mode: SessionMode,
-    shared: Arc<Shared>,
+    pub(super) shared: Arc<Shared>,
     outbox: mpsc::Sender<Outgoing>,
 }
 
@@ -406,6 +326,12 @@ impl ViewerSession {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn fixture(shared:Arc<Shared>)->Self {
+        let (outbox,_inbox)=mpsc::channel();Self {target:ScreenTarget::direct("renderer-fixture",Some("renderer-fixture")),
+            mode:SessionMode::View,shared,outbox}
+    }
+
     pub(crate) fn info(&self) -> MutexGuard<'_, SessionInfo> {
         self.shared.info()
     }
@@ -437,7 +363,7 @@ impl ViewerSession {
     pub(crate) fn invalidate_input(&self) { self.shared.invalidate_presentation(); }
 
     pub(crate) fn can_present(&self, frame: super::screen_presented::PresentedFrame) -> bool {
-        self.shared.can_present(frame)
+        self.shared.can_present(&frame)
     }
 
     pub(crate) fn presented_callback(&self, frame: super::screen_presented::PresentedFrame) -> super::screen_presented::Presented {
@@ -445,7 +371,7 @@ impl ViewerSession {
         let outbox = self.outbox.clone();
         Arc::new(move || {
             let modern = shared.modern();
-            shared.presented(frame, || !modern || outbox.send(Outgoing::Frame(ViewerFrame::Presented {
+            shared.presented(frame.clone(), || !modern || outbox.send(Outgoing::Frame(ViewerFrame::Presented {
                 gop_id: frame.gop_id, frame_id: frame.frame_id,
             })).is_ok());
         })

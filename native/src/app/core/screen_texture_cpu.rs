@@ -1,130 +1,106 @@
-//! BGRA texture path with one conflating reconstruction worker. Native pixels
-//! upload directly; area/cubic scaling never waits on the GUI thread.
-use std::sync::{Arc,Condvar,Mutex,PoisonError};
-use eframe::egui::{self,Color32,ColorImage,TextureHandle,TextureId,TextureOptions};
-use crate::screen::core::pixel_convert::BgraImage;
-
-pub(crate) fn color_image(image: &BgraImage) -> ColorImage {
-    let size = image.size();
-    let pixels = image.data().chunks_exact(4)
-        .map(|bgra| Color32::from_rgb(bgra[2],bgra[1],bgra[0])).collect();
-    ColorImage { size:[size.width as usize,size.height as usize],pixels }
+//! BGRA conversion and conflating CPU scaling feed one explicitly owned renderer slot.
+use std::sync::Arc;
+use eframe::egui::{self,Color32,ColorImage,TextureId};
+use crate::screen::core::{pixel_convert::BgraImage,frame_memory::MemoryHold,frame_budget::FrameLimits};
+use super::screen_texture_worker::{Worker,Work};
+use super::screen_render_upload::{PreparedImage,Package};
+use super::screen_presented::{PresentedFrame,Presented};
+use super::screen_render_owner::{RenderSlot,get};
+pub(crate) fn color_image(image:&BgraImage)->ColorImage {
+    let size=image.size();let pixels=image.data().chunks_exact(4).map(|p|Color32::from_rgb(p[2],p[1],p[0])).collect();
+    ColorImage {size:[size.width as usize,size.height as usize],pixels}
 }
-struct Work { source:Arc<ColorImage>, target:[usize;2], seq:u64, frame:Option<super::screen_presented::PresentedFrame>, ctx:egui::Context }
-struct Finished { source:[usize;2], target:[usize;2], seq:u64, frame:Option<super::screen_presented::PresentedFrame>, image:Option<ColorImage> }
-#[derive(Default)]
-struct Slots { pending:Option<Work>, finished:Option<Finished>, stopped:bool }
-struct Worker { shared:Arc<(Mutex<Slots>,Condvar)> }
-impl Worker {
-    fn new() -> Option<Self> {
-        let shared = Arc::new((Mutex::new(Slots::default()),Condvar::new()));
-        let thread = shared.clone();
-        let _ = std::thread::Builder::new().name("screen-scale".into()).spawn(move || loop {
-            let (lock,ready) = &*thread;
-            let work = {
-                let mut slots = lock.lock().unwrap_or_else(PoisonError::into_inner);
-                while !slots.stopped && slots.pending.is_none() {
-                    slots = ready.wait(slots).unwrap_or_else(PoisonError::into_inner);
-                }
-                if slots.stopped { return; }
-                slots.pending.take()
-            };
-            let Some(work) = work else { continue; };
-            let image = super::screen_scaling::resample_with_cancel(&work.source,work.target,&||
-                thread.0.lock().unwrap_or_else(PoisonError::into_inner).stopped);
-            let mut slots = lock.lock().unwrap_or_else(PoisonError::into_inner);
-            if slots.stopped { return; }
-            slots.finished = Some(Finished { source:work.source.size,target:work.target,seq:work.seq,frame:work.frame,image });
-            drop(slots);
-            work.ctx.request_repaint();
-        }).ok()?;
-        Some(Self { shared })
-    }
-    fn submit(&self, work:Work) {
-        let (lock,ready) = &*self.shared;
-        lock.lock().unwrap_or_else(PoisonError::into_inner).pending = Some(work);
-        ready.notify_one();
-    }
-    fn take(&self) -> Option<Finished> {
-        self.shared.0.lock().unwrap_or_else(PoisonError::into_inner).finished.take()
-    }
-}
-impl Drop for Worker {
-    fn drop(&mut self) {
-        let (lock,ready) = &*self.shared;
-        let mut slots = lock.lock().unwrap_or_else(PoisonError::into_inner);
-        slots.stopped = true;
-        slots.pending = None;
-        ready.notify_one();
-    }
-}
-#[derive(Default)]
 pub(crate) struct CpuTexture {
-    handle:Option<TextureHandle>,
-    source:Option<Arc<ColorImage>>,
-    seq:u64,
-    presented:u64,
-    source_frame:Option<super::screen_presented::PresentedFrame>,
-    presented_frame:Option<super::screen_presented::PresentedFrame>,
-    prepared:Option<[usize;2]>,
-    queued:Option<(u64,[usize;2])>,
-    worker:Option<Worker>,
-    failed:bool,
+    slot:Arc<RenderSlot>,source:Option<Arc<ColorImage>>,seq:u64,prepared_seq:u64,
+    source_frame:Option<PresentedFrame>,prepared:Option<[usize;2]>,queued:Option<(u64,[usize;2])>,
+    worker:Option<Worker>,failed:bool,memory:MemoryHold,limits:Option<FrameLimits>,source_memory:MemoryHold,source_limits:Option<FrameLimits>,
 }
+impl Default for CpuTexture {fn default()->Self {Self {slot:Arc::default(),source:None,seq:0,prepared_seq:0,source_frame:None,prepared:None,queued:None,worker:None,failed:false,memory:None,limits:None,source_memory:None,source_limits:None}}}
 impl CpuTexture {
-    pub(crate) fn update(&mut self, ctx:&egui::Context, image:&BgraImage) {
-        if super::screen_render_caps::check(ctx,image.size()).is_err() {
-            self.source=None; self.prepared=None; self.presented_frame=None; self.source_frame=None;
-            self.seq=self.seq.saturating_add(1); self.failed=true; return;
-        }
-        let source = color_image(image);
-        if self.source.as_ref().is_none_or(|old| old.size != source.size) { self.prepared = None; }
-        self.source = Some(Arc::new(source));
-        self.source_frame = None;
-        self.seq = self.seq.saturating_add(1);
-        self.failed = false;
+    pub(crate) fn slot(&self)->&Arc<RenderSlot> {&self.slot}
+    pub(crate) fn reset(&mut self) {
+        self.slot.watch_memory(&self.source_memory);self.slot.watch_memory(&self.memory);
+        self.slot.reset();if let Some(worker)=&self.worker {worker.invalidate();}
+        self.source=None;self.source_frame=None;self.source_memory=None;self.source_limits=None;self.memory=None;self.limits=None;
+        self.prepared=None;self.queued=None;self.prepared_seq=0;self.failed=false;super::screen_render_owner::notify_all();
     }
-    pub(crate) fn update_frame(&mut self, ctx:&egui::Context, image:&BgraImage, frame:super::screen_presented::PresentedFrame) {
-        self.update(ctx,image);
-        if !self.failed {self.source_frame = Some(frame);}
+    pub(crate) fn bind_memory(&mut self,memory:MemoryHold,limits:Option<FrameLimits>) {self.memory=memory;self.limits=limits;}
+    fn target(&self,ctx:&egui::Context,target:[usize;2])->Option<[usize;2]> {
+        let target=super::screen_render_caps::checked_target(ctx,target)?;
+        let size=crate::screen::core::pixel_convert::FrameSize::new(u32::try_from(target[0]).ok()?,u32::try_from(target[1]).ok()?);
+        let size=self.source_limits.unwrap_or(FrameLimits::LEGACY).fit(size);Some([size.width as usize,size.height as usize])
     }
-    fn upload(&mut self, ctx:&egui::Context, image:ColorImage, seq:u64, frame:Option<super::screen_presented::PresentedFrame>) {
-        if super::screen_render_caps::checked_target(ctx,image.size)!=Some(image.size) {
-            self.prepared=None; self.presented_frame=None; self.failed=true; return;
+    pub(crate) fn update(&mut self,ctx:&egui::Context,image:&BgraImage) {
+        if super::screen_render_caps::check(ctx,image.size()).is_err()||self.limits.is_some_and(|l|l.check(image.size()).is_err()) {self.reset();self.failed=true;return;}
+        if let Some(owner)=get(ctx) {owner.attach(&self.slot);}
+        let source=color_image(image);if self.source.as_ref().is_none_or(|old|old.size!=source.size) {self.prepared=None;}
+        self.source=Some(Arc::new(source));self.source_memory=self.memory.clone();self.source_limits=self.limits;
+        self.source_frame=None;self.seq=self.seq.saturating_add(1);self.failed=false;
+    }
+    pub(crate) fn update_frame(&mut self,ctx:&egui::Context,image:&BgraImage,frame:PresentedFrame) {
+        if self.source_frame.as_ref().is_some_and(|old|!old.same_source(&frame)) {
+            // Keep the newly bound session promise while retiring the old generation.
+            let memory=self.memory.clone();let limits=self.limits;self.reset();self.bind_memory(memory,limits);
         }
-        self.prepared = Some(image.size);
-        self.presented = seq;
-        self.presented_frame = frame;
-        self.failed = false;
-        match self.handle.as_mut() {
-            Some(handle) => handle.set(image,TextureOptions::NEAREST),
-            None => self.handle = Some(ctx.load_texture("screen-viewer",image,TextureOptions::NEAREST)),
+        self.update(ctx,image);if !self.failed {self.source_frame=Some(frame);}
+    }
+    /// Login may redraw the same signed pixels after its existing focus/geometry epoch changes.
+    pub(crate) fn reframe(&mut self,frame:PresentedFrame) {
+        let Some(source)=self.source.clone() else{return;};let memory=self.source_memory.clone();let limits=self.source_limits;
+        self.reset();self.source=Some(source);self.source_memory=memory;self.source_limits=limits;self.source_frame=Some(frame);self.seq=self.seq.saturating_add(1);
+    }
+    fn upload(&mut self,ctx:&egui::Context,image:Arc<ColorImage>,seq:u64,frame:Option<PresentedFrame>,memory:MemoryHold) {
+        if self.target(ctx,image.size)!=Some(image.size) {self.failed=true;return;}
+        let Some(owner)=get(ctx).filter(|owner|owner.available()) else{self.failed=true;return;};owner.attach(&self.slot);
+        self.slot.queue(Package::Cpu(PreparedImage {image:image.clone(),memory,frame,generation:self.slot.generation(),seq}));
+        self.prepared=Some(image.size);self.prepared_seq=seq;self.failed=false;ctx.request_repaint();
+    }
+    pub(crate) fn prepare(&mut self,ctx:&egui::Context,target:[usize;2]) {
+        if self.source_frame.as_ref().is_some_and(|frame|!frame.active()) {self.reset();return;}
+        let Some(target)=self.target(ctx,target) else{self.failed=true;return;};let Some(source)=self.source.clone() else{return;};
+        if source.size==target {
+            if self.prepared_seq!=self.seq||self.prepared!=Some(target) {self.upload(ctx,source,self.seq,self.source_frame.clone(),self.source_memory.clone());}return;
+        }
+        if self.worker.is_none() {self.worker=Worker::new();}let Some(worker)=&self.worker else{self.failed=true;return;};
+        let finished=worker.take();let generation=self.slot.generation();
+        if self.queued!=Some((self.seq,target)) {worker.submit(Work {source:source.clone(),target,seq:self.seq,frame:self.source_frame.clone(),ctx:ctx.clone(),memory:self.source_memory.clone(),generation:generation.clone()});self.queued=Some((self.seq,target));}
+        if let Some(done)=finished.filter(|d|d.generation.active()&&d.frame.as_ref().is_none_or(|frame|frame.active())&&d.generation.same(&generation)&&d.source==source.size&&d.target==target&&d.seq>=self.prepared_seq
+            &&d.frame.as_ref().zip(self.source_frame.as_ref()).is_none_or(|(a,b)|a.session==b.session&&a.epoch==b.epoch&&a.gop_id==b.gop_id)) {
+            if let Some(image)=done.image {self.upload(ctx,Arc::new(image),done.seq,done.frame,done.memory);}else{self.failed=true;}
         }
     }
-    pub(crate) fn prepare(&mut self, ctx:&egui::Context, target:[usize;2]) {
-        let Some(target)=super::screen_render_caps::checked_target(ctx,target) else {self.failed=true; return;};
-        let Some(source) = self.source.as_ref().cloned() else { return; };
-        if source.size == target {
-            if self.presented != self.seq || self.prepared != Some(target) {
-                self.upload(ctx,(*source).clone(),self.seq,self.source_frame);
-            }
-            return;
-        }
-        if self.worker.is_none() { self.worker = Worker::new(); }
-        let Some(worker) = self.worker.as_ref() else { self.failed = true; return; };
-        let finished = worker.take();
-        if self.queued != Some((self.seq,target)) {
-            worker.submit(Work { source:source.clone(),target,seq:self.seq,frame:self.source_frame,ctx:ctx.clone() });
-            self.queued = Some((self.seq,target));
-        }
-        if let Some(done) = finished.filter(|done| done.source == source.size && done.target == target && done.seq >= self.presented) {
-            if let Some(image) = done.image { self.upload(ctx,image,done.seq,done.frame); }
-            else { self.failed = true; }
-        }
+    pub(crate) fn paint(&self,painter:&egui::Painter,rect:egui::Rect,receipt:impl Fn(PresentedFrame)->Option<Presented>)->bool {
+        let healthy=!self.failed;
+        get(painter.ctx()).is_some_and(|owner|owner.paint_cpu(painter,rect,&self.slot,|frame|if healthy {receipt(frame)} else {None}))&&healthy
     }
-    pub(crate) fn presented_frame(&self) -> Option<super::screen_presented::PresentedFrame> { self.presented_frame }
-    pub(crate) fn failed(&self) -> bool { self.failed }
-    pub(crate) fn id(&self) -> Option<TextureId> {
-        self.prepared.and_then(|_| self.handle.as_ref().map(TextureHandle::id))
+    pub(crate) fn presented_frame(&self)->Option<PresentedFrame> {self.slot.frame()}
+    pub(crate) fn failed(&self)->bool {self.failed}
+    pub(crate) fn id(&self)->Option<TextureId> {self.slot.id()}
+}
+impl Drop for CpuTexture {fn drop(&mut self) {self.reset();self.slot.close();}}
+
+#[cfg(test)]
+mod memory_tests {
+    use super::*;
+    #[test]
+    fn batches_task_b6_cpu_source_keeps_its_lease_when_next_session_is_bound() {
+        let pool=Arc::new(crate::screen::core::frame_memory::MemoryPool::default());
+        let memory=Arc::new(pool.reserve(None,crate::screen::core::frame_budget::MAX_WORKING_BYTES).unwrap());
+        let ctx=egui::Context::default();let image=BgraImage::new(crate::screen::core::pixel_convert::FrameSize::new(2,2)).unwrap();
+        let mut texture=CpuTexture::default();texture.bind_memory(Some(memory.clone()),Some(FrameLimits::LEGACY));texture.update(&ctx,&image);
+        texture.bind_memory(None,None);drop(memory);assert!(texture.source.is_some());assert!(pool.reserve(None,1024*1024).is_err());
+        let work=Work {source:texture.source.as_ref().unwrap().clone(),target:[1,1],seq:texture.seq,frame:None,ctx,
+            memory:texture.source_memory.clone(),generation:texture.slot.generation()};
+        drop(texture);assert!(pool.reserve(None,1024*1024).is_err());drop(work);assert!(pool.reserve(None,1024*1024).is_ok());
     }
+    #[test]
+    fn batches_task_b6_login_epoch_reframe_aliases_pixels_and_retires_old_generation() {
+        let ctx=egui::Context::default();let driver=super::super::screen_render_owner::ControlledDriver::install(&ctx);
+        let mut texture=CpuTexture::default();let image=BgraImage::new(crate::screen::core::pixel_convert::FrameSize::new(2,2)).unwrap();
+        let frame=super::super::screen_presented::PresentedFrame::default();texture.update_frame(&ctx,&image,frame.clone());texture.prepare(&ctx,[2,2]);driver.upload();driver.complete_upload(texture.slot());
+        let pixels=Arc::downgrade(texture.source.as_ref().unwrap());let slot=texture.slot().clone();let mut next=frame;next.epoch=1;
+        texture.reframe(next);assert!(std::sync::Weak::ptr_eq(&pixels,&Arc::downgrade(texture.source.as_ref().unwrap())));assert!(Arc::ptr_eq(&slot,texture.slot()));
+        assert!(texture.presented_frame().is_none());driver.owner.after_update(&ctx);driver.complete_retirement(&slot);
+    }
+
 }

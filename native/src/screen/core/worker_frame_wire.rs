@@ -28,7 +28,7 @@ pub(super) fn read_reference_payload(reader:&mut impl Read,len:usize,expected:Op
     fields.u64()?;let regions=fields.u8()?;
     if regions>1 {return Err(invalid("invalid worker reference regions"));}
     let source=FrameLimits {max_size:read_size(&mut fields)?,max_pixels:fields.u64()?,working_bytes:fields.u64()?};
-    source.validate()?;fields.u64()?;let tag=fields.u8()?;
+    source.validate_capture()?;fields.u64()?;let tag=fields.u8()?;
     let bound=if let Some(limits)=expected {negotiated_payload_limit(tag,limits)?} else {
         let budget=super::super::frame_size_caps::PacketBudget::for_limits(source)?;
         match tag {ENCODED=>budget.encoded_bytes,RAW=>budget.raw_bytes,
@@ -123,7 +123,7 @@ pub(super) fn decode_encoded(payload: &[u8]) -> io::Result<StageFrame> {
 }
 
 pub(super) fn encode_reference(generation:u64,regions:bool,limits:FrameLimits,family_layout_revision:Option<u64>,reply:&WorkerReply) -> io::Result<(u8,Vec<u8>)> {
-    limits.validate()?;
+    limits.validate_capture()?;
     if matches!(reply,WorkerReply::Reference {..}) {return Err(invalid("nested worker reference envelope"));}
     let budget=super::super::frame_size_caps::PacketBudget::for_limits(limits)?;
     if let WorkerReply::Frame(StageFrame::Encoded {records,..})=reply {
@@ -150,7 +150,7 @@ pub(super) fn encode_reference(generation:u64,regions:bool,limits:FrameLimits,fa
 pub(super) fn decode_reference(payload:&[u8]) -> io::Result<WorkerReply> {
     let mut reader=BeReader::new(payload);let generation=reader.u64()?;let regions=match reader.u8()? {0=>false,1=>true,_=>return Err(invalid("invalid worker source capability"))};
     let limits=FrameLimits {max_size:read_size(&mut reader)?,max_pixels:reader.u64()?,working_bytes:reader.u64()?};
-    limits.validate()?;
+    limits.validate_capture()?;
     let revision=reader.u64()?;
     let family_layout_revision=(revision!=0).then_some(revision);
     let tag=reader.u8()?;

@@ -230,8 +230,8 @@ pub(crate) fn decode_relay_record(payload: &[u8]) -> std::io::Result<(GopHeader,
         .ok_or_else(|| invalid("screen relay record is too short"))?;
     let mut bytes = [0u8; GOP_HEADER_BYTES];
     bytes.copy_from_slice(head);
-    let mut header = GopHeader::decode(&bytes)?;
-    let rest = if header.frame_contract.is_some() {
+    let (mut header,extended) = GopHeader::decode_prefix(&bytes)?;
+    let rest = if extended {
         let (length, data) = rest.split_at_checked(2)
             .ok_or_else(|| invalid("screen relay contract length is missing"))?;
         let length = u16::from_be_bytes([length[0], length[1]]) as usize;
@@ -318,6 +318,20 @@ pub(crate) fn read_relay_budgeted(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn batches_task_b6_extended_4k_ipc_contract_is_complete() {
+        use crate::screen::core::frame_budget::{FrameCapabilities,FrameContract};
+        let caps=FrameCapabilities::admitted(FrameSize::new(16384,16384),768*1024*1024).unwrap();
+        let contract=FrameContract::negotiate(Some(caps),Some(caps)).unwrap();
+        let header=GopHeader {gop_id:1,frame_contract:contract,family_layout_revision:None,
+            kind:crate::screen::core::wire_binary::StreamKind::Video,
+            codec:crate::screen::core::negotiate::CodecKind::Tiles,profile:None,size:FrameSize::new(3840,2160)};
+        let record=FrameRecord {frame_id:1,capture_ts_us:100,
+            flags:crate::screen::core::wire_binary::FLAG_KEYFRAME,payload:vec![0]};
+        let bytes=encode_relay_record(&header,&record).unwrap();
+        assert_eq!(decode_relay_record(&bytes).unwrap(),(header,record));
+    }
 
     #[test]
     fn screen_task_ipc_screen_wire_shapes() {

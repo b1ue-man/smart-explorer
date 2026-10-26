@@ -8,7 +8,7 @@
 //! There is no fixed limit of tiles: a device that runs its most sessions
 //! says `session_limit`, and its tile stays closed until it is clicked.
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use eframe::egui::{self, Vec2};
 
@@ -18,7 +18,6 @@ use super::screen_pool::{
 };
 use super::screen_session::{Backend, ProbeInfo, ViewerSession};
 use super::screen_target::ScreenTarget;
-use super::screen_texts::state_text;
 use super::screen_texture_cpu::CpuTexture;
 use super::screen_tile_face::{Face, draw_tile};
 use super::screen_prefs::Fit;
@@ -30,9 +29,6 @@ use crate::share::access_grant::CapabilityDecision;
 const MIN_WIDTH: f32 = 160.0;
 const MAX_WIDTH: f32 = 480.0;
 const DEFAULT_WIDTH: f32 = 240.0;
-/// A tile that got no picture this long after the host accepted it says so
-/// (the preview interval is at most 5 s, plus transfer: twice that).
-const NO_ANSWER: Duration = Duration::from_secs(10);
 /// The choices of „Aktualisierung“.
 const INTERVALS: [(u64, &str); 4] = [(500, "0,5 s"), (1000, "1 s"), (2000, "2 s"), (5000, "5 s")];
 
@@ -63,7 +59,7 @@ pub(super) struct Tile {
 }
 
 impl Tile {
-    fn new(entry: DeviceEntry) -> Self {
+    pub(super) fn new(entry: DeviceEntry) -> Self {
         Self {
             entry,
             probe: Probe::Idle,
@@ -80,45 +76,7 @@ impl Tile {
         }
     }
 
-    pub(super) fn face(&self) -> Face {
-        if !self.entry.online {
-            return Face::Offline;
-        }
-        match &self.probe {
-            Probe::Idle | Probe::Running(_) => return Face::Probing,
-            Probe::Failed(error) => return Face::ProbeFailed(error.clone()),
-            Probe::Done(info) if !info.supported => return Face::Unsupported,
-            Probe::Done(info) if info.view == CapabilityDecision::Off => return Face::NotShared,
-            Probe::Done(info) if info.view == CapabilityDecision::Ask => return Face::Ask,
-            Probe::Done(_) => {}
-        }
-        if self.limit {
-            return Face::Limit;
-        }
-        if let Some(error) = &self.failed {
-            return Face::Failed(error.clone());
-        }
-        if self.picture.is_some() {
-            return Face::Picture;
-        }
-        if self.wait_frame { return Face::Waiting("Warte auf ein vollständiges aktuelles Bild …".into()); }
-        let Some(session) = &self.session else {
-            return Face::Waiting(state_text(SessionState::Connecting, None));
-        };
-        let info = session.info();
-        if self
-            .accepted_at
-            .is_some_and(|accepted| accepted.elapsed() >= NO_ANSWER)
-        {
-            return Face::NoAnswer;
-        }
-        let text = state_text(info.state, info.reason.as_deref());
-        Face::Waiting(if text.is_empty() {
-            "Warte auf das erste Bild …".to_string()
-        } else {
-            text
-        })
-    }
+
 }
 
 /// The group view of a scope.
@@ -132,7 +90,7 @@ pub(crate) struct ScreenTileGrid {
     interval_ms: u64,
     applied_interval: u64,
     /// A full session that returns to its tile.
-    pending: Option<ViewerSession>,
+    pending: Option<(ViewerSession,CpuTexture)>,
     fit: Fit,
 }
 
@@ -153,24 +111,25 @@ impl ScreenTileGrid {
     }
 
     /// The preview connection of a tile, for the full view of the same device.
-    pub(crate) fn take_session(&mut self, target: &ScreenTarget) -> Option<ViewerSession> {
+    pub(crate) fn take_session(&mut self, target: &ScreenTarget) -> Option<(ViewerSession,CpuTexture)> {
         let tile = self
             .tiles
             .iter_mut()
             .find(|tile| tile.entry.target.same_device(target))?;
-        tile.picture = None;
-        tile.session.take()
+        if let Some(session)=&tile.session {session.invalidate_input();}
+        tile.picture = None;tile.texture.reset();
+        tile.session.take().map(|session|(session,std::mem::take(&mut tile.texture)))
     }
 
     /// The full view going back to its tile as a preview; it is placed once
     /// the tiles exist.
-    pub(crate) fn adopt(&mut self, session: ViewerSession) {
-        self.pending = Some(session);
+    pub(crate) fn adopt(&mut self, session: ViewerSession,texture:CpuTexture) {
+        self.pending = Some((session,texture));
         self.generation = u64::MAX;
     }
 
     fn place_pending(&mut self) {
-        let Some(session) = self.pending.take() else {
+        let Some((session,texture)) = self.pending.take() else {
             return;
         };
         let info = session.info().hello.as_ref().map(|hello| ProbeInfo {
@@ -186,6 +145,7 @@ impl ScreenTileGrid {
                 tile.probe = Probe::Done(info);
             }
             tile.accepted_at = Some(Instant::now());
+            tile.visibility.invalidate();tile.texture=texture;
             tile.session = Some(session);
         }
     }
@@ -249,6 +209,7 @@ impl ScreenTileGrid {
     }
 
     fn open_preview(&self, tile: &mut Tile, edge: u32) {
+        tile.texture.reset();tile.visibility.invalidate();
         let request = preview_request(&self.backend.offers, edge, self.interval_ms);
         let session = ViewerSession::open(
             &self.backend,
@@ -264,10 +225,10 @@ impl ScreenTileGrid {
     }
 
     /// One step of a tile: probe, session, picture.
-    fn step(&self, tile: &mut Tile, ctx: &egui::Context, edge: u32) {
+    pub(super) fn step(&self, tile: &mut Tile, ctx: &egui::Context, edge: u32) {
         if !tile.entry.online {
             tile.session = None;
-            tile.picture = None;
+            tile.picture = None;tile.texture.reset();tile.visibility.invalidate();tile.wait_frame=false;
             tile.failed = None;
             if matches!(tile.probe, Probe::Done(_) | Probe::Failed(_)) {
                 tile.probe = Probe::Idle;
@@ -296,12 +257,8 @@ impl ScreenTileGrid {
             return;
         };
         if let Some(picture) = session.take_picture() {
-            if !tile.wait_frame || session.input_ready() {
-                if let super::screen_session::PictureData::Bgra(image) = picture.data {
-                    tile.texture.update(ctx, &image);
-                    tile.picture = Some(picture.size);
-                    tile.wait_frame = false;
-                }
+            if let Some(size)=accept_preview_picture(session,&mut tile.texture,ctx,picture) {
+                tile.picture=Some(size);tile.wait_frame=false;
             }
         }
         let (ended, accepted) = {
@@ -317,7 +274,7 @@ impl ScreenTileGrid {
             } else if end.code.as_deref() != Some("viewer_closed") {
                 tile.failed = Some(end.text);
             }
-            tile.session = None;
+            tile.session = None;tile.picture=None;tile.texture.reset();tile.visibility.invalidate();tile.wait_frame=false;
         } else if edge != tile.requested_edge && accepted {
             session.send(ViewerFrame::SetMode(preview_set_mode(
                 edge,
@@ -419,3 +376,19 @@ impl ScreenTileGrid {
         self.tiles.iter().map(Tile::face).collect()
     }
 }
+
+/// A visibility ACK admits a fresh decoded image before input is unlocked.
+/// Only the subsequent paint callback may mark that image as presented.
+fn accept_preview_picture(session:&ViewerSession,texture:&mut CpuTexture,ctx:&egui::Context,
+    picture:super::screen_session::Picture)->Option<FrameSize> {
+    let hidden=ctx.data(|data|data.get_temp::<super::screen_visibility::WindowVisibility>(egui::Id::new("screen_window_visibility")))
+        .is_some_and(|window|window.hidden());
+    if hidden || !session.can_present(picture.presented.clone()) {return None;}
+    let super::screen_session::PictureData::Bgra(image)=picture.data else {return None;};
+    super::screen_render_caps::bind_texture(texture,session,picture.memory.clone());
+    texture.update_frame(ctx,&image,picture.presented);
+    (!texture.failed()).then_some(picture.size)
+}
+#[cfg(test)]
+#[path="batches_preview_task_tests.rs"]
+mod batches_preview_task_tests;

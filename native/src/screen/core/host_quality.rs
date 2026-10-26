@@ -1,4 +1,8 @@
 //! Requested quality survives temporary preview, lossless and cadence limits.
+#[cfg(test)]
+#[path = "batches_quality_task_tests.rs"]
+mod batches_task_tests;
+
 use super::{CodecChoice, CodecKind, FrameSize, Pipeline, StreamKind};
 
 const SHARPNESS_FPS: u32 = 15;

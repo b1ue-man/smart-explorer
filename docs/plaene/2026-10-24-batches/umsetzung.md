@@ -136,6 +136,9 @@ Fernfenster, Programmstart und RDP besitzen abgegrenzte Umsetzungsaufträge.
 | B6-R9 native Capture-Zulassung, Detailplan | `capture_admission_plan` | Nutzervorgabe `gpt-6-astra`, `max` | 9 |
 | B6-R9/R10 Rendererbesitz und Sitzungswechsel, Umsetzung | `renderer_retirement` | `gpt-6.1-sol`, `xhigh` | 9 |
 | B6-R9 portabler Capture-Besitzerkern und Host-Trait | `capture_core` | `gpt-6.1-sol`, `xhigh` | 9 |
+| B6-R9 produktiver Login-Empfang und Desktop-/Android-Bildbesitz, Ergänzungsplan | `capture_admission_plan` (Folgeauftrag) | Nutzervorgabe `gpt-6-astra`, `max` | 9 |
+| B6-R9 Windows-Capture vor Allokation und letzter Bildbesitz | `capture_windows` | `gpt-6.1-sol`, `high` | 8 |
+| B6-R9 Linux-Capture, X11-Replygrenze und PipeWire-Verhandlung | `capture_linux` | `gpt-6.1-sol`, `xhigh` | 9 |
 
 Belegt sind die expliziten Modell-/Effortparameter der genannten Hostaufrufe.
 Antwortmodell-Metadaten sind über das verwendete Collaboration-Werkzeug nicht
@@ -822,3 +825,56 @@ Collaboration-Werkzeug nicht zugänglich; der Startparameter ist daher der
 verfügbare Modellbeleg. Kontingentrest und tatsächlicher Creditsverbrauch sind
 nicht gemessen. Die Lese-/Schreibfläche ist auf Pool, Capturetypen, Bildbesitz,
 Host-Trait und deren Quellenfixtures begrenzt.
+
+### R9-Ergänzung: produktiver Login-Empfang und Bildbesitz
+
+Main hat am 2026-10-26 im betroffenen Login-Rendereranschluss eine konkrete
+noch offene Grenze belegt: `LoginImage::show` bindet produktiv keine
+`MemoryHold`; seine neue kontrollierte Fixture injiziert eine.
+`login/os/shared/viewer.rs::ViewerFrame` enthält nur Token und Pixel-Vec,
+`daemon/os/shared/login_ipc_client.rs` liest die Pixel vorher ohne gemeinsame
+Zusage. Android legt im selben Loginpfad Direktbuffer, IntArray und Bitmaps an.
+Die Grenze von `4096×2304×4` Byte ist ein Größenlimit, kein Besitzerbudget.
+
+Erstplan: den bestehenden C10-Loginanschluss um die tatsächlich lokalen
+Empfangs-/Renderbesitzer erweitern, deren gleichzeitige Ablagen aus dem Code
+herleiten und vorherige Zulassung sowie letzten Besitz über IPC, Desktop und
+Android binden. Bestehende Maschinen-/Benutzerrechte, Challenge, Bildtoken,
+Präsentationsepoch und Release-Eingaben bleiben erhalten. Die genaue
+Besitzermenge und JNI-Endgrenze werden vor Produktänderungen im Ergänzungsplan
+geklärt. Es ist keine neue Nutzerentscheidung erforderlich.
+
+Der begrenzte Login-Ergänzungsplan läuft im bestehenden Astra/max-Planungsagenten.
+Die vorgeschaltete Planungsauswahl meldet für Grad 9 keinen Katalogkandidaten
+(Astra/xhigh 51,14 unter Mindestwert 56); die ausdrückliche Nutzervorgabe
+Astra/max für Planung bestimmt deshalb unverändert die Startkonfiguration.
+
+### R9: Windowsadapter und fertiges Rendererpaket
+
+Das abgegrenzte Rendererpaket ist zur Integration zurückgegeben. Es umfasst
+eigene CPU-/YUV-Ressourcen, den Abfluss nach dem letzten Draw, Sitzungsidentität,
+Skaliererabbruch und die tatsächlichen Übergänge in Vollansicht, Kacheln und
+Loginansicht. Syntax-/Textbefunde liegen vor; Typprüfung und Laufzeit sind
+unbestätigt. Die produktive Login-Empfangszusage bleibt im Ergänzungsplan offen.
+
+Für die Windowsadapter wurde nach dem abgeschlossenen Aufnahmeplan eine
+zusammenhängende Fläche aus WGC, DXGI, D3D-Readback, Host-Prepare und Loginquelle
+festgelegt. Die sechs Auswahlkriterien ergeben 19 Punkte und Grad 8:
+Schlusskette 3, offene Detailwahl 2, Abhängigkeiten 4, Autonomie 3,
+Prüfbarkeit 3, Fehlerfolge 4. Der Codex-Selektor wählt `gpt-6.1-sol`/`high`.
+Der Startparameter ist der zugängliche Modellbeleg; tatsächliche
+Antwortmodellmetadaten und gemessener Creditsverbrauch sind nicht verfügbar.
+Der Auftrag verändert keine Worker-, Codec-, Linux-, Android- oder
+Rendererimplementierung. Neue Quellenfixtures gehören zur gemeinsamen
+Remote-Suite und werden lokal nicht ausgeführt.
+
+Der Linuxanschluss erhält eine eigene zusammenhängende OS-Fläche: X11-SHM,
+Reply-/Cursorzulassung, PipeWire-Verhandlung, beide Portalwege und die gebundene
+Loginquelle. Seine offene Vorallokations-/Endbesitzerherleitung ergibt Grad 9
+aus 21 Punkten (4/2/4/3/4/4); der Codex-Selektor wählt
+`gpt-6.1-sol`/`xhigh`. Kern- und Workerdateien bleiben außerhalb seiner
+Schreibfläche. Die API `prepare_session_source` bleibt durch einen verifizierten
+delegierten `SessionAdmission`-Kontext auch im Kindprozess verwendbar.
+Familienpläne unterscheiden nun gleichzeitig lebende von seriell transienten
+Mitgliedern; ihre tatsächlichen Slices unterliegen weiterhin einem gemeinsamen
+Summenzähler. Diese Kernanschlüsse sind Quellcodebefunde ohne Laufzeitabnahme.

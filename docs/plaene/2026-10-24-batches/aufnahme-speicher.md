@@ -78,6 +78,7 @@ pub(crate) trait CaptureAuthority: Send + Sync {
     fn approve(&self, plan: CapturePlan) -> std::io::Result<CaptureGrant>;
 }
 impl SessionAdmission {
+    fn session(&self) -> &str;
     fn working_bytes(&self) -> u64; // W, niemals W + X
     fn bind_contract(&self, contract: Option<FrameContract>) -> std::io::Result<()>;
     fn authority(&self) -> std::sync::Arc<dyn CaptureAuthority>;
@@ -100,6 +101,22 @@ Ein `CapturePlan` wird über checked Konstruktoren aus `SourceKey`, Generation u
 `CaptureGrant::claim` ist ein schneller lokaler Teilbereichserwerb ohne OS-Abfrage und ohne IPC. Er prüft atomar **sowohl die konkrete Ownerkapazität als auch die Summe sämtlicher gleichzeitig lebender Slices** gegen den zugelassenen Gesamtbereich. Phasennamen sind keine voneinander unabhängigen Geldtöpfe. Wenn zwei im Plan als disjunkt angenommene Phasen doch gleichzeitig Besitzer halten, zählen beide realen Bestände; die zweite beanspruchte Slice muss noch in die Gesamtzusage passen oder scheitert vor Allokation. Die Phasenrechnung wird außerdem als überprüfbare Gleichzeitigkeitstabelle im Plan gespeichert. Sie ersetzt diesen Summenzähler nicht. `split` erhält exakt die bisherige Summenbuchung, Aliasclone vermehrt nur Referenzen, finaler Drop vermindert sie einmal.
 
 Der lokale Erwerb kann deshalb vor einer Callbackkopie eingesetzt werden. Das Beschaffen oder Erweitern eines Grants über `approve` liegt ausschließlich im vorbereitenden/control Pfad; der entfernte Workeradapter implementiert `CaptureAuthority` über den beschriebenen Dispatcher. Ein serialisierter Grantdeskriptor wird nur vom verifizierten Parentkanal angenommen. Ein Worker-Creditpool ist damit eine begrenzte Unterteilung eines bereits im Parent gezählten Grants, kein eigener `MemoryPool` mit neu beobachteter Kapazität. Parentantwort-/Workeranteile erhalten disjunkte Limits aus demselben Grant; ihre lokalen Summen können zusammen die im Parent gehaltene Gesamtsumme nicht überschreiten. Eine Übertragung dieser Teilbereiche ist ein quittierter Eigentumswechsel, kein gleichzeitiges Gutschreiben beim Sender und Empfänger.
+
+Der delegierte Kernanschluss konsumiert einmalig einen nicht clonbaren, nicht
+serialisierbaren Credit mit Quellen-/Generationsbindung, Gesamt-/Ownergrenzen
+und einem Lebensdauerbesitzer für die Retirementmeldung. Der OS-Dispatcher
+erzeugt ihn ausschließlich nach Prüfung des konkreten Parentkanals und der
+Grant-ID. Der portable Kern prüft die Übereinstimmung von Plan und Credit;
+er behauptet keine eigene Authentisierung des Kanals. Erst der letzte lokale
+Grant-/Slicebesitzer beendet diesen Credit. Der Parent behält bis zur bestätigten
+Retirement- oder Prozessendegrenze die tatsächliche gemeinsame Zusage.
+
+Slices sind disjunkte Buchungsbesitzer, keine physischen zusammenhängenden
+Arenaabschnitte. Freies Guthaben darf deshalb nicht durch künstliche
+Adressfragmentierung unbrauchbar werden. Ein Split erhält die Summe. Die Zahl
+jemals gewählter Quellen einer Sitzung erhält keine neue feste Obergrenze;
+Buchungsmetadaten folgen den tatsächlich lebenden Besitzern und checked,
+falliblen Containeroperationen. Vorhandene begrenzte Wireframes bleiben erhalten.
 
 ```rust
 // core/capture_image.rs
@@ -461,3 +478,32 @@ integriert. Der Kernteil allein schließt R9 nicht. Die bestehende Viewer-
 MemoryLease-Schnittstelle bleibt für die parallel laufende Rendererarbeit
 kompatibel. Alle Teilkorrekturen gehören zu derselben abschließenden Suite und
 demselben terminalen Release.
+
+
+### Verbindliche Anschlüsse nach der Kernintegration
+
+Der portable Kern liegt am 2026-10-26 als Quellcode vor; Plattformaktivierung,
+Workerprotokoll und Login-Empfang bleiben offen. Der additive Host-Trait behält
+seinen `Arc<SessionAdmission>`-Parameter. Für das Kind konstruiert
+`SessionAdmission::from_verified_parent(session, working, contract, authority,
+lifetime)` einen verifizierten delegierten Kontext ohne lokalen Pool und ohne
+neue W-Zusage. Seine Autorität reicht an den Parentdispatcher weiter; jeder
+zurückgegebene Grant hält zusätzlich den Sitzungs-Endbesitzer. Der Konstruktor
+selbst authentisiert keinen Kanal.
+
+`CapturePlan::add_serial_member(persistent, transient)` bildet die Summe der
+persistenten Mitgliedsbesitzer und die alternativen transienten Phasen ab.
+`concurrency_cases()` erhält die tatsächlichen Gleichzeitigkeitstabellen;
+`add_member` zählt unabhängige Pläne gleichzeitig. Die realen Slices bleiben
+zusätzlich durch den gemeinsamen Gesamt- und Ownerzähler begrenzt.
+`prepare_family_member(owner, session, native, admission)` ist die entsprechende
+Metadata-only-Backendgrenze. Ihr Default verweigert die Vorbereitung.
+
+`CapturedImage::grant()` klont ausschließlich den zugehörigen Root-/Memberscope.
+Damit können generische Downscale- und Codecanschlüsse denselben Besitzerplan
+verwenden. `AdmittedBytes::from_allocator(grant, owner, bytes, allocate)` erlaubt
+einen vorher begrenzten Bibliotheksallocator innerhalb eines bereits erworbenen
+Slices. Beim X11-Anschluss ist das der belegte Parser. Die Kapazitätskontrolle
+nach der Closure ersetzt keinen vorherigen Library-Allokationsbeleg. Ein
+kleineres Resultat darf später nicht über seine tatsächliche Vec-Kapazität
+wachsen. Eine zusätzliche Vollbildkopie ist für diesen Besitzerübergang unnötig.

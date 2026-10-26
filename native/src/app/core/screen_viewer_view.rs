@@ -117,7 +117,7 @@ impl ViewState {
             0,
         ));
         self.sent_display = display;
-        self.widget = ViewWidget::new(common.gpu);
+        self.widget.reconnect(common.gpu);
     }
 
     /// Ends the session and opens a new one to the same target.
@@ -129,6 +129,7 @@ impl ViewState {
     }
 
     pub(crate) fn end_session(&mut self) {
+        self.widget.retire();
         if let Some(session) = self.session.take() {
             self.widget.release_input(&session);
             session.close();

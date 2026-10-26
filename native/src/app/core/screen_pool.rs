@@ -62,7 +62,7 @@ pub(crate) fn preview_request(offers: &[CodecOffer], edge: u32, interval_ms: u64
         decoders: offers.to_vec(),
         display_size: Some(FrameSize::new(edge, edge)),
         max_fps: preview_fps(interval_ms),
-        frame_capabilities: renderer_capabilities(),
+        frame_capabilities: None,
     }
 }
 
@@ -83,16 +83,11 @@ pub(crate) fn full_request(
         decoders: offers.to_vec(),
         display_size: Some(display),
         max_fps: FULL_FPS,
-        frame_capabilities: renderer_capabilities(),
+        frame_capabilities: None,
     }
 }
 
-fn renderer_capabilities() -> Option<crate::screen::core::frame_budget::FrameCapabilities> {
-    let side = super::screen_wgpu_yuv::texture_limit()?;
-    Some(crate::screen::core::frame_budget::FrameCapabilities::legacy_resources(
-        FrameSize::new(side, side),
-    ))
-}
+// The production opener binds capabilities to its concrete renderer and lease.
 
 /// `SET_MODE` to the full view with the viewer's settings.
 pub(crate) fn full_set_mode(
