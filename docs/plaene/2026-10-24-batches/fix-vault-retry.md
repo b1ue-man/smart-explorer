@@ -1,7 +1,8 @@
 # RA-07: wiederholbarer Vault-Laufwerkstart
 
-Stand: 2026-10-26. Statischer Fixautorzyklus abgeschlossen; gemeinsamer
-Remote-Lauf und Release sind hiermit nicht bestätigt. Arbeitsbaum
+Stand: 2026-10-26. Der statische RA-07-Fixautorzyklus einschließlich der unten
+dokumentierten Modultrennung nach der Remote-Größenrückmeldung ist abgeschlossen.
+Gemeinsamer Remote-Lauf und Release sind hiermit nicht bestätigt. Arbeitsbaum
 `/tmp/smartexplorer-review-fixes-ee75e91b`, Branch `codex/review-fixes-ee75e91b`.
 Auftragsvergleich: Releasebasis `a814f263096fe69d3746e840b5f3fad3fd7e88a0`
 (v0.5.184), Reviewkandidat `ee75e91bad6b28ef9206a5b2b2857cbea75c4e5b`.
@@ -287,8 +288,10 @@ Die eigene anschließende Review ist abgeschlossen. Prüffragen und Befunde:
 8. **Quell-/Dokumentkonsistenz:** Geprüft wurden der vollständige eigene Diff,
    die Fixturekörper, die konkreten Aufrufer und die vorstehende Karte.
    `git diff --check` für beide Produktionsdateien meldete keine Probleme.
-   Die drei neuen/wesentlich bearbeiteten Rustdateien bleiben unter 500 Zeilen
-   und 50 KiB: 413/17.764 Byte, 196/7.021 Byte und 265/12.470 Byte.
+   Die erste statische Autorprüfung vor der Remoteformatierung ermittelte für
+   die drei neuen/wesentlich bearbeiteten Rustdateien 413/17.764 Byte,
+   196/7.021 Byte und 265/12.470 Byte. Diese historischen Rohgrößen ersetzen
+   nicht das später ergänzte Gate für tatsächlich formatierte Dateien.
 
 Verbleibende Grenzen: Keine lokalen Builds, Formatter oder Tests wurden
 ausgeführt. Ein isolierter Versuch, die Quellen mit dem vorhandenen Python
@@ -319,13 +322,15 @@ zusätzliche Modulregistrierung durch Main ist erforderlich.
 | `batches_task_vault_retry_clean_preflight_error_retains_failed_action` | Wird ein sauberer, bereits unregistrierter Eintrag nach Stop plus frühem Fehler wieder als Failed bedienbar, ohne Recoverydaten zu erfinden? |
 | `batches_task_vault_retry_shared_sources_keep_endpoint_identity` | Bleiben gespeicherte SFTP-, FTP- und WebDAVkonten, Google Drive, Direct Share, Room Share und der Gerätebaum mit ihren identischen Literalroots und getrennten Gegenstellen unverändert durch denselben Retrykoordinator erhalten? |
 
-Main registriert `batches_task_vault_retry_` in `native.required_prefixes` des
-gemeinsamen `native/review-task-manifest.json` und ordnet diese Funktionen dem
-RA-07-Meilenstein zu. Das vorhandene Auswahlpräfix `batches_` erfasst ihre
-Ausführung bereits; das zusätzliche Requiredpräfix sichert ihre Auffindbarkeit.
+Die zunächst benötigte Registrierung durch Main ist im Stand der unten
+dokumentierten Fortsetzung vorhanden: `batches_task_vault_retry_` steht in
+`native.required_prefixes` des gemeinsamen `native/review-task-manifest.json`,
+die Funktionen sind dem RA-07-Meilenstein zugeordnet. Das vorhandene
+Auswahlpräfix `batches_` erfasst ihre Ausführung; das Requiredpräfix sichert
+ihre Auffindbarkeit.
 
-Für die direkt betroffenen unveränderten Integrationen dieselbe Remote-Suite
-um die exakten bestehenden Namen ergänzen, soweit noch nicht registriert:
+Auch die direkt betroffenen unveränderten Integrationen sind mit den exakten
+bestehenden Namen in derselben Remote-Suite registriert:
 `drive_task_restore_runs_after_recovery_audit`,
 `drive_task_vault_locked_start_fails_vault_locked` und
 `drive_task_update_stop_exit_clean_journal_counts_as_unmount`.
@@ -338,15 +343,237 @@ Mains genau einer gemeinsamen Remote-Suite.
 ## 7. Entscheidungen und ungelöste Abhängigkeiten außerhalb der Fläche
 
 - Keine Unterdelegation; derselbe Autor erstellt diesen gesamten Zyklus.
-- Nur die sechs in der Scope-Datei freigegebenen Dateien sind schreibbar.
+- Schreibbar ist ausschließlich die jeweils aktive explizite Fläche der
+  Scope-Datei. Die Erweiterung für die Größenkorrektur steht im folgenden Abschnitt.
 - Main besitzt gemeinsame Suite, Rootgraph, Integration, Commit/Push und Release.
 - Nach dem Native-Fix ist ein Rootgraphrefresh durch Main erforderlich.
 - Die konkret fehlenden Leseabhängigkeiten `ipc.rs`, `daemon/mod.rs`,
   `mount/mod.rs` und `rooted_backend.rs` wurden an Main gemeldet, ausdrücklich
   lesend ergänzt und anschließend an den benötigten Abschnitten geprüft.
 - Keine ungelöste Produktabhängigkeit außerhalb der Schreibfläche ist aus
-  diesem statischen Autorzyklus belegt. Ausstehend sind Mains Manifestzuordnung,
-  Rootgraphrefresh, Remote-Kompilierung/-Suitebewertung und terminaler Release.
+  diesem statischen Autorzyklus belegt. Die Manifestzuordnung ist vorhanden;
+  ausstehend sind Rootgraphrefresh nach der Strukturfortsetzung,
+  Remote-Kompilierung/-Suitebewertung und terminaler Release.
 - Echtbetrieb mit nicht erreichbarem Vaultprovider und späterer Rückkehr des
   Providers bleibt bis zur gemeinsamen Remote-Suite beziehungsweise einem
   ausdrücklich benannten realen Lauf ohne Laufzeitbeleg.
+
+## Fortsetzung: fachliche Modultrennung nach Remote-Vorbereitung 40332971455
+
+### Erstplan und belegter Ausgangsstand
+
+Quelle: delegierte Fortsetzung vom 26.10.2026, aktualisierte Scope-Datei,
+`/tmp/smartexplorer-rv1-40332971455/format.json` und
+`/tmp/smartexplorer-rv1-size-inventory.json`. Die gemeldete Vorbereitung lief vor
+Kompilierung in das Größen-Gate; dies ist kein fehlgeschlagener Funktionstest.
+Ihre übernommenen Formatkorrekturen stehen auf Commit `10988167`.
+
+Der Auftrag verlangt fachliche Module unter 500 Zeilen und 50 KiB in üblicher
+Formatierung bei identischen öffentlichen Mount-/Runtimeverträgen, unveränderter
+Snapshot-/Host-/Retry-/Recoverysemantik und erhaltenen Fallnamen. Die drei
+belegten Ausgangsgrößen sind `app/core/drive_snapshot.rs` mit 550 Zeilen/
+20.417 Byte, `daemon/os/shared/mount_client.rs` mit 505 Zeilen/19.210 Byte und
+`mount/mod.rs` mit 503 Zeilen/17.531 Byte. Keine Verdichtung, keine Gateausnahme.
+
+Der Erstplan ist: Snapshotmodell und Anwendung eines fertigen Snapshots trennen;
+Laufwerksverwaltung und Hostsession aufteilen; Runtime-Datentypen und
+plattformspezifische Runtimeauskunft aus der Mountfassade ausgliedern. Die
+verbindliche Änderungsfläche besteht aus den drei Zieldateien, den vier
+freigegebenen neuen Modulpfaden `drive_snapshot_apply.rs`,
+`mount_client_host.rs`, `core/runtime_types.rs`, `os/shared/runtime_info.rs`
+und diesem Bericht. Ob alle vier neuen Dateien erforderlich sind, entscheidet
+die konkrete Lektüre. Das bestehende Retryfixmodul und seine Fixtures sind in
+dieser Phase ausschließlich lesbar.
+
+Planungstiefe 2: bestehende Verantwortlichkeiten und Sichtbarkeitsgrenzen werden
+getrennt; es entsteht keine neue Fähigkeit, Persistenzform oder öffentliche API.
+Aus dem Prompt fehlen keine nur vom Nutzer klärbaren Angaben. Noch zu klären
+sind die konkreten Modulpfade, benötigten privaten Zugriffe und Reexporte; der
+folgende Bestands-/Strukturplan hält diese Befunde vor jedem Native-Edit fest.
+
+### Bestandsplan, Lösungsentscheidung und zweiter Lückenabgleich
+
+Gelesen wurden die vollständigen drei formatierten Zieldateien, das
+AST-Inventar, `app/drive_modules.rs`, `app/core/batches_drive_task_tests.rs`,
+`mount_client_devices.rs` sowie die konkreten HostControl-/HostInputs- und
+DeviceFeed-Anschlüsse in `mount/os/shared/host_session.rs` und `host_devices.rs`.
+Die vorhandene Graphabfrage zu `drive_snapshot.rs`, `MountHostSession` und
+`DriveRuntimeInstallOutcome` wurde als Navigation genutzt; den Schnitt belegt
+der aktuelle Quelltext. `app/mod.rs` reexportiert die Drive-Module aus
+`drive_modules.rs`; der Snapshot ist dessen Untermodul. Die bestehenden Tests
+sind Kinder dieses unveränderten Snapshotmoduls.
+
+Verworfene Möglichkeiten: Zeilenkürzung oder entfernte Kommentare lösen keine
+Verantwortungsgrenze; eine bloße Auslagerung von Testmodulen würde die
+überbreiten Produktionszuständigkeiten nicht trennen. Eine neue parallele
+Mountclient-API würde Aufruferänderungen verursachen. Gewählt ist der folgende
+fachliche Schnitt mit denselben öffentlichen Namen und unveränderten Körpern:
+
+| Meilenstein | Dateien und konkreter Schnitt | Zu erhaltender Vertrag und Abnahmesignal |
+|---|---|---|
+| S1 Snapshotanwendung | `drive_snapshot.rs` behält Modelle, Identitätsentscheidungen, Eventpolling und Indexdeltas; `drive_snapshot_apply.rs` übernimmt `App::apply_drive_snapshot` und `disconnect_drive_views` als privates Kindmodul. | Derselbe Deltaentscheid veröffentlicht `drives` und `drive_info` gemeinsam, pinnt Medienidentität, verwirft nur betroffene Indexgenerationen und bricht betroffene Scan-/Picker-/Analyse-/Reclaimansichten unverändert ab. Bestehendes Testmodul und seine Fallnamen bleiben am bisherigen Pfad. |
+| S2 Hostsession | `mount_client.rs` behält Start/Stop/Retry/List, Recoveryrequests und Clientanmeldung; `mount_client_host.rs` übernimmt Hostsession, Hostanmeldung, Backendhandshake, Capabilityumgebung und Identitätsstub. Öffentliche Typ-/Funktionnamen werden zurückreexportiert. | IPCrequests, Timeouts, One-use-Environmentverbrauch, EOFstop, versiegelter Spoolschlüssel, Vaultlockwatch, Status-/Recoverymeldung und Backendstream bleiben identisch. Der bestehende Gerätebaumclient kann seine drei Sessionfelder, `host_stream` und den Proxyidentitätsstub weiter intern verwenden. |
+| S3 Runtimefassade | `core/runtime_types.rs` übernimmt reine Versionsdomänen, Runtime-Datentypen, MSIausgangsmodell und dessen Methoden; `os/shared/runtime_info.rs` übernimmt die existierenden OSabfragen und Installationsdelegation. `mount/mod.rs` reexportiert die gleichen Namen und behält den Prozess-/Hosteinstieg. | Identische Sichtbarkeit, serde-Felder/-Tags, Konstanten, MSIcodes, Meldungen, Plattformbedingungen und Rückgabewerte. Die neue Kernquelle enthält keine OSimporte oder Plattformzweige. Alle sieben Produktionsdateien bleiben in normalem Layout deutlich unter dem Gate. |
+| S4 Eigene Nachreview | Derselbe Autor vergleicht den kompletten Verschiebungsdiff mit `10988167`, private Pfade, Reexporte, Anbindungen und bestehende Fallnamen und dokumentiert Grenzen. | Keine fachliche Körperänderung außer nötiger Pfad-/Sichtbarkeitsanpassung, keine neue Testsuite und kein lokaler Lauf. Main führt denselben Remote-Einstieg erneut aus. |
+
+Primärquellen, Abruf 26.10.2026: die Rust Reference zu
+[`#[path]`](https://doc.rust-lang.org/reference/items/modules.html#the-path-attribute),
+[Sichtbarkeit und privaten Nachfahren](https://doc.rust-lang.org/reference/visibility-and-privacy.html)
+sowie [öffentlichen Reexporten](https://doc.rust-lang.org/reference/items/use-declarations.html#use-visibility).
+Dateipfade eines nicht inline deklarierten Moduls werden relativ zur Quelldatei
+aufgelöst. Ein privates Elternelement bleibt seinen Nachfahren zugänglich;
+ein öffentlicher Reexport erhält den bisherigen nutzbaren Namen.
+
+Zweiter Lückenabgleich vor dem Edit: Das Snapshotkind kann die privaten
+DriveState-/Bindingfelder seines Elternmoduls verwenden; `disconnect_drive_views`
+zieht mit seinem einzigen Aufrufer um. Die unveränderten Indexmethoden behalten
+ihre bisherigen `super::drive_inventory`-Pfade. Die Gerätebaumfunktionen bleiben
+als bisheriges Kind von `mount_client` deklariert. Die Hostsession gibt nur
+`id`, `ipc_addr` und `session_token` mit `pub(super)` an denselben bisherigen
+Mountclient-Modulbaum; `stop`, `vault` und `lock_watch` bleiben hostintern.
+`host_stream`, `MountProxyIdentity` und dessen `scheme` erhalten dieselbe enge
+Elternsichtbarkeit und private Aliase im Mountclient. Alle nach dem Umzug
+veränderten `super`-Pfade verweisen ausdrücklich auf den bisherigen Daemon,
+nicht versehentlich auf den Mountclient. Runtime-Dateien werden als private
+Kinder der vorhandenen Mountfassade eingebunden; die physische OSablage folgt
+dem etablierten `#[path]`-Muster. Damit ist keine weitere Schreibfläche nötig.
+
+### Ergänzte direkte und indirekte Verknüpfungskarte
+
+Die Größenverletzungen sind bestätigte Strukturfehler, keine zusätzlich
+behaupteten Laufzeitdefekte. Betroffene Verantwortlichkeiten sind
+`apply_drive_snapshot`/`disconnect_drive_views`, sämtliche Methoden von
+`MountHostSession` samt Hostanmeldung/Capabilityeingang/Proxyidentität sowie
+Runtime-Datentypen, Versionsprüfung, Ergebnisdarstellung und Runtimeabfragen.
+Der bisherige RA-07-Retryfix und seine Fehlerbehandlung werden nicht verändert.
+
+| Verbindung | Konkrete Kette nach dem Schnitt | Erhaltene Wirkung und indirekte Verbraucher |
+|---|---|---|
+| Moduldefinition → Snapshot | `app/mod.rs` → Reexport von `drive_modules.rs` → `drive_snapshot` → privates `apply` aus `drive_snapshot_apply.rs`. | `DriveEntry`, `DriveBinding`, `DriveState`, `diff`, `contains` und alle bestehenden Appmethodennamen bleiben an ihren nutzbaren Pfaden. Das bestehende Snapshot-Testkind bleibt im ursprünglichen Modul. |
+| Monitor → Veröffentlichung | `update_drives` nimmt den bestehenden Monitor-Snapshot an → `apply_drive_snapshot` → unverändertes `diff` auf Root, Medienidentität und Inkarnation. | `drives`, `drive_info` und `DriveState.entries` werden weiter in demselben synchronen Appaufruf veröffentlicht. Sidebar, Picker, Landing, Omni, Shareexport und Scanrootverbraucher erhalten denselben Bestand; ein Inventurfehler behält den letzten erfolgreichen Snapshot. Die unveränderten Monitor-/OSproducer liegen hinter ihrer bisherigen Aufrufschnittstelle. |
+| Medienwechsel → gebundene Ansichten | `apply_drive_snapshot` → `disconnect_drive_views`; unverändert geblieben sind `binding_for`, `binding_available`, `disconnected_drive`, `bind_scan_drive`, `accept_drive_consumer`, `drive_consumer_available`. | Aktiver lokaler Scan, inaktive lokale Tabs, lokaler Picker, lokale Analyse und Reclaim behalten Abbruch, Teilzugriffsentzug und Fehlermeldungen. Remotetabs werden nicht als lokale Medien verworfen. Ein Ersatzmedium unter demselben Pfad wird nicht durch Refresh übernommen; bewusste Navigation bleibt der Auswahlweg. |
+| Medienwechsel → Index/Watch/Mountdarstellung | Der verschobene Snapshotkörper erhöht weiterhin nur betroffene Generationen, bereinigt betroffene Indexpfade, markiert bestehende Vollbuilds als überholt und requeued ihre noch vorhandenen Roots. Danach unverändert `update_drive_watches`, `run_folder_search`, `mount_ui.next_poll`. `start_pending_drive_index` und `drain_drive_index` bleiben im Elternmodul. | Unabhängige Roots behalten ihren Index. Indexdeltas prüfen weiter Root, Identität, Inkarnation und Generation; `Delta::drop` behält seinen Release-Cancel. Der virtuelle Gerätebaum bleibt beim eigenen DeviceWatch und die Mountliste wird nur wie bisher vorgezogen. Keine neue Index- oder Monitorinstanz entsteht durch den Split. |
+| GUI/CLI/Öffnen → Verwaltungsrequests | Unveränderte `daemon`-Reexporte → `mount_client::{start_mount,stop_mount,retry_mount,list_mounts}` → unveränderte Requestkörper und `authenticated_stream`. Recovery Save/Import/Reactivate/List bleiben im selben Modul. | Tokens, Workerbereitschaft, Kontrolltimeout, Fehlerantworten und unbefristete Recoveryantwort während des Ownershipcommits bleiben identisch. Der RA-07-Manager wird weiterhin über genau denselben Retryrequest erreicht. |
+| Hosteinstieg → Session | `daemon::connect_mount_host` bleibt Reexport von `mount_client::connect_mount_host`, jetzt aus dem privaten `host`-Modul → `take_host_environment` → `MountHostAttach` → `connect_backend` → dieselbe `MountHostSession`. | Alle drei Capabilityumgebungswerte werden weiterhin vor ihrer Validierung entfernt. Tokenlänge/-alphabet, Loopbackadresse, Cachepfadabsicherung, zurückgemeldete Mount-ID, Timeout und Backendtoken werden unverändert geprüft. Kein neues Credential oder Fallback wird eingeführt. |
+| Hostsession → Betrieb und Ende | `mount/os/shared/host_session.rs::HostControl for MountHostSession` ruft unverändert `report_capacity`, `report_status_with_recovery`, `wait_for_stop_timeout`, `request_spool_key`, `next_lock_order` und `send_lock_answer` auf. `HostInputs::from_session` übernimmt die gleichen öffentlichen Felder. | Status- und Recoverywire einschließlich Kompatibilitätsflag, EOFstop, versiegelter Schlüssel, Nullisierung, Vaultlockwatch sowie Control-/Backendstreambesitz bleiben bestehen. Die kompletten Methodenkörper wurden zusammen mit ihren privaten Feldern verschoben. |
+| Gerätebaum → private Hostanschlüsse | Unverändertes `mount_client::devices` verwendet weiterhin `super::{host_stream,MountHostSession,MountProxyIdentity}`. Der Mountclient hält dafür private Aliase; `host` gewährt nur Elternsicht auf die nötigen Sessionfelder und Proxykonstruktion. `host_devices.rs` verwendet weiterhin dieselbe Session als `DeviceFeed` und `HostChildLink`. | Separate Verbindungen für ChildBackend, ChildRoots und DeviceWatch, 50-/35-Sekunden-Reserven, Capabilities und Writableantwort bleiben erhalten. Die drei Felder werden weder öffentlich noch daemonweit freigegeben; der nutzbare interne Modulbaum entspricht dem bisherigen. |
+| Hostbackend → VFSgrenze | Verschobenes `connect_backend` und unveränderter Gerätebaumclient → `AgentBackend::from_streams` → derselbe `mount_proxy::wrap`; `MountProxyIdentity` behält sein Backendtrait. | Scheme, Identitätsstring, BrokenPipe-Verhalten und sämtliche abgelehnten Stub-I/Ooperationen bleiben gleich. Es entsteht kein lokales Ersatzbackend und keine neue Schreibberechtigung. |
+| Runtimefassade → reine Daten | `mount/mod.rs` reexportiert `DriveRuntimeInfo`, `DriveRuntimeInstallOutcome`, die beiden Versionskonstanten, `DokanyVersionCompatibilityError` und `validate_dokany_version_domains` aus `core/runtime_types.rs`. | Gleiche Sichtbarkeit, Konstanten, getrennte DLL-/Treiberprotokolldomänen, serde-Felder und Status-Tags. `from_msi_exit_code`, `exit_code`, `message`, `is_failure` behalten alle Körper und Werte. CLI `drive.rs`, GUI `mount_runtime_ui.rs` und vorhandene Vertragstests verwenden unverändert die Mountfassade. |
+| Runtimefassade → OSdelegation | Gleiche öffentliche Funktionen in `mount/mod.rs` → `runtime_info` aus `os/shared/runtime_info.rs` → bestehende Windows- oder Linuxadapter. | Unterstützungsentscheidung, Gerätelabel, Bereitschaft, Runtimeinfo und Installationsantwort behalten alle bisherigen Plattformbedingungen, Meldungen und Rückgabewerte. Der neue Kern enthält keinen Plattformzweig; das gemeinsame OSmodul delegiert ohne direkte OScrate oder FFI. |
+| Prozessaufruf → derselbe Host | `run_host_if_requested` und `exit_on_update_stop` verbleiben unverändert in `mount/mod.rs`. | Genau zwei Argumente, derselbe `--mount-host`-Selektor, Mount-IDvalidierung, Betriebssystemhost und Exit 75 bleiben bestehen. Die Runtimeausgliederung verändert weder Prozesslebensdauer noch den Einstieg in die Session. |
+
+Die gegenüber der ersten RA-07-Karte neu hinzugekommenen Grenzen sind damit die
+Snapshotanwendung, der interne Hostclient und die Runtimeauskunft. Hinter den
+unverändert aufgerufenen Monitor-/Index-/OSadaptern werden keine neuen
+Implementierungen oder Laufzeitgarantien behauptet.
+
+### Umsetzung, Dateifläche und aktuelle Größen
+
+S1 bis S3 sind umgesetzt. Die Verschiebung verwendet die vom Remote-Formatter
+erzeugten Körper aus `10988167` mit ihrem normalen mehrzeiligen Layout; es
+wurden keine Anweisungen oder Kommentare zur Größenreduktion verdichtet.
+
+| Datei | Status in dieser Fortsetzung | Lokale Quellgröße nach dem Schnitt |
+|---|---|---|
+| `native/src/app/core/drive_snapshot.rs` | geändert; private Moduleinbindung | 371 Zeilen / 12.651 Byte |
+| `native/src/app/core/drive_snapshot_apply.rs` | neu; Snapshotanwendung und Ansichtsabbruch | 190 Zeilen / 8.036 Byte |
+| `native/src/daemon/os/shared/mount_client.rs` | geändert; Kontrolle/Recovery und Reexporte | 129 Zeilen / 5.521 Byte |
+| `native/src/daemon/os/shared/mount_client_host.rs` | neu; Hostsession und Handshake | 395 Zeilen / 14.374 Byte |
+| `native/src/mount/mod.rs` | geändert; Fassade und Hosteinstieg | 330 Zeilen / 10.895 Byte |
+| `native/src/mount/core/runtime_types.rs` | neu; reine Runtimeverträge | 130 Zeilen / 5.211 Byte |
+| `native/src/mount/os/shared/runtime_info.rs` | neu; OSabfragen/-delegation | 61 Zeilen / 2.182 Byte |
+| dieser Bericht | geändert | Strukturplan, Kartenfortschreibung und eigene Nachreview |
+
+Die zuvor geschriebenen RA-07-Produktions-/Fixturedateien wurden in dieser
+Fortsetzung nicht geändert. Ihre übernommenen formatierten Größen sind
+463 Zeilen/18.387 Byte (`mount_manager_start.rs`), 214 Zeilen/7.206 Byte
+(`mount_manager_start_cache.rs`) und 373 Zeilen/13.978 Byte
+(`batches_mount_retry_regression_task_tests.rs`). Die alten Rohgrößen im ersten
+Autorbefund sind ausdrücklich historisch markiert. Die erneute tatsächliche
+Formatterbestätigung gehört zum selben kommenden Remote-Vorbereitungslauf;
+lokal wurde kein Formatter aufgerufen.
+
+### Eigene anschließende Anti-Regressionsreview
+
+S4 ist abgeschlossen. Derselbe Fixautor hat den gesamten Verschiebungsdiff und
+die neue Modul-/Sichtbarkeitskarte nach der Umsetzung geprüft:
+
+1. Ein statischer Textvergleich gegen `git show 10988167:<Datei>` bestätigt
+   die identischen Körper von `apply_drive_snapshot` und
+   `disconnect_drive_views` und den unveränderten Rest von `drive_snapshot.rs`
+   nach Entfernung der neuen Moduleinbindung. Die Reihenfolge der
+   Generationen-, Pending-, Cancel-, Veröffentlichungs- und Viewänderungen ist
+   damit erhalten; es wurde kein Anwendungsschritt ausgelassen.
+2. Derselbe Vergleich bestätigt unveränderte Verwaltungs-/Recoveryrequests
+   und `authenticated_stream`. Für den Hostkörper stimmen alle Zeichen nach
+   Normalisierung genau der dokumentierten Importpfade und `pub(super)`-
+   Anpassungen überein. Timeout, Statuswire, Schlüsselverarbeitung, EOFstop,
+   Handshake und Environmentverbrauch haben keine fachliche Änderung.
+3. Der Gerätebaumclient bleibt am alten Modulpfad. Die fünf internen
+   Anknüpfungspunkte (`host_stream`, Proxyidentität und die drei Sessionfelder)
+   wurden gegen seine konkreten Zugriffe geprüft. Die Session-Controlfelder
+   und der Lockwatch bleiben privat. Der gesamte bisherige Sessionbesitz zieht
+   zusammen um; kein Stream, Token oder Arc wird neu erzeugt oder früher verworfen.
+4. Die kompletten reinen Runtimekörper und die kompletten Runtimeabfragekörper
+   stimmen gegen `10988167` überein. Der Präfix und der Hosteinstiegssuffix der
+   bisherigen Mountfassade bleiben unverändert. Die Reexportliste enthält alle
+   zuvor dort definierten nutzbaren Namen mit derselben Sichtbarkeit.
+5. `#[path]`-Auflösung und die Tiefe sämtlicher veränderter `super`-Referenzen
+   wurden gezielt an der offiziellen Rustreferenz und den konkreten
+   Elternmodulen geprüft. `runtime_types.rs` enthält keine OSimporte,
+   `cfg`-Plattformzweige, Hostprozesse oder FFI; `runtime_info.rs` delegiert an
+   die bisherigen OSadapter. Es gibt keine neue öffentliche Konfigurationsfläche.
+6. Die bestehenden Testmoduldeklarationen und Fallnamen bleiben erhalten.
+   Die RA-07-Statetabelle, die atomare Retryübergabe, Recoveryklassifikation,
+   Registryidentität und der Lease-/Hostbesitz werden in dieser Fortsetzung
+   nicht bearbeitet. `git diff --check` der drei bearbeiteten bestehenden
+   Produktionsdateien sowie die entsprechende Whitespaceprüfung der vier neuen
+   Quellen meldeten keine Probleme. Der zusätzliche statische Namensvergleich
+   bestätigt identische Snapshot- und RA-07-Fallnamen gegen `10988167`.
+   Größen wurden ausschließlich textuell ermittelt.
+
+Grenzen: Die statischen Vergleiche führen keinen Rustcode aus und belegen keine
+Kompilierung, Name-Resolution durch den Compiler, Linkbarkeit oder
+Kernel-/Providerreaktion. Es wurden keine lokalen Builds, Tests, Formatter,
+Hostprozesse, Installationen oder Graphupdates ausgeführt. Der einzige
+Graphifyprozess war eine abgeschlossene lesende Abfrage; dessen bekannte
+Skill-/Paketversionswarnung ist unverändert. Die erneute Remote-Formatter-/
+Größenbestätigung und die tatsächliche Kompilierung sind noch ausstehend.
+Der Vorbereitungsversuch 40332971455 ist kein funktionaler Pass und hat keinen
+der verlagerten Abläufe praktisch bestätigt.
+
+### Bestehende Fallnamen und nötige Integration durch Main
+
+Es gibt keinen neuen Fixturefall und keine neue Testmodulregistrierung.
+Das Snapshot-Testmodul bleibt `batches_drive_task_tests` mit den drei Namen:
+
+- `batches_task_drive_replacement_and_reattachment_invalidate_only_affected_root`
+- `batches_task_drive_disconnected_binding_requires_original_proven_media`
+- `batches_task_drive_binding_uses_deepest_root_and_literal_path_boundaries`
+
+Sein Präfix `batches_task_drive_` ist bereits im aktuellen Manifest enthalten.
+Auch `batches_task_vault_retry_` und die sechs oben dokumentierten RA-07-Namen
+sind im Stand dieser Fortsetzung bereits registriert; die frühere
+Registrierungsanforderung ist damit erfüllt. Fallnamen und Auswahl bleiben.
+
+Für den direkt verschobenen reinen Runtimevertrag stehen die bestehenden Fälle
+`remote_drive_task_dokany_msi_outcomes_preserve_actionable_exit_codes` und
+`remote_drive_task_dokany_library_and_driver_versions_use_separate_domains`
+zur Verfügung. Ihr Modul ist `#[cfg(all(test, not(windows)))]`; falls Main sie
+für diese Strukturfortsetzung ergänzend bindet, gehören sie in
+`native.linux_integrations`, nicht in die plattformgemeinsame Auswahl. Das ist
+keine Freigabe für einen separaten Lauf. Die vorhandenen gemeinsamen
+Hostsession-/Gerätebaum-/UIintegrationen werden nicht ersetzt.
+
+### Entscheidungen und verbleibende Grenzen außerhalb der Fläche
+
+- Alle acht aktiven Schreibpfade wurden eingehalten; kein fremder Bericht,
+  keine gemeinsame Suite-/Manifestdatei und kein vorheriger Retryfixturekörper
+  wurde geändert. Die zwei konkret gemeldeten zusätzlichen Lesedateien
+  `app/drive_modules.rs` und `app/core/batches_drive_task_tests.rs` wurden von Main
+  ausdrücklich ergänzt und vor der Ausgliederung gelesen.
+- Die Größenkorrektur benötigt weder Versionsbump noch einen eigenen Release.
+  Sie gehört zum selben offenen Kandidaten und derselben späteren Remote-Suite.
+- Keine zusätzliche Produktabhängigkeit außerhalb der Schreibfläche ist belegt.
+  Main besitzt weiterhin Rootgraphrefresh, Integration, Commit/Push, denselben
+  Remote-Vorbereitungseinstieg, anschließende Suitebewertung und terminalen Release.
