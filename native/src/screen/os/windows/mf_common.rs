@@ -31,6 +31,7 @@ use super::mf_decoder::MfDecoder;
 use super::mf_encoder::AsyncEncoder;
 use super::mf_encoder_sync::SyncEncoder;
 use crate::screen::core::codec_registry::{DecoderFactory, EncoderFactory};
+use crate::screen::core::capture_admission::CaptureGrant;
 use crate::screen::core::host_backend::{ScreenDecoder, ScreenEncoder};
 use crate::screen::core::negotiate::{CodecChoice, CodecOffer, H264Profile};
 use crate::screen::core::pixel_convert::FrameSize;
@@ -302,6 +303,18 @@ impl EncoderFactory for MfEncoderFactory {
         size: FrameSize,
         fps: u32,
     ) -> io::Result<Box<dyn ScreenEncoder>> {
+        self.create(choice, size, fps, None)
+    }
+
+    fn open_admitted(&self, choice: &CodecChoice, size: FrameSize, fps: u32,
+        grant: CaptureGrant) -> io::Result<Box<dyn ScreenEncoder>> {
+        self.create(choice, size, fps, Some(grant))
+    }
+}
+
+impl MfEncoderFactory {
+    fn create(&self, choice: &CodecChoice, size: FrameSize, fps: u32,
+        grant: Option<CaptureGrant>) -> io::Result<Box<dyn ScreenEncoder>> {
         let profile = choice
             .profile
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "H.264 needs a profile"))?;
@@ -321,10 +334,11 @@ impl EncoderFactory for MfEncoderFactory {
             size,
             fps: fps.max(1),
         };
-        if self.kind == Kind::HardwareEncoder {
-            Ok(Box::new(AsyncEncoder::new(transform, setup)?))
-        } else {
-            Ok(Box::new(SyncEncoder::new(transform, setup)?))
+        match (self.kind == Kind::HardwareEncoder, grant) {
+            (true, Some(grant)) => Ok(Box::new(AsyncEncoder::new_admitted(transform, setup, grant)?)),
+            (false, Some(grant)) => Ok(Box::new(SyncEncoder::new_admitted(transform, setup, grant)?)),
+            (true, None) => Ok(Box::new(AsyncEncoder::new(transform, setup)?)),
+            (false, None) => Ok(Box::new(SyncEncoder::new(transform, setup)?)),
         }
     }
 }
