@@ -292,8 +292,21 @@ Prüfkörper und Fallnamen; keine neue Registrierung ist nötig. Der
 [Autorenbericht](fix-f-android-ui-fixtures.md) benennt alle gelesenen/geänderten
 Dateien und die ausstehende Remote-Bestätigung. Kein Laufzeitpass behauptet.
 
-Aktiv sind danach M01, M02, M03, M05, M06, M07 und M13; M04 sowie M08–M12
-bleiben eingeplant. Der Scope wurde jeweils nur für konkret gemeldete
+Der finale API-Abruf um 23:10:44 UTC bestätigt den vollständig beendeten
+Lauf mit `failure`; der Gerätejob ist `skipped`. Es läuft keine Build-,
+Test- oder Releasestufe dieses Kandidaten mehr.
+
+M05 ist als `515e8286`, M07 als `da059df3` und M02 als `4d931637` integriert
+und gemeinsam mit M14 auf `main` und `codex/review-fixes-ee75e91b` gepusht.
+Jeder Autor hat seinen vollständigen eigenen Fixzyklus abgegeben; Main hat
+Diff, statische Syntax, Größen, Grenzen und Integration kontrolliert.
+Registryfelder bleiben unverändert, fremde Netzprofile werden nicht entfernt,
+absolute Backendpfade und strenge Quittungsprüfungen bleiben erhalten.
+Die erforderlichen Fallregistrierungen werden für dieselbe gemeinsame Suite
+gesammelt; es wurde kein lokaler Funktionslauf gestartet.
+
+Aktiv sind M01, M03, M06, M08, M11, M12 und M13; M04, M09 und M10 bleiben
+eingeplant. Der Scope wurde jeweils nur für konkret gemeldete
 Aufrufer erweitert. M02 umfasst nun die falschen relativen Joins in
 Ordnerreservierung und Ordner-Move. M06 umfasst den tatsächlichen
 Worker-/Dispatcherleser vor unbesessenem Payload. M13 umfasst die synchrone
@@ -301,4 +314,9 @@ Entziehung alter Freigaben vor Rebind, ohne die bestehende erfolgreiche
 Annahme einer neuen Generation im Routemonitor zu verlieren. M03 untersucht
 den gebundenen Linux-Selbstübergang vor dem Inaktivitätsbeweis der eigenen
 Deinstallation. Jeder dieser Autoren aktualisiert seinen eigenen endgültigen
-Plan und Quellenabgleich vor der betroffenen Änderung.
+Plan und Quellenabgleich vor der betroffenen Änderung. Bei M13 umfasst das
+auch einen sichtbaren Wartezustand während des Netzumbaus und eine frische
+Auswahlfrist nach dessen Ende, ohne absolute Operationdeadlines zu verlängern.
+Bei M01 wird die geänderte Namespacebestätigung durch sämtliche direkt
+angeschlossenen Sync-, Backup- und Recoveryverbraucher verfolgt; ein ehrliches
+unbestätigtes Ergebnis darf nicht still unterstützte Dateisysteme aussperren.
