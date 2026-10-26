@@ -123,6 +123,8 @@ Section "Smart Explorer (erforderlich)" SEC_MAIN
     MessageBox MB_OK|MB_ICONEXCLAMATION "se.exe wurde installiert, aber der Benutzer-PATH konnte nicht aktualisiert werden.$\r$\nTerminal-Aufruf: $INSTDIR\${CLI_EXE_NAME}"
   cli_path_done:
 
+  ; Administrative opt-in only: the normal per-user setup never executes this script.
+  File "${__FILEDIR__}\install-login-service.ps1"
   File "${__FILEDIR__}\..\LICENSE"
   SetOutPath "$INSTDIR\licenses\Dokany"
   File "/oname=NOTICE.txt" "${__FILEDIR__}\..\third-party\dokany\NOTICE.txt"
@@ -373,6 +375,7 @@ Section "Uninstall"
   Delete "$INSTDIR\${EXE_NAME}"
   Delete "$INSTDIR\${UPDATER_EXE_NAME}"
   Delete "$INSTDIR\${CLI_EXE_NAME}"
+  Delete "$INSTDIR\install-login-service.ps1"
   Delete "$INSTDIR\LICENSE"
   Delete "$INSTDIR\licenses\Dokany\NOTICE.txt"
   Delete "$INSTDIR\licenses\Dokany\LICENSE-GPL-3.0.txt"
