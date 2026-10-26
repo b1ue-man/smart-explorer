@@ -83,7 +83,9 @@ impl AccessDraft {
         (base, programs): (AccessGrant, Vec<String>),
         (accounts, helper): (Vec<AccountOption>, HelperState),
     ) -> Self {
-        let ask = base.capabilities().any(|(capability, decision)| !capability.requires_context() && decision == Ask);
+        let ask = base
+            .capabilities()
+            .any(|(capability, decision)| !capability.requires_context() && decision == Ask);
         let mut draft = Self {
             key: key.into(),
             title: title.into(),
@@ -127,7 +129,9 @@ impl AccessDraft {
         let screen = [Capability::ScreenView, Capability::ScreenControl];
         if self.decision(Capability::ExecCommands) != on
             || screen.iter().any(|c| self.decision(*c).is_on())
-            || Capability::ALL.into_iter().any(|capability| capability.requires_context() && self.decision(capability).is_on())
+            || Capability::ALL.into_iter().any(|capability| {
+                capability.requires_context() && self.decision(capability).is_on()
+            })
         {
             return None;
         }
@@ -143,7 +147,12 @@ impl AccessDraft {
     pub(super) fn select(&mut self, preset: AccessPreset) {
         let change = preset.change(self.programs.clone(), self.ask);
         self.account = change.account.unwrap_or_default();
-        self.decisions.extend(change.capabilities.into_iter().filter(|(capability, _)| !capability.requires_context()));
+        self.decisions.extend(
+            change
+                .capabilities
+                .into_iter()
+                .filter(|(capability, _)| !capability.requires_context()),
+        );
         self.programs = change.programs.unwrap_or_default();
         self.preset = Some(preset);
     }
@@ -152,7 +161,9 @@ impl AccessDraft {
     pub(super) fn set_ask(&mut self, ask: bool) {
         self.ask = ask;
         for (capability, decision) in &mut self.decisions {
-            if capability.requires_context() { continue; }
+            if capability.requires_context() {
+                continue;
+            }
             *decision = match (*decision, ask) {
                 (Allow, true) => Ask,
                 (Ask, false) => Allow,
@@ -164,7 +175,10 @@ impl AccessDraft {
 
     pub(super) fn set_decision(&mut self, capability: Capability, decision: CapabilityDecision) {
         self.decisions.insert(capability, decision);
-        self.ask = self.decisions.iter().any(|(capability, decision)| !capability.requires_context() && *decision == Ask);
+        self.ask = self
+            .decisions
+            .iter()
+            .any(|(capability, decision)| !capability.requires_context() && *decision == Ask);
         self.preset = self.detect();
     }
 
@@ -191,8 +205,12 @@ impl AccessDraft {
         };
         AccessGrantChange {
             account: Some(self.account.clone()),
-            capabilities: self.decisions.iter().filter(|(capability, _)| !capability.requires_context())
-                .map(|(capability, decision)| (*capability, *decision)).collect(),
+            capabilities: self
+                .decisions
+                .iter()
+                .filter(|(capability, _)| !capability.requires_context())
+                .map(|(capability, decision)| (*capability, *decision))
+                .collect(),
             programs: Some(self.programs.clone()),
             expiry,
             constraints: None,
@@ -208,8 +226,15 @@ impl AccessDraft {
 
     /// The one confirmation names the consequence (C6).
     pub(super) fn confirm_label(&self, own_label: &str) -> String {
-        if self.decisions.iter().any(|(capability, decision)| !capability.requires_context() && decision.is_on()) {
-            format!("Gewählte Befehls- und Bildschirmrechte als {} erlauben", self.account.label(own_label))
+        if self
+            .decisions
+            .iter()
+            .any(|(capability, decision)| !capability.requires_context() && decision.is_on())
+        {
+            format!(
+                "Gewählte Befehls- und Bildschirmrechte als {} erlauben",
+                self.account.label(own_label)
+            )
         } else {
             "Befehle, Terminal und Bildschirmrechte entziehen".into()
         }
@@ -357,54 +382,58 @@ pub(super) fn show(
         return None;
     };
     let (mut visible, mut done, mut action) = (true, false, None);
-    crate::app::dialog_geometry::window(ctx, "share_access_dialog_ui.0", format!("Zugriff für {}", draft.title))
-        .id(dialog_id())
-        .collapsible(false)
-        .resizable(true)
-        .default_width(480.0)
-        .open(&mut visible)
-        .show(ctx, |ui| {
-            if view.policy_revision != draft.revision {
-                ui.colored_label(theme::warning(ui), "Das Recht wurde inzwischen geändert.");
-                if ui.button("Neu laden").clicked() {
-                    let accounts = (draft.accounts.clone(), draft.helper);
-                    draft = AccessDraft::of(
-                        &view.target_key,
-                        &view.device_name,
-                        view.policy_revision,
-                        (view.access.clone(), view.programs.clone()),
-                        accounts,
-                    );
-                }
-                return;
+    crate::app::dialog_geometry::window(
+        ctx,
+        "share_access_dialog_ui.0",
+        format!("Zugriff für {}", draft.title),
+    )
+    .id(dialog_id())
+    .collapsible(false)
+    .resizable(true)
+    .default_width(480.0)
+    .open(&mut visible)
+    .show(ctx, |ui| {
+        if view.policy_revision != draft.revision {
+            ui.colored_label(theme::warning(ui), "Das Recht wurde inzwischen geändert.");
+            if ui.button("Neu laden").clicked() {
+                let accounts = (draft.accounts.clone(), draft.helper);
+                draft = AccessDraft::of(
+                    &view.target_key,
+                    &view.device_name,
+                    view.policy_revision,
+                    (view.access.clone(), view.programs.clone()),
+                    accounts,
+                );
             }
-            let other_accounts = crate::share::exec_run_as_supported();
-            controls(ui, &mut draft, &provider.user_label, other_accounts);
-            ui.separator();
-            for note in notes(&draft, &draft.title, provider, now) {
-                ui.colored_label(theme::danger(ui), note);
+            return;
+        }
+        let other_accounts = crate::share::exec_run_as_supported();
+        controls(ui, &mut draft, &provider.user_label, other_accounts);
+        ui.separator();
+        for note in notes(&draft, &draft.title, provider, now) {
+            ui.colored_label(theme::danger(ui), note);
+        }
+        let blocker = draft.blocker(provider, view.base_authorized, now);
+        if let Some(reason) = &blocker {
+            ui.label(RichText::new(reason).color(theme::muted(ui)));
+        }
+        crate::app::settings_form::status(ui, false, None, draft.save_error.as_deref());
+        ui.horizontal_wrapped(|ui| {
+            let label = RichText::new(draft.confirm_label(&provider.user_label)).strong();
+            if ui
+                .add_enabled(blocker.is_none(), egui::Button::new(label))
+                .clicked()
+            {
+                let (key, revision) = (draft.key.clone(), draft.revision);
+                action = Some(DialogAction::Apply {
+                    key,
+                    change: draft.change(now),
+                    revision,
+                });
             }
-            let blocker = draft.blocker(provider, view.base_authorized, now);
-            if let Some(reason) = &blocker {
-                ui.label(RichText::new(reason).color(theme::muted(ui)));
-            }
-            crate::app::settings_form::status(ui, false, None, draft.save_error.as_deref());
-            ui.horizontal_wrapped(|ui| {
-                let label = RichText::new(draft.confirm_label(&provider.user_label)).strong();
-                if ui
-                    .add_enabled(blocker.is_none(), egui::Button::new(label))
-                    .clicked()
-                {
-                    let (key, revision) = (draft.key.clone(), draft.revision);
-                    action = Some(DialogAction::Apply {
-                        key,
-                        change: draft.change(now),
-                        revision,
-                    });
-                }
-                done |= ui.button("Abbrechen").clicked();
-            });
+            done |= ui.button("Abbrechen").clicked();
         });
+    });
     if done || !visible {
         close(ctx);
     } else {

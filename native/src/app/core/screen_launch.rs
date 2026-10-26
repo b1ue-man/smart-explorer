@@ -72,8 +72,15 @@ fn run_viewer(start: Start, title: &str) -> i32 {
 pub(crate) fn run_screen_view(target_json: &str) -> i32 {
     crate::app::update_stop_ui::arm_window();
     match ScreenTarget::parse(target_json) {
-        Ok(target) if target.source.as_ref().and_then(crate::screen::core::family_protocol::selector).is_some()
-            => super::family_viewer::run(target),
+        Ok(target)
+            if target
+                .source
+                .as_ref()
+                .and_then(crate::screen::core::family_protocol::selector)
+                .is_some() =>
+        {
+            super::family_viewer::run(target)
+        }
         Ok(target) => run_viewer(Start::View(target), "Bildschirm"),
         Err(message) => error_window(&message),
     }

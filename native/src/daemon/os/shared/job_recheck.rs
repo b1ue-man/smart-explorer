@@ -27,7 +27,17 @@ pub(super) fn refresh(
         else {
             continue;
         };
-        if let Some((evidence, reason)) = evidence(job, state, jobs, states, if uses_drive(job) { credentials.into_iter().chain(drive_credentials).max() } else { credentials }) {
+        if let Some((evidence, reason)) = evidence(
+            job,
+            state,
+            jobs,
+            states,
+            if uses_drive(job) {
+                credentials.into_iter().chain(drive_credentials).max()
+            } else {
+                credentials
+            },
+        ) {
             changed |= store_recheck(job, evidence, reason);
         }
         if !active.contains(&job.id) {

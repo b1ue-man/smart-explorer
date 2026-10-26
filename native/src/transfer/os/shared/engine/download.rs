@@ -285,7 +285,8 @@ pub(super) fn publish_local(
             return Err(OpError::at(At::Publish, error));
         }
         part.published = true;
-        super::file_recovery::after(engine, file, &target).map_err(|error| OpError::at(At::Unknown, error))?;
+        super::file_recovery::after(engine, file, &target)
+            .map_err(|error| OpError::at(At::Unknown, error))?;
         return Ok(Outcome::Done);
     }
     let mut target = destination.to_path_buf();
@@ -297,14 +298,16 @@ pub(super) fn publish_local(
         match crate::vfs::promote_local_copy(&part.path, &target) {
             Ok(()) => {
                 part.published = true;
-                super::file_recovery::after(engine, file, &actual).map_err(|error| OpError::at(At::Unknown, error))?;
+                super::file_recovery::after(engine, file, &actual)
+                    .map_err(|error| OpError::at(At::Unknown, error))?;
                 if parent_rel(&file.rel).is_none() {
                     engine.folders.record_alias(&file.rel, &file_name(&target));
                 }
                 return Ok(Outcome::Done);
             }
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                super::file_recovery::unpublished(engine, file).map_err(|error| OpError::at(At::Unknown, error))?;
+                super::file_recovery::unpublished(engine, file)
+                    .map_err(|error| OpError::at(At::Unknown, error))?;
                 if engine.resume {
                     return existing(engine, destination, part.written())?
                         .ok_or_else(|| OpError::at(At::Publish, super::publish::different_size()));
@@ -326,13 +329,19 @@ pub(super) fn publish_local(
                             error.kind()
                         ),
                     ),
-                ))
+                ));
             }
         }
     }
 }
 
-fn prepare_part(engine: &Engine<'_>, file: &FileWork, part: &mut Part, staged: &str, target: &str) -> Result<(), OpError> {
+fn prepare_part(
+    engine: &Engine<'_>,
+    file: &FileWork,
+    part: &mut Part,
+    staged: &str,
+    target: &str,
+) -> Result<(), OpError> {
     if let Err(error) = super::file_recovery::before(engine, file, staged, target) {
         if let Err(failure) = super::file_recovery::preparation_failed(engine, file) {
             part.retained = true;

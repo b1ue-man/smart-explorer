@@ -8,9 +8,9 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::share::exec_policy::{ExecGrantSettings, ExecRunAs};
 use crate::share::access_constraints::{AccessConstraints, AccessRequest};
 pub use crate::share::access_relation_view::AccessGrantView;
+use crate::share::exec_policy::{ExecGrantSettings, ExecRunAs};
 
 /// The restricted remote-access account of `AccountProfile::Remote`.
 pub const REMOTE_ACCOUNT_NAME: &str = "se-remote";
@@ -294,8 +294,10 @@ impl AccessGrant {
 
     /// A contextual capability never allows through `decision_at` alone.
     pub fn decision_for(&self, request: &AccessRequest, now: i64) -> CapabilityDecision {
-        if self.expired_at(now) || self.constraints.validate().is_err()
-            || !self.constraints.allows(request, now) {
+        if self.expired_at(now)
+            || self.constraints.validate().is_err()
+            || !self.constraints.allows(request, now)
+        {
             CapabilityDecision::Off
         } else {
             self.decision(request.capability())
@@ -303,7 +305,11 @@ impl AccessGrant {
     }
 
     pub fn version(&self) -> u64 {
-        if self.version == 2 || !self.constraints.is_empty() { 2 } else { 1 }
+        if self.version == 2 || !self.constraints.is_empty() {
+            2
+        } else {
+            1
+        }
     }
 
     pub fn grants_any(&self) -> bool {
@@ -390,9 +396,14 @@ impl AccessGrant {
         self.account.validate()?;
         self.constraints.validate()?;
         for capability in Capability::ALL {
-            if capability.requires_context() && self.decision(capability).is_on()
-                && !self.constraints.has(capability) {
-                return Err(format!("{} requires explicit target constraints", capability.key()));
+            if capability.requires_context()
+                && self.decision(capability).is_on()
+                && !self.constraints.has(capability)
+            {
+                return Err(format!(
+                    "{} requires explicit target constraints",
+                    capability.key()
+                ));
             }
         }
         ExecGrantSettings {

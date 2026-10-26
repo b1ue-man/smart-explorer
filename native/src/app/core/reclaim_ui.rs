@@ -406,7 +406,10 @@ impl App {
             self.open_picker(PickerPurpose::ReclaimFolder, &init);
         } else if let Some(scan_source) = rescan {
             if accept_drive_identity && !scan_source.is_remote() {
-                self.accept_drive_consumer(super::drive_snapshot::DriveConsumer::Reclaim, scan_source.root());
+                self.accept_drive_consumer(
+                    super::drive_snapshot::DriveConsumer::Reclaim,
+                    scan_source.root(),
+                );
             }
             self.start_reclaim_source(scan_source);
         }

@@ -1,9 +1,12 @@
 //! Decoder/transport run anchor, including a blocked next() call.
 use super::screen_decode_thread::DecodeState;
-use super::screen_session::{Backend,Shared,Outgoing,StreamLink,refusal_end,EndInfo};
-use crate::{share::PeerOpenTarget,daemon::StreamRequest};
-use std::{io,sync::{Arc,mpsc}};
+use super::screen_session::{refusal_end, Backend, EndInfo, Outgoing, Shared, StreamLink};
 use crate::screen::core::wire_control::ViewerFrame;
+use crate::{daemon::StreamRequest, share::PeerOpenTarget};
+use std::{
+    io,
+    sync::{mpsc, Arc},
+};
 pub(super) fn run(
     backend: Backend,
     peer: PeerOpenTarget,
@@ -22,13 +25,25 @@ pub(super) fn run(
         }
     };
     let StreamLink {
-        memory, mut next,
+        memory,
+        mut next,
         send,
         close,
     } = link;
-    if shared.presentation.lock().unwrap_or_else(std::sync::PoisonError::into_inner).closed {
-        shared.retirement.watch_memory(&memory);shared.retirement.close();
-    } else {*shared.memory.lock().unwrap_or_else(std::sync::PoisonError::into_inner)=memory.clone();}
+    if shared
+        .presentation
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .closed
+    {
+        shared.retirement.watch_memory(&memory);
+        shared.retirement.close();
+    } else {
+        *shared
+            .memory
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = memory.clone();
+    }
     spawn_sender(inbox, send.clone(), close, shared.clone());
     let mut state = DecodeState::new(shared, backend.decoder.clone(), send, take_control);
     loop {
@@ -54,7 +69,6 @@ pub(super) fn run(
     // Lets the sender thread go.
     let _ = outbox.send(Outgoing::Close);
 }
-
 
 pub(super) type SendFrame = Arc<dyn Fn(&ViewerFrame) -> io::Result<()> + Send + Sync>;
 

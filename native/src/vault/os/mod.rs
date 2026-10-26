@@ -71,16 +71,10 @@ mod local_store;
 mod manage;
 #[path = "shared/mount_bridge.rs"]
 mod mount_bridge;
-#[path = "shared/open_policy.rs"]
-mod open_policy;
-#[cfg(windows)]
-#[path = "root_identity_windows.rs"]
-mod root_identity;
-#[cfg(not(windows))]
-#[path = "root_identity_unix.rs"]
-mod root_identity;
 #[path = "shared/open.rs"]
 mod open;
+#[path = "shared/open_policy.rs"]
+mod open_policy;
 #[path = "shared/password.rs"]
 mod password;
 #[path = "shared/registry_store.rs"]
@@ -89,6 +83,12 @@ mod registry_store;
 mod remember;
 #[path = "shared/replica.rs"]
 mod replica;
+#[cfg(windows)]
+#[path = "root_identity_windows.rs"]
+mod root_identity;
+#[cfg(not(windows))]
+#[path = "root_identity_unix.rs"]
+mod root_identity;
 #[path = "shared/sealed_spool.rs"]
 mod sealed_spool;
 #[path = "shared/session.rs"]
@@ -143,11 +143,15 @@ pub(crate) use manage::{
 pub(crate) use mount_bridge::{
     vault_drive_bridge, MountVaultError, Resolver, UnlockHook, VaultDriveBridge,
 };
-pub(crate) use open_policy::{mount_policy, confirm_root_trust, set_root_trust, set_cleartext_copy_policy, mount_access, authorize_provider, note_mount_binding, mount_binding_matches, forget_mount_binding, recovery_identity, MountAccess};
 pub(crate) use open::{
     canonical_vault_location, open_in, open_location_in, open_vault_backend, open_vault_location,
     open_with, publish_session, resolve_store_in, resolve_vault_store, site_locations,
     unlocked_session, withdraw_session, OpenedVault, ResolveLocation, VaultOpenError, WorkerOpen,
+};
+pub(crate) use open_policy::{
+    authorize_provider, confirm_root_trust, forget_mount_binding, mount_access,
+    mount_binding_matches, mount_policy, note_mount_binding, recovery_identity,
+    set_cleartext_copy_policy, set_root_trust, MountAccess,
 };
 pub(crate) use password::{
     change_password, change_site_password, check_new_password, PasswordChanged, PasswordError,
@@ -287,5 +291,8 @@ mod session_tests;
 #[path = "shared/spool_key_tests.rs"]
 mod spool_key_tests;
 
-pub(crate) use transfer_blob::{TransferBlobPurpose, seal_transfer_blob, open_transfer_blob};
-pub(crate) use transfer_blob_context::{TransferBlobContext, transfer_blob_context, check_transfer_blob_context_live, check_transfer_blob_context};
+pub(crate) use transfer_blob::{open_transfer_blob, seal_transfer_blob, TransferBlobPurpose};
+pub(crate) use transfer_blob_context::{
+    check_transfer_blob_context, check_transfer_blob_context_live, transfer_blob_context,
+    TransferBlobContext,
+};

@@ -73,14 +73,20 @@ pub(crate) enum ScreenIpcRequest {
     /// List/icons without opening the host's capture source.
     Metadata { target: PeerOpenTarget },
     /// An old daemon must reject the variant instead of silently ignoring the pin.
-    PinnedMetadata { target: PeerOpenTarget, expected_node: String },
+    PinnedMetadata {
+        target: PeerOpenTarget,
+        expected_node: String,
+    },
     /// A viewer session relayed over this connection.
     Stream {
         target: PeerOpenTarget,
         request: StreamRequest,
     },
     /// Requires a nonempty expected_node in request before opening the stream.
-    PinnedStream { target: PeerOpenTarget, request: StreamRequest },
+    PinnedStream {
+        target: PeerOpenTarget,
+        request: StreamRequest,
+    },
     /// A measurement with the test picture of `target`.
     Bench {
         target: PeerOpenTarget,
@@ -171,8 +177,8 @@ pub(crate) enum RelayHello {
         /// `direct` or `relay`.
         path: String,
         /// Private daemon allocation evidence; absent from the peer HELLO_OK.
-        #[serde(default,skip_serializing_if="Option::is_none")]
-        local_limits:Option<crate::screen::core::frame_budget::FrameLimits>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        local_limits: Option<crate::screen::core::frame_budget::FrameLimits>,
     },
 }
 
@@ -196,19 +202,30 @@ pub(crate) fn encode_relay_record(
         .map_err(|_| std::io::Error::other("picture record is too large"))?;
     let head = header.encode()?;
     if record.payload.len() > header.record_limit() {
-        return Err(std::io::Error::other("picture record exceeds its frame contract"));
+        return Err(std::io::Error::other(
+            "picture record exceeds its frame contract",
+        ));
     }
     let extension = if let Some(contract) = header.frame_contract {
-        let extension = RelayGopExtension { contract, family_layout_revision: header.family_layout_revision };
+        let extension = RelayGopExtension {
+            contract,
+            family_layout_revision: header.family_layout_revision,
+        };
         let bytes = serde_json::to_vec(&extension).map_err(std::io::Error::other)?;
         if bytes.len() > 1024 {
             return Err(std::io::Error::other("screen relay contract exceeds 1 KiB"));
         }
         Some(bytes)
-    } else { None };
-    let overhead = GOP_HEADER_BYTES + RECORD_HEADER_BYTES
+    } else {
+        None
+    };
+    let overhead = GOP_HEADER_BYTES
+        + RECORD_HEADER_BYTES
         + extension.as_ref().map_or(0, |bytes| bytes.len() + 2);
-    let capacity = record.payload.len().checked_add(overhead)
+    let capacity = record
+        .payload
+        .len()
+        .checked_add(overhead)
         .ok_or_else(|| std::io::Error::other("screen relay record length overflow"))?;
     let mut body = Vec::with_capacity(capacity);
     body.extend_from_slice(&head);
@@ -233,15 +250,17 @@ pub(crate) fn decode_relay_record(payload: &[u8]) -> std::io::Result<(GopHeader,
         .ok_or_else(|| invalid("screen relay record is too short"))?;
     let mut bytes = [0u8; GOP_HEADER_BYTES];
     bytes.copy_from_slice(head);
-    let (mut header,extended) = GopHeader::decode_prefix(&bytes)?;
+    let (mut header, extended) = GopHeader::decode_prefix(&bytes)?;
     let rest = if extended {
-        let (length, data) = rest.split_at_checked(2)
+        let (length, data) = rest
+            .split_at_checked(2)
             .ok_or_else(|| invalid("screen relay contract length is missing"))?;
         let length = u16::from_be_bytes([length[0], length[1]]) as usize;
         if length > 1024 {
             return Err(invalid("screen relay contract exceeds 1 KiB"));
         }
-        let (json, remaining) = data.split_at_checked(length)
+        let (json, remaining) = data
+            .split_at_checked(length)
             .ok_or_else(|| invalid("screen relay contract is truncated"))?;
         let extension: RelayGopExtension =
             serde_json::from_slice(json).map_err(std::io::Error::other)?;
@@ -324,33 +343,65 @@ mod tests {
 
     #[test]
     fn batches_task_b6_session_budget_private_relay_keeps_v1_and_rejects_oversize_before_read() {
-        use crate::screen::core::{frame_budget::legacy_limits,frame_size_caps::PacketBudget};
-        let local=legacy_limits(24*1024*1024,None).unwrap();
-        let hello=serde_json::from_value(serde_json::json!({"authorization":{"view":"allow","control":"allow"},
-            "platform":"windows","approval":"not_required"})).unwrap();
-        let accepted=RelayHello::Accepted {hello,path:"direct".into(),local_limits:Some(local)};
-        let bytes=serde_json::to_vec(&accepted).unwrap();let accepted:RelayHello=serde_json::from_slice(&bytes).unwrap();
-        let RelayHello::Accepted {hello,local_limits,..}=accepted else {panic!("not Accepted")};
-        assert!(hello.frame_contract.is_none());assert_eq!(local_limits,Some(local));
-        let packet=PacketBudget::for_receive(hello.frame_contract,local_limits).unwrap();
-        let bound=packet.record_bytes+GOP_HEADER_BYTES+RECORD_HEADER_BYTES;
-        let mut bytes=vec![RELAY_RECORD];bytes.extend_from_slice(&((bound+1) as u32).to_be_bytes());
-        let error=read_relay_budgeted(&mut bytes.as_slice(),usize::MAX,bound).unwrap_err();
-        assert_eq!(error.kind(),std::io::ErrorKind::InvalidData,"no payload was supplied");
+        use crate::screen::core::{frame_budget::legacy_limits, frame_size_caps::PacketBudget};
+        let local = legacy_limits(24 * 1024 * 1024, None).unwrap();
+        let hello = serde_json::from_value(
+            serde_json::json!({"authorization":{"view":"allow","control":"allow"},
+            "platform":"windows","approval":"not_required"}),
+        )
+        .unwrap();
+        let accepted = RelayHello::Accepted {
+            hello,
+            path: "direct".into(),
+            local_limits: Some(local),
+        };
+        let bytes = serde_json::to_vec(&accepted).unwrap();
+        let accepted: RelayHello = serde_json::from_slice(&bytes).unwrap();
+        let RelayHello::Accepted {
+            hello,
+            local_limits,
+            ..
+        } = accepted
+        else {
+            panic!("not Accepted")
+        };
+        assert!(hello.frame_contract.is_none());
+        assert_eq!(local_limits, Some(local));
+        let packet = PacketBudget::for_receive(hello.frame_contract, local_limits).unwrap();
+        let bound = packet.record_bytes + GOP_HEADER_BYTES + RECORD_HEADER_BYTES;
+        let mut bytes = vec![RELAY_RECORD];
+        bytes.extend_from_slice(&((bound + 1) as u32).to_be_bytes());
+        let error = read_relay_budgeted(&mut bytes.as_slice(), usize::MAX, bound).unwrap_err();
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::InvalidData,
+            "no payload was supplied"
+        );
     }
 
     #[test]
     fn batches_task_b6_extended_4k_ipc_contract_is_complete() {
-        use crate::screen::core::frame_budget::{FrameCapabilities,FrameContract};
-        let caps=FrameCapabilities::admitted(FrameSize::new(16384,16384),768*1024*1024).unwrap();
-        let contract=FrameContract::negotiate(Some(caps),Some(caps)).unwrap();
-        let header=GopHeader {gop_id:1,frame_contract:contract,family_layout_revision:None,
-            kind:crate::screen::core::wire_binary::StreamKind::Video,
-            codec:crate::screen::core::negotiate::CodecKind::Tiles,profile:None,size:FrameSize::new(3840,2160)};
-        let record=FrameRecord {frame_id:1,capture_ts_us:100,
-            flags:crate::screen::core::wire_binary::FLAG_KEYFRAME,payload:vec![0]};
-        let bytes=encode_relay_record(&header,&record).unwrap();
-        assert_eq!(decode_relay_record(&bytes).unwrap(),(header,record));
+        use crate::screen::core::frame_budget::{FrameCapabilities, FrameContract};
+        let caps =
+            FrameCapabilities::admitted(FrameSize::new(16384, 16384), 768 * 1024 * 1024).unwrap();
+        let contract = FrameContract::negotiate(Some(caps), Some(caps)).unwrap();
+        let header = GopHeader {
+            gop_id: 1,
+            frame_contract: contract,
+            family_layout_revision: None,
+            kind: crate::screen::core::wire_binary::StreamKind::Video,
+            codec: crate::screen::core::negotiate::CodecKind::Tiles,
+            profile: None,
+            size: FrameSize::new(3840, 2160),
+        };
+        let record = FrameRecord {
+            frame_id: 1,
+            capture_ts_us: 100,
+            flags: crate::screen::core::wire_binary::FLAG_KEYFRAME,
+            payload: vec![0],
+        };
+        let bytes = encode_relay_record(&header, &record).unwrap();
+        assert_eq!(decode_relay_record(&bytes).unwrap(), (header, record));
     }
 
     #[test]
@@ -406,7 +457,10 @@ mod tests {
             payload: vec![1, 2, 3],
         };
         let body = encode_relay_record(&header, &record).unwrap();
-        assert_eq!(decode_relay_record(&body).unwrap(), (header, record.clone()));
+        assert_eq!(
+            decode_relay_record(&body).unwrap(),
+            (header, record.clone())
+        );
         let cut = &body[..body.len() - 1];
         assert!(decode_relay_record(cut).is_err());
 
@@ -419,13 +473,23 @@ mod tests {
             hybrid_regions: true,
         });
         let body = encode_relay_record(&header, &record).unwrap();
-        assert_eq!(decode_relay_record(&body).unwrap(), (header, record.clone()));
+        assert_eq!(
+            decode_relay_record(&body).unwrap(),
+            (header, record.clone())
+        );
         header.family_layout_revision = Some(u64::MAX);
         let body = encode_relay_record(&header, &record).unwrap();
         assert_eq!(decode_relay_record(&body).unwrap(), (header, record));
         header.family_layout_revision = Some(0);
-        assert!(encode_relay_record(&header, &FrameRecord {
-            frame_id: 43, capture_ts_us: 1_001, flags: 1, payload: vec![1],
-        }).is_err());
+        assert!(encode_relay_record(
+            &header,
+            &FrameRecord {
+                frame_id: 43,
+                capture_ts_us: 1_001,
+                flags: 1,
+                payload: vec![1],
+            }
+        )
+        .is_err());
     }
 }

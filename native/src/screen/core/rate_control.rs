@@ -240,8 +240,11 @@ impl RateController {
         if path != self.path {
             self.delay_target = path.start_bps() as f64;
             self.loss_target = MAX_BITRATE_BPS as f64;
-            self.gradient.reset(); self.received = RateWindow::default(); self.sent = RateWindow::default();
-            self.loss_counters = None; self.overuse_streak = 0;
+            self.gradient.reset();
+            self.received = RateWindow::default();
+            self.sent = RateWindow::default();
+            self.loss_counters = None;
+            self.overuse_streak = 0;
         }
         self.path = path;
     }
@@ -251,9 +254,15 @@ impl RateController {
     }
 
     pub(crate) fn on_encode(&mut self, bytes: u64, elapsed_us: u64) {
-        if bytes == 0 || elapsed_us == 0 { return; }
-        let sample = (u128::from(bytes) * 8 * 1_000_000 / u128::from(elapsed_us)).min(u128::from(MAX_BITRATE_BPS)) as u64;
-        self.encode_capacity_bps = Some(self.encode_capacity_bps.map_or(sample, |previous| (previous * 7 + sample) / 8));
+        if bytes == 0 || elapsed_us == 0 {
+            return;
+        }
+        let sample = (u128::from(bytes) * 8 * 1_000_000 / u128::from(elapsed_us))
+            .min(u128::from(MAX_BITRATE_BPS)) as u64;
+        self.encode_capacity_bps = Some(
+            self.encode_capacity_bps
+                .map_or(sample, |previous| (previous * 7 + sample) / 8),
+        );
     }
 
     pub(crate) fn on_frame_sent(&mut self, bytes: u64, now_us: u64) {
@@ -301,15 +310,26 @@ impl RateController {
     }
 
     fn grow(&mut self, now_us: u64) {
-        if now_us.saturating_sub(self.last_update_us) < self.interval_us { return; }
+        if now_us.saturating_sub(self.last_update_us) < self.interval_us {
+            return;
+        }
         self.sent.prune(now_us);
-        let Some(delivery) = self.received.rate_bps() else { return; };
-        let Some(offered) = self.sent.rate_bps() else { return; };
+        let Some(delivery) = self.received.rate_bps() else {
+            return;
+        };
+        let Some(offered) = self.sent.rate_bps() else {
+            return;
+        };
         let current = self.delay_target.min(self.loss_target);
         if offered as f64 >= APP_LIMITED_SHARE * current {
             let capacity = self.encode_capacity_bps.unwrap_or(MAX_BITRATE_BPS) as f64;
             let probe = delivery as f64 * INTERVAL_GROWTH;
-            self.delay_target = clamp_bps((current * INTERVAL_GROWTH).min(probe).min(capacity).max(current));
+            self.delay_target = clamp_bps(
+                (current * INTERVAL_GROWTH)
+                    .min(probe)
+                    .min(capacity)
+                    .max(current),
+            );
             self.last_update_us = now_us;
         }
     }
@@ -366,8 +386,10 @@ impl Quality {
 pub(crate) fn quality_for(target_bps: u64, source: FrameSize, max_fps: u32) -> Quality {
     let max_fps = max_fps.max(1);
     let fps = (target_bps as f64 / (source.pixels().max(1) as f64 * BITS_PER_PIXEL)).floor() as u32;
-    Quality { fps: fps.clamp(1,max_fps), size: source }
-
+    Quality {
+        fps: fps.clamp(1, max_fps),
+        size: source,
+    }
 }
 
 /// The next quality from `current`: down at once when the target no longer

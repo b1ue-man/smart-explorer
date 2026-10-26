@@ -5,31 +5,54 @@ use crate::screen::core::input_model::InputEvent;
 use crate::screen::core::wire_control::ViewerFrame;
 
 pub(crate) fn input(session: &ViewerSession, events: Vec<InputEvent>) {
-    if !session.input_ready() { return; }
+    if !session.input_ready() {
+        return;
+    }
     let frames = {
         let mut info = session.info();
-        let Some(family) = &mut info.family else { return; };
+        let Some(family) = &mut info.family else {
+            return;
+        };
         match family.input(events) {
             Ok(frames) => frames,
-            Err(error) => { family.notice=Some(error.to_string()); return; }
+            Err(error) => {
+                family.notice = Some(error.to_string());
+                return;
+            }
         }
     };
-    if !session.input_ready() {disarm(session);return;}
-    for frame in frames { session.send(frame); }
+    if !session.input_ready() {
+        disarm(session);
+        return;
+    }
+    for frame in frames {
+        session.send(frame);
+    }
 }
 
-pub(crate) fn operate(session: &ViewerSession, identity: WindowIdentity, operation: WindowOperation) {
+pub(crate) fn operate(
+    session: &ViewerSession,
+    identity: WindowIdentity,
+    operation: WindowOperation,
+) {
     let request = {
-        let mut info=session.info();
-        let Some(family)=&mut info.family else { return; };
-        match family.operation(identity,operation) {
-            Ok(request)=>request,
-            Err(error)=>{family.notice=Some(error.to_string());return;}
+        let mut info = session.info();
+        let Some(family) = &mut info.family else {
+            return;
+        };
+        match family.operation(identity, operation) {
+            Ok(request) => request,
+            Err(error) => {
+                family.notice = Some(error.to_string());
+                return;
+            }
         }
     };
     session.send(ViewerFrame::FamilyOperation(request));
 }
 
-pub(crate) fn disarm(session:&ViewerSession) {
-    if let Some(family)=&mut session.info().family {family.disarm();}
+pub(crate) fn disarm(session: &ViewerSession) {
+    if let Some(family) = &mut session.info().family {
+        family.disarm();
+    }
 }

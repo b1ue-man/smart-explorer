@@ -104,8 +104,8 @@ fn render(
     resources: &mut YuvResources,
     frame: &YuvFrame,
 ) -> Vec<u8> {
-    let mut image=super::super::screen_render_yuv::YuvImage::new(device);
-    image.upload(resources,device,queue,frame);
+    let mut image = super::super::screen_render_yuv::YuvImage::new(device);
+    image.upload(resources, device, queue, frame);
     let extent = wgpu::Extent3d {
         width: SIDE,
         height: SIDE,
@@ -144,7 +144,7 @@ fn render(
             timestamp_writes: None,
             occlusion_query_set: None,
         });
-        image.draw(resources,&mut pass,true);
+        image.draw(resources, &mut pass, true);
     }
     encoder.copy_texture_to_buffer(
         wgpu::ImageCopyTexture {

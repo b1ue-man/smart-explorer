@@ -222,7 +222,11 @@ impl std::fmt::Debug for DiscoveryCommand {
                 .field("pin", &"[REDACTED]")
                 .field("share_back", share_back)
                 .finish(),
-            Self::StartOwnedDiscoveryExchange { discovery_id, share_back, .. } => formatter
+            Self::StartOwnedDiscoveryExchange {
+                discovery_id,
+                share_back,
+                ..
+            } => formatter
                 .debug_struct("StartOwnedDiscoveryExchange")
                 .field("discovery_id", discovery_id)
                 .field("pin", &"[REDACTED]")

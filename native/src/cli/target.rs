@@ -27,13 +27,36 @@ pub(crate) struct Target {
 impl Target {
     /// Explicit recovery binding. Keep the literal backend path; an unknown
     /// reopen identity never obtains a server-side rename capability.
-    pub(crate) fn rebind(backend: BackendHandle, path: String, expected: &crate::transfer::StoredEndpoint) -> Result<Self, String> {
-        let actual = crate::transfer::StoredEndpoint { local: backend.is_local(), namespace: backend.namespace_identity(), state: backend.state_identity() };
-        if &actual != expected { return Err("Wiederaufnahmeverbindung entspricht nicht dem gespeicherten Auftrag".into()); }
-        Ok(Self { backend, path, namespace_key: actual.namespace, rename_key: format!("recovery-unverified:{}", crate::transfer::new_job_id()), preserved_root: true, net: None })
+    pub(crate) fn rebind(
+        backend: BackendHandle,
+        path: String,
+        expected: &crate::transfer::StoredEndpoint,
+    ) -> Result<Self, String> {
+        let actual = crate::transfer::StoredEndpoint {
+            local: backend.is_local(),
+            namespace: backend.namespace_identity(),
+            state: backend.state_identity(),
+        };
+        if &actual != expected {
+            return Err(
+                "Wiederaufnahmeverbindung entspricht nicht dem gespeicherten Auftrag".into(),
+            );
+        }
+        Ok(Self {
+            backend,
+            path,
+            namespace_key: actual.namespace,
+            rename_key: format!("recovery-unverified:{}", crate::transfer::new_job_id()),
+            preserved_root: true,
+            net: None,
+        })
     }
 
-    pub(crate) fn rebind_native(root: &str, path: String, expected: &crate::transfer::StoredEndpoint) -> Result<Self, String> {
+    pub(crate) fn rebind_native(
+        root: &str,
+        path: String,
+        expected: &crate::transfer::StoredEndpoint,
+    ) -> Result<Self, String> {
         let backend: BackendHandle = std::sync::Arc::new(crate::vfs::LocalBackend::new(root));
         let mut target = Self::rebind(backend, path, expected)?;
         // This constructor, rather than a schema heuristic, proves a plain

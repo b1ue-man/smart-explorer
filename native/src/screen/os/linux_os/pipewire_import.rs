@@ -1,14 +1,14 @@
 //! One admitted whole mapping per Core memblock. Native access is serialized
 //! by the thread loop; no callback waits for Parent admission.
-use super::*;
-use super::super::pipewire_abi::{CoreMethods, SpaInterface};
 use super::super::pipewire_abi::memory::{
     fd_facts, CoreEvents, FdFacts, MemBlock, MemMap, MemoryApi, MempoolEvents,
 };
+use super::super::pipewire_abi::{CoreMethods, SpaInterface};
+use super::*;
+use crate::screen::core::capture_admission::CaptureSlice;
 use crate::screen::core::capture_import::{
     CaptureImportConnection, CaptureImportGrant, CaptureImportId, CaptureImportNeed,
 };
-use crate::screen::core::capture_admission::CaptureSlice;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 
 #[derive(Clone, Copy)]
@@ -69,7 +69,7 @@ pub(super) struct ImportController {
     pub core: AtomicPtr<c_void>,
     pub pool: AtomicPtr<c_void>,
     pub state: Mutex<Imports>,
-    pub lifecycle:Mutex<()>,
+    pub lifecycle: Mutex<()>,
     pub closed: AtomicBool,
     pub sequence: AtomicU64,
     pub generation: u64,
@@ -81,10 +81,12 @@ pub(super) struct ImportController {
 unsafe impl Send for ImportController {}
 unsafe impl Sync for ImportController {}
 impl ImportController {
-    pub(super) fn next_id(&self)->io::Result<CaptureImportId> {
-        let previous=self.sequence.fetch_update(Ordering::AcqRel,Ordering::Acquire,|n|n.checked_add(1))
-            .map_err(|_|io::Error::other("pipewire import sequence exhausted"))?;
-        CaptureImportId::new(self.generation,previous+1)
+    pub(super) fn next_id(&self) -> io::Result<CaptureImportId> {
+        let previous = self
+            .sequence
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_add(1))
+            .map_err(|_| io::Error::other("pipewire import sequence exhausted"))?;
+        CaptureImportId::new(self.generation, previous + 1)
     }
     pub(super) fn fail(&self, error: impl ToString) {
         self.latest.block_import(true);
@@ -93,28 +95,40 @@ impl ImportController {
     }
     pub(super) fn close(&self) {
         // Resume may dispatch callbacks, but those never take lifecycle.
-        let _lifecycle=self.lifecycle.lock().unwrap_or_else(PoisonError::into_inner);
+        let _lifecycle = self
+            .lifecycle
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         {
             let _state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
             self.closed.store(true, Ordering::Release);
         }
         self.latest.block_import(true);
-        self.connection.lock().unwrap_or_else(PoisonError::into_inner).take();
+        self.connection
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
         self.memory.wake();
     }
     pub(super) fn open(&self) -> bool {
         !self.closed.load(Ordering::Acquire) && !self.memory.stopped()
     }
     pub(super) fn pending(&self) -> Option<Pending> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner).pending
+        self.state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .pending
     }
     pub(super) unsafe fn inspect(&self, pending: Pending) -> io::Result<Inspected> {
         if !self.open() || self.core.load(Ordering::Acquire).is_null() {
             return Err(io::Error::other("pipewire import closed"));
         }
         let block = (self.api.find_id)(self.pool.load(Ordering::Acquire), pending.mem_id);
-        let native = block.as_ref().ok_or_else(|| io::Error::other("pipewire block missing"))?;
-        if native.fd != pending.fd || native.type_ != pending.kind || native.flags != pending.flags {
+        let native = block
+            .as_ref()
+            .ok_or_else(|| io::Error::other("pipewire block missing"))?;
+        if native.fd != pending.fd || native.type_ != pending.kind || native.flags != pending.flags
+        {
             return Err(io::Error::other("pipewire import identity changed"));
         }
         let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
@@ -134,7 +148,12 @@ impl ImportController {
         {
             return Err(io::Error::other("pipewire mapping rights differ from FD"));
         }
-        Ok(Inspected { pending, block: block as usize, facts, rights })
+        Ok(Inspected {
+            pending,
+            block: block as usize,
+            facts,
+            rights,
+        })
     }
     pub(super) fn need(&self, inspected: Inspected) -> io::Result<CaptureImportNeed> {
         CaptureImportNeed::new(
@@ -151,22 +170,36 @@ impl ImportController {
     ) -> io::Result<()> {
         // No Parent wait is inside this gate. Close waits for an in-progress
         // native resume to return before declaring this connection terminal.
-        let _lifecycle=self.lifecycle.lock().unwrap_or_else(PoisonError::into_inner);
+        let _lifecycle = self
+            .lifecycle
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         grant.check_identity(self.memory.source(), &inspected.pending.id)?;
         let current = self.inspect(inspected.pending)?;
-        if current.block!=inspected.block || current.rights!=inspected.rights
-            || current.facts.dev!=inspected.facts.dev || current.facts.inode!=inspected.facts.inode
-            || current.facts.access!=inspected.facts.access {
-            return Err(io::Error::other("pipewire FD identity changed during admission"));
+        if current.block != inspected.block
+            || current.rights != inspected.rights
+            || current.facts.dev != inspected.facts.dev
+            || current.facts.inode != inspected.facts.inode
+            || current.facts.access != inspected.facts.access
+        {
+            return Err(io::Error::other(
+                "pipewire FD identity changed during admission",
+            ));
         }
-        if current.facts!=inspected.facts {
+        if current.facts != inspected.facts {
             // A changed length needs a new exact request and monotone ID.
             // Keep Core paused; this response grants no mapping of the new size.
             grant.retire()?;
-            let mut pending=current.pending;
-            pending.id=self.next_id()?;
-            self.state.lock().unwrap_or_else(PoisonError::into_inner).pending=Some(pending);
-            return Err(io::Error::new(io::ErrorKind::Interrupted,"pipewire import length changed; readmit"));
+            let mut pending = current.pending;
+            pending.id = self.next_id()?;
+            self.state
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .pending = Some(pending);
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "pipewire import length changed; readmit",
+            ));
         }
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         if !self.open() || state.pending.map(|p| p.id) != Some(inspected.pending.id) {
@@ -214,13 +247,17 @@ impl ImportController {
         state.pending = None;
         drop(state);
         if !valid {
-            return Err(io::Error::other("pipewire whole map returned a different range"));
+            return Err(io::Error::other(
+                "pipewire whole map returned a different range",
+            ));
         }
         // Reentrant add_mem may set the barrier again during this resume.
         self.latest.block_import(false);
         let result = (self.api.set_paused)(self.core.load(Ordering::Acquire), false);
         if result < 0 {
-            return Err(io::Error::other(format!("pipewire core resume failed: {result}")));
+            return Err(io::Error::other(format!(
+                "pipewire core resume failed: {result}"
+            )));
         }
         Ok(())
     }
@@ -248,18 +285,18 @@ impl ImportController {
         }
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let closing = state.pool_closing;
-        let mut pending=state.head.take();
-        let mut retained=None;
-        while let Some(mut owner)=pending {
-            pending=owner.next.take();
+        let mut pending = state.head.take();
+        let mut retained = None;
+        while let Some(mut owner) = pending {
+            pending = owner.next.take();
             if owner.removed || core_finished || closing {
                 ImportBacking::retire(owner);
             } else {
-                owner.next=retained.take();
-                retained=Some(owner);
+                owner.next = retained.take();
+                retained = Some(owner);
             }
         }
-        state.head=retained;
+        state.head = retained;
     }
     pub(super) unsafe fn reap_release_handles(&self) {
         {
@@ -288,9 +325,9 @@ impl ImportController {
         self.pool.store(null_mut(), Ordering::Release);
     }
 }
-#[path = "pipewire_import_events.rs"]
-mod events;
 #[path = "pipewire_import_control.rs"]
 pub(super) mod control;
+#[path = "pipewire_import_events.rs"]
+mod events;
 #[cfg(test)]
 pub(super) use events::fixture_support;

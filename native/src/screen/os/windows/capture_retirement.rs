@@ -61,9 +61,16 @@ impl CaptureResources {
         .map_err(io::Error::other)?;
         // Partial construction has the same cleanup owner as normal capture.
         let mut resources = Self {
-            pending: Some(Pending { session: None, pool: Some(pool), _slice: slice }),
+            pending: Some(Pending {
+                session: None,
+                pool: Some(pool),
+                _slice: slice,
+            }),
         };
-        let session = resources.pool()?.CreateCaptureSession(item).map_err(io::Error::other)?;
+        let session = resources
+            .pool()?
+            .CreateCaptureSession(item)
+            .map_err(io::Error::other)?;
         if let Some(pending) = &mut resources.pending {
             pending.session = Some(session.clone());
         }
@@ -73,7 +80,9 @@ impl CaptureResources {
     }
 
     pub(super) fn pool(&self) -> io::Result<&Direct3D11CaptureFramePool> {
-        self.pending.as_ref().and_then(|pending| pending.pool.as_ref())
+        self.pending
+            .as_ref()
+            .and_then(|pending| pending.pool.as_ref())
             .ok_or_else(|| io::Error::other("WGC frame pool already closed"))
     }
 
@@ -88,7 +97,9 @@ impl CaptureResources {
 
 impl Drop for CaptureResources {
     fn drop(&mut self) {
-        let Some(mut pending) = self.pending.take() else { return; };
+        let Some(mut pending) = self.pending.take() else {
+            return;
+        };
         if pending.close().is_ok() {
             return;
         }
@@ -101,7 +112,9 @@ impl Drop for CaptureResources {
             .spawn(move || {
                 super::mf_common::ensure_com();
                 loop {
-                    let mut guard = worker.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let mut guard = worker
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     let complete = guard.as_mut().is_none_or(|pending| pending.close().is_ok());
                     if complete {
                         drop(guard.take());
@@ -112,7 +125,9 @@ impl Drop for CaptureResources {
                 }
             });
         if let Err(error) = started {
-            eprintln!("WGC cleanup could not start; capture credit retained until process exit: {error}");
+            eprintln!(
+                "WGC cleanup could not start; capture credit retained until process exit: {error}"
+            );
             // Even a thread creation failure cannot turn unknown native
             // ownership into free credit. The parent confirms process exit.
             std::mem::forget(held);

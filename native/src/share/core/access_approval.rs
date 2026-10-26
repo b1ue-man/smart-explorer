@@ -17,8 +17,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
 
 use tokio::sync::oneshot;
 
-use crate::share::access_grant::Capability;
 use crate::share::access_constraints::AccessRequest;
+use crate::share::access_grant::Capability;
 use crate::share::access_revocation::{self, AccessConfirmation};
 use crate::share::exec_access_view::ApprovalSurface;
 use crate::share::relation_proof::ProvenPrincipal;
@@ -39,7 +39,9 @@ pub(crate) trait ConsentNotifier: Send + Sync {
 
     /// True only after this surface renders the full AccessV2 target.
     /// Legacy consent windows must never approve an invisible target.
-    fn supports_contextual(&self) -> bool { false }
+    fn supports_contextual(&self) -> bool {
+        false
+    }
 
     /// The request ended (answered, withdrawn or cancelled).
     fn withdraw(&self, _id: &ApprovalId) {}
@@ -318,7 +320,10 @@ pub(crate) struct ApprovalTicket {
 impl ApprovalTicket {
     /// Only an answered contextual ticket can mint a receipt, exactly once.
     pub(crate) fn take_confirmation(&mut self) -> Option<AccessConfirmation> {
-        if !matches!(&self.state, TicketState::Ready(ApprovalOutcome::Once | ApprovalOutcome::Always)) {
+        if !matches!(
+            &self.state,
+            TicketState::Ready(ApprovalOutcome::Once | ApprovalOutcome::Always)
+        ) {
             return None;
         }
         self.binding.take().map(|(principal, request, revision)| {

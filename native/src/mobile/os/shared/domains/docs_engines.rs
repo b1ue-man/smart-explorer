@@ -100,7 +100,9 @@ impl Slot {
     pub(super) fn pending_count(&self) -> io::Result<usize> {
         // No backend, journal reopen or second cache lease. Cleartext paths
         // remain inside this count and never cross the provider boundary.
-        self.pending_engine.dirty_entries().map(|entries| entries.len())
+        self.pending_engine
+            .dirty_entries()
+            .map(|entries| entries.len())
     }
 }
 
@@ -131,7 +133,9 @@ pub(super) fn cache_root() -> io::Result<PathBuf> {
     crate::mount::prepare_spool_root(&cache_path()?)
 }
 
-fn cache_path() -> io::Result<PathBuf> { Ok(app_data_resolved()?.join(CACHE_DIR)) }
+fn cache_path() -> io::Result<PathBuf> {
+    Ok(app_data_resolved()?.join(CACHE_DIR))
+}
 
 /// The app's data folder with the folder the system handed over resolved.
 /// Android gives `filesDir` below `/data/user/<user>`, and for user 0 the
@@ -187,7 +191,9 @@ pub(super) fn close_root(root: &RootId) -> Vec<Arc<Slot>> {
         }
     }
     for slot in &slots {
-        if let Some(access) = &slot.access { access.revoke(); }
+        if let Some(access) = &slot.access {
+            access.revoke();
+        }
     }
     slots
 }
@@ -215,7 +221,9 @@ fn open(key: &EngineKey) -> io::Result<Slot> {
         }
     };
     let access = source.access;
-    if let Some(access) = &access { access.check()?; }
+    if let Some(access) = &access {
+        access.check()?;
+    }
     let mode = if source.writable {
         MountMode::ReadWrite
     } else {
@@ -233,10 +241,13 @@ fn open(key: &EngineKey) -> io::Result<Slot> {
         None => MountEngine::open_host_cache(config, source.backend, &cache)?,
     };
     let space = crate::mount::os::linux_os::cache_space::CacheDiskSpace::new(&cache)?;
-    let engine = engine.with_cache_space_probe(Arc::new(space))
+    let engine = engine
+        .with_cache_space_probe(Arc::new(space))
         .with_capacity_observer(Arc::new(super::docs::capacity_changed));
     if !rooted {
-        if let Some(access) = &access { access.check()?; }
+        if let Some(access) = &access {
+            access.check()?;
+        }
         engine.prepare_host_remote()?;
     }
     let pending_engine = Arc::new(engine);
@@ -244,7 +255,9 @@ fn open(key: &EngineKey) -> io::Result<Slot> {
     // Changes a crashed process left behind go out now; a failure keeps
     // them in the journal for `docs.retryPending`.
     let _ = fs.retry_pending_changes();
-    if let Some(access) = &access { access.check()?; }
+    if let Some(access) = &access {
+        access.check()?;
+    }
     let marker = cache.join(format!("{}{ROOT_FILE_SUFFIX}", id.as_str()));
     crate::support_dirs::write_private_atomic(&marker, key.label().as_bytes())?;
     Ok(Slot {
@@ -429,7 +442,9 @@ fn read_only() -> io::Error {
 }
 
 /// Unpublished changes, with explicit unknown state for unopened sealed caches.
-pub(super) fn pending() -> serde_json::Value { pending_state::pending() }
+pub(super) fn pending() -> serde_json::Value {
+    pending_state::pending()
+}
 
 pub(super) fn retry_pending(released: &dyn Fn(&RootId) -> bool) -> Vec<String> {
     pending_state::retry_pending(released)

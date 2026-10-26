@@ -8,12 +8,12 @@ use super::super::{
 };
 use super::{bad, validate_frame_len, META_LINK, META_SPECIAL, MIN_WIRE_META_BYTES};
 
-#[path = "frame_ext.rs"]
-pub(super) mod frame_ext;
-#[path = "folder_frames.rs"]
-pub(super) mod folder_frames;
 #[path = "capacity_frames.rs"]
 pub(super) mod capacity_frames;
+#[path = "folder_frames.rs"]
+pub(super) mod folder_frames;
+#[path = "frame_ext.rs"]
+pub(super) mod frame_ext;
 #[path = "frame_ops.rs"]
 pub(super) mod frame_ops;
 #[path = "lz4_frames.rs"]

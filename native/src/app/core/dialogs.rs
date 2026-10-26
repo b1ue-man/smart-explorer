@@ -152,7 +152,8 @@ impl App {
             .default_size([560.0, 480.0])
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
-                egui::ScrollArea::vertical().min_scrolled_height(0.0)
+                egui::ScrollArea::vertical()
+                    .min_scrolled_height(0.0)
                     .max_height(super::dialog_geometry::remaining_height(ui, 2.0))
                     .show(ui, |ui| {
                         ui.label(DISCLAIMER_TEXT);

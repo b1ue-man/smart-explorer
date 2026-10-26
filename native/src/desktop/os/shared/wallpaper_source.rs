@@ -2,7 +2,10 @@
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 use crate::source_media::{self, Priority, Source};
 
@@ -21,9 +24,15 @@ impl WallpaperReader {
         if source.as_ref() != guard.as_ref().map(|guard| guard.source()) {
             return Err(io::Error::other("wallpaper medium changed while opening"));
         }
-        if let Some(guard) = &guard { guard.validate_file(&file)?; }
+        if let Some(guard) = &guard {
+            guard.validate_file(&file)?;
+        }
         canceled(&cancel)?;
-        Ok(Self { file, source, cancel })
+        Ok(Self {
+            file,
+            source,
+            cancel,
+        })
     }
 
     fn access<T>(&mut self, operation: impl FnOnce(&mut File) -> io::Result<T>) -> io::Result<T> {
@@ -34,7 +43,9 @@ impl WallpaperReader {
             return Err(io::Error::other("wallpaper medium changed or was ejected"));
         }
         let result = operation(&mut self.file)?;
-        if let Some(guard) = &guard { guard.validate_file(&self.file)?; }
+        if let Some(guard) = &guard {
+            guard.validate_file(&self.file)?;
+        }
         canceled(&self.cancel)?;
         Ok(result)
     }
@@ -57,6 +68,11 @@ fn canceled(cancel: &AtomicBool) -> io::Result<()> {
     if cancel.load(Ordering::Acquire) {
         // ConnectionAborted is deliberately not Interrupted: decoders must not
         // retry cancellation indefinitely as a transient interrupted read.
-        Err(io::Error::new(io::ErrorKind::ConnectionAborted, "wallpaper read canceled"))
-    } else { Ok(()) }
+        Err(io::Error::new(
+            io::ErrorKind::ConnectionAborted,
+            "wallpaper read canceled",
+        ))
+    } else {
+        Ok(())
+    }
 }

@@ -142,7 +142,11 @@ pub(super) fn copy_entry_with(
     let spool = SourceSpool::collect(source, &plan, observer)?;
     observer.set_phase(TreePhase::Writing);
     let plan = apply_transfer(source, destination, plan, &spool, observer)?;
-    Ok(TransferReceipt { plan, spool, resume: request.resume })
+    Ok(TransferReceipt {
+        plan,
+        spool,
+        resume: request.resume,
+    })
 }
 
 impl TransferReceipt {
@@ -176,15 +180,48 @@ pub(super) fn remove_copied_source(
     remove_transferred_source(backend, &receipt.plan)
 }
 
-pub(super) fn remove_copied_source_verified(source: &dyn Backend, destination: &dyn Backend, receipt: &TransferReceipt, observer: &TreeObserver) -> Result<Vec<String>, String> {
-    if !receipt.resume { return remove_copied_source(source, receipt); }
+pub(super) fn remove_copied_source_verified(
+    source: &dyn Backend,
+    destination: &dyn Backend,
+    receipt: &TransferReceipt,
+    observer: &TreeObserver,
+) -> Result<Vec<String>, String> {
+    if !receipt.resume {
+        return remove_copied_source(source, receipt);
+    }
     receipt.plan.validate_destinations(destination)?;
     super::tree_remove::remove_transferred_source_checked(source, &receipt.plan, &|index| {
         let entry = &receipt.plan.entries[index];
-        receipt.plan.validate_destination_ancestry(destination, index)?;
-        super::tree_guard::validate_destination_state(destination, &entry.destination_path, &entry.destination, entry.source.is_dir)?;
-        if !entry.source.is_dir && (!receipt.spool.matches(index, source, &entry.source_path, entry.source.id.as_deref(), observer)? || !receipt.spool.matches(index, destination, &entry.destination_path, match &entry.destination { DestinationState::File(meta) => meta.id.as_deref(), _ => None }, observer)?) {
-            return Err("Quelle oder bestätigter Zielinhalt wurde vor der Movebereinigung geändert".into());
+        receipt
+            .plan
+            .validate_destination_ancestry(destination, index)?;
+        super::tree_guard::validate_destination_state(
+            destination,
+            &entry.destination_path,
+            &entry.destination,
+            entry.source.is_dir,
+        )?;
+        if !entry.source.is_dir
+            && (!receipt.spool.matches(
+                index,
+                source,
+                &entry.source_path,
+                entry.source.id.as_deref(),
+                observer,
+            )? || !receipt.spool.matches(
+                index,
+                destination,
+                &entry.destination_path,
+                match &entry.destination {
+                    DestinationState::File(meta) => meta.id.as_deref(),
+                    _ => None,
+                },
+                observer,
+            )?)
+        {
+            return Err(
+                "Quelle oder bestätigter Zielinhalt wurde vor der Movebereinigung geändert".into(),
+            );
         }
         Ok(())
     })

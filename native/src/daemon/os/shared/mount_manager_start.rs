@@ -27,12 +27,15 @@ impl MountManager {
         config: MountConfig,
         host: &ShareHost,
     ) -> Result<MountSnapshot, String> {
-        self.start_retained(config,host,None)
+        self.start_retained(config, host, None)
     }
 
     pub(super) fn start_retained(
-        &self, config:MountConfig, host:&ShareHost, lease:Option<Arc<dyn Send+Sync>>,
-    )->Result<MountSnapshot,String> {
+        &self,
+        config: MountConfig,
+        host: &ShareHost,
+        lease: Option<Arc<dyn Send + Sync>>,
+    ) -> Result<MountSnapshot, String> {
         config
             .validate()
             .map_err(|error| format!("Ungueltige Laufwerk-Konfiguration: {error}"))?;
@@ -45,15 +48,22 @@ impl MountManager {
     }
 
     pub(super) fn retry(&self, id: &MountId, host: &ShareHost) -> Result<MountSnapshot, String> {
-        self.retry_retained(id,host,None)
+        self.retry_retained(id, host, None)
     }
 
     pub(super) fn retry_retained(
-        &self, id:&MountId, host:&ShareHost, lease:Option<Arc<dyn Send+Sync>>,
-    )->Result<MountSnapshot,String> {
+        &self,
+        id: &MountId,
+        host: &ShareHost,
+        lease: Option<Arc<dyn Send + Sync>>,
+    ) -> Result<MountSnapshot, String> {
         self.retry_with(id, |manager, config, registry_recorded| {
             manager.start_locked_retained(
-                config, host, registry_recorded, lease, start_cache::StartEntry::Retry,
+                config,
+                host,
+                registry_recorded,
+                lease,
+                start_cache::StartEntry::Retry,
             )
         })
     }
@@ -91,7 +101,9 @@ impl MountManager {
                     && !entry.backend_stream_active
                     && matches!(entry.status, MountStatus::Unmounted)
                 {
-                    entry.status = MountStatus::Failed { detail: detail.clone() };
+                    entry.status = MountStatus::Failed {
+                        detail: detail.clone(),
+                    };
                 }
             }
         }
@@ -107,24 +119,41 @@ impl MountManager {
         host: &ShareHost,
         registry_recorded: bool,
     ) -> Result<MountSnapshot, String> {
-        self.start_locked_retained(config,host,registry_recorded,None,start_cache::StartEntry::New)
+        self.start_locked_retained(
+            config,
+            host,
+            registry_recorded,
+            None,
+            start_cache::StartEntry::New,
+        )
     }
 
     fn start_locked_retained(
-        &self, mut config:MountConfig, host:&ShareHost, registry_recorded:bool,
-        lease:Option<Arc<dyn Send+Sync>>,
+        &self,
+        mut config: MountConfig,
+        host: &ShareHost,
+        registry_recorded: bool,
+        lease: Option<Arc<dyn Send + Sync>>,
         admission: start_cache::StartEntry,
-    )->Result<MountSnapshot,String> {
+    ) -> Result<MountSnapshot, String> {
         if super::super::mount_registry::inactive::is_inactive(&config.id)
-            .map_err(|error| format!("Laufwerk-Recovery-Eigentümer lesen: {error}"))? {
-            return Err("Laufwerk liegt im inaktiven Recoverybestand; zuerst ausdrücklich reaktivieren".into());
+            .map_err(|error| format!("Laufwerk-Recovery-Eigentümer lesen: {error}"))?
+        {
+            return Err(
+                "Laufwerk liegt im inaktiven Recoverybestand; zuerst ausdrücklich reaktivieren"
+                    .into(),
+            );
         }
         if let crate::mount::MountSource::Vault { site_id } = &config.source {
             let policy = crate::vault::mount_policy(site_id)?;
-            if policy.read_only { config.mode = crate::mount::MountMode::ReadOnly; }
+            if policy.read_only {
+                config.mode = crate::mount::MountMode::ReadOnly;
+            }
             // Current explicit consent wins over a stale strict config. A legacy
             // Trusted flag alone never grants consent to a newly resolved root.
-            if policy.trusted { config.root_security = crate::mount::MountRootSecurity::Trusted; }
+            if policy.trusted {
+                config.root_security = crate::mount::MountRootSecurity::Trusted;
+            }
         }
         let key = config.id.as_str().to_string();
         match admission {
@@ -136,7 +165,10 @@ impl MountManager {
             }
         }?;
         self.forget_update_stop(&config.id);
-        let _start_end=StartEnd {manager:self,key:&key};
+        let _start_end = StartEnd {
+            manager: self,
+            key: &key,
+        };
         let vault_site = super::termination::vault_site(&config).map(str::to_string);
         if vault_site.is_some() {
             self.install_vault_hooks(host);
@@ -252,7 +284,9 @@ impl MountManager {
         let entry = state
             .get_mut(key)
             .ok_or_else(|| "Laufwerk-Start wurde abgebrochen".to_string())?;
-        if entry.child.is_none() {entry.startup_lease=None;}
+        if entry.child.is_none() {
+            entry.startup_lease = None;
+        }
         entry.backend = None;
         entry.capabilities = None;
         entry.launch_token = None;
@@ -314,7 +348,11 @@ impl MountManager {
 /// The backend the host is handed: the rooted backend of the source, or for
 /// the device tree the placeholder of the handshake.
 #[cfg(any(windows, target_os = "linux"))]
-fn backend_of(config: &MountConfig, host: &ShareHost, cache: &std::path::Path) -> Result<crate::vfs::BackendHandle, String> {
+fn backend_of(
+    config: &MountConfig,
+    host: &ShareHost,
+    cache: &std::path::Path,
+) -> Result<crate::vfs::BackendHandle, String> {
     if config.source.is_device_tree() {
         return Ok(super::super::drive_modules::devices_mount::placeholder_backend());
     }
@@ -384,12 +422,17 @@ fn spawn_host(
 
 /// A failed/deferred synchronous start owns no child. Never retain its lease
 /// forever; failures with a live or unobserved child remain protected.
-struct StartEnd<'a> {manager:&'a MountManager,key:&'a str}
+struct StartEnd<'a> {
+    manager: &'a MountManager,
+    key: &'a str,
+}
 impl Drop for StartEnd<'_> {
     fn drop(&mut self) {
-        if let Ok(mut state)=self.manager.state_guard() {
-            if let Some(entry)=state.get_mut(self.key) {
-                if entry.child.is_none() {entry.startup_lease=None;}
+        if let Ok(mut state) = self.manager.state_guard() {
+            if let Some(entry) = state.get_mut(self.key) {
+                if entry.child.is_none() {
+                    entry.startup_lease = None;
+                }
             }
         }
     }
@@ -399,12 +442,19 @@ impl Drop for StartEnd<'_> {
 /// authenticated Mounted releases every copy together, including idle streams.
 #[derive(Clone)]
 pub(super) struct StartupLease {
-    retained:Arc<std::sync::Mutex<Option<Arc<dyn Send+Sync>>>>,
+    retained: Arc<std::sync::Mutex<Option<Arc<dyn Send + Sync>>>>,
 }
 impl StartupLease {
-    pub(super) fn new(retained:Arc<dyn Send+Sync>)->Self {Self {retained:Arc::new(std::sync::Mutex::new(Some(retained)))}}
+    pub(super) fn new(retained: Arc<dyn Send + Sync>) -> Self {
+        Self {
+            retained: Arc::new(std::sync::Mutex::new(Some(retained))),
+        }
+    }
     pub(super) fn mounted(&self) {
-        self.retained.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+        self.retained
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
     }
 }
 

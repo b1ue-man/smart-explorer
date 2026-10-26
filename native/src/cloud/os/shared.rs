@@ -45,18 +45,27 @@ pub fn load_config_checked(p: Provider) -> std::io::Result<ClientConfig> {
 }
 
 pub fn save_config(p: Provider, c: &ClientConfig) -> std::io::Result<()> {
-    if [&c.client_id, &c.client_secret].iter().any(|value| value.chars().any(char::is_control)) {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput,
-            "Client-ID oder Secret enthält Steuerzeichen"));
+    if [&c.client_id, &c.client_secret]
+        .iter()
+        .any(|value| value.chars().any(char::is_control))
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Client-ID oder Secret enthält Steuerzeichen",
+        ));
     }
     let normalized = ClientConfig {
-        client_id: c.client_id.trim().into(), client_secret: c.client_secret.trim().into(),
+        client_id: c.client_id.trim().into(),
+        client_secret: c.client_secret.trim().into(),
     };
     super::coordinator::config_changed(p, &normalized)
 }
 
 pub(super) fn save_config_unlocked(p: Provider, c: &ClientConfig) -> std::io::Result<()> {
-    let body = format!("client_id={}\nclient_secret={}\n", c.client_id, c.client_secret);
+    let body = format!(
+        "client_id={}\nclient_secret={}\n",
+        c.client_id, c.client_secret
+    );
     crate::support_dirs::write_private_atomic(&cfg_path(p), body.as_bytes())
 }
 
@@ -69,9 +78,13 @@ pub fn refresh_token_checked(p: Provider) -> Result<Option<String>, String> {
     super::coordinator::refresh_token(p).map_err(|error| error.to_string())
 }
 
-pub fn refresh_token(p: Provider) -> Option<String> { refresh_token_checked(p).ok().flatten() }
+pub fn refresh_token(p: Provider) -> Option<String> {
+    refresh_token_checked(p).ok().flatten()
+}
 
-pub fn is_connected(p: Provider) -> bool { super::coordinator::status(p).signed_in }
+pub fn is_connected(p: Provider) -> bool {
+    super::coordinator::status(p).signed_in
+}
 
 pub fn disconnect(p: Provider) -> Result<(), String> {
     super::coordinator::disconnect(p).map_err(|error| error.to_string())

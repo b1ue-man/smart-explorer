@@ -34,12 +34,12 @@ use super::host_platform::{HostPlatform, HostStepError, VolumePoll};
 // DRV-M6: the device tree runs the same flow over its own set-up.
 #[path = "host_devices.rs"]
 pub(crate) mod devices;
+#[path = "host_capacity.rs"]
+mod host_capacity;
 #[path = "host_storage.rs"]
 mod host_storage;
 #[path = "host_session_reports.rs"]
 mod reports;
-#[path = "host_capacity.rs"]
-mod host_capacity;
 
 pub(crate) use host_storage::{LockAnswer, LockOrder, SpoolKeyAnswer};
 use reports::{
@@ -52,7 +52,9 @@ pub(crate) const CONTROL_POLL: Duration = Duration::from_millis(250);
 
 /// The daemon side of a drive host.
 pub(crate) trait HostControl {
-    fn report_capacity(&self, _capacity: crate::mount::MountCapacityReport) -> Result<(), String> { Ok(()) }
+    fn report_capacity(&self, _capacity: crate::mount::MountCapacityReport) -> Result<(), String> {
+        Ok(())
+    }
     fn report(&self, status: MountStatus, recovery: Option<MountRecovery>) -> Result<(), String>;
     /// `true` for an unmount request and for a lost daemon connection.
     fn wait_for_stop(&self, timeout: Duration) -> bool;
@@ -325,8 +327,10 @@ fn run_leased(
 }
 
 fn run_until_stopped(
-    platform: &mut dyn HostPlatform, control: &dyn HostControl,
-    engine: &dyn MountFilesystem, update_stop: &UpdateStopCheck,
+    platform: &mut dyn HostPlatform,
+    control: &dyn HostControl,
+    engine: &dyn MountFilesystem,
+    update_stop: &UpdateStopCheck,
 ) -> Ended {
     // Device-tree roots have no single cache volume or additive remote quota.
     run_until_stopped_with_capacity(platform, control, engine, update_stop, None)
@@ -359,7 +363,9 @@ fn run_until_stopped_with_capacity(
     let mut notification_error_reported = false;
     let mut update_checked = Instant::now();
     loop {
-        if let Some(space) = space { capacity_report.turn(control, engine, space); }
+        if let Some(space) = space {
+            capacity_report.turn(control, engine, space);
+        }
         if control.wait_for_stop(CONTROL_POLL) {
             return finish(platform, control, engine, None, HostExit::Stopped);
         }

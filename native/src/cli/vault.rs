@@ -77,7 +77,9 @@ enum VaultCommand {
     ForgetPassword(manage::SiteArg),
     #[command(about = "Change the name and the lock settings of a vault")]
     Settings(manage::SettingsArgs),
-    #[command(about = "Read, set or revoke identity-bound mount trust and separate cleartext-copy consent")]
+    #[command(
+        about = "Read, set or revoke identity-bound mount trust and separate cleartext-copy consent"
+    )]
     OpenPolicy(open_policy::PolicyArgs),
     #[command(about = "Check the structure of an unlocked vault")]
     Check(compare::CheckArgs),

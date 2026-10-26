@@ -1,2 +1,2 @@
-pub(crate) mod model;
 pub(crate) mod grant;
+pub(crate) mod model;

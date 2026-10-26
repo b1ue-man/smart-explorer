@@ -113,15 +113,23 @@ impl BackendExtensions for AgentBackend {
     }
 
     fn rename_reserved_directory(&self, source: &str, destination: &str) -> VfsResult<()> {
-        if !self.features().folder_reservation { return Err(unsupported()); }
+        if !self.features().folder_reservation {
+            return Err(unsupported());
+        }
         let lease = self.pool.lease();
         let (mux, reply) = lease.mutation_call(Frame::RenameDirectoryNoReplace {
-            src: source.into(), dst: destination.into(),
+            src: source.into(),
+            dst: destination.into(),
         })?;
         match reply {
             Frame::Ok => Ok(()),
-            Frame::Err(error) => Err(Frame::folder_error(&error).unwrap_or_else(|| agent_error(error))),
-            frame => { lease.invalidate(&mux); Err(unexpected("reserved-directory rename", &frame)) },
+            Frame::Err(error) => {
+                Err(Frame::folder_error(&error).unwrap_or_else(|| agent_error(error)))
+            }
+            frame => {
+                lease.invalidate(&mux);
+                Err(unexpected("reserved-directory rename", &frame))
+            }
         }
     }
 
@@ -138,12 +146,21 @@ impl BackendExtensions for AgentBackend {
             }
             return vfs::capacity(&*self.inner, root);
         }
-        match self.pool.lease().safe_call_timeout(Frame::Capacity(root.into()), QUERY_TIMEOUT) {
+        match self
+            .pool
+            .lease()
+            .safe_call_timeout(Frame::Capacity(root.into()), QUERY_TIMEOUT)
+        {
             Ok(Frame::CapacityData(json)) => serde_json::from_str(&json)
                 .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid capacity reply")),
             Ok(Frame::Err(error)) => Err(agent_error(error)),
             Ok(frame) => Err(unexpected("capacity", &frame)),
-            Err(error) => Ok(vfs::capacity_failure(self.state_identity(), root, vfs::CapacitySource::Agent, &error)),
+            Err(error) => Ok(vfs::capacity_failure(
+                self.state_identity(),
+                root,
+                vfs::CapacitySource::Agent,
+                &error,
+            )),
         }
     }
 

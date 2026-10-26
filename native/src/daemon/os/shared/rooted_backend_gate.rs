@@ -13,26 +13,38 @@ impl OperationGate {
     }
 
     fn check(&self) -> io::Result<()> {
-        self.1.as_ref().map_or(Ok(()), crate::vault::MountAccess::check)
+        self.1
+            .as_ref()
+            .map_or(Ok(()), crate::vault::MountAccess::check)
     }
 
     pub(super) fn reader(&self, inner: Box<dyn Read + Send>) -> Box<dyn Read + Send> {
-        Box::new(Reader { inner, access: self.1.clone() })
+        Box::new(Reader {
+            inner,
+            access: self.1.clone(),
+        })
     }
 
     pub(super) fn writer(&self, inner: Box<dyn Write + Send>) -> Box<dyn Write + Send> {
-        Box::new(Writer { inner, access: self.1.clone() })
+        Box::new(Writer {
+            inner,
+            access: self.1.clone(),
+        })
     }
 
     pub(super) fn read(&self) -> io::Result<RwLockReadGuard<'_, ()>> {
-        let held = self.0.read()
+        let held = self
+            .0
+            .read()
             .map_err(|_| super::mount_error::encoded(io::ErrorKind::Other))?;
         self.check()?;
         Ok(held)
     }
 
     pub(super) fn write(&self) -> io::Result<RwLockWriteGuard<'_, ()>> {
-        let held = self.0.write()
+        let held = self
+            .0
+            .write()
             .map_err(|_| super::mount_error::encoded(io::ErrorKind::Other))?;
         self.check()?;
         Ok(held)
@@ -46,7 +58,9 @@ struct Reader {
 
 impl Read for Reader {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
-        if let Some(access) = &self.access { access.check()?; }
+        if let Some(access) = &self.access {
+            access.check()?;
+        }
         self.inner.read(bytes)
     }
 }
@@ -58,11 +72,15 @@ struct Writer {
 
 impl Write for Writer {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        if let Some(access) = &self.access { access.check()?; }
+        if let Some(access) = &self.access {
+            access.check()?;
+        }
         self.inner.write(bytes)
     }
     fn flush(&mut self) -> io::Result<()> {
-        if let Some(access) = &self.access { access.check()?; }
+        if let Some(access) = &self.access {
+            access.check()?;
+        }
         self.inner.flush()
     }
 }

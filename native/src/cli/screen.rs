@@ -15,6 +15,7 @@ use crate::share::{PeerOpenTarget, ShareProfiles};
 
 mod bench;
 mod codec;
+mod families;
 pub(crate) mod input;
 mod output;
 #[cfg(target_os = "linux")]
@@ -27,7 +28,6 @@ mod still_tests;
 mod tests;
 mod view;
 mod windows;
-mod families;
 pub(crate) use view::open_family;
 
 /// `se screen windows DEVICE --json` (MCP tool `screen`).

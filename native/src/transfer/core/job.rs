@@ -3,8 +3,8 @@
 use super::types::{ResolvedRoot, TransferKind};
 use crate::types::{Conflict, CopyMode, FilterDef};
 use crate::vfs::BackendHandle;
-use std::sync::Arc;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// One side of a transfer.
 #[derive(Clone)]

@@ -12,7 +12,10 @@ pub(super) fn ui(app: &mut App, ui: &mut egui::Ui) {
     match pages_ui::current(ui, TAB_DEVICES) {
         SharePage::Contact(contact_id) => contact_page(app, ui, &contact_id),
         SharePage::Grant(device_id) => grant_page(app, ui, &device_id),
-        SharePage::Device { device_id, public_key } => pinned_page(app, ui, &device_id, &public_key),
+        SharePage::Device {
+            device_id,
+            public_key,
+        } => pinned_page(app, ui, &device_id, &public_key),
         SharePage::AddDevice => {
             if pages_ui::back_row(ui, "Geraet hinzufuegen") {
                 pages_ui::back(ui);
@@ -156,14 +159,33 @@ fn overview(app: &mut App, ui: &mut egui::Ui) {
     for room in &app.share_profiles.rooms {
         for member in &room.members {
             let identity = (member.device_id.clone(), member.public_key.clone());
-            let direct = app.share_profiles.direct_grants.iter().any(|grant| grant.device_id == member.device_id && grant.public_key == member.public_key)
-                || app.share_profiles.direct_contacts.iter().any(|contact| contact.remote_device_id.as_deref() == Some(member.device_id.as_str()) && contact.remote_public_key.as_deref() == Some(member.public_key.as_str()));
-            if direct || !listed.insert(identity.clone()) { continue; }
+            let direct = app.share_profiles.direct_grants.iter().any(|grant| {
+                grant.device_id == member.device_id && grant.public_key == member.public_key
+            }) || app.share_profiles.direct_contacts.iter().any(|contact| {
+                contact.remote_device_id.as_deref() == Some(member.device_id.as_str())
+                    && contact.remote_public_key.as_deref() == Some(member.public_key.as_str())
+            });
+            if direct || !listed.insert(identity.clone()) {
+                continue;
+            }
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(if member.device_name.is_empty() { "Gerät ohne Namen" } else { &member.device_name }).strong());
+                ui.label(
+                    RichText::new(if member.device_name.is_empty() {
+                        "Gerät ohne Namen"
+                    } else {
+                        &member.device_name
+                    })
+                    .strong(),
+                );
                 ui.label("Raummitglied");
                 if ui.button("Geräteeinstellungen …").clicked() {
-                    next = Some((TAB_DEVICES, SharePage::Device { device_id: identity.0, public_key: identity.1 }));
+                    next = Some((
+                        TAB_DEVICES,
+                        SharePage::Device {
+                            device_id: identity.0,
+                            public_key: identity.1,
+                        },
+                    ));
                 }
             });
         }
@@ -227,7 +249,9 @@ fn contact_page(app: &mut App, ui: &mut egui::Ui, contact_id: &str) {
         Some(grant) => grant_section(app, ui, &grant),
         None => {
             ui.label("Dieses Gerät hat noch keine Direktfreigabe für meine Dateien.");
-            if let (Some(device), Some(key)) = (&contact.remote_device_id, &contact.remote_public_key) {
+            if let (Some(device), Some(key)) =
+                (&contact.remote_device_id, &contact.remote_public_key)
+            {
                 crate::app::device_rights_ui::ui(app, ui, device, key);
             }
         }
@@ -255,14 +279,22 @@ fn connection_section(app: &mut App, ui: &mut egui::Ui, contact: &crate::share::
     if let Some(error) = &contact.last_error {
         ui.colored_label(theme::danger(ui), error);
     }
-    let mut form = crate::app::settings_form::Form::new(ui, "contact_form", &["Fingerabdruck", "Automatisch verbinden", "Automatisch öffnen"]);
+    let mut form = crate::app::settings_form::Form::new(
+        ui,
+        "contact_form",
+        &[
+            "Fingerabdruck",
+            "Automatisch verbinden",
+            "Automatisch öffnen",
+        ],
+    );
     form.row(ui, "Fingerabdruck", |ui| {
         ui.horizontal_wrapped(|ui| {
-        share_value_field(ui, &contact.expected_fingerprint);
-        if ui.button("Kopieren").clicked() {
-            ui.ctx().copy_text(contact.expected_fingerprint.clone());
-        }
-    });
+            share_value_field(ui, &contact.expected_fingerprint);
+            if ui.button("Kopieren").clicked() {
+                ui.ctx().copy_text(contact.expected_fingerprint.clone());
+            }
+        });
     });
     let mut open = false;
     let mut request = false;
@@ -279,8 +311,16 @@ fn connection_section(app: &mut App, ui: &mut egui::Ui, contact: &crate::share::
     });
     let mut auto_connect = contact.auto_connect;
     let mut auto_open = contact.auto_open;
-    let connect_changed = form.row_labelled(ui, "Automatisch verbinden", |ui, label| ui.checkbox(&mut auto_connect, "Aktiv").labelled_by(label).changed());
-    let open_changed = form.row_labelled(ui, "Automatisch öffnen", |ui, label| ui.checkbox(&mut auto_open, "Sobald erreichbar").labelled_by(label).changed());
+    let connect_changed = form.row_labelled(ui, "Automatisch verbinden", |ui, label| {
+        ui.checkbox(&mut auto_connect, "Aktiv")
+            .labelled_by(label)
+            .changed()
+    });
+    let open_changed = form.row_labelled(ui, "Automatisch öffnen", |ui, label| {
+        ui.checkbox(&mut auto_open, "Sobald erreichbar")
+            .labelled_by(label)
+            .changed()
+    });
     if connect_changed || open_changed {
         persist(app, "Verbindungseinstellung", |profiles| {
             profiles.set_contact_options(
@@ -377,11 +417,21 @@ fn grant_page(app: &mut App, ui: &mut egui::Ui, device_id: &str) {
     grant_section(app, ui, &grant);
     crate::app::share_rdp_ui::device(ui, &app.share_profiles, &grant.device_id, &grant.public_key);
     crate::app::share_apps_ui::device(ui, &app.share_profiles, &grant.device_id, &grant.public_key);
-    crate::app::family_device_ui::device(ui, &app.share_profiles, &grant.device_id, &grant.public_key);
+    crate::app::family_device_ui::device(
+        ui,
+        &app.share_profiles,
+        &grant.device_id,
+        &grant.public_key,
+    );
     crate::app::share_app_grant_ui::device(ui, &grant.device_id, &grant.public_key);
     crate::app::share_login_ui::device(ui, &grant.device_id, &grant.public_key);
     crate::app::share_tcp_ui::device(ui, &app.share_profiles, &grant.device_id, &grant.public_key);
-    crate::app::share_routes_ui::device(ui, app.share_routes.as_ref(), &grant.device_id, &grant.public_key);
+    crate::app::share_routes_ui::device(
+        ui,
+        app.share_routes.as_ref(),
+        &grant.device_id,
+        &grant.public_key,
+    );
 }
 
 /// Authorization, write right and commands of one authorized device.
@@ -443,16 +493,40 @@ fn home() -> Option<String> {
 }
 
 fn pinned_page(app: &mut App, ui: &mut egui::Ui, device_id: &str, public_key: &str) {
-    let contact = app.share_profiles.direct_contacts.iter().find(|contact|
-        contact.remote_device_id.as_deref() == Some(device_id) && contact.remote_public_key.as_deref() == Some(public_key)).map(|contact| contact.id.clone());
-    if let Some(contact) = contact { contact_page(app, ui, &contact); return; }
-    if app.share_profiles.direct_grants.iter().any(|grant| grant.device_id == device_id && grant.public_key == public_key) {
-        grant_page(app, ui, device_id); return;
+    let contact = app
+        .share_profiles
+        .direct_contacts
+        .iter()
+        .find(|contact| {
+            contact.remote_device_id.as_deref() == Some(device_id)
+                && contact.remote_public_key.as_deref() == Some(public_key)
+        })
+        .map(|contact| contact.id.clone());
+    if let Some(contact) = contact {
+        contact_page(app, ui, &contact);
+        return;
     }
-    let name = app.share_profiles.rooms.iter().flat_map(|room| &room.members)
+    if app
+        .share_profiles
+        .direct_grants
+        .iter()
+        .any(|grant| grant.device_id == device_id && grant.public_key == public_key)
+    {
+        grant_page(app, ui, device_id);
+        return;
+    }
+    let name = app
+        .share_profiles
+        .rooms
+        .iter()
+        .flat_map(|room| &room.members)
         .find(|member| member.device_id == device_id && member.public_key == public_key)
-        .map(|member| member.device_name.clone()).unwrap_or_else(|| "Gerät ohne Namen".into());
-    if pages_ui::back_row(ui, &name) { pages_ui::back(ui); return; }
+        .map(|member| member.device_name.clone())
+        .unwrap_or_else(|| "Gerät ohne Namen".into());
+    if pages_ui::back_row(ui, &name) {
+        pages_ui::back(ui);
+        return;
+    }
     crate::app::device_rights_ui::ui(app, ui, device_id, public_key);
     crate::app::share_rdp_ui::device(ui, &app.share_profiles, device_id, public_key);
     crate::app::share_apps_ui::device(ui, &app.share_profiles, device_id, public_key);

@@ -60,4 +60,6 @@ pub use storage_view::{
 
 #[path = "core/partial_merge.rs"]
 mod partial_merge;
-pub(crate) use partial_merge::{merge_retry_tree, preserve_retry_omissions, retry_node, RetryOmission};
+pub(crate) use partial_merge::{
+    merge_retry_tree, preserve_retry_omissions, retry_node, RetryOmission,
+};

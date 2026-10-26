@@ -8,7 +8,10 @@
 //! slideshow's own interval and on "Aktualisieren"; while the platform names
 //! none, the default color shows.
 use std::sync::mpsc::{self, Receiver, TryRecvError};
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::Instant;
 
 use eframe::egui::{self, Color32, Pos2, Rect};
@@ -166,7 +169,11 @@ impl Wallpaper {
         let spawned = std::thread::Builder::new()
             .name("se-desktop-wallpaper".into())
             .spawn(move || {
-                let _ = sender.send(wallpaper_image::load_cancellable(Some(&path), max_side, cancel));
+                let _ = sender.send(wallpaper_image::load_cancellable(
+                    Some(&path),
+                    max_side,
+                    cancel,
+                ));
                 wake.request_repaint();
             });
         if spawned.is_ok() {
@@ -203,11 +210,15 @@ impl Wallpaper {
     }
 
     fn cancel_pending(&mut self) {
-        if let Some(cancel) = self.cancel.take() { cancel.store(true, Ordering::Release); }
+        if let Some(cancel) = self.cancel.take() {
+            cancel.store(true, Ordering::Release);
+        }
         self.pending = None;
     }
 }
 
 impl Drop for Wallpaper {
-    fn drop(&mut self) { self.cancel_pending(); }
+    fn drop(&mut self) {
+        self.cancel_pending();
+    }
 }

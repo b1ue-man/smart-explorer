@@ -10,12 +10,25 @@ pub(crate) struct Manifest {
 }
 impl Manifest {
     pub(crate) fn validate(&self) -> std::io::Result<()> {
-        if self.format != 1 || self.version.is_empty() || self.version.len() > 64
-            || !self.version.bytes().all(|b| b.is_ascii_digit() || b == b'.')
-            || self.generation.is_empty() || self.generation.len() > 96
-            || !self.generation.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.')
-            || self.sha256.len() != 64 || !self.sha256.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return Err(std::io::Error::other("invalid protected login release manifest"));
+        if self.format != 1
+            || self.version.is_empty()
+            || self.version.len() > 64
+            || !self
+                .version
+                .bytes()
+                .all(|b| b.is_ascii_digit() || b == b'.')
+            || self.generation.is_empty()
+            || self.generation.len() > 96
+            || !self
+                .generation
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.')
+            || self.sha256.len() != 64
+            || !self.sha256.bytes().all(|b| b.is_ascii_hexdigit())
+        {
+            return Err(std::io::Error::other(
+                "invalid protected login release manifest",
+            ));
         }
         Ok(())
     }

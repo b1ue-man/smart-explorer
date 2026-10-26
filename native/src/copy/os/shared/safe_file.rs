@@ -12,12 +12,13 @@ use super::durability::finish_staged_commit;
 #[cfg(test)]
 use super::move_guard::{quarantine_source, restore_quarantine, source_snapshot_path};
 use super::move_guard::{
-    quarantine_source_observed, restore_after_error, restore_quarantine_if_any, source_changed_error,
+    quarantine_source_observed, restore_after_error, restore_quarantine_if_any,
+    source_changed_error,
 };
 #[cfg(test)]
 use super::path_guard::prepare_target_parent;
-use super::staging::{stage_copy, LocalFailure, Parallel};
 use super::publication::{self, PublicationObserver};
+use super::staging::{stage_copy, LocalFailure, Parallel};
 
 #[path = "direct_move.rs"]
 mod direct_move;
@@ -112,7 +113,13 @@ fn transfer_local_inner(
 
     if request.mode == CopyMode::Move {
         if let Some(outcome) = direct_move::try_move(
-            request, &source_path, &requested, &mut target, &mut races, &mut quarantine, observer,
+            request,
+            &source_path,
+            &requested,
+            &mut target,
+            &mut races,
+            &mut quarantine,
+            observer,
         )? {
             return Ok(outcome);
         }
@@ -178,10 +185,19 @@ fn transfer_local_inner(
 
     loop {
         if let Err(error) = publication::before(observer, &staged.temp, &target) {
-            publication::preparation_failed(observer, &staged.temp, &target, &error, quarantine.as_ref())
-                .map_err(LocalFailure::Publish)?;
+            publication::preparation_failed(
+                observer,
+                &staged.temp,
+                &target,
+                &error,
+                quarantine.as_ref(),
+            )
+            .map_err(LocalFailure::Publish)?;
             staged.discard().map_err(LocalFailure::Publish)?;
-            return Err(LocalFailure::Publish(restore_after_error(quarantine.as_ref(), error)));
+            return Err(LocalFailure::Publish(restore_after_error(
+                quarantine.as_ref(),
+                error,
+            )));
         }
         let committed = platform::commit_staged(
             &staged.temp,
@@ -189,8 +205,15 @@ fn transfer_local_inner(
             request.conflict == Conflict::Overwrite,
         );
         if let Err(error) = &committed {
-            publication::commit_failed(observer, &staged.temp, &target, &staged.file,
-                error, quarantine.as_ref()).map_err(LocalFailure::Publish)?;
+            publication::commit_failed(
+                observer,
+                &staged.temp,
+                &target,
+                &staged.file,
+                error,
+                quarantine.as_ref(),
+            )
+            .map_err(LocalFailure::Publish)?;
         }
         match committed {
             Ok(()) => break,
@@ -239,7 +262,8 @@ fn transfer_local_inner(
                 )))
             })?;
     }
-    publication::after(observer, &target, &staged.file, quarantine.as_ref()).map_err(LocalFailure::Publish)?;
+    publication::after(observer, &target, &staged.file, quarantine.as_ref())
+        .map_err(LocalFailure::Publish)?;
     drop(staged.file);
     if durable {
         finish_staged_commit(&target, src, &mut quarantine, platform::sync_parent)

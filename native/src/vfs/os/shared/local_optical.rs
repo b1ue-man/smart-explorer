@@ -18,6 +18,8 @@ pub(super) fn metadata_guard(path: &Path) -> io::Result<Option<crate::source_med
     let metadata = crate::local_access::symlink_metadata(path)?;
     let location = if crate::local_access::metadata_is_link_like(path, &metadata) {
         path.parent().unwrap_or(path)
-    } else { path };
+    } else {
+        path
+    };
     guard(location)
 }

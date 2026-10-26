@@ -37,15 +37,24 @@ fn batches_p13_manifest_requires_exact_hash_path_and_closed_schema() {
     for path in ["se", "../se", "/tmp/se", "mcp/runtimes/current/se"] {
         let mut changed = valid.clone();
         changed.runtime_file = path.into();
-        assert_eq!(changed.validate("se").unwrap_err(), "runtime_manifest_path_invalid");
+        assert_eq!(
+            changed.validate("se").unwrap_err(),
+            "runtime_manifest_path_invalid"
+        );
     }
     let mut changed = valid.clone();
     changed.runtime_sha256 = "e".repeat(64);
-    assert_eq!(changed.validate("se").unwrap_err(), "runtime_manifest_path_invalid");
+    assert_eq!(
+        changed.validate("se").unwrap_err(),
+        "runtime_manifest_path_invalid"
+    );
     for field in ["command", "args", "download_url", "credentials"] {
         let mut encoded = serde_json::to_value(&valid).unwrap();
         encoded[field] = serde_json::json!("not admitted");
-        assert!(serde_json::from_value::<Manifest>(encoded).is_err(), "{field}");
+        assert!(
+            serde_json::from_value::<Manifest>(encoded).is_err(),
+            "{field}"
+        );
     }
 }
 
@@ -53,14 +62,27 @@ fn batches_p13_manifest_requires_exact_hash_path_and_closed_schema() {
 fn batches_p13_manifest_allowlists_reject_duplicates_and_unlisted_starter() {
     let valid = manifest();
     let mut changed = valid.clone();
-    changed.allowed_launcher_hashes.push(changed.launcher_sha256.clone());
-    assert_eq!(changed.validate("se").unwrap_err(), "runtime_manifest_duplicate_or_invalid_launcher");
+    changed
+        .allowed_launcher_hashes
+        .push(changed.launcher_sha256.clone());
+    assert_eq!(
+        changed.validate("se").unwrap_err(),
+        "runtime_manifest_duplicate_or_invalid_launcher"
+    );
     changed = valid.clone();
     changed.allowed_launcher_hashes = vec!["e".repeat(64)];
-    assert_eq!(changed.validate("se").unwrap_err(), "runtime_manifest_current_launcher_not_allowed");
+    assert_eq!(
+        changed.validate("se").unwrap_err(),
+        "runtime_manifest_current_launcher_not_allowed"
+    );
     changed = valid;
-    changed.supported_runtimes.push(contract(&changed.runtime_sha256));
-    assert_eq!(changed.validate("se").unwrap_err(), "runtime_manifest_duplicate_or_unimplemented_contract");
+    changed
+        .supported_runtimes
+        .push(contract(&changed.runtime_sha256));
+    assert_eq!(
+        changed.validate("se").unwrap_err(),
+        "runtime_manifest_duplicate_or_unimplemented_contract"
+    );
 }
 
 #[test]
@@ -76,7 +98,10 @@ fn batches_p13_runtime_permission_requires_exact_hash_and_semantic_pair() {
     changed.ipc_contract_id = "unimplemented-ipc".into();
     assert!(!policy.permits(&changed));
     policy.supported_runtimes.push(changed.clone());
-    assert!(!policy.permits(&changed), "listing cannot implement a semantic adapter");
+    assert!(
+        !policy.permits(&changed),
+        "listing cannot implement a semantic adapter"
+    );
     changed = admitted;
     changed.shared_state_contract_id = "unimplemented-state".into();
     policy.supported_runtimes.push(changed.clone());
@@ -88,8 +113,14 @@ fn batches_p13_probe_binds_catalog_content_version_and_protocols() {
     let version = env!("CARGO_PKG_VERSION");
     let mut probe = RuntimeProbe::current();
     probe.validate(version).unwrap();
-    probe.compatibility_catalog.runtimes.push(contract(&"e".repeat(64)));
-    assert!(probe.validate(version).is_err(), "catalog edit must invalidate its digest");
+    probe
+        .compatibility_catalog
+        .runtimes
+        .push(contract(&"e".repeat(64)));
+    assert!(
+        probe.validate(version).is_err(),
+        "catalog edit must invalidate its digest"
+    );
     probe.compatibility_catalog_sha256 = probe.compatibility_catalog.sha256();
     probe.validate(version).unwrap();
     let approved = probe.compatibility_catalog.runtimes[0].clone();

@@ -34,41 +34,56 @@ impl Pipeline {
         self.max_fps = self.quality_policy.max_fps();
         self.preview_interval_us = 1_000_000 / u64::from(mode.preview_fps.max(1));
         // Temporary sharpness/preview caps never overwrite the requested full rate.
-        self.quality.fps = if self.max_fps != previous_fps { self.max_fps }
-            else { self.quality.fps.min(self.max_fps) };
+        self.quality.fps = if self.max_fps != previous_fps {
+            self.max_fps
+        } else {
+            self.quality.fps.min(self.max_fps)
+        };
         self.clock.set_fps(self.quality.fps);
         self.quality.size = self.fitted_size();
-        if mode != previous || self.choice != previous_choice { self.invalidate_reference(); }
+        if mode != previous || self.choice != previous_choice {
+            self.invalidate_reference();
+        }
         self.resize();
     }
 
     /// Replaces the source (`SET_MODE` with another source).
     pub(crate) fn set_source(&mut self, source: Box<dyn ScreenSource>) {
         // A detached old transition owns only the old Stage; polling can never reinstall it.
-        self.capture_transition.take();self.capture_ready=None;self.capture_applied=None;self.capture_active=false;
-        self.visible_rects=None;
-        self.source_size=source.size();
-        self.source_generation=source.reference_generation();
-        self.frame_contract = self.negotiated_contract.map(|mut c| {c.hybrid_regions &= source.supports_frame_regions();c});
+        self.capture_transition.take();
+        self.capture_ready = None;
+        self.capture_applied = None;
+        self.capture_active = false;
+        self.visible_rects = None;
+        self.source_size = source.size();
+        self.source_generation = source.reference_generation();
+        self.frame_contract = self.negotiated_contract.map(|mut c| {
+            c.hybrid_regions &= source.supports_frame_regions();
+            c
+        });
         self.stage = Some(Stage {
-            memory:self.memory.clone(),
+            memory: self.memory.clone(),
             source,
             encoder: None,
             encoder_book: None,
         });
         self.quality.size = self.fitted_size();
         self.invalidate_reference();
-        if let Err(error)=self.start_capture_transition(self.capture_requested) {self.capture_ready=Some(Err(error));}
+        if let Err(error) = self.start_capture_transition(self.capture_requested) {
+            self.capture_ready = Some(Err(error));
+        }
     }
 
     pub(crate) fn request_keyframe(&mut self) {
-        if self.pacer.keyframe_due() && self.gop.is_none() { return; }
+        if self.pacer.keyframe_due() && self.gop.is_none() {
+            return;
+        }
         self.invalidate_reference();
     }
 
     /// `FRAME_ACK` or `PREVIEW_ACK`.
     pub(crate) fn on_ack(&mut self, ack: FrameAck) -> bool {
-        self.sender.ack(ack.gop_id,ack.frame_id);
+        self.sender.ack(ack.gop_id, ack.frame_id);
         if self.preview_in_flight == Some(ack.frame_id) {
             self.preview_in_flight = None;
         }
@@ -114,5 +129,4 @@ impl Pipeline {
         self.second_frames = 0;
         stats
     }
-
 }

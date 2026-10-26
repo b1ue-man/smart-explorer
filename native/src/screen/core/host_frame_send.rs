@@ -10,10 +10,13 @@ impl Pipeline {
         capture_ts_us: u64,
         size: FrameSize,
         permit: crate::screen::core::sender_budget::EncodePermit,
-        work_epoch:u64,
+        work_epoch: u64,
     ) -> Result<Produced, PipelineError> {
-        let work=self.work.clone();
-        if !work.current(work_epoch) {self.reset_stream();return Ok(Produced::Reset);}
+        let work = self.work.clone();
+        if !work.current(work_epoch) {
+            self.reset_stream();
+            return Ok(Produced::Reset);
+        }
         if frame.records.is_empty() {
             return Ok(Produced::Idle);
         }
@@ -22,14 +25,17 @@ impl Pipeline {
             let header = GopHeader {
                 gop_id: self.next_gop_id,
                 frame_contract: self.frame_contract,
-                family_layout_revision: self.stage.as_ref().and_then(|stage| stage.source.family_layout_revision()),
+                family_layout_revision: self
+                    .stage
+                    .as_ref()
+                    .and_then(|stage| stage.source.family_layout_revision()),
                 kind: self.kind,
                 codec: self.choice.codec,
                 profile: self.choice.profile,
                 size,
             };
             self.next_gop_id += 1;
-            let opened=tokio::select! {biased;
+            let opened = tokio::select! {biased;
                 _=work.cancelled(work_epoch)=>Err(io::Error::from(io::ErrorKind::Interrupted)),
                 result=crate::screen::core::gop_stream::write_with_route(connection,stale,GopWriter::open(connection,header))=>result,
             };
@@ -50,13 +56,16 @@ impl Pipeline {
         let gop_id = gop.header().gop_id;
         self.next_frame_id += 1;
         let encoded_bytes: u64 = frame.records.iter().map(|r| r.len() as u64).sum();
-        let serialization_us = (u128::from(encoded_bytes) * 8 * 1_000_000 / u128::from(self.rate.target_bps().max(1))).min(u128::from(u64::MAX)) as u64;
+        let serialization_us = (u128::from(encoded_bytes) * 8 * 1_000_000
+            / u128::from(self.rate.target_bps().max(1)))
+        .min(u128::from(u64::MAX)) as u64;
         let active_budget = stale.saturating_add(Duration::from_micros(serialization_us));
-        let writing=crate::screen::core::gop_stream::write_with_route(
-            connection, active_budget,
+        let writing = crate::screen::core::gop_stream::write_with_route(
+            connection,
+            active_budget,
             gop.write_frame_admitted(frame_id, capture_ts_us, frame.keyframe, frame.records),
         );
-        let written=tokio::select! {biased;
+        let written = tokio::select! {biased;
             _=work.cancelled(work_epoch)=>Err(io::Error::from(io::ErrorKind::Interrupted)),
             result=writing=>result,
         };
@@ -68,9 +77,12 @@ impl Pipeline {
                 return Ok(Produced::Reset);
             }
         };
-        if !work.current(work_epoch) {self.reset_stream();return Ok(Produced::Reset);}
-        self.presentation.sent(gop_id,frame_id,frame.keyframe);
-        permit.sent(gop_id,frame_id,bytes);
+        if !work.current(work_epoch) {
+            self.reset_stream();
+            return Ok(Produced::Reset);
+        }
+        self.presentation.sent(gop_id, frame_id, frame.keyframe);
+        permit.sent(gop_id, frame_id, bytes);
         let sent_us = now_us();
         self.pacer.on_frame_sent(SentFrame {
             gop_id,

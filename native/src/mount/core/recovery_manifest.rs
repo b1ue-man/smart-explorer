@@ -90,12 +90,15 @@ pub struct InactiveMountRecovery {
 /// Components are checked on import before any OS operation. Backend paths
 /// inside journals are deliberately excluded from this local-path grammar.
 pub(crate) fn validate_components(components: &[String]) -> std::io::Result<()> {
-    if components.is_empty() || components.iter().any(|name| {
-        name.is_empty() || name == "." || name == ".."
-            || name.contains(['/', '\\', '\0', ':'])
-    }) {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData,
-            "Recoverypaket enthält einen ungültigen lokalen Dateinamen"));
+    if components.is_empty()
+        || components.iter().any(|name| {
+            name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', '\0', ':'])
+        })
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Recoverypaket enthält einen ungültigen lokalen Dateinamen",
+        ));
     }
     Ok(())
 }

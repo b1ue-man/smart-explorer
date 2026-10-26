@@ -120,7 +120,9 @@ impl QuarantinedChild {
     /// Delete only the confirmed child inside our exclusive 0700 capture.
     /// The caller must already have confirmed its external publication.
     pub(crate) fn dispose(&mut self) -> io::Result<()> {
-        if !self.active { return Ok(()); }
+        if !self.active {
+            return Ok(());
+        }
         self.verify()?;
         self.directory.remove_child(OsStr::new(HELD_NAME))?;
         self.active = false;

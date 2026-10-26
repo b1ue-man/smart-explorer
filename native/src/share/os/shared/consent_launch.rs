@@ -89,7 +89,9 @@ impl DesktopConsent {
 }
 
 impl ConsentNotifier for DesktopConsent {
-    fn supports_contextual(&self) -> bool { true }
+    fn supports_contextual(&self) -> bool {
+        true
+    }
 
     fn show(&self, request: &ApprovalView) -> Option<ApprovalSurface> {
         if !self.facts.graphical {
@@ -155,7 +157,11 @@ pub(crate) fn approval_context(view: &ApprovalView) -> Vec<String> {
     use crate::share::access_constraints::{AccessRequest, LoginOperation, TcpDirection, TcpHost};
     let mut lines = Vec::new();
     if !view.relation_id.is_empty() {
-        lines.push(format!("Quelle der Freigabe: {} / {}", view.relation, shown_relation(&view.relation_id)));
+        lines.push(format!(
+            "Quelle der Freigabe: {} / {}",
+            view.relation,
+            shown_relation(&view.relation_id)
+        ));
     }
     match &view.request {
         Some(AccessRequest::AppLaunch(request)) => {
@@ -179,38 +185,60 @@ pub(crate) fn approval_context(view: &ApprovalView) -> Vec<String> {
         Some(AccessRequest::TcpForward(request)) => {
             lines.push(format!("Initiatorgerät: {}", request.initiator.as_str()));
             lines.push(format!("Zielgerät: {}", request.target.as_str()));
-            lines.push(format!("Richtung: {}", match request.direction {
-                TcpDirection::PeerToHost => "Anfragendes Gerät → dieser Host",
-                TcpDirection::HostToPeer => "Dieser Host → anfragendes Gerät",
-            }));
+            lines.push(format!(
+                "Richtung: {}",
+                match request.direction {
+                    TcpDirection::PeerToHost => "Anfragendes Gerät → dieser Host",
+                    TcpDirection::HostToPeer => "Dieser Host → anfragendes Gerät",
+                }
+            ));
             match &request.host {
                 TcpHost::Loopback => lines.push("Zielhost: Loopback des Zielgeräts".into()),
                 TcpHost::Ip { address } => lines.push(format!("Zielhost: {address}")),
                 TcpHost::Dns { name, addresses } => {
                     lines.push(format!("Zielhost: {name}"));
                     if !addresses.is_empty() {
-                        lines.push(format!("Mitgeteilte DNS-Adressen: {}",
-                            addresses.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")));
+                        lines.push(format!(
+                            "Mitgeteilte DNS-Adressen: {}",
+                            addresses
+                                .iter()
+                                .map(ToString::to_string)
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ));
                     }
                 }
             }
-            lines.push(format!("Frisch aufgelöste Ziel-IP: {}", request.resolved_ip));
+            lines.push(format!(
+                "Frisch aufgelöste Ziel-IP: {}",
+                request.resolved_ip
+            ));
             lines.push(format!("Zielport: {}", request.port.get()));
         }
-        None => {},
+        None => {}
     }
     if !approval_context_complete(view) {
-        lines.push("Der vollständige Zielauftrag oder seine Beziehung fehlt; Erlauben ist gesperrt.".into());
+        lines.push(
+            "Der vollständige Zielauftrag oder seine Beziehung fehlt; Erlauben ist gesperrt."
+                .into(),
+        );
     }
     lines
 }
 fn shown_relation(value: &str) -> String {
-    value.chars().map(|character| {
-        if character.is_control() || matches!(character, '\u{200e}' | '\u{200f}' | '\u{2028}' | '\u{2029}'
-            | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}') {
-            format!("\\u{{{:x}}}", u32::from(character))
-        } else { character.to_string() }
-    }).collect()
+    value
+        .chars()
+        .map(|character| {
+            if character.is_control()
+                || matches!(character, '\u{200e}' | '\u{200f}' | '\u{2028}' | '\u{2029}'
+            | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}')
+            {
+                format!("\\u{{{:x}}}", u32::from(character))
+            } else {
+                character.to_string()
+            }
+        })
+        .collect()
 }
 
 /// Starts the window of `id` with the desktop program of this installation.

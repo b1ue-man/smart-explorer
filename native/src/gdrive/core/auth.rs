@@ -11,7 +11,8 @@ impl GDriveBackend {
     /// instead of starting their own.
     pub(super) fn bearer(&self) -> VfsResult<String> {
         if self.managed_auth {
-            cloud::validate_auth_account(Provider::GDrive, &self.drive_account_key).map_err(auth_error)?;
+            cloud::validate_auth_account(Provider::GDrive, &self.drive_account_key)
+                .map_err(auth_error)?;
         }
         let mut t = self.tokens_guard()?;
         if now_secs() >= t.expires_at {
@@ -43,12 +44,15 @@ impl GDriveBackend {
     /// This uses the explicit token and never re-enters the held token lock.
     fn refresh_for_account(&self) -> VfsResult<cloud::Tokens> {
         cloud::refresh_access_with_identity(
-            Provider::GDrive, Some(self.drive_account_key.as_ref()), |token| {
+            Provider::GDrive,
+            Some(self.drive_account_key.as_ref()),
+            |token| {
                 let value = self.identity_json(token)?;
                 super::state::parse_drive_account_key(&value.to_string())
                     .map_err(|_| cloud::AuthError::new(cloud::AuthState::IdentityUnverified))
             },
-        ).map_err(auth_error)
+        )
+        .map_err(auth_error)
     }
 
     /// Preserve the metadata read's six attempts and bounded congestion waits,
@@ -58,7 +62,8 @@ impl GDriveBackend {
         let url = self.api_url("about?fields=user(permissionId)");
         let mut backoff = super::api::listing_backoff();
         for attempt in 1..=6 {
-            let result = self.timed_request(agent.get(&url))
+            let result = self
+                .timed_request(agent.get(&url))
                 .set("Authorization", &format!("Bearer {token}"))
                 .call();
             let retry_after = match &result {
@@ -69,11 +74,21 @@ impl GDriveBackend {
                 Ok(value) => return Ok(value),
                 Err(error) => error,
             };
-            if error.state != cloud::AuthState::NetworkError { return Err(error); }
-            let wait_error = if error.provider.as_ref().is_some_and(|provider|
-                provider.http_status == Some(429) || provider.http_status == Some(503)
+            if error.state != cloud::AuthState::NetworkError {
+                return Err(error);
+            }
+            let wait_error = if error.provider.as_ref().is_some_and(|provider| {
+                provider.http_status == Some(429)
+                    || provider.http_status == Some(503)
                     || (provider.http_status == Some(403)
-                        && matches!(provider.code.as_str(), "rateLimitExceeded" | "userRateLimitExceeded" | "sharingRateLimitExceeded" | "quotaExceeded"))) {
+                        && matches!(
+                            provider.code.as_str(),
+                            "rateLimitExceeded"
+                                | "userRateLimitExceeded"
+                                | "sharingRateLimitExceeded"
+                                | "quotaExceeded"
+                        ))
+            }) {
                 crate::vfs::congestion_error(error.to_string(), retry_after)
             } else {
                 io::Error::other(error.clone())
@@ -149,8 +164,10 @@ impl GDriveBackend {
 
 fn auth_error(error: cloud::AuthError) -> io::Error {
     let kind = match error.state {
-        cloud::AuthState::IdentityConflict | cloud::AuthState::ClientChanged |
-        cloud::AuthState::ReauthorizeRequired | cloud::AuthState::Disconnected => io::ErrorKind::PermissionDenied,
+        cloud::AuthState::IdentityConflict
+        | cloud::AuthState::ClientChanged
+        | cloud::AuthState::ReauthorizeRequired
+        | cloud::AuthState::Disconnected => io::ErrorKind::PermissionDenied,
         cloud::AuthState::NetworkError => io::ErrorKind::ConnectionAborted,
         cloud::AuthState::IdentityUnverified => io::ErrorKind::InvalidData,
         _ => io::ErrorKind::Other,

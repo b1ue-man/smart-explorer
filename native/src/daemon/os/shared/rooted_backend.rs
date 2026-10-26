@@ -66,7 +66,10 @@ impl RootedBackend {
         let root_confinement = mount_capabilities.root_confinement;
         let access = crate::vault::mount_access(&raw_inner, root_confinement.is_enforced())?;
         let vault_trusted = access.is_some() && !root_confinement.is_enforced();
-        if root_security == MountRootSecurity::Enforced && !root_confinement.is_enforced() && !vault_trusted {
+        if root_security == MountRootSecurity::Enforced
+            && !root_confinement.is_enforced()
+            && !vault_trusted
+        {
             return Err(permission_denied(
                 "backend does not technically enforce the selected mount root; explicit trusted-root mode is required",
             ));
@@ -279,7 +282,9 @@ impl Backend for RootedBackend {
             .inner
             .open_read(&self.checked_existing(path)?)
             .map_err(sanitize_error)?;
-        Ok(Box::new(SanitizedReader { inner: self.operation.reader(reader) }))
+        Ok(Box::new(SanitizedReader {
+            inner: self.operation.reader(reader),
+        }))
     }
 
     fn open_read_at(
@@ -294,7 +299,11 @@ impl Backend for RootedBackend {
         self.inner
             .open_read_at(&self.checked_existing(path)?, None, offset)
             .map(|reader| {
-                reader.map(|inner| Box::new(SanitizedReader { inner: self.operation.reader(inner) }) as Box<dyn Read + Send>)
+                reader.map(|inner| {
+                    Box::new(SanitizedReader {
+                        inner: self.operation.reader(inner),
+                    }) as Box<dyn Read + Send>
+                })
             })
             .map_err(sanitize_error)
     }
@@ -307,7 +316,9 @@ impl Backend for RootedBackend {
             .inner
             .open_write(&self.checked_destination(path)?)
             .map_err(sanitize_error)?;
-        Ok(Box::new(SanitizedWriter { inner: self.operation.writer(writer) }))
+        Ok(Box::new(SanitizedWriter {
+            inner: self.operation.writer(writer),
+        }))
     }
 
     fn open_write_new(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
@@ -318,7 +329,9 @@ impl Backend for RootedBackend {
             .inner
             .open_write_new(&self.checked_destination(path)?)
             .map_err(sanitize_error)?;
-        Ok(Box::new(SanitizedWriter { inner: self.operation.writer(writer) }))
+        Ok(Box::new(SanitizedWriter {
+            inner: self.operation.writer(writer),
+        }))
     }
 
     fn download_name(&self, path: &str, name: &str) -> String {

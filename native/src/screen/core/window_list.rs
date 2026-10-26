@@ -188,9 +188,11 @@ impl WindowList {
             }
         }
         for app in &mut self.apps {
-            if app.icon.as_ref().is_some_and(|icon| {
-                icon.validate().is_err() || icon.app_id != app.app_id
-            }) {
+            if app
+                .icon
+                .as_ref()
+                .is_some_and(|icon| icon.validate().is_err() || icon.app_id != app.app_id)
+            {
                 app.icon = None;
             }
         }

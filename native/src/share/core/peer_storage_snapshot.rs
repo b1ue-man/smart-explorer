@@ -50,13 +50,10 @@ pub(super) fn walk_peer(
     let endpoint = backend.current_endpoint()?;
     let mut opened = backend.node.open_stream(&endpoint, &backend.identity)?;
     let lease = backend.mount_lease_token()?;
-    let result = backend.node.block_on_route(opened.generation, receive_snapshot(
-        &mut opened.send,
-        &mut opened.recv,
-        root,
-        lease,
-        on_progress,
-    ));
+    let result = backend.node.block_on_route(
+        opened.generation,
+        receive_snapshot(&mut opened.send, &mut opened.recv, root, lease, on_progress),
+    );
     if matches!(&result, Err(failure) if failure.invalidate_session) {
         let _ = backend
             .node
@@ -233,7 +230,9 @@ async fn recv_control(
 ) -> Result<FsResponse, PeerSnapshotFailure> {
     let response = recv_resp_wire(recv);
     tokio::pin!(response);
-    let idle = super::route_protocol::active_deadline_error(super::route_protocol::active_now() + SNAPSHOT_IDLE_TIMEOUT);
+    let idle = super::route_protocol::active_deadline_error(
+        super::route_protocol::active_now() + SNAPSHOT_IDLE_TIMEOUT,
+    );
     tokio::pin!(idle);
     let mut poll = tokio::time::interval(CANCEL_POLL);
     poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -262,7 +261,9 @@ async fn recv_data(
 ) -> Result<(u8, Vec<u8>), PeerSnapshotFailure> {
     let data = recv_tagged_limited(recv, MAX_SNAPSHOT_DATA_FRAME);
     tokio::pin!(data);
-    let idle = super::route_protocol::active_deadline_error(super::route_protocol::active_now() + SNAPSHOT_IDLE_TIMEOUT);
+    let idle = super::route_protocol::active_deadline_error(
+        super::route_protocol::active_now() + SNAPSHOT_IDLE_TIMEOUT,
+    );
     tokio::pin!(idle);
     let mut poll = tokio::time::interval(CANCEL_POLL);
     poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);

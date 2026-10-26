@@ -74,7 +74,11 @@ pub(super) fn updater_payload_spec() -> PayloadSpec {
 }
 
 pub(super) fn launcher_payload_spec() -> PayloadSpec {
-    PayloadSpec { local_names: &["se-mcp-launcher.exe"], http_names: &["se-mcp-launcher.exe"], hash_name: "se-mcp-launcher.exe.sha256" }
+    PayloadSpec {
+        local_names: &["se-mcp-launcher.exe"],
+        http_names: &["se-mcp-launcher.exe"],
+        hash_name: "se-mcp-launcher.exe.sha256",
+    }
 }
 
 pub(super) fn cli_payload_spec() -> PayloadSpec {

@@ -258,7 +258,8 @@ async fn complete_result_handshake<W: AsyncWrite + Unpin>(
     exec_id: &ExecId,
     policy: ExecHeartbeatPolicy,
 ) -> Result<(), ExecClientFailure> {
-    let deadline = super::route_protocol::active_now() + policy.client_result_acknowledged_timeout();
+    let deadline =
+        super::route_protocol::active_now() + policy.client_result_acknowledged_timeout();
     write_frame_with_timeout(
         send,
         &ClientFrame::ResultAck {

@@ -98,9 +98,10 @@ impl GDriveBackend {
             let account = load_drive_account_key(&http.api(), token)?;
             confirmed_account = Some(account.clone());
             Ok(account)
-        }).map_err(|error| error.to_string())?;
-        let drive_account_key = confirmed_account
-            .ok_or_else(|| "Drive-Konto wurde nicht bestätigt".to_string())?;
+        })
+        .map_err(|error| error.to_string())?;
+        let drive_account_key =
+            confirmed_account.ok_or_else(|| "Drive-Konto wurde nicht bestätigt".to_string())?;
         let cache_path = super::binding_store::account_cache_path(&drive_account_key);
         // Both files are merely hints. The immutable registry has its own
         // checked format and never falls back to empty state on read failure.
@@ -381,14 +382,19 @@ impl GDriveBackend {
 /// Drive publishes `user.permissionId` as the requesting user's opaque grantee
 /// ID. Unlike a refresh token, it remains the same when OAuth credentials are
 /// refreshed or re-authorized, so durable mutation records stay discoverable.
-fn load_drive_account_key(agent: &ureq::Agent, access_token: &str) -> Result<String, cloud::AuthError> {
+fn load_drive_account_key(
+    agent: &ureq::Agent,
+    access_token: &str,
+) -> Result<String, cloud::AuthError> {
     let url = format!("{}/about?fields=user(permissionId)", super::api::API);
     let bearer = format!("Bearer {access_token}");
-    let value = cloud::AuthError::drive_identity_response(agent
-        .get(&url)
-        .timeout(super::api::DRIVE_REQUEST_TIMEOUT)
-        .set("Authorization", &bearer)
-        .call())?;
+    let value = cloud::AuthError::drive_identity_response(
+        agent
+            .get(&url)
+            .timeout(super::api::DRIVE_REQUEST_TIMEOUT)
+            .set("Authorization", &bearer)
+            .call(),
+    )?;
     parse_drive_account_key(&value.to_string())
         .map_err(|_| cloud::AuthError::new(cloud::AuthState::IdentityUnverified))
 }

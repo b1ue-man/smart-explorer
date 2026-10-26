@@ -8,10 +8,7 @@ use super::open_target::{desktop_file, OpenRequest};
 
 /// Typed application locators are passed unchanged to the shared navigator.
 /// A remote locator must never be passed to a native file-manager path API.
-pub(crate) fn folder_location(
-    locator: &str,
-    with: OpenFoldersWith,
-) -> Result<OpenRequest, String> {
+pub(crate) fn folder_location(locator: &str, with: OpenFoldersWith) -> Result<OpenRequest, String> {
     let local = crate::connect::local_endpoint_path(locator)?;
     match with {
         OpenFoldersWith::App => Ok(OpenRequest::Window(StartRequest::OpenLocation {

@@ -25,10 +25,10 @@ mod remove_tree;
 #[path = "peer_reversible_replace.rs"]
 pub(super) mod reversible_replace;
 
-#[path = "folder_reservation.rs"]
-pub(in crate::share) mod folder_reservation;
 #[path = "file_identity_rpc.rs"]
 pub(in crate::share) mod file_identity;
+#[path = "folder_reservation.rs"]
+pub(in crate::share) mod folder_reservation;
 
 impl BackendExtensions for PeerBackend {
     fn directory_reservation_supported(&self, root: &str) -> bool {

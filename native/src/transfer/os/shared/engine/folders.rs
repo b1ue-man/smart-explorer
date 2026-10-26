@@ -26,7 +26,7 @@ use std::time::{Duration, Instant};
 
 #[path = "folders_local.rs"]
 mod local;
-pub(crate) use local::{ensure_plain_dir, local_target_root, existing_target_root};
+pub(crate) use local::{ensure_plain_dir, existing_target_root, local_target_root};
 
 const WAIT_SLICE: Duration = Duration::from_millis(100);
 
@@ -274,8 +274,13 @@ impl<'a> FolderRegister<'a> {
         loop {
             let path = join_rel(&self.root, &name);
             let result = self.attempt(&path, cancel, true, |path| match self.target {
-                Side::Remote(backend) => crate::vfs::create_dir_exclusive(backend, path).map(|()| true),
-                Side::Local => crate::vfs::create_dir_exclusive(&crate::vfs::LocalBackend::new("/"), path).map(|()| true),
+                Side::Remote(backend) => {
+                    crate::vfs::create_dir_exclusive(backend, path).map(|()| true)
+                }
+                Side::Local => {
+                    crate::vfs::create_dir_exclusive(&crate::vfs::LocalBackend::new("/"), path)
+                        .map(|()| true)
+                }
             });
             match result {
                 Ok(created) => {
@@ -351,7 +356,7 @@ impl<'a> FolderRegister<'a> {
                             // ambiguously completed request.
                             kind: io::ErrorKind::Other,
                             ..FolderError::of(path, &error)
-                        })
+                        });
                     }
                 }
             }

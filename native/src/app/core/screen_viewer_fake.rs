@@ -90,34 +90,38 @@ impl Fake {
 
     pub(super) fn backend(&self) -> Backend {
         let inner = self.inner.clone();
-        let open: Opener = Arc::new(move |_peer: PeerOpenTarget, request: StreamRequest, _shared:&super::screen_session::Shared| {
-            let (sender, receiver) = mpsc::channel();
-            inner.requests.lock().unwrap().push(request);
-            // The test sees the connection once its events can be sent.
-            let index = {
-                let mut senders = inner.events.lock().unwrap();
-                senders.push(sender);
-                senders.len() - 1
-            };
-            inner.opens.fetch_add(1, Ordering::SeqCst);
-            let (frames, closer) = (inner.clone(), inner.clone());
-            Ok::<StreamLink, String>(StreamLink {
-                memory: None,
-                next: Box::new(move || {
-                    receiver
-                        .recv()
-                        .unwrap_or_else(|_| Err(io::Error::other("closed")))
-                }),
-                send: Arc::new(move |frame: &ViewerFrame| {
-                    frames.frames.lock().unwrap().push(frame.clone());
-                    Ok::<(), io::Error>(())
-                }),
-                close: Arc::new(move || {
-                    closer.closed.lock().unwrap().push(index);
-                    Ok::<(), io::Error>(())
-                }),
-            })
-        });
+        let open: Opener = Arc::new(
+            move |_peer: PeerOpenTarget,
+                  request: StreamRequest,
+                  _shared: &super::screen_session::Shared| {
+                let (sender, receiver) = mpsc::channel();
+                inner.requests.lock().unwrap().push(request);
+                // The test sees the connection once its events can be sent.
+                let index = {
+                    let mut senders = inner.events.lock().unwrap();
+                    senders.push(sender);
+                    senders.len() - 1
+                };
+                inner.opens.fetch_add(1, Ordering::SeqCst);
+                let (frames, closer) = (inner.clone(), inner.clone());
+                Ok::<StreamLink, String>(StreamLink {
+                    memory: None,
+                    next: Box::new(move || {
+                        receiver
+                            .recv()
+                            .unwrap_or_else(|_| Err(io::Error::other("closed")))
+                    }),
+                    send: Arc::new(move |frame: &ViewerFrame| {
+                        frames.frames.lock().unwrap().push(frame.clone());
+                        Ok::<(), io::Error>(())
+                    }),
+                    close: Arc::new(move || {
+                        closer.closed.lock().unwrap().push(index);
+                        Ok::<(), io::Error>(())
+                    }),
+                })
+            },
+        );
         let decoder: DecoderOpener = Arc::new(|header: &GopHeader| {
             Ok::<Box<dyn ScreenDecoder>, io::Error>(Box::new(TilesScreenDecoder::new(header.size)?))
         });

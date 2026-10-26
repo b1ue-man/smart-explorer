@@ -97,20 +97,39 @@ pub(super) fn stage_copy(
 ) -> Result<Option<Staged>, LocalFailure> {
     // `transfer_local` looked at the path a moment ago; the open below checks
     // the type again and the final comparison catches any swap.
-    let optical = match crate::source_media::acquire(source, crate::source_media::Priority::Foreground, cancel) {
+    let optical = match crate::source_media::acquire(
+        source,
+        crate::source_media::Priority::Foreground,
+        cancel,
+    ) {
         Ok(guard) => guard,
         Err(_error) if cancel.load(std::sync::atomic::Ordering::Acquire) => return Ok(None),
         Err(error) => return Err(LocalFailure::Source(error)),
     };
-    if let Some(guard) = &optical { guard.set_mode(crate::source_media::ReadMode::Sequential); }
-    let single = Parallel { threads: 1, probe: None };
+    if let Some(guard) = &optical {
+        guard.set_mode(crate::source_media::ReadMode::Sequential);
+    }
+    let single = Parallel {
+        threads: 1,
+        probe: None,
+    };
     let parallel = if optical.is_some() { &single } else { parallel };
     let (reader, before) = open_regular_source(source)?;
     if !durable {
-        if let Some(staged) = stage_by_path(source, target, &reader, &before, cancel, optical.is_some(), progress)? {
+        if let Some(staged) = stage_by_path(
+            source,
+            target,
+            &reader,
+            &before,
+            cancel,
+            optical.is_some(),
+            progress,
+        )? {
             if let Some(guard) = &optical {
                 if let Err(error) = guard.validate(source) {
-                    if let Some(staged) = staged { staged.discard().map_err(LocalFailure::Target)?; }
+                    if let Some(staged) = staged {
+                        staged.discard().map_err(LocalFailure::Target)?;
+                    }
                     return Err(LocalFailure::Source(error));
                 }
             }
@@ -120,7 +139,9 @@ pub(super) fn stage_copy(
     let (temp, mut writer) = create_temp_sibling(target).map_err(LocalFailure::Target)?;
     let copied = match if optical.is_some() {
         copy_optical_handles(&reader, &mut writer, cancel, progress)
-    } else { copy_into(&reader, &mut writer, cancel, progress, parallel) } {
+    } else {
+        copy_into(&reader, &mut writer, cancel, progress, parallel)
+    } {
         Ok(Some(copied)) => copied,
         Ok(None) => {
             discard(temp, writer).map_err(LocalFailure::Target)?;
@@ -130,7 +151,9 @@ pub(super) fn stage_copy(
             return Err(discard_after_error(temp, writer, side_of(error)));
         }
     };
-    let finished = optical.as_ref().map_or(Ok(()), |guard| guard.validate(source))
+    let finished = optical
+        .as_ref()
+        .map_or(Ok(()), |guard| guard.validate(source))
         .map_err(LocalFailure::Source)
         .and_then(|()| unchanged_state(source, &reader, &before))
         .and_then(|metadata| {
@@ -177,28 +200,45 @@ fn copy_into(
 /// Optical bytes use one bounded sequential loop on both desktop systems.
 /// Preserve the existing source/target error attribution while sharing the
 /// measured block parameter with Windows' metadata-preserving path.
-pub(super) fn copy_optical_handles(reader: &File, writer: &mut File,
-    cancel: &AtomicBool, progress: &mut dyn FnMut(u64)) -> io::Result<Option<u64>> {
+pub(super) fn copy_optical_handles(
+    reader: &File,
+    writer: &mut File,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(u64),
+) -> io::Result<Option<u64>> {
     struct SourceReader<'a>(&'a File);
     impl io::Read for SourceReader<'_> {
         fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-            io::Read::read(&mut self.0, buffer).map_err(|error|
-                if error.kind() == io::ErrorKind::Interrupted { error }
-                else { io::Error::other(LocalFailure::Source(error)) })
+            io::Read::read(&mut self.0, buffer).map_err(|error| {
+                if error.kind() == io::ErrorKind::Interrupted {
+                    error
+                } else {
+                    io::Error::other(LocalFailure::Source(error))
+                }
+            })
         }
     }
     struct TargetWriter<'a>(&'a mut File);
     impl io::Write for TargetWriter<'_> {
         fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-            io::Write::write(self.0, bytes).map_err(|error|
-                if error.kind() == io::ErrorKind::Interrupted { error }
-                else { io::Error::other(LocalFailure::Target(error)) })
+            io::Write::write(self.0, bytes).map_err(|error| {
+                if error.kind() == io::ErrorKind::Interrupted {
+                    error
+                } else {
+                    io::Error::other(LocalFailure::Target(error))
+                }
+            })
         }
         fn flush(&mut self) -> io::Result<()> {
             io::Write::flush(self.0).map_err(|error| io::Error::other(LocalFailure::Target(error)))
         }
     }
-    crate::source_media::sequential_copy(&mut SourceReader(reader), &mut TargetWriter(writer), cancel, progress)
+    crate::source_media::sequential_copy(
+        &mut SourceReader(reader),
+        &mut TargetWriter(writer),
+        cancel,
+        progress,
+    )
 }
 
 /// Opens the source of a copy: a regular file (never a link, junction or
@@ -250,8 +290,11 @@ fn stage_by_path(
             Some(Ok(None)) => return Ok(Some(None)),
             Some(Ok(Some((bytes, file)))) => {
                 if bytes != before.len || unchanged(source, reader, before).is_err() {
-                    return Err(discard_after_error(temp, file,
-                        LocalFailure::Source(source_changed_error(source))));
+                    return Err(discard_after_error(
+                        temp,
+                        file,
+                        LocalFailure::Source(source_changed_error(source)),
+                    ));
                 }
                 return Ok(Some(Some(Staged {
                     temp,
@@ -334,19 +377,29 @@ fn untagged(error: io::Error) -> LocalFailure {
 
 fn discard(temp: PathBuf, file: File) -> io::Result<()> {
     let result = (|| {
-        let parent_path = temp.parent().filter(|parent| !parent.as_os_str().is_empty())
+        let parent_path = temp
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
             .unwrap_or_else(|| Path::new("."));
         let parent = crate::local_access::ConfinedDirectory::open_root(parent_path)?;
-        let name = temp.file_name().ok_or_else(|| io::Error::other("stage has no child name"))?;
+        let name = temp
+            .file_name()
+            .ok_or_else(|| io::Error::other("stage has no child name"))?;
         let expected = match parent.entry(name) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
             Err(error) => return Err(error),
         };
         let class = crate::local_access::classify_open_file(&expected)?;
-        if !expected.metadata()?.is_file() || class.link_like || class.special
-            || !platform::same_file_object(&expected, &file)? {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "owned stage name was replaced"));
+        if !expected.metadata()?.is_file()
+            || class.link_like
+            || class.special
+            || !platform::same_file_object(&expected, &file)?
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "owned stage name was replaced",
+            ));
         }
         // Keep the metadata/O_PATH handle alive while releasing the writer.
         // Windows's conditional DELETE open must not conflict with our own
@@ -354,15 +407,23 @@ fn discard(temp: PathBuf, file: File) -> io::Result<()> {
         drop(file);
         super::recovery::discard_transfer_stage_live(&parent, &temp, &expected)
     })();
-    result.map_err(|error| io::Error::new(error.kind(), format!(
-        "stage cleanup unconfirmed for recorded path {}: {error}", temp.display(),
-    )))
+    result.map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!(
+                "stage cleanup unconfirmed for recorded path {}: {error}",
+                temp.display(),
+            ),
+        )
+    })
 }
 
 fn discard_after_error(temp: PathBuf, file: File, cause: LocalFailure) -> LocalFailure {
     match discard(temp, file) {
         Ok(()) => cause,
-        Err(error) => LocalFailure::Target(io::Error::new(error.kind(), format!("{cause}; {error}"))),
+        Err(error) => {
+            LocalFailure::Target(io::Error::new(error.kind(), format!("{cause}; {error}")))
+        }
     }
 }
 

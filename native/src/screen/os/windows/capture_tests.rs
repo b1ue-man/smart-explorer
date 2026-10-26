@@ -28,13 +28,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WINDOW_EX_STYLE, WM_CLOSE, WM_DESTROY, WM_TIMER, WNDCLASSW, WS_POPUP, WS_VISIBLE,
 };
 
-use super::host_backend::WindowsBackend;
 use super::capture_slots::batches_capture_task_tests::open_admitted;
+use super::host_backend::WindowsBackend;
 use super::{capture_wgc, window_list};
+use crate::screen::core::capture_image::CapturedImage;
 use crate::screen::core::host_backend::{ScreenHostBackend, ScreenSource, SourceFrame};
 use crate::screen::core::negotiate::{CodecChoice, CodecKind};
 use crate::screen::core::pixel_convert::{BgraImage, FrameSize};
-use crate::screen::core::capture_image::CapturedImage;
 use crate::screen::core::session_state::SessionState;
 use crate::screen::core::window_list::{ListSource, SourceId};
 
@@ -289,7 +289,11 @@ fn screen_task_windows_wgc_snapshot_matches() {
             screen_size()
         );
     }
-    assert!(image.image().data().chunks_exact(4).all(|pixel| pixel[3] == 255));
+    assert!(image
+        .image()
+        .data()
+        .chunks_exact(4)
+        .all(|pixel| pixel[3] == 255));
     // The still picture of it is a PNG of the same size.
     let png = crate::screen::core::snapshot::encode_png(image.image()).unwrap();
     assert_eq!(&png[..4], &[0x89, b'P', b'N', b'G']);
@@ -363,7 +367,7 @@ fn screen_task_windows_bench_real_capture() {
     let mut source = open_admitted(&backend, &window.source_id(), None).unwrap();
     let first = next_picture(source.as_mut(), Duration::from_secs(5));
     let choice = CodecChoice {
-            max_macroblocks_per_second: None,
+        max_macroblocks_per_second: None,
         codec: CodecKind::Tiles,
         profile: None,
         encoder_hardware: false,
@@ -428,8 +432,12 @@ fn screen_task_windows_dxgi_fallback_captures_monitor() {
 #[test]
 fn screen_task_windows_synthetic_source_still_works() {
     let backend = WindowsBackend::new();
-    let mut source = open_admitted(&backend, &SourceId::Synthetic, Some(FrameSize::new(640, 360)))
-        .expect("the test picture opens on Windows");
+    let mut source = open_admitted(
+        &backend,
+        &SourceId::Synthetic,
+        Some(FrameSize::new(640, 360)),
+    )
+    .expect("the test picture opens on Windows");
     assert_eq!(source.size(), FrameSize::new(640, 360));
     let SourceFrame::Frame(first) = source.capture(1, false).unwrap() else {
         panic!("the test picture gives a picture");

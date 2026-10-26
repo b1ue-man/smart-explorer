@@ -54,10 +54,18 @@ pub(crate) fn session_row(session: &SessionView) -> String {
         crate::screen::core::wire_hello::SessionMode::Preview => "Vorschau",
         _ => "sieht zu",
     };
-    let name = if session.device_name.trim().is_empty() { "Gerät ohne Namen" } else { &session.device_name };
+    let name = if session.device_name.trim().is_empty() {
+        "Gerät ohne Namen"
+    } else {
+        &session.device_name
+    };
     let state = match session.state.key() {
-        "streaming" => "verbunden", "starting" => "wird gestartet", "paused" => "pausiert",
-        "ended" => "beendet", "failed" => "fehlgeschlagen", _ => "Sitzungszustand nicht bekannt",
+        "streaming" => "verbunden",
+        "starting" => "wird gestartet",
+        "paused" => "pausiert",
+        "ended" => "beendet",
+        "failed" => "fehlgeschlagen",
+        _ => "Sitzungszustand nicht bekannt",
     };
     format!("{name} · {mode} · {state}")
 }
@@ -140,10 +148,21 @@ pub(crate) fn ui(ui: &mut egui::Ui) {
                 stop(Some(session.id.clone()));
             }
         });
-        egui::CollapsingHeader::new("Statistik und Diagnose").id_salt(("screen_statistics", &session.id)).show(ui, |ui| {
-            ui.label(format!("{} Bilder/s · {} kbit/s", session.fps, session.bitrate_kbps));
-            ui.monospace(format!("Quelle: {}\nZustand: {}\nKodierung: {}\nVerbindung: {}", session.source, session.state.key(), session.codec.as_deref().unwrap_or("unbekannt"), session.path));
-        });
+        egui::CollapsingHeader::new("Statistik und Diagnose")
+            .id_salt(("screen_statistics", &session.id))
+            .show(ui, |ui| {
+                ui.label(format!(
+                    "{} Bilder/s · {} kbit/s",
+                    session.fps, session.bitrate_kbps
+                ));
+                ui.monospace(format!(
+                    "Quelle: {}\nZustand: {}\nKodierung: {}\nVerbindung: {}",
+                    session.source,
+                    session.state.key(),
+                    session.codec.as_deref().unwrap_or("unbekannt"),
+                    session.path
+                ));
+            });
     }
     if sessions.len() > 1 && ui.button("Alle beenden").clicked() {
         stop(None);
@@ -240,10 +259,7 @@ mod tests {
             controlling: true,
             state: SessionState::Streaming,
         };
-        assert_eq!(
-            session_row(&session),
-            "Laptop · steuert · verbunden"
-        );
+        assert_eq!(session_row(&session), "Laptop · steuert · verbunden");
         let request: ApprovalView = serde_json::from_value(serde_json::json!({
             "id": "ab".repeat(16),
             "device_name": "Laptop",

@@ -97,7 +97,11 @@ impl ApplyRequest {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum InstallMode { GuiAck, Verified, CliOnly }
+pub(crate) enum InstallMode {
+    GuiAck,
+    Verified,
+    CliOnly,
+}
 
 #[derive(Debug)]
 pub(crate) struct ApplyArgs {
@@ -148,10 +152,15 @@ impl ApplyArgs {
             );
         }
         if has_key(raw, "--launcher-staged") != has_key(raw, "--launcher-sha256") {
-            return Err("Launcherpfad und erwarteter SHA-256 muessen gemeinsam angegeben werden".into());
+            return Err(
+                "Launcherpfad und erwarteter SHA-256 muessen gemeinsam angegeben werden".into(),
+            );
         }
-        let install_mode=match arg_value(raw,"--install-mode").as_deref() {
-            None|Some("gui_ack")=>InstallMode::GuiAck,Some("verified")=>InstallMode::Verified,Some("cli_only")=>InstallMode::CliOnly,Some(_)=>return Err("Unbekannter Installationsabschluss".into()),
+        let install_mode = match arg_value(raw, "--install-mode").as_deref() {
+            None | Some("gui_ack") => InstallMode::GuiAck,
+            Some("verified") => InstallMode::Verified,
+            Some("cli_only") => InstallMode::CliOnly,
+            Some(_) => return Err("Unbekannter Installationsabschluss".into()),
         };
         Ok(Self {
             install_mode,

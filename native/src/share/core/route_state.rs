@@ -3,13 +3,24 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum RouteClass { Lan, Direct, Relay }
+pub(crate) enum RouteClass {
+    Lan,
+    Direct,
+    Relay,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum RoutePhase {
-    Collecting, CheckingLan, CheckingDirect, Lan, Direct, RelayFallback,
-    Paused, Offline, Cancelled,
+    Collecting,
+    CheckingLan,
+    CheckingDirect,
+    Lan,
+    Direct,
+    RelayFallback,
+    Paused,
+    Offline,
+    Cancelled,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -37,10 +48,16 @@ pub(crate) struct RouteStatus {
 
 impl RouteStatus {
     pub(crate) fn initial(generation: u64) -> Self {
-        Self { generation, revision: 0, pause_epoch: 0, phase: RoutePhase::Collecting,
-            class: None, application_allowed: false,
+        Self {
+            generation,
+            revision: 0,
+            pause_epoch: 0,
+            phase: RoutePhase::Collecting,
+            class: None,
+            application_allowed: false,
             reason: "Verbindung wird ermittelt".into(),
-            remote_guarantee: RemoteRouteGuarantee::Unconfirmed }
+            remote_guarantee: RemoteRouteGuarantee::Unconfirmed,
+        }
     }
 
     pub(crate) fn label(&self) -> &'static str {
@@ -58,7 +75,7 @@ impl RouteStatus {
     }
 
     pub(crate) fn remote_limit(&self) -> Option<&'static str> {
-        (self.remote_guarantee == RemoteRouteGuarantee::LocalSenderOnly).then_some(
-            "Direktreihenfolge der Gegenstelle nicht durchsetzbar; Update erforderlich")
+        (self.remote_guarantee == RemoteRouteGuarantee::LocalSenderOnly)
+            .then_some("Direktreihenfolge der Gegenstelle nicht durchsetzbar; Update erforderlich")
     }
 }

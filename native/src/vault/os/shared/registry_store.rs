@@ -134,7 +134,10 @@ impl RegistryStore {
         site.validate()?;
         let _guard = self.write_guard()?;
         let load = self.load().map_err(read_error)?;
-        let current = load.sites.iter().find(|other| other.id == site.id)
+        let current = load
+            .sites
+            .iter()
+            .find(|other| other.id == site.id)
             .ok_or_else(|| "Tresorort ist nicht eingetragen".to_string())?;
         check_location_free(&load.sites, site)?;
         // Generic settings/password saves may hold a stale record. Only the
@@ -142,7 +145,13 @@ impl RegistryStore {
         let mut merged = site.clone();
         let key = crate::vault::core::open_policy::POLICY_KEY;
         merged.extra.retain(|(name, _)| name != key);
-        merged.extra.extend(current.extra.iter().filter(|(name, _)| name == key).cloned());
+        merged.extra.extend(
+            current
+                .extra
+                .iter()
+                .filter(|(name, _)| name == key)
+                .cloned(),
+        );
         self.write(&merged)
     }
 
@@ -154,7 +163,9 @@ impl RegistryStore {
         change: impl FnOnce(&mut SiteRecord) -> Result<(), String>,
     ) -> Result<SiteRecord, String> {
         let _guard = self.write_guard()?;
-        let mut record = self.get(id).map_err(read_error)?
+        let mut record = self
+            .get(id)
+            .map_err(read_error)?
             .ok_or_else(|| "Tresorort ist nicht eingetragen".to_string())?;
         change(&mut record)?;
         record.validate()?;

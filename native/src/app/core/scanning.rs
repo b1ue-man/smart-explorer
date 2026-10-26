@@ -17,8 +17,10 @@ impl App {
     /// `scan_scope`).
     fn start_scan_with(&mut self, root: PathBuf, record_history: bool, keep_name_filter: bool) {
         let requested = root.to_string_lossy();
-        if self.remote.is_none() && self.disconnected_drive(&requested)
-            && (keep_name_filter || !self.selecting_drive_root(&requested)) {
+        if self.remote.is_none()
+            && self.disconnected_drive(&requested)
+            && (keep_name_filter || !self.selecting_drive_root(&requested))
+        {
             self.error_msg = Some("Datenträger nicht verbunden".into());
             return;
         }
@@ -58,7 +60,9 @@ impl App {
         }
         let root_text = if self.remote.is_some() && !is_local_style(&requested) {
             requested.into_owned()
-        } else { local_path_text(&root) };
+        } else {
+            local_path_text(&root)
+        };
         if self.root_path != root_text {
             self.tree.collapsed.clear();
             self.read_access = Default::default();
@@ -80,7 +84,9 @@ impl App {
             // local scan).
             self.add_recent(&self.root_path.clone());
         }
-        if !keep_name_filter || self.drive_binding.is_none() { self.bind_scan_drive(); }
+        if !keep_name_filter || self.drive_binding.is_none() {
+            self.bind_scan_drive();
+        }
         // Per-location sort preference (after `remote` is finalized, so the key
         // is namespaced by connection). Default if unset; no inheritance.
         self.dirs_first = self
@@ -252,7 +258,10 @@ impl App {
 
     fn start_index_build_with(&mut self, only_loaded_optical: bool) {
         if !self.drive_index_ready() {
-            self.notice = Some(("Laufwerksbestand wird gelesen; Indexaufbau danach erneut starten.".into(), Instant::now()));
+            self.notice = Some((
+                "Laufwerksbestand wird gelesen; Indexaufbau danach erneut starten.".into(),
+                Instant::now(),
+            ));
             return;
         }
         if self.index_building {
@@ -281,11 +290,20 @@ impl App {
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let started = if only_loaded_optical {
             super::optical_index::verify_loaded_async(
-                roots, folder_index_path(), self.folder_index.clone(), tx, cancel.clone(),
+                roots,
+                folder_index_path(),
+                self.folder_index.clone(),
+                tx,
+                cancel.clone(),
             )
         } else {
             super::optical_index::build_async(
-                roots, folder_index_path(), self.folder_index.clone(), tx, cancel.clone(), true,
+                roots,
+                folder_index_path(),
+                self.folder_index.clone(),
+                tx,
+                cancel.clone(),
+                true,
             )
         };
         match started {

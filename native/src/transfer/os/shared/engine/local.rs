@@ -76,10 +76,26 @@ pub(super) fn copy_file(engine: &Engine<'_>, file: &FileWork, meter: &Meter<'_>)
             }
             Ok(Outcome::Done)
         }
-        Ok(LocalOutcome::Skipped) => { super::file_recovery::unpublished(engine, file).map_err(|error| OpError::at(At::Unknown, error))?; Ok(Outcome::Skipped) },
-        Ok(LocalOutcome::Canceled) => { super::file_recovery::unpublished(engine, file).map_err(|error| OpError::at(At::Unknown, error))?; Err(OpError::canceled()) },
-        Err(LocalFailure::Source(error)) => { super::file_recovery::unpublished(engine, file).map_err(|error| OpError::at(At::Unknown, error))?; Err(OpError::source(error)) },
-        Err(LocalFailure::Target(error)) => { super::file_recovery::unpublished(engine, file).map_err(|error| OpError::at(At::Unknown, error))?; Err(OpError::target(error)) },
+        Ok(LocalOutcome::Skipped) => {
+            super::file_recovery::unpublished(engine, file)
+                .map_err(|error| OpError::at(At::Unknown, error))?;
+            Ok(Outcome::Skipped)
+        }
+        Ok(LocalOutcome::Canceled) => {
+            super::file_recovery::unpublished(engine, file)
+                .map_err(|error| OpError::at(At::Unknown, error))?;
+            Err(OpError::canceled())
+        }
+        Err(LocalFailure::Source(error)) => {
+            super::file_recovery::unpublished(engine, file)
+                .map_err(|error| OpError::at(At::Unknown, error))?;
+            Err(OpError::source(error))
+        }
+        Err(LocalFailure::Target(error)) => {
+            super::file_recovery::unpublished(engine, file)
+                .map_err(|error| OpError::at(At::Unknown, error))?;
+            Err(OpError::target(error))
+        }
         Err(LocalFailure::Publish(error)) => Err(OpError::at(At::Publish, error)),
     }
 }
@@ -192,8 +208,10 @@ fn take_extras(
     };
     // The common small file or move asks for nothing: no look into the queue
     // (a lock every worker shares) and no permit taking.
-    if engine.is_move() || size < SPLIT_FROM
-        || crate::source_media::probe(source).is_ok_and(|source| source.is_some()) {
+    if engine.is_move()
+        || size < SPLIT_FROM
+        || crate::source_media::probe(source).is_ok_and(|source| source.is_some())
+    {
         return (none(), None);
     }
     let key = device_key(source, target);
@@ -277,14 +295,31 @@ pub(super) fn move_whole_roots(engine: &Engine<'_>, plan: &mut RootPlan) {
         let policy = engine.view.folders.for_root(&root.path);
         if policy != crate::transfer::FolderConflict::Merge {
             if let Some(reservations) = reservations {
-                match reservations.move_root(engine.folders.root(), &root.path, &root.rel, policy == crate::transfer::FolderConflict::KeepBoth, engine.stop_flag()) {
+                match reservations.move_root(
+                    engine.folders.root(),
+                    &root.path,
+                    &root.rel,
+                    policy == crate::transfer::FolderConflict::KeepBoth,
+                    engine.stop_flag(),
+                ) {
                     Ok((relative, moved)) => {
                         root.rel = relative;
-                        if let Some(resolved) = resolved_roots.iter_mut().find(|entry| entry.source == root.path) { resolved.planned = root.rel.clone(); }
-                        if moved { engine.stats.entry_moved_whole(); return false; }
+                        if let Some(resolved) = resolved_roots
+                            .iter_mut()
+                            .find(|entry| entry.source == root.path)
+                        {
+                            resolved.planned = root.rel.clone();
+                        }
+                        if moved {
+                            engine.stats.entry_moved_whole();
+                            return false;
+                        }
                         return true;
                     }
-                    Err(error) => { engine.issue(&root.path, &format!("Ordner verschieben: {error}")); return false; }
+                    Err(error) => {
+                        engine.issue(&root.path, &format!("Ordner verschieben: {error}"));
+                        return false;
+                    }
                 }
             }
         }
@@ -314,10 +349,15 @@ pub(super) fn prune_moved_dirs(engine: &Engine<'_>, plan: &RootPlan) {
     // Retain selected roots of an incomplete journaled move. Their object
     // guards must remain available while unfinished siblings are resumed.
     let keep_roots = engine.job_record.is_some()
-        && (engine.issues.total() != 0 || engine.user_cancel.load(std::sync::atomic::Ordering::Acquire));
+        && (engine.issues.total() != 0
+            || engine
+                .user_cancel
+                .load(std::sync::atomic::Ordering::Acquire));
     let dirs: Vec<PathBuf> = std::mem::take(&mut *super::lock(&engine.moved_dirs))
         .into_iter()
-        .filter(|(source, _)| !keep_roots || !plan.walk_roots.iter().any(|root| root.path == *source))
+        .filter(|(source, _)| {
+            !keep_roots || !plan.walk_roots.iter().any(|root| root.path == *source)
+        })
         .filter(|(_, rel)| plain_dir(&native(&engine.folders.path_of(rel))))
         .map(|(source, _)| native(&source))
         .collect();

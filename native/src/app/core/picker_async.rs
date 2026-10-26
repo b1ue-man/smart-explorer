@@ -12,7 +12,11 @@ impl App {
             },
             None => return,
         };
-        if !self.drive_consumer_available(super::drive_snapshot::DriveConsumer::Picker, &cwd, remote) {
+        if !self.drive_consumer_available(
+            super::drive_snapshot::DriveConsumer::Picker,
+            &cwd,
+            remote,
+        ) {
             if let Some(picker) = self.picker.as_mut() {
                 picker.list_rx = None;
                 picker.listing = false;
@@ -141,7 +145,9 @@ impl App {
                         picker.is_remote = true;
                     } else {
                         picker.backend = Some(match connected.net {
-                            Some(net) => Arc::new(crate::net::UncBackend::new(&connected.target, net)),
+                            Some(net) => {
+                                Arc::new(crate::net::UncBackend::new(&connected.target, net))
+                            }
                             None => Arc::new(crate::vfs::LocalBackend::new(&connected.target)),
                         });
                         picker.is_remote = false;

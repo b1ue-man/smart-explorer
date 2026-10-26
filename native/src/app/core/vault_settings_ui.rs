@@ -142,23 +142,27 @@ pub(crate) fn show(ctx: &egui::Context) -> Vec<Effect> {
     let mut effects = Vec::new();
     refresh(window, &row);
     let mut open = true;
-    crate::app::dialog_geometry::window(ctx, "vault_settings_ui.0", format!("Tresor-Eigenschaften – {}", row.label))
-        .id(egui::Id::new("vault_settings"))
-        .open(&mut open)
-        .collapsible(false)
-        .default_size([620.0, 400.0])
-        .show(ctx, |ui| {
-            ui.horizontal_top(|ui| {
-                ui.vertical(|ui| {
-                    ui.set_min_width(120.0);
-                    for page in Page::ALL {
-                        ui.selectable_value(&mut window.page, page, page.title());
-                    }
-                });
-                ui.separator();
-                ui.vertical(|ui| page_ui(ui, window, &row, &rows, &mut effects));
+    crate::app::dialog_geometry::window(
+        ctx,
+        "vault_settings_ui.0",
+        format!("Tresor-Eigenschaften – {}", row.label),
+    )
+    .id(egui::Id::new("vault_settings"))
+    .open(&mut open)
+    .collapsible(false)
+    .default_size([620.0, 400.0])
+    .show(ctx, |ui| {
+        ui.horizontal_top(|ui| {
+            ui.vertical(|ui| {
+                ui.set_min_width(120.0);
+                for page in Page::ALL {
+                    ui.selectable_value(&mut window.page, page, page.title());
+                }
             });
+            ui.separator();
+            ui.vertical(|ui| page_ui(ui, window, &row, &rows, &mut effects));
         });
+    });
     if !open {
         *held = None;
     }

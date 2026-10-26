@@ -45,14 +45,21 @@ pub(crate) fn cat(target: &Target) -> Result<(), String> {
     cat_observed(target, &super::tree_observer::TreeObserver::default())
 }
 
-pub(crate) fn cat_observed(target: &Target, observer: &super::tree_observer::TreeObserver) -> Result<(), String> {
+pub(crate) fn cat_observed(
+    target: &Target,
+    observer: &super::tree_observer::TreeObserver,
+) -> Result<(), String> {
     crate::source_media::with_cancellation(observer.cancel_flag(), || {
         observer.check()?;
-        let mut reader = target.backend.open_read(&target.path)
+        let mut reader = target
+            .backend
+            .open_read(&target.path)
             .map_err(|error| observer.explain(explain_read_error(target, error)))?;
         let mut output = io::stdout().lock();
         io::copy(&mut reader, &mut output).map_err(|error| observer.explain(error.to_string()))?;
-        output.flush().map_err(|error| observer.explain(error.to_string()))
+        output
+            .flush()
+            .map_err(|error| observer.explain(error.to_string()))
     })
 }
 
@@ -73,10 +80,10 @@ mod copying;
 mod moving;
 #[cfg(test)]
 pub(crate) use copying::copy;
-pub(crate) use copying::{copy_with_stats, copy_with_folder_stats};
-pub(super) use copying::{copy_observed, copy_observed_with_folders, copy_observed_in_job};
+pub(super) use copying::{copy_observed, copy_observed_in_job, copy_observed_with_folders};
+pub(crate) use copying::{copy_with_folder_stats, copy_with_stats};
+pub(super) use moving::{move_observed, move_observed_in_job, move_observed_with_folders};
 pub(crate) use moving::{move_path, move_with_folders};
-pub(super) use moving::{move_observed, move_observed_with_folders, move_observed_in_job};
 
 fn print_notices(outcome: &TreeOutcome) {
     let mut err = io::stderr().lock();

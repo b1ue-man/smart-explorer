@@ -14,8 +14,8 @@ use crate::vfs::{
 
 impl BackendExtensions for UnavailableBackend {
     fn directory_reservation_supported(&self, root: &str) -> bool {
-        self.live_backend().is_ok_and(|backend|
-            vfs::directory_reservation_supported(&*backend, root))
+        self.live_backend()
+            .is_ok_and(|backend| vfs::directory_reservation_supported(&*backend, root))
     }
 
     fn create_dir_exclusive(&self, path: &str) -> VfsResult<()> {

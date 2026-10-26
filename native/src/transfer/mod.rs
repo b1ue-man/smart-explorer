@@ -42,14 +42,14 @@ mod flow_control;
 mod flow_registry;
 #[path = "core/flow_window.rs"]
 mod flow_window;
+#[path = "core/folder_alias.rs"]
+mod folder_alias;
+#[path = "core/folder_conflict.rs"]
+mod folder_conflict;
 #[path = "os/shared/hints.rs"]
 mod hints;
 #[path = "core/job.rs"]
 mod job;
-#[path = "core/folder_conflict.rs"]
-mod folder_conflict;
-#[path = "core/folder_alias.rs"]
-mod folder_alias;
 #[path = "core/job_record.rs"]
 mod job_record;
 pub(crate) use job_record::{JobRecord, StoredEndpoint};
@@ -137,6 +137,13 @@ pub use downloads::{
     download_paths_progress, download_remote_clipboard_items, download_remote_paths_for_clipboard,
 };
 pub(crate) use edit_download::download_for_edit;
+pub use engine::new_job_id;
+pub(crate) use engine::record_io::{
+    monitor_contexts, read_record, read_record_state, record_context, record_locations,
+    write_record, RecordContext, RecordKind,
+};
+pub(crate) use engine::{count_folder_conflict, folder_conflicts, FolderPreviewScan};
+pub(crate) use engine::{reopen_job, unconfirmed_jobs, RecoveryCatalog};
 pub(crate) use engine::{run_view, JobView, Side};
 pub(crate) use engine_names::parent_path;
 pub use external::{external_snapshots, register_external, ExternalSnapshot, ExternalTransfer};
@@ -145,12 +152,8 @@ pub use flow::{
     FlowSnapshot, PermitPair, ANONYMOUS_JOB,
 };
 pub use flow_control::OpOutcome;
-pub use job::{path_within, Endpoint, JobItems, Layout, PairItem, RecoveryMode, TransferJob};
 pub use folder_conflict::{FolderConflict, FolderConflictPolicy, FolderConflictPreview};
-pub(crate) use engine::{folder_conflicts, count_folder_conflict, FolderPreviewScan};
-pub(crate) use engine::{unconfirmed_jobs, reopen_job, RecoveryCatalog};
-pub(crate) use engine::record_io::{read_record, read_record_state, write_record, record_locations, record_context, monitor_contexts, RecordContext, RecordKind};
-pub use engine::new_job_id;
+pub use job::{path_within, Endpoint, JobItems, Layout, PairItem, RecoveryMode, TransferJob};
 pub use lane::{
     launch_transfer, ActiveTransfer, FinishedTransfer, LaunchTransfer, TransferLane,
     TransferRequest,

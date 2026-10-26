@@ -26,8 +26,11 @@ pub(crate) fn copy_to_new_file(
     expected: u64,
     cancel: &AtomicBool,
 ) -> io::Result<u64> {
-    let optical = crate::source_media::acquire(source, crate::source_media::Priority::Foreground, cancel)?;
-    if let Some(guard) = &optical { guard.set_mode(crate::source_media::ReadMode::Sequential); }
+    let optical =
+        crate::source_media::acquire(source, crate::source_media::Priority::Foreground, cancel)?;
+    if let Some(guard) = &optical {
+        guard.set_mode(crate::source_media::ReadMode::Sequential);
+    }
     let (reader, before) = open_source(source).map_err(|failure| failure.into_error())?;
     // The kernel copies; `cancel` stops it between its chunks (CopyFile2's
     // cancel flag, the handle loop elsewhere). Progress is counted by the
@@ -44,8 +47,11 @@ pub(crate) fn copy_to_new_file(
         Some(Err(error)) => return Err(error),
         None => copy_by_handles(&reader, stage, cancel, optical.is_some(), &mut quiet)?,
     };
-    let media_unchanged = optical.as_ref().map_or(Ok(()), |guard| guard.validate(source));
-    let complete = media_unchanged.is_ok() && bytes == expected
+    let media_unchanged = optical
+        .as_ref()
+        .map_or(Ok(()), |guard| guard.validate(source));
+    let complete = media_unchanged.is_ok()
+        && bytes == expected
         && file
             .metadata()
             .is_ok_and(|metadata| metadata.is_file() && metadata.len() == expected)
@@ -73,14 +79,15 @@ fn copy_by_handles(
     progress: &mut dyn FnMut(u64),
 ) -> io::Result<(u64, File)> {
     let mut writer = crate::vfs::create_local_copy_stage(stage)?;
-    let copied =
-        (if optical { super::staging::copy_optical_handles(reader, &mut writer, cancel, progress) }
-        else { platform::copy_handles(reader, &mut writer, cancel, progress, 1) }).and_then(|copied| {
-            platform::copy_permissions(&writer, &reader.metadata()?, None)?;
-            copied.ok_or_else(|| {
-                io::Error::new(io::ErrorKind::Interrupted, "Serverkopie abgebrochen")
-            })
-        });
+    let copied = (if optical {
+        super::staging::copy_optical_handles(reader, &mut writer, cancel, progress)
+    } else {
+        platform::copy_handles(reader, &mut writer, cancel, progress, 1)
+    })
+    .and_then(|copied| {
+        platform::copy_permissions(&writer, &reader.metadata()?, None)?;
+        copied.ok_or_else(|| io::Error::new(io::ErrorKind::Interrupted, "Serverkopie abgebrochen"))
+    });
     match copied {
         Ok(bytes) => Ok((bytes, writer)),
         Err(error) => {

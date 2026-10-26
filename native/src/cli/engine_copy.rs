@@ -307,7 +307,9 @@ fn run(
         recoverable: false,
         recovery: crate::transfer::RecoveryMode::New,
         id: None,
-        folders: &crate::transfer::FolderConflictPolicy::new(crate::transfer::FolderConflict::Merge),
+        folders: &crate::transfer::FolderConflictPolicy::new(
+            crate::transfer::FolderConflict::Merge,
+        ),
         source: side_of(src),
         target: side_of(dst),
         target_dir,

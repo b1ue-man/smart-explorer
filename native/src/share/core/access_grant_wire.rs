@@ -84,10 +84,15 @@ fn read_known(value: &Value) -> Option<AccessRecord> {
     let mut kept = KeptParts {
         capabilities: BTreeMap::new(),
         fields: wire.fields,
-        account_fields: value.get("account")?.as_object()?.iter()
-            .filter(|(key, _)| key.as_str() != "kind"
-                && !(key.as_str() == "name" && account_has_name))
-            .map(|(key, value)| (key.clone(), value.clone())).collect(),
+        account_fields: value
+            .get("account")?
+            .as_object()?
+            .iter()
+            .filter(|(key, _)| {
+                key.as_str() != "kind" && !(key.as_str() == "name" && account_has_name)
+            })
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
     };
     if wire.version == 2 {
         if let Some(constraints) = kept.fields.remove("constraints") {
@@ -181,7 +186,10 @@ pub fn ported(enabled: bool, run_as: &ExecRunAs, programs: &[String]) -> AccessG
 /// without a list, `allow, off` with one, or `off, off`. `None`: the grant
 /// needs the `access` object.
 pub fn legacy_form(grant: &AccessGrant, programs: &[String]) -> Option<(bool, ExecRunAs)> {
-    if grant.version() == 2 || grant.valid_until.is_some() || grant.account == AccountProfile::Remote {
+    if grant.version() == 2
+        || grant.valid_until.is_some()
+        || grant.account == AccountProfile::Remote
+    {
         return None;
     }
     if grant.decision(Capability::ScreenView).is_on()

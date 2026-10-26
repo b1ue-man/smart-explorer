@@ -9,6 +9,12 @@
 //! to SCR-M6, SCR-M8).
 use std::io;
 
+use super::capture_admission::CaptureGrant;
+use super::capture_image::CapturedImage;
+use super::capture_records::CapturedRecords;
+pub(crate) use super::capture_source_contract::{
+    HostOutputPlan, PreparedSource, PreparedSourceInfo,
+};
 use super::input_model::{InputCapabilities, InputEvent};
 use super::negotiate::{CodecChoice, CodecOffer};
 use super::pixel_convert::{BgraImage, FrameSize, YuvMatrix};
@@ -21,10 +27,6 @@ use super::wire_hello::HostPlatform;
 use crate::share::access_approval::{ApprovalBroker, ApprovalSummary, ApprovalTicket};
 use crate::share::access_grant::Capability;
 use crate::share::relation_proof::ProvenPrincipal;
-use super::capture_image::CapturedImage;
-use super::capture_records::CapturedRecords;
-use super::capture_admission::CaptureGrant;
-pub(crate) use super::capture_source_contract::{PreparedSource, PreparedSourceInfo, HostOutputPlan};
 
 /// What one capture delivered.
 pub(crate) enum SourceFrame {
@@ -36,43 +38,80 @@ pub(crate) enum SourceFrame {
 }
 
 /// Release-only endpoint belonging to one existing source.
-pub(crate) trait ScreenInputSink:Send+Sync {
-    fn legacy_input_invalid(&self)->bool {false}
-    fn inject(&self,_events:&[InputEvent],_reference_generation:u64,_presented:bool)->Result<(),ControlBlock> {
+pub(crate) trait ScreenInputSink: Send + Sync {
+    fn legacy_input_invalid(&self) -> bool {
+        false
+    }
+    fn inject(
+        &self,
+        _events: &[InputEvent],
+        _reference_generation: u64,
+        _presented: bool,
+    ) -> Result<(), ControlBlock> {
         Err(ControlBlock::ControlUnavailable)
     }
-    fn release(&self,events:&[InputEvent])->Result<(),ControlBlock>;
-    fn family_snapshot(&self) -> io::Result<Option<crate::remote_window::FamilySnapshot>> { Ok(None) }
-    fn family_operation(&self, _request: super::family_protocol::FamilyOperation,
-        _active: std::sync::Arc<std::sync::atomic::AtomicBool>)
-        -> io::Result<super::family_protocol::FamilyOperationResult> {
-        Err(io::Error::new(io::ErrorKind::Unsupported, "source_has_no_window_family"))
+    fn release(&self, events: &[InputEvent]) -> Result<(), ControlBlock>;
+    fn family_snapshot(&self) -> io::Result<Option<crate::remote_window::FamilySnapshot>> {
+        Ok(None)
     }
-    fn family_input(&self, _request: super::family_protocol::FamilyInput,
-        _active: std::sync::Arc<std::sync::atomic::AtomicBool>)
-        -> io::Result<super::family_protocol::FamilyInputResult> {
-        Err(io::Error::new(io::ErrorKind::Unsupported, "source_has_no_window_family"))
+    fn family_operation(
+        &self,
+        _request: super::family_protocol::FamilyOperation,
+        _active: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> io::Result<super::family_protocol::FamilyOperationResult> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "source_has_no_window_family",
+        ))
+    }
+    fn family_input(
+        &self,
+        _request: super::family_protocol::FamilyInput,
+        _active: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> io::Result<super::family_protocol::FamilyInputResult> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "source_has_no_window_family",
+        ))
     }
 }
 /// One capture source; its SourceId determines whether it contains screen content.
 pub(crate) trait ScreenSource: Send {
-    fn legacy_input_invalid(&self)->bool {false}
+    fn legacy_input_invalid(&self) -> bool {
+        false
+    }
     /// Prepared capture implementations return their active bound grant.
     /// None supplies no allocation permission and is only a transitional
     /// state until every productive source uses prepare/activate.
-    fn capture_grant(&self) -> Option<super::capture_admission::CaptureGrant> {None}
+    fn capture_grant(&self) -> Option<super::capture_admission::CaptureGrant> {
+        None
+    }
     /// A metadata-only wrapper may complete activation here. Some(state)
     /// preserves its pending state and requests no picture or encoder buffer.
-    fn prepare_capture(&mut self, _request:&super::host_stage::StageRequest)->io::Result<Option<SessionState>> {Ok(None)}
+    fn prepare_capture(
+        &mut self,
+        _request: &super::host_stage::StageRequest,
+    ) -> io::Result<Option<SessionState>> {
+        Ok(None)
+    }
     /// Runs in the original capture worker after the admitted request waited
     /// in IPC. Platform sources may additionally verify their live geometry.
-    fn inject_input(&mut self,backend:&dyn ScreenHostBackend,reference_generation:u64,_presented:bool,events:&[InputEvent])
-        ->Result<(),ControlBlock> {
-        if reference_generation!=self.reference_generation(){return Err(ControlBlock::ControlUnavailable);}
+    fn inject_input(
+        &mut self,
+        backend: &dyn ScreenHostBackend,
+        reference_generation: u64,
+        _presented: bool,
+        events: &[InputEvent],
+    ) -> Result<(), ControlBlock> {
+        if reference_generation != self.reference_generation() {
+            return Err(ControlBlock::ControlUnavailable);
+        }
         backend.inject(events)
     }
     /// Release-only endpoint retained across a source change or an in-flight capture.
-    fn input_sink(&self)->Option<std::sync::Arc<dyn ScreenInputSink>> {None}
+    fn input_sink(&self) -> Option<std::sync::Arc<dyn ScreenInputSink>> {
+        None
+    }
     /// Size of the source's pictures; a change starts a new picture stream.
     fn size(&self) -> FrameSize;
     /// Proven capture allocation bound; unmodified adapters keep their old ceiling.
@@ -81,34 +120,62 @@ pub(crate) trait ScreenSource: Send {
     }
     /// The allocation bound for this negotiated session; legacy adapters may
     /// retain a distinct surface-backed path without changing their v2 offer.
-    fn frame_limits_for_contract(&self, contract: Option<super::frame_budget::FrameContract>) -> super::frame_budget::FrameLimits {
-        contract.map_or_else(||self.frame_limits(),|contract|contract.limits.for_capture(self.frame_limits()))
+    fn frame_limits_for_contract(
+        &self,
+        contract: Option<super::frame_budget::FrameContract>,
+    ) -> super::frame_budget::FrameLimits {
+        contract.map_or_else(
+            || self.frame_limits(),
+            |contract| contract.limits.for_capture(self.frame_limits()),
+        )
     }
     /// Matching raw/video pixels permit hybrid reconstruction; false retains the v2 size contract without hybrid operations.
-    fn supports_frame_regions(&self) -> bool { true }
+    fn supports_frame_regions(&self) -> bool {
+        true
+    }
     /// Geometry/content identity beyond dimensions, such as a window-family revision.
-    fn reference_generation(&self) -> u64 { 0 }
+    fn reference_generation(&self) -> u64 {
+        0
+    }
     /// Layout captured into the most recent successful family image.
-    fn family_layout_revision(&self) -> Option<u64> { None }
+    fn family_layout_revision(&self) -> Option<u64> {
+        None
+    }
     /// Stop background production while retaining the authorized source identity.
-    fn set_capture_active(&mut self, _active: bool) -> io::Result<()> { Ok(()) }
+    fn set_capture_active(&mut self, _active: bool) -> io::Result<()> {
+        Ok(())
+    }
     /// The picture of encoded frame `frame_id` (the synthetic source draws
     /// the id into its barcode). With `keyframe` a source delivers its last
     /// picture even when nothing changed, so a key frame always has one.
     fn capture(&mut self, frame_id: u64, keyframe: bool) -> io::Result<SourceFrame>;
     /// A still image leaves the capture adapter only within the session's
     /// geometry. The raw source allocation retains its separate capture limit.
-    fn capture_snapshot(&mut self,frame_id:u64,contract:Option<super::frame_budget::FrameContract>)->io::Result<SourceFrame> {
-        if let Some(contract)=contract {contract.validate()?;}
-        let limits=self.frame_limits_for_contract(contract);
-        match self.capture(frame_id,true)? {
-            SourceFrame::Frame(image)=>{
-                let size=limits.fit(image.size());limits.check(size)?;
-                Ok(SourceFrame::Frame(if size==image.size() {image} else {
-                    image.downscale(size,limits,&image.grant(),super::capture_admission::CaptureOwner::ScaledPixels)?
+    fn capture_snapshot(
+        &mut self,
+        frame_id: u64,
+        contract: Option<super::frame_budget::FrameContract>,
+    ) -> io::Result<SourceFrame> {
+        if let Some(contract) = contract {
+            contract.validate()?;
+        }
+        let limits = self.frame_limits_for_contract(contract);
+        match self.capture(frame_id, true)? {
+            SourceFrame::Frame(image) => {
+                let size = limits.fit(image.size());
+                limits.check(size)?;
+                Ok(SourceFrame::Frame(if size == image.size() {
+                    image
+                } else {
+                    image.downscale(
+                        size,
+                        limits,
+                        &image.grant(),
+                        super::capture_admission::CaptureOwner::ScaledPixels,
+                    )?
                 }))
             }
-            frame=>Ok(frame),
+            frame => Ok(frame),
         }
     }
 
@@ -132,16 +199,28 @@ pub(crate) struct CapturedEncodedFrame {
 }
 
 pub(crate) trait ScreenEncoder: Send {
-    fn encode_captured(&mut self, _frame: &CapturedImage, _request: &super::host_stage::StageRequest)
-        -> io::Result<CapturedEncodedFrame> {
-        Err(io::Error::new(io::ErrorKind::Unsupported,"encoder_has_no_capture_admission"))
+    fn encode_captured(
+        &mut self,
+        _frame: &CapturedImage,
+        _request: &super::host_stage::StageRequest,
+    ) -> io::Result<CapturedEncodedFrame> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "encoder_has_no_capture_admission",
+        ))
     }
     /// Encoder name for statistics (`tiles`, an MFT, `openh264`).
     fn name(&self) -> String;
     fn size(&self) -> FrameSize;
     /// A pending lossless correction needs one repeated capture after motion stops.
-    fn needs_refresh(&self) -> bool { false }
-    fn encode_frame(&mut self, frame: &BgraImage, request: &super::host_stage::StageRequest) -> io::Result<EncodedFrame> {
+    fn needs_refresh(&self) -> bool {
+        false
+    }
+    fn encode_frame(
+        &mut self,
+        frame: &BgraImage,
+        request: &super::host_stage::StageRequest,
+    ) -> io::Result<EncodedFrame> {
         self.encode(frame, request.keyframe, request.target_bps)
     }
     /// Encodes `frame` (of `size()`); no records when nothing changed.
@@ -185,7 +264,9 @@ pub(crate) trait ScreenDecoder: Send {
     fn decode(&mut self, record: &FrameRecord) -> io::Result<bool>;
     /// Identity of the picture produced by the last `decode` that returned `true`.
     /// `None` is unproven output and must never receive a presentation receipt.
-    fn decoded_frame(&self) -> Option<super::decoded_frame::DecodedFrame> { None }
+    fn decoded_frame(&self) -> Option<super::decoded_frame::DecodedFrame> {
+        None
+    }
     /// The last completed picture.
     fn picture(&self) -> &BgraImage;
     /// Asks to keep the decoded planes (`yuv_picture`) and to skip the
@@ -216,14 +297,29 @@ impl SourceRefusal {
 /// The screen host of one platform.
 pub(crate) trait ScreenHostBackend: Send + Sync {
     fn platform(&self) -> HostPlatform;
-    fn memory_facts(&self)->Option<super::frame_memory::MemoryFacts> {None}
-    fn capacity_ceiling(&self,facts:Option<super::frame_memory::MemoryFacts>)->super::frame_memory::CapacityCeiling {
-        if facts.is_some() {super::frame_memory::CapacityCeiling::desktop(facts)}
-        else {super::frame_memory::CapacityCeiling::bounded(self.session_memory_ceiling())}
+    fn memory_facts(&self) -> Option<super::frame_memory::MemoryFacts> {
+        None
+    }
+    fn capacity_ceiling(
+        &self,
+        facts: Option<super::frame_memory::MemoryFacts>,
+    ) -> super::frame_memory::CapacityCeiling {
+        if facts.is_some() {
+            super::frame_memory::CapacityCeiling::desktop(facts)
+        } else {
+            super::frame_memory::CapacityCeiling::bounded(self.session_memory_ceiling())
+        }
     }
     /// Android's separately observed Java heap bound remains a session ceiling.
-    fn session_memory_ceiling(&self)->u64 {super::frame_budget::MAX_SESSION_WORKING_BYTES}
-    fn icon(&self, _entry: super::app_icon::AuthorizedIconEntry<'_>) -> io::Result<Option<super::app_icon::IconReply>> {Ok(None)}
+    fn session_memory_ceiling(&self) -> u64 {
+        super::frame_budget::MAX_SESSION_WORKING_BYTES
+    }
+    fn icon(
+        &self,
+        _entry: super::app_icon::AuthorizedIconEntry<'_>,
+    ) -> io::Result<Option<super::app_icon::IconReply>> {
+        Ok(None)
+    }
     /// A graphical session exists in which the screen can be shown.
     fn graphical_session(&self) -> bool;
     fn monitors(&self) -> Vec<MonitorInfo>;
@@ -234,30 +330,54 @@ pub(crate) trait ScreenHostBackend: Send + Sync {
     fn windows(&self) -> io::Result<WindowList>;
     /// Metadata-only source preparation. The additive default refuses this
     /// boundary; it must never open a legacy source without its capture grant.
-    fn prepare_session_source(&self, _owner: &str, _session: &str, _source: &SourceId,
-        _wanted: Option<FrameSize>, _control: bool,
-        _admission: std::sync::Arc<super::capture_admission::SessionAdmission>)
-        -> Result<Box<dyn PreparedSource>, SourceRefusal> {
+    fn prepare_session_source(
+        &self,
+        _owner: &str,
+        _session: &str,
+        _source: &SourceId,
+        _wanted: Option<FrameSize>,
+        _control: bool,
+        _admission: std::sync::Arc<super::capture_admission::SessionAdmission>,
+    ) -> Result<Box<dyn PreparedSource>, SourceRefusal> {
         Err(SourceRefusal::new("capture_preparation_unavailable"))
     }
     /// Family metadata keeps the exact member identity and the same local or
     /// delegated admission. Activation still requires its bound member grant.
-    fn prepare_family_member(&self, _owner: &str, _session: &str,
+    fn prepare_family_member(
+        &self,
+        _owner: &str,
+        _session: &str,
         _native: crate::remote_window::NativeWindowId,
-        _admission: std::sync::Arc<super::capture_admission::SessionAdmission>)
-        -> Result<Box<dyn PreparedSource>, SourceRefusal> {
+        _admission: std::sync::Arc<super::capture_admission::SessionAdmission>,
+    ) -> Result<Box<dyn PreparedSource>, SourceRefusal> {
         Err(SourceRefusal::new("family_capture_preparation_unavailable"))
     }
     fn family_windows(&self, _owner: &str) -> io::Result<super::family_protocol::FamilyListing> {
-        Err(io::Error::new(io::ErrorKind::Unsupported, "window_family_listing_unavailable"))
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "window_family_listing_unavailable",
+        ))
     }
     /// Trusted host launch correlation only; publication remains ScreenView metadata.
-    fn register_family_pin(&self,_owner:&str,_request_id:&str,_pin:crate::remote_window::WindowPin)
-        ->io::Result<super::family_protocol::FamilyListEntry> {
-        Err(io::Error::new(io::ErrorKind::Unsupported,"verified_family_registration_unavailable"))
+    fn register_family_pin(
+        &self,
+        _owner: &str,
+        _request_id: &str,
+        _pin: crate::remote_window::WindowPin,
+    ) -> io::Result<super::family_protocol::FamilyListEntry> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "verified_family_registration_unavailable",
+        ))
     }
-    fn open_session_source(&self, _owner: &str, _session: &str, source: &SourceId,
-        wanted: Option<FrameSize>, _control: bool) -> Result<Box<dyn ScreenSource>, SourceRefusal> {
+    fn open_session_source(
+        &self,
+        _owner: &str,
+        _session: &str,
+        source: &SourceId,
+        wanted: Option<FrameSize>,
+        _control: bool,
+    ) -> Result<Box<dyn ScreenSource>, SourceRefusal> {
         if super::family_protocol::selector(source).is_some() {
             return Err(SourceRefusal::new("window_family_unavailable"));
         }
@@ -272,9 +392,13 @@ pub(crate) trait ScreenHostBackend: Send + Sync {
     ) -> Result<Box<dyn ScreenSource>, SourceRefusal>;
     /// Opens only this member's own surface. A desktop/root crop is forbidden,
     /// including when the independent capture API stops working after opening.
-    fn open_family_member(&self, _native: crate::remote_window::NativeWindowId)
-        -> Result<Box<dyn ScreenSource>, SourceRefusal> {
-        Err(SourceRefusal::new("window_family_member_capture_unsupported"))
+    fn open_family_member(
+        &self,
+        _native: crate::remote_window::NativeWindowId,
+    ) -> Result<Box<dyn ScreenSource>, SourceRefusal> {
+        Err(SourceRefusal::new(
+            "window_family_member_capture_unsupported",
+        ))
     }
     fn open_encoder(
         &self,
@@ -282,17 +406,30 @@ pub(crate) trait ScreenHostBackend: Send + Sync {
         size: FrameSize,
     ) -> io::Result<Box<dyn ScreenEncoder>>;
     /// Carries the negotiated image and codec-rate contract to in-process encoders.
-    fn open_encoder_for_stage(&self, request: &super::host_stage::StageRequest) -> io::Result<Box<dyn ScreenEncoder>> {
+    fn open_encoder_for_stage(
+        &self,
+        request: &super::host_stage::StageRequest,
+    ) -> io::Result<Box<dyn ScreenEncoder>> {
         self.open_encoder(&request.choice, request.size)
     }
-    fn open_encoder_for_stage_admitted(&self, _request: &super::host_stage::StageRequest,
-        _grant: CaptureGrant) -> io::Result<Box<dyn ScreenEncoder>> {
-        Err(io::Error::new(io::ErrorKind::Unsupported,"encoder_has_no_capture_admission"))
+    fn open_encoder_for_stage_admitted(
+        &self,
+        _request: &super::host_stage::StageRequest,
+        _grant: CaptureGrant,
+    ) -> io::Result<Box<dyn ScreenEncoder>> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "encoder_has_no_capture_admission",
+        ))
     }
     /// Injects the input of the controlling viewer.
     fn inject(&self, events: &[InputEvent]) -> Result<(), ControlBlock>;
     /// Family coordinates are relative to the exact admitted capture geometry.
-    fn inject_family(&self, _member: &crate::remote_window::CaptureMember, events: &[InputEvent]) -> Result<(), ControlBlock> {
+    fn inject_family(
+        &self,
+        _member: &crate::remote_window::CaptureMember,
+        events: &[InputEvent],
+    ) -> Result<(), ControlBlock> {
         self.inject(events)
     }
     /// Release previously injected controls even after their window loses focus.

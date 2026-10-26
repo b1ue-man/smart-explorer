@@ -193,18 +193,23 @@ fn screen_task_reset_streams_free_slots() {
 struct Desktop;
 
 impl ScreenHostBackend for Desktop {
-    fn prepare_session_source(&self, owner:&str, session:&str, source:&SourceId,
-        wanted:Option<FrameSize>, control:bool,
-        admission:Arc<crate::screen::core::capture_admission::SessionAdmission>)
-        ->Result<Box<dyn crate::screen::core::host_backend::PreparedSource>,SourceRefusal>
-    {
-        SyntheticBackend.prepare_session_source(owner,session,source,wanted,control,admission)
+    fn prepare_session_source(
+        &self,
+        owner: &str,
+        session: &str,
+        source: &SourceId,
+        wanted: Option<FrameSize>,
+        control: bool,
+        admission: Arc<crate::screen::core::capture_admission::SessionAdmission>,
+    ) -> Result<Box<dyn crate::screen::core::host_backend::PreparedSource>, SourceRefusal> {
+        SyntheticBackend.prepare_session_source(owner, session, source, wanted, control, admission)
     }
-    fn open_encoder_for_stage_admitted(&self, request:&crate::screen::core::host_stage::StageRequest,
-        grant:crate::screen::core::capture_admission::CaptureGrant)
-        ->io::Result<Box<dyn crate::screen::core::host_backend::ScreenEncoder>>
-    {
-        SyntheticBackend.open_encoder_for_stage_admitted(request,grant)
+    fn open_encoder_for_stage_admitted(
+        &self,
+        request: &crate::screen::core::host_stage::StageRequest,
+        grant: crate::screen::core::capture_admission::CaptureGrant,
+    ) -> io::Result<Box<dyn crate::screen::core::host_backend::ScreenEncoder>> {
+        SyntheticBackend.open_encoder_for_stage_admitted(request, grant)
     }
 
     fn platform(&self) -> HostPlatform {

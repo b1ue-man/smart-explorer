@@ -16,7 +16,9 @@ use windows::Win32::Media::MediaFoundation::{
 
 use super::mf_common::ensure_com;
 use super::mf_encoder_sync::{stop, UNITS_PER_SECOND};
-use super::mf_media::{input_sample, process_output_bounded, sample_bytes_bounded, video_type, Output};
+use super::mf_media::{
+    input_sample, process_output_bounded, sample_bytes_bounded, video_type, Output,
+};
 use crate::screen::core::decoded_frame::{DecodedFrame, DecoderFallback, FrameIdentities};
 use crate::screen::core::host_backend::{Chroma, ScreenDecoder, YuvPicture};
 use crate::screen::core::pixel_convert::{nv12_to_bgra, BgraImage, FrameSize, Nv12View, YuvMatrix};
@@ -34,7 +36,7 @@ pub(super) struct MfDecoder {
     size: FrameSize,
     /// The decoder's picture with its padding.
     allocated: FrameSize,
-    limits:crate::screen::core::frame_budget::FrameLimits,
+    limits: crate::screen::core::frame_budget::FrameLimits,
     picture: BgraImage,
     frames: i64,
     identities: FrameIdentities,
@@ -54,7 +56,10 @@ impl MfDecoder {
         name: String,
         header: &GopHeader,
     ) -> io::Result<Self> {
-        let limits=header.frame_contract.map_or(crate::screen::core::frame_budget::FrameLimits::LEGACY,|c|c.limits);
+        let limits = header.frame_contract.map_or(
+            crate::screen::core::frame_budget::FrameLimits::LEGACY,
+            |c| c.limits,
+        );
         limits.check(header.size)?;
         let input = video_type(&MFVideoFormat_H264, header.size, 30)?;
         // SAFETY: attribute write and type selection on the activated
@@ -70,7 +75,8 @@ impl MfDecoder {
             name,
             size: header.size,
             allocated: header.size,
-            picture:BgraImage::new_with_limits(header.size,limits)?,limits,
+            picture: BgraImage::new_with_limits(header.size, limits)?,
+            limits,
             frames: 0,
             identities: FrameIdentities::default(),
             decoded: None,
@@ -103,14 +109,25 @@ impl MfDecoder {
             }
             let packed = unsafe { media.GetUINT64(&MF_MT_FRAME_SIZE) }.unwrap_or(0);
             let padded = FrameSize::new((packed >> 32) as u32, packed as u32);
-            let allocated=if padded.width==0 && padded.height==0 {self.size} else {padded};
-            if allocated.width<self.size.width || allocated.height<self.size.height
-                || allocated.width>self.size.width.saturating_add(15) || allocated.height>self.size.height.saturating_add(15) {
-                return Err(io::Error::other("MF decoder geometry contradicts the stream"));
+            let allocated = if padded.width == 0 && padded.height == 0 {
+                self.size
+            } else {
+                padded
+            };
+            if allocated.width < self.size.width
+                || allocated.height < self.size.height
+                || allocated.width > self.size.width.saturating_add(15)
+                || allocated.height > self.size.height.saturating_add(15)
+            {
+                return Err(io::Error::other(
+                    "MF decoder geometry contradicts the stream",
+                ));
             }
             self.limits.check(allocated)?;
-            unsafe {self.transform.SetOutputType(0,&media,0)?;}
-            self.allocated=allocated;
+            unsafe {
+                self.transform.SetOutputType(0, &media, 0)?;
+            }
+            self.allocated = allocated;
             return Ok(());
         }
         Err(io::Error::other(
@@ -120,10 +137,14 @@ impl MfDecoder {
 
     /// Converts one NV12 output sample into the picture.
     fn convert(&mut self, sample: &IMFSample) -> io::Result<()> {
-        let max=self.limits.check(self.allocated)?;
-        let bytes=sample_bytes_bounded(sample,max)?;
+        let max = self.limits.check(self.allocated)?;
+        let bytes = sample_bytes_bounded(sample, max)?;
         let rows = self.allocated.height as usize;
-        let pitch=bytes.len().checked_mul(2).ok_or_else(||io::Error::other("NV12 size overflow"))?/(rows*3).max(1);
+        let pitch = bytes
+            .len()
+            .checked_mul(2)
+            .ok_or_else(|| io::Error::other("NV12 size overflow"))?
+            / (rows * 3).max(1);
         let luma = pitch * rows;
         if pitch < self.size.width as usize || bytes.len() < luma {
             return Err(io::Error::new(
@@ -131,7 +152,14 @@ impl MfDecoder {
                 "decoded NV12 picture is smaller than its type says",
             ));
         }
-        let view = Nv12View::new_with_limits(self.size,&bytes[..luma],pitch,&bytes[luma..],pitch,self.limits)?;
+        let view = Nv12View::new_with_limits(
+            self.size,
+            &bytes[..luma],
+            pitch,
+            &bytes[luma..],
+            pitch,
+            self.limits,
+        )?;
         if self.yuv {
             let planes = self.planes.get_or_insert_with(|| YuvPicture {
                 y: Vec::new(),
@@ -157,7 +185,11 @@ impl MfDecoder {
         let mut shown = false;
         let fallback = self.allocated.pixels() as usize * 3 / 2;
         loop {
-            match process_output_bounded(&self.transform,fallback,self.limits.check(self.allocated)?)? {
+            match process_output_bounded(
+                &self.transform,
+                fallback,
+                self.limits.check(self.allocated)?,
+            )? {
                 Output::Sample(out) => {
                     // SAFETY: query on the output sample owned by this call. A drain
                     // before ProcessInput accepts the next AU still names its old AU.
@@ -185,10 +217,18 @@ impl ScreenDecoder for MfDecoder {
     fn decode(&mut self, record: &FrameRecord) -> io::Result<bool> {
         ensure_com();
         self.decoded = None;
-        crate::screen::core::frame_size_caps::check_avc_dimensions(&record.payload,self.size,self.limits)?;
-        let time = self.frames.checked_mul(FRAME_UNITS)
+        crate::screen::core::frame_size_caps::check_avc_dimensions(
+            &record.payload,
+            self.size,
+            self.limits,
+        )?;
+        let time = self
+            .frames
+            .checked_mul(FRAME_UNITS)
             .ok_or_else(|| io::Error::other("MF decoder timestamp overflow"))?;
-        let next = self.frames.checked_add(1)
+        let next = self
+            .frames
+            .checked_add(1)
             .ok_or_else(|| io::Error::other("MF decoder frame counter overflow"))?;
         let sample = input_sample(&record.payload, time, FRAME_UNITS)?;
         let mut shown = false;
@@ -202,12 +242,15 @@ impl ScreenDecoder for MfDecoder {
             unsafe { self.transform.ProcessInput(0, &sample, 0)? };
         }
         // Register only after acceptance: earlier drained output cannot claim this AU.
-        self.identities.insert(time as u64, DecodedFrame::from_record(record))?;
+        self.identities
+            .insert(time as u64, DecodedFrame::from_record(record))?;
         self.frames = next;
         Ok(self.drain()? || shown)
     }
 
-    fn decoded_frame(&self) -> Option<DecodedFrame> { self.decoded }
+    fn decoded_frame(&self) -> Option<DecodedFrame> {
+        self.decoded
+    }
 
     fn picture(&self) -> &BgraImage {
         &self.picture
@@ -259,12 +302,12 @@ mod tests {
                     encoder_hardware: hardware,
                     decoder_hardware: false,
                     max_size: FrameSize::MAX,
-                    max_pixels:crate::screen::core::pixel_convert::MAX_FRAME_PIXELS,
-                    max_macroblocks_per_second:None,
+                    max_pixels: crate::screen::core::pixel_convert::MAX_FRAME_PIXELS,
+                    max_macroblocks_per_second: None,
                 };
                 let mut encoder = factory.open(&choice, size, 30).unwrap();
                 let header = GopHeader {
-            family_layout_revision: None,
+                    family_layout_revision: None,
                     frame_contract: None,
                     gop_id: 1,
                     kind: StreamKind::Video,
@@ -290,7 +333,9 @@ mod tests {
                             payload,
                         };
                         if decoder.decode(&record).unwrap() {
-                            let output = decoder.decoded_frame().expect("decoded MF picture identity");
+                            let output = decoder
+                                .decoded_frame()
+                                .expect("decoded MF picture identity");
                             let read = read_barcode(&decoder.picture().view(), size).unwrap();
                             if matches!(read, BarcodeRead::Valid(id) if id == output.frame_id) {
                                 good += 1;

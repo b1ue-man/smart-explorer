@@ -30,55 +30,55 @@
 //! Parts of SCR-M1 that SCR-M2 and SCR-M3 do not use yet keep
 //! `allow(dead_code)` on their module; each such declaration names them.
 
-pub(crate) mod authorize;
 pub(crate) mod app_icon;
-pub(crate) mod icon_host;
-pub(crate) mod icon_cache;
-pub(crate) mod bench;
-pub(crate) mod catalog_entries;
-pub(crate) mod codec_registry;
-pub(crate) mod decoded_frame;
-pub(crate) mod control_sender;
-pub(crate) mod frame_budget;
-pub(crate) mod frame_memory;
-pub(crate) mod capture_admission;
-pub(crate) mod capture_import;
+pub(crate) mod authorize;
 #[cfg(test)]
-mod batches_capture_import_task_tests;
-pub(crate) mod capture_plan;
-pub(crate) mod capture_grant;
-pub(crate) mod capture_bytes;
-pub(crate) mod capture_image;
-pub(crate) mod image_admission;
-#[cfg(test)]
-mod batches_image_admission_task_tests;
-pub(crate) mod capture_source_contract;
-pub(crate) mod capture_records;
-pub(crate) mod capture_transport;
-pub(crate) mod host_codec_adapters;
+mod batches_4k_task_tests;
 #[cfg(test)]
 mod batches_capture_admission_task_tests;
 #[cfg(test)]
 mod batches_capture_image_task_tests;
 #[cfg(test)]
-mod batches_4k_task_tests;
+mod batches_capture_import_task_tests;
+#[cfg(test)]
+mod batches_image_admission_task_tests;
+#[cfg(test)]
+pub(crate) mod batches_quality_acceptance_task_tests;
+pub(crate) mod bench;
+pub(crate) mod capture_admission;
+pub(crate) mod capture_bytes;
+pub(crate) mod capture_grant;
+pub(crate) mod capture_image;
+pub(crate) mod capture_import;
+pub(crate) mod capture_plan;
+pub(crate) mod capture_records;
+pub(crate) mod capture_source_contract;
+pub(crate) mod capture_transport;
+pub(crate) mod catalog_entries;
+pub(crate) mod codec_registry;
+pub(crate) mod control_sender;
+pub(crate) mod decoded_frame;
+pub(crate) mod frame_budget;
+pub(crate) mod frame_memory;
+pub(crate) mod frame_protocol;
+pub(crate) mod frame_reference;
+pub(crate) mod frame_regions;
+pub(crate) mod frame_size_caps;
+pub(crate) mod gop_stream;
+pub(crate) mod host_admission;
+pub(crate) mod host_backend;
+pub(crate) mod host_codec_adapters;
+pub(crate) mod host_hybrid;
+pub(crate) mod host_pipeline;
+pub(crate) mod host_server;
+pub(crate) mod host_stage;
+pub(crate) mod icon_cache;
+pub(crate) mod icon_host;
+pub(crate) mod image_admission;
 #[cfg(test)]
 pub(crate) mod quality_acceptance_baseline;
 #[cfg(test)]
 pub(crate) mod quality_acceptance_metrics;
-#[cfg(test)]
-pub(crate) mod batches_quality_acceptance_task_tests;
-pub(crate) mod frame_size_caps;
-pub(crate) mod frame_regions;
-pub(crate) mod frame_protocol;
-pub(crate) mod frame_reference;
-pub(crate) mod gop_stream;
-pub(crate) mod host_backend;
-pub(crate) mod host_admission;
-pub(crate) mod host_pipeline;
-pub(crate) mod host_hybrid;
-pub(crate) mod host_server;
-pub(crate) mod host_stage;
 pub(crate) mod visibility;
 // Not yet used by SCR-M2: `TOOLBAR_KEYS`, `key_usage`, `key_name`,
 // `pointer_to_pixel`, `pixel_to_pointer` and `PressedInputs::is_empty`
@@ -102,8 +102,8 @@ pub(crate) mod pixel_convert;
 // Not yet used by SCR-M2: `RateController::receive_rate_bps`.
 #[allow(dead_code)]
 pub(crate) mod rate_control;
-pub(crate) mod sender_budget;
 pub(crate) mod registry;
+pub(crate) mod sender_budget;
 // Not yet used by SCR-M2: `SessionTracker`, `SessionState::can_move_to`,
 // `SessionState::is_terminal` and `KeyframeRequester::is_open`.
 #[allow(dead_code)]
@@ -118,12 +118,12 @@ pub(crate) mod wire;
 pub(crate) mod wire_binary;
 pub(crate) mod wire_control;
 pub(crate) mod wire_hello;
-pub(crate) mod worker_wire;
 pub(crate) mod worker_capture_wire;
+pub(crate) mod worker_wire;
 
+pub(crate) mod family_listing;
 pub(crate) mod family_protocol;
 pub(crate) mod family_viewer;
-pub(crate) mod family_listing;
 pub(crate) mod worker_family;
 
 #[cfg(test)]

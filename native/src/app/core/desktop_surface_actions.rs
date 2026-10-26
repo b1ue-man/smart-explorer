@@ -122,11 +122,22 @@ impl SystemActions {
         });
         let notices = self.notices.clone();
         let ctx = self.ctx.clone();
-        let spawned = std::thread::Builder::new().name("se-desktop-transfer".into()).spawn(move || {
-            for (path, error) in desktop_ops::run_transfer_job(job).errors { let _ = notices.send(format!("{path}: {error}")); }
-            ctx.request_repaint();
-        });
-        match spawned { Ok(_) => { if consume_cut { self.own = None; } }, Err(error) => self.notice(format!("Übertragung nicht gestartet: {error}")) }
+        let spawned = std::thread::Builder::new()
+            .name("se-desktop-transfer".into())
+            .spawn(move || {
+                for (path, error) in desktop_ops::run_transfer_job(job).errors {
+                    let _ = notices.send(format!("{path}: {error}"));
+                }
+                ctx.request_repaint();
+            });
+        match spawned {
+            Ok(_) => {
+                if consume_cut {
+                    self.own = None;
+                }
+            }
+            Err(error) => self.notice(format!("Übertragung nicht gestartet: {error}")),
+        }
     }
 }
 
@@ -198,10 +209,17 @@ impl SurfaceActions for SystemActions {
     }
 
     fn run(&mut self, op: DesktopOp) {
-        if let DesktopOp::Transfer { sources, folder, cut } = &op {
+        if let DesktopOp::Transfer {
+            sources,
+            folder,
+            cut,
+        } = &op
+        {
             let mode = if *cut { CopyMode::Move } else { CopyMode::Copy };
             let (job, errors) = desktop_ops::transfer_job(sources, folder, mode);
-            for (path, error) in errors { self.notice(format!("{path}: {error}")); }
+            for (path, error) in errors {
+                self.notice(format!("{path}: {error}"));
+            }
             if let Some(job) = job {
                 match super::folder_conflict_ui::Admission::new(job) {
                     Ok(admission) => self.folders.push_back(admission),
@@ -262,11 +280,15 @@ impl SurfaceActions for SystemActions {
     }
 
     fn take_notices(&mut self) -> Vec<String> {
-        if let Some(result) = self.folders.front_mut().and_then(|admission| admission.show(&self.ctx)) {
+        if let Some(result) = self
+            .folders
+            .front_mut()
+            .and_then(|admission| admission.show(&self.ctx))
+        {
             self.folders.pop_front();
             match result {
                 Ok(Some(job)) => self.run_transfer_job(job),
-                Ok(None) => {},
+                Ok(None) => {}
                 Err(error) => self.notice(format!("Ordnerkonflikte prüfen: {error}")),
             }
         }

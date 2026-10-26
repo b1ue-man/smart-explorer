@@ -41,18 +41,18 @@ mod mode;
 #[path = "host_quality.rs"]
 mod quality;
 use quality::{QualityMode, QualityPolicy};
-#[path = "host_frame_send.rs"]
-mod frame_send;
 #[path = "host_capture_pause.rs"]
 mod capture_pause;
+#[path = "host_frame_send.rs"]
+mod frame_send;
 #[path = "host_reference.rs"]
 mod reference;
 use reference::ReferencePresentation;
-#[path = "host_work_control.rs"]
-mod work_control;
 #[path = "host_pipeline_actor.rs"]
 mod actor;
-pub(crate) use actor::{PipelineActor,WorkCompletion};
+#[path = "host_work_control.rs"]
+mod work_control;
+pub(crate) use actor::{PipelineActor, WorkCompletion};
 
 /// Long edge of a tile preview unless the group view asks for more (C6).
 pub(crate) const PREVIEW_EDGE: u32 = 320;
@@ -116,21 +116,21 @@ pub(crate) struct Totals {
 }
 
 pub(crate) struct Pipeline {
-    work:Arc<work_control::WorkControl>,
+    work: Arc<work_control::WorkControl>,
     backend: Arc<dyn ScreenHostBackend>,
     frame_contract: Option<super::frame_budget::FrameContract>,
     negotiated_contract: Option<super::frame_budget::FrameContract>,
     sender: super::sender_budget::SenderBudget,
-    route_epoch: Option<(u64,u64,Option<crate::share::route_state::RouteClass>)>,
+    route_epoch: Option<(u64, u64, Option<crate::share::route_state::RouteClass>)>,
     stage: Option<Stage>,
     source_size: FrameSize,
-    source_generation:u64,
-    presentation:ReferencePresentation,
+    source_generation: u64,
+    presentation: ReferencePresentation,
     capture_active: bool,
     capture_applied: Option<bool>,
     capture_requested: bool,
     capture_ready: Option<io::Result<()>>,
-    capture_transition: Option<tokio::task::JoinHandle<(Stage,bool,io::Result<()>)>>,
+    capture_transition: Option<tokio::task::JoinHandle<(Stage, bool, io::Result<()>)>>,
     visible_rects: Option<Vec<super::visibility::VisibleRect>>,
     choice: CodecChoice,
     quality_policy: QualityPolicy,
@@ -143,7 +143,7 @@ pub(crate) struct Pipeline {
     pacer: Pacer,
     rate: RateController,
     clock: FrameClock,
-    codec_fps:u32,
+    codec_fps: u32,
     quality: Quality,
     max_fps: u32,
     /// The viewer's display from its hello.
@@ -162,34 +162,67 @@ pub(crate) struct Pipeline {
     encoder_epoch: u64,
     /// The running encoder and its picture size.
     running: Option<(StageEncoder, FrameSize)>,
-    memory:super::frame_memory::MemoryHold,
-    admission:Option<Arc<super::capture_admission::SessionAdmission>>,
+    memory: super::frame_memory::MemoryHold,
+    admission: Option<Arc<super::capture_admission::SessionAdmission>>,
 }
 
 impl Pipeline {
-    pub(crate) fn next_frame_id(&self) -> u64 { self.next_frame_id }
+    pub(crate) fn next_frame_id(&self) -> u64 {
+        self.next_frame_id
+    }
     pub(crate) fn set_visible_rects(&mut self, rects: Option<Vec<super::visibility::VisibleRect>>) {
-        self.visible_rects=rects.filter(|rects|rects.len()<=super::visibility::MAX_VISIBLE_RECTS && rects.iter().all(|r|
-            r.width>0 && r.height>0 && r.x.checked_add(r.width).is_some_and(|n|n<=self.source_size.width)
-            && r.y.checked_add(r.height).is_some_and(|n|n<=self.source_size.height)));
+        self.visible_rects = rects.filter(|rects| {
+            rects.len() <= super::visibility::MAX_VISIBLE_RECTS
+                && rects.iter().all(|r| {
+                    r.width > 0
+                        && r.height > 0
+                        && r.x
+                            .checked_add(r.width)
+                            .is_some_and(|n| n <= self.source_size.width)
+                        && r.y
+                            .checked_add(r.height)
+                            .is_some_and(|n| n <= self.source_size.height)
+                })
+        });
     }
-    fn visible_for_size(&self,size:FrameSize) -> Option<Vec<super::visibility::VisibleRect>> {
-        if self.source_size.width==0 || self.source_size.height==0 {return None;}
-        self.visible_rects.as_ref().map(|rects|rects.iter().map(|r| {
-            let (sw,sh)=(u64::from(self.source_size.width),u64::from(self.source_size.height));
-            let x=u64::from(r.x)*u64::from(size.width)/sw;let y=u64::from(r.y)*u64::from(size.height)/sh;
-            let right=(u64::from(r.x+r.width)*u64::from(size.width)).div_ceil(sw);
-            let bottom=(u64::from(r.y+r.height)*u64::from(size.height)).div_ceil(sh);
-            super::visibility::VisibleRect {x:x as u32,y:y as u32,width:(right-x) as u32,height:(bottom-y) as u32}
-        }).collect())
+    fn visible_for_size(&self, size: FrameSize) -> Option<Vec<super::visibility::VisibleRect>> {
+        if self.source_size.width == 0 || self.source_size.height == 0 {
+            return None;
+        }
+        self.visible_rects.as_ref().map(|rects| {
+            rects
+                .iter()
+                .map(|r| {
+                    let (sw, sh) = (
+                        u64::from(self.source_size.width),
+                        u64::from(self.source_size.height),
+                    );
+                    let x = u64::from(r.x) * u64::from(size.width) / sw;
+                    let y = u64::from(r.y) * u64::from(size.height) / sh;
+                    let right = (u64::from(r.x + r.width) * u64::from(size.width)).div_ceil(sw);
+                    let bottom = (u64::from(r.y + r.height) * u64::from(size.height)).div_ceil(sh);
+                    super::visibility::VisibleRect {
+                        x: x as u32,
+                        y: y as u32,
+                        width: (right - x) as u32,
+                        height: (bottom - y) as u32,
+                    }
+                })
+                .collect()
+        })
     }
-    pub(crate) fn set_tile_limit(&mut self, size: FrameSize) { self.tile_limit=Some(size); }
+    pub(crate) fn set_tile_limit(&mut self, size: FrameSize) {
+        self.tile_limit = Some(size);
+    }
 
     /// P6/route/source/decoder changes restart both the codec and composite reference.
     pub(crate) fn invalidate_reference(&mut self) {
-        if self.gop.is_none() && self.running.is_none() && self.pacer.frames_in_flight()==0 {
-            self.sender.reset(); self.drop_encoder();
-        } else { self.reset_stream(); }
+        if self.gop.is_none() && self.running.is_none() && self.pacer.frames_in_flight() == 0 {
+            self.sender.reset();
+            self.drop_encoder();
+        } else {
+            self.reset_stream();
+        }
     }
 
     pub(crate) fn totals(&self) -> Totals {
@@ -209,11 +242,16 @@ impl Pipeline {
     }
 
     /// The source within the bounds of the mode and of the codec.
-    fn output_limits(&self)->io::Result<super::frame_budget::FrameLimits> {
+    fn output_limits(&self) -> io::Result<super::frame_budget::FrameLimits> {
         match self.frame_contract {
-            Some(contract)=>Ok(contract.limits),
-            None=>self.admission.as_ref().map(|admission|
-                super::frame_budget::legacy_limits(admission.working_bytes(),None)).unwrap_or(Ok(super::frame_budget::FrameLimits::LEGACY)),
+            Some(contract) => Ok(contract.limits),
+            None => self
+                .admission
+                .as_ref()
+                .map(|admission| {
+                    super::frame_budget::legacy_limits(admission.working_bytes(), None)
+                })
+                .unwrap_or(Ok(super::frame_budget::FrameLimits::LEGACY)),
         }
     }
     fn fitted_size(&self) -> FrameSize {
@@ -226,14 +264,23 @@ impl Pipeline {
             self.bounds.height.min(max.height),
         );
         let size = stage.source.size().fit_within(limit);
-        let Ok(limits)=self.output_limits() else {return FrameSize::new(0,0);};
-        let mut limits=limits.intersect(stage.source.frame_limits_for_contract(self.frame_contract));
+        let Ok(limits) = self.output_limits() else {
+            return FrameSize::new(0, 0);
+        };
+        let mut limits =
+            limits.intersect(stage.source.frame_limits_for_contract(self.frame_contract));
         if self.frame_contract.is_some() {
-            limits.max_pixels=limits.max_pixels.min(limits.working_bytes/super::frame_budget::VERSIONED_WORKING_IMAGES/4);
+            limits.max_pixels = limits
+                .max_pixels
+                .min(limits.working_bytes / super::frame_budget::VERSIONED_WORKING_IMAGES / 4);
         }
         limits.max_pixels = limits.max_pixels.min(self.choice.max_pixels);
-        let fitted=limits.fit(size);
-        if self.choice.codec==CodecKind::H264 {super::frame_size_caps::fit_macroblocks(fitted,limits.max_pixels/256)} else {fitted}
+        let fitted = limits.fit(size);
+        if self.choice.codec == CodecKind::H264 {
+            super::frame_size_caps::fit_macroblocks(fitted, limits.max_pixels / 256)
+        } else {
+            fitted
+        }
     }
 
     /// The size of the next picture group: tiles keep the fitted source,
@@ -242,9 +289,7 @@ impl Pipeline {
         let fitted = self.fitted_size();
         match self.choice.codec {
             CodecKind::Tiles => fitted,
-            CodecKind::H264 => {
-                self.quality.size.fit_within(fitted).even()
-            }
+            CodecKind::H264 => self.quality.size.fit_within(fitted).even(),
         }
     }
 
@@ -288,11 +333,9 @@ impl Pipeline {
         self.sender.reset();
         self.drop_encoder();
     }
-
-
 }
 
-#[path="host_pipeline_init.rs"]
+#[path = "host_pipeline_init.rs"]
 mod initialization;
-#[path="host_pipeline_produce.rs"]
+#[path = "host_pipeline_produce.rs"]
 mod producing;

@@ -145,14 +145,24 @@ pub(crate) struct FsWatch {
 #[serde(tag = "op", rename_all = "snake_case")]
 pub(crate) enum FsRequest {
     /// `folder_reservation_v1`: strict atomic reservation, never legacy fallback.
-    CreateDirExclusive { path: String },
+    CreateDirExclusive {
+        path: String,
+    },
     /// `folder_reservation_v1`: stable identity of the actual plain directory.
-    DirectoryIdentity { path: String },
+    DirectoryIdentity {
+        path: String,
+    },
     /// `file_identity_v1`: backend-attested regular-file object identity.
-    FileIdentity { path: String },
+    FileIdentity {
+        path: String,
+    },
     /// Technical primitive support; permission and identity remain separate.
-    DirectoryReservationSupported { path: String },
-    Capacity { path: String },
+    DirectoryReservationSupported {
+        path: String,
+    },
+    Capacity {
+        path: String,
+    },
     Capabilities {
         path: String,
         /// Mount hosts request a principal-bound root lease. Browsing and UI
@@ -426,16 +436,26 @@ fn is_zero(value: &u64) -> bool {
 mod reservation_compatibility_tests {
     use super::*;
     #[test]
-    fn batches_task_transfer_compat_reserved_share_rename_is_a_single_write_with_distinct_wire_operation() {
-        let request = FsRequest::RenameReservedDirectory { src: "/owned".into(), dst: "/final".into() };
+    fn batches_task_transfer_compat_reserved_share_rename_is_a_single_write_with_distinct_wire_operation(
+    ) {
+        let request = FsRequest::RenameReservedDirectory {
+            src: "/owned".into(),
+            dst: "/final".into(),
+        };
         assert!(request.mutates_filesystem());
         let wire = serde_json::to_value(&request).unwrap();
         assert_eq!(wire["op"], "rename_reserved_directory");
-        assert_eq!(wire["src"], "/owned"); assert_eq!(wire["dst"], "/final");
+        assert_eq!(wire["src"], "/owned");
+        assert_eq!(wire["dst"], "/final");
         let decoded: FsRequest = serde_json::from_value(wire).unwrap();
         assert!(decoded.mutates_filesystem());
-        let ordinary: FsRequest = serde_json::from_str(r#"{"op":"rename_no_replace","src":"/old","dst":"/new"}"#).unwrap();
-        assert_eq!(serde_json::to_value(ordinary).unwrap()["op"], "rename_no_replace");
+        let ordinary: FsRequest =
+            serde_json::from_str(r#"{"op":"rename_no_replace","src":"/old","dst":"/new"}"#)
+                .unwrap();
+        assert_eq!(
+            serde_json::to_value(ordinary).unwrap()["op"],
+            "rename_no_replace"
+        );
     }
 }
 

@@ -123,8 +123,10 @@ impl WebdavBackend {
     pub(super) fn propfind_properties(&self, path: &str, body: &str) -> VfsResult<String> {
         let response = metadata_request::send(self, path, "0", body).map_err(request_err)?;
         if response.status() != 207 {
-            return Err(io::Error::new(io::ErrorKind::InvalidData,
-                "WebDAV property query did not return multistatus"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "WebDAV property query did not return multistatus",
+            ));
         }
         super::listing_body::read(response)
     }

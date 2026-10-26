@@ -15,7 +15,9 @@ use eframe::egui::{self, RichText};
 
 use crate::app::theme;
 use crate::share::access_approval::{ApprovalCommand, ApprovalDecision, ApprovalId, ApprovalView};
-use crate::share::consent_launch::{approval_context, approval_context_complete, capability_label, request_line};
+use crate::share::consent_launch::{
+    approval_context, approval_context_complete, capability_label, request_line,
+};
 
 /// How often the window reads its request.
 const POLL: Duration = Duration::from_secs(1);

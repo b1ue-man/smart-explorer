@@ -14,9 +14,15 @@ impl ExecInputSender {
         Self { data, cancel }
     }
 
-    pub(crate) async fn send(&self, input: ExecClientInput) -> Result<(), mpsc::error::SendError<ExecClientInput>> {
+    pub(crate) async fn send(
+        &self,
+        input: ExecClientInput,
+    ) -> Result<(), mpsc::error::SendError<ExecClientInput>> {
         if matches!(input, ExecClientInput::Cancel) {
-            return self.cancel.send(true).map_err(|_| mpsc::error::SendError(input));
+            return self
+                .cancel
+                .send(true)
+                .map_err(|_| mpsc::error::SendError(input));
         }
         let mut cancel = self.cancel.subscribe();
         tokio::select! {
@@ -29,18 +35,28 @@ impl ExecInputSender {
         }
     }
 
-    pub(crate) fn cancel(&self) { let _ = self.cancel.send(true); }
+    pub(crate) fn cancel(&self) {
+        let _ = self.cancel.send(true);
+    }
 }
 
 pub(super) async fn cancelled(cancel: &mut watch::Receiver<bool>) {
     loop {
-        if *cancel.borrow_and_update() { return; }
-        if cancel.changed().await.is_err() { return; }
+        if *cancel.borrow_and_update() {
+            return;
+        }
+        if cancel.changed().await.is_err() {
+            return;
+        }
     }
 }
 
-pub(super) async fn forward(connection: &Connection, mut input: mpsc::Receiver<ExecClientInput>,
-    mut cancel: watch::Receiver<bool>, output: mpsc::Sender<ExecClientInput>) {
+pub(super) async fn forward(
+    connection: &Connection,
+    mut input: mpsc::Receiver<ExecClientInput>,
+    mut cancel: watch::Receiver<bool>,
+    output: mpsc::Sender<ExecClientInput>,
+) {
     loop {
         let command = tokio::select! {
             biased;

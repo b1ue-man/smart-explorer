@@ -3,9 +3,14 @@ use crate::mount::{MountConfig, MountSource, RecoveryBackendIdentity};
 use crate::vfs::BackendHandle;
 use std::{io, path::Path};
 
-pub(super) fn authorize(config: &MountConfig, backend: &BackendHandle, cache: &Path)
-    -> Result<(), String> {
-    if !matches!(config.source, MountSource::GoogleDrive { .. }) { return Ok(()); }
+pub(super) fn authorize(
+    config: &MountConfig,
+    backend: &BackendHandle,
+    cache: &Path,
+) -> Result<(), String> {
+    if !matches!(config.source, MountSource::GoogleDrive { .. }) {
+        return Ok(());
+    }
     // The lease is non-blocking and precedes every read/write below. It
     // creates only empty cache directories and is dropped before host start.
     let _lease = crate::mount::RecoveryCacheLease::acquire(cache, &config.id)
@@ -17,15 +22,19 @@ pub(super) fn authorize(config: &MountConfig, backend: &BackendHandle, cache: &P
         .map_err(|error| error.to_string())
 }
 
-fn capture(config: &MountConfig, backend: &BackendHandle,
-    expected: Option<&RecoveryBackendIdentity>) -> io::Result<RecoveryBackendIdentity> {
+fn capture(
+    config: &MountConfig,
+    backend: &BackendHandle,
+    expected: Option<&RecoveryBackendIdentity>,
+) -> io::Result<RecoveryBackendIdentity> {
     let state = backend.state_identity();
     let namespace = backend.namespace_identity();
     if let Some(expected) = expected {
         expected.validate_for(&config.source)?;
         expected.matches_session(&state, &namespace)?;
     }
-    let principal = namespace.strip_prefix("gdrive:path-v2:")
+    let principal = namespace
+        .strip_prefix("gdrive:path-v2:")
         .filter(|value| value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
         .ok_or_else(crate::mount::recovery_identity_conflict)?;
     if backend.scheme() != crate::vfs::Scheme::GDrive {
@@ -33,12 +42,18 @@ fn capture(config: &MountConfig, backend: &BackendHandle,
     }
     // This fresh backend validates the actual root ID and its folder bindings;
     // cached path hints and the provider's `root` alias are not the authority.
-    let root_object = backend.item_id(config.source.root().as_str())?
+    let root_object = backend
+        .item_id(config.source.root().as_str())?
         .filter(|id| !id.is_empty() && id != "root")
         .ok_or_else(crate::mount::recovery_identity_conflict)?;
     let current = RecoveryBackendIdentity {
-        version: 1, source: config.source.clone(), provider: "gdrive".into(),
-        principal: principal.into(), namespace, state_identity: state, root_object,
+        version: 1,
+        source: config.source.clone(),
+        provider: "gdrive".into(),
+        principal: principal.into(),
+        namespace,
+        state_identity: state,
+        root_object,
     };
     current.validate_for(&config.source)?;
     if expected.is_some_and(|expected| expected != &current) {

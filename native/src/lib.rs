@@ -9,11 +9,11 @@ compile_error!("Android image fixtures are allowed only in a debug instrumentati
 pub mod agent;
 pub mod agent_proto;
 pub mod analytics;
-pub(crate) mod apps;
 #[cfg(unix)]
 pub(crate) mod android_fs;
 #[cfg(not(target_os = "android"))]
 pub mod app;
+pub(crate) mod apps;
 pub mod apptrash;
 pub mod autostart;
 pub mod bisync;
@@ -85,7 +85,10 @@ pub mod zipfs;
 pub fn run_gui() -> eframe::Result<()> {
     let raw_args: Vec<_> = std::env::args_os().skip(1).collect();
     if let Some(result) = run_login_service_if_requested(&raw_args) {
-        if let Err(error) = result { eprintln!("Login service: {error}"); std::process::exit(1); }
+        if let Err(error) = result {
+            eprintln!("Login service: {error}");
+            std::process::exit(1);
+        }
         return Ok(());
     }
     install_panic_logger();
@@ -204,7 +207,12 @@ pub fn run_gui() -> eframe::Result<()> {
         "Smart Explorer",
         options,
         Box::new(|cc| {
-            cc.egui_ctx.data_mut(|data| data.insert_temp(eframe::egui::Id::new("screen_renderer_wgpu"), cc.wgpu_render_state.is_some()));
+            cc.egui_ctx.data_mut(|data| {
+                data.insert_temp(
+                    eframe::egui::Id::new("screen_renderer_wgpu"),
+                    cc.wgpu_render_state.is_some(),
+                )
+            });
             let app = match start {
                 StartRequest::Gui { start_path } => app::App::new(just_updated, start_path),
                 request => app::App::new_with_start(just_updated, request),

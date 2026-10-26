@@ -22,12 +22,12 @@ mod drive_print;
 use drive_print::{exit_for_status, print_snapshot, print_snapshot_text};
 #[cfg(test)]
 use drive_print::{snapshot_line, status_column};
-#[path = "drive_set.rs"]
-mod drive_set;
-#[path = "drive_recovery.rs"]
-mod drive_recovery;
 #[path = "drive_capacity.rs"]
 mod drive_capacity;
+#[path = "drive_recovery.rs"]
+mod drive_recovery;
+#[path = "drive_set.rs"]
+mod drive_set;
 // DRV-M4: runtime, install answer, folder column and unmount under Linux.
 #[cfg(target_os = "linux")]
 #[path = "drive_output_linux.rs"]
@@ -43,7 +43,9 @@ pub(super) struct DriveArgs {
 
 #[derive(Subcommand)]
 enum DriveCommand {
-    #[command(about = "Save all available local recovery data and detach a stopped drive, including offline")]
+    #[command(
+        about = "Save all available local recovery data and detach a stopped drive, including offline"
+    )]
     SaveRemove(drive_recovery::SaveRemoveArgs),
     #[command(about = "List, import or explicitly reactivate retained drive recovery")]
     Recovery(drive_recovery::RecoveryArgs),

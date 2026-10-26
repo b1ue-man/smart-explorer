@@ -188,11 +188,20 @@ pub(crate) fn statfs(shared: &FuseShared, reply: ReplyStatfs) {
         Ok(stat) => {
             let available = widen(stat.f_bavail).saturating_mul(widen(stat.f_frsize));
             let budget = shared.filesystem.cache_capacity_budget(available);
-            let capacity = crate::mount::MountCapacity::from_budget(shared.filesystem.capacity_snapshot(), budget);
-            reply.statfs(capacity.total_bytes / u64::from(BLOCK_SIZE),
+            let capacity = crate::mount::MountCapacity::from_budget(
+                shared.filesystem.capacity_snapshot(),
+                budget,
+            );
+            reply.statfs(
+                capacity.total_bytes / u64::from(BLOCK_SIZE),
                 capacity.available_bytes / u64::from(BLOCK_SIZE),
                 capacity.available_bytes / u64::from(BLOCK_SIZE),
-                widen(stat.f_files), widen(stat.f_ffree), BLOCK_SIZE, NAME_MAX, BLOCK_SIZE);
+                widen(stat.f_files),
+                widen(stat.f_ffree),
+                BLOCK_SIZE,
+                NAME_MAX,
+                BLOCK_SIZE,
+            );
         }
         Err(error) => reply.error(errno(&error)),
     }

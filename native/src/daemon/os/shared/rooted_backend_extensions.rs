@@ -10,8 +10,12 @@ use super::RootedBackend;
 
 impl BackendExtensions for RootedBackend {
     fn directory_reservation_supported(&self, root: &str) -> bool {
-        let Ok(_operation) = self.operation.read() else { return false; };
-        let Ok(root) = self.checked_existing(root) else { return false; };
+        let Ok(_operation) = self.operation.read() else {
+            return false;
+        };
+        let Ok(root) = self.checked_existing(root) else {
+            return false;
+        };
         // Read-only is a separate access fact, not a missing primitive.
         vfs::directory_reservation_supported(&*self.raw_inner, &root)
     }

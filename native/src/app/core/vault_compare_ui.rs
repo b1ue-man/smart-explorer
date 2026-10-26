@@ -334,14 +334,18 @@ pub(crate) fn show(ctx: &egui::Context) -> Vec<Effect> {
     window.refresh_rows();
     let mut effects = Vec::new();
     let mut open = true;
-    crate::app::dialog_geometry::window(ctx, "vault_compare_ui.0", format!("Tresor vergleichen – {}", window.name))
-        .id(egui::Id::new("vault_compare"))
-        .open(&mut open)
-        .collapsible(false)
-        .default_size([980.0, 560.0])
-        .show(ctx, |ui| {
-            super::vault_compare_list_ui::content(ui, window, &rows, &mut effects);
-        });
+    crate::app::dialog_geometry::window(
+        ctx,
+        "vault_compare_ui.0",
+        format!("Tresor vergleichen – {}", window.name),
+    )
+    .id(egui::Id::new("vault_compare"))
+    .open(&mut open)
+    .collapsible(false)
+    .default_size([980.0, 560.0])
+    .show(ctx, |ui| {
+        super::vault_compare_list_ui::content(ui, window, &rows, &mut effects);
+    });
     show_question(ctx, window);
     if window.busy() {
         ctx.request_repaint_after(std::time::Duration::from_millis(150));

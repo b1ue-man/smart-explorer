@@ -28,8 +28,8 @@ fn invalid_input(text: &str) -> io::Error {
 /// picture carries nothing and is dropped.
 pub(crate) fn encode_png(image: &BgraImage) -> io::Result<Vec<u8>> {
     let size = image.size();
-    let bytes=super::frame_budget::FrameLimits::RESOURCE.check(size)?;
-    let mut rgb=Vec::with_capacity(bytes/4*3);
+    let bytes = super::frame_budget::FrameLimits::RESOURCE.check(size)?;
+    let mut rgb = Vec::with_capacity(bytes / 4 * 3);
     for pixel in image.data().chunks_exact(4) {
         rgb.extend_from_slice(&[pixel[2], pixel[1], pixel[0]]);
     }
@@ -49,7 +49,11 @@ fn png_at(image: &BgraImage, size: FrameSize) -> io::Result<Vec<u8>> {
     if image.size() == size {
         return encode_png(image);
     }
-    encode_png(&downscale_bgra_with_limits(&image.view(),size,super::frame_budget::FrameLimits::RESOURCE)?)
+    encode_png(&downscale_bgra_with_limits(
+        &image.view(),
+        size,
+        super::frame_budget::FrameLimits::RESOURCE,
+    )?)
 }
 
 fn long_edge(size: FrameSize) -> u32 {
@@ -92,9 +96,13 @@ pub(crate) fn fit(
 /// to a black picture of the stream's `size`. The last record must end the
 /// frame.
 pub(crate) fn decode_snapshot(records: &[FrameRecord], size: FrameSize) -> io::Result<BgraImage> {
-    decode_snapshot_with_limits(records,size,super::frame_budget::FrameLimits::LEGACY)
+    decode_snapshot_with_limits(records, size, super::frame_budget::FrameLimits::LEGACY)
 }
-pub(crate) fn decode_snapshot_with_limits(records:&[FrameRecord],size:FrameSize,limits:super::frame_budget::FrameLimits)->io::Result<BgraImage> {
+pub(crate) fn decode_snapshot_with_limits(
+    records: &[FrameRecord],
+    size: FrameSize,
+    limits: super::frame_budget::FrameLimits,
+) -> io::Result<BgraImage> {
     limits.check(size)?;
     let Some(last) = records.last() else {
         return Err(invalid_input("the snapshot has no records"));
@@ -102,12 +110,20 @@ pub(crate) fn decode_snapshot_with_limits(records:&[FrameRecord],size:FrameSize,
     if last.has_more() {
         return Err(invalid_input("the snapshot ends in the middle of a frame"));
     }
-    if !last.is_keyframe() || records.iter().any(|record|record.frame_id!=last.frame_id || !record.is_keyframe()) {
-        return Err(invalid_input("snapshot does not contain one complete reference frame"));
+    if !last.is_keyframe()
+        || records
+            .iter()
+            .any(|record| record.frame_id != last.frame_id || !record.is_keyframe())
+    {
+        return Err(invalid_input(
+            "snapshot does not contain one complete reference frame",
+        ));
     }
-    let mut decoder=TileDecoder::new_with_limits(size,limits)?;
-    for (index,record) in records.iter().enumerate() {
-        if record.has_more()!=(index+1<records.len()) {return Err(invalid_input("snapshot frame boundaries are inconsistent"));}
+    let mut decoder = TileDecoder::new_with_limits(size, limits)?;
+    for (index, record) in records.iter().enumerate() {
+        if record.has_more() != (index + 1 < records.len()) {
+            return Err(invalid_input("snapshot frame boundaries are inconsistent"));
+        }
         decoder.apply_frame_record(record)?;
     }
     Ok(decoder.image().clone())

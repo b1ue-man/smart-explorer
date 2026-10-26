@@ -21,8 +21,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::mount::{
-    DriveSelection, MountConfig, MountId, MountMode, MountSnapshot, MountSource, MountStatus, MountRootSecurity,
-    PathDialect,
+    DriveSelection, MountConfig, MountId, MountMode, MountRootSecurity, MountSnapshot, MountSource,
+    MountStatus, PathDialect,
 };
 
 use super::super::drive_modules::ipc_protocol_drives::DriveIpcRequest;
@@ -201,7 +201,10 @@ pub(crate) fn ensure_mounted_for(location: &str) -> Result<PathBuf, String> {
     let site = canonical_site(&located)?;
     let policy = crate::vault::mount_policy(&site)?;
     if !policy.allowed() {
-        return Err(format!("{}: Diesem Speicherort für das Einhängen vertrauen", crate::vault::ROOT_TRUST_REQUIRED));
+        return Err(format!(
+            "{}: Diesem Speicherort für das Einhängen vertrauen",
+            crate::vault::ROOT_TRUST_REQUIRED
+        ));
     }
     let label = crate::vault::RegistryStore::open_default()
         .resolve(&site)
@@ -210,8 +213,14 @@ pub(crate) fn ensure_mounted_for(location: &str) -> Result<PathBuf, String> {
     candidates.sort_by_key(mount_rank);
     let waiting = candidates.into_iter().find(|mount| {
         matches!(&mount.config.source, MountSource::Vault { site_id } if *site_id == site)
-            && !matches!(mount.status, MountStatus::Mounted { .. } | MountStatus::MountedAt { .. } | MountStatus::Conflict { .. })
-            && (!mount.recovery.requires_retention() || matches!(mount.status, MountStatus::Mounting))
+            && !matches!(
+                mount.status,
+                MountStatus::Mounted { .. }
+                    | MountStatus::MountedAt { .. }
+                    | MountStatus::Conflict { .. }
+            )
+            && (!mount.recovery.requires_retention()
+                || matches!(mount.status, MountStatus::Mounting))
             && current_mount_policy(mount, &site)
     });
     // A concurrent opener may already be mounting this exact site. Observe
@@ -228,11 +237,19 @@ pub(crate) fn ensure_mounted_for(location: &str) -> Result<PathBuf, String> {
                 id,
                 source,
                 DriveSelection::Automatic,
-                if policy.read_only { MountMode::ReadOnly } else { MountMode::ReadWrite },
+                if policy.read_only {
+                    MountMode::ReadOnly
+                } else {
+                    MountMode::ReadWrite
+                },
                 label.chars().take(128).collect::<String>(),
             )
             .map_err(|error| format!("Tresor-Laufwerk: {error}"))?
-            .with_root_security(if policy.enforced { MountRootSecurity::Enforced } else { MountRootSecurity::Trusted });
+            .with_root_security(if policy.enforced {
+                MountRootSecurity::Enforced
+            } else {
+                MountRootSecurity::Trusted
+            });
             super::start_mount(config)?
         }
     };
@@ -251,7 +268,9 @@ pub(crate) fn ensure_mounted_for(location: &str) -> Result<PathBuf, String> {
     }
     Err(match current.status {
         MountStatus::Failed { detail } => detail,
-        MountStatus::RuntimeUnavailable { detail } => format!("{}: {detail}", crate::vault::MOUNT_RUNTIME_MISSING),
+        MountStatus::RuntimeUnavailable { detail } => {
+            format!("{}: {detail}", crate::vault::MOUNT_RUNTIME_MISSING)
+        }
         MountStatus::Mounting => "Das Tresor-Laufwerk wurde nicht rechtzeitig eingebunden".into(),
         _ => "Der Ort liegt nicht auf dem Tresor-Laufwerk".into(),
     })
@@ -261,7 +280,11 @@ pub(crate) fn ensure_mounted_for(location: &str) -> Result<PathBuf, String> {
 fn mount_rank(mount: &MountSnapshot) -> u8 {
     match mount.status {
         MountStatus::Mounted { .. } | MountStatus::MountedAt { .. } => {
-            if mount.recovery.requires_retention() { 1 } else { 0 }
+            if mount.recovery.requires_retention() {
+                1
+            } else {
+                0
+            }
         }
         MountStatus::Mounting => 2,
         MountStatus::Conflict { .. } => 5,
@@ -271,12 +294,23 @@ fn mount_rank(mount: &MountSnapshot) -> u8 {
 }
 
 fn current_mount_policy(mount: &MountSnapshot, site: &str) -> bool {
-    if !matches!(mount.config.source, MountSource::Vault { .. }) { return true; }
-    if matches!(mount.status, MountStatus::Conflict { .. }) { return false; }
-    let Ok(policy) = crate::vault::mount_policy(site) else { return false; };
-    policy.allowed() && (!policy.read_only || mount.config.mode == MountMode::ReadOnly)
-        && (!matches!(mount.status, MountStatus::Mounted { .. } | MountStatus::MountedAt { .. } | MountStatus::Conflict { .. })
-            || crate::vault::mount_binding_matches(mount.config.id.as_str(), &policy.binding))
+    if !matches!(mount.config.source, MountSource::Vault { .. }) {
+        return true;
+    }
+    if matches!(mount.status, MountStatus::Conflict { .. }) {
+        return false;
+    }
+    let Ok(policy) = crate::vault::mount_policy(site) else {
+        return false;
+    };
+    policy.allowed()
+        && (!policy.read_only || mount.config.mode == MountMode::ReadOnly)
+        && (!matches!(
+            mount.status,
+            MountStatus::Mounted { .. }
+                | MountStatus::MountedAt { .. }
+                | MountStatus::Conflict { .. }
+        ) || crate::vault::mount_binding_matches(mount.config.id.as_str(), &policy.binding))
 }
 
 #[cfg(test)]

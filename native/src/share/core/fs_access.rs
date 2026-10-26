@@ -250,7 +250,11 @@ impl FsAccess {
             .promote_staged(&staged.path, &destination.path)
     }
 
-    pub(super) fn rename_reserved_directory(&self, source: &str, destination: &str) -> io::Result<()> {
+    pub(super) fn rename_reserved_directory(
+        &self,
+        source: &str,
+        destination: &str,
+    ) -> io::Result<()> {
         let source = self.resolve_write(source)?;
         let destination = self.resolve_write(destination)?;
         self.require_same_backend(&source, &destination)?;

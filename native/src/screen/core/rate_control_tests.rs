@@ -132,10 +132,7 @@ fn screen_task_rate_control_quality_ladder() {
     let low = quality_for(500_000, source, 30);
     assert_eq!(low.fps, 4);
     assert_eq!(low.size, source);
-    assert_eq!(
-        quality_for(MIN_BITRATE_BPS, source, 30).size,
-        source
-    );
+    assert_eq!(quality_for(MIN_BITRATE_BPS, source, 30).size, source);
     let bottom = quality_for(10_000, source, 30).size;
     assert_eq!(bottom, source);
     assert_eq!(quality_for(10_000, source, 30).fps, 1);

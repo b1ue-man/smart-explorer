@@ -151,157 +151,212 @@ impl App {
                 // Capture the parent's real height before entering a horizontal
                 // layout: a horizontal row itself only offers one row of height.
                 let footer = super::dialog_geometry::picker_footer_height(ui);
-                let body_height = (super::dialog_geometry::remaining_height(ui, 0.0) - footer).max(1.0);
+                let body_height =
+                    (super::dialog_geometry::remaining_height(ui, 0.0) - footer).max(1.0);
                 ui.allocate_ui_with_layout(
                     egui::vec2(ui.available_width(), body_height),
-                    egui::Layout::left_to_right(egui::Align::Min), |ui| {
-                    // ── Left: places ──
-                    let places_width = (ui.available_width() * 0.3).min(220.0);
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(places_width, body_height),
-                        egui::Layout::top_down(egui::Align::Min), |ui| {
-                        ui.set_width(places_width);
-                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-                        egui::ScrollArea::vertical().min_scrolled_height(0.0).id_salt("picker_places")
-                            .max_height(body_height).auto_shrink([false, false]).show(ui, |ui| {
-                        ui.label(RichText::new("ORTE").small().color(theme::muted(ui)));
-                        if ui.selectable_label(false, "🏠 Home").clicked() {
-                            open_local = Some(home.clone());
-                        }
-                        for (d, _f, _t) in &drives {
-                            if ui.selectable_label(false, format!("💽 {}", d)).clicked() {
-                                open_local = Some(d.clone());
-                            }
-                        }
-                        // Keep the same remote choices for every sync entry point.
-                        if !local_only {
-                            ui.add_space(6.0);
-                            ui.label(
-                                RichText::new("VERBINDUNGEN")
-                                    .small()
-                                    .color(theme::muted(ui)),
-                            );
-                            if conns.is_empty()
-                                && !gdrive_connected
-                                && peer_locations.is_empty()
-                                && tab_locations.is_empty()
-                            {
-                                ui.colored_label(theme::muted(ui), "(keine)");
-                            }
-                            if gdrive_connected
-                                && ui.selectable_label(false, "☁ Google Drive").clicked()
-                            {
-                                open_gdrive = true;
-                            }
-                            for c in &conns {
-                                if ui
-                                    .selectable_label(false, format!("🖧 {}", c.display()))
-                                    .on_hover_text(c.to_target())
-                                    .clicked()
-                                {
-                                    open_conn = Some(c.clone());
-                                }
-                            }
-                            for (label, target) in &peer_locations {
-                                if ui
-                                    .selectable_label(false, format!("Share: {label}"))
-                                    .clicked()
-                                {
-                                    open_peer = Some((label.clone(), target.clone()));
-                                }
-                            }
-                            for (index, location) in tab_locations.iter().enumerate() {
-                                if ui
-                                    .selectable_label(false, format!("Tab: {}", location.label))
-                                    .clicked()
-                                {
-                                    open_tab = Some(index);
-                                }
-                            }
-                        }
-                        });
-                    });
+                    egui::Layout::left_to_right(egui::Align::Min),
+                    |ui| {
+                        // ── Left: places ──
+                        let places_width = (ui.available_width() * 0.3).min(220.0);
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(places_width, body_height),
+                            egui::Layout::top_down(egui::Align::Min),
+                            |ui| {
+                                ui.set_width(places_width);
+                                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                                egui::ScrollArea::vertical()
+                                    .min_scrolled_height(0.0)
+                                    .id_salt("picker_places")
+                                    .max_height(body_height)
+                                    .auto_shrink([false, false])
+                                    .show(ui, |ui| {
+                                        ui.label(
+                                            RichText::new("ORTE").small().color(theme::muted(ui)),
+                                        );
+                                        if ui.selectable_label(false, "🏠 Home").clicked() {
+                                            open_local = Some(home.clone());
+                                        }
+                                        for (d, _f, _t) in &drives {
+                                            if ui
+                                                .selectable_label(false, format!("💽 {}", d))
+                                                .clicked()
+                                            {
+                                                open_local = Some(d.clone());
+                                            }
+                                        }
+                                        // Keep the same remote choices for every sync entry point.
+                                        if !local_only {
+                                            ui.add_space(6.0);
+                                            ui.label(
+                                                RichText::new("VERBINDUNGEN")
+                                                    .small()
+                                                    .color(theme::muted(ui)),
+                                            );
+                                            if conns.is_empty()
+                                                && !gdrive_connected
+                                                && peer_locations.is_empty()
+                                                && tab_locations.is_empty()
+                                            {
+                                                ui.colored_label(theme::muted(ui), "(keine)");
+                                            }
+                                            if gdrive_connected
+                                                && ui
+                                                    .selectable_label(false, "☁ Google Drive")
+                                                    .clicked()
+                                            {
+                                                open_gdrive = true;
+                                            }
+                                            for c in &conns {
+                                                if ui
+                                                    .selectable_label(
+                                                        false,
+                                                        format!("🖧 {}", c.display()),
+                                                    )
+                                                    .on_hover_text(c.to_target())
+                                                    .clicked()
+                                                {
+                                                    open_conn = Some(c.clone());
+                                                }
+                                            }
+                                            for (label, target) in &peer_locations {
+                                                if ui
+                                                    .selectable_label(
+                                                        false,
+                                                        format!("Share: {label}"),
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    open_peer =
+                                                        Some((label.clone(), target.clone()));
+                                                }
+                                            }
+                                            for (index, location) in
+                                                tab_locations.iter().enumerate()
+                                            {
+                                                if ui
+                                                    .selectable_label(
+                                                        false,
+                                                        format!("Tab: {}", location.label),
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    open_tab = Some(index);
+                                                }
+                                            }
+                                        }
+                                    });
+                            },
+                        );
 
-                    ui.separator();
-
-                    // ── Right: current folder ──
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(ui.available_width(), body_height),
-                        egui::Layout::top_down(egui::Align::Min), |ui| {
-                        ui.set_height(body_height);
-                        ui.set_width(ui.available_width());
-                        ui.horizontal(|ui| {
-                            if ui.button("⬆ Hoch").clicked() {
-                                go_up = true;
-                            }
-                            if !conn_label.is_empty() {
-                                ui.add(egui::Label::new(RichText::new(format!("● {}", conn_label))
-                                    .color(theme::accent(ui))).truncate()).on_hover_text(&conn_label);
-                            }
-                        });
-                        ui.add(egui::Label::new(
-                            RichText::new(if cwd.is_empty() {
-                                "—".to_string()
-                            } else {
-                                cwd.clone()
-                            })
-                            .monospace()
-                            .color(theme::muted(ui)),
-                        ).truncate()).on_hover_text(&cwd);
                         ui.separator();
-                        if connecting || listing {
-                            ui.horizontal(|ui| {
-                                ui.spinner();
-                                ui.label(if connecting {
-                                    "Verbinde…"
-                                } else {
-                                    "Lade Ordner…"
-                                });
-                            });
-                        } else if let Some(e) = &error {
-                            ui.add(egui::Label::new(RichText::new(e).color(theme::danger(ui)))
-                                .truncate()).on_hover_text(e);
-                        } else if !has_loc {
-                            ui.colored_label(
-                                theme::muted(ui),
-                                "Links einen Ort oder eine Verbindung wählen.",
-                            );
-                        } else {
-                            ui.label("");
-                        }
-                        let list = egui::ScrollArea::vertical().min_scrolled_height(0.0)
-                            .id_salt("picker_list")
-                            .min_scrolled_height(0.0)
-                            .max_height(super::dialog_geometry::remaining_height(ui, 0.0))
-                            .auto_shrink([false, false])
-                            .show(ui, |ui| {
-                                for (index, name) in entries.iter().enumerate() {
-                                    let response = ui.selectable_label(
-                                        selected == Some(index),
-                                        format!("📁 {}", name),
-                                    );
-                                    if response.clicked() {
-                                        selected = Some(index);
+
+                        // ── Right: current folder ──
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(ui.available_width(), body_height),
+                            egui::Layout::top_down(egui::Align::Min),
+                            |ui| {
+                                ui.set_height(body_height);
+                                ui.set_width(ui.available_width());
+                                ui.horizontal(|ui| {
+                                    if ui.button("⬆ Hoch").clicked() {
+                                        go_up = true;
                                     }
-                                    let keyboard_open = response.has_focus()
-                                        && ui.input_mut(|input| {
-                                            input.consume_key(
-                                                egui::Modifiers::NONE,
-                                                egui::Key::Enter,
+                                    if !conn_label.is_empty() {
+                                        ui.add(
+                                            egui::Label::new(
+                                                RichText::new(format!("● {}", conn_label))
+                                                    .color(theme::accent(ui)),
                                             )
-                                        });
-                                    if response.double_clicked() || keyboard_open {
-                                        enter = Some(name.clone());
+                                            .truncate(),
+                                        )
+                                        .on_hover_text(&conn_label);
                                     }
+                                });
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(if cwd.is_empty() {
+                                            "—".to_string()
+                                        } else {
+                                            cwd.clone()
+                                        })
+                                        .monospace()
+                                        .color(theme::muted(ui)),
+                                    )
+                                    .truncate(),
+                                )
+                                .on_hover_text(&cwd);
+                                ui.separator();
+                                if connecting || listing {
+                                    ui.horizontal(|ui| {
+                                        ui.spinner();
+                                        ui.label(if connecting {
+                                            "Verbinde…"
+                                        } else {
+                                            "Lade Ordner…"
+                                        });
+                                    });
+                                } else if let Some(e) = &error {
+                                    ui.add(
+                                        egui::Label::new(RichText::new(e).color(theme::danger(ui)))
+                                            .truncate(),
+                                    )
+                                    .on_hover_text(e);
+                                } else if !has_loc {
+                                    ui.colored_label(
+                                        theme::muted(ui),
+                                        "Links einen Ort oder eine Verbindung wählen.",
+                                    );
+                                } else {
+                                    ui.label("");
                                 }
-                                if has_loc && entries.is_empty() && error.is_none() && !connecting {
-                                    ui.colored_label(theme::muted(ui), "(keine Unterordner)");
-                                }
-                            });
-                        ctx.data_mut(|data| data.insert_temp(
-                            egui::Id::new(("picker_list_height", geometry_key)), list.inner_rect.height()));
-                    });
-                });
+                                let list = egui::ScrollArea::vertical()
+                                    .min_scrolled_height(0.0)
+                                    .id_salt("picker_list")
+                                    .min_scrolled_height(0.0)
+                                    .max_height(super::dialog_geometry::remaining_height(ui, 0.0))
+                                    .auto_shrink([false, false])
+                                    .show(ui, |ui| {
+                                        for (index, name) in entries.iter().enumerate() {
+                                            let response = ui.selectable_label(
+                                                selected == Some(index),
+                                                format!("📁 {}", name),
+                                            );
+                                            if response.clicked() {
+                                                selected = Some(index);
+                                            }
+                                            let keyboard_open = response.has_focus()
+                                                && ui.input_mut(|input| {
+                                                    input.consume_key(
+                                                        egui::Modifiers::NONE,
+                                                        egui::Key::Enter,
+                                                    )
+                                                });
+                                            if response.double_clicked() || keyboard_open {
+                                                enter = Some(name.clone());
+                                            }
+                                        }
+                                        if has_loc
+                                            && entries.is_empty()
+                                            && error.is_none()
+                                            && !connecting
+                                        {
+                                            ui.colored_label(
+                                                theme::muted(ui),
+                                                "(keine Unterordner)",
+                                            );
+                                        }
+                                    });
+                                ctx.data_mut(|data| {
+                                    data.insert_temp(
+                                        egui::Id::new(("picker_list_height", geometry_key)),
+                                        list.inner_rect.height(),
+                                    )
+                                });
+                            },
+                        );
+                    },
+                );
 
                 ui.separator();
                 let can_choose = has_loc && !connecting && !listing && !cwd.is_empty();
@@ -317,10 +372,18 @@ impl App {
                         close = true;
                     }
                 });
-                ui.add(egui::Label::new(RichText::new(if can_choose {
-                    value_preview.as_str()
-                } else { "" }).color(theme::muted(ui))).truncate())
-                    .on_hover_text(&value_preview);
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(if can_choose {
+                            value_preview.as_str()
+                        } else {
+                            ""
+                        })
+                        .color(theme::muted(ui)),
+                    )
+                    .truncate(),
+                )
+                .on_hover_text(&value_preview);
             });
 
         if let Some(picker) = self.picker.as_mut() {
@@ -364,10 +427,16 @@ impl App {
             }
         }
         if choose {
-            if let Some((cwd, remote)) = self.picker.as_ref()
-                .map(|picker| (picker.cwd.clone(), picker.is_remote)) {
-                if !self.drive_consumer_available(super::drive_snapshot::DriveConsumer::Picker,
-                    &cwd, remote) {
+            if let Some((cwd, remote)) = self
+                .picker
+                .as_ref()
+                .map(|picker| (picker.cwd.clone(), picker.is_remote))
+            {
+                if !self.drive_consumer_available(
+                    super::drive_snapshot::DriveConsumer::Picker,
+                    &cwd,
+                    remote,
+                ) {
                     if let Some(picker) = self.picker.as_mut() {
                         picker.error = Some("Datenträger nicht verbunden".into());
                     }
@@ -411,7 +480,10 @@ impl App {
                                 ));
                             }
                         } else {
-                            self.accept_drive_consumer(super::drive_snapshot::DriveConsumer::Analytics, &value);
+                            self.accept_drive_consumer(
+                                super::drive_snapshot::DriveConsumer::Analytics,
+                                &value,
+                            );
                             self.start_analytics_scan(value);
                         }
                     }
@@ -428,7 +500,10 @@ impl App {
                                 ));
                             }
                         } else {
-                            self.accept_drive_consumer(super::drive_snapshot::DriveConsumer::Reclaim, &value);
+                            self.accept_drive_consumer(
+                                super::drive_snapshot::DriveConsumer::Reclaim,
+                                &value,
+                            );
                             self.start_reclaim_scan(value);
                         }
                     }

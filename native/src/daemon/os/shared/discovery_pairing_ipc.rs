@@ -6,13 +6,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
-use crate::share::{DiscoveryCommand, DiscoveryEvent, ShareCmd, ShareCmdResult, ShareService};
 use super::discovery_pairing_protocol::{
     DiscoveryPairingError as Error, DiscoveryPairingReply as Reply,
     DiscoveryPairingRequest as Request, DiscoveryPairingStatus as Status,
 };
 use super::ipc_host::ShareHost;
 use super::ipc_protocol::{write_response, IpcResponse};
+use crate::share::{DiscoveryCommand, DiscoveryEvent, ShareCmd, ShareCmdResult, ShareService};
 
 const POLL: Duration = Duration::from_millis(100);
 const LIST_WAIT: Duration = Duration::from_secs(15);
@@ -31,7 +31,8 @@ pub(super) struct DiscoveryObservers {
 
 impl DiscoveryObservers {
     fn subscribe(&mut self, discovery_id: Option<String>) -> Arc<Mutex<Observation>> {
-        self.observers.retain(|observer| observer.strong_count() > 0);
+        self.observers
+            .retain(|observer| observer.strong_count() > 0);
         let observation = Arc::new(Mutex::new(Observation {
             discovery_id,
             ..Observation::default()
@@ -42,8 +43,12 @@ impl DiscoveryObservers {
 
     pub(super) fn observe(&mut self, event: &DiscoveryEvent) {
         self.observers.retain(|observer| {
-            let Some(observer) = observer.upgrade() else { return false; };
-            if let Ok(mut state) = observer.lock() { state.observe(event); }
+            let Some(observer) = observer.upgrade() else {
+                return false;
+            };
+            if let Ok(mut state) = observer.lock() {
+                state.observe(event);
+            }
             true
         });
     }
@@ -64,22 +69,38 @@ impl Observation {
             self.list = Some(advertisements.clone());
             return;
         }
-        let Some(wanted_discovery) = self.discovery_id.as_deref() else { return; };
+        let Some(wanted_discovery) = self.discovery_id.as_deref() else {
+            return;
+        };
         let (exchange_id, discovery_id) = match event {
-            DiscoveryEvent::ExchangeCompleted { exchange_id, discovery_id, .. } =>
-                (Some(exchange_id.as_str()), Some(discovery_id.as_str())),
-            DiscoveryEvent::ExchangeUnconfirmed { exchange_id, discovery_id, .. }
-            | DiscoveryEvent::ExchangeCancelled { exchange_id, discovery_id } =>
-                (Some(exchange_id.as_str()), discovery_id.as_deref()),
-            DiscoveryEvent::ExchangeFailed { exchange_id, discovery_id, .. } =>
-                (exchange_id.as_deref(), discovery_id.as_deref()),
+            DiscoveryEvent::ExchangeCompleted {
+                exchange_id,
+                discovery_id,
+                ..
+            } => (Some(exchange_id.as_str()), Some(discovery_id.as_str())),
+            DiscoveryEvent::ExchangeUnconfirmed {
+                exchange_id,
+                discovery_id,
+                ..
+            }
+            | DiscoveryEvent::ExchangeCancelled {
+                exchange_id,
+                discovery_id,
+            } => (Some(exchange_id.as_str()), discovery_id.as_deref()),
+            DiscoveryEvent::ExchangeFailed {
+                exchange_id,
+                discovery_id,
+                ..
+            } => (exchange_id.as_deref(), discovery_id.as_deref()),
             _ => return,
         };
         let relevant = match self.exchange_id.as_deref() {
             Some(ours) => exchange_id == Some(ours),
             None => discovery_id.is_none() || discovery_id == Some(wanted_discovery),
         };
-        if !relevant { return; }
+        if !relevant {
+            return;
+        }
         if self.terminal.len() >= PENDING_TERMINALS {
             self.overflow = true;
         } else {
@@ -91,14 +112,28 @@ impl Observation {
         self.exchange_id = Some(exchange_id.to_string());
         for event in self.terminal.drain(..) {
             let (id, status, outcome, error_code) = match event {
-                DiscoveryEvent::ExchangeCompleted { exchange_id, outcome, .. } =>
-                    (Some(exchange_id), Status::Completed, Some(outcome), None),
-                DiscoveryEvent::ExchangeUnconfirmed { exchange_id, outcome, .. } =>
-                    (Some(exchange_id), Status::Unconfirmed, Some(outcome), None),
-                DiscoveryEvent::ExchangeCancelled { exchange_id, .. } =>
-                    (Some(exchange_id), Status::Cancelled, None, Some(Error::Cancelled)),
-                DiscoveryEvent::ExchangeFailed { exchange_id, .. } =>
-                    (exchange_id, Status::Failed, None, Some(Error::PairingFailed)),
+                DiscoveryEvent::ExchangeCompleted {
+                    exchange_id,
+                    outcome,
+                    ..
+                } => (Some(exchange_id), Status::Completed, Some(outcome), None),
+                DiscoveryEvent::ExchangeUnconfirmed {
+                    exchange_id,
+                    outcome,
+                    ..
+                } => (Some(exchange_id), Status::Unconfirmed, Some(outcome), None),
+                DiscoveryEvent::ExchangeCancelled { exchange_id, .. } => (
+                    Some(exchange_id),
+                    Status::Cancelled,
+                    None,
+                    Some(Error::Cancelled),
+                ),
+                DiscoveryEvent::ExchangeFailed { exchange_id, .. } => (
+                    exchange_id,
+                    Status::Failed,
+                    None,
+                    Some(Error::PairingFailed),
+                ),
                 _ => continue,
             };
             if id.as_deref() == Some(exchange_id) {
@@ -147,29 +182,43 @@ struct ConnectionWatch {
 }
 
 impl ConnectionWatch {
-    fn new(stream: &TcpStream, cancel: crate::share::DiscoveryExchangeCancellation) -> io::Result<Self> {
+    fn new(
+        stream: &TcpStream,
+        cancel: crate::share::DiscoveryExchangeCancellation,
+    ) -> io::Result<Self> {
         let mut read = stream.try_clone()?;
         let stop = Arc::new(AtomicBool::new(false));
         let stopped = Arc::clone(&stop);
         let cancelled = cancel.clone();
-        let thread = std::thread::Builder::new().name("discovery-owner".into()).spawn(move || {
-            while !stopped.load(Ordering::Acquire) {
-                match connection_alive(&mut read) {
-                    Ok(true) => {}
-                    // EOF, explicit cancel, malformed control and socket
-                    // errors all end only this connection's ownership.
-                    Ok(false) | Err(_) => { cancelled.cancel(); break; }
+        let thread = std::thread::Builder::new()
+            .name("discovery-owner".into())
+            .spawn(move || {
+                while !stopped.load(Ordering::Acquire) {
+                    match connection_alive(&mut read) {
+                        Ok(true) => {}
+                        // EOF, explicit cancel, malformed control and socket
+                        // errors all end only this connection's ownership.
+                        Ok(false) | Err(_) => {
+                            cancelled.cancel();
+                            break;
+                        }
+                    }
                 }
-            }
-        })?;
-        Ok(Self { cancel, stop, thread: Some(thread) })
+            })?;
+        Ok(Self {
+            cancel,
+            stop,
+            thread: Some(thread),
+        })
     }
 }
 
 impl Drop for ConnectionWatch {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
-        if let Some(thread) = self.thread.take() { let _ = thread.join(); }
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
     }
 }
 
@@ -182,30 +231,62 @@ pub(super) fn serve(
     stream.set_read_timeout(Some(POLL))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
     if host.reload_now().is_err() {
-        return answer(&mut stream, Reply::Error { error_code: Error::DaemonError });
+        return answer(
+            &mut stream,
+            Reply::Error {
+                error_code: Error::DaemonError,
+            },
+        );
     }
     host.drain_events();
     let discovery_id = match &request {
         Request::List => None,
-        Request::Pair { discovery_id, pin, .. } => {
-            if pin.as_bytes().is_empty() || pin.as_bytes().len() > crate::share::DISCOVERY_PIN_MAX_BYTES {
-                return answer(&mut stream, Reply::Error { error_code: Error::InvalidPin });
+        Request::Pair {
+            discovery_id, pin, ..
+        } => {
+            if pin.as_bytes().is_empty()
+                || pin.as_bytes().len() > crate::share::DISCOVERY_PIN_MAX_BYTES
+            {
+                return answer(
+                    &mut stream,
+                    Reply::Error {
+                        error_code: Error::InvalidPin,
+                    },
+                );
             }
             Some(discovery_id.clone())
         }
     };
     let (service, observation) = {
-        let mut state = host.state.lock().map_err(|_| io::Error::other("discovery state unavailable"))?;
+        let mut state = host
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("discovery state unavailable"))?;
         let Some(service) = state.service.clone() else {
-            return answer(&mut stream, Reply::Error { error_code: Error::WorkerUnavailable });
+            return answer(
+                &mut stream,
+                Reply::Error {
+                    error_code: Error::WorkerUnavailable,
+                },
+            );
         };
         if !state.signal_connected {
-            return answer(&mut stream, Reply::Error { error_code: Error::Offline });
+            return answer(
+                &mut stream,
+                Reply::Error {
+                    error_code: Error::Offline,
+                },
+            );
         }
         (service, state.discovery_pairing.subscribe(discovery_id))
     };
     if let Err(error) = service.cmd(ShareCmd::Discovery(DiscoveryCommand::ListDiscoveries)) {
-        return answer(&mut stream, Reply::Error { error_code: Error::from_command(&error) });
+        return answer(
+            &mut stream,
+            Reply::Error {
+                error_code: Error::from_command(&error),
+            },
+        );
     }
     let offers = match wait_list(&mut stream, host, &observation) {
         Ok(offers) => offers,
@@ -213,38 +294,83 @@ pub(super) fn serve(
     };
     match request {
         Request::List => answer(&mut stream, Reply::List { offers }),
-        Request::Pair { discovery_id, pin, share_back } => {
-            if !offers.iter().any(|offer| offer.discovery_id == discovery_id
-                && offer.expires_at > crate::share::core_now_secs())
-            {
-                return answer(&mut stream, Reply::Error { error_code: Error::OfferUnavailable });
+        Request::Pair {
+            discovery_id,
+            pin,
+            share_back,
+        } => {
+            if !offers.iter().any(|offer| {
+                offer.discovery_id == discovery_id
+                    && offer.expires_at > crate::share::core_now_secs()
+            }) {
+                return answer(
+                    &mut stream,
+                    Reply::Error {
+                        error_code: Error::OfferUnavailable,
+                    },
+                );
             }
             let (owner_handle, lease) = crate::share::DiscoveryExchangeOwner::new(runtime_lease);
             let connection = ConnectionWatch::new(&stream, owner_handle.cancellation())?;
             // Create the cancellation handle before submitting the command.
             // An ACK timeout must not orphan the worker's eventual start.
             let mut owner = OwnedExchange {
-                service: service.clone(), exchange_id: None, connection, _owner: owner_handle,
+                service: service.clone(),
+                exchange_id: None,
+                connection,
+                _owner: owner_handle,
             };
-            let started = service.cmd(ShareCmd::Discovery(DiscoveryCommand::StartOwnedDiscoveryExchange {
-                discovery_id: discovery_id.clone(), pin, share_back, owner: lease,
-            }));
+            let started = service.cmd(ShareCmd::Discovery(
+                DiscoveryCommand::StartOwnedDiscoveryExchange {
+                    discovery_id: discovery_id.clone(),
+                    pin,
+                    share_back,
+                    owner: lease,
+                },
+            ));
             let exchange_id = match started {
                 Ok(ShareCmdResult::DiscoveryExchange(handle)) => handle.exchange_id,
                 Err(error) => {
                     owner.connection.cancel.cancel();
-                    return answer(&mut stream, Reply::Error { error_code: Error::from_command(&error) });
+                    return answer(
+                        &mut stream,
+                        Reply::Error {
+                            error_code: Error::from_command(&error),
+                        },
+                    );
                 }
-                _ => return answer(&mut stream, Reply::Error { error_code: Error::DaemonError }),
+                _ => {
+                    return answer(
+                        &mut stream,
+                        Reply::Error {
+                            error_code: Error::DaemonError,
+                        },
+                    )
+                }
             };
             owner.exchange_id = Some(exchange_id.clone());
-            answer(&mut stream, Reply::Started { discovery_id: discovery_id.clone(), exchange_id: exchange_id.clone() })?;
+            answer(
+                &mut stream,
+                Reply::Started {
+                    discovery_id: discovery_id.clone(),
+                    exchange_id: exchange_id.clone(),
+                },
+            )?;
             let deadline = Instant::now() + EXCHANGE_WAIT;
             loop {
                 host.drain_events();
                 let result = {
-                    let mut state = observation.lock().map_err(|_| io::Error::other("discovery observation unavailable"))?;
-                    if state.overflow { return answer(&mut stream, Reply::Error { error_code: Error::ObservationLost }); }
+                    let mut state = observation
+                        .lock()
+                        .map_err(|_| io::Error::other("discovery observation unavailable"))?;
+                    if state.overflow {
+                        return answer(
+                            &mut stream,
+                            Reply::Error {
+                                error_code: Error::ObservationLost,
+                            },
+                        );
+                    }
                     state.take_result(&exchange_id, &discovery_id)
                 };
                 if let Some(result) = result {
@@ -252,9 +378,16 @@ pub(super) fn serve(
                     return answer(&mut stream, result);
                 }
                 if Instant::now() >= deadline {
-                    return answer(&mut stream, Reply::Error { error_code: Error::Timeout });
+                    return answer(
+                        &mut stream,
+                        Reply::Error {
+                            error_code: Error::Timeout,
+                        },
+                    );
                 }
-                if owner.connection.cancel.is_cancelled() { return Ok(()); }
+                if owner.connection.cancel.is_cancelled() {
+                    return Ok(());
+                }
                 std::thread::sleep(POLL);
             }
         }
@@ -269,11 +402,20 @@ fn wait_list(
     let deadline = Instant::now() + LIST_WAIT;
     loop {
         host.drain_events();
-        if let Some(list) = observation.lock().map_err(|_| Error::ObservationLost)?.list.take() {
+        if let Some(list) = observation
+            .lock()
+            .map_err(|_| Error::ObservationLost)?
+            .list
+            .take()
+        {
             return Ok(list);
         }
-        if Instant::now() >= deadline { return Err(Error::Timeout); }
-        if !connection_alive(stream).map_err(|_| Error::DaemonError)? { return Err(Error::Cancelled); }
+        if Instant::now() >= deadline {
+            return Err(Error::Timeout);
+        }
+        if !connection_alive(stream).map_err(|_| Error::DaemonError)? {
+            return Err(Error::Cancelled);
+        }
     }
 }
 
@@ -283,8 +425,18 @@ fn connection_alive(stream: &mut TcpStream) -> io::Result<bool> {
         // EOF covers hard process termination on Windows as well as drop.
         Ok(0) => Ok(false),
         Ok(1) if byte[0] == b'c' => Ok(false),
-        Ok(_) => Err(io::Error::new(io::ErrorKind::InvalidData, "invalid discovery control")),
-        Err(error) if matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut | io::ErrorKind::Interrupted) => Ok(true),
+        Ok(_) => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid discovery control",
+        )),
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut | io::ErrorKind::Interrupted
+            ) =>
+        {
+            Ok(true)
+        }
         Err(error) => Err(error),
     }
 }
@@ -302,7 +454,8 @@ mod tests {
             exchange_id: id.into(),
             discovery_id: "offer".into(),
             outcome: crate::share::DiscoveryRelationOutcome::DirectInstalled {
-                contact_id: "contact".into(), display_name: "Peer".into(),
+                contact_id: "contact".into(),
+                display_name: "Peer".into(),
             },
         }
     }
@@ -311,11 +464,17 @@ mod tests {
     fn batches_task_p29_gui_drain_preserves_exact_owned_terminal_result() {
         let mut host = super::super::ipc_host::ShareHostState::new();
         let observer = host.discovery_pairing.subscribe(Some("offer".into()));
-        host.discovery_pairing.observe(&completed("previous-exchange"));
+        host.discovery_pairing
+            .observe(&completed("previous-exchange"));
         host.discovery_pairing.observe(&completed("ours"));
-        host.ui_events.push(crate::share::ShareEvent::Discovery(completed("ours")));
+        host.ui_events
+            .push(crate::share::ShareEvent::Discovery(completed("ours")));
         let _gui = std::mem::take(&mut host.ui_events);
-        let result = observer.lock().unwrap().take_result("ours", "offer").unwrap();
+        let result = observer
+            .lock()
+            .unwrap()
+            .take_result("ours", "offer")
+            .unwrap();
         assert!(matches!(result, Reply::Finished {
             exchange_id, status: Status::Completed, ..
         } if exchange_id == "ours"));

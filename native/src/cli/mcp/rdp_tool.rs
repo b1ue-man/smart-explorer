@@ -1,6 +1,9 @@
 //! Structured inventory and native-client jobs; never a live RDP payload.
 use super::{args::Args, response};
-use crate::{rdp::{AuthenticatedProbe, CertificatePolicy, StartRequest}, share::{PeerOpenTarget, tcp_forward::TunnelId}};
+use crate::{
+    rdp::{AuthenticatedProbe, CertificatePolicy, StartRequest},
+    share::{tcp_forward::TunnelId, PeerOpenTarget},
+};
 use rmcp::model::CallToolResult;
 use serde_json::{json, Value};
 
@@ -17,9 +20,14 @@ pub(super) fn properties() -> Value {
         "wait":{"type":"integer","minimum":1,"default":30},"id":{"type":"string"}
     })
 }
-pub(super) fn rdp(args: &Args, mut probe: impl FnMut(PeerOpenTarget) -> Result<AuthenticatedProbe, String>) -> Result<CallToolResult, String> {
+pub(super) fn rdp(
+    args: &Args,
+    mut probe: impl FnMut(PeerOpenTarget) -> Result<AuthenticatedProbe, String>,
+) -> Result<CallToolResult, String> {
     let result = match args.string("action")?.as_str() {
-        "local_probe" => serde_json::to_value(crate::rdp::probe_local_host()).map_err(|e| e.to_string())?,
+        "local_probe" => {
+            serde_json::to_value(crate::rdp::probe_local_host()).map_err(|e| e.to_string())?
+        }
         "clients" => json!({"clients":crate::rdp::local_clients()}),
         "probe" => {
             let (target, _) = crate::cli::screen::device_target(&args.string("device")?)?;
@@ -28,26 +36,44 @@ pub(super) fn rdp(args: &Args, mut probe: impl FnMut(PeerOpenTarget) -> Result<A
         "open" => {
             let (target, _) = crate::cli::screen::device_target(&args.string("device")?)?;
             let report = probe(target.clone())?;
-            let policy = match args.opt_string("certificate_policy")?.as_deref().unwrap_or("exact_peer_pin") {
+            let policy = match args
+                .opt_string("certificate_policy")?
+                .as_deref()
+                .unwrap_or("exact_peer_pin")
+            {
                 "exact_peer_pin" => CertificatePolicy::ExactPeerPin,
                 "peer_pin_or_native_trust" => CertificatePolicy::PeerPinOrNativeTrust,
                 "native_dialog" => CertificatePolicy::NativeDialog,
                 _ => return Err("Invalid RDP certificate_policy".into()),
             };
-            let request = StartRequest { service_id:args.string("service")?,client_id:args.string("client")?,
-                certificate_policy:policy,remote_app:args.opt_string("remote_app")?,
-                acknowledge_local_access:args.flag("acknowledge_local_access")?,
-                acknowledge_session_effect:args.flag("acknowledge_session_effect")?,
-                acknowledge_certificate_dialog:args.flag("acknowledge_certificate_dialog")?,
-                lifetime_secs:u32::try_from(args.opt_u64("lifetime_secs")?.unwrap_or(900))
-                    .map_err(|_| "lifetime_secs must be 1..86400".to_string())? };
+            let request = StartRequest {
+                service_id: args.string("service")?,
+                client_id: args.string("client")?,
+                certificate_policy: policy,
+                remote_app: args.opt_string("remote_app")?,
+                acknowledge_local_access: args.flag("acknowledge_local_access")?,
+                acknowledge_session_effect: args.flag("acknowledge_session_effect")?,
+                acknowledge_certificate_dialog: args.flag("acknowledge_certificate_dialog")?,
+                lifetime_secs: u32::try_from(args.opt_u64("lifetime_secs")?.unwrap_or(900))
+                    .map_err(|_| "lifetime_secs must be 1..86400".to_string())?,
+            };
             let wait = args.opt_u64("wait")?.unwrap_or(30);
-            if wait == 0 || wait > 300 { return Err("RDP setup wait must be 1..300 seconds".into()); }
-            let session = crate::rdp::start(target,&report,&request,std::time::Duration::from_secs(wait),|| {})?;
+            if wait == 0 || wait > 300 {
+                return Err("RDP setup wait must be 1..300 seconds".into());
+            }
+            let session = crate::rdp::start(
+                target,
+                &report,
+                &request,
+                std::time::Duration::from_secs(wait),
+                || {},
+            )?;
             json!({"session":crate::rdp::own_in_background(session)?})
         }
         "list" => json!({"tunnels":crate::daemon::tcp_list()?}),
-        "status" => json!({"tunnel":crate::daemon::tcp_status(TunnelId::parse(&args.string("id")?)?)?}),
+        "status" => {
+            json!({"tunnel":crate::daemon::tcp_status(TunnelId::parse(&args.string("id")?)?)?})
+        }
         "close" => json!({"closed":crate::rdp::close(TunnelId::parse(&args.string("id")?)?)?}),
         action => return Err(format!("Unknown RDP action {action}")),
     };

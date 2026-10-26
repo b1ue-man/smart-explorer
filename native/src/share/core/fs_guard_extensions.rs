@@ -8,7 +8,9 @@ use std::{
 
 impl BackendExtensions for GuardedBackend {
     fn directory_reservation_supported(&self, root: &str) -> bool {
-        if self.read(root).is_err() { return false; }
+        if self.read(root).is_err() {
+            return false;
+        }
         let supported = vfs::directory_reservation_supported(&*self.inner, root);
         supported && self.read(root).is_ok()
     }
@@ -212,41 +214,91 @@ impl BackendExtensions for GuardedBackend {
 #[cfg(test)]
 mod reservation_compatibility_tests {
     use super::*;
-    use crate::vfs::{Backend, Scheme, VfsMeta};
     use crate::share::{export_config::ExportAccess, fs_host_policy::TargetPolicy};
-    use std::{io, sync::{Arc, atomic::{AtomicUsize, Ordering}}};
+    use crate::vfs::{Backend, Scheme, VfsMeta};
+    use std::{
+        io,
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        },
+    };
 
     #[derive(Default)]
-    struct Provider { ordinary: AtomicUsize, strict: AtomicUsize }
+    struct Provider {
+        ordinary: AtomicUsize,
+        strict: AtomicUsize,
+    }
     impl Backend for Provider {
-        fn scheme(&self) -> Scheme { Scheme::Webdav }
-        fn root_display(&self) -> String { "/".into() }
-        fn extensions(&self) -> Option<&dyn BackendExtensions> { Some(self) }
-        fn list_dir(&self, _: &str) -> VfsResult<Vec<VfsMeta>> { Ok(Vec::new()) }
-        fn stat(&self, _: &str) -> VfsResult<VfsMeta> { Ok(VfsMeta::default()) }
-        fn open_read(&self, _: &str) -> VfsResult<Box<dyn Read + Send>> { Err(io::Error::from(io::ErrorKind::Unsupported)) }
-        fn open_write(&self, _: &str) -> VfsResult<Box<dyn Write + Send>> { Err(io::Error::from(io::ErrorKind::Unsupported)) }
-        fn rename(&self, _: &str, _: &str) -> VfsResult<()> { self.ordinary.fetch_add(1, Ordering::SeqCst); Ok(()) }
-        fn rename_no_replace(&self, source: &str, destination: &str) -> VfsResult<()> { self.rename(source, destination) }
-        fn remove_file(&self, _: &str) -> VfsResult<()> { Err(io::Error::from(io::ErrorKind::Unsupported)) }
-        fn remove_dir(&self, _: &str) -> VfsResult<()> { Err(io::Error::from(io::ErrorKind::Unsupported)) }
-        fn mkdir_all(&self, _: &str) -> VfsResult<()> { Err(io::Error::from(io::ErrorKind::Unsupported)) }
+        fn scheme(&self) -> Scheme {
+            Scheme::Webdav
+        }
+        fn root_display(&self) -> String {
+            "/".into()
+        }
+        fn extensions(&self) -> Option<&dyn BackendExtensions> {
+            Some(self)
+        }
+        fn list_dir(&self, _: &str) -> VfsResult<Vec<VfsMeta>> {
+            Ok(Vec::new())
+        }
+        fn stat(&self, _: &str) -> VfsResult<VfsMeta> {
+            Ok(VfsMeta::default())
+        }
+        fn open_read(&self, _: &str) -> VfsResult<Box<dyn Read + Send>> {
+            Err(io::Error::from(io::ErrorKind::Unsupported))
+        }
+        fn open_write(&self, _: &str) -> VfsResult<Box<dyn Write + Send>> {
+            Err(io::Error::from(io::ErrorKind::Unsupported))
+        }
+        fn rename(&self, _: &str, _: &str) -> VfsResult<()> {
+            self.ordinary.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        fn rename_no_replace(&self, source: &str, destination: &str) -> VfsResult<()> {
+            self.rename(source, destination)
+        }
+        fn remove_file(&self, _: &str) -> VfsResult<()> {
+            Err(io::Error::from(io::ErrorKind::Unsupported))
+        }
+        fn remove_dir(&self, _: &str) -> VfsResult<()> {
+            Err(io::Error::from(io::ErrorKind::Unsupported))
+        }
+        fn mkdir_all(&self, _: &str) -> VfsResult<()> {
+            Err(io::Error::from(io::ErrorKind::Unsupported))
+        }
     }
     impl BackendExtensions for Provider {
-        fn rename_reserved_directory(&self, _: &str, _: &str) -> VfsResult<()> { self.strict.fetch_add(1, Ordering::SeqCst); Ok(()) }
+        fn rename_reserved_directory(&self, _: &str, _: &str) -> VfsResult<()> {
+            self.strict.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
     }
 
     #[test]
     fn batches_task_transfer_compat_share_guard_preserves_strict_dispatch_and_read_only_denial() {
         let provider = Arc::new(Provider::default());
-        let writable = GuardedBackend::new(provider.clone(), TargetPolicy::new(ExportAccess::ReadWrite, false, false), None);
+        let writable = GuardedBackend::new(
+            provider.clone(),
+            TargetPolicy::new(ExportAccess::ReadWrite, false, false),
+            None,
+        );
         vfs::rename_reserved_directory(&writable, "/owned", "/final").unwrap();
         assert_eq!(provider.strict.load(Ordering::SeqCst), 1);
         assert_eq!(provider.ordinary.load(Ordering::SeqCst), 0);
         writable.rename_no_replace("/old", "/new").unwrap();
         assert_eq!(provider.ordinary.load(Ordering::SeqCst), 1);
-        let readonly = GuardedBackend::new(provider.clone(), TargetPolicy::new(ExportAccess::ReadOnly, false, false), None);
-        assert_eq!(vfs::rename_reserved_directory(&readonly, "/owned", "/final").unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        let readonly = GuardedBackend::new(
+            provider.clone(),
+            TargetPolicy::new(ExportAccess::ReadOnly, false, false),
+            None,
+        );
+        assert_eq!(
+            vfs::rename_reserved_directory(&readonly, "/owned", "/final")
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
         assert_eq!(provider.strict.load(Ordering::SeqCst), 1);
     }
 }

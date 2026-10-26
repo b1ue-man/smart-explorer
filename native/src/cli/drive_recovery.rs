@@ -6,7 +6,11 @@ use std::path::PathBuf;
 pub(super) struct SaveRemoveArgs {
     #[arg(help = "Mount ID from se drive list")]
     selector: String,
-    #[arg(long, value_name = "FOLDER", help = "Existing folder for a private complete recovery package")]
+    #[arg(
+        long,
+        value_name = "FOLDER",
+        help = "Existing folder for a private complete recovery package"
+    )]
     destination: PathBuf,
     #[arg(long)]
     json: bool,
@@ -21,11 +25,22 @@ pub(super) struct RecoveryArgs {
 #[derive(Subcommand)]
 enum RecoveryCommand {
     #[command(about = "List retained recovery packages; never mounts or contacts a provider")]
-    List { #[arg(long)] json: bool },
+    List {
+        #[arg(long)]
+        json: bool,
+    },
     #[command(about = "Verify and privately import a versioned package without activating it")]
-    Import { package: PathBuf, #[arg(long)] json: bool },
+    Import {
+        package: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
     #[command(about = "Restore an inactive package as a stopped mount; auto-remount remains off")]
-    Reactivate { id: String, #[arg(long)] json: bool },
+    Reactivate {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 pub(super) fn save_remove(args: SaveRemoveArgs) -> Result<i32, String> {
@@ -40,11 +55,16 @@ pub(super) fn run(args: RecoveryArgs) -> Result<i32, String> {
         RecoveryCommand::List { json } => {
             let records = crate::daemon::list_mount_recoveries()?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&records).map_err(|error| error.to_string())?);
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&records).map_err(|error| error.to_string())?
+                );
             } else if records.is_empty() {
                 println!("recoveries\t0");
             } else {
-                for record in records { print_record(&record, false)?; }
+                for record in records {
+                    print_record(&record, false)?;
+                }
             }
         }
         RecoveryCommand::Import { package, json } => {
@@ -54,34 +74,66 @@ pub(super) fn run(args: RecoveryArgs) -> Result<i32, String> {
         RecoveryCommand::Reactivate { id, json } => {
             let snapshot = crate::daemon::reactivate_mount_recovery(id)?;
             super::print_snapshot(&snapshot, json)?;
-            if !json { println!("recovery\tbereit\tauto-remount=off\tAusdrücklich mit se drive retry erneut verbinden"); }
+            if !json {
+                println!("recovery\tbereit\tauto-remount=off\tAusdrücklich mit se drive retry erneut verbinden");
+            }
         }
     }
     Ok(0)
 }
 
 fn absolute(path: PathBuf) -> Result<PathBuf, String> {
-    if path.is_absolute() { Ok(path) }
-    else { std::env::current_dir().map(|directory| directory.join(path)).map_err(|error| error.to_string()) }
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        std::env::current_dir()
+            .map(|directory| directory.join(path))
+            .map_err(|error| error.to_string())
+    }
 }
 
 fn print_record(record: &crate::mount::InactiveMountRecovery, json: bool) -> Result<(), String> {
     if json {
-        println!("{}", serde_json::to_string_pretty(record).map_err(|error| error.to_string())?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(record).map_err(|error| error.to_string())?
+        );
     } else {
-        println!("recovery\t{}\t{}\t{}", record.id, record.config.id, record.package_path.display());
+        println!(
+            "recovery\t{}\t{}\t{}",
+            record.id,
+            record.config.id,
+            record.package_path.display()
+        );
         println!("manifest-sha256\t{}", record.manifest_sha256);
-        println!("retained-cache\t{}\treactivated\t{}", record.retained_cache.display(), record.reactivated);
-        println!("local-snapshot-complete\t{}\tsealed\t{}", record.local_snapshot_complete, record.sealed);
-        let unknown = record.gaps.iter().filter(|gap|
-            gap.kind == crate::mount::RecoveryGapKind::JournalInventoryUnknown).count();
-        println!("not-backed-up-count\t{}", record.gap_count.saturating_sub(unknown as u64));
+        println!(
+            "retained-cache\t{}\treactivated\t{}",
+            record.retained_cache.display(),
+            record.reactivated
+        );
+        println!(
+            "local-snapshot-complete\t{}\tsealed\t{}",
+            record.local_snapshot_complete, record.sealed
+        );
+        let unknown = record
+            .gaps
+            .iter()
+            .filter(|gap| gap.kind == crate::mount::RecoveryGapKind::JournalInventoryUnknown)
+            .count();
+        println!(
+            "not-backed-up-count\t{}",
+            record.gap_count.saturating_sub(unknown as u64)
+        );
         println!("inventory-unknown-count\t{unknown}");
-        if let Some(error) = &record.package_error { println!("package-error\t{error}"); }
+        if let Some(error) = &record.package_error {
+            println!("package-error\t{error}");
+        }
         for gap in &record.gaps {
             let label = if gap.kind == crate::mount::RecoveryGapKind::JournalInventoryUnknown {
                 "inventory-unknown"
-            } else { "not-backed-up" };
+            } else {
+                "not-backed-up"
+            };
             println!("{label}\t{:?}\t{}\t{}", gap.kind, gap.subject, gap.detail);
         }
         println!("inactive\tkein automatisches Einbinden\tOriginalcache bleibt erhalten");

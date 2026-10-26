@@ -1,17 +1,28 @@
 //! B1: persisted root consent and cleartext consent remain independent.
-use super::*;
 use super::super::registry_types::{LockSettings, SiteRecord};
+use super::*;
 
 fn binding() -> RootBinding {
     RootBinding {
-        site: "0123456789abcdef0123456789abcdef".into(), vault: "vault-id".into(),
-        location: "sftp://saved/Vault".into(), backend: "Sftp".into(),
-        namespace: "server-key".into(), account: "account-a".into(),
-        root: "/Vault".into(), object: Some("object-a".into()),
+        site: "0123456789abcdef0123456789abcdef".into(),
+        vault: "vault-id".into(),
+        location: "sftp://saved/Vault".into(),
+        backend: "Sftp".into(),
+        namespace: "server-key".into(),
+        account: "account-a".into(),
+        root: "/Vault".into(),
+        object: Some("object-a".into()),
     }
 }
 fn record() -> SiteRecord {
-    SiteRecord::new("0123456789abcdef0123456789abcdef", "Fixture", "/vault", "vault-id", 0, LockSettings::desktop())
+    SiteRecord::new(
+        "0123456789abcdef0123456789abcdef",
+        "Fixture",
+        "/vault",
+        "vault-id",
+        0,
+        LockSettings::desktop(),
+    )
 }
 
 #[test]
@@ -19,7 +30,10 @@ fn batches_task_vault_root_and_cleartext_consents_persist_independently() {
     let mut record = record();
     record.extra.push(("future-setting".into(), "keep".into()));
     let original = binding();
-    let mut policy = OpenPolicy { trusted_root: Some(original.clone()), cleartext_copy: None };
+    let mut policy = OpenPolicy {
+        trusted_root: Some(original.clone()),
+        cleartext_copy: None,
+    };
     store_policy(&mut record, &policy).unwrap();
     assert_eq!(stored_policy(&record).unwrap(), policy);
     assert!(stored_policy(&record).unwrap().cleartext_copy.is_none());
@@ -27,21 +41,63 @@ fn batches_task_vault_root_and_cleartext_consents_persist_independently() {
     policy.cleartext_copy = Some(original);
     store_policy(&mut record, &policy).unwrap();
     assert_eq!(stored_policy(&record).unwrap(), policy);
-    assert!(record.extra.contains(&("future-setting".into(), "keep".into())));
-    assert_eq!(record.extra.iter().filter(|(key, _)| key == POLICY_KEY).count(), 1);
-    let mount = MountPolicy { binding: binding(), enforced: false, trusted: false, cleartext_copy: true, read_only: false };
-    assert!(!mount.allowed(), "cleartext consent cannot authorize a mount");
-    assert!(MountPolicy { enforced: true, ..mount.clone() }.allowed());
-    assert!(MountPolicy { trusted: true, ..mount }.allowed());
+    assert!(record
+        .extra
+        .contains(&("future-setting".into(), "keep".into())));
+    assert_eq!(
+        record
+            .extra
+            .iter()
+            .filter(|(key, _)| key == POLICY_KEY)
+            .count(),
+        1
+    );
+    let mount = MountPolicy {
+        binding: binding(),
+        enforced: false,
+        trusted: false,
+        cleartext_copy: true,
+        read_only: false,
+    };
+    assert!(
+        !mount.allowed(),
+        "cleartext consent cannot authorize a mount"
+    );
+    assert!(MountPolicy {
+        enforced: true,
+        ..mount.clone()
+    }
+    .allowed());
+    assert!(MountPolicy {
+        trusted: true,
+        ..mount
+    }
+    .allowed());
 }
 
 #[test]
 fn batches_task_vault_consent_keeps_every_identity_component_exact() {
     let original = binding();
     let mut record = record();
-    store_policy(&mut record, &OpenPolicy { trusted_root: Some(original.clone()), cleartext_copy: Some(original.clone()) }).unwrap();
+    store_policy(
+        &mut record,
+        &OpenPolicy {
+            trusted_root: Some(original.clone()),
+            cleartext_copy: Some(original.clone()),
+        },
+    )
+    .unwrap();
     let stored = stored_policy(&record).unwrap();
-    for field in ["site", "vault", "location", "backend", "namespace", "account", "root", "object"] {
+    for field in [
+        "site",
+        "vault",
+        "location",
+        "backend",
+        "namespace",
+        "account",
+        "root",
+        "object",
+    ] {
         let mut changed = serde_json::to_value(&original).unwrap();
         changed[field] = serde_json::json!(format!("{}-changed", changed[field].as_str().unwrap()));
         let changed: RootBinding = serde_json::from_value(changed).unwrap();

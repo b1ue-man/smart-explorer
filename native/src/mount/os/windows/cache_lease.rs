@@ -67,11 +67,18 @@ impl CacheLease {
         };
         let lock_path = cache_root.join(format!(".{}.host.lock", mount_id.as_str()));
         validate_existing_target(&lock_path)?;
-        let lock_file = OpenOptions::new().read(true).share_mode(0)
-            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT).open(lock_path)?;
+        let lock_file = OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(lock_path)?;
         validate_lock_handle(&lock_file)?;
-        Ok(Self { _lock_file: lock_file, _files_directory: files_directory,
-            _mount_directory: mount_directory, _cache_directory: cache_directory })
+        Ok(Self {
+            _lock_file: lock_file,
+            _files_directory: files_directory,
+            _mount_directory: mount_directory,
+            _cache_directory: cache_directory,
+        })
     }
 }
 
@@ -80,9 +87,11 @@ pub(crate) fn audit_recovery(
     mount_id: &MountId,
 ) -> io::Result<crate::mount::MountRecovery> {
     match fs::symlink_metadata(cache_root.join(mount_id.as_str())) {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(crate::mount::MountRecovery::Clean),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(crate::mount::MountRecovery::Clean)
+        }
         Err(error) => return Err(error),
-        Ok(_) => {},
+        Ok(_) => {}
     }
     let _lease = CacheLease::acquire_existing(cache_root, mount_id)?;
     crate::mount::spool::audit_recovery(cache_root, mount_id)
@@ -96,7 +105,10 @@ pub(crate) fn audit_pending(cache_root: &Path, mount_id: &MountId) -> io::Result
         "mount_cache_inventory_unknown: Versiegelter oder unvollständiger Cache bleibt bis zum autorisierten Öffnen unbekannt"))
 }
 
-pub(crate) fn audit_pending_state(cache_root: &Path, mount_id: &MountId) -> io::Result<Option<usize>> {
+pub(crate) fn audit_pending_state(
+    cache_root: &Path,
+    mount_id: &MountId,
+) -> io::Result<Option<usize>> {
     match fs::symlink_metadata(cache_root.join(mount_id.as_str())) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Some(0)),
         Err(error) => return Err(error),

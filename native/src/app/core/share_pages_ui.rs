@@ -60,7 +60,10 @@ pub(super) enum SharePage {
     /// An authorization without a contact (device id).
     Grant(String),
     /// Pinned identity; room-only devices use the same rights page.
-    Device { device_id: String, public_key: String },
+    Device {
+        device_id: String,
+        public_key: String,
+    },
     AddDevice,
     RemovedDevices,
     /// A saved room (local profile id).

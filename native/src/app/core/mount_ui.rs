@@ -9,10 +9,10 @@ use super::prelude::*;
 use super::*;
 
 const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
-#[path = "mount_recovery_ui.rs"]
-mod recovery_ui;
 #[path = "mount_capacity_ui.rs"]
 mod capacity_ui;
+#[path = "mount_recovery_ui.rs"]
+mod recovery_ui;
 
 pub(super) struct MountUiState {
     pub(super) draft: Option<MountDraft>,
@@ -144,7 +144,9 @@ impl App {
                     }
                     MountUiResult::Opened => {}
                     MountUiResult::RecoverySaved(record) => {
-                        self.mount_ui.mounts.retain(|mount| mount.config.id != record.config.id);
+                        self.mount_ui
+                            .mounts
+                            .retain(|mount| mount.config.id != record.config.id);
                         self.mount_ui.recovery_draft = None;
                         self.notice = Some((format!(
                             "Laufwerk entfernt; Recovery {} unter {} erhalten. {} ausdrücklich ungesicherte Datenbezüge stehen im Manifest",
@@ -340,8 +342,9 @@ impl App {
         if let Some((id, label)) = save_recovery {
             self.mount_ui.recovery_draft = Some(recovery_ui::RecoveryDraft::new(id, label));
         } else if show_recoveries {
-            self.spawn_mount_action("Recoverybestand wird gelesen", ||
-                crate::daemon::list_mount_recoveries().map(MountUiResult::RecoveryList));
+            self.spawn_mount_action("Recoverybestand wird gelesen", || {
+                crate::daemon::list_mount_recoveries().map(MountUiResult::RecoveryList)
+            });
         } else if install_runtime {
             self.spawn_mount_action("Dokany wird sicher installiert", || {
                 crate::mount::install_drive_runtime(None).map(MountUiResult::RuntimeInstalled)

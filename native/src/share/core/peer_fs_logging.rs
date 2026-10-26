@@ -51,9 +51,15 @@ pub(super) fn request_label(request: &FsRequest) -> &'static str {
 
 pub(super) fn response_summary(response: &FsResponse) -> String {
     match response {
-        FsResponse::DirectoryReservationSupported { supported } => format!("directory reservation supported={supported}"),
-        FsResponse::DirectoryIdentity { identity } => format!("directory identity known={}", identity.is_some()),
-        FsResponse::FileIdentity { identity } => format!("file identity known={}", identity.is_some()),
+        FsResponse::DirectoryReservationSupported { supported } => {
+            format!("directory reservation supported={supported}")
+        }
+        FsResponse::DirectoryIdentity { identity } => {
+            format!("directory identity known={}", identity.is_some())
+        }
+        FsResponse::FileIdentity { identity } => {
+            format!("file identity known={}", identity.is_some())
+        }
         FsResponse::Capacity { capacity } => format!("capacity state={:?}", capacity.state),
         FsResponse::Capabilities {
             capabilities,

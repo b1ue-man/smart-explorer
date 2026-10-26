@@ -99,8 +99,8 @@ fn edge_pan(pan: Vec2, area: Rect, dest: Vec2, hover: Option<Pos2>, dt: f32) -> 
 pub(crate) struct ViewWidget {
     cpu: CpuTexture,
     current: Option<Current>,
-    source_stamp:Option<super::screen_presented::PresentedFrame>,
-    source_geometry:Option<FrameSize>,
+    source_stamp: Option<super::screen_presented::PresentedFrame>,
+    source_geometry: Option<FrameSize>,
     pan: Vec2,
     mapper: Option<InputMapper>,
     /// The GPU path takes the planes; cleared when a picture did not fit it.
@@ -114,7 +114,8 @@ impl ViewWidget {
         Self {
             cpu: CpuTexture::default(),
             current: None,
-            source_stamp:None,source_geometry:None,
+            source_stamp: None,
+            source_geometry: None,
             pan: Vec2::ZERO,
             mapper: None,
             gpu,
@@ -124,30 +125,56 @@ impl ViewWidget {
     }
 
     fn accept(&mut self, ctx: &egui::Context, session: &ViewerSession, picture: Picture) {
-        if self.source_stamp.as_ref().is_some_and(|old|!old.same_source(&picture.presented))
-            || matches!((&self.current,&picture.data),(Some(Current::Cpu(_)),PictureData::Yuv(_))|(Some(Current::Gpu(..)),PictureData::Bgra(_))) {
-            self.cpu.reset();self.current=None;
+        if self
+            .source_stamp
+            .as_ref()
+            .is_some_and(|old| !old.same_source(&picture.presented))
+            || matches!(
+                (&self.current, &picture.data),
+                (Some(Current::Cpu(_)), PictureData::Yuv(_))
+                    | (Some(Current::Gpu(..)), PictureData::Bgra(_))
+            )
+        {
+            self.cpu.reset();
+            self.current = None;
         }
-        self.source_stamp=Some(picture.presented.clone());self.source_geometry=Some(picture.size);
-        let limits=session.info().hello.as_ref().and_then(|hello|hello.frame_contract).map(|c|c.limits)
+        self.source_stamp = Some(picture.presented.clone());
+        self.source_geometry = Some(picture.size);
+        let limits = session
+            .info()
+            .hello
+            .as_ref()
+            .and_then(|hello| hello.frame_contract)
+            .map(|c| c.limits)
             .unwrap_or(crate::screen::core::frame_budget::FrameLimits::LEGACY);
-        if limits.check(picture.size).is_err() {self.retire();return;}
+        if limits.check(picture.size).is_err() {
+            self.retire();
+            return;
+        }
         match picture.data {
             PictureData::Bgra(image) => {
-                super::screen_render_caps::bind_texture(&mut self.cpu,session,picture.memory.clone());
+                super::screen_render_caps::bind_texture(
+                    &mut self.cpu,
+                    session,
+                    picture.memory.clone(),
+                );
                 self.cpu.update_frame(ctx, &image, picture.presented);
                 self.current = Some(Current::Cpu(picture.size));
             }
             PictureData::Yuv(planes) => {
                 let mut frame = YuvFrame::new(picture.size, planes);
-                frame.memory=picture.memory;
-                let fits_texture = super::screen_render_owner::get(ctx).and_then(|owner|owner.texture_limit()).is_some_and(|limit|
-                    frame.size.width <= limit && frame.size.height <= limit);
+                frame.memory = picture.memory;
+                let fits_texture = super::screen_render_owner::get(ctx)
+                    .and_then(|owner| owner.texture_limit())
+                    .is_some_and(|limit| frame.size.width <= limit && frame.size.height <= limit);
                 if self.gpu && frame.fits() && fits_texture {
                     self.current = Some(Current::Gpu(Arc::new(frame), picture.presented));
                 } else {
                     // The next pictures come as BGRA.
-                    self.gpu = false;self.cpu.reset();self.current=None;self.source_stamp=None;
+                    self.gpu = false;
+                    self.cpu.reset();
+                    self.current = None;
+                    self.source_stamp = None;
                     session.set_prefer_yuv(false);
                 }
             }
@@ -183,15 +210,34 @@ impl ViewWidget {
         let _ = session.take_picture();
         self.current = None;
         self.cpu.reset();
-        self.source_stamp=None;self.source_geometry=None;
+        self.source_stamp = None;
+        self.source_geometry = None;
         self.pan = Vec2::ZERO;
         self.visibility.invalidate();
     }
 
-    pub(crate) fn retire(&mut self) {self.current=None;self.source_stamp=None;self.source_geometry=None;self.cpu.reset();self.visibility.invalidate();}
-    pub(crate) fn take_texture(&mut self)->CpuTexture {self.retire();std::mem::take(&mut self.cpu)}
-    pub(crate) fn adopt_texture(&mut self,texture:CpuTexture) {self.retire();self.cpu=texture;}
-    pub(crate) fn reconnect(&mut self,gpu:bool) {self.retire();self.gpu=gpu;self.pan=Vec2::ZERO;self.mapper=None;self.was_focused=true;}
+    pub(crate) fn retire(&mut self) {
+        self.current = None;
+        self.source_stamp = None;
+        self.source_geometry = None;
+        self.cpu.reset();
+        self.visibility.invalidate();
+    }
+    pub(crate) fn take_texture(&mut self) -> CpuTexture {
+        self.retire();
+        std::mem::take(&mut self.cpu)
+    }
+    pub(crate) fn adopt_texture(&mut self, texture: CpuTexture) {
+        self.retire();
+        self.cpu = texture;
+    }
+    pub(crate) fn reconnect(&mut self, gpu: bool) {
+        self.retire();
+        self.gpu = gpu;
+        self.pan = Vec2::ZERO;
+        self.mapper = None;
+        self.was_focused = true;
+    }
 
     /// The mapper, made on demand (tests).
     #[cfg(test)]
@@ -216,33 +262,59 @@ impl ViewWidget {
         params: &ViewParams,
     ) -> ViewResult {
         let ctx = ui.ctx().clone();
-        let mut window = ctx.data(|data| data.get_temp::<super::screen_visibility::WindowVisibility>(egui::Id::new("screen_window_visibility"))).unwrap_or_default();
+        let mut window = ctx
+            .data(|data| {
+                data.get_temp::<super::screen_visibility::WindowVisibility>(egui::Id::new(
+                    "screen_window_visibility",
+                ))
+            })
+            .unwrap_or_default();
         if window.hidden() || session.is_ended() || !ui.clip_rect().is_positive() {
             self.release_input(session);
             self.current = None;
             self.cpu.reset();
-            self.source_stamp=None;self.source_geometry=None;
+            self.source_stamp = None;
+            self.source_geometry = None;
         }
-        if self.source_stamp.as_ref().is_some_and(|frame|!frame.active()) {
-            self.current=None;self.source_stamp=None;self.cpu.reset();
+        if self
+            .source_stamp
+            .as_ref()
+            .is_some_and(|frame| !frame.active())
+        {
+            self.current = None;
+            self.source_stamp = None;
+            self.cpu.reset();
             // Keep measured source geometry while waiting for the visibility ACK's frame.
         }
         session.refresh_visibility();
         if let Some(picture) = session.take_picture() {
-            if !window.hidden() && !session.is_ended() && session.can_present(picture.presented.clone()) {
+            if !window.hidden()
+                && !session.is_ended()
+                && session.can_present(picture.presented.clone())
+            {
                 self.accept(&ctx, session, picture);
             }
         }
         let ppp = ctx.pixels_per_point();
         let available = ui.available_size();
         let (area, response) = ui.allocate_exact_size(available, Sense::click_and_drag());
-        if !ui.is_rect_visible(area)||!area.intersect(ui.clip_rect()).is_positive() {
-            window.shown=Some(false);self.release_input(session);self.current=None;self.cpu.reset();self.source_stamp=None;self.source_geometry=None;
+        if !ui.is_rect_visible(area) || !area.intersect(ui.clip_rect()).is_positive() {
+            window.shown = Some(false);
+            self.release_input(session);
+            self.current = None;
+            self.cpu.reset();
+            self.source_stamp = None;
+            self.source_geometry = None;
         }
         let painter = ui.painter_at(area);
         painter.rect_filled(area, 0.0, Color32::BLACK);
-        let size = self.current.as_ref().map(Current::size).or(self.source_geometry);
-        let mut shown = None;let mut reported_geometry=None;
+        let size = self
+            .current
+            .as_ref()
+            .map(Current::size)
+            .or(self.source_geometry);
+        let mut shown = None;
+        let mut reported_geometry = None;
         if let Some(size) = size.filter(|size| size.width > 0 && size.height > 0) {
             if params.fit == Fit::Actual {
                 let dest = Vec2::new(size.width as f32 / ppp, size.height as f32 / ppp);
@@ -255,9 +327,17 @@ impl ViewWidget {
                 }
             }
             let dest = image_rect(area, size, params.fit, ppp, self.pan);
-            reported_geometry=Some(Geometry {rect:dest,size});
+            reported_geometry = Some(Geometry { rect: dest, size });
             let nearest = params.fit == Fit::Actual;
-            let rendered=super::screen_view_widget_render::paint(self.current.as_ref(),&mut self.cpu,session,&painter,area,&Geometry {rect:dest,size},nearest);
+            let rendered = super::screen_view_widget_render::paint(
+                self.current.as_ref(),
+                &mut self.cpu,
+                session,
+                &painter,
+                area,
+                &Geometry { rect: dest, size },
+                nearest,
+            );
             if params.dimmed {
                 painter.rect_filled(dest, 0.0, Color32::from_black_alpha(128));
             }
@@ -274,12 +354,17 @@ impl ViewWidget {
         if let Some(lines) = params.stats {
             screen_stats_overlay::show(ui, area, lines);
         }
-        if let Some(report) = self.visibility.report(&window, area.intersect(ui.clip_rect()), reported_geometry.as_ref(), ppp) {
+        if let Some(report) = self.visibility.report(
+            &window,
+            area.intersect(ui.clip_rect()),
+            reported_geometry.as_ref(),
+            ppp,
+        ) {
             if report.state == crate::screen::core::visibility::VisibilityState::Hidden {
                 self.release_input(session);
                 self.current = None;
                 self.cpu.reset();
-            self.source_stamp=None;
+                self.source_stamp = None;
             }
             session.set_visibility(report);
         }

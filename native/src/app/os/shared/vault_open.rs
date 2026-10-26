@@ -41,8 +41,12 @@ fn failed_step(error: String) -> VaultOpenStep {
 }
 
 fn missing_runtime_for(location: &str) -> bool {
-    let Some((site, _)) = crate::vault::split_place(location) else { return false; };
-    let Ok(record) = crate::vault::RegistryStore::open_default().resolve(&site) else { return false; };
+    let Some((site, _)) = crate::vault::split_place(location) else {
+        return false;
+    };
+    let Ok(record) = crate::vault::RegistryStore::open_default().resolve(&site) else {
+        return false;
+    };
     crate::daemon::list_mounts().is_ok_and(|mounts| mounts.iter().any(|mount| {
         matches!(&mount.config.source, crate::mount::MountSource::Vault { site_id } if *site_id == record.id)
             && matches!(mount.status, crate::mount::MountStatus::RuntimeUnavailable { .. })
@@ -123,7 +127,7 @@ impl OpenCopy {
             } => {
                 check_copy_backend(&backend)?;
                 Ok((backend, path, name, id))
-            },
+            }
             Self::Lazy { site, path, name } => {
                 let root = crate::vault::vault_location(&site, "/");
                 let (backend, _) = crate::connect::resolve_endpoint(&root)?;
@@ -136,13 +140,16 @@ impl OpenCopy {
 }
 
 fn check_copy_backend(backend: &crate::vfs::BackendHandle) -> Result<(), String> {
-    let site = crate::vault::vault_site_of(backend.as_ref()).flatten()
+    let site = crate::vault::vault_site_of(backend.as_ref())
+        .flatten()
         .ok_or_else(|| "Tresoridentität der Klartextquelle ist unbekannt".to_string())?;
     let policy = crate::vault::mount_policy(&site)?;
     let expected = format!("vault:{}#{}", policy.binding.account, policy.binding.root);
     let namespace = format!("vault:{}#{}", policy.binding.namespace, policy.binding.root);
     if backend.state_identity() != expected || backend.namespace_identity() != namespace {
-        return Err("Konto oder Root des Tresors wurde geändert; den Tresor bitte erneut öffnen".into());
+        return Err(
+            "Konto oder Root des Tresors wurde geändert; den Tresor bitte erneut öffnen".into(),
+        );
     }
     Ok(())
 }
@@ -194,8 +201,15 @@ impl crate::app::App {
                 crate::app::open_local_path(&path.to_string_lossy(), mode);
                 VaultFileOpen::Opened
             }
-            Ok(None) if vault_ui_settings::mount_on_open() => self.start_vault_mount(location, mode, copy),
-            Ok(None) => self.vault_open_failure(location, "‚Beim Öffnen einhängen‘ ist ausgeschaltet", mode, copy),
+            Ok(None) if vault_ui_settings::mount_on_open() => {
+                self.start_vault_mount(location, mode, copy)
+            }
+            Ok(None) => self.vault_open_failure(
+                location,
+                "‚Beim Öffnen einhängen‘ ist ausgeschaltet",
+                mode,
+                copy,
+            ),
             Err(error) => self.vault_open_failure(location, &error, mode, copy),
         }
     }
@@ -223,12 +237,20 @@ impl crate::app::App {
         self.start_vault_mount_choice(location, mode, copy, None)
     }
 
-    fn start_vault_mount_choice(&mut self, location: &str, mode: crate::app::OpenMode, copy: &OpenCopy, trust: Option<crate::vault::RootBinding>) -> VaultFileOpen {
+    fn start_vault_mount_choice(
+        &mut self,
+        location: &str,
+        mode: crate::app::OpenMode,
+        copy: &OpenCopy,
+        trust: Option<crate::vault::RootBinding>,
+    ) -> VaultFileOpen {
         let target = location.to_string();
         let ctx = crate::app::vault_modules::vault_feed::context();
         let started = spawn(&ctx, "vault-mount", move || {
             if let Some(binding) = trust {
-                if let Err(error) = crate::vault::confirm_root_trust(&binding) { return VaultOpenStep::Blocked(error); }
+                if let Err(error) = crate::vault::confirm_root_trust(&binding) {
+                    return VaultOpenStep::Blocked(error);
+                }
             }
             open_step(
                 &target,
@@ -255,26 +277,44 @@ impl crate::app::App {
         }
     }
 
-    fn vault_open_failure(&mut self, location: &str, reason: &str, mode: crate::app::OpenMode, copy: &OpenCopy) -> VaultFileOpen {
+    fn vault_open_failure(
+        &mut self,
+        location: &str,
+        reason: &str,
+        mode: crate::app::OpenMode,
+        copy: &OpenCopy,
+    ) -> VaultFileOpen {
         if reason.contains(crate::vault::ROOT_TRUST_REQUIRED) {
-            let record = crate::vault::split_place(location)
-                .and_then(|(site, _)| crate::vault::RegistryStore::open_default().resolve(&site).ok());
+            let record = crate::vault::split_place(location).and_then(|(site, _)| {
+                crate::vault::RegistryStore::open_default()
+                    .resolve(&site)
+                    .ok()
+            });
             if let Some(record) = record {
                 match crate::vault::mount_policy(&record.id) {
                     Ok(policy) => {
                         let question = format!("Tresor „{}“\nSpeicherort: {}\nBackend: {}\nKonto/Peer: {}\nRoot: {}\n\nDie technische Rootbegrenzung ist nicht belegt. Diesem Speicherort für das Einhängen vertrauen? \
                             Die Freigabe gilt nur für diese Identitäten, erlaubt keine Klartextkopie und kann am Tresor widerrufen werden.", record.display_label(), record.location, policy.binding.backend, policy.binding.account, policy.binding.root);
-                        if crate::app::confirm_yes_no("Diesem Tresorspeicher vertrauen?", &question) {
-                            return self.start_vault_mount_choice(location, mode, copy, Some(policy.binding));
+                        if crate::app::confirm_yes_no("Diesem Tresorspeicher vertrauen?", &question)
+                        {
+                            return self.start_vault_mount_choice(
+                                location,
+                                mode,
+                                copy,
+                                Some(policy.binding),
+                            );
                         }
                     }
                     Err(error) => {
-                        self.error_msg = Some(format!("Speicheridentität nicht bestätigt: {error}"));
+                        self.error_msg =
+                            Some(format!("Speicheridentität nicht bestätigt: {error}"));
                         return VaultFileOpen::Declined;
                     }
                 }
             }
-        } else if reason.starts_with(crate::vault::MOUNT_RUNTIME_MISSING) && missing_runtime_for(location) {
+        } else if reason.starts_with(crate::vault::MOUNT_RUNTIME_MISSING)
+            && missing_runtime_for(location)
+        {
             return self.ask_vault_copy(location, reason);
         }
         self.error_msg = Some(format!("Tresordatei nicht geöffnet: {reason}"));
@@ -283,12 +323,17 @@ impl crate::app::App {
 
     fn ask_vault_copy(&mut self, location: &str, reason: &str) -> VaultFileOpen {
         let site = crate::vault::split_place(location).map(|(site, _)| site);
-        let policy = site.as_deref().and_then(|site| crate::vault::mount_policy(site).ok());
+        let policy = site
+            .as_deref()
+            .and_then(|site| crate::vault::mount_policy(site).ok());
         if policy.as_ref().is_some_and(|policy| policy.cleartext_copy) {
             return VaultFileOpen::CopyAgreed;
         }
         if !crate::app::confirm_yes_no(COPY_TITLE, &copy_question(reason)) {
-            self.notice = Some(("Keine Klartextkopie angelegt".into(), std::time::Instant::now()));
+            self.notice = Some((
+                "Keine Klartextkopie angelegt".into(),
+                std::time::Instant::now(),
+            ));
             return VaultFileOpen::Declined;
         }
         if let Some(site) = site {
@@ -338,7 +383,9 @@ impl crate::app::App {
                     crate::app::open_local_path(&path.to_string_lossy(), done.mode);
                 }
                 Some(VaultOpenStep::AskForCopy(reason) | VaultOpenStep::Blocked(reason)) => {
-                    if self.vault_open_failure(&done.location, &reason, done.mode, &done.copy) == VaultFileOpen::CopyAgreed {
+                    if self.vault_open_failure(&done.location, &reason, done.mode, &done.copy)
+                        == VaultFileOpen::CopyAgreed
+                    {
                         self.continue_vault_copy(done.copy, done.mode);
                     }
                 }

@@ -75,7 +75,9 @@ pub(super) fn upload(
     // the uncertainty first; a lost answer can never authorize a resend.
     for (file, _) in &opened {
         if let Err(error) = super::file_recovery::prepare_batch(engine, file) {
-            for (prepared, _) in &opened { let _ = super::file_recovery::unpublished(engine, prepared); }
+            for (prepared, _) in &opened {
+                let _ = super::file_recovery::unpublished(engine, prepared);
+            }
             engine.fatal(format!("Paketpublikation vorbereiten: {error}"));
             return;
         }
@@ -113,7 +115,12 @@ pub(super) fn upload(
         Err(error) if error.kind() == io::ErrorKind::Unsupported => {
             engine.stats.unmoved(delivery.served.iter().sum());
             for file in files {
-                if let Err(error) = super::file_recovery::unpublished(engine, &file) { engine.fatal(format!("Unveröffentlichten Paketbeleg zurücknehmen: {error}")); return; }
+                if let Err(error) = super::file_recovery::unpublished(engine, &file) {
+                    engine.fatal(format!(
+                        "Unveröffentlichten Paketbeleg zurücknehmen: {error}"
+                    ));
+                    return;
+                }
                 run_file(engine, file, buffer);
             }
             return;
@@ -126,7 +133,11 @@ pub(super) fn upload(
         match outcomes.next() {
             Some(BatchPutOutcome::Published(path)) => {
                 if let Err(error) = super::file_recovery::after(engine, &file, &path) {
-                    failures.member(file, OpError::at(At::Unknown, error), Attempt::MaybePublished);
+                    failures.member(
+                        file,
+                        OpError::at(At::Unknown, error),
+                        Attempt::MaybePublished,
+                    );
                     continue;
                 }
                 if parent_rel(&file.rel).is_none() {

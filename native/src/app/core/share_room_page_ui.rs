@@ -137,9 +137,21 @@ fn room_page(app: &mut App, ui: &mut egui::Ui, profile_id: &str) {
     pages_ui::heading(ui, "RECHTE");
     let mut may_write = room.policy.members_may_write;
     let mut confirm = room.policy.confirm_new_members;
-    let mut form = crate::app::settings_form::Form::new(ui, "room_policy_form", &["Mitglieder schreiben", "Neue Mitglieder"]);
-    let write_changed = form.row_labelled(ui, "Mitglieder schreiben", |ui, label| ui.checkbox(&mut may_write, "Auf schreibbaren Freigaben erlauben").labelled_by(label).changed());
-    let confirm_changed = form.row_labelled(ui, "Neue Mitglieder", |ui, label| ui.checkbox(&mut confirm, "Einzeln bestätigen").labelled_by(label).changed());
+    let mut form = crate::app::settings_form::Form::new(
+        ui,
+        "room_policy_form",
+        &["Mitglieder schreiben", "Neue Mitglieder"],
+    );
+    let write_changed = form.row_labelled(ui, "Mitglieder schreiben", |ui, label| {
+        ui.checkbox(&mut may_write, "Auf schreibbaren Freigaben erlauben")
+            .labelled_by(label)
+            .changed()
+    });
+    let confirm_changed = form.row_labelled(ui, "Neue Mitglieder", |ui, label| {
+        ui.checkbox(&mut confirm, "Einzeln bestätigen")
+            .labelled_by(label)
+            .changed()
+    });
     ui.label("Ein Raum-Code gibt allein keine Ordner frei.");
     if write_changed || confirm_changed {
         persist(app, "Raumrechte", |profiles| {
@@ -173,22 +185,25 @@ fn rename_row(app: &mut App, ui: &mut egui::Ui, room: &crate::share::RoomProfile
     let mut form = crate::app::settings_form::Form::new(ui, "room_name_form", &["Raumname"]);
     form.row(ui, "Raumname", |ui| {
         ui.horizontal_wrapped(|ui| {
-        if ui
-            .add(egui::TextEdit::singleline(&mut name).desired_width(share_input_width(ui, 220.0)))
-            .changed()
-        {
-            ui.data_mut(|data| data.insert_temp(id, name.clone()));
-        }
-        if ui
-            .add_enabled(name.trim() != room.name, egui::Button::new("Umbenennen"))
-            .clicked()
-        {
-            persist(app, "Raumname", |profiles| {
-                profiles.rename_room(&room.id, &name)
-            });
-            ui.data_mut(|data| data.remove::<String>(id));
-        }
-    });
+            if ui
+                .add(
+                    egui::TextEdit::singleline(&mut name)
+                        .desired_width(share_input_width(ui, 220.0)),
+                )
+                .changed()
+            {
+                ui.data_mut(|data| data.insert_temp(id, name.clone()));
+            }
+            if ui
+                .add_enabled(name.trim() != room.name, egui::Button::new("Umbenennen"))
+                .clicked()
+            {
+                persist(app, "Raumname", |profiles| {
+                    profiles.rename_room(&room.id, &name)
+                });
+                ui.data_mut(|data| data.remove::<String>(id));
+            }
+        });
     });
 }
 
@@ -272,9 +287,15 @@ fn member_row(
         app.share_tab = pages_ui::TAB_DIAGNOSTICS;
     }
     if exec {
-        pages_ui::open(app, ui, pages_ui::TAB_DEVICES, SharePage::Device {
-            device_id: member.device_id.clone(), public_key: member.public_key.clone(),
-        });
+        pages_ui::open(
+            app,
+            ui,
+            pages_ui::TAB_DEVICES,
+            SharePage::Device {
+                device_id: member.device_id.clone(),
+                public_key: member.public_key.clone(),
+            },
+        );
     }
     if open {
         app.open_share_target(crate::share::PeerOpenTarget::RoomDevice {

@@ -124,33 +124,37 @@ pub(crate) fn show(ctx: &egui::Context) -> Vec<Effect> {
     };
     let busy = dialog.rx.is_some();
     let (mut create_now, mut cancel) = (false, false);
-    crate::app::dialog_geometry::window(ctx, "vault_sync_editor_ui.0", format!("Synchronisieren – {}", origin.label))
-        .id(egui::Id::new("vault_sync_create"))
-        .collapsible(false)
-        .resizable(true)
-        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-        .show(ctx, |ui| {
-            create_form(ui, dialog, &origin, &rows, busy, &mut effects);
-            ui.separator();
-            ui.horizontal(|ui| {
-                let ready = dialog.draft.issue().is_none() && !busy;
-                if ui
-                    .add_enabled(ready, egui::Button::new("Anlegen"))
-                    .clicked()
-                {
-                    create_now = true;
-                }
-                if ui
-                    .add_enabled(!busy, egui::Button::new("Abbrechen"))
-                    .clicked()
-                {
-                    cancel = true;
-                }
-                if busy {
-                    ui.spinner();
-                }
-            });
+    crate::app::dialog_geometry::window(
+        ctx,
+        "vault_sync_editor_ui.0",
+        format!("Synchronisieren – {}", origin.label),
+    )
+    .id(egui::Id::new("vault_sync_create"))
+    .collapsible(false)
+    .resizable(true)
+    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+    .show(ctx, |ui| {
+        create_form(ui, dialog, &origin, &rows, busy, &mut effects);
+        ui.separator();
+        ui.horizontal(|ui| {
+            let ready = dialog.draft.issue().is_none() && !busy;
+            if ui
+                .add_enabled(ready, egui::Button::new("Anlegen"))
+                .clicked()
+            {
+                create_now = true;
+            }
+            if ui
+                .add_enabled(!busy, egui::Button::new("Abbrechen"))
+                .clicked()
+            {
+                cancel = true;
+            }
+            if busy {
+                ui.spinner();
+            }
         });
+    });
     if cancel {
         *held = None;
     } else if create_now {

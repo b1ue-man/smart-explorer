@@ -193,7 +193,9 @@ impl ViewState {
 
     fn send_keys(&self, events: Vec<InputEvent>) {
         if let (Some(session), true) = (&self.session, self.control_on) {
-            if !session.input_ready() { return; }
+            if !session.input_ready() {
+                return;
+            }
             session.send(ViewerFrame::Input(events));
         }
     }

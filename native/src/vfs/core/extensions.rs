@@ -70,7 +70,10 @@ pub trait BackendExtensions: Backend {
     }
 
     fn capacity(&self, root: &str) -> VfsResult<super::CapacitySnapshot> {
-        Ok(super::CapacitySnapshot::unknown(self.state_identity(), root))
+        Ok(super::CapacitySnapshot::unknown(
+            self.state_identity(),
+            root,
+        ))
     }
 
     /// Intrinsic archive policy, independent of the current export grant.

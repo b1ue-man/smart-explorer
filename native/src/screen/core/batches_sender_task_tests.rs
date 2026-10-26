@@ -29,7 +29,10 @@ fn batches_task_b6_sender_abandoned_encode_permit_releases_capacity_fairly() {
     let permit = admit(&first, 1).unwrap();
     assert!(admit(&second, 2).is_none());
     drop(permit);
-    assert!(admit(&first, 3).is_none(), "recently waiting sibling owns the next turn");
+    assert!(
+        admit(&first, 3).is_none(),
+        "recently waiting sibling owns the next turn"
+    );
     let permit = admit(&second, 4).unwrap();
     assert!(admit(&first, 5).is_none());
     drop(permit);
@@ -49,14 +52,18 @@ fn batches_task_b6_sender_control_reservation_is_peer_shared_and_survives_flow_r
     assert!(reserve_control("batches-b6-independent".into(), bytes).is_some());
     drop(control);
     assert!(reserve_control(peer, bytes).is_some());
-    assert_eq!(SenderBudget::control_reserve_bytes() + super::super::pacing::RELAY_GUARD_BYTES,
-        super::super::pacing::RELAY_QUEUE_BYTES);
+    assert_eq!(
+        SenderBudget::control_reserve_bytes() + super::super::pacing::RELAY_GUARD_BYTES,
+        super::super::pacing::RELAY_QUEUE_BYTES
+    );
 }
 
 #[test]
 fn batches_task_b6_rate_path_change_resets_loss_and_keeps_native_source_pixels() {
-    use super::super::rate_control::{RateController, quality_for, START_DIRECT_BPS, START_RELAY_BPS};
     use super::super::pixel_convert::FrameSize;
+    use super::super::rate_control::{
+        quality_for, RateController, START_DIRECT_BPS, START_RELAY_BPS,
+    };
     let mut rate = RateController::new(PathKind::Direct, 0);
     rate.on_loss_counters(100, 0);
     rate.on_loss_counters(200, 100);

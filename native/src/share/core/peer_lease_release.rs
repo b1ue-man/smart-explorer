@@ -62,21 +62,25 @@ fn schedule_release(
                     return;
                 }
             };
-            let result = node.block_on_route(opened.generation, io_deadline::run_for_until(
-                "peer mount lease release",
-                timeout, Some(deadline),
-                async {
-                    send_ctrl(
-                        &mut opened.send,
-                        &Ctrl::Fs {
-                            req: FsRequest::ReleaseLease,
-                            lease: Some(token),
-                        },
-                    )
-                    .await?;
-                    recv_resp_wire(&mut opened.recv).await
-                },
-            ));
+            let result = node.block_on_route(
+                opened.generation,
+                io_deadline::run_for_until(
+                    "peer mount lease release",
+                    timeout,
+                    Some(deadline),
+                    async {
+                        send_ctrl(
+                            &mut opened.send,
+                            &Ctrl::Fs {
+                                req: FsRequest::ReleaseLease,
+                                lease: Some(token),
+                            },
+                        )
+                        .await?;
+                        recv_resp_wire(&mut opened.recv).await
+                    },
+                ),
+            );
             match result {
                 Ok(response) => match decode_resp(response) {
                     Ok(FsResponse::Ok) => {}

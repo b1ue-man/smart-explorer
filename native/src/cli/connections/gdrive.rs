@@ -113,8 +113,14 @@ pub(super) fn run(args: GdriveArgs) -> Result<i32, String> {
                         "no"
                     }
                 );
-                println!("auth_state\t{}", value["state"].as_str().unwrap_or("storage_error"));
-                println!("auth_message\t{}", value["message"].as_str().unwrap_or("OAuth-Status fehlt"));
+                println!(
+                    "auth_state\t{}",
+                    value["state"].as_str().unwrap_or("storage_error")
+                );
+                println!(
+                    "auth_message\t{}",
+                    value["message"].as_str().unwrap_or("OAuth-Status fehlt")
+                );
             }
             Ok(0)
         }
@@ -142,10 +148,12 @@ pub(super) fn run(args: GdriveArgs) -> Result<i32, String> {
 /// The document of `status --json`: the fields of the Android `gdrive.status`.
 pub(super) fn status_value() -> serde_json::Value {
     let status = crate::cloud::auth_status(Provider::GDrive);
-    serde_json::to_value(status).unwrap_or_else(|_| json!({
-        "state": "storage_error", "signed_in": false,
-        "message": "OAuth-Status konnte nicht dargestellt werden"
-    }))
+    serde_json::to_value(status).unwrap_or_else(|_| {
+        json!({
+            "state": "storage_error", "signed_in": false,
+            "message": "OAuth-Status konnte nicht dargestellt werden"
+        })
+    })
 }
 
 #[cfg(test)]

@@ -12,7 +12,9 @@ use super::types::VerifiedPayload;
 mod launcher;
 #[path = "legacy_launcher.rs"]
 mod legacy_launcher;
-pub use legacy_launcher::{complete_legacy_launcher,LegacyLauncherRequest,CompletedLegacyLauncher};
+pub use legacy_launcher::{
+    complete_legacy_launcher, CompletedLegacyLauncher, LegacyLauncherRequest,
+};
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(25);
 const UPDATE_USER_AGENT: &str = "smart-explorer-updater";

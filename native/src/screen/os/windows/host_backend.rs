@@ -59,7 +59,9 @@ impl WindowsBackend {
 }
 
 impl ScreenHostBackend for WindowsBackend {
-    fn memory_facts(&self)->Option<crate::screen::core::frame_memory::MemoryFacts> {super::session_memory::facts()}
+    fn memory_facts(&self) -> Option<crate::screen::core::frame_memory::MemoryFacts> {
+        super::session_memory::facts()
+    }
     fn platform(&self) -> HostPlatform {
         HostPlatform::Windows
     }
@@ -92,43 +94,72 @@ impl ScreenHostBackend for WindowsBackend {
     }
 
     fn windows(&self) -> io::Result<WindowList> {
-        let mut list=window_list::list(self.limits());
+        let mut list = window_list::list(self.limits());
         super::app_icons::attach(&mut list);
         Ok(list)
     }
 
-    fn icon(&self, entry: crate::screen::core::app_icon::AuthorizedIconEntry<'_>) -> io::Result<Option<crate::screen::core::app_icon::IconReply>> {
+    fn icon(
+        &self,
+        entry: crate::screen::core::app_icon::AuthorizedIconEntry<'_>,
+    ) -> io::Result<Option<crate::screen::core::app_icon::IconReply>> {
         super::app_icons::load(entry)
     }
 
-    fn prepare_session_source(&self, owner: &str, session: &str, source: &SourceId,
-        wanted: Option<FrameSize>, control: bool,
-        admission: std::sync::Arc<crate::screen::core::capture_admission::SessionAdmission>)
-        -> Result<Box<dyn crate::screen::core::host_backend::PreparedSource>, SourceRefusal> {
+    fn prepare_session_source(
+        &self,
+        owner: &str,
+        session: &str,
+        source: &SourceId,
+        wanted: Option<FrameSize>,
+        control: bool,
+        admission: std::sync::Arc<crate::screen::core::capture_admission::SessionAdmission>,
+    ) -> Result<Box<dyn crate::screen::core::host_backend::PreparedSource>, SourceRefusal> {
         if matches!(source, SourceId::Synthetic) {
-            return SyntheticBackend.prepare_session_source(owner, session, source, wanted, control, admission);
+            return SyntheticBackend
+                .prepare_session_source(owner, session, source, wanted, control, admission);
         }
-        if !self.graphical_session() {return Err(SourceRefusal::new(super::capture_source::CAPTURE_UNAVAILABLE));}
+        if !self.graphical_session() {
+            return Err(SourceRefusal::new(
+                super::capture_source::CAPTURE_UNAVAILABLE,
+            ));
+        }
         PreparedWindows::prepare(session, source, admission)
     }
 
-    fn prepare_family_member(&self, owner: &str, session: &str,
+    fn prepare_family_member(
+        &self,
+        owner: &str,
+        session: &str,
         native: crate::remote_window::NativeWindowId,
-        admission: std::sync::Arc<crate::screen::core::capture_admission::SessionAdmission>)
-        -> Result<Box<dyn crate::screen::core::host_backend::PreparedSource>, SourceRefusal> {
-        let handle = usize::try_from(native.0).map_err(|_|SourceRefusal::new(super::capture_source::WINDOW_NOT_FOUND))?;
+        admission: std::sync::Arc<crate::screen::core::capture_admission::SessionAdmission>,
+    ) -> Result<Box<dyn crate::screen::core::host_backend::PreparedSource>, SourceRefusal> {
+        let handle = usize::try_from(native.0)
+            .map_err(|_| SourceRefusal::new(super::capture_source::WINDOW_NOT_FOUND))?;
         // This boundary can only prepare CreateForWindow. The metadata and
         // activation branches never fall back to a monitor or a desktop crop.
-        self.prepare_session_source(owner, session, &SourceId::Window(handle.to_string()), None, false, admission)
+        self.prepare_session_source(
+            owner,
+            session,
+            &SourceId::Window(handle.to_string()),
+            None,
+            false,
+            admission,
+        )
     }
 
-    fn open_source(&self, _source: &SourceId, _wanted: Option<FrameSize>)
-        -> Result<Box<dyn ScreenSource>, SourceRefusal> {
+    fn open_source(
+        &self,
+        _source: &SourceId,
+        _wanted: Option<FrameSize>,
+    ) -> Result<Box<dyn ScreenSource>, SourceRefusal> {
         Err(SourceRefusal::new("capture_grant_required"))
     }
 
-    fn open_family_member(&self, _native: crate::remote_window::NativeWindowId)
-        -> Result<Box<dyn ScreenSource>,SourceRefusal> {
+    fn open_family_member(
+        &self,
+        _native: crate::remote_window::NativeWindowId,
+    ) -> Result<Box<dyn ScreenSource>, SourceRefusal> {
         Err(SourceRefusal::new("capture_grant_required"))
     }
 
@@ -140,8 +171,19 @@ impl ScreenHostBackend for WindowsBackend {
         SyntheticBackend.open_encoder(choice, size)
     }
 
-    fn open_encoder_for_stage(&self, request: &crate::screen::core::host_stage::StageRequest) -> io::Result<Box<dyn ScreenEncoder>> {
-        Ok(crate::screen::os::codec_inventory::registry().open_encoder_with_contract(&request.choice, request.size, request.fps, &[], request.frame_contract)?.encoder)
+    fn open_encoder_for_stage(
+        &self,
+        request: &crate::screen::core::host_stage::StageRequest,
+    ) -> io::Result<Box<dyn ScreenEncoder>> {
+        Ok(crate::screen::os::codec_inventory::registry()
+            .open_encoder_with_contract(
+                &request.choice,
+                request.size,
+                request.fps,
+                &[],
+                request.frame_contract,
+            )?
+            .encoder)
     }
 
     fn open_encoder_for_stage_admitted(
@@ -150,16 +192,21 @@ impl ScreenHostBackend for WindowsBackend {
         grant: crate::screen::core::capture_admission::CaptureGrant,
     ) -> io::Result<Box<dyn ScreenEncoder>> {
         Ok(crate::screen::os::codec_inventory::registry()
-            .open_encoder_for_stage_admitted(request, &[], grant)?.encoder)
+            .open_encoder_for_stage_admitted(request, &[], grant)?
+            .encoder)
     }
 
     fn inject(&self, events: &[InputEvent]) -> Result<(), ControlBlock> {
         super::input_send::inject(events)
     }
-    fn inject_family(&self,member:&crate::remote_window::CaptureMember,events:&[InputEvent])->Result<(),ControlBlock> {
-        super::input_send::inject_family(member.geometry,events)
+    fn inject_family(
+        &self,
+        member: &crate::remote_window::CaptureMember,
+        events: &[InputEvent],
+    ) -> Result<(), ControlBlock> {
+        super::input_send::inject_family(member.geometry, events)
     }
-    fn release_input(&self,events:&[InputEvent])->Result<(),ControlBlock> {
+    fn release_input(&self, events: &[InputEvent]) -> Result<(), ControlBlock> {
         super::input_send::release(events)
     }
 }

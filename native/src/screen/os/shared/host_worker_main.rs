@@ -18,13 +18,13 @@ use std::time::{Duration, Instant};
 
 use super::codec_inventory;
 use super::openh264_switched_on;
+use crate::screen::core::frame_budget::FrameLimits;
 use crate::screen::core::gop_stream::now_us;
 use crate::screen::core::host_backend::{
     ScreenEncoder, ScreenHostBackend, ScreenSource, SourceFrame,
 };
 use crate::screen::core::host_stage::{StageEncoder, StageFrame, StageRequest};
 use crate::screen::core::negotiate::CodecChoice;
-use crate::screen::core::frame_budget::FrameLimits;
 use crate::screen::core::wire_hello::ScreenErrorCode;
 use crate::screen::core::worker_wire::{read_message, send_reply, WorkerReply, WorkerRequest};
 
@@ -60,7 +60,7 @@ struct Running {
 }
 
 struct Worker {
-    admitted:Option<Option<crate::screen::core::frame_budget::FrameContract>>,
+    admitted: Option<Option<crate::screen::core::frame_budget::FrameContract>>,
     backend: Arc<dyn ScreenHostBackend>,
     source: Option<Box<dyn ScreenSource>>,
     encoder: Option<Running>,
@@ -71,13 +71,13 @@ struct Worker {
     /// The session may control (`OPEN` with `control`).
     control: bool,
     capture_active: bool,
-    reference_generation:u64,
+    reference_generation: u64,
     family: Option<super::host_worker_client::family_backend::WorkerFamily>,
-    prepared:Option<Box<dyn crate::screen::core::capture_source_contract::PreparedSource>>,
-    planned:Option<crate::screen::core::capture_admission::CapturePlan>,
-    capture_session:Option<Arc<crate::screen::core::capture_admission::SessionAdmission>>,
-    remote:Arc<dispatch::RemoteAuthority>,
-    release_sink:Option<Arc<dyn crate::screen::core::host_backend::ScreenInputSink>>,
+    prepared: Option<Box<dyn crate::screen::core::capture_source_contract::PreparedSource>>,
+    planned: Option<crate::screen::core::capture_admission::CapturePlan>,
+    capture_session: Option<Arc<crate::screen::core::capture_admission::SessionAdmission>>,
+    remote: Arc<dispatch::RemoteAuthority>,
+    release_sink: Option<Arc<dyn crate::screen::core::host_backend::ScreenInputSink>>,
 }
 
 fn failed(code: ScreenErrorCode, error: impl ToString) -> WorkerReply {
@@ -111,74 +111,157 @@ pub fn run_screen_host_worker_if_requested(arguments: &[std::ffi::OsString]) -> 
 }
 
 /// Runs the host process; the exit code of `--screen-host-worker`.
-pub(crate) fn run_host_worker() -> i32 {run::run()}
+pub(crate) fn run_host_worker() -> i32 {
+    run::run()
+}
 
-#[path="host_worker_run.rs"]
-mod run;
-#[path="capture_dispatch.rs"]
+#[path = "capture_dispatch.rs"]
 mod dispatch;
-#[path="host_worker_prepare.rs"]
+#[path = "host_worker_prepare.rs"]
 mod prepare;
+#[path = "host_worker_run.rs"]
+mod run;
 
 impl Worker {
     fn handle(&mut self, request: WorkerRequest) -> WorkerReply {
         match request {
-            WorkerRequest::CaptureControl(request)=>self.handle_capture_request(request),
-            WorkerRequest::OpenFamily(_) | WorkerRequest::Open(_) => failed(ScreenErrorCode::CaptureFailed,"worker_open_requires_preparation_and_grant"),
+            WorkerRequest::CaptureControl(request) => self.handle_capture_request(request),
+            WorkerRequest::OpenFamily(_) | WorkerRequest::Open(_) => failed(
+                ScreenErrorCode::CaptureFailed,
+                "worker_open_requires_preparation_and_grant",
+            ),
             WorkerRequest::Family(command) => {
-                use crate::screen::core::worker_family::{FamilyCommand,FamilyReply};
-                let result = if self.remote.is_closed() && !matches!(&command, FamilyCommand::Snapshot) {
-                    Err(io::Error::new(io::ErrorKind::Interrupted,"family control cancelled by worker close"))
-                } else {match (self.family.as_mut(),command) {
-                    (Some(family),FamilyCommand::Snapshot)=>family.snapshot().map(|snapshot|FamilyReply::Snapshot(Some(snapshot))),
-                    (None,FamilyCommand::Snapshot)=>Ok(FamilyReply::Snapshot(None)),
-                    (Some(family),FamilyCommand::Operation(request))=>family.operation(request).map(FamilyReply::Operation),
-                    (Some(family),FamilyCommand::Input(request))=>family.input(request).map(FamilyReply::Input),
-                    _=>Err(io::Error::new(io::ErrorKind::PermissionDenied,"source_has_no_window_family")),
-                }};
-                match result {Ok(reply)=>WorkerReply::Family(reply),Err(error)=>capture_failed(&error)}
+                use crate::screen::core::worker_family::{FamilyCommand, FamilyReply};
+                let result =
+                    if self.remote.is_closed() && !matches!(&command, FamilyCommand::Snapshot) {
+                        Err(io::Error::new(
+                            io::ErrorKind::Interrupted,
+                            "family control cancelled by worker close",
+                        ))
+                    } else {
+                        match (self.family.as_mut(), command) {
+                            (Some(family), FamilyCommand::Snapshot) => family
+                                .snapshot()
+                                .map(|snapshot| FamilyReply::Snapshot(Some(snapshot))),
+                            (None, FamilyCommand::Snapshot) => Ok(FamilyReply::Snapshot(None)),
+                            (Some(family), FamilyCommand::Operation(request)) => {
+                                family.operation(request).map(FamilyReply::Operation)
+                            }
+                            (Some(family), FamilyCommand::Input(request)) => {
+                                family.input(request).map(FamilyReply::Input)
+                            }
+                            _ => Err(io::Error::new(
+                                io::ErrorKind::PermissionDenied,
+                                "source_has_no_window_family",
+                            )),
+                        }
+                    };
+                match result {
+                    Ok(reply) => WorkerReply::Family(reply),
+                    Err(error) => capture_failed(&error),
+                }
             }
             WorkerRequest::Release(events) => {
-                let allowed=events.iter().all(|event|matches!(event,
-                    crate::screen::core::input_model::InputEvent::Key {down:false,..}
-                    |crate::screen::core::input_model::InputEvent::Button {down:false,..}
-                    |crate::screen::core::input_model::InputEvent::Touch {phase:crate::screen::core::input_model::TouchPhase::End|crate::screen::core::input_model::TouchPhase::Cancel,..}));
-                let blocked=if !allowed || !self.control {Some(crate::screen::core::wire_control::ControlBlock::ControlUnavailable)}
-                    else if let Some(family)=self.family.as_mut() {family.release().err()}
-                    else if let Some(sink)=self.release_sink.as_ref() {sink.release(&events).err()}
-                    else {self.backend.release_input(&events).err()};
-                WorkerReply::InputDone {blocked,legacy_reconnect:self.source.as_ref().is_some_and(|s|s.legacy_input_invalid())}
+                let allowed = events.iter().all(|event| {
+                    matches!(
+                        event,
+                        crate::screen::core::input_model::InputEvent::Key { down: false, .. }
+                            | crate::screen::core::input_model::InputEvent::Button {
+                                down: false,
+                                ..
+                            }
+                            | crate::screen::core::input_model::InputEvent::Touch {
+                                phase: crate::screen::core::input_model::TouchPhase::End
+                                    | crate::screen::core::input_model::TouchPhase::Cancel,
+                                ..
+                            }
+                    )
+                });
+                let blocked = if !allowed || !self.control {
+                    Some(crate::screen::core::wire_control::ControlBlock::ControlUnavailable)
+                } else if let Some(family) = self.family.as_mut() {
+                    family.release().err()
+                } else if let Some(sink) = self.release_sink.as_ref() {
+                    sink.release(&events).err()
+                } else {
+                    self.backend.release_input(&events).err()
+                };
+                WorkerReply::InputDone {
+                    blocked,
+                    legacy_reconnect: self
+                        .source
+                        .as_ref()
+                        .is_some_and(|s| s.legacy_input_invalid()),
+                }
             }
             WorkerRequest::SetCaptureActive(active) => {
-                self.capture_active=false; self.encoder=None;
-                match self.source.as_mut().ok_or_else(||io::Error::other("screen source unavailable")).and_then(|source|source.set_capture_active(active)) {
-                    Ok(()) => {self.capture_active=active; WorkerReply::CaptureActive(active)},
+                self.capture_active = false;
+                self.encoder = None;
+                match self
+                    .source
+                    .as_mut()
+                    .ok_or_else(|| io::Error::other("screen source unavailable"))
+                    .and_then(|source| source.set_capture_active(active))
+                {
+                    Ok(()) => {
+                        self.capture_active = active;
+                        WorkerReply::CaptureActive(active)
+                    }
                     Err(error) => capture_failed(&error),
                 }
             }
             WorkerRequest::Produce(request) => self.produce(&request),
-            WorkerRequest::Capture { frame_id,frame_contract } => self.raw(frame_id,frame_contract),
+            WorkerRequest::Capture {
+                frame_id,
+                frame_contract,
+            } => self.raw(frame_id, frame_contract),
             WorkerRequest::Input(input) => {
-                let blocked = if !self.control || self.source.is_none() || self.family.is_some() || self.remote.is_closed() {
+                let blocked = if !self.control
+                    || self.source.is_none()
+                    || self.family.is_some()
+                    || self.remote.is_closed()
+                {
                     Some(crate::screen::core::wire_control::ControlBlock::ControlUnavailable)
                 } else {
-                    self.source.as_mut().and_then(|source|source.inject_input(self.backend.as_ref(),
-                        input.reference_generation,input.presented,&input.events).err())
+                    self.source.as_mut().and_then(|source| {
+                        source
+                            .inject_input(
+                                self.backend.as_ref(),
+                                input.reference_generation,
+                                input.presented,
+                                &input.events,
+                            )
+                            .err()
+                    })
                 };
-                WorkerReply::InputDone { blocked,legacy_reconnect:self.source.as_ref().is_some_and(|s|s.legacy_input_invalid()) }
+                WorkerReply::InputDone {
+                    blocked,
+                    legacy_reconnect: self
+                        .source
+                        .as_ref()
+                        .is_some_and(|s| s.legacy_input_invalid()),
+                }
             }
             WorkerRequest::Close => failed(ScreenErrorCode::CaptureFailed, "closed"),
         }
     }
 
     /// One raw picture for a still image.
-    fn raw(&mut self, frame_id: u64,contract:Option<crate::screen::core::frame_budget::FrameContract>) -> WorkerReply {
-        if let Err(error)=self.admit(contract) {return failed(ScreenErrorCode::CaptureFailed,error);}
-        if !self.capture_active {return failed(ScreenErrorCode::CaptureFailed,"screen capture is paused");}
+    fn raw(
+        &mut self,
+        frame_id: u64,
+        contract: Option<crate::screen::core::frame_budget::FrameContract>,
+    ) -> WorkerReply {
+        if let Err(error) = self.admit(contract) {
+            return failed(ScreenErrorCode::CaptureFailed, error);
+        }
+        if !self.capture_active {
+            return failed(ScreenErrorCode::CaptureFailed, "screen capture is paused");
+        }
         let Some(source) = self.source.as_mut() else {
             return failed(ScreenErrorCode::CaptureFailed, "no source is open");
         };
-        match source.capture_snapshot(frame_id,contract) {
+        match source.capture_snapshot(frame_id, contract) {
             Ok(SourceFrame::Frame(image)) => WorkerReply::Raw(image),
             Ok(SourceFrame::Paused(state)) => WorkerReply::Frame(StageFrame::Paused(state)),
             Ok(SourceFrame::Unchanged) => {
@@ -189,15 +272,29 @@ impl Worker {
     }
 
     /// RAW snapshots and encoded frames share one immutable session promise.
-    fn admit(&mut self,contract:Option<crate::screen::core::frame_budget::FrameContract>)->io::Result<()> {
+    fn admit(
+        &mut self,
+        contract: Option<crate::screen::core::frame_budget::FrameContract>,
+    ) -> io::Result<()> {
         if self.remote.is_closed() {
-            return Err(io::Error::new(io::ErrorKind::Interrupted,"worker capture cancelled by close"));
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "worker capture cancelled by close",
+            ));
         }
-        if let Some(contract)=contract {contract.validate()?;}
-        let Some(accepted)=self.admitted else {return Err(io::Error::other("worker capture contract is unbound"));};
-        if self.capture_session.is_none() || self.source.is_none()
-            || !crate::screen::core::frame_budget::contract_matches(contract,accepted) {
-            return Err(io::Error::other("worker request changed the admitted capture contract"));
+        if let Some(contract) = contract {
+            contract.validate()?;
+        }
+        let Some(accepted) = self.admitted else {
+            return Err(io::Error::other("worker capture contract is unbound"));
+        };
+        if self.capture_session.is_none()
+            || self.source.is_none()
+            || !crate::screen::core::frame_budget::contract_matches(contract, accepted)
+        {
+            return Err(io::Error::other(
+                "worker request changed the admitted capture contract",
+            ));
         }
         Ok(())
     }

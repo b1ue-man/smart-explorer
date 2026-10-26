@@ -67,14 +67,33 @@ impl App {
         }
         let mut open = true;
         let mut actions = Vec::new();
-        let mut places = vec![("Lokales Dateisystem".to_string(), crate::transfer::Endpoint::Local)];
+        let mut places = vec![(
+            "Lokales Dateisystem".to_string(),
+            crate::transfer::Endpoint::Local,
+        )];
         for index in 0..self.tabs.len() {
             if let Some((place, _)) = self.tab_place(index) {
-                if !place.is_local() { places.push((format!("Tab {}: {}", index + 1, place.label), place.endpoint)); }
+                if !place.is_local() {
+                    places.push((
+                        format!("Tab {}: {}", index + 1, place.label),
+                        place.endpoint,
+                    ));
+                }
             }
         }
-        let known: std::collections::HashSet<String> = self.transfer_center.lane.active.iter().filter_map(|active| active.job.as_ref().map(|job| job.id.clone()))
-            .chain(self.transfer_center.finished.iter().filter_map(|entry| entry.job.as_ref().map(|job| job.id.clone()))).collect();
+        let known: std::collections::HashSet<String> = self
+            .transfer_center
+            .lane
+            .active
+            .iter()
+            .filter_map(|active| active.job.as_ref().map(|job| job.id.clone()))
+            .chain(
+                self.transfer_center
+                    .finished
+                    .iter()
+                    .filter_map(|entry| entry.job.as_ref().map(|job| job.id.clone())),
+            )
+            .collect();
         let mut recovery = None;
         let center = &self.transfer_center;
         super::dialog_geometry::window(ctx, "transfer_window.0", "⇅ Übertragungen")
@@ -95,7 +114,12 @@ impl App {
         }
         if let Some(recovery) = recovery {
             match recovery {
-                Ok(job) => { self.submit_approved_job_for(job, super::transfer_center::TransferPurpose::Copy); }
+                Ok(job) => {
+                    self.submit_approved_job_for(
+                        job,
+                        super::transfer_center::TransferPurpose::Copy,
+                    );
+                }
                 Err(error) => self.error_msg = Some(error),
             }
         }
@@ -154,11 +178,12 @@ fn window_body(
         ui.colored_label(theme::muted(ui), EMPTY_HINT);
         return;
     }
-    egui::ScrollArea::vertical().min_scrolled_height(0.0)
+    egui::ScrollArea::vertical()
+        .min_scrolled_height(0.0)
         .id_salt("transfer_rows")
         .auto_shrink([false, false])
         .max_height(super::dialog_geometry::remaining_height(ui, 1.0))
-                    .show(ui, |ui| {
+        .show(ui, |ui| {
             for target in center.connecting.iter().rev() {
                 ui.push_id(("connect", target.id), |ui| {
                     connecting_row(ui, target, actions)
@@ -333,7 +358,8 @@ fn issue_list(
             }
         }
     });
-    egui::ScrollArea::vertical().min_scrolled_height(0.0)
+    egui::ScrollArea::vertical()
+        .min_scrolled_height(0.0)
         .id_salt("issues")
         .max_height(super::dialog_geometry::remaining_height(ui, 2.0))
         .show(ui, |ui| {

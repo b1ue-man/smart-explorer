@@ -56,7 +56,7 @@ pub(crate) fn preview_gap_ms(interval_ms: u64) -> u64 {
 
 pub(crate) fn preview_request(offers: &[CodecOffer], edge: u32, interval_ms: u64) -> StreamRequest {
     StreamRequest {
-            expected_node: None,
+        expected_node: None,
         mode: SessionMode::Preview,
         source: None,
         decoders: offers.to_vec(),
@@ -73,7 +73,7 @@ pub(crate) fn full_request(
     control: bool,
 ) -> StreamRequest {
     StreamRequest {
-            expected_node: None,
+        expected_node: None,
         mode: if control {
             SessionMode::Control
         } else {

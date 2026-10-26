@@ -26,12 +26,12 @@ mod path_guard;
 pub(super) mod pipe_copy;
 #[path = "planning.rs"]
 mod planning;
+#[path = "prune.rs"]
+mod prune;
 #[path = "publication.rs"]
 mod publication;
 #[path = "recovery.rs"]
 mod recovery;
-#[path = "prune.rs"]
-mod prune;
 #[path = "safe_file.rs"]
 mod safe_file;
 #[path = "server_copy.rs"]
@@ -42,7 +42,9 @@ mod staging;
 pub use pairs::start_copy_pairs;
 pub(crate) use path_guard::validate_directory_target;
 pub(crate) use prune::prune_empty_dirs;
-pub(crate) use publication::{local_file_identity, local_file_identity_handle, PublicationObserver};
+pub(crate) use publication::{
+    local_file_identity, local_file_identity_handle, PublicationObserver,
+};
 pub(crate) use recovery::{discard_transfer_stage, recover_transfer_quarantine};
 pub(crate) use safe_file::{transfer_local, transfer_local_observed, LocalOutcome, LocalRequest};
 pub(crate) use server_copy::copy_to_new_file;
@@ -124,7 +126,9 @@ pub fn start_copy_expanded(
         let (items, layout) = roots_of(paths, &opts)?;
         Ok(LocalJob {
             id: String::new(),
-            folders: crate::transfer::FolderConflictPolicy::new(crate::transfer::FolderConflict::KeepBoth),
+            folders: crate::transfer::FolderConflictPolicy::new(
+                crate::transfer::FolderConflict::KeepBoth,
+            ),
             items,
             layout,
             filter,
@@ -150,7 +154,9 @@ pub fn start_copy_from_paths(
         let (items, layout) = roots_of(paths, &opts)?;
         Ok(LocalJob {
             id: String::new(),
-            folders: crate::transfer::FolderConflictPolicy::new(crate::transfer::FolderConflict::KeepBoth),
+            folders: crate::transfer::FolderConflictPolicy::new(
+                crate::transfer::FolderConflict::KeepBoth,
+            ),
             items,
             layout,
             filter: None,

@@ -198,7 +198,7 @@ fn records(image: &BgraImage, kind: StreamKind, gop_id: u64) -> Vec<Option<Strea
         .unwrap();
     let count = payloads.len();
     let header = GopHeader {
-            family_layout_revision: None,
+        family_layout_revision: None,
         frame_contract: None,
         gop_id,
         kind,

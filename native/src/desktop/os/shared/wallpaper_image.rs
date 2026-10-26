@@ -11,7 +11,10 @@
 //! [`SystemWallpaper`] (path, fit mode, color of the monitor).
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 #[path = "wallpaper_source.rs"]
 mod source;
@@ -272,7 +275,11 @@ pub(crate) fn load(path: Option<&Path>, max_side: u32) -> Loaded {
     load_cancellable(path, max_side, Arc::new(AtomicBool::new(false)))
 }
 
-pub(crate) fn load_cancellable(path: Option<&Path>, max_side: u32, cancel: Arc<AtomicBool>) -> Loaded {
+pub(crate) fn load_cancellable(
+    path: Option<&Path>,
+    max_side: u32,
+    cancel: Arc<AtomicBool>,
+) -> Loaded {
     let Some(path) = path.filter(|path| !path.as_os_str().is_empty()) else {
         return Loaded::Color("kein Bild (Volltonfarbe)".into());
     };
@@ -284,7 +291,8 @@ pub(crate) fn load_cancellable(path: Option<&Path>, max_side: u32, cancel: Arc<A
 
 fn decode(path: &Path, max_side: u32, cancel: Arc<AtomicBool>) -> Result<DecodedImage, String> {
     let shown = |error: &dyn fmt::Display| format!("{}: {error}", path.display());
-    let file = source::WallpaperReader::open(path, Arc::clone(&cancel)).map_err(|error| shown(&error))?;
+    let file =
+        source::WallpaperReader::open(path, Arc::clone(&cancel)).map_err(|error| shown(&error))?;
     let mut reader = image::ImageReader::new(std::io::BufReader::new(file))
         .with_guessed_format()
         .map_err(|error| shown(&error))?;
@@ -293,9 +301,13 @@ fn decode(path: &Path, max_side: u32, cancel: Arc<AtomicBool>) -> Result<Decoded
     limits.max_image_height = Some(MAX_DECODE_SIDE);
     reader.limits(limits);
     let decoded = reader.decode().map_err(|error| shown(&error))?;
-    if cancel.load(Ordering::Acquire) { return Err("wallpaper read canceled".into()); }
+    if cancel.load(Ordering::Acquire) {
+        return Err("wallpaper read canceled".into());
+    }
     let rgba = shrink(decoded.into_rgba8(), max_side);
-    if cancel.load(Ordering::Acquire) { return Err("wallpaper read canceled".into()); }
+    if cancel.load(Ordering::Acquire) {
+        return Err("wallpaper read canceled".into());
+    }
     let (width, height) = rgba.dimensions();
     Ok(DecodedImage {
         width,

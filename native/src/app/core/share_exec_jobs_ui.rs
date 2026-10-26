@@ -54,10 +54,7 @@ pub(in crate::app) fn ui_exec_jobs(ui: &mut egui::Ui) {
         }
     });
     if let Some(error) = error {
-        ui.colored_label(
-            theme::danger(ui),
-            format!("Exec-Status: {error}"),
-        );
+        ui.colored_label(theme::danger(ui), format!("Exec-Status: {error}"));
     }
     if let Some(notice) = notice {
         ui.label(notice);
@@ -145,18 +142,32 @@ fn job_card(
         });
 
         ui.label(format!("Programm: {}", job.program));
-        egui::CollapsingHeader::new("Diagnose dieses Befehls").id_salt(("job_diag", job.exec_id.to_string())).show(ui, |ui| {
-            ui.monospace(format!("Exec-ID: {}\nGerät: {}\nCommand-Digest: {}\nPolicy-Revision: {}", job.exec_id, job.peer_device_id, job.command_digest, job.policy_revision));
-        });
+        egui::CollapsingHeader::new("Diagnose dieses Befehls")
+            .id_salt(("job_diag", job.exec_id.to_string()))
+            .show(ui, |ui| {
+                ui.monospace(format!(
+                    "Exec-ID: {}\nGerät: {}\nCommand-Digest: {}\nPolicy-Revision: {}",
+                    job.exec_id, job.peer_device_id, job.command_digest, job.policy_revision
+                ));
+            });
         if let Some(started) = job.started_at {
             ui.small(format!("Gestartet: {}", timestamp(started)));
         }
         if let Some(terminal) = &job.terminal {
-            if let Some(code) = terminal.exit_code { ui.label(format!("Exitcode: {code}")); }
-            if terminal.output_truncated { ui.small("Ausgabe gekürzt"); }
-            egui::CollapsingHeader::new("Ausgabestatistik").id_salt(("job_output_stats", job.exec_id.to_string())).show(ui, |ui| {
-                ui.monospace(format!("Ergebnis: {:?} · stdout={} B · stderr={} B", terminal.kind, terminal.stdout_bytes, terminal.stderr_bytes));
-            });
+            if let Some(code) = terminal.exit_code {
+                ui.label(format!("Exitcode: {code}"));
+            }
+            if terminal.output_truncated {
+                ui.small("Ausgabe gekürzt");
+            }
+            egui::CollapsingHeader::new("Ausgabestatistik")
+                .id_salt(("job_output_stats", job.exec_id.to_string()))
+                .show(ui, |ui| {
+                    ui.monospace(format!(
+                        "Ergebnis: {:?} · stdout={} B · stderr={} B",
+                        terminal.kind, terminal.stdout_bytes, terminal.stderr_bytes
+                    ));
+                });
         }
         if let Some(active) = active {
             let key = format!("{:?}:{}", active.direction, job.exec_id);

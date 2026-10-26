@@ -47,8 +47,14 @@ pub(crate) struct LocalSource {
 impl LocalSource {
     pub(crate) fn open(path: &str) -> Result<Self, OpError> {
         let native_path = native(path);
-        let optical = crate::source_media::acquire_current(&native_path, crate::source_media::Priority::Foreground).map_err(OpError::source)?;
-        if let Some(guard) = &optical { guard.set_mode(crate::source_media::ReadMode::Sequential); }
+        let optical = crate::source_media::acquire_current(
+            &native_path,
+            crate::source_media::Priority::Foreground,
+        )
+        .map_err(OpError::source)?;
+        if let Some(guard) = &optical {
+            guard.set_mode(crate::source_media::ReadMode::Sequential);
+        }
         let metadata =
             crate::local_access::symlink_metadata(&native_path).map_err(OpError::source)?;
         let before = observe(&native_path, &metadata, path)?;
@@ -64,7 +70,9 @@ impl LocalSource {
         Ok(source)
     }
 
-    pub(crate) fn is_optical(&self) -> bool { self.optical.is_some() }
+    pub(crate) fn is_optical(&self) -> bool {
+        self.optical.is_some()
+    }
 
     pub(crate) fn length(&self) -> u64 {
         self.before.length
@@ -75,13 +83,19 @@ impl LocalSource {
     pub(crate) fn publication_check(self) -> Result<LocalCheck, OpError> {
         self.verify()?;
         let identity = optional_identity(&self.file).map_err(OpError::source)?;
-        Ok(LocalCheck { path: self.display.clone(), before: self.before, identity,
-            medium: self.optical.as_ref().map(|guard| guard.source().clone()) })
+        Ok(LocalCheck {
+            path: self.display.clone(),
+            before: self.before,
+            identity,
+            medium: self.optical.as_ref().map(|guard| guard.source().clone()),
+        })
     }
 
     /// The opened file and the path are still what was opened.
     pub(crate) fn verify(&self) -> Result<(), OpError> {
-        if let Some(guard) = &self.optical { guard.validate(&self.path).map_err(OpError::source)?; }
+        if let Some(guard) = &self.optical {
+            guard.validate(&self.path).map_err(OpError::source)?;
+        }
         let opened = self.file.metadata().map_err(OpError::source)?;
         let named = crate::local_access::symlink_metadata(&self.path).map_err(OpError::source)?;
         if observe(&self.path, &opened, &self.display)? != self.before
@@ -187,7 +201,9 @@ impl LocalCheck {
         if source.before != self.before
             || optional_identity(&source.file).map_err(OpError::source)? != self.identity
             || source.optical.as_ref().map(|guard| guard.source()) != self.medium.as_ref()
-        { return Err(changed(&self.path)); }
+        {
+            return Err(changed(&self.path));
+        }
         source.verify()
     }
 }
@@ -215,8 +231,10 @@ impl RangeSource {
     /// A handle on the file, positioned at `offset`.
     pub(crate) fn open_at(&self, offset: u64) -> Result<File, OpError> {
         if self.optical {
-            return Err(OpError::source(io::Error::new(io::ErrorKind::Unsupported,
-                "optical sources require their exclusive sequential reader")));
+            return Err(OpError::source(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "optical sources require their exclusive sequential reader",
+            )));
         }
         let mut file = crate::local_access::open_read(&self.path).map_err(OpError::source)?;
         let opened = file.metadata().map_err(OpError::source)?;

@@ -11,19 +11,19 @@ use std::io;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
 
+use super::app_icon::{IconRequest, IconResponse};
 use super::input_model::{decode_batch, encode_batch, InputEvent};
 use super::negotiate::{CodecKind, H264Profile};
 use super::pixel_convert::FrameSize;
 use super::rate_control::PathKind;
 use super::session_state::SessionState;
-use super::window_list::{SourceId, WindowList};
 use super::visibility::{ViewerVisibility, VisibilityAck};
-use super::app_icon::{IconRequest, IconResponse};
+use super::window_list::{SourceId, WindowList};
 use super::wire::{
     from_json, invalid, read_frame, to_json, write_frame, BeReader, CONTROL_REQUEST, CONTROL_STATE,
-    ERROR, FRAME_ACK, INPUT, KEYFRAME_REQUEST, LIST_WINDOWS, MAX_CONTROL_BYTES, MAX_WINDOWS_BYTES,
-    PING, PONG, PREVIEW_ACK, SET_MODE, SNAPSHOT, STATE, STATS, WINDOWS, VISIBILITY, VISIBILITY_ACK,
-    ICON_REQUEST, ICON_REPLY, PRESENTED,
+    ERROR, FRAME_ACK, ICON_REPLY, ICON_REQUEST, INPUT, KEYFRAME_REQUEST, LIST_WINDOWS,
+    MAX_CONTROL_BYTES, MAX_WINDOWS_BYTES, PING, PONG, PRESENTED, PREVIEW_ACK, SET_MODE, SNAPSHOT,
+    STATE, STATS, VISIBILITY, VISIBILITY_ACK, WINDOWS,
 };
 use super::wire_hello::ScreenErrorCode;
 
@@ -262,7 +262,10 @@ pub(crate) enum ViewerFrame {
     FamilyOperation(super::family_protocol::FamilyOperation),
     FamilyInput(super::family_protocol::FamilyInput),
     /// Complete frame adopted for presentation; only after a v2 contract.
-    Presented {gop_id:u64,frame_id:u64},
+    Presented {
+        gop_id: u64,
+        frame_id: u64,
+    },
     Visibility(ViewerVisibility),
     SetMode(SetMode),
     Input(Vec<InputEvent>),
@@ -294,13 +297,21 @@ pub(crate) enum HostFrame {
 
 pub(crate) fn encode_viewer_frame(frame: &ViewerFrame) -> io::Result<(u8, Vec<u8>)> {
     Ok(match frame {
-        ViewerFrame::ListFamilies => (super::wire::LIST_FAMILIES,b"{}".to_vec()),
-        ViewerFrame::FamilySnapshot => (super::wire::FAMILY_SNAPSHOT_REQUEST,b"{}".to_vec()),
-        ViewerFrame::FamilyOperation(request) => {request.validate()?;(super::wire::FAMILY_OPERATION,to_json(request)?)},
-        ViewerFrame::FamilyInput(request) => {request.validate()?;(super::wire::FAMILY_INPUT,to_json(request)?)},
-        ViewerFrame::Presented {gop_id,frame_id}=>{
-            if *gop_id==0 || *frame_id==0 {return Err(invalid("presented frame needs nonzero identities"));}
-            (PRESENTED,encode_u64s(&[*gop_id,*frame_id]))
+        ViewerFrame::ListFamilies => (super::wire::LIST_FAMILIES, b"{}".to_vec()),
+        ViewerFrame::FamilySnapshot => (super::wire::FAMILY_SNAPSHOT_REQUEST, b"{}".to_vec()),
+        ViewerFrame::FamilyOperation(request) => {
+            request.validate()?;
+            (super::wire::FAMILY_OPERATION, to_json(request)?)
+        }
+        ViewerFrame::FamilyInput(request) => {
+            request.validate()?;
+            (super::wire::FAMILY_INPUT, to_json(request)?)
+        }
+        ViewerFrame::Presented { gop_id, frame_id } => {
+            if *gop_id == 0 || *frame_id == 0 {
+                return Err(invalid("presented frame needs nonzero identities"));
+            }
+            (PRESENTED, encode_u64s(&[*gop_id, *frame_id]))
         }
         ViewerFrame::Visibility(report) => {
             report.validate()?;
@@ -326,16 +337,34 @@ pub(crate) fn encode_viewer_frame(frame: &ViewerFrame) -> io::Result<(u8, Vec<u8
 }
 
 pub(crate) fn decode_viewer_frame(tag: u8, payload: &[u8]) -> io::Result<ViewerFrame> {
-    if payload.len() > super::wire::tag_limit(tag) {return Err(invalid("viewer frame exceeds its tag budget"));}
+    if payload.len() > super::wire::tag_limit(tag) {
+        return Err(invalid("viewer frame exceeds its tag budget"));
+    }
     Ok(match tag {
-        super::wire::LIST_FAMILIES => {from_json::<serde_json::Map<String,serde_json::Value>>(payload)?;ViewerFrame::ListFamilies},
-        super::wire::FAMILY_SNAPSHOT_REQUEST => {from_json::<serde_json::Map<String,serde_json::Value>>(payload)?;ViewerFrame::FamilySnapshot},
-        super::wire::FAMILY_OPERATION => {let request:super::family_protocol::FamilyOperation=from_json(payload)?;request.validate()?;ViewerFrame::FamilyOperation(request)},
-        super::wire::FAMILY_INPUT => {let request:super::family_protocol::FamilyInput=from_json(payload)?;request.validate()?;ViewerFrame::FamilyInput(request)},
-        PRESENTED=>{
-            let [gop_id,frame_id]=decode_u64s::<2>(payload)?;
-            if gop_id==0 || frame_id==0 {return Err(invalid("presented frame needs nonzero identities"));}
-            ViewerFrame::Presented {gop_id,frame_id}
+        super::wire::LIST_FAMILIES => {
+            from_json::<serde_json::Map<String, serde_json::Value>>(payload)?;
+            ViewerFrame::ListFamilies
+        }
+        super::wire::FAMILY_SNAPSHOT_REQUEST => {
+            from_json::<serde_json::Map<String, serde_json::Value>>(payload)?;
+            ViewerFrame::FamilySnapshot
+        }
+        super::wire::FAMILY_OPERATION => {
+            let request: super::family_protocol::FamilyOperation = from_json(payload)?;
+            request.validate()?;
+            ViewerFrame::FamilyOperation(request)
+        }
+        super::wire::FAMILY_INPUT => {
+            let request: super::family_protocol::FamilyInput = from_json(payload)?;
+            request.validate()?;
+            ViewerFrame::FamilyInput(request)
+        }
+        PRESENTED => {
+            let [gop_id, frame_id] = decode_u64s::<2>(payload)?;
+            if gop_id == 0 || frame_id == 0 {
+                return Err(invalid("presented frame needs nonzero identities"));
+            }
+            ViewerFrame::Presented { gop_id, frame_id }
         }
         VISIBILITY => {
             let report: ViewerVisibility = from_json(payload)?;
@@ -372,10 +401,16 @@ pub(crate) fn decode_viewer_frame(tag: u8, payload: &[u8]) -> io::Result<ViewerF
 
 pub(crate) fn encode_host_frame(frame: &HostFrame) -> io::Result<(u8, Vec<u8>)> {
     Ok(match frame {
-        HostFrame::Families(list) => {list.validate()?;(super::wire::FAMILIES,to_json(list)?)},
-        HostFrame::FamilySnapshot(snapshot) => (super::wire::FAMILY_SNAPSHOT,snapshot.encode()?),
-        HostFrame::FamilyOperation(result) => {result.validate()?;(super::wire::FAMILY_OPERATION_RESULT,to_json(result)?)},
-        HostFrame::FamilyInput(result) => (super::wire::FAMILY_INPUT_RESULT,to_json(result)?),
+        HostFrame::Families(list) => {
+            list.validate()?;
+            (super::wire::FAMILIES, to_json(list)?)
+        }
+        HostFrame::FamilySnapshot(snapshot) => (super::wire::FAMILY_SNAPSHOT, snapshot.encode()?),
+        HostFrame::FamilyOperation(result) => {
+            result.validate()?;
+            (super::wire::FAMILY_OPERATION_RESULT, to_json(result)?)
+        }
+        HostFrame::FamilyInput(result) => (super::wire::FAMILY_INPUT_RESULT, to_json(result)?),
         HostFrame::VisibilityAck(ack) => (VISIBILITY_ACK, to_json(ack)?),
         HostFrame::State(report) => (STATE, to_json(report)?),
         HostFrame::Pong(pong) => (
@@ -392,18 +427,33 @@ pub(crate) fn encode_host_frame(frame: &HostFrame) -> io::Result<(u8, Vec<u8>)> 
             (WINDOWS, to_json(list)?)
         }
         HostFrame::Stats(stats) => (STATS, to_json(stats)?),
-        HostFrame::IconReply(reply) => {reply.validate()?;(ICON_REPLY,to_json(reply)?)}
+        HostFrame::IconReply(reply) => {
+            reply.validate()?;
+            (ICON_REPLY, to_json(reply)?)
+        }
         HostFrame::ControlState(state) => (CONTROL_STATE, to_json(state)?),
         HostFrame::Error(error) => (ERROR, to_json(error)?),
     })
 }
 
 pub(crate) fn decode_host_frame(tag: u8, payload: &[u8]) -> io::Result<HostFrame> {
-    if payload.len() > super::wire::tag_limit(tag) {return Err(invalid("host frame exceeds its tag budget"));}
+    if payload.len() > super::wire::tag_limit(tag) {
+        return Err(invalid("host frame exceeds its tag budget"));
+    }
     Ok(match tag {
-        super::wire::FAMILIES => {let list:super::family_protocol::FamilyListing=from_json(payload)?;list.validate()?;HostFrame::Families(list)},
-        super::wire::FAMILY_SNAPSHOT => HostFrame::FamilySnapshot(crate::remote_window::FamilySnapshot::decode(payload)?),
-        super::wire::FAMILY_OPERATION_RESULT => {let result:super::family_protocol::FamilyOperationResult=from_json(payload)?;result.validate()?;HostFrame::FamilyOperation(result)},
+        super::wire::FAMILIES => {
+            let list: super::family_protocol::FamilyListing = from_json(payload)?;
+            list.validate()?;
+            HostFrame::Families(list)
+        }
+        super::wire::FAMILY_SNAPSHOT => {
+            HostFrame::FamilySnapshot(crate::remote_window::FamilySnapshot::decode(payload)?)
+        }
+        super::wire::FAMILY_OPERATION_RESULT => {
+            let result: super::family_protocol::FamilyOperationResult = from_json(payload)?;
+            result.validate()?;
+            HostFrame::FamilyOperation(result)
+        }
         super::wire::FAMILY_INPUT_RESULT => HostFrame::FamilyInput(from_json(payload)?),
         VISIBILITY_ACK => HostFrame::VisibilityAck(from_json(payload)?),
         STATE => HostFrame::State(from_json(payload)?),
@@ -426,9 +476,13 @@ pub(crate) fn decode_host_frame(tag: u8, payload: &[u8]) -> io::Result<HostFrame
             let mut reply: IconResponse = from_json(payload)?;
             reply.request.validate()?;
             if reply.content.as_ref().is_some_and(|content| {
-                content.bytes_for(&reply.request.icon)
-                    .and_then(|bytes|super::app_icon::decode_png(&bytes)).is_err()
-            }) {reply.content=None;}
+                content
+                    .bytes_for(&reply.request.icon)
+                    .and_then(|bytes| super::app_icon::decode_png(&bytes))
+                    .is_err()
+            }) {
+                reply.content = None;
+            }
             HostFrame::IconReply(reply)
         }
         CONTROL_STATE => HostFrame::ControlState(from_json(payload)?),

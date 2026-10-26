@@ -99,10 +99,11 @@ pub(super) async fn handle_connection(
     node.require_sharing_active()?;
     let remote_node = conn.remote_id().to_string();
     let handshake_deadline = super::route_protocol::active_now() + HANDSHAKE_TIMEOUT;
-    let (mut send, mut recv) = super::route_protocol::timeout_until(handshake_deadline, conn.accept_bi())
-        .await
-        .map_err(|_| eio("Session-Handshake Timeout"))?
-        .map_err(eio)?;
+    let (mut send, mut recv) =
+        super::route_protocol::timeout_until(handshake_deadline, conn.accept_bi())
+            .await
+            .map_err(|_| eio("Session-Handshake Timeout"))?
+            .map_err(eio)?;
     let hello = match super::route_protocol::run_until_active(
         handshake_deadline,
         "Session-Hello Timeout",
@@ -158,11 +159,21 @@ pub(super) async fn handle_connection(
     node.bind_incoming_principal(&conn, session.principal())
         .await?;
     session.authorize(&node.auth)?;
-    super::route_monitor::authenticated_remote_capability(&conn, session.requested("route_policy_v1"));
+    super::route_monitor::authenticated_remote_capability(
+        &conn,
+        session.requested("route_policy_v1"),
+    );
     super::route_protocol::run_until_active(
         handshake_deadline,
         "Session-Bestaetigung Timeout",
-        send_ctrl(&mut send, &if session.requested("route_policy_v1") { Ctrl::PeerHelloOkRoute } else { Ctrl::PeerHelloOk }),
+        send_ctrl(
+            &mut send,
+            &if session.requested("route_policy_v1") {
+                Ctrl::PeerHelloOkRoute
+            } else {
+                Ctrl::PeerHelloOk
+            },
+        ),
     )
     .await?;
     drop(handshake_permit);
@@ -221,23 +232,26 @@ pub(super) async fn handle_connection(
         };
         let node = node.clone();
         let connection = conn.clone();
-        tokio::spawn(super::route_protocol::scope(connection.clone(), async move {
-            let _pending = pending;
-            let acknowledged = send.stopped();
-            if let Err(error) = handle_peer_stream(send, recv, context).await {
-                node.emit_connection_error(ConnectionErrorKind::FsStream, error.to_string());
-            }
-            // Drain replies/FIN before a pressure close: a completed mutation
-            // cannot be mistaken for an unexecuted retry.
-            if super::route_protocol::timeout_for(io_deadline::PEER_OP_TIMEOUT, acknowledged)
-                .await
-                .is_err()
-            {
-                // Delivery is ambiguous. This is never an IDLE retry signal,
-                // which could replay an already completed mutation.
-                connection.close(VarInt::from_u32(0x5348), b"reply acknowledgment timeout");
-            }
-        }));
+        tokio::spawn(super::route_protocol::scope(
+            connection.clone(),
+            async move {
+                let _pending = pending;
+                let acknowledged = send.stopped();
+                if let Err(error) = handle_peer_stream(send, recv, context).await {
+                    node.emit_connection_error(ConnectionErrorKind::FsStream, error.to_string());
+                }
+                // Drain replies/FIN before a pressure close: a completed mutation
+                // cannot be mistaken for an unexecuted retry.
+                if super::route_protocol::timeout_for(io_deadline::PEER_OP_TIMEOUT, acknowledged)
+                    .await
+                    .is_err()
+                {
+                    // Delivery is ambiguous. This is never an IDLE retry signal,
+                    // which could replay an already completed mutation.
+                    connection.close(VarInt::from_u32(0x5348), b"reply acknowledgment timeout");
+                }
+            },
+        ));
     }
 }
 

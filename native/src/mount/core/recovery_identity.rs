@@ -25,15 +25,22 @@ pub(crate) struct RecoveryBackendIdentity {
 impl RecoveryBackendIdentity {
     pub(crate) fn validate_for(&self, source: &MountSource) -> io::Result<()> {
         if self.version != 1 {
-            return Err(io::Error::new(io::ErrorKind::Unsupported,
-                "Die Version der historischen Laufwerkidentität wird nicht unterstützt"));
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "Die Version der historischen Laufwerkidentität wird nicht unterstützt",
+            ));
         }
-        if !matches!(source, MountSource::GoogleDrive { .. }) || &self.source != source
-            || self.provider != "gdrive" || self.principal.len() != 64
+        if !matches!(source, MountSource::GoogleDrive { .. })
+            || &self.source != source
+            || self.provider != "gdrive"
+            || self.principal.len() != 64
             || !self.principal.bytes().all(|byte| byte.is_ascii_hexdigit())
             || self.namespace != format!("gdrive:path-v2:{}", self.principal)
-            || !self.state_identity.starts_with(&format!("{}:", self.namespace))
-            || self.root_object.is_empty() || self.root_object == "root"
+            || !self
+                .state_identity
+                .starts_with(&format!("{}:", self.namespace))
+            || self.root_object.is_empty()
+            || self.root_object == "root"
         {
             return Err(conflict());
         }
@@ -51,13 +58,15 @@ impl RecoveryBackendIdentity {
 
 /// Legacy packages remain readable and savable. Their source-only value
 /// grants no authority to replay writes into today's signed-in account.
-pub(crate) fn manifest_identity(value: &serde_json::Value, source: &MountSource)
-    -> io::Result<Option<RecoveryBackendIdentity>> {
+pub(crate) fn manifest_identity(
+    value: &serde_json::Value,
+    source: &MountSource,
+) -> io::Result<Option<RecoveryBackendIdentity>> {
     if *value == serde_json::to_value(source).map_err(io::Error::other)? {
         return Ok(None);
     }
-    let identity: RecoveryBackendIdentity = serde_json::from_value(value.clone())
-        .map_err(|_| conflict())?;
+    let identity: RecoveryBackendIdentity =
+        serde_json::from_value(value.clone()).map_err(|_| conflict())?;
     identity.validate_for(source)?;
     Ok(Some(identity))
 }

@@ -24,7 +24,7 @@ pub use retention::*;
 
 #[path = "os/denied_roots.rs"]
 mod denied_roots;
-pub use denied_roots::{DeniedRoots, ScanVisits, retry_contains};
+pub use denied_roots::{retry_contains, DeniedRoots, ScanVisits};
 
 #[path = "os/retry.rs"]
 mod retry;

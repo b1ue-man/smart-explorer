@@ -27,10 +27,18 @@ pub(crate) use self::watch_wire::{FsWatchEvent, ALIVE_SECS, MAX_NOTICE_PATHS, SI
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "r", rename_all = "snake_case")]
 pub(crate) enum FsResponse {
-    DirectoryIdentity { identity: Option<String> },
-    FileIdentity { identity: Option<String> },
-    DirectoryReservationSupported { supported: bool },
-    Capacity { capacity: crate::vfs::CapacitySnapshot },
+    DirectoryIdentity {
+        identity: Option<String>,
+    },
+    FileIdentity {
+        identity: Option<String>,
+    },
+    DirectoryReservationSupported {
+        supported: bool,
+    },
+    Capacity {
+        capacity: crate::vfs::CapacitySnapshot,
+    },
     Capabilities {
         capabilities: FsWriteCapabilities,
         /// Additive protocol-v3 fields. Legacy peers omit them and therefore

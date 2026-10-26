@@ -17,7 +17,7 @@ mod drive_events;
 #[path = "windows/drive_inventory.rs"]
 mod drive_inventory;
 pub(crate) use drive_events::start_drive_events;
-pub(crate) use drive_inventory::{read_drive_inventory, read_drive_capacity};
+pub(crate) use drive_inventory::{read_drive_capacity, read_drive_inventory};
 
 /// UI storage uses slash separators only on Windows; Unix backslashes are names.
 pub(in crate::app) fn local_path_text(path: &std::path::Path) -> String {

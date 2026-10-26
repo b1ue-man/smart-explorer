@@ -22,14 +22,14 @@ pub(crate) use self::vault::{
     CompareHead, CompareItemWire, CompareSideWire, ResolveFailure, SealPurposeWire, SecretText,
     VaultEventView, VaultIpcReply, VaultIpcRequest, VaultSiteView, VaultStatusView,
 };
-#[path = "ipc_protocol_screen.rs"]
-pub(super) mod screen;
-#[path = "ipc_protocol_tcp.rs"]
-pub(super) mod tcp;
 #[path = "ipc_protocol_apps.rs"]
 pub(super) mod apps;
 #[path = "ipc_protocol_login.rs"]
 pub(crate) mod login;
+#[path = "ipc_protocol_screen.rs"]
+pub(super) mod screen;
+#[path = "ipc_protocol_tcp.rs"]
+pub(super) mod tcp;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -318,7 +318,10 @@ pub(super) enum IpcRequest {
         token: String,
         req: apps::AppsIpcRequest,
     },
-    Login { token: String, req: login::LoginIpcRequest },
+    Login {
+        token: String,
+        req: login::LoginIpcRequest,
+    },
     /// A drive host's request beyond attach, backend and status (R5); the
     /// session token of its mount authorizes it, never the daemon token.
     MountHostExt {
@@ -400,10 +403,18 @@ impl IpcRequest {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub(super) enum IpcResponse {
-    DiscoveryPairing { reply: super::discovery_pairing_protocol::DiscoveryPairingReply },
-    MountRecovery { recovery: crate::mount::InactiveMountRecovery },
-    MountRecoveries { recoveries: Vec<crate::mount::InactiveMountRecovery> },
-    RuntimeHello { reply: crate::mcp_launcher::RuntimeHelloReply },
+    DiscoveryPairing {
+        reply: super::discovery_pairing_protocol::DiscoveryPairingReply,
+    },
+    MountRecovery {
+        recovery: crate::mount::InactiveMountRecovery,
+    },
+    MountRecoveries {
+        recoveries: Vec<crate::mount::InactiveMountRecovery>,
+    },
+    RuntimeHello {
+        reply: crate::mcp_launcher::RuntimeHelloReply,
+    },
     Pong {
         #[serde(default)]
         version: String,
@@ -483,7 +494,7 @@ pub(super) enum IpcResponse {
 
 #[path = "ipc_protocol_io.rs"]
 mod io_wire;
-pub(super) use io_wire::{write_response, set_stream_timeout, write_request, read_response};
+pub(super) use io_wire::{read_response, set_stream_timeout, write_request, write_response};
 
 #[cfg(test)]
 #[path = "ipc_protocol_tests.rs"]

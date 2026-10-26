@@ -207,7 +207,9 @@ pub(super) fn screen(args: &Args) -> Result<CallToolResult, String> {
         "families" => {
             let (target, _) = crate::cli::screen::device_target(&args.string("device")?)?;
             let list = crate::daemon::screen_families(target, Some(wait(args)?), |_| {})?;
-            Ok(response::ok(serde_json::to_value(list).map_err(|error|error.to_string())?))
+            Ok(response::ok(
+                serde_json::to_value(list).map_err(|error| error.to_string())?,
+            ))
         }
         other => Err(format!(
             "unknown action `{other}`: use devices, probe, windows, families or snapshot"

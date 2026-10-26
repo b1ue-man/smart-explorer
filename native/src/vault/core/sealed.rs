@@ -39,7 +39,13 @@ pub(crate) enum SealPurpose {
 }
 
 impl SealPurpose {
-    pub(crate) const ALL: [Self; 5] = [Self::LocalStore, Self::LogFields, Self::SpoolWrap, Self::TransferJob, Self::TransferAlias];
+    pub(crate) const ALL: [Self; 5] = [
+        Self::LocalStore,
+        Self::LogFields,
+        Self::SpoolWrap,
+        Self::TransferJob,
+        Self::TransferAlias,
+    ];
 
     /// The HKDF `info` of the purpose (C3.6).
     pub(crate) fn info(self) -> &'static str {

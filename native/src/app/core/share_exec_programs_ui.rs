@@ -182,7 +182,9 @@ pub(super) fn notes(
             name.eq_ignore_ascii_case("root") || name.eq_ignore_ascii_case("administrator")
         });
         if warning.elevated.is_some() || admin {
-            let marker = warning.elevated.unwrap_or("Fernzugriff mit Administratorrechten");
+            let marker = warning
+                .elevated
+                .unwrap_or("Fernzugriff mit Administratorrechten");
             notes.push(format!(
                 "Achtung: {account} hat Administratorrechte; das Gerät steuert damit diesen \
                  Rechner vollständig ({}, {marker}).",
@@ -359,20 +361,31 @@ pub(super) fn controls(
     let entries = catalog(draft.helper);
     let wide = ui.available_width() >= egui::TextStyle::Body.resolve(ui.style()).size * 34.0;
     if wide {
-        egui::Grid::new(("capability_table", &draft.key)).num_columns(4).striped(true).show(ui, |ui| {
-            ui.strong("Fähigkeit");
-            let headers = [ui.strong("Aus").id, ui.strong("Fragen").id, ui.strong("Erlauben").id];
-            ui.end_row();
-            for entry in &entries {
-                let label = ui.label(entry.label).on_hover_text(entry.description);
-                for (column, decision) in [Off, Ask, Allow].into_iter().enumerate() {
-                    capability_option(ui, draft, entry, decision, "").labelled_by(label.id).labelled_by(headers[column]);
-                }
+        egui::Grid::new(("capability_table", &draft.key))
+            .num_columns(4)
+            .striped(true)
+            .show(ui, |ui| {
+                ui.strong("Fähigkeit");
+                let headers = [
+                    ui.strong("Aus").id,
+                    ui.strong("Fragen").id,
+                    ui.strong("Erlauben").id,
+                ];
                 ui.end_row();
-            }
-        });
+                for entry in &entries {
+                    let label = ui.label(entry.label).on_hover_text(entry.description);
+                    for (column, decision) in [Off, Ask, Allow].into_iter().enumerate() {
+                        capability_option(ui, draft, entry, decision, "")
+                            .labelled_by(label.id)
+                            .labelled_by(headers[column]);
+                    }
+                    ui.end_row();
+                }
+            });
     } else {
-        for entry in &entries { capability_row(ui, draft, entry); }
+        for entry in &entries {
+            capability_row(ui, draft, entry);
+        }
     }
     heading(ui, "GÜLTIG");
     period_choice(ui, draft);
@@ -409,14 +422,31 @@ fn capability_row(ui: &mut egui::Ui, draft: &mut AccessDraft, entry: &Capability
     ui.label(RichText::new(text).small().color(theme::muted(ui)));
 }
 
-fn capability_option(ui: &mut egui::Ui, draft: &mut AccessDraft, entry: &CapabilityEntry, decision: CapabilityDecision, label: &str) -> egui::Response {
+fn capability_option(
+    ui: &mut egui::Ui,
+    draft: &mut AccessDraft,
+    entry: &CapabilityEntry,
+    decision: CapabilityDecision,
+    label: &str,
+) -> egui::Response {
     let listed = !draft.programs.is_empty() && entry.capability == Capability::ExecTerminal;
     let machine = entry.capability == Capability::LoginAccess;
     let selected = draft.decision(entry.capability) == decision;
     let enabled = decision == Off || (!listed && !machine);
-    let response = ui.add_enabled(enabled, egui::RadioButton::new(selected, label))
-        .on_hover_text(format!("{}: {}", entry.label, match decision { Off => "Aus", Ask => "Fragen", Allow => "Erlauben" }));
-    if response.clicked() { draft.set_decision(entry.capability, decision); }
+    let response = ui
+        .add_enabled(enabled, egui::RadioButton::new(selected, label))
+        .on_hover_text(format!(
+            "{}: {}",
+            entry.label,
+            match decision {
+                Off => "Aus",
+                Ask => "Fragen",
+                Allow => "Erlauben",
+            }
+        ));
+    if response.clicked() {
+        draft.set_decision(entry.capability, decision);
+    }
     response
 }
 

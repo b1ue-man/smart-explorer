@@ -4,7 +4,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use ashpd::desktop::{Session, SessionPortal};
-use ashpd::zbus::{self, zvariant::{as_value, OwnedObjectPath, Type, Value}};
+use ashpd::zbus::{
+    self,
+    zvariant::{as_value, OwnedObjectPath, Type, Value},
+};
 use futures_util::StreamExt;
 use serde::Deserialize;
 
@@ -38,13 +41,18 @@ fn failed(error: impl std::fmt::Display) -> Refusal {
 }
 
 pub(crate) fn session_path<T: SessionPortal>(session: &Session<T>) -> Result<String, Refusal> {
-    serde_json::to_value(session).map_err(failed)?.as_str()
-        .map(str::to_owned).ok_or_else(|| failed("session handle is not an object path"))
+    serde_json::to_value(session)
+        .map_err(failed)?
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| failed("session handle is not an object path"))
 }
 
 impl StartResults {
     pub(crate) fn selected<T: SessionPortal>(
-        &self, session: &Session<T>, portal_version: u32,
+        &self,
+        session: &Session<T>,
+        portal_version: u32,
     ) -> Result<Arc<StreamIdentity>, Refusal> {
         self.bind(session_path(session)?, portal_version)
     }
@@ -55,11 +63,18 @@ impl StartResults {
             return Err(failed("the portal must choose exactly one stream"));
         };
         if portal_version >= 6 && properties.serial.is_none() {
-            return Err(failed("ScreenCast v6 omitted pipewire-serial; choose the source again"));
+            return Err(failed(
+                "ScreenCast v6 omitted pipewire-serial; choose the source again",
+            ));
         }
         Ok(Arc::new(StreamIdentity::new(
-            *node_id, properties.serial, session, properties.id.clone(),
-            properties.size.filter(|(width, height)| *width > 0 && *height > 0),
+            *node_id,
+            properties.serial,
+            session,
+            properties.id.clone(),
+            properties
+                .size
+                .filter(|(width, height)| *width > 0 && *height > 0),
         )))
     }
 }
@@ -72,7 +87,11 @@ mod tests {
     #[derive(Serialize, Type)]
     #[zvariant(signature = "dict")]
     struct WireProperties {
-        #[serde(rename = "pipewire-serial", with = "as_value::optional", skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "pipewire-serial",
+            with = "as_value::optional",
+            skip_serializing_if = "Option::is_none"
+        )]
         serial: Option<u64>,
         #[serde(with = "as_value")]
         size: (i32, i32),
@@ -86,11 +105,27 @@ mod tests {
     }
 
     fn response(serial: Option<u64>, count: usize) -> StartResults {
-        let raw = WireResults { streams: (0..count).map(|_| (42, WireProperties {
-            serial, size: (960, 540),
-        })).collect() };
-        let message = zbus::message::Message::signal("/org/freedesktop/portal/desktop/request/test",
-            "org.freedesktop.portal.Request", "Response").unwrap().build(&(0u32, raw)).unwrap();
+        let raw = WireResults {
+            streams: (0..count)
+                .map(|_| {
+                    (
+                        42,
+                        WireProperties {
+                            serial,
+                            size: (960, 540),
+                        },
+                    )
+                })
+                .collect(),
+        };
+        let message = zbus::message::Message::signal(
+            "/org/freedesktop/portal/desktop/request/test",
+            "org.freedesktop.portal.Request",
+            "Response",
+        )
+        .unwrap()
+        .build(&(0u32, raw))
+        .unwrap();
         let (status, results): (u32, StartResults) = message.body().deserialize().unwrap();
         assert_eq!(status, 0);
         results
@@ -106,33 +141,54 @@ mod tests {
         assert_eq!(selected.session, "/session/granted");
         assert!(response(None, 1).bind("/session/legacy".into(), 5).is_ok());
         assert!(response(None, 1).bind("/session/v6".into(), 6).is_err());
-        assert!(response(Some(1), 0).bind("/session/none".into(), 6).is_err());
-        assert!(response(Some(1), 2).bind("/session/multiple".into(), 6).is_err());
+        assert!(response(Some(1), 0)
+            .bind("/session/none".into(), 6)
+            .is_err());
+        assert!(response(Some(1), 2)
+            .bind("/session/multiple".into(), 6)
+            .is_err());
     }
 }
 
 /// Subscribe before Start so even an immediate response cannot be missed.
 /// Only the existing session is started; no second dialog/session or input transport is created.
 pub(crate) async fn start<T: SessionPortal>(
-    portal: &zbus::Proxy<'_>, session: &Session<T>,
+    portal: &zbus::Proxy<'_>,
+    session: &Session<T>,
 ) -> Result<StartResults, Refusal> {
     let mut nonce = [0u8; 16];
     getrandom::getrandom(&mut nonce).map_err(failed)?;
     let nonce: String = nonce.iter().map(|byte| format!("{byte:02x}")).collect();
     let token = format!("se_start_{nonce}");
     let connection = portal.connection();
-    let sender = connection.unique_name().ok_or_else(|| failed("missing D-Bus unique name"))?
-        .as_str().trim_start_matches(':').replace('.', "_");
+    let sender = connection
+        .unique_name()
+        .ok_or_else(|| failed("missing D-Bus unique name"))?
+        .as_str()
+        .trim_start_matches(':')
+        .replace('.', "_");
     let path = format!("/org/freedesktop/portal/desktop/request/{sender}/{token}");
-    let request = zbus::Proxy::new(connection, "org.freedesktop.portal.Desktop", path.as_str(),
-        "org.freedesktop.portal.Request").await.map_err(failed)?;
+    let request = zbus::Proxy::new(
+        connection,
+        "org.freedesktop.portal.Desktop",
+        path.as_str(),
+        "org.freedesktop.portal.Request",
+    )
+    .await
+    .map_err(failed)?;
     let mut responses = request.receive_signal("Response").await.map_err(failed)?;
     let options = HashMap::from([("handle_token", Value::from(token.as_str()))]);
-    let returned: OwnedObjectPath = portal.call("Start", &(session, "", options)).await.map_err(failed)?;
+    let returned: OwnedObjectPath = portal
+        .call("Start", &(session, "", options))
+        .await
+        .map_err(failed)?;
     if returned.as_str() != path {
         return Err(failed("Start returned an unexpected request handle"));
     }
-    let message = responses.next().await.ok_or_else(|| failed("Start response stream ended"))?;
+    let message = responses
+        .next()
+        .await
+        .ok_or_else(|| failed("Start response stream ended"))?;
     let (status, results): (u32, StartResults) = message.body().deserialize().map_err(failed)?;
     match status {
         0 => Ok(results),

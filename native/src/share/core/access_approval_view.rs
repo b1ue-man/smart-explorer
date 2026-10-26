@@ -8,8 +8,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::share::access_grant::Capability;
 use crate::share::access_constraints::AccessRequest;
+use crate::share::access_grant::Capability;
 use crate::share::relation_proof::ProvenPrincipal;
 use crate::share::ExecCommand;
 

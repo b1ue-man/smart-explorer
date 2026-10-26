@@ -1,8 +1,8 @@
 //! Pure, bounded TCP forwarding contract. A tunnel exposes one exact service;
 //! it never accepts a destination from the bytes of a local TCP connection.
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use serde::{Deserialize, Serialize};
 use super::access_constraints::{TcpDirection, TcpHost, TcpPort};
+use serde::{Deserialize, Serialize};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 pub(crate) const TCP_LOCAL_ACCESS_NOTICE: &str = "Jeder gleichzeitig lokal laufende Prozess kann diesen Loopbackport erreichen. Der weitergeleitete Dienst muss seine Benutzer selbst authentifizieren; ohne eigene Authentifizierung erhält dieser Prozess Zugriff auf den Dienst.";
 pub(crate) const TCP_PROTOCOL_VERSION: u16 = 1;
@@ -14,10 +14,20 @@ pub(crate) const MAX_TCP_STREAMS: usize = 16;
 pub(crate) const TCP_COPY_BYTES: usize = 8 * 1024;
 
 pub(crate) fn shown_error(value: &str) -> String {
-    value.chars().take(1024).map(|character| {
-        if character.is_control() || matches!(character, '\u{200e}' | '\u{200f}' | '\u{2028}' | '\u{2029}'
-            | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}') { '?' } else { character }
-    }).collect()
+    value
+        .chars()
+        .take(1024)
+        .map(|character| {
+            if character.is_control()
+                || matches!(character, '\u{200e}' | '\u{200f}' | '\u{2028}' | '\u{2029}'
+            | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}')
+            {
+                '?'
+            } else {
+                character
+            }
+        })
+        .collect()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -30,15 +40,25 @@ impl TunnelId {
     pub(crate) fn parse(value: &str) -> Result<Self, String> {
         if value.len() == 32 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             Ok(Self(value.to_ascii_lowercase()))
-        } else { Err("TCP tunnel ID must contain exactly 32 hexadecimal characters".into()) }
+        } else {
+            Err("TCP tunnel ID must contain exactly 32 hexadecimal characters".into())
+        }
     }
-    pub(crate) fn as_str(&self) -> &str { &self.0 }
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 impl TryFrom<String> for TunnelId {
     type Error = String;
-    fn try_from(value: String) -> Result<Self, String> { Self::parse(&value) }
+    fn try_from(value: String) -> Result<Self, String> {
+        Self::parse(&value)
+    }
 }
-impl From<TunnelId> for String { fn from(value: TunnelId) -> Self { value.0 } }
+impl From<TunnelId> for String {
+    fn from(value: TunnelId) -> Self {
+        value.0
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -52,9 +72,16 @@ impl TcpDestination {
         match &self.host {
             TcpHost::Loopback => Ok(()),
             TcpHost::Ip { address } if valid_ip(*address) => Ok(()),
-            TcpHost::Dns { name, addresses } if valid_dns(name)
-                && addresses.len() <= 64 && addresses.iter().all(|ip| valid_ip(*ip)) => Ok(()),
-            _ => Err("TCP destination must be loopback, one unicast IP or one plain DNS name".into()),
+            TcpHost::Dns { name, addresses }
+                if valid_dns(name)
+                    && addresses.len() <= 64
+                    && addresses.iter().all(|ip| valid_ip(*ip)) =>
+            {
+                Ok(())
+            }
+            _ => {
+                Err("TCP destination must be loopback, one unicast IP or one plain DNS name".into())
+            }
         }
     }
     /// DNS addresses supplied by a requester are never used to resolve or
@@ -64,20 +91,35 @@ impl TcpDestination {
             "loopback" | "localhost" => TcpHost::Loopback,
             value => match value.parse::<IpAddr>() {
                 Ok(address) => TcpHost::Ip { address },
-                Err(_) => TcpHost::Dns { name: value.into(), addresses: Vec::new() },
+                Err(_) => TcpHost::Dns {
+                    name: value.into(),
+                    addresses: Vec::new(),
+                },
             },
         };
-        let value = Self { host, port: port.try_into()? };
+        let value = Self {
+            host,
+            port: port.try_into()?,
+        };
         value.validate()?;
         Ok(value)
     }
 }
-fn valid_ip(ip: IpAddr) -> bool { !ip.is_unspecified() && !ip.is_multicast() }
+fn valid_ip(ip: IpAddr) -> bool {
+    !ip.is_unspecified() && !ip.is_multicast()
+}
 fn valid_dns(name: &str) -> bool {
-    name.len() <= 253 && name.parse::<IpAddr>().is_err() && name.split('.').all(|part| {
-        !part.is_empty() && part.len() <= 63 && !part.starts_with('-') && !part.ends_with('-')
-            && part.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-    })
+    name.len() <= 253
+        && name.parse::<IpAddr>().is_err()
+        && name.split('.').all(|part| {
+            !part.is_empty()
+                && part.len() <= 63
+                && !part.starts_with('-')
+                && !part.ends_with('-')
+                && part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,11 +136,15 @@ pub(crate) struct TcpStart {
     #[serde(default = "default_lifetime")]
     pub(crate) lifetime_secs: u32,
 }
-fn default_lifetime() -> u32 { 15 * 60 }
+fn default_lifetime() -> u32 {
+    15 * 60
+}
 impl TcpStart {
     pub(crate) fn validate(&self) -> Result<(), String> {
         self.destination.validate()?;
-        if !self.acknowledge_local_access { return Err(TCP_LOCAL_ACCESS_NOTICE.into()); }
+        if !self.acknowledge_local_access {
+            return Err(TCP_LOCAL_ACCESS_NOTICE.into());
+        }
         if !(1..=24 * 60 * 60).contains(&self.lifetime_secs) {
             return Err("TCP tunnel lifetime must be 1..86400 seconds".into());
         }
@@ -111,7 +157,10 @@ impl TcpStart {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum TunnelRole { Listener, Target }
+pub(crate) enum TunnelRole {
+    Listener,
+    Target,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct TunnelView {

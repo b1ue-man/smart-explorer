@@ -1,8 +1,8 @@
 //! One image geometry for drawing, native-pixel panning, visibility and input.
-use eframe::egui::{Pos2,Rect,Vec2};
 use super::screen_prefs::Fit;
-use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::input_model::pixel_to_pointer;
+use crate::screen::core::pixel_convert::FrameSize;
+use eframe::egui::{Pos2, Rect, Vec2};
 
 /// Where the picture lies on the screen and how large its source is.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -55,21 +55,30 @@ pub(crate) fn image_rect(area: Rect, size: FrameSize, fit: Fit, ppp: f32, pan: V
     };
     let x = place(dest.x, area.width(), area.min.x, pan.x);
     let y = place(dest.y, area.height(), area.min.y, pan.y);
-    let start = if fit == Fit::Actual { Pos2::new((x * ppp).round() / ppp, (y * ppp).round() / ppp) }
-        else { Pos2::new(x, y) };
+    let start = if fit == Fit::Actual {
+        Pos2::new((x * ppp).round() / ppp, (y * ppp).round() / ppp)
+    } else {
+        Pos2::new(x, y)
+    };
     Rect::from_min_size(start, dest)
 }
 
-
 /// egui 0.29 clamps GPU callback viewports to the framebuffer. Preserve the
 /// original image mapping inside that clipped viewport, including panning.
-pub(crate) fn viewport_uv(rect: Rect, ppp: f32, screen: [u32;2]) -> Option<[f32;4]> {
-    let min = rect.min*ppp;
-    let size = rect.size()*ppp;
-    if size.x <= 0.0 || size.y <= 0.0 { return None; }
-    let left = min.x.round().clamp(0.0,screen[0] as f32);
-    let top = min.y.round().clamp(0.0,screen[1] as f32);
-    let right = (rect.max.x*ppp).round().clamp(left,screen[0] as f32);
-    let bottom = (rect.max.y*ppp).round().clamp(top,screen[1] as f32);
-    Some([(left-min.x)/size.x,(top-min.y)/size.y,(right-left)/size.x,(bottom-top)/size.y])
+pub(crate) fn viewport_uv(rect: Rect, ppp: f32, screen: [u32; 2]) -> Option<[f32; 4]> {
+    let min = rect.min * ppp;
+    let size = rect.size() * ppp;
+    if size.x <= 0.0 || size.y <= 0.0 {
+        return None;
+    }
+    let left = min.x.round().clamp(0.0, screen[0] as f32);
+    let top = min.y.round().clamp(0.0, screen[1] as f32);
+    let right = (rect.max.x * ppp).round().clamp(left, screen[0] as f32);
+    let bottom = (rect.max.y * ppp).round().clamp(top, screen[1] as f32);
+    Some([
+        (left - min.x) / size.x,
+        (top - min.y) / size.y,
+        (right - left) / size.x,
+        (bottom - top) / size.y,
+    ])
 }

@@ -15,6 +15,7 @@ use std::io::{self, Read, Write};
 
 use serde::{Deserialize, Serialize};
 
+use super::frame_budget::FrameLimits;
 use super::host_stage::{StageEncoder, StageFrame, StageRequest};
 use super::input_model::InputEvent;
 use super::negotiate::{CodecChoice, CodecKind, H264Profile};
@@ -25,11 +26,10 @@ use super::wire::{from_json, invalid, to_json, BeReader, MAX_CONTROL_BYTES};
 use super::wire_binary::MAX_RECORD_BYTES;
 use super::wire_control::ControlBlock;
 use super::wire_hello::ScreenErrorCode;
-use super::frame_budget::FrameLimits;
 
 #[path = "worker_frame_wire.rs"]
 mod frame_wire;
-use frame_wire::{encode_frame,decode_encoded};
+use frame_wire::{decode_encoded, encode_frame};
 
 // Daemon to host process.
 pub(crate) const OPEN: u8 = 1;
@@ -37,14 +37,14 @@ pub(crate) const PRODUCE: u8 = 2;
 pub(crate) const CAPTURE: u8 = 3;
 pub(crate) const CLOSE: u8 = 4;
 pub(crate) const INPUT: u8 = 5;
-pub(crate) const BOUND_INPUT:u8=10;
+pub(crate) const BOUND_INPUT: u8 = 10;
 pub(crate) const SET_CAPTURE_ACTIVE: u8 = 6;
 pub(crate) const OPEN_FAMILY: u8 = 7;
 pub(crate) const FAMILY_COMMAND: u8 = 8;
 pub(crate) const RELEASE_INPUT: u8 = 9;
 pub(crate) const FAMILY_REPLY: u8 = 26;
 pub(crate) const CAPTURE_ACTIVE: u8 = 24;
-pub(crate) const REFERENCE:u8=25;
+pub(crate) const REFERENCE: u8 = 25;
 // Host process to daemon.
 pub(crate) const OPENED: u8 = 16;
 pub(crate) const REFUSED: u8 = 17;
@@ -66,13 +66,19 @@ const MAX_NAME_BYTES: usize = 256;
 /// The payload limit of `tag`; `None` for a tag this version does not know.
 pub(crate) fn tag_limit(tag: u8) -> Option<usize> {
     match tag {
-        super::worker_capture_wire::CONTROL | super::worker_capture_wire::CONTROL_REPLY
-            | super::worker_capture_wire::GRANT_REQUEST | super::worker_capture_wire::GRANT_REPLY
-            | super::worker_capture_wire::RETIRED | super::worker_capture_wire::REDUCED => Some(super::wire::MAX_WINDOWS_BYTES),
-        super::worker_capture_wire::OWNED_REFERENCE => packet_budget().ok()?.encoded_bytes.max(packet_budget().ok()?.raw_bytes).checked_add(58),
-        OPEN | OPEN_FAMILY | FAMILY_COMMAND | RELEASE_INPUT | PRODUCE | CAPTURE | INPUT | BOUND_INPUT | OPENED | REFUSED | PAUSED | FAILED | INPUT_DONE => {
-            Some(MAX_CONTROL_BYTES)
-        }
+        super::worker_capture_wire::CONTROL
+        | super::worker_capture_wire::CONTROL_REPLY
+        | super::worker_capture_wire::GRANT_REQUEST
+        | super::worker_capture_wire::GRANT_REPLY
+        | super::worker_capture_wire::RETIRED
+        | super::worker_capture_wire::REDUCED => Some(super::wire::MAX_WINDOWS_BYTES),
+        super::worker_capture_wire::OWNED_REFERENCE => packet_budget()
+            .ok()?
+            .encoded_bytes
+            .max(packet_budget().ok()?.raw_bytes)
+            .checked_add(58),
+        OPEN | OPEN_FAMILY | FAMILY_COMMAND | RELEASE_INPUT | PRODUCE | CAPTURE | INPUT
+        | BOUND_INPUT | OPENED | REFUSED | PAUSED | FAILED | INPUT_DONE => Some(MAX_CONTROL_BYTES),
         CLOSE => Some(0),
         SET_CAPTURE_ACTIVE | CAPTURE_ACTIVE => Some(1),
         UNCHANGED => Some(8),
@@ -103,11 +109,14 @@ pub(crate) fn write_message(writer: &mut impl Write, tag: u8, payload: &[u8]) ->
 
 /// Reads one frame; `None` when the stream ended cleanly before a frame.
 pub(crate) fn read_message(reader: &mut impl Read) -> io::Result<Option<(u8, Vec<u8>)>> {
-    read_message_with_limits(reader,None)
+    read_message_with_limits(reader, None)
 }
 
 /// PRODUCE supplies its actual v2 limits; None preserves non-PRODUCE/legacy IO.
-pub(crate) fn read_message_with_limits(reader:&mut impl Read, limits:Option<FrameLimits>)->io::Result<Option<(u8,Vec<u8>)>> {
+pub(crate) fn read_message_with_limits(
+    reader: &mut impl Read,
+    limits: Option<FrameLimits>,
+) -> io::Result<Option<(u8, Vec<u8>)>> {
     let mut head = [0u8; 5];
     loop {
         match reader.read(&mut head[..1]) {
@@ -123,14 +132,22 @@ pub(crate) fn read_message_with_limits(reader:&mut impl Read, limits:Option<Fram
     if len > limit {
         return Err(invalid("host process frame exceeds the limit of its tag"));
     }
-    if matches!(head[0], RAW | ENCODED | super::worker_capture_wire::OWNED_REFERENCE) {
-        return Err(invalid("worker pictures require a prior owned transport ticket"));
+    if matches!(
+        head[0],
+        RAW | ENCODED | super::worker_capture_wire::OWNED_REFERENCE
+    ) {
+        return Err(invalid(
+            "worker pictures require a prior owned transport ticket",
+        ));
     }
-    if head[0]==REFERENCE {
-        return Ok(Some((REFERENCE,frame_wire::read_reference_payload(reader,len,limits)?)));
+    if head[0] == REFERENCE {
+        return Ok(Some((
+            REFERENCE,
+            frame_wire::read_reference_payload(reader, len, limits)?,
+        )));
     }
-    if let Some(limits)=limits {
-        if len>frame_wire::negotiated_payload_limit(head[0],limits)? {
+    if let Some(limits) = limits {
+        if len > frame_wire::negotiated_payload_limit(head[0], limits)? {
             return Err(invalid("worker reply exceeds PRODUCE working memory"));
         }
     }
@@ -156,11 +173,11 @@ struct InputWire {
     events: Vec<InputEvent>,
 }
 
-#[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct BoundInput {
-    pub events:Vec<InputEvent>,
-    pub reference_generation:u64,
-    pub presented:bool,
+    pub events: Vec<InputEvent>,
+    pub reference_generation: u64,
+    pub presented: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -168,7 +185,7 @@ struct InputDoneWire {
     #[serde(default)]
     blocked: Option<ControlBlock>,
     #[serde(default)]
-    legacy_reconnect:bool,
+    legacy_reconnect: bool,
 }
 
 /// `PRODUCE` as JSON (`CodecChoice` has no serde form of its own).
@@ -199,8 +216,8 @@ struct ProduceWire {
 #[derive(Serialize, Deserialize)]
 struct CaptureWire {
     frame_id: u64,
-    #[serde(default,skip_serializing_if="Option::is_none")]
-    frame_contract:Option<super::frame_budget::FrameContract>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    frame_contract: Option<super::frame_budget::FrameContract>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -208,7 +225,9 @@ struct SizeWire {
     size: FrameSize,
 }
 
-fn legacy_pixels() -> u64 { super::pixel_convert::MAX_FRAME_PIXELS }
+fn legacy_pixels() -> u64 {
+    super::pixel_convert::MAX_FRAME_PIXELS
+}
 
 #[derive(Serialize, Deserialize)]
 struct RefusedWire {
@@ -251,9 +270,9 @@ pub(crate) fn send_reply(writer: &mut impl Write, reply: &WorkerReply) -> io::Re
     write_message(writer, tag, &payload)
 }
 
-#[path = "worker_request_wire.rs"]
-mod requests;
 #[path = "worker_reply_wire.rs"]
 mod replies;
-pub(crate) use requests::WorkerRequest;
+#[path = "worker_request_wire.rs"]
+mod requests;
 pub(crate) use replies::WorkerReply;
+pub(crate) use requests::WorkerRequest;

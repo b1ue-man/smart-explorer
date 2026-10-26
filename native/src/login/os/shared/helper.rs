@@ -1,55 +1,107 @@
 //! Dedicated capture/input process. No network endpoint or codec is created.
-use std::{io, sync::{Arc, Mutex, mpsc}, time::{Duration, Instant}};
-use crate::login::core::{model::Operation, wire::{self, HelperCommand, HelperInit, Reply}};
-use crate::screen::core::{host_backend::SourceFrame, input_model::{PressedInputs, InputEvent, TouchPhase}};
-use super::{denied, helper_capture, super::platform};
+use super::{super::platform, denied, helper_capture};
+use crate::login::core::{
+    model::Operation,
+    wire::{self, HelperCommand, HelperInit, Reply},
+};
+use crate::screen::core::{
+    host_backend::SourceFrame,
+    input_model::{InputEvent, PressedInputs, TouchPhase},
+};
+use std::{
+    io,
+    sync::{mpsc, Arc, Mutex},
+    time::{Duration, Instant},
+};
 
 pub(crate) fn run(probe: bool) -> io::Result<()> {
     let (mut input, output) = platform::helper_channel()?;
     let init: HelperInit = wire::receive(&mut input)?;
-    if init.cookie.len() != 64 { return Err(denied("invalid inherited login helper capability")); }
+    if init.cookie.len() != 64 {
+        return Err(denied("invalid inherited login helper capability"));
+    }
     let actual = platform::prepare_helper(&init.binding, init.parent_id, probe)?;
-    if probe { return platform::run_probe(input, output, init, actual); }
-    if actual != init.binding { return Err(denied("login desktop changed before helper initialization")); }
+    if probe {
+        return platform::run_probe(input, output, init, actual);
+    }
+    if actual != init.binding {
+        return Err(denied("login desktop changed before helper initialization"));
+    }
     let output = Arc::new(Mutex::new(output));
-    let (capture, receiver, mut source) = helper_capture::HelperCapture::open(&init, input, output.clone())?;
-    if !context_matches(&actual)? { return Err(denied("login desktop geometry changed during initialization")); }
-    let mut ready = Reply::state("ready"); ready.binding = Some(actual.clone());
+    let (capture, receiver, mut source) =
+        helper_capture::HelperCapture::open(&init, input, output.clone())?;
+    if !context_matches(&actual)? {
+        return Err(denied(
+            "login desktop geometry changed during initialization",
+        ));
+    }
+    let mut ready = Reply::state("ready");
+    ready.binding = Some(actual.clone());
     helper_capture::send(&output, &ready)?;
     let mut pressed = PressedInputs::default();
     let mut last_request = Instant::now();
     let result = (|| loop {
         // A dedicated fresh helper replaces the old context; no UI thread is moved.
         if !context_matches(&actual)? || last_request.elapsed() > Duration::from_secs(5) {
-            return Err(denied("login desktop, capture geometry or helper lease ended"));
+            return Err(denied(
+                "login desktop, capture geometry or helper lease ended",
+            ));
         }
         let call = match receiver.recv_timeout(Duration::from_millis(100)) {
-            Ok(call) => call?, Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Ok(call) => call?,
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
             Err(_) => return Ok(()),
         };
         last_request = Instant::now();
-        if call.cookie != init.cookie { return Err(denied("wrong inherited login helper capability")); }
-        let HelperCommand::Operation(operation) = call.command else { return Err(denied("capture helper does not accept metadata-probe commands")); };
+        if call.cookie != init.cookie {
+            return Err(denied("wrong inherited login helper capability"));
+        }
+        let HelperCommand::Operation(operation) = call.command else {
+            return Err(denied(
+                "capture helper does not accept metadata-probe commands",
+            ));
+        };
         operation.validate().map_err(denied)?;
-        if !context_matches(&actual)? { return Err(denied("login desktop or capture geometry changed before operation")); }
+        if !context_matches(&actual)? {
+            return Err(denied(
+                "login desktop or capture geometry changed before operation",
+            ));
+        }
         match operation {
             Operation::Capture { frame_id } => match source.capture(frame_id, false)? {
                 SourceFrame::Frame(image) => {
                     // Recheck after capture so a context switch cannot publish stale pixels.
-                    if !context_matches(&actual)? { return Err(denied("login desktop or capture geometry changed during capture")); }
+                    if !context_matches(&actual)? {
+                        return Err(denied(
+                            "login desktop or capture geometry changed during capture",
+                        ));
+                    }
                     capture.pixels(&output, &image)?;
                 }
-                SourceFrame::Unchanged => helper_capture::send(&output, &Reply::state("unchanged"))?,
+                SourceFrame::Unchanged => {
+                    helper_capture::send(&output, &Reply::state("unchanged"))?
+                }
                 SourceFrame::Paused(_) => helper_capture::send(&output, &Reply::state("paused"))?,
             },
             Operation::Input { events } => {
                 // Retain attempted downs too: partial OS injection still needs releases.
                 for event in &events {
-                    if !matches!(event, InputEvent::Key { down: false, .. } | InputEvent::Button { down: false, .. }
-                        | InputEvent::Touch { phase: TouchPhase::End | TouchPhase::Cancel, .. }) { pressed.observe(event); }
+                    if !matches!(
+                        event,
+                        InputEvent::Key { down: false, .. }
+                            | InputEvent::Button { down: false, .. }
+                            | InputEvent::Touch {
+                                phase: TouchPhase::End | TouchPhase::Cancel,
+                                ..
+                            }
+                    ) {
+                        pressed.observe(event);
+                    }
                 }
                 crate::screen::os::inject_login_input(&events)?;
-                for event in &events { pressed.observe(event); }
+                for event in &events {
+                    pressed.observe(event);
+                }
                 helper_capture::send(&output, &Reply::state("input_applied"))?;
             }
             Operation::ReleaseInputs => {
@@ -59,7 +111,9 @@ pub(crate) fn run(probe: bool) -> io::Result<()> {
                 helper_capture::send(&output, &Reply::state("inputs_released"))?;
             }
             Operation::Stop => return Ok(()),
-            Operation::Start | Operation::SecureAttention => return Err(denied("operation belongs to the broker")),
+            Operation::Start | Operation::SecureAttention => {
+                return Err(denied("operation belongs to the broker"))
+            }
         }
     })();
     // The OS adapter keeps the old bound desktop for releases even after a switch.

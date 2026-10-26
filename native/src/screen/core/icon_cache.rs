@@ -1,7 +1,7 @@
 //! Hash + proven peer + app identity bind content; names never key the cache.
+use super::app_icon::{IconRef, IconReply};
 use std::collections::VecDeque;
 use std::io;
-use super::app_icon::{IconRef, IconReply};
 
 const MAX_CACHE_BYTES: usize = 8 * 1024 * 1024;
 
@@ -20,17 +20,24 @@ pub(crate) struct IconCache {
 
 impl IconCache {
     pub(crate) fn get(&self, key: &IconCacheKey) -> Option<&[u8]> {
-        self.entries.iter().find(|(stored, _)| stored == key).map(|(_, bytes)| bytes.as_slice())
+        self.entries
+            .iter()
+            .find(|(stored, _)| stored == key)
+            .map(|(_, bytes)| bytes.as_slice())
     }
 
     pub(crate) fn insert(&mut self, key: IconCacheKey, reply: &IconReply) -> io::Result<()> {
-        if key.peer.is_empty() { return Err(super::app_icon::invalid("icon peer context is absent")); }
+        if key.peer.is_empty() {
+            return Err(super::app_icon::invalid("icon peer context is absent"));
+        }
         let png = reply.bytes_for(&key.icon)?;
         // Fully validate before retaining bytes; invalid content cannot poison a known hash.
         super::app_icon::decode_png(&png)?;
         self.retain(|stored| stored.peer != key.peer || stored.icon.app_id != key.icon.app_id);
         while self.bytes.saturating_add(png.len()) > MAX_CACHE_BYTES {
-            let Some((_, evicted)) = self.entries.pop_front() else { break; };
+            let Some((_, evicted)) = self.entries.pop_front() else {
+                break;
+            };
             self.bytes -= evicted.len();
         }
         self.bytes += png.len();

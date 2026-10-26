@@ -110,7 +110,8 @@ fn body(ui: &mut egui::Ui) {
     if loaded && shown.is_empty() {
         ui.label("Keine Eintraege auf diesem Host.");
     }
-    egui::ScrollArea::vertical().min_scrolled_height(0.0)
+    egui::ScrollArea::vertical()
+        .min_scrolled_height(0.0)
         .id_salt("share_exec_audit_scroll")
         .max_height(crate::app::dialog_geometry::remaining_height(ui, 2.0))
         .show(ui, |ui| {

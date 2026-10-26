@@ -142,35 +142,40 @@ impl App {
                     return;
                 };
                 let _awake = crate::keep_awake::hold(crate::keep_awake::Reason::SyncRun);
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-                    || crate::source_media::with_cancellation(&worker_cancel, || -> Result<String, String> {
-                        let job = current_preview_job(&job_id)?;
-                        job.validate()?;
-                        let (a, ra) = crate::connect::resolve_endpoint(&job.source)?;
-                        let (b, rb) = crate::connect::resolve_endpoint(&job.target)?;
-                        let fresh = current_preview_job(&job_id)?;
-                        if fresh.source != job.source || fresh.target != job.target {
-                            return Err("Setup wurde umgestellt; bitte erneut vergleichen.".into());
-                        }
-                        let a = crate::vfs::sync_backend(a);
-                        let b = crate::vfs::sync_backend(b);
-                        let stats = crate::bisync::apply_preview_action(
-                            &*a,
-                            &ra,
-                            &*b,
-                            &rb,
-                            &preview,
-                            &action,
-                            job.checked_opts(false)?,
-                            &worker_cancel,
-                        )
-                        .map_err(|e| e.to_string())?;
-                        Ok(format!(
-                            "Datei synchronisiert ({} →, {} ←, {} gelöscht)",
-                            stats.a_to_b, stats.b_to_a, stats.deleted
-                        ))
-                    }),
-                ))
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    crate::source_media::with_cancellation(
+                        &worker_cancel,
+                        || -> Result<String, String> {
+                            let job = current_preview_job(&job_id)?;
+                            job.validate()?;
+                            let (a, ra) = crate::connect::resolve_endpoint(&job.source)?;
+                            let (b, rb) = crate::connect::resolve_endpoint(&job.target)?;
+                            let fresh = current_preview_job(&job_id)?;
+                            if fresh.source != job.source || fresh.target != job.target {
+                                return Err(
+                                    "Setup wurde umgestellt; bitte erneut vergleichen.".into()
+                                );
+                            }
+                            let a = crate::vfs::sync_backend(a);
+                            let b = crate::vfs::sync_backend(b);
+                            let stats = crate::bisync::apply_preview_action(
+                                &*a,
+                                &ra,
+                                &*b,
+                                &rb,
+                                &preview,
+                                &action,
+                                job.checked_opts(false)?,
+                                &worker_cancel,
+                            )
+                            .map_err(|e| e.to_string())?;
+                            Ok(format!(
+                                "Datei synchronisiert ({} →, {} ←, {} gelöscht)",
+                                stats.a_to_b, stats.b_to_a, stats.deleted
+                            ))
+                        },
+                    )
+                }))
                 .unwrap_or_else(|_| {
                     Err(
                         "Einzelaktion endete ohne verlässliches Ergebnis; bitte neu vergleichen."

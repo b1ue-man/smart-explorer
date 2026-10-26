@@ -17,7 +17,8 @@ struct Store {
 }
 
 fn valid(size: [f32; 2]) -> bool {
-    size.into_iter().all(|value| value.is_finite() && value > 0.0 && value < 100_000.0)
+    size.into_iter()
+        .all(|value| value.is_finite() && value > 0.0 && value < 100_000.0)
 }
 
 fn store() -> &'static Mutex<Store> {
@@ -32,12 +33,22 @@ fn store() -> &'static Mutex<Store> {
                 _ => (GeometryFile::default(), false),
             },
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => (
-                GeometryFile { version: 1, ..GeometryFile::default() }, true,
+                GeometryFile {
+                    version: 1,
+                    ..GeometryFile::default()
+                },
+                true,
             ),
             Err(_) => (GeometryFile::default(), false),
         };
-        file.sizes.retain(|key, size| KEYS.contains(&key.as_str()) && valid(*size));
-        Mutex::new(Store { file, attempted: BTreeMap::new(), writable, failed: !writable })
+        file.sizes
+            .retain(|key, size| KEYS.contains(&key.as_str()) && valid(*size));
+        Mutex::new(Store {
+            file,
+            attempted: BTreeMap::new(),
+            writable,
+            failed: !writable,
+        })
     })
 }
 
@@ -52,37 +63,55 @@ pub(in crate::app) fn failed() -> bool {
 /// Called after the pointer is released. A failed identical write is not
 /// retried every frame; the UI reports the persistence limit explicitly.
 pub(in crate::app) fn save(key: &'static str, size: [f32; 2]) {
-    if !KEYS.contains(&key) || !valid(size) { return; }
-    let Ok(mut state) = store().lock() else { return };
-    if !state.writable { return; }
-    let previous = state.attempted.get(key).or_else(|| state.file.sizes.get(key));
-    if previous.is_some_and(|old| {
-        (old[0] - size[0]).abs() < 0.5 && (old[1] - size[1]).abs() < 0.5
-    }) { return; }
+    if !KEYS.contains(&key) || !valid(size) {
+        return;
+    }
+    let Ok(mut state) = store().lock() else {
+        return;
+    };
+    if !state.writable {
+        return;
+    }
+    let previous = state
+        .attempted
+        .get(key)
+        .or_else(|| state.file.sizes.get(key));
+    if previous.is_some_and(|old| (old[0] - size[0]).abs() < 0.5 && (old[1] - size[1]).abs() < 0.5)
+    {
+        return;
+    }
     state.attempted.insert(key.to_owned(), size);
     let result = merge_save(key, size);
     state.failed = result.is_err();
-    if let Ok(file) = result { state.file = file; }
+    if let Ok(file) = result {
+        state.file = file;
+    }
 }
 
 /// Serialize read/merge/promotion across GUI processes. Atomic replacement
 /// alone cannot preserve a second process's independently changed dialog.
 fn merge_save(key: &str, size: [f32; 2]) -> std::io::Result<GeometryFile> {
     let path = crate::support_dirs::app_data_file("dialog_geometry.json");
-    let lock = crate::support_dirs::open_private_lock(
-        &crate::support_dirs::app_data_file("dialog_geometry.lock"),
-    )?;
+    let lock = crate::support_dirs::open_private_lock(&crate::support_dirs::app_data_file(
+        "dialog_geometry.lock",
+    ))?;
     lock.lock()?;
     let mut file = match crate::support_dirs::read_private_text(&path, 64 * 1024) {
         Ok(text) => serde_json::from_str::<GeometryFile>(&text).map_err(std::io::Error::other)?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound =>
-            GeometryFile { version: 1, ..GeometryFile::default() },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => GeometryFile {
+            version: 1,
+            ..GeometryFile::default()
+        },
         Err(error) => return Err(error),
     };
     if file.version != 1 {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown dialog geometry version"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "unknown dialog geometry version",
+        ));
     }
-    file.sizes.retain(|key, size| KEYS.contains(&key.as_str()) && valid(*size));
+    file.sizes
+        .retain(|key, size| KEYS.contains(&key.as_str()) && valid(*size));
     file.sizes.insert(key.to_owned(), size);
     let bytes = serde_json::to_vec(&file).map_err(std::io::Error::other)?;
     crate::support_dirs::write_private_atomic(&path, &bytes)?;

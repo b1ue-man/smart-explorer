@@ -14,7 +14,9 @@ use eframe::egui::{self, RichText};
 use super::programs_ui::heading;
 use crate::app::theme;
 use crate::share::access_approval::{ApprovalCommand, ApprovalDecision, ApprovalView};
-use crate::share::consent_launch::{approval_context, approval_context_complete, capability_label, request_line};
+use crate::share::consent_launch::{
+    approval_context, approval_context_complete, capability_label, request_line,
+};
 
 /// How often the list is read while the tab is shown.
 const POLL: Duration = Duration::from_secs(2);

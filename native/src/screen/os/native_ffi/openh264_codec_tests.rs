@@ -164,7 +164,7 @@ fn screen_task_openh264_decodes_constrained_high() {
     assert_eq!(sps, 100, "profile_idc of the test stream");
     let size = FrameSize::new(640, 360);
     let header = crate::screen::core::wire_binary::GopHeader {
-            family_layout_revision: None,
+        family_layout_revision: None,
         frame_contract: None,
         gop_id: 1,
         kind: crate::screen::core::wire_binary::StreamKind::Video,

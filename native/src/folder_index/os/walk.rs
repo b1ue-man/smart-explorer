@@ -15,8 +15,12 @@ pub(super) enum WalkStop {
     Failed(String),
 }
 
-pub(super) fn build_index_excluding(roots: Vec<PathBuf>, tx: &Sender<IndexMsg>, cancel: &AtomicBool,
-    excluded: &[PathBuf]) -> Result<FolderIndex, WalkStop> {
+pub(super) fn build_index_excluding(
+    roots: Vec<PathBuf>,
+    tx: &Sender<IndexMsg>,
+    cancel: &AtomicBool,
+    excluded: &[PathBuf],
+) -> Result<FolderIndex, WalkStop> {
     if roots.is_empty() {
         return Err(WalkStop::Failed("folder-index roots are empty".to_string()));
     }
@@ -26,11 +30,15 @@ pub(super) fn build_index_excluding(roots: Vec<PathBuf>, tx: &Sender<IndexMsg>, 
     let mut media = Vec::new();
     let mut last_progress = Instant::now();
     for root in roots {
-        if excluded.iter().any(|excluded| root.starts_with(excluded)) { continue; }
+        if excluded.iter().any(|excluded| root.starts_with(excluded)) {
+            continue;
+        }
         check_canceled(cancel)?;
         let _guard = media_guard(&root, cancel)?;
         require_plain_directory(&root, "index root")?;
-        if let Some(guard) = &_guard { media.push((root.clone(), guard.source().clone())); }
+        if let Some(guard) = &_guard {
+            media.push((root.clone(), guard.source().clone()));
+        }
         let normalized = normalized_path(&root)?;
         if insert_path(&mut index, normalized)? {
             let source = _guard.as_ref().map(|guard| guard.source().clone());
@@ -39,23 +47,36 @@ pub(super) fn build_index_excluding(roots: Vec<PathBuf>, tx: &Sender<IndexMsg>, 
     }
 
     while let Some((dir, depth, root, source)) = stack.pop() {
-        if excluded.iter().any(|excluded| dir.starts_with(excluded)) { continue; }
+        if excluded.iter().any(|excluded| dir.starts_with(excluded)) {
+            continue;
+        }
         check_canceled(cancel)?;
         if let Some(source) = &source {
-            if crate::source_media::probe(&root).map_err(|error| WalkStop::Failed(error.to_string()))?.as_ref() != Some(source) {
-                return Err(WalkStop::Failed(format!("optical medium changed at {}", root.display())));
+            if crate::source_media::probe(&root)
+                .map_err(|error| WalkStop::Failed(error.to_string()))?
+                .as_ref()
+                != Some(source)
+            {
+                return Err(WalkStop::Failed(format!(
+                    "optical medium changed at {}",
+                    root.display()
+                )));
             }
         }
         emit_progress(tx, &index, &dir, &mut last_progress, false)?;
 
-        let entries = match crate::source_media::GuardedIterator::new(&dir,
-            crate::source_media::Priority::Background, cancel, || {
+        let entries = match crate::source_media::GuardedIterator::new(
+            &dir,
+            crate::source_media::Priority::Background,
+            cancel,
+            || {
                 require_plain_directory(&dir, "queued directory").map_err(|stop| match stop {
                     WalkStop::Failed(error) => io::Error::other(error),
                     _ => io::Error::new(io::ErrorKind::Interrupted, "index canceled"),
                 })?;
                 std::fs::read_dir(&dir)
-            }) {
+            },
+        ) {
             Ok(entries) => entries,
             Err(error) if depth > 0 && skip_unreadable_directory(&error) => continue,
             Err(error) => {
@@ -68,7 +89,9 @@ pub(super) fn build_index_excluding(roots: Vec<PathBuf>, tx: &Sender<IndexMsg>, 
         for entry in entries {
             check_canceled(cancel)?;
             let entry = entry.map_err(|error| {
-                if cancel.load(Ordering::Acquire) { return WalkStop::Canceled; }
+                if cancel.load(Ordering::Acquire) {
+                    return WalkStop::Canceled;
+                }
                 WalkStop::Failed(format!("cannot enumerate {}: {error}", dir.display()))
             })?;
             let path = entry.path();
@@ -115,8 +138,15 @@ pub(super) fn build_index_excluding(roots: Vec<PathBuf>, tx: &Sender<IndexMsg>, 
     }
 
     for (root, expected) in media {
-        if crate::source_media::probe(&root).map_err(|error| WalkStop::Failed(error.to_string()))?.as_ref() != Some(&expected) {
-            return Err(WalkStop::Failed(format!("optical medium changed at {}", root.display())));
+        if crate::source_media::probe(&root)
+            .map_err(|error| WalkStop::Failed(error.to_string()))?
+            .as_ref()
+            != Some(&expected)
+        {
+            return Err(WalkStop::Failed(format!(
+                "optical medium changed at {}",
+                root.display()
+            )));
         }
     }
     emit_progress(tx, &index, Path::new(""), &mut last_progress, true)?;
@@ -178,8 +208,17 @@ fn emit_progress(
     .map_err(|_| WalkStop::ReceiverClosed)
 }
 
-fn media_guard(path: &Path, cancel: &AtomicBool) -> Result<Option<crate::source_media::Guard>, WalkStop> {
-    crate::source_media::acquire(path, crate::source_media::Priority::Background, cancel)
-        .map_err(|error| if cancel.load(Ordering::Acquire) { WalkStop::Canceled }
-            else { WalkStop::Failed(format!("cannot read {}: {error}", path.display())) })
+fn media_guard(
+    path: &Path,
+    cancel: &AtomicBool,
+) -> Result<Option<crate::source_media::Guard>, WalkStop> {
+    crate::source_media::acquire(path, crate::source_media::Priority::Background, cancel).map_err(
+        |error| {
+            if cancel.load(Ordering::Acquire) {
+                WalkStop::Canceled
+            } else {
+                WalkStop::Failed(format!("cannot read {}: {error}", path.display()))
+            }
+        },
+    )
 }

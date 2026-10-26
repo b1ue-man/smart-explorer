@@ -24,9 +24,7 @@ fn callback(pointer: *mut c_void, work: impl FnOnce(&ImportController)) {
         data.fail("pipewire import callback panic");
     }
 }
-unsafe extern "C" fn add_mem(
-    pointer: *mut c_void, mem_id: u32, kind: u32, fd: c_int, flags: u32,
-) {
+unsafe extern "C" fn add_mem(pointer: *mut c_void, mem_id: u32, kind: u32, fd: c_int, flags: u32) {
     callback(pointer, |data| {
         data.latest.block_import(true);
         let core = data.core.load(Ordering::Acquire);
@@ -37,9 +35,12 @@ unsafe extern "C" fn add_mem(
         if !data.open() {
             return;
         }
-        let id=match data.next_id() {
-            Ok(id)=>id,
-            Err(error)=>{data.fail(error);return;}
+        let id = match data.next_id() {
+            Ok(id) => id,
+            Err(error) => {
+                data.fail(error);
+                return;
+            }
         };
         let mut state = data.state.lock().unwrap_or_else(PoisonError::into_inner);
         if state.pending.is_some() {
@@ -47,7 +48,13 @@ unsafe extern "C" fn add_mem(
             data.fail("pipewire delivered an import across its receive barrier");
             return;
         }
-        state.pending = Some(Pending { mem_id, kind, fd, flags, id });
+        state.pending = Some(Pending {
+            mem_id,
+            kind,
+            fd,
+            flags,
+            id,
+        });
         drop(state);
         data.memory.wake();
     });
@@ -101,7 +108,11 @@ unsafe extern "C" fn destroy(pointer: *mut c_void) {
     });
 }
 unsafe extern "C" fn error(
-    pointer: *mut c_void, _id: u32, _seq: c_int, result: c_int, message: *const c_char,
+    pointer: *mut c_void,
+    _id: u32,
+    _seq: c_int,
+    result: c_int,
+    message: *const c_char,
 ) {
     callback(pointer, |data| {
         let message = if message.is_null() {
@@ -114,7 +125,9 @@ unsafe extern "C" fn error(
 }
 impl ImportController {
     pub(in crate::screen::os::pipewire_stream) fn new(
-        api: MemoryApi, latest: Arc<LatestFrame>, memory: Arc<CaptureMemory>,
+        api: MemoryApi,
+        latest: Arc<LatestFrame>,
+        memory: Arc<CaptureMemory>,
     ) -> io::Result<Box<Self>> {
         let connection = memory.import_connection()?;
         Ok(Box::new(Self {
@@ -124,7 +137,7 @@ impl ImportController {
             core: AtomicPtr::new(null_mut()),
             pool: AtomicPtr::new(null_mut()),
             state: Mutex::new(Imports::default()),
-            lifecycle:Mutex::new(()),
+            lifecycle: Mutex::new(()),
             closed: AtomicBool::new(false),
             sequence: AtomicU64::new(0),
             generation: connection.generation(),
@@ -134,7 +147,10 @@ impl ImportController {
         }))
     }
     /// Called before stream_connect and before event dispatch can start.
-    pub(in crate::screen::os::pipewire_stream) unsafe fn attach(&mut self, core: *mut c_void) -> io::Result<()> {
+    pub(in crate::screen::os::pipewire_stream) unsafe fn attach(
+        &mut self,
+        core: *mut c_void,
+    ) -> io::Result<()> {
         let pool = (self.api.get_mempool)(core);
         if pool.is_null() {
             return Err(io::Error::other("pipewire core has no mempool"));
@@ -143,12 +159,17 @@ impl ImportController {
         self.pool.store(pool, Ordering::Release);
         let interface = &*(core as *const SpaInterface);
         let methods = (interface.funcs as *const CoreMethods)
-            .as_ref().ok_or_else(|| io::Error::other("pipewire core methods missing"))?;
-        let listen = methods.add_listener
+            .as_ref()
+            .ok_or_else(|| io::Error::other("pipewire core methods missing"))?;
+        let listen = methods
+            .add_listener
             .ok_or_else(|| io::Error::other("pipewire core listener missing"))?;
         let pointer = (self as *mut Self).cast();
         let result = listen(
-            interface.data, &mut *self.core_hook, (&CORE as *const CoreEvents).cast(), pointer,
+            interface.data,
+            &mut *self.core_hook,
+            (&CORE as *const CoreEvents).cast(),
+            pointer,
         );
         if result < 0 {
             return Err(io::Error::other("pipewire core import listener failed"));
@@ -161,12 +182,12 @@ impl ImportController {
 #[cfg(test)]
 pub(crate) mod fixture_support {
     use super::*;
-    use crate::screen::os::pipewire_stream::{imports, memory::CaptureMemory, buffers::fixture};
-    use crate::screen::os::pipewire_abi::{SpaInterface, CoreMethods};
     use crate::screen::core::capture_admission::{CaptureGrant, SessionAdmission, SourceKey};
-    use crate::screen::core::host_codec_adapters::{HostOutputPlan, HostContract, HostCodecPlan};
-    use crate::screen::core::frame_memory::{MemoryPool, MemoryFacts, CapacityCeiling};
     use crate::screen::core::frame_budget::MAX_WORKING_BYTES;
+    use crate::screen::core::frame_memory::{CapacityCeiling, MemoryFacts, MemoryPool};
+    use crate::screen::core::host_codec_adapters::{HostCodecPlan, HostContract, HostOutputPlan};
+    use crate::screen::os::pipewire_abi::{CoreMethods, SpaInterface};
+    use crate::screen::os::pipewire_stream::{buffers::fixture, imports, memory::CaptureMemory};
     pub(crate) struct Fixture {
         pub(crate) imports: Box<imports::ImportController>,
         pub(crate) memory: Arc<CaptureMemory>,
@@ -182,17 +203,22 @@ pub(crate) mod fixture_support {
                 available_commit: 8 << 30,
                 available_address_space: 8 << 30,
             });
-            let admission = Arc::new(MemoryPool::default()).admit_session(
-                facts, CapacityCeiling::desktop(facts), MAX_WORKING_BYTES, session,
-            ).unwrap();
+            let admission = Arc::new(MemoryPool::default())
+                .admit_session(
+                    facts,
+                    CapacityCeiling::desktop(facts),
+                    MAX_WORKING_BYTES,
+                    session,
+                )
+                .unwrap();
             let key = SourceKey::new(session, "portal:selected-node").unwrap();
             admission.register_prepared_source(key.clone()).unwrap();
             let memory = Arc::new(CaptureMemory::new(key, admission.clone()));
             let latest = Arc::new(LatestFrame::default());
             latest.suspend_before_connect();
-            let mut imports = imports::ImportController::new(
-                fixture::api(), latest.clone(), memory.clone(),
-            ).unwrap();
+            let mut imports =
+                imports::ImportController::new(fixture::api(), latest.clone(), memory.clone())
+                    .unwrap();
             static METHODS: CoreMethods = CoreMethods {
                 version: 0,
                 add_listener: Some(fixture::core_listen),
@@ -208,11 +234,25 @@ pub(crate) mod fixture_support {
                 funcs: (&METHODS as *const CoreMethods).cast(),
                 data: std::ptr::null_mut(),
             });
-            unsafe { imports.attach((&mut *core as *mut SpaInterface).cast()).unwrap() };
-            Self { imports, memory, latest, core, admission }
+            unsafe {
+                imports
+                    .attach((&mut *core as *mut SpaInterface).cast())
+                    .unwrap()
+            };
+            Self {
+                imports,
+                memory,
+                latest,
+                core,
+                admission,
+            }
         }
         pub(crate) fn inspect(&self) -> imports::Inspected {
-            unsafe { self.imports.inspect(self.imports.pending().unwrap()).unwrap() }
+            unsafe {
+                self.imports
+                    .inspect(self.imports.pending().unwrap())
+                    .unwrap()
+            }
         }
         pub(crate) fn admit(&self) {
             let inspected = self.inspect();
@@ -223,7 +263,8 @@ pub(crate) mod fixture_support {
         pub(crate) fn image_grant(&self, size: FrameSize) -> CaptureGrant {
             self.admission.bind_contract(None).unwrap();
             self.memory.format(Some((VideoFormat::Bgra, size))).unwrap();
-            let output = HostOutputPlan::new(HostContract::Legacy, size, HostCodecPlan::Tiles).unwrap();
+            let output =
+                HostOutputPlan::new(HostContract::Legacy, size, HostCodecPlan::Tiles).unwrap();
             let plan = self.memory.capture_plan(&output).unwrap().unwrap();
             let grant = self.memory.authority().approve(plan).unwrap();
             self.memory.activate(grant.clone()).unwrap();
@@ -241,7 +282,14 @@ pub(crate) mod fixture_support {
             total
         }
         pub(crate) fn base(&self) -> usize {
-            self.imports.state.lock().unwrap().head.as_ref().unwrap().base
+            self.imports
+                .state
+                .lock()
+                .unwrap()
+                .head
+                .as_ref()
+                .unwrap()
+                .base
         }
     }
     impl Drop for Fixture {

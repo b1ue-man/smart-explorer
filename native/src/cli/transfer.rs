@@ -42,7 +42,12 @@ pub(super) fn transfer_plan_as(
     Ok((meta, dst_path))
 }
 
-pub(super) fn validate_transfer_path(src: &Target, dst: &Target, meta: &VfsMeta, dst_path: &str) -> Result<(), String> {
+pub(super) fn validate_transfer_path(
+    src: &Target,
+    dst: &Target,
+    meta: &VfsMeta,
+    dst_path: &str,
+) -> Result<(), String> {
     if src.same_namespace(dst) {
         let src_cmp = comparable_path(src, &src.path)?;
         let dst_cmp = comparable_path(dst, &dst_path)?;

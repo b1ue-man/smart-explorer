@@ -18,13 +18,13 @@ use eframe::egui::{
 };
 
 use super::screen_input_keys::{is_text_key, key_usage_of, local_key};
-#[cfg(test)]
-use crate::screen::core::{input_model::pixel_to_pointer, pixel_convert::FrameSize};
 use crate::screen::core::input_model::{
-    key_usage, InputCapabilities, InputEvent, PointerButton, PressedInputs,
-    TouchPhase, MAX_INPUT_EVENTS, MAX_TEXT_BYTES,
+    key_usage, InputCapabilities, InputEvent, PointerButton, PressedInputs, TouchPhase,
+    MAX_INPUT_EVENTS, MAX_TEXT_BYTES,
 };
 use crate::screen::core::wire::MAX_CONTROL_BYTES;
+#[cfg(test)]
+use crate::screen::core::{input_model::pixel_to_pointer, pixel_convert::FrameSize};
 
 /// Wheel notches per line of a mouse wheel in lines (1/120 notch units).
 const NOTCH: f32 = 120.0;
@@ -161,7 +161,16 @@ impl InputMapper {
         }
         if self.suppress_modifiers {
             if frame_mods.ctrl || frame_mods.alt || frame_mods.shift {
-                for event in events { if let Event::Key { key, pressed:false, .. } = event { self.swallowed.retain(|held| held != key); } }
+                for event in events {
+                    if let Event::Key {
+                        key,
+                        pressed: false,
+                        ..
+                    } = event
+                    {
+                        self.swallowed.retain(|held| held != key);
+                    }
+                }
                 return;
             }
             self.suppress_modifiers = false;
@@ -332,7 +341,9 @@ impl InputMapper {
 
     fn key(&mut self, key: Key, pressed: bool, repeat: bool, modifiers: Modifiers) {
         if local_key(key, modifiers).is_some() {
-            if !pressed { self.swallowed.retain(|held| *held != key); }
+            if !pressed {
+                self.swallowed.retain(|held| *held != key);
+            }
             if pressed && !self.swallowed.contains(&key) {
                 self.swallowed.push(key);
             }

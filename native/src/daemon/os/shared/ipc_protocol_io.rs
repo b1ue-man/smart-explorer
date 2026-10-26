@@ -1,11 +1,14 @@
 //! Bounded IPC transport, separated from the request/reply model.
+use super::super::line::{read_line_limited_from_stream, MAX_IPC_LINE};
+use super::{IpcRequest, IpcResponse};
 use std::io::{self, Write};
 use std::net::TcpStream;
 use std::time::Duration;
-use super::{IpcRequest, IpcResponse};
-use super::super::line::{read_line_limited_from_stream, MAX_IPC_LINE};
 
-pub(in crate::daemon) fn write_response(stream: &mut TcpStream, response: &IpcResponse) -> io::Result<()> {
+pub(in crate::daemon) fn write_response(
+    stream: &mut TcpStream,
+    response: &IpcResponse,
+) -> io::Result<()> {
     let mut line = serde_json::to_string(response).map_err(eio)?;
     line.push('\n');
     if line.len() > MAX_IPC_LINE {
@@ -25,7 +28,12 @@ pub(in crate::daemon) fn set_stream_timeout(stream: &TcpStream, timeout: Option<
 
 pub(in crate::daemon) fn write_request(stream: &mut TcpStream, req: &IpcRequest) -> io::Result<()> {
     let mut line = super::super::runtime_hello::encode_request(req)?;
-    if line.len()>=MAX_IPC_LINE {return Err(io::Error::new(io::ErrorKind::InvalidInput,"ipc request exceeds line budget"));}
+    if line.len() >= MAX_IPC_LINE {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "ipc request exceeds line budget",
+        ));
+    }
     line.push('\n');
     stream.write_all(line.as_bytes())?;
     stream.flush()

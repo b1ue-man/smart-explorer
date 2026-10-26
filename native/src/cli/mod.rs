@@ -10,6 +10,7 @@ mod drive;
 mod engine_copy;
 mod folder_conflict;
 pub(crate) use folder_conflict::{RecoveredCommandTask, SavedCommandsCatalog};
+mod apps;
 #[cfg(test)]
 mod engine_copy_tests;
 mod entry_kind;
@@ -23,6 +24,7 @@ mod link_paths;
 mod links_task_backends;
 #[cfg(test)]
 mod links_task_tests;
+mod login;
 mod mcp;
 mod ops;
 #[cfg(test)]
@@ -34,11 +36,8 @@ mod ops_transfer_tests;
 mod os;
 mod plugin;
 mod private_file;
-mod screen;
-mod tcp;
-mod apps;
 mod rdp;
-mod login;
+mod screen;
 mod search;
 mod setup;
 mod share;
@@ -46,6 +45,7 @@ mod shell;
 mod shell_session;
 mod sync_jobs;
 mod target;
+mod tcp;
 mod transfer;
 mod tree_apply;
 mod tree_destination;
@@ -218,9 +218,16 @@ struct CopyArgs {
     force: bool,
     #[arg(long, help = "Print rate and limiting resource to stderr when done")]
     stats: bool,
-    #[arg(long, value_enum, help = "Selected folder collision: merge (default), keep-both, or fail (independent of --force)")]
+    #[arg(
+        long,
+        value_enum,
+        help = "Selected folder collision: merge (default), keep-both, or fail (independent of --force)"
+    )]
     folder_conflict: Option<folder_conflict::FolderPolicy>,
-    #[arg(long, help = "Resume this saved CLI job ID with its exact source, target, and decisions")]
+    #[arg(
+        long,
+        help = "Resume this saved CLI job ID with its exact source, target, and decisions"
+    )]
     resume_job: Option<String>,
 }
 
@@ -234,9 +241,16 @@ struct MoveArgs {
     recursive: bool,
     #[arg(short, long, help = "Allow overwriting an existing destination")]
     force: bool,
-    #[arg(long, value_enum, help = "Selected folder collision: merge (default), keep-both, or fail (independent of --force)")]
+    #[arg(
+        long,
+        value_enum,
+        help = "Selected folder collision: merge (default), keep-both, or fail (independent of --force)"
+    )]
     folder_conflict: Option<folder_conflict::FolderPolicy>,
-    #[arg(long, help = "Resume this saved CLI job ID with its exact source, target, and decisions")]
+    #[arg(
+        long,
+        help = "Resume this saved CLI job ID with its exact source, target, and decisions"
+    )]
     resume_job: Option<String>,
 }
 
@@ -311,7 +325,9 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
         Command::Screen(args) => screen::run(args),
         Command::Tcp(args) => tcp::run(args),
         Command::Apps(args) => apps::run(args),
-        Command::Rdp(args) => rdp::run(args, |target| crate::daemon::apps_rdp_probe(target, Some(std::time::Duration::from_secs(30)), || {})),
+        Command::Rdp(args) => rdp::run(args, |target| {
+            crate::daemon::apps_rdp_probe(target, Some(std::time::Duration::from_secs(30)), || {})
+        }),
         Command::Login(args) => login::run(args),
         Command::Vault(args) => vault::run(args),
         Command::Completions(args) => completions::run(args),
@@ -337,13 +353,28 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
         Command::Get(args) | Command::Put(args) | Command::Cp(args) => {
             let src = target::resolve(&args.src)?;
             let dst = target::resolve(&args.dst)?;
-            ops::copy_with_folder_stats(&src, &dst, args.recursive, args.force, args.stats, args.folder_conflict.map(Into::into), args.resume_job.as_deref())?;
+            ops::copy_with_folder_stats(
+                &src,
+                &dst,
+                args.recursive,
+                args.force,
+                args.stats,
+                args.folder_conflict.map(Into::into),
+                args.resume_job.as_deref(),
+            )?;
             Ok(0)
         }
         Command::Mv(args) => {
             let src = target::resolve(&args.src)?;
             let dst = target::resolve(&args.dst)?;
-            ops::move_with_folders(&src, &dst, args.recursive, args.force, args.folder_conflict.map(Into::into), args.resume_job.as_deref())?;
+            ops::move_with_folders(
+                &src,
+                &dst,
+                args.recursive,
+                args.force,
+                args.folder_conflict.map(Into::into),
+                args.resume_job.as_deref(),
+            )?;
             Ok(0)
         }
         Command::Rm(args) => {

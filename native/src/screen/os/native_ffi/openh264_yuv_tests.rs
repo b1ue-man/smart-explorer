@@ -47,7 +47,7 @@ fn screen_task_decoder_prefer_yuv_skips_bgra() {
     let encoded = opened.encoder.encode(&image, true, 2_000_000).unwrap();
     assert!(encoded.keyframe && !encoded.records.is_empty());
     let header = GopHeader {
-            family_layout_revision: None,
+        family_layout_revision: None,
         frame_contract: None,
         gop_id: 1,
         kind: StreamKind::Video,

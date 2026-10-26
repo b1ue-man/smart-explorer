@@ -93,11 +93,19 @@ pub(super) async fn serve(stream: FsStream, req: FsRequest) -> io::Result<()> {
     match req {
         FsRequest::FileIdentity { path } => {
             crate::share::peer_extensions::file_identity::serve(
-                send, path, access, authorization, principal,
-            ).await
+                send,
+                path,
+                access,
+                authorization,
+                principal,
+            )
+            .await
         }
         FsRequest::Capacity { path } => {
-            let result = control(&principal, "Share capacity", move || crate::share::capacity::host(&access, &path)).await;
+            let result = control(&principal, "Share capacity", move || {
+                crate::share::capacity::host(&access, &path)
+            })
+            .await;
             match result {
                 Ok(capacity) => reply(&mut send, FsResponse::Capacity { capacity }).await,
                 Err(error) => reply_err(&mut send, error).await,
@@ -233,8 +241,13 @@ pub(super) async fn serve(stream: FsStream, req: FsRequest) -> io::Result<()> {
         | FsRequest::DirectoryIdentity { .. }
         | FsRequest::DirectoryReservationSupported { .. }) => {
             crate::share::peer_extensions::folder_reservation::serve(
-                send, request, access, authorization, principal,
-            ).await
+                send,
+                request,
+                access,
+                authorization,
+                principal,
+            )
+            .await
         }
         FsRequest::Rename { src, dst } => {
             let result = control(&principal, "Share rename", move || {

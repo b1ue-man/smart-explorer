@@ -147,7 +147,9 @@ impl Job {
     }
 
     pub(super) fn release_operation_after_handoff(&self) {
-        if let Ok(mut guard) = self.operation.lock() { guard.take(); }
+        if let Ok(mut guard) = self.operation.lock() {
+            guard.take();
+        }
     }
 
     pub(super) fn finish(&self, end: JobEnd) {

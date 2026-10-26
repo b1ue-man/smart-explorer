@@ -5,8 +5,9 @@ use super::core::{eio, now_secs, random_token};
 use super::discovery_pin::{discovery_pin_strength, DISCOVERY_MAX_OFFER_SECS};
 use super::discovery_signal_port::DiscoveryExchangePort;
 use super::discovery_signal_state::{
-    ActiveDiscoveryOffer, DiscoveryExchangeRole, DiscoverySignalState, DISCOVERY_PUBLISH_RETRY_DELAY,
-    MAX_ACTIVE_DISCOVERY_OFFERS, MAX_DISCOVERY_ALIAS_BYTES, MAX_DISCOVERY_SUITE_BYTES,
+    ActiveDiscoveryOffer, DiscoveryExchangeRole, DiscoverySignalState,
+    DISCOVERY_PUBLISH_RETRY_DELAY, MAX_ACTIVE_DISCOVERY_OFFERS, MAX_DISCOVERY_ALIAS_BYTES,
+    MAX_DISCOVERY_SUITE_BYTES,
 };
 use super::discovery_signal_types::{
     DiscoveryCommand, DiscoveryEvent, DiscoveryOfferHandle, DiscoveryOfferStopReason,
@@ -218,9 +219,7 @@ impl DiscoverySignalRuntime {
         events: &crossbeam_channel::Sender<ShareEvent>,
     ) -> DiscoveryCommandOutcome {
         if owner.as_ref().is_some_and(|owner| owner.is_cancelled()) {
-            return DiscoveryCommandOutcome::result(Err(eio(
-                "Discovery-Besitzer wurde beendet",
-            )));
+            return DiscoveryCommandOutcome::result(Err(eio("Discovery-Besitzer wurde beendet")));
         }
         if self.state.exchanges.values().any(|exchange| {
             exchange.role == DiscoveryExchangeRole::Connector

@@ -11,14 +11,16 @@ use std::sync::{mpsc, Arc, Mutex, MutexGuard, PoisonError};
 
 use eframe::egui;
 
-pub(crate) use super::screen_session_backend::{Backend,StreamLink,Opener,DecoderOpener,ProbeInfo,Prober,Wake};
+pub(crate) use super::screen_session_backend::{
+    Backend, DecoderOpener, Opener, ProbeInfo, Prober, StreamLink, Wake,
+};
 use super::screen_target::ScreenTarget;
 use super::screen_visibility::ResumeGate;
-use crate::screen::core::visibility::ViewerVisibility;
 use crate::daemon::StreamRequest;
 use crate::screen::core::host_backend::YuvPicture;
 use crate::screen::core::pixel_convert::{BgraImage, FrameSize};
 use crate::screen::core::session_state::SessionState;
+use crate::screen::core::visibility::ViewerVisibility;
 use crate::screen::core::window_list::WindowList;
 use crate::screen::core::wire_control::{
     ControlBlock, ControlHolder, HostStats, SetMode, StreamInfo, StreamMode, ViewerFrame,
@@ -102,8 +104,8 @@ pub(crate) struct SessionInfo {
     pub windows: Option<WindowList>,
     pub family: Option<crate::screen::core::family_viewer::FamilyViewer>,
     pub family_icon: Option<std::sync::Arc<egui::IconData>>,
-    pub icons:Arc<Mutex<super::screen_icons::ScreenIcons>>,
-    pub icon_peer:String,
+    pub icons: Arc<Mutex<super::screen_icons::ScreenIcons>>,
+    pub icon_peer: String,
     /// The text of the last error frame that did not end the session.
     pub notice: Option<String>,
     /// The host refused the control (`control_busy`): another device has it.
@@ -131,8 +133,8 @@ impl SessionInfo {
             windows: None,
             family: None,
             family_icon: None,
-            icons:Arc::new(Mutex::new(super::screen_icons::ScreenIcons::default())),
-            icon_peer:String::new(),
+            icons: Arc::new(Mutex::new(super::screen_icons::ScreenIcons::default())),
+            icon_peer: String::new(),
             notice: None,
             control_denied: false,
             latency: LatencyWindow::default(),
@@ -171,15 +173,23 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 impl Shared {
     pub(crate) fn new(prefer_yuv: bool, present_gap_ms: u64) -> Arc<Self> {
         Arc::new(Self {
-            retirement:Arc::default(),
+            retirement: Arc::default(),
             info: Mutex::new(SessionInfo::new()),
-            picture: Mutex::new(None), memory:Mutex::new(None),
+            picture: Mutex::new(None),
+            memory: Mutex::new(None),
             prefer_yuv: AtomicBool::new(prefer_yuv),
             present_gap_ms: AtomicU64::new(present_gap_ms),
             resume: Mutex::new(ResumeGate::default()),
             presentation: Mutex::new(super::screen_presented::PresentationState::default()),
             visibility: Mutex::new(None),
-            decoder_mode: Mutex::new(SetMode { mode:StreamMode::Full, source:None, size:None, fps:None, sharpness:false, lossless:false }),
+            decoder_mode: Mutex::new(SetMode {
+                mode: StreamMode::Full,
+                source: None,
+                size: None,
+                fps: None,
+                sharpness: false,
+                lossless: false,
+            }),
             lossless_fallback: AtomicBool::new(false),
         })
     }
@@ -199,8 +209,10 @@ impl Shared {
 
     /// Replaces the shown picture; the previous one that nobody took is gone.
     pub(crate) fn put_picture(&self, picture: Picture) {
-        let presentation=lock(&self.presentation);
-        if presentation.matches(&picture.presented) {*lock(&self.picture) = Some(picture);}
+        let presentation = lock(&self.presentation);
+        if presentation.matches(&picture.presented) {
+            *lock(&self.picture) = Some(picture);
+        }
     }
 
     pub(crate) fn visibility_ack(&self, geometry_generation: u64, min_frame_id: u64) {
@@ -222,9 +234,12 @@ impl Shared {
         }
     }
     pub(super) fn request_lossless(&self) -> Option<SetMode> {
-        if self.lossless_fallback.swap(true, Ordering::AcqRel) { return None; }
+        if self.lossless_fallback.swap(true, Ordering::AcqRel) {
+            return None;
+        }
         let mut mode = lock(&self.decoder_mode);
-        mode.lossless = true; mode.source = None;
+        mode.lossless = true;
+        mode.source = None;
         Some(mode.clone())
     }
 
@@ -286,31 +301,48 @@ impl ViewerSession {
         present_gap_ms: u64,
     ) -> Self {
         let (outbox, inbox) = mpsc::channel();
-        request.expected_node=target.expected_node.clone();
+        request.expected_node = target.expected_node.clone();
         let shared = Shared::new(prefer_yuv, present_gap_ms);
-        *lock(&shared.decoder_mode) = SetMode { mode:if request.mode==SessionMode::Preview {StreamMode::Preview} else {StreamMode::Full},
-            source:None, size:request.display_size, fps:(request.max_fps!=0).then_some(request.max_fps), sharpness:false, lossless:false };
-        shared.update(|info| info.family = request.source.as_ref()
-            .and_then(crate::screen::core::family_viewer::FamilyViewer::for_source));
+        *lock(&shared.decoder_mode) = SetMode {
+            mode: if request.mode == SessionMode::Preview {
+                StreamMode::Preview
+            } else {
+                StreamMode::Full
+            },
+            source: None,
+            size: request.display_size,
+            fps: (request.max_fps != 0).then_some(request.max_fps),
+            sharpness: false,
+            lossless: false,
+        };
+        shared.update(|info| {
+            info.family = request
+                .source
+                .as_ref()
+                .and_then(crate::screen::core::family_viewer::FamilyViewer::for_source)
+        });
         let mode = request.mode;
         match target.to_peer() {
             Ok(peer) => {
-                let sender=outbox.clone();
+                let sender = outbox.clone();
                 {
-                    let mut info=shared.info();
-                    info.icon_peer=serde_json::to_string(&peer).unwrap_or_default();
-                    lock(&info.icons).requests.set_sender(Arc::new(move |request| {
-                        let _=sender.send(Outgoing::Frame(ViewerFrame::IconRequest(request)));
-                    }));
+                    let mut info = shared.info();
+                    info.icon_peer = serde_json::to_string(&peer).unwrap_or_default();
+                    lock(&info.icons)
+                        .requests
+                        .set_sender(Arc::new(move |request| {
+                            let _ = sender.send(Outgoing::Frame(ViewerFrame::IconRequest(request)));
+                        }));
                 }
                 super::screen_decode_thread::spawn(
-                backend.clone(),
-                peer,
-                request,
-                shared.clone(),
-                (outbox.clone(), inbox),
-                take_control,
-            )},
+                    backend.clone(),
+                    peer,
+                    request,
+                    shared.clone(),
+                    (outbox.clone(), inbox),
+                    take_control,
+                )
+            }
             Err(message) => {
                 shared.end(EndInfo {
                     text: message,
@@ -327,9 +359,14 @@ impl ViewerSession {
     }
 
     #[cfg(test)]
-    pub(crate) fn fixture(shared:Arc<Shared>)->Self {
-        let (outbox,_inbox)=mpsc::channel();Self {target:ScreenTarget::direct("renderer-fixture",Some("renderer-fixture")),
-            mode:SessionMode::View,shared,outbox}
+    pub(crate) fn fixture(shared: Arc<Shared>) -> Self {
+        let (outbox, _inbox) = mpsc::channel();
+        Self {
+            target: ScreenTarget::direct("renderer-fixture", Some("renderer-fixture")),
+            mode: SessionMode::View,
+            shared,
+            outbox,
+        }
     }
 
     pub(crate) fn info(&self) -> MutexGuard<'_, SessionInfo> {
@@ -343,37 +380,57 @@ impl ViewerSession {
 
     /// Queues the negotiated visibility report. Old peers retain their wire contract.
     pub(crate) fn set_visibility(&self, mut report: ViewerVisibility) {
-        report.geometry_generation = lock(&self.shared.visibility).as_ref()
-            .map_or(1, |(previous, _)| previous.geometry_generation.saturating_add(1));
+        report.geometry_generation = lock(&self.shared.visibility)
+            .as_ref()
+            .map_or(1, |(previous, _)| {
+                previous.geometry_generation.saturating_add(1)
+            });
         let modern = self.shared.modern();
         self.shared.invalidate_presentation();
         lock(&self.shared.resume).report(&report, modern);
         *lock(&self.shared.visibility) = Some((report.clone(), modern));
-        if modern { self.send(ViewerFrame::Visibility(report)); }
+        if modern {
+            self.send(ViewerFrame::Visibility(report));
+        }
     }
 
     /// Replays the latest facts once HELLO proves the new frame contract.
     pub(crate) fn refresh_visibility(&self) {
         let modern = self.shared.modern();
-        let report = lock(&self.shared.visibility).as_ref()
-            .filter(|(_, sent_modern)| modern && !sent_modern).map(|(report, _)| report.clone());
-        if let Some(report) = report { self.set_visibility(report); }
+        let report = lock(&self.shared.visibility)
+            .as_ref()
+            .filter(|(_, sent_modern)| modern && !sent_modern)
+            .map(|(report, _)| report.clone());
+        if let Some(report) = report {
+            self.set_visibility(report);
+        }
     }
 
-    pub(crate) fn invalidate_input(&self) { self.shared.invalidate_presentation(); }
+    pub(crate) fn invalidate_input(&self) {
+        self.shared.invalidate_presentation();
+    }
 
     pub(crate) fn can_present(&self, frame: super::screen_presented::PresentedFrame) -> bool {
         self.shared.can_present(&frame)
     }
 
-    pub(crate) fn presented_callback(&self, frame: super::screen_presented::PresentedFrame) -> super::screen_presented::Presented {
+    pub(crate) fn presented_callback(
+        &self,
+        frame: super::screen_presented::PresentedFrame,
+    ) -> super::screen_presented::Presented {
         let shared = self.shared.clone();
         let outbox = self.outbox.clone();
         Arc::new(move || {
             let modern = shared.modern();
-            shared.presented(frame.clone(), || !modern || outbox.send(Outgoing::Frame(ViewerFrame::Presented {
-                gop_id: frame.gop_id, frame_id: frame.frame_id,
-            })).is_ok());
+            shared.presented(frame.clone(), || {
+                !modern
+                    || outbox
+                        .send(Outgoing::Frame(ViewerFrame::Presented {
+                            gop_id: frame.gop_id,
+                            frame_id: frame.frame_id,
+                        }))
+                        .is_ok()
+            });
         })
     }
 
@@ -395,7 +452,11 @@ impl ViewerSession {
         if let ViewerFrame::Input(events) = frame {
             if self.info().family.is_some() {
                 super::family_viewer_session::input(self, events);
-            } else { let _ = self.outbox.send(Outgoing::Frame(ViewerFrame::Input(events))); }
+            } else {
+                let _ = self
+                    .outbox
+                    .send(Outgoing::Frame(ViewerFrame::Input(events)));
+            }
             return;
         }
         let _ = self.outbox.send(Outgoing::Frame(frame));

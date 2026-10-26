@@ -24,7 +24,10 @@ pub struct FolderConflictPolicy {
 
 impl FolderConflictPolicy {
     pub fn new(default: FolderConflict) -> Self {
-        Self { default, roots: BTreeMap::new() }
+        Self {
+            default,
+            roots: BTreeMap::new(),
+        }
     }
 
     pub fn for_root(&self, source: &str) -> FolderConflict {

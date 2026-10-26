@@ -15,20 +15,25 @@ impl App {
         let mut allow_plaintext = ui
             .data_mut(|data| data.get_temp::<bool>(allow_id))
             .unwrap_or_else(|| stored_plaintext(&self.share_server));
-        let mut form = crate::app::settings_form::Form::new(ui, "share_connection_form", &["Share-Server", "Gerätename"]);
+        let mut form = crate::app::settings_form::Form::new(
+            ui,
+            "share_connection_form",
+            &["Share-Server", "Gerätename"],
+        );
         form.row_labelled(ui, "Share-Server", |ui, field_label| {
-        ui.add(
-            egui::TextEdit::singleline(&mut self.share_server_draft)
-                .hint_text("wss://server[:port]/pfad oder server[:port] (verschlüsselt)")
-                .desired_width(f32::INFINITY),
-        ).labelled_by(field_label)
-        .on_hover_text(
-            "Adresse deines eigenen Routing-Servers (se-share-server). Er vermittelt \
+            ui.add(
+                egui::TextEdit::singleline(&mut self.share_server_draft)
+                    .hint_text("wss://server[:port]/pfad oder server[:port] (verschlüsselt)")
+                    .desired_width(f32::INFINITY),
+            )
+            .labelled_by(field_label)
+            .on_hover_text(
+                "Adresse deines eigenen Routing-Servers (se-share-server). Er vermittelt \
              nur die Verbindung — die Dateien gehen direkt zwischen den Geräten, \
              Ende-zu-Ende-verschlüsselt. Ohne Schema wird TLS (wss://) benutzt; einen \
              selbst signierten Server mit #sha256=<Fingerabdruck> anheften. Mehrere \
              Adressen mit Komma trennen.",
-        );
+            );
         });
         if ui
             .checkbox(&mut allow_plaintext, "Unverschlüsselt erlauben (unsicher)")
@@ -47,11 +52,12 @@ impl App {
             ui.data_mut(|data| data.insert_temp(allow_id, false));
         }
         form.row_labelled(ui, "Gerätename", |ui, field_label| {
-        ui.add(
-            egui::TextEdit::singleline(&mut self.share_device_draft)
-                .hint_text("Gerätename")
-                .desired_width(f32::INFINITY),
-        ).labelled_by(field_label);
+            ui.add(
+                egui::TextEdit::singleline(&mut self.share_device_draft)
+                    .hint_text("Gerätename")
+                    .desired_width(f32::INFINITY),
+            )
+            .labelled_by(field_label);
         });
         if ui.button("Verbindungseinstellungen speichern").clicked() {
             let server = match canonical_server_input(&self.share_server_draft, allow_plaintext) {

@@ -41,7 +41,10 @@ pub use config::{
     take_updater_error, update_source_str,
 };
 pub use core::is_newer;
-pub use feed::{download_update, download_version, list_remote_versions,complete_legacy_launcher,LegacyLauncherRequest,CompletedLegacyLauncher};
+pub use feed::{
+    complete_legacy_launcher, download_update, download_version, list_remote_versions,
+    CompletedLegacyLauncher, LegacyLauncherRequest,
+};
 pub use feed_files::{download_feed_file, file_sha256, read_feed_sha256, read_feed_version};
 pub use flow::{check_async, update_to_latest_async};
 /// The `se` installed next to the running app (the desktop GUI runs it for
@@ -56,7 +59,7 @@ pub use terminal::{
     check_feed, desktop_update_possible, detect_installation, replace_cli, stage_update, FeedCheck,
     Installation,
 };
-pub(crate) use terminal::{lock_cli_for_integration,LegacyIntegrationGuard};
+pub(crate) use terminal::{lock_cli_for_integration, LegacyIntegrationGuard};
 pub use types::{StagedUpdate, UpdateMsg, VerifiedPayload};
 
 #[cfg(test)]

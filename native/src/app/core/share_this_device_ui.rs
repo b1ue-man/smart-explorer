@@ -8,18 +8,22 @@ pub(super) fn ui(app: &mut App, ui: &mut egui::Ui) {
     identity(app, ui);
     crate::app::share_login_ui::host_indicator(ui);
     super::pages_ui::heading(ui, "GERAETENAME");
-    let mut form = crate::app::settings_form::Form::new(ui, "this_device_form", &["Gerätename", "Share-Server"]);
+    let mut form = crate::app::settings_form::Form::new(
+        ui,
+        "this_device_form",
+        &["Gerätename", "Share-Server"],
+    );
     form.row(ui, "Gerätename", |ui| {
         ui.horizontal_wrapped(|ui| {
-        ui.add(
-            egui::TextEdit::singleline(&mut app.share_device_draft)
-                .hint_text("Geraetename")
-                .desired_width(share_input_width(ui, 260.0)),
-        );
-        if ui.button("Name aendern").clicked() {
-            rename(app);
-        }
-    });
+            ui.add(
+                egui::TextEdit::singleline(&mut app.share_device_draft)
+                    .hint_text("Geraetename")
+                    .desired_width(share_input_width(ui, 260.0)),
+            );
+            if ui.button("Name aendern").clicked() {
+                rename(app);
+            }
+        });
     });
     super::pages_ui::heading(ui, "DIREKT-CODE ERREICHBAR");
     ui.label("Offline ist der Direkt-Code fuer neue Kontakte nicht erreichbar; gekoppelte Geraete und Raeume bleiben verbunden. Gilt bis zum naechsten Start des Share-Workers.");
@@ -80,22 +84,26 @@ fn identity(app: &mut App, ui: &mut egui::Ui) {
         .map(|identity| (identity.direct_code(), identity.fingerprint.clone()));
     match &local_identity {
         Some((direct_code, fingerprint)) => {
-            let mut identity_form = crate::app::settings_form::Form::new(ui, "this_device_identity", &["Direkt-Code", "Fingerabdruck"]);
+            let mut identity_form = crate::app::settings_form::Form::new(
+                ui,
+                "this_device_identity",
+                &["Direkt-Code", "Fingerabdruck"],
+            );
             identity_form.row(ui, "Direkt-Code", |ui| {
                 ui.horizontal_wrapped(|ui| {
-                share_value_field(ui, direct_code);
-                if ui.button("Code kopieren").clicked() {
-                    ui.ctx().copy_text(direct_code.clone());
-                }
-            });
+                    share_value_field(ui, direct_code);
+                    if ui.button("Code kopieren").clicked() {
+                        ui.ctx().copy_text(direct_code.clone());
+                    }
+                });
             });
             identity_form.row(ui, "Fingerabdruck", |ui| {
                 ui.horizontal_wrapped(|ui| {
-                share_value_field(ui, fingerprint);
-                if ui.button("Fingerprint kopieren").clicked() {
-                    ui.ctx().copy_text(fingerprint.clone());
-                }
-            });
+                    share_value_field(ui, fingerprint);
+                    if ui.button("Fingerprint kopieren").clicked() {
+                        ui.ctx().copy_text(fingerprint.clone());
+                    }
+                });
             });
         }
         None => {

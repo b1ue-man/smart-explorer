@@ -261,8 +261,9 @@ impl VaultBackend {
                 ) => {
                     let target = self.at(&node.contents());
                     let id = self.checked_storage_id(&target, id.as_deref())?;
-                    self.inner.promote_staged_to_id(&from, &target, id.as_deref())
-                },
+                    self.inner
+                        .promote_staged_to_id(&from, &target, id.as_deref())
+                }
                 (Some(_), _) => Err(invalid_input(
                     "Ein Ordner oder eine Verknüpfung wird nicht durch eine Datei ersetzt",
                 )),

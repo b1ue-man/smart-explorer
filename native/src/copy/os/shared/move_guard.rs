@@ -24,8 +24,12 @@ pub(super) struct QuarantinedSource {
 }
 
 impl QuarantinedSource {
-    pub(super) fn file(&self) -> &File { &self.file }
-    pub(super) fn parent(&self) -> &crate::local_access::ConfinedDirectory { &self.parent }
+    pub(super) fn file(&self) -> &File {
+        &self.file
+    }
+    pub(super) fn parent(&self) -> &crate::local_access::ConfinedDirectory {
+        &self.parent
+    }
 }
 
 pub(super) fn source_snapshot_path(path: &Path) -> io::Result<SourceSnapshot> {
@@ -70,16 +74,23 @@ pub(super) fn quarantine_source_observed(
     source: &Path,
     observer: Option<&dyn super::publication::PublicationObserver>,
 ) -> io::Result<QuarantinedSource> {
-    let parent_path = source.parent().filter(|parent| !parent.as_os_str().is_empty())
+    let parent_path = source
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
     let held_parent = crate::local_access::ConfinedDirectory::open_root(parent_path)?;
     let file = crate::local_access::open_regular(source, crate::local_access::FinalLink::Refuse)?;
     let snapshot = source_snapshot_file(&file)?;
-    let source_name = source.file_name().ok_or_else(|| source_changed_error(source))?;
+    let source_name = source
+        .file_name()
+        .ok_or_else(|| source_changed_error(source))?;
     if !platform::same_file_object(&held_parent.entry(source_name)?, &file)? {
         return Err(source_changed_error(source));
     }
-    let recovery_identity = match observer.map(|_| super::publication::local_file_identity_handle(&file)).transpose() {
+    let recovery_identity = match observer
+        .map(|_| super::publication::local_file_identity_handle(&file))
+        .transpose()
+    {
         Ok(identity) => identity,
         Err(error) if error.kind() == io::ErrorKind::Unsupported => None,
         Err(error) => return Err(error),
@@ -111,8 +122,11 @@ pub(super) fn quarantine_source_observed(
                         .is_ok_and(|actual| &actual == expected),
                     None => true,
                 };
-                let held_matches = match candidate.file_name().map(|name|
-                    held_parent.entry(name).and_then(|current| platform::same_file_object(&current, &file))) {
+                let held_matches = match candidate.file_name().map(|name| {
+                    held_parent
+                        .entry(name)
+                        .and_then(|current| platform::same_file_object(&current, &file))
+                }) {
                     Some(Ok(matches)) => matches,
                     Some(Err(error)) => return Err(rollback_quarantine(source, &candidate, error)),
                     None => false,
@@ -183,8 +197,13 @@ pub(super) fn restore_quarantine(source: &QuarantinedSource) -> io::Result<()> {
         }
     }
     super::recovery::recover_transfer_quarantine_live(
-        &source.parent, &source.original, &source.path, &source.file, false,
-    ).map_err(|error| {
+        &source.parent,
+        &source.original,
+        &source.path,
+        &source.file,
+        false,
+    )
+    .map_err(|error| {
         io::Error::new(
             error.kind(),
             format!(
@@ -209,7 +228,11 @@ pub(super) fn remove_quarantine(source: &QuarantinedSource) -> io::Result<()> {
         }
     }
     super::recovery::recover_transfer_quarantine_live(
-        &source.parent, &source.original, &source.path, &source.file, true,
+        &source.parent,
+        &source.original,
+        &source.path,
+        &source.file,
+        true,
     )
 }
 

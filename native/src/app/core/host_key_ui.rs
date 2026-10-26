@@ -69,7 +69,7 @@ pub(in crate::app) fn window(app: &mut App, ctx: &egui::Context) {
     let mut open = true;
     let mut close = false;
     super::dialog_geometry::window(ctx, "host_key_ui.0", "SSH-Hostschlüssel prüfen")
-            .id(egui::Id::new("SSH-Hostschlüssel prüfen"))
+        .id(egui::Id::new("SSH-Hostschlüssel prüfen"))
         .collapsible(false)
         .resizable(true)
         .open(&mut open)

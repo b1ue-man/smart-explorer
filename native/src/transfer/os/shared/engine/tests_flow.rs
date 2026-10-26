@@ -180,7 +180,9 @@ fn transfer_engine_task_refused_read_access_ends_the_job() {
         recoverable: true,
         recovery: crate::transfer::RecoveryMode::New,
         id: None,
-        folders: &crate::transfer::FolderConflictPolicy::new(crate::transfer::FolderConflict::Merge),
+        folders: &crate::transfer::FolderConflictPolicy::new(
+            crate::transfer::FolderConflict::Merge,
+        ),
         source: Side::Local,
         target: Side::Local,
         target_dir: &target,

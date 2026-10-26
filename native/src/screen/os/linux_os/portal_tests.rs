@@ -11,16 +11,31 @@ use crate::screen::core::pixel_convert::BgraImage;
 use crate::screen::os::pipewire_stream::convert_rows;
 use crate::screen::os::spa_pod::VideoFormat;
 
-fn admitted_picture(image:BgraImage)->crate::screen::core::capture_image::CapturedImage {
-    use crate::screen::core::capture_admission::{SourceKey,CaptureGeneration,CaptureOwner};
-    use crate::screen::core::capture_plan::{CapturePlan,CapturePhases};
-    let admission=super::super::host_backend::prepared::test_admission("portal-pixels");
-    let mut plan=CapturePlan::new(SourceKey::new("portal-pixels","portal").unwrap(),CaptureGeneration::new(1));
-    plan.add_bgra(CaptureOwner::SourcePixels,image.size(),1,CapturePhases::ALL).unwrap();
-    let grant=admission.authority().approve(plan).unwrap();
-    let mut builder=crate::screen::core::capture_image::CaptureImageBuilder::new(image.size(),
-        crate::screen::core::frame_budget::FrameLimits::RESOURCE,&grant,CaptureOwner::SourcePixels).unwrap();
-    builder.pixels_mut().copy_from_slice(image.data());builder.freeze()
+fn admitted_picture(image: BgraImage) -> crate::screen::core::capture_image::CapturedImage {
+    use crate::screen::core::capture_admission::{CaptureGeneration, CaptureOwner, SourceKey};
+    use crate::screen::core::capture_plan::{CapturePhases, CapturePlan};
+    let admission = super::super::host_backend::prepared::test_admission("portal-pixels");
+    let mut plan = CapturePlan::new(
+        SourceKey::new("portal-pixels", "portal").unwrap(),
+        CaptureGeneration::new(1),
+    );
+    plan.add_bgra(
+        CaptureOwner::SourcePixels,
+        image.size(),
+        1,
+        CapturePhases::ALL,
+    )
+    .unwrap();
+    let grant = admission.authority().approve(plan).unwrap();
+    let mut builder = crate::screen::core::capture_image::CaptureImageBuilder::new(
+        image.size(),
+        crate::screen::core::frame_budget::FrameLimits::RESOURCE,
+        &grant,
+        CaptureOwner::SourcePixels,
+    )
+    .unwrap();
+    builder.pixels_mut().copy_from_slice(image.data());
+    builder.freeze()
 }
 
 #[test]

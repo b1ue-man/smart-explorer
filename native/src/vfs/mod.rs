@@ -24,13 +24,10 @@ mod batch;
 mod cache;
 #[path = "core/capacity.rs"]
 mod capacity;
-pub use self::capacity::{capacity, capacity_failure, observed_now_ms, CapacitySnapshot, CapacityState, CapacitySource, CapacityFailure};
-#[cfg(windows)]
-#[path = "os/windows/capacity.rs"]
-mod local_capacity;
-#[cfg(not(windows))]
-#[path = "os/linux_os/capacity.rs"]
-mod local_capacity;
+pub use self::capacity::{
+    capacity, capacity_failure, observed_now_ms, CapacityFailure, CapacitySnapshot, CapacitySource,
+    CapacityState,
+};
 #[path = "core/capabilities.rs"]
 mod capabilities;
 #[path = "core/congestion.rs"]
@@ -55,10 +52,19 @@ mod extension_types;
 mod extensions;
 #[path = "core/file_identity.rs"]
 mod file_identity;
+#[cfg(windows)]
+#[path = "os/windows/capacity.rs"]
+mod local_capacity;
+#[cfg(not(windows))]
+#[path = "os/linux_os/capacity.rs"]
+mod local_capacity;
 pub use file_identity::file_identity;
 #[path = "core/folder_reservation.rs"]
 mod folder_reservation;
-pub use folder_reservation::{create_dir_exclusive, directory_identity, directory_reservation_supported, rename_reserved_directory};
+pub use folder_reservation::{
+    create_dir_exclusive, directory_identity, directory_reservation_supported,
+    rename_reserved_directory,
+};
 #[path = "os/shared/confined_local.rs"]
 mod confined_local;
 #[path = "os/shared/confined_local_extensions.rs"]

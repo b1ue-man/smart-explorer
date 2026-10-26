@@ -1,10 +1,10 @@
 //! Checked host ownership sets. Entries always denote distinct allocations;
 //! aliases exist only by sharing a real captured storage owner.
-use std::io;
 use super::capture_admission::{CaptureGeneration, SourceKey};
 use super::frame_budget::FrameContract;
 use super::pixel_convert::FrameSize;
 use super::wire::invalid;
+use std::io;
 
 pub(crate) const OWNER_COUNT: usize = 10;
 pub(crate) const PHASE_COUNT: usize = 9;
@@ -13,28 +13,57 @@ pub(crate) type CapturePhaseCase = [[u64; OWNER_COUNT]; PHASE_COUNT];
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(usize)]
 pub(crate) enum CaptureOwner {
-    NativeSurface, Readback, SourcePixels, CompositionPixels, ScaledPixels,
-    FilterScratch, Metadata, Transport, CodecInput, CodecOutput,
+    NativeSurface,
+    Readback,
+    SourcePixels,
+    CompositionPixels,
+    ScaledPixels,
+    FilterScratch,
+    Metadata,
+    Transport,
+    CodecInput,
+    CodecOutput,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(usize)]
 pub(crate) enum HostPhase {
-    Capture, LiveEncode, EncodedTransfer, RawSnapshot, SnapshotEncode,
-    Send, Convert, CodecOutput, Transition,
+    Capture,
+    LiveEncode,
+    EncodedTransfer,
+    RawSnapshot,
+    SnapshotEncode,
+    Send,
+    Convert,
+    CodecOutput,
+    Transition,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CapturePhases(u16);
 impl CapturePhases {
     pub(crate) const ALL: Self = Self((1 << PHASE_COUNT) - 1);
-    pub(crate) const fn one(phase: HostPhase) -> Self {Self(1 << phase as usize)}
-    pub(crate) fn new(phases: &[HostPhase]) -> io::Result<Self> {
-        if phases.is_empty() {return Err(invalid("capture allocation has no live phase"));}
-        Ok(Self(phases.iter().fold(0, |bits, phase| bits | (1 << *phase as usize))))
+    pub(crate) const fn one(phase: HostPhase) -> Self {
+        Self(1 << phase as usize)
     }
-    fn contains(self, phase: usize) -> bool {self.0 & (1 << phase) != 0}
-    pub(crate) fn bits(self) -> u16 {self.0}
+    pub(crate) fn new(phases: &[HostPhase]) -> io::Result<Self> {
+        if phases.is_empty() {
+            return Err(invalid("capture allocation has no live phase"));
+        }
+        Ok(Self(
+            phases
+                .iter()
+                .fold(0, |bits, phase| bits | (1 << *phase as usize)),
+        ))
+    }
+    fn contains(self, phase: usize) -> bool {
+        self.0 & (1 << phase) != 0
+    }
+    pub(crate) fn bits(self) -> u16 {
+        self.0
+    }
     pub(crate) fn from_bits(bits: u16) -> io::Result<Self> {
-        if bits == 0 || bits & !Self::ALL.0 != 0 {return Err(invalid("invalid capture phase bits"));}
+        if bits == 0 || bits & !Self::ALL.0 != 0 {
+            return Err(invalid("invalid capture phase bits"));
+        }
         Ok(Self(bits))
     }
 }
@@ -53,13 +82,27 @@ pub(crate) struct CaptureRequirement {
     phases: CapturePhases,
 }
 impl CaptureRequirement {
-    pub(crate) fn object(&self) -> CaptureObject {self.object}
-    pub(crate) fn source(&self) -> &SourceKey {&self.source}
-    pub(crate) fn generation(&self) -> CaptureGeneration {self.generation}
-    pub(crate) fn owner(&self) -> CaptureOwner {self.owner}
-    pub(crate) fn bytes_each(&self) -> u64 {self.bytes_each}
-    pub(crate) fn count(&self) -> u64 {self.count}
-    pub(crate) fn phases(&self) -> CapturePhases {self.phases}
+    pub(crate) fn object(&self) -> CaptureObject {
+        self.object
+    }
+    pub(crate) fn source(&self) -> &SourceKey {
+        &self.source
+    }
+    pub(crate) fn generation(&self) -> CaptureGeneration {
+        self.generation
+    }
+    pub(crate) fn owner(&self) -> CaptureOwner {
+        self.owner
+    }
+    pub(crate) fn bytes_each(&self) -> u64 {
+        self.bytes_each
+    }
+    pub(crate) fn count(&self) -> u64 {
+        self.count
+    }
+    pub(crate) fn phases(&self) -> CapturePhases {
+        self.phases
+    }
 }
 
 #[derive(Debug)]
@@ -76,110 +119,200 @@ pub(crate) struct CapturePlan {
     import_only: bool,
 }
 impl CapturePlan {
-    pub(super) fn local_identity(source:SourceKey,generation:CaptureGeneration)->Self {
-        Self {source,generation,requirements:Vec::new(),table:[[0;OWNER_COUNT];PHASE_COUNT],
-            totals:[0;PHASE_COUNT],contract:None,concurrent:Vec::new(),serial:Vec::new(),cases:Vec::new(),import_only:false}
+    pub(super) fn local_identity(source: SourceKey, generation: CaptureGeneration) -> Self {
+        Self {
+            source,
+            generation,
+            requirements: Vec::new(),
+            table: [[0; OWNER_COUNT]; PHASE_COUNT],
+            totals: [0; PHASE_COUNT],
+            contract: None,
+            concurrent: Vec::new(),
+            serial: Vec::new(),
+            cases: Vec::new(),
+            import_only: false,
+        }
     }
     pub(crate) fn new(source: SourceKey, generation: CaptureGeneration) -> Self {
-        Self {source, generation, requirements: Vec::new(),
-            table: [[0; OWNER_COUNT]; PHASE_COUNT], totals: [0; PHASE_COUNT], contract: None,
-            concurrent: vec![[[0; OWNER_COUNT]; PHASE_COUNT]], serial: Vec::new(),
-            cases: vec![[[0; OWNER_COUNT]; PHASE_COUNT]],import_only:false}
-    }
-    pub(crate) fn source(&self) -> &SourceKey {&self.source}
-    pub(crate) fn generation(&self) -> CaptureGeneration {self.generation}
-    pub(crate) fn contract_binding(&self) -> Option<Option<FrameContract>> {self.contract}
-    pub(crate) fn is_import(&self)->bool {self.import_only}
-    pub(super) fn mark_import(&mut self)->io::Result<()> {
-        if self.contract.is_some() || self.requirements.iter().any(|item|
-            !matches!(item.owner,CaptureOwner::NativeSurface|CaptureOwner::Metadata)) {
-            return Err(invalid("prepared import plan contains image or codec authority"));
+        Self {
+            source,
+            generation,
+            requirements: Vec::new(),
+            table: [[0; OWNER_COUNT]; PHASE_COUNT],
+            totals: [0; PHASE_COUNT],
+            contract: None,
+            concurrent: vec![[[0; OWNER_COUNT]; PHASE_COUNT]],
+            serial: Vec::new(),
+            cases: vec![[[0; OWNER_COUNT]; PHASE_COUNT]],
+            import_only: false,
         }
-        self.import_only=true;Ok(())
+    }
+    pub(crate) fn source(&self) -> &SourceKey {
+        &self.source
+    }
+    pub(crate) fn generation(&self) -> CaptureGeneration {
+        self.generation
+    }
+    pub(crate) fn contract_binding(&self) -> Option<Option<FrameContract>> {
+        self.contract
+    }
+    pub(crate) fn is_import(&self) -> bool {
+        self.import_only
+    }
+    pub(super) fn mark_import(&mut self) -> io::Result<()> {
+        if self.contract.is_some()
+            || self.requirements.iter().any(|item| {
+                !matches!(
+                    item.owner,
+                    CaptureOwner::NativeSurface | CaptureOwner::Metadata
+                )
+            })
+        {
+            return Err(invalid(
+                "prepared import plan contains image or codec authority",
+            ));
+        }
+        self.import_only = true;
+        Ok(())
     }
     pub(crate) fn bind_contract(&mut self, contract: Option<FrameContract>) -> io::Result<()> {
-        if self.import_only {return Err(invalid("prepared imports cannot bind a frame contract"));}
-        if let Some(contract) = contract {contract.validate()?;}
+        if self.import_only {
+            return Err(invalid("prepared imports cannot bind a frame contract"));
+        }
+        if let Some(contract) = contract {
+            contract.validate()?;
+        }
         if self.contract.is_some_and(|bound| bound != contract) {
             return Err(invalid("capture plan has a different output contract"));
         }
         self.contract = Some(contract);
         Ok(())
     }
-    pub(crate) fn requirements(&self) -> &[CaptureRequirement] {&self.requirements}
-    pub(crate) fn source_image_bytes(&self) -> Option<u64> {
-        self.requirements.iter().filter(|item| item.source == self.source
-            && matches!(item.owner,CaptureOwner::SourcePixels|CaptureOwner::CompositionPixels))
-            .map(|item|item.bytes_each).max()
+    pub(crate) fn requirements(&self) -> &[CaptureRequirement] {
+        &self.requirements
     }
-    pub(crate) fn phase_table(&self) -> &[[u64; OWNER_COUNT]; PHASE_COUNT] {&self.table}
+    pub(crate) fn source_image_bytes(&self) -> Option<u64> {
+        self.requirements
+            .iter()
+            .filter(|item| {
+                item.source == self.source
+                    && matches!(
+                        item.owner,
+                        CaptureOwner::SourcePixels | CaptureOwner::CompositionPixels
+                    )
+            })
+            .map(|item| item.bytes_each)
+            .max()
+    }
+    pub(crate) fn phase_table(&self) -> &[[u64; OWNER_COUNT]; PHASE_COUNT] {
+        &self.table
+    }
     /// Actual simultaneous ownership tables. The per-owner summary can have
     /// maxima from different serial members; these cases retain that distinction.
-    pub(crate) fn concurrency_cases(&self) -> &[CapturePhaseCase] {&self.cases}
-    pub(crate) fn phase_bytes(&self, phase: HostPhase) -> u64 {self.totals[phase as usize]}
-    pub(crate) fn peak_bytes(&self) -> u64 {self.totals.iter().copied().max().unwrap_or(0)}
+    pub(crate) fn concurrency_cases(&self) -> &[CapturePhaseCase] {
+        &self.cases
+    }
+    pub(crate) fn phase_bytes(&self, phase: HostPhase) -> u64 {
+        self.totals[phase as usize]
+    }
+    pub(crate) fn peak_bytes(&self) -> u64 {
+        self.totals.iter().copied().max().unwrap_or(0)
+    }
     pub(crate) fn owner_limits(&self) -> [u64; OWNER_COUNT] {
         std::array::from_fn(|owner| self.table.iter().map(|row| row[owner]).max().unwrap_or(0))
     }
     /// Authenticated worker metadata may restore the exact serialized family
     /// concurrency table. It cannot enlarge any independently checked owner
     /// requirement. No allocation receives permission from the wire table alone.
-    pub(crate) fn restore_verified_cases(&mut self, cases: Vec<CapturePhaseCase>) -> io::Result<()> {
-        if cases.is_empty() {return Err(invalid("worker capture plan has no concurrency case"));}
+    pub(crate) fn restore_verified_cases(
+        &mut self,
+        cases: Vec<CapturePhaseCase>,
+    ) -> io::Result<()> {
+        if cases.is_empty() {
+            return Err(invalid("worker capture plan has no concurrency case"));
+        }
         for case in &cases {
             for phase in 0..PHASE_COUNT {
                 for owner in 0..OWNER_COUNT {
                     if case[phase][owner] > self.table[phase][owner] {
-                        return Err(invalid("worker concurrency exceeds checked owner requirements"));
+                        return Err(invalid(
+                            "worker concurrency exceeds checked owner requirements",
+                        ));
                     }
                 }
             }
         }
-        let (table,totals)=summarize(&cases)?;
-        self.concurrent=copy_cases(&cases)?;
+        let (table, totals) = summarize(&cases)?;
+        self.concurrent = copy_cases(&cases)?;
         self.serial.clear();
-        self.cases=cases;
-        self.table=table;
-        self.totals=totals;
+        self.cases = cases;
+        self.table = table;
+        self.totals = totals;
         Ok(())
     }
-    pub(crate) fn add_bytes(&mut self, owner: CaptureOwner, bytes_each: u64,
-        count: u64, phases: CapturePhases) -> io::Result<CaptureObject> {
+    pub(crate) fn add_bytes(
+        &mut self,
+        owner: CaptureOwner,
+        bytes_each: u64,
+        count: u64,
+        phases: CapturePhases,
+    ) -> io::Result<CaptureObject> {
         if bytes_each == 0 || count == 0 {
             return Err(invalid("empty capture ownership requirement"));
         }
-        if self.import_only && !matches!(owner,CaptureOwner::NativeSurface|CaptureOwner::Metadata) {
+        if self.import_only
+            && !matches!(owner, CaptureOwner::NativeSurface | CaptureOwner::Metadata)
+        {
             return Err(invalid("prepared import cannot own pixels or codec output"));
         }
-        let bytes = bytes_each.checked_mul(count).ok_or_else(|| invalid("capture count overflow"))?;
+        let bytes = bytes_each
+            .checked_mul(count)
+            .ok_or_else(|| invalid("capture count overflow"))?;
         let mut concurrent = copy_cases(&self.concurrent)?;
         for case in &mut concurrent {
             for phase in 0..PHASE_COUNT {
                 if phases.contains(phase) {
-                    case[phase][owner as usize] = case[phase][owner as usize].checked_add(bytes)
+                    case[phase][owner as usize] = case[phase][owner as usize]
+                        .checked_add(bytes)
                         .ok_or_else(|| invalid("capture owner capacity overflow"))?;
                 }
             }
         }
         let cases = combine_cases(&concurrent, &self.serial)?;
         let (table, totals) = summarize(&cases)?;
-        self.requirements.try_reserve(1).map_err(|_| io::Error::other("capture plan allocation failed"))?;
+        self.requirements
+            .try_reserve(1)
+            .map_err(|_| io::Error::other("capture plan allocation failed"))?;
         let object = CaptureObject(self.requirements.len());
-        self.requirements.push(CaptureRequirement {object, source: self.source.clone(),
-            generation: self.generation, owner, bytes_each, count, phases});
+        self.requirements.push(CaptureRequirement {
+            object,
+            source: self.source.clone(),
+            generation: self.generation,
+            owner,
+            bytes_each,
+            count,
+            phases,
+        });
         self.table = table;
         self.totals = totals;
         self.concurrent = concurrent;
         self.cases = cases;
         Ok(object)
     }
-    pub(crate) fn add_bgra(&mut self, owner: CaptureOwner, size: FrameSize,
-        count: u64, phases: CapturePhases) -> io::Result<CaptureObject> {
+    pub(crate) fn add_bgra(
+        &mut self,
+        owner: CaptureOwner,
+        size: FrameSize,
+        count: u64,
+        phases: CapturePhases,
+    ) -> io::Result<CaptureObject> {
         self.add_bytes(owner, bgra_bytes(size)?, count, phases)
     }
     /// All member allocations are distinct. No caller-chosen alias IDs exist.
     pub(crate) fn add_member(&mut self, member: CapturePlan) -> io::Result<()> {
-        if self.import_only || member.import_only {return Err(invalid("prepared imports cannot merge with frame plans"));}
+        if self.import_only || member.import_only {
+            return Err(invalid("prepared imports cannot merge with frame plans"));
+        }
         if self.source.session() != member.source.session() {
             return Err(invalid("family member belongs to another session"));
         }
@@ -187,7 +320,8 @@ impl CapturePlan {
         let concurrent = combine_cases(&self.concurrent, &member.cases)?;
         let cases = combine_cases(&concurrent, &self.serial)?;
         let (table, totals) = summarize(&cases)?;
-        let requirements = copy_requirements([self.requirements.as_slice(), member.requirements.as_slice()])?;
+        let requirements =
+            copy_requirements([self.requirements.as_slice(), member.requirements.as_slice()])?;
         self.contract = contract;
         self.concurrent = concurrent;
         self.cases = cases;
@@ -201,25 +335,39 @@ impl CapturePlan {
     /// this repeatedly adds alternatives to the same serial lane. Ordinary
     /// add_member keeps independent lanes concurrent through a Cartesian sum.
     /// A real overlap still debits the shared grant total and must fit it.
-    pub(crate) fn add_serial_member(&mut self, persistent: CapturePlan, transient: CapturePlan) -> io::Result<()> {
+    pub(crate) fn add_serial_member(
+        &mut self,
+        persistent: CapturePlan,
+        transient: CapturePlan,
+    ) -> io::Result<()> {
         if self.import_only || persistent.import_only || transient.import_only {
             return Err(invalid("prepared imports cannot become serial image plans"));
         }
-        if persistent.source != transient.source || persistent.generation != transient.generation
-            || persistent.source.session() != self.source.session() {
+        if persistent.source != transient.source
+            || persistent.generation != transient.generation
+            || persistent.source.session() != self.source.session()
+        {
             return Err(invalid("serial member identity or generation mismatch"));
         }
-        let contract = merge_contract(merge_contract(self.contract, persistent.contract)?, transient.contract)?;
+        let contract = merge_contract(
+            merge_contract(self.contract, persistent.contract)?,
+            transient.contract,
+        )?;
         let concurrent = combine_cases(&self.concurrent, &persistent.cases)?;
         let mut serial = copy_cases(&self.serial)?;
         if transient.peak_bytes() != 0 {
-            serial.try_reserve_exact(transient.cases.len()).map_err(|_| io::Error::other("serial capture plan allocation failed"))?;
+            serial
+                .try_reserve_exact(transient.cases.len())
+                .map_err(|_| io::Error::other("serial capture plan allocation failed"))?;
             serial.extend_from_slice(&transient.cases);
         }
         let cases = combine_cases(&concurrent, &serial)?;
         let (table, totals) = summarize(&cases)?;
-        let requirements = copy_requirements([self.requirements.as_slice(),
-            persistent.requirements.as_slice(), transient.requirements.as_slice()])?;
+        let requirements = copy_requirements([
+            self.requirements.as_slice(),
+            persistent.requirements.as_slice(),
+            transient.requirements.as_slice(),
+        ])?;
         self.contract = contract;
         self.concurrent = concurrent;
         self.serial = serial;
@@ -229,21 +377,33 @@ impl CapturePlan {
         self.requirements = requirements;
         Ok(())
     }
-    pub(super) fn for_source(&self, source: &SourceKey, generation: CaptureGeneration) -> io::Result<Self> {
+    pub(super) fn for_source(
+        &self,
+        source: &SourceKey,
+        generation: CaptureGeneration,
+    ) -> io::Result<Self> {
         let mut plan = Self::new(source.clone(), generation);
-        if let Some(contract) = self.contract {plan.bind_contract(contract)?;}
+        if let Some(contract) = self.contract {
+            plan.bind_contract(contract)?;
+        }
         for item in &self.requirements {
             if &item.source == source && item.generation == generation {
                 plan.add_bytes(item.owner, item.bytes_each, item.count, item.phases)?;
             }
         }
-        if plan.peak_bytes() == 0 {return Err(invalid("source is not a bound capture-plan member"));}
+        if plan.peak_bytes() == 0 {
+            return Err(invalid("source is not a bound capture-plan member"));
+        }
         Ok(plan)
     }
 }
 pub(crate) fn bgra_bytes(size: FrameSize) -> io::Result<u64> {
-    if size.width == 0 || size.height == 0 {return Err(invalid("unknown capture pixel size"));}
-    u64::from(size.width).checked_mul(u64::from(size.height)).and_then(|n| n.checked_mul(4))
+    if size.width == 0 || size.height == 0 {
+        return Err(invalid("unknown capture pixel size"));
+    }
+    u64::from(size.width)
+        .checked_mul(u64::from(size.height))
+        .and_then(|n| n.checked_mul(4))
         .ok_or_else(|| invalid("capture pixel size overflow"))
 }
 

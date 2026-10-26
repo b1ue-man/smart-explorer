@@ -13,10 +13,13 @@ use crate::local_access::{self, FinalLink};
 
 impl BackendExtensions for LocalBackend {
     fn confined_local_root(&self, root: &str) -> VfsResult<Option<super::BackendHandle>> {
-        super::ConfinedLocalBackend::open(root).map(|backend| Some(std::sync::Arc::new(backend) as super::BackendHandle))
+        super::ConfinedLocalBackend::open(root)
+            .map(|backend| Some(std::sync::Arc::new(backend) as super::BackendHandle))
     }
 
-    fn directory_reservation_supported(&self, _root: &str) -> bool { true }
+    fn directory_reservation_supported(&self, _root: &str) -> bool {
+        true
+    }
 
     fn create_dir_exclusive(&self, path: &str) -> VfsResult<()> {
         local_platform::check_new_name(&local_platform::to_os(path))?;
@@ -38,8 +41,16 @@ impl BackendExtensions for LocalBackend {
     fn capacity(&self, root: &str) -> VfsResult<crate::vfs::CapacitySnapshot> {
         let identity = crate::vfs::Backend::state_identity(self);
         match super::local_capacity::query(root) {
-            Ok(mut value) => { value.identity = identity; Ok(value) }
-            Err(error) => Ok(crate::vfs::capacity_failure(identity, root, crate::vfs::CapacitySource::Filesystem, &error)),
+            Ok(mut value) => {
+                value.identity = identity;
+                Ok(value)
+            }
+            Err(error) => Ok(crate::vfs::capacity_failure(
+                identity,
+                root,
+                crate::vfs::CapacitySource::Filesystem,
+                &error,
+            )),
         }
     }
 
@@ -48,8 +59,9 @@ impl BackendExtensions for LocalBackend {
     }
 
     fn open_read_regular(&self, path: &str, _id: Option<&str>) -> VfsResult<Box<dyn Read + Send>> {
-        crate::source_media::guard_reader(&local_platform::to_os(path), ||
-            local_access::open_regular(&local_platform::to_os(path), FinalLink::Refuse))
+        crate::source_media::guard_reader(&local_platform::to_os(path), || {
+            local_access::open_regular(&local_platform::to_os(path), FinalLink::Refuse)
+        })
     }
 
     /// A new stage only the owner can read until `finish_stage` gives it its
@@ -119,23 +131,45 @@ pub fn local_mount_boundary(path: &str) -> io::Result<Option<MountKind>> {
     local_platform::mount_boundary(&local_platform::to_os(path))
 }
 
-fn confined_parent(path: &str) -> io::Result<(crate::local_access::ConfinedDirectory, std::ffi::OsString)> {
+fn confined_parent(
+    path: &str,
+) -> io::Result<(crate::local_access::ConfinedDirectory, std::ffi::OsString)> {
     let path = local_platform::to_os(path);
     confined_parent_os(&path)
 }
-fn confined_parent_os(path: &std::path::Path) -> io::Result<(crate::local_access::ConfinedDirectory, std::ffi::OsString)> {
-    let name = path.file_name().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "root is not one child directory"))?.to_os_string();
-    let parent = path.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or_else(|| std::path::Path::new("."));
-    Ok((crate::local_access::ConfinedDirectory::open_root(parent)?, name))
+fn confined_parent_os(
+    path: &std::path::Path,
+) -> io::Result<(crate::local_access::ConfinedDirectory, std::ffi::OsString)> {
+    let name = path
+        .file_name()
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "root is not one child directory",
+            )
+        })?
+        .to_os_string();
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."));
+    Ok((
+        crate::local_access::ConfinedDirectory::open_root(parent)?,
+        name,
+    ))
 }
 
 fn local_directory_identity(path: &str) -> io::Result<Option<String>> {
     let path = local_platform::to_os(path);
     if path.file_name().is_none() {
-        return crate::local_access::ConfinedDirectory::open_root(&path)?.identity().map(Some);
+        return crate::local_access::ConfinedDirectory::open_root(&path)?
+            .identity()
+            .map(Some);
     }
     let (parent, name) = confined_parent_os(&path)?;
     let entry = parent.selected_entry(&name)?;
-    if !entry.metadata()?.is_dir() || local_access::classify_open_file(&entry)?.link_like { return Ok(None); }
+    if !entry.metadata()?.is_dir() || local_access::classify_open_file(&entry)?.link_like {
+        return Ok(None);
+    }
     parent.select_child_root(&name)?.stable_identity()
 }

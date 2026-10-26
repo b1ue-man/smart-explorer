@@ -239,74 +239,120 @@ pub(crate) fn inject(events: &[InputEvent]) -> Result<(), ControlBlock> {
 
 /// Positions belong to a captured source, not a freshly relocated output.
 /// Callers retain their source/Frame/PRESENTED proof across the worker queue.
-pub(crate) fn inject_bound(source:&SourceId,area:Area,events:&[InputEvent])->Result<(),ControlBlock> {
-    let mut state=state();
+pub(crate) fn inject_bound(
+    source: &SourceId,
+    area: Area,
+    events: &[InputEvent],
+) -> Result<(), ControlBlock> {
+    let mut state = state();
     if state.conn.is_none() {
-        let (conn,screen)=RustConnection::connect(None).map_err(|_|ControlBlock::ControlUnavailable)?;
-        if conn.extension_information(x11rb::protocol::xtest::X11_EXTENSION_NAME).ok().flatten().is_none() {
+        let (conn, screen) =
+            RustConnection::connect(None).map_err(|_| ControlBlock::ControlUnavailable)?;
+        if conn
+            .extension_information(x11rb::protocol::xtest::X11_EXTENSION_NAME)
+            .ok()
+            .flatten()
+            .is_none()
+        {
             return Err(ControlBlock::UnsupportedOnHost);
         }
-        let root=conn.setup().roots[screen].root;state.conn=Some((conn,root));
+        let root = conn.setup().roots[screen].root;
+        state.conn = Some((conn, root));
     }
-    let State {sas,conn,..}=&mut *state;
-    let Some((conn,root))=conn.as_ref() else{return Err(ControlBlock::ControlUnavailable);};
-    if area_of(conn,*root,source).map_err(|_|ControlBlock::ControlUnavailable)?!=area {
+    let State { sas, conn, .. } = &mut *state;
+    let Some((conn, root)) = conn.as_ref() else {
+        return Err(ControlBlock::ControlUnavailable);
+    };
+    if area_of(conn, *root, source).map_err(|_| ControlBlock::ControlUnavailable)? != area {
         return Err(ControlBlock::ControlUnavailable);
     }
     for event in events {
-        if let InputEvent::PointerAbs {x,y}|InputEvent::Touch {x,y,..}=event {
-            let px=i64::from(area.x)+i64::from(*x)*i64::from(area.width-1)/65_535;
-            let py=i64::from(area.y)+i64::from(*y)*i64::from(area.height-1)/65_535;
-            if i16::try_from(px).is_err()||i16::try_from(py).is_err(){return Err(ControlBlock::ControlUnavailable);}
+        if let InputEvent::PointerAbs { x, y } | InputEvent::Touch { x, y, .. } = event {
+            let px = i64::from(area.x) + i64::from(*x) * i64::from(area.width - 1) / 65_535;
+            let py = i64::from(area.y) + i64::from(*y) * i64::from(area.height - 1) / 65_535;
+            if i16::try_from(px).is_err() || i16::try_from(py).is_err() {
+                return Err(ControlBlock::ControlUnavailable);
+            }
         }
     }
-    if send(conn,*root,area,events,sas).is_err(){state.conn=None;return Err(ControlBlock::ControlUnavailable);}
+    if send(conn, *root, area, events, sas).is_err() {
+        state.conn = None;
+        return Err(ControlBlock::ControlUnavailable);
+    }
     Ok(())
 }
 
 /// Session-owned compensating ups do not need an existing source window or
 /// root-space pointer position, and never emit MotionNotify on touch cancel.
-pub(crate) fn release(events:&[InputEvent])->Result<(),ControlBlock> {
-    let mut releases=Vec::with_capacity(events.len());
+pub(crate) fn release(events: &[InputEvent]) -> Result<(), ControlBlock> {
+    let mut releases = Vec::with_capacity(events.len());
     for event in events {
         match event {
-            InputEvent::Key {down:false,..}|InputEvent::Button {down:false,..}=>releases.push(event.clone()),
-            InputEvent::Touch {id,phase:TouchPhase::End|TouchPhase::Cancel,..}=>{
-                if *id==0 {releases.push(InputEvent::Button {button:PointerButton::Left,down:false});}
+            InputEvent::Key { down: false, .. } | InputEvent::Button { down: false, .. } => {
+                releases.push(event.clone())
             }
-            _=>return Err(ControlBlock::ControlUnavailable),
+            InputEvent::Touch {
+                id,
+                phase: TouchPhase::End | TouchPhase::Cancel,
+                ..
+            } => {
+                if *id == 0 {
+                    releases.push(InputEvent::Button {
+                        button: PointerButton::Left,
+                        down: false,
+                    });
+                }
+            }
+            _ => return Err(ControlBlock::ControlUnavailable),
         }
     }
-    let mut state=state();
+    let mut state = state();
     if state.conn.is_none() {
-        let (conn,screen)=RustConnection::connect(None).map_err(|_|ControlBlock::ControlUnavailable)?;
-        if conn.extension_information(x11rb::protocol::xtest::X11_EXTENSION_NAME).ok().flatten().is_none() {
+        let (conn, screen) =
+            RustConnection::connect(None).map_err(|_| ControlBlock::ControlUnavailable)?;
+        if conn
+            .extension_information(x11rb::protocol::xtest::X11_EXTENSION_NAME)
+            .ok()
+            .flatten()
+            .is_none()
+        {
             return Err(ControlBlock::UnsupportedOnHost);
         }
-        let root=conn.setup().roots[screen].root;
-        state.conn=Some((conn,root));
+        let root = conn.setup().roots[screen].root;
+        state.conn = Some((conn, root));
     }
-    let State {sas,conn,..}=&mut *state;
-    let Some((conn,root))=conn.as_ref() else{return Err(ControlBlock::ControlUnavailable);};
-    let sent=(|| {
+    let State { sas, conn, .. } = &mut *state;
+    let Some((conn, root)) = conn.as_ref() else {
+        return Err(ControlBlock::ControlUnavailable);
+    };
+    let sent = (|| {
         for event in &releases {
-            let (kind,detail)=match event {
-                InputEvent::Button {button,..}=>(BUTTON_RELEASE,button_code(*button)),
-                InputEvent::Key {hid_usage,..}=>{
-                    if !sas.allows(*hid_usage,false){continue;}
-                    let Some(code)=evdev_code(*hid_usage).and_then(|code|u8::try_from(code+8).ok()) else{continue;};
-                    (x11_keymap::KEY_RELEASE,code)
+            let (kind, detail) = match event {
+                InputEvent::Button { button, .. } => (BUTTON_RELEASE, button_code(*button)),
+                InputEvent::Key { hid_usage, .. } => {
+                    if !sas.allows(*hid_usage, false) {
+                        continue;
+                    }
+                    let Some(code) =
+                        evdev_code(*hid_usage).and_then(|code| u8::try_from(code + 8).ok())
+                    else {
+                        continue;
+                    };
+                    (x11_keymap::KEY_RELEASE, code)
                 }
-                _=>return Err(io::Error::other("non_release_event")),
+                _ => return Err(io::Error::other("non_release_event")),
             };
             // Check the server response before dropping the pending held state.
-            conn.xtest_fake_input(kind,detail,0,*root,0,0,0).map_err(io::Error::other)?
-                .check().map_err(io::Error::other)?;
+            conn.xtest_fake_input(kind, detail, 0, *root, 0, 0, 0)
+                .map_err(io::Error::other)?
+                .check()
+                .map_err(io::Error::other)?;
         }
-        Ok::<_,io::Error>(())
+        Ok::<_, io::Error>(())
     })();
     if sent.is_err() {
-        state.conn=None;return Err(ControlBlock::ControlUnavailable);
+        state.conn = None;
+        return Err(ControlBlock::ControlUnavailable);
     }
     Ok(())
 }

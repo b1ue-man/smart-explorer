@@ -23,6 +23,8 @@ mod binding_store;
 mod cache;
 #[path = "core/cache_store.rs"]
 mod cache_store;
+#[path = "core/capacity.rs"]
+mod capacity;
 #[path = "core/change_scope.rs"]
 mod change_scope;
 #[path = "core/changes.rs"]
@@ -37,14 +39,12 @@ mod core;
 mod duplicates;
 #[path = "core/extensions.rs"]
 mod extensions;
-#[path = "core/capacity.rs"]
-mod capacity;
-#[path = "core/folder_reservation.rs"]
-mod folder_reservation;
 #[path = "core/file_list.rs"]
 mod file_list;
 #[path = "core/folder_create_journal.rs"]
 mod folder_create_journal;
+#[path = "core/folder_reservation.rs"]
+mod folder_reservation;
 #[path = "core/http.rs"]
 mod http;
 #[path = "core/id_pool.rs"]

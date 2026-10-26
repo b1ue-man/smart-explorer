@@ -64,17 +64,23 @@ impl DiscoveryPairingError {
     pub(crate) fn message(self) -> &'static str {
         match self {
             Self::InvalidPin => "PIN input is empty, invalid UTF-8, or exceeds the PIN limit",
-            Self::WorkerUnavailable => "Share worker is unavailable; inspect Share status and refresh its configuration",
+            Self::WorkerUnavailable => {
+                "Share worker is unavailable; inspect Share status and refresh its configuration"
+            }
             Self::Offline => "Share server is not connected",
             Self::Unsupported => "Share server does not support discovery pairing",
-            Self::OfferUnavailable => "Discovery offer is unavailable or expired; list offers again",
+            Self::OfferUnavailable => {
+                "Discovery offer is unavailable or expired; list offers again"
+            }
             Self::AlreadyPairing => "This discovery offer already has an active exchange",
             Self::IncompatibleOffer => "Discovery offer uses an incompatible pairing protocol",
             Self::PairingFailed => "Pairing failed; check the PIN, offer, peer and trust policy",
             Self::Cancelled => "Discovery exchange was cancelled",
             Self::Timeout => "Discovery response did not arrive before its deadline",
             Self::ObservationLost => "Discovery outcome could not be observed reliably",
-            Self::AcknowledgementLost => "Worker acknowledgement is missing; the request outcome was not confirmed",
+            Self::AcknowledgementLost => {
+                "Worker acknowledgement is missing; the request outcome was not confirmed"
+            }
             Self::DaemonError => "Discovery daemon request failed",
         }
     }
@@ -102,8 +108,13 @@ impl DiscoveryPairingError {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub(crate) enum DiscoveryPairingReply {
-    List { offers: Vec<DiscoveryAdvertisement> },
-    Started { discovery_id: String, exchange_id: String },
+    List {
+        offers: Vec<DiscoveryAdvertisement>,
+    },
+    Started {
+        discovery_id: String,
+        exchange_id: String,
+    },
     Finished {
         discovery_id: String,
         exchange_id: String,
@@ -111,5 +122,7 @@ pub(crate) enum DiscoveryPairingReply {
         outcome: Option<DiscoveryRelationOutcome>,
         error_code: Option<DiscoveryPairingError>,
     },
-    Error { error_code: DiscoveryPairingError },
+    Error {
+        error_code: DiscoveryPairingError,
+    },
 }

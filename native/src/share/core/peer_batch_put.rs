@@ -160,21 +160,20 @@ impl PeerBackend {
             req: FsRequest::WriteDone,
             lease: lease.clone(),
         };
-        let sent = self.node.block_on_route(opened.generation, io_deadline::run(
-            "peer batch commit",
-            send_ctrl(&mut opened.send, &commit),
-        ));
+        let sent = self.node.block_on_route(
+            opened.generation,
+            io_deadline::run("peer batch commit", send_ctrl(&mut opened.send, &commit)),
+        );
         let entry_count = u32::try_from(entries.len()).unwrap_or(u32::MAX);
         let budget = match &sent {
             Ok(()) => PEER_OP_TIMEOUT.saturating_add(COMMIT_PER_ENTRY.saturating_mul(entry_count)),
             // A host that stopped the stream has sent its reason already.
             Err(_) => REFUSAL_WAIT,
         };
-        let reply = self.node.block_on_route(opened.generation, io_deadline::run_for(
-            "peer batch reply",
-            budget,
-            read_reply(&mut opened.recv),
-        ));
+        let reply = self.node.block_on_route(
+            opened.generation,
+            io_deadline::run_for("peer batch reply", budget, read_reply(&mut opened.recv)),
+        );
         match reply {
             Ok(Reply::Committed(outcomes)) => {
                 // Finishing our side tells the host the outcomes arrived.
@@ -201,10 +200,10 @@ impl PeerBackend {
         total: u64,
     ) -> Result<(), BodyError> {
         self.node
-            .block_on_route(opened.generation, io_deadline::run(
-                "peer batch header",
-                send_ctrl(&mut opened.send, header),
-            ))
+            .block_on_route(
+                opened.generation,
+                io_deadline::run("peer batch header", send_ctrl(&mut opened.send, header)),
+            )
             .map_err(BodyError::Transport)?;
         let mut buffer = vec![0u8; CHUNK];
         let mut remaining = total;
@@ -221,10 +220,13 @@ impl PeerBackend {
                 )));
             }
             self.node
-                .block_on_route(opened.generation, io_deadline::run(
-                    "peer batch data",
-                    send_tagged(&mut opened.send, TAG_DATA, chunk),
-                ))
+                .block_on_route(
+                    opened.generation,
+                    io_deadline::run(
+                        "peer batch data",
+                        send_tagged(&mut opened.send, TAG_DATA, chunk),
+                    ),
+                )
                 .map_err(BodyError::Transport)?;
             remaining -= wanted as u64;
         }
@@ -237,11 +239,14 @@ impl PeerBackend {
         let error = match failure {
             BodyError::Source(error) => error,
             BodyError::Transport(error) => {
-                let reason = self.node.block_on_route(opened.generation, io_deadline::run_for(
-                    "peer batch refusal",
-                    REFUSAL_WAIT,
-                    recv_resp_wire(&mut opened.recv),
-                ));
+                let reason = self.node.block_on_route(
+                    opened.generation,
+                    io_deadline::run_for(
+                        "peer batch refusal",
+                        REFUSAL_WAIT,
+                        recv_resp_wire(&mut opened.recv),
+                    ),
+                );
                 match reason {
                     Ok(FsResponse::Err { kind, msg }) => into_io(kind, msg),
                     _ => {

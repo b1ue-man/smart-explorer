@@ -19,29 +19,65 @@ pub(crate) fn run_legacy(
     cancel: &AtomicBool,
 ) {
     let id = super::new_job_id();
-    let folders = crate::transfer::FolderConflictPolicy::new(if target.is_local() { crate::transfer::FolderConflict::Merge } else { crate::transfer::FolderConflict::KeepBoth });
-    run_with_recovery(source, target, target_dir, items, filter, &id, &folders, crate::transfer::RecoveryMode::New, tx, cancel);
+    let folders = crate::transfer::FolderConflictPolicy::new(if target.is_local() {
+        crate::transfer::FolderConflict::Merge
+    } else {
+        crate::transfer::FolderConflict::KeepBoth
+    });
+    run_with_recovery(
+        source,
+        target,
+        target_dir,
+        items,
+        filter,
+        &id,
+        &folders,
+        crate::transfer::RecoveryMode::New,
+        tx,
+        cancel,
+    );
 }
 
 /// Recovery callers pass the original identity and decisions. Never infer
 /// a previous job from matching paths: that could consume a new user copy.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_legacy_with_identity(
-    source: Side<'_>, target: Side<'_>, target_dir: &str, items: JobItems,
-    filter: Option<(FilterDef, String)>, id: &str,
+    source: Side<'_>,
+    target: Side<'_>,
+    target_dir: &str,
+    items: JobItems,
+    filter: Option<(FilterDef, String)>,
+    id: &str,
     folders: &crate::transfer::FolderConflictPolicy,
-    tx: &crossbeam_channel::Sender<TransferMsg>, cancel: &AtomicBool,
+    tx: &crossbeam_channel::Sender<TransferMsg>,
+    cancel: &AtomicBool,
 ) {
-    run_with_recovery(source, target, target_dir, items, filter, id, folders, crate::transfer::RecoveryMode::Resume, tx, cancel);
+    run_with_recovery(
+        source,
+        target,
+        target_dir,
+        items,
+        filter,
+        id,
+        folders,
+        crate::transfer::RecoveryMode::Resume,
+        tx,
+        cancel,
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
 fn run_with_recovery(
-    source: Side<'_>, target: Side<'_>, target_dir: &str, items: JobItems,
-    filter: Option<(FilterDef, String)>, id: &str,
+    source: Side<'_>,
+    target: Side<'_>,
+    target_dir: &str,
+    items: JobItems,
+    filter: Option<(FilterDef, String)>,
+    id: &str,
     folders: &crate::transfer::FolderConflictPolicy,
     recovery: crate::transfer::RecoveryMode,
-    tx: &crossbeam_channel::Sender<TransferMsg>, cancel: &AtomicBool,
+    tx: &crossbeam_channel::Sender<TransferMsg>,
+    cancel: &AtomicBool,
 ) {
     let source_label = match source {
         Side::Remote(backend) => backend.root_display(),

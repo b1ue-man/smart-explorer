@@ -193,7 +193,8 @@ pub(super) fn watch(
 /// Typed capacity payload, queried only on the authorized backend.
 pub(super) fn capacity(backend: &BackendHandle, root: &str) -> io::Result<Frame> {
     let value = vfs::capacity(&**backend, root)?;
-    serde_json::to_string(&value).map(Frame::CapacityData)
+    serde_json::to_string(&value)
+        .map(Frame::CapacityData)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "capacity serialization failed"))
 }
 
@@ -203,8 +204,11 @@ pub(super) fn folder_reply(result: io::Result<Frame>, credit: bool) -> Frame {
     match result {
         Err(error) => {
             let text = super::backend_server::error_text(&error, credit);
-            if text != error.to_string() { Frame::Err(text) }
-            else { Frame::folder_reply(Err(error)) }
+            if text != error.to_string() {
+                Frame::Err(text)
+            } else {
+                Frame::folder_reply(Err(error))
+            }
         }
         Ok(frame) => frame,
     }
@@ -218,9 +222,9 @@ pub(super) fn folder_operation(backend: &BackendHandle, request: Frame, credit: 
         Frame::CreateDirExclusive(path) => {
             vfs::create_dir_exclusive(&**backend, &path).map(|()| Frame::Ok)
         }
-        Frame::DirectoryReservationSupported(root) => {
-            Ok(Frame::Answer(u64::from(vfs::directory_reservation_supported(&**backend, &root))))
-        }
+        Frame::DirectoryReservationSupported(root) => Ok(Frame::Answer(u64::from(
+            vfs::directory_reservation_supported(&**backend, &root),
+        ))),
         Frame::DirectoryIdentity(path) => {
             vfs::directory_identity(&**backend, &path).map(Frame::DirectoryIdentityValue)
         }
@@ -229,7 +233,10 @@ pub(super) fn folder_operation(backend: &BackendHandle, request: Frame, credit: 
             // content hashes, paths or provider IDs without file semantics.
             vfs::file_identity(&**backend, &path).map(Frame::FileIdentityValue)
         }
-        _ => Err(io::Error::new(io::ErrorKind::InvalidInput, "Unexpected folder request")),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Unexpected folder request",
+        )),
     };
     folder_reply(result, credit)
 }
@@ -238,37 +245,89 @@ pub(super) fn folder_operation(backend: &BackendHandle, request: Frame, credit: 
 mod reservation_compatibility_tests {
     use super::*;
     use crate::vfs::{Backend, BackendExtensions, Scheme, VfsMeta};
-    use std::{io::{Read, Write}, sync::{Arc, atomic::{AtomicUsize, Ordering}}};
+    use std::{
+        io::{Read, Write},
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        },
+    };
 
     #[derive(Default)]
-    struct Provider { ordinary: AtomicUsize, strict: AtomicUsize }
+    struct Provider {
+        ordinary: AtomicUsize,
+        strict: AtomicUsize,
+    }
     impl Backend for Provider {
-        fn scheme(&self) -> Scheme { Scheme::Webdav }
-        fn root_display(&self) -> String { "/".into() }
-        fn extensions(&self) -> Option<&dyn BackendExtensions> { Some(self) }
-        fn list_dir(&self, _: &str) -> io::Result<Vec<VfsMeta>> { Ok(Vec::new()) }
-        fn stat(&self, _: &str) -> io::Result<VfsMeta> { Ok(VfsMeta::default()) }
-        fn open_read(&self, _: &str) -> io::Result<Box<dyn Read + Send>> { Err(io::Error::from(io::ErrorKind::Unsupported)) }
-        fn open_write(&self, _: &str) -> io::Result<Box<dyn Write + Send>> { Err(io::Error::from(io::ErrorKind::Unsupported)) }
-        fn rename(&self, _: &str, _: &str) -> io::Result<()> { self.ordinary.fetch_add(1, Ordering::SeqCst); Ok(()) }
-        fn rename_no_replace(&self, source: &str, destination: &str) -> io::Result<()> { self.rename(source, destination) }
-        fn remove_file(&self, _: &str) -> io::Result<()> { Err(io::Error::from(io::ErrorKind::Unsupported)) }
-        fn remove_dir(&self, _: &str) -> io::Result<()> { Err(io::Error::from(io::ErrorKind::Unsupported)) }
-        fn mkdir_all(&self, _: &str) -> io::Result<()> { Err(io::Error::from(io::ErrorKind::Unsupported)) }
+        fn scheme(&self) -> Scheme {
+            Scheme::Webdav
+        }
+        fn root_display(&self) -> String {
+            "/".into()
+        }
+        fn extensions(&self) -> Option<&dyn BackendExtensions> {
+            Some(self)
+        }
+        fn list_dir(&self, _: &str) -> io::Result<Vec<VfsMeta>> {
+            Ok(Vec::new())
+        }
+        fn stat(&self, _: &str) -> io::Result<VfsMeta> {
+            Ok(VfsMeta::default())
+        }
+        fn open_read(&self, _: &str) -> io::Result<Box<dyn Read + Send>> {
+            Err(io::Error::from(io::ErrorKind::Unsupported))
+        }
+        fn open_write(&self, _: &str) -> io::Result<Box<dyn Write + Send>> {
+            Err(io::Error::from(io::ErrorKind::Unsupported))
+        }
+        fn rename(&self, _: &str, _: &str) -> io::Result<()> {
+            self.ordinary.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        fn rename_no_replace(&self, source: &str, destination: &str) -> io::Result<()> {
+            self.rename(source, destination)
+        }
+        fn remove_file(&self, _: &str) -> io::Result<()> {
+            Err(io::Error::from(io::ErrorKind::Unsupported))
+        }
+        fn remove_dir(&self, _: &str) -> io::Result<()> {
+            Err(io::Error::from(io::ErrorKind::Unsupported))
+        }
+        fn mkdir_all(&self, _: &str) -> io::Result<()> {
+            Err(io::Error::from(io::ErrorKind::Unsupported))
+        }
     }
     impl BackendExtensions for Provider {
         fn rename_reserved_directory(&self, _: &str, _: &str) -> io::Result<()> {
-            self.strict.fetch_add(1, Ordering::SeqCst); Err(io::Error::new(io::ErrorKind::Unsupported, "no atomic binding rename"))
+            self.strict.fetch_add(1, Ordering::SeqCst);
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "no atomic binding rename",
+            ))
         }
     }
 
     #[test]
     fn batches_task_transfer_compat_daemon_reserved_frame_keeps_strict_provider_boundary() {
-        let provider = Arc::new(Provider::default()); let backend: BackendHandle = provider.clone();
-        let reply = folder_operation(&backend, Frame::RenameDirectoryNoReplace { src: "/owned".into(), dst: "/final".into() }, true);
-        let Frame::Err(message) = reply else { panic!("strict unsupported was lost"); };
-        assert_eq!(Frame::folder_error(&message).unwrap().kind(), io::ErrorKind::Unsupported);
-        assert_eq!(provider.strict.load(Ordering::SeqCst), 1); assert_eq!(provider.ordinary.load(Ordering::SeqCst), 0);
+        let provider = Arc::new(Provider::default());
+        let backend: BackendHandle = provider.clone();
+        let reply = folder_operation(
+            &backend,
+            Frame::RenameDirectoryNoReplace {
+                src: "/owned".into(),
+                dst: "/final".into(),
+            },
+            true,
+        );
+        let Frame::Err(message) = reply else {
+            panic!("strict unsupported was lost");
+        };
+        assert_eq!(
+            Frame::folder_error(&message).unwrap().kind(),
+            io::ErrorKind::Unsupported
+        );
+        assert_eq!(provider.strict.load(Ordering::SeqCst), 1);
+        assert_eq!(provider.ordinary.load(Ordering::SeqCst), 0);
         backend.rename_no_replace("/old", "/new").unwrap();
         assert_eq!(provider.ordinary.load(Ordering::SeqCst), 1);
     }

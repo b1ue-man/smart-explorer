@@ -1,32 +1,53 @@
 //! Local, explicitly acknowledged loopback listener. Reversing the endpoint
 //! pair requires a separately started tunnel and that target's own grant.
-use std::{io, sync::Arc, time::Duration};
-use iroh::endpoint::Connection;
-use tokio::{io::AsyncReadExt, sync::Semaphore, task::JoinSet};
 use super::core::{eio, hmac_proof, now_secs, random_token};
 use super::node::ShareIrohNode;
 use super::node_tcp::{cancelled_stop, require_policy, CloseTcp};
 use super::profiles::fingerprint_matches;
 use super::service::ShareService;
 use super::session::{endpoint_addr, relation_kind_id, PeerPrincipal};
-use super::tcp_forward::{TcpStart, TunnelId, TunnelRole, TunnelView, MAX_TCP_STREAMS, TCP_ALPN, TCP_PROTOCOL_VERSION};
+use super::tcp_forward::{
+    TcpStart, TunnelId, TunnelRole, TunnelView, MAX_TCP_STREAMS, TCP_ALPN, TCP_PROTOCOL_VERSION,
+};
 use super::tcp_registry::TcpRegistration;
-use super::tcp_wire::{self, TcpClientHello, TcpDataOpen, TcpDataReply, TcpHelloReply, TcpServerHello};
+use super::tcp_wire::{
+    self, TcpClientHello, TcpDataOpen, TcpDataReply, TcpHelloReply, TcpServerHello,
+};
 use super::types::{PeerEndpoint, PeerOpenTarget};
+use iroh::endpoint::Connection;
+use std::{io, sync::Arc, time::Duration};
+use tokio::{io::AsyncReadExt, sync::Semaphore, task::JoinSet};
 
 impl ShareIrohNode {
     async fn connect_tcp(&self, endpoint: &PeerEndpoint) -> io::Result<CloseTcp> {
         self.require_sharing_active()?;
-        if endpoint.expected_node_id.as_deref().is_some_and(|pin|
-            !pin.is_empty() && pin != endpoint.presence.node_id) {
-            return Err(io::Error::new(io::ErrorKind::PermissionDenied, "TCP peer NodeId pin mismatch"));
+        if endpoint
+            .expected_node_id
+            .as_deref()
+            .is_some_and(|pin| !pin.is_empty() && pin != endpoint.presence.node_id)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "TCP peer NodeId pin mismatch",
+            ));
         }
         let local = self.routes.current(&self.endpoint);
         let address = endpoint_addr(&endpoint.presence, &local, &self.transport_options)?;
-        let generation = self.policy.snapshot(PeerPrincipal::from_endpoint(endpoint))?;
-        let connection = tokio::time::timeout(Duration::from_secs(30), self.endpoint.connect(address, TCP_ALPN))
-            .await.map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "TCP peer connect timed out"))?
-            .map_err(|error| io::Error::new(io::ErrorKind::NotConnected, format!("TCP peer connection: {error}; the peer must support share-tcp/1")))?;
+        let generation = self
+            .policy
+            .snapshot(PeerPrincipal::from_endpoint(endpoint))?;
+        let connection = tokio::time::timeout(
+            Duration::from_secs(30),
+            self.endpoint.connect(address, TCP_ALPN),
+        )
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "TCP peer connect timed out"))?
+        .map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::NotConnected,
+                format!("TCP peer connection: {error}; the peer must support share-tcp/1"),
+            )
+        })?;
         let close = CloseTcp(connection.clone());
         require_policy(&connection)?;
         self.policy.bind(&connection, generation)?;
@@ -36,13 +57,21 @@ impl ShareIrohNode {
 }
 
 impl ShareService {
-    pub(crate) fn tcp_start(&self, target: &PeerOpenTarget, request: TcpStart,
-        pending: impl FnMut()) -> io::Result<TunnelView> {
+    pub(crate) fn tcp_start(
+        &self,
+        target: &PeerOpenTarget,
+        request: TcpStart,
+        pending: impl FnMut(),
+    ) -> io::Result<TunnelView> {
         self.tcp_start_cancellable(target, request, pending, None)
     }
-    pub(crate) fn tcp_start_cancellable(&self, target: &PeerOpenTarget, request: TcpStart,
-        mut pending: impl FnMut(), cancellation: Option<Arc<super::route_cancellation::RouteCancellation>>)
-        -> io::Result<TunnelView> {
+    pub(crate) fn tcp_start_cancellable(
+        &self,
+        target: &PeerOpenTarget,
+        request: TcpStart,
+        mut pending: impl FnMut(),
+        cancellation: Option<Arc<super::route_cancellation::RouteCancellation>>,
+    ) -> io::Result<TunnelView> {
         request.validate().map_err(eio)?;
         let endpoint = self.endpoint_for_target(target).map_err(eio)?;
         let node = self.iroh.clone();
@@ -133,18 +162,36 @@ impl ShareService {
           }
         })
     }
-    pub(crate) fn tcp_list(&self) -> Vec<TunnelView> { self.iroh.tcp.registry.list() }
-    pub(crate) fn tcp_status(&self, id: &TunnelId) -> Option<TunnelView> { self.iroh.tcp.registry.status(id) }
-    pub(crate) fn tcp_close(&self, id: &TunnelId) -> bool { self.iroh.tcp.registry.close(id) }
+    pub(crate) fn tcp_list(&self) -> Vec<TunnelView> {
+        self.iroh.tcp.registry.list()
+    }
+    pub(crate) fn tcp_status(&self, id: &TunnelId) -> Option<TunnelView> {
+        self.iroh.tcp.registry.status(id)
+    }
+    pub(crate) fn tcp_close(&self, id: &TunnelId) -> bool {
+        self.iroh.tcp.registry.close(id)
+    }
 }
 
-fn check_server(server: &TcpServerHello, endpoint: &PeerEndpoint, connection: &Connection) -> io::Result<()> {
+fn check_server(
+    server: &TcpServerHello,
+    endpoint: &PeerEndpoint,
+    connection: &Connection,
+) -> io::Result<()> {
     let presence = &endpoint.presence;
-    if server.version != TCP_PROTOCOL_VERSION || server.device_id != presence.device_id
-        || server.public_key != presence.public_key || server.fingerprint != presence.fingerprint
-        || server.node_id != presence.node_id || server.node_id != connection.remote_id().to_string()
-        || !fingerprint_matches(&server.public_key, &server.fingerprint) || server.challenge.len() < 24 {
-        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "TCP host identity or protocol does not match pinned device"));
+    if server.version != TCP_PROTOCOL_VERSION
+        || server.device_id != presence.device_id
+        || server.public_key != presence.public_key
+        || server.fingerprint != presence.fingerprint
+        || server.node_id != presence.node_id
+        || server.node_id != connection.remote_id().to_string()
+        || !fingerprint_matches(&server.public_key, &server.fingerprint)
+        || server.challenge.len() < 24
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "TCP host identity or protocol does not match pinned device",
+        ));
     }
     Ok(())
 }
@@ -155,12 +202,24 @@ fn check_bound_target(request: &TcpStart, target: std::net::SocketAddr) -> io::R
         TcpHost::Ip { address } => *address == target.ip(),
         TcpHost::Dns { .. } => !target.ip().is_unspecified() && !target.ip().is_multicast(),
     };
-    if matches && target.port() == request.destination.port.get() { Ok(()) }
-    else { Err(io::Error::new(io::ErrorKind::PermissionDenied, "TCP host acknowledged an unexpected target")) }
+    if matches && target.port() == request.destination.port.get() {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "TCP host acknowledged an unexpected target",
+        ))
+    }
 }
 
-async fn run_listener(node: std::sync::Weak<ShareIrohNode>, connection: Connection, listener: tokio::net::TcpListener,
-    control_recv: &mut iroh::endpoint::RecvStream, registration: TcpRegistration, lifetime: u32) {
+async fn run_listener(
+    node: std::sync::Weak<ShareIrohNode>,
+    connection: Connection,
+    listener: tokio::net::TcpListener,
+    control_recv: &mut iroh::endpoint::RecvStream,
+    registration: TcpRegistration,
+    lifetime: u32,
+) {
     let mut stop = registration.cancelled.clone();
     let streams = Arc::new(Semaphore::new(MAX_TCP_STREAMS));
     let activity = Arc::new(super::node::IncomingActivity::default());

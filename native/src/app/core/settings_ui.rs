@@ -31,7 +31,9 @@ impl App {
     pub(super) fn open_settings(&mut self, page: SettingsPage) {
         self.settings.open = true;
         self.settings.page = page;
-        if let Some(tab) = super::settings_navigation::default_share_tab(page) { self.share_tab = tab; }
+        if let Some(tab) = super::settings_navigation::default_share_tab(page) {
+            self.share_tab = tab;
+        }
     }
 
     pub(in crate::app) fn ui_settings(&mut self, ctx: &egui::Context) {
@@ -139,11 +141,17 @@ impl App {
         // The sidebar owns vault window driving; this page only opens its
         // existing actions, so the same windows are never drawn twice.
         ui.horizontal_wrapped(|ui| {
-            if ui.button("Tresor erstellen …").clicked() { super::vault_create_ui::open_create(); }
-            if ui.button("Vorhandenen Tresor hinzufügen …").clicked() { super::vault_create_ui::open_add(None); }
+            if ui.button("Tresor erstellen …").clicked() {
+                super::vault_create_ui::open_create();
+            }
+            if ui.button("Vorhandenen Tresor hinzufügen …").clicked() {
+                super::vault_create_ui::open_add(None);
+            }
         });
         let rows = super::vault_feed::rows();
-        if rows.is_empty() { ui.label("Die aktuelle Tresorübersicht enthält keine Einträge."); }
+        if rows.is_empty() {
+            ui.label("Die aktuelle Tresorübersicht enthält keine Einträge.");
+        }
         for row in rows {
             ui.horizontal_wrapped(|ui| {
                 ui.label(&row.label);
@@ -153,9 +161,13 @@ impl App {
                     super::vault_models::RowState::Locking => "Wird gesperrt",
                     super::vault_models::RowState::Unavailable => "Nicht verfügbar",
                 });
-                if ui.button("Eigenschaften und Rechte …").clicked() { super::vault_settings_ui::open(&row.site); }
+                if ui.button("Eigenschaften und Rechte …").clicked() {
+                    super::vault_settings_ui::open(&row.site);
+                }
             });
-            if let Some(reason) = row.reason { ui.colored_label(theme::warning(ui), reason); }
+            if let Some(reason) = row.reason {
+                ui.colored_label(theme::warning(ui), reason);
+            }
         }
     }
 

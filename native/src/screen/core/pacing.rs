@@ -130,7 +130,9 @@ impl Pacer {
         }
     }
 
-    pub(crate) fn on_budget_drop(&mut self) { self.dropped = self.dropped.saturating_add(1); }
+    pub(crate) fn on_budget_drop(&mut self) {
+        self.dropped = self.dropped.saturating_add(1);
+    }
 
     pub(crate) fn on_frame_sent(&mut self, frame: SentFrame) {
         if frame.keyframe {
@@ -225,13 +227,25 @@ impl FrameClock {
     }
 
     /// The same effective cadence is returned to the encoder's StageRequest.
-    pub(crate) fn set_codec_fps(&mut self,requested:u32,size:super::pixel_convert::FrameSize,max_blocks_per_second:Option<u64>)->Option<u32> {
-        let blocks=super::frame_size_caps::macroblocks(size);
-        if blocks==0 {return None;}
-        let max=max_blocks_per_second.map_or(u64::from(MAX_FPS),|n|n/blocks).min(u64::from(MAX_FPS));
-        if max==0 {return None;}
-        let fps=requested.clamp(1,MAX_FPS).min(max as u32);
-        self.set_fps(fps);Some(fps)
+    pub(crate) fn set_codec_fps(
+        &mut self,
+        requested: u32,
+        size: super::pixel_convert::FrameSize,
+        max_blocks_per_second: Option<u64>,
+    ) -> Option<u32> {
+        let blocks = super::frame_size_caps::macroblocks(size);
+        if blocks == 0 {
+            return None;
+        }
+        let max = max_blocks_per_second
+            .map_or(u64::from(MAX_FPS), |n| n / blocks)
+            .min(u64::from(MAX_FPS));
+        if max == 0 {
+            return None;
+        }
+        let fps = requested.clamp(1, MAX_FPS).min(max as u32);
+        self.set_fps(fps);
+        Some(fps)
     }
 
     pub(crate) fn interval_us(&self) -> u64 {

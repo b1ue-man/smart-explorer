@@ -6,9 +6,8 @@
 //! grant journal at the revision this command read, so a concurrent change is
 //! refused instead of overwritten. The device selection is the one of `se
 //! share grants exec` (`grants_exec.rs`).
-use std::collections::BTreeMap;
-use clap::{ArgMatches, Args, Command, FromArgMatches};
-use clap_complete::ArgValueCandidates;
+use super::grants_access_output::{self as output, RoomFacts};
+use super::grants_exec::{room_targets, select_one, targets, AccessTarget};
 use crate::cli::completions_access as completions;
 use crate::share::access_catalog::{capability_catalog, HelperState, HelperStatus, HostFacts};
 use crate::share::access_grant::{
@@ -16,8 +15,9 @@ use crate::share::access_grant::{
     Expiry,
 };
 use crate::share::ExecGrant;
-use super::grants_access_output::{self as output, RoomFacts};
-use super::grants_exec::{room_targets, select_one, targets, AccessTarget};
+use clap::{ArgMatches, Args, Command, FromArgMatches};
+use clap_complete::ArgValueCandidates;
+use std::collections::BTreeMap;
 #[path = "grants_device_view.rs"]
 mod device_view;
 
@@ -293,7 +293,11 @@ pub(super) fn run(args: AccessArgs, json: bool) -> Result<(), String> {
         };
     }
     if args.device_view {
-        if request.is_some() { return Err("--device-view is read-only; set one exact relationship without this option".into()); }
+        if request.is_some() {
+            return Err(
+                "--device-view is read-only; set one exact relationship without this option".into(),
+            );
+        }
         return device_view::show(&profiles, args.selector.as_deref(), json);
     }
     let all = targets(&profiles);

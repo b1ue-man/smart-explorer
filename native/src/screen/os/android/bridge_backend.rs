@@ -53,14 +53,17 @@ pub(crate) const DISPLAY_ID: &str = "0";
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct BridgeBackend;
 
-
 impl ScreenHostBackend for BridgeBackend {
-    fn capacity_ceiling(&self, facts: Option<crate::screen::core::frame_memory::MemoryFacts>)
-        -> crate::screen::core::frame_memory::CapacityCeiling {
+    fn capacity_ceiling(
+        &self,
+        facts: Option<crate::screen::core::frame_memory::MemoryFacts>,
+    ) -> crate::screen::core::frame_memory::CapacityCeiling {
         crate::screen::os::session_memory::capacity_ceiling(facts)
     }
-    fn session_memory_ceiling(&self)->u64 {
-        channels::prereqs().working_bytes.unwrap_or(crate::screen::core::frame_budget::MAX_WORKING_BYTES)
+    fn session_memory_ceiling(&self) -> u64 {
+        channels::prereqs()
+            .working_bytes
+            .unwrap_or(crate::screen::core::frame_budget::MAX_WORKING_BYTES)
             .min(crate::screen::core::frame_budget::MAX_WORKING_BYTES)
     }
     fn platform(&self) -> HostPlatform {
@@ -88,7 +91,7 @@ impl ScreenHostBackend for BridgeBackend {
 
     fn encoders(&self) -> Vec<CodecOffer> {
         let mut offers = channels::prereqs().encoders;
-        offers.truncate(crate::screen::core::negotiate::MAX_CODEC_OFFERS-1);
+        offers.truncate(crate::screen::core::negotiate::MAX_CODEC_OFFERS - 1);
         offers.push(CodecOffer::tiles());
         offers
     }
@@ -143,14 +146,22 @@ impl ScreenHostBackend for BridgeBackend {
         })
     }
 
-    fn icon(&self, entry: crate::screen::core::app_icon::AuthorizedIconEntry<'_>) -> io::Result<Option<crate::screen::core::app_icon::IconReply>> {
+    fn icon(
+        &self,
+        entry: crate::screen::core::app_icon::AuthorizedIconEntry<'_>,
+    ) -> io::Result<Option<crate::screen::core::app_icon::IconReply>> {
         super::android_app_icons::load(entry)
     }
 
-    fn prepare_session_source(&self, _owner:&str, session:&str, source:&SourceId,
-        wanted:Option<FrameSize>, _control:bool,
-        admission:Arc<crate::screen::core::capture_admission::SessionAdmission>)
-        ->Result<Box<dyn crate::screen::core::host_backend::PreparedSource>,SourceRefusal> {
+    fn prepare_session_source(
+        &self,
+        _owner: &str,
+        session: &str,
+        source: &SourceId,
+        wanted: Option<FrameSize>,
+        _control: bool,
+        admission: Arc<crate::screen::core::capture_admission::SessionAdmission>,
+    ) -> Result<Box<dyn crate::screen::core::host_backend::PreparedSource>, SourceRefusal> {
         let prereqs = channels::prereqs();
         if !prereqs.registered {
             return Err(SourceRefusal::new(HOST_APP_NOT_RUNNING));
@@ -159,9 +170,7 @@ impl ScreenHostBackend for BridgeBackend {
             SourceId::Monitor(id) if id != DISPLAY_ID => {
                 return Err(SourceRefusal::new("unknown_monitor"))
             }
-            SourceId::Window(_) => {
-                return Err(SourceRefusal::new(APP_WINDOW_UNAVAILABLE))
-            }
+            SourceId::Window(_) => return Err(SourceRefusal::new(APP_WINDOW_UNAVAILABLE)),
             _ => {}
         }
         let display = prereqs.display.map(|(w, h)| FrameSize::new(w, h));
@@ -173,15 +182,29 @@ impl ScreenHostBackend for BridgeBackend {
             }
         });
         let start = start_for(source, max);
-        let key=crate::screen::core::capture_admission::SourceKey::new(session,&source.to_string())
-            .map_err(|e|SourceRefusal::new(&e.to_string()))?;
-        let channel=channels::open(start);
-        channel.capture.attach(admission,key.clone()).map_err(|e|SourceRefusal::new(&e.to_string()))?;
-        let limits=crate::screen::core::frame_budget::FrameLimits::RESOURCE;
-        Ok(Box::new(super::android_capture_prepared::AndroidPrepared::new(channel,key,limits)))
+        let key =
+            crate::screen::core::capture_admission::SourceKey::new(session, &source.to_string())
+                .map_err(|e| SourceRefusal::new(&e.to_string()))?;
+        let channel = channels::open(start);
+        channel
+            .capture
+            .attach(admission, key.clone())
+            .map_err(|e| SourceRefusal::new(&e.to_string()))?;
+        let limits = crate::screen::core::frame_budget::FrameLimits::RESOURCE;
+        Ok(Box::new(
+            super::android_capture_prepared::AndroidPrepared::new(channel, key, limits),
+        ))
     }
-    fn open_source(&self,_source:&SourceId,_wanted:Option<FrameSize>)->Result<Box<dyn ScreenSource>,SourceRefusal> {
-        Err(SourceRefusal::new(if channels::prereqs().registered {"capture_grant_required"} else {HOST_APP_NOT_RUNNING}))
+    fn open_source(
+        &self,
+        _source: &SourceId,
+        _wanted: Option<FrameSize>,
+    ) -> Result<Box<dyn ScreenSource>, SourceRefusal> {
+        Err(SourceRefusal::new(if channels::prereqs().registered {
+            "capture_grant_required"
+        } else {
+            HOST_APP_NOT_RUNNING
+        }))
     }
 
     fn open_encoder(
@@ -198,13 +221,29 @@ impl ScreenHostBackend for BridgeBackend {
         }
     }
 
-    fn open_encoder_for_stage_admitted(&self,request:&crate::screen::core::host_stage::StageRequest,
-        grant:crate::screen::core::capture_admission::CaptureGrant)->io::Result<Box<dyn ScreenEncoder>> {
-        if request.choice.codec != CodecKind::Tiles {return Err(io::Error::new(io::ErrorKind::Unsupported,
-            "H.264 runs in the app's admitted MediaCodec encoder"));}
-        let limits=request.frame_contract.map_or(crate::screen::core::frame_budget::FrameLimits::LEGACY,|c|c.limits);
-        let encoder=Box::new(crate::screen::core::host_codec_adapters::AdmittedTilesEncoder::new(request.size,limits,grant.clone())?);
-        crate::screen::core::host_hybrid::wrap_captured(encoder,request,grant)
+    fn open_encoder_for_stage_admitted(
+        &self,
+        request: &crate::screen::core::host_stage::StageRequest,
+        grant: crate::screen::core::capture_admission::CaptureGrant,
+    ) -> io::Result<Box<dyn ScreenEncoder>> {
+        if request.choice.codec != CodecKind::Tiles {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "H.264 runs in the app's admitted MediaCodec encoder",
+            ));
+        }
+        let limits = request.frame_contract.map_or(
+            crate::screen::core::frame_budget::FrameLimits::LEGACY,
+            |c| c.limits,
+        );
+        let encoder = Box::new(
+            crate::screen::core::host_codec_adapters::AdmittedTilesEncoder::new(
+                request.size,
+                limits,
+                grant.clone(),
+            )?,
+        );
+        crate::screen::core::host_hybrid::wrap_captured(encoder, request, grant)
     }
 
     fn inject(&self, events: &[InputEvent]) -> Result<(), ControlBlock> {

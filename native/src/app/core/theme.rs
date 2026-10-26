@@ -25,34 +25,58 @@ impl Palette {
         let rgb = Color32::from_rgb;
         if dark {
             Self {
-                surface: rgb(27, 27, 27), panel: rgb(32, 32, 32),
-                subtle: rgb(40, 40, 40), text: rgb(225, 225, 225),
-                muted: rgb(175, 175, 175), border: rgb(65, 65, 65),
-                control_border: rgb(125, 125, 125), accent: rgb(125, 180, 235),
-                selection: rgb(40, 65, 90), selected_text: rgb(240, 245, 250),
-                success: rgb(125, 216, 166), warning: rgb(255, 203, 120),
+                surface: rgb(27, 27, 27),
+                panel: rgb(32, 32, 32),
+                subtle: rgb(40, 40, 40),
+                text: rgb(225, 225, 225),
+                muted: rgb(175, 175, 175),
+                border: rgb(65, 65, 65),
+                control_border: rgb(125, 125, 125),
+                accent: rgb(125, 180, 235),
+                selection: rgb(40, 65, 90),
+                selected_text: rgb(240, 245, 250),
+                success: rgb(125, 216, 166),
+                warning: rgb(255, 203, 120),
                 danger: rgb(255, 154, 158),
             }
         } else {
             Self {
-                surface: rgb(255, 255, 255), panel: rgb(245, 245, 245),
-                subtle: rgb(237, 237, 237), text: rgb(30, 30, 30),
-                muted: rgb(85, 85, 85), border: rgb(195, 195, 195),
-                control_border: rgb(115, 115, 115), accent: rgb(25, 80, 145),
-                selection: rgb(211, 228, 245), selected_text: rgb(20, 45, 75),
-                success: rgb(25, 106, 63), warning: rgb(135, 76, 10),
+                surface: rgb(255, 255, 255),
+                panel: rgb(245, 245, 245),
+                subtle: rgb(237, 237, 237),
+                text: rgb(30, 30, 30),
+                muted: rgb(85, 85, 85),
+                border: rgb(195, 195, 195),
+                control_border: rgb(115, 115, 115),
+                accent: rgb(25, 80, 145),
+                selection: rgb(211, 228, 245),
+                selected_text: rgb(20, 45, 75),
+                success: rgb(25, 106, 63),
+                warning: rgb(135, 76, 10),
                 danger: rgb(173, 38, 50),
             }
         }
     }
 }
 
-pub(super) fn palette(ui: &egui::Ui) -> Palette { Palette::new(ui.visuals().dark_mode) }
-pub(super) fn muted(ui: &egui::Ui) -> Color32 { palette(ui).muted }
-pub(super) fn accent(ui: &egui::Ui) -> Color32 { palette(ui).accent }
-pub(super) fn success(ui: &egui::Ui) -> Color32 { palette(ui).success }
-pub(super) fn warning(ui: &egui::Ui) -> Color32 { palette(ui).warning }
-pub(super) fn danger(ui: &egui::Ui) -> Color32 { palette(ui).danger }
+pub(super) fn palette(ui: &egui::Ui) -> Palette {
+    Palette::new(ui.visuals().dark_mode)
+}
+pub(super) fn muted(ui: &egui::Ui) -> Color32 {
+    palette(ui).muted
+}
+pub(super) fn accent(ui: &egui::Ui) -> Color32 {
+    palette(ui).accent
+}
+pub(super) fn success(ui: &egui::Ui) -> Color32 {
+    palette(ui).success
+}
+pub(super) fn warning(ui: &egui::Ui) -> Color32 {
+    palette(ui).warning
+}
+pub(super) fn danger(ui: &egui::Ui) -> Color32 {
+    palette(ui).danger
+}
 
 pub(super) fn style(theme: egui::Theme) -> egui::Style {
     let mut style = theme.default_style();
@@ -90,8 +114,13 @@ pub(super) fn style(theme: egui::Theme) -> egui::Style {
     v.selection.bg_fill = p.selection;
     v.selection.stroke = Stroke::new(1.5_f32, p.selected_text);
     v.text_cursor.stroke = Stroke::new(2.0_f32, p.accent);
-    for widget in [&mut v.widgets.noninteractive, &mut v.widgets.inactive,
-        &mut v.widgets.hovered, &mut v.widgets.active, &mut v.widgets.open] {
+    for widget in [
+        &mut v.widgets.noninteractive,
+        &mut v.widgets.inactive,
+        &mut v.widgets.hovered,
+        &mut v.widgets.active,
+        &mut v.widgets.open,
+    ] {
         widget.fg_stroke = Stroke::new(1.0_f32, p.text);
         widget.rounding = Rounding::same(2.0);
         widget.expansion = 0.0;

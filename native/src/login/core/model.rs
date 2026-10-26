@@ -1,6 +1,6 @@
 //! Administrative policy and exact, independently signed peer operations (V1).
-use serde::{Deserialize, Serialize};
 use crate::screen::core::input_model::{InputEvent, MAX_INPUT_EVENTS, MAX_TEXT_BYTES};
+use serde::{Deserialize, Serialize};
 
 pub(crate) const VERSION: u32 = 1;
 pub(crate) const MAX_CONTROL: usize = 64 * 1024;
@@ -13,7 +13,15 @@ pub(crate) const GATEWAY_SWITCH: &str = "--login-gateway-service";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum DesktopKind { BeforeLogin, Locked, Uac, UserSession, X11Greeter, WaylandGreeter, Unavailable }
+pub(crate) enum DesktopKind {
+    BeforeLogin,
+    Locked,
+    Uac,
+    UserSession,
+    X11Greeter,
+    WaylandGreeter,
+    Unavailable,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -62,18 +70,30 @@ pub(crate) struct Policy {
 
 impl Policy {
     pub(crate) fn validate(&self) -> Result<(), &'static str> {
-        if self.format != VERSION || self.revision == 0 || self.machine_id.is_empty()
-            || self.machine_id.len() > 256 || self.gateway_identity.is_empty()
-            || self.machine_public_key.parse::<iroh::PublicKey>().is_err() || self.grants.len() > 256 {
+        if self.format != VERSION
+            || self.revision == 0
+            || self.machine_id.is_empty()
+            || self.machine_id.len() > 256
+            || self.gateway_identity.is_empty()
+            || self.machine_public_key.parse::<iroh::PublicKey>().is_err()
+            || self.grants.len() > 256
+        {
             return Err("invalid protected login policy");
         }
         let mut peers = std::collections::HashSet::new();
         for grant in &self.grants {
-            if grant.peer_id.is_empty() || grant.peer_id.len() > 256
-                || !peers.insert(&grant.peer_id) || grant.public_key.parse::<iroh::PublicKey>().is_err()
-                || grant.target_users.is_empty() || grant.target_users.len() > 64
-                || grant.target_users.iter().any(|id| id.is_empty() || id.len() > 256)
-                || grant.not_before >= grant.expires_at {
+            if grant.peer_id.is_empty()
+                || grant.peer_id.len() > 256
+                || !peers.insert(&grant.peer_id)
+                || grant.public_key.parse::<iroh::PublicKey>().is_err()
+                || grant.target_users.is_empty()
+                || grant.target_users.len() > 64
+                || grant
+                    .target_users
+                    .iter()
+                    .any(|id| id.is_empty() || id.len() > 256)
+                || grant.not_before >= grant.expires_at
+            {
                 return Err("invalid protected login grant");
             }
         }
@@ -95,12 +115,24 @@ pub(crate) enum Operation {
 impl Operation {
     pub(crate) fn validate(&self) -> Result<(), &'static str> {
         if let Self::Input { events } = self {
-            if events.is_empty() || events.len() > MAX_INPUT_EVENTS { return Err("invalid input batch size"); }
+            if events.is_empty() || events.len() > MAX_INPUT_EVENTS {
+                return Err("invalid input batch size");
+            }
             for event in events {
                 match event {
-                    InputEvent::Text { text } if text.len() > MAX_TEXT_BYTES || text.contains('\0') => return Err("invalid input text"),
-                    InputEvent::Key { hid_usage, .. } if !crate::screen::core::input_model::valid_key_usage(*hid_usage) => return Err("invalid input key"),
-                    InputEvent::Action { .. } => return Err("Android actions are unavailable at login"),
+                    InputEvent::Text { text }
+                        if text.len() > MAX_TEXT_BYTES || text.contains('\0') =>
+                    {
+                        return Err("invalid input text")
+                    }
+                    InputEvent::Key { hid_usage, .. }
+                        if !crate::screen::core::input_model::valid_key_usage(*hid_usage) =>
+                    {
+                        return Err("invalid input key")
+                    }
+                    InputEvent::Action { .. } => {
+                        return Err("Android actions are unavailable at login")
+                    }
                     _ => {}
                 }
             }
@@ -137,11 +169,28 @@ impl SignedRequest {
     /// Fixed field order and domain prefix; this exact byte string is signed by the peer.
     pub(crate) fn signing_bytes(&self) -> std::io::Result<Vec<u8>> {
         #[derive(Serialize)]
-        struct Body<'a> { challenge: &'a Challenge, peer_id: &'a str, target_user: &'a str, operation: &'a Operation }
+        struct Body<'a> {
+            challenge: &'a Challenge,
+            peer_id: &'a str,
+            target_user: &'a str,
+            operation: &'a Operation,
+        }
         let mut bytes = b"smart-explorer/login-operation/v1\0".to_vec();
-        serde_json::to_writer(&mut bytes, &Body { challenge: &self.challenge, peer_id: &self.peer_id,
-            target_user: &self.target_user, operation: &self.operation }).map_err(std::io::Error::other)?;
-        if bytes.len() > MAX_CONTROL { return Err(std::io::Error::other("signed login operation exceeds limit")); }
+        serde_json::to_writer(
+            &mut bytes,
+            &Body {
+                challenge: &self.challenge,
+                peer_id: &self.peer_id,
+                target_user: &self.target_user,
+                operation: &self.operation,
+            },
+        )
+        .map_err(std::io::Error::other)?;
+        if bytes.len() > MAX_CONTROL {
+            return Err(std::io::Error::other(
+                "signed login operation exceeds limit",
+            ));
+        }
         Ok(bytes)
     }
 

@@ -1,18 +1,32 @@
 //! Pinned outbound device commands. Trusted RDP inventories arise here only.
-use std::{io,sync::Arc,time::Duration};
+use super::{
+    apps_wire::{self, AppsClientHello, AppsCommand, AppsReply, AppsResult, AppsServerHello},
+    core::{eio, hmac_proof, random_token},
+    service::ShareService,
+    session::{endpoint_addr, relation_kind_id, PeerPrincipal},
+    types::{PeerEndpoint, PeerOpenTarget},
+};
 use iroh::endpoint::Connection;
-use super::{apps_wire::{self,AppsCommand,AppsResult,AppsReply,AppsServerHello,AppsClientHello},
-    core::{eio,hmac_proof,random_token},service::ShareService,
-    session::{endpoint_addr,relation_kind_id,PeerPrincipal},types::{PeerEndpoint,PeerOpenTarget}};
+use std::{io, sync::Arc, time::Duration};
 
 /// This receipt is created only after the transport/identity/request checks.
 /// It deliberately does not implement Deserialize.
-pub(crate) struct AuthenticatedAppsReply {pub node_id:String,pub device_id:String,pub result:AppsResult}
+pub(crate) struct AuthenticatedAppsReply {
+    pub node_id: String,
+    pub device_id: String,
+    pub result: AppsResult,
+}
 impl ShareService {
-    pub(crate) fn apps_command(&self,target:&PeerOpenTarget,command:AppsCommand,mut pending:impl FnMut(),
-        cancellation:Option<Arc<super::route_cancellation::RouteCancellation>>)->io::Result<AuthenticatedAppsReply> {
-        let endpoint=self.endpoint_for_target(target).map_err(eio)?;
-        let node=self.iroh.clone();let identity=self.identity.clone();
+    pub(crate) fn apps_command(
+        &self,
+        target: &PeerOpenTarget,
+        command: AppsCommand,
+        mut pending: impl FnMut(),
+        cancellation: Option<Arc<super::route_cancellation::RouteCancellation>>,
+    ) -> io::Result<AuthenticatedAppsReply> {
+        let endpoint = self.endpoint_for_target(target).map_err(eio)?;
+        let node = self.iroh.clone();
+        let identity = self.identity.clone();
         node.block_on(async {
             let cancelled=async {if let Some(cancel)=&cancellation {loop {
                 cancel.check()?;tokio::select! {()=cancel.cancelled()=>return Err::<(),io::Error>(eio("device command cancelled")),
@@ -75,21 +89,49 @@ impl ShareService {
             }
         })
     }
-    pub(crate) fn rdp_host_probe(&self,target:&PeerOpenTarget,pending:impl FnMut(),
-        cancellation:Option<Arc<super::route_cancellation::RouteCancellation>>)->io::Result<crate::rdp::AuthenticatedProbe> {
-        let reply=self.apps_command(target,AppsCommand::RdpProbe,pending,cancellation)?;
-        let AppsResult::RdpProbe {host}=reply.result else {return Err(eio("unexpected RDP host probe reply"));};
-        crate::rdp::AuthenticatedProbe::from_authenticated_peer(reply.node_id,host).map_err(eio)
+    pub(crate) fn rdp_host_probe(
+        &self,
+        target: &PeerOpenTarget,
+        pending: impl FnMut(),
+        cancellation: Option<Arc<super::route_cancellation::RouteCancellation>>,
+    ) -> io::Result<crate::rdp::AuthenticatedProbe> {
+        let reply = self.apps_command(target, AppsCommand::RdpProbe, pending, cancellation)?;
+        let AppsResult::RdpProbe { host } = reply.result else {
+            return Err(eio("unexpected RDP host probe reply"));
+        };
+        crate::rdp::AuthenticatedProbe::from_authenticated_peer(reply.node_id, host).map_err(eio)
     }
 }
-fn check_server(server:&AppsServerHello,endpoint:&PeerEndpoint,connection:&Connection)->io::Result<()> {
-    let p=&endpoint.presence;
-    if server.version!=apps_wire::APPS_VERSION||server.device_id!=p.device_id||server.public_key!=p.public_key
-        ||server.fingerprint!=p.fingerprint||server.node_id!=p.node_id||server.node_id!=connection.remote_id().to_string()
-        ||!super::profiles::fingerprint_matches(&server.public_key,&server.fingerprint)
-        ||server.challenge.len()<24||server.challenge.len()>256 {return Err(io::Error::new(io::ErrorKind::PermissionDenied,"device command server does not match pinned peer"));}
+fn check_server(
+    server: &AppsServerHello,
+    endpoint: &PeerEndpoint,
+    connection: &Connection,
+) -> io::Result<()> {
+    let p = &endpoint.presence;
+    if server.version != apps_wire::APPS_VERSION
+        || server.device_id != p.device_id
+        || server.public_key != p.public_key
+        || server.fingerprint != p.fingerprint
+        || server.node_id != p.node_id
+        || server.node_id != connection.remote_id().to_string()
+        || !super::profiles::fingerprint_matches(&server.public_key, &server.fingerprint)
+        || server.challenge.len() < 24
+        || server.challenge.len() > 256
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "device command server does not match pinned peer",
+        ));
+    }
     Ok(())
 }
-fn matches_result(command:&AppsCommand,result:&AppsResult)->bool {matches!((command,result),
-    (AppsCommand::Catalog,AppsResult::Catalog {..})|(AppsCommand::Launch {..},AppsResult::Launch {..})|
-    (AppsCommand::Icon {..},AppsResult::Icon {..})|(AppsCommand::Receipt {..},AppsResult::Receipt {..})|(AppsCommand::RdpProbe,AppsResult::RdpProbe {..}))}
+fn matches_result(command: &AppsCommand, result: &AppsResult) -> bool {
+    matches!(
+        (command, result),
+        (AppsCommand::Catalog, AppsResult::Catalog { .. })
+            | (AppsCommand::Launch { .. }, AppsResult::Launch { .. })
+            | (AppsCommand::Icon { .. }, AppsResult::Icon { .. })
+            | (AppsCommand::Receipt { .. }, AppsResult::Receipt { .. })
+            | (AppsCommand::RdpProbe, AppsResult::RdpProbe { .. })
+    )
+}

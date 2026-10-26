@@ -404,7 +404,7 @@ pub(crate) fn run_local(options: BenchOptions, codecs: &CodecRegistry) -> io::Re
     let opened = codecs.open_encoder(&choice, size, fps)?;
     let mut encoder = opened.encoder;
     let header = GopHeader {
-            family_layout_revision: None,
+        family_layout_revision: None,
         frame_contract: None,
         gop_id: 1,
         kind: StreamKind::Video,

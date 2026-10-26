@@ -49,22 +49,46 @@ impl ExecState {
         }
     }
 
-    pub(super) fn register_owner(&self, owner: Arc<super::exec_ipc::ExecLifetime>) -> std::io::Result<()> {
-        let mut owners = self.owners.lock().map_err(|_| std::io::Error::other("Exec-Besitzerregistrierung gesperrt"))?;
+    pub(super) fn register_owner(
+        &self,
+        owner: Arc<super::exec_ipc::ExecLifetime>,
+    ) -> std::io::Result<()> {
+        let mut owners = self
+            .owners
+            .lock()
+            .map_err(|_| std::io::Error::other("Exec-Besitzerregistrierung gesperrt"))?;
         if owners.contains_key(owner.token()) {
-            return Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "Exec-Kontrollbindung kollidiert"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "Exec-Kontrollbindung kollidiert",
+            ));
         }
         owners.insert(owner.token().to_owned(), owner);
         Ok(())
     }
 
-    pub(super) fn owner(&self, id: &crate::share::ExecId, token: &str) -> Option<Arc<super::exec_ipc::ExecLifetime>> {
-        self.owners.lock().ok()?.get(token).filter(|owner| owner.exec_id() == id).cloned()
+    pub(super) fn owner(
+        &self,
+        id: &crate::share::ExecId,
+        token: &str,
+    ) -> Option<Arc<super::exec_ipc::ExecLifetime>> {
+        self.owners
+            .lock()
+            .ok()?
+            .get(token)
+            .filter(|owner| owner.exec_id() == id)
+            .cloned()
     }
 
     pub(super) fn remove_owner(&self, owner: &Arc<super::exec_ipc::ExecLifetime>) {
-        let mut owners = self.owners.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if owners.get(owner.token()).is_some_and(|current| Arc::ptr_eq(current, owner)) {
+        let mut owners = self
+            .owners
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if owners
+            .get(owner.token())
+            .is_some_and(|current| Arc::ptr_eq(current, owner))
+        {
             owners.remove(owner.token());
         }
     }

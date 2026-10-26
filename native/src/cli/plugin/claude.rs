@@ -63,18 +63,27 @@ pub(super) fn install(executable: &Path) -> Result<Value, String> {
 
 pub(super) fn uninstall() -> Result<Value, String> {
     let root = files::claude_marketplace_dir();
-    if files::generated_files_absent(&root)? {return Ok(json!({"host":"claude","removed_files":false,"steps":[]}));}
+    if files::generated_files_absent(&root)? {
+        return Ok(json!({"host":"claude","removed_files":false,"steps":[]}));
+    }
     files::verify_owned(&root)?;
     let mut host = Vec::new();
     if let Some(claude) = host_cli::find("claude") {
-        if !marketplace_is_ours(&claude, &root)? { return Err("integration_conflict: Claude marketplace points to an unowned source".into()); }
+        if !marketplace_is_ours(&claude, &root)? {
+            return Err(
+                "integration_conflict: Claude marketplace points to an unowned source".into(),
+            );
+        }
         for args in [
             &["plugin", "uninstall", PLUGIN_ID, "--scope", "user", "-y"][..],
             &["plugin", "marketplace", "remove", MARKETPLACE][..],
         ] {
             let output = host_cli::run(&claude, args)?;
             if !output.success {
-                return Err(format!("Claude removal failed ({}); generated ownership files retained for retry",output.detail()));
+                return Err(format!(
+                    "Claude removal failed ({}); generated ownership files retained for retry",
+                    output.detail()
+                ));
             }
             host.push(json!({
                 "command": format!("claude {}", args.join(" ")),
@@ -101,22 +110,31 @@ pub(super) fn status(executable: &Path) -> Value {
     })
 }
 
-fn marketplace_is_ours(cli:&std::path::Path,root:&Path)->Result<bool,String> {
-    let listed=host_cli::run(cli,&["plugin","marketplace","list","--json"])?;
-    if !listed.success {return Err(format!("cannot verify Claude marketplace ownership ({})",listed.detail()));}
-    let value:Value=serde_json::from_str(&listed.stdout).map_err(|_|"integration_conflict: Claude marketplace listing schema unsupported")?;
-    fn matches(value:&Value,root:&Path)->bool {
+fn marketplace_is_ours(cli: &std::path::Path, root: &Path) -> Result<bool, String> {
+    let listed = host_cli::run(cli, &["plugin", "marketplace", "list", "--json"])?;
+    if !listed.success {
+        return Err(format!(
+            "cannot verify Claude marketplace ownership ({})",
+            listed.detail()
+        ));
+    }
+    let value: Value = serde_json::from_str(&listed.stdout)
+        .map_err(|_| "integration_conflict: Claude marketplace listing schema unsupported")?;
+    fn matches(value: &Value, root: &Path) -> bool {
         match value {
-            Value::Array(values)=>values.iter().any(|value|matches(value,root)),
-            Value::Object(map)=> {
-                let name=map.get("name").and_then(Value::as_str);
-                let source=map.get("source").and_then(Value::as_str)
-                    .or_else(||map.get("source").and_then(|s|s.get("path")).and_then(Value::as_str));
-                (name==Some(MARKETPLACE) && source.is_some_and(|s|Path::new(s)==root))
-                    || map.values().any(|value|matches(value,root))
-            },
-            _=>false,
+            Value::Array(values) => values.iter().any(|value| matches(value, root)),
+            Value::Object(map) => {
+                let name = map.get("name").and_then(Value::as_str);
+                let source = map.get("source").and_then(Value::as_str).or_else(|| {
+                    map.get("source")
+                        .and_then(|s| s.get("path"))
+                        .and_then(Value::as_str)
+                });
+                (name == Some(MARKETPLACE) && source.is_some_and(|s| Path::new(s) == root))
+                    || map.values().any(|value| matches(value, root))
+            }
+            _ => false,
         }
     }
-    Ok(matches(&value,root))
+    Ok(matches(&value, root))
 }

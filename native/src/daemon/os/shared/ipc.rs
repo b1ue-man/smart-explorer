@@ -30,16 +30,32 @@ pub(super) fn handle_client(
     let req: IpcRequest = serde_json::from_str(line.trim()).map_err(eio)?;
     let bound = matches!(&req, IpcRequest::RuntimeCall { .. });
     require_request_auth(token, &req, &host)?;
-    let runtime_context = match &req { IpcRequest::RuntimeCall {hello,..} => Some(hello.clone()), _ => None };
+    let runtime_context = match &req {
+        IpcRequest::RuntimeCall { hello, .. } => Some(hello.clone()),
+        _ => None,
+    };
     let req = super::runtime_hello::unwrap_request(req, host.generation(), host.initialized())?;
-    if bound { require_request_auth(token, &req, &host)?; }
+    if bound {
+        require_request_auth(token, &req, &host)?;
+    }
     let runtime_lease = match super::runtime_hello::request_lease(runtime_context.as_ref(), &req) {
-        Ok(lease)=>lease,
-        Err(error)=>{
-            let msg=error.to_string();
-            let code=if msg.contains("update_recovery_required") {"update_recovery_required"}
-                else if msg.contains("update_in_progress") {"update_in_progress"} else {"reconnect_required"};
-            write_response(&mut stream,&IpcResponse::Err {msg,code:Some(code.into())})?;
+        Ok(lease) => lease,
+        Err(error) => {
+            let msg = error.to_string();
+            let code = if msg.contains("update_recovery_required") {
+                "update_recovery_required"
+            } else if msg.contains("update_in_progress") {
+                "update_in_progress"
+            } else {
+                "reconnect_required"
+            };
+            write_response(
+                &mut stream,
+                &IpcResponse::Err {
+                    msg,
+                    code: Some(code.into()),
+                },
+            )?;
             return Ok(());
         }
     };
@@ -50,15 +66,25 @@ pub(super) fn handle_client(
     }
     let controlled_exec = matches!(&req, IpcRequest::ExecStreamControlled { .. });
     match req {
-        IpcRequest::DiscoveryPairing { request, .. } => {
-            super::discovery_pairing_ipc::serve(stream, &host, request, runtime_lease.as_ref().map(|lease| {
-                let retained:std::sync::Arc<dyn Send+Sync>=lease.clone(); retained
-            }))
-        }
+        IpcRequest::DiscoveryPairing { request, .. } => super::discovery_pairing_ipc::serve(
+            stream,
+            &host,
+            request,
+            runtime_lease.as_ref().map(|lease| {
+                let retained: std::sync::Arc<dyn Send + Sync> = lease.clone();
+                retained
+            }),
+        ),
         IpcRequest::RuntimeCall { .. } => Err(eio("nested runtime request rejected")),
         IpcRequest::RuntimeHello { hello, .. } => write_response(
             &mut stream,
-            &IpcResponse::RuntimeHello { reply: super::runtime_hello::ready_reply(&hello, host.generation(), host.initialized()) },
+            &IpcResponse::RuntimeHello {
+                reply: super::runtime_hello::ready_reply(
+                    &hello,
+                    host.generation(),
+                    host.initialized(),
+                ),
+            },
         ),
         IpcRequest::Ping { .. } => write_response(
             &mut stream,
@@ -141,12 +167,25 @@ pub(super) fn handle_client(
         | IpcRequest::ExecStreamControlled { target, start, .. } => {
             let setup = super::exec_ipc::SetupWatch::start(&stream)?;
             let deadline = Instant::now() + Duration::from_secs(45);
-            match super::exec_ipc::start_remote_cancellable(&host, target, start,
-                runtime_lease.as_ref().map(|lease| {let retained:std::sync::Arc<dyn Send+Sync>=lease.clone();retained}),
-                setup.cancellation(), deadline) {
+            match super::exec_ipc::start_remote_cancellable(
+                &host,
+                target,
+                start,
+                runtime_lease.as_ref().map(|lease| {
+                    let retained: std::sync::Arc<dyn Send + Sync> = lease.clone();
+                    retained
+                }),
+                setup.cancellation(),
+                deadline,
+            ) {
                 Ok(remote) => {
                     if controlled_exec {
-                        return super::exec_ipc::serve_controlled(stream, remote, host.exec_state.clone(), setup);
+                        return super::exec_ipc::serve_controlled(
+                            stream,
+                            remote,
+                            host.exec_state.clone(),
+                            setup,
+                        );
                     }
                     setup.check()?;
                     write_response(
@@ -161,9 +200,11 @@ pub(super) fn handle_client(
                 Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg, code: None }),
             }
         }
-        IpcRequest::ExecControl { exec_id, control_token, .. } => {
-            super::exec_ipc::serve_control(stream, &host.exec_state, &exec_id, &control_token)
-        }
+        IpcRequest::ExecControl {
+            exec_id,
+            control_token,
+            ..
+        } => super::exec_ipc::serve_control(stream, &host.exec_state, &exec_id, &control_token),
         IpcRequest::ExecJobs { .. } => write_response(
             &mut stream,
             &IpcResponse::ExecJobs {
@@ -176,7 +217,14 @@ pub(super) fn handle_client(
                 found: super::exec_state::cancel(&host, &target),
             },
         ),
-        IpcRequest::StartMount { config, .. } => match host.mounts.start_retained(config, &host, runtime_lease.as_ref().map(|lease| {let retained:std::sync::Arc<dyn Send+Sync>=lease.clone();retained})) {
+        IpcRequest::StartMount { config, .. } => match host.mounts.start_retained(
+            config,
+            &host,
+            runtime_lease.as_ref().map(|lease| {
+                let retained: std::sync::Arc<dyn Send + Sync> = lease.clone();
+                retained
+            }),
+        ) {
             Ok(mount) => write_response(&mut stream, &IpcResponse::Mount { mount }),
             Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg, code: None }),
         },
@@ -188,7 +236,14 @@ pub(super) fn handle_client(
             Ok(mounts) => write_response(&mut stream, &IpcResponse::Mounts { mounts }),
             Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg, code: None }),
         },
-        IpcRequest::RetryMount { id, .. } => match host.mounts.retry_retained(&id, &host, runtime_lease.as_ref().map(|lease| {let retained:std::sync::Arc<dyn Send+Sync>=lease.clone();retained})) {
+        IpcRequest::RetryMount { id, .. } => match host.mounts.retry_retained(
+            &id,
+            &host,
+            runtime_lease.as_ref().map(|lease| {
+                let retained: std::sync::Arc<dyn Send + Sync> = lease.clone();
+                retained
+            }),
+        ) {
             Ok(mount) => write_response(&mut stream, &IpcResponse::Mount { mount }),
             Err(msg) => write_response(&mut stream, &IpcResponse::Err { msg, code: None }),
         },

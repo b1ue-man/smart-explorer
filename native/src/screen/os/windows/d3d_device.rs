@@ -19,9 +19,9 @@ use windows::Win32::Graphics::Direct3D11::{
 use windows::Win32::Graphics::Dxgi::{IDXGIAdapter, IDXGIDevice};
 use windows::Win32::System::WinRT::Direct3D11::CreateDirect3D11DeviceFromDXGIDevice;
 
-use crate::screen::core::pixel_convert::FrameSize;
 pub(super) use super::capture_readback::Readback;
-use crate::screen::core::frame_budget::{FrameLimits,MAX_WORKING_BYTES};
+use crate::screen::core::frame_budget::{FrameLimits, MAX_WORKING_BYTES};
+use crate::screen::core::pixel_convert::FrameSize;
 
 /// The Direct3D device of one source in both of its forms.
 pub(super) struct DeviceSet {
@@ -98,29 +98,47 @@ pub(super) fn create_on(adapter: Option<&IDXGIAdapter>) -> windows::core::Result
 }
 
 impl DeviceSet {
-    pub(super) fn frame_limits(&self)->FrameLimits {
+    pub(super) fn frame_limits(&self) -> FrameLimits {
         // SAFETY: immutable query on this live D3D11 device.
-        let side=if unsafe {self.device.GetFeatureLevel()}.0>=D3D_FEATURE_LEVEL_11_0.0 {16384} else {8192};
-        FrameLimits {max_size:FrameSize::new(side,side),..FrameLimits::RESOURCE}
+        let side = if unsafe { self.device.GetFeatureLevel() }.0 >= D3D_FEATURE_LEVEL_11_0.0 {
+            16384
+        } else {
+            8192
+        };
+        FrameLimits {
+            max_size: FrameSize::new(side, side),
+            ..FrameLimits::RESOURCE
+        }
     }
-    pub(super) fn capture_limits(&self,native:FrameSize)->io::Result<FrameLimits> {
-        let mut limits=self.frame_limits();
-        let bytes=native.checked_bgra_len()? as u64;
-        if native.width==0 || native.height==0 || native.width>limits.max_size.width || native.height>limits.max_size.height {
-            return Err(io::Error::other("capture exceeds this D3D11 device's texture dimensions"));
+    pub(super) fn capture_limits(&self, native: FrameSize) -> io::Result<FrameLimits> {
+        let mut limits = self.frame_limits();
+        let bytes = native.checked_bgra_len()? as u64;
+        if native.width == 0
+            || native.height == 0
+            || native.width > limits.max_size.width
+            || native.height > limits.max_size.height
+        {
+            return Err(io::Error::other(
+                "capture exceeds this D3D11 device's texture dimensions",
+            ));
         }
         // Two native capture buffers replace two of the eight working images.
         // When native exceeds a working image, six delivered images share the rest.
-        if bytes>MAX_WORKING_BYTES/8 {
-            let remaining=MAX_WORKING_BYTES.checked_sub(bytes.checked_mul(2).ok_or_else(||io::Error::other("capture bytes overflow"))?)
-                .ok_or_else(||io::Error::other("native capture buffers exceed 512 MiB"))?;
-            limits.max_pixels=limits.max_pixels.min(remaining/6/4);
+        if bytes > MAX_WORKING_BYTES / 8 {
+            let remaining = MAX_WORKING_BYTES
+                .checked_sub(
+                    bytes
+                        .checked_mul(2)
+                        .ok_or_else(|| io::Error::other("capture bytes overflow"))?,
+                )
+                .ok_or_else(|| io::Error::other("native capture buffers exceed 512 MiB"))?;
+            limits.max_pixels = limits.max_pixels.min(remaining / 6 / 4);
         }
         limits.check(limits.fit(native))?;
         Ok(limits)
     }
-    pub(super) fn delivered_size(&self,width:u32,height:u32)->io::Result<FrameSize> {
-        let native=FrameSize::new(width,height);
+    pub(super) fn delivered_size(&self, width: u32, height: u32) -> io::Result<FrameSize> {
+        let native = FrameSize::new(width, height);
         Ok(self.capture_limits(native)?.fit(native))
     }
 }

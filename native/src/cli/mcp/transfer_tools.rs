@@ -24,11 +24,15 @@ pub(super) fn start(session: &Session, kind: JobKind, args: &Args<'_>) -> Result
     let destination_spec = args.string("destination")?;
     let recursive = args.flag("recursive")?;
     let overwrite = args.flag("overwrite")?;
-    let folders=match args.opt_string("folder_conflict")?.as_deref().unwrap_or("merge") {
-        "merge"=>crate::transfer::FolderConflict::Merge,
-        "keep-both"=>crate::transfer::FolderConflict::KeepBoth,
-        "fail"=>crate::transfer::FolderConflict::Fail,
-        _=>return Err("folder_conflict must be merge, keep-both or fail".into()),
+    let folders = match args
+        .opt_string("folder_conflict")?
+        .as_deref()
+        .unwrap_or("merge")
+    {
+        "merge" => crate::transfer::FolderConflict::Merge,
+        "keep-both" => crate::transfer::FolderConflict::KeepBoth,
+        "fail" => crate::transfer::FolderConflict::Fail,
+        _ => return Err("folder_conflict must be merge, keep-both or fail".into()),
     };
     // Resolve both ends before a job exists, so a typo fails immediately.
     let source = session.targets.resolve(&source_spec)?;

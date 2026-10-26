@@ -19,11 +19,11 @@ pub(crate) mod mount_ui_open;
 #[path = "core/settings_devices_ui.rs"]
 pub(crate) mod settings_devices_ui;
 
-#[path = "core/drive_snapshot.rs"]
-pub(crate) mod drive_snapshot;
 #[path = "os/shared/drive_events.rs"]
 pub(crate) mod drive_events;
 #[path = "os/shared/drive_inventory.rs"]
 pub(crate) mod drive_inventory;
+#[path = "core/drive_snapshot.rs"]
+pub(crate) mod drive_snapshot;
 #[path = "os/shared/optical_index.rs"]
 pub(crate) mod optical_index;

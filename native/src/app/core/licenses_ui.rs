@@ -83,7 +83,7 @@ pub(super) fn show_licenses_window(ctx: &egui::Context) {
     }
     let mut open = true;
     super::dialog_geometry::window(ctx, "licenses_ui.0", TITLE)
-            .id(egui::Id::new(TITLE))
+        .id(egui::Id::new(TITLE))
         .open(&mut open)
         .default_size([720.0, 520.0])
         .max_size(theme::window_content_limit(ctx))
@@ -105,7 +105,8 @@ fn window_body(ui: &mut egui::Ui, state: &mut LicensesWindow) {
 
     let lines = lines();
     let row_height = ui.text_style_height(&egui::TextStyle::Monospace);
-    let mut area = egui::ScrollArea::both().min_scrolled_height(0.0)
+    let mut area = egui::ScrollArea::both()
+        .min_scrolled_height(0.0)
         .max_height(super::dialog_geometry::remaining_height(ui, 0.0))
         .id_salt("se_crate_licenses_text")
         .auto_shrink([false, false]);

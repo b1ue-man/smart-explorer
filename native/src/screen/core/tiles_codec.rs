@@ -137,7 +137,10 @@ impl TileEncoder {
         Self::new_with_limits(size, super::frame_budget::FrameLimits::LEGACY)
     }
 
-    pub(crate) fn new_with_limits(size: FrameSize, limits: super::frame_budget::FrameLimits) -> io::Result<Self> {
+    pub(crate) fn new_with_limits(
+        size: FrameSize,
+        limits: super::frame_budget::FrameLimits,
+    ) -> io::Result<Self> {
         limits.check(size)?;
         let (columns, rows) = (
             size.width.div_ceil(TILE_SIDE),
@@ -150,7 +153,8 @@ impl TileEncoder {
             hashes: vec![0; columns as usize * rows as usize],
             primed: false,
             tile: Vec::with_capacity(MAX_TILE_BYTES),
-            previous: None, limits,
+            previous: None,
+            limits,
         })
     }
 
@@ -169,11 +173,16 @@ impl TileEncoder {
         keyframe: bool,
         record_limit: usize,
     ) -> io::Result<Vec<Vec<u8>>> {
-        self.encode_visible(frame,keyframe,record_limit,None)
+        self.encode_visible(frame, keyframe, record_limit, None)
     }
     /// Full references rebuild all pixels; deltas retain unsent pixels and hashes.
-    pub(crate) fn encode_visible(&mut self, frame: &BgraView, keyframe: bool, record_limit: usize,
-        visible: Option<&[super::visibility::VisibleRect]>) -> io::Result<Vec<Vec<u8>>> {
+    pub(crate) fn encode_visible(
+        &mut self,
+        frame: &BgraView,
+        keyframe: bool,
+        record_limit: usize,
+        visible: Option<&[super::visibility::VisibleRect]>,
+    ) -> io::Result<Vec<Vec<u8>>> {
         if frame.size() != self.size {
             return Err(invalid("tile frame size differs from the encoder size"));
         }
@@ -181,21 +190,34 @@ impl TileEncoder {
             return Err(invalid("tile record limit is outside 16 KiB..=4 MiB"));
         }
         let full = keyframe || !self.primed;
-        let mut previous=self.previous.take().map(Ok).unwrap_or_else(||BgraImage::new_with_limits(self.size,self.limits))?;
+        let mut previous = self
+            .previous
+            .take()
+            .map(Ok)
+            .unwrap_or_else(|| BgraImage::new_with_limits(self.size, self.limits))?;
         let mut records: Vec<Vec<u8>> = Vec::new();
         let mut count = 0u16;
         for row in 0..self.rows {
             for column in 0..self.columns {
                 let rect = tile_rect(column, row, self.size);
-                if !full && !super::frame_regions::visible(rect,visible) {continue;}
+                if !full && !super::frame_regions::visible(rect, visible) {
+                    continue;
+                }
                 let hash = tile_hash(frame, rect);
                 let slot = &mut self.hashes[(row * self.columns + column) as usize];
-                let exact=!full && *slot==hash && {
-                    let from=rect.x as usize*4; let end=(rect.x+rect.width) as usize*4;
-                    (rect.y..rect.y+rect.height).all(|y| previous.view().row(y)[from..end].chunks_exact(4)
-                        .zip(frame.row(y)[from..end].chunks_exact(4)).all(|(a,b)|a[..3]==b[..3]))
+                let exact = !full && *slot == hash && {
+                    let from = rect.x as usize * 4;
+                    let end = (rect.x + rect.width) as usize * 4;
+                    (rect.y..rect.y + rect.height).all(|y| {
+                        previous.view().row(y)[from..end]
+                            .chunks_exact(4)
+                            .zip(frame.row(y)[from..end].chunks_exact(4))
+                            .all(|(a, b)| a[..3] == b[..3])
+                    })
                 };
-                if !full && *slot == hash && exact { continue; }
+                if !full && *slot == hash && exact {
+                    continue;
+                }
                 *slot = hash;
                 let fits = records.last().is_some_and(|record| {
                     record.len() + MAX_ENCODED_TILE_BYTES <= record_limit && count < u16::MAX
@@ -209,16 +231,20 @@ impl TileEncoder {
                 if let Some(record) = records.last_mut() {
                     append_tile(record, rect, &self.tile)?;
                     count += 1;
-                    let from=rect.x as usize*4;let end=(rect.x+rect.width) as usize*4;
-                    for y in rect.y..rect.y+rect.height {
-                        let row=&mut previous.row_mut(y)[from..end];row.copy_from_slice(&frame.row(y)[from..end]);
-                        for pixel in row.chunks_exact_mut(4) {pixel[3]=255;}
+                    let from = rect.x as usize * 4;
+                    let end = (rect.x + rect.width) as usize * 4;
+                    for y in rect.y..rect.y + rect.height {
+                        let row = &mut previous.row_mut(y)[from..end];
+                        row.copy_from_slice(&frame.row(y)[from..end]);
+                        for pixel in row.chunks_exact_mut(4) {
+                            pixel[3] = 255;
+                        }
                     }
                 }
             }
         }
         close(&mut records, count);
-        self.previous=Some(previous);
+        self.previous = Some(previous);
         self.primed = true;
         Ok(records)
     }
@@ -247,23 +273,46 @@ impl TileDecoder {
         Ok(Self {
             image: BgraImage::new(size)?,
             scratch: Vec::with_capacity(MAX_TILE_BYTES),
-            frame_id: None, coverage: Vec::new(), last_rects: Vec::new(),
+            frame_id: None,
+            coverage: Vec::new(),
+            last_rects: Vec::new(),
         })
     }
 
-    pub(crate) fn new_with_limits(size: FrameSize, limits: super::frame_budget::FrameLimits) -> io::Result<Self> {
-        Ok(Self { image: BgraImage::new_with_limits(size, limits)?, scratch: Vec::with_capacity(MAX_TILE_BYTES), frame_id:None,coverage:Vec::new(),last_rects:Vec::new() })
+    pub(crate) fn new_with_limits(
+        size: FrameSize,
+        limits: super::frame_budget::FrameLimits,
+    ) -> io::Result<Self> {
+        Ok(Self {
+            image: BgraImage::new_with_limits(size, limits)?,
+            scratch: Vec::with_capacity(MAX_TILE_BYTES),
+            frame_id: None,
+            coverage: Vec::new(),
+            last_rects: Vec::new(),
+        })
     }
 
-    pub(crate) fn apply_frame_record(&mut self, record: &super::wire_binary::FrameRecord) -> io::Result<bool> {
+    pub(crate) fn apply_frame_record(
+        &mut self,
+        record: &super::wire_binary::FrameRecord,
+    ) -> io::Result<bool> {
         if self.frame_id != Some(record.frame_id) {
-            self.frame_id=Some(record.frame_id);
-            self.coverage=vec![false; self.image.size().width.div_ceil(TILE_SIDE) as usize * self.image.size().height.div_ceil(TILE_SIDE) as usize];
+            self.frame_id = Some(record.frame_id);
+            self.coverage = vec![
+                false;
+                self.image.size().width.div_ceil(TILE_SIDE) as usize
+                    * self.image.size().height.div_ceil(TILE_SIDE) as usize
+            ];
         }
         self.apply_record(&record.payload)?;
-        let columns=self.image.size().width.div_ceil(TILE_SIDE);
-        for rect in &self.last_rects { self.coverage[((rect.y/TILE_SIDE)*columns+rect.x/TILE_SIDE) as usize]=true; }
-        if !record.has_more() && record.is_keyframe() && self.coverage.iter().any(|covered| !covered) {
+        let columns = self.image.size().width.div_ceil(TILE_SIDE);
+        for rect in &self.last_rects {
+            self.coverage[((rect.y / TILE_SIDE) * columns + rect.x / TILE_SIDE) as usize] = true;
+        }
+        if !record.has_more()
+            && record.is_keyframe()
+            && self.coverage.iter().any(|covered| !covered)
+        {
             return Err(invalid("lossless keyframe did not rebuild every tile"));
         }
         Ok(!record.has_more())

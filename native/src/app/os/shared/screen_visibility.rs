@@ -14,14 +14,29 @@ pub(crate) fn subtract(rects: &mut Vec<Rect>, cover: Rect) {
     let mut out = Vec::new();
     for rect in rects.iter().copied() {
         let cut = rect.intersect(cover);
-        if !cut.is_positive() { out.push(rect); continue; }
+        if !cut.is_positive() {
+            out.push(rect);
+            continue;
+        }
         for part in [
-            Rect::from_min_max(rect.min, eframe::egui::pos2(rect.max.x,cut.min.y)),
-            Rect::from_min_max(eframe::egui::pos2(rect.min.x,cut.max.y),rect.max),
-            Rect::from_min_max(eframe::egui::pos2(rect.min.x,cut.min.y),eframe::egui::pos2(cut.min.x,cut.max.y)),
-            Rect::from_min_max(eframe::egui::pos2(cut.max.x,cut.min.y),eframe::egui::pos2(rect.max.x,cut.max.y)),
-        ] { if part.is_positive() { out.push(part); } }
-        if out.len() > 128 { return; }
+            Rect::from_min_max(rect.min, eframe::egui::pos2(rect.max.x, cut.min.y)),
+            Rect::from_min_max(eframe::egui::pos2(rect.min.x, cut.max.y), rect.max),
+            Rect::from_min_max(
+                eframe::egui::pos2(rect.min.x, cut.min.y),
+                eframe::egui::pos2(cut.min.x, cut.max.y),
+            ),
+            Rect::from_min_max(
+                eframe::egui::pos2(cut.max.x, cut.min.y),
+                eframe::egui::pos2(rect.max.x, cut.max.y),
+            ),
+        ] {
+            if part.is_positive() {
+                out.push(part);
+            }
+        }
+        if out.len() > 128 {
+            return;
+        }
     }
     *rects = out;
 }

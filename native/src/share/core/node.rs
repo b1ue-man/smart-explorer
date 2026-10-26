@@ -384,13 +384,16 @@ impl ShareIrohNode {
         identity: ShareIdentity,
         start: super::exec_types::ExecStart,
     ) -> io::Result<super::exec_session::ShareExecSession> {
-        self.start_exec_retained(endpoint,identity,start,None)
+        self.start_exec_retained(endpoint, identity, start, None)
     }
 
     pub(super) fn start_exec_retained(
-        self:&Arc<Self>, endpoint:PeerEndpoint, identity:ShareIdentity,
-        start:super::exec_types::ExecStart, retainer:Option<Arc<dyn Send+Sync>>,
-    )->io::Result<super::exec_session::ShareExecSession> {
+        self: &Arc<Self>,
+        endpoint: PeerEndpoint,
+        identity: ShareIdentity,
+        start: super::exec_types::ExecStart,
+        retainer: Option<Arc<dyn Send + Sync>>,
+    ) -> io::Result<super::exec_session::ShareExecSession> {
         self.start_exec_cancellable(endpoint, identity, start, retainer, None, None)
     }
 

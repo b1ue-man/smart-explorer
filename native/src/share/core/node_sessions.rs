@@ -373,7 +373,8 @@ impl ShareIrohNode {
                     .connect(addr, ALPN)
                     .await
                     .map_err(io_deadline::disconnected)?;
-                self.await_route(&connection, Some(endpoint), Some(deadline)).await?;
+                self.await_route(&connection, Some(endpoint), Some(deadline))
+                    .await?;
                 let (mut send, mut recv) = connection
                     .open_bi()
                     .await
@@ -381,8 +382,10 @@ impl ShareIrohNode {
                 send_ctrl(&mut send, &Ctrl::PeerHello { hello }).await?;
                 match recv_ctrl(&mut recv).await? {
                     response @ (Ctrl::PeerHelloOk | Ctrl::PeerHelloOkRoute) => {
-                        super::route_monitor::authenticated_remote_capability(&connection,
-                            matches!(response, Ctrl::PeerHelloOkRoute));
+                        super::route_monitor::authenticated_remote_capability(
+                            &connection,
+                            matches!(response, Ctrl::PeerHelloOkRoute),
+                        );
                         let transport = transport_label(&connection);
                         let _ = self.ev.try_send(ShareEvent::Status(format!(
                             "Iroh-Session authentifiziert: {} via {} in {} ms",

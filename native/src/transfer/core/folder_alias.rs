@@ -36,6 +36,10 @@ pub struct FolderAliases {
 
 impl FolderAliases {
     pub fn new(scope: FolderAliasScope) -> Self {
-        Self { version: 1, scope, roots: BTreeMap::new() }
+        Self {
+            version: 1,
+            scope,
+            roots: BTreeMap::new(),
+        }
     }
 }

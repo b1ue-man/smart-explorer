@@ -1,10 +1,7 @@
 //! Negotiated P14 client calls. Mutations never replay an ambiguous request;
 //! identity is read-only metadata and may reconnect under its own deadline.
 use super::super::{
-    agent_error::agent_error,
-    backend::AgentBackend,
-    ext_stream::unexpected,
-    ext_wire::unsupported,
+    agent_error::agent_error, backend::AgentBackend, ext_stream::unexpected, ext_wire::unsupported,
 };
 use crate::agent_proto::Frame;
 use crate::vfs::Backend;
@@ -13,10 +10,16 @@ use std::{io, time::Duration};
 const QUERY_TIMEOUT: Duration = Duration::from_secs(20);
 
 pub(super) fn supported(backend: &AgentBackend, root: &str) -> bool {
-    if !backend.features().folder_reservation { return false; }
-    matches!(backend.pool.lease().safe_call_timeout(
-        Frame::DirectoryReservationSupported(root.into()), QUERY_TIMEOUT,
-    ), Ok(Frame::Answer(1)))
+    if !backend.features().folder_reservation {
+        return false;
+    }
+    matches!(
+        backend.pool.lease().safe_call_timeout(
+            Frame::DirectoryReservationSupported(root.into()),
+            QUERY_TIMEOUT,
+        ),
+        Ok(Frame::Answer(1))
+    )
 }
 
 pub(super) fn create(backend: &AgentBackend, path: &str) -> io::Result<()> {
@@ -39,10 +42,10 @@ pub(super) fn identity(backend: &AgentBackend, path: &str) -> io::Result<Option<
     if !backend.features().folder_reservation {
         return Err(unsupported());
     }
-    let reply = backend.pool.lease().safe_call_timeout(
-        Frame::DirectoryIdentity(path.into()),
-        QUERY_TIMEOUT,
-    )?;
+    let reply = backend
+        .pool
+        .lease()
+        .safe_call_timeout(Frame::DirectoryIdentity(path.into()), QUERY_TIMEOUT)?;
     match reply {
         Frame::DirectoryIdentityValue(identity)
             if identity.as_ref().is_none_or(|id| !id.is_empty()) =>
@@ -64,14 +67,20 @@ pub(super) fn file_identity(backend: &AgentBackend, path: &str) -> io::Result<Op
     if !backend.features().file_identity {
         return Ok(None);
     }
-    let reply = backend.pool.lease().safe_call_timeout(
-        Frame::FileIdentity(path.into()), QUERY_TIMEOUT,
-    )?;
+    let reply = backend
+        .pool
+        .lease()
+        .safe_call_timeout(Frame::FileIdentity(path.into()), QUERY_TIMEOUT)?;
     match reply {
         Frame::FileIdentityValue(identity) => {
             let namespace = backend.namespace_identity();
-            Ok(identity.filter(|id| !id.is_empty()).map(|id|
-                format!("agent-file:{}:{namespace}:{}:{id}", namespace.len(), id.len())))
+            Ok(identity.filter(|id| !id.is_empty()).map(|id| {
+                format!(
+                    "agent-file:{}:{namespace}:{}:{id}",
+                    namespace.len(),
+                    id.len()
+                )
+            }))
         }
         Frame::Err(message) => Err(error(message)),
         frame => Err(unexpected("file identity", &frame)),

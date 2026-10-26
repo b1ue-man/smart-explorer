@@ -45,9 +45,11 @@ pub(crate) use self::core::locator::{
     is_site_id, is_vault_locator, vault_location, vault_store_location, VaultLocator,
     VaultStoreLocator, VAULT_SCHEME, VAULT_STORE_SCHEME,
 };
-pub(crate) use self::core::open_policy::{MountPolicy, OpenPolicy, RootBinding, stored_policy, ROOT_TRUST_REQUIRED, MOUNT_RUNTIME_MISSING};
 pub(crate) use self::core::lock_policy::{
     LockPlatform, LockReason, SignalSupport, SystemSignal, BACKGROUND_CHOICES, DEFAULT_IDLE_MINUTES,
+};
+pub(crate) use self::core::open_policy::{
+    stored_policy, MountPolicy, OpenPolicy, RootBinding, MOUNT_RUNTIME_MISSING, ROOT_TRUST_REQUIRED,
 };
 pub(crate) use self::core::registry_types::{
     location_key, new_site_id, LockSettings, SiteKind, SiteRecord,
@@ -57,31 +59,36 @@ pub(crate) use self::core::{
     locked_site, vault_locked, LockListener, VaultLocked, VaultSession, VAULT_LOCKED_CODE,
 };
 pub(crate) use self::os::{
-    mount_policy, confirm_root_trust, set_root_trust, set_cleartext_copy_policy, mount_access, authorize_provider, note_mount_binding, mount_binding_matches, forget_mount_binding, recovery_identity, MountAccess,
-    account, add_site, apply_vault_preview_action, available_memory, canonical_vault_location,
-    change_password, change_site_password, check_new_password, check_site, check_site_in,
-    compare_job, compare_job_in, compare_snapshot, compare_stale, compare_text_job, create_site,
-    create_vault, create_vault_job, default_replicas_root, detect_location, detect_storage,
-    expand_dir_sort, expand_places, find_vault_job, host_visibility, hosts_register,
-    is_compare_stale, jobs_using, lock_all_for_exit, merge_apply_item, note_vault_backend, open_in,
-    open_location_in, open_vault_backend, open_vault_location, open_with, platform_lock_defaults,
-    preview_vault_job_in, publish_session, publish_vault_mount, recovery_key_info, register,
-    remove_drive_thumbnails, remove_entered, remove_site, resolve_in, resolve_item,
-    resolve_item_in, resolve_store_in, resolve_vault_store, run_vault_job, run_vault_job_in,
-    seal_log_fields, sealed_mount_storage, shows_vault, site_locations, store_dir_sort,
-    store_places, unlock_entered, unlock_entered_cancellable, unlock_saved, unlock_storage,
-    unlocked_session, update_settings, vault_drive_bridge, vault_mount_of, vault_mount_roots,
-    vault_site_of, wire_error_text, withdraw_session, withdraw_vault_mount, ActionEnv, CheckResult,
-    ConsumerGuard, ConsumerKind, CopyTarget, Detection, EphemeralSpool, Installed, JobPlace,
-    JournalPathSealer, LocalStore, LockError, LockParticipant, LockRequest, ManageError,
-    MountVaultError, OpenedVault, OsSecretStore, PasswordChanged, PasswordError, PlaceList,
-    ProcessSealing, RecoveryKeyInfo, RegisterEvent, RegistryLoad, RegistryStore, ResolveLocation,
-    ResolveReport, ResolveRequest, Resolver, SealedSpoolFile, SealedSpoolStorage, SecretStore,
-    SessionRegister, SettingsChange, SiteSealing, SiteState, SiteStatus, SpoolKey, UnlockError,
-    UnlockHook, UnlockOptions, UnlockTarget, Unlocked, VaultBackend, VaultDriveBridge,
-    VaultJobCreated, VaultOpenError, VaultPlaces, VaultPreview, VaultRunOutcome, VaultRunRequest,
-    WorkerOpen, ACCOUNT_PREFIX, CREATE_RECOVERY_HINT, EVENT_LOG, LOCK_PLATFORM, MERGE_MAX_BYTES,
+    account, add_site, apply_vault_preview_action, authorize_provider, available_memory,
+    canonical_vault_location, change_password, change_site_password, check_new_password,
+    check_site, check_site_in, compare_job, compare_job_in, compare_snapshot, compare_stale,
+    compare_text_job, confirm_root_trust, create_site, create_vault, create_vault_job,
+    default_replicas_root, detect_location, detect_storage, expand_dir_sort, expand_places,
+    find_vault_job, forget_mount_binding, host_visibility, hosts_register, is_compare_stale,
+    jobs_using, lock_all_for_exit, merge_apply_item, mount_access, mount_binding_matches,
+    mount_policy, note_mount_binding, note_vault_backend, open_in, open_location_in,
+    open_vault_backend, open_vault_location, open_with, platform_lock_defaults,
+    preview_vault_job_in, publish_session, publish_vault_mount, recovery_identity,
+    recovery_key_info, register, remove_drive_thumbnails, remove_entered, remove_site, resolve_in,
+    resolve_item, resolve_item_in, resolve_store_in, resolve_vault_store, run_vault_job,
+    run_vault_job_in, seal_log_fields, sealed_mount_storage, set_cleartext_copy_policy,
+    set_root_trust, shows_vault, site_locations, store_dir_sort, store_places, unlock_entered,
+    unlock_entered_cancellable, unlock_saved, unlock_storage, unlocked_session, update_settings,
+    vault_drive_bridge, vault_mount_of, vault_mount_roots, vault_site_of, wire_error_text,
+    withdraw_session, withdraw_vault_mount, ActionEnv, CheckResult, ConsumerGuard, ConsumerKind,
+    CopyTarget, Detection, EphemeralSpool, Installed, JobPlace, JournalPathSealer, LocalStore,
+    LockError, LockParticipant, LockRequest, ManageError, MountAccess, MountVaultError,
+    OpenedVault, OsSecretStore, PasswordChanged, PasswordError, PlaceList, ProcessSealing,
+    RecoveryKeyInfo, RegisterEvent, RegistryLoad, RegistryStore, ResolveLocation, ResolveReport,
+    ResolveRequest, Resolver, SealedSpoolFile, SealedSpoolStorage, SecretStore, SessionRegister,
+    SettingsChange, SiteSealing, SiteState, SiteStatus, SpoolKey, UnlockError, UnlockHook,
+    UnlockOptions, UnlockTarget, Unlocked, VaultBackend, VaultDriveBridge, VaultJobCreated,
+    VaultOpenError, VaultPlaces, VaultPreview, VaultRunOutcome, VaultRunRequest, WorkerOpen,
+    ACCOUNT_PREFIX, CREATE_RECOVERY_HINT, EVENT_LOG, LOCK_PLATFORM, MERGE_MAX_BYTES,
     MIN_PASSWORD_CHARS, RECOVERY_KEY_NOTE, SCREEN_LOCK_NOTE, SPOOL_KEY_FILE, VAULTS_DIR,
 };
 
-pub(crate) use self::os::{TransferBlobPurpose, TransferBlobContext, transfer_blob_context, check_transfer_blob_context_live, check_transfer_blob_context, seal_transfer_blob, open_transfer_blob};
+pub(crate) use self::os::{
+    check_transfer_blob_context, check_transfer_blob_context_live, open_transfer_blob,
+    seal_transfer_blob, transfer_blob_context, TransferBlobContext, TransferBlobPurpose,
+};

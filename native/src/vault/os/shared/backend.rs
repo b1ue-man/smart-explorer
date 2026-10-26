@@ -42,7 +42,9 @@ pub(crate) struct VaultBackend {
 /// Only a backend's explicit opt-in may replace its local I/O. Unknown
 /// wrappers retain their permission, cancellation and provider behavior.
 pub(super) fn confine_storage(inner: BackendHandle, root: &str) -> BackendHandle {
-    let confined = inner.extensions().and_then(|extension| extension.confined_local_root(root).ok().flatten());
+    let confined = inner
+        .extensions()
+        .and_then(|extension| extension.confined_local_root(root).ok().flatten());
     confined.unwrap_or(inner)
 }
 
@@ -286,7 +288,9 @@ impl Backend for VaultBackend {
         // cleartext subdirectory has no independent held storage authority.
         if crate::vault::core::path_map::components(root).is_ok_and(|parts| parts.is_empty()) {
             self.inner.root_confinement(&self.root)
-        } else { RootConfinement::Unverified }
+        } else {
+            RootConfinement::Unverified
+        }
     }
 
     fn mount_path_capabilities(&self, root: &str) -> VfsResult<MountPathCapabilities> {

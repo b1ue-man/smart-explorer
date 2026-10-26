@@ -41,11 +41,17 @@ impl ShareHost {
             IpcRequest::Vault { req, .. } => super::super::ipc_vault::serve(self, stream, req),
             IpcRequest::Screen { req, .. } => self.serve_screen(stream, req),
             IpcRequest::Login { req, .. } => self.serve_login(stream, req),
-            IpcRequest::MountHostExt { id, session_token, req } => {
-                super::super::drive_modules::mount_host_ext_serve::serve(
-                    self, stream, &id, &session_token, req,
-                )
-            }
+            IpcRequest::MountHostExt {
+                id,
+                session_token,
+                req,
+            } => super::super::drive_modules::mount_host_ext_serve::serve(
+                self,
+                stream,
+                &id,
+                &session_token,
+                req,
+            ),
             other => unhandled(&mut stream, &other),
         }
     }
