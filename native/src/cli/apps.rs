@@ -24,8 +24,8 @@ enum AppsCommand {
         width: u32,
         #[arg(long)]
         height: u32,
-        #[arg(long, default_value_t = 1)]
-        version: u8,
+        #[arg(long, default_value_t = 1, help = "Icon reference data version")]
+        icon_version: u8,
         #[arg(long)]
         catalog_revision: String,
         #[arg(long)]
@@ -124,14 +124,14 @@ pub(super) fn run(args: AppsArgs) -> Result<i32, String> {
             sha256,
             width,
             height,
-            version,
+            icon_version,
             catalog_revision,
             json: _,
         } => {
             let (target, _) = super::screen::device_target(&device)?;
             let id = AppId::try_from(app_id.clone()).map_err(|e| e.to_string())?;
             let icon = crate::screen::core::app_icon::IconRef {
-                version,
+                version: icon_version,
                 app_id,
                 sha256,
                 width,
@@ -219,3 +219,7 @@ pub(super) fn request(
         request_id: RequestId::try_from(id).map_err(|e| e.to_string())?,
     })
 }
+
+#[cfg(test)]
+#[path = "apps_task_tests.rs"]
+mod task_tests;
