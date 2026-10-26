@@ -111,9 +111,9 @@ fn perm_task_gui_accounts_page_states() {
         vec![remote(None), deploy(None)],
     ));
     with_page(state, true, |h, draw| {
-        assert!(h
-            .capture
-            .contains("Kontodienst eingerichtet (Version 0.5.183)."));
+        assert!(h.capture.contains("Kontodienst eingerichtet."));
+        assert_eq!(h.click("Diagnose des Kontodiensts", 0, draw), None);
+        assert!(h.capture.contains("Version 0.5.183"));
         assert!(h.capture.contains("verfügbar"));
         assert!(h.capture.contains(SESSION_LIMITS));
         let disallow = ExecAccountsAction::Disallow {

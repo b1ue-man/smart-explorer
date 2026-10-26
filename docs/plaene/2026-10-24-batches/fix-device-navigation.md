@@ -956,3 +956,300 @@ terminalen gemeinsamen Release. Dieser Autor hat keine lokalen Builds,
 Compiler, Formatter, Tests, Server, Installationen, Hostaufrufe,
 Gitmutationen, Graphupdates oder Unteragenten ausgeführt und behauptet
 keinen bestandenen Remotelauf.
+
+## Fortsetzung: Diagnosen D01–D21 aus Lauf 40368746815
+
+### Erstplan aus dem neuen Auftrag
+
+Der neue begrenzte Auftrag gilt am Kandidaten
+`b233e5336a0ee177e19382a7adf592d297dcf202`. Lauf 40368746815 ist laut
+Auftrag vollständig beendet. Die aktuelle Scope-Datei ersetzt die vorige
+Schreibfläche. Dieser Autor verantwortet D01–D03, D07–D12, D14–D16 und
+D21 vollständig: Funktionsauflistung, direkte/indirekte Karte, vorherigen
+Fixplan, Umsetzung und eigene anschließende Anti-Regressionsreview.
+Der wörtliche Nutzervertrag ist erneut vollständig gelesen.
+
+Zu erhalten sind Desktopordner-/Appaktionen, Kontenverwaltung,
+Routendiagnose, die vorhandene Execdeadlinefixture und derselbe Windows-
+Shellstart mit PIDL, Deadline, Prozesskorrelation und Cleanup. Änderungen
+sind ausschließlich in den fünf zugewiesenen Rustdateien, dem bestehenden
+Bericht und `Cargo.toml` für das erforderliche Windows-Feature erlaubt.
+`Cargo.lock`, Paketversion, gemeinsame Suite und fremde Dateien
+bleiben außerhalb dieser Schreibfläche. Main besitzt den praktischen
+Nachweis im selben Remoteeinstieg sowie Graph, Git und Release.
+
+Die vollständige zugewiesene Diagnoseliste wurde einschließlich aller
+gerenderten Meldungen, Vorschläge und Plattformzuordnungen ausgewertet:
+
+| Diagnosen | Belegter Fehler vor der Bestandsklärung |
+| --- | --- |
+| D01, D02 | `desktop_surface_actions.rs` benennt `folder_conflict_ui::Admission` über einen nicht vorhandenen Elternmodulpfad, sowohl im Queuefeld als auch beim Anlegen der Admission. |
+| D03 | `desktop_surface_menu_ui.rs` erreicht den vorhandenen Apppicker wegen eines falschen Elternmodulpfads nicht. |
+| D07 | `share_access_accounts_actions.rs` nennt `AccountChoices`, ohne den vorhandenen Typ im Scope zu haben. |
+| D08–D12 | `share_routes_ui.rs` nennt `egui::Ui`, `RichText` und `CollapsingHeader`, ohne den im Projekt verwendeten egui-Zugang zu importieren. |
+| D14–D16 | Der vorhandene Windows-Shellstart kann `SHELLEXECUTEINFOW` und `ShellExecuteExW` nicht sehen. Laut Auftrag weist die mitgelieferte Windows-0.58-Primärquelle auf das fehlende Feature `Win32_System_Registry`. Der vorgeschlagene Wechsel zu `ShellExecuteW` ist ohne Prüfung des bestehenden PIDL-/Prozessvertrags nicht zulässig. |
+| D21 | Die vorhandene Execdeadlinefixture nennt das vorhandene `io_deadline`-Modul ohne gültigen Import. |
+
+Der Export nennt keine Android-Diagnose. Das ist kein Beleg einer
+bestandenen Androidprüfung. Vorläufige Planungstiefe ist 2: bestehende
+gekoppelte GUI-/Daemon-/Plattformverträge müssen erhalten werden.
+Die genaue Modulhierarchie, Typbesitz, konkrete Featurebedingung und
+betroffenen Fixtureaussagen sind noch durch die zugewiesene Lektüre zu
+klären. Eine nur vom Nutzer zu liefernde Angabe ist nicht erkennbar.
+Nächster Schritt sind diese vorhandenen Definitionen und tatsächlichen
+Aufrufer; danach folgt der konkrete regressionsschützende Plan vor jeder
+Produktänderung. Lokale Ausführung und Unteragenten bleiben verboten.
+
+### Zweitplan: Bestand, Fehlerfunktionen und vollständige Anschlusskarte
+
+Die belegte Planungstiefe bleibt 2. `app/mod.rs` deklariert
+`desktop_modules` als eigenes Untermodul und reexportiert dessen
+Desktopmodule. `folder_conflict_ui` und `share_apps_ui` gehören unmittelbar
+zu `app`; `super` eines Desktop-Untermoduls bezeichnet dagegen
+`desktop_modules`. Die gesuchten Funktionen existieren bereits mit
+passender Sichtbarkeit. Eine neue API oder Modulsichtbarkeit ist nicht
+erforderlich.
+
+Die Definition von `AccountChoices` ist der gemeinsame typisierte Vertrag
+in `share/core/exec_helper_protocol.rs`. Der Kontenrenderer importiert ihn
+bereits; sein extrahierter Actionsbaustein importiert bislang nur `page`,
+`AccountsPage` und `PageAction`. `share_routes_ui` benötigt denselben
+`eframe::egui`-Zugang wie die vorhandenen GUIbausteine. `io_deadline` ist
+bereits unter `share` registriert und bietet den exakt von der Fixture
+verlangten absoluten `run_until`-Aufruf.
+
+| Fehlerhafte Funktion oder betroffene Grenze | Direkte und indirekte bestehende Kette; Erhaltungsanforderung |
+| --- | --- |
+| D01/D02: `SystemActions::folders`, `SurfaceActions::run` | `desktop_surface_menu_ui::paste` oder vorhandener Transferauftrag → konkreter Benutzerdesktop aus `ViewModel::folder(false)` und Zwischenablagepfade → `DesktopOp::Transfer` mit Copy-/Movewert → `desktop_ops::transfer_job` → validierter lokaler, wiederherstellbarer Treejob → `folder_conflict_ui::Admission::new` → eigene FIFO des Flächenprozesses. Die Typreferenz und der Konstruktor müssen dieselbe existierende Admission meinen. |
+| D01/D02: `take_notices`, `run_transfer_job` | Vorderste Admission → `Admission::show`/FolderPreviewScan → Auswahl KeepBoth, Merge oder Skip pro Quellordner → ausschließlich `Ok(Some(job))` startet den bestehenden Transferthread → `desktop_ops::run_transfer_job` → gemeinsamer `transfer::run_view` → Fortschritt/Issues → Noticekanal und Repaint. Abbruch und vollständiges Überspringen liefern `Ok(None)`; Fehler werden angezeigt. Die eigene Cutzwischenablage wird erst nach erfolgreichem Threadstart und passendem Roots-/Moveauftrag verbraucht. |
+| Unveränderte Desktopaktionen neben D01/D02 | `activate`, Datei-/Flächenmenü und `SurfaceActions::open/run` → unveränderte OpenRequest-/DesktopOpvarianten. Umbenennen prüft Einzelname und nutzt lokales NoReplace; neuer Ordner nutzt exklusiven freien Namen; Papierkorbfehler bleiben Fehler und führen zu keiner dauerhaften Löschung. Auswahl, Monitorlayout, Heartbeat, native Dateiablage, Copy und Cut bleiben unverändert. |
+| D03: `desktop_surface_menu_ui::device_menu` | Konkretes DeviceTile aus dem ViewModel, einschließlich Raumgerät → „Programme auf diesem Gerät …“ → `app::share_apps_ui::open_surface` mit demselben egui-Kontext, `PeerOpenTarget` und Gerätenamen → kontextgebundene Liste offener Picker, nach exaktem Ziel dedupliziert → `surface_windows` → gerätebezogenes `panel`. Die Änderung darf keinen Appstart und keinen Ersatzprozess auslösen. |
+| Indirekter D03-Appauftrag | `panel` → gespeicherten Request der konkreten Beziehung wiederherstellen → authentifizierten Katalog abfragen → neuen vollständigen Request aus Katalog-, App-, Benutzer-, Sitzungs- und Request-ID bilden → privat und synchron vor dem Versenden speichern → genau ein `AppsCommand::Launch` → danach ausschließlich derselbe Receipt bei Antwortverlust/Refresh. `settle` prüft Geräte-ID und vollständigen Request. Der bestätigte Node-/Window-/Generationbeleg geht über den vorhandenen installierten P4-Öffner; ein gespeicherter Request allein ist kein Fensterbeleg. |
+| D07: `share_access_accounts_actions::read` | „Dieses Gerät“ → vorhandenes `share_exec_ui::ui_host_accounts` → AccountsPage im selben egui-Kontext → Hintergrundabfrage `daemon::access_accounts` → laufender Daemon mit Token/AccountList → `exec_account_choices` des tatsächlichen Workers → kanonischer `AccountChoices { helper, choices }` → dieselbe Page und Repaint. Ohne erreichbaren Worker bleibt der bisherige lokale Fallback erhalten. |
+| Indirekter D07-Administrationspfad | `ui_accounts` → vorhandener Renderer `page` → Refresh, CopyCommand oder ausdrückliche Applyaktion → `run` mit Busyguard → `exec_accounts_apply` und `PkexecGraphical` → Done oder NeedsAdministrator → bestehende Anzeige/CopyCommand → erneutes Einlesen. Setup, Allow, Disallow, Update und Remove behalten Bestätigung, konkrete Kontowerte, Fehler und Refresh. Ein Typimport darf keine Kontorechte erweitern. |
+| D08–D12: `share_routes_ui::device`, `show_peer` | Bereits gepollter `ShareRouteSnapshot` des Aufrufers → Anzeige von Snapshotfehler/IPCkürzung → Auswahl ausschließlich nach Geräte-ID und öffentlichem Schlüssel → Verbindungen mit Zustand, Grund und Remotegrenze → eigene Detailheader nach Peer und Connection-ID → rückwärts dargestellter Paarverlauf mit bestehendem Messhinweis. `service_routes` projiziert dieselbe gepinnte Identität aus Monitor-/Historienfakten; der Renderer liest nur und startet keine Messung oder Verbindung. |
+| D14–D16: Windows-`Platform::dispatch` | Installierter AppsFolder-Katalog mit Shell-Parsingname und Fingerprint → HostPlatformtarget und unveränderter LaunchRequest → COM-STA → aktuelles Shellitem mit erneutem Fingerprint → tatsächliche interaktive Benutzer-/Logonsitzung → Unlockprüfung → Shell-PIDL → unmittelbare Grantdeadlineprüfung → `SHELLEXECUTEINFOW` mit festem Verb, IDLIST/NOCLOSEPROCESS/NOASYNC/NO_UI → derselbe `ShellExecuteExW` → PIDLfreigabe und ggf. Prozesskorrelation → Handleabschluss → bestehender Ergebnisstatus. |
+| Indirekte Windows-Prozess-/P4-Kette | Nur bei erfolgreichem Shellaufruf und gültigem hProcess → `window_correlation::record` → tatsächlicher Nutzer-/Logonabgleich, Prozess-ID, Sitzung und Erstellzeit → dupliziertes Handle mit Dropabschluss → Request-/Dispatchgebundener gemeinsamer Handoff → `Correlations::take_started/confirm` → genaues noch lebendes Prozessfenster, Benutzerprüfung und Originalpintransfer. Fehlendes hProcess erzeugt keinen erfundenen Fensterbeleg; Ausgang bleibt zunächst `StartedWindowPending`. |
+| D21: `handshake_io_enforces_one_absolute_deadline_for_a_stalled_peer` | Bestehende Execserver-Fixture → bereits vorhandenes `share::io_deadline::run_until` → `tokio::time::timeout_at` auf derselben absoluten Instant → unveränderter Timeouttyp und unveränderter Meldungstext. Produktions-Exec verwendet seine bestehende aktive Routen-/Heartbeatzeit und unveränderte Grantdeadline; die Fixture wird nicht auf einen anderen Uhrvertrag umgebogen. |
+
+Die zugeschnittene Graphabfrage fand die zugehörigen Typ- und Dateiknoten.
+Die anschließenden konkreten Pfadabfragen zeigen die Verbindung
+`desktop_surface_actions → desktop_ops → run_transfer_job → TransferJob →
+requires_preview → folder_conflict_ui` sowie `share_access_accounts_actions →
+lock → AccountsPage → AccountChoices`. Die AST-Referenzkanten ersetzen
+keine Modulauflösung; die fehlerhaften Elternpfade wurden deshalb gegen die
+tatsächlichen Deklarationen gelesen. Der aktuelle Rootgraph wurde nur
+gelesen. Das Werkzeug meldet Skill 0.9.11 gegenüber Paket 0.9.17; alle drei
+Leseabfragen waren erfolgreich. Eine Installation ist hier nicht erlaubt.
+
+### Zusätzlicher eigener Fixturebefund
+
+In derselben Kontenkette ist ein weiterer konkreter Fehler belegt:
+`perm_task_gui_accounts_page_states` erwartet bei installiertem Dienst
+„Kontodienst eingerichtet (Version 0.5.183).“. `service_block` zeigt bereits
+die Statuszeile „Kontodienst eingerichtet.“ und die Version im vorhandenen
+aufklappbaren Abschnitt „Diagnose des Kontodiensts“. Die alte Assertion
+verfehlt die aktuelle Darstellung. Main hat die genaue Fixture zur
+Bearbeitung und ihren bestehenden Harness zur Lektüre freigegeben.
+
+Gewählte Erhaltung: zuerst die sichtbare Statuszeile prüfen, danach den
+vorhandenen Diagnoseheader mit dem bestehenden echten egui-Klickharness
+öffnen und die Version prüfen. Ein Klick auf die Diagnose muss weiterhin
+keine Administrationsaktion erzeugen. Sämtliche bisherigen Setup-/Update-/
+Entzugs-/Remove-/Sitzungswarnungs- und Fallbackbelege bleiben erhalten.
+Das Produktlayout und die Versionsangabe werden nicht verändert.
+
+### Entscheidungsrecherche und endgültiger Fixplan
+
+Die lokale mitgelieferte Windows-0.58-Primärquelle enthält unmittelbar vor
+`ShellExecuteExW` die Bedingung `#[cfg(feature = "Win32_System_Registry")]`
+(Zeilen 4588–4592). Beide architekturabhängigen `SHELLEXECUTEINFOW`-
+Definitionen und deren Defaultimplementierungen tragen dieselbe Bedingung
+(ab Zeilen 36140 und 36193). Der vorhandene Highlevelvertrag in
+`Cargo.toml` ist `windows = "0.58"`, `Cargo.lock` enthält dazu Windows
+0.58.0. Nur `windows-sys` aktiviert Registry bereits; dessen getrennte
+Features schalten die Highlevel-`windows`-API nicht frei.
+
+Am 2026-10-26 gelesene Microsoft-Primärdokumentation bestätigt den
+PIDL-/Prozesshandlevertrag: `SEE_MASK_IDLIST` bindet die Shell-ID-Liste,
+`SEE_MASK_NOCLOSEPROCESS` ermöglicht das zurückgegebene Prozesshandle, und
+der Aufrufer muss dieses schließen. Nicht jeder erfolgreiche Shellstart
+liefert ein Prozesshandle
+([SHELLEXECUTEINFOW](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/ns-shellapi-shellexecuteinfow)).
+Der Shellaufruf verwendet die In-/Outstruktur und benötigt den passenden
+COMkontext
+([ShellExecuteExW](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-shellexecuteexw)).
+Die versuchten docs.rs-Aufrufe für Windows 0.58 waren über das Webwerkzeug
+nicht erreichbar; die exakte Featurebedingung wurde aus der vollständigen
+lokal mitgelieferten Version gelesen.
+
+Entschieden sind kanonische gezielte Imports und genau ein Featureeintrag
+im bestehenden Windows-Targetblock. Ein neuer egui-Crateeintrag würde die
+bereits verwendete eframe-API unnötig duplizieren. Neue Moduldeklarationen
+oder breite Sichtbarkeitsänderungen sind nicht nötig. Der vorgeschlagene
+`ShellExecuteW`-Ersatz bietet den benötigten PIDL-/hProcess-In-/Outvertrag
+nicht und würde die bestehende Korrelation verlieren. Der bestehende
+absolute Deadlinehelper und die bisherigen Fixtureaussagen werden erhalten.
+
+| Planpunkt | Konkrete Änderung und Abhängigkeit | Prüfbares erwartetes Ergebnis |
+| --- | --- | --- |
+| E1 | `desktop_surface_actions.rs`: `crate::app::folder_conflict_ui` importieren und beide falschen Elternreferenzen auf den importierten Modulnamen beziehen. `desktop_surface_menu_ui.rs`: `crate::app::share_apps_ui` importieren und bestehenden Pickeraufruf darauf beziehen. Tatsächliche Modulregister, Admission und Picker sind gelesen. | Bestehende Transferqueue und derselbe Apppicker werden erreichbar; kein veränderter Funktionskörper über die Namensauflösung hinaus. |
+| E2 | `share_access_accounts_actions.rs`: kanonischen `exec_helper_protocol::AccountChoices` importieren. `share_routes_ui.rs`: bestehenden `eframe::egui`-Zugang importieren. Definitionen und vollständige Consumerkörper sind gelesen. | Bestehender Worker-/Fallbackaccountwert und alle fünf Administrationsaktionen bleiben erhalten; Routendiagnose behält konkrete Identitätsauswahl, Text, Zustand und Detail-IDs. |
+| E3 | `Cargo.toml`: ausschließlich `Win32_System_Registry` im vorhandenen `windows`-0.58-Featureblock ergänzen, mit kurzem konkretem Kommentar zum Shellstart. Primärquelle und unveränderter kompletter Windowsadapter sind gelesen. | Bestehende Shell-Ex-Typen/Funktion werden unter derselben Bibliotheksversion verfügbar; PIDL, Frist, Sitzungsbindung, Prozesskorrelation und Cleanup bleiben exakt erhalten. Kein Lock-/Versionswechsel. |
+| E4 | `exec_server_tests.rs`: vorhandenes `crate::share::io_deadline` importieren. Zusätzlich freigegebene `share_access_accounts_ui_tests.rs`: vorhandene Status-/Versionsassertion auf Statuszeile plus Diagnoseklick/-version abbilden. Helper und Harness sind gelesen. | Derselbe absolute Deadlinefall bleibt unverändert. Der vorhandene Kontenfall belegt Status und zugängliche Version sowie alle bisherigen Aktionen; keine Fallumbenennung oder ersatzlose Assertionentfernung. |
+| E5 | Gesamten eigenen Diff anschließend gegen b233e533 lesen, kanonische Module und zusätzliche Fixture erneut prüfen, statische Rustsyntax-/TOML-/Body-/Größenkontrolle und eigene Anti-Regressionsreview dokumentieren. | Ausschließlich E1–E4 unterscheiden sich; Produktkörper und alle verbleibenden Assertions sind erhalten, native Dateien unter 500 Zeilen/50 KiB. Die tatsächliche Bestätigung erfolgt durch Main im selben Remoteeinstieg. |
+
+Die zweite Lückenprüfung hat kanonischen Typ, Modulsichtbarkeit,
+vollständige Windowsfeaturebedingung, beide Deadlineverträge und den
+tatsächlichen Klickharness geklärt. Alle benötigten zusätzlichen Lesepfade
+und die eine zusätzliche Fixture-Schreibdatei sind ausdrücklich gewährt.
+Vor der Umsetzung bleibt keine entscheidungsrelevante Scopefrage offen.
+
+### Umsetzung und eigene anschließende Anti-Regressionsreview
+
+E1 bis E4 sind umgesetzt. E5 wurde danach durch denselben Autor als
+erneute Prüfung der gesamten oben ermittelten Anschlusskarte ausgeführt.
+Die vollständigen eigenen Quelländerungen wurden gegen den Kandidaten
+b233e533 gelesen. Die zusätzlichen integrierten Korrekturen von Main
+berühren die exklusive Schreibfläche dieses Autors nicht.
+
+| Prüffrage | Befund nach der Umsetzung |
+| --- | --- |
+| Erreichen Einfügen und Transfer dieselbe Admission? | Das Queuefeld und `Admission::new` beziehen beide das vorhandene `crate::app::folder_conflict_ui`. Der Kontrakt ist unverändert: Preview vor Jobausführung, FIFO im Flächenprozess, explizite Ordnerwahl, Cancel/Skip ohne Start und sichtbare Fehler. Die komplette Ausführungsfolge, Copy-/Moveentscheidung und Cutverbrauchsbedingung unterscheiden sich ausschließlich in der korrigierten Namensauflösung. |
+| Bleiben bestehende Datei-/Geräte-/Raum-/Desktopaktionen bestehen? | Alle Funktionsnamen, Menütexte, aktiven/gesperrten Aktionen, ausgewählten Elemente, konkreten Zielparameter, Monitor-/Heartbeataufrufe und DesktopOp-/OpenRequestvarianten sind erhalten. NoReplace, Namensprüfung, Wiederherstellbarkeit und Papierkorbfehlerpfad des verbundenen Backends sind unverändert. |
+| Öffnet die Programmhandlung denselben gerätegebundenen Picker? | `device_menu` ruft den vorhandenen `app::share_apps_ui::open_surface` mit exakt demselben Kontext, Ziel und Namen auf. Direct und Room behalten ihre konkrete Beziehung; Deduplizierung, gespeicherter Auftrag, einmaliger Launch, Receipt-only-Retry, Node-/Request-/Window-/Generationprüfung und bestehender P4-Öffner bleiben unverändert. Der Pfadwechsel fügt keinen Hoststart und keinen neuen Prozess hinzu. |
+| Bleiben Kontenquelle und Administratorrechte erhalten? | Der importierte `AccountChoices` ist genau der bereits vom Renderer und Daemon verwendete Typ. Workerabfrage, Token, Fristen und lokaler Fallback bleiben erhalten. Die fünf Aktionen Setup, Allow, Disallow, Update und Remove behalten Busyguard, ausdrückliche Benutzeraktion, `PkexecGraphical`, Ergebnis-/Fehleranzeige und erneutes Lesen. Keine Kontoberechtigung oder Sichtbarkeit wird erweitert. |
+| Belegt die angepasste Kontenfixture weiterhin Zustand und Version? | Der existierende Fall prüft die tatsächliche Statuszeile, öffnet die sichtbare „Diagnose des Kontodiensts“, erwartet dabei keine PageAction und prüft danach dieselbe Fixtureversion 0.5.183. Die übrigen Assertions für Verfügbarkeit, Sitzungshinweis, Setup, Update, Entzug, Remove und abgelehnte Anmeldung sind unverändert. Die separate Administrator-Fallback-/Kopierfixture bleibt unverändert. |
+| Bleibt die Routendiagnose eine konkrete lesende Ansicht? | Ein Import liefert dieselben vorhandenen egui-Typen. Der vollständige Renderer bleibt bytegleich: Selektion nach Geräte-ID und öffentlichem Schlüssel, Fehler-/Truncatedanzeige, alle Verbindungen, Remotegrenze ohne Doppelanzeige, bestehende Detail-IDs und unveränderter Messverlauf. Keine Verbindungs- oder Messaktion wurde hinzugefügt. |
+| Bleibt der Windows-Shellstart derselbe? | Nur die benötigte Featurefreigabe im bestehenden Windows-0.58-Block ist ergänzt. Der komplette Shelladapter ist bytegleich, einschließlich Shellitem-/Fingerprintprüfung, tatsächlicher interaktiver Sitzung, Unlockbedingung, PIDL, unmittelbarer Grantdeadline, festem Verb, Masken, `ShellExecuteExW`, PIDLfreigabe und Handleabschluss. Katalog, Sessionadapter und Prozesskorrelation sind ebenfalls unverändert. |
+| Bleiben tatsächliche Prozessbesitzer und Fensterbelege erhalten? | Die Erfolgskorrelation erfolgt weiterhin vor dem Schließen des Originalhandles. Das duplizierte Handle behält seinen eigenen Dropabschluss; Sitzungs-/Nutzer-/Erstellzeitbindung, lebender Prozessbeleg, konkreter Request/Dispatch und P4-Originalpin bleiben erhalten. Fehlender Prozess- oder Fensterbeleg wird nicht durch eine PID-/Namenssuche ersetzt. |
+| Bleibt die absolute Execdeadlinefixture erhalten? | Ausschließlich der vorhandene Helperimport ist ergänzt. Der gesamte Fallkörper einschließlich 20-ms-Instant, pending-Future, Timeoutkind und exaktem Text „stalled handshake“ ist bytegleich. Produktive aktive Routenzeit, Heartbeatbudget, Cancel-/Acklogik und Grantdeadline sind unverändert. |
+| Bleiben Bibliotheks-/Speicherverträge erhalten? | Der TOMLvergleich zeigt ausschließlich ein zusätzliches Feature bei `target.cfg(windows).dependencies.windows`. Crateversion, Paketversion, alle bisherigen Features und sämtliche übrigen Manifestwerte sind gleich. `Cargo.lock` ist bytegleich. Request-/Receiptmodelle, private Requestdateien und Protokollformen ändern sich nicht. |
+
+Die statische Syntaxprüfung verwendet den bereits installierten
+Tree-sitter-Rustparser; für alle bearbeiteten Rustdateien gibt es keine
+Fehlerknoten, und sämtliche Funktionsnamen bleiben erhalten. Ein
+vollständiger Quellvergleich ergibt nach Rücknahme genau der geplanten
+Import-/Pfadänderungen wieder b233e533. Für die Kontenfixture ist
+ausschließlich der ausdrücklich geplante Ersatz der einen alten
+Inlineassertion durch Status-, Diagnoseklick- und Versionsnachweis
+verschieden; jede übrige Zeile bleibt erhalten. Die Execfixture unterscheidet
+sich ausschließlich im Import.
+
+Der statische TOMLparser bestätigt das zusätzliche Feature im richtigen
+Target und derselben Highlevelbibliothek; sämtliche verbleibenden
+Manifestwerte sind identisch. Die gelesenen verbundenen Quellen für
+Admission, Picker, Requestjobs/-speicher, Kontenrenderer und Harness,
+Routenprojektion, Execserver/Deadlinehelper sowie Windowsplattform,
+Katalog, Sitzung und beide Korrelationsstufen sind bytegleich zu b233e533.
+`git diff --check` hat im eigenen Diff keinen Befund geliefert.
+Keiner dieser Nachweise führt Rustcode, Produktaktionen oder Tests aus.
+
+Die eigene abschließende Review belegt keinen weiteren Fehler in der
+ermittelten Kette. Syntaxstruktur und Quellidentität beweisen weder
+vollständige Typprüfung noch reale Shell-/Rechte-/Geräte-/UIausführung.
+Die erneute praktische Bestätigung gehört weiterhin Main.
+
+### Dateiübersicht und Größen
+
+Es wurden keine Dateien neu angelegt. Geändert wurden ausschließlich
+der bestehende Bericht, der bestehende Windowsfeatureblock in
+`native/Cargo.toml` und die folgenden explizit freigegebenen Rustdateien:
+
+| Datei unter `native/src/` | Zeilen | Bytes |
+| --- | ---: | ---: |
+| `app/core/desktop_surface_actions.rs` | 298 | 10272 |
+| `app/core/desktop_surface_menu_ui.rs` | 425 | 14343 |
+| `app/core/share_access_accounts_actions.rs` | 111 | 4058 |
+| `app/core/share_access_accounts_ui_tests.rs` | 201 | 7392 |
+| `app/core/share_routes_ui.rs` | 75 | 2713 |
+| `share/core/exec_server_tests.rs` | 242 | 7513 |
+
+Alle bearbeiteten Rustmodule bleiben unter 500 Zeilen und unter 50 KiB
+mit üblicher Zeilenaufteilung. Es gibt keine Verdichtung oder Gateausnahme.
+Die ergänzte Schreibfreigabe betrifft ausschließlich die bereits vorhandene
+Kontenfixture; kein zusätzlicher Produkt-Schreibpfad wurde benötigt.
+
+### Vorhandene Fälle und Registrierung durch Main
+
+Die konkreten bestehenden Fälle für den gleichen Remoteeinstieg wurden
+Main gemeldet:
+
+- `handshake_io_enforces_one_absolute_deadline_for_a_stalled_peer`
+- `perm_task_gui_accounts_page_states`
+- `perm_task_gui_setup_without_pkexec_shows_sudo_command`
+- `desktop_task_desktop_ops_rename_trash_copy`
+
+Sie bestätigen die zugewiesene Deadlinefixture, die Kontenansicht samt
+Status-/Versions-/Administrationsbelegen, den bestehenden fehlenden
+Administratorfrontend-Fallback und die verbundenen Desktopdateiaktionen.
+Es gibt keine neuen Testnamen oder umbenannten Fälle. Die übrigen
+Execserverfälle wurden weder verändert noch als zusätzliche manuelle
+Testkampagne angefordert.
+
+Der vorhandene R12-Anschluss bleibt im gelesenen Manifest registriert:
+
+- `batches_task_device_navigation_surface_draws_picker_and_p4_errors`
+- `batches_task_device_navigation_surface_keeps_direct_room_and_output_contexts_separate`
+- `batches_task_device_navigation_confirmed_receipt_keeps_identity_and_rejects_invalid_bindings`
+
+Der Windowsfeaturefix benötigt außerdem die ohnehin vorhandene
+Windowskompilierung desselben Remoteeinstiegs. Ein bestandener Live-
+Shellstart, tatsächlicher Kontenwechsel oder beobachtetes Fernfenster wird
+daraus nicht abgeleitet. Für die reine Importkorrektur der Routendiagnose
+wurde kein neuer künstlicher Test geschrieben; unveränderter Renderer
+und die bestehende Remote-Typprüfung bilden hier die konkrete Grenze.
+
+### Vollständige Leseübersicht dieser Fortsetzung
+
+Gelesen wurden sämtliche geänderten Dateien der obigen Übersicht,
+`native/Cargo.toml` und der vorhandene Bericht. Zusätzlich wurden folgende
+konkrete Pfade vollständig oder an den ausdrücklich betroffenen
+Definitionen, Aufrufern und Registrierungen gelesen:
+
+- `/tmp/smartexplorer-final-review-user-contract.txt`, die aktuelle Scope-Datei und `/tmp/smartexplorer-rv1-40368746815/device-navigation-errors.json`.
+- `/tmp/smartexplorer-rv1-40368746815/primary/windows-0.58-shell.rs`: exakte versionsgebundene cfg-/Typ-/Funktionsdefinitionen.
+- `native/Cargo.lock`: gebundene Windowsversion und unveränderte Datei.
+- `native/review-task-manifest.json`: bestehender R12-Anschluss und konkreter Registrierungsbedarf.
+- `native/src/app/mod.rs`, `native/src/app/desktop_modules.rs`, `native/src/app/core/prelude.rs`: tatsächliche App-/Desktopmodulgrenzen und vorhandener egui-Zugang.
+- `native/src/app/core/desktop_surface_view_model.rs`: konkrete Tile-/Dateiauswahl, Benutzerdesktop, Layout, Heartbeat und Nachrichten.
+- `native/src/app/core/folder_conflict_ui.rs`: vollständige Admission, Vorschau, Entscheidungen und Abbruch-/Freigabevertrag.
+- `native/src/app/core/share_apps_ui.rs`, `native/src/app/core/share_apps_jobs.rs`, `native/src/app/core/share_apps_store.rs`: vollständiger gerätegebundener Picker, Requestjobs, Receipt-/P4-Bindung und private Wiederherstellung.
+- `native/src/app/core/share_exec_ui.rs`, `native/src/app/core/share_access_accounts_ui.rs`: vorhandener Konteneinstieg, vollständiger Renderer, Accounttyp und fünf Administrationsaktionen.
+- `native/src/app/core/share_access_ui_tests.rs`: vollständiger bereits vorhandener Klick-/Captureharness.
+- `native/src/daemon/os/shared/access_ipc.rs`: existierender AccountList-Client/-Server, Token und Fristen.
+- `native/src/desktop/os/mod.rs`, `native/src/desktop/os/shared/desktop_ops.rs`, `native/src/desktop/os/shared/desktop_ops_tests.rs`: kanonische Registrierung, vollständiger lokaler Job-/Dateiaktionspfad und bestehende Fixture.
+- `native/src/share/mod.rs`, `native/src/share/core/exec_helper_protocol.rs`, `native/src/share/core/service_routes.rs`: tatsächliche Modul-/Typexporte, kanonischer Accounttyp und vollständige Routenprojektion/-darstellungstexte.
+- `native/src/share/core/exec_server.rs`, `native/src/share/core/io_deadline.rs`, `native/src/share/core/route_protocol.rs`: Fixtureeinbindung, absoluter Helper und bestehende aktive Produktionsdeadline.
+- `native/src/apps/mod.rs`, `native/src/apps/core/model.rs`, `native/src/apps/os/shared/platform.rs`: vorhandene Exporte, Requests, Session-/Windowfelder, Ergebnistypen und HostPlatformvertrag.
+- `native/src/apps/os/windows/mod.rs`, `native/src/apps/os/windows/catalog.rs`, `native/src/apps/os/windows/launch.rs`, `native/src/apps/os/windows/session.rs`, `native/src/apps/os/windows/window_correlation.rs`: vollständige betroffene Windowsadapter und tatsächlicher Start-/Besitzweg.
+- `native/src/apps/os/shared/window_correlation.rs`: vollständiger Request-/Dispatchhandoff, Lebendigkeit und Originalfenster-/Pinvertrag.
+- `docs/ARCHITEKTUR.md`, `docs/oberflaechen/desktop-launcher.md`, `docs/oberflaechen/fernzugriff.md`: betroffene aktuelle Einstiege und Oberflächenverträge.
+- `graphify-out/graph.json`: ausdrücklich freigegebene gezielte Leseabfrage und die beiden beschriebenen Pfadabfragen.
+- `/root/.codex/skills/graphify/SKILL.md` und dessen `references/query.md`: vorhandene Leseabfrage, keine Extraktion oder Installation.
+
+Die angewandten zentralen Arbeitsanweisungen dieses laufenden Auftrags
+wurden wiederverwendet. Die zusätzlichen Pfade wurden jeweils vor der
+Lektüre konkret bei Main angefordert und explizit freigegeben; eine
+allgemeine Repositoryerkundung wurde nicht ausgeführt.
+
+### Entscheidungen, Abweichung und verbleibende Grenzen
+
+Die vollständige eigene Funktionsauflistung, Anschlusskarte, vorherige
+Planung, Umsetzung und anschließende Anti-Regressionsreview sind erledigt.
+Der einzige zusätzliche Funktionsbefund ist die veraltete Kontenfixture;
+sie wurde nach konkreter Scopefreigabe mit erhaltenem Zustands- und
+Versionsnachweis korrigiert. Alle zugewiesenen D-Diagnosen haben eine
+konkrete Quellkorrektur. Es bleibt keine erforderliche Produktänderung
+oder konkrete Scopeabhängigkeit offen.
+
+Main besitzt die Registrierung der gemeldeten vorhandenen Fälle und die
+praktische Bestätigung im gleichen gemeinsamen Remoteeinstieg sowie
+Integration, Rootgraphrefresh, Commit/Push und terminalen Release.
+Dieser Autor hat keine Unteragenten, lokalen Builds, Compiler, Formatter,
+Tests, Produktaktionen, Server, Installationen, Hostaufrufe, Lockauflösung,
+Gitmutationen, Graphupdates oder Releases ausgeführt. Die gezielten
+Graphabfragen und statischen Syntax-/TOML-/Quellvergleiche sind keine
+Produkt- oder Testausführung. Reale Windows-Shell-/Konten-/Geräte- und
+Desktopausführung bleibt hier ungeprüft; ein erfolgreicher Remotelauf
+wird nicht behauptet.

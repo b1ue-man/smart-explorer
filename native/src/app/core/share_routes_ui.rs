@@ -1,5 +1,6 @@
 //! Device-page route section. The caller supplies its polled daemon snapshot.
 use crate::share::{DeviceRouteDiagnostics, ShareRouteSnapshot};
+use eframe::egui;
 
 /// Call on the existing device page with the complete pinned identity. A name
 /// or a device id without its public key must never select another peer's facts.

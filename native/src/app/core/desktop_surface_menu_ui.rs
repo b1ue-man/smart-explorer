@@ -25,6 +25,7 @@ use super::desktop_surface_host::{
 };
 use super::desktop_surface_rename_ui::Rename;
 use super::desktop_surface_view_model::{ItemRef, ViewModel};
+use crate::app::share_apps_ui;
 use crate::desktop::core::items::{self, DesktopFile};
 use crate::desktop::core::layout::{ItemId, LayoutOp};
 use crate::desktop::core::state::Platform;
@@ -142,7 +143,7 @@ fn device_menu(ui: &mut egui::Ui, tile: &DeviceTile, cx: &mut Cx<'_>) {
         chosen = Some(open_target::device_page(tile));
     }
     if ui.button("Programme auf diesem Gerät …").clicked() {
-        super::share_apps_ui::open_surface(ui.ctx(), tile.target.clone(), tile.name.clone());
+        share_apps_ui::open_surface(ui.ctx(), tile.target.clone(), tile.name.clone());
         ui.close_menu();
     }
     if let Some(request) = chosen {
