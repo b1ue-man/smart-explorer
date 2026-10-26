@@ -1,5 +1,5 @@
 //! Unprivileged machine endpoint. The independent local broker owns every effect.
-use super::{client::GatewayClient, denied, installation, now};
+use super::{denied, installation, now};
 use crate::{
     login::{
         core::{
@@ -9,7 +9,7 @@ use crate::{
             },
             gateway_wire as wire,
             machine::MachineIdentity,
-            model::{Challenge, Operation, Policy, SignedRequest, VERSION},
+            model::{Operation, Policy, SignedRequest, VERSION},
             wire::Reply,
         },
         os::platform,
@@ -27,10 +27,14 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::{
-    sync::{mpsc, oneshot, watch, Semaphore},
-    task::{JoinHandle, JoinSet},
+    sync::{watch, Semaphore},
+    task::JoinSet,
 };
 use zeroize::Zeroizing;
+
+#[path = "gateway_worker.rs"]
+mod worker;
+use worker::BrokerWorker;
 const HANDSHAKE: Duration = Duration::from_secs(30);
 const BROKER_IDLE: Duration = Duration::from_secs(5);
 // The existing Share endpoint permits 64 pending application handshakes. The
@@ -401,108 +405,4 @@ async fn handle(
     transport::close(&connection);
     worker.finish().await;
     result
-}
-struct Work {
-    request: SignedRequest,
-    answer: oneshot::Sender<
-        io::Result<(
-            Reply,
-            Option<crate::screen::core::capture_image::CapturedImage>,
-        )>,
-    >,
-}
-struct BrokerWorker {
-    commands: Option<mpsc::Sender<Work>>,
-    ready: Option<
-        oneshot::Receiver<
-            io::Result<(
-                Challenge,
-                Arc<crate::screen::core::image_admission::ImageAdmission>,
-            )>,
-        >,
-    >,
-    worker: Option<JoinHandle<()>>,
-    images: Option<Arc<crate::screen::core::image_admission::ImageAdmission>>,
-}
-impl BrokerWorker {
-    fn start(peer: String, user: String) -> Self {
-        let (commands, mut input) = mpsc::channel::<Work>(1);
-        let (ready, initial) = oneshot::channel();
-        let worker = tokio::task::spawn_blocking(move || {
-            let mut client = match GatewayClient::connect(&peer, &user) {
-                Ok(client) => client,
-                Err(error) => {
-                    let _ = ready.send(Err(error));
-                    return;
-                }
-            };
-            if ready
-                .send(Ok((client.challenge().clone(), client.images())))
-                .is_err()
-            {
-                return;
-            }
-            while let Some(work) = input.blocking_recv() {
-                // Abandoned queued work must not become a new privileged IPC
-                // request. An operation already handed to the broker is in flight.
-                if input.is_closed() || work.answer.is_closed() {
-                    break;
-                }
-                let answer = client.send(work.request);
-                let end = answer.is_err();
-                if work.answer.send(answer).is_err() || end {
-                    break;
-                }
-            }
-            // Dropping the only IPC client ends capture/input at the independent broker.
-        });
-        Self {
-            commands: Some(commands),
-            ready: Some(initial),
-            worker: Some(worker),
-            images: None,
-        }
-    }
-    async fn ready(&mut self) -> io::Result<Challenge> {
-        let (challenge, images) = self
-            .ready
-            .take()
-            .ok_or_else(|| denied("broker startup challenge was already consumed"))?
-            .await
-            .map_err(io::Error::other)??;
-        self.images = Some(images);
-        Ok(challenge)
-    }
-    async fn ask(
-        &mut self,
-        request: SignedRequest,
-    ) -> io::Result<(
-        Reply,
-        Option<crate::screen::core::capture_image::CapturedImage>,
-    )> {
-        let (answer, received) = oneshot::channel();
-        self.commands
-            .as_ref()
-            .ok_or_else(|| denied("local broker bridge is closed"))?
-            .send(Work { request, answer })
-            .await
-            .map_err(|_| io::Error::other("local broker bridge stopped"))?;
-        received.await.map_err(io::Error::other)?
-    }
-    fn images(&self) -> io::Result<Arc<crate::screen::core::image_admission::ImageAdmission>> {
-        self.images
-            .clone()
-            .ok_or_else(|| denied("broker image admission is unavailable"))
-    }
-    async fn finish(mut self) {
-        self.commands.take();
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.await;
-        }
-    }
-}
-impl Drop for BrokerWorker {
-    fn drop(&mut self) {
-        self.commands.take();
-    }
 }
