@@ -19,6 +19,7 @@ object ScreenTexts {
         "streaming" -> R.string.screen_state_streaming
         "secure_desktop" -> R.string.screen_state_secure_desktop
         "window_minimized" -> R.string.screen_state_window_minimized
+        "viewer_hidden" -> R.string.screen_state_viewer_hidden
         "host_locked" -> R.string.screen_state_host_locked
         "session_inactive" -> R.string.screen_state_session_inactive
         "no_display" -> R.string.screen_state_no_display

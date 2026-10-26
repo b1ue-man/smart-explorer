@@ -5,6 +5,7 @@ state:starting
 state:streaming
 state:secure_desktop
 state:window_minimized
+state:viewer_hidden
 state:host_locked
 state:session_inactive
 state:no_display

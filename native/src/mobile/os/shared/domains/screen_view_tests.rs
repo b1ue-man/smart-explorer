@@ -263,6 +263,7 @@ fn all_keys() -> String {
         Streaming,
         SecureDesktop,
         WindowMinimized,
+        ViewerHidden,
         HostLocked,
         SessionInactive,
         NoDisplay,
@@ -272,8 +273,8 @@ fn all_keys() -> String {
     // A new state breaks this match and with it the test (add its text).
     states.iter().for_each(|state| match state {
         Connecting | WaitingForApproval | WaitingForPortal | Starting | Streaming
-        | SecureDesktop | WindowMinimized | HostLocked | SessionInactive | NoDisplay | Ended
-        | Unknown => {}
+        | SecureDesktop | WindowMinimized | ViewerHidden | HostLocked | SessionInactive
+        | NoDisplay | Ended | Unknown => {}
     });
     let reasons = [
         EndReason::ViewerClosed,
