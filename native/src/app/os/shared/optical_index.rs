@@ -317,11 +317,17 @@ fn paths_hash(index: &FolderIndex, root: &str) -> String {
 }
 
 #[cfg(test)]
+#[path = "../../../source_media/fixture_root.rs"]
+mod fixture_root;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
+
     #[test]
     fn batches_task_optical_index_requires_proof_reuses_and_invalidates() {
-        let fixture = tempfile::tempdir().unwrap();
+        let fixture = fixture_root::new().unwrap();
         let root = fixture.path().join("disc");
         std::fs::create_dir(&root).unwrap();
         std::fs::create_dir(root.join("actual")).unwrap();
@@ -376,12 +382,15 @@ mod tests {
             verified.iter().any(|path| path == &retained),
             "startup verification rebuilt the non-optical tree"
         );
+        let persisted = FolderIndex::load(&persist).unwrap();
         assert!(
-            FolderIndex::load(&persist)
-                .unwrap()
-                .iter()
-                .any(|path| path == &retained),
+            persisted.iter().any(|path| path == &retained),
             "startup wrote a partial index as the full index"
+        );
+        assert_eq!(
+            persisted.iter().collect::<BTreeSet<_>>(),
+            verified.iter().collect::<BTreeSet<_>>(),
+            "startup did not persist the complete verified index"
         );
         let before = std::fs::read(&persist).unwrap();
         cancel.store(true, Ordering::Release);
