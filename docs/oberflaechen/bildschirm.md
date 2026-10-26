@@ -204,11 +204,23 @@ Stand SCR-M8 (U27). Der Host läuft im Dienst `A/screen/ScreenHostService.kt`. D
 | Darstellungsbeleg | Desktop `screen_presented.rs` und Android `ScreenPresentedFrame` bestätigen die tatsächlich konsumierte GOP-/Frame-/Epochenidentität. Empfang allein schaltet Eingabe nicht frei. Familienansichten binden zusätzlich die Layoutrevision. |
 | Größen- und Speicherangebot | `frame_budget.rs` und `ScreenFrameLimits.kt` binden v2-Grenzen vor Paket-, Queue-, Pull- und Decoderallokationen. Full und Preview teilen einen sitzungseigenen Skalierungsbesitzer; Zwischenpuffer und gehaltene Ausgaben werden vor der Allokation gegen das angenommene Budget zugelassen. Die statische Bilanz gilt für lebende Produktpuffer; Prozess-RSS, Codec-/Treiberpuffer und GC sind kein Bestandteil dieser Zusage. Speicher- und Geräteverhalten wurden noch nicht ausgeführt. |
 
-Bei der derzeitigen v2-Reserve von 24 Bildäquivalenten und höchstens 512 MiB
-Arbeitsbudget liegt das maximale Pixelangebot bei 5.592.405 Pixeln. Ein
-3840×2160-Bild wird im v2-Weg deshalb verkleinert. Die getrennten Legacy-/RAW-
-Grenzen bleiben erhalten; daraus folgt keine allgemeine Auflösungsparität.
-Diese praktische Grenze ist Bestandteil des anschließenden Gesamtreviews.
+Die v2-Klasse erlaubt im aktuellen Quellstand bis zu 864 MiB bei unveränderter
+Reserve von 24 Bildäquivalenten. Windows und Linux begrenzen neue Zusagen durch
+physische, Commit- und Adressraumfakten sowie die bereits gezählten Sitzungen.
+Das ermöglicht ein natives 3840×2160-Angebot bei ausreichenden Ressourcen;
+fehlende Fakten, alte Gegenstellen und kleinere Android-Angebote erlauben keine
+pauschale Erweiterung. Legacy-/RAW-Grenzen bleiben bei 512 MiB. Eine Zusage ist
+interne Ressourcenrechnung, keine physische Reservierung gegen fremde Prozesse.
+
+Die aktuelle Renderergrenze verwendet konkrete `RendererOwner`-/`RenderSlot`-
+Besitzer für CPU-/YUV-Uploads, Renderflächen und ausstehendes Retirement. Der
+Glow-F3-Quellkandidat gibt fehlgeschlagene Uploads und Draws bis zur
+Präsentationsentscheidung weiter. Der statische Nachreview hat zusätzlich eine
+noch zu korrigierende Weiterverwendung alter Login-Eingabebelege nach einem
+Rendererfehler festgestellt. Der Capture-Batchreview belegt Fehler an
+Cursorzulassung, SHM-Import, Worker-Ausgabesperre und Formatwechsel; deren
+Korrektur läuft im selben Gesamtbatch. Dieser Dokumentstand bestätigt weder
+die vollständige Speicherbilanz noch einen ausgeführten 4K-Nachweis.
 
 CLI und MCP erhalten Metadaten, Quellen, Standbilder und Steuerbefehle über
 bestehende Screen-Verträge. Livebilder werden von Desktop-/Androidrenderern
