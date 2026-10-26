@@ -131,7 +131,8 @@ Die bestehende vollständige 512-MiB-Legacyklasse bleibt als Bestandsvertrag erh
 
 M2 und M3 hängen von M1 ab; M4 hängt von M3 ab; M5 erfolgt nach dem vollständigen
 Fix. Die zusätzliche Freigabe für alle genannten privaten Grenzen wurde bei Main
-eingeholt. Die geänderten Rustdateien bleiben unter 500 Zeilen und 50 KiB.
+eingeholt. Der Plan verlangt Rustdateien unter 500 Zeilen und 50 KiB nach
+üblicher Formatierung; die nachträgliche Strukturkorrektur ist unten dokumentiert.
 
 Korrektur des Plans aus der anschließenden eigenen Verbraucheraufnahme, vor der
 darauf gestützten Anpassung: Die geometrische Vorschaupolitik gilt ausschließlich
@@ -400,7 +401,9 @@ Kandidatengraphen, statische Text-/AST-Prüfung und Dateiedits. Für die AST-Pr�
 wurden die bereits installierten Rust-/Kotlin-Tree-sitter-Grammatiken des
 Graphify-Werkzeuginterpreters benutzt; es gab keine Installation und keinen
 Graphumbau. `git diff --check` meldet für die eigene Schreibfläche keinen Fehler.
-Die geänderten Rustdateien bleiben unter 500 Zeilen und 50 KiB.
+Die damalige Größenprüfung zählte den noch dichten Quellstand. Ihr unvollständiger
+Strukturnachweis wird durch die unten dokumentierte Fortsetzung nach der
+tatsächlichen Remoteformatierung ersetzt.
 Main übernimmt den vorgeschriebenen vollständigen Root-Graphrefresh nach der
 Integration; dieser Fixautor verändert die generierten Graphdateien nicht.
 
@@ -605,3 +608,168 @@ Scope-Datei; fremde Änderungen im gemeinsamen Gitstatus wurden nicht übernomme
 Die beiden ursprünglichen Befundberichte und `review-gesamt.md` im Main-Baum
 wurden ausschließlich gelesen beziehungsweise gezielt nach den zugewiesenen IDs
 durchsucht. Kein Produktcode und kein Bericht im Main-Baum wurde verändert.
+
+## Fortsetzung nach Remote-Vorbereitung 40332971455: fachliche Modulgrößen
+
+Diese Fortsetzung gehört zu demselben Autorzyklus. Ausgang ist der bereits
+übernommene, an den Kandidaten gebundene Patch `10988167`. Die Remotevorbereitung
+hat die Größen nach normaler Formatierung festgestellt; vor einer Kompilierung
+scheiterte der Vorbereitungsschritt. Compiler- und Gerätejobs wurden übersprungen.
+Die frühere Größenangabe dieses Berichts bezog sich auf den damaligen dichten
+Quelltext und belegte die geforderte Größe nach üblicher Formatierung nicht.
+Diese Lücke wird durch fachliche Aufteilung geschlossen, ohne Zeilenverdichtung.
+
+### Erstplan und konkret belegter Bestand
+
+Ergebnisauftrag: Die sechs benannten Verantwortlichkeiten und ihre neuen Module
+bleiben jeweils unter 500 Zeilen und 50 KiB. Verhalten, Besitzer, Berechtigungen,
+Wireformate und sämtliche exakten Fallnamen bleiben erhalten. Main besitzt Git,
+Manifest, Rootgraph und dieselbe spätere Remote-Suite. Dieser Autor startet keine
+Compiler, Formatter, Tests, Server oder App-/Hostprozesse und keine Unteragenten.
+
+Die Dateien haben am formatierten Ausgang 524 (`screen_decode_thread.rs`),
+598 (`host_session.rs`), 580 (`bridge_channels.rs`), 648 (`bridge_source.rs`),
+597 (`viewer_sink.rs`) und 573 Zeilen (gemeinsame Budgetfixture). Die bytegrößten
+beiden dieser Quellen haben 25 886 und 23 232 Bytes; das Problem ist hier die
+Zeilenzahl. Konkrete Quellen: die sechs Dateien sowie die gezielt auf diese
+Dateien eingegrenzte Größeninventur der Vorbereitung. Keine Quellfunktion wird
+als neuer funktionaler Fehler bewertet; fehlerhaft ist ihre Modulabgrenzung nach
+dem durchgesetzten Größenvertrag.
+
+Die Stufe-eins-Entscheidung trennt Ereignissteuerung von Bildverarbeitung,
+Sitzungslauf von Steuerframeverarbeitung, Kanalregistrierung vom geschützten
+Kanalzustand, rohe Androidbilder von ihrer Codierung und Pulltransport von
+Rekonstruktion. Ressourcenfelder und ihre Deklarations-/Dropreihenfolge bleiben
+in ihren bisherigen Typen. Die Budgetfälle werden nach Capture-Neustart und
+Transport geteilt; ihre bisherigen registrierten Testeinstiege bleiben erhalten.
+
+### Recherche und finaler Strukturplan vor der Umsetzung
+
+Die bestehenden Untermodulmuster `host_input_release.rs` und
+`host_visibility.rs` benutzen einen privaten `#[path]`-Anschluss und
+`use super::*`. Die [Rust-Modulreferenz](https://doc.rust-lang.org/reference/items/modules.html)
+und [Rust-Sichtbarkeitsreferenz](https://doc.rust-lang.org/reference/visibility-and-privacy.html),
+abgerufen am 2026-10-26, bestätigen die relative Quelldateiauflösung, Zugriff der
+Kindmodule auf private Elternfelder und `pub(super)` als Grenze für zurückgerufene
+Methoden. Es wird keine Abhängigkeit und kein öffentlicher Modulpfad ergänzt.
+
+Die zweite Lückenrecherche prüft die zurücklaufenden Methodenaufrufe, vorhandene
+Testmodule, `super`-Pfade und unveränderte Zugriffsstufen. Reexporte erhalten die
+vorhandenen Namen. Die konkrete Umsetzung nutzt vollständige Methodenblöcke;
+es werden keine Besitzfelder in Hilfsobjekte umgehängt und keine Sperren geteilt.
+
+| Strukturschritt | Zielmodule und konkrete Grenze | Erwarteter statischer Beleg |
+|---|---|---|
+| S1 Desktopdecode | `screen_decode_thread.rs` behält Decoderzustand, Record-/Framezuordnung und Ausgabe. `screen_decode_events.rs` übernimmt `on_event`, `connection_lost` und Hostereignisse. | Familien-/Accepted-/Kontrollereignisse erreichen dieselben Methoden. Decoder und ausstehende Bilder enden weiterhin vor dem Sitzungslease; Darstellung und Verlustfreiheit behalten ihre Identitäten. |
+| S2 Hoststeuerung | `host_session.rs` behält Lauf, Produktion, Berichte und Abschluss. `host_session_control.rs` übernimmt Steuerframes, Eingabe und Kontrollfreigabe. | Unveränderte Rechte-, Sichtbarkeits-, Referenz-, Snapshot-, Pending-, Rückfrage- und Releasebedingungen; die abschließende Freigabe erreicht dieselbe Methode. |
+| S3 Androidkanal | `bridge_channels.rs` behält Typen und Prozessregister. `bridge_channel_state.rs` übernimmt die Methoden des bestehenden `Channel`. | Genau dieselbe Mutex-/Condvargrenze schützt Epochwechsel, Queuebilder, Grants, Aktivitätsquittung, Ende und Capturebeginn. |
+| S4 Androidquelle | `bridge_source.rs` behält Source-/Stage-Vertrag, Aktivität und Drop. `bridge_source_input.rs` übernimmt Still-Anforderung und RAW-Decodierung; `bridge_source_capture.rs` übernimmt Tiles/H.264. | Gleiche Epoch-/Generationswahl, native Referenzfreigabe, Grants, Paaridentität, Fristen, Fallback und Zustimmung; der öffentliche `decode_still`-Name bleibt erreichbar. |
+| S5 Androidviewer | `viewer_sink.rs` behält GOP-Rekonstruktion und Typen. `viewer_sink_queue.rs` übernimmt den bestehenden `PullQueue`-Algorithmus. | Lokale Legacygrenzen, vollständige GOP-/Frameidentität, Stau, Backpressure, Pullpuffer und Abschluss bleiben unverändert. Ein zusätzliches Decode-Modul ist für diese fachliche Trennung nicht erforderlich. |
+| S6 Budgetfälle | Die gemeinsame Fixture behält Transport-/Policyfälle und ihre registrierten Einstiege. `batches_android_capture_restart_task_tests.rs` übernimmt Capture-Neustart-, Snapshot- und Queue-/Epochlogik. | Die bisherigen vollständigen Testpfade und Fallnamen bleiben durch schlanke Aufrufe erhalten; alle bisherigen Fallkörper werden genau einmal aufgerufen. |
+
+S1–S6 sind unabhängig schreibbar und werden sequenziell durch diesen Autor
+umgesetzt. Danach folgen die eigene vollständige statische Nachreview, ein
+AST-Vergleich der verschobenen Körper, Prüfung der Sichtbarkeits-/Modulanschlüsse,
+der unveränderten Testeinstiege sowie normale Zeilen-/Bytegrößen. Diese Erwartungen
+autorisieren keinen lokalen Compiler-, Formatter- oder Testlauf.
+
+### Umsetzung und eigene anschließende Anti-Regressionsreview dieser Fortsetzung
+
+S1–S6 sind umgesetzt. Der gleiche Fixautor hat anschließend die Anschlüsse und
+die vollständigen betroffenen Vertragsketten erneut geprüft. `DecodeState`,
+`Session`, `Channel`, `BridgeSource`, `PullQueue`, `ViewerSink`, ihre Grant-/Lease-
+Felder und sämtliche Queuetypen bleiben dieselben Typen. Die Definitionen ihrer
+Felder, Konstanten und Zustandsvarianten sind gegenüber `10988167` unverändert.
+Insbesondere bleibt die Deklarationsreihenfolge von Decoder, ausstehenden Bildern,
+gemeinsamem Zustand und Sitzungslease erhalten.
+
+Der AST-Vergleich findet jeden ursprünglichen Funktionskörper genau als
+unveränderten Körper in seinem Ursprungsmodul oder seinem neuen Fachmodul wieder.
+Ausgenommen sind ausschließlich die notwendigen zusätzlichen `super`-Stufen in
+den qualifizierten Modulpfaden. Es wurde keine Bedingung, Frist, Claimgröße,
+Queueoperation, Ausnahmebehandlung oder Abschlussoperation verändert. Methoden,
+die aus dem Elternmodul zurückgerufen werden, erhalten `pub(super)`; bereits
+crateweite Einstiege behalten ihre bisherige Sichtbarkeit. Die Scopeerweiterung
+endet damit an derselben bisherigen Elternmodulgrenze. Alle neuen `#[path]`-
+Anschlüsse zeigen auf vorhandene Dateien innerhalb der erlaubten Schreibfläche.
+
+| Fortschreibung der vollständigen betroffenen Kette | Eigener statischer Nachbeleg |
+|---|---|
+| Desktop `screen_decode_run` → `DecodeState::on_event` in `screen_decode_events` → `record`/`show` in `screen_decode_thread` | Accepted-/Familienvertrag, Kontrollanforderung, Fehler-/Endereignis, Schlüsselbildanforderung und GOP-/Framezuordnung besitzen unveränderte Körper. Decoderdrain, gehaltene Bilder und Lease bleiben in derselben Zustandsinstanz. |
+| `host_server::session` → `Session::run` → `on_frame` in `host_session_control` → vorhandene Family-/Visibility-/Input-Release-Module | View/Control, Preview/Full, Rechte, Fenster-/Iconanfragen, Snapshot, Referenzboden, gedrückte Eingaben, Freigabe, Stop und Sitzungsabschluss benutzen dieselben Aufrufe und Bedingungen. `finish` ruft dieselbe `release_control`-Methode auf. |
+| JNI/Bridge → `bridge_channels` → `Channel`-Methoden in `bridge_channel_state` → vorhandene `CaptureSession`/`CaptureAuthority` | Register und Kanalidentität bleiben im Elternmodul. Queueabbau und Epochbindung bleiben unter derselben Sperre; externe Slices, Aktivitätsquittung, Rückfrage, Ende und Capturebeginn behalten ihren bisherigen tatsächlichen Besitz. |
+| `BridgeSource::produce`/`capture` → `bridge_source_input`/`bridge_source_capture` → derselbe Kanal und dieselben Grants | RAW-/H.264-Paaridentität, Frames, Generationen, Encoderreferenzen, Epochwechsel, Deadline, Zustimmung und Tiles-Fallback bleiben erhalten. `decode_still` wird am bisherigen Modulpfad crateweit reexportiert. `set_capture_active` und `Drop` bleiben im Ursprungsmodul; der Kotlin-Drain-/Retirementanschluss bleibt unverändert. |
+| Mobile Stream → `ViewerSink::record` → `PullQueue`-Methoden in `viewer_sink_queue` → JNI-Pull/Kotlin | Tatsächliche lokale Legacygrenzen, GOP-/Framepräfixe, Queuebudgets, Backpressure, Schlüsselbild-/Stauzustand, zu kleiner Pullpuffer und tatsächliches Schließen bleiben unverändert. Neue Queue-, Mutex-, Condvar- oder Prozessbudgetinstanzen entstehen nicht. |
+| Bestehende `session_memory::compatibility_tests`-Einstiege → `android_capture_restart` | Reihenfolge und vollständige registrierte Testnamen sind identisch zum formatierten Ausgang. Jeder der vier bisherigen Android-Capturefälle ruft seinen unveränderten Körper genau einmal auf. Der neue Fachmodulname erzeugt keinen zusätzlichen registrierten Test und erfordert keinen neuen Manifestfilter. |
+
+Die ursprünglichen statischen Funktions- und Besitzbelege dieses Berichts gelten
+damit weiter. Legacy-Wireformat, private IPC, Android-Vorschau-/Vollansichtsübergang,
+Loginverbraucher, Source-/Sessionidentität und der gemeinsame Prozesspool erhalten
+keine neue Schnittstelle. Es gibt keine neue Benutzeraktion, Wartebedienung oder
+geänderte Fehlerkorrektur. Der Großteil dieser unveränderten Verbraucher musste
+nicht erneut implementiert werden; die neue Modulgrenze endet unter ihren
+vorhandenen öffentlichen Einstiegen.
+
+### Dateiübersicht und konkrete Größen nach der Aufteilung
+
+Alle folgenden Dateien wurden in dieser Fortsetzung durch denselben Autor
+gelesen und geändert beziehungsweise erstellt. Vollständige Körper wurden aus
+dem bereits remoteformatierten Ausgang übernommen; neue Anschlüsse und Methoden-
+köpfe verwenden normale Rustformatierung. Es fand kein lokaler Formatterlauf statt.
+
+| Datei | Status in dieser Fortsetzung | Zeilen | Bytes |
+|---|---|---:|---:|
+| `native/src/app/core/screen_decode_thread.rs` | geändert | 318 | 11 909 |
+| `native/src/app/core/screen_decode_events.rs` | erstellt | 214 | 8 580 |
+| `native/src/screen/core/host_session.rs` | geändert | 375 | 14 138 |
+| `native/src/screen/core/host_session_control.rs` | erstellt | 231 | 9 308 |
+| `native/src/screen/os/android/bridge_channels.rs` | geändert | 378 | 13 059 |
+| `native/src/screen/os/android/bridge_channel_state.rs` | erstellt | 207 | 7 490 |
+| `native/src/screen/os/android/bridge_source.rs` | geändert | 260 | 9 504 |
+| `native/src/screen/os/android/bridge_source_input.rs` | erstellt | 84 | 3 133 |
+| `native/src/screen/os/android/bridge_source_capture.rs` | erstellt | 321 | 13 651 |
+| `native/src/screen/os/android/viewer_sink.rs` | geändert | 401 | 15 326 |
+| `native/src/screen/os/android/viewer_sink_queue.rs` | erstellt | 201 | 7 419 |
+| `native/src/screen/os/shared/batches_session_budget_compatibility_task_tests.rs` | geändert | 266 | 10 487 |
+| `native/src/screen/os/shared/batches_android_capture_restart_task_tests.rs` | erstellt | 328 | 11 398 |
+
+Der einzige geänderte Bericht ist weiterhin diese Datei. Die erlaubte optionale
+Extraktion `viewer_sink_decode.rs` wurde nicht benötigt und nicht erstellt.
+Zusätzlich gezielt gelesen wurden die aktuelle Scope-Datei, der eigene bisherige
+Bericht, die sechs passenden Einträge in `/tmp/smartexplorer-rv1-size-inventory.json`,
+die Metadaten von `/tmp/smartexplorer-rv1-40332971455/format.json`,
+`native/src/app/mod.rs`, `native/src/screen/os/mod.rs`,
+`native/src/screen/core/host_server.rs`, `host_input_release.rs`,
+`host_visibility.rs`, `batches_snapshot_task_tests.rs`,
+`native/src/app/core/batches_decode_lifetime_task_tests.rs`,
+`native/src/screen/os/android/batches_capture_task_tests.rs` und
+`native/src/screen/os/shared/session_memory.rs`. Bloße nicht existente
+Dateinamensannahmen wurden nicht als gelesene Dateien erfasst.
+
+### Tatsächliche Prüfungen und verbleibende Grenzen dieser Fortsetzung
+
+Durchgeführt wurden ausschließlich Quellen-/Dokumentlektüre, Edits und statische
+Text-/AST-Prüfungen mit der vorhandenen Tree-sitter-Rustgrammatik. Der Vergleich
+mit `10988167` meldet keine geänderten oder fehlenden ursprünglichen Körper,
+keine geänderte Daten-/Konstantendefinition, keinen Syntaxfehler, keinen fehlenden
+Modulpfad, keine veränderten registrierten Testnamen und keine Größenverletzung
+in den zugewiesenen Dateien. Die Kontroll- und Besitzketten wurden darüber hinaus
+vom selben Autor selbst gegen die neuen Sichtbarkeitsgrenzen geprüft.
+
+Keine lokale Build-, Compiler-, Formatter-, Test-, Server-, Geräte- oder
+Hostausführung fand statt. Es gibt keine neue funktionale Fallregistrierung:
+Die oben aufgeführten exakten Fälle und die Kotlin-Testklasse bleiben gültig.
+Die erneute Bestätigung durch Mains denselben Remote-Suiteeinstieg steht aus;
+insbesondere sind Typprüfung, eine erneute Remoteformatierung und Laufzeitverhalten
+nach der Aufteilung noch unbekannt. Main behält Commit/Push, Manifest, Rootgraph
+und die weitere Suite-/Releaseorchestrierung. Innerhalb der zugewiesenen
+Strukturkorrektur bleibt keine bekannte ungeklärte Quellabhängigkeit.
+
+Der abschließende Vergleich umfasst zusätzlich die ursprünglichen Signaturen;
+abgesehen von den dokumentierten internen Sichtbarkeiten sind auch diese
+unverändert. Die registrierten Testaufrufe besitzen jeweils genau einen Aufruf
+des verschobenen Körpers. `git diff --check` sowie die ergänzende Prüfung der
+neuen Dateien auf nachgestellten Whitespace und zusätzliche Leerzeilen am
+Dateiende melden keinen Befund. Die normalen Dateigrößen der zugewiesenen
+Verantwortlichkeiten liegen abschließend zwischen 84 und 401 Zeilen und
+zwischen 3 133 und 15 326 Bytes. Keine Gateausnahme wurde eingeführt.
