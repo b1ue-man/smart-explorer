@@ -214,8 +214,8 @@ fn capture_until(source: &mut X11Source, mut done: impl FnMut(&BgraImage) -> boo
     let started = Instant::now();
     loop {
         if let SourceFrame::Frame(image) = source.capture(1, true).unwrap() {
-            if done(&image) {
-                return image;
+            if done(image.image()) {
+                return image.image().clone();
             }
         }
         assert!(
@@ -335,7 +335,7 @@ fn screen_task_x11_bench_real_capture() {
     let mut frames = 0u32;
     while started.elapsed() < Duration::from_secs(3) {
         if let SourceFrame::Frame(image) = source.capture(u64::from(frames), true).unwrap() {
-            encoder.encode(&image, true, 0).unwrap();
+            encoder.encode(image.image(), true, 0).unwrap();
             frames += 1;
         }
     }

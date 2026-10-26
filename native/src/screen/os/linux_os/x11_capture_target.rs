@@ -48,7 +48,7 @@ impl X11Source {
             Target::Monitor {..}=>{
                 // RandR can move the output without changing root dimensions
                 // or causing GetImage to fail. Refresh before every capture.
-                let area=self.current_area()?;self.note_geometry(area)?;
+                let area=self.current_area()?;self.admit_geometry(area)?;
                 self.pass_monitor(area.x,area.y)
             }
             Target::Window(window)=>self.pass_window(window),

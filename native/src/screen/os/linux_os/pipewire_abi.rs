@@ -83,10 +83,12 @@ pub(crate) struct SpaData {
 }
 
 #[repr(C)]
+pub(crate) struct SpaMeta {pub type_:u32,pub size:u32,pub data:*mut c_void}
+#[repr(C)]
 pub(crate) struct SpaBuffer {
     pub n_metas: u32,
     pub n_datas: u32,
-    pub metas: *mut c_void,
+    pub metas: *mut SpaMeta,
     pub datas: *mut SpaData,
 }
 
@@ -121,6 +123,7 @@ pub(crate) struct PwStreamEvents {
 
 /// The loaded functions; the library stays loaded as long as this lives.
 pub(crate) struct PipewireApi {
+    pub memory: memory::MemoryApi,
     pub init: unsafe extern "C" fn(*mut c_int, *mut *mut *mut c_char),
     pub thread_loop_new: unsafe extern "C" fn(*const c_char, *const c_void) -> *mut c_void,
     pub thread_loop_get_loop: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
@@ -141,6 +144,7 @@ pub(crate) struct PipewireApi {
         unsafe extern "C" fn(*mut c_void, *mut SpaHook, *const PwStreamEvents, *mut c_void),
     pub stream_connect:
         unsafe extern "C" fn(*mut c_void, c_int, u32, u32, *mut *const SpaPod, u32) -> c_int,
+    pub stream_update_params: unsafe extern "C" fn(*mut c_void,*mut *const SpaPod,u32)->c_int,
     pub stream_dequeue_buffer: unsafe extern "C" fn(*mut c_void) -> *mut PwBuffer,
     pub stream_queue_buffer: unsafe extern "C" fn(*mut c_void, *mut PwBuffer) -> c_int,
     pub stream_set_active: unsafe extern "C" fn(*mut c_void,bool) -> c_int,
@@ -169,6 +173,7 @@ pub(crate) fn load_from(name: &str) -> io::Result<PipewireApi> {
     let library = unsafe { Library::new(name) }
         .map_err(|error| io::Error::new(io::ErrorKind::NotFound, format!("{name}: {error}")))?;
     let api = PipewireApi {
+        memory: memory::MemoryApi::load(&library)?,
         init: symbol(&library, "pw_init")?,
         thread_loop_new: symbol(&library, "pw_thread_loop_new")?,
         thread_loop_get_loop: symbol(&library, "pw_thread_loop_get_loop")?,
@@ -185,6 +190,7 @@ pub(crate) fn load_from(name: &str) -> io::Result<PipewireApi> {
         stream_new: symbol(&library, "pw_stream_new")?,
         stream_add_listener: symbol(&library, "pw_stream_add_listener")?,
         stream_connect: symbol(&library, "pw_stream_connect")?,
+        stream_update_params: symbol(&library,"pw_stream_update_params")?,
         stream_dequeue_buffer: symbol(&library, "pw_stream_dequeue_buffer")?,
         stream_queue_buffer: symbol(&library, "pw_stream_queue_buffer")?,
         stream_set_active: symbol(&library,"pw_stream_set_active")?,
@@ -229,3 +235,26 @@ pub(crate) fn available(name: &str) -> bool {
     }
     load_from(name).is_ok()
 }
+
+
+// Public inline SPA interfaces from PipeWire 0.3.65 core.h/port.h and hook.h.
+// The callbacks' data pointer, not the interface address, is the first
+// method argument. These layouts avoid private proxy or marshal internals.
+#[repr(C)]
+pub(super) struct SpaInterface {
+    pub type_: *const c_char, pub version:u32,
+    pub funcs:*const c_void, pub data:*mut c_void,
+}
+#[repr(C)]
+pub(super) struct CoreMethods {
+    pub version:u32,
+    pub add_listener:Option<unsafe extern "C" fn(*mut c_void,*mut SpaHook,*const c_void,*mut c_void)->c_int>,
+    pub hello:Option<unsafe extern "C" fn(*mut c_void,u32)->c_int>,
+    pub sync:Option<unsafe extern "C" fn(*mut c_void,u32,c_int)->c_int>,
+    pub pong:Option<unsafe extern "C" fn(*mut c_void,u32,c_int)->c_int>,
+    pub error:Option<unsafe extern "C" fn(*mut c_void,u32,c_int,c_int,*const c_char)->c_int>,
+    pub get_registry:Option<unsafe extern "C" fn(*mut c_void,u32,usize)->*mut c_void>,
+}
+
+#[path="pipewire_memory_abi.rs"]
+pub(crate) mod memory;

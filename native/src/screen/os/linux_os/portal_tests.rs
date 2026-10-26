@@ -9,145 +9,18 @@ use crate::screen::core::host_backend::ScreenEncoder;
 use crate::screen::core::host_backend::TilesScreenEncoder;
 use crate::screen::core::pixel_convert::BgraImage;
 use crate::screen::os::pipewire_stream::convert_rows;
-use crate::screen::os::spa_pod::{enum_format_pod, parse_video_format, VideoFormat};
+use crate::screen::os::spa_pod::VideoFormat;
 
-fn word(out: &mut Vec<u8>, value: u32) {
-    out.extend_from_slice(&value.to_le_bytes());
-}
-
-fn pad(out: &mut Vec<u8>) {
-    while out.len() % 8 != 0 {
-        out.push(0);
-    }
-}
-
-/// An `Id` pod: size 4, type 3, the id, 4 bytes of padding.
-fn id_pod(out: &mut Vec<u8>, id: u32) {
-    word(out, 4);
-    word(out, 3);
-    word(out, id);
-    word(out, 0);
-}
-
-/// A choice pod over `values` of `child_size` bytes and `child_type`.
-fn choice_pod(out: &mut Vec<u8>, kind: u32, child_size: u32, child_type: u32, values: &[u32]) {
-    let body_size = 8 + 8 + values.len() as u32 * 4;
-    word(out, body_size);
-    word(out, 19);
-    word(out, kind);
-    word(out, 0);
-    word(out, child_size);
-    word(out, child_type);
-    for value in values {
-        word(out, *value);
-    }
-    pad(out);
-}
-
-#[test]
-fn screen_task_spa_pod_enum_format_bytes() {
-    // Written out from the description of `spa/param/video/format-utils.h`
-    // and `spa/pod/pod.h`: object, then key/flags/pod for each property.
-    let mut body = Vec::new();
-    word(&mut body, 0x40003); // SPA_TYPE_OBJECT_Format
-    word(&mut body, 3); // SPA_PARAM_EnumFormat
-    word(&mut body, 1); // mediaType
-    word(&mut body, 0);
-    id_pod(&mut body, 2); // video
-    word(&mut body, 2); // mediaSubtype
-    word(&mut body, 0);
-    id_pod(&mut body, 1); // raw
-    word(&mut body, 0x20001); // VIDEO_format
-    word(&mut body, 0);
-    choice_pod(&mut body, 3, 4, 3, &[8, 8, 7, 12, 11]); // Enum of Ids
-    word(&mut body, 0x20003); // VIDEO_size
-    word(&mut body, 0);
-    choice_pod(&mut body, 1, 8, 10, &[1920, 1080, 1, 1, 16384, 16384]); // Range
-    word(&mut body, 0x20004); // VIDEO_framerate
-    word(&mut body, 0);
-    choice_pod(&mut body, 1, 8, 11, &[0, 1, 0, 1, 1000, 1]);
-    let mut expected = Vec::new();
-    word(&mut expected, body.len() as u32);
-    word(&mut expected, 15); // Object
-    expected.extend_from_slice(&body);
-    pad(&mut expected);
-    let built = enum_format_pod();
-    assert_eq!(built, expected);
-    let size = u32::from_le_bytes(built[0..4].try_into().unwrap()) as usize;
-    assert_eq!(size, built.len() - 8);
-    assert_eq!(built.len() % 8, 0);
-    // No VIDEO_modifier (key 0x20005): producers keep to shared memory.
-    assert!(!built
-        .windows(4)
-        .any(|word| word == 0x20005u32.to_le_bytes()));
-}
-
-#[test]
-fn spa_pod_negotiated_format_is_read_and_garbage_is_not() {
-    let mut body = Vec::new();
-    word(&mut body, 0x40003);
-    word(&mut body, 4); // SPA_PARAM_Format
-    word(&mut body, 1);
-    word(&mut body, 0);
-    id_pod(&mut body, 2);
-    word(&mut body, 0x20001);
-    word(&mut body, 0);
-    id_pod(&mut body, 12); // BGRA
-    word(&mut body, 0x20003);
-    word(&mut body, 0);
-    word(&mut body, 8);
-    word(&mut body, 10); // Rectangle
-    word(&mut body, 1920);
-    word(&mut body, 1080);
-    word(&mut body, 0x20004);
-    word(&mut body, 0);
-    word(&mut body, 8);
-    word(&mut body, 11); // Fraction
-    word(&mut body, 60);
-    word(&mut body, 1);
-    let mut pod = Vec::new();
-    word(&mut pod, body.len() as u32);
-    word(&mut pod, 15);
-    pod.extend_from_slice(&body);
-    assert_eq!(
-        parse_video_format(&pod),
-        Some((VideoFormat::Bgra, FrameSize::new(1920, 1080)))
-    );
-    // The offer holds choices, not values: nothing negotiated.
-    assert_eq!(parse_video_format(&enum_format_pod()), None);
-    assert_eq!(parse_video_format(&pod[..pod.len() - 5]), None);
-    assert_eq!(parse_video_format(&[0u8; 3]), None);
-    assert_eq!(parse_video_format(&[]), None);
-}
-
-/// `spa_pod_fixate` turns the choices of the negotiated format into choices
-/// of the kind `None` that keep their values; the first one is the value
-/// (KWin through the KDE portal). A choice that still offers alternatives is
-/// no negotiated format.
-#[test]
-fn spa_pod_negotiated_format_reads_fixated_choices() {
-    let object = |format_kind: u32, size_kind: u32| {
-        let mut body = Vec::new();
-        word(&mut body, 0x40003);
-        word(&mut body, 4); // SPA_PARAM_Format
-        word(&mut body, 0x20001);
-        word(&mut body, 0);
-        choice_pod(&mut body, format_kind, 4, 3, &[8, 12, 11]); // BGRx first
-        word(&mut body, 0x20003);
-        word(&mut body, 0);
-        choice_pod(&mut body, size_kind, 8, 10, &[1280, 800, 1, 1, 4096, 4096]);
-        let mut pod = Vec::new();
-        word(&mut pod, body.len() as u32);
-        word(&mut pod, 15);
-        pod.extend_from_slice(&body);
-        pod
-    };
-    assert_eq!(
-        parse_video_format(&object(0, 0)),
-        Some((VideoFormat::Bgrx, FrameSize::new(1280, 800)))
-    );
-    assert_eq!(parse_video_format(&object(3, 0)), None);
-    assert_eq!(parse_video_format(&object(0, 1)), None);
+fn admitted_picture(image:BgraImage)->crate::screen::core::capture_image::CapturedImage {
+    use crate::screen::core::capture_admission::{SourceKey,CaptureGeneration,CaptureOwner};
+    use crate::screen::core::capture_plan::{CapturePlan,CapturePhases};
+    let admission=super::super::host_backend::prepared::test_admission("portal-pixels");
+    let mut plan=CapturePlan::new(SourceKey::new("portal-pixels","portal").unwrap(),CaptureGeneration::new(1));
+    plan.add_bgra(CaptureOwner::SourcePixels,image.size(),1,CapturePhases::ALL).unwrap();
+    let grant=admission.authority().approve(plan).unwrap();
+    let mut builder=crate::screen::core::capture_image::CaptureImageBuilder::new(image.size(),
+        crate::screen::core::frame_budget::FrameLimits::RESOURCE,&grant,CaptureOwner::SourcePixels).unwrap();
+    builder.pixels_mut().copy_from_slice(image.data());builder.freeze()
 }
 
 #[test]
@@ -206,7 +79,7 @@ fn portal_source_maps_the_portal_states() {
         latest.clone(),
     )));
     assert!(paused(source.capture(1, false).unwrap()));
-    latest.publish(picture(640, 360));
+    latest.publish(admitted_picture(picture(640, 360)));
     assert!(matches!(
         source.capture(2, false).unwrap(),
         SourceFrame::Frame(_)
@@ -221,7 +94,7 @@ fn portal_source_maps_the_portal_states() {
         source.capture(4, true).unwrap(),
         SourceFrame::Frame(_)
     ));
-    latest.publish(picture(800, 600));
+    latest.publish(admitted_picture(picture(800, 600)));
     assert!(matches!(
         source.capture(5, false).unwrap(),
         SourceFrame::Frame(_)
@@ -287,7 +160,7 @@ fn await_picture(
     let mut next_nudge = started;
     loop {
         match source.capture(1, true).map_err(NoPicture::Source)? {
-            SourceFrame::Frame(image) => return Ok(image),
+            SourceFrame::Frame(image) => return Ok(image.image().clone()),
             SourceFrame::Paused(_) | SourceFrame::Unchanged => {}
         }
         if started.elapsed() >= within {
@@ -377,7 +250,7 @@ fn screen_task_wayland_portal_bench() {
     let mut frames = 0u32;
     while started.elapsed() < Duration::from_secs(3) {
         if let SourceFrame::Frame(image) = source.capture(0, true).unwrap() {
-            encoder.encode(&image, true, 0).unwrap();
+            encoder.encode(image.image(), true, 0).unwrap();
             frames += 1;
         }
     }
@@ -470,4 +343,33 @@ fn screen_task_kde_remote_desktop_input() {
         InputEvent::Text { text: "se".into() },
     ];
     assert_eq!(super::super::portal_input::inject(&events), Ok(()));
+}
+
+impl PortalSource {
+    /// Where the session stands, for the failure text of a source that
+    /// shows no picture: the portal still waiting (dialog, portal service),
+    /// a failure, or the stream and what it did.
+    #[cfg(test)]
+    pub(crate) fn describe(&self) -> String {
+        match &*self.handle.lock() {
+            PortalState::Waiting | PortalState::WaitingInactive => {
+                "portal: no answer to Start yet (dialog or portal service)".into()
+            }
+            PortalState::Streaming(latest) => format!("portal: streaming; {}", latest.describe()),
+            PortalState::Denied(text) => format!("portal: denied: {text}"),
+            PortalState::Failed(text) => format!("portal: failed: {text}"),
+        }
+    }
+}
+
+#[cfg(test)]
+impl PortalSource {
+    /// The stream runs and has sent only empty or corrupted chunks so far:
+    /// the compositor reports cursor moves, no change of the screen.
+    pub(crate) fn only_empty_chunks(&self) -> bool {
+        match &*self.handle.lock() {
+            PortalState::Streaming(latest) => latest.only_empty_chunks(),
+            _ => false,
+        }
+    }
 }
