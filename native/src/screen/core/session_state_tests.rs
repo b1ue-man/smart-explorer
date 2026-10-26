@@ -1,6 +1,6 @@
 use super::*;
 
-const ALL: [SessionState; 12] = [
+const ALL: [SessionState; 13] = [
     SessionState::Connecting,
     SessionState::WaitingForApproval,
     SessionState::WaitingForPortal,
@@ -8,6 +8,7 @@ const ALL: [SessionState; 12] = [
     SessionState::Streaming,
     SessionState::SecureDesktop,
     SessionState::WindowMinimized,
+    SessionState::ViewerHidden,
     SessionState::HostLocked,
     SessionState::SessionInactive,
     SessionState::NoDisplay,
@@ -26,8 +27,13 @@ fn screen_task_session_state_moves_and_keyframe_requests() {
         WaitingForApproval,
         Starting,
         Streaming,
+        ViewerHidden,
+        Starting,
+        Streaming,
         SecureDesktop,
         Streaming,
+        WaitingForPortal,
+        ViewerHidden,
         WaitingForPortal,
         Streaming,
         Ended,
@@ -35,9 +41,9 @@ fn screen_task_session_state_moves_and_keyframe_requests() {
     for (at, state) in path.into_iter().enumerate() {
         session.move_to(state, at as u64 + 1).unwrap();
     }
-    assert_eq!((session.state(), session.since_us()), (Ended, 8));
+    assert_eq!((session.state(), session.since_us()), (Ended, 13));
     assert!(
-        session.move_to(Streaming, 9).is_err(),
+        session.move_to(Streaming, 14).is_err(),
         "nothing leaves ended"
     );
     assert_eq!(session.state(), Ended);
@@ -46,6 +52,7 @@ fn screen_task_session_state_moves_and_keyframe_requests() {
     let mut fresh = SessionTracker::new(5);
     assert!(fresh.move_to(Streaming, 6).is_err());
     assert!(fresh.move_to(SecureDesktop, 6).is_err());
+    assert!(fresh.move_to(ViewerHidden, 6).is_err());
     fresh.move_to(Connecting, 7).unwrap();
     assert_eq!(fresh.since_us(), 5);
     fresh.move_to(NoDisplay, 8).unwrap();
@@ -70,8 +77,33 @@ fn screen_task_session_state_moves_and_keyframe_requests() {
     let paused: Vec<SessionState> = ALL.into_iter().filter(|state| state.is_paused()).collect();
     assert_eq!(
         paused,
-        [SecureDesktop, WindowMinimized, HostLocked, SessionInactive]
+        [
+            SecureDesktop,
+            WindowMinimized,
+            ViewerHidden,
+            HostLocked,
+            SessionInactive,
+        ]
     );
+    // Hiding an accepted viewer also suspends a pending portal/approval or
+    // unavailable display; showing it can return to that source condition.
+    for state in [
+        WaitingForApproval,
+        WaitingForPortal,
+        Starting,
+        Streaming,
+        SecureDesktop,
+        WindowMinimized,
+        HostLocked,
+        SessionInactive,
+        NoDisplay,
+    ] {
+        assert!(state.can_move_to(ViewerHidden), "{state:?} -> hidden");
+        assert!(ViewerHidden.can_move_to(state), "hidden -> {state:?}");
+    }
+    assert!(!ViewerHidden.can_move_to(Connecting));
+    assert!(!Ended.can_move_to(ViewerHidden));
+    assert!(Unknown.can_move_to(ViewerHidden));
     assert!(Ended.is_terminal() && !Streaming.is_terminal());
     assert_eq!(EndReason::CapabilityNarrowed.key(), "capability_narrowed");
 

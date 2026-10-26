@@ -47,6 +47,9 @@ pub(crate) fn state_text(state: SessionState, reason: Option<&str>) -> String {
                 .into()
         }
         SessionState::WindowMinimized => "Fenster ist minimiert".into(),
+        SessionState::ViewerHidden => {
+            "Diese Ansicht ist nicht sichtbar; die Bildübertragung pausiert".into()
+        }
         SessionState::HostLocked => "Das Gerät ist gesperrt".into(),
         SessionState::SessionInactive => "Die Benutzersitzung des Geräts ist nicht aktiv".into(),
         SessionState::NoDisplay => {

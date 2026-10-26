@@ -231,6 +231,7 @@ fn batches_task_b6_snapshot_returns_to_new_live_keyframe_without_stale_presentat
                 Box::new(Source {
                     size,
                     family: Some(7),
+                    grant: crate::screen::core::capture_test_support::grant(size, contract),
                 }),
                 choice,
                 &host,

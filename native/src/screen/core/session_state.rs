@@ -65,7 +65,11 @@ impl SessionState {
     pub(crate) fn is_paused(self) -> bool {
         matches!(
             self,
-            Self::SecureDesktop | Self::WindowMinimized | Self::HostLocked | Self::SessionInactive
+            Self::SecureDesktop
+                | Self::WindowMinimized
+                | Self::ViewerHidden
+                | Self::HostLocked
+                | Self::SessionInactive
         )
     }
 
@@ -94,6 +98,9 @@ impl SessionState {
             Starting => matches!(self, Connecting | NoDisplay) || waiting || running,
             Streaming => waiting || running,
             SecureDesktop | WindowMinimized | HostLocked | SessionInactive => running,
+            // Visibility can pause an accepted session even while its source
+            // waits for approval, a portal or a graphical display.
+            ViewerHidden => running || waiting || self == NoDisplay,
             NoDisplay => matches!(self, Connecting | WaitingForPortal) || running,
             Connecting | Ended | Unknown => false,
         }

@@ -282,6 +282,7 @@ mod tests {
         assert!(!watching(SessionState::WaitingForApproval));
         assert!(watching(SessionState::Streaming));
         assert!(watching(SessionState::SecureDesktop));
+        assert!(watching(SessionState::ViewerHidden));
         assert!(!watching(SessionState::Ended));
     }
 }
