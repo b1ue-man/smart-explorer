@@ -1,6 +1,7 @@
 //! Recovery has its own explicit destination and remains discoverable after
 //! the active mount disappears. Vault recovery always preserves sealed bytes.
-use super::super::prelude::*;
+use crate::app::prelude::egui;
+
 use super::{App, MountUiResult};
 
 pub(super) struct RecoveryDraft {

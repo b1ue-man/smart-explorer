@@ -1,7 +1,7 @@
 # RA-07: wiederholbarer Vault-Laufwerkstart
 
 Stand: 2026-10-26. Der statische RA-07-Fixautorzyklus einschließlich der unten
-dokumentierten Modultrennung nach der Remote-Größenrückmeldung ist abgeschlossen.
+dokumentierten Modultrennung und der zugewiesenen Compilerkorrekturen ist abgeschlossen.
 Gemeinsamer Remote-Lauf und Release sind hiermit nicht bestätigt. Arbeitsbaum
 `/tmp/smartexplorer-review-fixes-ee75e91b`, Branch `codex/review-fixes-ee75e91b`.
 Auftragsvergleich: Releasebasis `a814f263096fe69d3746e840b5f3fad3fd7e88a0`
@@ -577,3 +577,212 @@ Hostsession-/Gerätebaum-/UIintegrationen werden nicht ersetzt.
 - Keine zusätzliche Produktabhängigkeit außerhalb der Schreibfläche ist belegt.
   Main besitzt weiterhin Rootgraphrefresh, Integration, Commit/Push, denselben
   Remote-Vorbereitungseinstieg, anschließende Suitebewertung und terminalen Release.
+
+## Fortsetzung: konkrete Compilerbefunde aus Remote-Lauf 40354605251
+
+### Ziel, Quellen und erster Erhaltungsplan
+
+Die delegierte Fortsetzung vom 26.10.2026 beauftragt die Fehlergruppen C01,
+C10, C24, C25, C26, C28, C29, C30, C31, C32, C41, C42, C43 sowie A01,
+A03, A04, A05, A06, A07, A14, A15, A16 und A17. Der Quellenkandidat ist
+`d95dc404e834edfe7be0e1c96be162b36865efa9`; konkrete Compilerbelege stehen in
+`/tmp/smartexplorer-rv1-40354605251/vault-retry-errors.json`. Alle Jobs dieses
+Laufs sind laut delegiertem Auftrag beendet. Die neue Scope-Datei ersetzt die
+vorige Strukturfläche. Keine lokale Ausführung und keine Abschwächung von
+Prüfungen oder Abnahmekriterien.
+
+Ergebnis ist ein einziger wirksamer Recoverydialog mit denselben bestehenden
+Sichern-/Entfernen-/Import-/Reaktivierungswegen, kanonische IPCtypen, für die
+tatsächlichen Daemonbesitzer erreichbare Retainedmethoden, derselbe
+Snapshotfehlerpfad und atomisches Nichtüberschreiben ohne neue Panik unter
+Linux/Android. Der erste Plan trennt die belegten Ursachen in Recovery-
+Modulidentität, IPC-Namensauflösung, interne Besitzer-Sichtbarkeit, eindeutigen
+Stringparameter und den plattformabhängigen FFIflagtyp. Es entsteht keine
+neue Nutzerfähigkeit, Persistenzform oder öffentliche API; Tiefe 2 genügt.
+
+### Bestand, Entscheidungen und konkreter Fixplan vor dem Edit
+
+| Belegter Fehler | Aktueller Funktionszusammenhang | Konkrete Korrektur und zu erhaltendes Ergebnis |
+|---|---|---|
+| C01, C24, C26, C28, C29, C30, C31, C32 | `app/mod.rs` registriert `mount_recovery_ui.rs` direkt, während `mount_ui.rs` dieselbe Datei als privates Kind `recovery_ui` besitzt. `MountUiState::recovery_draft` verwendet ausschließlich den Kindtyp. Die doppelte Appimpl erzeugt deshalb zwei Methoden und zugriffsfremde Draftfelder. | Nur die zusätzliche Direktregistrierung entfernen. Die Datei, das wirksame Kindmodul, Dialogmethoden, Draftfelder, Bestandsdarstellung und sämtliche Aktionen bleiben. Statt des fragilen Prelude-Globimports wird die tatsächlich benutzte `egui`-Bindung kanonisch aus `crate::app::prelude` importiert; `App` und `MountUiResult` bleiben ausdrücklich aus dem wirklichen Elternmodul importiert. |
+| C10, A01 | `MountHostRequest` ist in `daemon::drive_modules::ipc_protocol_mount_host` definiert; `ipc_protocol` besitzt keinen solchen Reexport. | Den Hostclient direkt an diese kanonische Enum anbinden. Keine neue Enum, kein geändertes Drahtformat, keine Änderung von Capacity, Lock oder Gerätebaumoperationen. |
+| A03, A04, A05, A06, A07 | Alle vier Recoveryclientoperationen und ihr gemeinsamer Requestparameter nennen fälschlich `ipc_protocol::DriveIpcRequest`. Der Typ des Drahtfelds `IpcRequest::Drive.req` liegt in `drive_modules::ipc_protocol_drives`. | Ein Import des tatsächlich definierten Typs und entsprechende kurze Referenzen. SaveRemove, List, Import und Reactivate bleiben vollständig erhalten; Server, Token, Antworten und Fehlerverhalten bleiben gleich. |
+| C41, C42, C43, A14, A15, A16 | Methoden im Kindmodul `mount_manager::start_path` sind `pub(super)`, ihre Aufrufer liegen aber in `daemon::ipc` und `daemon::drive_modules::devices_mount`. | Nur `start`, `start_retained` und `retry_retained` erhalten `pub(in crate::daemon)`. Die Freigabe endet am tatsächlichen Daemonbesitzer; kein `pub`, keine weitergereichte Capability und keine Änderung der Methoden-/Leasekörper. |
+| C25 | `drain_drive_index` übergibt `.into()` an einen bereits generischen `impl Into<String>`-Parameter. Der Compiler kann dessen Zwischentyp nicht eindeutig bestimmen. | Den unveränderten Fehlertext als `&str` übergeben; Meldung, früher Return, Deltaabbruch und Fehlerzweig bleiben vollständig bestehen. |
+| A17 | libc 0.2.186 definiert `RENAME_NOREPLACE` auf Android als `c_int`, auf Linux als `c_uint`; `renameat2` verlangt `c_uint`. | Nur das unverändert aktive Flagbit explizit auf `libc::c_uint` abbilden. Keine `unwrap`-Konversion, kein Check-then-rename und kein überschreibender Ersatzpfad. Gepinnter Parent, Dateinamen, Fehlerweitergabe und Directory-fsync bleiben. |
+
+Lösungsrecherche: Die Rustreferenz zur Sichtbarkeit wurde erneut auf die
+tatsächliche Elternhierarchie angewendet. Die offizielle
+[E0283-Erklärung](https://doc.rust-lang.org/error_codes/E0283.html) und der
+gerenderte Compilerhinweis belegen die unnötig mehrdeutige Zwischenkonversion.
+Für libc wurde die im Lockfile festgehaltene Version 0.2.186 geprüft:
+[Androidquelle](https://raw.githubusercontent.com/rust-lang/libc/0.2.186/src/unix/linux_like/android/mod.rs)
+definiert Flagwert 1 als `c_int` und den Funktionsparameter als `c_uint`;
+die [Linuxquelle](https://raw.githubusercontent.com/rust-lang/libc/0.2.186/src/unix/linux_like/linux/mod.rs)
+definiert denselben Wert als `c_uint`. Der
+[Linux-Systemaufrufvertrag](https://man7.org/linux/man-pages/man2/rename.2.html)
+bewahrt das Nichtüberschreiben mit `RENAME_NOREPLACE` und meldet eine Kollision
+als Fehler. Abrufdatum aller ergänzten Quellen: 26.10.2026. Die zunächst
+angefragten docs.rs-Androidseiten waren nicht abrufbar; die versionsgebundene
+offizielle Quelle schließt die benötigte Typlücke.
+
+Zweiter Lückenabgleich vor der Umsetzung: Die Recoverydraftfelder bleiben
+privat, weil der einzig beibehaltene Dialog und der einzig verwendete Drafttyp
+aus demselben Kindmodul stammen. Eine Feldfreigabe würde die falsche
+Doppelinstanz verdecken und wird nicht eingeführt. `ipc_protocol.rs` benennt
+die kanonischen Untermodultypen bereits in seinen Drahtfeldern; zusätzliche
+Hubreexporte sind unnötig. `pub(in crate::daemon)` erreicht beide konkreten
+Aufrufer über deren gemeinsamen Vorfahren und lässt den Prozess-/Hostbesitz
+unverändert. Das Flag hat in beiden Zieldefinitionen den positiven Wert 1;
+die ABItypabbildung ist daher ohne Laufzeitprüfung oder Panik möglich.
+
+Die zusätzliche Abstimmung mit Main sieht vor, nur den Recoveryhunk in
+`app/mod.rs` zuerst abzuschließen und diese Datei danach für den getrennten
+Captureautor freizugeben. Viewerregistrierungen gehören nicht zu diesem Fix;
+sie werden hier weder editiert noch geprüft. Die verbleibenden Recoverydateien
+werden unabhängig weiterbearbeitet. Der spätere Remote-Nachweis verbleibt
+vollständig bei Main im selben Suite-Fixloop.
+
+### Ergänzte eigene Funktion-/Verknüpfungskarte
+
+| Grenze | Vollständige betroffene Verbindung | Erhaltener Vertrag |
+|---|---|---|
+| Registrierung → einziger Dialogtyp | `app/mod.rs` bindet weiterhin `mount_ui` ein; allein dessen privates Kind `recovery_ui` lädt `mount_recovery_ui.rs`. `MountUiState::recovery_draft`, `RecoveryDraft::new` und `App::ui_mount_recovery` beziehen sich dadurch auf dieselbe Definition. `ui_mount_windows` ruft den Dialog weiter auf. | Kein zweiter Appmethodenkörper und keine zweite Draftidentität. `id`, `label`, `destination` bleiben privat; kein Feldzugriff wird nur für die Kompilierung freigegeben. `egui` stammt ausdrücklich aus dem vorhandenen Eframe-Reexport in `app::prelude`. Dialoggeometrie und Themenlimit bleiben am bisherigen Elternpfad. |
+| Dialog → erfolgreiche oder fehlgeschlagene Aktion | Der vorhandene Knopf „Sichern und entfernen“ legt den Draft an; der Dialog verlangt einen absoluten Zielpfad und freie Aktion → `spawn_mount_action` → `save_remove_mount` → `MountUiResult::RecoverySaved` → `drain_mount_ui`. Schließen verwirft nur den Draft. | Zielwahl, Busy-Sperre, bestehende Warntexte, asynchroner Ablauf und Fehleranzeige bleiben. Der aktive UIeintrag wird weiterhin erst nach der erfolgreichen Antwort entfernt und der erhaltene Recoveryrecord hinzugefügt. Die saubere „Entfernen“-Aktion und die nichtsaubere Sicherungsaktion bleiben getrennt. |
+| Recoverybestand → Sichtbarkeit und Reaktivierung | „Inaktiven Recoverybestand anzeigen“ → `list_mount_recoveries` → `RecoveryList` → `recovery_ui::show_retained`. Der Bestand zeigt Paket, Originalcache, Hash, Lücken, Versiegelung, Reaktivierungszustand und den bestehenden CLIreaktivierungsbefehl. | Die Zusammenführung entfernt weder Bestandsansicht noch Hinweise zu ungesicherten Inhalten. Sie erfindet keine bislang fehlenden Import-/Reaktivierungsbuttons. Die vorhandenen Import-/Reaktivierungsfunktionen bleiben über ihre Client-/IPCwege erhalten. |
+| Client → derselbe Drahttyp | `save_remove_mount`, `list_mount_recoveries`, `import_mount_recovery`, `reactivate_mount_recovery` → `recovery_request(DriveIpcRequest)` → `IpcRequest::Drive { token, req }`. Clientimport und Drahtfeld verweisen auf dieselbe Definition in `drive_modules::ipc_protocol_drives`. | RecoverySaveRemove, RecoveryList, RecoveryImport und RecoveryReactivate behalten sämtliche Felder. Workerbereitschaft, Token, Loopbackstream, Kontrollreserve, Entfall eines festen Antworttimeouts während der Ownershiptransaktion und Fehlerweitergabe bleiben identisch. |
+| Drahttyp → Recoverybesitzer | `ipc_protocol_drives::serve` → `MountManager::{save_remove,recovery_list,recovery_import,recovery_reactivate}`; Rückweg über `IpcResponse::{MountRecovery,MountRecoveries,Mount,Err}`. | Keine neue Enum, kein neues serde-Tag und keine entfernte Matchvariante. Die kanonischen Protokolldefinitionen sind unverändert; die Korrektur betrifft ausschließlich den Verweis des Clients. |
+| SaveRemove → Paket und Ownershipcommit | `save_remove` hält Lifecycle, lehnt laufenden Child-/Streambesitz ab, bestimmt Cache-IDs, hält vorhandene Cacheleases und die historische Backend-/Vaultidentität → `export_mount_recovery` → `mount_registry::inactive::detach` bei gehaltenem State → Entfernen des aktiven Entries und `forget_mount_binding`. | Originalcache und Leasebesitz bleiben bis zum bestehenden Ownershipabschluss erhalten. Die aktive Registrierung wird erst nach Paketpublikation geändert. Ein vorgelagerter Fehler führt nicht zu einer erfolgreichen Entfernung. Keine Schlüssel- oder Klartextfreigabe wird ergänzt. |
+| Import/Reaktivierung → verifizierter privater Bestand | `recovery_import` → `copy_recovery_package` → privater Appbestand → Inaktivrecord. `recovery_reactivate` prüft freie Mount-ID, Manifesthash, Google-Kontoidentität und Vaultbindung → `restore_recovery_cache` → Registryreaktivierung → `registered_entry(..., Unknown, ...)`. | Fremdes Originalpaket und Cache werden nicht gelöscht; Import verbindet keinen Mount. Reaktivierung bleibt ausdrücklich, gestoppt und ohne Auto-remount. Fehlende historische Freigaben erteilen kein Trusted. Bestehende Identitätskonflikte und Wiederholbarkeit bleiben erhalten. |
+| Hostkapazität → kanonische Hostenum | `MountHostSession::report_capacity` → `MountHostRequest::Capacity` aus `drive_modules::ipc_protocol_mount_host` → `IpcRequest::MountHostExt.req`. Die gleiche Enum trägt unverändert PrepareLock, ChildBackend und DeviceWatch. | Nur der Import wird korrigiert. Status-/Recoverymeldungen, Backend-/Controlstreams, Spoolschlüssel, Vaultlock und Gerätebaumrecht bleiben unverändert. Die Protokollenum selbst wird nicht umbenannt, dupliziert oder exportseitig erweitert. |
+| Daemonbesitzer → Start/Retry mit Lease | `devices_mount::enable` → `MountManager::start` → `start_retained`; `ipc::handle_client` nimmt die bestehende Runtimelease an und ruft `start_retained` oder `retry_retained` mit demselben `Arc<dyn Send + Sync>` auf. Beide erreichen die bisherigen privaten Start-/Retrykoordinatoren. | Genau diese drei Methoden sind für den gemeinsamen Vorfahren `crate::daemon` sichtbar. Ihre Körper, Lifecycle-/Registry-/Policygates, die atomare RA-07-Übergabe sowie `StartEnd` und `StartupLease` bleiben unverändert. Es entsteht kein öffentlicher Startbypass und keine verkürzte Leaselebensdauer. |
+| Indexworkerende → derselbe Appfehler | `drain_drive_index` nimmt den Deltaempfänger; bei getrenntem Kanal folgt derselbe `push_app_error("Laufwerksindex", "Indexworker wurde beendet")` und derselbe frühe Return. | Die unnötige Zwischenkonversion entfällt. Text, Meldungskategorie, Delta-Drop/Cancel und Kontrollfluss bleiben. Der Empty-Zweig hält den Delta wie bisher, der Complete-Zweig validiert wie bisher Identität/Generation. |
+| Paket-/Cachecommit → gemeinsame NoReplace-Grenze | `export_mount_recovery` publiziert das vollständige Paket mit `publish(..., false)` nach Payload-/Manifest-/Namespacebestätigung. `copy_recovery_package` publiziert die verifizierte private Kopie ebenfalls mit false. `restore_recovery_cache` publiziert einen fehlenden Basisordner und vollständig vorbereitete Rootstages jeweils mit false. | Alle benötigten NoReplace-Aufrufer bleiben vorhanden und unverändert. Vorhandene Cacheziele werden vor dem Kopieren gegen ihren Subtree geprüft; ein nachträglich erscheinendes Ziel kann den atomaren Kernel-Nichtüberschreibschutz nicht umgehen. Keine lokale Existenzvorprüfung ersetzt den Renameaufruf. |
+| NoReplace → Linux/Android-ABI und Dauerhaftigkeit | `mount/mod.rs` wählt außerhalb Windows weiterhin `os/linux_os/recovery_storage.rs`. Dessen `publish` verlangt denselben Parent, hält dessen `DirectoryHandle`, bildet beide Literalnamen als CStrings und ruft `renameat2(fd, source, fd, target, flags)` auf. `replace=false` liefert den unverändert gesetzten Flagwert 1 im Typ `c_uint`; `replace=true` bleibt 0. Danach bleiben errno-Fehler und Parent-fsync maßgeblich. | Keine Konversion mit `unwrap`/`expect`, kein überschreibender Rückfall und keine zusätzliche Pfadauflösung. Konflikte und fehlende Dateisystemunterstützung bleiben echte Fehler. Unter Android wird ausschließlich der bisher inkompatible Cintegertyp korrigiert. |
+
+### Tatsächlich gelesene und geänderte Dateien dieser Fortsetzung
+
+Zusätzlich beziehungsweise erneut gelesen wurden die genaue Scope-Datei, der
+wörtliche Nutzervertrag, die vollständige Compilerdiagnose, der eigene Bericht,
+`rv1-modulplan.md` (Mount-/Runtimeabschnitt), `Cargo.toml` und `Cargo.lock`
+(Eframe-/egui- und libc-Zuordnung) sowie der freigegebene Rootgraph ausschließlich
+lesend. Die aktuelle Graphabfrage lautete
+`graphify query 'DriveIpcRequest MountHostRequest mount_client_host mount_manager_start RecoveryDraft' --budget 1000`.
+Die konkrete Quellenprüfung bestimmt die vorstehende Karte; die Graphabfrage
+ist kein Compilerbeleg.
+
+Die produktive Quellenlektüre umfasst die benötigten Abschnitte von
+`app/mod.rs`, `app/drive_modules.rs`, `app/core/{drive_snapshot,mount_ui,mount_recovery_ui,prelude,theme}.rs`,
+`daemon/{mod,drive_modules}.rs`,
+`daemon/os/shared/{devices_mount,ipc,ipc_protocol,ipc_protocol_drives,ipc_protocol_mount_host,mount_client,mount_client_host,mount_manager_start,mount_recovery_transaction}.rs`,
+`mount/mod.rs`, `mount/core/{recovery_state,recovery_manifest}.rs` und
+`mount/os/linux_os/recovery_storage.rs`. Außerdem wurden die konkreten
+Publikations-/Verifikations-/Restorekörper in
+`mount/os/shared/{recovery_export,recovery_import}.rs` und die gesamte
+`mount/os/shared/batches_recovery_task_tests.rs` gelesen. Quellpfade sind
+relativ zu `native/src/`; Abschnittlektüre wird nicht als erneute Volllektüre
+des gesamten jeweiligen Moduls behauptet.
+
+Eigene Änderungen:
+
+| Datei | Abgeschlossene Änderung | Quellgröße nach diesem Fix |
+|---|---|---|
+| `native/src/app/mod.rs` | Nur zusätzliche Direktregistrierung der Recoverydatei entfernt; exakt zwei Zeilen | 405 → 403 Zeilen unmittelbar bei Übergabe; spätere Viewerhunks gehören dem Captureautor |
+| `native/src/app/core/mount_recovery_ui.rs` | `egui` ausdrücklich aus dem kanonischen Prelude importiert | 98 Zeilen / 4.330 Byte |
+| `native/src/app/core/drive_snapshot.rs` | Überflüssige `.into()`-Zwischenkonversion am unveränderten Fehlertext entfernt | 371 Zeilen / 12.644 Byte |
+| `native/src/daemon/os/shared/mount_client.rs` | Ein kanonischer DriveIpcRequest-Import für alle vier Recoveryoperationen und ihren gemeinsamen Parameter | 130 Zeilen / 5.480 Byte |
+| `native/src/daemon/os/shared/mount_client_host.rs` | Kanonischer MountHostRequest-Import | 396 Zeilen / 14.432 Byte |
+| `native/src/daemon/os/shared/mount_manager_start.rs` | Nur drei tatsächliche Besitzer-Sichtbarkeiten korrigiert | 463 Zeilen / 18.420 Byte |
+| `native/src/mount/os/linux_os/recovery_storage.rs` | NoReplace-Flag im plattformübergreifend richtigen ABItyp ohne Panikkonversion | 56 Zeilen / 1.862 Byte |
+| dieser Bericht | Fehlerauflistung, Erhaltungsplan, aktuelle Karte und eigene Nachreview | keine native Größenregel |
+
+`mount_ui.rs`, `devices_mount.rs`, `ipc.rs`, alle kanonischen Protokolldefinitionen,
+Export-/Importkörper und Fixturedateien wurden nicht verändert.
+`daemon/mod.rs` blieb ausschließlich lesbar beim Geräteautor. Main hat den
+eigenen exakten Zwei-Zeilen-Hunk aus `app/mod.rs` gesichert und dessen
+Schreibfläche danach ausdrücklich dem Captureautor übertragen. Nach dieser
+Übergabe wurde `app/mod.rs` von diesem Autor nicht mehr bearbeitet. Der eigene
+abgeschlossene Recoveryhunk bleibt Bestandteil dieses Fixberichts.
+
+### Eigene anschließende Anti-Regressionsreview und Grenzen
+
+Die eigene Review nach der Umsetzung hat sämtliche zugewiesenen Fehlergruppen
+gegen ihre konkreten Definitionen und Verbraucher verfolgt:
+
+1. **Recoveryidentität:** Die aktuelle Registrierungssuche findet die Datei nur
+   noch als `mount_ui::recovery_ui`. Draft, Dialog, sichtbare Aktion und
+   Rückmeldung verwenden denselben Typ. Kein Feld wurde geöffnet und kein
+   Dialog-/Bestands-/Clientkörper entfernt. Der explizite `egui`-Import ist
+   erforderlich: Das vorhandene Prelude bindet `eframe::egui` ein, und
+   Cargo.toml enthält keinen direkten `egui`-Cratenamen für einen unqualifizierten
+   Ersatz. Dieser Befund wurde vor Abschluss in den finalen Import übernommen.
+2. **Kanonische Typen:** Der konkrete DriveRequest des Clients ist derselbe
+   wie das `IpcRequest::Drive.req`-Feld. Der konkrete HostRequest ist derselbe
+   wie `MountHostExt.req`. Statische Vergleiche gegen `d95dc404` bestätigen
+   unveränderte Definitionen in `ipc_protocol.rs`, `ipc_protocol_drives.rs`
+   und `ipc_protocol_mount_host.rs`. Es wurde keine Wirebehauptung oder
+   Enumvariante zur Kompilierung entfernt.
+3. **Ressourcenbesitz:** Ein Textvergleich gegen `d95dc404` bestätigt, dass
+   `mount_manager_start.rs` ausschließlich die drei dokumentierten
+   Sichtbarkeitsänderungen enthält. Der Retainedleaseparameter, seine Weitergabe,
+   Lifecyclelocks und sämtliche Körper stimmen überein. Die tatsächlichen
+   Aufrufer sind Nachfahren von `crate::daemon`; eine weitergehende Freigabe
+   ist nicht nötig und wurde nicht erteilt.
+4. **Unveränderte Körper:** Entsprechende statische Vergleiche bestätigen
+   im Recoveryclient ausschließlich Import-/Typreferenzanpassungen, im
+   Hostclient ausschließlich den kanonischen Import, im Recoverydialog
+   ausschließlich den Preludeimport und im Snapshot ausschließlich die
+   überflüssige Zwischenkonversion. Save/Remove/Import/Reactivate, alle
+   Antwortvarianten und der Snapshotreturn sind erhalten.
+5. **Atomisches Nichtüberschreiben:** Der neue Wert hat denselben dokumentierten
+   Flagbitwert 1. Beide Funktionsparameter- und Konstantentypen wurden in der
+   tatsächlich gelockten libc-Version gelesen. Nur Android erhält die
+   notwendige signed/unsigned-Abbildung; Linux verwendet seine bereits
+   korrekt typisierte Konstante direkt. Der einzige unsichere Aufruf
+   behält seine gehaltenen FDs und Namen; `RENAME_NOREPLACE`, Fehlerweitergabe
+   und Directory-fsync bleiben. Weder `.unwrap()` noch `.expect()` wurde
+   eingeführt. Die Export-/Import-/Restoreaufrufer behalten ihre Argumente
+   `replace=false`; somit wird keine bestehende Zielkollision als
+   Überschreibberechtigung interpretiert.
+6. **Keine abgeschwächte Prüfung:** Native Quellen bleiben mit normalem Layout
+   unter 500 Zeilen und 50 KiB. Die gezielte Whitespacekontrolle der sechs
+   weiter selbst besessenen Produktdateien meldete keinen Befund. Tests,
+   Testnamen, Manifestauswahl, Assertions und Gates wurden nicht verändert.
+   Der neue Compilerbefund ergänzt die früheren statischen Körpervergleiche
+   um die jetzt konkret korrigierten Namens-/Sichtbarkeits-/FFIfehler; er wird
+   weder als Infrastrukturfehler umgedeutet noch durch eine Erfolgsaussage ersetzt.
+
+Die Korrekturen zu allen aufgeführten Diagnose-IDs sind quellenmäßig umgesetzt.
+Die erneute Compilerbestätigung für Windows, Linux und Android und die
+Funktionsbestätigung stehen aus. Dieser Autor hat keine lokalen Builds,
+Compiler, Tests, Formatter, Server, Installationen, Hostprozesse, Gitmutationen,
+Graphupdates oder Unteragenten ausgeführt. Die nur lesende Graphabfrage ist
+beendet. Es gibt keinen aus diesem Autorzyklus abgeleiteten Kompilier- oder
+Funktionspass.
+
+### Bestehende Fallnamen und offene Integration
+
+Es wurde keine Fixturedatei geschrieben und kein neuer Fall vorbereitet.
+Die vorhandene gemeinsame Auswahl `batches_task_recovery_` deckt weiterhin die
+tatsächlich gelesenen Namen ab:
+
+- `batches_task_recovery_offline_export_import_preserves_raw_bytes_after_source_removal`
+- `batches_task_recovery_tamper_and_conflicting_cache_preserve_originals`
+- `batches_task_recovery_sealed_bytes_report_unknown_inventory_without_invented_entries`
+- `batches_task_recovery_export_refuses_symlink_without_reading_external_payload`
+
+Der letzte Fall bleibt unverändert Unixgebunden. Seine Existenz ist kein
+Laufzeitnachweis. Die bestehenden Wirefälle `drive_requests_keep_their_wire_form`,
+`devices_wire_requests_keep_their_form` und `mount_host_ext_wire_form` bleiben
+unverändert an ihren bisherigen Protokollmodulen. Die bestehenden RA-07-Namen
+und Snapshotnamen aus den vorangegangenen Abschnitten bleiben ebenfalls erhalten.
+Es wird keine neue Suite und kein Einzelaufruf verlangt; Main bewertet die
+erneute Kompilierung und Funktionsausführung im selben Suite-Fixloop.
+
+Offen bleiben ausschließlich die von Main besessene Integration des übergebenen
+Appregistrierungshunks mit dem getrennten Viewerhunk, Rootgraphrefresh,
+Remotebestätigung und der gemeinsame terminale Release. Keine weitere
+Produktabhängigkeit oder ungeklärte notwendige Nutzerangabe ist in der eigenen
+Fläche belegt. Die drei zusätzlich angefragten Recoveryquellen und der Rootgraph
+wurden von Main konkret lesend freigegeben; die Schreibfläche wurde nicht
+eigenmächtig erweitert.

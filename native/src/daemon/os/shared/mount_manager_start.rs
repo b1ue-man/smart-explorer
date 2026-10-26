@@ -22,7 +22,7 @@ use super::{random_token, write_capabilities};
 use super::{snapshot, start_cache, MountManager};
 
 impl MountManager {
-    pub(super) fn start(
+    pub(in crate::daemon) fn start(
         &self,
         config: MountConfig,
         host: &ShareHost,
@@ -30,7 +30,7 @@ impl MountManager {
         self.start_retained(config, host, None)
     }
 
-    pub(super) fn start_retained(
+    pub(in crate::daemon) fn start_retained(
         &self,
         config: MountConfig,
         host: &ShareHost,
@@ -51,7 +51,7 @@ impl MountManager {
         self.retry_retained(id, host, None)
     }
 
-    pub(super) fn retry_retained(
+    pub(in crate::daemon) fn retry_retained(
         &self,
         id: &MountId,
         host: &ShareHost,

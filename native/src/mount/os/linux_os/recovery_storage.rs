@@ -23,6 +23,16 @@ pub(crate) fn publish(source: &Path, target: &Path, replace: bool) -> io::Result
     let target_name = CString::new(target.file_name().unwrap_or(OsStr::new("")).as_bytes())
         .map_err(io::Error::other)?;
     let fd = root.directory_file().as_raw_fd();
+    // Android libc types this same flag bit as c_int; renameat2 takes c_uint.
+    #[cfg(target_os = "android")]
+    let no_replace: libc::c_uint = libc::RENAME_NOREPLACE as libc::c_uint;
+    #[cfg(not(target_os = "android"))]
+    let no_replace: libc::c_uint = libc::RENAME_NOREPLACE;
+    let flags = if replace {
+        0
+    } else {
+        no_replace
+    };
     // SAFETY: both names and the same held parent descriptor stay alive.
     let result = unsafe {
         libc::renameat2(
@@ -30,7 +40,7 @@ pub(crate) fn publish(source: &Path, target: &Path, replace: bool) -> io::Result
             source_name.as_ptr(),
             fd,
             target_name.as_ptr(),
-            if replace { 0 } else { libc::RENAME_NOREPLACE },
+            flags,
         )
     };
     if result != 0 {
