@@ -1,6 +1,9 @@
 # Geräte- und Appnavigation: G7, G8, G9
 
 Stand: 2026-10-26. Zugewiesener Fixautor: `/root/fix_device_navigation`.
+Die erste Abschlussfassung ist der Stand vor Remoteformatierung; ihre
+damalige Größenbewertung wird im Fortsetzungsabschnitt anhand des realen
+Remote-Befunds ausdrücklich korrigiert.
 Arbeitskopie: `/tmp/smartexplorer-review-fixes-ee75e91b`, ursprünglicher
 Reviewkandidat `ee75e91bad6b28ef9206a5b2b2857cbea75c4e5b`.
 Die Releasebasis `a814f263096fe69d3746e840b5f3fad3fd7e88a0` / `v0.5.184`
@@ -391,3 +394,277 @@ offener Registrierungs- oder Dokumentationsauftrag an einen späteren
 Fixautor.
 Kein Build, Compiler, Formatter, Test, Server, Paket, Commit, Push,
 Graphupdate oder Release wurde durch diesen Fixautor gestartet.
+
+## Fortsetzung: reale Modulgrößen aus Remote-Vorbereitung 40332971455
+
+### Erstplan aus der Fortsetzung
+
+Der delegierte Auftrag vom 2026-10-26 setzt denselben Autorzyklus fort:
+Der Remoteversuch `40332971455` meldete nach normaler Rustformatierung
+Größenverletzungen vor jeder Kompilierung. Der übernommene Stand ist
+`10988167`; der Arbeitsbaum war bei Fortsetzung sauber. Die aktuelle
+Scope-Datei benennt ausschließlich elf Zielmodule und deren erlaubte
+Extraktionsdateien. Das frühere, statisch begrenzte Größenurteil wird durch
+diesen realen Formatierungsbefund korrigiert: Normale Formatierung ist für
+die Größenabnahme maßgeblich, nicht die zuvor vorhandene kompakte Schreibweise.
+
+Beauftragtes Ergebnis: Die elf Verantwortlichkeiten fachlich auf Module
+unter 500 Zeilen und 50 KiB verteilen. Geräte-/Appbedienung, UI, Rechte,
+Consent, Wire-/Persistenzformate, Zustandsbesitz, Abbruch und exakte
+Testfunktionsnamen bleiben erhalten. Keine Zeilenverdichtung und keine
+Gateausnahme. Main besitzt Git, Graph und dieselbe spätere Remote-Suite.
+Lokale Formatter, Builds, Tests, Hostaufrufe und Unteragenten sind verboten.
+
+Vorläufiger Plan: Für jedes Ziel die vorhandenen Funktionen, Datenbesitzer,
+Modulanschlüsse und Testregistrierungen lesen; die zugelassenen fachlichen
+Trennstellen festlegen; unveränderte Funktionskörper in zusammenhängende
+Unterbausteine verschieben; Rustsichtbarkeit und Wiretypen kontrollieren;
+den gesamten betroffenen Aufrufweg danach selbst statisch gegenlesen.
+Noch unbekannt sind die tatsächlichen Trennstellen und die benötigte
+Sichtbarkeit; diese Angaben sind aus der Lesefläche klärbar. Eine nur vom
+Nutzer klärbare Angabe ist nicht erkennbar.
+
+| Zielmodul | Normal formatierte Ausgangszeilen |
+| --- | ---: |
+| `app/core/analytics_access.rs` | 552 |
+| `app/core/share_access_accounts_ui.rs` | 500 |
+| `app/core/share_device_page_ui.rs` | 538 |
+| `apps/os/android/bridge.rs` | 508 |
+| `apps/os/host.rs` | 879 |
+| `daemon/os/shared/discovery_pairing_ipc.rs` | 515 |
+| `daemon/os/shared/ipc_protocol.rs` | 501 |
+| `screen/os/linux_os/app_icons.rs` | 585 |
+| `screen/os/windows/app_icons.rs` | 554 |
+| `share/core/access_runtime_tests.rs` | 525 |
+| `share/core/node_apps.rs` | 977 |
+
+Die Pfade der Tabelle liegen unter `native/src/`. Quelle sind die gelesenen
+Dateigrößen am übernommenen Commit; Befundquelle des Auftrags sind außerdem
+`/tmp/smartexplorer-rv1-40332971455/format.json` und das gefilterte
+`/tmp/smartexplorer-rv1-size-inventory.json`. Kein Compilerjob dieses
+Remoteversuchs lief; ein Laufzeiturteil wird daraus nicht abgeleitet.
+
+### Bestand, zusätzliche Verknüpfungskarte und Strukturplan
+
+Die zusätzliche Graphabfrage zu `AppHost`, `node_apps`, Discovery,
+Analysezugriff, Konten-/Geräteseite und Icons ordnet die vorhandenen Knoten
+zu. Die tatsächlichen Funktionsblöcke wurden anschließend in den elf
+zugewiesenen Dateien gelesen. Der Graph ist weiterhin eine Navigationshilfe;
+seine Zeilenstände ersetzen nicht die übernommenen formatierten Quellen.
+
+| Bisherige Verantwortung und betroffene Kette | Fachliche Extraktion und Erhalt |
+| --- | --- |
+| `analytics_access`: Analyseergebnis → DeniedRoots/Teilscan → Rechteanfrage → erneute Ergebnisauswertung → Problemliste/Kopierbericht | `analytics_access_issues.rs` besitzt Berichtsformat und Problemlistendarstellung; `analytics_access_tests.rs` enthält denselben bisherigen `tests`-Modulinhalt. Generation, Consentgeneration, Worker und Pendingreceiver bleiben in `AnalyticsAccess`; die Appmethoden bleiben im Ursprung. Reexports erhalten `issue_report`/`issues_ui`. |
+| `share_access_accounts_ui`: Befehletab → Kontextzustand → Kontenliste/OS-Bewertung → ausdrückliche Adminaktion → Ergebnis → Neuladen | `share_access_accounts_actions.rs` besitzt den vorhandenen Sharedzustand, Workerstart und Aktionsausführung. Die Form-, Konto- und Ergebnisdarstellung bleibt im Ursprung; `ui_accounts` wird mit unveränderter Sichtbarkeit reexportiert. Context-ID, Arc/Mutex, Busyprüfung, Elevation und Repaint bleiben gleich. |
+| `share_device_page_ui`: Kontakt-/Grant-/Pinnedgerät → Verbindung/Vertrauen → Bildschirm → Appkatalog/Familien/Login/TCP/Routen → Rechte-/Freigabeänderung | `share_device_connection_ui.rs` übernimmt Verbindungs- und Bildschirmabschnitt. Die ursprünglichen Kontakt-/Grant-/Pinnedseiten bleiben Eigentümer von Geräteauswahl, Profiles, Persistenz und den nachgelagerten App-/P4-Anschlüssen. |
+| Androidbridge: JNI-Katalog/Dispatch → noncegebundener Zustand → E4-Hold → einmaliger JNI-Claim → OS-Dispatch → lokale Result-/Consentfortsetzung | `bridge_admission.rs` besitzt ausschließlich Admissionregistry, Hold/Drop und Permit-/Claimprüfung. Die vorhandenen Bridgequeues, Sinks, Wartebedingungen und Katalog-/Launch-/Iconantworten bleiben im Ursprung. Die Zulassungstypen/-funktionen werden unverändert reexportiert; keine zweite Registry. |
+| AppHost: authentifizierter Peer-/Requestbesitzer → frischer Katalog/Benutzer/Sitzung → Admissionguard → dauerhaftes Claimjournal → OS-Dispatch → Dispatch-/Fensterbeleg → Wiederabfrage/P4 | `host_catalog.rs` besitzt Katalog/Icon und Faktenvalidierung; `host_launch.rs` Startbeleg, Einmalclaim, Consentfortsetzung und Dispatch; `host_lifecycle.rs` Belegabfrage, lokale Antworten und P4-Korrelation. `AppHost` bleibt derselbe Typ mit denselben Feldern, Journalen und Mutexen; seine Methoden bleiben über denselben Typ erreichbar. |
+| Discovery: Stream/Beobachter → gepufferter Terminalbeleg → exakter Exchangebesitzer → Start/Wait/Cancel → Verbindungsende → Ownerdrop | Nur die vorhandenen Tests gehen nach `discovery_pairing_ipc_tests.rs`; das registrierte Modul heißt weiterhin `tests`. Beobachter, Terminalpuffer, Verbindungswache, Wait- und Cancelwege bleiben unverändert zusammen. |
+| Daemon-IPC: bestehender Request/Response → Mountfähigkeiten/Disposition → VFS-Fakten und Rückabbildung | `ipc_protocol_mount_capabilities.rs` enthält genau Mount-DTOs und deren vorhandene Konvertierungen. Gleich sichtbare Reexports erhalten die Aufrufer; derive-/serde-Attribute, Variantennamen, Felder, Defaults und Fähigkeitssemantik bleiben unverändert. |
+| Linuxicons: installierter Desktopkatalog → eindeutige Desktop-ID → Theme/SVG/Raster → gebundene Referenz; X11-WM_CLASS/PID/NET_WM_ICON als kontrollierter Rückfall | `app_icon_catalog.rs` besitzt begrenztes Kataloglesen und eindeutige Zuordnung; `app_icon_netwm.rs` X11-Rückfall und Fensteridentität. Theme-/SVG-/Hash-/Antwortlogik bleibt im Ursprung. Keine neue Pfadauflösung, Dateiausführung oder Exec-Auswertung. |
+| Windowsicons: HWND/Prozess/AUMID → installierter Shellkatalog → Icon/Shellbitmap → begrenzte Rasterantwort | `app_icons_shell.rs` übernimmt den vorhandenen Shellbitmapauszug einschließlich HBITMAP-/DC-Abschluss und Alphaaufbereitung. Die übrigen Hostidentitäts-/Katalog-/Iconpfade bleiben zusammen; COM-Initialisierung und Threadbesitz werden nicht verschoben. |
+| Access-Runtimeabnahme: Grant-/Identitäts-/Konten-/Deadlineänderung → bestehende Zulassungsregistry → selektiver Rechteentzug und Ressourcenerhalt | `access_runtime_lifecycle_tests.rs` übernimmt die vorhandenen Lebenszyklusprüfkörper. Die ursprünglichen Testfunktionen bleiben als dünne Registrierungsfunktionen am ursprünglichen Modulpfad und rufen genau ihren verschobenen Körper auf. Kein Testname und keine Auswahl ändert sich. |
+| NodeApps: authentifizierter Stream/Principal → Katalog-/Icon-/Launch-/Receiptkommando → E4-Bestätigung/Zulassung → AppHost → P4-Pin und lokale Androidfortsetzung | `node_apps_client.rs` hält Streamhandshake und Bestätigungswarten; `node_apps_host.rs` Kommandodispatch, sichtbaren Katalog, Requestfakten und Appzulassung; `node_apps_platform.rs` lokale Result-/Consentcallbacks. `NodeApps` behält Configuration, Pending-AccessHandles, Watchset, Slots und Ownerkey. Lokale Grant-/Konfigurationsmethoden und P4-Windowadapter bleiben am Ursprung angeschlossen. |
+
+Entscheidungsrecherche, abgerufen 2026-10-26:
+[Rustsichtbarkeit](https://doc.rust-lang.org/reference/visibility-and-privacy.html)
+erlaubt Nachkommen Zugriff auf private Elternfelder; beschränkte Sichtbarkeit
+und Reexports müssen die bisherige Vorfahrenreichweite erhalten.
+[Inhärente Implementierungen](https://doc.rust-lang.org/reference/items/implementations.html)
+erlauben mehrere impl-Blöcke desselben Cratetyps; der Aufrufpfad bleibt am
+Typ. Deshalb verbleiben Datenbesitzer im Ursprung. Neu nötige Geschwister-
+hilfen sind nur zum ursprünglichen Verantwortungsmodul sichtbar. Eine neue
+öffentliche API oder ein anderer Registrybesitzer ist nicht erforderlich.
+
+Verbindlicher Ablauf vor Quelländerungen:
+
+1. Die vorgenannten fachlichen Blöcke ohne Verhaltensänderung in genau die
+   erlaubten Extraktionspfade verschieben. Bereits formatierte Zeilen
+   übernehmen; nur die für neue Modulrahmen nötige Einrückung ändern.
+2. Vorhandene Aufrufnamen durch Reexports oder dieselben inhärenten Methoden
+   erhalten. Relative `super`-Pfade um genau die neue Elternebene korrigieren;
+   eingeschränkte Sichtbarkeit auf denselben bisherigen Vorfahren binden.
+3. Die unveränderten Zustandsfelder, Locks, Guards, Wire-/Serdeattribute,
+   Testnamen und Rückgabepfade gegen den übernommenen Commit vergleichen.
+   Erforderliches Ergebnis: Keine doppelte Registry, kein zusätzlicher
+   Launch, keine geänderte Fehler-/Abbruchreihenfolge, keine verlorene
+   Testregistrierung.
+4. Quellen statisch auf Größen, Modulpfade und unveränderte Funktionskörper
+   prüfen. Die tatsächliche Format-/Kompilier-/Suitebestätigung gehört
+   ausschließlich zur späteren Wiederholung desselben Remoteeinstiegs.
+5. Derselbe Autor liest anschließend die betroffene gesamte Kette erneut,
+   dokumentiert seine Anti-Regressionsbefunde und meldet die endgültigen
+   Dateien sowie präzise verbleibende Laufzeitgrenzen an Main.
+
+Zweite Lückenprüfung: Die drei besonders gekoppelten Flächen wurden vor
+der Extraktion zusätzlich geprüft: AppHost-Guards laufen weiterhin durch
+denselben `dispatch`; NodeApps-Pendingbesitz bleibt bis lokaler Fortsetzung
+am selben Node; Windows-DC/HBITMAP und Android-AdmissionHold behalten ihren
+Abschlussort innerhalb desselben Funktionskörpers. Ein `include!` als reine
+Größenumgehung, neue Schematypen, geänderte Tests oder eine Gateausnahme sind
+ausgeschlossen. Die zugelassenen Extraktionspfade reichen nach dieser
+Bestandslektüre aus.
+
+### Umgesetzte Modulstruktur und endgültige Dateien
+
+Die geplante Aufteilung ist umgesetzt. Jedes der elf Ursprungsmodule und
+jede der 17 erlaubten Extraktionsdateien bleibt im geschriebenen, aus der
+Remoteformatierung übernommenen normalen Layout unter 500 Zeilen und
+50 KiB. Es wurden keine Zeilen zusammengezogen. Die erneute Ausführung des
+Remoteformatters bleibt der verbindliche abschließende Größenbeleg.
+
+| Geändertes Ursprungsmodul unter `native/src/` | Zeilen nach Extraktion |
+| --- | ---: |
+| `app/core/analytics_access.rs` | 453 |
+| `app/core/share_access_accounts_ui.rs` | 397 |
+| `app/core/share_device_page_ui.rs` | 417 |
+| `apps/os/android/bridge.rs` | 420 |
+| `apps/os/host.rs` | 266 |
+| `daemon/os/shared/discovery_pairing_ipc.rs` | 451 |
+| `daemon/os/shared/ipc_protocol.rs` | 407 |
+| `screen/os/linux_os/app_icons.rs` | 357 |
+| `screen/os/windows/app_icons.rs` | 465 |
+| `share/core/access_runtime_tests.rs` | 389 |
+| `share/core/node_apps.rs` | 249 |
+
+| Neu erstelltes fachliches Untermodul unter `native/src/` | Zeilen |
+| --- | ---: |
+| `app/core/analytics_access_tests.rs` | 49 |
+| `app/core/analytics_access_issues.rs` | 58 |
+| `app/core/share_access_accounts_actions.rs` | 110 |
+| `app/core/share_device_connection_ui.rs` | 128 |
+| `apps/os/android/bridge_admission.rs` | 107 |
+| `apps/os/host_catalog.rs` | 127 |
+| `apps/os/host_launch.rs` | 282 |
+| `apps/os/host_lifecycle.rs` | 226 |
+| `daemon/os/shared/discovery_pairing_ipc_tests.rs` | 65 |
+| `daemon/os/shared/ipc_protocol_mount_capabilities.rs` | 102 |
+| `screen/os/linux_os/app_icon_catalog.rs` | 148 |
+| `screen/os/linux_os/app_icon_netwm.rs` | 100 |
+| `screen/os/windows/app_icons_shell.rs` | 96 |
+| `share/core/access_runtime_lifecycle_tests.rs` | 157 |
+| `share/core/node_apps_client.rs` | 183 |
+| `share/core/node_apps_host.rs` | 412 |
+| `share/core/node_apps_platform.rs` | 154 |
+
+Zusätzlich geändert wurde ausschließlich dieser eigene Bericht. Es wurde
+kein fremder Bericht, Suiteeintrag oder zentraler Orchestrierungspfad
+geändert. Die frühere G7/G8/G9-Produktkorrektur bleibt erhalten.
+
+Der einzige zusätzlich gekapselte Ausdruck ist die bereits vorhandene
+Deadlineabfrage im Android-Dispatchtimeout: `admission::claimed_until(id)`
+liest unter derselben Registrymutex denselben `Option<Instant>` und gibt
+denselben Poisonfehler zurück. So bleibt die Registry privat beim neuen
+Admissionbesitzer. Das ist keine neue Zulassungsentscheidung und verändert
+weder Frist, Claim, Guardhaltung noch Wiederholungsverhalten.
+
+### Eigene Anti-Regressionsreview der Strukturkorrektur
+
+Derselbe Autor hat nach der Extraktion die vollständige zusätzliche Karte
+oben erneut am finalen Quellstand geprüft. Neben dem manuellen Gegenlesen
+wurde der bereits installierte Rust-Tree-sitter-Parser aus der vorhandenen
+Graphify-Umgebung benutzt. Er liest und parst Quelltext; es wurden damit
+keine Produktfunktionen, Tests, Formatter, Compiler oder Hosts gestartet.
+
+Vergleichsbasis war je Ziel die konkrete Datei aus `10988167`. Für den
+Funktionskörpervergleich wurden ausschließlich Kommentare, Formatwhitespace
+und die gezielt hinzugefügte relative Elternebene normalisiert. Strings,
+Operationen, Fehlertexte und Kontrollfluss blieben Bestandteil des Vergleichs.
+Alle ursprünglichen Funktionskörper sind im Ursprungsmodul oder zugeordneten
+Untermodul unverändert vorhanden; die einzelne Androiddeadline-Kapselung
+wurde separat direkt gegen den ursprünglichen gelockten Ausdruck geprüft.
+Alle ursprünglichen Structs, Enums, Typaliase und Konstanten stimmen bis
+auf die erforderliche Modul-Sichtbarkeit überein. Die ursprünglichen
+Testregistrierungsnamen sind ebenfalls erhalten.
+
+Die erste statische Syntaxlektüre erkannte einen eigenen Extraktionsfehler:
+Eine für `DesktopIcon` bestimmte Feldsichtbarkeit war auch an den Parameter
+`desktop_for::id` geraten. Dieser reine Extraktionsfehler wurde vor Übergabe
+korrigiert; die anschließend vollständig wiederholte statische Parser-
+und Körperprüfung meldete keinen Syntaxfehler und keine unaufgelöste
+Körperabweichung. Ein zusätzliches Leerzeilenproblem am Ende der Kontenseite
+wurde ebenfalls vor dem abschließenden `git diff --check` entfernt.
+
+| Erhaltungsvertrag | Eigener abschließender Befund |
+| --- | --- |
+| Bestehende Aufrufer/Sichtbarkeit | `ui_accounts`, Analysebericht/-UI, Mount-DTOs, Android-Admissiontypen/-funktionen und Linuxfensteridentität werden unter ihren bisherigen Namen reexportiert. `pub(in super::super)` erhält beim Umzug ursprünglich zum Elternmodul sichtbarer DTOs und Funktionen genau denselben Vorfahren. AppHost- und ShareIrohNode-Methoden bleiben inhärente Methoden desselben Typs. Private modulübergreifende Helfer sind nur am bisherigen Verantwortungsmodul sichtbar. |
+| Analyseabbruch und Zugriffsentscheidung | `AnalyticsAccess` behält Generation, Consentgeneration, Pendingreceiver, DeniedRoots und Partialworker. Ausgelagert sind nur Problemdarstellung und vorhandene Tests. Erneute Rechteanfrage, lokale/remote Unterscheidung und Teilscancancellation bleiben in denselben Appmethoden. |
+| Konten-/Gerätebedienung | Labels, Context-ID, Kontoauswahl, ausdrückliche Adminaktionen, Busyprüfung und Ergebnis-/Reloadfolge sind unverändert. Kontakt-/Grant-/Pinnedseiten behalten ihre Profiles und Persistenz. Verbindung, Vertrauen, Dateifreigabe, Bildschirm, Appkatalog, Fensterfamilie, Login, TCP und Routen bleiben an denselben sichtbaren Bedienwegen. |
+| Androidzulassung | Genau eine Admissionregistry liegt nun beim Admissionmodul. Request-ID, deadline, valid-Closure und claimed_until bleiben dieselben Daten. Hold/Drop, einmaliger Claim und Warten auf den tatsächlichen Aufruf bleiben unverändert. Die neue Deadlinefunktion ist ausschließlich eine typisierte Lesefassade auf diese Registry. |
+| AppHost-Consent und Einmalstart | Device, Platform, Journal, Serialmutex, Ownershiproot und Correlationsmutex bleiben im ursprünglichen AppHost. Journalbind/Claim, Consentfortsetzung, Admissionguard, Deadline und Dispatch bleiben innerhalb derselben Funktionskörper und Reihenfolge; die Methodenauslagerung erzeugt keinen neuen Besitzer oder Start. |
+| AppHost-Beleg/P4 | Requestbody-, Katalog-, App-, Benutzer-, Sitzungs- und Fensterbindung bleiben unverändert. Dispatchantworten können weiterhin keine P4-Aktivierung erfinden. Receipt, Correlation, WindowPending und NoteWindow ändern weder Wireformat noch Journalinhalt. |
+| Discovery | Produktionscode, Observerbesitz, Terminalpuffer, Listen-/Exchangewarten, Cancel und Verbindungswache sind unverändert. Die vorhandenen Tests behalten das Modul `tests` und damit ihre bisherigen vollqualifizierten Pfade. |
+| IPC-/Persistenzformate | Mountvariantennamen, Feldnamen, serde-/derive-Attribute, Defaults und VFS-Konvertierungen sind unverändert. Apphost-PeerRequestBinding und die gespeicherten Apprequest-/Belegtypen wurden nicht geändert. Kein Schema oder Protokoll wird angehoben oder migriert. |
+| Linuxicons | Catalogbudget, Tombstones, Uniqueness, literal ID/Classbindung, Dateigrenzen, Theme-/SVG-/Rasterlimits und Hashvergleich bleiben erhalten. WM_CLASS/PID/NET_WM_ICON-Abfrage erhält durch den Umzug nur die korrekte zusätzliche Elternebene; kein ungeprüfter Pfad oder Exec wird ergänzt. |
+| Windowsicons | COM-Apartmentinitialisierung bleibt am bisherigen Caller. Shellbitmapoperation, Pixel-/Alphaberechnung, DC-/HBITMAP-Freigabe und sämtliche Fehlerpfade sind identisch. FFI und Betriebssystemimporte bleiben ausschließlich im Windowsadapter. |
+| NodeApps-Rechte und Ressourcenbesitz | Configuration, Pendingkontexte mit AccessHandle, Windowwatchset, Semaphore und Ownerkey bleiben am ursprünglichen Node. Handshake/Principalprüfung, Katalogfilter, Ask-Ticket, Policyrevision, Verbindungsabbruch, Deadline, Accessregistry und Guardübergabe bleiben in denselben Körpern. Genau ein Platformnode-Weakbesitzer und dieselben lokalen Callbackwege bleiben vorhanden. |
+| Testregistrierung | Analyse-/Discoverymodule behalten ihren Namen `tests`; AppHost behält `batches_launch_task_tests`. Die vier ausgelagerten Access-Lebenszykluskörper werden von den ursprünglichen registrierten Testfunktionen aufgerufen. Kein Testsuffix, vollqualifizierter Registrierungsort, Filter oder Suitekommando wird ersetzt. |
+| Strukturgrenzen | Alle zugewiesenen Quellen liegen im aktuellen Layout unter 500 Zeilen und 50 KiB; die größte ist der vorhandene Windowsiconadapter mit 465 Zeilen. Es gibt keine Zeilenverdichtung, keinen include!-Ausweichpfad, keine Gateausnahme, keine neue Abhängigkeit und keine neue Plattformverzweigung im Kern. |
+
+`git diff --check` für die elf geänderten Ursprungsmodule war abschließend
+fehlerfrei. Eine zusätzliche statische Textlektüre prüfte auch die neuen
+Dateien auf Whitespace, Konfliktmarker und beide Größenlimits. Die Syntax-,
+Körper- und Datendefinitionsvergleiche sind ausdrücklich keine Typprüfung,
+kein Linking und kein Laufzeitpass. Rustsichtbarkeit wurde am Quelltext
+und am Rustreferenzvertrag geprüft; ihre Compilerbestätigung bleibt offen.
+
+### Exakte bestehende Fallnamen und Registrierung
+
+Es wurde keine zusätzliche Suite und kein zusätzlicher Testfall angelegt.
+Diese bereits vorhandenen Registrierungen bleiben exakt erhalten:
+
+Analyse:
+
+- `analytics_access_task_remote_access_never_requests_local_privileges`
+- `analytics_access_task_report_lists_each_retained_path_and_omissions`
+- `analytics_access_task_new_scan_resets_prompt_without_canceling_consented_launch`
+
+Discovery:
+
+- `batches_task_p29_gui_drain_preserves_exact_owned_terminal_result`
+- `batches_task_p29_observer_overflow_fails_closed_and_dead_observers_expire`
+- `batches_task_p29_connection_end_cancels_even_before_start_acknowledgement`
+
+Access-Runtime:
+
+- `p18d_targeted_recheck_preserves_unrelated_app_user_port_and_old_rights`
+- `p18d_persisted_widening_keeps_lease_narrowing_revokes_before_publication`
+- `p18d_session_user_and_relation_changes_end_only_bound_operations`
+- `p18d_admission_holds_auth_through_registration_and_resource_publication`
+- `p18d_poisoned_auth_denies_without_panic_or_resource_publication`
+- `p18d_deadline_wakes_without_screen_and_later_admission_wakes_idle_timer`
+- `p18d_account_and_earlier_deadline_changes_revoke_only_affected_leases`
+- `p18d_failed_persisted_identity_check_keeps_live_authority_unchanged`
+- `p18d_room_login_is_denied_even_with_an_explicit_matching_room_grant`
+
+Der vorhandene G7/G8/G9-Eintrag `R12-G7-G8-G9-Geraetenavigation` und seine
+im ersten Berichtsteil benannten Fälle werden durch die Strukturkorrektur
+nicht verändert. Main benötigt für diese Extraktion keine neuen
+Testnamen oder Auswahlpräfixe. Die neuen Rustdateien müssen wie die
+Ursprünge am bestehenden Remoteformat-/Größen-/Kompilierweg teilnehmen.
+
+### Zusätzliche gelesene Quellen, Entscheidungen und Grenzen
+
+Zusätzlich zur früheren Dateiliste wurden für diese Fortsetzung die elf
+Ursprungsmodule der Größentabelle, alle 17 neuen Untermoduldateien, die
+aktualisierte Scope-Datei, der eigene Bericht und die beiden genannten
+Remote-Befunddateien gelesen. In `native/src/apps/os/mod.rs`,
+`native/src/apps/os/android/mod.rs` und `native/src/apps/mod.rs` wurden die
+vorhandenen Plattform- und AppHost-Exports geprüft. Die Graphabfrage und
+die beiden oben verlinkten Rustreferenzen ergänzen diese Quellen.
+Die Ursprungskörper und Definitionen wurden jeweils aus demselben
+`10988167` gelesen; fremde Repositoryflächen wurden nicht erkundet.
+
+Die fachlichen Extraktionspfade reichten aus; es bleibt kein konkreter
+Scopebedarf für die Umsetzung offen. Die zusammenhängende Appkette und
+die eigenen ursprünglichen G7/G8/G9-Fixes bleiben unverändert anschließbar.
+Erledigt sind Strukturplan, Verknüpfungskarte, Quellaufteilung und eigene
+anschließende statische Anti-Regressionsreview durch denselben Autor.
+
+Main besitzt weiterhin den gemeinsamen Graphrefresh, Commit/Push,
+die erneute Format-/Größen-/Compilerbestätigung und die Wiederholung des
+bestehenden einen Remote-Suiteeinstiegs. Reale OS-, Consent-, Netzwerk-,
+Geräte- und UIausführung bleiben hier ungeprüft. Dieser Autor hat weder
+lokal formatiert, kompiliert, gebaut oder getestet noch Hosts aufgerufen,
+Unteragenten gestartet, Gitmutationen, Graphupdates oder Releaseaktionen
+ausgeführt. Die Fortsetzung behauptet keinen erfolgreichen Remote-Suitelauf.

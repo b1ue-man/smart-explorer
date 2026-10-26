@@ -2,152 +2,21 @@
 //! `Exec=` is never read. Every path comes from the host's installed catalog/theme.
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
-use std::io::{self, Read};
-use std::path::{Component, Path, PathBuf};
+use std::io;
+use std::path::{Path, PathBuf};
 
 use crate::screen::core::app_icon::{self, AuthorizedIconEntry, IconReply, MAX_ICON_BYTES};
 use crate::screen::core::window_list::{ListSource, WindowEntry, WindowList};
 
+#[path = "app_icon_catalog.rs"]
+mod installed;
+#[path = "app_icon_netwm.rs"]
+mod netwm;
+use installed::{catalog, desktop_for, ini, read_bounded, safe_relative, DesktopIcon};
+use netwm::window_icon;
+pub(crate) use netwm::window_identity;
+
 const OUTPUT_SIDE: u32 = 128;
-const MAX_CATALOG_ENTRIES: usize = 8192;
-
-#[derive(Clone)]
-struct DesktopIcon {
-    id: String,
-    startup_class: Option<String>,
-    icon: String,
-}
-
-fn safe_relative(value: &str) -> bool {
-    !value.is_empty()
-        && Path::new(value)
-            .components()
-            .all(|part| matches!(part, Component::Normal(_)))
-}
-
-fn read_bounded(path: &Path) -> io::Result<Vec<u8>> {
-    let file = fs::File::open(path)?;
-    if !file.metadata()?.is_file() || file.metadata()?.len() > MAX_ICON_BYTES as u64 {
-        return Err(app_icon::invalid("icon source exceeds byte budget"));
-    }
-    let mut bytes = Vec::new();
-    file.take(MAX_ICON_BYTES as u64 + 1)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() > MAX_ICON_BYTES {
-        return Err(app_icon::invalid("icon source grew beyond byte budget"));
-    }
-    Ok(bytes)
-}
-
-fn ini(text: &str, section: &str, key: &str) -> Option<String> {
-    let mut active = false;
-    for line in text.lines().map(str::trim) {
-        if line.starts_with('[') {
-            active = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) == Some(section);
-        } else if active {
-            if let Some((name, value)) = line.split_once('=') {
-                if name.trim() == key {
-                    return Some(value.trim().into());
-                }
-            }
-        }
-    }
-    None
-}
-
-fn catalog(dirs: &[PathBuf]) -> Vec<DesktopIcon> {
-    let mut found = BTreeMap::new();
-    let mut scanned = 0usize;
-    for base in dirs {
-        let mut base_ids = HashSet::new();
-        let root = base.join("applications");
-        let mut pending = vec![root.clone()];
-        while let Some(dir) = pending.pop() {
-            let children = match fs::read_dir(&dir) {
-                Ok(children) => children,
-                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-                Err(_) => return Vec::new(),
-            };
-            for child in children {
-                let Ok(child) = child else {
-                    return Vec::new();
-                };
-                scanned += 1;
-                // An incomplete catalog cannot prove uniqueness; keep every list entry neutral.
-                if scanned > MAX_CATALOG_ENTRIES {
-                    return Vec::new();
-                }
-                let path = child.path();
-                let Ok(kind) = child.file_type() else {
-                    return Vec::new();
-                };
-                // Do not follow directory links or recurse outside applications/.
-                if kind.is_dir() {
-                    if path.components().count() >= root.components().count() + 8 {
-                        return Vec::new();
-                    }
-                    pending.push(path);
-                    continue;
-                }
-                if path.extension().and_then(|s| s.to_str()) != Some("desktop") {
-                    continue;
-                }
-                let Some(id) = path
-                    .strip_prefix(&root)
-                    .ok()
-                    .and_then(|p| p.to_str())
-                    .map(|s| s.replace('/', "-"))
-                else {
-                    continue;
-                };
-                if !base_ids.insert(id.clone()) {
-                    return Vec::new();
-                }
-                if found.contains_key(&id) {
-                    continue;
-                }
-                // Record tombstones too: Hidden=true masks a system entry with the same ID.
-                let Some(text) = read_bounded(&path)
-                    .ok()
-                    .and_then(|bytes| String::from_utf8(bytes).ok())
-                else {
-                    return Vec::new();
-                };
-                let entry = (|| {
-                    if ini(&text, "Desktop Entry", "Hidden").as_deref() == Some("true")
-                        || ini(&text, "Desktop Entry", "Type").as_deref() != Some("Application")
-                    {
-                        return None;
-                    }
-                    Some(DesktopIcon {
-                        id: id.clone(),
-                        startup_class: ini(&text, "Desktop Entry", "StartupWMClass"),
-                        icon: ini(&text, "Desktop Entry", "Icon").unwrap_or_default(),
-                    })
-                })();
-                found.insert(id, entry);
-            }
-        }
-    }
-    found.into_values().flatten().collect()
-}
-
-fn desktop_for<'a>(
-    entries: &'a [DesktopIcon],
-    id: &str,
-    wm_class: bool,
-) -> Option<&'a DesktopIcon> {
-    let full = if id.ends_with(".desktop") {
-        id.to_string()
-    } else {
-        format!("{id}.desktop")
-    };
-    let mut candidates = entries.iter().filter(|entry| {
-        entry.id == full || (wm_class && entry.startup_class.as_deref() == Some(id))
-    });
-    let entry = candidates.next()?;
-    candidates.next().is_none().then_some(entry)
-}
 
 fn icon_bases(dirs: &[PathBuf]) -> Vec<PathBuf> {
     let mut bases = Vec::new();
@@ -399,103 +268,6 @@ fn resolve(entry: &DesktopIcon, dirs: &[PathBuf], theme: &str) -> Option<IconRep
     }
 }
 
-/// EWMH ARGB fallback only after the current window class proves this desktop mapping.
-fn window_icon(window: &WindowEntry, desktop: &DesktopIcon) -> Option<IconReply> {
-    use x11rb::connection::Connection;
-    use x11rb::protocol::xproto::{AtomEnum, ConnectionExt};
-    let xid: u32 = window.id.parse().ok()?;
-    let (connection, _) = x11rb::rust_connection::RustConnection::connect(None).ok()?;
-    let class = connection
-        .get_property(false, xid, AtomEnum::WM_CLASS, AtomEnum::STRING, 0, 1024)
-        .ok()?
-        .reply()
-        .ok()?;
-    if class.bytes_after != 0 {
-        return None;
-    }
-    let class = super::x11_windows::app_of_wm_class(&class.value);
-    let stem = desktop.id.strip_suffix(".desktop").unwrap_or(&desktop.id);
-    if class != stem && desktop.startup_class.as_deref() != Some(class.as_str()) {
-        return None;
-    }
-    if let Some(expected_pid) = window.pid {
-        let atom = connection
-            .intern_atom(false, b"_NET_WM_PID")
-            .ok()?
-            .reply()
-            .ok()?
-            .atom;
-        let property = connection
-            .get_property(false, xid, atom, AtomEnum::CARDINAL, 0, 1)
-            .ok()?
-            .reply()
-            .ok()?;
-        if property.value32()?.next() != Some(expected_pid) {
-            return None;
-        }
-    }
-    let atom = connection
-        .intern_atom(false, b"_NET_WM_ICON")
-        .ok()?
-        .reply()
-        .ok()?
-        .atom;
-    // The property itself is bounded before x11rb allocates its returned pixel words.
-    let property = connection
-        .get_property(false, xid, atom, AtomEnum::CARDINAL, 0, 65_538)
-        .ok()?
-        .reply()
-        .ok()?;
-    if property.bytes_after != 0 {
-        return None;
-    }
-    let words: Vec<u32> = property.value32()?.collect();
-    let mut at = 0usize;
-    let mut chosen: Option<(u32, u32, &[u32])> = None;
-    while let Some(header) = words.get(at..at.checked_add(2)?) {
-        let (width, height) = (header[0], header[1]);
-        let pixels = app_icon::checked_pixels(width, height).ok()?;
-        let end = at.checked_add(2)?.checked_add(pixels)?;
-        let content = words.get(at + 2..end)?;
-        let distance = width.abs_diff(OUTPUT_SIDE) + height.abs_diff(OUTPUT_SIDE);
-        if chosen
-            .is_none_or(|(w, h, _)| distance < w.abs_diff(OUTPUT_SIDE) + h.abs_diff(OUTPUT_SIDE))
-        {
-            chosen = Some((width, height, content));
-        }
-        at = end;
-    }
-    if at != words.len() {
-        return None;
-    }
-    let (width, height, content) = chosen?;
-    let mut rgba = Vec::with_capacity(content.len() * 4);
-    for pixel in content {
-        rgba.extend_from_slice(&[
-            (pixel >> 16) as u8,
-            (pixel >> 8) as u8,
-            *pixel as u8,
-            (pixel >> 24) as u8,
-        ]);
-    }
-    let png = super::app_icon_raster::rgba_png(width, height, &rgba).ok()?;
-    IconReply::new(&desktop.id, &png).ok()
-}
-
-/// Refresh on every list: theme changes and changed app bytes produce new hashes.
-pub(crate) fn window_identity(native: u64) -> io::Result<Option<String>> {
-    let xid = u32::try_from(native)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "X11 window ID out of range"))?;
-    let list = super::x11_windows::list()?;
-    let id = super::x11_windows::window_id(xid);
-    let Some(window) = list.windows.iter().find(|window| window.id == id) else {
-        return Ok(None);
-    };
-    let dirs = super::app_units::data_dirs(&|name| std::env::var(name).ok());
-    let entries = catalog(&dirs);
-    let source = window.app_id.as_deref().unwrap_or(&window.app);
-    Ok(desktop_for(&entries, source, true).map(|entry| entry.id.clone()))
-}
 
 pub(crate) fn attach(list: &mut WindowList) {
     let dirs = super::app_units::data_dirs(&|name| std::env::var(name).ok());
