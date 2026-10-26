@@ -4,14 +4,16 @@ use windows_sys::Win32::{Foundation::{HANDLE, WAIT_OBJECT_0}, Security::{self, D
 use crate::login::{core::model::{SessionBinding, HELPER_SWITCH, PROBE_SWITCH}, os::shared::{child::{Lifetime, Spawned}, denied, installation::{self, Installation}, nonce}};
 use super::{pipe, security::{self, Handle, wide}};
 struct Life { process: Handle, _job: Handle }
-impl Drop for Life { fn drop(&mut self) { self.stop(); } }
+impl Drop for Life { fn drop(&mut self) { let _ = self.stop(); } }
 impl Lifetime for Life {
     fn process_id(&self) -> u32 { unsafe { GetProcessId(self.process.0) } }
-    fn stop(&mut self) {
-        if unsafe { WaitForSingleObject(self.process.0, 0) } == WAIT_OBJECT_0 { return; }
+    fn stop(&mut self) -> bool {
+        if unsafe { WaitForSingleObject(self.process.0, 0) } == WAIT_OBJECT_0 { return true; }
         let end = Instant::now() + Duration::from_secs(2);
-        while Instant::now() < end { if unsafe { WaitForSingleObject(self.process.0, 20) } == WAIT_OBJECT_0 { return; } }
-        unsafe { TerminateProcess(self.process.0, 1); WaitForSingleObject(self.process.0, 2000); }
+        while Instant::now() < end { if unsafe { WaitForSingleObject(self.process.0, 20) } == WAIT_OBJECT_0 { return true; } }
+        // TerminateProcess is asynchronous. Only the process handle's signaled
+        // state confirms exit, including when termination itself returned 0.
+        unsafe { TerminateProcess(self.process.0, 1); WaitForSingleObject(self.process.0, 2000) == WAIT_OBJECT_0 }
     }
 }
 pub(super) fn console_token(session: u32) -> io::Result<Handle> {

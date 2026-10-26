@@ -2,6 +2,10 @@ pub(crate) mod broker;
 pub(crate) mod child;
 pub(crate) mod client;
 pub(crate) mod helper;
+pub(crate) mod capture_admission;
+pub(crate) mod capture_lifetime;
+pub(crate) mod child_reader;
+pub(crate) mod helper_capture;
 pub(crate) mod installation;
 use std::io;
 pub(crate) fn denied(reason: impl ToString) -> io::Error { io::Error::new(io::ErrorKind::PermissionDenied, reason.to_string()) }
@@ -19,5 +23,6 @@ pub(crate) mod gateway_client;
 pub(crate) mod provision;
 pub(crate) mod status;
 pub(crate) mod viewer;
+pub(crate) mod viewer_images;
 pub(crate) mod target;
 pub(crate) mod host_status;

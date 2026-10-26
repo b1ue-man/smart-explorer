@@ -35,12 +35,12 @@ pub(crate) fn serve(stream: &mut (impl Read + Write), boot: &str) -> io::Result<
                 let reply = link.ready()?;
                 if reply.state == "ready" && reply.binding.as_ref() == Some(&actual) {
                     helper = Some(link); pinned_binding = Some(actual.clone()); pinned_generation = install.manifest.generation.clone();
-                    Ok((reply, Vec::new()))
+                    Ok((reply, None))
                 } else {
-                    Ok((Reply::refused_with("unavailable", "login helper did not confirm its exact authorized session/desktop binding"), Vec::new()))
+                    Ok((Reply::refused_with("unavailable", "login helper did not confirm its exact authorized session/desktop binding"), None))
                 }
             }
-            Operation::Stop => { helper.take(); Ok((Reply::state("stopped"), Vec::new())) }
+            Operation::Stop => { helper.take(); Ok((Reply::state("stopped"), None)) }
             Operation::SecureAttention if helper.is_some() => {
                 // The broker cannot inspect the helper's capture geometry.
                 // Release through that live context before the privileged action;
@@ -48,8 +48,8 @@ pub(crate) fn serve(stream: &mut (impl Read + Write), boot: &str) -> io::Result<
                 helper.as_mut().ok_or_else(|| denied("login helper is absent"))?
                     .ask(Operation::ReleaseInputs).and_then(|_| {
                         platform::secure_attention(&actual)
-                            .map(|()| (Reply::state("secure_attention_requested"), Vec::new()))
-                            .or_else(|error| Ok((Reply::refused_with("policy_blocked", error), Vec::new())))
+                            .map(|()| (Reply::state("secure_attention_requested"), None))
+                            .or_else(|error| Ok((Reply::refused_with("policy_blocked", error), None)))
                     })
             },
             operation => helper.as_mut().ok_or_else(|| denied("start the authorized login helper first")).and_then(|helper| helper.ask(operation)),
@@ -62,7 +62,7 @@ pub(crate) fn serve(stream: &mut (impl Read + Write), boot: &str) -> io::Result<
                 // A dead capture context cannot issue a fresh challenge with
                 // the old desktop/frame identity. A new viewer must start it.
                 if had_helper { wire::send(stream, &refused)?; return Ok(()); }
-                (refused, Vec::new())
+                (refused, None)
             }
         };
         if stop { wire::send(stream, &reply)?; return Ok(()); }
@@ -75,8 +75,10 @@ pub(crate) fn serve(stream: &mut (impl Read + Write), boot: &str) -> io::Result<
         sequence = sequence.checked_add(1).ok_or_else(|| denied("login sequence exhausted"))?;
         authority = Authority::new(&fresh.policy, boot.into(), latest, peer_id.clone(), target_user.clone(), nonce()?, sequence, now()?);
         reply.challenge = Some(authority.challenge().clone());
+        // Private inherited grant identifiers never enter the gateway wire.
+        reply.capture_id = None;
         evidence.update(helper.as_ref().map(HelperLink::process_id), &fresh.policy)?;
         wire::send(stream, &reply)?;
-        if !pixels.is_empty() { wire::write_frame(stream, PIXELS, &pixels)?; }
+        if let Some(pixels) = pixels { wire::write_frame(stream, PIXELS, pixels.as_slice())?; }
     }
 }
