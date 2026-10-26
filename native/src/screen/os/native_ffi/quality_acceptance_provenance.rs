@@ -26,6 +26,10 @@ fn range<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
     let from = source.find(start).unwrap();
     &source[from..from + source[from..].find(end).unwrap()]
 }
+// Only embedded working-tree text uses this: immutable git blobs are hashed raw.
+fn checkout_lf(source: &str) -> String {
+    source.replace("\r\n", "\n")
+}
 fn frozen<'a>(source: &'a str, name: &str) -> &'a str {
     source
         .split_once(&format!("// BEGIN_FROZEN_{name}\n"))
@@ -49,16 +53,23 @@ pub(super) fn verify() -> Value {
     let codec = original(baseline::CODEC_PATH);
     assert_eq!(metrics::sha256(pixels.as_bytes()), baseline::PIXEL_SHA256);
     assert_eq!(metrics::sha256(codec.as_bytes()), baseline::CODEC_SHA256);
-    assert_eq!(range(&pixels, "#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]\npub(crate) enum YuvMatrix", "/// NV12 → BGRA"),
-        frozen(include_str!("../../core/quality_acceptance_baseline.rs"), "PIXELS"));
-    let snapshot = include_str!("quality_acceptance_baseline.rs");
+    let pixel_snapshot = checkout_lf(include_str!("../../core/quality_acceptance_baseline.rs"));
+    assert_eq!(
+        range(
+            &pixels,
+            "#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]\npub(crate) enum YuvMatrix",
+            "/// NV12 → BGRA"
+        ),
+        frozen(&pixel_snapshot, "PIXELS")
+    );
+    let snapshot = checkout_lf(include_str!("quality_acceptance_baseline.rs"));
     assert_eq!(
         range(
             &codec,
             "/// One OpenH264 encoder;",
             "pub(crate) struct OpenH264DecoderFactory"
         ),
-        frozen(snapshot, "ENCODER")
+        frozen(&snapshot, "ENCODER")
     );
     assert_eq!(
         range(
@@ -66,13 +77,14 @@ pub(super) fn verify() -> Value {
             "/// One OpenH264 decoder of",
             "/// Serializes the task tests"
         ),
-        frozen(snapshot, "DECODER")
+        frozen(&snapshot, "DECODER")
     );
     let lock = original("native/Cargo.lock");
+    let current_lock = checkout_lf(include_str!("../../../../Cargo.lock"));
     for name in ["openh264", "openh264-sys2"] {
         let version = format!("name = \"{name}\"\nversion = \"0.9.9\"");
         assert!(lock.contains(&version));
-        assert!(include_str!("../../../../Cargo.lock").contains(&version));
+        assert!(current_lock.contains(&version));
     }
     let pin = super::super::openh264_pins::PIN.unwrap();
     assert!(
@@ -87,4 +99,42 @@ pub(super) fn verify() -> Value {
         "openh264_crate": "0.9.9", "openh264_sys2_crate": "0.9.9",
         "library_sha256": pin.library_sha256,
         "baseline_scope": "frozen CPU codec path, one synchronous output from the first input, no pending decoder frames; not an old application build"})
+}
+
+#[test]
+fn batches_task_b6_quality_provenance_checkout_line_endings_keep_exact_content() {
+    for (source, name) in [
+        (
+            include_str!("../../core/quality_acceptance_baseline.rs"),
+            "PIXELS",
+        ),
+        (include_str!("quality_acceptance_baseline.rs"), "ENCODER"),
+        (include_str!("quality_acceptance_baseline.rs"), "DECODER"),
+    ] {
+        let lf = checkout_lf(source);
+        let crlf = lf.replace('\n', "\r\n");
+        let windows = checkout_lf(&crlf);
+        assert_eq!(windows, lf);
+        let expected = frozen(&lf, name);
+        assert_eq!(frozen(&windows, name), expected);
+        let marker = format!("// BEGIN_FROZEN_{name}\r\n");
+        for inserted in ["// altered frozen source\r\n", " ", "\r"] {
+            let changed = crlf.replacen(&marker, &format!("{marker}{inserted}"), 1);
+            let changed_lf = checkout_lf(&changed);
+            assert_ne!(
+                frozen(&changed_lf, name),
+                expected,
+                "checkout conversion must retain inserted content in {name}"
+            );
+        }
+    }
+    let lock = checkout_lf(include_str!("../../../../Cargo.lock"));
+    let windows_lock = checkout_lf(&lock.replace('\n', "\r\n"));
+    assert_eq!(windows_lock, lock);
+    for name in ["openh264", "openh264-sys2"] {
+        let version = format!("name = \"{name}\"\nversion = \"0.9.9\"");
+        assert!(windows_lock.contains(&version));
+        let changed = format!("name = \"{name}\"\r\nversion = \"0.9.8\"");
+        assert!(!checkout_lf(&changed).contains(&version));
+    }
 }

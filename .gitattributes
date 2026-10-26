@@ -19,3 +19,8 @@ third-party/rust-crates/THIRD-PARTY-LICENSES.txt text eol=lf
 
 # Cisco OpenH264 binary license: word for word, no line-end conversion (SHA-256 pinned in screen/core/licenses.rs).
 /third-party/openh264/BINARY_LICENSE.txt -text
+
+# Embedded release-quality provenance: compare the same source text on every platform.
+/native/src/screen/core/quality_acceptance_baseline.rs text eol=lf
+/native/src/screen/os/native_ffi/quality_acceptance_baseline.rs text eol=lf
+/native/Cargo.lock text eol=lf
