@@ -254,17 +254,32 @@ fn batches_task_optical_confined_reader_uses_held_root_and_cancel() {
         .confined_local_root(&text)
         .unwrap()
         .unwrap();
-    fs::rename(&root, &moved).unwrap();
-    fs::create_dir(&root).unwrap();
-    fs::write(root.join("file.bin"), b"replacement").unwrap();
-    let moved_profile = test_profiles::register(&moved, original.clone());
-    old_profile.replace(Source {
-        device: format!("replacement:{}", root.display()),
-        generation: "different".into(),
-        read_only: true,
-    });
+    #[cfg(windows)]
+    {
+        let error = fs::rename(&root, &moved).unwrap_err();
+        assert_eq!(
+            error.raw_os_error(),
+            Some(windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION as i32)
+        );
+        assert!(!moved.exists());
+        assert_eq!(fs::read(root.join("file.bin")).unwrap(), b"original");
+    }
+    #[cfg(not(windows))]
+    let moved_profile = {
+        fs::rename(&root, &moved).unwrap();
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("file.bin"), b"replacement").unwrap();
+        let profile = test_profiles::register(&moved, original.clone());
+        old_profile.replace(Source {
+            device: format!("replacement:{}", root.display()),
+            generation: "different".into(),
+            read_only: true,
+        });
+        profile
+    };
+    let effective_root = if cfg!(windows) { &root } else { &moved };
     let cancel = AtomicBool::new(false);
-    let held = acquire(&moved, Priority::Foreground, &cancel)
+    let held = acquire(effective_root, Priority::Foreground, &cancel)
         .unwrap()
         .unwrap();
     let waiting_cancel = AtomicBool::new(false);
@@ -287,5 +302,7 @@ fn batches_task_optical_confined_reader_uses_held_root_and_cancel() {
     let mut bytes = Vec::new();
     reader.read_to_end(&mut bytes).unwrap();
     assert_eq!(bytes, b"original");
+    #[cfg(not(windows))]
     drop(moved_profile);
+    drop(old_profile);
 }

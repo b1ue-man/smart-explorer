@@ -214,7 +214,13 @@ mod vault_tests {
         assert!(text.contains(&plain), "{text}");
         assert!(!text.contains("Geheimprojekt"), "{text}");
         // An older index file with vault paths: loading leaves them out.
-        std::fs::write(&file, format!("{plain}\n{inside}\n{located}\n")).unwrap();
+        let hidden = format!("{plain}/.hidden/Cache");
+        let appdata = format!("{plain}/AppData/Cache");
+        std::fs::write(
+            &file,
+            format!("{plain}\n{inside}\n{located}\n{hidden}\n{appdata}\n"),
+        )
+        .unwrap();
         let loaded = FolderIndex::load(&file).unwrap();
         let paths: Vec<&String> = loaded.iter().collect();
         assert_eq!(paths, [&plain]);
