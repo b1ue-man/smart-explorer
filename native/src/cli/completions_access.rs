@@ -216,6 +216,9 @@ pub(super) fn capability_name(capability: Capability) -> &'static str {
         Capability::ExecTerminal => "terminal",
         Capability::ScreenView => "screen view",
         Capability::ScreenControl => "screen control",
+        Capability::AppLaunch => "app launch",
+        Capability::LoginAccess => "login access",
+        Capability::TcpForward => "TCP forwarding",
     }
 }
 

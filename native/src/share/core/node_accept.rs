@@ -51,7 +51,7 @@ impl ShareIrohNode {
                     // automatic reconnects of paired devices are never throttled.
                     let exec = connection.alpn() == EXEC_ALPN;
                     let screen = connection.alpn() == SCREEN_ALPN;
-                    let tcp = connection.alpn() == super::tcp_wire::TCP_ALPN;
+                    let tcp = connection.alpn() == super::tcp_forward::TCP_ALPN;
                     let apps = connection.alpn() == super::apps_wire::APPS_ALPN;
                     if super::auth_penalty::refusal_applies(exec || screen || tcp || apps, known) {
                         let now = std::time::Instant::now();
@@ -179,7 +179,7 @@ async fn dispatch_connection(
         }
         EXEC_ALPN => super::exec_server::handle_connection(node, connection, permit).await,
         SCREEN_ALPN => node.handle_screen_connection(connection, permit).await,
-        super::tcp_wire::TCP_ALPN => node.handle_tcp_connection(connection, permit).await,
+        super::tcp_forward::TCP_ALPN => node.handle_tcp_connection(connection, permit).await,
         super::apps_wire::APPS_ALPN => node.handle_apps_connection(connection, permit).await,
         _ => Err(eio("Unbekanntes Share-Protokoll")),
     }

@@ -204,7 +204,8 @@ impl ShareIrohNode {
             }
         };
         let mut initial_socket = Some(socket);
-        let accepted = tcp_wire::send_json(&mut send, &TcpHelloReply::Opened { target });
+        let opened = TcpHelloReply::Opened { target };
+        let accepted = tcp_wire::send_json(&mut send, &opened);
         tokio::select! {
             biased;
             () = revoked(&access) => return Err(io::Error::new(io::ErrorKind::PermissionDenied, "TCP access revoked")),

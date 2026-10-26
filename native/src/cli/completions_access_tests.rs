@@ -88,6 +88,7 @@ fn perm_task_completions_access() {
         ]),
         programs: None,
         expiry: Some(Expiry::At(end)),
+        constraints: None,
     };
     remote.apply_access_change(&change, NOW).unwrap();
     let state = "as se-remote · commands allow · terminal ask";

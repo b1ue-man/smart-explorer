@@ -90,15 +90,14 @@ impl ShareIrohNode {
                         .map_err(eio)??;
                 // The owner-specific persistent ledger is unreachable from a
                 // different proven relationship, even after a worker restart.
-                if principal_grant(
-                    &self
+                let relationship_active = {
+                    let state = self
                         .auth
                         .lock()
-                        .map_err(|_| eio("authorization unavailable"))?,
-                    principal,
-                )
-                .is_none()
-                {
+                        .map_err(|_| eio("authorization unavailable"))?;
+                    principal_grant(&state, principal).is_some()
+                };
+                if !relationship_active {
                     return Err(eio("relationship ended"));
                 }
                 Ok(AppsResult::Receipt { receipt })

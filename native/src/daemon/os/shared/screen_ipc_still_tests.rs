@@ -94,6 +94,8 @@ fn listed() -> WindowList {
             id: "4242".into(),
             title: "Editor".into(),
             app: "notepad".into(),
+            app_id: None,
+            icon: None,
             pid: Some(7),
             monitor: Some("DISPLAY1".into()),
             minimized: false,

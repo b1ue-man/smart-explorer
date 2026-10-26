@@ -54,7 +54,7 @@ fn written(grant: &ExecGrant) -> String {
     serde_json::to_string(grant).unwrap()
 }
 
-fn decisions(grant: &ExecGrant) -> [CapabilityDecision; 4] {
+fn decisions(grant: &ExecGrant) -> [CapabilityDecision; Capability::ALL.len()] {
     let access = grant.access_grant();
     Capability::ALL.map(|capability| access.decision(capability))
 }
@@ -75,7 +75,7 @@ fn perm_task_port_full_shell_0_5_180() {
     assert_eq!(grant.policy_revision, 6);
     let access = grant.access_grant();
     assert_eq!(access.account, AccountProfile::Own);
-    assert_eq!(decisions(&grant), [ALLOW, ALLOW, OFF, OFF]);
+    assert_eq!(decisions(&grant), [ALLOW, ALLOW, OFF, OFF, OFF, OFF, OFF]);
     assert_eq!(access.valid_until, None);
     // Written as 0.5.181 and 0.5.182 write it: the old fields and `run_as`.
     assert_eq!(
@@ -95,7 +95,7 @@ fn perm_task_port_program_list_0_5_182() {
     assert_eq!(grant.programs, ["/usr/bin/uptime"]);
     assert_eq!(grant.access_grant().account, AccountProfile::Own);
     // Commands of the listed program only; no terminal.
-    assert_eq!(decisions(&grant), [ALLOW, OFF, OFF, OFF]);
+    assert_eq!(decisions(&grant), [ALLOW, OFF, OFF, OFF, OFF, OFF, OFF]);
     assert_eq!(written(&grant), stored);
 }
 
@@ -110,7 +110,7 @@ fn perm_task_port_run_as_root_worker() {
             name: "deploy".into()
         }
     );
-    assert_eq!(decisions(&grant), [ALLOW, ALLOW, OFF, OFF]);
+    assert_eq!(decisions(&grant), [ALLOW, ALLOW, OFF, OFF, OFF, OFF, OFF]);
     assert_eq!(
         grant.run_as,
         ExecRunAs::Account {
@@ -125,7 +125,7 @@ fn perm_task_port_disabled_keeps_settings() {
     let stored = r#"{"enabled":false,"policy_revision":5,"changed_at":8,"source_request_id":null,"source_decision_revision":null,"run_as":{"kind":"account","name":"deploy"},"programs":["uptime"]}"#;
     let mut grant = read(stored);
     assert!(!grant.enabled);
-    assert_eq!(decisions(&grant), [OFF, OFF, OFF, OFF]);
+    assert_eq!(decisions(&grant), [OFF, OFF, OFF, OFF, OFF, OFF, OFF]);
     assert_eq!(grant.programs, ["uptime"]);
     assert_eq!(
         grant.access_grant().account,
@@ -136,7 +136,7 @@ fn perm_task_port_disabled_keeps_settings() {
     assert_eq!(written(&grant), stored);
     // Switching on again brings account and list back.
     grant.set_runtime_enabled(true, 9).unwrap();
-    assert_eq!(decisions(&grant), [ALLOW, OFF, OFF, OFF]);
+    assert_eq!(decisions(&grant), [ALLOW, OFF, OFF, OFF, OFF, OFF, OFF]);
     assert_eq!(grant.programs, ["uptime"]);
     assert_eq!(
         grant.run_as,
@@ -279,7 +279,7 @@ fn perm_task_old_reader_sees_new_grant_off() {
 #[test]
 fn perm_task_unknown_access_version_fail_closed() {
     let object = json!({
-        "version": 2,
+        "version": crate::share::access_grant_wire::ACCESS_VERSION + 1,
         "account": {"kind": "own"},
         "capabilities": {"exec_commands": "allow", "exec_terminal": "allow", "files": "allow"},
         "approver": "someone"
@@ -295,7 +295,7 @@ fn perm_task_unknown_access_version_fail_closed() {
     });
     let mut grant: ExecGrant = serde_json::from_value(stored).unwrap();
     assert!(!grant.enabled);
-    assert_eq!(decisions(&grant), [OFF, OFF, OFF, OFF]);
+    assert_eq!(decisions(&grant), [OFF, OFF, OFF, OFF, OFF, OFF, OFF]);
     for capability in Capability::ALL {
         assert_eq!(grant.decision_at(capability, 5), OFF);
     }
@@ -304,7 +304,7 @@ fn perm_task_unknown_access_version_fail_closed() {
     assert_eq!(saved["access"], object);
     assert_eq!(saved["enabled"], false);
     grant.set_runtime_enabled(true, 6).unwrap();
-    assert_eq!(decisions(&grant), [ALLOW, ALLOW, OFF, OFF]);
+    assert_eq!(decisions(&grant), [ALLOW, ALLOW, OFF, OFF, OFF, OFF, OFF]);
     let changed: Value = serde_json::to_value(&grant).unwrap();
     assert!(changed.get("access").is_none());
     assert_eq!(changed["enabled"], true);
@@ -316,7 +316,7 @@ fn perm_task_unknown_access_version_fail_closed() {
         "access": {"version": 1, "account": {"kind": "own"}, "capabilities": {"exec_commands": "sometimes"}}
     });
     let grant: ExecGrant = serde_json::from_value(unreadable.clone()).unwrap();
-    assert_eq!(decisions(&grant), [OFF, OFF, OFF, OFF]);
+    assert_eq!(decisions(&grant), [OFF, OFF, OFF, OFF, OFF, OFF, OFF]);
     assert_eq!(
         serde_json::to_value(&grant).unwrap()["access"],
         unreadable["access"]
@@ -334,7 +334,7 @@ fn perm_task_unknown_access_version_fail_closed() {
         }
     });
     let mut grant: ExecGrant = serde_json::from_value(newer).unwrap();
-    assert_eq!(decisions(&grant), [ASK, OFF, OFF, OFF]);
+    assert_eq!(decisions(&grant), [ASK, OFF, OFF, OFF, OFF, OFF, OFF]);
     grant
         .apply_access_change(&change(&[(Capability::ExecTerminal, ALLOW)]), 7)
         .unwrap();
