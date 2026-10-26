@@ -10,6 +10,10 @@ pub(super) struct MemberAuthority {
 }
 
 impl CaptureAuthority for MemberAuthority {
+    fn approve_supplement(&self, image: &CaptureGrant, plan: CapturePlan) -> io::Result<CaptureGrant> {
+        image.check_supplement(&plan)?;
+        self.parent.authority().approve_supplement(image, plan)
+    }
     fn approve(&self, _plan: CapturePlan) -> io::Result<CaptureGrant> {
         self.changed.store(true, Ordering::SeqCst);
         Err(io::Error::new(io::ErrorKind::WouldBlock,
@@ -139,5 +143,41 @@ impl FamilyScreenSource {
         drop(order);
         drop(metadata);
         Ok(image.freeze())
+    }
+}
+
+#[cfg(test)]
+mod supplement_tests {
+    use super::*;
+    use crate::screen::core::capture_plan::CapturePhases;
+    #[test]
+    fn batches_task_capture_integration_family_cursor_preserves_root_and_changed_flag() {
+        let parent=crate::screen::core::capture_test_support::session(None);
+        let source=SourceKey::new(parent.session(),"cursor-member").unwrap();
+        let mut member=CapturePlan::new(source.clone(),CaptureGeneration::new(4));
+        member.add_bytes(CaptureOwner::SourcePixels,8,2,CapturePhases::ALL).unwrap();
+        let mut plan=CapturePlan::new(SourceKey::new(parent.session(),"family").unwrap(),CaptureGeneration::new(2));
+        plan.add_member(member).unwrap();
+        let root=parent.authority().approve(plan).unwrap();
+        let image=root.for_member(&source,CaptureGeneration::new(4)).unwrap();
+        let changed=Arc::new(AtomicBool::new(false));
+        let output=HostOutputPlan::new(crate::screen::core::host_codec_adapters::HostContract::Legacy,
+            FrameSize::new(2,1),crate::screen::core::host_codec_adapters::HostCodecPlan::Tiles).unwrap();
+        let context=member_admission(&parent,&output,changed.clone()).unwrap();
+        for _ in 0..2 {
+            let mut cursor=CapturePlan::new(source.clone(),CaptureGeneration::new(4));
+            cursor.add_bytes(CaptureOwner::Readback,64,1,CapturePhases::ALL).unwrap();
+            cursor.add_bytes(CaptureOwner::Metadata,8,1,CapturePhases::ALL).unwrap();
+            let cursor=context.authority().approve_supplement(&image,cursor).unwrap();
+            let parsed=cursor.claim(CaptureOwner::Metadata,8).unwrap();
+            assert!(!changed.load(Ordering::SeqCst));
+            assert!(!root.is_retired().unwrap());
+            assert!(image.claim(CaptureOwner::SourcePixels,8).is_ok());
+            drop(cursor);drop(parsed);
+        }
+        let mut geometry=CapturePlan::new(source,CaptureGeneration::new(5));
+        geometry.add_bytes(CaptureOwner::SourcePixels,16,2,CapturePhases::ALL).unwrap();
+        assert_eq!(context.authority().approve(geometry).err().unwrap().kind(),io::ErrorKind::WouldBlock);
+        assert!(changed.load(Ordering::SeqCst),"real geometry changes still coordinate family readmission");
     }
 }

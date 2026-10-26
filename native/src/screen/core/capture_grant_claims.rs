@@ -19,6 +19,13 @@ impl Drop for GrantInner {
 
 impl CaptureGrant {
     pub(crate) fn claim(&self, owner: CaptureOwner, bytes: u64) -> io::Result<CaptureSlice> {
+        self.claim_if_active(owner, bytes)?
+            .ok_or_else(|| invalid("retired capture grant cannot authorize new claims"))
+    }
+
+    /// Retirement and a last transport claim decide under the same ledger
+    /// lock. None is expected source turnover, not a malformed credit.
+    pub(crate) fn claim_if_active(&self, owner: CaptureOwner, bytes: u64) -> io::Result<Option<CaptureSlice>> {
         if self.image_admission().is_some() {
             return Err(invalid("local image copies require an explicit ImageRole claim"));
         }
@@ -36,7 +43,7 @@ impl CaptureGrant {
             .lock()
             .map_err(|_| io::Error::other("capture grant poisoned"))?;
         if usage.retired {
-            return Err(invalid("retired capture grant cannot authorize new claims"));
+            return Ok(None);
         }
         let owner_total = usage.owners[owner as usize]
             .checked_add(bytes)
@@ -77,13 +84,18 @@ impl CaptureGrant {
         // Each non-Clone value owns a distinct logical credit. Pixel buffers
         // are separate allocations, so imposing arena contiguity would invent
         // fragmentation that the product's allocator does not have.
-        Ok(CaptureSlice {
+        Ok(Some(CaptureSlice {
             grant: Some(self.inner.clone()),
             member: self.member.clone(),
             owner,
             bytes,
             image: None,
-        })
+        }))
+    }
+
+    pub(crate) fn is_retired(&self) -> io::Result<bool> {
+        self.inner.usage.lock().map(|usage| usage.retired)
+            .map_err(|_| io::Error::other("capture grant poisoned"))
     }
 
     /// End capture authority while retaining only its real live slices. All

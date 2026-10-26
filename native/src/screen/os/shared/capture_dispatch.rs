@@ -107,7 +107,7 @@ impl RemoteAuthority {
     }
     fn release_value(&self,value:GrantValue) {
         match value {
-            GrantValue::Frame(credit) | GrantValue::Import(credit) => self.release_unused(credit.id),
+            GrantValue::Frame(credit) | GrantValue::Supplement(credit) | GrantValue::Import(credit) => self.release_unused(credit.id),
             GrantValue::PreparedOwner {source,owner} => {
                 let session = self.session.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
                 if let (Some(session),Ok(owner)) = (session,PreparedSourceOwnerId::new(owner)) {
@@ -173,3 +173,60 @@ pub(super) fn start(mut input:impl Read+Send+'static,authority:Arc<RemoteAuthori
 
 #[path = "capture_dispatch_requests.rs"]
 mod requests;
+
+#[cfg(test)]
+mod supplement_tests {
+    use super::*;
+    use crate::screen::core::{capture_admission::{CaptureGeneration,CaptureOwner},capture_plan::CapturePhases};
+    struct Framed {bytes:Vec<u8>,frames:mpsc::Sender<Vec<u8>>}
+    impl Write for Framed {
+        fn write(&mut self,bytes:&[u8])->io::Result<usize> {self.bytes.extend_from_slice(bytes);Ok(bytes.len())}
+        fn flush(&mut self)->io::Result<()> {let _=self.frames.send(std::mem::take(&mut self.bytes));Ok(())}
+    }
+    #[test]
+    fn batches_task_capture_integration_remote_member_supplement_uses_the_image_book() {
+        let (frames,written)=mpsc::channel();
+        let output:Output=Arc::new(Mutex::new(Box::new(Framed {bytes:Vec::new(),frames})));
+        let remote=RemoteAuthority::new(output);
+        remote.bind_session("capture-fixture").unwrap();
+        let member=SourceKey::new("capture-fixture","x11-member").unwrap();
+        let root_key=SourceKey::new("capture-fixture","family").unwrap();
+        let mut plan=CapturePlan::new(root_key,CaptureGeneration::new(2));
+        let mut child=CapturePlan::new(member.clone(),CaptureGeneration::new(4));
+        child.add_bytes(CaptureOwner::SourcePixels,8,2,CapturePhases::ALL).unwrap();
+        plan.add_member(child).unwrap();
+        let credit=CreditWire {id:23,source:plan.source().source().into(),generation:2,
+            total:plan.peak_bytes(),owners:plan.owner_limits()};
+        let root=remote.import(plan,credit).unwrap();
+        let image=root.for_member(&member,CaptureGeneration::new(4)).unwrap();
+        remote.state.lock().unwrap().allowed.insert(member.source().into());
+        let sending=remote.clone();
+        let capture=std::thread::spawn(move || {
+            let mut plan=CapturePlan::new(member,CaptureGeneration::new(4));
+            plan.add_bytes(CaptureOwner::Readback,64,1,CapturePhases::ALL).unwrap();
+            plan.add_bytes(CaptureOwner::Metadata,8,1,CapturePhases::ALL).unwrap();
+            sending.approve_supplement(&image,plan)
+        });
+        let mut input=io::Cursor::new(written.recv_timeout(Duration::from_secs(2)).unwrap());
+        let (tag,length)=capture_transport::read_header(&mut input).unwrap().unwrap();
+        assert_eq!(tag,wire::GRANT_REQUEST);
+        let payload=capture_transport::read_control(&mut input,length).unwrap();
+        let GrantRequest::SupplementPlan {request,image,plan}=crate::screen::core::wire::from_json(&payload).unwrap()
+            else {panic!("cursor was sent as a replacement frame plan");};
+        assert_eq!(image,23);
+        let plan=plan.plan("capture-fixture").unwrap();
+        assert_eq!(plan.source().source(),"x11-member");
+        assert_eq!(plan.generation().value(),4);
+        remote.deliver(GrantReply {request,value:Some(GrantValue::Supplement(CreditWire {id:24,
+            source:plan.source().source().into(),generation:4,total:plan.peak_bytes(),owners:plan.owner_limits()})),error:None,retryable:false});
+        let cursor=capture.join().unwrap().unwrap();
+        assert_eq!(remote.id_for(&root).unwrap(),23);
+        assert_eq!(remote.id_for(&cursor).unwrap(),24);
+        assert!(!root.is_retired().unwrap());
+        drop(cursor);
+        let mut input=io::Cursor::new(written.recv_timeout(Duration::from_secs(2)).unwrap());
+        let (tag,length)=capture_transport::read_header(&mut input).unwrap().unwrap();
+        assert_eq!(tag,wire::RETIRED);
+        assert_eq!(crate::screen::core::wire::from_json::<u64>(&capture_transport::read_control(&mut input,length).unwrap()).unwrap(),24);
+    }
+}

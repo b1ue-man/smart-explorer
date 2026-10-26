@@ -2,6 +2,22 @@
 use super::*;
 use crate::screen::core::{capture_import::CaptureImportNeed,worker_capture_wire::{GrantRequest,GrantValue}};
 impl CaptureBroker {
+    fn approve_supplement(&self,image:u64,plan:CapturePlan)->io::Result<CreditWire> {
+        let mut state=self.state.lock().map_err(|_|io::Error::other("capture broker poisoned"))?;
+        if state.exited {return Err(io::Error::new(io::ErrorKind::BrokenPipe,"worker exited"));}
+        if state.current!=Some(image) {return Err(io::Error::new(io::ErrorKind::WouldBlock,"cursor image is no longer current"));}
+        let image=state.entries.get(&image).and_then(|entry|entry.worker.as_ref())
+            .ok_or_else(||io::Error::other("cursor image has no worker credit"))?;
+        image.for_member(plan.source(),plan.generation())?.check_supplement(&plan)?;
+        let grant=self.admission.authority().approve(plan)?;
+        let id=state.next;
+        state.next=id.checked_add(1).ok_or_else(||io::Error::other("worker credit IDs exhausted"))?;
+        let credit=CreditWire{id,source:grant.source().source().into(),generation:grant.generation().value(),
+            total:grant.plan().peak_bytes(),owners:grant.plan().owner_limits()};
+        state.entries.try_reserve(1).map_err(|_|io::Error::other("worker credit registry allocation failed"))?;
+        state.entries.insert(id,Entry{worker:Some(grant),parent:None,held:None});
+        Ok(credit)
+    }
     fn registration_key(&self, source: &str, parent: Option<String>,
         selection: Option<crate::screen::core::window_list::SourceId>) -> io::Result<SourceKey>
     {
@@ -75,6 +91,8 @@ impl CaptureBroker {
     pub(in crate::screen::os::host_worker_client) fn resource(&self,request:GrantRequest)->Option<(u64,io::Result<GrantValue>)> {
         match request {
             GrantRequest::FramePlan{request,plan}=>Some((request,plan.plan(self.session()).and_then(|plan|self.approve(plan,None)).map(GrantValue::Frame))),
+            GrantRequest::SupplementPlan{request,image,plan}=>Some((request,plan.plan(self.session())
+                .and_then(|plan|self.approve_supplement(image,plan)).map(GrantValue::Supplement))),
             GrantRequest::PreparedImport{request,need}=>Some((request,need.need(self.session()).and_then(|need|self.approve_import(need)).map(GrantValue::Import))),
             GrantRequest::RegisterPrepared{request,source,parent,selection}=>Some((request,self.register_source(source,parent,selection,false))),
             GrantRequest::OwnPrepared {request,source,parent,selection} => Some((request,self.register_source(source,parent,selection,true))),
