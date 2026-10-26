@@ -1,5 +1,6 @@
-//! Program-file removal fixtures: temporary roots, non-runnable image bytes,
-//! actual file locks; no host profile, process launch or installer execution.
+//! Program-file removal fixtures with isolated roots and actual file locks.
+//! The Linux handoff case alone runs the runner's candidate CLI in its own
+//! copied installation; no case uses a real host profile or an installer.
 use super::*;
 use crate::mcp_launcher::installation::atomic_json;
 
@@ -9,7 +10,14 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
-        let directory = tempfile::tempdir().unwrap();
+        Self::new_at(None)
+    }
+
+    fn new_at(parent: Option<&std::path::Path>) -> Self {
+        let directory = match parent {
+            Some(parent) => tempfile::tempdir_in(parent).unwrap(),
+            None => tempfile::tempdir().unwrap(),
+        };
         let root = std::fs::canonicalize(directory.path()).unwrap();
         os::protect(&root, true).unwrap();
         let runtime = b"\x7fELF-regression-runtime";
@@ -82,6 +90,51 @@ impl Fixture {
             installation,
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn batches_p13_linux_installed_cli_retirement_reexecs_only_with_its_bound_root() {
+    let source = std::env::var_os("SE_SCREEN_TASK_WORKER")
+        .expect("the existing remote task runner must provide its candidate se binary");
+    let source = std::fs::canonicalize(source).unwrap();
+    assert!(source.is_file(), "candidate se binary missing");
+    // An executable installation is staged on the candidate's own filesystem.
+    // The child's system temp below is deliberately unusable for execution.
+    let fixture = Fixture::new_at(Some(source.parent().unwrap()));
+    let root = &fixture.installation.root;
+    let hash = crate::updater::file_sha256(&source).unwrap();
+    let mut manifest = fixture.installation.manifest.clone();
+    manifest.runtime_sha256 = hash.clone();
+    manifest.runtime_file = format!("mcp/runtimes/{hash}/{}", os::CLI_NAME);
+    let runtime_directory = root.join("mcp/runtimes").join(&hash);
+    std::fs::create_dir(&runtime_directory).unwrap();
+    os::protect(&runtime_directory, true).unwrap();
+    std::fs::copy(&source, root.join(os::CLI_NAME)).unwrap();
+    std::fs::copy(&source, root.join(&manifest.runtime_file)).unwrap();
+    std::fs::write(runtime_directory.join("lifetime.lock"), b"").unwrap();
+    atomic_json(&root.join("mcp/current.v1.json"), &manifest).unwrap();
+    let user = root.join("mcp/user-notes.txt");
+    std::fs::write(&user, b"keep user data").unwrap();
+    let rejected = std::process::Command::new(root.join(os::CLI_NAME))
+        .args(["plugin", "retire-installation"])
+        .env("SE_MCP_RETIREMENT_ROOT_FD", "1").env_remove("COMPLETE")
+        .output().unwrap();
+    assert!(!rejected.status.success(), "forged root descriptor was accepted");
+    assert!(root.join("mcp/current.v1.json").exists());
+    assert!(root.join(&manifest.runtime_file).exists());
+    let output = std::process::Command::new(root.join(os::CLI_NAME))
+        .args(["plugin", "retire-installation"])
+        .env("TMPDIR", "/proc").env_remove("SE_MCP_RETIREMENT_ROOT_FD")
+        .env_remove("COMPLETE").output().unwrap();
+    assert!(output.status.success(), "retirement failed: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(!root.join("mcp/current.v1.json").exists());
+    assert!(!root.join(&manifest.runtime_file).exists());
+    assert!(root.join(os::CLI_NAME).exists(), "ordinary installed CLI belongs to the installer stage");
+    assert_eq!(std::fs::read(&user).unwrap(), b"keep user data");
+    assert!(!std::fs::read_dir(root).unwrap().any(|entry|
+        entry.unwrap().file_name().to_string_lossy().starts_with(".mcp-retire-")),
+        "retirement left its own staging program behind");
 }
 
 #[test]

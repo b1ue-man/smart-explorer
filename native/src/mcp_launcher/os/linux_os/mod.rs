@@ -6,11 +6,22 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 #[path = "spawn.rs"]
 mod spawn;
+#[path = "process_inventory.rs"]
+mod process_inventory;
+#[path = "retirement.rs"]
+mod retirement;
+pub(in crate::mcp_launcher) use process_inventory::{processes_for, removal_image_guard};
+pub(in crate::mcp_launcher) use retirement::{retirement_handoff, retirement_root};
 pub(in crate::mcp_launcher) use spawn::*;
 
 pub(in crate::mcp_launcher) const CLI_NAME: &str = "se";
 pub(in crate::mcp_launcher) const LAUNCHER_NAME: &str = "se-mcp-launcher";
-pub(in crate::mcp_launcher) fn uninstall_programs_idle(root: &Path) -> Result<(), String> {
+#[cfg(test)]
+pub(in crate::mcp_launcher) fn create_test_directory_link(source: &Path, target: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(source, target)
+}
+pub(in crate::mcp_launcher) fn uninstall_programs_idle(root: &Path) -> Result<Vec<File>, String> {
+    let mut guards = Vec::new();
     for name in [
         CLI_NAME,
         "smart_explorer",
@@ -18,17 +29,11 @@ pub(in crate::mcp_launcher) fn uninstall_programs_idle(root: &Path) -> Result<()
         "smart_explorer_updater",
         "Smart Explorer Updater",
     ] {
-        if processes_for(&root.join(name))?
-            .iter()
-            .any(|owner| owner.pid != std::process::id())
-        {
-            return Err(format!(
-                "uninstall_busy: {} has active program owners",
-                root.join(name).display()
-            ));
+        if let Some(guard) = removal_image_guard(&root.join(name))? {
+            guards.push(guard);
         }
     }
-    Ok(())
+    Ok(guards)
 }
 
 pub(in crate::mcp_launcher) fn validate_tree(root: &Path, path: &Path) -> Result<(), String> {
@@ -209,48 +214,6 @@ pub(in crate::mcp_launcher) fn process_identity(pid: u32) -> Result<ProcessIdent
         image: image.to_string_lossy().into_owned(),
         executable_object: Some(object),
     })
-}
-pub(in crate::mcp_launcher) fn processes_for(path: &Path) -> Result<Vec<ProcessIdentity>, String> {
-    let mut result = Vec::new();
-    for entry in std::fs::read_dir("/proc").map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let Some(pid) = entry
-            .file_name()
-            .to_str()
-            .and_then(|s| s.parse::<u32>().ok())
-        else {
-            continue;
-        };
-        match process_identity(pid) {
-            Ok(identity) if Path::new(&identity.image) == path => result.push(identity),
-            Ok(_) => {}
-            Err(_) if !entry.path().exists() => {}
-            Err(_) => {
-                if let Ok(stat) = std::fs::read_to_string(entry.path().join("stat")) {
-                    if let Some((_, tail)) = stat.rsplit_once(") ") {
-                        let mut fields = tail.split_whitespace();
-                        let state = fields.next();
-                        let flags = fields
-                            .nth(5)
-                            .and_then(|s| s.parse::<u64>().ok())
-                            .unwrap_or_default();
-                        if state == Some("Z") || flags & 0x0020_0000 != 0 {
-                            continue;
-                        }
-                    }
-                }
-                // An unreadable live process cannot prove this generation unused.
-                let uid = std::fs::metadata(entry.path())
-                    .map_err(|e| e.to_string())?
-                    .uid();
-                if uid == unsafe { libc::geteuid() } {
-                    return Err("runtime_process_status_unknown".into());
-                }
-                return Err("runtime_cross_user_process_status_unknown".into());
-            }
-        }
-    }
-    Ok(result)
 }
 pub(in crate::mcp_launcher) fn stop_identity(path: &Path) -> Result<StopIdentity, String> {
     let meta = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;

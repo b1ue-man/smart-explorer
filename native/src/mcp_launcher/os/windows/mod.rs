@@ -282,7 +282,7 @@ pub(in crate::mcp_launcher) fn process_matches(expected: &ProcessIdentity) -> bo
 
 /// Uninstall never terminates a process by its basename. Keep every active
 /// owner alive and let the user close this installation before retrying.
-pub(in crate::mcp_launcher) fn uninstall_programs_idle(root: &Path) -> Result<(), String> {
+pub(in crate::mcp_launcher) fn uninstall_programs_idle(root: &Path) -> Result<Vec<File>, String> {
     for name in [
         CLI_NAME,
         "Smart Explorer.exe",
@@ -295,5 +295,16 @@ pub(in crate::mcp_launcher) fn uninstall_programs_idle(root: &Path) -> Result<()
             return Err(format!("uninstall_busy: {} has active program owners; close Smart Explorer, its background worker and this installation's terminal commands, then retry",root.join(name).display()));
         }
     }
+    Ok(Vec::new())
+}
+
+pub(in crate::mcp_launcher) fn retirement_root() -> Result<Option<crate::mcp_launcher::installation::RetirementRoot>, String> {
+    Ok(None)
+}
+pub(in crate::mcp_launcher) fn retirement_handoff(_root: &Path, _hash: &str, _snapshot: &str) -> Result<(), String> {
+    // Windows retains its existing installed-CLI and process/sharing policy.
     Ok(())
+}
+pub(in crate::mcp_launcher) fn removal_image_guard(_path: &Path) -> Result<Option<File>, String> {
+    Ok(None)
 }

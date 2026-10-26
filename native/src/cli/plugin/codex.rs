@@ -2,6 +2,8 @@
 #[cfg(test)]
 #[path = "batches_codex_task_tests.rs"]
 mod batches_codex_task_tests;
+#[path = "codex_comments.rs"]
+mod comments;
 use super::{files, host_cli, managed};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -288,10 +290,7 @@ pub(super) fn uninstall() -> Result<Value, String> {
         let legacy = owner.is_none() && legacy_matches(table);
         verify_removable_entry(table, owner.as_ref(), legacy)
             .map_err(|error| format!("{error} ({})", path.display()))?;
-        doc["mcp_servers"]
-            .as_table_like_mut()
-            .ok_or("integration_conflict: mcp_servers is not a table")?
-            .remove(SERVER);
+        comments::remove_server(&mut doc)?;
         managed::replace(&path, before.as_deref(), doc.to_string().as_bytes())?;
     }
     if owner_bytes.is_some() {
