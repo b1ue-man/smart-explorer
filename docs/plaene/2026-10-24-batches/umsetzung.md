@@ -1284,8 +1284,11 @@ gültige Bedeutung. Vorhandene Quittungs-, Konflikt- und Schreibschutzgrenzen
 bleiben erhalten. Die Laufzeitbestätigung erfolgt gemeinsam nach sämtlichen
 M01–M14-Korrekturen. Anschließend wurden M03 (`252f3fe8`), M06 (`a6a54ae3`),
 M08 (`c7c49f12`), M12 (`9dde70f1`) und M11 (`625df513`) mit vollständigen
-Autorenberichten und statischer Integrationsprüfung gepusht. M01, M04, M09,
-M10 und M13 arbeiten; kein Paket wartet mehr auf seinen Start. Die gemeinsame
-Manifestintegration und der vollständige Rootgraph folgen nach diesen Fixes.
+Autorenberichten und statischer Integrationsprüfung gepusht. M04 (`49974aa4`),
+M01 (`3c54f558`), M09 (`5209fe97`) und M13 (`98a9ed1f`) sind ebenfalls nach
+vollständiger eigener Autorenreview integriert. M10 schließt die ausdrücklich
+belegten verbundenen Root-/Parent-/ID-Fixturefehler ab; kein Paket wartet auf
+seinen Start. Die gemeinsame Manifestintegration und der vollständige
+Rootgraph folgen nach dem letzten Fix.
 Der finale Abruf des bisherigen Laufs um 23:10:44 UTC
 bestätigt dessen Ende und den übersprungenen Gerätejob.
