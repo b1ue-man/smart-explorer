@@ -4,7 +4,9 @@ use eframe::egui;
 use super::screen_render_upload::{Package,Drain,UploadTicket,SlotState};
 pub(crate) use super::screen_render_upload::RenderSlot;
 use super::screen_render_wgpu::{WgpuBackend,CpuImage};
-use super::screen_render_glow::GlowBackend;
+use super::screen_render_glow::{GlowBackend,GlowImage};
+use super::screen_image_memory::GpuClaims;
+use crate::screen::core::image_admission::ImageHold;
 use super::screen_render_yuv::YuvImage;
 
 pub(super) fn lock<T>(m:&Mutex<T>)->MutexGuard<'_,T> {m.lock().unwrap_or_else(PoisonError::into_inner)}
@@ -13,9 +15,9 @@ pub(crate) fn notify_all() {let (m,c)=events();let mut epoch=lock(m);*epoch=epoc
 pub(crate) fn wait_event(epoch:u64) {let (m,c)=events();let mut current=lock(m);while *current==epoch {current=c.wait(current).unwrap_or_else(PoisonError::into_inner);}}
 pub(crate) fn event_epoch()->u64 {*lock(&events().0)}
 
-pub(super) enum Native {Wgpu(CpuImage),Glow(egui::TextureId),Yuv(YuvImage),#[cfg(test)] Controlled(egui::TextureId)}
-pub(super) struct Resident {pub package:Package,pub native:Native,pub upload:UploadTicket}
-pub(super) struct Retirement {pub(super) package:Package,pub(super) upload:UploadTicket,pub(super) drain:Drain}
+pub(super) enum Native {Wgpu(CpuImage),Glow(GlowImage),Yuv(YuvImage),#[cfg(test)] Controlled(egui::TextureId,[usize;2])}
+pub(super) struct Resident {pub package:Package,pub native:Native,pub upload:UploadTicket,pub surface:Option<ImageHold>}
+pub(super) struct Retirement {pub(super) package:Package,pub(super) upload:UploadTicket,pub(super) drain:Drain,pub(super) surface:Option<ImageHold>}
 pub(super) enum Backend {Wgpu(WgpuBackend),Glow(GlowBackend),Unavailable,#[cfg(test)] Controlled {upload:bool}}
 pub(crate) struct RendererOwner {pub(super) backend:Mutex<Backend>,slots:Mutex<Vec<Arc<RenderSlot>>>,closed:std::sync::atomic::AtomicBool,limit:u32,yuv:bool}
 const KEY:&str="screen_renderer_owner";
@@ -63,20 +65,30 @@ impl RendererOwner {
     }
     fn step(backend:&mut Backend,s:&mut SlotState,allow_upload:bool) {
         if s.retiring.as_ref().is_some_and(|r|r.drain.confirmed()&&r.upload.drain.confirmed()) {s.retiring=None;notify_all();}
+        if let Some(resident)=&mut s.resident {if resident.upload.drain.confirmed() {resident.upload.staging=None;}}
+        if let Some(retiring)=&mut s.retiring {if retiring.upload.drain.confirmed() {retiring.upload.staging=None;}}
         let retire=s.resident.as_ref().is_some_and(|r|!r.package.active()||s.closed
             ||s.candidate.as_ref().is_some_and(|p|!compatible(&r.native,p)));
         if retire&&s.retiring.is_none() {
+            if !s.closed&&s.resident.as_ref().is_some_and(|r|r.package.active()) {
+                if let Some(candidate)=s.candidate.as_ref().filter(|candidate|candidate.active()) {
+                    if s.next_upload.is_none() {
+                        let Ok(claims)=candidate.upload_claims(None) else{return;};
+                        s.next_upload=Some(claims);
+                    }
+                }
+            }
             if let Some(r)=s.resident.take() {
                 s.admission=r.package.memory().as_ref().map(Arc::downgrade);
                 let drain=match (&mut *backend,&r.native) {
                     (Backend::Wgpu(b),Native::Wgpu(t))=>{t.retire(b);b.submit()},
                     (Backend::Wgpu(b),Native::Yuv(t))=>{t.destroy();b.submit()},
-                    (Backend::Glow(b),Native::Glow(id))=>b.retire(*id),
-                    #[cfg(test)] (Backend::Controlled {..},Native::Controlled(_))=>Drain::default(),
+                    (Backend::Glow(b),Native::Glow(image))=>b.retire(image.id),
+                    #[cfg(test)] (Backend::Controlled {..},Native::Controlled(..))=>Drain::default(),
                     _=>Drain::default(),
                 };
                 // This fresh submission/fence follows the LAST render pass, not only upload.
-                s.retiring=Some(Retirement {package:r.package,upload:r.upload,drain});
+                s.retiring=Some(Retirement {package:r.package,upload:r.upload,drain,surface:r.surface});
             }
         }
         if !allow_upload||s.closed||s.retiring.is_some()||s.resident.as_ref().is_some_and(|r|!r.upload.drain.confirmed()) {return;}
@@ -87,7 +99,8 @@ impl RendererOwner {
             b.upload(s,package);
         } else {
             #[cfg(test)] if let Backend::Controlled {upload:true}=backend {
-                set_resident(s,Native::Controlled(egui::TextureId::User(1)),package,Drain::default());return;
+                let Ok(claims)=s.claim_upload(&package) else{s.candidate=Some(package);return;};
+                set_resident(s,Native::Controlled(egui::TextureId::User(1),match &package {Package::Cpu(p)=>p.image.size,_=>[0,0]}),package,Drain::default(),claims);return;
             }
             s.candidate=Some(package);
         }
@@ -112,17 +125,17 @@ impl RendererOwner {
         // Drop all app-native references and stop/join its one polling service first.
         // Glow has no valid context here; concrete native-instance return is its proof.
         drop(backend);
-        for slot in slots.iter() {let mut s=lock(&slot.state);s.candidate=None;s.resident=None;s.retiring=None;s.admission=None;}
+        for slot in slots.iter() {let mut s=lock(&slot.state);s.candidate=None;s.next_upload=None;s.resident=None;s.retiring=None;s.admission=None;}
         drop(slots);lock(&self.slots).clear();notify_all();
     }
 }
 fn compatible(native:&Native,package:&Package)->bool {match (native,package) {
     (Native::Wgpu(t),Package::Cpu(p))=>t.size==p.image.size,
     (Native::Yuv(t),Package::Yuv{frame,..})=>t.compatible(frame),
-    (Native::Glow(_),Package::Cpu(_))=>true,#[cfg(test)] (Native::Controlled(_),Package::Cpu(_))=>true,_=>false,
+    (Native::Glow(t),Package::Cpu(p))=>t.size==p.image.size,#[cfg(test)] (Native::Controlled(_,size),Package::Cpu(p))=>*size==p.image.size,_=>false,
 }}
-pub(super) fn set_resident(s:&mut SlotState,native:Native,package:Package,drain:Drain) {
-    s.admission=None;s.resident=Some(Resident {native,upload:UploadTicket {drain,package:package.clone()},package});
+pub(super) fn set_resident(s:&mut SlotState,native:Native,package:Package,drain:Drain,claims:GpuClaims) {
+    s.admission=None;s.resident=Some(Resident {native,upload:UploadTicket {drain,package:package.clone(),staging:claims.staging},package,surface:claims.surface});
 }
 #[cfg(test)]
 #[path="batches_renderer_task_tests.rs"]

@@ -2,7 +2,7 @@
 use std::sync::Arc;
 use eframe::egui::{self, Color32, Rect, Sense, Vec2};
 use crate::login::{FrameToken, ViewerSession};
-use crate::screen::core::{input_model::InputCapabilities, pixel_convert::{BgraImage, FrameSize}};
+use crate::screen::core::{input_model::InputCapabilities, pixel_convert::FrameSize};
 use super::super::{screen_input_map::{Geometry, InputMapper}, screen_texture_cpu::CpuTexture, screen_presented::{PresentedFrame,SessionToken}};
 pub(super) struct LoginImage { texture: CpuTexture, token: Option<FrameToken>, mapper: InputMapper, was_ready: bool, rect: Option<Rect>, clip: Option<Rect>, session:std::sync::Weak<ViewerSession>, identity:SessionToken,epoch:Option<u64> }
 impl Default for LoginImage {
@@ -19,10 +19,9 @@ impl LoginImage {
         if hidden { session.focus(false, false); self.texture.reset(); self.token = None; return; }
         if matches!(snapshot.state.as_str(), "ended" | "stopping") { self.texture.reset(); self.token = None; session.focus(false, false); ui.label("Anmeldeverbindung beendet. Für einen neuen Kontext ausdrücklich neu starten."); return; }
         if let Some(frame) = session.take_frame() {
-            let size = FrameSize::new(frame.token.width, frame.token.height);
-            match BgraImage::from_vec(size, frame.pixels) {
-                Ok(image) => { self.texture.update_frame(ui.ctx(), &image, stamp(session,&frame.token,self.identity.clone(),snapshot.presentation_epoch)); self.token = Some(frame.token);self.epoch=Some(snapshot.presentation_epoch); }
-                Err(_) => { session.close(); return; }
+            if frame.image.size()!=FrameSize::new(frame.token.width,frame.token.height) {session.close();return;}
+            if self.texture.update_local_frame(ui.ctx(),&frame.image,stamp(session,&frame.token,self.identity.clone(),snapshot.presentation_epoch)) {
+                self.token=Some(frame.token);self.epoch=Some(snapshot.presentation_epoch);
             }
         }
         let height = ui.available_height().min(ui.clip_rect().height()).clamp(1.0, 480.0);
@@ -71,18 +70,33 @@ fn stamp(session:&Arc<ViewerSession>,token:&FrameToken,identity:SessionToken,epo
     })));
     PresentedFrame {session:identity,validity,login:Some(Arc::new(token.clone())),epoch,gop_id:1,frame_id:token.frame_id}
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::app::screen_render_owner::ControlledDriver;
+    use crate::screen::core::image_admission::ImageRole;
     #[test]
-    fn batches_task_b6_login_image_reset_keeps_pane_slot_until_explicit_retirement() {
-        let ctx=egui::Context::default();let driver=ControlledDriver::install(&ctx);let pool=Arc::new(crate::screen::core::frame_memory::MemoryPool::default());
-        let memory=Arc::new(pool.reserve(None,crate::screen::core::frame_budget::MAX_WORKING_BYTES).unwrap());let mut pane=LoginImage::default();
-        pane.texture.bind_memory(Some(memory.clone()),Some(crate::screen::core::frame_budget::FrameLimits::LEGACY));
-        pane.texture.update(&ctx,&BgraImage::new(FrameSize::new(2,2)).unwrap());pane.texture.prepare(&ctx,[2,2]);drop(memory);
-        driver.upload();driver.complete_upload(pane.texture.slot());let slot=pane.texture.slot().clone();
-        pane.reset();assert!(Arc::ptr_eq(&slot,pane.texture.slot()));driver.owner.after_update(&ctx);drop(pane);
-        assert!(pool.reserve(None,1024*1024).is_err());driver.complete_retirement(&slot);assert!(pool.reserve(None,1024*1024).is_ok());
+    fn batches_task_b6_login_image_real_ipc_show_keeps_local_claims_until_render_retirement() {
+        let fixture=crate::daemon::login_image_fixture(FrameSize::new(8,8)).unwrap();
+        assert!(fixture.wait_frame(std::time::Duration::from_secs(3)));
+        let memory=fixture.image_admission(crate::app::screen_image_memory::owner_limits().unwrap());
+        let ctx=egui::Context::default(); let driver=ControlledDriver::install(&ctx);
+        let mut pane=LoginImage::default(); pane.texture.set_test_local(memory.clone());
+        let show=|pane:&mut LoginImage|ctx.run(egui::RawInput {
+            screen_rect:Some(Rect::from_min_size(egui::Pos2::ZERO,Vec2::splat(8.0))),..Default::default()
+        },|ctx| {egui::CentralPanel::default().frame(egui::Frame::none()).show(ctx,|ui|pane.show(ui,&fixture.session,false));});
+        drop(show(&mut pane)); driver.upload(); driver.complete_upload(pane.texture.slot());
+        assert_eq!(memory.live_count(ImageRole::RenderSurface).unwrap(),1);
+        assert_eq!(memory.live_count(ImageRole::UploadStaging).unwrap(),0);
+        let output=show(&mut pane);
+        assert!(fixture.session.snapshot().presented_frame.is_none(),"UI preparation is not a draw receipt");
+        assert_eq!(driver.draw_output(&output),1);
+        assert!(fixture.session.snapshot().presented_frame.is_some());
+        let slot=pane.texture.slot().clone(); drop(output);
+        fixture.session.close(); pane.reset(); drop(pane); driver.owner.after_update(&ctx);
+        fixture.finish().unwrap();
+        assert_eq!(memory.live_count(ImageRole::RenderSurface).unwrap(),1);
+        driver.complete_retirement(&slot); assert_eq!(memory.live_bytes().unwrap(),0);
     }
 }

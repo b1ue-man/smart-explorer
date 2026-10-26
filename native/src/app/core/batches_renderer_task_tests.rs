@@ -24,6 +24,7 @@ impl ControlledDriver {
     pub(crate) fn complete_retirement(&self,slot:&RenderSlot) {
         let drain=lock(&slot.state).retiring.as_ref().map(|r|r.drain.clone());if let Some(drain)=drain {drain.confirm();}self.owner.after_update(&self.ctx);
     }
+    pub(crate) fn draw_output(&self,output:&egui::FullOutput)->usize {super::super::screen_render_cpu::draw_controlled_output(output)}
     pub(crate) fn draw(&self,slot:&Arc<RenderSlot>,stamp:PresentedFrame,receipt:super::super::screen_presented::Presented)->bool {
         super::super::screen_render_cpu::draw_receipt(slot.clone(),slot.generation(),Some(stamp),receipt)
     }

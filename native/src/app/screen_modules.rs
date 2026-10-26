@@ -98,5 +98,6 @@ mod screen_viewer_tests;
 #[path="core/screen_decode_run.rs"] mod screen_decode_run;
 
 #[path="core/screen_render_cpu.rs"] mod screen_render_cpu;
+#[path="core/screen_image_memory.rs"] mod screen_image_memory;
 
 #[path="core/screen_view_widget_render.rs"] mod screen_view_widget_render;

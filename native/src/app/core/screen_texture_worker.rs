@@ -1,11 +1,12 @@
 //! One conflating worker is reused across render generations; cancellation owns no pixels.
 use std::sync::{Arc,Mutex,Condvar,PoisonError};
-use eframe::egui::{self,ColorImage};
+use eframe::egui;
+use super::screen_image_memory::CpuPixels;
 use super::screen_render_upload::Generation;
 use super::screen_presented::PresentedFrame;
 use crate::screen::core::frame_memory::MemoryHold;
-pub(super) struct Work {pub source:Arc<ColorImage>,pub target:[usize;2],pub seq:u64,pub frame:Option<PresentedFrame>,pub ctx:egui::Context,pub memory:MemoryHold,pub generation:Generation}
-pub(super) struct Finished {pub source:[usize;2],pub target:[usize;2],pub seq:u64,pub frame:Option<PresentedFrame>,pub image:Option<ColorImage>,pub memory:MemoryHold,pub generation:Generation}
+pub(super) struct Work {pub source:Arc<CpuPixels>,pub target:[usize;2],pub seq:u64,pub frame:Option<PresentedFrame>,pub ctx:egui::Context,pub memory:MemoryHold,pub generation:Generation}
+pub(super) struct Finished {pub source:[usize;2],pub target:[usize;2],pub seq:u64,pub frame:Option<PresentedFrame>,pub image:Option<Arc<CpuPixels>>,pub memory:MemoryHold,pub generation:Generation}
 #[derive(Default)]
 struct Slots {pending:Option<Work>,finished:Option<Finished>,stopped:bool,running:bool}
 pub(super) struct Worker {shared:Arc<(Mutex<Slots>,Condvar)>,#[cfg(test)] gate:Arc<Mutex<Option<Arc<TestGate>>>>}
@@ -22,7 +23,7 @@ impl Worker {
             let Some(work)=work else{continue;};
             #[cfg(test)] let barrier=thread_gate.lock().unwrap().clone();
             #[cfg(test)] if let Some(gate)=&barrier {if !gate.after_resample {gate.enter();}}
-            let image=super::screen_scaling::resample_with_cancel(&work.source,work.target,&||!work.generation.active()||work.frame.as_ref().is_some_and(|frame|!frame.active()));
+            let image=super::screen_scaling::resample_admitted(&work.source,work.target,&||!work.generation.active()||work.frame.as_ref().is_some_and(|frame|!frame.active()));
             #[cfg(test)] if let Some(gate)=&barrier {if gate.after_resample {gate.enter();}}
             let mut s=lock.lock().unwrap_or_else(PoisonError::into_inner);s.running=false;
             if !s.stopped&&work.generation.active()&&work.frame.as_ref().is_none_or(|frame|frame.active()) {

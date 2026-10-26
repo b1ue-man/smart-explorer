@@ -244,7 +244,7 @@ impl super::screen_render_owner::RendererOwner {
         if !image.matches_view(rect,screen.pixels_per_point,screen.size_in_pixels) {
             if !r.upload.drain.confirmed() {return false;}
             image.set_view(&b.state.queue,rect,screen.pixels_per_point,screen.size_in_pixels);
-            r.upload=UploadTicket {drain:b.submit(),package:r.package.clone()};
+            r.upload=UploadTicket {drain:b.submit(),package:r.package.clone(),staging:None};
         }true
     }
 }
