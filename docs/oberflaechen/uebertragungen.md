@@ -23,5 +23,40 @@ bezeichnet weiterhin zwei verschiedene Orte. Sync und „Fehlende übertragen“
 erhalten ihre bestehenden Zielnamen. Abbruch, Lesefehler und geschützte Links
 werden nicht zu Lösch- oder Vollständigkeitsbelegen umgedeutet.
 
+„Fehlende übertragen“ bleibt nach Kopien und lokalen Moves verfügbar,
+auch nach einem frühen Fehler ohne Ergebnisroots. Die Wiederholung behält
+Verbindungen, Auswahl, Zielnamen und die Journal-ID. Bereits vorhandene
+Dateien gleicher Größe bleiben unangetastet; abweichende Dateien werden
+gemeldet und nicht ersetzt. Eine bestätigte aktuelle Übertragungsantwort
+verlangt dafür keine neue persistente Providerordner-ID. Unklare Anlage- und
+Publikationsantworten bleiben im selben Journal geschützt, auch bei mehreren
+Klicks. Movequellen und Quarantäne werden nur mit ihren erforderlichen
+Belegen ausgelassen oder bereinigt. Die ausdrücklich gewählte Wiederherstellung
+eines gespeicherten Jobs behält die strenge Objekt-, Quellen-, Ziel-, Rechte-
+und Journalprüfung.
+
+FTP/FTPS und SFTP ohne se-Agent können ausgewählte Ordner weiterhin über die
+exklusive MKD/MKDIR-Anlage kopieren. Eine fehlende stabile Objektidentität
+bleibt unbekannt; nach einer verlorenen Anlageantwort wird kein fremder oder
+unbestätigter Zielordner übernommen. Gewöhnliches WebDAV-Ordnerumbenennen nutzt
+weiterhin `MOVE` mit `Overwrite: F`. Die strikte Reservierungsveröffentlichung
+verlangt gesondert atomare Providerunterstützung; eine ausdrücklich ohne Mutation
+abgelehnte REBIND-Veröffentlichung kann im bestätigten Erstlauf auf die exklusive
+Anlage im endgültigen Namen wechseln. Ein unklarer Ausgang erlaubt diesen
+Fallback nicht.
+
+Ein Uploadkonto ohne Inhaltsleserecht kann seine erlaubten Uploads abschließen.
+Fehlende Rücklese- oder Inkarnationsbelege werden dabei nicht als bestätigte
+Wiederherstellbarkeit ausgegeben. Stagetyp, bekannte übertragene Größe,
+Quellprüfung, Providerabschluss und Konfliktschutz bleiben erforderlich.
+Gleichvolumiges Verschieben einer regulären lokalen Datei verlangt keinen
+Hardlink und keine vollständige zusätzliche Inhaltskopie, sofern der gehaltene
+Quellhandle den direkten Move erlaubt. Ohne Hardlink bleibt ein unbestätigter
+bereits umbenannter Inhalt am Ziel erhalten; er wird nicht zur Fehlerbereinigung
+gelöscht. Dauerhaftigkeit und persistentes Eigentum bleiben getrennte Belege.
+
+Diese Kompatibilitätskorrekturen sind im Quellkandidaten enthalten; ihre
+Remote-Laufzeitprüfung und Veröffentlichung stehen aus.
+
 Statische Befunde: [Review B2](../plaene/2026-10-24-batches/review-b2.md).
 Offene Produktarbeit: [TODO](../TODO.md).

@@ -68,16 +68,32 @@ pub(super) fn begin(view: &JobView<'_>, target_root: &str, cancel: &std::sync::a
             if !data.file_journal && data.mutation_started { return Err(io::Error::other("Alter Auftrag ohne Dateipublikationsbelege; eine sichere Wiederaufnahme ist unbestätigt")); }
             let mut candidate = data.clone(); candidate.guards.clear(); candidate.complete = false; candidate.target_object = None; candidate.mutation_started = false; candidate.file_journal = true;
             if candidate != expected { return Err(io::Error::other(format!("Auftrag {id} hat einen abweichenden Quellen-/Ziel-/Policyvertrag"))); }
-            if data.complete { return Err(io::Error::other(format!("Auftrag {id} ist bereits abgeschlossen"))); }
+            if data.complete && !super::file_recovery::missing_retry::live(view) { return Err(io::Error::other(format!("Auftrag {id} ist bereits abgeschlossen"))); }
             verify_target(view, &data)?;
+            let mut data = data;
+            if super::file_recovery::missing_retry::live(view) {
+                data.complete = false;
+                if !data.mutation_started {
+                    data.guards = source_paths(view.items).into_iter().map(|path| snapshot(view.source, path)).collect();
+                    data.target_object = with_backend(view.target, |backend| crate::vfs::directory_identity(backend, target_root)).ok().flatten();
+                }
+                write_record(&path, RecordKind::Job, id, context.as_ref(), &data)?;
+            }
             if !data.mutation_started { super::file_recovery::initialize(&path, &data, context.as_ref())?; }
             let receipts = super::file_recovery::verify_saved(view, &data, &path, context.as_ref(), cancel)?;
+            if super::file_recovery::missing_retry::live(view) {
+                for guard in data.guards.iter_mut().filter(|guard| !guard.verified) {
+                    let current = snapshot(view.source, &guard.path);
+                    if current.verified { *guard = current; }
+                }
+                write_record(&path, RecordKind::Job, id, context.as_ref(), &data)?;
+            }
             let completed = verify_sources(view, &data, &receipts)?;
             let files = receipts.into_values().map(|(_, root)| root).collect();
             (data, completed, files)
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            if view.recovery == crate::transfer::RecoveryMode::Resume { return Err(io::Error::other("Gespeicherter Auftrag fehlt; Wiederaufnahme bleibt unbestätigt")); }
+            if view.recovery == crate::transfer::RecoveryMode::Resume && !super::file_recovery::missing_retry::unstarted(view, &path)? { return Err(io::Error::other("Gespeicherter Auftrag fehlt; Wiederaufnahme bleibt unbestätigt")); }
             let mut data = expected;
             data.target_object = with_backend(view.target, |backend| crate::vfs::directory_identity(backend, target_root)).ok().flatten();
             let sources = source_paths(view.items);
@@ -100,6 +116,7 @@ pub(super) fn begin(view: &JobView<'_>, target_root: &str, cancel: &std::sync::a
 
 fn verify_target(view: &JobView<'_>, record: &JobRecord) -> io::Result<()> {
     if record.target != endpoint(view.target) { return Err(io::Error::other("Zielverbindung des gespeicherten Auftrags stimmt nicht überein")); }
+    if super::file_recovery::missing_retry::target(view, record)? { return Ok(()); }
     let actual = with_backend(view.target, |backend| crate::vfs::directory_identity(backend, &record.target_dir))?;
     if record.target_object.is_none() || record.target_object != actual { return Err(io::Error::other("Gespeicherter Zielroot ist geändert oder unbestätigt")); }
     Ok(())
@@ -110,7 +127,7 @@ pub(super) fn preflight(view: &JobView<'_>) -> io::Result<Option<String>> {
     let Some(id) = view.id else { return Ok(None); };
     let locations = record_io::record_locations(view.source, view.target, &source_paths(view.items), view.target_dir)?;
     let context = record_context(&locations)?;
-    let record = match read_record::<JobRecord>(&path(id)?, RecordKind::Job, id, u64::MAX, context.is_some()) { Ok(record) => record, Err(error) if error.kind() == io::ErrorKind::NotFound && view.recovery == crate::transfer::RecoveryMode::New => return Ok(None), Err(error) => return Err(error) };
+    let record = match read_record::<JobRecord>(&path(id)?, RecordKind::Job, id, u64::MAX, context.is_some()) { Ok(record) => record, Err(error) if error.kind() == io::ErrorKind::NotFound && (view.recovery == crate::transfer::RecoveryMode::New || super::file_recovery::missing_retry::unstarted(view, &path(id)?)?) => return Ok(None), Err(error) => return Err(error) };
     if view.recovery == crate::transfer::RecoveryMode::New { return Err(io::Error::new(io::ErrorKind::AlreadyExists, "Job-ID ist bereits vergeben")); }
     let requested = if view.target_dir == record.target_dir { view.target_dir.to_string() }
         else if view.target.is_local() && !view.source.is_local() { super::folders::existing_target_root(view.target_dir)? }
@@ -135,7 +152,7 @@ fn verify_sources(view: &JobView<'_>, record: &JobRecord, files: &super::file_re
             if let Some(relative) = confirmed_move(view, record, before)? { completed.push(crate::transfer::ResolvedRoot { source: before.path.clone(), rel: relative }); continue; }
         }
         let same = after.verified && before.directory == after.directory && before.link == after.link && before.id == after.id
-            && if before.directory { before.object.is_some() && before.object == after.object || before.id.is_some() && before.id == after.id }
+            && if before.directory { before.object.is_some() && before.object == after.object || before.id.is_some() && before.id == after.id || super::file_recovery::missing_retry::live(view) && before.object.is_none() && before.id.is_none() }
             else { before.size == after.size && before.mtime_ms == after.mtime_ms && (before.object.is_none() || before.object == after.object) };
         if !same { return Err(io::Error::other(format!("Quellidentität von Auftrag {} ist geändert oder unbestätigt", record.id))); }
     }

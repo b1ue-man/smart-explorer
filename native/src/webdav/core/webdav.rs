@@ -371,9 +371,8 @@ impl Backend for WebdavBackend {
     }
 
     fn rename_no_replace(&self, src: &str, dst: &str) -> VfsResult<()> {
-        if self.stat(src)?.is_dir {
-            return super::folder_reservation::rename(self, src, dst);
-        }
+        // Preserve ordinary WebDAV collection MOVE with Overwrite:F.
+        // Recoverable reservations use the separate strict REBIND extension.
         self.move_stage_time(src, dst, false)
     }
 

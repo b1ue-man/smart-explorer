@@ -24,12 +24,30 @@ impl Reservations {
         self.store.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).data.roots.get(source).map(|saved| saved.relative.clone())
     }
 
-    pub fn confirm_resume(&self, target: Side<'_>, root: &str, source: &str, relative: &str) -> io::Result<Option<bool>> {
+    pub fn confirm_resume(&self, target: Side<'_>, root: &str, source: &str, relative: &str, live: bool, cancel: &AtomicBool) -> io::Result<Option<bool>> {
         let local = LocalBackend::new("/");
         let backend: &dyn Backend = match target { Side::Local => &local, Side::Remote(backend) => backend };
         let mut store = self.store.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let Some(saved) = store.data.roots.get(source).cloned() else { return Ok(None); };
         if saved.relative != relative { return Err(io::Error::other("Wiederaufnahmeziel weicht vom gespeicherten Alias ab")); }
+        if live && !saved.published {
+            if saved.move_source {
+                if !target.is_local() { return Err(io::Error::other("Gespeicherte Movequelle ist nicht lokal")); }
+                drop(store);
+                return self.move_root(root, source, &saved.wanted, false, cancel).map(|(_, moved)| Some(moved));
+            }
+            Self::publish(backend, root, &mut store, source, saved)?;
+            return Ok(Some(false));
+        }
+        if live && saved.published && saved.identity.is_none() && !saved.move_source {
+            match backend.stat(&join_rel(root, relative)) {
+                Ok(meta) if meta.is_dir && !meta.is_symlink && !meta.special => {},
+                Ok(_) => return Err(io::Error::other("Bestätigter Zielalias ist kein regulärer Ordner")),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => crate::vfs::create_dir_exclusive(backend, &join_rel(root, relative))?,
+                Err(error) => return Err(error),
+            }
+            return Ok(Some(false));
+        }
         let identity = saved.identity.as_ref().ok_or_else(|| io::Error::other("Gespeicherter Alias ist unbestätigt"))?;
         if crate::vfs::directory_identity(backend, &join_rel(root, relative))?.as_ref() != Some(identity) { return Err(io::Error::other("Gespeicherter Zielalias wurde ersetzt oder fehlt")); }
         let mut confirmed = saved.clone(); confirmed.published = true;
@@ -99,6 +117,31 @@ impl Reservations {
             store.save()?;
             match Self::publish(backend, root, &mut store, source, saved.clone()) {
                 Ok(relative) => return Ok(relative),
+                Err(error) if error.kind() == io::ErrorKind::Unsupported => {
+                    // A provider can expose an ID without atomic REBIND.
+                    // Strict Unsupported guarantees no namespace mutation;
+                    // keep first-run MKCOL usable without claiming recovery
+                    // of an unacknowledged exclusive creation.
+                    if crate::vfs::directory_identity(backend, &stage_path)? != saved.identity {
+                        return Err(io::Error::other("Identität der nicht veröffentlichten Ordnerstage ist geändert"));
+                    }
+                    backend.remove_dir(&stage_path)?;
+                    saved.direct = true; saved.stage.clear(); saved.identity = None;
+                    store.data.roots.insert(source.to_string(), saved.clone()); store.save()?;
+                    match crate::vfs::create_dir_exclusive(backend, &join_rel(root, &saved.relative)) {
+                        Ok(()) => {
+                            saved.published = true;
+                            store.data.roots.insert(source.to_string(), saved.clone()); store.save()?;
+                            saved.identity = crate::vfs::directory_identity(backend, &join_rel(root, &saved.relative))?;
+                            store.data.roots.insert(source.to_string(), saved.clone()); store.save()?;
+                            return Ok(saved.relative);
+                        }
+                        Err(error) if error.kind() == io::ErrorKind::AlreadyExists && renumber => {
+                            store.data.roots.remove(source); store.save()?; continue;
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
                     // Only a definite NoReplace collision permits renumbering.
                     if crate::vfs::directory_identity(backend, &stage_path)? == saved.identity {
@@ -164,7 +207,7 @@ impl Reservations {
         if crate::vfs::directory_identity(backend, &stage)?.as_ref() != Some(identity) {
             return Err(io::Error::other("Gespeicherte Ordnerreservierung ist nicht mehr dieselbe"));
         }
-        backend.rename_no_replace(&stage, &target)?;
+        crate::vfs::rename_reserved_directory(backend, &stage, &target)?;
         if crate::vfs::directory_identity(backend, &target)?.as_ref() != Some(identity) {
             return Err(io::Error::other("Zielordneridentität nach Veröffentlichung unbestätigt"));
         }

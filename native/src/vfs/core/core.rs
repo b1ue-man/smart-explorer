@@ -197,10 +197,11 @@ pub trait Backend: Send + Sync {
 
     fn rename(&self, src: &str, dst: &str) -> VfsResult<()>;
 
-    /// Move `src` to a destination that must not already exist. This is a hard
-    /// atomicity contract: an existence probe followed by ordinary rename does
-    /// not satisfy it because another writer can create `dst` between calls.
-    /// Backends without a protocol/OS no-replace primitive stay unsupported.
+    /// Move `src` without overwriting an existing destination. The protocol/OS
+    /// primitive must arbitrate that decision; a probe followed by replacing
+    /// rename does not satisfy it. WebDAV collection MOVE can be partial:
+    /// strict recoverable directory publication uses `rename_reserved_directory`.
+    /// Backends without a protocol/OS no-overwrite primitive stay unsupported.
     fn rename_no_replace(&self, src: &str, dst: &str) -> VfsResult<()> {
         super::backend_defaults::rename_no_replace(src, dst)
     }

@@ -228,6 +228,7 @@ pub(super) async fn serve(stream: FsStream, req: FsRequest) -> io::Result<()> {
             .await
         }
         request @ (FsRequest::CreateDir { .. }
+        | FsRequest::RenameReservedDirectory { .. }
         | FsRequest::CreateDirExclusive { .. }
         | FsRequest::DirectoryIdentity { .. }
         | FsRequest::DirectoryReservationSupported { .. }) => {

@@ -41,6 +41,9 @@ impl BackendExtensions for PeerBackend {
     fn directory_identity(&self, path: &str) -> io::Result<Option<String>> {
         folder_reservation::identity(self, path)
     }
+    fn rename_reserved_directory(&self, source: &str, destination: &str) -> io::Result<()> {
+        folder_reservation::rename(self, source, destination)
+    }
     fn file_identity(&self, path: &str) -> io::Result<Option<String>> {
         file_identity::client(self, path)
     }

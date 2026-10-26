@@ -15,6 +15,18 @@ pub(super) fn is_retryable_read(request: &FsRequest) -> bool {
     )
 }
 
+#[cfg(test)]
+mod reservation_compatibility_tests {
+    use super::*;
+    #[test]
+    fn batches_task_transfer_compat_reserved_share_rename_accepts_only_unit_reply_and_never_read_retries() {
+        let request = FsRequest::RenameReservedDirectory { src: "/owned".into(), dst: "/final".into() };
+        assert!(!is_retryable_read(&request));
+        assert!(response_matches(&request, &FsResponse::Ok));
+        assert!(!response_matches(&request, &FsResponse::DirectoryReservationSupported { supported: true }));
+    }
+}
+
 pub(super) fn response_matches(request: &FsRequest, response: &FsResponse) -> bool {
     if matches!(response, FsResponse::Err { .. }) {
         return true;
@@ -36,6 +48,7 @@ pub(super) fn response_matches(request: &FsRequest, response: &FsResponse) -> bo
         }
         FsRequest::Rename { .. }
         | FsRequest::RenameNoReplace { .. }
+        | FsRequest::RenameReservedDirectory { .. }
         | FsRequest::PromoteStaged { .. }
         | FsRequest::PromoteNoReplace { .. }
         | FsRequest::RemoveFile { .. }

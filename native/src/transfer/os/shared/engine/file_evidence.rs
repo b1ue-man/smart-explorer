@@ -21,6 +21,34 @@ enum Observation { Published, Source }
 pub(super) fn observe(side: Side<'_>, path: &str, cancel: &AtomicBool) -> io::Result<Proof> {
     observe_as(side, path, None, cancel, Observation::Published)
 }
+
+/// Readback is optional for a live acknowledged remote copy. Its absence
+/// never supplies a restart ownership proof or authorizes source cleanup.
+pub(super) fn observe_available(side: Side<'_>, path: &str, cancel: &AtomicBool) -> io::Result<Option<Proof>> {
+    match observe(side, path, cancel) {
+        Ok(proof) => Ok(Some(proof)),
+        Err(error) if readback_unavailable(side, &error) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+pub(super) fn readback_unavailable(side: Side<'_>, error: &io::Error) -> bool {
+    !side.is_local() && matches!(error.kind(), io::ErrorKind::PermissionDenied | io::ErrorKind::Unsupported)
+}
+
+pub(super) fn validate_copy_target(source: Side<'_>, source_path: &str, source_size: u64, target: Side<'_>, path: &str) -> io::Result<()> {
+    let expected = with_backend(source, |backend| backend.read_size(source_path, source_size))?;
+    validate_target_shape(target, path, expected)
+}
+
+pub(super) fn validate_target_shape(side: Side<'_>, path: &str, expected_size: Option<u64>) -> io::Result<()> {
+    let meta = with_backend(side, |backend| backend.stat(path))?;
+    if meta.is_dir || meta.is_symlink || meta.special || expected_size.is_some_and(|size| meta.size != size) {
+        return Err(io::Error::new(io::ErrorKind::InvalidData,
+            format!("Uploadziel ist keine reguläre Datei der übertragenen Größe: {path}")));
+    }
+    Ok(())
+}
 pub(super) fn observe_source(side: Side<'_>, path: &str, selected_id: Option<&str>, cancel: &AtomicBool) -> io::Result<Proof> {
     observe_as(side, path, selected_id, cancel, Observation::Source)
 }

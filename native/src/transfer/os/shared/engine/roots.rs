@@ -160,12 +160,21 @@ fn plan_roots(
     let gate = view.source.is_local().then(|| crate::transfer::AccessGate::new(&view.gate_root()));
     for mut root in plan.walk_roots.drain(..) {
         if cancel.load(Ordering::Acquire) { return Err(super::super::cancel::CANCELED_ERROR.to_string()); }
-        if view.resume.is_some() {
+        if view.resume.is_some() && (resumed.contains_key(root.path.as_str()) || reservations.as_ref().is_some_and(|saved| saved.saved_relative(&root.path).is_some())) {
+            // A folder deliberately skipped by the earlier conflict decision
+            // has no resolved root. Missing-only must not turn it into a merge.
+            if !resumed.contains_key(root.path.as_str())
+                && view.folders.for_root(&root.path) == crate::transfer::FolderConflict::Skip
+                && selected_directory(view.source, &root.path, gate.as_ref())? {
+                plan.omitted += 1;
+                plan.roots.retain(|entry| entry.source != root.path);
+                continue;
+            }
             if let Some(reservations) = &reservations {
                 if !resumed.contains_key(root.path.as_str()) {
                     if let Some(relative) = reservations.saved_relative(&root.path) { root.rel = relative; }
                 }
-                let moved = reservations.confirm_resume(view.target, register.root(), &root.path, &root.rel).map_err(|error| format!("Wiederaufnahmealias bestätigen: {error}"))?;
+                let moved = reservations.confirm_resume(view.target, register.root(), &root.path, &root.rel, super::file_recovery::missing_retry::live(view), cancel).map_err(|error| format!("Wiederaufnahmealias bestätigen: {error}"))?;
                 if let Some(entry) = plan.roots.iter_mut().find(|entry| entry.source == root.path) { entry.planned = root.rel.clone(); }
                 if moved == Some(true) && !target_exists(view.source, &root.path)? { continue; }
             }
@@ -202,7 +211,7 @@ fn plan_roots(
             if let Some(entry) = plan.roots.iter_mut().find(|entry| entry.source == root.path) {
                 entry.planned = root.rel.clone();
             }
-        } else if !view.target.is_local() && !root.rel.contains('/') && !resumed.contains_key(root.path.as_str()) {
+        } else if !view.target.is_local() && !root.rel.contains('/') && view.resume.is_none() {
             root.rel = claim(register, &root.rel)?;
             if let Some(entry) = plan.roots.iter_mut().find(|entry| entry.source == root.path) { entry.planned = root.rel.clone(); }
         }
@@ -271,7 +280,7 @@ fn plan_pairs(
             None => {
                 let planned = match resumed.get(receipt_key.as_str()).or_else(|| resumed.get(first.as_str())) {
                     Some(rel) => first_component(rel).to_string(),
-                    None if view.target.is_local() || pair.rel.contains('/') => first.clone(),
+                    None if view.target.is_local() || pair.rel.contains('/') || view.resume.is_some() => first.clone(),
                     None => claim(register, &first)?,
                 };
                 plan.roots.push(PlannedRoot {

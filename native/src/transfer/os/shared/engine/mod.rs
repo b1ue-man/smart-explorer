@@ -25,6 +25,8 @@ mod folder_alias_store;
 mod job_store;
 mod file_recovery;
 mod file_evidence;
+#[cfg(test)]
+mod batches_backend_compatibility_task_tests;
 pub(crate) mod record_io;
 pub(crate) use job_store::{unconfirmed_jobs, reopen_job, RecoveryCatalog};
 pub(crate) mod folder_reservation;

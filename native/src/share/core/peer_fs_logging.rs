@@ -22,6 +22,7 @@ pub(super) fn request_label(request: &FsRequest) -> &'static str {
         FsRequest::MkdirAll { .. } => "mkdir_all",
         FsRequest::Rename { .. } => "rename",
         FsRequest::RenameNoReplace { .. } => "rename_no_replace",
+        FsRequest::RenameReservedDirectory { .. } => "rename_reserved_directory",
         FsRequest::PromoteStaged { .. } => "promote_staged",
         FsRequest::ReplaceStagedReversible(_) => "replace_staged_reversible",
         FsRequest::CopyFile { .. } => "copy_file",

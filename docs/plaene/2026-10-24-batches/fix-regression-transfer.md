@@ -1,0 +1,751 @@
+# Transferkompatibilität: Fixautorbericht
+
+Stand: 2026-10-26. Arbeitskopie `/tmp/smartexplorer-review-fixes-ee75e91b`,
+Ausgangskandidat `ee75e91bad6b28ef9206a5b2b2857cbea75c4e5b`.
+Dieser Bericht und alle zugehörigen Änderungen stammen vom selben Fixautor.
+Es wurde kein lokaler Build, Formatter, Compiler oder Test gestartet.
+
+## A — Auftrag und Grenzen
+
+Quelle ist der delegierte Ergebnisauftrag mit dem wörtlichen Nutzervertrag
+in `/tmp/smartexplorer-final-review-user-contract.txt`.
+Vollständig zu liefern sind Funktionsauflistung, direkte und indirekte
+Verknüpfungskarte, Fixplan, Implementierung und eigene anschließende
+Anti-Regressionsreview für RA-02, RA-03/RSOL-01, RA-04, RA-09/RSOL-02 und RSOL-05.
+Die sieben IDs beschreiben fünf eigenständige Fehlerursachen.
+Die Schreibgrenze steht in `/tmp/smartexplorer-fix-transfer-compat-scope.json`.
+Der Main-Arbeitsbaum bleibt unverändert. Suite-Orchestrierung, Ausführung,
+Commits, Pushes, Graphrefresh und terminaler Release gehören dem Hauptagenten.
+
+Grundfunktion: zusätzliche Wiederherstellungsbelege dürfen bestehende
+Erstübertragungen, bewusst neue Missing-only-Ausführungen und gewöhnliches
+Umbenennen nicht von unbelegten Providerfähigkeiten abhängig machen.
+Gespeicherte Wiederherstellung bleibt an echte Objektidentität gebunden.
+Keine Annahme über verfügbare Livekonten oder lokale Testresultate wird gemacht.
+Planungstiefe 2: zusammenhängende Korrektur vorhandener Verträge.
+
+## B — Bestand, Fehlerfunktionen und Verknüpfungskarte
+
+| Befund | Fehlerhafte Funktion und Auswirkung | Direkt betroffene Kette |
+|---|---|---|
+| RA-02 | `WebdavBackend::rename_no_replace` verlangt für jeden Ordner Resource-ID und REBIND; Desktop und Android verlieren gewöhnliches Umbenennen. | `app/os/shared/file_actions.rs::confirm_rename` und `mobile/os/shared/fs_edit.rs::rename` → `Backend::rename_no_replace` → `webdav/core/webdav.rs` → `folder_reservation::rename`. CLI-Move erreicht denselben Vertrag. Die strikte Engine-Reservierung verwendet bisher dieselbe Schnittstelle. |
+| RA-03/RSOL-01 | FTP-/SFTP-`directory_identity` gibt Unsupported statt unbekannter Identität zurück; Erstkopie eines Ordners scheitert vor dem ersten Kind. | Desktop `transfer_route.rs` und Android `transfer.rs` → `TransferJob`/Lane → `engine::prepare` → `roots::plan_roots` → `Reservations::reserve` → `vfs::directory_identity` → FTP-/SFTP-Extension. `selection.rs` prüft die separate exklusive MKD/MKDIR-Fähigkeit. |
+| RA-04 | `resume_job` bindet „Fehlende übertragen“ an `RecoveryMode::Resume`; unbekannter Zielroot sperrt den bisherigen Missing-only-Bedienweg. | `transfer_window.rs`/`TransferCenter::take_resume` → `resume_job` → `job_store::preflight/begin/verify_target` → `roots`/AliasStore → Datei-Resume/Größenvergleich. Persistente Recovery verwendet dagegen `transfer_recovery_ui.rs`, `cli/transfer_recovery.rs` und `run_legacy_with_identity`. |
+| RA-09/RSOL-02 | `file_recovery::before/after_checked` liest die Remote-Datei zur Belegerzeugung; ein erlaubter Upload scheitert bei verweigertem Download. | Upload, Remote-Copy, Server-Copy, Segmente, Pakete → `publish` beziehungsweise `prepare_direct/after` → `observe` → `open_read_regular`. Writerabschluss, Quellprüfung, NoReplace und Stagebesitz sind davon getrennte bestehende Verträge. |
+| RSOL-05 | `direct_move::try_move` setzt einen Hardlink voraus; FAT32/exFAT fallen trotz gleichem Volume auf vollständige Stagekopie zurück. | Desktop lokaler Move → `engine/local.rs::copy_file` → `transfer_local_observed` → Quarantäne → `PublicationAlias::create` → Hardlink → bisheriger Stagefallback. PublicationObserver und `publication_proof` halten Datei, Inhalt und Zielparentbeleg; `move_guard` besitzt Restore/Cleanup. |
+
+Indirekte Grenzen der fünf Ketten:
+
+- VFS-Vertrag: `Backend`, `BackendExtensions`, `CachingBackend`, Local-/ConfinedLocal-,
+  FTP-, SFTP-, WebDAV-, Drive-, SMB-, Agent- und Shareadapter. Cacheinvalidierung
+  und Share-Freigaben müssen die getrennte strikte Renameoperation weiterreichen.
+- Job- und Aliasvertrag: `JobView`, `JobRecord`, `StoredEndpoint`, `SourceGuard`,
+  `FolderAliasScope`, `FolderAliases`, `record_io` und Filejournalindex. Namespace,
+  State, Root, Auswahl, Policy, Vaultkontext und Lock dürfen nicht gelockert werden.
+- Dateioperationen: `worker` → `ops` → `local`, `upload`, `download`, `remote_copy`,
+  `segments_copy`, `segments_upload`, `segments_download`, `batch_put`, `batch_get`.
+  Die gemeinsame Publikationsgrenze entscheidet Quellbehalt, Fehlerzuordnung,
+  Abbruch, Stagebereinigung, Skip, Nummerierung und endgültige Fortschrittsmeldung.
+- Normale CLI-/MCP-Zielauflösung bleibt über `cli/transfer.rs`, `engine_copy.rs`,
+  `folder_conflict.rs` und `tree_ops.rs` ausdrücklich zielnamengebunden.
+  Sync nutzt unveränderte Backendpfade und erhält keine Missing-only-Abkürzung.
+- Lokal: `safe_file`, `direct_move`, `move_guard`, `durability`, `publication`,
+  `publication_proof`, `recovery`, OS-Moveadapter und gehaltene
+  `local_access::ConfinedDirectory` bestimmen Fremdobjektschutz und Cleanup.
+
+## C — Lösungsentscheidung und Quellenrecherche
+
+Erste Recherche: bestehende Erstlaufpfade und die Unterscheidung zwischen
+aktueller Ausführung und persistenter Recovery wiederverwenden. Bloßes globales
+Abschalten von Journaling, erfundene Provideridentitäten, Probe-plus-Mkdir als
+Reservierung sowie MOVE als angeblich atomarer Recoverybeleg werden verworfen.
+
+Zweite Recherche: gewöhnliches WebDAV-MOVE und striktes REBIND brauchen eine
+separate typisierte Schnittstelle; Downloadverweigerung darf nur die optionale
+Remote-Belegerzeugung begrenzen, niemals lokale Fehler oder echten I/O-Verlust
+verschlucken. Ohne Hardlink muss der gehaltene Quarantäneinhalt unmittelbar
+umbenannt werden; eine misslungene Nachbestätigung darf ihn nicht löschen.
+
+Primärquellen, erneut geprüft 2026-10-26:
+
+- [RFC 4918 §9.9](https://www.rfc-editor.org/rfc/rfc4918#section-9.9):
+  Collection-MOVE und `Overwrite: F`; keine allgemeine Atomaritätsgarantie.
+- [RFC 5842 §2.5 und §6](https://www.rfc-editor.org/rfc/rfc5842#section-6):
+  REBIND ist der gesonderte atomare Bindingvertrag.
+- [RFC 3659 §7.5.2](https://www.rfc-editor.org/rfc/rfc3659#section-7.5.2):
+  FTP-Unique ist kein belegter verbindungsübergreifender Wiederherstellungsnachweis.
+- [vsftpd-Konfiguration](https://security.appspot.com/vsftpd/vsftpd_conf.html):
+  `download_enable` und `write_enable` begrenzen Downloads und Uploadmutationen getrennt.
+- [Microsoft Dateisystemvergleich](https://learn.microsoft.com/en-us/windows/win32/fileio/filesystem-functionality-comparison):
+  FAT32 und exFAT unterstützen keine Hardlinks.
+- [MoveFileExW](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefileexw):
+  Rename desselben Volumes benötigt keine inhaltsgleiche Zusatzkopie.
+
+## D — Konkrete Meilensteine vor der Implementierung
+
+1. **M1 Provider-Erstkopie:** FTP/SFTP melden unbekannte stabile Ordneridentität
+   mit `Ok(None)`; die exklusive MKD/MKDIR-Fähigkeit bleibt separat wahr.
+   Erwartung: freier und kollidierender Ordnername funktionieren; verlorene
+   Antwort wird ohne Eigentumsbeleg nicht als erfolgreiche Recovery ausgegeben.
+2. **M2 WebDAV-Umbenennen:** normalen MOVE-Vertrag wiederherstellen, strikte
+   Reservierungsveröffentlichung an eine eigene VFS-Operation binden. Cache
+   und Share-Rechtewrapper reichen dieselbe strikte Operation weiter.
+   Erwartung: normaler Server ohne Bindings kann Ordner umbenennen; strikte
+   Wiederherstellungsreservierung behauptet dort keine Atomarität.
+3. **M3 Missing-only, nach Abschnitt J korrigiert:** Copy und lokale Moves
+   behalten ihre Job-ID, Endpunkte, Auswahl, Policy und aufgelösten Zielnamen.
+   Die aktuelle Wiederholung unterscheidet bestätigte Ausführungsantworten von
+   dauerhaftem Eigentum; unbekannte Intents bleiben gesperrt. Frühe Fehler ohne
+   tatsächlichen Mutationseintrag bleiben auch ohne Ergebnisroots wiederholbar.
+   Gespeicherte Recovery bleibt streng. Zuvor übersprungene Ordner bleiben
+   ausgelassen. Erwartung: passende Dateien werden übersprungen, fehlende
+   übertragen, abweichende weder ersetzt noch neu nummeriert.
+4. **M4 Uploadrechte:** Remote-Belegerzeugung behandelt ausschließlich PermissionDenied
+   oder Unsupported als fehlenden optionalen Zielbeleg. Stagetyp und bekannte
+   Übertragungsgröße werden weiterhin über Metadaten geprüft. Vor dem Rename wird ein
+   unbestätigter Intent gespeichert; danach bleibt die fehlende Wiederherstellbarkeit
+   ehrlich. Erwartung: zulässiger Upload ist erfolgreich; unklarer Ausgang wird
+   weder automatisch wiederholt noch als bestätigtes Eigentum interpretiert.
+5. **M5 Move ohne Hardlink:** direkten Same-volume-Rename mit gehaltenem Handle
+   zulassen, wenn der Hardlink nicht verfügbar ist. Quellquarantäne, NoReplace,
+   vorbereiteter Intent, tatsächliche Flush-/Namespaceprüfung und Fehlerbehalt
+   bleiben aktiv. Erwartung: keine Stagekopie für diesen Fall; Konflikt, Abbruch,
+   EXDEV und unbestätigte Veröffentlichung bleiben sicher.
+6. **M6 Eigene Anti-Regressionsreview und Fallvorbereitung:** dieselben direkten
+   und indirekten Ketten nach Implementierung erneut lesen; eng gebundene Fälle
+   für die eine spätere Remote-Suite deklarieren und erforderliche Registrierungen
+   dem Hauptagenten übergeben. Keine lokale Ausführung.
+
+Status vor der Integrationsnachfrage: M1–M6 waren quellseitig umgesetzt und
+statisch geprüft. Die anschließende RA-04-Quellenklärung widerlegt jedoch die
+Copy-/Nichtleere-Roots-Einschränkung des ersten M3-Fixes. Abschnitt J führt
+denselben Autorzyklus dafür fort; seine Ergebnisse ersetzen die früheren
+M3-Aussagen. Laufzeit-, Compiler- und Veröffentlichungsbeleg stehen bei Main aus.
+
+## E — Implementierungsergebnis und ergänzte vollständige Wirkungsketten
+
+**M1:** `ftp/core/folder_reservation.rs::identity` und
+`sftp/core/folder_reservation.rs::identity` liefern `Ok(None)`.
+`directory_reservation_supported` bleibt die vorhandene Aussage über die
+exklusive einzelne MKD/MKDIR-Anlage. Die Engine erreicht damit ihren bereits
+vorhandenen direkten Erstlaufpfad. Weder ein Verzeichnisname noch FTP-Unique
+werden als persistente Eigentumsidentität gespeichert.
+
+**M2:** Die neue VFS-Operation `rename_reserved_directory` trennt die strikte
+Veröffentlichung vom gewöhnlichen `Backend::rename_no_replace`.
+Ihre vollständige direkte/indirekte Weitergabe lautet:
+
+1. `engine/folder_reservation.rs::Reservations::publish` →
+   `vfs/core/folder_reservation.rs::rename_reserved_directory` →
+   `BackendExtensions::rename_reserved_directory`.
+2. Direkter WebDAV-Backend → `webdav/core/extensions.rs` → bestehendes
+   `webdav/core/folder_reservation.rs::rename` mit Resource-ID, REBIND und
+   `Overwrite: F`. Gewöhnliches `WebdavBackend::rename_no_replace` verwendet
+   stattdessen wieder `move_stage_time(..., false)`.
+3. `CachingBackend` delegiert die strikte Operation an seinen echten Backend
+   und invalidiert Quelle und Ziel auch bei einem fehlgeschlagenen Ergebnis.
+4. `GuardedBackend` prüft beide Pfade mit seinen bestehenden `destructive`-
+   Freigaben, delegiert die strikte Operation und bestätigt anschließend die
+   Ziel-Schreibfreigabe. Es reicht keinen inneren Backend ungeprüft heraus.
+5. `AgentBackend` verwendet für gewöhnliches Umbenennen weiterhin den alten
+   `RenameNoReplace`-Frame. Die strikte Extension verlangt `folder_reservation`
+   und sendet einmal den bestehenden `RenameDirectoryNoReplace`-Frame.
+   `daemon/backend_ops::folder_operation` delegiert diesen Frame an die strikte
+   VFS-Operation. `backend_server` behält für den gewöhnlichen Frame seinen
+   bisherigen Backendaufruf. Der eigenständige se-Agent verwendet für den
+   strikten Frame weiterhin seinen vorhandenen lokalen atomaren OS-Adapter.
+6. `PeerBackend` → `peer_extensions::rename_reserved_directory` →
+   `folder_reservation::rename` verlangt das ausgehandelte
+   `folder_reservation_v1` für beide Orte. `call_once` sendet den neuen
+   `FsRequest::RenameReservedDirectory` ohne die Retrylogik von `Attempts`.
+   `FsRequest::effect` klassifiziert ihn als Schreiboperation;
+   `peer_request_policy` erlaubt nur die Unit-Erfolgsantwort und keinen Readretry;
+   `peer_fs_logging` benennt ihn getrennt. `server_fs` →
+   `folder_reservation::serve` hält die bestehende autorisierte Mount-Lease →
+   `FsAccess::rename_reserved_directory` löst beide Schreiborte auf, verlangt
+   denselben Backend/Mount und delegiert an die strikte VFS-Operation.
+
+Das Merkmal `folder_reservation_v1` existiert im letzten Releasebaum
+`a814f263` noch nicht; dies wurde am Versionsdiff von `wire_capabilities.rs`
+nachgeprüft. Die Erweiterung ergänzt denselben noch unveröffentlichten
+Featurevertrag. Ein Altpeer erhält keinen neuen strikten Request. Sein
+gewöhnlicher Renamevertrag bekommt keine neue Featurevoraussetzung.
+
+Ein Provider mit Resource-ID, aber ohne atomare Binding-Veröffentlichung wird
+beim bestätigten Unsupported-Ergebnis nicht pauschal unbenutzbar: Die Engine
+prüft erneut ihre leere Stageidentität, entfernt diese Stage und reserviert den
+endgültigen Namen durch die exklusive Verzeichnisanlage. Erst deren bestätigte
+Antwort und nachfolgende Identitätsabfrage können einen neuen Eigentumsbeleg
+erzeugen. Transportfehler, fremde Stage, fehlende Stage und verlorene
+Publikationsantwort erlauben diesen Fallback nicht. Der neue strikte
+Extensionvertrag legt ausdrücklich fest, dass Unsupported keine Mutation
+ausgeführt hat; nachgelagerte Fehler werden zusätzlich durch die noch vorhandene
+eigene Stage abgegrenzt.
+
+**M3:** `app/core/transfer_route.rs::resume_job` klont den Auftrag für Copy
+und lokale Moves, behält dieselbe Job-ID und setzt `RecoveryMode::Resume`.
+Die Ergebnisroots ergänzen die bereits vorhandene Zuordnung; ein fehlgeschlagener
+Folgeversuch mit leeren Roots löscht vorher aufgelöste Namen nicht. Vor der
+ersten Rootplanung bleibt `resume = Some([])` möglich. Die neue Operation
+`missing_retry::live` trennt diesen bestehenden aktuellen Bedienweg von
+explizit gespeicherter Recovery mit `resume == None`. `job_store` bindet weiter
+Endpunkte, Auswahl, Filter, Policy, Vault und Joblock. Bestätigte aktuelle
+Publikationsantworten dürfen ohne persistente Objekt-ID den bisherigen
+Größen-/Nichtüberschreibenpfad erneut erreichen. Unbekannte Intents werden
+weiter streng geprüft, bevor ein neuer Intent geschrieben werden darf.
+Aliasse ohne bestätigte Anlageantwort werden weder übernommen noch neu
+nummeriert. Frühe Fehler vor dem Jobjournal oder vor tatsächlicher Mutation
+und noch nicht geplante Wurzeln erhalten einen sicheren neuen Planungsversuch.
+Vollständig bewegte ausgewählte Dateien werden nur über bestätigte Ergebnisse
+und geprüfte Zielbelege ausgelassen; Quarantänebereinigung bleibt an die
+vorhandenen starken Eigentumsbelege gebunden. Die vollständige korrigierte
+Bedienkette, die Implementierung und die eigene Nachreview stehen in Abschnitt J.
+
+**M4:** `file_evidence::observe_available` behandelt ausschließlich
+PermissionDenied/Unsupported eines optionalen Remote-Zielbelegs als fehlenden
+Beleg. `before` speichert trotzdem den Publikationsintent; `after_checked`
+bestätigt ohne vollständigen Beleg kein persistentes Dateieigentum.
+`validate_copy_target`/`validate_target_shape` verlangen eine vorhandene
+reguläre Datei und die bekannte übertragene Größe. Google-native Exportquellen
+behalten ihren vorhandenen `read_size == None`-Vertrag; unbekannte Exportlänge
+wird nicht fälschlich zu Null.
+
+Die tatsächliche FTP-Kette ist `FtpConnection::open_reader_from` →
+`retr_as_stream` → RETR-Antwortklassifizierung → `FtpBackend::open_read`.
+Ausschließlich eine RETR-550-Ablehnung bekommt PermissionDenied mit erhaltenem
+Servertext. SIZE, MLST, LIST, MKD, RNFR und RNTO behalten ihre Fehlerabbildung;
+550 wird nirgends zu einem Abwesenheitsbeweis umgedeutet. Der vorhandene
+Agent-Textdecoder erkennt PermissionDenied, der Share-Fehlerkanal transportiert
+die vorhandene typisierte Klasse. Quell-Lesefehler, lokale Fehler, Abbruch,
+Timeout, ungültige Daten und verkürzte Streams werden nicht unterdrückt.
+
+Die indirekten Verbraucher von `before`, `prepare_direct`, `prepare_batch`
+und `after` sind weiterhin Upload, Remote-Stream, lokales FTP-Bridging,
+Server-Copy, segmentierter Upload/Remote-Copy sowie Paketpublikation.
+Jeder Verbraucher behält seinen Writerabschluss, Quellcheck, Größencheck,
+Zielkonflikt und seinen konservativen Umgang mit unklarer Publikation.
+`publication_state`, `verify_source`, Aliasvalidierung, Indexzähler und
+Reparatur eines Pending-Intents behalten ihre starken Eigentumsbedingungen.
+`verify_saved` und `verify_target` unterscheiden jetzt die aktuelle ausdrücklich
+angeforderte Missing-only-Ausführung; ihre gespeicherte Recovery bleibt streng.
+Kein fehlender Rücklesebeleg bestätigt dabei persistentes Eigentum.
+
+**M5:** `direct_move::try_move` verwendet einen Hardlink weiterhin dort, wo
+dieser tatsächlich verfügbar ist. Ohne Hardlink benennt es die bereits
+gesicherte Quarantäne selbst um. Es hält den flushfähigen Quellhandle über
+Preflight, Rename, Zielprüfung, tatsächlichen Datei-/Parentflush und
+Publikationsbeleg. Die Zielprüfung bindet den erreichten Pfad an dasselbe
+aktuelle Liveobjekt. Eine vor dem Rename festgehaltene FAT-Dateinummer wird
+nicht als über Rename hinweg stabile Inkarnation behauptet.
+
+Vor dem Commit wird Abbruch nach einer erfolgreichen Vorbereitung nochmals
+behandelt; zuerst wird eine mögliche Publikationserlaubnis widerrufen, dann
+die Quarantäne ohne Ersetzen zurückgestellt. Bei unbekanntem Renameergebnis
+oder fehlgeschlagener Nachbestätigung wird kein bereits umbenannter Inhalt
+gelöscht. Fehlermeldungen nennen für den Pfad ohne Hardlink keine vermeintlich
+noch vorhandene Quarantänedatei. NoReplace-Konflikte, Rename-Nummerierung,
+Skip, Overwrite, EXDEV-Stagefallback und der bisherige Pfad bei fehlenden
+Flushrechten bleiben über dieselben vorhandenen Grenzen erhalten.
+
+Zusatzquelle zur zweiten Recherche, geprüft 2026-10-26:
+[NtFlushBuffersFileEx](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ntflushbuffersfileex)
+führt NTFS, ReFS, FAT und exFAT für Flags 0 auf. Das belegt die APIgrundlage,
+keinen tatsächlich ausgeführten FAT-/exFAT-Lauf dieses Kandidaten.
+
+## F — Eigene anschließende Anti-Regressionsreview
+
+Prüfgegenstand war nach vollständiger Implementierung die gesamte oben
+abgebildete Wirkungskette einschließlich ihrer unveränderten Verbraucher.
+Methode: erneutes Lesen der Änderungen und Gegenstellen, Verfolgen von
+Typ-/Fehler-/Besitzübergängen und Persistenz, Vergleich mit dem Releasevertrag,
+anschließend Rust-AST-Parsing und Whitespaceprüfung. Der Reviewautor ist
+derselbe Autor wie bei Fehlerauflistung, Plan und Fix.
+
+| Vertrag | Eigener Befund nach der Umsetzung |
+|---|---|
+| FTP/FTPS/SFTP-Erstkopie | Unbekannte Objektidentität erreicht die direkte exklusive Anlage. MKD/MKDIR und eindeutige Kollisionsbehandlung bleiben erforderlich. SSH-Anmeldung, Hostschlüssel und SSH-Authentifizierungsagent werden nicht verändert. |
+| WebDAV-Umbenennen | Desktop `confirm_rename`, Android `fs_edit::rename` und CLI `try_rename_fast` erreichen wieder den gewöhnlichen serverseitigen No-overwrite-MOVE. Die neue stärkere Ordnergarantie bleibt über alle beschriebenen Wrapper ausdrücklich getrennt. |
+| Identität und Literale | Endpunkt-/Verbindungsidentitäten, Root- und Paarbedeutung sowie Literalnamen werden nicht neu kodiert. Die aktuelle Missing-only-Wiederholung behält dieselben Backend-Arcs; zwei Gegenstellen mit gleichlautendem relativem Pfad werden nicht gleichgesetzt. |
+| Fehlende übertragen | Copy und lokale Moves bleiben über denselben sichtbaren Button erreichbar. Passende Dateien bleiben unangetastet; fehlende Dateien benutzen die bestätigten Ergebnisnamen. Frühe Fehler ohne Roots sind erneut planbar. Abweichende Dateien bleiben erhalten. Eine frühere Skip-Entscheidung wird nicht zu Merge; eine unbestätigte Rootanlage bekommt keinen geratenen Alias. Derselbe Journalbestand schützt jeden erneuten Klick. |
+| Recovery | Gespeicherte Recovery verlangt weiter Quellen-/Ziel-/Objekt-/Policy-/Vaultbindung und vollständige Journale. Ein fehlender Rücklese-/Inkarnationsbeleg wird nicht durch Größe oder Metadaten als Eigentum ersetzt. Moves behalten die ursprüngliche Jobidentität. |
+| Uploadrechte | Erlaubtes Schreiben und verweigertes Inhaltslesen bleiben getrennt. Nach fehlendem Rücklesen werden Stagetyp und bekannte Größe erneut verlangt. Fehlende, zu Ordnern ersetzte und in der Größe veränderte Stages können nicht als vollständiger Upload durchlaufen. |
+| Fehler, Abbruch und Retry | Nur die benannten optionalen Belegklassen werden begrenzt. Transport-/Datenfehler und Abbruch bleiben Fehler. Ein unbekannter Publish-/Renameausgang erteilt weder automatische Wiederholerlaubnis noch Cleanupfreigabe. Neue Sharemutationen umgehen die Request-Retrylogik vollständig. |
+| Rechte und Cache | Cachedelegation behält Liveprüfung und Invalidierung. Share prüft beide destruktiven Pfade und dieselbe Mount-Lease/Backendgrenze; Read-only-Exporte gelangen nicht zur Provider-Mutation. |
+| Lokales Move/Backup | Hardlinkfähige Dateisysteme behalten den bisherigen Retentionspfad. Ohne Hardlink ist kein vollständiger Inhaltskopierpfad zwingend. Vor erfolgreicher Renameoperation bleiben Original/Quarantäne wiederherstellbar. Nach tatsächlichem Commit bleibt der Inhalt am Ziel; bei unklarem Ausgang wird keine vermeintlich entbehrliche Quelle bereinigt. Ersetzungs-/Backupprimitive wurden nicht verändert. |
+| Sync, Versionen und Konfliktkopien | Die zusätzlich selbst gelesenen produktiven Renameverbraucher sind `bisync::version_save::{archive,rollback}`, `merge_recovery`-Originalwiederherstellung, `replacement_recovery::recover` und `Staged::publish_sibling`. Sie verarbeiten reguläre Archiv-/Stage-/Konfliktdateien, keine Collection-Veröffentlichung. Inhalt-/Signaturprüfung, Backupvoraussetzung, Nichtüberschreiben und getrennte Namespacebestätigung bleiben unverändert. Die zugehörigen tatsächlichen Fixturedelegationen wurden nachgelesen. |
+| Oberflächen | Desktop und Android behalten ihre vorhandenen Aktionen und Ergebnisorte. CLI/MCP behalten ausdrücklich eingegebene Zielnamen und ihren bestehenden Merge-Standard. Es wurde keine neue Konten-, Dialog-, Berechtigungs- oder Featurevoraussetzung für gewöhnliches Umbenennen eingeführt. |
+
+Während dieser eigenen Review wurden der Schutz zuvor übersprungener Ordner,
+der Umgang mit fehlender Ergebniszuordnung, die Typ-/Größenprüfung ohne
+Rückleserecht und die korrekte Fehlermeldung nach einem Move ohne Hardlink
+noch im selben Fixzyklus ergänzt. Diese Korrekturen sind in den oben genannten
+Ergebnissen enthalten. Es gibt nach dieser statischen Nachprüfung keinen
+weiteren festgestellten unbehandelten Fehler innerhalb der ermittelten
+Wirkungskette. Das ist kein ausgeführter Kompilier- oder Laufzeitnachweis.
+
+## G — Vorbereitete Fälle und Registrierung durch Main
+
+Alle nachfolgenden Namen sind vorhandene Rust-Testfunktionen dieses Fixstands.
+Keine dieser Funktionen wurde lokal ausgeführt. Die neuen Testmodule sind
+bereits in den zugehörigen Rust-Modulen eingebunden. Für die gemeinsame Suite
+selektiert das bestehende Präfix `batches_` sie bereits grundsätzlich; Main muss
+zusätzlich `batches_task_transfer_compat_` als erforderliches Präfix und die
+Meilensteinzuordnung mit genau diesen `native_cases` im gemeinsamen Manifest
+registrieren. Dieses Manifest und die CI-Orchestrierung wurden hier nicht
+geändert. Die Fälle sind für dieselbe Linux-/Windows-Remote-Suite vorgesehen.
+
+M1 — freie/kollidierende Ordner, fehlende Identität, unklare Anlageantwort:
+
+```text
+batches_task_transfer_compat_folder_without_identity_copies_and_numbers
+batches_task_transfer_compat_folder_lost_response_is_not_recovered_without_identity
+```
+
+M2 — WebDAV-MOVE, striktes REBIND/Unsupported, Cache, Share und Daemon:
+
+```text
+batches_task_transfer_compat_folder_identity_does_not_require_binding_rename_for_first_copy
+batches_task_transfer_compat_webdav_ordinary_folder_move_needs_no_binding_extension
+batches_task_transfer_compat_webdav_reserved_move_keeps_strict_rebind_boundary_through_cache
+batches_task_transfer_compat_reserved_share_rename_is_a_single_write_with_distinct_wire_operation
+batches_task_transfer_compat_reserved_share_rename_accepts_only_unit_reply_and_never_read_retries
+batches_task_transfer_compat_share_guard_preserves_strict_dispatch_and_read_only_denial
+batches_task_transfer_compat_daemon_reserved_frame_keeps_strict_provider_boundary
+```
+
+M3 — tatsächlicher Button für Copy/Move, leere Roots vor/nach Jobanlage,
+bestätigte Zielnamen, abweichende Dateien, früherer Ordner-Skip, Remote-Paare,
+literale Namen, Uploadrechte, aufeinanderfolgende verlorene Antworten,
+Journalverlust und geschützter Quellbesitz:
+
+```text
+batches_task_transfer_compat_missing_button_keeps_copy_move_and_empty_root_contract
+batches_task_transfer_compat_missing_only_preserves_resolved_folder_and_skip_contract
+batches_task_transfer_compat_missing_only_preserves_skipped_selected_folder
+batches_task_transfer_compat_missing_only_remote_pairs_keep_literal_names_and_endpoints
+batches_task_transfer_compat_missing_only_retries_before_journal_for_copy_and_move
+batches_task_transfer_compat_missing_only_retries_empty_roots_after_no_id_listing_failure
+batches_task_transfer_compat_missing_only_local_move_keeps_completed_pairs_and_conflicts
+batches_task_transfer_compat_missing_only_lost_directory_reply_stays_protected_with_empty_roots
+batches_task_transfer_compat_missing_only_lost_file_reply_survives_successive_clicks
+batches_task_transfer_compat_missing_only_acknowledged_upload_needs_no_read_or_object_id
+batches_task_transfer_compat_missing_only_keeps_stored_recovery_and_journal_loss_strict
+batches_task_transfer_compat_missing_only_never_discards_unknown_move_quarantine
+```
+
+M4 — Uploadrechte, Kollisionsschutz, fehlende Recoverybelege, verlorene Antwort,
+fehlende/ersetzte/veränderte Stages, tatsächliche Lesefehler und lokale Ablehnung:
+
+```text
+batches_task_transfer_compat_upload_only_target_completes_without_claiming_recovery
+batches_task_transfer_compat_upload_only_lost_answer_never_republishes_or_removes_source
+batches_task_transfer_compat_refused_readback_does_not_publish_missing_directory_or_resized_stage
+batches_task_transfer_compat_readback_io_failure_is_not_permission_fallback
+batches_task_transfer_compat_optional_remote_readback_never_hides_local_permission_error
+```
+
+M5 — Rename ohne Hardlink/Inhaltskopie, Belegfehler, unbekannte Commitantwort,
+widerrufene Vorbereitung, Abbruch und vollständige Dateikonfliktpolitik:
+
+```text
+batches_task_transfer_compat_move_without_hardlinks_does_not_copy_bytes
+batches_task_transfer_compat_move_without_hardlinks_retains_committed_target_on_receipt_failure
+batches_task_transfer_compat_move_without_hardlinks_keeps_unknown_committed_result
+batches_task_transfer_compat_move_without_hardlinks_restores_failed_preparation_and_cancel
+batches_task_transfer_compat_move_without_hardlinks_preserves_conflicts
+```
+
+Grenzen dieser Fallvorbereitung: Die neuen Backend-Doubles üben produktive
+Engine-/VFS-/Copy-/Guard-/Daemonpfade mit kontrollierten Fähigkeiten und Fehlern
+aus. Die WebDAV-Fälle benutzen auf dem späteren Runner einen eigenen
+Loopback-HTTP-Server. Die Movefälle unterdrücken Hardlinkverfügbarkeit gezielt;
+sie erzeugen kein tatsächliches FAT32-/exFAT-Volume. Sie ersetzen keinen
+ausgeführten FTP-/FTPS-/SFTP-Serverlauf, keinen vollständigen Share-/Agent-
+Netzwerklauf und keinen Android-UI-Lauf. Bestehende gemeinsame Integrationen
+für Backupfehler, Source-/Destinationdrift, Baseline-Retry und geschützte
+Auslassungen bleiben im Manifest unverändert und gehören zu Mains einer Suite.
+
+
+## H — Gelesene, geänderte und erstellte Dateien
+
+Die folgenden Listen beziehen sich auf diese isolierte Arbeitskopie.
+„Gezielt gelesen“ umfasst vollständige Dateien oder die entscheidungsrelevanten
+Funktions-/Aufruferausschnitte; es behauptet keine zeilenweise Komplettlektüre
+jeder Datei. Die AST-only-Liste bezeichnet ausschließlich Syntaxlektüre.
+
+Erstellt:
+
+- `docs/plaene/2026-10-24-batches/fix-regression-transfer.md`
+- `native/src/copy/os/shared/batches_direct_move_compatibility_task_tests.rs`
+- `native/src/transfer/os/shared/engine/batches_backend_compatibility_task_tests.rs`
+- `native/src/transfer/os/shared/engine/batches_publication_compatibility_task_tests.rs`
+- `native/src/transfer/os/shared/engine/missing_retry.rs`
+- `native/src/transfer/os/shared/engine/batches_missing_retry_compatibility_task_tests.rs`
+
+Geändert:
+
+- `docs/oberflaechen/uebertragungen.md`
+- `native/src/agent/core/backend.rs`
+- `native/src/agent/core/extensions.rs`
+- `native/src/app/core/transfer_route.rs`
+- `native/src/copy/os/shared/direct_move.rs`
+- `native/src/daemon/os/shared/backend_ops.rs`
+- `native/src/ftp/core/folder_reservation.rs`
+- `native/src/ftp/core/streams.rs`
+- `native/src/sftp/core/folder_reservation.rs`
+- `native/src/share/core/folder_reservation.rs`
+- `native/src/share/core/fs_access.rs`
+- `native/src/share/core/fs_guard_extensions.rs`
+- `native/src/share/core/fs_request.rs`
+- `native/src/share/core/peer_extensions.rs`
+- `native/src/share/core/peer_fs_logging.rs`
+- `native/src/share/core/peer_request_policy.rs`
+- `native/src/share/core/server_fs.rs`
+- `native/src/share/core/wire_capabilities.rs`
+- `native/src/transfer/os/shared/engine/file_evidence.rs`
+- `native/src/transfer/os/shared/engine/file_recovery.rs`
+- `native/src/transfer/os/shared/engine/folder_reservation.rs`
+- `native/src/transfer/os/shared/engine/mod.rs`
+- `native/src/transfer/os/shared/engine/job_store.rs`
+- `native/src/transfer/os/shared/engine/roots.rs`
+- `native/src/vfs/core/cache_extensions.rs`
+- `native/src/vfs/core/core.rs`
+- `native/src/vfs/core/extensions.rs`
+- `native/src/vfs/core/folder_reservation.rs`
+- `native/src/vfs/mod.rs`
+- `native/src/webdav/core/extensions.rs`
+- `native/src/webdav/core/webdav.rs`
+
+Zusätzlich zu sämtlichen geänderten/erstellten Dateien gezielt gelesen:
+
+- `AGENTS.md`
+- `docs/ARCHITEKTUR.md`
+- `docs/plaene/2026-10-24-batches/batches.md`
+- `docs/plaene/2026-10-24-batches/regressionsreview.md`
+- `docs/plaene/2026-10-24-batches/vertraege.md`
+- `graphify-out/graph.json`
+- `native/Cargo.lock`
+- `native/review-task-manifest.json`
+- `native/src/agent/core/agent_error.rs`
+- `native/src/agent/core/folder_reservation.rs`
+- `native/src/agent_proto/core/folder_frames.rs`
+- `native/src/agent_proto/core/server.rs`
+- `native/src/agent_proto/core/transport_error.rs`
+- `native/src/agent_proto/core/types.rs`
+- `native/src/app/core/transfer_center.rs`
+- `native/src/app/core/transfer_center_tests.rs`
+- `native/src/app/core/transfer_route_tests.rs`
+- `native/src/app/core/transfer_window.rs`
+- `native/src/app/os/shared/file_actions.rs`
+- `native/src/bisync/os/shared/apply_stage.rs`
+- `native/src/bisync/os/shared/apply_transfer_tests.rs`
+- `native/src/bisync/os/shared/engine_provider_fixture.rs`
+- `native/src/bisync/os/shared/merge_recovery.rs`
+- `native/src/bisync/os/shared/merge_task_fixture.rs`
+- `native/src/bisync/os/shared/replacement_recovery.rs`
+- `native/src/bisync/os/shared/sync_reliability_task_backend_fixture.rs`
+- `native/src/bisync/os/shared/sync_reliability_task_spelling_migration_tests.rs`
+- `native/src/bisync/os/shared/test_remote.rs`
+- `native/src/bisync/os/shared/tests/dedupe.rs`
+- `native/src/bisync/os/shared/tests/hash_walk.rs`
+- `native/src/bisync/os/shared/tests/incremental.rs`
+- `native/src/bisync/os/shared/tests/incremental_safety_fixture.rs`
+- `native/src/bisync/os/shared/tests/move_retry.rs`
+- `native/src/bisync/os/shared/tests/safety_backends.rs`
+- `native/src/bisync/os/shared/version_save.rs`
+- `native/src/cli/engine_copy.rs`
+- `native/src/cli/folder_conflict.rs`
+- `native/src/cli/transfer.rs`
+- `native/src/cli/transfer_recovery.rs`
+- `native/src/cli/tree_ops.rs`
+- `native/src/copy/os/linux_file_proof.rs`
+- `native/src/copy/os/linux_os.rs`
+- `native/src/copy/os/shared/durability.rs`
+- `native/src/copy/os/shared/move_guard.rs`
+- `native/src/copy/os/shared/publication.rs`
+- `native/src/copy/os/shared/publication_proof.rs`
+- `native/src/copy/os/shared/recovery.rs`
+- `native/src/copy/os/shared/safe_file.rs`
+- `native/src/copy/os/shared/safe_file_tests.rs`
+- `native/src/copy/os/windows.rs`
+- `native/src/copy/os/windows_file_proof.rs`
+- `native/src/copy/os/windows_identity.rs`
+- `native/src/copy/os/windows_publication_failure.rs`
+- `native/src/daemon/os/shared/backend_server.rs`
+- `native/src/ftp/core/errors.rs`
+- `native/src/ftp/core/extensions.rs`
+- `native/src/ftp/core/ftp.rs`
+- `native/src/ftp/core/io_adapters.rs`
+- `native/src/ftp/core/staging.rs`
+- `native/src/ftp/core/transfer_engine_task_tests.rs`
+- `native/src/ftp/core/transfer_fixture.rs`
+- `native/src/ftp/mod.rs`
+- `native/src/local_access/os/windows/confined.rs`
+- `native/src/local_access/os/windows/publication.rs`
+- `native/src/mobile/os/shared/fs_edit.rs`
+- `native/src/mobile/os/shared/transfer.rs`
+- `native/src/sftp/core/backend.rs`
+- `native/src/sftp/core/extensions.rs`
+- `native/src/share/core/backend.rs`
+- `native/src/share/core/export_config.rs`
+- `native/src/share/core/fs.rs`
+- `native/src/share/core/fs_error.rs`
+- `native/src/share/core/fs_guard_backend.rs`
+- `native/src/share/core/fs_guard_backend_task_tests.rs`
+- `native/src/share/core/fs_guard_names.rs`
+- `native/src/share/core/fs_guard_stream.rs`
+- `native/src/share/core/fs_policy.rs`
+- `native/src/share/core/peer_request.rs`
+- `native/src/share/core/peer_reversible_replace.rs`
+- `native/src/share/core/peer_stream.rs`
+- `native/src/share/core/peer_telemetry.rs`
+- `native/src/share/core/wire.rs`
+- `native/src/share/mod.rs`
+- `native/src/share/os/shared/fs_host_policy.rs`
+- `native/src/transfer/core/folder_conflict.rs`
+- `native/src/transfer/core/job.rs`
+- `native/src/transfer/core/job_record.rs`
+- `native/src/transfer/os/shared/engine/batch_put.rs`
+- `native/src/transfer/os/shared/engine/discovery.rs`
+- `native/src/transfer/os/shared/engine/file_recovery_fix_tests.rs`
+- `native/src/transfer/os/shared/engine/file_recovery_tests.rs`
+- `native/src/transfer/os/shared/engine/folder_alias_store.rs`
+- `native/src/transfer/os/shared/engine/folder_move.rs`
+- `native/src/transfer/os/shared/engine/folders.rs`
+- `native/src/transfer/os/shared/engine/folders_local.rs`
+- `native/src/transfer/os/shared/engine/folders_tests.rs`
+- `native/src/transfer/os/shared/engine/job_store.rs`
+- `native/src/transfer/os/shared/engine/legacy.rs`
+- `native/src/transfer/os/shared/engine/local.rs`
+- `native/src/transfer/os/shared/engine/ops.rs`
+- `native/src/transfer/os/shared/engine/publish.rs`
+- `native/src/transfer/os/shared/engine/remote_copy.rs`
+- `native/src/transfer/os/shared/engine/selection.rs`
+- `native/src/transfer/os/shared/engine/source.rs`
+- `native/src/transfer/os/shared/engine/test_backend.rs`
+- `native/src/transfer/os/shared/engine/test_run.rs`
+- `native/src/transfer/os/shared/engine/tests_batch.rs`
+- `native/src/transfer/os/shared/engine/tests_remote.rs`
+- `native/src/transfer/os/shared/engine/tests_review_packets.rs`
+- `native/src/transfer/os/shared/engine/upload.rs`
+- `native/src/transfer/os/shared/engine/worker.rs`
+- `native/src/vfs/core/backend_defaults.rs`
+- `native/src/vfs/core/cache.rs`
+- `native/src/vfs/core/cache_load.rs`
+- `native/src/vfs/core/cache_state.rs`
+- `native/src/vfs/core/cache_support.rs`
+- `native/src/vfs/core/extension_calls.rs`
+- `native/src/vfs/core/meta.rs`
+- `native/src/vfs/core/promotion.rs`
+- `native/src/vfs/core/scheme.rs`
+- `native/src/vfs/os/linux_os/local_platform.rs`
+- `native/src/vfs/os/shared/confined_local_backend.rs`
+- `native/src/vfs/os/shared/confined_local_extensions.rs`
+- `native/src/vfs/os/shared/local.rs`
+- `native/src/vfs/os/shared/local_extensions.rs`
+- `native/src/vfs/os/shared/local_file_identity.rs`
+- `native/src/vfs/os/windows/local_platform.rs`
+- `native/src/webdav/core/copy_writer_task_tests.rs`
+- `native/src/webdav/core/folder_reservation.rs`
+- `native/src/webdav/core/stage_move.rs`
+- `native/src/webdav/core/transfer_engine_task_tests.rs`
+- `native/src/webdav/mod.rs`
+
+Zusätzlich ausschließlich als Rust-AST gelesen:
+
+- `native/src/transfer/os/shared/engine/batch.rs`
+- `native/src/transfer/os/shared/engine/batch_get.rs`
+- `native/src/transfer/os/shared/engine/bottleneck.rs`
+- `native/src/transfer/os/shared/engine/dispatch.rs`
+- `native/src/transfer/os/shared/engine/download.rs`
+- `native/src/transfer/os/shared/engine/issues.rs`
+- `native/src/transfer/os/shared/engine/issues_vault_tests.rs`
+- `native/src/transfer/os/shared/engine/limiter_tests.rs`
+- `native/src/transfer/os/shared/engine/local_extras_tests.rs`
+- `native/src/transfer/os/shared/engine/local_plan.rs`
+- `native/src/transfer/os/shared/engine/queue.rs`
+- `native/src/transfer/os/shared/engine/record_io.rs`
+- `native/src/transfer/os/shared/engine/segments.rs`
+- `native/src/transfer/os/shared/engine/segments_copy.rs`
+- `native/src/transfer/os/shared/engine/segments_copy_tests.rs`
+- `native/src/transfer/os/shared/engine/segments_download.rs`
+- `native/src/transfer/os/shared/engine/segments_tests.rs`
+- `native/src/transfer/os/shared/engine/segments_upload.rs`
+- `native/src/transfer/os/shared/engine/segments_upload_tests.rs`
+- `native/src/transfer/os/shared/engine/stats.rs`
+- `native/src/transfer/os/shared/engine/test_faults.rs`
+- `native/src/transfer/os/shared/engine/tests_flow.rs`
+- `native/src/transfer/os/shared/engine/tests_local.rs`
+- `native/src/transfer/os/shared/engine/tests_review.rs`
+- `native/src/transfer/os/shared/engine/util.rs`
+- `native/src/transfer/os/shared/engine/view.rs`
+
+Außerhalb der Arbeitskopie ausschließlich gelesen: `/root/.codex/AGENTS.md`,
+`/root/.codex/skills/graphify/SKILL.md`,
+`/tmp/smartexplorer-final-review-user-contract.txt`,
+`/tmp/smartexplorer-fix-transfer-compat-scope.json` und die jeweils zugewiesenen
+Befundabschnitte in
+`/home/CodeProjects/smartexplorer/smart-explorer/docs/plaene/2026-10-24-batches/review-regression-astra.md`
+sowie
+`/home/CodeProjects/smartexplorer/smart-explorer/docs/plaene/2026-10-24-batches/review-regression-sol.md`.
+Die oben verlinkten externen Primärquellen wurden über das Webwerkzeug gelesen.
+
+## I — Nachweisgrenzen und Übergabe
+
+- Die eigenen Änderungen liegen ausschließlich auf
+  `codex/review-fixes-ee75e91b` in der zugewiesenen Arbeitskopie.
+  Dieser Autor hat keinen Commit, Push, Build, Formatter, Compiler, Test,
+  Server, Paketinstaller, Graphrefresh oder Release ausgeführt.
+- Die statische Endkontrolle verwendete den bereits installierten
+  Tree-sitter-Rust-Parser aus der Graphify-Pythonumgebung. In den eigenen
+  geänderten Rustdateien zeigte der Parser keine Syntaxfehler;
+  `git diff --check` zeigte keinen Whitespacebefund. Das beweist weder
+  Rust-Typprüfung noch bestandene Testfunktionen. Sämtliche eigenen neuen
+  oder geänderten Rustdateien liegen unter 500 Zeilen und 50 KiB.
+- Der Quellgraph wurde als Navigationshilfe abgefragt. Die CLI meldete
+  Skillversion 0.9.11 gegenüber Paketversion 0.9.17. Dynamische Traitaufrufer
+  wurden deshalb und wegen der AST-Grenzen anhand des tatsächlichen Codes
+  nachverfolgt. Der vollständige Rootgraphrefresh nach Integration bleibt Main
+  zugewiesen; dieser Autor hat keinen Teilgraph erzeugt.
+- Main hat den tatsächlichen Startaufruf mit
+  `model="gpt-6.1-sol"`, `reasoning_effort="max"`, `fork_turns="none"`
+  bestätigt. Unabhängige Antwortmodell-Metadaten oder zusätzliche
+  Transkript-Modelleinträge stellt der Host nach Mains Auskunft nicht bereit.
+  Belegt ist somit der Start mit diesen Parametern, keine unabhängige
+  Verifikation des tatsächlichen Antwortmodells.
+- Ein tatsächlicher FTP-/FTPS-/SFTP-/WebDAV-Providerlauf, ein tatsächliches
+  FAT32-/exFAT-Volume, eine vollständige Share-/Agent-Netzwerksitzung und die
+  sichtbaren Desktop-/Android-Bedienwege wurden hier nicht ausgeführt.
+  Fehlende Livezugänge werden nicht als bestandene Abnahme dargestellt und
+  sind nach Projektvorgabe keine Voraussetzung für den terminalen Release.
+- Es besteht keine noch ungeklärte erforderliche Quelländerung außerhalb der
+  zuletzt erweiterten exklusiven Schreibfläche. Main muss die beschriebenen
+  Fälle im gemeinsamen Manifest zuordnen, den integrierten Kandidaten
+  committen/pushen, die eine Remote-Suite auswerten, den Rootgraph aktualisieren
+  und den einen terminalen vollständigen Remote-Release ausführen.
+
+## J — RA-04: fortgesetzter eigener Autorzyklus nach Integrationsnachfrage
+
+**A — Auftrag und widerlegte Grundlage:** Main meldet vor dem Commit, dass
+der Release `a814f263` auch lokale Moves und leere Ergebnisroots über
+„Fehlende übertragen“ wiederholen konnte. Die erste M3-Einschränkung war eine
+zu enge eigene Folgerung, keine Nutzergrenze. Der vollständige bisherige
+Bedienweg bleibt beauftragt; unbekannte Publikationen und Quellbesitz bleiben
+geschützt. Schreib-/Ausführungsgrenzen bleiben unverändert.
+
+**B — tatsächlicher Bestand:** `FinishedEntry::can_resume` prüft nur
+`job.is_some()`, Unvollständigkeit und `TransferPurpose::Copy`. Dieser Zweck
+umfasst lokale Paste-/Dialog-Moves; `build_job` schließt ausschließlich
+Remote-Moves aus. `take_resume` führt beide lokalen CopyModes in `resume_job`.
+Im Release klont diese Funktion ohne Modus- oder Roots-Bedingung. Auch ein
+Enginefehler vor erfolgreicher Rootplanung liefert `Done` mit leeren Roots und
+erhält den Auftrag in der Lane. Die neue Journalpipeline prüft dagegen den
+Zielroot bereits vor dem erneuten Planen auf stabile Objektidentität.
+
+**C — Entscheidungsplan:** Einen neuen Job ohne Prüfung des alten Journals
+zu starten wird verworfen: Eine verlorene Publishantwort würde dadurch ihre
+Sperre verlieren. CopyMode oder eine leere Roots-Liste allein beweisen weder
+eine sichere noch eine unklare Ausführung. Gewählt wird derselbe Job mit einer
+getrennten aktuellen Missing-only-Prüfung (`resume.is_some()`) und unveränderter
+strikter gespeicherter Recovery (`resume == None`). Eine zusätzlich gespeicherte
+bestätigte Ausführungsantwort bleibt von dauerhaftem Objekteigentum getrennt.
+Unbestätigte Intents werden weiterhin über die vorhandenen starken Belege
+aufgelöst oder gesperrt; ein neuer Intent überschreibt niemals diese Prüfung.
+
+**D — konkrete Ergänzung M3:**
+
+1. `resume_job` behält für Copy und lokale Moves dieselbe Job-ID und markiert
+   die aktuelle Missing-only-Ausführung mit den Ergebnisroots, auch bei leerer
+   Liste. Endpunkte, Auswahl, Filter, Konflikte und Zielnamen bleiben erhalten.
+2. Job-/Dateijournal unterscheiden eine bestätigte aktuelle Publishantwort
+   von einer restartfest bestätigten Objektidentität. Ohne Objekt-ID dürfen
+   bestätigte Copy-Ergebnisse erneut nach den bestehenden Größen-/Skipregeln
+   geprüft werden. Unklare Intents behalten ihre bisherige Recoveryprüfung.
+3. Frühe Fehler ohne Mutation dürfen Root- und Quellbelege neu erheben; fehlende
+   alte Jobdaten werden nur für die aktuelle leere Wiederholung ohne verbliebene
+   Datei-/Aliasjournale als nie gestartete Ausführung behandelt. Gespeicherte
+   Recovery verlangt weiter ihren Datensatz.
+4. Rootplanung unterscheidet tatsächlich aufgelöste Aliasse von noch nicht
+   geplanten Wurzeln. Bestätigte No-ID-Aliasse dürfen im aktuellen Bedienweg
+   unter exakt demselben Namen weiterlaufen; unbestätigte Anlageantworten
+   werden weder zu Merge noch zu einer neuen Nummer. Lokale Movequellen
+   dürfen nur mit bestätigtem Ergebnis ausgelassen oder mit ihren bisherigen
+   starken Belegen bereinigt werden.
+5. Eigene Nachreview verfolgt Button, Lane, Record, Alias, Dateipublikation,
+   Quarantäne und Konflikte erneut. Genau vorbereitete Fälle für Copy/Move,
+   leere Roots, fehlende IDs, verlorene Antworten und wiederholten Abbruch
+   werden derselben Remote-Suite zugeordnet; hier wird nichts ausgeführt.
+
+**Implementierungsergebnis:** Die Ergänzung ist im selben Fixzyklus umgesetzt.
+`resume_job` setzt keine neue Job-ID mehr. Die aktuelle Wiederholung bleibt in
+`JobView`, Lane und jedem nachfolgenden Klick auf demselben Journal. Der neue
+Rootabgleich behält bei einem fehlgeschlagenen Folgeversuch die vorherigen
+Ergebnisnamen, statt sie durch eine leere Ergebnisliste zu ersetzen. Der neue
+Helper `file_recovery::missing_retry` bündelt die Abgrenzung. Das additive
+Receiptfeld `acknowledged` wird ausschließlich nach einer erfolgreichen
+`after_checked`-Bestätigung geschrieben, bei jedem neuen Intent auf false
+initialisiert und bei Widerruf ebenfalls zurückgesetzt. Es ist unabhängig von
+`confirmed`, das weiterhin einen beobachteten Objektbeleg verlangt.
+[Serde-Feldattribute](https://serde.rs/field-attrs.html), geprüft 2026-10-26,
+belegen `#[serde(default)]`: ältere Datensätze erhalten für das neue Boolfeld
+false; vorhandene echte `confirmed`-Belege bleiben verwendbar.
+
+`verify_saved` validiert weiterhin sämtliche Einträge und Indexzähler. Nur für
+diese aktuelle Wiederholung dürfen bestätigte Copyantworten ohne destructive
+Recoveryarbeiten den normalen Missing-only-Dateipfad erreichen. Lokale Moves
+mit noch vorhandener Quarantäne gehen weiterhin durch die strikte Beleg- und
+Bereinigungsprüfung. Ohne Quarantäne wird eine fehlende ausgewählte Movequelle
+nur nach bestätigter Antwort und geprüftem Zielbeleg ausgelassen. Dateien mit
+unklarer Publishantwort behalten unabhängig von der Roots-Liste ihre Sperre.
+Ein wiederholter Klick kann weder die ursprüngliche Journal-ID wechseln noch
+einen unbestätigten Eintrag überschreiben.
+
+`job_store` darf vor tatsächlicher Mutation frische Quell-/Zielbelege erheben.
+Ein vorher unbestätigter Quellpfad wird erst nach Prüfung sämtlicher Intents
+anhand eines jetzt vorhandenen aktuellen Objekts bestätigt. Eine schon bekannte
+Objektbindung wird dabei nicht überschrieben. Ein fehlender Jobdatensatz wird
+nur im aktuellen leeren Bedienweg ohne verbliebenes Datei- oder Aliasjournal
+als Fehler vor `begin` behandelt. Ein fehlender Index nach Mutation bleibt ein
+Fehler; gespeicherte Recovery erhält keine Abwesenheitsausnahme.
+
+`roots::plan_roots` unterscheidet Ergebnis-/gespeicherte Aliasse von noch nicht
+geplanten Wurzeln. Die erste Gruppe behält ihre exakten Namen; ein bestätigter
+No-ID-Ordner verlangt keine erfundene Identität. Nicht bestätigte MKD/MKCOL-
+Antworten benutzen dagegen die bestehende starke Auflösung oder bleiben
+unbestätigt. Noch nicht geplante Verzeichnisse behalten ihre exklusive
+Ordnerkonfliktentscheidung. Unaufgelöste reguläre Dateien/Pairs benutzen im
+Missing-only-Durchgang den bisherigen Namen und bekommen keine neue Nummer.
+
+**Eigene anschließende Nachreview:** Erneut selbst verfolgt wurde die Kette
+`transfer_window::finished_row` → `FinishedEntry::can_resume` →
+`take_resume` → `resume_job` → `transfer_jobs::submit_job/submit_job_for` →
+`folder_conflict_ui::requires_preview` → `TransferCenter::submit` → Lane →
+`run_job/run_view/prepare` → Job-/Dateijournal → Alias-/Rootplanung → lokaler,
+Upload- und Remote-Copy-Worker → Publikationsantwort → `Done`/Lane/FinishedEntry.
+`requires_preview` behält bei `resume.is_some()` die vorhandene Entscheidung;
+es wird beim Klick keine neue Policy eingeschoben. Die Lane hält den geklonten
+Auftrag einschließlich derselben Job-ID für den nächsten Klick fest.
+
+| Erneut geprüfter Vertrag | Eigener statischer Befund |
+|---|---|
+| Sichtbarer Move-Button | `TransferPurpose::Copy` schließt `CopyMode::Move` nicht aus. Der ergänzte Appfall prüft genau `FinishedEntry::can_resume` für einen unvollständigen lokalen Move. Remote-Moves bleiben durch den vorhandenen Jobvalidator abgelehnt. |
+| Früher Fehler vor Jobanlage | Ein als Datei blockierter lokaler Zielordner scheitert vor `begin`; nach Beseitigung des Hindernisses darf Copy oder Move mit leerer Ergebnisliste starten. Vorhandene Datei-/Aliasjournale schließen diesen Sonderfall aus. |
+| Früher Fehler nach Jobanlage | Ein verweigertes Remote-Listing liegt vor `prepare_apply`, daher existiert kein Mutationseintrag. Beim erneuten Versuch werden keine stabilen Provider-IDs vorausgesetzt. |
+| Teilweise lokaler Move | Fehlende erfolgreich bewegte ausgewählte Dateien brauchen bestätigten Zielinhalt. Noch ausstehende Dateien bleiben in der Auswahl. Ein vorhandenes abweichendes Ziel wird gemeldet; die betreffende Quelle bleibt liegen. |
+| Verlorene MKD-/Publishantwort | Erneute Klicks mit zunächst vorhandenen und danach leeren Roots halten dieselbe Journal-ID. Nicht bestätigte Ordner-/Dateipublikationen werden weder zu Skip noch zu Renummerierung oder neuer Publikation. |
+| Quarantäne und Ersatz | Eine noch vorhandene Quarantäne umgeht die strikte Recovery nie. Ein nach verlorener Antwort durch ein gleich großes gleichinhaltiges Fremdobjekt ersetztes Ziel gibt keine Quellbereinigung frei. |
+| Rechte und fehlende IDs | Ein bestätigter erlaubter Upload bleibt nach verweigertem Rücklesen aktuell wiederholbar. Die Kopie kann fehlende Dateien ergänzen, bestätigt aber weiterhin kein dauerhaftes Eigentum. |
+| Gespeicherte Recovery und Journalverlust | `resume == None` erreicht keine Missing-only-Ausnahme. Zielobjekt-, Quellen-, Policy-, Vault-, Lock-, Index-/Pending- und Eigentumsprüfungen bleiben dort wirksam. Ein fehlender Index wird nicht neu auf Null gesetzt. |
+| Unveränderte fünf Fixketten | Erstkopie, gewöhnliches/striktes Rename, RETR-Rechtegrenze und direkter Move verwenden weiterhin ihre beschriebenen Pfade. Das neue Boolfeld allein erlaubt keine Mutation und keine Cleanupoperation. |
+
+Die genaue Fallliste ist in Abschnitt G ergänzt; der bisherige Appfall wurde
+für den tatsächlichen Copy-/Move-/Leerroots-Vertrag umbenannt. Alle neuen
+Module sind quellseitig eingebunden. Diese Nachreview ist eine statische
+Autorprüfung, keine ausgeführte Suite.
+
+Abschluss der Ergänzung: Eigene Rust-AST-Prüfung, Dateigrenzenkontrolle,
+Whitespaceprüfung und der Abgleich deklarierter Fallnamen mit vorhandenen
+Funktionen zeigten keine Befunde. Kompilierung und Ausführung stehen weiterhin
+bei Main aus; im fortgesetzten Autorzyklus wurde kein lokaler Build, Compiler,
+Formatter, Test oder Server gestartet.
+

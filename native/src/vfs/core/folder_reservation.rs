@@ -20,3 +20,12 @@ pub fn directory_identity(backend: &dyn Backend, path: &str) -> VfsResult<Option
         None => Ok(None),
     }
 }
+
+/// The strict publication boundary for an owned reservation. Ordinary UI
+/// folder renames keep their protocol's existing no-overwrite behavior.
+pub fn rename_reserved_directory(backend: &dyn Backend, source: &str, destination: &str) -> VfsResult<()> {
+    match backend.extensions() {
+        Some(extensions) => extensions.rename_reserved_directory(source, destination),
+        None => super::meta::unsupported("backend cannot publish a directory reservation atomically"),
+    }
+}

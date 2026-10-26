@@ -37,6 +37,16 @@ fn require_feature(backend: &PeerBackend, path: &str) -> io::Result<()> {
     Ok(())
 }
 
+pub(super) fn rename(backend: &PeerBackend, source: &str, destination: &str) -> io::Result<()> {
+    require_feature(backend, source)?;
+    require_feature(backend, destination)?;
+    match super::reversible_replace::call_once(backend,
+        FsRequest::RenameReservedDirectory { src: source.into(), dst: destination.into() }, "rename_reserved_directory")? {
+        FsResponse::Ok => Ok(()),
+        _ => Err(peer_stream::invalid("Invalid reserved-directory rename reply")),
+    }
+}
+
 pub(in crate::share) fn host_create(target: ResolvedTarget, exclusive: bool, strict: bool) -> io::Result<()> {
     if strict {
         crate::vfs::create_dir_exclusive(&*target.backend, &target.path)
@@ -91,6 +101,9 @@ pub(in crate::share) async fn serve(
         "Share directory reservation",
         move || {
             let operation = || match request {
+                FsRequest::RenameReservedDirectory { src, dst } => {
+                    access.rename_reserved_directory(&src, &dst).map(|()| FsResponse::Ok)
+                }
                 FsRequest::DirectoryReservationSupported { path } => {
                     host_supported(&access, &path).map(|supported|
                         FsResponse::DirectoryReservationSupported { supported })
