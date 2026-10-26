@@ -53,6 +53,14 @@ pub trait BackendExtensions: Backend {
         Ok(None)
     }
 
+    /// Publish an owned directory reservation with one atomic no-replace
+    /// rename. This is stronger than a protocol's ordinary folder MOVE.
+    /// Unsupported promises no mutation. Wrappers must delegate this
+    /// operation through their own access guards.
+    fn rename_reserved_directory(&self, source: &str, destination: &str) -> VfsResult<()> {
+        self.rename_no_replace(source, destination)
+    }
+
     /// Stable regular-file object identity across rename. Never a path,
     /// ETag, size or timestamp; wrappers must apply their own endpoint/root
     /// guard before delegation. Unsupported providers return `None`.

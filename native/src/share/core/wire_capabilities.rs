@@ -11,7 +11,8 @@ use crate::vfs::{MtimePrecision, NameLimit, TargetLimits};
 /// only to a host that offers it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct FsHostFeatures {
-    /// Strict atomic directory create and stable object identity requests.
+    /// Exclusive directory create, identity and atomic reserved-rename requests.
+    /// Each underlying provider still reports unknown/unsupported separately.
     #[serde(default, skip_serializing_if = "is_false")]
     pub(crate) folder_reservation_v1: bool,
     /// Explicit regular-file object identities behind the live export guard.

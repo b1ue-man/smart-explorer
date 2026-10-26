@@ -26,6 +26,9 @@ impl BackendExtensions for WebdavBackend {
     fn directory_identity(&self, path: &str) -> VfsResult<Option<String>> {
         super::folder_reservation::identity(self, path)
     }
+    fn rename_reserved_directory(&self, source: &str, destination: &str) -> VfsResult<()> {
+        super::folder_reservation::rename(self, source, destination)
+    }
 
     fn capacity(&self, root: &str) -> VfsResult<crate::vfs::CapacitySnapshot> {
         super::capacity::query(self, root)

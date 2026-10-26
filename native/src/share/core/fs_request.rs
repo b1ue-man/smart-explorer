@@ -215,6 +215,11 @@ pub(crate) enum FsRequest {
         src: String,
         dst: String,
     },
+    /// `folder_reservation_v1`: atomic publication of an owned directory.
+    RenameReservedDirectory {
+        src: String,
+        dst: String,
+    },
     PromoteStaged {
         staged: String,
         destination: String,
@@ -342,6 +347,7 @@ impl FsRequest {
             | Self::CreateDir { .. }
             | Self::Rename { .. }
             | Self::RenameNoReplace { .. }
+            | Self::RenameReservedDirectory { .. }
             | Self::PromoteStaged { .. }
             | Self::ReplaceStagedReversible(_)
             | Self::PromoteNoReplace { .. }
@@ -414,6 +420,23 @@ impl FsRequest {
 
 fn is_zero(value: &u64) -> bool {
     *value == 0
+}
+
+#[cfg(test)]
+mod reservation_compatibility_tests {
+    use super::*;
+    #[test]
+    fn batches_task_transfer_compat_reserved_share_rename_is_a_single_write_with_distinct_wire_operation() {
+        let request = FsRequest::RenameReservedDirectory { src: "/owned".into(), dst: "/final".into() };
+        assert!(request.mutates_filesystem());
+        let wire = serde_json::to_value(&request).unwrap();
+        assert_eq!(wire["op"], "rename_reserved_directory");
+        assert_eq!(wire["src"], "/owned"); assert_eq!(wire["dst"], "/final");
+        let decoded: FsRequest = serde_json::from_value(wire).unwrap();
+        assert!(decoded.mutates_filesystem());
+        let ordinary: FsRequest = serde_json::from_str(r#"{"op":"rename_no_replace","src":"/old","dst":"/new"}"#).unwrap();
+        assert_eq!(serde_json::to_value(ordinary).unwrap()["op"], "rename_no_replace");
+    }
 }
 
 /// The caller persists recovery intent before sending this mutation once.

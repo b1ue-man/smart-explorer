@@ -70,7 +70,15 @@ impl FtpConnection {
             stream
                 .retr_as_stream(path)
                 .map(|data| Some(Box::new(data) as Box<dyn Read + Send>))
-                .map_err(super::errors::map)
+                .map_err(|error| {
+                    if super::errors::reply_code(&error) == Some(550) {
+                        // RETR was refused. This never proves absence and
+                        // does not change SIZE/MLST/MKD/RNTO classification.
+                        // Keep the kind readable by existing agent proxies.
+                        io::Error::new(io::ErrorKind::PermissionDenied,
+                            format!("Permission denied for FTP RETR (550): {error}"))
+                    } else { super::errors::map(error) }
+                })
         })?;
         let Some(data) = data else {
             // REST was refused with an answer: the connection is in step.

@@ -27,6 +27,12 @@ impl BackendExtensions for CachingBackend {
     fn directory_identity(&self, path: &str) -> VfsResult<Option<String>> {
         crate::vfs::directory_identity(&*self.inner, path)
     }
+    fn rename_reserved_directory(&self, source: &str, destination: &str) -> VfsResult<()> {
+        let result = crate::vfs::rename_reserved_directory(&*self.inner, source, destination);
+        self.invalidate(source);
+        self.invalidate(destination);
+        result
+    }
     fn file_identity(&self, path: &str) -> VfsResult<Option<String>> {
         crate::vfs::file_identity(&*self.inner, path)
     }

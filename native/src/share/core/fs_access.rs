@@ -250,6 +250,13 @@ impl FsAccess {
             .promote_staged(&staged.path, &destination.path)
     }
 
+    pub(super) fn rename_reserved_directory(&self, source: &str, destination: &str) -> io::Result<()> {
+        let source = self.resolve_write(source)?;
+        let destination = self.resolve_write(destination)?;
+        self.require_same_backend(&source, &destination)?;
+        crate::vfs::rename_reserved_directory(&*source.backend, &source.path, &destination.path)
+    }
+
     /// Publishes a complete stage only while `destination` is absent; the
     /// host validates the stage itself, saving the client a round trip.
     /// `copy` commits a copy stage (ID providers verify their own naming).

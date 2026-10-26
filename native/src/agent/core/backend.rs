@@ -358,11 +358,9 @@ impl Backend for AgentBackend {
     }
 
     fn rename_no_replace(&self, src: &str, dst: &str) -> VfsResult<()> {
-        let request = if self.features().folder_reservation && self.stat(src)?.is_dir {
-            Frame::RenameDirectoryNoReplace { src: src.into(), dst: dst.into() }
-        } else {
-            Frame::RenameNoReplace { src: src.into(), dst: dst.into() }
-        };
+        // Ordinary provider renames retain their existing protocol semantics.
+        // Reserved directories use the distinct strict extension/frame.
+        let request = Frame::RenameNoReplace { src: src.into(), dst: dst.into() };
         let lease = self.pool.lease();
         let (mux, reply) = lease.mutation_call(request)?;
         match reply {

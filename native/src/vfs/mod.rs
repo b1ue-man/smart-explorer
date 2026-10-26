@@ -58,7 +58,7 @@ mod file_identity;
 pub use file_identity::file_identity;
 #[path = "core/folder_reservation.rs"]
 mod folder_reservation;
-pub use folder_reservation::{create_dir_exclusive, directory_identity, directory_reservation_supported};
+pub use folder_reservation::{create_dir_exclusive, directory_identity, directory_reservation_supported, rename_reserved_directory};
 #[path = "os/shared/confined_local.rs"]
 mod confined_local;
 #[path = "os/shared/confined_local_extensions.rs"]

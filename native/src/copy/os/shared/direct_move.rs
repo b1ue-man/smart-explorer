@@ -6,7 +6,7 @@ use super::super::super::platform;
 use super::super::durability::finish_direct_move;
 use super::super::move_guard::{
     moved_target_changed_error, remove_quarantine, restore_after_error,
-    restore_quarantine_if_any, source_changed_error, source_snapshot_path, QuarantinedSource,
+    restore_quarantine_if_any, source_changed_error, source_snapshot_file, source_snapshot_path, QuarantinedSource,
 };
 use super::super::publication::{self, PublicationObserver};
 use super::super::staging::LocalFailure;
@@ -21,17 +21,14 @@ pub(super) fn try_move(
     quarantine: &mut Option<QuarantinedSource>,
     observer: Option<&dyn PublicationObserver>,
 ) -> Result<Option<LocalOutcome>, LocalFailure> {
-    // A rename consumes its source. Every direct move retains the quarantine
-    // until actual destination durability is confirmed, including callers
-    // without a journal observer. Rename a private hardlink instead.
+    // Retain a hardlink where available. Filesystems such as FAT/exFAT can
+    // still rename the held quarantine itself without copying its contents.
+    // Their live object proof does not become a persistent recovery identity.
     let source = quarantine.as_ref().ok_or_else(missing_quarantine)?;
-    let alias = match PublicationAlias::create(source).map_err(|error| {
+    let alias = PublicationAlias::create(source).map_err(|error| {
         LocalFailure::Source(restore_after_error(quarantine.as_ref(), error))
-    })? {
-        Some(alias) => alias,
-        None => return Ok(None),
-    };
-    let rename_source = alias.path.as_path();
+    })?;
+    let rename_source = alias.as_ref().map_or(source.path.as_path(), |alias| alias.path.as_path());
     let source = quarantine.as_ref().ok_or_else(missing_quarantine)?;
     let live = match crate::copy::publication_proof::open_live_move_source(
         rename_source, source.file(),
@@ -42,44 +39,59 @@ pub(super) fn try_move(
         Err(_) => return Ok(None),
     };
     loop {
+        if request.cancel.load(std::sync::atomic::Ordering::Acquire) {
+            drop(live);
+            restore_quarantine_if_any(quarantine.as_ref()).map_err(LocalFailure::Source)?;
+            return Ok(Some(LocalOutcome::Canceled));
+        }
         if let Err(error) = publication::before(observer, rename_source, target) {
             drop(live);
             if let Err(uncertain) = publication::preparation_failed(
                 observer, rename_source, target, &error, quarantine.as_ref(),
             ) {
-                alias.retain();
+                if let Some(alias) = &alias { alias.retain(); }
                 return Err(LocalFailure::Publish(uncertain));
             }
             return Err(LocalFailure::Publish(restore_after_error(quarantine.as_ref(), error)));
         }
+        if request.cancel.load(std::sync::atomic::Ordering::Acquire) {
+            let error = io::Error::new(io::ErrorKind::Interrupted, "direct move canceled before publication");
+            if let Err(uncertain) = publication::preparation_failed(observer, rename_source, target, &error, quarantine.as_ref()) {
+                if let Some(alias) = &alias { alias.retain(); }
+                return Err(LocalFailure::Publish(uncertain));
+            }
+            drop(live);
+            restore_quarantine_if_any(quarantine.as_ref()).map_err(LocalFailure::Source)?;
+            return Ok(Some(LocalOutcome::Canceled));
+        }
         let committed = crate::copy::publication_proof::preflight_direct_move(&live, target)
             .and_then(|()| platform::move_file(rename_source, target, request.conflict == Conflict::Overwrite));
+        #[cfg(test)]
+        let committed = compatibility_tests::move_reply(committed);
         if let Err(error) = &committed {
             if let Err(uncertain) = publication::commit_failed(
-                observer, rename_source, target, &live, error, quarantine.as_ref(),
+                observer, rename_source, target, &live, error, alias.as_ref().and(quarantine.as_ref()),
             ) {
-                alias.retain();
+                if let Some(alias) = &alias { alias.retain(); }
                 return Err(LocalFailure::Publish(uncertain));
             }
         }
         match committed {
             Ok(()) => {
                 let source = quarantine.as_ref().ok_or_else(missing_quarantine)?;
-                match source_snapshot_path(target) {
-                    Ok(snapshot) if snapshot == source.snapshot => {}
-                    Ok(_) => return Err(LocalFailure::Publish(moved_target_changed_error(target, None))),
-                    Err(error) => return Err(LocalFailure::Publish(moved_target_changed_error(target, Some(error)))),
-                }
+                validate_target(source, target, &live, alias.is_some())
+                    .map_err(|error| LocalFailure::Publish(moved_target_changed_error(target, Some(error))))?;
                 // A durable receipt records publication; it does not itself
                 // flush destination bytes or the destination directory entry.
-                // Confirm both before destroying the retained source hardlink.
+                // Confirm both before destroying any retained source hardlink.
                 crate::copy::publication_proof::confirm_handle_publication(
                     target, &live, request.cancel,
                 ).map_err(|error| LocalFailure::Publish(io::Error::new(error.kind(), format!(
-                    "move committed at {}; secured source retained at {}; destination durability confirmation failed: {error}",
-                    target.display(), source.path.display(),
+                    "move committed at {}; {}; destination durability confirmation failed: {error}",
+                    target.display(), if alias.is_some() { format!("secured source retained at {}", source.path.display()) }
+                    else { "moved source remains at the destination; no source cleanup was performed".into() },
                 ))))?;
-                publication::after(observer, target, &live, quarantine.as_ref())
+                publication::after(observer, target, &live, alias.as_ref().and(quarantine.as_ref()))
                     .map_err(LocalFailure::Publish)?;
                 // Release the write reservation before the conditional DELETE
                 // handle used by Windows quarantine cleanup is acquired.
@@ -87,7 +99,7 @@ pub(super) fn try_move(
                 // Also handles POSIX rename's no-op for two hardlinks to
                 // the same inode. The retained source is never cleaned up
                 // before the publication receipt is durable.
-                if metadata_if_exists(&source.path).map_err(LocalFailure::Publish)?.is_some() {
+                if alias.is_some() && metadata_if_exists(&source.path).map_err(LocalFailure::Publish)?.is_some() {
                     remove_quarantine(source).map_err(LocalFailure::Publish)?;
                 }
                 finish_direct_move(target, source, platform::sync_parent)
@@ -125,6 +137,20 @@ pub(super) fn try_move(
     }
 }
 
+fn validate_target(source: &QuarantinedSource, target: &Path, live: &std::fs::File, retained: bool) -> io::Result<()> {
+    let reached = crate::local_access::open_regular(target, crate::local_access::FinalLink::Refuse)?;
+    let current = source_snapshot_file(&reached)?;
+    let held = source_snapshot_file(live)?;
+    // FAT file numbers can change on a cross-directory rename. Both live
+    // handles must identify the same current object; size/time alone do not.
+    if !platform::same_file_object(&reached, live)? || current != held
+        || current.len != source.snapshot.len || current.modified != source.snapshot.modified
+        || retained && current != source.snapshot {
+        return Err(source_changed_error(target));
+    }
+    Ok(())
+}
+
 fn missing_quarantine() -> LocalFailure {
     LocalFailure::Publish(io::Error::new(io::ErrorKind::InvalidData, "move quarantine is missing"))
 }
@@ -139,6 +165,8 @@ struct PublicationAlias {
 
 impl PublicationAlias {
     fn create(source: &QuarantinedSource) -> io::Result<Option<Self>> {
+        #[cfg(test)]
+        if compatibility_tests::without_hardlinks() { return Ok(None); }
         use std::collections::hash_map::RandomState;
         use std::hash::{BuildHasher, Hash, Hasher};
         let parent = source.path.parent().unwrap_or_else(|| Path::new("."));
@@ -176,8 +204,8 @@ impl PublicationAlias {
                     return Ok(Some(alias));
                 }
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-                // A filesystem without hardlinks still gets the safe stage
-                // path; this optimization never weakens move recovery.
+                // A failed hardlink is not a cross-volume move. The caller
+                // may rename the held quarantine and keep its outcome honest.
                 Err(_) => return Ok(None),
             }
         }
@@ -186,6 +214,10 @@ impl PublicationAlias {
 
     fn retain(&self) { self.discard_on_drop.set(false); }
 }
+
+#[cfg(test)]
+#[path = "batches_direct_move_compatibility_task_tests.rs"]
+mod compatibility_tests;
 
 impl Drop for PublicationAlias {
     fn drop(&mut self) {

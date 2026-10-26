@@ -112,6 +112,19 @@ impl BackendExtensions for AgentBackend {
         folder_reservation::identity(self, path)
     }
 
+    fn rename_reserved_directory(&self, source: &str, destination: &str) -> VfsResult<()> {
+        if !self.features().folder_reservation { return Err(unsupported()); }
+        let lease = self.pool.lease();
+        let (mux, reply) = lease.mutation_call(Frame::RenameDirectoryNoReplace {
+            src: source.into(), dst: destination.into(),
+        })?;
+        match reply {
+            Frame::Ok => Ok(()),
+            Frame::Err(error) => Err(Frame::folder_error(&error).unwrap_or_else(|| agent_error(error))),
+            frame => { lease.invalidate(&mux); Err(unexpected("reserved-directory rename", &frame)) },
+        }
+    }
+
     fn file_identity(&self, path: &str) -> VfsResult<Option<String>> {
         folder_reservation::file_identity(self, path)
     }
