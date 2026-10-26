@@ -4,8 +4,8 @@
 
 Stand und Primärquellen erneut geprüft am 2026-10-26. Der bestehende Einstieg
 `.github/workflows/review-task.yml` → `native/test-review-task.sh` wird für den
-vollständigen laufenden Gesamtbatch verwendet. Die Ausführung ist noch nicht
-erfolgt. Maßgeblich sind `docs/plaene/2026-10-24-batches/batches.md`,
+vollständigen laufenden Gesamtbatch verwendet. Der erste Lauf ist am 2026-10-26 in der Remote-Vorbereitung beendet;
+Kompilierung und funktionale Ausführung haben noch nicht begonnen. Maßgeblich sind `docs/plaene/2026-10-24-batches/batches.md`,
 `vertraege.md`, `umsetzung.md` und `native/review-task-manifest.json`.
 Vor dem ersten Lauf müssen der normale frische Astra/xhigh-Gesamtreview und die
 zusätzlichen unabhängigen Astra/max- und Sol-6.1/max-Regressionsreviews erfolgt
@@ -354,3 +354,26 @@ Exitcode des Bibliotheksdurchgangs weiter. Quelle, geprüft am 2026-10-26:
 [Debian xvfb-run](https://manpages.debian.org/testing/xvfb/xvfb-run.1.en.html).
 Das belegt nach erfolgreichem Remote-Lauf die isolierte X11-Schnittstelle,
 keine physische Desktop- oder Compositorsitzung.
+
+## Lauf 40332971455: gebundene Vorbereitungskorrekturen
+
+Der [erste Lauf](https://github.com/b1ue-man/smart-explorer/actions/runs/40332971455)
+prüfte Kandidat `34f3361de13104e386eba26bf16d6a0160475481`. Sein Job
+`dependencies` beendete sich vor den Compilerjobs mit den erwarteten
+Lockfile-/Formatkorrekturen und zusätzlich gemeldeten Modulgrößenverletzungen.
+Linux, Windows und beide Androidstufen wurden dadurch nicht gestartet.
+
+Die Abhängigkeitsauflösung erhält alle bereits gesperrten Paketversionen und
+Checksummen; sie ergänzt die vom vorhandenen Manifest aktivierte Closure.
+Original-Lock-SHA256: `17491c4f5c4f68fdb5c51973e25c25701b822ecb95d5f31dd608f4860e943491`.
+Aufgelöster Lock-SHA256: `72c269cf0cda3db0b072dcec437d30e2cc5fa342ca6fc47abe6c7c318f5081a4`.
+Remote-Formatpatch-SHA256: `57194cbcc7932a64b7816b20b0327cd48986bc5cff3b3ef522496461c87f8a4b`.
+Main hat Kandidat, Hashes und Anwendbarkeit geprüft und die gelieferten Patches
+übernommen. Die eingefrorenen Releaseblöcke des Bildqualitätsvergleichs bleiben
+bytegleich. Weder Cargoauflösung noch Rustformatierung liefen lokal.
+
+Die im Artefakt `format.json` benannten Verantwortlichkeiten werden vor der
+Wiederholung desselben Suiteeinstiegs in passende Module unter der Projektgrenze
+aufgeteilt. Bestehende Funktionsnamen, Zugriffsgrenzen, Drahtformate und
+Meilensteinauswahl bleiben erhalten. Aus diesem Lauf wird kein bestandener
+Verhaltensfall abgeleitet.

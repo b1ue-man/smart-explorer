@@ -2,19 +2,19 @@ use super::journal::{Journal, PersistedDelete, PersistedEntry, RecoveredJournal}
 use super::spool_storage::{MountStorage, SpoolHandle, SpoolStorage};
 use super::stage_ledger::StageLedger;
 use super::types::{MountId, NamespaceIntent};
+use crate::local_access::{DirectoryHandle, EntryKind};
 use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use crate::local_access::{DirectoryHandle, EntryKind};
 
 const ALLOCATION_ATTEMPTS: usize = 128;
 
-#[path = "spool_recovery.rs"]
-mod recovery;
 #[path = "spool_audit.rs"]
 mod audit;
+#[path = "spool_recovery.rs"]
+mod recovery;
 
 pub(super) struct AllocatedSpool {
     pub name: String,
@@ -290,7 +290,10 @@ pub(super) fn audit_pending(base: &Path, mount_id: &MountId) -> io::Result<usize
 /// Strictly read-only inventory: no creation, rotation, truncation, orphan
 /// cleanup or PlainPathSealer over ciphertext. None preserves unknown state.
 pub(super) fn audit_pending_state(base: &Path, mount_id: &MountId) -> io::Result<Option<usize>> {
-    use std::{ffi::OsStr, io::{BufReader, Read}};
+    use std::{
+        ffi::OsStr,
+        io::{BufReader, Read},
+    };
     let base = match DirectoryHandle::open_root(base) {
         Ok(base) => base,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Some(0)),
@@ -306,32 +309,46 @@ pub(super) fn audit_pending_state(base: &Path, mount_id: &MountId) -> io::Result
         let child = child?;
         match child.name.to_str() {
             Some("spool-key.wrapped") => return Ok(None),
-            Some(name @ ("journal.jsonl" | "journal.jsonl.compact-old" | "journal.jsonl.compact-new")) => {
+            Some(
+                name
+                @ ("journal.jsonl" | "journal.jsonl.compact-old" | "journal.jsonl.compact-new"),
+            ) => {
                 if child.is_link_like || !matches!(child.kind, EntryKind::File) {
-                    return Err(io::Error::new(io::ErrorKind::PermissionDenied,
-                        "Offlinejournal ist kein regulärer Eintrag; Cache bleibt unverändert"));
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "Offlinejournal ist kein regulärer Eintrag; Cache bleibt unverändert",
+                    ));
                 }
                 journals.insert(name.to_string());
             }
-            _ => {},
+            _ => {}
         }
     }
-    let selected = ["journal.jsonl", "journal.jsonl.compact-old", "journal.jsonl.compact-new"]
-        .into_iter().find(|name| journals.contains(*name));
+    let selected = [
+        "journal.jsonl",
+        "journal.jsonl.compact-old",
+        "journal.jsonl.compact-new",
+    ]
+    .into_iter()
+    .find(|name| journals.contains(*name));
     let Some(selected) = selected else {
         match root.open_child(OsStr::new("files")) {
             Ok(files) if files.read_directory()?.next().is_some() => return Err(io::Error::new(
-                io::ErrorKind::InvalidData, "Recoveryjournal fehlt bei vorhandenen Cachedateien; alle Bytes bleiben erhalten")),
-            Ok(_) => {},
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {},
+                io::ErrorKind::InvalidData,
+                "Recoveryjournal fehlt bei vorhandenen Cachedateien; alle Bytes bleiben erhalten",
+            )),
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
         }
         return Ok(Some(0));
     };
     let file = root.open_regular_child(OsStr::new(selected))?;
     if file.metadata()?.len() > audit::MAX_AUDIT_BYTES {
-        return Err(io::Error::new(io::ErrorKind::InvalidData,
-            "Offlinejournal überschreitet 64 MiB; Originalbytes bleiben erhalten"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Offlinejournal überschreitet 64 MiB; Originalbytes bleiben erhalten",
+        ));
     }
     audit::pending(BufReader::new(file.take(audit::MAX_AUDIT_BYTES + 1)))
 }

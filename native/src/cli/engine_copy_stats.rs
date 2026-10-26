@@ -56,7 +56,10 @@ pub(in crate::cli) fn stats_line(progress: &TreeProgress, wall_ms: u64) -> Strin
             format_bytes(bytes)
         )
     };
-    if let Some(optical) = optical_status::text(&progress.optical_readers) { line.push_str("; "); line.push_str(&optical); }
+    if let Some(optical) = optical_status::text(&progress.optical_readers) {
+        line.push_str("; ");
+        line.push_str(&optical);
+    }
     line
 }
 

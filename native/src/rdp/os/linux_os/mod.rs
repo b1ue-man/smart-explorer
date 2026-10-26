@@ -1,14 +1,19 @@
-pub(crate) mod clients;
 mod client_trust;
-mod inventory;
+pub(crate) mod clients;
 mod gnome;
+mod inventory;
 mod krdp;
 mod xrdp;
 use crate::rdp::core::{HostProbe, RDP_PROBE_VERSION};
 
 pub(crate) fn probe() -> HostProbe {
-    let mut report = HostProbe { version: RDP_PROBE_VERSION, platform: "linux".into(),
-        services: Vec::new(), unavailable_reason: None, diagnostics: Vec::new() };
+    let mut report = HostProbe {
+        version: RDP_PROBE_VERSION,
+        platform: "linux".into(),
+        services: Vec::new(),
+        unavailable_reason: None,
+        diagnostics: Vec::new(),
+    };
     gnome::probe(&mut report);
     krdp::probe(&mut report);
     xrdp::probe(&mut report);

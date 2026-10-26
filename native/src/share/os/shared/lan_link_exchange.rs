@@ -2,11 +2,11 @@
 use std::io;
 use std::sync::Arc;
 
+use super::route_protocol::{active_now, timeout_until};
 use futures_util::StreamExt;
 use iroh::endpoint::{Connection, RecvStream, SendStream};
 use tokio::io::AsyncWriteExt;
 use tokio::time::Instant;
-use super::route_protocol::{active_now, timeout_until};
 
 use super::core::{eio, random_bytes};
 use super::lan_link_facts::{self, LanPeerPin};
@@ -42,13 +42,16 @@ pub(super) async fn run(
             "LAN-Link geschlossen",
         ))
     };
-    super::route_protocol::scope(connection.clone(), tokio::time::timeout(SESSION_DEADLINE, async {
-        tokio::select! {
-            biased;
-            result = monitor => result,
-            result = work => result,
-        }
-    }))
+    super::route_protocol::scope(
+        connection.clone(),
+        tokio::time::timeout(SESSION_DEADLINE, async {
+            tokio::select! {
+                biased;
+                result = monitor => result,
+                result = work => result,
+            }
+        }),
+    )
     .await
     .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "LAN-Link-Sitzung abgelaufen"))?
 }

@@ -17,24 +17,24 @@ use tokio::sync::mpsc;
 use super::{HostContext, CLOSE_GRACE};
 use crate::screen::core::authorize::log_event;
 use crate::screen::core::gop_stream::now_us;
-use crate::screen::core::host_pipeline::{Pipeline,PipelineActor,Produced,WorkCompletion};
+use crate::screen::core::host_pipeline::{Pipeline, PipelineActor, Produced, WorkCompletion};
 use crate::screen::core::input_model::{InputEvent, PressedInputs};
 use crate::screen::core::registry::SessionHandle;
 use crate::screen::core::session_state::{EndReason, SessionState};
 use crate::screen::core::wire_binary::StreamKind;
 use crate::screen::core::wire_control::{
-    recv_viewer_frame, ControlAction, ControlState, HostFrame, Pong,
-    ScreenWireError, SetMode, StateReport, StreamInfo, StreamMode, ViewerFrame,
+    recv_viewer_frame, ControlAction, ControlState, HostFrame, Pong, ScreenWireError, SetMode,
+    StateReport, StreamInfo, StreamMode, ViewerFrame,
 };
 use crate::screen::core::wire_hello::{ScreenErrorCode, SessionMode};
 use crate::share::relation_proof::ProvenPrincipal;
 
-#[path = "host_visibility.rs"]
-mod visibility;
-#[path = "host_input_release.rs"]
-mod input_release;
 #[path = "host_family.rs"]
 mod family;
+#[path = "host_input_release.rs"]
+mod input_release;
+#[path = "host_visibility.rs"]
+mod visibility;
 
 /// A viewer that sends nothing (not even `PING`) this long has gone.
 const VIEWER_SILENCE: Duration = Duration::from_secs(15);
@@ -64,8 +64,10 @@ pub(super) struct Session<'a> {
     mode: SessionMode,
     pipeline: PipelineActor,
     pressed: PressedInputs,
-    input_release:Option<tokio::task::JoinHandle<Result<(),crate::screen::core::wire_control::ControlBlock>>>,
-    release_blocked:Option<crate::screen::core::wire_control::ControlBlock>,
+    input_release: Option<
+        tokio::task::JoinHandle<Result<(), crate::screen::core::wire_control::ControlBlock>>,
+    >,
+    release_blocked: Option<crate::screen::core::wire_control::ControlBlock>,
     state: SessionState,
     reported_stream: Option<StreamInfo>,
     started: Instant,
@@ -74,9 +76,9 @@ pub(super) struct Session<'a> {
     visibility_ack_pending: bool,
     visible: bool,
     input_floor: Option<u64>,
-    observed_reference_floor:u64,
+    observed_reference_floor: u64,
     icons_supported: bool,
-    family:family::FamilyState,
+    family: family::FamilyState,
 }
 
 /// How a session ended: the reason and the `ERROR` the viewer gets first.
@@ -96,11 +98,11 @@ impl<'a> Session<'a> {
         pipeline: Pipeline,
         visibility_supported: bool,
         icons_supported: bool,
-        families_supported:bool,
-        family_source:Option<String>,
+        families_supported: bool,
+        family_source: Option<String>,
     ) -> Self {
-        let pipeline=PipelineActor::new(pipeline,connection.clone());
-        let observed_reference_floor=pipeline.reference_floor();
+        let pipeline = PipelineActor::new(pipeline, connection.clone());
+        let observed_reference_floor = pipeline.reference_floor();
         Self {
             context,
             connection,
@@ -109,7 +111,9 @@ impl<'a> Session<'a> {
             principal,
             mode,
             pipeline,
-            pressed: PressedInputs::default(),input_release:None,release_blocked:None,
+            pressed: PressedInputs::default(),
+            input_release: None,
+            release_blocked: None,
             state: SessionState::Starting,
             reported_stream: None,
             started: Instant::now(),
@@ -120,7 +124,7 @@ impl<'a> Session<'a> {
             input_floor: None,
             observed_reference_floor,
             icons_supported,
-            family:family::FamilyState::new(families_supported,family_source),
+            family: family::FamilyState::new(families_supported, family_source),
         }
     }
 
@@ -129,7 +133,9 @@ impl<'a> Session<'a> {
         let (frames_tx, mut frames) = mpsc::channel(FRAME_QUEUE);
         let reader = tokio::spawn(read_viewer_frames(recv, frames_tx));
         if self.family.selected.is_some() && self.family_snapshot(true).await.is_err() {
-            reader.abort();self.finish((EndReason::Failed,None)).await;return;
+            reader.abort();
+            self.finish((EndReason::Failed, None)).await;
+            return;
         }
         let mut stop = self.handle.stop_signal();
         let tick = Duration::from_micros(1_000_000 / u64::from(max_fps.max(1)));
@@ -176,8 +182,11 @@ impl<'a> Session<'a> {
 
     async fn frame(&mut self, frame: HostFrame) -> io::Result<()> {
         crate::screen::core::control_sender::send(
-            self.connection.remote_id().to_string(), &mut self.send, &frame,
-        ).await
+            self.connection.remote_id().to_string(),
+            &mut self.send,
+            &frame,
+        )
+        .await
     }
 
     async fn error(&mut self, code: ScreenErrorCode, detail: String) -> io::Result<()> {
@@ -208,7 +217,9 @@ impl<'a> Session<'a> {
     }
 
     async fn second(&mut self) -> io::Result<()> {
-        if self.family.selected.is_some() {self.family_snapshot(false).await?;}
+        if self.family.selected.is_some() {
+            self.family_snapshot(false).await?;
+        }
         let stats = self.pipeline.second(self.connection);
         self.handle.update(|view| {
             view.bitrate_kbps = stats.sent_kbps;
@@ -222,9 +233,13 @@ impl<'a> Session<'a> {
         self.poll_input_release();
         if let Some(applied) = self.pipeline.poll_capture_active() {
             if let Err(error) = applied {
-                return Some((EndReason::Failed, Some(ScreenWireError::new(
-                    ScreenErrorCode::CaptureFailed, Some(error.to_string()),
-                ))));
+                return Some((
+                    EndReason::Failed,
+                    Some(ScreenWireError::new(
+                        ScreenErrorCode::CaptureFailed,
+                        Some(error.to_string()),
+                    )),
+                ));
             }
             if self.visibility_ack_pending {
                 self.visibility_ack_pending = false;
@@ -234,45 +249,87 @@ impl<'a> Session<'a> {
                     geometry_generation: self.visibility_generation,
                     min_frame_id: floor,
                 };
-                if self.frame(HostFrame::VisibilityAck(ack)).await.is_err() { return Some(LOST); }
-                if !self.visible && self.report(SessionState::ViewerHidden, Some("viewer_hidden")).await.is_err() {
+                if self.frame(HostFrame::VisibilityAck(ack)).await.is_err() {
+                    return Some(LOST);
+                }
+                if !self.visible
+                    && self
+                        .report(SessionState::ViewerHidden, Some("viewer_hidden"))
+                        .await
+                        .is_err()
+                {
                     return Some(LOST);
                 }
             }
         }
-        if self.visibility_ack_pending { return None; }
-        if !self.visible { return None; }
-        let completion=self.pipeline.take_completion();
-        let completed=completion.is_some();
+        if self.visibility_ack_pending {
+            return None;
+        }
+        if !self.visible {
+            return None;
+        }
+        let completion = self.pipeline.take_completion();
+        let completed = completion.is_some();
         self.refresh_input_reference();
-        let next=match completion {
-            None=>None,
-            Some(WorkCompletion::Snapshot(result))=>{
-                if let Err(failure)=result {
-                    if self.error(failure.code,failure.error.to_string()).await.is_err() {return Some(LOST);}
+        let next = match completion {
+            None => None,
+            Some(WorkCompletion::Snapshot(result)) => {
+                if let Err(failure) = result {
+                    if self
+                        .error(failure.code, failure.error.to_string())
+                        .await
+                        .is_err()
+                    {
+                        return Some(LOST);
+                    }
                 }
                 None
             }
-            Some(WorkCompletion::Tick(produced))=>match produced {
-                Ok(Produced::Sent)=>Some(SessionState::Streaming),
-                Ok(Produced::Paused(state))=>Some(state),
-                Ok(Produced::Idle|Produced::Dropped|Produced::Reset)=>None,
-                Ok(Produced::Closed)=>return Some((closed_reason(self.connection),None)),
-                Err(failure)=>return Some((EndReason::Failed,Some(ScreenWireError::new(failure.code,Some(failure.error.to_string()))))),
+            Some(WorkCompletion::Tick(produced)) => match produced {
+                Ok(Produced::Sent) => Some(SessionState::Streaming),
+                Ok(Produced::Paused(state)) => Some(state),
+                Ok(Produced::Idle | Produced::Dropped | Produced::Reset) => None,
+                Ok(Produced::Closed) => return Some((closed_reason(self.connection), None)),
+                Err(failure) => {
+                    return Some((
+                        EndReason::Failed,
+                        Some(ScreenWireError::new(
+                            failure.code,
+                            Some(failure.error.to_string()),
+                        )),
+                    ))
+                }
             },
         };
         if completed && self.family.selected.is_some() {
-            if let Err(error)=self.family_snapshot(false).await {
-                return Some((EndReason::Failed,Some(ScreenWireError::new(ScreenErrorCode::CaptureFailed,Some(error.to_string())))));
+            if let Err(error) = self.family_snapshot(false).await {
+                return Some((
+                    EndReason::Failed,
+                    Some(ScreenWireError::new(
+                        ScreenErrorCode::CaptureFailed,
+                        Some(error.to_string()),
+                    )),
+                ));
             }
         }
-        if let Err(failure)=self.pipeline.begin_tick() {
-            return Some((EndReason::Failed,Some(ScreenWireError::new(failure.code,Some(failure.error.to_string())))));
+        if let Err(failure) = self.pipeline.begin_tick() {
+            return Some((
+                EndReason::Failed,
+                Some(ScreenWireError::new(
+                    failure.code,
+                    Some(failure.error.to_string()),
+                )),
+            ));
         }
-        let notice=self.pipeline.take_fallback_notice();
+        let notice = self.pipeline.take_fallback_notice();
         if next.is_some() || notice.is_some() {
-            self.report(next.unwrap_or(self.state),notice.as_deref()).await.err().map(|_|LOST)
-        } else {None}
+            self.report(next.unwrap_or(self.state), notice.as_deref())
+                .await
+                .err()
+                .map(|_| LOST)
+        } else {
+            None
+        }
     }
 
     async fn on_frame(&mut self, frame: ViewerFrame) -> io::Result<()> {
@@ -281,22 +338,41 @@ impl<'a> Session<'a> {
         self.refresh_input_reference();
         match frame {
             ViewerFrame::ListFamilies => {
-                if !self.family.supported {return Err(io::Error::new(io::ErrorKind::Unsupported,"family_contract_not_negotiated"));}
-                let listing=crate::screen::core::family_listing::list(self.context,self.principal)?;
+                if !self.family.supported {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Unsupported,
+                        "family_contract_not_negotiated",
+                    ));
+                }
+                let listing =
+                    crate::screen::core::family_listing::list(self.context, self.principal)?;
                 self.frame(HostFrame::Families(listing)).await
             }
-            ViewerFrame::FamilySnapshot=>self.family_snapshot(true).await,
-            ViewerFrame::FamilyOperation(request)=>self.family_operation(request).await,
-            ViewerFrame::FamilyInput(request)=>self.family_input(request).await,
-            ViewerFrame::Presented {gop_id,frame_id}=>{
-                if !self.pipeline.presentation_supported() {return Err(io::Error::new(io::ErrorKind::InvalidData,"presentation was not negotiated"));}
-                if self.visible && !self.visibility_ack_pending && self.pipeline.on_presented(gop_id,frame_id) {self.input_floor=None;}
+            ViewerFrame::FamilySnapshot => self.family_snapshot(true).await,
+            ViewerFrame::FamilyOperation(request) => self.family_operation(request).await,
+            ViewerFrame::FamilyInput(request) => self.family_input(request).await,
+            ViewerFrame::Presented { gop_id, frame_id } => {
+                if !self.pipeline.presentation_supported() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "presentation was not negotiated",
+                    ));
+                }
+                if self.visible
+                    && !self.visibility_ack_pending
+                    && self.pipeline.on_presented(gop_id, frame_id)
+                {
+                    self.input_floor = None;
+                }
                 Ok(())
             }
             ViewerFrame::FrameAck(ack) | ViewerFrame::PreviewAck(ack) => {
-                let known=self.pipeline.on_ack(ack);
-                if !self.pipeline.presentation_supported() && known && self.input_floor.is_some_and(|floor| ack.frame_id >= floor)
-                    && ack.frame_id < self.pipeline.next_frame_id() {
+                let known = self.pipeline.on_ack(ack);
+                if !self.pipeline.presentation_supported()
+                    && known
+                    && self.input_floor.is_some_and(|floor| ack.frame_id >= floor)
+                    && ack.frame_id < self.pipeline.next_frame_id()
+                {
                     self.input_floor = None;
                 }
                 Ok(())
@@ -312,18 +388,28 @@ impl<'a> Session<'a> {
                 self.frame(HostFrame::Pong(pong)).await
             }
             ViewerFrame::SetMode(set) => self.set_mode(set).await,
-            ViewerFrame::ListWindows => match crate::screen::core::icon_host::list(self.context,self.principal) {
-                Ok(list) => self.frame(HostFrame::Windows(list)).await,
-                Err(error) => {
-                    self.error(ScreenErrorCode::CaptureFailed, error.to_string())
-                        .await
+            ViewerFrame::ListWindows => {
+                match crate::screen::core::icon_host::list(self.context, self.principal) {
+                    Ok(list) => self.frame(HostFrame::Windows(list)).await,
+                    Err(error) => {
+                        self.error(ScreenErrorCode::CaptureFailed, error.to_string())
+                            .await
+                    }
                 }
-            },
+            }
             ViewerFrame::IconRequest(request) => {
-                if !self.icons_supported {return Err(io::Error::new(io::ErrorKind::InvalidInput,"icon contract was not negotiated"));}
-                let response=crate::screen::core::icon_host::icon(self.context,self.principal,request)?;
-                let mut stop=self.handle.stop_signal();
-                if stop.borrow().is_some() {return Ok(());}
+                if !self.icons_supported {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "icon contract was not negotiated",
+                    ));
+                }
+                let response =
+                    crate::screen::core::icon_host::icon(self.context, self.principal, request)?;
+                let mut stop = self.handle.stop_signal();
+                if stop.borrow().is_some() {
+                    return Ok(());
+                }
                 tokio::select! {
                     biased;
                     _=stop.changed()=>Ok(()),
@@ -348,25 +434,48 @@ impl<'a> Session<'a> {
     async fn input(&mut self, events: &[InputEvent]) -> io::Result<()> {
         if self.family.selected.is_some() {
             self.release_pressed();
-            return self.error(ScreenErrorCode::ControlUnavailable,"family_input_requires_snapshot_target".into()).await;
+            return self
+                .error(
+                    ScreenErrorCode::ControlUnavailable,
+                    "family_input_requires_snapshot_target".into(),
+                )
+                .await;
         }
-        let sink=self.pipeline.input_sink();
-        let reference=self.pipeline.input_reference_generation();
-        let presented=self.pipeline.presentation_supported();
-        if !self.visible || self.input_floor.is_some() || !self.pipeline.input_reference_ready() || self.input_release.is_some() {return Ok(());}
-        if !presented && sink.as_ref().is_some_and(|sink|sink.legacy_input_invalid()) {
+        let sink = self.pipeline.input_sink();
+        let reference = self.pipeline.input_reference_generation();
+        let presented = self.pipeline.presentation_supported();
+        if !self.visible
+            || self.input_floor.is_some()
+            || !self.pipeline.input_reference_ready()
+            || self.input_release.is_some()
+        {
+            return Ok(());
+        }
+        if !presented
+            && sink
+                .as_ref()
+                .is_some_and(|sink| sink.legacy_input_invalid())
+        {
             self.release_pressed();
             return self.error(ScreenErrorCode::ControlUnavailable,
                 "Der Bildausschnitt hat sich geändert. Aufnahme läuft weiter; zum Steuern ist eine neue Verbindung erforderlich.".into()).await;
         }
-        if let Some(blocked)=self.release_blocked.take() {
-            return self.frame(HostFrame::ControlState(ControlState {holder:self.handle.controller(),blocked:Some(blocked)})).await;
+        if let Some(blocked) = self.release_blocked.take() {
+            return self
+                .frame(HostFrame::ControlState(ControlState {
+                    holder: self.handle.controller(),
+                    blocked: Some(blocked),
+                }))
+                .await;
         }
         if !self.handle.holds_control() {
             let detail = "input without control".to_string();
             return self.error(ScreenErrorCode::RightNotGranted, detail).await;
         }
-        let applied=match &sink {Some(sink)=>sink.inject(events,reference,presented),None=>self.context.backend.inject(events)};
+        let applied = match &sink {
+            Some(sink) => sink.inject(events, reference, presented),
+            None => self.context.backend.inject(events),
+        };
         match applied {
             Ok(()) => {
                 for event in events {
@@ -381,10 +490,16 @@ impl<'a> Session<'a> {
                     blocked: Some(blocked),
                 };
                 self.frame(HostFrame::ControlState(state)).await?;
-                if !presented && sink.as_ref().is_some_and(|sink|sink.legacy_input_invalid()) {
+                if !presented
+                    && sink
+                        .as_ref()
+                        .is_some_and(|sink| sink.legacy_input_invalid())
+                {
                     self.error(ScreenErrorCode::ControlUnavailable,
                         "Der Bildausschnitt hat sich geändert. Aufnahme läuft weiter; zum Steuern ist eine neue Verbindung erforderlich.".into()).await
-                } else {Ok(())}
+                } else {
+                    Ok(())
+                }
             }
         }
     }

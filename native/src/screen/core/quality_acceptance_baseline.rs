@@ -1,13 +1,15 @@
 //! Test-only original BT.709 path from v0.5.184; never used by production.
 //! Exact frozen block is checked against the immutable git source on the runner.
-use std::io;
 use super::pixel_convert::{BgraImage, BgraView, I420Image};
 use super::wire::invalid;
+use std::io;
 pub(crate) const RELEASE_COMMIT: &str = "a814f263096fe69d3746e840b5f3fad3fd7e88a0";
 pub(crate) const PIXEL_PATH: &str = "native/src/screen/core/pixel_convert.rs";
-pub(crate) const PIXEL_SHA256: &str = "322c0c1221f98f3d5993b3f9b84f24cfd6552dcf1b91a5bfc84167b16fb61165";
+pub(crate) const PIXEL_SHA256: &str =
+    "322c0c1221f98f3d5993b3f9b84f24cfd6552dcf1b91a5bfc84167b16fb61165";
 pub(crate) const CODEC_PATH: &str = "native/src/screen/os/native_ffi/openh264_codec.rs";
-pub(crate) const CODEC_SHA256: &str = "7f1f1ee52d5da0130a6ad6e21aa4c7655c99f3067fe7b4e504c2c9e514c40ac1";
+pub(crate) const CODEC_SHA256: &str =
+    "7f1f1ee52d5da0130a6ad6e21aa4c7655c99f3067fe7b4e504c2c9e514c40ac1";
 // BEGIN_FROZEN_PIXELS
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub(crate) enum YuvMatrix {

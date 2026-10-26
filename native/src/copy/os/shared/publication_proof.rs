@@ -1,18 +1,31 @@
 //! Publication evidence is tied to one opened regular file and its held parent.
-use std::{ffi::OsString, fs::File, io::{self, Read, Seek, SeekFrom}, path::{Path, PathBuf}};
-use sha2::{Digest, Sha256};
 use crate::local_access::ConfinedDirectory;
+use sha2::{Digest, Sha256};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::{
+    ffi::OsString,
+    fs::File,
+    io::{self, Read, Seek, SeekFrom},
+    path::{Path, PathBuf},
+};
 
 /// Reconfirm a journaled destination before destroying its retained source.
 /// Successful hashing alone is insufficient: both file and actual parent
 /// flush must succeed, and the original parent/name must still bind the file.
 pub(crate) fn confirm_transfer_publication(
-    target: &Path, expected_identity: &str, expected_sha256: &str, cancel: &AtomicBool,
+    target: &Path,
+    expected_identity: &str,
+    expected_sha256: &str,
+    cancel: &AtomicBool,
 ) -> io::Result<()> {
-    if expected_identity.is_empty() || expected_sha256.len() != 64
-        || !expected_sha256.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "publication receipt lacks complete identity/SHA-256 evidence"));
+    if expected_identity.is_empty()
+        || expected_sha256.len() != 64
+        || !expected_sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "publication receipt lacks complete identity/SHA-256 evidence",
+        ));
     }
     active(cancel)?;
     let mut held = Publication::open(target)?;
@@ -27,7 +40,8 @@ pub(crate) fn confirm_transfer_publication(
     held.require_digest(expected_sha256, cancel)?;
     held.require_identity(expected_identity)?;
     held.verify_binding()?;
-    if super::imp::local_file_identity_handle(&held.parent.entry(&held.name)?)? != expected_identity {
+    if super::imp::local_file_identity_handle(&held.parent.entry(&held.name)?)? != expected_identity
+    {
         return Err(changed());
     }
     active(cancel)
@@ -37,11 +51,20 @@ pub(crate) fn confirm_transfer_publication(
 /// Hashing uses a readable handle bound to that same still-live object, so a
 /// write-only stage and a final readonly attribute both remain supported.
 pub(crate) fn confirm_transfer_publication_handle(
-    target: &Path, file: &File, expected_identity: &str, expected_sha256: &str, cancel: &AtomicBool,
+    target: &Path,
+    file: &File,
+    expected_identity: &str,
+    expected_sha256: &str,
+    cancel: &AtomicBool,
 ) -> io::Result<()> {
-    if expected_identity.is_empty() || expected_sha256.len() != 64
-        || !expected_sha256.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "publication receipt lacks complete identity/SHA-256 evidence"));
+    if expected_identity.is_empty()
+        || expected_sha256.len() != 64
+        || !expected_sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "publication receipt lacks complete identity/SHA-256 evidence",
+        ));
     }
     active(cancel)?;
     let mut held = Publication::from_live(target, file)?;
@@ -54,7 +77,8 @@ pub(crate) fn confirm_transfer_publication_handle(
     held.require_digest(expected_sha256, cancel)?;
     held.require_identity(expected_identity)?;
     held.verify_binding()?;
-    if super::imp::local_file_identity_handle(&held.parent.entry(&held.name)?)? != expected_identity {
+    if super::imp::local_file_identity_handle(&held.parent.entry(&held.name)?)? != expected_identity
+    {
         return Err(changed());
     }
     active(cancel)
@@ -62,15 +86,20 @@ pub(crate) fn confirm_transfer_publication_handle(
 
 /// Acquire flush capability before attempting a direct rename. An unavailable
 /// handle selects the existing stage path before any publication takes place.
-pub(super) fn open_live_move_source(
-    source: &Path, expected: &File,
-) -> io::Result<File> {
-    let name = source.file_name().filter(|name| !name.is_empty()).ok_or_else(changed)?;
-    let parent_path = source.parent().filter(|parent| !parent.as_os_str().is_empty())
+pub(super) fn open_live_move_source(source: &Path, expected: &File) -> io::Result<File> {
+    let name = source
+        .file_name()
+        .filter(|name| !name.is_empty())
+        .ok_or_else(changed)?;
+    let parent_path = source
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
     let parent = ConfinedDirectory::open_root(parent_path)?;
     let file = super::platform::open_move_publication_file(&parent, name)?;
-    if !super::platform::same_file_object(&file, expected)? { return Err(changed()); }
+    if !super::platform::same_file_object(&file, expected)? {
+        return Err(changed());
+    }
     Ok(file)
 }
 
@@ -79,12 +108,16 @@ pub(super) fn open_live_move_source(
 /// an EXDEV returned after dispatch remains an ordinary unconfirmed error.
 pub(super) fn preflight_direct_move(source: &File, target: &Path) -> io::Result<()> {
     let result = (|| {
-        let parent_path = target.parent().filter(|parent| !parent.as_os_str().is_empty())
+        let parent_path = target
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
             .unwrap_or_else(|| Path::new("."));
         let parent = ConfinedDirectory::open_root(parent_path)?;
         if super::platform::different_rename_boundary(source, parent.file())? {
-            return Err(io::Error::new(io::ErrorKind::CrossesDevices,
-                "direct move crosses an observed mount/volume boundary before mutation"));
+            return Err(io::Error::new(
+                io::ErrorKind::CrossesDevices,
+                "direct move crosses an observed mount/volume boundary before mutation",
+            ));
         }
         Ok(())
     })();
@@ -94,40 +127,62 @@ pub(super) fn preflight_direct_move(source: &File, target: &Path) -> io::Result<
 /// An error return alone is insufficient on NFS or an arbitrary provider.
 /// Before revoking a successful preparation, prove that the actual stage
 /// still names our live object and the destination does not name that object.
-pub(super) fn confirm_unpublished(staged: &Path, target: &Path, file: &File, cause: &io::Error) -> io::Result<()> {
+pub(super) fn confirm_unpublished(
+    staged: &Path,
+    target: &Path,
+    file: &File,
+    cause: &io::Error,
+) -> io::Result<()> {
     let stage_name = staged.file_name().ok_or_else(changed)?;
     let target_name = target.file_name().ok_or_else(changed)?;
-    let parent_path = |path: &Path| path.parent().filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new(".")).to_path_buf();
+    let parent_path = |path: &Path| {
+        path.parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf()
+    };
     let stage_path = parent_path(staged);
     let target_path = parent_path(target);
     let stage_parent = ConfinedDirectory::open_root(&stage_path)?;
     let before_mutation = crate::vfs::unpublished_of(cause);
     let actual = stage_parent.entry(stage_name)?;
     let class = crate::local_access::classify_open_file(&actual)?;
-    if !actual.metadata()?.is_file() || class.link_like || class.special
-        || !super::platform::same_file_object(&actual, file)? { return Err(changed()); }
+    if !actual.metadata()?.is_file()
+        || class.link_like
+        || class.special
+        || !super::platform::same_file_object(&actual, file)?
+    {
+        return Err(changed());
+    }
     // A typed pre-dispatch refusal is independent of any remote namespace
     // observation: this execution never called its mutation primitive.
     if before_mutation {
-        return if ConfinedDirectory::open_root(&stage_path)?.identity()? == stage_parent.identity()?
-            && super::platform::same_file_object(&stage_parent.entry(stage_name)?, file)? {
+        return if ConfinedDirectory::open_root(&stage_path)?.identity()?
+            == stage_parent.identity()?
+            && super::platform::same_file_object(&stage_parent.entry(stage_name)?, file)?
+        {
             Ok(())
-        } else { Err(changed()) };
+        } else {
+            Err(changed())
+        };
     }
     let target_parent = ConfinedDirectory::open_root(&target_path)?;
     super::platform::require_local_publication_observation(stage_parent.file())?;
     super::platform::require_local_publication_observation(target_parent.file())?;
     match target_parent.entry(target_name) {
-        Ok(target) if super::platform::same_file_object(&target, file)? => return Err(io::Error::other(
-            "destination names the staged object; publication outcome remains unconfirmed")),
-        Ok(_) => {},
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {},
+        Ok(target) if super::platform::same_file_object(&target, file)? => {
+            return Err(io::Error::other(
+                "destination names the staged object; publication outcome remains unconfirmed",
+            ))
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(error),
     }
     if ConfinedDirectory::open_root(&stage_path)?.identity()? != stage_parent.identity()?
         || ConfinedDirectory::open_root(&target_path)?.identity()? != target_parent.identity()?
-        || !super::platform::same_file_object(&stage_parent.entry(stage_name)?, file)? {
+        || !super::platform::same_file_object(&stage_parent.entry(stage_name)?, file)?
+    {
         return Err(changed());
     }
     Ok(())
@@ -138,34 +193,60 @@ pub(super) fn confirm_unpublished(staged: &Path, target: &Path, file: &File, cau
 /// even when a later remote rename error would have an ambiguous outcome.
 pub(super) fn preflight_no_replace(target: &Path) -> io::Result<()> {
     match crate::local_access::symlink_metadata(target) {
-        Ok(_) => Err(crate::vfs::unpublished_error(io::ErrorKind::AlreadyExists,
-            format!("no-replace destination already exists before mutation: {}", target.display()))),
+        Ok(_) => Err(crate::vfs::unpublished_error(
+            io::ErrorKind::AlreadyExists,
+            format!(
+                "no-replace destination already exists before mutation: {}",
+                target.display()
+            ),
+        )),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(crate::vfs::unpublished_error(error.kind(),
-            format!("no-replace destination check failed before mutation at {}: {error}", target.display()))),
+        Err(error) => Err(crate::vfs::unpublished_error(
+            error.kind(),
+            format!(
+                "no-replace destination check failed before mutation at {}: {error}",
+                target.display()
+            ),
+        )),
     }
 }
 
 /// An immediately published stage keeps its real live file handle. It can
 /// prove and flush that object without requiring any persisted-ID capability
 /// or reopening a read-only destination for newly requested write access.
-pub(super) fn confirm_handle_publication(target: &Path, file: &File, cancel: &AtomicBool) -> io::Result<()> {
+pub(super) fn confirm_handle_publication(
+    target: &Path,
+    file: &File,
+    cancel: &AtomicBool,
+) -> io::Result<()> {
     active(cancel)?;
-    let name = target.file_name().filter(|name| !name.is_empty()).ok_or_else(changed)?;
-    let parent_path = target.parent().filter(|parent| !parent.as_os_str().is_empty())
+    let name = target
+        .file_name()
+        .filter(|name| !name.is_empty())
+        .ok_or_else(changed)?;
+    let parent_path = target
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
     let parent = ConfinedDirectory::open_root(parent_path)?;
     let reached = parent.entry(name)?;
-    if !super::platform::same_file_object(&reached, file)? { return Err(changed()); }
+    if !super::platform::same_file_object(&reached, file)? {
+        return Err(changed());
+    }
     file.sync_all()?;
     active(cancel)?;
     super::platform::confirm_publication_namespace(&parent)?;
     let current = ConfinedDirectory::open_root(parent_path)?;
     let reached = parent.entry(name)?;
     let class = crate::local_access::classify_open_file(&reached)?;
-    if current.identity()? != parent.identity()? || !reached.metadata()?.is_file()
-        || class.link_like || class.special
-        || !super::platform::same_file_object(&reached, file)? { return Err(changed()); }
+    if current.identity()? != parent.identity()?
+        || !reached.metadata()?.is_file()
+        || class.link_like
+        || class.special
+        || !super::platform::same_file_object(&reached, file)?
+    {
+        return Err(changed());
+    }
     active(cancel)
 }
 
@@ -178,36 +259,74 @@ struct Publication {
 
 impl Publication {
     fn open(target: &Path) -> io::Result<Self> {
-        let name = target.file_name().filter(|name| !name.is_empty()).ok_or_else(||
-            io::Error::new(io::ErrorKind::InvalidInput, "publication target requires one child name"))?.to_owned();
-        let parent_path = target.parent().filter(|parent| !parent.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new(".")).to_path_buf();
+        let name = target
+            .file_name()
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "publication target requires one child name",
+                )
+            })?
+            .to_owned();
+        let parent_path = target
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
         let parent = ConfinedDirectory::open_root(&parent_path)?;
         let file = super::platform::open_publication_file(&parent, &name)?;
         let class = crate::local_access::classify_open_file(&file)?;
-        if !file.metadata()?.is_file() || class.link_like || class.special { return Err(changed()); }
-        Ok(Self { parent, parent_path, name, file })
+        if !file.metadata()?.is_file() || class.link_like || class.special {
+            return Err(changed());
+        }
+        Ok(Self {
+            parent,
+            parent_path,
+            name,
+            file,
+        })
     }
 
     fn from_live(target: &Path, live: &File) -> io::Result<Self> {
-        let name = target.file_name().filter(|name| !name.is_empty()).ok_or_else(changed)?.to_owned();
-        let parent_path = target.parent().filter(|parent| !parent.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new(".")).to_path_buf();
+        let name = target
+            .file_name()
+            .filter(|name| !name.is_empty())
+            .ok_or_else(changed)?
+            .to_owned();
+        let parent_path = target
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
         let parent = ConfinedDirectory::open_root(&parent_path)?;
         let file = parent.open_file(&name, false, false, false, false)?;
         let class = crate::local_access::classify_open_file(&file)?;
         let live_class = crate::local_access::classify_open_file(live)?;
-        if !file.metadata()?.is_file() || class.link_like || class.special
-            || !live.metadata()?.is_file() || live_class.link_like || live_class.special
-            || !super::platform::same_file_object(&file, live)? {
+        if !file.metadata()?.is_file()
+            || class.link_like
+            || class.special
+            || !live.metadata()?.is_file()
+            || live_class.link_like
+            || live_class.special
+            || !super::platform::same_file_object(&file, live)?
+        {
             return Err(changed());
         }
-        Ok(Self { parent, parent_path, name, file })
+        Ok(Self {
+            parent,
+            parent_path,
+            name,
+            file,
+        })
     }
 
     fn require_identity(&self, expected: &str) -> io::Result<()> {
-        if super::imp::local_file_identity_handle(&self.file)? == expected { Ok(()) }
-        else { Err(changed()) }
+        if super::imp::local_file_identity_handle(&self.file)? == expected {
+            Ok(())
+        } else {
+            Err(changed())
+        }
     }
 
     fn require_digest(&mut self, expected: &str, cancel: &AtomicBool) -> io::Result<()> {
@@ -224,15 +343,21 @@ impl Publication {
                 result => result?,
             };
             active(cancel)?;
-            if read == 0 { break; }
+            if read == 0 {
+                break;
+            }
             length = length.checked_add(read as u64).ok_or_else(changed)?;
             digest.update(&buffer[..read]);
         }
         let after = self.file.metadata()?;
         let actual = format!("{:x}", digest.finalize());
-        if length != before.len() || length != after.len()
+        if length != before.len()
+            || length != after.len()
             || before.modified().ok() != after.modified().ok()
-            || !actual.eq_ignore_ascii_case(expected) { return Err(changed()); }
+            || !actual.eq_ignore_ascii_case(expected)
+        {
+            return Err(changed());
+        }
         active(cancel)
     }
 
@@ -240,11 +365,16 @@ impl Publication {
         // The current textual parent is checked only against the already
         // retained parent; it is never used as authority for a child mutation.
         let current = ConfinedDirectory::open_root(&self.parent_path)?;
-        if current.identity()? != self.parent.identity()? { return Err(changed()); }
+        if current.identity()? != self.parent.identity()? {
+            return Err(changed());
+        }
         let reached = self.parent.entry(&self.name)?;
         let class = crate::local_access::classify_open_file(&reached)?;
-        if !reached.metadata()?.is_file() || class.link_like || class.special
-            || !super::platform::same_file_object(&reached, &self.file)? {
+        if !reached.metadata()?.is_file()
+            || class.link_like
+            || class.special
+            || !super::platform::same_file_object(&reached, &self.file)?
+        {
             return Err(changed());
         }
         Ok(())
@@ -252,11 +382,19 @@ impl Publication {
 }
 
 fn changed() -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, "published file content, object or parent/name binding changed")
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        "published file content, object or parent/name binding changed",
+    )
 }
 
 fn active(cancel: &AtomicBool) -> io::Result<()> {
     if cancel.load(Ordering::Acquire) {
-        Err(io::Error::new(io::ErrorKind::Interrupted, "publication confirmation canceled"))
-    } else { Ok(()) }
+        Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "publication confirmation canceled",
+        ))
+    } else {
+        Ok(())
+    }
 }

@@ -7,9 +7,10 @@ use std::{
 };
 
 use super::{RemoteExec, SetupWatch};
-use crate::daemon::{exec_state::ExecState, ipc_protocol::{
-    read_response, write_request, write_response, IpcRequest, IpcResponse,
-}};
+use crate::daemon::{
+    exec_state::ExecState,
+    ipc_protocol::{read_response, write_request, write_response, IpcRequest, IpcResponse},
+};
 
 // The existing local Exec frame deadline also bounds the control attachment.
 const ATTACH_TIMEOUT: Duration = super::LOCAL_EVENT_WRITE_TIMEOUT;
@@ -39,25 +40,44 @@ impl ExecLifetime {
     fn new(exec_id: crate::share::ExecId, input: crate::share::ShareExecInput) -> io::Result<Self> {
         let mut bytes = [0u8; 32];
         getrandom::getrandom(&mut bytes).map_err(|error| io::Error::other(error.to_string()))?;
-        Ok(Self { exec_id, input, token: bytes.iter().map(|byte| format!("{byte:02x}")).collect(),
-            state: Mutex::new(OwnerState::default()), changed: Condvar::new() })
+        Ok(Self {
+            exec_id,
+            input,
+            token: bytes.iter().map(|byte| format!("{byte:02x}")).collect(),
+            state: Mutex::new(OwnerState::default()),
+            changed: Condvar::new(),
+        })
     }
 
-    pub(in crate::daemon) fn token(&self) -> &str { &self.token }
-    pub(in crate::daemon) fn exec_id(&self) -> &crate::share::ExecId { &self.exec_id }
+    pub(in crate::daemon) fn token(&self) -> &str {
+        &self.token
+    }
+    pub(in crate::daemon) fn exec_id(&self) -> &crate::share::ExecId {
+        &self.exec_id
+    }
 
     fn cancel(&self) {
-        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let signal = !state.finished && !std::mem::replace(&mut state.cancelled, true);
         drop(state);
         self.changed.notify_all();
-        if signal { let _ = self.input.send(crate::share::ExecClientInput::Cancel); }
+        if signal {
+            let _ = self.input.send(crate::share::ExecClientInput::Cancel);
+        }
     }
 
     fn finish(&self) {
-        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.finished = true;
-        if let Some(control) = state.control.take() { let _ = control.shutdown(Shutdown::Both); }
+        if let Some(control) = state.control.take() {
+            let _ = control.shutdown(Shutdown::Both);
+        }
         drop(state);
         self.changed.notify_all();
     }
@@ -66,24 +86,45 @@ impl ExecLifetime {
         let deadline = Instant::now() + ATTACH_TIMEOUT;
         loop {
             setup.check()?;
-            let state = self.state.lock().map_err(|_| io::Error::other("Exec-Kontrollbindung gesperrt"))?;
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| io::Error::other("Exec-Kontrollbindung gesperrt"))?;
             if state.cancelled || state.finished {
-                return Err(io::Error::new(io::ErrorKind::Interrupted, "Exec-Besitzer hat abgebrochen"));
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "Exec-Besitzer hat abgebrochen",
+                ));
             }
-            if state.ready { return Ok(()); }
-            let remaining = deadline.checked_duration_since(Instant::now()).ok_or_else(|| {
-                io::Error::new(io::ErrorKind::TimedOut, "Exec-Kontrollbindung nicht rechtzeitig bestaetigt")
-            })?;
-            let (_state, _wait) = self.changed.wait_timeout(state, remaining.min(Duration::from_millis(25)))
+            if state.ready {
+                return Ok(());
+            }
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "Exec-Kontrollbindung nicht rechtzeitig bestaetigt",
+                    )
+                })?;
+            let (_state, _wait) = self
+                .changed
+                .wait_timeout(state, remaining.min(Duration::from_millis(25)))
                 .map_err(|_| io::Error::other("Exec-Kontrollbindung gesperrt"))?;
         }
     }
 
     fn claim(&self, stream: &TcpStream) -> io::Result<()> {
         let control = stream.try_clone()?;
-        let mut state = self.state.lock().map_err(|_| io::Error::other("Exec-Kontrollbindung gesperrt"))?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("Exec-Kontrollbindung gesperrt"))?;
         if state.claimed || state.cancelled || state.finished {
-            return Err(io::Error::new(io::ErrorKind::PermissionDenied, "Exec-Kontrollbindung ist nicht verfuegbar"));
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Exec-Kontrollbindung ist nicht verfuegbar",
+            ));
         }
         state.claimed = true;
         state.control = Some(control);
@@ -91,9 +132,15 @@ impl ExecLifetime {
     }
 
     fn ready(&self) -> io::Result<()> {
-        let mut state = self.state.lock().map_err(|_| io::Error::other("Exec-Kontrollbindung gesperrt"))?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("Exec-Kontrollbindung gesperrt"))?;
         if state.finished || state.cancelled {
-            return Err(io::Error::new(io::ErrorKind::Interrupted, "Exec-Besitzer hat abgebrochen"));
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "Exec-Besitzer hat abgebrochen",
+            ));
         }
         state.ready = true;
         drop(state);
@@ -120,13 +167,23 @@ pub(in crate::daemon) fn serve_controlled(
     registry: Arc<ExecState>,
     setup: SetupWatch,
 ) -> io::Result<()> {
-    let owner = Arc::new(ExecLifetime::new(remote.session.exec_id().clone(), remote.session.input())?);
+    let owner = Arc::new(ExecLifetime::new(
+        remote.session.exec_id().clone(),
+        remote.session.input(),
+    )?);
     registry.register_owner(owner.clone())?;
-    let _registration = Registration { owner: owner.clone(), registry: registry.clone() };
+    let _registration = Registration {
+        owner: owner.clone(),
+        registry: registry.clone(),
+    };
     setup.check()?;
-    write_response(&mut stream, &IpcResponse::ExecControlledReady {
-        exec_id: owner.exec_id().clone(), control_token: owner.token().to_owned(),
-    })?;
+    write_response(
+        &mut stream,
+        &IpcResponse::ExecControlledReady {
+            exec_id: owner.exec_id().clone(),
+            control_token: owner.token().to_owned(),
+        },
+    )?;
     // The capability is already registered when Ready becomes observable. Keep
     // the setup EOF guard until the independent socket has acknowledged binding.
     owner.wait_ready(&setup)?;
@@ -141,7 +198,10 @@ pub(in crate::daemon) fn serve_control(
     token: &str,
 ) -> io::Result<()> {
     let owner = registry.owner(exec_id, token).ok_or_else(|| {
-        io::Error::new(io::ErrorKind::PermissionDenied, "Exec-Kontrollbindung stimmt nicht mit der Sitzung ueberein")
+        io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Exec-Kontrollbindung stimmt nicht mit der Sitzung ueberein",
+        )
     })?;
     owner.claim(&stream)?;
     let result = (|| {
@@ -175,7 +235,14 @@ pub(super) fn connect_control(
     let mut control = TcpStream::connect_timeout(&address, Duration::from_secs(2))?;
     control.set_read_timeout(Some(ATTACH_TIMEOUT))?;
     control.set_write_timeout(Some(ATTACH_TIMEOUT))?;
-    write_request(&mut control, &IpcRequest::ExecControl { token, exec_id, control_token })?;
+    write_request(
+        &mut control,
+        &IpcRequest::ExecControl {
+            token,
+            exec_id,
+            control_token,
+        },
+    )?;
     match read_response(&mut control)? {
         IpcResponse::ExecControlReady => {
             control.set_read_timeout(None)?;
@@ -183,6 +250,9 @@ pub(super) fn connect_control(
             Ok(control)
         }
         IpcResponse::Err { msg, .. } => Err(io::Error::other(msg)),
-        _ => Err(io::Error::new(io::ErrorKind::InvalidData, "Worker-IPC bestaetigt keine Exec-Kontrollbindung")),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Worker-IPC bestaetigt keine Exec-Kontrollbindung",
+        )),
     }
 }

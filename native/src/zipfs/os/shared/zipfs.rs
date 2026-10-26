@@ -173,7 +173,9 @@ impl crate::vfs::BackendExtensions for ZipBackend {
     }
 }
 impl Backend for ZipBackend {
-    fn extensions(&self) -> Option<&dyn crate::vfs::BackendExtensions> { Some(self) }
+    fn extensions(&self) -> Option<&dyn crate::vfs::BackendExtensions> {
+        Some(self)
+    }
     fn scheme(&self) -> Scheme {
         Scheme::Local
     }

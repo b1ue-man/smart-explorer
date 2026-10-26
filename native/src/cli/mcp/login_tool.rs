@@ -1,10 +1,16 @@
 //! MCP owns its viewer sockets; responses contain metadata, never live pixels.
-use std::{collections::BTreeMap, sync::{Arc, Mutex}};
-use serde_json::{json, Value};
-use rmcp::model::CallToolResult;
 use super::{args::Args, response};
 use crate::daemon::{LoginClose, LoginCommand, LoginViewer};
-struct Owned { viewer: Mutex<LoginViewer>, close: LoginClose }
+use rmcp::model::CallToolResult;
+use serde_json::{json, Value};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex},
+};
+struct Owned {
+    viewer: Mutex<LoginViewer>,
+    close: LoginClose,
+}
 static OWNED: Mutex<BTreeMap<String, Arc<Owned>>> = Mutex::new(BTreeMap::new());
 pub(super) const DESCRIPTION: &str = "Read optional login installation, administrative rights/platform limits and owned viewer sessions. Open only with an explicit administrator-provided public machine target and acknowledge_machine_pin; a normal device selector is not machine proof. Every start/capture/input/release/SAS/stop uses the same daemon owner socket and independent peer-signed broker contract. The existing five-second signed-operation idle lease is never renewed by status/challenge. No automatic input retry, service installation, policy mutation, password-specific argument, live picture stream or image bytes in tool results. Capture returns bounded frame metadata only. Close ends the owner and releases inputs.";
 pub(super) fn properties() -> Value {
@@ -31,44 +37,97 @@ pub(super) fn login(args: &Args) -> Result<CallToolResult, String> {
         "session" => json!({"session":crate::daemon::login_session(args.string("id")?)?}),
         "open" => {
             purge()?;
-            if OWNED.lock().map_err(|_| "MCP login owner registry is unavailable")?.len() >= 64 { return Err("MCP login session admission is full".into()); }
-            let target = serde_json::from_value(args.value("target").cloned().ok_or_else(|| "target is required".to_string())?).map_err(|error| error.to_string())?;
-            let mut viewer = LoginViewer::open(target, args.string("target_user")?, args.flag("acknowledge_machine_pin")?)?;
+            if OWNED
+                .lock()
+                .map_err(|_| "MCP login owner registry is unavailable")?
+                .len()
+                >= 64
+            {
+                return Err("MCP login session admission is full".into());
+            }
+            let target = serde_json::from_value(
+                args.value("target")
+                    .cloned()
+                    .ok_or_else(|| "target is required".to_string())?,
+            )
+            .map_err(|error| error.to_string())?;
+            let mut viewer = LoginViewer::open(
+                target,
+                args.string("target_user")?,
+                args.flag("acknowledge_machine_pin")?,
+            )?;
             let started = viewer.command(LoginCommand::Start)?;
             let id = viewer.view().session.clone();
-            let result = json!({"session":viewer.view(),"start":started.reply,"live_image_stream":false});
+            let result =
+                json!({"session":viewer.view(),"start":started.reply,"live_image_stream":false});
             if viewer.view().challenge.is_some() {
-                let owned = Arc::new(Owned { close: viewer.control(), viewer: Mutex::new(viewer) });
-                OWNED.lock().map_err(|_| "MCP login owner registry is unavailable")?.insert(id, owned);
+                let owned = Arc::new(Owned {
+                    close: viewer.control(),
+                    viewer: Mutex::new(viewer),
+                });
+                OWNED
+                    .lock()
+                    .map_err(|_| "MCP login owner registry is unavailable")?
+                    .insert(id, owned);
             }
             result
         }
         "close" => {
             let id = args.string("id")?;
-            if let Some(owned) = OWNED.lock().map_err(|_| "MCP login owner registry is unavailable")?.remove(&id) { owned.close.close(); }
+            if let Some(owned) = OWNED
+                .lock()
+                .map_err(|_| "MCP login owner registry is unavailable")?
+                .remove(&id)
+            {
+                owned.close.close();
+            }
             json!({"stopped":crate::daemon::login_stop(Some(id))?})
         }
         "challenge" | "start" | "capture" | "input" | "release_inputs" | "secure_attention" => {
             let id = args.string("id")?;
-            let owned = OWNED.lock().map_err(|_| "MCP login owner registry is unavailable")?.get(&id).cloned()
+            let owned = OWNED
+                .lock()
+                .map_err(|_| "MCP login owner registry is unavailable")?
+                .get(&id)
+                .cloned()
                 .ok_or_else(|| "this MCP process does not own that login session".to_string())?;
             let command = match action.as_str() {
                 "challenge" => LoginCommand::Challenge,
                 "start" => LoginCommand::Start,
-                "capture" => LoginCommand::Capture { frame_id: args.opt_u64("frame_id")?.ok_or_else(|| "frame_id is required".to_string())? },
-                "input" => LoginCommand::Input { events: serde_json::from_value(args.value("events").cloned().ok_or_else(|| "events are required".to_string())?).map_err(|error| error.to_string())? },
+                "capture" => LoginCommand::Capture {
+                    frame_id: args
+                        .opt_u64("frame_id")?
+                        .ok_or_else(|| "frame_id is required".to_string())?,
+                },
+                "input" => LoginCommand::Input {
+                    events: serde_json::from_value(
+                        args.value("events")
+                            .cloned()
+                            .ok_or_else(|| "events are required".to_string())?,
+                    )
+                    .map_err(|error| error.to_string())?,
+                },
                 "release_inputs" => LoginCommand::ReleaseInputs,
                 _ => LoginCommand::SecureAttention,
             };
-            let result = owned.viewer.lock().map_err(|_| "MCP login session is unavailable")?.command(command);
+            let result = owned
+                .viewer
+                .lock()
+                .map_err(|_| "MCP login session is unavailable")?
+                .command(command);
             match result {
                 Ok(frame) => {
                     let terminal = frame.reply.view.challenge.is_none();
                     let value = json!({"reply":frame.reply,"pixel_bytes":frame.pixels.len(),"live_image_stream":false});
-                    if terminal { remove(&id)?; }
+                    if terminal {
+                        remove(&id)?;
+                    }
                     value
                 }
-                Err(error) => { remove(&id)?; return Err(error); }
+                Err(error) => {
+                    remove(&id)?;
+                    return Err(error);
+                }
             }
         }
         _ => return Err(format!("unknown login action {action}")),
@@ -76,25 +135,47 @@ pub(super) fn login(args: &Args) -> Result<CallToolResult, String> {
     Ok(response::ok(value))
 }
 fn remove(id: &str) -> Result<(), String> {
-    if let Some(owned) = OWNED.lock().map_err(|_| "MCP login owner registry is unavailable")?.remove(id) { owned.close.close(); }
+    if let Some(owned) = OWNED
+        .lock()
+        .map_err(|_| "MCP login owner registry is unavailable")?
+        .remove(id)
+    {
+        owned.close.close();
+    }
     Ok(())
 }
 fn purge() -> Result<(), String> {
     let live = crate::daemon::login_sessions()?;
-    let mut sessions = OWNED.lock().map_err(|_| "MCP login owner registry is unavailable")?;
+    let mut sessions = OWNED
+        .lock()
+        .map_err(|_| "MCP login owner registry is unavailable")?;
     sessions.retain(|id, owned| {
         let keep = live.iter().any(|session| &session.session == id);
-        if !keep { owned.close.close(); } keep
+        if !keep {
+            owned.close.close();
+        }
+        keep
     });
     Ok(())
 }
 /// Main invokes this after pending tool calls finish and before MCP runtime exit.
 /// It interrupts each owner immediately, then waits for the daemon's real drain.
 pub(super) fn shutdown() -> Result<usize, String> {
-    let sessions = OWNED.lock().map_err(|_| "MCP login owner registry is unavailable")?.clone();
-    for owned in sessions.values() { owned.close.close(); }
-    for id in sessions.keys() { crate::daemon::login_stop(Some(id.clone()))?; }
-    let mut remaining = OWNED.lock().map_err(|_| "MCP login owner registry is unavailable")?;
-    for id in sessions.keys() { remaining.remove(id); }
+    let sessions = OWNED
+        .lock()
+        .map_err(|_| "MCP login owner registry is unavailable")?
+        .clone();
+    for owned in sessions.values() {
+        owned.close.close();
+    }
+    for id in sessions.keys() {
+        crate::daemon::login_stop(Some(id.clone()))?;
+    }
+    let mut remaining = OWNED
+        .lock()
+        .map_err(|_| "MCP login owner registry is unavailable")?;
+    for id in sessions.keys() {
+        remaining.remove(id);
+    }
     Ok(sessions.len())
 }

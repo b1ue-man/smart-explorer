@@ -118,19 +118,39 @@ pub(crate) fn transfer(sources: &[PathBuf], folder: &Path, mode: CopyMode) -> Tr
     report
 }
 
-pub(crate) fn transfer_job(sources: &[PathBuf], folder: &Path, mode: CopyMode) -> (Option<crate::transfer::TransferJob>, Vec<(String, String)>) {
+pub(crate) fn transfer_job(
+    sources: &[PathBuf],
+    folder: &Path,
+    mode: CopyMode,
+) -> (Option<crate::transfer::TransferJob>, Vec<(String, String)>) {
     let mut paths = Vec::new();
     let mut errors = Vec::new();
     for source in sources {
-        let Some(parent) = source.parent().filter(|parent| !parent.as_os_str().is_empty()) else {
+        let Some(parent) = source
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        else {
             errors.push((forward(source), "kein Eintrag eines Ordners".to_string()));
             continue;
         };
-        if mode == CopyMode::Move && same_folder(parent, folder) { continue; }
-        match io_path(source) { Ok(path) => paths.push(path), Err(error) => errors.push((forward(source), error)) }
+        if mode == CopyMode::Move && same_folder(parent, folder) {
+            continue;
+        }
+        match io_path(source) {
+            Ok(path) => paths.push(path),
+            Err(error) => errors.push((forward(source), error)),
+        }
     }
-    if paths.is_empty() { return (None, errors); }
-    let target_dir = match io_path(folder) { Ok(path) => path, Err(error) => { errors.push((forward(folder), error)); return (None, errors); } };
+    if paths.is_empty() {
+        return (None, errors);
+    }
+    let target_dir = match io_path(folder) {
+        Ok(path) => path,
+        Err(error) => {
+            errors.push((forward(folder), error));
+            return (None, errors);
+        }
+    };
     let job = crate::transfer::TransferJob {
         id: crate::transfer::new_job_id(),
         recoverable: true,
@@ -142,13 +162,18 @@ pub(crate) fn transfer_job(sources: &[PathBuf], folder: &Path, mode: CopyMode) -
         layout: crate::transfer::Layout::Tree,
         filter: None,
         conflict: Conflict::Rename,
-        folders: crate::transfer::FolderConflictPolicy::new(crate::transfer::FolderConflict::KeepBoth),
+        folders: crate::transfer::FolderConflictPolicy::new(
+            crate::transfer::FolderConflict::KeepBoth,
+        ),
         mode,
         source_label: "Desktop-Auswahl".to_string(),
         target_label: target_dir,
         resume: None,
     };
-    if let Err(error) = job.validate() { errors.push((forward(folder), error)); return (None, errors); }
+    if let Err(error) = job.validate() {
+        errors.push((forward(folder), error));
+        return (None, errors);
+    }
     (Some(job), errors)
 }
 
@@ -156,13 +181,24 @@ pub(crate) fn run_transfer_job(job: crate::transfer::TransferJob) -> TransferRep
     let mut report = TransferReport::default();
     let cancel = std::sync::atomic::AtomicBool::new(false);
     let state = std::sync::Mutex::new(&mut report);
-    crate::transfer::run_view(crate::transfer::JobView::of(&job), &|message| {
-        if let crate::transfer::TransferMsg::Done { progress, issues, .. } = message {
-            let mut state = state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            state.files_done = progress.files_done;
-            state.errors.extend(issues.into_iter().map(|issue| (issue.path, issue.message)));
-        }
-    }, &cancel);
+    crate::transfer::run_view(
+        crate::transfer::JobView::of(&job),
+        &|message| {
+            if let crate::transfer::TransferMsg::Done {
+                progress, issues, ..
+            } = message
+            {
+                let mut state = state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                state.files_done = progress.files_done;
+                state
+                    .errors
+                    .extend(issues.into_iter().map(|issue| (issue.path, issue.message)));
+            }
+        },
+        &cancel,
+    );
     drop(state);
     report
 }

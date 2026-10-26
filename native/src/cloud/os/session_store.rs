@@ -15,15 +15,26 @@ pub(super) fn lock(provider: Provider) -> Result<Guard, AuthError> {
     let thread = TRANSACTION.lock().map_err(|_| storage_error())?;
     let dir = crate::support_dirs::app_data_dir().join("cloud");
     crate::support_dirs::ensure_private_dir(&dir).map_err(|_| storage_error())?;
-    let file = crate::support_dirs::open_private_lock(&dir.join(format!("{}.auth.lock", provider.as_str())))
-        .map_err(|_| storage_error())?;
+    let file = crate::support_dirs::open_private_lock(
+        &dir.join(format!("{}.auth.lock", provider.as_str())),
+    )
+    .map_err(|_| storage_error())?;
     file.lock().map_err(|_| storage_error())?;
-    Ok(Guard { _thread: thread, _file: file })
+    Ok(Guard {
+        _thread: thread,
+        _file: file,
+    })
 }
 
-fn key(provider: Provider) -> String { format!("cloud:session:v1:{}", provider.as_str()) }
-pub(super) fn legacy_key(provider: Provider) -> String { format!("cloud:{}", provider.as_str()) }
-pub(super) fn storage_error() -> AuthError { AuthError::new(AuthState::StorageError) }
+fn key(provider: Provider) -> String {
+    format!("cloud:session:v1:{}", provider.as_str())
+}
+pub(super) fn legacy_key(provider: Provider) -> String {
+    format!("cloud:{}", provider.as_str())
+}
+pub(super) fn storage_error() -> AuthError {
+    AuthError::new(AuthState::StorageError)
+}
 
 pub(super) fn read(provider: Provider) -> Result<Option<Session>, AuthError> {
     let raw = crate::creds::get_secret_checked(&key(provider)).map_err(|_| storage_error())?;
@@ -41,13 +52,21 @@ pub(super) fn read_legacy(provider: Provider) -> Result<Option<String>, AuthErro
 
 pub(super) fn write(provider: Provider, session: &Session, tracked: bool) -> Result<(), AuthError> {
     let raw = serde_json::to_string(session).map_err(|_| storage_error())?;
-    let result = if tracked { crate::creds::set_secret(&key(provider), &raw) }
-        else { crate::creds::set_secret_untracked(&key(provider), &raw) };
+    let result = if tracked {
+        crate::creds::set_secret(&key(provider), &raw)
+    } else {
+        crate::creds::set_secret_untracked(&key(provider), &raw)
+    };
     result.map_err(|_| storage_error())
 }
 
 pub(super) fn empty(provider: Provider, client_id: &str) -> Session {
-    Session { version: 1, provider: provider.as_str().into(), client_id: client_id.into(), ..Session::default() }
+    Session {
+        version: 1,
+        provider: provider.as_str().into(),
+        client_id: client_id.into(),
+        ..Session::default()
+    }
 }
 
 #[cfg(test)]
@@ -66,9 +85,15 @@ pub(crate) fn test_snapshot(provider: Provider) -> Result<TestSessionSnapshot, S
 }
 
 #[cfg(test)]
-pub(crate) fn test_restore(provider: Provider, snapshot: TestSessionSnapshot) -> Result<(), String> {
+pub(crate) fn test_restore(
+    provider: Provider,
+    snapshot: TestSessionSnapshot,
+) -> Result<(), String> {
     let _guard = lock(provider).map_err(|error| error.to_string())?;
-    for (key, value) in [(key(provider), snapshot.session), (legacy_key(provider), snapshot.legacy)] {
+    for (key, value) in [
+        (key(provider), snapshot.session),
+        (legacy_key(provider), snapshot.legacy),
+    ] {
         match value {
             Some(value) => crate::creds::set_secret(&key, &value)?,
             None => crate::creds::delete_secret_checked(&key)?,

@@ -1,6 +1,6 @@
 //! Descriptor-relative recovery with verified private capture before deletion.
-use std::{ffi::OsStr, fs::File, io, os::unix::io::AsRawFd, path::Path};
 use crate::local_access::{ConfinedDirectory, DirectoryHandle};
+use std::{ffi::OsStr, fs::File, io, os::unix::io::AsRawFd, path::Path};
 
 pub(crate) fn recover_transfer_child(
     parent: &ConfinedDirectory,
@@ -34,35 +34,60 @@ pub(crate) fn recover_transfer_child(
     let directory = DirectoryHandle::open_root(Path::new(&anchor))?;
     let mut captured = directory.quarantine_regular_child(name, &expected)?;
     let verified = crate::copy::local_file_identity_handle(captured.file()).and_then(|identity| {
-        if identity == expected_identity { Ok(()) } else { Err(changed()) }
+        if identity == expected_identity {
+            Ok(())
+        } else {
+            Err(changed())
+        }
     });
     if let Err(cause) = verified {
         let retained = captured.retained_location();
         return Err(match captured.restore() {
             Ok(()) => cause,
-            Err(error) => io::Error::new(cause.kind(),
-                format!("{cause}; transfer cleanup retained at {}; rollback failed: {error}", retained.display())),
+            Err(error) => io::Error::new(
+                cause.kind(),
+                format!(
+                    "{cause}; transfer cleanup retained at {}; rollback failed: {error}",
+                    retained.display()
+                ),
+            ),
         });
     }
-    captured.dispose().map_err(|error| io::Error::new(error.kind(), format!(
-        "transfer cleanup at {}: {error}", captured.retained_location().display(),
-    )))?;
+    captured.dispose().map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!(
+                "transfer cleanup at {}: {error}",
+                captured.retained_location().display(),
+            ),
+        )
+    })?;
     parent.file().sync_all()
 }
 
 fn changed() -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, "transfer recovery file identity changed")
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        "transfer recovery file identity changed",
+    )
 }
 
 pub(crate) fn recover_transfer_child_live(
-    parent: &ConfinedDirectory, name: &OsStr, expected: &File,
+    parent: &ConfinedDirectory,
+    name: &OsStr,
+    expected: &File,
     destination: Option<&OsStr>,
 ) -> io::Result<()> {
     let identity = super::file_identity(expected)?;
     let current = parent.entry(name)?;
     let class = crate::local_access::classify_open_file(&current)?;
-    if !current.metadata()?.is_file() || class.link_like || class.special
-        || super::file_identity(&current)? != identity { return Err(changed()); }
+    if !current.metadata()?.is_file()
+        || class.link_like
+        || class.special
+        || super::file_identity(&current)? != identity
+    {
+        return Err(changed());
+    }
     if let Some(destination) = destination {
         parent.rename(name, parent, destination, false)?;
         if super::file_identity(&parent.entry(destination)?)? != identity {
@@ -79,8 +104,14 @@ pub(crate) fn recover_transfer_child_live(
     // The original File stays alive through capture and disposal. The private
     // capture verifies this same live inode before permitting any deletion.
     let mut captured = directory.quarantine_regular_child(name, expected)?;
-    captured.dispose().map_err(|error| io::Error::new(error.kind(), format!(
-        "live transfer cleanup retained at {}: {error}", captured.retained_location().display(),
-    )))?;
+    captured.dispose().map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!(
+                "live transfer cleanup retained at {}: {error}",
+                captured.retained_location().display(),
+            ),
+        )
+    })?;
     parent.file().sync_all()
 }

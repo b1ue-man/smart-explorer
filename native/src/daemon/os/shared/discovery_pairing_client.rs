@@ -7,7 +7,9 @@ use super::discovery_pairing_protocol::{
     DiscoveryPairingError as Error, DiscoveryPairingReply as Reply,
     DiscoveryPairingRequest as Request,
 };
-use super::ipc_protocol::{read_response, set_stream_timeout, write_request, IpcRequest, IpcResponse};
+use super::ipc_protocol::{
+    read_response, set_stream_timeout, write_request, IpcRequest, IpcResponse,
+};
 
 fn connect(request: Request) -> Result<TcpStream, Error> {
     super::ipc_client::ensure_worker_ready().map_err(|_| Error::WorkerUnavailable)?;
@@ -16,14 +18,19 @@ fn connect(request: Request) -> Result<TcpStream, Error> {
     let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(2))
         .map_err(|_| Error::WorkerUnavailable)?;
     set_stream_timeout(&stream, Some(Duration::from_secs(150)));
-    write_request(&mut stream, &IpcRequest::DiscoveryPairing { token, request })
-        .map_err(|_| Error::DaemonError)?;
+    write_request(
+        &mut stream,
+        &IpcRequest::DiscoveryPairing { token, request },
+    )
+    .map_err(|_| Error::DaemonError)?;
     Ok(stream)
 }
 
 fn receive(stream: &mut TcpStream) -> Result<Reply, Error> {
     match read_response(stream).map_err(|_| Error::DaemonError)? {
-        IpcResponse::DiscoveryPairing { reply: Reply::Error { error_code } } => Err(error_code),
+        IpcResponse::DiscoveryPairing {
+            reply: Reply::Error { error_code },
+        } => Err(error_code),
         IpcResponse::DiscoveryPairing { reply } => Ok(reply),
         _ => Err(Error::DaemonError),
     }
@@ -44,12 +51,19 @@ pub(crate) struct DiscoveryPairingSession {
 }
 
 impl DiscoveryPairingSession {
-    pub(crate) fn exchange_id(&self) -> &str { &self.exchange_id }
+    pub(crate) fn exchange_id(&self) -> &str {
+        &self.exchange_id
+    }
 
     pub(crate) fn wait(mut self) -> Result<Reply, Error> {
         match receive(&mut self.stream)? {
             reply @ Reply::Finished { .. } => {
-                if let Reply::Finished { discovery_id, exchange_id, .. } = &reply {
+                if let Reply::Finished {
+                    discovery_id,
+                    exchange_id,
+                    ..
+                } = &reply
+                {
                     if discovery_id != &self.discovery_id || exchange_id != &self.exchange_id {
                         return Err(Error::DaemonError);
                     }
@@ -65,7 +79,10 @@ impl DiscoveryPairingSession {
     #[allow(dead_code)]
     pub(crate) fn cancel(mut self) -> Result<(), Error> {
         let sent = self.stream.write_all(b"c").map_err(|_| Error::DaemonError);
-        let closed = self.stream.shutdown(Shutdown::Both).map_err(|_| Error::DaemonError);
+        let closed = self
+            .stream
+            .shutdown(Shutdown::Both)
+            .map_err(|_| Error::DaemonError);
         sent.and(closed)
     }
 }
@@ -78,10 +95,20 @@ pub(crate) fn start_discovery_pairing(
     if pin.as_bytes().is_empty() || pin.as_bytes().len() > crate::share::DISCOVERY_PIN_MAX_BYTES {
         return Err(Error::InvalidPin);
     }
-    let mut stream = connect(Request::Pair { discovery_id: discovery_id.clone(), pin, share_back })?;
+    let mut stream = connect(Request::Pair {
+        discovery_id: discovery_id.clone(),
+        pin,
+        share_back,
+    })?;
     match receive(&mut stream)? {
-        Reply::Started { discovery_id: received, exchange_id } if received == discovery_id =>
-            Ok(DiscoveryPairingSession { stream, discovery_id, exchange_id }),
+        Reply::Started {
+            discovery_id: received,
+            exchange_id,
+        } if received == discovery_id => Ok(DiscoveryPairingSession {
+            stream,
+            discovery_id,
+            exchange_id,
+        }),
         _ => Err(Error::DaemonError),
     }
 }

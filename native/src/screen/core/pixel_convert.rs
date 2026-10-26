@@ -6,10 +6,10 @@
 //! with 8 fractional bits.
 use std::io;
 
-use super::wire::invalid;
 use super::frame_budget::FrameLimits;
+use super::wire::invalid;
 
-pub(crate) use super::frame_size_caps::{FrameSize,Rect,MAX_FRAME_SIDE,MAX_FRAME_PIXELS};
+pub(crate) use super::frame_size_caps::{FrameSize, Rect, MAX_FRAME_PIXELS, MAX_FRAME_SIDE};
 
 /// A borrowed BGRA frame with a row pitch, as capture hands it out. Its size
 /// is not limited to `MAX_FRAME_PIXELS`: sources larger than that are scaled
@@ -23,7 +23,9 @@ pub(crate) struct BgraView<'a> {
 
 impl<'a> BgraView<'a> {
     pub(crate) fn new(size: FrameSize, stride: usize, data: &'a [u8]) -> io::Result<Self> {
-        let row = usize::try_from(size.width).ok().and_then(|n| n.checked_mul(4))
+        let row = usize::try_from(size.width)
+            .ok()
+            .and_then(|n| n.checked_mul(4))
             .ok_or_else(|| invalid("BGRA row size overflow"))?;
         let rows = size.height as usize;
         let needed = stride
@@ -65,24 +67,39 @@ impl BgraImage {
         Self::new_with_limits(size, super::frame_budget::FrameLimits::LEGACY)
     }
 
-    pub(crate) fn new_with_limits(size: FrameSize, limits: super::frame_budget::FrameLimits) -> io::Result<Self> {
+    pub(crate) fn new_with_limits(
+        size: FrameSize,
+        limits: super::frame_budget::FrameLimits,
+    ) -> io::Result<Self> {
         let len = limits.check(size)?;
         let mut data = vec![0u8; len];
         for pixel in data.chunks_exact_mut(4) {
             pixel[3] = 0xFF;
         }
-        Ok(Self { size, data, regions: None })
+        Ok(Self {
+            size,
+            data,
+            regions: None,
+        })
     }
 
     pub(crate) fn from_vec(size: FrameSize, data: Vec<u8>) -> io::Result<Self> {
-        Self::from_vec_with_limits(size,data,FrameLimits::LEGACY)
+        Self::from_vec_with_limits(size, data, FrameLimits::LEGACY)
     }
 
-    pub(crate) fn from_vec_with_limits(size:FrameSize,data:Vec<u8>,limits:FrameLimits)->io::Result<Self> {
+    pub(crate) fn from_vec_with_limits(
+        size: FrameSize,
+        data: Vec<u8>,
+        limits: FrameLimits,
+    ) -> io::Result<Self> {
         if data.len() != limits.check(size)? {
             return Err(invalid("BGRA frame data does not match its size"));
         }
-        Ok(Self { size, data, regions: None })
+        Ok(Self {
+            size,
+            data,
+            regions: None,
+        })
     }
 
     pub(crate) fn size(&self) -> FrameSize {
@@ -93,10 +110,17 @@ impl BgraImage {
         &self.data
     }
 
-    pub(crate) fn regions(&self) -> Option<&super::frame_regions::FrameRegions> { self.regions.as_ref() }
+    pub(crate) fn regions(&self) -> Option<&super::frame_regions::FrameRegions> {
+        self.regions.as_ref()
+    }
 
-    pub(crate) fn set_regions(&mut self, regions: super::frame_regions::FrameRegions) -> io::Result<()> {
-        regions.validate(self.size)?; self.regions = Some(regions); Ok(())
+    pub(crate) fn set_regions(
+        &mut self,
+        regions: super::frame_regions::FrameRegions,
+    ) -> io::Result<()> {
+        regions.validate(self.size)?;
+        self.regions = Some(regions);
+        Ok(())
     }
 
     pub(crate) fn data_mut(&mut self) -> &mut [u8] {
@@ -119,28 +143,42 @@ impl BgraImage {
 }
 
 /// Clockwise quarter turns of a BGRA picture; platform adapters supply the orientation.
-#[derive(Clone,Copy,Debug,PartialEq,Eq)]
-pub(crate) enum BgraRotation {Identity,Clockwise90,Clockwise180,Clockwise270}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BgraRotation {
+    Identity,
+    Clockwise90,
+    Clockwise180,
+    Clockwise270,
+}
 impl BgraRotation {
-    pub(crate) fn size(self,size:FrameSize)->FrameSize {
-        match self {Self::Clockwise90|Self::Clockwise270=>FrameSize::new(size.height,size.width),_=>size}
+    pub(crate) fn size(self, size: FrameSize) -> FrameSize {
+        match self {
+            Self::Clockwise90 | Self::Clockwise270 => FrameSize::new(size.height, size.width),
+            _ => size,
+        }
     }
 }
-pub(crate) fn rotate_bgra(image:BgraImage,rotation:BgraRotation,limits:FrameLimits)->io::Result<BgraImage> {
+pub(crate) fn rotate_bgra(
+    image: BgraImage,
+    rotation: BgraRotation,
+    limits: FrameLimits,
+) -> io::Result<BgraImage> {
     limits.check(image.size())?;
-    if rotation==BgraRotation::Identity {return Ok(image);}
-    let from=image.size();
-    let mut target=BgraImage::new_with_limits(rotation.size(from),limits)?;
+    if rotation == BgraRotation::Identity {
+        return Ok(image);
+    }
+    let from = image.size();
+    let mut target = BgraImage::new_with_limits(rotation.size(from), limits)?;
     for y in 0..from.height {
-        for (x,pixel) in image.view().row(y).chunks_exact(4).enumerate() {
-            let x=x as u32;
-            let (dx,dy)=match rotation {
-                BgraRotation::Clockwise90=>(from.height-1-y,x),
-                BgraRotation::Clockwise180=>(from.width-1-x,from.height-1-y),
-                BgraRotation::Clockwise270=>(y,from.width-1-x),
-                BgraRotation::Identity=>(x,y),
+        for (x, pixel) in image.view().row(y).chunks_exact(4).enumerate() {
+            let x = x as u32;
+            let (dx, dy) = match rotation {
+                BgraRotation::Clockwise90 => (from.height - 1 - y, x),
+                BgraRotation::Clockwise180 => (from.width - 1 - x, from.height - 1 - y),
+                BgraRotation::Clockwise270 => (y, from.width - 1 - x),
+                BgraRotation::Identity => (x, y),
             };
-            target.row_mut(dy)[dx as usize*4..dx as usize*4+4].copy_from_slice(pixel);
+            target.row_mut(dy)[dx as usize * 4..dx as usize * 4 + 4].copy_from_slice(pixel);
         }
     }
     Ok(target)
@@ -173,9 +211,16 @@ impl<'a> Nv12View<'a> {
         uv: &'a [u8],
         uv_stride: usize,
     ) -> io::Result<Self> {
-        Self::new_with_limits(size,y,y_stride,uv,uv_stride,FrameLimits::LEGACY)
+        Self::new_with_limits(size, y, y_stride, uv, uv_stride, FrameLimits::LEGACY)
     }
-    pub(crate) fn new_with_limits(size:FrameSize,y:&'a [u8],y_stride:usize,uv:&'a [u8],uv_stride:usize,limits:FrameLimits)->io::Result<Self> {
+    pub(crate) fn new_with_limits(
+        size: FrameSize,
+        y: &'a [u8],
+        y_stride: usize,
+        uv: &'a [u8],
+        uv_stride: usize,
+        limits: FrameLimits,
+    ) -> io::Result<Self> {
         limits.check(size)?;
         let chroma = size.chroma();
         let fits = |plane: &[u8], stride: usize, row: usize, rows: usize| {
@@ -261,10 +306,14 @@ fn clamp_u8(value: i32) -> u8 {
 /// BGRA → I420. Odd sides are allowed: the last chroma sample repeats the
 /// edge pixel. Alpha is ignored.
 pub(crate) fn bgra_to_i420(src: &BgraView, matrix: YuvMatrix) -> io::Result<I420Image> {
-    bgra_to_i420_with_limits(src,matrix,FrameLimits::LEGACY)
+    bgra_to_i420_with_limits(src, matrix, FrameLimits::LEGACY)
 }
-pub(crate) fn bgra_to_i420_with_limits(src:&BgraView,matrix:YuvMatrix,limits:FrameLimits)->io::Result<I420Image> {
-    let size=src.size();
+pub(crate) fn bgra_to_i420_with_limits(
+    src: &BgraView,
+    matrix: YuvMatrix,
+    limits: FrameLimits,
+) -> io::Result<I420Image> {
+    let size = src.size();
     limits.check(size)?;
     let k = matrix.coefficients();
     let chroma = size.chroma();
@@ -374,14 +423,18 @@ pub(crate) fn nv12_to_bgra(
 /// Area average down to `size`, which must not exceed the source in either
 /// side; every source pixel counts once per covered target pixel.
 pub(crate) fn downscale_bgra(src: &BgraView, size: FrameSize) -> io::Result<BgraImage> {
-    downscale_bgra_with_limits(src,size,FrameLimits::LEGACY)
+    downscale_bgra_with_limits(src, size, FrameLimits::LEGACY)
 }
-pub(crate) fn downscale_bgra_with_limits(src:&BgraView,size:FrameSize,limits:FrameLimits)->io::Result<BgraImage> {
+pub(crate) fn downscale_bgra_with_limits(
+    src: &BgraView,
+    size: FrameSize,
+    limits: FrameLimits,
+) -> io::Result<BgraImage> {
     let from = src.size();
     if size.width > from.width || size.height > from.height {
         return Err(invalid("downscale target is larger than the source"));
     }
-    let mut out = BgraImage::new_with_limits(size,limits)?;
+    let mut out = BgraImage::new_with_limits(size, limits)?;
     let span = |index: u32, target: u32, source: u32| {
         let start = (u64::from(index) * u64::from(source) / u64::from(target)) as usize;
         let end = (u64::from(index + 1) * u64::from(source) / u64::from(target)) as usize;

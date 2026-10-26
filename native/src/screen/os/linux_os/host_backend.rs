@@ -13,8 +13,8 @@
 //! says so in its limits.
 use std::io;
 use std::path::PathBuf;
-use std::sync::{Arc,OnceLock};
-#[path="capture_prepared.rs"]
+use std::sync::{Arc, OnceLock};
+#[path = "capture_prepared.rs"]
 pub(super) mod prepared;
 
 use super::portal_session::{PortalOptions, PortalSource};
@@ -151,7 +151,9 @@ fn wayland_list() -> WindowList {
 }
 
 impl ScreenHostBackend for LinuxBackend {
-    fn memory_facts(&self)->Option<crate::screen::core::frame_memory::MemoryFacts> {super::session_memory::facts()}
+    fn memory_facts(&self) -> Option<crate::screen::core::frame_memory::MemoryFacts> {
+        super::session_memory::facts()
+    }
     fn platform(&self) -> HostPlatform {
         HostPlatform::Linux
     }
@@ -227,58 +229,97 @@ impl ScreenHostBackend for LinuxBackend {
     }
 
     fn windows(&self) -> io::Result<WindowList> {
-        let mut list=self.list_windows()?;
+        let mut list = self.list_windows()?;
         super::app_icons::attach(&mut list);
         Ok(list)
     }
 
-    fn icon(&self, entry: crate::screen::core::app_icon::AuthorizedIconEntry<'_>) -> io::Result<Option<crate::screen::core::app_icon::IconReply>> {
+    fn icon(
+        &self,
+        entry: crate::screen::core::app_icon::AuthorizedIconEntry<'_>,
+    ) -> io::Result<Option<crate::screen::core::app_icon::IconReply>> {
         super::app_icons::load(entry)
     }
 
-    fn prepare_session_source(&self,owner:&str,session:&str,source:&SourceId,wanted:Option<FrameSize>,
-        control:bool,admission:Arc<crate::screen::core::capture_admission::SessionAdmission>)
-        ->Result<Box<dyn crate::screen::core::host_backend::PreparedSource>,SourceRefusal> {
-        if admission.session()!=session {return Err(SourceRefusal::new("capture_session_mismatch"));}
-        if matches!(source,SourceId::Synthetic) {
-            return SyntheticBackend.prepare_session_source(owner,session,source,wanted,control,admission);
+    fn prepare_session_source(
+        &self,
+        owner: &str,
+        session: &str,
+        source: &SourceId,
+        wanted: Option<FrameSize>,
+        control: bool,
+        admission: Arc<crate::screen::core::capture_admission::SessionAdmission>,
+    ) -> Result<Box<dyn crate::screen::core::host_backend::PreparedSource>, SourceRefusal> {
+        if admission.session() != session {
+            return Err(SourceRefusal::new("capture_session_mismatch"));
         }
-        let key=crate::screen::core::capture_admission::SourceKey::new(session,&format!("linux:{source:?}"))
-            .map_err(|error|SourceRefusal::new(&error.to_string()))?;
+        if matches!(source, SourceId::Synthetic) {
+            return SyntheticBackend
+                .prepare_session_source(owner, session, source, wanted, control, admission);
+        }
+        let key = crate::screen::core::capture_admission::SourceKey::new(
+            session,
+            &format!("linux:{source:?}"),
+        )
+        .map_err(|error| SourceRefusal::new(&error.to_string()))?;
         match self.session {
-            SessionKind::None=>Err(SourceRefusal::new("no_display")),
-            SessionKind::X11=>prepared::X11Prepared::new(source,key,admission,false)
-                .map(|source|Box::new(source) as Box<dyn crate::screen::core::host_backend::PreparedSource>),
-            SessionKind::Wayland=>match source {
-                SourceId::Monitor(id) if id==PORTAL_MONITOR_ID=>{
-                    let desktop=std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
-                    crate::screen::core::host_admission::prepare_registered(
-                        key.clone(),admission.clone(),|| {
-                            prepared::PortalPrepared::new(PortalOptions {
-                                remote_desktop:control && remote_desktop_portal(&desktop),
-                                pipewire_library:self.pipewire_library},key,admission)
-                                .map(|source|Box::new(source) as Box<dyn crate::screen::core::host_backend::PreparedSource>)
-                                .map_err(|error|SourceRefusal::new(&format!("portal: {error}")))
-                        })
-                }
-                _=>Err(SourceRefusal::new(PORTAL_SELECTS_SOURCE)),
+            SessionKind::None => Err(SourceRefusal::new("no_display")),
+            SessionKind::X11 => {
+                prepared::X11Prepared::new(source, key, admission, false).map(|source| {
+                    Box::new(source) as Box<dyn crate::screen::core::host_backend::PreparedSource>
+                })
             }
+            SessionKind::Wayland => match source {
+                SourceId::Monitor(id) if id == PORTAL_MONITOR_ID => {
+                    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+                    crate::screen::core::host_admission::prepare_registered(
+                        key.clone(),
+                        admission.clone(),
+                        || {
+                            prepared::PortalPrepared::new(
+                                PortalOptions {
+                                    remote_desktop: control && remote_desktop_portal(&desktop),
+                                    pipewire_library: self.pipewire_library,
+                                },
+                                key,
+                                admission,
+                            )
+                            .map(|source| {
+                                Box::new(source)
+                                    as Box<dyn crate::screen::core::host_backend::PreparedSource>
+                            })
+                            .map_err(|error| SourceRefusal::new(&format!("portal: {error}")))
+                        },
+                    )
+                }
+                _ => Err(SourceRefusal::new(PORTAL_SELECTS_SOURCE)),
+            },
         }
     }
-    fn prepare_family_member(&self,_owner:&str,session:&str,native:crate::remote_window::NativeWindowId,
-        admission:Arc<crate::screen::core::capture_admission::SessionAdmission>)
-        ->Result<Box<dyn crate::screen::core::host_backend::PreparedSource>,SourceRefusal> {
-        if admission.session()!=session {return Err(SourceRefusal::new("capture_session_mismatch"));}
+    fn prepare_family_member(
+        &self,
+        _owner: &str,
+        session: &str,
+        native: crate::remote_window::NativeWindowId,
+        admission: Arc<crate::screen::core::capture_admission::SessionAdmission>,
+    ) -> Result<Box<dyn crate::screen::core::host_backend::PreparedSource>, SourceRefusal> {
+        if admission.session() != session {
+            return Err(SourceRefusal::new("capture_session_mismatch"));
+        }
         match self.session {
-            SessionKind::X11=>{
-                let source=SourceId::Window(native.0.to_string());
-                let key=crate::screen::core::capture_admission::SourceKey::new(session,&format!("linux:{source:?}"))
-                    .map_err(|error|SourceRefusal::new(&error.to_string()))?;
-                prepared::X11Prepared::new(&source,key,admission,true)
-                    .map(|source|Box::new(source) as Box<dyn crate::screen::core::host_backend::PreparedSource>)
+            SessionKind::X11 => {
+                let source = SourceId::Window(native.0.to_string());
+                let key = crate::screen::core::capture_admission::SourceKey::new(
+                    session,
+                    &format!("linux:{source:?}"),
+                )
+                .map_err(|error| SourceRefusal::new(&error.to_string()))?;
+                prepared::X11Prepared::new(&source, key, admission, true).map(|source| {
+                    Box::new(source) as Box<dyn crate::screen::core::host_backend::PreparedSource>
+                })
             }
-            SessionKind::Wayland=>Err(SourceRefusal::new(PORTAL_SELECTS_SOURCE)),
-            SessionKind::None=>Err(SourceRefusal::new("no_display")),
+            SessionKind::Wayland => Err(SourceRefusal::new(PORTAL_SELECTS_SOURCE)),
+            SessionKind::None => Err(SourceRefusal::new("no_display")),
         }
     }
 
@@ -287,19 +328,23 @@ impl ScreenHostBackend for LinuxBackend {
         source: &SourceId,
         wanted: Option<FrameSize>,
     ) -> Result<Box<dyn ScreenSource>, SourceRefusal> {
-        let _=wanted;
-        if self.session==SessionKind::None && !matches!(source,SourceId::Synthetic) {
+        let _ = wanted;
+        if self.session == SessionKind::None && !matches!(source, SourceId::Synthetic) {
             return Err(SourceRefusal::new("no_display"));
         }
-        if self.session==SessionKind::Wayland && !matches!(source,SourceId::Synthetic)
-            && !matches!(source,SourceId::Monitor(id) if id==PORTAL_MONITOR_ID) {
+        if self.session == SessionKind::Wayland
+            && !matches!(source, SourceId::Synthetic)
+            && !matches!(source,SourceId::Monitor(id) if id==PORTAL_MONITOR_ID)
+        {
             return Err(SourceRefusal::new(PORTAL_SELECTS_SOURCE));
         }
         Err(SourceRefusal::new("capture_grant_required"))
     }
 
-    fn open_family_member(&self,_native:crate::remote_window::NativeWindowId)
-        ->Result<Box<dyn ScreenSource>,SourceRefusal> {
+    fn open_family_member(
+        &self,
+        _native: crate::remote_window::NativeWindowId,
+    ) -> Result<Box<dyn ScreenSource>, SourceRefusal> {
         Err(SourceRefusal::new("capture_grant_required"))
     }
 
@@ -311,14 +356,29 @@ impl ScreenHostBackend for LinuxBackend {
         SyntheticBackend.open_encoder(choice, size)
     }
 
-    fn open_encoder_for_stage(&self, request: &crate::screen::core::host_stage::StageRequest) -> io::Result<Box<dyn ScreenEncoder>> {
-        Ok(crate::screen::os::codec_inventory::registry().open_encoder_with_contract(&request.choice, request.size, request.fps, &[], request.frame_contract)?.encoder)
+    fn open_encoder_for_stage(
+        &self,
+        request: &crate::screen::core::host_stage::StageRequest,
+    ) -> io::Result<Box<dyn ScreenEncoder>> {
+        Ok(crate::screen::os::codec_inventory::registry()
+            .open_encoder_with_contract(
+                &request.choice,
+                request.size,
+                request.fps,
+                &[],
+                request.frame_contract,
+            )?
+            .encoder)
     }
 
-    fn open_encoder_for_stage_admitted(&self,request:&crate::screen::core::host_stage::StageRequest,
-        grant:crate::screen::core::capture_admission::CaptureGrant)->io::Result<Box<dyn ScreenEncoder>> {
+    fn open_encoder_for_stage_admitted(
+        &self,
+        request: &crate::screen::core::host_stage::StageRequest,
+        grant: crate::screen::core::capture_admission::CaptureGrant,
+    ) -> io::Result<Box<dyn ScreenEncoder>> {
         Ok(crate::screen::os::codec_inventory::registry()
-            .open_encoder_for_stage_admitted(request,&[],grant)?.encoder)
+            .open_encoder_for_stage_admitted(request, &[], grant)?
+            .encoder)
     }
 
     fn inject(&self, events: &[InputEvent]) -> Result<(), ControlBlock> {
@@ -328,20 +388,23 @@ impl ScreenHostBackend for LinuxBackend {
             SessionKind::None => Err(ControlBlock::UnsupportedOnHost),
         }
     }
-    fn inject_family(&self, member: &crate::remote_window::CaptureMember,
-        events: &[InputEvent]) -> Result<(), ControlBlock> {
+    fn inject_family(
+        &self,
+        member: &crate::remote_window::CaptureMember,
+        events: &[InputEvent],
+    ) -> Result<(), ControlBlock> {
         if self.session == SessionKind::X11 {
             inject_x11_family(member, events, super::x11_input::inject_bound)
         } else {
             self.inject(events)
         }
     }
-    fn release_input(&self,events:&[InputEvent])->Result<(),ControlBlock> {
+    fn release_input(&self, events: &[InputEvent]) -> Result<(), ControlBlock> {
         match self.session {
-            SessionKind::X11=>super::x11_input::release(events),
+            SessionKind::X11 => super::x11_input::release(events),
             // Keep the actual portal session/device grant boundary unchanged.
-            SessionKind::Wayland=>super::portal_input::inject(events),
-            SessionKind::None=>Err(ControlBlock::UnsupportedOnHost),
+            SessionKind::Wayland => super::portal_input::inject(events),
+            SessionKind::None => Err(ControlBlock::UnsupportedOnHost),
         }
     }
 }
@@ -385,46 +448,89 @@ mod tests;
 
 /// Keep the host gate's admitted member geometry through the final XTest
 /// boundary. A movement/resize after that gate is denied by inject_bound.
-fn inject_x11_family(member: &crate::remote_window::CaptureMember, events: &[InputEvent],
-    inject: impl FnOnce(&SourceId, super::x11_input::Area, &[InputEvent]) -> Result<(), ControlBlock>)
-    -> Result<(), ControlBlock>
-{
-    if !member.input || !member.geometry.valid() { return Err(ControlBlock::ControlUnavailable); }
-    let window = u32::try_from(member.binding.native.0).ok().filter(|id| *id > 1)
+fn inject_x11_family(
+    member: &crate::remote_window::CaptureMember,
+    events: &[InputEvent],
+    inject: impl FnOnce(&SourceId, super::x11_input::Area, &[InputEvent]) -> Result<(), ControlBlock>,
+) -> Result<(), ControlBlock> {
+    if !member.input || !member.geometry.valid() {
+        return Err(ControlBlock::ControlUnavailable);
+    }
+    let window = u32::try_from(member.binding.native.0)
+        .ok()
+        .filter(|id| *id > 1)
         .ok_or(ControlBlock::ControlUnavailable)?;
-    let area = super::x11_input::Area { x: member.geometry.x, y: member.geometry.y,
-        width: i32::try_from(member.geometry.width).map_err(|_| ControlBlock::ControlUnavailable)?,
-        height: i32::try_from(member.geometry.height).map_err(|_| ControlBlock::ControlUnavailable)? };
+    let area = super::x11_input::Area {
+        x: member.geometry.x,
+        y: member.geometry.y,
+        width: i32::try_from(member.geometry.width)
+            .map_err(|_| ControlBlock::ControlUnavailable)?,
+        height: i32::try_from(member.geometry.height)
+            .map_err(|_| ControlBlock::ControlUnavailable)?,
+    };
     inject(&SourceId::Window(window.to_string()), area, events)
 }
 
 #[cfg(test)]
 mod batches_family_geometry_task_tests {
     use super::*;
-    use crate::remote_window::{CaptureGeometry, CaptureMember, NativeWindowId, WindowBinding, WindowIdentity};
+    use crate::remote_window::{
+        CaptureGeometry, CaptureMember, NativeWindowId, WindowBinding, WindowIdentity,
+    };
 
     fn member() -> CaptureMember {
-        CaptureMember { identity: WindowIdentity { session: "ab".repeat(16), generation: 2 },
-            binding: WindowBinding { native: NativeWindowId(42), birth: vec![7; 16] },
-            geometry: CaptureGeometry { x: -50, y: 20, width: 321, height: 123 }, z_order: 1, input: true }
+        CaptureMember {
+            identity: WindowIdentity {
+                session: "ab".repeat(16),
+                generation: 2,
+            },
+            binding: WindowBinding {
+                native: NativeWindowId(42),
+                birth: vec![7; 16],
+            },
+            geometry: CaptureGeometry {
+                x: -50,
+                y: 20,
+                width: 321,
+                height: 123,
+            },
+            z_order: 1,
+            input: true,
+        }
     }
 
     #[test]
     fn batches_family_x11_input_retains_admitted_member_geometry_until_inject_bound() {
         let member = member();
-        let events = vec![InputEvent::PointerAbs { x: u16::MAX, y: 0 },
-            InputEvent::Touch { id: 0, phase: crate::screen::core::input_model::TouchPhase::Start, x: 0, y: u16::MAX }];
+        let events = vec![
+            InputEvent::PointerAbs { x: u16::MAX, y: 0 },
+            InputEvent::Touch {
+                id: 0,
+                phase: crate::screen::core::input_model::TouchPhase::Start,
+                x: 0,
+                y: u16::MAX,
+            },
+        ];
         let mut called = false;
         let result = inject_x11_family(&member, &events, |source, area, forwarded| {
             called = true;
             assert_eq!(source, &SourceId::Window("42".into()));
-            assert_eq!(area, super::super::x11_input::Area { x: -50, y: 20, width: 321, height: 123 });
+            assert_eq!(
+                area,
+                super::super::x11_input::Area {
+                    x: -50,
+                    y: 20,
+                    width: 321,
+                    height: 123
+                }
+            );
             assert_eq!(forwarded, events.as_slice());
             // A final native geometry refusal must reach WorkerFamily so it
             // releases held input; it must not fall back to unbound injection.
             Err(ControlBlock::ControlUnavailable)
         });
-        assert!(called); assert_eq!(result, Err(ControlBlock::ControlUnavailable));
+        assert!(called);
+        assert_eq!(result, Err(ControlBlock::ControlUnavailable));
     }
 
     #[test]
@@ -432,11 +538,16 @@ mod batches_family_geometry_task_tests {
         let mut cases = vec![member(); 4];
         cases[0].input = false;
         cases[1].geometry.width = 0;
-        cases[2].geometry.x = -1; cases[2].geometry.width = i32::MAX as u32 + 1;
+        cases[2].geometry.x = -1;
+        cases[2].geometry.width = i32::MAX as u32 + 1;
         cases[3].binding.native = NativeWindowId(u64::from(u32::MAX) + 1);
         for member in cases {
-            assert_eq!(inject_x11_family(&member, &[], |_, _, _| panic!("invalid member reached XTest")),
-                Err(ControlBlock::ControlUnavailable));
+            assert_eq!(
+                inject_x11_family(&member, &[], |_, _, _| panic!(
+                    "invalid member reached XTest"
+                )),
+                Err(ControlBlock::ControlUnavailable)
+            );
         }
     }
 }

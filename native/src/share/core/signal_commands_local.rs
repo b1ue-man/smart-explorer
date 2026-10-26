@@ -38,7 +38,12 @@ pub(super) fn apply_persisted_exec_grant(
     policy: ExecGrant,
 ) -> io::Result<ExecGrantMutation> {
     let mutation = exec_grant_runtime::apply_exact_with_access(
-        auth, iroh.exec_registry(), Some(iroh.access_registry()), target, principal, policy,
+        auth,
+        iroh.exec_registry(),
+        Some(iroh.access_registry()),
+        target,
+        principal,
+        policy,
     )?;
     schedule_current(auth, iroh)?;
     Ok(mutation)

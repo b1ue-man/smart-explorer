@@ -14,18 +14,36 @@ pub(crate) struct Admission {
 
 impl Admission {
     pub(crate) fn new(job: TransferJob) -> Result<Self, String> {
-        let preview = crate::transfer::FolderPreviewScan::start(job.clone()).map_err(|error| format!("Ordnerprüfung nicht gestartet: {error}"))?;
-        Ok(Self { job: Some(job), preview, index: 0, choice: FolderConflict::KeepBoth, all: false })
+        let preview = crate::transfer::FolderPreviewScan::start(job.clone())
+            .map_err(|error| format!("Ordnerprüfung nicht gestartet: {error}"))?;
+        Ok(Self {
+            job: Some(job),
+            preview,
+            index: 0,
+            choice: FolderConflict::KeepBoth,
+            all: false,
+        })
     }
 
     /// `Some(Ok(None))` is an explicit cancellation, never approval.
-    pub(crate) fn show(&mut self, ctx: &egui::Context) -> Option<Result<Option<TransferJob>, String>> {
+    pub(crate) fn show(
+        &mut self,
+        ctx: &egui::Context,
+    ) -> Option<Result<Option<TransferJob>, String>> {
         let state = self.preview.snapshot();
-        if let Some(error) = &state.error { return Some(Err(error.clone())); }
-        if state.ready && state.folders.is_empty() { return Some(Ok(self.job.take())); }
+        if let Some(error) = &state.error {
+            return Some(Err(error.clone()));
+        }
+        if state.ready && state.folders.is_empty() {
+            return Some(Ok(self.job.take()));
+        }
         let folder = state.folders.get(self.index).cloned();
         let count = state.folders.len();
-        let remaining_support_keep_both = state.folders.iter().skip(self.index).all(|folder| folder.keep_both_supported);
+        let remaining_support_keep_both = state
+            .folders
+            .iter()
+            .skip(self.index)
+            .all(|folder| folder.keep_both_supported);
         drop(state);
         let mut approved = false;
         let mut canceled = false;
@@ -77,18 +95,34 @@ impl Admission {
                 }
             });
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
-        if canceled { self.preview.cancel(); return Some(Ok(None)); }
+        if canceled {
+            self.preview.cancel();
+            return Some(Ok(None));
+        }
         if approved {
             let state = self.preview.snapshot();
-            if let Some(error) = state.error { return Some(Err(error)); }
-            if self.index >= state.folders.len() { return None; }
+            if let Some(error) = state.error {
+                return Some(Err(error));
+            }
+            if self.index >= state.folders.len() {
+                return None;
+            }
             if let Some(job) = &mut self.job {
-                let end = if self.all { state.folders.len() } else { self.index + 1 };
-                for folder in &state.folders[self.index..end] { job.folders.roots.insert(folder.source.clone(), self.choice); }
+                let end = if self.all {
+                    state.folders.len()
+                } else {
+                    self.index + 1
+                };
+                for folder in &state.folders[self.index..end] {
+                    job.folders.roots.insert(folder.source.clone(), self.choice);
+                }
                 self.index = end;
                 if self.index == state.folders.len() {
                     self.preview.cancel();
-                    if matches!(&job.items, JobItems::Roots { paths, .. } if paths.iter().all(|path| job.folders.roots.get(path) == Some(&FolderConflict::Skip))) { return Some(Ok(None)); }
+                    if matches!(&job.items, JobItems::Roots { paths, .. } if paths.iter().all(|path| job.folders.roots.get(path) == Some(&FolderConflict::Skip)))
+                    {
+                        return Some(Ok(None));
+                    }
                     return Some(Ok(self.job.take()));
                 }
                 self.choice = FolderConflict::KeepBoth;
@@ -99,7 +133,9 @@ impl Admission {
 }
 
 pub(in crate::app) fn requires_preview(job: &TransferJob) -> bool {
-    job.resume.is_none() && job.layout == Layout::Tree && matches!(job.items, JobItems::Roots { .. })
+    job.resume.is_none()
+        && job.layout == Layout::Tree
+        && matches!(job.items, JobItems::Roots { .. })
 }
 
 type Queue = VecDeque<(Admission, super::transfer_center::TransferPurpose)>;
@@ -108,22 +144,34 @@ fn queue() -> &'static Mutex<Queue> {
     QUEUE.get_or_init(|| Mutex::new(VecDeque::new()))
 }
 
-pub(in crate::app) fn enqueue(job: TransferJob, purpose: super::transfer_center::TransferPurpose) -> Result<(), String> {
+pub(in crate::app) fn enqueue(
+    job: TransferJob,
+    purpose: super::transfer_center::TransferPurpose,
+) -> Result<(), String> {
     let admission = Admission::new(job)?;
-    queue().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push_back((admission, purpose));
+    queue()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push_back((admission, purpose));
     Ok(())
 }
 
 impl super::App {
     pub(in crate::app) fn ui_folder_conflicts(&mut self, ctx: &egui::Context) {
         let finished = {
-            let mut queue = queue().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            let result = queue.front_mut().and_then(|(admission, _)| admission.show(ctx));
+            let mut queue = queue()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let result = queue
+                .front_mut()
+                .and_then(|(admission, _)| admission.show(ctx));
             result.and_then(|result| queue.pop_front().map(|(_, purpose)| (result, purpose)))
         };
         if let Some((result, purpose)) = finished {
             match result {
-                Ok(Some(job)) => { self.submit_approved_job_for(job, purpose); }
+                Ok(Some(job)) => {
+                    self.submit_approved_job_for(job, purpose);
+                }
                 Ok(None) => {}
                 Err(error) => self.error_msg = Some(format!("Ordnerkonflikte prüfen: {error}")),
             }

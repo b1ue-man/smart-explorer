@@ -66,7 +66,10 @@ pub trait MountFilesystem: Send + Sync {
     /// Cached provider metadata only: implementations must not query the network here.
     fn capacity_snapshot(&self) -> crate::vfs::CapacitySnapshot {
         let facts = self.volume_facts();
-        let mut value = crate::vfs::CapacitySnapshot::unknown(format!("mount:{}", facts.id.as_str()), facts.root.as_str());
+        let mut value = crate::vfs::CapacitySnapshot::unknown(
+            format!("mount:{}", facts.id.as_str()),
+            facts.root.as_str(),
+        );
         value.read_only = facts.read_only;
         value
     }

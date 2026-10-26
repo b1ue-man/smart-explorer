@@ -1,4 +1,4 @@
 pub(crate) mod clients;
-mod profile;
 mod probe;
+mod profile;
 pub(crate) use self::probe::probe;

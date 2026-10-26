@@ -72,7 +72,9 @@ mod tests {
     struct Retention(Arc<AtomicBool>);
 
     impl Drop for Retention {
-        fn drop(&mut self) { self.0.store(true, Ordering::Release); }
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
     }
 
     #[test]

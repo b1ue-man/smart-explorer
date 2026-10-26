@@ -25,7 +25,8 @@ impl App {
                 });
                 ui.separator();
                 let log = crate::daemon::read_log_tail(300);
-                egui::ScrollArea::vertical().min_scrolled_height(0.0)
+                egui::ScrollArea::vertical()
+                    .min_scrolled_height(0.0)
                     .stick_to_bottom(true)
                     .auto_shrink([false, false])
                     .max_height(super::dialog_geometry::remaining_height(ui, 1.0))

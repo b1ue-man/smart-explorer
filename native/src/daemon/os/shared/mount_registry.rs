@@ -85,8 +85,13 @@ pub(super) fn load_in(directory: &Path) -> io::Result<Vec<MountConfig>> {
 /// Stores `config` in the file of its kind and returns every drive.
 pub(super) fn upsert_in(directory: &Path, config: &MountConfig) -> io::Result<Vec<MountConfig>> {
     config.validate()?;
-    if inactive::list_in(directory)?.iter().any(|record| record.owns_mount_cache && record.config.id == config.id) {
-        return Err(invalid_data("Mount-ID besitzt inaktive Recovery; zuerst ausdrücklich reaktivieren"));
+    if inactive::list_in(directory)?
+        .iter()
+        .any(|record| record.owns_mount_cache && record.config.id == config.id)
+    {
+        return Err(invalid_data(
+            "Mount-ID besitzt inaktive Recovery; zuerst ausdrücklich reaktivieren",
+        ));
     }
     let mut stored = Stored::read(directory)?;
     let first = config.source.stored_in_first_registry();

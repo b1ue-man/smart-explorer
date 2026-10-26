@@ -25,7 +25,12 @@ pub(super) fn spawn(
     tx: Sender<CopyMsg>,
     prepare: impl FnOnce() -> Result<LocalJob, (String, String)> + Send + 'static,
 ) -> CopyHandle {
-    spawn_with_recovery(crate::transfer::new_job_id(), crate::transfer::RecoveryMode::New, tx, prepare)
+    spawn_with_recovery(
+        crate::transfer::new_job_id(),
+        crate::transfer::RecoveryMode::New,
+        tx,
+        prepare,
+    )
 }
 
 pub(super) fn spawn_in_job(
@@ -49,7 +54,10 @@ fn spawn_with_recovery(
     let spawned = std::thread::Builder::new()
         .name("copy-driver".into())
         .spawn(move || match prepare() {
-            Ok(mut job) => { job.id = worker_id; run(&job, recovery, &tx, &worker_cancel) },
+            Ok(mut job) => {
+                job.id = worker_id;
+                run(&job, recovery, &tx, &worker_cancel)
+            }
             Err((path, detail)) => send_failure(&tx, path, detail),
         });
     if let Err(error) = spawned {
@@ -58,7 +66,12 @@ fn spawn_with_recovery(
     CopyHandle { cancel, job_id: id }
 }
 
-fn run(job: &LocalJob, recovery: crate::transfer::RecoveryMode, tx: &Sender<CopyMsg>, cancel: &AtomicBool) {
+fn run(
+    job: &LocalJob,
+    recovery: crate::transfer::RecoveryMode,
+    tx: &Sender<CopyMsg>,
+    cancel: &AtomicBool,
+) {
     let source_label = match &job.items {
         JobItems::Roots {
             base: Some(base), ..

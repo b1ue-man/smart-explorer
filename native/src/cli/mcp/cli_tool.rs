@@ -41,18 +41,28 @@ pub(super) fn start(session: &Session, args: &Args<'_>) -> Result<Arc<Job>, Stri
         return Err(refusal);
     }
     let stdin = args.opt_string("stdin")?;
-    let pairing=arguments.get(0).is_some_and(|v|v=="share")
-        && arguments.get(1).is_some_and(|v|v=="discover")
-        && arguments.get(2).is_some_and(|v|v=="pair");
+    let pairing = arguments.get(0).is_some_and(|v| v == "share")
+        && arguments.get(1).is_some_and(|v| v == "discover")
+        && arguments.get(2).is_some_and(|v| v == "pair");
     if pairing {
-        if arguments.iter().any(|v|v=="--pin"||v.starts_with("--pin=")) {
+        if arguments
+            .iter()
+            .any(|v| v == "--pin" || v.starts_with("--pin="))
+        {
             return Err("pairing PINs must use --pin-stdin and the separate stdin field".into());
         }
-        if arguments.iter().any(|v|v=="--pin-prompt") {
-            return Err("interactive PIN prompts are unavailable in MCP; use --pin-stdin and stdin".into());
+        if arguments.iter().any(|v| v == "--pin-prompt") {
+            return Err(
+                "interactive PIN prompts are unavailable in MCP; use --pin-stdin and stdin".into(),
+            );
         }
-        if !arguments.iter().any(|v|v=="--pin-stdin") || stdin.as_ref().is_none_or(String::is_empty) {
-            return Err("MCP pairing requires --pin-stdin and nonempty stdin; no pairing was started".into());
+        if !arguments.iter().any(|v| v == "--pin-stdin")
+            || stdin.as_ref().is_none_or(String::is_empty)
+        {
+            return Err(
+                "MCP pairing requires --pin-stdin and nonempty stdin; no pairing was started"
+                    .into(),
+            );
         }
     }
     let mut command = Command::new(&session.executable);
@@ -82,13 +92,16 @@ pub(super) fn start(session: &Session, args: &Args<'_>) -> Result<Arc<Job>, Stri
         error
     };
     let maintenance = crate::mcp_launcher::is_maintenance(&arguments);
-    let mut child = crate::mcp_launcher::spawn_generation_child(command, stdin.is_some()).map_err(|error| {
-        not_started(format!(
-            "cannot start {}: {error}",
-            session.executable.display()
-        ))
-    })?;
-    if maintenance { job.release_operation_after_handoff(); }
+    let mut child =
+        crate::mcp_launcher::spawn_generation_child(command, stdin.is_some()).map_err(|error| {
+            not_started(format!(
+                "cannot start {}: {error}",
+                session.executable.display()
+            ))
+        })?;
+    if maintenance {
+        job.release_operation_after_handoff();
+    }
     let (readers, input_writer) = match capture(&job, &mut child, stdin) {
         Ok(result) => result,
         Err(error) => {
@@ -123,7 +136,13 @@ pub(super) fn start(session: &Session, args: &Args<'_>) -> Result<Arc<Job>, Stri
             Ok(Err(error)) => Some(error),
             Err(_) => Some("standard input writer failed".to_string()),
         });
-        if let Some(error) = input_error { return JobEnd { status: JobStatus::Failed, result: json!({}), error: Some(error) }; }
+        if let Some(error) = input_error {
+            return JobEnd {
+                status: JobStatus::Failed,
+                result: json!({}),
+                error: Some(error),
+            };
+        }
         match status {
             Ok(status) => JobEnd {
                 status: if job.cancel_requested() {
@@ -149,17 +168,20 @@ fn capture(
     job: &Arc<Job>,
     child: &mut crate::mcp_launcher::GenerationChild,
     stdin: Option<String>,
-    ) -> Result<Captured, String> {
+) -> Result<Captured, String> {
     let input_writer = match (stdin, child.stdin.take()) {
-        (Some(text), Some(mut pipe)) => {
-        Some(std::thread::Builder::new()
-            .name(format!("se-mcp-{}-stdin", job.id))
-            .spawn(move || {
-                pipe.write_all(text.as_bytes()).map_err(|_| "cannot complete standard input".to_string())
-            })
-            .map_err(|error| format!("cannot feed standard input: {error}"))?)
+        (Some(text), Some(mut pipe)) => Some(
+            std::thread::Builder::new()
+                .name(format!("se-mcp-{}-stdin", job.id))
+                .spawn(move || {
+                    pipe.write_all(text.as_bytes())
+                        .map_err(|_| "cannot complete standard input".to_string())
+                })
+                .map_err(|error| format!("cannot feed standard input: {error}"))?,
+        ),
+        (Some(_), None) => {
+            return Err("cannot feed standard input: the requested pipe is missing".into())
         }
-        (Some(_), None) => return Err("cannot feed standard input: the requested pipe is missing".into()),
         (None, _) => None,
     };
     let mut readers = Vec::new();

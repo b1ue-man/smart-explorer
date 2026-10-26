@@ -105,22 +105,22 @@ mod pending_attributes;
 mod range_read;
 #[path = "core/recovery.rs"]
 mod recovery;
-#[path = "core/recovery_state.rs"]
-mod recovery_state;
-#[path = "core/recovery_manifest.rs"]
-mod recovery_manifest;
+#[path = "core/recovery_export.rs"]
+mod recovery_export;
+#[path = "os/shared/recovery_export.rs"]
+mod recovery_export_io;
 #[path = "core/recovery_identity.rs"]
 mod recovery_identity;
 #[path = "os/shared/recovery_identity.rs"]
 mod recovery_identity_io;
-#[path = "core/recovery_export.rs"]
-mod recovery_export;
 #[path = "core/recovery_import.rs"]
 mod recovery_import;
-#[path = "os/shared/recovery_export.rs"]
-mod recovery_export_io;
 #[path = "os/shared/recovery_import.rs"]
 mod recovery_import_io;
+#[path = "core/recovery_manifest.rs"]
+mod recovery_manifest;
+#[path = "core/recovery_state.rs"]
+mod recovery_state;
 #[cfg(windows)]
 #[path = "os/windows/recovery_storage.rs"]
 mod recovery_storage;
@@ -174,22 +174,29 @@ mod remote_drive_task_tests;
 pub(crate) mod os;
 
 pub(crate) use metadata_cache::MetadataChange;
-pub(crate) use recovery_identity::{RecoveryBackendIdentity, manifest_identity as recovery_manifest_identity,
-    conflict as recovery_identity_conflict, missing as recovery_identity_missing};
-pub(crate) use recovery_identity_io::{read_mount_recovery_identity, preflight_mount_recovery_identity,
-    bind_mount_recovery_identity};
-#[cfg(windows)]
-pub(crate) use os::windows::CacheLease as RecoveryCacheLease;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub(crate) use os::linux_os::CacheLease as RecoveryCacheLease;
-pub use recovery_manifest::{InactiveMountRecovery, RecoveryFile, RecoveryGap, RecoveryGapKind,
-    RecoveryJournal, RecoveryManifest, RECOVERY_FORMAT_VERSION};
-pub(crate) use recovery_state::{RecoveryCommitPoint, recovery_checkpoint};
+#[cfg(windows)]
+pub(crate) use os::windows::CacheLease as RecoveryCacheLease;
+pub(crate) use recovery_export_io::{export_mount_recovery, recovery_cache_ids};
+pub(crate) use recovery_identity::{
+    conflict as recovery_identity_conflict, manifest_identity as recovery_manifest_identity,
+    missing as recovery_identity_missing, RecoveryBackendIdentity,
+};
+pub(crate) use recovery_identity_io::{
+    bind_mount_recovery_identity, preflight_mount_recovery_identity, read_mount_recovery_identity,
+};
+pub(crate) use recovery_import_io::{
+    confirm_recovery_namespace, copy_recovery_package, read_recovery_manifest,
+    restore_recovery_cache, verify_recovery_package,
+};
+pub use recovery_manifest::{
+    InactiveMountRecovery, RecoveryFile, RecoveryGap, RecoveryGapKind, RecoveryJournal,
+    RecoveryManifest, RECOVERY_FORMAT_VERSION,
+};
 #[cfg(test)]
 pub(crate) use recovery_state::fail_next_recovery_at;
-pub(crate) use recovery_export_io::{export_mount_recovery, recovery_cache_ids};
-pub(crate) use recovery_import_io::{read_recovery_manifest, verify_recovery_package,
-    restore_recovery_cache, confirm_recovery_namespace, copy_recovery_package};
+pub(crate) use recovery_state::{recovery_checkpoint, RecoveryCommitPoint};
 pub(crate) use recovery_storage::publish as publish_recovery_object;
 
 #[cfg(test)]

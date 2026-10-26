@@ -157,12 +157,22 @@ fn answer(
     out: &mut dyn Write,
 ) -> Result<(), String> {
     let id = resolve(source, given.trim())?;
-    let request = source.pending()?.into_iter().find(|request| request.id.as_str() == id)
+    let request = source
+        .pending()?
+        .into_iter()
+        .find(|request| request.id.as_str() == id)
         .ok_or_else(|| "Die Rückfrage ist nicht mehr offen.".to_string())?;
-    if decision != ApprovalDecision::Deny && !crate::share::consent_launch::approval_context_complete(&request) {
-        return Err("Der vollständige Zielauftrag oder seine Beziehung fehlt; Erlauben ist gesperrt.".into());
+    if decision != ApprovalDecision::Deny
+        && !crate::share::consent_launch::approval_context_complete(&request)
+    {
+        return Err(
+            "Der vollständige Zielauftrag oder seine Beziehung fehlt; Erlauben ist gesperrt."
+                .into(),
+        );
     }
-    if !json { write(out, &line(&request))?; }
+    if !json {
+        write(out, &line(&request))?;
+    }
     source.decide(&id, decision).map_err(|error| {
         format!("{error}; `se share exec approvals` lists the requests that are still open")
     })?;
@@ -172,7 +182,8 @@ fn answer(
         ApprovalDecision::Deny => "deny",
     };
     let text = if json {
-        let value = serde_json::json!({"id": id, "decision": key, "decided": true, "request": request});
+        let value =
+            serde_json::json!({"id": id, "decision": key, "decided": true, "request": request});
         serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?
     } else {
         format!("approval\t{id}\tdecision={key}\tdecided=true")

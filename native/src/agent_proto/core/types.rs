@@ -98,7 +98,10 @@ pub enum Frame {
     FileIdentity(String),
     FileIdentityValue(Option<String>),
     /// Directory publication with typed failure classes (`folder-reservation-v1`).
-    RenameDirectoryNoReplace { src: String, dst: String },
+    RenameDirectoryNoReplace {
+        src: String,
+        dst: String,
+    },
     Hello {
         proto: u32,
     },

@@ -17,7 +17,7 @@ use crate::screen::core::wire_control::{KeyframeReason, KeyframeRequest};
 
 fn header(gop_id: u64, codec: CodecKind, size: FrameSize) -> GopHeader {
     GopHeader {
-            family_layout_revision: None,
+        family_layout_revision: None,
         frame_contract: None,
         gop_id,
         kind: StreamKind::Video,
@@ -157,7 +157,10 @@ fn screen_task_android_pull_stall_resets() {
     assert_eq!(flags & FLAG_KEYFRAME, FLAG_KEYFRAME);
     assert_eq!(flags & FLAG_NEW_STREAM, FLAG_NEW_STREAM);
     assert_eq!(flags >> GOP_SHIFT, 2);
-    assert_eq!(flags & (FLAG_GOP_ID | FLAG_FRAME_ID), FLAG_GOP_ID | FLAG_FRAME_ID);
+    assert_eq!(
+        flags & (FLAG_GOP_ID | FLAG_FRAME_ID),
+        FLAG_GOP_ID | FLAG_FRAME_ID
+    );
     assert_eq!(dst[16..24], 2u64.to_le_bytes());
     assert_eq!(dst[24..32], 5u64.to_le_bytes());
     assert_eq!(dst[32..36], *b"idr2");

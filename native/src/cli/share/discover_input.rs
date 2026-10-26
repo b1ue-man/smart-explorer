@@ -3,7 +3,10 @@ use std::io::{IsTerminal, Read};
 
 use zeroize::{Zeroize, Zeroizing};
 
-pub(super) fn read_pin(pin_stdin: bool, pin_prompt: bool) -> Result<crate::share::DiscoveryPin, &'static str> {
+pub(super) fn read_pin(
+    pin_stdin: bool,
+    pin_prompt: bool,
+) -> Result<crate::share::DiscoveryPin, &'static str> {
     if pin_stdin == pin_prompt {
         return Err("choose exactly one PIN source: --pin-stdin or --pin-prompt");
     }
@@ -48,7 +51,10 @@ mod tests {
     #[test]
     fn batches_task_p29_stdin_preserves_spaces_unicode_and_all_line_endings() {
         let input = "  0123é\r\nsecond line\n ";
-        assert_eq!(read_pin_to_eof(input.as_bytes()).unwrap().as_bytes(), input.as_bytes());
+        assert_eq!(
+            read_pin_to_eof(input.as_bytes()).unwrap().as_bytes(),
+            input.as_bytes()
+        );
     }
 
     #[test]
@@ -65,7 +71,9 @@ mod tests {
         struct BrokenInput(bool);
         impl std::io::Read for BrokenInput {
             fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
-                if output.is_empty() { return Ok(0); }
+                if output.is_empty() {
+                    return Ok(0);
+                }
                 if self.0 {
                     return Err(std::io::Error::other("private-input-sentinel"));
                 }

@@ -133,7 +133,7 @@ pub(super) fn read_choice_in(directory: &Path) -> Option<Choice> {
     // switch-off decision. An old devices.json:On must never auto-enable
     // an archived tree; a registry read error cannot authorize auto-enable.
     match super::super::mount_registry::inactive::is_inactive_in(directory, &id) {
-        Ok(false) => {},
+        Ok(false) => {}
         Ok(true) | Err(_) => return Some(Choice::Off),
     }
     let body = std::fs::read(directory.join(CHOICE_FILE)).ok()?;

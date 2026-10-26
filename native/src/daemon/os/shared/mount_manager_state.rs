@@ -274,7 +274,10 @@ pub(super) fn snapshot(entry: &MountEntry) -> MountSnapshot {
     MountSnapshot {
         config: entry.config.clone(),
         status: entry.status.clone(),
-        capacity: entry.capacity.clone().map(|value| value.with_freshness(crate::vfs::observed_now_ms())),
+        capacity: entry
+            .capacity
+            .clone()
+            .map(|value| value.with_freshness(crate::vfs::observed_now_ms())),
         recovery: entry.recovery,
         recovery_required_compat: entry.recovery.requires_retention(),
     }

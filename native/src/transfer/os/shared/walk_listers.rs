@@ -81,7 +81,10 @@ impl Lister for LocalLister {
     fn list(&self, dir: &str) -> io::Result<Vec<Listed>> {
         let path = native(dir);
         {
-            let _guard = crate::source_media::acquire_current(&path, crate::source_media::Priority::Foreground)?;
+            let _guard = crate::source_media::acquire_current(
+                &path,
+                crate::source_media::Priority::Foreground,
+            )?;
             let mut listed = Vec::new();
             for entry in crate::local_access::read_directory(&path)? {
                 let entry = match entry {
@@ -132,8 +135,13 @@ impl Lister for LocalLister {
             let link = crate::local_access::symlink_metadata(&native_path)?;
             let location = if crate::local_access::metadata_is_link_like(&native_path, &link) {
                 native_path.parent().unwrap_or(&native_path)
-            } else { native_path.as_path() };
-            let _guard = crate::source_media::acquire_current(location, crate::source_media::Priority::Foreground)?;
+            } else {
+                native_path.as_path()
+            };
+            let _guard = crate::source_media::acquire_current(
+                location,
+                crate::source_media::Priority::Foreground,
+            )?;
             let metadata = crate::local_access::symlink_metadata(&native_path)?;
             let class = crate::local_access::metadata_class(&native_path, &metadata);
             let name = path

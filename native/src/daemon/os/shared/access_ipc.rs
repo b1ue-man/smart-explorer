@@ -62,12 +62,24 @@ impl ShareHost {
                     grant.map(|grant| AccessGrantView::new(&grant.access_grant(), &own, now));
                 Ok(AccessIpcReply::GrantMutation { result, grant })
             }
-            AccessIpcRequest::DeviceRights { device_id, public_key } => {
-                let service = self.state.lock()
-                    .map_err(|_| "Share worker state is locked".to_string())?.service.clone()
+            AccessIpcRequest::DeviceRights {
+                device_id,
+                public_key,
+            } => {
+                let service = self
+                    .state
+                    .lock()
+                    .map_err(|_| "Share worker state is locked".to_string())?
+                    .service
+                    .clone()
                     .ok_or_else(|| "Share service is not active".to_string())?;
                 let own = crate::share::exec_provider_status().user_label;
-                let view = service.device_access_view(&device_id, &public_key, &own, crate::share::core_now_secs())?;
+                let view = service.device_access_view(
+                    &device_id,
+                    &public_key,
+                    &own,
+                    crate::share::core_now_secs(),
+                )?;
                 Ok(AccessIpcReply::DeviceRights { view })
             }
             AccessIpcRequest::Approvals => Ok(AccessIpcReply::ApprovalList {
@@ -324,10 +336,12 @@ fn follow(exec_id: &ExecId, slot: &Weak<NoticeSlot>, mut changed: impl FnMut(&Ex
 
 /// Every policy source and remaining route; never authorizes an operation.
 pub(crate) fn device_access_rights(
-    device_id: &str, public_key: &str,
+    device_id: &str,
+    public_key: &str,
 ) -> Result<crate::share::access_relation_view::DeviceAccessView, String> {
     match request(AccessIpcRequest::DeviceRights {
-        device_id: device_id.into(), public_key: public_key.into(),
+        device_id: device_id.into(),
+        public_key: public_key.into(),
     })? {
         AccessIpcReply::DeviceRights { view } => Ok(view),
         _ => Err(unexpected()),

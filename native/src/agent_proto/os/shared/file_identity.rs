@@ -24,7 +24,8 @@ pub(crate) fn identity(path: &str) -> io::Result<Option<String>> {
     // A replacement between the metadata read and this check is not ours.
     let checked = super::local_platform::open_regular_no_follow(path, false)?;
     if !super::local_platform::same_file_object(&checked, &file)?
-        || super::local_platform::stable_handle_identity(&checked)? != identity {
+        || super::local_platform::stable_handle_identity(&checked)? != identity
+    {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "File object changed during identity query",

@@ -133,7 +133,11 @@ impl VaultBackend {
         let mut candidates = Vec::new();
         for meta in stored.entries {
             if check_name(&meta.name).is_err() {
-                listing.omitted.push(omission(&meta.name, OmissionReason::Unrepresentable, "Ungültige Speicherkomponente"));
+                listing.omitted.push(omission(
+                    &meta.name,
+                    OmissionReason::Unrepresentable,
+                    "Ungültige Speicherkomponente",
+                ));
                 continue;
             }
             let class = classify_entry(&meta.name);
@@ -224,7 +228,10 @@ impl VaultBackend {
             Named::Undecryptable => return unreadable(&stored, UNDECRYPTABLE),
         };
         if check_name(&clear).is_err() {
-            return unreadable(&stored, "Entschlüsselter Name ist keine einzelne Pfadkomponente");
+            return unreadable(
+                &stored,
+                "Entschlüsselter Name ist keine einzelne Pfadkomponente",
+            );
         }
         // Reachable under its name only when stored exactly as se stores it
         // (NFC, canonical, shortened above the threshold); else an alias.

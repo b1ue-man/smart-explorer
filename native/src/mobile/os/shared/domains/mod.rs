@@ -27,29 +27,37 @@ mod locations;
 #[path = "screen_host.rs"]
 mod screen_host;
 // SCR-M9 (U28): this phone as screen viewer.
-#[path = "screen_view.rs"]
-mod screen_view;
-#[path = "login_view.rs"]
-mod login_view;
-#[path = "login_images.rs"]
-mod login_images;
 #[cfg(all(target_os = "android", feature = "android-instrumentation-fixtures"))]
 mod android_image_fixtures;
 #[cfg(all(target_os = "android", feature = "android-instrumentation-fixtures"))]
 mod login_image_fixture;
+#[path = "login_images.rs"]
+mod login_images;
+#[path = "login_view.rs"]
+mod login_view;
+#[path = "screen_view.rs"]
+mod screen_view;
 // DRV-M8: the documents provider (`docs.*`) and its proxy descriptors.
+#[path = "app_launch.rs"]
+mod app_launch;
+#[path = "apps.rs"]
+mod apps;
 #[path = "docs.rs"]
 mod docs;
-#[path = "docs_engines.rs"]
-mod docs_engines;
 #[path = "docs_access.rs"]
 mod docs_access;
+#[path = "docs_engines.rs"]
+mod docs_engines;
 #[path = "docs_ids.rs"]
 mod docs_ids;
 #[path = "docs_io.rs"]
 mod docs_io;
 #[path = "docs_vault.rs"]
 mod docs_vault;
+#[path = "rdp.rs"]
+mod rdp;
+#[path = "route_status.rs"]
+mod route_status;
 #[cfg(test)]
 #[path = "settings_parity_tests.rs"]
 mod settings_parity_tests;
@@ -77,16 +85,6 @@ mod share_settings;
 mod share_state;
 #[path = "share_status.rs"]
 mod share_status;
-#[path = "route_status.rs"]
-mod route_status;
-#[path = "tcp.rs"]
-mod tcp;
-#[path = "apps.rs"]
-mod apps;
-#[path = "app_launch.rs"]
-mod app_launch;
-#[path = "rdp.rs"]
-mod rdp;
 #[path = "sync_conflicts.rs"]
 mod sync_conflicts;
 #[path = "sync_jobs.rs"]
@@ -101,6 +99,8 @@ mod sync_run;
 mod sync_state_json;
 #[path = "sync_versions.rs"]
 mod sync_versions;
+#[path = "tcp.rs"]
+mod tcp;
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
@@ -111,22 +111,24 @@ mod update;
 mod vault_compare;
 #[path = "vault_keys.rs"]
 mod vault_keys;
-#[path = "vaults.rs"]
-mod vaults;
 #[path = "vault_open_policy.rs"]
 mod vault_open_policy;
+#[path = "vaults.rs"]
+mod vaults;
 
 // SCR-M8: the binary calls of the JNI bridge (`screen_jni.rs`).
 pub use docs_io::{doc_fsync, doc_open, doc_read, doc_release, doc_size, doc_write};
-pub use screen_host::{screen_control, screen_push};
-pub use screen_host::{
-    screen_capture_address, screen_capture_begin, screen_capture_claim,
-    screen_capture_release, screen_push_admitted,
+pub use login_images::{
+    login_bitmap_take, login_image_owner_close, login_image_owner_create,
+    login_render_target_claim, LoginBitmapLease, LoginBitmapTicket, LoginRenderTarget,
 };
-pub use screen_view::screen_pull;
 pub use login_view::{login_close, login_release};
-pub use login_images::{LoginBitmapTicket, LoginBitmapLease, LoginRenderTarget,
-    login_image_owner_create, login_image_owner_close, login_bitmap_take, login_render_target_claim};
+pub use screen_host::{
+    screen_capture_address, screen_capture_begin, screen_capture_claim, screen_capture_release,
+    screen_push_admitted,
+};
+pub use screen_host::{screen_control, screen_push};
+pub use screen_view::screen_pull;
 // U31 S2: the label of a vault for task titles outside this module.
 pub(crate) use vaults::label_of as vault_label;
 
@@ -145,7 +147,9 @@ pub(crate) fn dispatch(
         "tcp" => tcp::handle(method, args),
         "login" => login_view::handle(method, args),
         "apps" => app_launch::handle(method, args).or_else(|| apps::handle(method, args)),
-        "rdp" => rdp::handle(method, args, |target| crate::daemon::apps_rdp_probe(target, Some(std::time::Duration::from_secs(30)), || {})),
+        "rdp" => rdp::handle(method, args, |target| {
+            crate::daemon::apps_rdp_probe(target, Some(std::time::Duration::from_secs(30)), || {})
+        }),
         "analyze" | "reclaim" => analysis_method(rt, method, args),
         "update" => update_method(rt, method),
         "app" => app_licenses::handle(method),
@@ -327,16 +331,9 @@ fn update_method(rt: &Runtime, method: &str) -> Option<Result<Value, ApiError>> 
 
 #[cfg(all(target_os = "android", feature = "android-instrumentation-fixtures"))]
 pub use android_image_fixtures::{
-    android_fixture_capture_open,
-    android_fixture_capture_state,
-    android_fixture_capture_consume_still,
-    android_fixture_capture_pull_address,
-    android_fixture_capture_release_reader,
-    android_fixture_capture_release_viewer,
-    android_fixture_capture_retire,
-    android_fixture_capture_finish,
-    android_fixture_login_open,
-    android_fixture_login_enqueue,
-    android_fixture_login_state,
-    android_fixture_login_finish,
+    android_fixture_capture_consume_still, android_fixture_capture_finish,
+    android_fixture_capture_open, android_fixture_capture_pull_address,
+    android_fixture_capture_release_reader, android_fixture_capture_release_viewer,
+    android_fixture_capture_retire, android_fixture_capture_state, android_fixture_login_enqueue,
+    android_fixture_login_finish, android_fixture_login_open, android_fixture_login_state,
 };

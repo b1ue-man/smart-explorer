@@ -92,16 +92,23 @@ impl App {
         });
         ui.label(RichText::new("Die Dienstmeldung zeigt den Sync-Prozess. Für den Wächter gibt es keine eigene Aktivitätsmeldung.").small().color(theme::muted(ui)));
         // Check cadence (how often the daemon evaluates schedules / reacts).
-        let mut form = crate::app::settings_form::Form::new(ui, "background_form", &["Prüfintervall", "Pause"]);
-        form.row_labelled(ui, "Prüfintervall", |ui, field_label| {
-            match crate::daemon::cadence_secs() {
+        let mut form = crate::app::settings_form::Form::new(
+            ui,
+            "background_form",
+            &["Prüfintervall", "Pause"],
+        );
+        form.row_labelled(
+            ui,
+            "Prüfintervall",
+            |ui, field_label| match crate::daemon::cadence_secs() {
                 Ok(mut cadence) => {
                     if ui
                         .add(
                             egui::DragValue::new(&mut cadence)
                                 .range(2..=3600)
                                 .suffix(" s"),
-                        ).labelled_by(field_label)
+                        )
+                        .labelled_by(field_label)
                         .changed()
                     {
                         self.report_daemon_control(
@@ -114,59 +121,62 @@ impl App {
                     ui.colored_label(theme::danger(ui), "nicht lesbar")
                         .on_hover_text(format!("Zeitsteuerung ist sicher gesperrt: {error}"));
                 }
-            }
-        });
+            },
+        );
 
         // Pause / resume.
         form.row(ui, "Pause", |ui| {
             ui.horizontal_wrapped(|ui| {
-            match crate::daemon::pause_remaining() {
-                Ok(Some(r)) if r == i64::MAX => {
-                    ui.colored_label(theme::warning(ui), "⏸ pausiert (dauerhaft)");
+                match crate::daemon::pause_remaining() {
+                    Ok(Some(r)) if r == i64::MAX => {
+                        ui.colored_label(theme::warning(ui), "⏸ pausiert (dauerhaft)");
+                    }
+                    Ok(Some(r)) => {
+                        ui.colored_label(
+                            theme::warning(ui),
+                            format!("⏸ pausiert (noch {} min)", (r / 60).max(1)),
+                        );
+                    }
+                    Ok(None) => {
+                        ui.colored_label(theme::muted(ui), "Pause:");
+                    }
+                    Err(error) => {
+                        ui.colored_label(theme::danger(ui), "⏸ Status nicht lesbar")
+                            .on_hover_text(format!("Zeitsteuerung ist sicher gesperrt: {error}"));
+                    }
                 }
-                Ok(Some(r)) => {
-                    ui.colored_label(
-                        theme::warning(ui),
-                        format!("⏸ pausiert (noch {} min)", (r / 60).max(1)),
+                if ui.small_button("2 h").clicked() {
+                    self.report_daemon_control(
+                        "Pause speichern",
+                        crate::daemon::pause_for_secs(2 * 3600),
                     );
                 }
-                Ok(None) => {
-                    ui.colored_label(theme::muted(ui), "Pause:");
+                if ui.small_button("8 h").clicked() {
+                    self.report_daemon_control(
+                        "Pause speichern",
+                        crate::daemon::pause_for_secs(8 * 3600),
+                    );
                 }
-                Err(error) => {
-                    ui.colored_label(theme::danger(ui), "⏸ Status nicht lesbar")
-                        .on_hover_text(format!("Zeitsteuerung ist sicher gesperrt: {error}"));
+                if ui.small_button("24 h").clicked() {
+                    self.report_daemon_control(
+                        "Pause speichern",
+                        crate::daemon::pause_for_secs(24 * 3600),
+                    );
                 }
-            }
-            if ui.small_button("2 h").clicked() {
-                self.report_daemon_control(
-                    "Pause speichern",
-                    crate::daemon::pause_for_secs(2 * 3600),
-                );
-            }
-            if ui.small_button("8 h").clicked() {
-                self.report_daemon_control(
-                    "Pause speichern",
-                    crate::daemon::pause_for_secs(8 * 3600),
-                );
-            }
-            if ui.small_button("24 h").clicked() {
-                self.report_daemon_control(
-                    "Pause speichern",
-                    crate::daemon::pause_for_secs(24 * 3600),
-                );
-            }
-            if ui
-                .small_button("∞")
-                .on_hover_text("Dauerhaft pausieren")
-                .clicked()
-            {
-                self.report_daemon_control("Pause speichern", crate::daemon::pause_indefinite());
-            }
-            if ui.small_button("▶ Fortsetzen").clicked() {
-                self.report_daemon_control("Pause aufheben", crate::daemon::resume());
-            }
-        });
+                if ui
+                    .small_button("∞")
+                    .on_hover_text("Dauerhaft pausieren")
+                    .clicked()
+                {
+                    self.report_daemon_control(
+                        "Pause speichern",
+                        crate::daemon::pause_indefinite(),
+                    );
+                }
+                if ui.small_button("▶ Fortsetzen").clicked() {
+                    self.report_daemon_control("Pause aufheben", crate::daemon::resume());
+                }
+            });
         });
 
         // Auto-pause conditions.

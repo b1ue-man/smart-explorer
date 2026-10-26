@@ -70,8 +70,13 @@ impl App {
         if !active {
             // Invalid staging must not close otherwise usable RDP sessions.
             if intent == ExitIntent::Update && !self.sync_exit_gate.update_verified {
-                let preflight = self.sync_exit_gate.update.as_ref()
-                    .ok_or_else(|| "Das Update ist nicht mehr bereit. Bitte erneut prüfen.".to_string())
+                let preflight = self
+                    .sync_exit_gate
+                    .update
+                    .as_ref()
+                    .ok_or_else(|| {
+                        "Das Update ist nicht mehr bereit. Bitte erneut prüfen.".to_string()
+                    })
                     .and_then(verify_ready_update);
                 if let Err(error) = preflight {
                     self.error_msg = Some(error);
@@ -182,7 +187,11 @@ impl App {
         ctx.request_repaint();
     }
 
-    fn finish_ready_update(&mut self, ctx: &egui::Context, ready: ReadyUpdate) -> Result<(), String> {
+    fn finish_ready_update(
+        &mut self,
+        ctx: &egui::Context,
+        ready: ReadyUpdate,
+    ) -> Result<(), String> {
         // The drain may have waited for a peer approval. Revalidate bytes now,
         // immediately before shutdown preparation and the existing apply API.
         verify_ready_update(&ready)?;
@@ -213,7 +222,8 @@ fn verify_ready_update(ready: &ReadyUpdate) -> Result<(), String> {
     match ready {
         ReadyUpdate::Staged(bundle) => crate::updater::verify_staged_update(bundle),
         ReadyUpdate::InstalledRollback { .. } => Ok(()),
-    }.map_err(|error| format!("Update-Staging ist nicht mehr gültig: {error}"))
+    }
+    .map_err(|error| format!("Update-Staging ist nicht mehr gültig: {error}"))
 }
 
 #[cfg(test)]

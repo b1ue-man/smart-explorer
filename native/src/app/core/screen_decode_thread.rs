@@ -11,18 +11,16 @@
 //! ignored. A decode error or a broken group is answered with one key frame
 //! request (`KeyframeRequester`: at most one open request); until a key frame
 //! of the group arrives its records are skipped.
-use std::io;
 use std::collections::BTreeMap;
+use std::io;
 use std::sync::Arc;
 use std::time::Instant;
 
-use super::screen_session::{
-    DecoderOpener, EndInfo, Picture, PictureData, Shared,
-};
+use super::screen_session::{DecoderOpener, EndInfo, Picture, PictureData, Shared};
 use super::screen_texts::{end_text, error_text};
 use crate::daemon::StreamEvent;
-use crate::screen::core::gop_stream::now_us;
 use crate::screen::core::decoded_frame::{DecodedFrame, DecoderFallback, MAX_PENDING_FRAMES};
+use crate::screen::core::gop_stream::now_us;
 use crate::screen::core::host_backend::ScreenDecoder;
 use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::session_state::{KeyframeRequester, SessionState};
@@ -73,7 +71,11 @@ impl DecodeState {
         send: SendFrame,
         take_control: bool,
     ) -> Self {
-        let memory=shared.memory.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+        let memory = shared
+            .memory
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         Self {
             memory,
             shared,
@@ -94,24 +96,57 @@ impl DecodeState {
 
     /// Applies one event; `true` when it was the session's last.
     pub(crate) fn on_event(&mut self, event: StreamEvent) -> bool {
-        if self.shared.presentation.lock().unwrap_or_else(std::sync::PoisonError::into_inner).closed {self.gop=None;return true;}
+        if self
+            .shared
+            .presentation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .closed
+        {
+            self.gop = None;
+            return true;
+        }
         match event {
             StreamEvent::Pending(_) => self
                 .shared
                 .update(|info| info.state = SessionState::WaitingForApproval),
             StreamEvent::Accepted { hello, path } => {
-                let exceeds=self.shared.memory.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref()
-                    .is_some_and(|memory|hello.frame_contract.is_some_and(|contract|contract.limits.working_bytes>memory.bytes()));
-                if hello.validate().is_err() || exceeds {self.connection_lost();return true;}
-                if self.shared.info().family.is_some() && (hello.family_version != Some(1)
-                    || hello.frame_contract.is_none_or(|contract|contract.version!=crate::screen::core::frame_budget::FRAME_PROTOCOL)) {
-                    self.shared.end(EndInfo { text:"Der Host bestätigt den Familien-/Bildvertrag nicht.".into(), code:None });
+                let exceeds = self
+                    .shared
+                    .memory
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .as_ref()
+                    .is_some_and(|memory| {
+                        hello
+                            .frame_contract
+                            .is_some_and(|contract| contract.limits.working_bytes > memory.bytes())
+                    });
+                if hello.validate().is_err() || exceeds {
+                    self.connection_lost();
+                    return true;
+                }
+                if self.shared.info().family.is_some()
+                    && (hello.family_version != Some(1)
+                        || hello.frame_contract.is_none_or(|contract| {
+                            contract.version != crate::screen::core::frame_budget::FRAME_PROTOCOL
+                        }))
+                {
+                    self.shared.end(EndInfo {
+                        text: "Der Host bestätigt den Familien-/Bildvertrag nicht.".into(),
+                        code: None,
+                    });
                     return true;
                 }
                 {
-                    let icons=self.shared.info().icons.clone();
-                    icons.lock().unwrap_or_else(std::sync::PoisonError::into_inner).requests
-                        .negotiate(hello.icon_version==Some(crate::screen::core::app_icon::ICON_VERSION));
+                    let icons = self.shared.info().icons.clone();
+                    icons
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .requests
+                        .negotiate(
+                            hello.icon_version == Some(crate::screen::core::app_icon::ICON_VERSION),
+                        );
                 }
                 self.shared.update(|info| {
                     info.hello = Some(hello);
@@ -132,32 +167,47 @@ impl DecodeState {
                 }
             }
             StreamEvent::Host(frame) => {
-                if let Some(result)=super::family_viewer_events::receive(&self.shared, &self.send, &frame) {
+                if let Some(result) =
+                    super::family_viewer_events::receive(&self.shared, &self.send, &frame)
+                {
                     match result {
-                        Err(error)=>{self.shared.end(EndInfo{text:error.to_string(),code:None});return true;}
-                        Ok(true)=>{
-                            self.shared.cancel_presentation();self.gop=None;
-                            self.request_keyframe(KeyframeReason::Reset,self.latest_gop);
+                        Err(error) => {
+                            self.shared.end(EndInfo {
+                                text: error.to_string(),
+                                code: None,
+                            });
+                            return true;
                         }
-                        Ok(false)=>{}
+                        Ok(true) => {
+                            self.shared.cancel_presentation();
+                            self.gop = None;
+                            self.request_keyframe(KeyframeReason::Reset, self.latest_gop);
+                        }
+                        Ok(false) => {}
                     }
-                } else { self.host(frame); }
-            },
+                } else {
+                    self.host(frame);
+                }
+            }
             StreamEvent::Record { header, record } => self.record(header, record),
             StreamEvent::Broken { gop_id } => {
-                if gop_id < self.latest_gop { return false; }
+                if gop_id < self.latest_gop {
+                    return false;
+                }
                 self.shared.cancel_presentation();
                 if self.gop.as_ref().is_some_and(|gop| gop.id == gop_id) {
                     self.gop = None;
                 }
                 self.broken = Some(gop_id);
-                self.broken_frame = self.last_record
-                    .filter(|(group, _)| *group == gop_id).map(|(_, frame)| frame);
+                self.broken_frame = self
+                    .last_record
+                    .filter(|(group, _)| *group == gop_id)
+                    .map(|(_, frame)| frame);
                 self.request_keyframe(KeyframeReason::Reset, gop_id);
             }
             StreamEvent::Clock(offset) => self.shared.update(|info| info.clock_offset_us = offset),
             StreamEvent::End(end) => {
-                self.gop=None;
+                self.gop = None;
                 self.shared.stop_presentation();
                 let text = end_text(&end.code, end.detail.as_deref());
                 self.shared.update(|info| {
@@ -175,7 +225,7 @@ impl DecodeState {
 
     /// The reading side broke without an end from the relay.
     pub(crate) fn connection_lost(&mut self) {
-        self.gop=None;
+        self.gop = None;
         self.shared.end(EndInfo {
             text: end_text("connection_lost", None),
             code: Some("connection_lost".into()),
@@ -185,19 +235,28 @@ impl DecodeState {
     fn host(&mut self, frame: HostFrame) {
         match frame {
             HostFrame::State(report) => {
-                if report.state != SessionState::Streaming && self.shared.info().state != report.state {
+                if report.state != SessionState::Streaming
+                    && self.shared.info().state != report.state
+                {
                     self.shared.suspend_presentation();
                 }
                 self.shared.update(|info| {
-                info.state = report.state;
-                if let Some(reason) = report.reason.as_deref().and_then(|value| value.strip_prefix("encoder_fallback_to_tiles: ")) {
-                    info.notice = Some(format!("Videoencoder nicht verfügbar; verlustfreie Übertragung. {reason}"));
-                }
-                info.reason = report.reason;
-                if report.stream.is_some() {
-                    info.stream = report.stream;
-                }
-            })},
+                    info.state = report.state;
+                    if let Some(reason) = report
+                        .reason
+                        .as_deref()
+                        .and_then(|value| value.strip_prefix("encoder_fallback_to_tiles: "))
+                    {
+                        info.notice = Some(format!(
+                            "Videoencoder nicht verfügbar; verlustfreie Übertragung. {reason}"
+                        ));
+                    }
+                    info.reason = report.reason;
+                    if report.stream.is_some() {
+                        info.stream = report.stream;
+                    }
+                })
+            }
             HostFrame::Error(error) => {
                 let text = error_text(&error.code, error.detail.as_deref());
                 let busy = error.code == "control_busy";
@@ -208,25 +267,38 @@ impl DecodeState {
             }
             HostFrame::Windows(list) => {
                 self.shared.update(|info| {
-                    info.icons.lock().unwrap_or_else(std::sync::PoisonError::into_inner).requests.refreshed();
+                    info.icons
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .requests
+                        .refreshed();
                     info.windows = Some(list);
                 });
             }
-            HostFrame::IconReply(response)=>{
-                let (icons,peer)={let info=self.shared.info();(info.icons.clone(),info.icon_peer.clone())};
-                icons.lock().unwrap_or_else(std::sync::PoisonError::into_inner).receive(&peer,&response);
+            HostFrame::IconReply(response) => {
+                let (icons, peer) = {
+                    let info = self.shared.info();
+                    (info.icons.clone(), info.icon_peer.clone())
+                };
+                icons
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .receive(&peer, &response);
             }
             HostFrame::ControlState(state) => self.shared.update(|info| {
                 info.controller = state.holder;
                 info.blocked = state.blocked;
             }),
             HostFrame::Stats(stats) => self.shared.update(|info| info.stats = Some(stats)),
-            HostFrame::Families(_) | HostFrame::FamilySnapshot(_) | HostFrame::FamilyOperation(_)
-                | HostFrame::FamilyInput(_) => {},
+            HostFrame::Families(_)
+            | HostFrame::FamilySnapshot(_)
+            | HostFrame::FamilyOperation(_)
+            | HostFrame::FamilyInput(_) => {}
             // The relay answers `PING` and reports the clock itself.
             HostFrame::Pong(_) => {}
             HostFrame::VisibilityAck(ack) => {
-                self.shared.visibility_ack(ack.geometry_generation, ack.min_frame_id);
+                self.shared
+                    .visibility_ack(ack.geometry_generation, ack.min_frame_id);
             }
         }
     }
@@ -272,16 +344,42 @@ impl DecodeState {
     }
 
     fn record(&mut self, header: GopHeader, record: FrameRecord) {
-        let admitted=self.shared.info().hello.as_ref().is_some_and(|hello|
-            crate::screen::core::frame_budget::contract_matches(header.frame_contract,hello.frame_contract));
-        let exceeds=self.shared.memory.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref().is_some_and(|memory| {
-            let owners=if header.frame_contract.is_some() {24} else {8};header.size.pixels().saturating_mul(4*owners)>memory.bytes()
+        let admitted = self.shared.info().hello.as_ref().is_some_and(|hello| {
+            crate::screen::core::frame_budget::contract_matches(
+                header.frame_contract,
+                hello.frame_contract,
+            )
         });
-        if !admitted || exceeds {self.connection_lost();return;}
-        if self.shared.lossless_fallback.load(std::sync::atomic::Ordering::Acquire)
-            && header.codec != crate::screen::core::negotiate::CodecKind::Tiles { return; }
-        if let Some(family)=&self.shared.info().family {
-            if family.snapshot.as_ref().is_none_or(|snapshot|header.family_layout_revision!=Some(snapshot.layout_revision)) {
+        let exceeds = self
+            .shared
+            .memory
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .is_some_and(|memory| {
+                let owners = if header.frame_contract.is_some() {
+                    24
+                } else {
+                    8
+                };
+                header.size.pixels().saturating_mul(4 * owners) > memory.bytes()
+            });
+        if !admitted || exceeds {
+            self.connection_lost();
+            return;
+        }
+        if self
+            .shared
+            .lossless_fallback
+            .load(std::sync::atomic::Ordering::Acquire)
+            && header.codec != crate::screen::core::negotiate::CodecKind::Tiles
+        {
+            return;
+        }
+        if let Some(family) = &self.shared.info().family {
+            if family.snapshot.as_ref().is_none_or(|snapshot| {
+                header.family_layout_revision != Some(snapshot.layout_revision)
+            }) {
                 return;
             }
         }
@@ -291,7 +389,11 @@ impl DecodeState {
         self.last_record = Some((header.gop_id, record.frame_id));
         let keyframe = record.flags & FLAG_KEYFRAME != 0;
         if self.broken == Some(header.gop_id) {
-            if !keyframe || self.broken_frame.is_some_and(|frame| record.frame_id <= frame) {
+            if !keyframe
+                || self
+                    .broken_frame
+                    .is_some_and(|frame| record.frame_id <= frame)
+            {
                 return;
             }
             self.broken = None;
@@ -308,7 +410,7 @@ impl DecodeState {
                 None => {
                     self.broken_frame = Some(record.frame_id);
                     return;
-                },
+                }
             },
         };
         let want_yuv = self.shared.prefers_yuv();
@@ -319,26 +421,39 @@ impl DecodeState {
         let decoded = (|| -> io::Result<_> {
             let input = DecodedFrame::from_record(&record);
             if let Some((submitted, _)) = gop.pending.get(&input.frame_id) {
-                if *submitted != input { return Err(io::Error::other("frame fragments changed capture identity")); }
+                if *submitted != input {
+                    return Err(io::Error::other("frame fragments changed capture identity"));
+                }
             } else {
                 if gop.pending.len() >= MAX_PENDING_FRAMES {
                     return Err(io::Error::other("presentation identity window exhausted"));
                 }
                 gop.pending.insert(input.frame_id, (input, presented));
             }
-            if !gop.decoder.decode(&record)? { return Ok(None); }
-            let output = gop.decoder.decoded_frame()
+            if !gop.decoder.decode(&record)? {
+                return Ok(None);
+            }
+            let output = gop
+                .decoder
+                .decoded_frame()
                 .ok_or_else(|| io::Error::other("decoded picture has no identity"))?;
-            let (submitted, receipt) = gop.pending.remove(&output.frame_id)
+            let (submitted, receipt) = gop
+                .pending
+                .remove(&output.frame_id)
                 .ok_or_else(|| io::Error::other("decoded picture was not submitted in this GOP"))?;
-            if output != submitted { return Err(io::Error::other("decoded picture changed capture identity")); }
-            gop.pending.retain(|frame_id, _| *frame_id > output.frame_id);
+            if output != submitted {
+                return Err(io::Error::other("decoded picture changed capture identity"));
+            }
+            gop.pending
+                .retain(|frame_id, _| *frame_id > output.frame_id);
             Ok(Some((output, receipt)))
         })();
         match decoded {
             Ok(output) => {
                 if let Some((output, receipt)) = output {
-                    if output.keyframe { self.keyframes.on_keyframe(); }
+                    if output.keyframe {
+                        self.keyframes.on_keyframe();
+                    }
                     self.show(&gop, header.size, output.capture_ts_us, receipt);
                 }
                 self.gop = Some(gop);
@@ -348,10 +463,13 @@ impl DecodeState {
                 self.broken = Some(header.gop_id);
                 self.broken_frame = Some(record.frame_id);
                 if header.frame_contract.is_some_and(|c| c.hybrid_regions)
-                    && DecoderFallback::from_error(&error).is_some() {
+                    && DecoderFallback::from_error(&error).is_some()
+                {
                     if let Some(mode) = self.shared.request_lossless() {
                         self.shared.update(|info| info.notice = Some("Der Videodecoder liefert kein passend zugeordnetes Hybridbild. Die Sitzung wechselt zur verlustfreien Kachelübertragung.".into()));
-                        if (self.send)(&ViewerFrame::SetMode(mode)).is_err() { self.connection_lost(); }
+                        if (self.send)(&ViewerFrame::SetMode(mode)).is_err() {
+                            self.connection_lost();
+                        }
                     }
                     return;
                 }
@@ -361,7 +479,13 @@ impl DecodeState {
     }
 
     /// Hands the finished picture to the GUI thread.
-    fn show(&mut self, gop: &Gop, size: FrameSize, capture_ts_us: u64, presented: super::screen_presented::PresentedFrame) {
+    fn show(
+        &mut self,
+        gop: &Gop,
+        size: FrameSize,
+        capture_ts_us: u64,
+        presented: super::screen_presented::PresentedFrame,
+    ) {
         let shown_us = now_us();
         let gap = std::time::Duration::from_millis(self.shared.present_gap_ms());
         let due = self
@@ -387,7 +511,7 @@ impl DecodeState {
         self.seq += 1;
         self.last_shown = Some(Instant::now());
         self.shared.put_picture(Picture {
-            memory:self.memory.clone(),
+            memory: self.memory.clone(),
             seq: self.seq,
             presented,
             size,
@@ -396,5 +520,5 @@ impl DecodeState {
     }
 }
 #[cfg(test)]
-#[path="batches_decode_lifetime_task_tests.rs"]
+#[path = "batches_decode_lifetime_task_tests.rs"]
 mod lifetime_tests;

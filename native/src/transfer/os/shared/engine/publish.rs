@@ -139,7 +139,8 @@ pub(crate) fn complete(
                 return Err(error);
             }
             if let Err(error) = super::file_recovery::prepare_direct(engine, file, &path) {
-                super::file_recovery::preparation_failed(engine, file).map_err(|failure| OpError::at(At::Unknown, failure))?;
+                super::file_recovery::preparation_failed(engine, file)
+                    .map_err(|failure| OpError::at(At::Unknown, failure))?;
                 return Err(OpError::target(error));
             }
             if let Err(error) = writer.flush() {
@@ -149,11 +150,18 @@ pub(crate) fn complete(
                 let refused =
                     ends_job_at_target(error.kind()) || crate::vfs::congestion_of(&error).is_some();
                 let at = if refused { At::Target } else { At::Unknown };
-                if refused { super::file_recovery::unpublished(engine, file).map_err(|error| OpError::at(At::Unknown, error))?; }
-                return Err(OpError::at(at, relabeled(&error, &format!("„{path}“ abschließen"))));
+                if refused {
+                    super::file_recovery::unpublished(engine, file)
+                        .map_err(|error| OpError::at(At::Unknown, error))?;
+                }
+                return Err(OpError::at(
+                    at,
+                    relabeled(&error, &format!("„{path}“ abschließen")),
+                ));
             }
             drop(writer);
-            super::file_recovery::after(engine, file, &path).map_err(|error| OpError::at(At::Unknown, error))?;
+            super::file_recovery::after(engine, file, &path)
+                .map_err(|error| OpError::at(At::Unknown, error))?;
             Ok(Outcome::Done)
         }
         Destination::Staged {

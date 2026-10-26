@@ -19,7 +19,12 @@ impl DiscoverySignalRuntime {
             .state
             .exchanges
             .values()
-            .filter(|exchange| exchange.owner.as_ref().is_some_and(|owner| owner.is_cancelled()))
+            .filter(|exchange| {
+                exchange
+                    .owner
+                    .as_ref()
+                    .is_some_and(|owner| owner.is_cancelled())
+            })
             .map(|exchange| exchange.exchange_id.clone())
             .collect();
         let mut first_error = None;

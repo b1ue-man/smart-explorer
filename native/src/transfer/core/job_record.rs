@@ -14,8 +14,16 @@ pub struct StoredEndpoint {
 impl StoredEndpoint {
     pub fn of(endpoint: &Endpoint) -> Self {
         match endpoint {
-            Endpoint::Local => Self { local: true, namespace: "local".into(), state: "local".into() },
-            Endpoint::Remote(backend) => Self { local: false, namespace: backend.namespace_identity(), state: backend.state_identity() },
+            Endpoint::Local => Self {
+                local: true,
+                namespace: "local".into(),
+                state: "local".into(),
+            },
+            Endpoint::Remote(backend) => Self {
+                local: false,
+                namespace: backend.namespace_identity(),
+                state: backend.state_identity(),
+            },
         }
     }
 }
@@ -39,11 +47,62 @@ pub struct StoredFilter {
 
 impl StoredFilter {
     pub fn of((filter, base): &(FilterDef, String)) -> Self {
-        Self { base: base.clone(), text: filter.text.clone(), text_mode: match filter.text_mode { TextMode::Substring => 0, TextMode::Regex => 1, TextMode::Glob => 2 }, extensions: filter.extensions.clone(), size: [filter.size.min, filter.size.max], mtime: [filter.mtime.min, filter.mtime.max], btime: [filter.btime.min, filter.btime.max], depth: [filter.depth.min, filter.depth.max], include_files: filter.include_files, include_dirs: filter.include_dirs, include_hidden: filter.include_hidden, include_system: filter.include_system, problem_names_only: filter.problem_names_only }
+        Self {
+            base: base.clone(),
+            text: filter.text.clone(),
+            text_mode: match filter.text_mode {
+                TextMode::Substring => 0,
+                TextMode::Regex => 1,
+                TextMode::Glob => 2,
+            },
+            extensions: filter.extensions.clone(),
+            size: [filter.size.min, filter.size.max],
+            mtime: [filter.mtime.min, filter.mtime.max],
+            btime: [filter.btime.min, filter.btime.max],
+            depth: [filter.depth.min, filter.depth.max],
+            include_files: filter.include_files,
+            include_dirs: filter.include_dirs,
+            include_hidden: filter.include_hidden,
+            include_system: filter.include_system,
+            problem_names_only: filter.problem_names_only,
+        }
     }
 
     pub fn restore(&self) -> Result<(FilterDef, String), String> {
-        Ok((FilterDef { text: self.text.clone(), text_mode: match self.text_mode { 0 => TextMode::Substring, 1 => TextMode::Regex, 2 => TextMode::Glob, _ => return Err("Gespeicherter Filtermodus ist unbekannt".into()) }, extensions: self.extensions.clone(), size: crate::types::Range { min: self.size[0], max: self.size[1] }, mtime: crate::types::Range { min: self.mtime[0], max: self.mtime[1] }, btime: crate::types::Range { min: self.btime[0], max: self.btime[1] }, depth: crate::types::Range { min: self.depth[0], max: self.depth[1] }, include_files: self.include_files, include_dirs: self.include_dirs, include_hidden: self.include_hidden, include_system: self.include_system, problem_names_only: self.problem_names_only }, self.base.clone()))
+        Ok((
+            FilterDef {
+                text: self.text.clone(),
+                text_mode: match self.text_mode {
+                    0 => TextMode::Substring,
+                    1 => TextMode::Regex,
+                    2 => TextMode::Glob,
+                    _ => return Err("Gespeicherter Filtermodus ist unbekannt".into()),
+                },
+                extensions: self.extensions.clone(),
+                size: crate::types::Range {
+                    min: self.size[0],
+                    max: self.size[1],
+                },
+                mtime: crate::types::Range {
+                    min: self.mtime[0],
+                    max: self.mtime[1],
+                },
+                btime: crate::types::Range {
+                    min: self.btime[0],
+                    max: self.btime[1],
+                },
+                depth: crate::types::Range {
+                    min: self.depth[0],
+                    max: self.depth[1],
+                },
+                include_files: self.include_files,
+                include_dirs: self.include_dirs,
+                include_hidden: self.include_hidden,
+                include_system: self.include_system,
+                problem_names_only: self.problem_names_only,
+            },
+            self.base.clone(),
+        ))
     }
 }
 
@@ -84,11 +143,48 @@ pub struct JobRecord {
 
 impl JobRecord {
     pub fn bind(&self, source: Endpoint, target: Endpoint) -> Result<TransferJob, String> {
-        if self.version != 1 || StoredEndpoint::of(&source) != self.source || StoredEndpoint::of(&target) != self.target {
-            return Err("Geöffnete Quellen-/Zielverbindung entspricht nicht dem gespeicherten Auftrag".into());
+        if self.version != 1
+            || StoredEndpoint::of(&source) != self.source
+            || StoredEndpoint::of(&target) != self.target
+        {
+            return Err(
+                "Geöffnete Quellen-/Zielverbindung entspricht nicht dem gespeicherten Auftrag"
+                    .into(),
+            );
         }
-        if self.complete { return Err("Dieser Übertragungsauftrag ist bereits abgeschlossen".into()); }
-        let job = TransferJob { id: self.id.clone(), recoverable: true, recovery: crate::transfer::RecoveryMode::Resume, source, target, target_dir: self.target_dir.clone(), items: self.items.clone(), layout: self.layout, filter: self.filter.as_ref().map(StoredFilter::restore).transpose()?, conflict: match self.file_policy { 0 => Conflict::Rename, 1 => Conflict::Overwrite, 2 => Conflict::Skip, _ => return Err("Gespeicherte Dateikonfliktregel ist unbekannt".into()) }, folders: self.folders.clone(), mode: if self.moving { CopyMode::Move } else { CopyMode::Copy }, source_label: format!("Wiederaufnahme {}", self.id), target_label: self.target_dir.clone(), resume: None };
+        if self.complete {
+            return Err("Dieser Übertragungsauftrag ist bereits abgeschlossen".into());
+        }
+        let job = TransferJob {
+            id: self.id.clone(),
+            recoverable: true,
+            recovery: crate::transfer::RecoveryMode::Resume,
+            source,
+            target,
+            target_dir: self.target_dir.clone(),
+            items: self.items.clone(),
+            layout: self.layout,
+            filter: self
+                .filter
+                .as_ref()
+                .map(StoredFilter::restore)
+                .transpose()?,
+            conflict: match self.file_policy {
+                0 => Conflict::Rename,
+                1 => Conflict::Overwrite,
+                2 => Conflict::Skip,
+                _ => return Err("Gespeicherte Dateikonfliktregel ist unbekannt".into()),
+            },
+            folders: self.folders.clone(),
+            mode: if self.moving {
+                CopyMode::Move
+            } else {
+                CopyMode::Copy
+            },
+            source_label: format!("Wiederaufnahme {}", self.id),
+            target_label: self.target_dir.clone(),
+            resume: None,
+        };
         job.validate()?;
         Ok(job)
     }

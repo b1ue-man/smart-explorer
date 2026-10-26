@@ -36,7 +36,9 @@ pub(in crate::daemon) enum MountHostRequest {
     /// Waits for a lock of the drive's vault (vault drives only).
     PrepareLock { deadline_ms: u64 },
     /// Cached provider metadata and the real host staging budget.
-    Capacity { capacity: crate::mount::MountCapacityReport },
+    Capacity {
+        capacity: crate::mount::MountCapacityReport,
+    },
     /// DRV-M6: opens `root` of a device for the device tree.
     ChildBackend {
         target: crate::mount::PeerMountTarget,

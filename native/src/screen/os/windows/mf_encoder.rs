@@ -17,16 +17,16 @@ use windows::Win32::Media::MediaFoundation::{
 };
 
 use super::mf_common::{ensure_com, EncoderSetup};
-use super::{mf_capture_media, mf_capture_output};
 use super::mf_encoder_sync::{
     clamp_bitrate, force_keyframe, frame_of, retune, start, stop, UNITS_PER_SECOND,
 };
 use super::mf_media::{
     configure_encoder, input_sample, is_keyframe, nv12_bytes, process_output, sample_bytes, Output,
 };
-use crate::screen::core::host_backend::{CapturedEncodedFrame, EncodedFrame, ScreenEncoder};
+use super::{mf_capture_media, mf_capture_output};
 use crate::screen::core::capture_admission::{CaptureGrant, CaptureOwner};
 use crate::screen::core::capture_image::{AdmittedBytes, CapturedImage};
+use crate::screen::core::host_backend::{CapturedEncodedFrame, EncodedFrame, ScreenEncoder};
 use crate::screen::core::host_stage::StageRequest;
 use crate::screen::core::pixel_convert::{BgraImage, FrameSize};
 use crate::screen::core::rate_control::START_DIRECT_BPS;
@@ -63,12 +63,19 @@ impl AsyncEncoder {
         Self::create(transform, setup, None)
     }
 
-    pub(super) fn new_admitted(transform: IMFTransform, setup: EncoderSetup,
-        grant: CaptureGrant) -> io::Result<Self> {
+    pub(super) fn new_admitted(
+        transform: IMFTransform,
+        setup: EncoderSetup,
+        grant: CaptureGrant,
+    ) -> io::Result<Self> {
         Self::create(transform, setup, Some(grant))
     }
 
-    fn create(transform: IMFTransform, setup: EncoderSetup, grant: Option<CaptureGrant>) -> io::Result<Self> {
+    fn create(
+        transform: IMFTransform,
+        setup: EncoderSetup,
+        grant: Option<CaptureGrant>,
+    ) -> io::Result<Self> {
         // SAFETY: attribute write on the activated transform; without it an
         // asynchronous MFT refuses every call.
         unsafe {
@@ -127,43 +134,79 @@ impl AsyncEncoder {
 }
 
 impl ScreenEncoder for AsyncEncoder {
-    fn encode_captured(&mut self, image: &CapturedImage, request: &StageRequest)
-        -> io::Result<CapturedEncodedFrame> {
-        let grant = self.grant.clone().ok_or_else(|| io::Error::other("MF encoder has no capture grant"))?;
+    fn encode_captured(
+        &mut self,
+        image: &CapturedImage,
+        request: &StageRequest,
+    ) -> io::Result<CapturedEncodedFrame> {
+        let grant = self
+            .grant
+            .clone()
+            .ok_or_else(|| io::Error::other("MF encoder has no capture grant"))?;
         let maximum = mf_capture_output::capture_limit(&grant, image, request, self.setup.size)?;
         ensure_com();
         retune(self.api.as_ref(), &mut self.bitrate, request.target_bps);
-        if request.keyframe && self.frames > 0 {force_keyframe(self.api.as_ref());}
+        if request.keyframe && self.frames > 0 {
+            force_keyframe(self.api.as_ref());
+        }
         let deadline = Instant::now() + EVENT_DEADLINE;
         while self.credits == 0 {
             match self.next_event(deadline)? {
-                Event::NeedInput => self.credits = self.credits.checked_add(1)
-                    .ok_or_else(|| io::Error::other("MF input credit overflow"))?,
-                Event::HaveOutput => return Err(io::Error::other("the hardware encoder gave a picture without its frame")),
+                Event::NeedInput => {
+                    self.credits = self
+                        .credits
+                        .checked_add(1)
+                        .ok_or_else(|| io::Error::other("MF input credit overflow"))?
+                }
+                Event::HaveOutput => {
+                    return Err(io::Error::other(
+                        "the hardware encoder gave a picture without its frame",
+                    ))
+                }
                 Event::Other => (),
             }
         }
         let duration = UNITS_PER_SECOND / i64::from(self.setup.fps.max(1));
-        let time = self.frames.checked_mul(duration).ok_or_else(|| io::Error::other("MF frame timestamp overflow"))?;
+        let time = self
+            .frames
+            .checked_mul(duration)
+            .ok_or_else(|| io::Error::other("MF frame timestamp overflow"))?;
         let sample = mf_capture_media::input_sample(&grant, image, time, duration)?;
-        self.frames = self.frames.checked_add(1).ok_or_else(|| io::Error::other("MF frame count overflow"))?;
-        unsafe {self.transform.ProcessInput(0, &sample, 0)?};
+        self.frames = self
+            .frames
+            .checked_add(1)
+            .ok_or_else(|| io::Error::other("MF frame count overflow"))?;
+        unsafe { self.transform.ProcessInput(0, &sample, 0)? };
         self.credits -= 1;
         drop(sample);
         let mut bytes = AdmittedBytes::buffer(&grant, CaptureOwner::CodecOutput, maximum as u64)?;
         loop {
             match self.next_event(deadline)? {
-                Event::NeedInput => self.credits = self.credits.checked_add(1)
-                    .ok_or_else(|| io::Error::other("MF input credit overflow"))?,
-                Event::HaveOutput => match mf_capture_output::process_output(&self.transform, &grant,
-                    self.setup.size.bgra_len())? {
+                Event::NeedInput => {
+                    self.credits = self
+                        .credits
+                        .checked_add(1)
+                        .ok_or_else(|| io::Error::other("MF input credit overflow"))?
+                }
+                Event::HaveOutput => match mf_capture_output::process_output(
+                    &self.transform,
+                    &grant,
+                    self.setup.size.bgra_len(),
+                )? {
                     Output::Sample(sample) => {
                         let keyframe = is_keyframe(&sample);
                         mf_capture_output::append_sample(&mut bytes, &sample)?;
-                        return mf_capture_output::finish(bytes, self.setup.size, keyframe, request.keyframe);
+                        return mf_capture_output::finish(
+                            bytes,
+                            self.setup.size,
+                            keyframe,
+                            request.keyframe,
+                        );
                     }
                     Output::NeedInput => (),
-                    Output::StreamChange => return Err(io::Error::other("the encoder changed its output type")),
+                    Output::StreamChange => {
+                        return Err(io::Error::other("the encoder changed its output type"))
+                    }
                 },
                 Event::Other => (),
             }
@@ -185,7 +228,9 @@ impl ScreenEncoder for AsyncEncoder {
         target_bps: u64,
     ) -> io::Result<EncodedFrame> {
         if self.grant.is_some() {
-            return Err(io::Error::other("admitted MF encoder requires encode_captured"));
+            return Err(io::Error::other(
+                "admitted MF encoder requires encode_captured",
+            ));
         }
         if frame.size() != self.setup.size {
             return Err(io::Error::new(
@@ -223,8 +268,14 @@ impl ScreenEncoder for AsyncEncoder {
                 Event::HaveOutput => match process_output(&self.transform, fallback)? {
                     Output::Sample(out) => {
                         let key = is_keyframe(&out);
-                        let frame=frame_of(vec![sample_bytes(&out)?],key,keyframe)?;
-                        for data in &frame.records {crate::screen::core::frame_size_caps::check_avc_dimensions(data,self.setup.size,crate::screen::core::frame_budget::FrameLimits::RESOURCE)?;}
+                        let frame = frame_of(vec![sample_bytes(&out)?], key, keyframe)?;
+                        for data in &frame.records {
+                            crate::screen::core::frame_size_caps::check_avc_dimensions(
+                                data,
+                                self.setup.size,
+                                crate::screen::core::frame_budget::FrameLimits::RESOURCE,
+                            )?;
+                        }
                         return Ok(frame);
                     }
                     Output::NeedInput => {}

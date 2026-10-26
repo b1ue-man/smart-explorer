@@ -5,10 +5,9 @@
 pub(crate) mod core;
 pub(crate) mod os;
 
+pub(crate) use core::grant::{LocalAppGrantChange, LocalAppGrantSnapshot};
 pub(crate) use core::model::{
-    AppId, AppKind, CatalogApp, CatalogSnapshot, DeviceId, HostSession, LaunchDenial,
-    LaunchFacts, LaunchReceipt, LaunchRequest, LaunchState, RequestId, SessionId,
-    UserId, WindowBinding,
+    AppId, AppKind, CatalogApp, CatalogSnapshot, DeviceId, HostSession, LaunchDenial, LaunchFacts,
+    LaunchReceipt, LaunchRequest, LaunchState, RequestId, SessionId, UserId, WindowBinding,
 };
-pub(crate) use os::host::{AppHost,CatalogIcons,LaunchAdmission};
-pub(crate) use core::grant::{LocalAppGrantChange,LocalAppGrantSnapshot};
+pub(crate) use os::host::{AppHost, CatalogIcons, LaunchAdmission};

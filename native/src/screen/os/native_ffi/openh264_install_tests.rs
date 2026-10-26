@@ -9,7 +9,7 @@ use crate::screen::os::openh264_pins::CISCO_BINARY_LICENSE;
 
 fn cb_choice() -> CodecChoice {
     CodecChoice {
-            max_macroblocks_per_second: None,
+        max_macroblocks_per_second: None,
         codec: CodecKind::H264,
         profile: Some(H264Profile::ConstrainedBaseline),
         encoder_hardware: false,

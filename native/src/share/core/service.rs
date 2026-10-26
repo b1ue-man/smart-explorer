@@ -184,29 +184,45 @@ impl ShareService {
     }
 
     pub(crate) fn start_exec_for_target(
-        &self, target:&PeerOpenTarget, start:super::exec_types::ExecStart,
-    )->Result<super::exec_session::ShareExecSession,String> {
-        self.start_exec_for_target_retained(target,start,None)
+        &self,
+        target: &PeerOpenTarget,
+        start: super::exec_types::ExecStart,
+    ) -> Result<super::exec_session::ShareExecSession, String> {
+        self.start_exec_for_target_retained(target, start, None)
     }
 
     pub(crate) fn start_exec_for_target_retained(
-        &self, target:&PeerOpenTarget, start:super::exec_types::ExecStart,
-        retainer:Option<Arc<dyn Send+Sync>>,
-    )->Result<super::exec_session::ShareExecSession,String> {
-        let endpoint=self.endpoint_for_target(target)?;
-        self.iroh.start_exec_retained(endpoint,self.identity.clone(),start,retainer)
-            .map_err(|error|error.to_string())
+        &self,
+        target: &PeerOpenTarget,
+        start: super::exec_types::ExecStart,
+        retainer: Option<Arc<dyn Send + Sync>>,
+    ) -> Result<super::exec_session::ShareExecSession, String> {
+        let endpoint = self.endpoint_for_target(target)?;
+        self.iroh
+            .start_exec_retained(endpoint, self.identity.clone(), start, retainer)
+            .map_err(|error| error.to_string())
     }
 
     pub(crate) fn start_exec_for_target_cancellable(
-        &self, target: &PeerOpenTarget, start: super::exec_types::ExecStart,
+        &self,
+        target: &PeerOpenTarget,
+        start: super::exec_types::ExecStart,
         retainer: Option<Arc<dyn Send + Sync>>,
-        cancellation: Arc<super::route_cancellation::RouteCancellation>, deadline: std::time::Instant,
+        cancellation: Arc<super::route_cancellation::RouteCancellation>,
+        deadline: std::time::Instant,
     ) -> Result<super::exec_session::ShareExecSession, String> {
         cancellation.check().map_err(|error| error.to_string())?;
         let endpoint = self.endpoint_for_target(target)?;
-        self.iroh.start_exec_cancellable(endpoint, self.identity.clone(), start, retainer,
-            Some(cancellation), Some(deadline)).map_err(|error| error.to_string())
+        self.iroh
+            .start_exec_cancellable(
+                endpoint,
+                self.identity.clone(),
+                start,
+                retainer,
+                Some(cancellation),
+                Some(deadline),
+            )
+            .map_err(|error| error.to_string())
     }
 
     pub fn relay_url(&self) -> String {
@@ -242,7 +258,10 @@ impl ShareService {
         )
     }
 
-    pub(super) fn endpoint_for_target(&self, target: &PeerOpenTarget) -> Result<PeerEndpoint, String> {
+    pub(super) fn endpoint_for_target(
+        &self,
+        target: &PeerOpenTarget,
+    ) -> Result<PeerEndpoint, String> {
         let state = self
             .auth
             .lock()

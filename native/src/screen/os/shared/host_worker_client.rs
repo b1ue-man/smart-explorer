@@ -13,30 +13,28 @@
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::sync::atomic::{AtomicBool,AtomicU64,Ordering};
 use std::time::{Duration, Instant};
 
-use crate::screen::core::host_backend::{ScreenSource, SourceFrame, SourceRefusal};
 use crate::screen::core::frame_budget::FrameLimits;
+use crate::screen::core::host_backend::{ScreenSource, SourceFrame, SourceRefusal};
 use crate::screen::core::host_stage::{HostStage, StageError, StageFrame, StageRequest};
 use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::window_list::SourceId;
 use crate::screen::core::wire_hello::ScreenErrorCode;
-use crate::screen::core::worker_wire::{
-    send_request, OpenRequest, WorkerReply, WorkerRequest,
-};
+use crate::screen::core::worker_wire::{send_request, OpenRequest, WorkerReply, WorkerRequest};
 
 #[path = "host_worker_reader.rs"]
 mod reader;
 use reader::WorkerReader;
-#[path="capture_broker.rs"]
-mod capture_broker;
-#[path="host_worker_lifetime.rs"]
-mod capture_lifetime;
 #[path = "host_worker_backend.rs"]
 mod backend;
+#[path = "capture_broker.rs"]
+mod capture_broker;
+#[path = "host_worker_lifetime.rs"]
+mod capture_lifetime;
 #[path = "family_backend.rs"]
 pub(crate) mod family_backend;
 pub(crate) use backend::{watch_registry, WorkerBackend, WorkerProgram};
@@ -116,12 +114,28 @@ fn wait_for(child: &mut Child, limit: Duration) -> Option<ExitStatus> {
     }
 }
 
-struct SourceFacts {generation:AtomicU64,regions:AtomicBool,limits:Mutex<FrameLimits>,family_layout_revision:AtomicU64,legacy_reconnect:AtomicBool}
-impl Default for SourceFacts {fn default()->Self {Self {generation:AtomicU64::new(0),regions:AtomicBool::new(true),limits:Mutex::new(FrameLimits::LEGACY),family_layout_revision:AtomicU64::new(0),legacy_reconnect:AtomicBool::new(false)}}}
+struct SourceFacts {
+    generation: AtomicU64,
+    regions: AtomicBool,
+    limits: Mutex<FrameLimits>,
+    family_layout_revision: AtomicU64,
+    legacy_reconnect: AtomicBool,
+}
+impl Default for SourceFacts {
+    fn default() -> Self {
+        Self {
+            generation: AtomicU64::new(0),
+            regions: AtomicBool::new(true),
+            limits: Mutex::new(FrameLimits::LEGACY),
+            family_layout_revision: AtomicU64::new(0),
+            legacy_reconnect: AtomicBool::new(false),
+        }
+    }
+}
 
 /// One running host process.
 pub(super) struct WorkerLink {
-    facts:Arc<SourceFacts>,
+    facts: Arc<SourceFacts>,
     child: Option<Child>,
     input: Arc<Mutex<ChildStdin>>,
     broker: Arc<capture_broker::CaptureBroker>,
@@ -130,9 +144,15 @@ pub(super) struct WorkerLink {
 
 impl WorkerLink {
     fn start(_program: &Path, _env: &[(String, String)]) -> io::Result<Self> {
-        Err(io::Error::other("worker opening requires a prepared session admission"))
+        Err(io::Error::other(
+            "worker opening requires a prepared session admission",
+        ))
     }
-    fn start_prepared(program: &Path, env: &[(String,String)], broker: Arc<capture_broker::CaptureBroker>) -> io::Result<Self> {
+    fn start_prepared(
+        program: &Path,
+        env: &[(String, String)],
+        broker: Arc<capture_broker::CaptureBroker>,
+    ) -> io::Result<Self> {
         let mut command = Command::new(program);
         command.envs(env.iter().map(|(key, value)| (key, value)));
         command
@@ -142,13 +162,18 @@ impl WorkerLink {
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
         super::worker_lifetime::prepare(&mut command);
-        Self::with_command_admitted(command,broker)
+        Self::with_command_admitted(command, broker)
     }
 
     fn with_command(_command: Command) -> io::Result<Self> {
-        Err(io::Error::other("worker command requires a prepared session admission"))
+        Err(io::Error::other(
+            "worker command requires a prepared session admission",
+        ))
     }
-    fn with_command_admitted(command: Command, broker: Arc<capture_broker::CaptureBroker>) -> io::Result<Self> {
+    fn with_command_admitted(
+        command: Command,
+        broker: Arc<capture_broker::CaptureBroker>,
+    ) -> io::Result<Self> {
         let mut child = spawn(command)?;
         if let Err(error) = super::worker_lifetime::bind(&child) {
             let _ = child.kill();
@@ -160,8 +185,8 @@ impl WorkerLink {
             let _ = child.wait();
             return Err(io::Error::other("screen host process has no pipes"));
         };
-        let input=Arc::new(Mutex::new(input));
-        let reader = match WorkerReader::start(output,input.clone(),broker.clone()) {
+        let input = Arc::new(Mutex::new(input));
+        let reader = match WorkerReader::start(output, input.clone(), broker.clone()) {
             Ok(reader) => reader,
             Err(error) => {
                 let _ = child.kill();
@@ -170,9 +195,10 @@ impl WorkerLink {
             }
         };
         Ok(Self {
-            facts:Arc::new(SourceFacts::default()),
-            child:Some(child),
-            input,broker,
+            facts: Arc::new(SourceFacts::default()),
+            child: Some(child),
+            input,
+            broker,
             reader,
         })
     }
@@ -183,20 +209,55 @@ impl WorkerLink {
         request: &WorkerRequest,
         limit: Duration,
     ) -> Result<WorkerReply, StageError> {
-        let sent=self.input.lock().map_err(|_|io::Error::other("worker input poisoned"))
-            .and_then(|mut input|send_request(&mut *input,request));
-        if let Err(error)=sent {return Err(self.lost(error));}
+        let sent = self
+            .input
+            .lock()
+            .map_err(|_| io::Error::other("worker input poisoned"))
+            .and_then(|mut input| send_request(&mut *input, request));
+        if let Err(error) = sent {
+            return Err(self.lost(error));
+        }
         match self.reader.receive(limit) {
             Ok(Ok(Some(reply))) => {
-                let reply=if let WorkerReply::Reference {generation,regions,limits,family_layout_revision,reply}=reply {
-                    if generation<self.facts.generation.load(Ordering::Acquire) {self.kill();return Err(StageError::new(ScreenErrorCode::CaptureFailed,io::Error::other("worker source generation regressed")));}
-                    *self.facts.limits.lock().unwrap_or_else(PoisonError::into_inner)=limits;
-                    self.facts.family_layout_revision.store(family_layout_revision.unwrap_or(0),Ordering::Release);
-                    self.facts.regions.store(regions,Ordering::Release);self.facts.generation.store(generation,Ordering::Release);*reply
-                } else {reply};
-                if let WorkerReply::InputDone {legacy_reconnect,..}=&reply {self.facts.legacy_reconnect.store(*legacy_reconnect,Ordering::Release);}
+                let reply = if let WorkerReply::Reference {
+                    generation,
+                    regions,
+                    limits,
+                    family_layout_revision,
+                    reply,
+                } = reply
+                {
+                    if generation < self.facts.generation.load(Ordering::Acquire) {
+                        self.kill();
+                        return Err(StageError::new(
+                            ScreenErrorCode::CaptureFailed,
+                            io::Error::other("worker source generation regressed"),
+                        ));
+                    }
+                    *self
+                        .facts
+                        .limits
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner) = limits;
+                    self.facts
+                        .family_layout_revision
+                        .store(family_layout_revision.unwrap_or(0), Ordering::Release);
+                    self.facts.regions.store(regions, Ordering::Release);
+                    self.facts.generation.store(generation, Ordering::Release);
+                    *reply
+                } else {
+                    reply
+                };
+                if let WorkerReply::InputDone {
+                    legacy_reconnect, ..
+                } = &reply
+                {
+                    self.facts
+                        .legacy_reconnect
+                        .store(*legacy_reconnect, Ordering::Release);
+                }
                 Ok(reply)
-            },
+            }
             Ok(Ok(None)) | Err(RecvTimeoutError::Disconnected) => {
                 Err(self.lost(io::Error::from(io::ErrorKind::UnexpectedEof)))
             }
@@ -217,8 +278,13 @@ impl WorkerLink {
 
     /// The process is gone: its exit names the reason.
     fn lost(&mut self, error: io::Error) -> StageError {
-        let status = self.child.as_mut().and_then(|child|wait_for(child,EXIT_WAIT));
-        if status.is_some() {self.broker.process_exited();}
+        let status = self
+            .child
+            .as_mut()
+            .and_then(|child| wait_for(child, EXIT_WAIT));
+        if status.is_some() {
+            self.broker.process_exited();
+        }
         if status.is_none() {
             self.kill();
         }
@@ -241,23 +307,34 @@ impl WorkerLink {
     }
 
     fn kill(&mut self) {
-        if let Some(child)=self.child.as_mut() {
-            let _=child.kill();
-            if wait_for(child, EXIT_WAIT).is_some() {self.broker.process_exited();}
+        if let Some(child) = self.child.as_mut() {
+            let _ = child.kill();
+            if wait_for(child, EXIT_WAIT).is_some() {
+                self.broker.process_exited();
+            }
         }
     }
 }
 
 impl Drop for WorkerLink {
     fn drop(&mut self) {
-        if let Ok(mut input)=self.input.lock() {let _=send_request(&mut *input,&WorkerRequest::Close);}
-        let status=self.child.as_mut().and_then(|child|wait_for(child,EXIT_WAIT));
-        if status.is_some() {self.broker.process_exited();self.child=None;return;}
+        if let Ok(mut input) = self.input.lock() {
+            let _ = send_request(&mut *input, &WorkerRequest::Close);
+        }
+        let status = self
+            .child
+            .as_mut()
+            .and_then(|child| wait_for(child, EXIT_WAIT));
+        if status.is_some() {
+            self.broker.process_exited();
+            self.child = None;
+            return;
+        }
         self.kill();
-        if let Some(mut child)=self.child.take() {
+        if let Some(mut child) = self.child.take() {
             match child.try_wait() {
-                Ok(Some(_))=>self.broker.process_exited(),
-                _=>capture_lifetime::retire(child,self.broker.clone()),
+                Ok(Some(_)) => self.broker.process_exited(),
+                _ => capture_lifetime::retire(child, self.broker.clone()),
             }
         }
     }
@@ -270,7 +347,7 @@ pub(super) type SharedLink = Arc<Mutex<WorkerLink>>;
 #[path = "host_worker_source.rs"]
 mod source;
 pub(crate) use source::WorkerSource;
-#[path="host_worker_prepared.rs"]
+#[path = "host_worker_prepared.rs"]
 mod prepared;
 
 /// Where a host process for `source` comes from: the desktop program, or

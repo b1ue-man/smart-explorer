@@ -108,10 +108,11 @@ pub(super) fn show(
     let mut dialog = current(ctx).filter(|dialog| dialog.draft.key == room_key)?;
     let (mut visible, mut done, mut result) = (true, false, None);
     let count = dialog.members.len();
-    crate::app::dialog_geometry::window(ctx, "share_access_room_ui.0", format!(
-        "Zugriff für alle Mitglieder von {}",
-        dialog.draft.title
-    ))
+    crate::app::dialog_geometry::window(
+        ctx,
+        "share_access_room_ui.0",
+        format!("Zugriff für alle Mitglieder von {}", dialog.draft.title),
+    )
     .id(dialog_id())
     .collapsible(false)
     .resizable(true)
@@ -139,7 +140,11 @@ pub(super) fn show(
         if let Some(reason) = &problem {
             ui.label(RichText::new(reason).color(theme::muted(ui)));
         }
-        let allows = dialog.draft.decisions.iter().any(|(capability, decision)| !capability.requires_context() && decision.is_on());
+        let allows = dialog
+            .draft
+            .decisions
+            .iter()
+            .any(|(capability, decision)| !capability.requires_context() && decision.is_on());
         let label = if allows {
             format!("Gewählte Befehls- und Bildschirmrechte für {count} Mitglieder erlauben")
         } else {

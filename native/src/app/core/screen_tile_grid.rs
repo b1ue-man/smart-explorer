@@ -16,11 +16,11 @@ use super::screen_devices::{entries, DeviceEntry, Devices, GridScope};
 use super::screen_pool::{
     preview_edge, preview_gap_ms, preview_request, preview_set_mode, DEFAULT_PREVIEW_INTERVAL_MS,
 };
+use super::screen_prefs::Fit;
 use super::screen_session::{Backend, ProbeInfo, ViewerSession};
 use super::screen_target::ScreenTarget;
 use super::screen_texture_cpu::CpuTexture;
-use super::screen_tile_face::{Face, draw_tile};
-use super::screen_prefs::Fit;
+use super::screen_tile_face::{draw_tile, Face};
 use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::session_state::SessionState;
 use crate::screen::core::wire_control::ViewerFrame;
@@ -31,7 +31,6 @@ const MAX_WIDTH: f32 = 480.0;
 const DEFAULT_WIDTH: f32 = 240.0;
 /// The choices of „Aktualisierung“.
 const INTERVALS: [(u64, &str); 4] = [(500, "0,5 s"), (1000, "1 s"), (2000, "2 s"), (5000, "5 s")];
-
 
 type ProbeSlot = Arc<Mutex<Option<Result<ProbeInfo, String>>>>;
 
@@ -75,8 +74,6 @@ impl Tile {
             visibility: super::screen_visibility::VisibilityTracker::default(),
         }
     }
-
-
 }
 
 /// The group view of a scope.
@@ -90,7 +87,7 @@ pub(crate) struct ScreenTileGrid {
     interval_ms: u64,
     applied_interval: u64,
     /// A full session that returns to its tile.
-    pending: Option<(ViewerSession,CpuTexture)>,
+    pending: Option<(ViewerSession, CpuTexture)>,
     fit: Fit,
 }
 
@@ -111,25 +108,33 @@ impl ScreenTileGrid {
     }
 
     /// The preview connection of a tile, for the full view of the same device.
-    pub(crate) fn take_session(&mut self, target: &ScreenTarget) -> Option<(ViewerSession,CpuTexture)> {
+    pub(crate) fn take_session(
+        &mut self,
+        target: &ScreenTarget,
+    ) -> Option<(ViewerSession, CpuTexture)> {
         let tile = self
             .tiles
             .iter_mut()
             .find(|tile| tile.entry.target.same_device(target))?;
-        if let Some(session)=&tile.session {session.invalidate_input();}
-        tile.picture = None;tile.texture.reset();
-        tile.session.take().map(|session|(session,std::mem::take(&mut tile.texture)))
+        if let Some(session) = &tile.session {
+            session.invalidate_input();
+        }
+        tile.picture = None;
+        tile.texture.reset();
+        tile.session
+            .take()
+            .map(|session| (session, std::mem::take(&mut tile.texture)))
     }
 
     /// The full view going back to its tile as a preview; it is placed once
     /// the tiles exist.
-    pub(crate) fn adopt(&mut self, session: ViewerSession,texture:CpuTexture) {
-        self.pending = Some((session,texture));
+    pub(crate) fn adopt(&mut self, session: ViewerSession, texture: CpuTexture) {
+        self.pending = Some((session, texture));
         self.generation = u64::MAX;
     }
 
     fn place_pending(&mut self) {
-        let Some((session,texture)) = self.pending.take() else {
+        let Some((session, texture)) = self.pending.take() else {
             return;
         };
         let info = session.info().hello.as_ref().map(|hello| ProbeInfo {
@@ -145,7 +150,8 @@ impl ScreenTileGrid {
                 tile.probe = Probe::Done(info);
             }
             tile.accepted_at = Some(Instant::now());
-            tile.visibility.invalidate();tile.texture=texture;
+            tile.visibility.invalidate();
+            tile.texture = texture;
             tile.session = Some(session);
         }
     }
@@ -209,7 +215,8 @@ impl ScreenTileGrid {
     }
 
     fn open_preview(&self, tile: &mut Tile, edge: u32) {
-        tile.texture.reset();tile.visibility.invalidate();
+        tile.texture.reset();
+        tile.visibility.invalidate();
         let request = preview_request(&self.backend.offers, edge, self.interval_ms);
         let session = ViewerSession::open(
             &self.backend,
@@ -228,7 +235,10 @@ impl ScreenTileGrid {
     pub(super) fn step(&self, tile: &mut Tile, ctx: &egui::Context, edge: u32) {
         if !tile.entry.online {
             tile.session = None;
-            tile.picture = None;tile.texture.reset();tile.visibility.invalidate();tile.wait_frame=false;
+            tile.picture = None;
+            tile.texture.reset();
+            tile.visibility.invalidate();
+            tile.wait_frame = false;
             tile.failed = None;
             if matches!(tile.probe, Probe::Done(_) | Probe::Failed(_)) {
                 tile.probe = Probe::Idle;
@@ -257,8 +267,9 @@ impl ScreenTileGrid {
             return;
         };
         if let Some(picture) = session.take_picture() {
-            if let Some(size)=accept_preview_picture(session,&mut tile.texture,ctx,picture) {
-                tile.picture=Some(size);tile.wait_frame=false;
+            if let Some(size) = accept_preview_picture(session, &mut tile.texture, ctx, picture) {
+                tile.picture = Some(size);
+                tile.wait_frame = false;
             }
         }
         let (ended, accepted) = {
@@ -274,7 +285,11 @@ impl ScreenTileGrid {
             } else if end.code.as_deref() != Some("viewer_closed") {
                 tile.failed = Some(end.text);
             }
-            tile.session = None;tile.picture=None;tile.texture.reset();tile.visibility.invalidate();tile.wait_frame=false;
+            tile.session = None;
+            tile.picture = None;
+            tile.texture.reset();
+            tile.visibility.invalidate();
+            tile.wait_frame = false;
         } else if edge != tile.requested_edge && accepted {
             session.send(ViewerFrame::SetMode(preview_set_mode(
                 edge,
@@ -350,8 +365,8 @@ impl ScreenTileGrid {
                         ui.selectable_value(&mut self.interval_ms, ms, label);
                     }
                 });
-            ui.selectable_value(&mut self.fit,Fit::Fit,"Einpassen");
-            ui.selectable_value(&mut self.fit,Fit::Actual,"1:1 · Ziehen zum Verschieben");
+            ui.selectable_value(&mut self.fit, Fit::Fit, "Einpassen");
+            ui.selectable_value(&mut self.fit, Fit::Actual, "1:1 · Ziehen zum Verschieben");
             ui.label("Größe:");
             ui.add(egui::Slider::new(&mut self.width, MIN_WIDTH..=MAX_WIDTH).show_value(false));
         });
@@ -379,16 +394,29 @@ impl ScreenTileGrid {
 
 /// A visibility ACK admits a fresh decoded image before input is unlocked.
 /// Only the subsequent paint callback may mark that image as presented.
-fn accept_preview_picture(session:&ViewerSession,texture:&mut CpuTexture,ctx:&egui::Context,
-    picture:super::screen_session::Picture)->Option<FrameSize> {
-    let hidden=ctx.data(|data|data.get_temp::<super::screen_visibility::WindowVisibility>(egui::Id::new("screen_window_visibility")))
-        .is_some_and(|window|window.hidden());
-    if hidden || !session.can_present(picture.presented.clone()) {return None;}
-    let super::screen_session::PictureData::Bgra(image)=picture.data else {return None;};
-    super::screen_render_caps::bind_texture(texture,session,picture.memory.clone());
-    texture.update_frame(ctx,&image,picture.presented);
+fn accept_preview_picture(
+    session: &ViewerSession,
+    texture: &mut CpuTexture,
+    ctx: &egui::Context,
+    picture: super::screen_session::Picture,
+) -> Option<FrameSize> {
+    let hidden = ctx
+        .data(|data| {
+            data.get_temp::<super::screen_visibility::WindowVisibility>(egui::Id::new(
+                "screen_window_visibility",
+            ))
+        })
+        .is_some_and(|window| window.hidden());
+    if hidden || !session.can_present(picture.presented.clone()) {
+        return None;
+    }
+    let super::screen_session::PictureData::Bgra(image) = picture.data else {
+        return None;
+    };
+    super::screen_render_caps::bind_texture(texture, session, picture.memory.clone());
+    texture.update_frame(ctx, &image, picture.presented);
     (!texture.failed()).then_some(picture.size)
 }
 #[cfg(test)]
-#[path="batches_preview_task_tests.rs"]
+#[path = "batches_preview_task_tests.rs"]
 mod batches_preview_task_tests;

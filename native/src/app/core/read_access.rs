@@ -11,7 +11,6 @@ pub(super) struct ReadAccess {
     unretryable_errors: u64,
     initial_error: Option<String>,
     partial: Option<super::partial_scan::PartialWorker<super::partial_scan::ExplorerResult>>,
-
 }
 
 impl ReadAccess {
@@ -59,9 +58,11 @@ impl App {
                 Err("Lesehelfer wurde ohne Ergebnis beendet".into())
             }
         };
-        let same_location = self.remote.is_none() && self.root_path == *root
+        let same_location = self.remote.is_none()
+            && self.root_path == *root
             && self.read_access.generation == self.read_access.consent_generation
-            && !self.disconnected_drive(root) && !self.scan_running;
+            && !self.disconnected_drive(root)
+            && !self.scan_running;
         self.read_access.pending = None;
         self.read_access.message = Some(match result {
             Ok(true) => {
@@ -69,10 +70,18 @@ impl App {
                     match self.read_access.denied.roots() {
                         Ok(roots) => {
                             self.read_access.initial_error = self.error_msg.clone();
-                            self.read_access.unretryable_errors = self.progress.errors.saturating_sub(self.progress.permission_denied);
+                            self.read_access.unretryable_errors = self
+                                .progress
+                                .errors
+                                .saturating_sub(self.progress.permission_denied);
                             let scope = self.scan_scope();
-                            match super::partial_scan::explorer(self.root_path.clone(),
-                                self.read_access.generation, roots, scope.max_depth, scope.retention) {
+                            match super::partial_scan::explorer(
+                                self.root_path.clone(),
+                                self.read_access.generation,
+                                roots,
+                                scope.max_depth,
+                                scope.retention,
+                            ) {
                                 Ok(worker) => self.read_access.partial = Some(worker),
                                 Err(error) => self.error_msg = Some(error),
                             }
@@ -96,9 +105,15 @@ impl App {
     }
 
     fn poll_partial_read(&mut self) {
-        let Some(worker) = &self.read_access.partial else { return; };
-        if worker.generation != self.read_access.generation || worker.root != self.root_path
-            || self.remote.is_some() || self.scan_running || self.disconnected_drive(&worker.root) {
+        let Some(worker) = &self.read_access.partial else {
+            return;
+        };
+        if worker.generation != self.read_access.generation
+            || worker.root != self.root_path
+            || self.remote.is_some()
+            || self.scan_running
+            || self.disconnected_drive(&worker.root)
+        {
             self.read_access.partial = None;
             return;
         }
@@ -111,7 +126,10 @@ impl App {
                         self.error_msg = Some(format!("Teilbaum {root} nicht übernommen: Besuchssumme fehlt. Vollständiges Aktualisieren stellt die Zählgrundlage wieder her."));
                         return;
                     }
-                    Err(error) => { self.error_msg = Some(error.to_string()); return; }
+                    Err(error) => {
+                        self.error_msg = Some(error.to_string());
+                        return;
+                    }
                 };
                 if !result.complete && old_visits != crate::scanner::ScanVisits::default() {
                     // An incomplete walk and a filtered old listing cannot
@@ -120,60 +138,109 @@ impl App {
                     return;
                 }
                 let visits = match result.denied.visits(&root) {
-                    Ok(Some(visits)) if visits.scanned == result.progress.scanned
-                        && visits.bytes == result.progress.bytes => visits,
+                    Ok(Some(visits))
+                        if visits.scanned == result.progress.scanned
+                            && visits.bytes == result.progress.bytes =>
+                    {
+                        visits
+                    }
                     Ok(_) => {
                         self.error_msg = Some(format!("Teilbaum {root} nicht übernommen: neue Besuchssumme ist nicht gesichert."));
                         return;
                     }
-                    Err(error) => { self.error_msg = Some(error.to_string()); return; }
+                    Err(error) => {
+                        self.error_msg = Some(error.to_string());
+                        return;
+                    }
                 };
-                let total = self.progress.scanned.checked_sub(old_visits.scanned)
+                let total = self
+                    .progress
+                    .scanned
+                    .checked_sub(old_visits.scanned)
                     .zip(self.progress.bytes.checked_sub(old_visits.bytes))
-                    .and_then(|(scanned, bytes)| crate::scanner::ScanVisits { scanned, bytes }.checked_add(visits));
+                    .and_then(|(scanned, bytes)| {
+                        crate::scanner::ScanVisits { scanned, bytes }.checked_add(visits)
+                    });
                 let Some(total) = total else {
                     self.error_msg = Some(format!("Teilbaum {root} nicht übernommen: Besuchssummen sind nicht konsistent. Vollständiges Aktualisieren ist erforderlich."));
                     return;
                 };
                 let remaining = match self.read_access.denied.roots() {
                     Ok(roots) => roots,
-                    Err(error) => { self.error_msg = Some(error.to_string()); self.read_access.partial = None; return; }
+                    Err(error) => {
+                        self.error_msg = Some(error.to_string());
+                        self.read_access.partial = None;
+                        return;
+                    }
                 };
                 let next = crate::scanner::DeniedRoots::default();
                 for path in remaining {
-                    if path != root || !result.complete { next.record(path); }
+                    if path != root || !result.complete {
+                        next.record(path);
+                    }
                 }
                 match result.denied.roots() {
-                    Ok(roots) => for path in roots { next.record(path); },
-                    Err(error) => { self.error_msg = Some(error.to_string()); next.record(root.clone()); }
+                    Ok(roots) => {
+                        for path in roots {
+                            next.record(path);
+                        }
+                    }
+                    Err(error) => {
+                        self.error_msg = Some(error.to_string());
+                        next.record(root.clone());
+                    }
                 }
                 if let Err(error) = self.read_access.denied.copy_visits_to(&next) {
-                    self.error_msg = Some(error.to_string()); return;
+                    self.error_msg = Some(error.to_string());
+                    return;
                 }
-                if !result.complete { next.record_visits(root.clone(), visits); }
+                if !result.complete {
+                    next.record_visits(root.clone(), visits);
+                }
                 self.read_access.denied = next;
-                super::partial_scan::merge_entries(&mut self.entries, &root, result.entries, result.complete);
+                super::partial_scan::merge_entries(
+                    &mut self.entries,
+                    &root,
+                    result.entries,
+                    result.complete,
+                );
                 if result.complete {
-                    self.failed_paths.retain(|(path, _)| !crate::scanner::retry_contains(&root, path));
+                    self.failed_paths
+                        .retain(|(path, _)| !crate::scanner::retry_contains(&root, path));
                 }
-                self.progress.permission_denied = self.read_access.denied.roots()
-                    .map(|roots| roots.len() as u64).unwrap_or(1);
+                self.progress.permission_denied = self
+                    .read_access
+                    .denied
+                    .roots()
+                    .map(|roots| roots.len() as u64)
+                    .unwrap_or(1);
                 self.progress.scanned = total.scanned;
                 self.progress.bytes = total.bytes;
-                self.read_access.unretryable_errors = self.read_access.unretryable_errors.saturating_add(result.progress.errors.saturating_sub(result.progress.permission_denied));
-                self.progress.errors = self.read_access.unretryable_errors.saturating_add(self.progress.permission_denied);
+                self.read_access.unretryable_errors =
+                    self.read_access.unretryable_errors.saturating_add(
+                        result
+                            .progress
+                            .errors
+                            .saturating_sub(result.progress.permission_denied),
+                    );
+                self.progress.errors = self
+                    .read_access
+                    .unretryable_errors
+                    .saturating_add(self.progress.permission_denied);
                 self.summary_cache = None;
                 self.recompute_view();
             }
             Err(crossbeam_channel::TryRecvError::Disconnected) => {
                 self.read_access.partial = None;
-                if self.progress.permission_denied == 0 && self.read_access.unretryable_errors == 0
-                    && self.error_msg == self.read_access.initial_error {
+                if self.progress.permission_denied == 0
+                    && self.read_access.unretryable_errors == 0
+                    && self.error_msg == self.read_access.initial_error
+                {
                     self.error_msg = None;
                 }
                 self.read_access.message = Some("Teilscans beendet; nicht übernommene oder weiterhin gesperrte Wurzeln bleiben erneut anforderbar.".into());
             }
-            Err(crossbeam_channel::TryRecvError::Empty) => {},
+            Err(crossbeam_channel::TryRecvError::Empty) => {}
         }
     }
 
@@ -205,8 +272,11 @@ impl App {
         }
         if self.read_access.pending.is_some() || self.read_access.partial.is_some() {
             ui.spinner();
-            ui.label(if self.read_access.partial.is_some() { "Gesperrte Teilbäume werden erneut gelesen …" }
-                else { "Windows-Rechteanfrage läuft …" });
+            ui.label(if self.read_access.partial.is_some() {
+                "Gesperrte Teilbäume werden erneut gelesen …"
+            } else {
+                "Windows-Rechteanfrage läuft …"
+            });
             if self.read_access.partial.is_some() && ui.button("Teilscans abbrechen").clicked() {
                 self.read_access.invalidate_partial();
                 self.read_access.message = Some("Teilscans abgebrochen; bisherige Ergebnisse und verbleibende Sperren bleiben erhalten.".into());

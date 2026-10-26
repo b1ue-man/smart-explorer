@@ -6,7 +6,13 @@ pub(crate) enum WorkerReply {
     CaptureControl(super::super::worker_capture_wire::CaptureReply),
     Family(super::super::worker_family::FamilyReply),
     /// Generation is visible before any enclosed answer is consumed. No nesting.
-    Reference {generation:u64,regions:bool,limits:FrameLimits,family_layout_revision:Option<u64>,reply:Box<WorkerReply>},
+    Reference {
+        generation: u64,
+        regions: bool,
+        limits: FrameLimits,
+        family_layout_revision: Option<u64>,
+        reply: Box<WorkerReply>,
+    },
     Opened {
         size: FrameSize,
     },
@@ -23,17 +29,32 @@ pub(crate) enum WorkerReply {
     /// `INPUT` was injected (`None`) or blocked with this reason.
     InputDone {
         blocked: Option<ControlBlock>,
-        legacy_reconnect:bool,
+        legacy_reconnect: bool,
     },
 }
 
 impl WorkerReply {
     pub(crate) fn encode(&self) -> io::Result<(u8, Vec<u8>)> {
         match self {
-            Self::CaptureControl(reply)=>Ok((super::super::worker_capture_wire::CONTROL_REPLY,to_json(reply)?)),
+            Self::CaptureControl(reply) => Ok((
+                super::super::worker_capture_wire::CONTROL_REPLY,
+                to_json(reply)?,
+            )),
             Self::Family(reply) => Ok((FAMILY_REPLY, to_json(reply)?)),
-            Self::Reference {generation,regions,limits,family_layout_revision,reply}=>frame_wire::encode_reference(*generation,*regions,*limits,*family_layout_revision,reply),
-            Self::CaptureActive(active) => Ok((CAPTURE_ACTIVE,vec![u8::from(*active)])),
+            Self::Reference {
+                generation,
+                regions,
+                limits,
+                family_layout_revision,
+                reply,
+            } => frame_wire::encode_reference(
+                *generation,
+                *regions,
+                *limits,
+                *family_layout_revision,
+                reply,
+            ),
+            Self::CaptureActive(active) => Ok((CAPTURE_ACTIVE, vec![u8::from(*active)])),
             Self::Opened { size } => Ok((OPENED, to_json(&SizeWire { size: *size })?)),
             Self::Refused { reason } => Ok((
                 REFUSED,
@@ -41,7 +62,9 @@ impl WorkerReply {
                     reason: reason.clone(),
                 })?,
             )),
-            Self::Frame(StageFrame::Encoded {..}) => Err(invalid("worker records require owned capture transport")),
+            Self::Frame(StageFrame::Encoded { .. }) => {
+                Err(invalid("worker records require owned capture transport"))
+            }
             Self::Frame(frame) => encode_frame(frame),
             Self::Failed { code, message } => {
                 let wire = FailedWire {
@@ -51,17 +74,26 @@ impl WorkerReply {
                 Ok((FAILED, to_json(&wire)?))
             }
             Self::Raw(_) => Err(invalid("worker raw reply requires owned capture transport")),
-            Self::InputDone { blocked,legacy_reconnect } => {
-                Ok((INPUT_DONE, to_json(&InputDoneWire { blocked: *blocked,legacy_reconnect:*legacy_reconnect })?))
-            }
+            Self::InputDone {
+                blocked,
+                legacy_reconnect,
+            } => Ok((
+                INPUT_DONE,
+                to_json(&InputDoneWire {
+                    blocked: *blocked,
+                    legacy_reconnect: *legacy_reconnect,
+                })?,
+            )),
         }
     }
 
     pub(crate) fn decode(tag: u8, payload: &[u8]) -> io::Result<Self> {
         match tag {
-            super::super::worker_capture_wire::CONTROL_REPLY=>Ok(Self::CaptureControl(from_json(payload)?)),
+            super::super::worker_capture_wire::CONTROL_REPLY => {
+                Ok(Self::CaptureControl(from_json(payload)?))
+            }
             FAMILY_REPLY => Ok(Self::Family(from_json(payload)?)),
-            REFERENCE=>frame_wire::decode_reference(payload),
+            REFERENCE => frame_wire::decode_reference(payload),
             OPENED => {
                 let wire: SizeWire = from_json(payload)?;
                 if wire.size.width == 0 || wire.size.height == 0 {
@@ -95,16 +127,17 @@ impl WorkerReply {
                 })
             }
             RAW => Err(invalid("worker raw reply requires a prior capture ticket")),
-            CAPTURE_ACTIVE if payload==[0] || payload==[1] => Ok(Self::CaptureActive(payload[0]!=0)),
+            CAPTURE_ACTIVE if payload == [0] || payload == [1] => {
+                Ok(Self::CaptureActive(payload[0] != 0))
+            }
             INPUT_DONE => {
                 let wire: InputDoneWire = from_json(payload)?;
                 Ok(Self::InputDone {
                     blocked: wire.blocked,
-                    legacy_reconnect:wire.legacy_reconnect,
+                    legacy_reconnect: wire.legacy_reconnect,
                 })
             }
             _ => Err(invalid("unexpected host process answer")),
         }
     }
 }
-

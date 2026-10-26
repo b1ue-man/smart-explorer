@@ -1,7 +1,7 @@
 //! Bounded facts, never endpoint addresses or authorization material.
-use std::time::Duration;
-use serde::{Deserialize, Serialize};
 use super::route_state::{RouteClass, RouteStatus};
+use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub(crate) struct RouteBudget {

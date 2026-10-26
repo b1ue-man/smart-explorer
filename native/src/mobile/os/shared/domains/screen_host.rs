@@ -43,24 +43,52 @@ fn fits_wire(text: &str) -> bool {
 pub fn screen_push(session: u64, data: &[u8], _pts_us: u64, flags: u32) -> i32 {
     channels::push(session, data, flags)
 }
-pub fn screen_push_admitted(session:u64,generation:u64,data:&[u8],_pts_us:u64,flags:u32)->i32 {
-    channels::push_admitted(session,generation,data,flags)
+pub fn screen_push_admitted(
+    session: u64,
+    generation: u64,
+    data: &[u8],
+    _pts_us: u64,
+    flags: u32,
+) -> i32 {
+    channels::push_admitted(session, generation, data, flags)
 }
-pub fn screen_capture_begin(session:u64,width:u32,height:u32,kind:u32)->u64 {
-    let generation = channels::channel(session).and_then(|channel|channel.begin_capture(
-        crate::screen::core::pixel_convert::FrameSize::new(width,height),kind).ok()).unwrap_or(0);
+pub fn screen_capture_begin(session: u64, width: u32, height: u32, kind: u32) -> u64 {
+    let generation = channels::channel(session)
+        .and_then(|channel| {
+            channel
+                .begin_capture(
+                    crate::screen::core::pixel_convert::FrameSize::new(width, height),
+                    kind,
+                )
+                .ok()
+        })
+        .unwrap_or(0);
     #[cfg(all(target_os = "android", feature = "android-instrumentation-fixtures"))]
-    if generation != 0 {crate::screen::os::android_capture_fixture::observed_begin(session, generation);}
+    if generation != 0 {
+        crate::screen::os::android_capture_fixture::observed_begin(session, generation);
+    }
     generation
 }
-pub fn screen_capture_claim(session:u64,generation:u64,owner:u32,bytes:u64,buffer:bool)->u64 {
-    channels::channel(session).and_then(|channel|channel.capture.grant(generation).ok())
-        .and_then(|grant|crate::screen::os::android_capture_arena::claim(&grant,owner,bytes,buffer).ok()).unwrap_or(0)
+pub fn screen_capture_claim(
+    session: u64,
+    generation: u64,
+    owner: u32,
+    bytes: u64,
+    buffer: bool,
+) -> u64 {
+    channels::channel(session)
+        .and_then(|channel| channel.capture.grant(generation).ok())
+        .and_then(|grant| {
+            crate::screen::os::android_capture_arena::claim(&grant, owner, bytes, buffer).ok()
+        })
+        .unwrap_or(0)
 }
-pub fn screen_capture_address(token:u64)->Option<(usize,usize)> {
+pub fn screen_capture_address(token: u64) -> Option<(usize, usize)> {
     crate::screen::os::android_capture_arena::address(token)
 }
-pub fn screen_capture_release(token:u64) {crate::screen::os::android_capture_arena::release(token);}
+pub fn screen_capture_release(token: u64) {
+    crate::screen::os::android_capture_arena::release(token);
+}
 
 /// `screenControl` of the JNI bridge: the next message for `session`
 /// (0: input of the controlling viewer), or `None` after `timeout`.
@@ -112,8 +140,11 @@ fn prereqs(args: &Value) -> Result<Value, ApiError> {
     let working_bytes = match args.get("workingBytes") {
         None | Some(Value::Null) => None,
         Some(value) => {
-            let bytes = value.as_u64().ok_or_else(|| invalid("Ungültiges Bildspeicherbudget."))?;
-            crate::screen::core::frame_budget::FrameLimits::RESOURCE.with_working_budget(bytes)
+            let bytes = value
+                .as_u64()
+                .ok_or_else(|| invalid("Ungültiges Bildspeicherbudget."))?;
+            crate::screen::core::frame_budget::FrameLimits::RESOURCE
+                .with_working_budget(bytes)
                 .map_err(|error| invalid(error.to_string()))?;
             Some(bytes)
         }
@@ -132,17 +163,33 @@ fn prereqs(args: &Value) -> Result<Value, ApiError> {
         Some(list) => Some(
             list.iter()
                 .filter_map(|entry| {
-                    use crate::screen::core::negotiate::{CodecOffer,H264Profile};
-                    let profile=match entry.get("profile").and_then(Value::as_str)? {
-                        "cb" => H264Profile::ConstrainedBaseline,"high" => H264Profile::High,_ => return None,
+                    use crate::screen::core::negotiate::{CodecOffer, H264Profile};
+                    let profile = match entry.get("profile").and_then(Value::as_str)? {
+                        "cb" => H264Profile::ConstrainedBaseline,
+                        "high" => H264Profile::High,
+                        _ => return None,
                     };
-                    let mut offer=CodecOffer::h264(profile,opt_bool(entry,"hardware",false));
-                    let side=|key| entry.get(key).and_then(Value::as_u64).and_then(|n|u32::try_from(n).ok()).filter(|n|*n>0 && *n<=16_384);
-                    if let (Some(width),Some(height))=(side("maxWidth"),side("maxHeight")) {
-                        offer=offer.with_max(crate::screen::core::pixel_convert::FrameSize::new(width,height));
+                    let mut offer = CodecOffer::h264(profile, opt_bool(entry, "hardware", false));
+                    let side = |key| {
+                        entry
+                            .get(key)
+                            .and_then(Value::as_u64)
+                            .and_then(|n| u32::try_from(n).ok())
+                            .filter(|n| *n > 0 && *n <= 16_384)
+                    };
+                    if let (Some(width), Some(height)) = (side("maxWidth"), side("maxHeight")) {
+                        offer = offer.with_max(crate::screen::core::pixel_convert::FrameSize::new(
+                            width, height,
+                        ));
                     }
-                    offer.max_macroblocks=entry.get("maxMacroblocks").and_then(Value::as_u64).filter(|n|*n>0);
-                    offer.max_macroblocks_per_second=entry.get("maxMacroblocksPerSecond").and_then(Value::as_u64).filter(|n|*n>0);
+                    offer.max_macroblocks = entry
+                        .get("maxMacroblocks")
+                        .and_then(Value::as_u64)
+                        .filter(|n| *n > 0);
+                    offer.max_macroblocks_per_second = entry
+                        .get("maxMacroblocksPerSecond")
+                        .and_then(Value::as_u64)
+                        .filter(|n| *n > 0);
                     Some(offer)
                 })
                 .collect::<Vec<_>>(),
@@ -159,26 +206,41 @@ fn prereqs(args: &Value) -> Result<Value, ApiError> {
             })
             .collect::<Vec<(String, String)>>()
     });
-    if let Some(list)=args.get("apps").and_then(Value::as_array) {
-        let icons=list.iter().take(128).filter_map(|entry| {
-            let package=entry.get("package")?.as_str()?;
-            let icon:crate::screen::core::app_icon::IconRef=serde_json::from_value(entry.get("icon")?.clone()).ok()?;
-            if icon.app_id!=package {return None;}
-            let png_base64=entry.get("iconPngBase64")?.as_str()?;
-            if png_base64.len()>crate::screen::core::app_icon::MAX_ICON_BASE64_BYTES {return None;}
-            Some(crate::screen::core::app_icon::IconReply {icon,png_base64:png_base64.into()})
-        }).collect();
-        let _=crate::screen::os::android_app_icons::replace_registered(icons);
+    if let Some(list) = args.get("apps").and_then(Value::as_array) {
+        let icons = list
+            .iter()
+            .take(128)
+            .filter_map(|entry| {
+                let package = entry.get("package")?.as_str()?;
+                let icon: crate::screen::core::app_icon::IconRef =
+                    serde_json::from_value(entry.get("icon")?.clone()).ok()?;
+                if icon.app_id != package {
+                    return None;
+                }
+                let png_base64 = entry.get("iconPngBase64")?.as_str()?;
+                if png_base64.len() > crate::screen::core::app_icon::MAX_ICON_BASE64_BYTES {
+                    return None;
+                }
+                Some(crate::screen::core::app_icon::IconReply {
+                    icon,
+                    png_base64: png_base64.into(),
+                })
+            })
+            .collect();
+        let _ = crate::screen::os::android_app_icons::replace_registered(icons);
     }
     if let Some(bytes) = working_bytes {
         crate::screen::os::image_memory::observe_capacity_ceiling(
-            crate::screen::core::frame_memory::CapacityCeiling::bounded(bytes))
-            .map_err(|error| invalid(error.to_string()))?;
+            crate::screen::core::frame_memory::CapacityCeiling::bounded(bytes),
+        )
+        .map_err(|error| invalid(error.to_string()))?;
     }
     channels::set_event_sink(emit);
     let stored = channels::set_prereqs(|stored| {
         stored.registered = true;
-        if let Some(bytes) = working_bytes { stored.working_bytes = Some(bytes); }
+        if let Some(bytes) = working_bytes {
+            stored.working_bytes = Some(bytes);
+        }
         if let Some(accessibility) = accessibility {
             stored.accessibility = accessibility;
         }

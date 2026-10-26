@@ -32,16 +32,22 @@ mod screen_input_map;
 #[path = "core/screen_launch.rs"]
 pub(crate) mod screen_launch;
 pub(crate) use screen_launch::{run_screen_grid, run_screen_view};
+#[path = "core/screen_icon_requests.rs"]
+mod screen_icon_requests;
+#[path = "core/screen_icons.rs"]
+mod screen_icons;
 #[path = "core/screen_pool.rs"]
 mod screen_pool;
 #[path = "core/screen_prefs.rs"]
 mod screen_prefs;
 #[path = "core/screen_presented.rs"]
 mod screen_presented;
-#[path = "core/screen_session.rs"]
-mod screen_session;
 #[path = "core/screen_render_caps.rs"]
 pub(crate) mod screen_render_caps;
+#[path = "core/screen_scaling.rs"]
+mod screen_scaling;
+#[path = "core/screen_session.rs"]
+mod screen_session;
 #[path = "core/screen_stats_overlay.rs"]
 mod screen_stats_overlay;
 #[path = "core/screen_target.rs"]
@@ -58,22 +64,16 @@ mod screen_tile_grid;
 mod screen_toolbar_ui;
 #[path = "core/screen_view_widget.rs"]
 mod screen_view_widget;
-#[path = "core/screen_visibility.rs"]
-mod screen_visibility;
-#[path = "core/screen_scaling.rs"]
-mod screen_scaling;
-#[path = "core/screen_icons.rs"]
-mod screen_icons;
-#[path = "core/screen_icon_requests.rs"]
-mod screen_icon_requests;
-#[path = "core/screen_viewport.rs"]
-mod screen_viewport;
-#[path = "os/shared/screen_visibility.rs"]
-mod screen_visibility_os;
 #[path = "core/screen_viewer_app.rs"]
 mod screen_viewer_app;
 #[path = "core/screen_viewer_view.rs"]
 mod screen_viewer_view;
+#[path = "core/screen_viewport.rs"]
+mod screen_viewport;
+#[path = "core/screen_visibility.rs"]
+mod screen_visibility;
+#[path = "os/shared/screen_visibility.rs"]
+mod screen_visibility_os;
 #[path = "core/screen_wgpu_yuv.rs"]
 mod screen_wgpu_yuv;
 
@@ -87,17 +87,29 @@ mod screen_viewer_misc_tests;
 #[path = "core/screen_viewer_tests.rs"]
 mod screen_viewer_tests;
 
-#[path="core/screen_render_upload.rs"] mod screen_render_upload;
-#[path="core/screen_render_owner.rs"] mod screen_render_owner;
-#[path="core/screen_render_wgpu.rs"] mod screen_render_wgpu;
-#[path="core/screen_render_glow.rs"] mod screen_render_glow;
-#[path="core/screen_render_yuv.rs"] mod screen_render_yuv;
-#[path="core/screen_render_app.rs"] pub(crate) mod screen_render_app;
-#[path="core/screen_texture_worker.rs"] mod screen_texture_worker;
-#[path="core/screen_session_backend.rs"] mod screen_session_backend;
-#[path="core/screen_decode_run.rs"] mod screen_decode_run;
+#[path = "core/screen_decode_run.rs"]
+mod screen_decode_run;
+#[path = "core/screen_render_app.rs"]
+pub(crate) mod screen_render_app;
+#[path = "core/screen_render_glow.rs"]
+mod screen_render_glow;
+#[path = "core/screen_render_owner.rs"]
+mod screen_render_owner;
+#[path = "core/screen_render_upload.rs"]
+mod screen_render_upload;
+#[path = "core/screen_render_wgpu.rs"]
+mod screen_render_wgpu;
+#[path = "core/screen_render_yuv.rs"]
+mod screen_render_yuv;
+#[path = "core/screen_session_backend.rs"]
+mod screen_session_backend;
+#[path = "core/screen_texture_worker.rs"]
+mod screen_texture_worker;
 
-#[path="core/screen_render_cpu.rs"] mod screen_render_cpu;
-#[path="core/screen_image_memory.rs"] mod screen_image_memory;
+#[path = "core/screen_image_memory.rs"]
+mod screen_image_memory;
+#[path = "core/screen_render_cpu.rs"]
+mod screen_render_cpu;
 
-#[path="core/screen_view_widget_render.rs"] mod screen_view_widget_render;
+#[path = "core/screen_view_widget_render.rs"]
+mod screen_view_widget_render;

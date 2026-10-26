@@ -8,10 +8,11 @@
 //! duplicate search, no Unix modes.
 use std::io::{self, Read, Write};
 
-use crate::vault::core::capabilities::{cleartext_limits, cleartext_capacity};
+use crate::vault::core::capabilities::{cleartext_capacity, cleartext_limits};
 use crate::vault::core::path_map::components;
 use crate::vfs::{
-    self, Backend, BackendExtensions, StageFinish, StageFinished, TargetLimits, VfsListing, VfsResult,
+    self, Backend, BackendExtensions, StageFinish, StageFinished, TargetLimits, VfsListing,
+    VfsResult,
 };
 
 use super::backend::VaultBackend;
@@ -30,23 +31,31 @@ impl BackendExtensions for VaultBackend {
     fn directory_identity(&self, path: &str) -> VfsResult<Option<String>> {
         self.session.check()?;
         if components(path)?.is_empty() {
-            return vfs::directory_identity(self.inner.as_ref(), &self.root)
-                .map(|identity| identity.map(|identity| format!("vault-root:{}:{identity}", self.session.config().jti)));
+            return vfs::directory_identity(self.inner.as_ref(), &self.root).map(|identity| {
+                identity
+                    .map(|identity| format!("vault-root:{}:{identity}", self.session.config().jti))
+            });
         }
         // Ownership observations must not use a previous path-to-directory cache.
         self.cache.clear();
-        let parts = Parts::of(path)?.ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "directory path is missing"))?;
+        let parts = Parts::of(path)?.ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "directory path is missing")
+        })?;
         let found = self.find_at(&parts)?;
-        if !matches!(&found.kind, NodeKind::Dir { .. }) { return Ok(None); }
+        if !matches!(&found.kind, NodeKind::Dir { .. }) {
+            return Ok(None);
+        }
         let directory = self.read_dir_id(&found.node)?;
-        vfs::directory_identity(self.inner.as_ref(), &self.at(&directory.content))
-            .map(|identity| identity.map(|identity| format!("vault-dir:{}:{identity}", self.session.config().jti)))
+        vfs::directory_identity(self.inner.as_ref(), &self.at(&directory.content)).map(|identity| {
+            identity.map(|identity| format!("vault-dir:{}:{identity}", self.session.config().jti))
+        })
     }
 
     fn file_identity(&self, path: &str) -> VfsResult<Option<String>> {
         self.session.check()?;
         self.cache.clear();
-        let parts = Parts::of(path)?.ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "file path is missing"))?;
+        let parts = Parts::of(path)?
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "file path is missing"))?;
         // This maps both unpublished stages and files through the same vault
         // content boundary used by regular reads; it never follows a link.
         let contents = self.file_contents(&parts)?;
@@ -63,8 +72,12 @@ impl BackendExtensions for VaultBackend {
         self.session.check()?;
         let mut capacity = vfs::capacity(self.inner.as_ref(), &self.root)?;
         let combo = self.session.config().combo;
-        capacity.total_bytes = capacity.total_bytes.map(|bytes| cleartext_capacity(bytes, combo));
-        capacity.available_bytes = capacity.available_bytes.map(|bytes| cleartext_capacity(bytes, combo));
+        capacity.total_bytes = capacity
+            .total_bytes
+            .map(|bytes| cleartext_capacity(bytes, combo));
+        capacity.available_bytes = capacity
+            .available_bytes
+            .map(|bytes| cleartext_capacity(bytes, combo));
         if capacity.used_bytes.is_some() {
             capacity.used_bytes = match (capacity.total_bytes, capacity.available_bytes) {
                 (Some(total), Some(available)) => Some(total.saturating_sub(available)),

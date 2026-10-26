@@ -75,9 +75,13 @@ impl FtpConnection {
                         // RETR was refused. This never proves absence and
                         // does not change SIZE/MLST/MKD/RNTO classification.
                         // Keep the kind readable by existing agent proxies.
-                        io::Error::new(io::ErrorKind::PermissionDenied,
-                            format!("Permission denied for FTP RETR (550): {error}"))
-                    } else { super::errors::map(error) }
+                        io::Error::new(
+                            io::ErrorKind::PermissionDenied,
+                            format!("Permission denied for FTP RETR (550): {error}"),
+                        )
+                    } else {
+                        super::errors::map(error)
+                    }
                 })
         })?;
         let Some(data) = data else {

@@ -156,7 +156,13 @@ pub(crate) async fn handshake(
     build: impl FnOnce(&ScreenServerHello) -> io::Result<ScreenClientHello>,
     on_pending: impl FnMut(Capability),
 ) -> Result<ViewerSession, ViewerError> {
-    handshake_for(connection,|server|build(server).map(|hello|(hello,None)),on_pending,false).await
+    handshake_for(
+        connection,
+        |server| build(server).map(|hello| (hello, None)),
+        on_pending,
+        false,
+    )
+    .await
 }
 
 /// A list/icon channel. Older hosts retain LIST_WINDOWS over the synthetic source only.
@@ -165,61 +171,105 @@ pub(crate) async fn handshake_metadata(
     build: impl FnOnce(&ScreenServerHello) -> io::Result<ScreenClientHello>,
     on_pending: impl FnMut(Capability),
 ) -> Result<ViewerSession, ViewerError> {
-    handshake_for(connection,|server|build(server).map(|hello|(hello,None)),on_pending,true).await
+    handshake_for(
+        connection,
+        |server| build(server).map(|hello| (hello, None)),
+        on_pending,
+        true,
+    )
+    .await
 }
 
 pub(crate) async fn handshake_admitted(
-    connection:Connection,
-    build:impl FnOnce(&ScreenServerHello)->io::Result<(ScreenClientHello,super::frame_memory::MemoryHold)>,
-    on_pending:impl FnMut(Capability),
-)->Result<ViewerSession,ViewerError> {
-    handshake_for(connection,build,on_pending,false).await
+    connection: Connection,
+    build: impl FnOnce(
+        &ScreenServerHello,
+    ) -> io::Result<(ScreenClientHello, super::frame_memory::MemoryHold)>,
+    on_pending: impl FnMut(Capability),
+) -> Result<ViewerSession, ViewerError> {
+    handshake_for(connection, build, on_pending, false).await
 }
 
 async fn handshake_for(
     connection: Connection,
-    build: impl FnOnce(&ScreenServerHello) -> io::Result<(ScreenClientHello,super::frame_memory::MemoryHold)>,
+    build: impl FnOnce(
+        &ScreenServerHello,
+    ) -> io::Result<(ScreenClientHello, super::frame_memory::MemoryHold)>,
     mut on_pending: impl FnMut(Capability),
     metadata: bool,
 ) -> Result<ViewerSession, ViewerError> {
-    let (mut send, mut recv) = crate::share::route_protocol::run_with_route(
-        &connection, HANDSHAKE_TIMEOUT, None,
-        async { connection.accept_bi().await.map_err(io::Error::other) }).await?;
+    let (mut send, mut recv) =
+        crate::share::route_protocol::run_with_route(&connection, HANDSHAKE_TIMEOUT, None, async {
+            connection.accept_bi().await.map_err(io::Error::other)
+        })
+        .await?;
     let server = crate::share::route_protocol::run_with_route(
-        &connection, HANDSHAKE_TIMEOUT, None, recv_server_hello(&mut recv)).await?;
+        &connection,
+        HANDSHAKE_TIMEOUT,
+        None,
+        recv_server_hello(&mut recv),
+    )
+    .await?;
     if !supports_version(server.protocol_version) {
         connection.close(VIEWER_CLOSE, b"screen protocol version");
         return Err(ViewerError::Unsupported);
     }
-    let (mut hello,mut memory) = build(&server)?;
-    hello.frame_capabilities=hello.frame_capabilities.map(|caps|caps.for_server(server.frame_memory_class)).transpose()?;
-    hello.family_version = server.family_version.filter(|version|*version==super::family_protocol::FAMILY_PROTOCOL);
-    if hello.source.as_ref().is_some_and(|source|super::family_protocol::selector(source).is_some()) && hello.family_version.is_none() {
+    let (mut hello, mut memory) = build(&server)?;
+    hello.frame_capabilities = hello
+        .frame_capabilities
+        .map(|caps| caps.for_server(server.frame_memory_class))
+        .transpose()?;
+    hello.family_version = server
+        .family_version
+        .filter(|version| *version == super::family_protocol::FAMILY_PROTOCOL);
+    if hello
+        .source
+        .as_ref()
+        .is_some_and(|source| super::family_protocol::selector(source).is_some())
+        && hello.family_version.is_none()
+    {
         return Err(ViewerError::Unsupported);
     }
-    hello.icon_version = server.icon_version.filter(|version|*version==super::app_icon::ICON_VERSION);
-    hello.metadata_only = metadata && (hello.icon_version.is_some() || hello.family_version.is_some());
+    hello.icon_version = server
+        .icon_version
+        .filter(|version| *version == super::app_icon::ICON_VERSION);
+    hello.metadata_only =
+        metadata && (hello.icon_version.is_some() || hello.family_version.is_some());
     if metadata {
         hello.mode = SessionMode::View;
         hello.source = Some(SourceId::Synthetic);
         hello.frame_capabilities = None;
     }
     if !metadata && server.frame_memory_class.is_none() {
-        if let Some(lease)=&memory {
-            let limits=super::frame_budget::legacy_limits(lease.bytes(),hello.frame_capabilities.map(|caps|caps.texture_size))?;
+        if let Some(lease) = &memory {
+            let limits = super::frame_budget::legacy_limits(
+                lease.bytes(),
+                hello.frame_capabilities.map(|caps| caps.texture_size),
+            )?;
             // Existing v1 hosts honor display_size but cannot interpret v2's
             // memory offer. Ask them for pixels the actual local lease can hold.
-            let mut wanted=limits.fit(hello.display_size.unwrap_or(FrameSize::MAX));
-            if limits.max_pixels<256 || limits.max_size.width<16 || limits.max_size.height<16 {
-                hello.decoders.retain(|offer|offer.codec!=super::negotiate::CodecKind::H264);
-            } else if hello.decoders.iter().any(|offer|offer.codec==super::negotiate::CodecKind::H264) {
-                wanted=super::frame_size_caps::fit_macroblocks(wanted,limits.max_pixels/256);
+            let mut wanted = limits.fit(hello.display_size.unwrap_or(FrameSize::MAX));
+            if limits.max_pixels < 256 || limits.max_size.width < 16 || limits.max_size.height < 16
+            {
+                hello
+                    .decoders
+                    .retain(|offer| offer.codec != super::negotiate::CodecKind::H264);
+            } else if hello
+                .decoders
+                .iter()
+                .any(|offer| offer.codec == super::negotiate::CodecKind::H264)
+            {
+                wanted = super::frame_size_caps::fit_macroblocks(wanted, limits.max_pixels / 256);
             }
-            hello.display_size=Some(wanted);
+            hello.display_size = Some(wanted);
         }
     }
-    let probe=hello.mode==SessionMode::Probe;
-    connection.set_max_concurrent_uni_streams(VarInt::from_u32(if probe {0} else {VIEWER_UNI_STREAMS}));
+    let probe = hello.mode == SessionMode::Probe;
+    connection.set_max_concurrent_uni_streams(VarInt::from_u32(if probe {
+        0
+    } else {
+        VIEWER_UNI_STREAMS
+    }));
     send_client_hello(&mut send, &hello).await?;
     let accepted = loop {
         match recv_hello_reply(&mut recv).await? {
@@ -231,49 +281,102 @@ async fn handshake_for(
             }
         }
     };
-    if accepted.icon_version.is_some() && accepted.icon_version!=hello.icon_version {
-        return Err(ViewerError::Io(io::Error::other("host enabled an unoffered icon contract")));
+    if accepted.icon_version.is_some() && accepted.icon_version != hello.icon_version {
+        return Err(ViewerError::Io(io::Error::other(
+            "host enabled an unoffered icon contract",
+        )));
     }
     if accepted.family_version.is_some() && accepted.family_version != hello.family_version {
-        return Err(ViewerError::Io(io::Error::other("host enabled an unoffered window family protocol")));
+        return Err(ViewerError::Io(io::Error::other(
+            "host enabled an unoffered window family protocol",
+        )));
     }
-    if hello.source.as_ref().is_some_and(|source|super::family_protocol::selector(source).is_some()) && accepted.family_version.is_none() {
+    if hello
+        .source
+        .as_ref()
+        .is_some_and(|source| super::family_protocol::selector(source).is_some())
+        && accepted.family_version.is_none()
+    {
         return Err(ViewerError::Unsupported);
     }
     if let Some(contract) = accepted.frame_contract {
-        let offered = hello.frame_capabilities.ok_or_else(|| io::Error::other("host enabled an unoffered frame protocol"))?;
+        let offered = hello
+            .frame_capabilities
+            .ok_or_else(|| io::Error::other("host enabled an unoffered frame protocol"))?;
         offered.validate()?;
-        if contract.version != offered.version || (contract.hybrid_regions && !offered.hybrid_regions)
-            || contract.limits.max_size.width > offered.frames.max_size.width.min(offered.texture_size.width)
-            || contract.limits.max_size.height > offered.frames.max_size.height.min(offered.texture_size.height)
-            || contract.limits.max_pixels > offered.frames.max_pixels || contract.limits.working_bytes > offered.frames.working_bytes
-            || memory.as_ref().is_some_and(|lease|contract.limits.working_bytes>lease.bytes()) {
-            return Err(ViewerError::Io(io::Error::other("host frame contract exceeds viewer's capability evidence")));
+        if contract.version != offered.version
+            || (contract.hybrid_regions && !offered.hybrid_regions)
+            || contract.limits.max_size.width
+                > offered
+                    .frames
+                    .max_size
+                    .width
+                    .min(offered.texture_size.width)
+            || contract.limits.max_size.height
+                > offered
+                    .frames
+                    .max_size
+                    .height
+                    .min(offered.texture_size.height)
+            || contract.limits.max_pixels > offered.frames.max_pixels
+            || contract.limits.working_bytes > offered.frames.working_bytes
+            || memory
+                .as_ref()
+                .is_some_and(|lease| contract.limits.working_bytes > lease.bytes())
+        {
+            return Err(ViewerError::Io(io::Error::other(
+                "host frame contract exceeds viewer's capability evidence",
+            )));
         }
-        if let Some(lease)=memory.as_mut().and_then(std::sync::Arc::get_mut) {
+        if let Some(lease) = memory.as_mut().and_then(std::sync::Arc::get_mut) {
             lease.release_to(contract.limits.working_bytes);
         }
     }
-    let local_limits=if metadata {None} else if let Some(contract)=accepted.frame_contract {Some(contract.limits)}
-        else {memory.as_ref().map(|lease|super::frame_budget::legacy_limits(lease.bytes(),
-            hello.frame_capabilities.map(|caps|caps.texture_size))).transpose()?};
+    let local_limits = if metadata {
+        None
+    } else if let Some(contract) = accepted.frame_contract {
+        Some(contract.limits)
+    } else {
+        memory
+            .as_ref()
+            .map(|lease| {
+                super::frame_budget::legacy_limits(
+                    lease.bytes(),
+                    hello.frame_capabilities.map(|caps| caps.texture_size),
+                )
+            })
+            .transpose()?
+    };
     let (control, mut outgoing) = mpsc::channel::<ViewerFrame>(CONTROL_QUEUE);
     let (host_tx, host) = mpsc::channel(CONTROL_QUEUE);
     let (pictures_tx, pictures) = picture_channel();
-    let icons_supported=accepted.icon_version==Some(super::app_icon::ICON_VERSION);
-    let pending_icons=std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::<super::app_icon::IconRequest,std::time::Instant>::new()));
-    let sent_icons=pending_icons.clone();
+    let icons_supported = accepted.icon_version == Some(super::app_icon::ICON_VERSION);
+    let pending_icons = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::<
+        super::app_icon::IconRequest,
+        std::time::Instant,
+    >::new()));
+    let sent_icons = pending_icons.clone();
     let writer = tokio::spawn(async move {
         while let Some(frame) = outgoing.recv().await {
-            if let ViewerFrame::IconRequest(request)=&frame {
-                if !icons_supported {continue;}
-                let admitted={
-                    let mut pending=sent_icons.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                    pending.retain(|_,at|at.elapsed()<Duration::from_secs(30));
-                    if pending.len()>=8 || pending.contains_key(request) {false}
-                    else {pending.insert(request.clone(),std::time::Instant::now());true}
+            if let ViewerFrame::IconRequest(request) = &frame {
+                if !icons_supported {
+                    continue;
+                }
+                let admitted = {
+                    let mut pending = sent_icons
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    pending.retain(|_, at| at.elapsed() < Duration::from_secs(30));
+                    if pending.len() >= 8 || pending.contains_key(request) {
+                        false
+                    } else {
+                        pending.insert(request.clone(), std::time::Instant::now());
+                        true
+                    }
                 };
-                if !admitted {continue;}
+                if !admitted {
+                    continue;
+                }
             }
             if send_viewer_frame(&mut send, &frame).await.is_err() {
                 return;
@@ -284,10 +387,16 @@ async fn handshake_for(
     let reader = tokio::spawn(async move {
         loop {
             let frame = recv_host_frame(&mut recv).await;
-            if let Ok(HostFrame::IconReply(response))=&frame {
+            if let Ok(HostFrame::IconReply(response)) = &frame {
                 // At most eight correlated icon replies may enter the host-frame queue.
-                if pending_icons.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .remove(&response.request).is_none() {continue;}
+                if pending_icons
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .remove(&response.request)
+                    .is_none()
+                {
+                    continue;
+                }
             }
             let failed = frame.is_err();
             if host_tx.send(frame).await.is_err() || failed {
@@ -295,9 +404,18 @@ async fn handshake_for(
             }
         }
     });
-    let streams=if probe {drop(pictures_tx);tokio::spawn(async {})} else {
-        tokio::spawn(accept_picture_streams_admitted(connection.clone(),pictures_tx,control.clone(),
-            accepted.frame_contract,memory.clone(),local_limits))
+    let streams = if probe {
+        drop(pictures_tx);
+        tokio::spawn(async {})
+    } else {
+        tokio::spawn(accept_picture_streams_admitted(
+            connection.clone(),
+            pictures_tx,
+            control.clone(),
+            accepted.frame_contract,
+            memory.clone(),
+            local_limits,
+        ))
     };
     let pings = control.clone();
     let clock = tokio::spawn(async move {

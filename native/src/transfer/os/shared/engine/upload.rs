@@ -63,7 +63,10 @@ pub(super) fn upload(
     }
     let source_check = match source.publication_check() {
         Ok(check) => check,
-        Err(error) => { publish::abandon(engine, target, destination); return Err(error); }
+        Err(error) => {
+            publish::abandon(engine, target, destination);
+            return Err(error);
+        }
     };
     publish::complete(engine, target, file, destination, || source_check.verify())
 }

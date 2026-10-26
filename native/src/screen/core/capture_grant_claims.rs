@@ -25,9 +25,15 @@ impl CaptureGrant {
 
     /// Retirement and a last transport claim decide under the same ledger
     /// lock. None is expected source turnover, not a malformed credit.
-    pub(crate) fn claim_if_active(&self, owner: CaptureOwner, bytes: u64) -> io::Result<Option<CaptureSlice>> {
+    pub(crate) fn claim_if_active(
+        &self,
+        owner: CaptureOwner,
+        bytes: u64,
+    ) -> io::Result<Option<CaptureSlice>> {
         if self.image_admission().is_some() {
-            return Err(invalid("local image copies require an explicit ImageRole claim"));
+            return Err(invalid(
+                "local image copies require an explicit ImageRole claim",
+            ));
         }
         if bytes > self.inner.limits[owner as usize]
             || bytes > self.inner.capacity
@@ -94,7 +100,10 @@ impl CaptureGrant {
     }
 
     pub(crate) fn is_retired(&self) -> io::Result<bool> {
-        self.inner.usage.lock().map(|usage| usage.retired)
+        self.inner
+            .usage
+            .lock()
+            .map(|usage| usage.retired)
             .map_err(|_| io::Error::other("capture grant poisoned"))
     }
 

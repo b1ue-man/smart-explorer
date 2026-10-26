@@ -1,15 +1,26 @@
 //! Test-only v0.5.184 coders, preserved verbatim between the frozen markers.
 //! No candidate factory, converter or decoder is substituted for this arm.
-use std::{io, os::raw::{c_int, c_void}};
-use openh264::{OpenH264API, decoder::{Decoder, DecoderConfig},
-    encoder::{BitRate, Complexity, Encoder, EncoderConfig, FrameRate, FrameType,
-        Profile, RateControlMode, UsageType, VuiConfig}, formats::{YUVSlices, YUVSource}};
-use super::{coder_error, load, OPENH264_NAME, OpenH264Store};
-use crate::screen::core::{host_backend::{Chroma, EncodedFrame, ScreenDecoder, ScreenEncoder, YuvPicture},
+use super::{coder_error, load, OpenH264Store, OPENH264_NAME};
+use crate::screen::core::{
+    host_backend::{Chroma, EncodedFrame, ScreenDecoder, ScreenEncoder, YuvPicture},
+    pixel_convert::YuvMatrix,
     pixel_convert::{BgraImage, FrameSize, I420Image},
     quality_acceptance_baseline as pixels,
-    pixel_convert::YuvMatrix,
-    wire_binary::FrameRecord};
+    wire_binary::FrameRecord,
+};
+use openh264::{
+    decoder::{Decoder, DecoderConfig},
+    encoder::{
+        BitRate, Complexity, Encoder, EncoderConfig, FrameRate, FrameType, Profile,
+        RateControlMode, UsageType, VuiConfig,
+    },
+    formats::{YUVSlices, YUVSource},
+    OpenH264API,
+};
+use std::{
+    io,
+    os::raw::{c_int, c_void},
+};
 const MIN_BITRATE_BPS: u64 = 150_000;
 const MAX_BITRATE_BPS: u64 = 240_000_000;
 const ENCODER_OPTION_BITRATE: c_int = 5;
@@ -17,8 +28,14 @@ const ENCODER_OPTION_MAX_BITRATE: c_int = 6;
 const SPATIAL_LAYER_0: c_int = 0;
 const SPATIAL_LAYER_ALL: c_int = 4;
 #[repr(C)]
-struct BitrateInfo {layer: c_int, bitrate: c_int}
-fn bgra_to_i420(view: &crate::screen::core::pixel_convert::BgraView<'_>, _: YuvMatrix) -> io::Result<I420Image> {
+struct BitrateInfo {
+    layer: c_int,
+    bitrate: c_int,
+}
+fn bgra_to_i420(
+    view: &crate::screen::core::pixel_convert::BgraView<'_>,
+    _: YuvMatrix,
+) -> io::Result<I420Image> {
     pixels::bgra_to_i420(view, pixels::YuvMatrix::Bt709)
 }
 fn i420_to_bgra(source: &I420Image, _: YuvMatrix, output: &mut BgraImage) -> io::Result<()> {
@@ -289,26 +306,51 @@ pub(super) struct Baseline {
     pub(super) encoder: Box<dyn ScreenEncoder>,
     decoder: OpenH264Decoder,
 }
-pub(super) fn open(store: &OpenH264Store, size: FrameSize, fps: u32)
-    -> io::Result<Baseline> {
-    let encoder = OpenH264Encoder {api: Some(load(store)?), encoder: None, size,
-        fps: fps.max(1), bitrate: 0};
-    let decoder = OpenH264Decoder {decoder: Decoder::with_api_config(load(store)?, DecoderConfig::new()).map_err(coder_error)?,
-        size, planes: I420Image {size, y: Vec::new(), u: Vec::new(), v: Vec::new()},
-        picture: BgraImage::new(size)?, yuv: false, yuv_out: None};
-    Ok(Baseline {encoder: Box::new(encoder), decoder})
+pub(super) fn open(store: &OpenH264Store, size: FrameSize, fps: u32) -> io::Result<Baseline> {
+    let encoder = OpenH264Encoder {
+        api: Some(load(store)?),
+        encoder: None,
+        size,
+        fps: fps.max(1),
+        bitrate: 0,
+    };
+    let decoder = OpenH264Decoder {
+        decoder: Decoder::with_api_config(load(store)?, DecoderConfig::new())
+            .map_err(coder_error)?,
+        size,
+        planes: I420Image {
+            size,
+            y: Vec::new(),
+            u: Vec::new(),
+            v: Vec::new(),
+        },
+        picture: BgraImage::new(size)?,
+        yuv: false,
+        yuv_out: None,
+    };
+    Ok(Baseline {
+        encoder: Box::new(encoder),
+        decoder,
+    })
 }
 impl Baseline {
     pub(super) fn decode(&mut self, record: &FrameRecord) -> io::Result<Option<&BgraImage>> {
-        if !self.decoder.decode(record)? {return Ok(None);}
+        if !self.decoder.decode(record)? {
+            return Ok(None);
+        }
         let mut remaining: c_int = 0;
         // SAFETY: the historical decoder is initialized; get_option writes one
         // c_int while this exclusive borrow keeps its native instance alive.
-        let status = unsafe {self.decoder.decoder.raw_api().get_option(
-            openh264_sys2::DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER,
-            (&mut remaining as *mut c_int).cast())};
+        let status = unsafe {
+            self.decoder.decoder.raw_api().get_option(
+                openh264_sys2::DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER,
+                (&mut remaining as *mut c_int).cast(),
+            )
+        };
         if status != 0 || remaining != 0 {
-            return Err(io::Error::other("baseline output cannot be tied to exactly one synchronous capture"));
+            return Err(io::Error::other(
+                "baseline output cannot be tied to exactly one synchronous capture",
+            ));
         }
         Ok(Some(self.decoder.picture()))
     }

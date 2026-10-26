@@ -6,7 +6,10 @@ fn main() {
     if let Some(result) = smart_explorer::run_login_service_if_requested(&arguments) {
         match result {
             Ok(()) => std::process::exit(0),
-            Err(error) => { eprintln!("se: login service: {error}"); std::process::exit(1); }
+            Err(error) => {
+                eprintln!("se: login service: {error}");
+                std::process::exit(1);
+            }
         }
     }
     if let Some(result) = smart_explorer::mcp_launcher::runtime_contract_probe(&arguments) {

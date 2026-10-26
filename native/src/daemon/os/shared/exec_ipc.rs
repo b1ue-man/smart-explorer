@@ -166,9 +166,15 @@ pub fn connect(
     let (exec_id, control_token) = match read_response(&mut stream).map_err(|error| {
         format!("Worker-IPC fuer unabhaengigen Exec-Abbruch inkompatibel oder getrennt: {error}")
     })? {
-        IpcResponse::ExecControlledReady { exec_id, control_token } => (exec_id, control_token),
+        IpcResponse::ExecControlledReady {
+            exec_id,
+            control_token,
+        } => (exec_id, control_token),
         IpcResponse::Err { msg, .. } => return Err(msg),
-        _ => return Err("Worker-IPC unterstuetzt keinen unabhaengigen Exec-Abbruch; Neuverbindung erforderlich".into()),
+        _ => return Err(
+            "Worker-IPC unterstuetzt keinen unabhaengigen Exec-Abbruch; Neuverbindung erforderlich"
+                .into(),
+        ),
     };
     let control = lifetime::connect_control(addr, token, exec_id.clone(), control_token)
         .map_err(|error| format!("Exec-Kontrollbindung fehlgeschlagen: {error}"))?;
@@ -194,18 +200,28 @@ mod lifetime;
 pub(super) use lifetime::{serve_control, serve_controlled, ExecLifetime};
 
 pub(super) fn start_remote(
-    host: &ShareHost, target: crate::share::PeerOpenTarget, start: crate::share::ExecStart,
+    host: &ShareHost,
+    target: crate::share::PeerOpenTarget,
+    start: crate::share::ExecStart,
     retainer: Option<Arc<dyn Send + Sync>>,
 ) -> Result<RemoteExec, String> {
-    start_remote_cancellable(host, target, start, retainer,
+    start_remote_cancellable(
+        host,
+        target,
+        start,
+        retainer,
         Arc::new(crate::share::route_cancellation::RouteCancellation::default()),
-        Instant::now() + Duration::from_secs(45))
+        Instant::now() + Duration::from_secs(45),
+    )
 }
 
 pub(super) fn start_remote_cancellable(
-    host: &ShareHost, target: crate::share::PeerOpenTarget, start: crate::share::ExecStart,
+    host: &ShareHost,
+    target: crate::share::PeerOpenTarget,
+    start: crate::share::ExecStart,
     retainer: Option<Arc<dyn Send + Sync>>,
-    cancellation: Arc<crate::share::route_cancellation::RouteCancellation>, deadline: Instant,
+    cancellation: Arc<crate::share::route_cancellation::RouteCancellation>,
+    deadline: Instant,
 ) -> Result<RemoteExec, String> {
     connect::start_remote(host, target, start, retainer, cancellation, deadline)
 }

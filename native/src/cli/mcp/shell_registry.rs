@@ -228,9 +228,9 @@ impl ShellRegistry {
 }
 
 impl Port {
-    fn new(client: SessionClient, owned: bool, target_key: Option<String>) -> Result<Self,String> {
-        let operation=Arc::new(Mutex::new(crate::mcp_launcher::continuation_operation()?));
-        let active=operation.clone();
+    fn new(client: SessionClient, owned: bool, target_key: Option<String>) -> Result<Self, String> {
+        let operation = Arc::new(Mutex::new(crate::mcp_launcher::continuation_operation()?));
+        let active = operation.clone();
         let log = Arc::new(Mutex::new(ActivityLog::default()));
         let events = client.activity();
         let writer = log.clone();
@@ -238,17 +238,26 @@ impl Port {
             .name("se-mcp-shell-log".into())
             .spawn(move || {
                 for event in events {
-                    let ended=matches!(event,Activity::Ended {..});
+                    let ended = matches!(event, Activity::Ended { .. });
                     if let Ok(mut log) = writer.lock() {
                         log.push(&event);
                     }
-                    if ended {if let Ok(mut guard)=active.lock() {guard.take();}}
+                    if ended {
+                        if let Ok(mut guard) = active.lock() {
+                            guard.take();
+                        }
+                    }
                 }
-                if let Ok(mut guard)=active.lock() {guard.take();}
+                if let Ok(mut guard) = active.lock() {
+                    guard.take();
+                }
             });
-        if let Err(error)=logging {client.leave(); return Err(format!("cannot watch persistent shell lifetime: {error}"));}
+        if let Err(error) = logging {
+            client.leave();
+            return Err(format!("cannot watch persistent shell lifetime: {error}"));
+        }
         Ok(Self {
-            _operation:operation,
+            _operation: operation,
             client,
             owned,
             target_key,

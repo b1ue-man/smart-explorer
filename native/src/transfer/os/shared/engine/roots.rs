@@ -84,7 +84,14 @@ pub(crate) fn remote_planner(
 
 /// Plans the roots of `view` into `register` (which already knows the target
 /// names when the target is remote).
-pub(crate) fn plan(view: &JobView<'_>, register: &FolderRegister<'_>, cancel: &AtomicBool, completed: &[ResolvedRoot], files: &[ResolvedRoot], alias_required: bool) -> Result<RootPlan, String> {
+pub(crate) fn plan(
+    view: &JobView<'_>,
+    register: &FolderRegister<'_>,
+    cancel: &AtomicBool,
+    completed: &[ResolvedRoot],
+    files: &[ResolvedRoot],
+    alias_required: bool,
+) -> Result<RootPlan, String> {
     let resumed: HashMap<&str, &str> = view
         .resume
         .unwrap_or_default()
@@ -94,9 +101,16 @@ pub(crate) fn plan(view: &JobView<'_>, register: &FolderRegister<'_>, cancel: &A
         .map(|root| (root.source.as_str(), root.rel.as_str()))
         .collect();
     match view.items {
-        JobItems::Roots { paths, base } => {
-            plan_roots(view, register, paths, base.as_deref(), &resumed, cancel, completed, alias_required)
-        }
+        JobItems::Roots { paths, base } => plan_roots(
+            view,
+            register,
+            paths,
+            base.as_deref(),
+            &resumed,
+            cancel,
+            completed,
+            alias_required,
+        ),
         JobItems::Pairs(pairs) => plan_pairs(view, register, pairs, &resumed, completed),
     }
 }
@@ -133,7 +147,9 @@ fn plan_roots(
             source: path.clone(),
             planned: rel.clone(),
         });
-        if completed.iter().any(|root| root.source == *path) { continue; }
+        if completed.iter().any(|root| root.source == *path) {
+            continue;
+        }
         plan.walk_roots.push(WalkRoot {
             path: path.clone(),
             rel,
@@ -144,44 +160,102 @@ fn plan_roots(
     if view.layout == Layout::Flatten {
         return Ok(plan);
     }
-    let needs_aliases = view.resume.is_some() || plan.walk_roots.iter().any(|root| view.folders.for_root(&root.path) != crate::transfer::FolderConflict::Merge);
+    let needs_aliases = view.resume.is_some()
+        || plan.walk_roots.iter().any(|root| {
+            view.folders.for_root(&root.path) != crate::transfer::FolderConflict::Merge
+        });
     let reservations = if needs_aliases {
-        let namespace = |side: Side<'_>| side.backend().map_or_else(|| "local".to_string(), |backend| backend.namespace_identity());
-        Some(super::folder_reservation::Reservations::open(super::super::super::folder_alias::FolderAliasScope {
-            job: view.id.map(str::to_string).unwrap_or_else(super::new_job_id),
-            source_namespace: namespace(view.source),
-            target_namespace: namespace(view.target),
-            target_root: register.root().to_string(),
-            native_target: view.target.is_local(),
-            vault_locations: super::record_io::record_locations(view.source, view.target, &paths.iter().map(String::as_str).collect::<Vec<_>>(), register.root()).map_err(|error| error.to_string())?,
-        }, view.recovery, alias_required).map_err(|error| format!("Ordnerzuordnung speichern: {error}"))?)
-    } else { None };
+        let namespace = |side: Side<'_>| {
+            side.backend().map_or_else(
+                || "local".to_string(),
+                |backend| backend.namespace_identity(),
+            )
+        };
+        Some(
+            super::folder_reservation::Reservations::open(
+                super::super::super::folder_alias::FolderAliasScope {
+                    job: view
+                        .id
+                        .map(str::to_string)
+                        .unwrap_or_else(super::new_job_id),
+                    source_namespace: namespace(view.source),
+                    target_namespace: namespace(view.target),
+                    target_root: register.root().to_string(),
+                    native_target: view.target.is_local(),
+                    vault_locations: super::record_io::record_locations(
+                        view.source,
+                        view.target,
+                        &paths.iter().map(String::as_str).collect::<Vec<_>>(),
+                        register.root(),
+                    )
+                    .map_err(|error| error.to_string())?,
+                },
+                view.recovery,
+                alias_required,
+            )
+            .map_err(|error| format!("Ordnerzuordnung speichern: {error}"))?,
+        )
+    } else {
+        None
+    };
     let mut kept = Vec::new();
-    let gate = view.source.is_local().then(|| crate::transfer::AccessGate::new(&view.gate_root()));
+    let gate = view
+        .source
+        .is_local()
+        .then(|| crate::transfer::AccessGate::new(&view.gate_root()));
     for mut root in plan.walk_roots.drain(..) {
-        if cancel.load(Ordering::Acquire) { return Err(super::super::cancel::CANCELED_ERROR.to_string()); }
-        if view.resume.is_some() && (resumed.contains_key(root.path.as_str()) || reservations.as_ref().is_some_and(|saved| saved.saved_relative(&root.path).is_some())) {
+        if cancel.load(Ordering::Acquire) {
+            return Err(super::super::cancel::CANCELED_ERROR.to_string());
+        }
+        if view.resume.is_some()
+            && (resumed.contains_key(root.path.as_str())
+                || reservations
+                    .as_ref()
+                    .is_some_and(|saved| saved.saved_relative(&root.path).is_some()))
+        {
             // A folder deliberately skipped by the earlier conflict decision
             // has no resolved root. Missing-only must not turn it into a merge.
             if !resumed.contains_key(root.path.as_str())
                 && view.folders.for_root(&root.path) == crate::transfer::FolderConflict::Skip
-                && selected_directory(view.source, &root.path, gate.as_ref())? {
+                && selected_directory(view.source, &root.path, gate.as_ref())?
+            {
                 plan.omitted += 1;
                 plan.roots.retain(|entry| entry.source != root.path);
                 continue;
             }
             if let Some(reservations) = &reservations {
                 if !resumed.contains_key(root.path.as_str()) {
-                    if let Some(relative) = reservations.saved_relative(&root.path) { root.rel = relative; }
+                    if let Some(relative) = reservations.saved_relative(&root.path) {
+                        root.rel = relative;
+                    }
                 }
-                let moved = reservations.confirm_resume(view.target, register.root(), &root.path, &root.rel, super::file_recovery::missing_retry::live(view), cancel).map_err(|error| format!("Wiederaufnahmealias bestätigen: {error}"))?;
-                if let Some(entry) = plan.roots.iter_mut().find(|entry| entry.source == root.path) { entry.planned = root.rel.clone(); }
-                if moved == Some(true) && !target_exists(view.source, &root.path)? { continue; }
+                let moved = reservations
+                    .confirm_resume(
+                        view.target,
+                        register.root(),
+                        &root.path,
+                        &root.rel,
+                        super::file_recovery::missing_retry::live(view),
+                        cancel,
+                    )
+                    .map_err(|error| format!("Wiederaufnahmealias bestätigen: {error}"))?;
+                if let Some(entry) = plan
+                    .roots
+                    .iter_mut()
+                    .find(|entry| entry.source == root.path)
+                {
+                    entry.planned = root.rel.clone();
+                }
+                if moved == Some(true) && !target_exists(view.source, &root.path)? {
+                    continue;
+                }
             }
             kept.push(root);
             continue;
         }
-        let saved_move = reservations.as_ref().is_some_and(|reservations| reservations.saved_move(&root.path));
+        let saved_move = reservations
+            .as_ref()
+            .is_some_and(|reservations| reservations.saved_move(&root.path));
         if saved_move || selected_directory(view.source, &root.path, gate.as_ref())? {
             let policy = view.folders.for_root(&root.path);
             if policy != crate::transfer::FolderConflict::Merge {
@@ -191,29 +265,59 @@ fn plan_roots(
                     continue;
                 }
                 if let Some(parent) = super::super::engine_names::parent_rel(&root.rel) {
-                    register.ensure(parent, cancel).map_err(|error| error.message)?;
+                    register
+                        .ensure(parent, cancel)
+                        .map_err(|error| error.message)?;
                 }
                 if let Some(reservations) = &reservations {
-                    let whole_move = view.mode == crate::types::CopyMode::Move && view.source.is_local() && view.target.is_local() && view.filter.is_none();
+                    let whole_move = view.mode == crate::types::CopyMode::Move
+                        && view.source.is_local()
+                        && view.target.is_local()
+                        && view.filter.is_none();
                     if !whole_move {
-                    match reservations.reserve(view.target, register.root(), &root.path, &root.rel, policy == crate::transfer::FolderConflict::KeepBoth, cancel) {
-                        Ok(relative) => root.rel = relative,
-                        Err(error) if policy == crate::transfer::FolderConflict::Skip && error.kind() == std::io::ErrorKind::AlreadyExists => {
-                            plan.omitted += 1;
-                            plan.roots.retain(|entry| entry.source != root.path);
-                            continue;
+                        match reservations.reserve(
+                            view.target,
+                            register.root(),
+                            &root.path,
+                            &root.rel,
+                            policy == crate::transfer::FolderConflict::KeepBoth,
+                            cancel,
+                        ) {
+                            Ok(relative) => root.rel = relative,
+                            Err(error)
+                                if policy == crate::transfer::FolderConflict::Skip
+                                    && error.kind() == std::io::ErrorKind::AlreadyExists =>
+                            {
+                                plan.omitted += 1;
+                                plan.roots.retain(|entry| entry.source != root.path);
+                                continue;
+                            }
+                            Err(error) => {
+                                return Err(format!(
+                                    "Zielordner für „{}“ reservieren: {error}",
+                                    root.path
+                                ))
+                            }
                         }
-                        Err(error) => return Err(format!("Zielordner für „{}“ reservieren: {error}", root.path)),
-                    }
                     }
                 }
             }
-            if let Some(entry) = plan.roots.iter_mut().find(|entry| entry.source == root.path) {
+            if let Some(entry) = plan
+                .roots
+                .iter_mut()
+                .find(|entry| entry.source == root.path)
+            {
                 entry.planned = root.rel.clone();
             }
         } else if !view.target.is_local() && !root.rel.contains('/') && view.resume.is_none() {
             root.rel = claim(register, &root.rel)?;
-            if let Some(entry) = plan.roots.iter_mut().find(|entry| entry.source == root.path) { entry.planned = root.rel.clone(); }
+            if let Some(entry) = plan
+                .roots
+                .iter_mut()
+                .find(|entry| entry.source == root.path)
+            {
+                entry.planned = root.rel.clone();
+            }
         }
         kept.push(root);
     }
@@ -222,16 +326,28 @@ fn plan_roots(
     Ok(plan)
 }
 
-fn selected_directory(side: Side<'_>, path: &str, gate: Option<&crate::transfer::AccessGate>) -> Result<bool, String> {
+fn selected_directory(
+    side: Side<'_>,
+    path: &str,
+    gate: Option<&crate::transfer::AccessGate>,
+) -> Result<bool, String> {
     let inspect = || match side {
-        Side::Local => crate::local_access::symlink_metadata(&native(path))
-            .map(|meta| meta.is_dir() && !crate::local_access::metadata_is_link_like(&native(path), &meta)),
-        Side::Remote(backend) => backend.stat(path).map(|meta| meta.is_dir && !meta.is_symlink),
+        Side::Local => crate::local_access::symlink_metadata(&native(path)).map(|meta| {
+            meta.is_dir() && !crate::local_access::metadata_is_link_like(&native(path), &meta)
+        }),
+        Side::Remote(backend) => backend
+            .stat(path)
+            .map(|meta| meta.is_dir && !meta.is_symlink),
     };
     let mut result = inspect();
-    if result.as_ref().is_err_and(|error| error.kind() == std::io::ErrorKind::PermissionDenied) {
+    if result
+        .as_ref()
+        .is_err_and(|error| error.kind() == std::io::ErrorKind::PermissionDenied)
+    {
         if let Some(gate) = gate {
-            if gate.request() == crate::transfer::AccessAnswer::Granted { result = inspect(); }
+            if gate.request() == crate::transfer::AccessAnswer::Granted {
+                result = inspect();
+            }
         }
     }
     result.map_err(|error| format!("Quellordner „{path}“ prüfen: {error}"))
@@ -270,7 +386,10 @@ fn plan_pairs(
         if let Some(root) = completed.iter().find(|root| root.source == receipt_key) {
             if !firsts.contains_key(&first) {
                 let planned = first_component(&root.rel).to_string();
-                plan.roots.push(PlannedRoot { source: first.clone(), planned: planned.clone() });
+                plan.roots.push(PlannedRoot {
+                    source: first.clone(),
+                    planned: planned.clone(),
+                });
                 firsts.insert(first, planned);
             }
             continue;
@@ -278,9 +397,17 @@ fn plan_pairs(
         let planned = match firsts.get(&first) {
             Some(planned) => planned.clone(),
             None => {
-                let planned = match resumed.get(receipt_key.as_str()).or_else(|| resumed.get(first.as_str())) {
+                let planned = match resumed
+                    .get(receipt_key.as_str())
+                    .or_else(|| resumed.get(first.as_str()))
+                {
                     Some(rel) => first_component(rel).to_string(),
-                    None if view.target.is_local() || pair.rel.contains('/') || view.resume.is_some() => first.clone(),
+                    None if view.target.is_local()
+                        || pair.rel.contains('/')
+                        || view.resume.is_some() =>
+                    {
+                        first.clone()
+                    }
                     None => claim(register, &first)?,
                 };
                 plan.roots.push(PlannedRoot {

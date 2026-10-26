@@ -103,31 +103,89 @@ impl App {
             for (i, root) in cfg.roots.iter_mut().enumerate() {
                 egui::Frame::group(ui.style()).show(ui, |ui| {
                     ui.strong(&root.label);
-                    let mut form = crate::app::settings_form::Form::new(ui, i, &["Ordner", "Zugriff", "Systemorte"]);
-                    form.row(ui, "Ordner", |ui| { share_value_field(ui, &root.path); });
-                    form.row(ui, "Zugriff", |ui| {
-                        egui::ComboBox::from_id_salt(("export_access", i)).selected_text(if root.access == crate::share::ExportAccess::ReadOnly { "Nur lesen" } else { "Lesen und Schreiben" }).show_ui(ui, |ui| {
-                            changed |= ui.selectable_value(&mut root.access, crate::share::ExportAccess::ReadOnly, "Nur lesen").changed();
-                            changed |= ui.selectable_value(&mut root.access, crate::share::ExportAccess::ReadWrite, "Lesen und Schreiben").changed();
-                        });
+                    let mut form = crate::app::settings_form::Form::new(
+                        ui,
+                        i,
+                        &["Ordner", "Zugriff", "Systemorte"],
+                    );
+                    form.row(ui, "Ordner", |ui| {
+                        share_value_field(ui, &root.path);
                     });
-                    form.row(ui, "Systemorte", |ui| { changed |= ui.checkbox(&mut root.allow_system_writes, "Beschreibbar (unsicher)").changed(); });
+                    form.row(ui, "Zugriff", |ui| {
+                        egui::ComboBox::from_id_salt(("export_access", i))
+                            .selected_text(if root.access == crate::share::ExportAccess::ReadOnly {
+                                "Nur lesen"
+                            } else {
+                                "Lesen und Schreiben"
+                            })
+                            .show_ui(ui, |ui| {
+                                changed |= ui
+                                    .selectable_value(
+                                        &mut root.access,
+                                        crate::share::ExportAccess::ReadOnly,
+                                        "Nur lesen",
+                                    )
+                                    .changed();
+                                changed |= ui
+                                    .selectable_value(
+                                        &mut root.access,
+                                        crate::share::ExportAccess::ReadWrite,
+                                        "Lesen und Schreiben",
+                                    )
+                                    .changed();
+                            });
+                    });
+                    form.row(ui, "Systemorte", |ui| {
+                        changed |= ui
+                            .checkbox(&mut root.allow_system_writes, "Beschreibbar (unsicher)")
+                            .changed();
+                    });
                     ui.horizontal_wrapped(|ui| {
                         if ui.button("Test").clicked() {
-                            self.append_share_diag(format!("Freigabe-Test {}: {}\n", root.label, if std::path::Path::new(&root.path).exists() { "ok" } else { "nicht gefunden" }));
+                            self.append_share_diag(format!(
+                                "Freigabe-Test {}: {}\n",
+                                root.label,
+                                if std::path::Path::new(&root.path).exists() {
+                                    "ok"
+                                } else {
+                                    "nicht gefunden"
+                                }
+                            ));
                         }
-                        if ui.add_enabled(i > 0, egui::Button::new("Nach oben")).clicked() { move_up = Some(i); }
-                        if ui.add_enabled(i + 1 < root_count, egui::Button::new("Nach unten")).clicked() { move_down = Some(i); }
-                        if ui.button("Entfernen").clicked() { remove = Some(i); }
+                        if ui
+                            .add_enabled(i > 0, egui::Button::new("Nach oben"))
+                            .clicked()
+                        {
+                            move_up = Some(i);
+                        }
+                        if ui
+                            .add_enabled(i + 1 < root_count, egui::Button::new("Nach unten"))
+                            .clicked()
+                        {
+                            move_down = Some(i);
+                        }
+                        if ui.button("Entfernen").clicked() {
+                            remove = Some(i);
+                        }
                     });
                 });
             }
         }
         for root in &mut cfg.roots {
-            if root.access == crate::share::ExportAccess::ReadOnly && self.share_profiles.auto_home_was_migrated(&scope, &root.path) {
+            if root.access == crate::share::ExportAccess::ReadOnly
+                && self
+                    .share_profiles
+                    .auto_home_was_migrated(&scope, &root.path)
+            {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(format!("{}: Die alte automatische Home-Freigabe wurde auf Lesen umgestellt.", root.label));
-                    if ui.button("Schreiben wieder erlauben").clicked() { root.access = crate::share::ExportAccess::ReadWrite; changed = true; }
+                    ui.label(format!(
+                        "{}: Die alte automatische Home-Freigabe wurde auf Lesen umgestellt.",
+                        root.label
+                    ));
+                    if ui.button("Schreiben wieder erlauben").clicked() {
+                        root.access = crate::share::ExportAccess::ReadWrite;
+                        changed = true;
+                    }
                 });
             }
         }

@@ -70,18 +70,21 @@ fn collect(
         entries: Vec::with_capacity(1024),
         ..CollectOutcome::default()
     };
-    let root_link_metadata = match crate::source_media::acquire(root, crate::source_media::Priority::Foreground, cancel)
-        .and_then(|_guard| crate::local_access::symlink_metadata(root)) {
-        Ok(metadata) => metadata,
-        Err(error) => {
-            push_issue(&mut outcome, root, error.to_string());
-            return outcome;
-        }
-    };
+    let root_link_metadata =
+        match crate::source_media::acquire(root, crate::source_media::Priority::Foreground, cancel)
+            .and_then(|_guard| crate::local_access::symlink_metadata(root))
+        {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                push_issue(&mut outcome, root, error.to_string());
+                return outcome;
+            }
+        };
     let root_is_link = is_link_like(&root_link_metadata);
     let root_metadata = if root_is_link && follow_symlinks {
         match crate::source_media::acquire(root, crate::source_media::Priority::Foreground, cancel)
-            .and_then(|_guard| std::fs::metadata(root)) {
+            .and_then(|_guard| std::fs::metadata(root))
+        {
             Ok(metadata) => metadata,
             Err(error) => {
                 push_issue(&mut outcome, root, error.to_string());
@@ -102,7 +105,10 @@ fn collect(
 
     let optical = match crate::source_media::probe(root) {
         Ok(source) => source,
-        Err(error) => { push_issue(&mut outcome, root, error.to_string()); return outcome; }
+        Err(error) => {
+            push_issue(&mut outcome, root, error.to_string());
+            return outcome;
+        }
     };
     let mut name_bytes = 0usize;
     let mut stack = vec![(root.to_path_buf(), start_depth, 0u32)];
@@ -111,8 +117,14 @@ fn collect(
             outcome.canceled = true;
             break;
         }
-        if optical.as_ref().is_some_and(|expected| !crate::source_media::probe(root).is_ok_and(|source| source.as_ref() == Some(expected))) {
-            push_issue(&mut outcome, root, "optical medium changed during copy expansion".into());
+        if optical.as_ref().is_some_and(|expected| {
+            !crate::source_media::probe(root).is_ok_and(|source| source.as_ref() == Some(expected))
+        }) {
+            push_issue(
+                &mut outcome,
+                root,
+                "optical medium changed during copy expansion".into(),
+            );
             break;
         }
         if relative_depth > MAX_COLLECTED_DEPTH {
@@ -123,9 +135,14 @@ fn collect(
             );
             break;
         }
-        let read_directory = || crate::source_media::GuardedIterator::new(&directory,
-            crate::source_media::Priority::Foreground, cancel,
-            || crate::local_access::read_directory(&directory));
+        let read_directory = || {
+            crate::source_media::GuardedIterator::new(
+                &directory,
+                crate::source_media::Priority::Foreground,
+                cancel,
+                || crate::local_access::read_directory(&directory),
+            )
+        };
         let mut listing = read_directory();
         if may_request
             && listing
@@ -199,8 +216,13 @@ fn collect(
                 entry.is_link_like || entry.kind == crate::local_access::EntryKind::Link;
             let (is_dir, hidden, system, size, mtime_ms, btime_ms) =
                 if is_symlink && follow_symlinks {
-                    let metadata = match crate::source_media::acquire(&path, crate::source_media::Priority::Foreground, cancel)
-                        .and_then(|_guard| std::fs::metadata(&path)) {
+                    let metadata = match crate::source_media::acquire(
+                        &path,
+                        crate::source_media::Priority::Foreground,
+                        cancel,
+                    )
+                    .and_then(|_guard| std::fs::metadata(&path))
+                    {
                         Ok(metadata) => metadata,
                         Err(error) => {
                             push_issue(&mut outcome, &path, error.to_string());
@@ -284,8 +306,14 @@ fn collect(
             break;
         }
     }
-    if optical.as_ref().is_some_and(|expected| !crate::source_media::probe(root).is_ok_and(|source| source.as_ref() == Some(expected))) {
-        push_issue(&mut outcome, root, "optical medium changed during copy expansion".into());
+    if optical.as_ref().is_some_and(|expected| {
+        !crate::source_media::probe(root).is_ok_and(|source| source.as_ref() == Some(expected))
+    }) {
+        push_issue(
+            &mut outcome,
+            root,
+            "optical medium changed during copy expansion".into(),
+        );
     }
     outcome
 }

@@ -6,21 +6,29 @@ use std::sync::Mutex;
 
 static RUNTIME_FAILURE: Mutex<Option<AuthError>> = Mutex::new(None);
 
-fn now() -> i64 { crate::cloud::core_impl::now_secs() }
+fn now() -> i64 {
+    crate::cloud::core_impl::now_secs()
+}
 fn runtime_error(error: &AuthError) {
-    if let Ok(mut value) = RUNTIME_FAILURE.lock() { *value = Some(error.clone()); }
+    if let Ok(mut value) = RUNTIME_FAILURE.lock() {
+        *value = Some(error.clone());
+    }
 }
 fn commit(provider: Provider, session: &mut Session) -> Result<(), AuthError> {
     persist(provider, session, true)
 }
 fn persist(provider: Provider, session: &mut Session, tracked: bool) -> Result<(), AuthError> {
     // Pure diagnostics do not supersede an in-flight explicit browser login.
-    if tracked || session.generation == 0 { session.advance()?; }
+    if tracked || session.generation == 0 {
+        session.advance()?;
+    }
     if let Err(error) = store::write(provider, session, tracked) {
         runtime_error(&error);
         return Err(error);
     }
-    if let Ok(mut value) = RUNTIME_FAILURE.lock() { *value = None; }
+    if let Ok(mut value) = RUNTIME_FAILURE.lock() {
+        *value = None;
+    }
     Ok(())
 }
 
@@ -38,16 +46,33 @@ pub(super) fn begin_authorize(provider: Provider) -> Result<(ClientConfig, u64),
         let record = session(provider, &cfg.client_id)?;
         let has_token = if record.generation == 0 {
             store::read_legacy(provider)?.is_some_and(|token| !token.is_empty())
-        } else { !record.refresh_token.is_empty() };
-        record.account_key.is_none() && has_token && !cfg.client_id.is_empty()
+        } else {
+            !record.refresh_token.is_empty()
+        };
+        record.account_key.is_none()
+            && has_token
+            && !cfg.client_id.is_empty()
             && record.client_id == cfg.client_id
-            && !matches!(record.state, AuthState::ReauthorizeRequired | AuthState::ProviderError | AuthState::IdentityConflict)
+            && !matches!(
+                record.state,
+                AuthState::ReauthorizeRequired
+                    | AuthState::ProviderError
+                    | AuthState::IdentityConflict
+            )
     };
     if needs_binding {
         // First confirm a still usable legacy grant before a browser can select
         // a different account. Never try its token against multiple client IDs.
-        if let Err(error) = refresh(provider, &crate::cloud::core_impl::refresh_endpoint(provider)?, None, |token| oauth_http::identify(provider, token)) {
-            if !matches!(error.state, AuthState::ReauthorizeRequired | AuthState::ProviderError) {
+        if let Err(error) = refresh(
+            provider,
+            &crate::cloud::core_impl::refresh_endpoint(provider)?,
+            None,
+            |token| oauth_http::identify(provider, token),
+        ) {
+            if !matches!(
+                error.state,
+                AuthState::ReauthorizeRequired | AuthState::ProviderError
+            ) {
                 return Err(error);
             }
             // An unusable legacy grant has no provable principal: explicitly
@@ -61,16 +86,25 @@ pub(super) fn begin_authorize(provider: Provider) -> Result<(ClientConfig, u64),
 }
 
 pub(super) fn finish_authorize(
-    provider: Provider, cfg: &ClientConfig, generation: u64, tokens: Tokens,
+    provider: Provider,
+    cfg: &ClientConfig,
+    generation: u64,
+    tokens: Tokens,
     cancelled: &std::sync::atomic::AtomicBool,
 ) -> Result<Tokens, AuthError> {
-    if cancelled.load(std::sync::atomic::Ordering::Acquire) { return Err(AuthError::new(AuthState::OperationSuperseded)); }
-    if tokens.refresh_token.trim().is_empty() { return Err(AuthError::new(AuthState::ProviderError)); }
+    if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+        return Err(AuthError::new(AuthState::OperationSuperseded));
+    }
+    if tokens.refresh_token.trim().is_empty() {
+        return Err(AuthError::new(AuthState::ProviderError));
+    }
     let _guard = store::lock(provider)?;
     let current = config(provider)?;
     let mut record = session(provider, &current.client_id)?;
-    if current.client_id != cfg.client_id || current.client_secret != cfg.client_secret
-        || generation != record.generation {
+    if current.client_id != cfg.client_id
+        || current.client_secret != cfg.client_secret
+        || generation != record.generation
+    {
         return Err(AuthError::new(AuthState::OperationSuperseded));
     }
     let account = oauth_http::identify(provider, &tokens.access_token)?;
@@ -107,18 +141,31 @@ pub(crate) fn refresh(
     if cfg.client_id.trim().is_empty() || record.client_id != cfg.client_id {
         return Err(AuthError::new(AuthState::ClientChanged));
     }
-    if expected_account.zip(record.account_key.as_deref()).is_some_and(|(a, b)| a != b) {
+    if expected_account
+        .zip(record.account_key.as_deref())
+        .is_some_and(|(a, b)| a != b)
+    {
         return Err(AuthError::new(AuthState::IdentityConflict));
     }
-    if matches!(record.state, AuthState::ReauthorizeRequired | AuthState::ProviderError | AuthState::IdentityConflict) {
-        return Err(AuthError { state: record.state, provider: record.provider_error });
+    if matches!(
+        record.state,
+        AuthState::ReauthorizeRequired | AuthState::ProviderError | AuthState::IdentityConflict
+    ) {
+        return Err(AuthError {
+            state: record.state,
+            provider: record.provider_error,
+        });
     }
     let previous = if record.generation == 0 {
         // A legacy grant is adopted once, only after this exact client accepts it
         // and the provider confirms its one principal under the same lock.
         store::read_legacy(provider)?.unwrap_or_default()
-    } else { record.refresh_token.clone() };
-    if previous.is_empty() { return Err(AuthError::new(AuthState::Disconnected)); }
+    } else {
+        record.refresh_token.clone()
+    };
+    if previous.is_empty() {
+        return Err(AuthError::new(AuthState::Disconnected));
+    }
     record.refresh_token = previous.clone();
     let mut tokens = match oauth_http::refresh(token_url, &cfg, &previous) {
         Ok(tokens) => tokens,
@@ -127,7 +174,9 @@ pub(crate) fn refresh(
             return Err(error);
         }
     };
-    if tokens.refresh_token.is_empty() { tokens.refresh_token = previous; }
+    if tokens.refresh_token.is_empty() {
+        tokens.refresh_token = previous;
+    }
     let account = match identify(&tokens.access_token) {
         Ok(account) => account,
         Err(error) => {
@@ -154,20 +203,41 @@ pub(crate) fn refresh(
     Ok(tokens)
 }
 
-fn record_failure(provider: Provider, record: &mut Session, error: &AuthError, rotated: bool) -> Result<(), AuthError> {
+fn record_failure(
+    provider: Provider,
+    record: &mut Session,
+    error: &AuthError,
+    rotated: bool,
+) -> Result<(), AuthError> {
     record.state = error.state;
     record.provider_error = error.provider.clone();
     // A pure network diagnostic keeps the grant usable and must not wake jobs.
     // Rotation or a terminal authentication transition still invalidates users.
-    persist(provider, record, rotated || !matches!(error.state, AuthState::NetworkError | AuthState::IdentityUnverified))
+    persist(
+        provider,
+        record,
+        rotated
+            || !matches!(
+                error.state,
+                AuthState::NetworkError | AuthState::IdentityUnverified
+            ),
+    )
 }
 
 pub(crate) fn status(provider: Provider) -> AuthStatus {
     let mut value = AuthStatus {
-        state: AuthState::Disconnected, message: String::new(), client_configured: false,
-        client_id: None, signed_in: false, account_key: None, generation: 0,
-        login_at: None, last_refresh_at: None, client_changed_at: None,
-        provider_error: None, project_status: "unconfirmed",
+        state: AuthState::Disconnected,
+        message: String::new(),
+        client_configured: false,
+        client_id: None,
+        signed_in: false,
+        account_key: None,
+        generation: 0,
+        login_at: None,
+        last_refresh_at: None,
+        client_changed_at: None,
+        provider_error: None,
+        project_status: "unconfirmed",
     };
     let result = (|| {
         // A complete secure-store record is atomic; status must remain responsive
@@ -176,9 +246,19 @@ pub(crate) fn status(provider: Provider) -> AuthStatus {
         value.client_configured = !cfg.client_id.is_empty();
         value.client_id = value.client_configured.then_some(cfg.client_id.clone());
         if let Some(record) = store::read(provider)? {
-            value.state = if record.client_id != cfg.client_id { AuthState::ClientChanged } else { record.state };
-            value.signed_in = !record.refresh_token.is_empty() && !matches!(value.state,
-                AuthState::ReauthorizeRequired | AuthState::ClientChanged | AuthState::IdentityConflict | AuthState::ProviderError);
+            value.state = if record.client_id != cfg.client_id {
+                AuthState::ClientChanged
+            } else {
+                record.state
+            };
+            value.signed_in = !record.refresh_token.is_empty()
+                && !matches!(
+                    value.state,
+                    AuthState::ReauthorizeRequired
+                        | AuthState::ClientChanged
+                        | AuthState::IdentityConflict
+                        | AuthState::ProviderError
+                );
             value.account_key = record.account_key;
             value.generation = record.generation;
             value.login_at = record.login_at;
@@ -191,12 +271,17 @@ pub(crate) fn status(provider: Provider) -> AuthStatus {
         }
         Ok::<_, AuthError>(())
     })();
-    if let Err(error) = result { value.state = error.state; value.signed_in = false; }
+    if let Err(error) = result {
+        value.state = error.state;
+        value.signed_in = false;
+    }
     if let Ok(failure) = RUNTIME_FAILURE.lock() {
         if let Some(error) = failure.as_ref() {
             value.state = error.state;
             value.provider_error = error.provider.clone();
-            if error.state == AuthState::StorageError { value.signed_in = false; }
+            if error.state == AuthState::StorageError {
+                value.signed_in = false;
+            }
         }
     }
     value.message = value.state.message().into();
@@ -207,19 +292,37 @@ pub(crate) fn status(provider: Provider) -> AuthStatus {
 pub(crate) fn validate_account(provider: Provider, account: &str) -> Result<(), AuthError> {
     let cfg = config(provider)?;
     let record = store::read(provider)?.ok_or_else(|| AuthError::new(AuthState::Disconnected))?;
-    if record.account_key.as_deref() != Some(account) { return Err(AuthError::new(AuthState::IdentityConflict)); }
-    if record.client_id != cfg.client_id { return Err(AuthError::new(AuthState::ClientChanged)); }
-    if record.refresh_token.is_empty() { return Err(AuthError::new(AuthState::Disconnected)); }
-    if matches!(record.state, AuthState::ReauthorizeRequired | AuthState::IdentityConflict | AuthState::ProviderError) {
-        return Err(AuthError { state: record.state, provider: record.provider_error });
+    if record.account_key.as_deref() != Some(account) {
+        return Err(AuthError::new(AuthState::IdentityConflict));
+    }
+    if record.client_id != cfg.client_id {
+        return Err(AuthError::new(AuthState::ClientChanged));
+    }
+    if record.refresh_token.is_empty() {
+        return Err(AuthError::new(AuthState::Disconnected));
+    }
+    if matches!(
+        record.state,
+        AuthState::ReauthorizeRequired | AuthState::IdentityConflict | AuthState::ProviderError
+    ) {
+        return Err(AuthError {
+            state: record.state,
+            provider: record.provider_error,
+        });
     }
     Ok(())
 }
 
 pub(crate) fn success_revision(provider: Provider) -> Option<i64> {
     let record = store::read(provider).ok()??;
-    if record.state != AuthState::Connected { return None; }
-    record.login_at.into_iter().chain(record.last_refresh_at).max()
+    if record.state != AuthState::Connected {
+        return None;
+    }
+    record
+        .login_at
+        .into_iter()
+        .chain(record.last_refresh_at)
+        .max()
 }
 
 pub(super) fn disconnect(provider: Provider) -> Result<(), AuthError> {
@@ -227,7 +330,8 @@ pub(super) fn disconnect(provider: Provider) -> Result<(), AuthError> {
     let cfg = config(provider)?;
     let mut record = session(provider, &cfg.client_id)?;
     // Erase the legacy grant before creating the authoritative disconnected tombstone.
-    crate::creds::delete_secret_checked(&store::legacy_key(provider)).map_err(|_| store::storage_error())?;
+    crate::creds::delete_secret_checked(&store::legacy_key(provider))
+        .map_err(|_| store::storage_error())?;
     record.refresh_token.clear();
     record.state = AuthState::Disconnected;
     record.provider_error = None;
@@ -236,14 +340,20 @@ pub(super) fn disconnect(provider: Provider) -> Result<(), AuthError> {
 }
 
 pub(super) fn store_import(provider: Provider, token: &str) -> Result<(), AuthError> {
-    if token.trim().is_empty() { return Err(AuthError::new(AuthState::ProviderError)); }
+    if token.trim().is_empty() {
+        return Err(AuthError::new(AuthState::ProviderError));
+    }
     let _guard = store::lock(provider)?;
     let cfg = config(provider)?;
     let mut record = session(provider, &cfg.client_id)?;
     // Imported tokens cannot change an already confirmed principal. The
     // verifier checks the retained account before any access token escapes.
-    if record.account_key.is_none() && record.refresh_token.is_empty() { record.client_id = cfg.client_id.clone(); }
-    if record.client_id != cfg.client_id { return Err(AuthError::new(AuthState::ClientChanged)); }
+    if record.account_key.is_none() && record.refresh_token.is_empty() {
+        record.client_id = cfg.client_id.clone();
+    }
+    if record.client_id != cfg.client_id {
+        return Err(AuthError::new(AuthState::ClientChanged));
+    }
     record.refresh_token = token.into();
     record.state = AuthState::LegacyUnverified;
     record.provider_error = None;
@@ -261,12 +371,18 @@ pub(super) fn refresh_token(provider: Provider) -> Result<Option<String>, AuthEr
 pub(super) fn config_changed(provider: Provider, cfg: &ClientConfig) -> std::io::Result<()> {
     let _guard = store::lock(provider).map_err(std::io::Error::other)?;
     let previous = shared::load_config_checked(provider)?;
-    let mut record = store::read(provider).map_err(std::io::Error::other)?
+    let mut record = store::read(provider)
+        .map_err(std::io::Error::other)?
         .unwrap_or_else(|| store::empty(provider, &previous.client_id));
     if record.generation == 0 {
-        record.refresh_token = store::read_legacy(provider).map_err(std::io::Error::other)?.unwrap_or_default();
-        if record.refresh_token.is_empty() { record.client_id = cfg.client_id.clone(); }
-        else { record.state = AuthState::LegacyUnverified; }
+        record.refresh_token = store::read_legacy(provider)
+            .map_err(std::io::Error::other)?
+            .unwrap_or_default();
+        if record.refresh_token.is_empty() {
+            record.client_id = cfg.client_id.clone();
+        } else {
+            record.state = AuthState::LegacyUnverified;
+        }
     }
     // Advance before changing the config, so even a failed config write or a
     // client A -> B -> A transition invalidates pending browser callbacks.
@@ -284,7 +400,9 @@ pub(super) fn config_changed(provider: Provider, cfg: &ClientConfig) -> std::io:
 
 #[cfg(test)]
 pub(crate) fn test_clear_runtime_failure() {
-    if let Ok(mut value) = RUNTIME_FAILURE.lock() { *value = None; }
+    if let Ok(mut value) = RUNTIME_FAILURE.lock() {
+        *value = None;
+    }
 }
 
 #[cfg(test)]

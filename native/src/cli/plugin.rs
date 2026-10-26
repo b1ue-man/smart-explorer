@@ -8,12 +8,12 @@ mod claude;
 mod codex;
 #[path = "plugin/config.rs"]
 mod config;
-#[path = "plugin/managed.rs"]
-mod managed;
 #[path = "plugin/files.rs"]
 mod files;
 #[path = "plugin/host_cli.rs"]
 mod host_cli;
+#[path = "plugin/managed.rs"]
+mod managed;
 
 use clap::{Args, Subcommand, ValueEnum};
 use serde_json::{json, Value};
@@ -98,25 +98,53 @@ impl Host {
 }
 
 pub(super) fn run(args: PluginArgs) -> Result<i32, String> {
-    if matches!(&args.command,Command::RetireInstallation) {
+    if matches!(&args.command, Command::RetireInstallation) {
         crate::mcp_launcher::retire_current_installation()?;
         return Ok(0);
     }
-    if matches!(&args.command, Command::Install(_) | Command::Uninstall(_) | Command::Refresh) && crate::mcp_launcher::current_runtime().is_some() {
-        return Err("integration_maintenance_handoff_required: use the registered installation".into());
+    if matches!(
+        &args.command,
+        Command::Install(_) | Command::Uninstall(_) | Command::Refresh
+    ) && crate::mcp_launcher::current_runtime().is_some()
+    {
+        return Err(
+            "integration_maintenance_handoff_required: use the registered installation".into(),
+        );
     }
-    let _generator=if matches!(&args.command,Command::Install(_)|Command::Uninstall(_)|Command::Refresh) {
+    let _generator = if matches!(
+        &args.command,
+        Command::Install(_) | Command::Uninstall(_) | Command::Refresh
+    ) {
         crate::mcp_launcher::generator_operation()?
-    }else{None};
-    let _legacy_update=if matches!(&args.command,Command::Install(_)) {crate::mcp_launcher::legacy_profile_guard()?}else{None};
+    } else {
+        None
+    };
+    let _legacy_update = if matches!(&args.command, Command::Install(_)) {
+        crate::mcp_launcher::legacy_profile_guard()?
+    } else {
+        None
+    };
     let (executable, launcher_error) = match files::executable() {
-        Ok(path)=>(path,None),
-        Err(error) if matches!(&args.command,Command::Status {..}|Command::Uninstall(_)) => (std::env::current_exe().map_err(|e|e.to_string())?,Some(error)),
-        Err(error)=>return Err(error),
+        Ok(path) => (path, None),
+        Err(error)
+            if matches!(
+                &args.command,
+                Command::Status { .. } | Command::Uninstall(_)
+            ) =>
+        {
+            (
+                std::env::current_exe().map_err(|e| e.to_string())?,
+                Some(error),
+            )
+        }
+        Err(error) => return Err(error),
     };
     match args.command {
-        Command::RetireInstallation=>Ok(0),
-        Command::Refresh => { files::refresh()?; Ok(0) },
+        Command::RetireInstallation => Ok(0),
+        Command::Refresh => {
+            files::refresh()?;
+            Ok(0)
+        }
         Command::Install(selection) => {
             let mut reports = Vec::new();
             let mut installed = 0usize;
@@ -219,19 +247,28 @@ fn print(reports: &[Value], json: bool) -> Result<(), String> {
 /// version or another path of `se` wrote.
 pub(super) fn refresh_generated_files() {
     if crate::mcp_launcher::current_runtime().is_some() {
-        if let Err(error) = crate::mcp_launcher::refresh_current_profile() { eprintln!("se plugin: {error}"); }
+        if let Err(error) = crate::mcp_launcher::refresh_current_profile() {
+            eprintln!("se plugin: {error}");
+        }
         return;
     }
-    let refreshed=match crate::mcp_launcher::Installation::current() {
-        Ok(None)=>files::refresh(),
-        _=>crate::mcp_launcher::refresh_entry_installation(),
+    let refreshed = match crate::mcp_launcher::Installation::current() {
+        Ok(None) => files::refresh(),
+        _ => crate::mcp_launcher::refresh_entry_installation(),
     };
-    if let Err(error)=refreshed {eprintln!("se plugin: {error}");}
+    if let Err(error) = refreshed {
+        eprintln!("se plugin: {error}");
+    }
 }
 
 /// Generated-file state for the MCP `status` tool (no host commands run).
 pub(super) fn status_value() -> Value {
-    let executable = match files::executable() {Ok(path)=>path,Err(error)=>return json!({"runtime":crate::mcp_launcher::status_value(),"launcher_error":error})};
+    let executable = match files::executable() {
+        Ok(path) => path,
+        Err(error) => {
+            return json!({"runtime":crate::mcp_launcher::status_value(),"launcher_error":error})
+        }
+    };
     json!({
         "claude": files::generated_state(Some(files::claude_marketplace_dir()), &executable),
         "codex_skill": files::generated_state(files::codex_skill_dir(), &executable),

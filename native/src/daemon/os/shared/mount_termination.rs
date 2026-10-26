@@ -233,7 +233,9 @@ impl MountManager {
         };
         let inventory = if pending.is_none() {
             "; Anzahl offener Änderungen bis zum Entsperren unbekannt; Cache bleibt unverändert erhalten"
-        } else { "" };
+        } else {
+            ""
+        };
         entry.status = MountStatus::Failed {
             detail: format!("{cause}{tail}{inventory}"),
         };

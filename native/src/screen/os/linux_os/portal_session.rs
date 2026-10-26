@@ -18,11 +18,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use super::pipewire_abi;
+use super::pipewire_stream::memory::CaptureMemory;
 use super::pipewire_stream::{LatestFrame, PwStream, Taken};
 use super::portal_tokens::{self, TokenKind};
+use crate::screen::core::capture_admission::{CaptureGrant, SessionAdmission, SourceKey};
 use crate::screen::core::host_backend::{ScreenSource, SourceFrame};
-use crate::screen::core::capture_admission::{CaptureGrant,SessionAdmission,SourceKey};
-use super::pipewire_stream::memory::CaptureMemory;
 use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::session_state::SessionState;
 
@@ -71,8 +71,8 @@ pub(crate) struct PortalHandle {
     state: Arc<Mutex<PortalState>>,
     /// Dropped (or sent to) to end the session; the thread closes it.
     _stop: Option<tokio::sync::oneshot::Sender<()>>,
-    memory:Arc<CaptureMemory>,
-    input_sink:Option<Arc<dyn crate::screen::core::host_backend::ScreenInputSink>>,
+    memory: Arc<CaptureMemory>,
+    input_sink: Option<Arc<dyn crate::screen::core::host_backend::ScreenInputSink>>,
 }
 
 pub(crate) struct PortalSession;
@@ -81,35 +81,46 @@ impl PortalSession {
     /// Starts the portal negotiation on a thread of its own and returns at
     /// once.
     #[cfg(test)]
-    pub(crate) fn start(options:PortalOptions)->io::Result<PortalHandle> {
-        let admission=super::host_backend::prepared::test_admission("portal-fixture");
-        let key=SourceKey::new("portal-fixture","portal")?;
+    pub(crate) fn start(options: PortalOptions) -> io::Result<PortalHandle> {
+        let admission = super::host_backend::prepared::test_admission("portal-fixture");
+        let key = SourceKey::new("portal-fixture", "portal")?;
         admission.register_prepared_source(key.clone())?;
-        Self::prepare(options,Arc::new(CaptureMemory::new(key,admission)))
+        Self::prepare(options, Arc::new(CaptureMemory::new(key, admission)))
     }
-    pub(crate) fn prepare(options: PortalOptions,memory:Arc<CaptureMemory>) -> io::Result<PortalHandle> {
+    pub(crate) fn prepare(
+        options: PortalOptions,
+        memory: Arc<CaptureMemory>,
+    ) -> io::Result<PortalHandle> {
         let state = Arc::new(Mutex::new(PortalState::Waiting));
         let (stop, stopped) = tokio::sync::oneshot::channel();
         let shared = state.clone();
-        let capture_memory=memory.clone();
-        let input_sink=if options.remote_desktop {
+        let capture_memory = memory.clone();
+        let input_sink = if options.remote_desktop {
             let inputs = super::portal_input::open_channel();
-            let sink=inputs.input_sink(&memory);
+            let sink = inputs.input_sink(&memory);
             std::thread::Builder::new()
                 .name("portal-session".into())
                 .spawn(move || {
-                    super::portal_input::thread_main(&shared, stopped, options, inputs,capture_memory)
+                    super::portal_input::thread_main(
+                        &shared,
+                        stopped,
+                        options,
+                        inputs,
+                        capture_memory,
+                    )
                 })?;
             Some(sink)
         } else {
             std::thread::Builder::new()
                 .name("portal-session".into())
-                .spawn(move || thread_main(&shared, stopped, options,capture_memory))?;
+                .spawn(move || thread_main(&shared, stopped, options, capture_memory))?;
             None
         };
         Ok(PortalHandle {
             state,
-            _stop: Some(stop),memory,input_sink,
+            _stop: Some(stop),
+            memory,
+            input_sink,
         })
     }
 }
@@ -132,38 +143,49 @@ impl PortalHandle {
     pub(crate) fn detached(state: PortalState) -> Self {
         Self {
             state: Arc::new(Mutex::new(state)),
-            _stop: None,memory:Arc::new(CaptureMemory::new(SourceKey::new("portal-fixture","portal").unwrap(),
-                super::host_backend::prepared::test_admission("portal-fixture"))),input_sink:None,
+            _stop: None,
+            memory: Arc::new(CaptureMemory::new(
+                SourceKey::new("portal-fixture", "portal").unwrap(),
+                super::host_backend::prepared::test_admission("portal-fixture"),
+            )),
+            input_sink: None,
         }
     }
 }
 
-pub(super) fn latest_for_state(state:&Mutex<PortalState>)->Arc<LatestFrame> {
-    let latest=Arc::new(LatestFrame::default());
-    let active=!matches!(&*state.lock().unwrap_or_else(PoisonError::into_inner),PortalState::WaitingInactive);
-    latest.set_initial_active(active);latest
+pub(super) fn latest_for_state(state: &Mutex<PortalState>) -> Arc<LatestFrame> {
+    let latest = Arc::new(LatestFrame::default());
+    let active = !matches!(
+        &*state.lock().unwrap_or_else(PoisonError::into_inner),
+        PortalState::WaitingInactive
+    );
+    latest.set_initial_active(active);
+    latest
 }
 
 pub(super) fn set(state: &Mutex<PortalState>, next: PortalState) {
-    let mut state=state.lock().unwrap_or_else(PoisonError::into_inner);
-    if let PortalState::Streaming(latest)=&next {
-        let active=!matches!(&*state,PortalState::WaitingInactive);
-        if let Err(error)=latest.set_capture_active(active) {*state=PortalState::Failed(error.to_string());return;}
+    let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
+    if let PortalState::Streaming(latest) = &next {
+        let active = !matches!(&*state, PortalState::WaitingInactive);
+        if let Err(error) = latest.set_capture_active(active) {
+            *state = PortalState::Failed(error.to_string());
+            return;
+        }
     }
-    *state=next;
+    *state = next;
 }
 
 fn thread_main(
     state: &Arc<Mutex<PortalState>>,
     stopped: tokio::sync::oneshot::Receiver<()>,
     options: PortalOptions,
-    memory:Arc<CaptureMemory>,
+    memory: Arc<CaptureMemory>,
 ) {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build();
     match runtime {
-        Ok(runtime) => runtime.block_on(run(state, stopped, options,memory)),
+        Ok(runtime) => runtime.block_on(run(state, stopped, options, memory)),
         Err(error) => set(
             state,
             PortalState::Failed(format!("portal_runtime: {error}")),
@@ -194,7 +216,7 @@ async fn run(
     state: &Arc<Mutex<PortalState>>,
     stopped: tokio::sync::oneshot::Receiver<()>,
     options: PortalOptions,
-    memory:Arc<CaptureMemory>,
+    memory: Arc<CaptureMemory>,
 ) {
     // Without PipeWire there is nothing to show: no dialog for nothing.
     let api = match pipewire_abi::load_named(options.pipewire_library) {
@@ -233,7 +255,10 @@ async fn run(
     let closed = match session.receive_closed().await {
         Ok(closed) => closed,
         Err(error) => {
-            set(state, PortalState::Failed(format!("portal_closed_subscription: {error}")));
+            set(
+                state,
+                PortalState::Failed(format!("portal_closed_subscription: {error}")),
+            );
             let _ = session.close().await;
             return;
         }
@@ -245,12 +270,12 @@ async fn run(
     });
     match select(flow, stop).await {
         Either::Left((Ok(chosen), stop)) => {
-            let latest=latest_for_state(state);
+            let latest = latest_for_state(state);
             let identity = chosen.identity;
-            match PwStream::start(api, chosen.fd, identity.clone(), latest.clone(),memory) {
+            match PwStream::start(api, chosen.fd, identity.clone(), latest.clone(), memory) {
                 Ok(stream) => {
                     set(state, PortalState::Streaming(latest.clone()));
-                    let _=select(stop,Box::pin(latest.wait_failure())).await;
+                    let _ = select(stop, Box::pin(latest.wait_failure())).await;
                     latest.fail("portal_closed".into());
                     identity.invalidate();
                     drop(stream);
@@ -326,16 +351,28 @@ pub(crate) struct PortalSource {
 }
 
 impl PortalSource {
-    pub(crate) fn prepare(options:PortalOptions,key:SourceKey,admission:Arc<SessionAdmission>)->io::Result<Self> {
-        Ok(Self::with_handle(PortalSession::prepare(options,Arc::new(CaptureMemory::new(key,admission)))?))
+    pub(crate) fn prepare(
+        options: PortalOptions,
+        key: SourceKey,
+        admission: Arc<SessionAdmission>,
+    ) -> io::Result<Self> {
+        Ok(Self::with_handle(PortalSession::prepare(
+            options,
+            Arc::new(CaptureMemory::new(key, admission)),
+        )?))
     }
-    pub(crate) fn memory(&self)->&Arc<CaptureMemory> {&self.handle.memory}
-    pub(crate) fn check_preparation(&self)->io::Result<()> {
+    pub(crate) fn memory(&self) -> &Arc<CaptureMemory> {
+        &self.handle.memory
+    }
+    pub(crate) fn check_preparation(&self) -> io::Result<()> {
         match &*self.handle.lock() {
-            PortalState::Denied(reason)=>Err(io::Error::new(io::ErrorKind::PermissionDenied,format!("portal_denied: {reason}"))),
-            PortalState::Failed(reason)=>Err(io::Error::other(reason.clone())),
-            PortalState::Streaming(latest)=>latest.check_failure(),
-            _=>Ok(()),
+            PortalState::Denied(reason) => Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!("portal_denied: {reason}"),
+            )),
+            PortalState::Failed(reason) => Err(io::Error::other(reason.clone())),
+            PortalState::Streaming(latest) => latest.check_failure(),
+            _ => Ok(()),
         }
     }
     /// Starts the portal session; never waits for the dialog.
@@ -351,31 +388,54 @@ impl PortalSource {
             had_frame: false,
         }
     }
-
-
 }
 
-
 impl ScreenSource for PortalSource {
-    fn inject_input(&mut self,_backend:&dyn crate::screen::core::host_backend::ScreenHostBackend,
-        reference_generation:u64,presented:bool,events:&[crate::screen::core::input_model::InputEvent])
-        ->Result<(),crate::screen::core::wire_control::ControlBlock> {
-        self.handle.input_sink.as_ref().ok_or(crate::screen::core::wire_control::ControlBlock::ControlUnavailable)?
-            .inject(events,reference_generation,presented)
+    fn inject_input(
+        &mut self,
+        _backend: &dyn crate::screen::core::host_backend::ScreenHostBackend,
+        reference_generation: u64,
+        presented: bool,
+        events: &[crate::screen::core::input_model::InputEvent],
+    ) -> Result<(), crate::screen::core::wire_control::ControlBlock> {
+        self.handle
+            .input_sink
+            .as_ref()
+            .ok_or(crate::screen::core::wire_control::ControlBlock::ControlUnavailable)?
+            .inject(events, reference_generation, presented)
     }
-    fn input_sink(&self)->Option<Arc<dyn crate::screen::core::host_backend::ScreenInputSink>> {
+    fn input_sink(&self) -> Option<Arc<dyn crate::screen::core::host_backend::ScreenInputSink>> {
         self.handle.input_sink.clone()
     }
-    fn capture_grant(&self)->Option<CaptureGrant> {self.memory().current_grant()}
-    fn reference_generation(&self)->u64 {self.memory().generation().value()}
-    fn frame_limits(&self)->crate::screen::core::frame_budget::FrameLimits {crate::screen::core::frame_budget::FrameLimits::RESOURCE}
+    fn capture_grant(&self) -> Option<CaptureGrant> {
+        self.memory().current_grant()
+    }
+    fn reference_generation(&self) -> u64 {
+        self.memory().generation().value()
+    }
+    fn frame_limits(&self) -> crate::screen::core::frame_budget::FrameLimits {
+        crate::screen::core::frame_budget::FrameLimits::RESOURCE
+    }
 
-    fn set_capture_active(&mut self,active:bool) -> io::Result<()> {
-        let mut state=self.handle.lock();
+    fn set_capture_active(&mut self, active: bool) -> io::Result<()> {
+        let mut state = self.handle.lock();
         match &*state {
-            PortalState::Waiting | PortalState::WaitingInactive => { *state=if active {PortalState::Waiting} else {PortalState::WaitingInactive}; Ok(()) },
-            PortalState::Streaming(latest) => {latest.set_capture_active(active)?; self.had_frame=false; Ok(())},
-            PortalState::Denied(reason) | PortalState::Failed(reason) => Err(io::Error::new(io::ErrorKind::NotConnected,reason.clone())),
+            PortalState::Waiting | PortalState::WaitingInactive => {
+                *state = if active {
+                    PortalState::Waiting
+                } else {
+                    PortalState::WaitingInactive
+                };
+                Ok(())
+            }
+            PortalState::Streaming(latest) => {
+                latest.set_capture_active(active)?;
+                self.had_frame = false;
+                Ok(())
+            }
+            PortalState::Denied(reason) | PortalState::Failed(reason) => {
+                Err(io::Error::new(io::ErrorKind::NotConnected, reason.clone()))
+            }
         }
     }
     fn size(&self) -> FrameSize {
@@ -386,7 +446,9 @@ impl ScreenSource for PortalSource {
         #[cfg(test)]
         self.memory().activate_for_test()?;
         let latest = match &*self.handle.lock() {
-            PortalState::Waiting | PortalState::WaitingInactive => return Ok(SourceFrame::Paused(SessionState::WaitingForPortal)),
+            PortalState::Waiting | PortalState::WaitingInactive => {
+                return Ok(SourceFrame::Paused(SessionState::WaitingForPortal))
+            }
             PortalState::Streaming(latest) => latest.clone(),
             PortalState::Denied(text) => {
                 return Err(io::Error::new(

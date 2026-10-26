@@ -44,14 +44,14 @@ pub(super) fn audit_registered(configs: &[MountConfig]) -> Vec<MountRecovery> {
                 // Do not open/compact/clean this cache before its start gate.
                 crate::mount::MountSource::GoogleDrive { .. } => MountRecovery::Unknown,
                 _ => match audit(&cache_root, &config.id) {
-                Ok(pending) => recovery_of(pending),
-                Err(error) => {
-                    super::super::state::log(&format!(
-                        "registered mount {} recovery audit failed: {error}",
-                        config.id
-                    ));
-                    MountRecovery::Unknown
-                }
+                    Ok(pending) => recovery_of(pending),
+                    Err(error) => {
+                        super::super::state::log(&format!(
+                            "registered mount {} recovery audit failed: {error}",
+                            config.id
+                        ));
+                        MountRecovery::Unknown
+                    }
                 },
             })
             .collect();
@@ -65,9 +65,16 @@ pub(super) fn insert(
     key: &str,
     config: MountConfig,
     registry_recorded: bool,
-    startup_lease: Option<std::sync::Arc<dyn Send+Sync>>,
+    startup_lease: Option<std::sync::Arc<dyn Send + Sync>>,
 ) -> Result<(), String> {
-    insert_generation(manager, key, config, registry_recorded, startup_lease, StartEntry::New)
+    insert_generation(
+        manager,
+        key,
+        config,
+        registry_recorded,
+        startup_lease,
+        StartEntry::New,
+    )
 }
 
 pub(super) fn restart(
@@ -75,9 +82,16 @@ pub(super) fn restart(
     key: &str,
     config: MountConfig,
     registry_recorded: bool,
-    startup_lease: Option<std::sync::Arc<dyn Send+Sync>>,
+    startup_lease: Option<std::sync::Arc<dyn Send + Sync>>,
 ) -> Result<(), String> {
-    insert_generation(manager, key, config, registry_recorded, startup_lease, StartEntry::Retry)
+    insert_generation(
+        manager,
+        key,
+        config,
+        registry_recorded,
+        startup_lease,
+        StartEntry::Retry,
+    )
 }
 
 fn insert_generation(
@@ -85,7 +99,7 @@ fn insert_generation(
     key: &str,
     config: MountConfig,
     registry_recorded: bool,
-    startup_lease: Option<std::sync::Arc<dyn Send+Sync>>,
+    startup_lease: Option<std::sync::Arc<dyn Send + Sync>>,
     admission: StartEntry,
 ) -> Result<(), String> {
     let mut state = manager.state_guard()?;
@@ -116,7 +130,7 @@ fn insert_generation(
             backend_token: None,
             control: None,
             child: None,
-            startup_lease:startup_lease.map(super::start_path::StartupLease::new),
+            startup_lease: startup_lease.map(super::start_path::StartupLease::new),
             backend_stream_active: false,
             pending_host_failure: None,
             host_terminal_failure: false,
@@ -141,8 +155,12 @@ pub(super) fn prepare(
     let cache_root =
         crate::mount::prepare_spool_root(&crate::support_dirs::app_data_dir().join("mount-cache"))
             .map_err(|error| format!("Laufwerk-Cache absichern: {error}"))?;
-    let config = manager.state_guard()?.get(key)
-        .ok_or_else(|| "Laufwerk-Start wurde abgebrochen".to_string())?.config.clone();
+    let config = manager
+        .state_guard()?
+        .get(key)
+        .ok_or_else(|| "Laufwerk-Start wurde abgebrochen".to_string())?
+        .config
+        .clone();
     if matches!(config.source, crate::mount::MountSource::GoogleDrive { .. }) {
         record(manager, key, MountRecovery::Unknown)?;
         crate::mount::preflight_mount_recovery_identity(&cache_root, &config)

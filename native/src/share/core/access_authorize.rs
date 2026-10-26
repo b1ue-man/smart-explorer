@@ -114,8 +114,12 @@ pub(crate) fn request_for(
     let endpoints_match = match request {
         AccessRequest::TcpForward(request) => {
             let (initiator, target) = match request.direction {
-                TcpDirection::PeerToHost => (principal.node_id.as_str(), state.identity.node_id.as_str()),
-                TcpDirection::HostToPeer => (state.identity.node_id.as_str(), principal.node_id.as_str()),
+                TcpDirection::PeerToHost => {
+                    (principal.node_id.as_str(), state.identity.node_id.as_str())
+                }
+                TcpDirection::HostToPeer => {
+                    (state.identity.node_id.as_str(), principal.node_id.as_str())
+                }
             };
             request.initiator.as_str() == initiator && request.target.as_str() == target
         }
@@ -123,8 +127,11 @@ pub(crate) fn request_for(
         AccessRequest::AppLaunch(_) => true,
     };
     CapabilityState {
-        decision: if endpoints_match { grant.access_grant().decision_for(request, now) }
-            else { CapabilityDecision::Off },
+        decision: if endpoints_match {
+            grant.access_grant().decision_for(request, now)
+        } else {
+            CapabilityDecision::Off
+        },
         policy_revision: grant.policy_revision,
         changed_at: grant.changed_at,
     }

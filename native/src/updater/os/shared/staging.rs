@@ -30,7 +30,7 @@ impl StagingGuard {
         self.track_path(payload.path());
     }
 
-    pub(super) fn track_path(&mut self,path:&Path) {
+    pub(super) fn track_path(&mut self, path: &Path) {
         self.paths.push(path.to_path_buf());
     }
 
@@ -58,8 +58,13 @@ pub(super) fn stage_from_feed(feed: &Feed, version: &str) -> Result<StagedUpdate
     let cli = feed.fetch_cli_exe(version)?;
     guard.track(&cli);
     let launcher = feed.fetch_launcher_exe(version)?;
-    if launcher.is_none() && crate::mcp_launcher::staged_runtime_managed(cli.path(),cli.sha256(),version)? {
-        return Err("Der Managed-faehige CLI-Payload benoetigt den MCP-Starter derselben Feedversion".into());
+    if launcher.is_none()
+        && crate::mcp_launcher::staged_runtime_managed(cli.path(), cli.sha256(), version)?
+    {
+        return Err(
+            "Der Managed-faehige CLI-Payload benoetigt den MCP-Starter derselben Feedversion"
+                .into(),
+        );
     }
     if let Some(payload) = launcher.as_ref() {
         guard.track(payload);

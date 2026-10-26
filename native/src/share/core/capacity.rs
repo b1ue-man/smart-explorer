@@ -1,5 +1,10 @@
 //! Capacity is negotiated, authorized read metadata of one resolved export.
-use super::{backend::PeerBackend, fs_access::FsAccess, peer_stream, wire::{FsRequest, FsResponse}};
+use super::{
+    backend::PeerBackend,
+    fs_access::FsAccess,
+    peer_stream,
+    wire::{FsRequest, FsResponse},
+};
 use crate::vfs::{Backend, CapacitySnapshot, CapacitySource};
 use std::io;
 pub(super) fn client(backend: &PeerBackend, root: &str) -> io::Result<CapacitySnapshot> {
@@ -9,12 +14,20 @@ pub(super) fn client(backend: &PeerBackend, root: &str) -> io::Result<CapacitySn
         }
         match backend.request(FsRequest::Capacity { path: root.into() })? {
             FsResponse::Capacity { capacity } => Ok(capacity),
-            _ => Err(io::Error::new(io::ErrorKind::InvalidData, "invalid peer capacity reply")),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid peer capacity reply",
+            )),
         }
     })();
     match result {
         Ok(value) => Ok(value),
-        Err(error) => Ok(crate::vfs::capacity_failure(backend.state_identity(), root, CapacitySource::Share, &error)),
+        Err(error) => Ok(crate::vfs::capacity_failure(
+            backend.state_identity(),
+            root,
+            CapacitySource::Share,
+            &error,
+        )),
     }
 }
 pub(super) fn host(access: &FsAccess, root: &str) -> io::Result<CapacitySnapshot> {
@@ -27,9 +40,14 @@ pub(super) fn host(access: &FsAccess, root: &str) -> io::Result<CapacitySnapshot
     access.check_read()?;
     // Re-resolve under the current grant after network/provider work.
     let checked = access.resolve(root)?;
-    if checked.mount_key != target.mount_key || checked.path != target.path
-        || checked.backend.namespace_identity() != target.backend.namespace_identity() {
-        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "capacity export changed"));
+    if checked.mount_key != target.mount_key
+        || checked.path != target.path
+        || checked.backend.namespace_identity() != target.backend.namespace_identity()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "capacity export changed",
+        ));
     }
     Ok(value)
 }

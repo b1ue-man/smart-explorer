@@ -22,7 +22,9 @@ pub(crate) enum LocalKey {
 pub(crate) fn local_key(key: Key, modifiers: Modifiers) -> Option<LocalKey> {
     match key {
         Key::F11 => Some(LocalKey::Fullscreen),
-        Key::F if modifiers.ctrl && modifiers.alt && modifiers.shift => Some(LocalKey::ExitFullscreen),
+        Key::F if modifiers.ctrl && modifiers.alt && modifiers.shift => {
+            Some(LocalKey::ExitFullscreen)
+        }
         Key::S if modifiers.ctrl && modifiers.shift => Some(LocalKey::Stats),
         Key::K if modifiers.ctrl && modifiers.shift => Some(LocalKey::ToggleControl),
         _ => None,

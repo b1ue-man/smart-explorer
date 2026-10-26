@@ -1,6 +1,6 @@
 //! Read-only installed-record report; it never starts or changes a service.
-use serde::{Deserialize, Serialize};
 use crate::login::Policy;
+use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct InstallationStatus {
     pub state: String,

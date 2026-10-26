@@ -1,7 +1,7 @@
 //! Portable P5 wire and decision types. Platform launch targets never enter here.
-use std::{fmt, io};
-use serde::{Deserialize, Serialize};
 use crate::screen::core::app_icon::IconRef;
+use serde::{Deserialize, Serialize};
+use std::{fmt, io};
 
 pub(crate) fn invalid(reason: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, reason.into())
@@ -13,7 +13,9 @@ macro_rules! identifier {
         #[serde(try_from = "String", into = "String")]
         pub(crate) struct $name(String);
         impl $name {
-            pub(crate) fn as_str(&self) -> &str { &self.0 }
+            pub(crate) fn as_str(&self) -> &str {
+                &self.0
+            }
         }
         impl TryFrom<String> for $name {
             type Error = io::Error;
@@ -24,9 +26,15 @@ macro_rules! identifier {
                 Ok(Self(text))
             }
         }
-        impl From<$name> for String { fn from(id: $name) -> Self { id.0 } }
+        impl From<$name> for String {
+            fn from(id: $name) -> Self {
+                id.0
+            }
+        }
         impl fmt::Display for $name {
-            fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result { out.write_str(&self.0) }
+            fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
+                out.write_str(&self.0)
+            }
         }
     };
 }
@@ -48,7 +56,11 @@ pub(crate) struct HostSession {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum AppKind { WindowsShell, LinuxDesktopEntry, AndroidLauncher }
+pub(crate) enum AppKind {
+    WindowsShell,
+    LinuxDesktopEntry,
+    AndroidLauncher,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -142,7 +154,11 @@ pub(crate) struct LaunchReceipt {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum LaunchDenial { ConsentRequired(String), Denied(String), Unsupported(String) }
+pub(crate) enum LaunchDenial {
+    ConsentRequired(String),
+    Denied(String),
+    Unsupported(String),
+}
 impl LaunchDenial {
     pub(crate) fn parts(self) -> (LaunchState, String) {
         match self {

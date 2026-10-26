@@ -163,7 +163,10 @@ impl CaptureGrant {
         }
     }
 
-    pub(super) fn retain_lifetime(&self, lifetime: Arc<dyn CaptureCreditLifetime>) -> io::Result<()> {
+    pub(super) fn retain_lifetime(
+        &self,
+        lifetime: Arc<dyn CaptureCreditLifetime>,
+    ) -> io::Result<()> {
         let mut lifetimes = self
             .inner
             .lifetimes
@@ -178,7 +181,10 @@ impl CaptureGrant {
 
     /// Consumes exactly one verified credit; no independent memory observation
     /// or W reservation occurs in the worker. Clone shares this local ledger.
-    pub(crate) fn from_delegated(plan: CapturePlan, credit: DelegatedCaptureCredit) -> io::Result<Self> {
+    pub(crate) fn from_delegated(
+        plan: CapturePlan,
+        credit: DelegatedCaptureCredit,
+    ) -> io::Result<Self> {
         if plan.source() != &credit.source
             || plan.generation() != credit.generation
             || plan.peak_bytes() != credit.total
@@ -212,17 +218,29 @@ impl CaptureGrant {
 
     pub(crate) fn check_supplement(&self, plan: &CapturePlan) -> io::Result<()> {
         self.check_identity(plan.source(), plan.generation())?;
-        if !self.allows_images() || self.image_admission().is_some() || plan.is_import()
-            || plan.peak_bytes() == 0 || plan.requirements().iter().any(|item| {
-                item.source() != self.source() || item.generation() != self.generation()
-                    || !matches!(item.owner(), super::capture_plan::CaptureOwner::Readback
-                        | super::capture_plan::CaptureOwner::Metadata)
+        if !self.allows_images()
+            || self.image_admission().is_some()
+            || plan.is_import()
+            || plan.peak_bytes() == 0
+            || plan.requirements().iter().any(|item| {
+                item.source() != self.source()
+                    || item.generation() != self.generation()
+                    || !matches!(
+                        item.owner(),
+                        super::capture_plan::CaptureOwner::Readback
+                            | super::capture_plan::CaptureOwner::Metadata
+                    )
             })
         {
-            return Err(invalid("capture supplement must own only this image's cursor bytes"));
+            return Err(invalid(
+                "capture supplement must own only this image's cursor bytes",
+            ));
         }
         if self.is_retired()? {
-            return Err(io::Error::new(io::ErrorKind::WouldBlock,"capture supplement's image has retired"));
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "capture supplement's image has retired",
+            ));
         }
         Ok(())
     }

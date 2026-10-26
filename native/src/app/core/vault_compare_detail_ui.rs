@@ -103,7 +103,8 @@ fn row_color(ui: &egui::Ui, row: &Row, left: bool) -> Option<egui::Color32> {
 }
 
 fn diff_view(ui: &mut egui::Ui, model: &MergeModel) {
-    egui::ScrollArea::vertical().min_scrolled_height(0.0)
+    egui::ScrollArea::vertical()
+        .min_scrolled_height(0.0)
         .id_salt("vault_compare_diff")
         .max_height(crate::app::dialog_geometry::remaining_height(ui, 2.0))
         .auto_shrink([false, true])
@@ -144,7 +145,8 @@ fn merge_view(ui: &mut egui::Ui, model: &mut MergeModel, result: &mut String) {
     });
     let mut changed = false;
     let count = model.rows.len();
-    egui::ScrollArea::vertical().min_scrolled_height(0.0)
+    egui::ScrollArea::vertical()
+        .min_scrolled_height(0.0)
         .id_salt("vault_compare_merge")
         .max_height(crate::app::dialog_geometry::remaining_height(ui, 2.0))
         .auto_shrink([false, true])
@@ -191,7 +193,8 @@ fn merge_view(ui: &mut egui::Ui, model: &mut MergeModel, result: &mut String) {
         *result = model.result();
     }
     ui.label("Ergebnis (frei bearbeitbar)");
-    egui::ScrollArea::vertical().min_scrolled_height(0.0)
+    egui::ScrollArea::vertical()
+        .min_scrolled_height(0.0)
         .id_salt("vault_compare_result")
         .max_height(crate::app::dialog_geometry::remaining_height(ui, 2.0))
         .show(ui, |ui| {

@@ -23,7 +23,10 @@ pub(crate) struct WindowBinding {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum PinPlatform { Windows, X11 }
+pub(crate) enum PinPlatform {
+    Windows,
+    X11,
+}
 
 /// Internal authenticated daemon/worker transfer only. Never a peer request.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -43,12 +46,15 @@ pub(crate) struct CaptureGeometry {
 
 impl CaptureGeometry {
     pub(crate) fn valid(self) -> bool {
-        self.width > 0 && self.height > 0
+        self.width > 0
+            && self.height > 0
             && i64::from(self.x) + i64::from(self.width) <= i64::from(i32::MAX)
             && i64::from(self.y) + i64::from(self.height) <= i64::from(i32::MAX)
     }
     pub(crate) fn contains(self, x: i32, y: i32) -> bool {
-        self.valid() && x >= self.x && y >= self.y
+        self.valid()
+            && x >= self.x
+            && y >= self.y
             && i64::from(x) < i64::from(self.x) + i64::from(self.width)
             && i64::from(y) < i64::from(self.y) + i64::from(self.height)
     }
@@ -56,7 +62,13 @@ impl CaptureGeometry {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum WindowKind { Main, Dialog, Popup, Menu, Tooltip }
+pub(crate) enum WindowKind {
+    Main,
+    Dialog,
+    Popup,
+    Menu,
+    Tooltip,
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct WindowOperations {
@@ -107,7 +119,11 @@ pub(crate) struct FamilyUpdate {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case")]
-pub(crate) enum WindowOperation { Resize { width: u32, height: u32 }, Focus, Close }
+pub(crate) enum WindowOperation {
+    Resize { width: u32, height: u32 },
+    Focus,
+    Close,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct WindowInputTarget {
@@ -167,11 +183,22 @@ impl CaptureBoundary {
     pub(crate) fn bounds(&self) -> Option<CaptureGeometry> {
         let left = self.members.iter().map(|m| m.geometry.x).min()?;
         let top = self.members.iter().map(|m| m.geometry.y).min()?;
-        let right = self.members.iter().map(|m| i64::from(m.geometry.x) + i64::from(m.geometry.width)).max()?;
-        let bottom = self.members.iter().map(|m| i64::from(m.geometry.y) + i64::from(m.geometry.height)).max()?;
-        let bounds = CaptureGeometry { x: left, y: top,
+        let right = self
+            .members
+            .iter()
+            .map(|m| i64::from(m.geometry.x) + i64::from(m.geometry.width))
+            .max()?;
+        let bottom = self
+            .members
+            .iter()
+            .map(|m| i64::from(m.geometry.y) + i64::from(m.geometry.height))
+            .max()?;
+        let bounds = CaptureGeometry {
+            x: left,
+            y: top,
             width: u32::try_from(right - i64::from(left)).ok()?,
-            height: u32::try_from(bottom - i64::from(top)).ok()? };
+            height: u32::try_from(bottom - i64::from(top)).ok()?,
+        };
         bounds.valid().then_some(bounds)
     }
 
@@ -179,22 +206,34 @@ impl CaptureBoundary {
     /// normalized source coordinates. Blank canvas space cannot target the desktop.
     pub(crate) fn map_pointer(&self, x: u16, y: u16) -> Option<(&CaptureMember, u16, u16)> {
         let bounds = self.bounds()?;
-        let px = i64::from(bounds.x) + i64::from(x) * i64::from(bounds.width.saturating_sub(1)) / 65_535;
-        let py = i64::from(bounds.y) + i64::from(y) * i64::from(bounds.height.saturating_sub(1)) / 65_535;
+        let px =
+            i64::from(bounds.x) + i64::from(x) * i64::from(bounds.width.saturating_sub(1)) / 65_535;
+        let py = i64::from(bounds.y)
+            + i64::from(y) * i64::from(bounds.height.saturating_sub(1)) / 65_535;
         let px = i32::try_from(px).ok()?;
         let py = i32::try_from(py).ok()?;
-        let member = self.members.iter().filter(|m| m.input && m.geometry.contains(px, py))
+        let member = self
+            .members
+            .iter()
+            .filter(|m| m.input && m.geometry.contains(px, py))
             .max_by_key(|m| m.z_order)?;
         let along = |pixel: i32, start: i32, length: u32| -> u16 {
-            let value = (i64::from(pixel) - i64::from(start)) * 65_535 / i64::from(length.saturating_sub(1).max(1));
+            let value = (i64::from(pixel) - i64::from(start)) * 65_535
+                / i64::from(length.saturating_sub(1).max(1));
             value.clamp(0, 65_535) as u16
         };
-        Some((member, along(px, member.geometry.x, member.geometry.width),
-            along(py, member.geometry.y, member.geometry.height)))
+        Some((
+            member,
+            along(px, member.geometry.x, member.geometry.width),
+            along(py, member.geometry.y, member.geometry.height),
+        ))
     }
 
     /// Blank space between family surfaces must stay blank, never desktop pixels.
     pub(crate) fn member_at(&self, x: i32, y: i32) -> Option<&CaptureMember> {
-        self.members.iter().filter(|m| m.geometry.contains(x, y)).max_by_key(|m| m.z_order)
+        self.members
+            .iter()
+            .filter(|m| m.geometry.contains(x, y))
+            .max_by_key(|m| m.z_order)
     }
 }

@@ -149,10 +149,15 @@ impl App {
     }
 
     pub(in crate::app) fn start_analytics_source(&mut self, source: StorageScanSource) {
-        if !self.drive_consumer_available(super::drive_snapshot::DriveConsumer::Analytics, source.root(), source.is_remote()) {
+        if !self.drive_consumer_available(
+            super::drive_snapshot::DriveConsumer::Analytics,
+            source.root(),
+            source.is_remote(),
+        ) {
             self.analytics_state = StorageRunState::Failed;
             self.analytics_issues.push(crate::analytics::ScanIssue {
-                path: source.root().into(), detail: "Datenträger nicht verbunden".into(),
+                path: source.root().into(),
+                detail: "Datenträger nicht verbunden".into(),
             });
             return;
         }
@@ -314,7 +319,9 @@ impl App {
     }
 
     pub(in crate::app) fn cancel_analytics_scan(&mut self) {
-        if self.analytics_access.invalidate_partial() { self.analytics_state = StorageRunState::Canceled; }
+        if self.analytics_access.invalidate_partial() {
+            self.analytics_state = StorageRunState::Canceled;
+        }
         if let Some(scan) = &self.analytics_scan {
             // Keep the receiver and live evidence until the worker actually
             // answers. Requesting cancellation is not a terminal result.

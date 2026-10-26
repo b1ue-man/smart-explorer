@@ -134,7 +134,10 @@ pub(crate) fn conflicts(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     Ok(json!({ "names": names, "choosable": all_local, "folders": folder_rows(args, &folders)? }))
 }
 
-fn folder_rows(args: &Value, folders: &[crate::transfer::FolderConflictPreview]) -> Result<Vec<Value>, ApiError> {
+fn folder_rows(
+    args: &Value,
+    folders: &[crate::transfer::FolderConflictPreview],
+) -> Result<Vec<Value>, ApiError> {
     let sources = nonempty_list(args, "sources")?;
     folders.iter().map(|folder| {
         let source = sources.iter().find_map(|value| {
@@ -151,21 +154,36 @@ fn folder_rows(args: &Value, folders: &[crate::transfer::FolderConflictPreview])
 pub(crate) fn folder_preview(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     let job = super::transfer::preview_job(rt, args)?;
     let args = args.clone();
-    let id = rt.spawn_task("folder-preview", "Ordnerkonflikte zählen".to_string(), move |ctx| {
-        ctx.keep_names_private();
-        let scan = crate::transfer::FolderPreviewScan::start(job)?;
-        loop {
-            if ctx.cancelled() { scan.cancel(); return Err(ApiError::canceled()); }
-            let state = scan.snapshot();
-            if let Some(error) = state.error { return Err(ApiError::internal(error)); }
-            if state.ready && state.folders.iter().all(|folder| folder.counted) {
-                return Ok(json!({ "folders": folder_rows(&args, &state.folders)? }));
+    let id = rt.spawn_task(
+        "folder-preview",
+        "Ordnerkonflikte zählen".to_string(),
+        move |ctx| {
+            ctx.keep_names_private();
+            let scan = crate::transfer::FolderPreviewScan::start(job)?;
+            loop {
+                if ctx.cancelled() {
+                    scan.cancel();
+                    return Err(ApiError::canceled());
+                }
+                let state = scan.snapshot();
+                if let Some(error) = state.error {
+                    return Err(ApiError::internal(error));
+                }
+                if state.ready && state.folders.iter().all(|folder| folder.counted) {
+                    return Ok(json!({ "folders": folder_rows(&args, &state.folders)? }));
+                }
+                let new_files: u64 = state.folders.iter().map(|folder| folder.new_files).sum();
+                let collisions: u64 = state
+                    .folders
+                    .iter()
+                    .map(|folder| folder.colliding_files)
+                    .sum();
+                ctx.message(&format!(
+                    "Bisher {new_files} neue und {collisions} gleichnamige Dateien"
+                ));
+                std::thread::sleep(std::time::Duration::from_millis(100));
             }
-            let new_files: u64 = state.folders.iter().map(|folder| folder.new_files).sum();
-            let collisions: u64 = state.folders.iter().map(|folder| folder.colliding_files).sum();
-            ctx.message(&format!("Bisher {new_files} neue und {collisions} gleichnamige Dateien"));
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
-    });
+        },
+    );
     Ok(json!({ "taskId": id }))
 }

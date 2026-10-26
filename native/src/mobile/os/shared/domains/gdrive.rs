@@ -73,7 +73,10 @@ fn sign_in_task(ctx: &TaskCtx) -> Result<Value, ApiError> {
     std::thread::Builder::new()
         .name("gdrive-sign-in".into())
         .spawn(move || {
-            let _ = tx.send(crate::cloud::authorize_cancellable(Provider::GDrive, &worker_cancelled));
+            let _ = tx.send(crate::cloud::authorize_cancellable(
+                Provider::GDrive,
+                &worker_cancelled,
+            ));
         })
         .map_err(|error| io_error("Anmeldung starten", error))?;
     let deadline = Instant::now() + SIGN_IN_WAIT;

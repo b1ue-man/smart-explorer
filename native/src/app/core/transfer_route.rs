@@ -168,7 +168,10 @@ pub(in crate::app) fn resume_job(job: &TransferJob, roots: &[ResolvedRoot]) -> T
     let mut resumed = job.clone();
     let mut resolved = job.resume.clone().unwrap_or_default();
     for root in roots {
-        match resolved.iter_mut().find(|saved| saved.source == root.source) {
+        match resolved
+            .iter_mut()
+            .find(|saved| saved.source == root.source)
+        {
             Some(saved) => *saved = root.clone(),
             None => resolved.push(root.clone()),
         }
@@ -186,9 +189,14 @@ mod compatibility_tests {
     use super::*;
     #[test]
     fn batches_task_transfer_compat_missing_button_keeps_copy_move_and_empty_root_contract() {
-        let selection = TransferSelection::roots(TransferPlace::local(), vec!["/from/a".into()], None);
-        let original = paste_job(&selection, &TransferPlace::local(), "/to", CopyMode::Copy).unwrap();
-        let roots = [ResolvedRoot { source: "/from/a".into(), rel: "a (2)".into() }];
+        let selection =
+            TransferSelection::roots(TransferPlace::local(), vec!["/from/a".into()], None);
+        let original =
+            paste_job(&selection, &TransferPlace::local(), "/to", CopyMode::Copy).unwrap();
+        let roots = [ResolvedRoot {
+            source: "/from/a".into(),
+            rel: "a (2)".into(),
+        }];
         let repeated = resume_job(&original, &roots);
         assert_eq!(repeated.id, original.id);
         assert_eq!(repeated.recovery, crate::transfer::RecoveryMode::Resume);
@@ -198,11 +206,18 @@ mod compatibility_tests {
         assert_eq!(repeated.folders, original.folders);
         assert_eq!(repeated.conflict, original.conflict);
         assert_eq!(repeated.recoverable, original.recoverable);
-        let remote = TransferPlace::remote(std::sync::Arc::new(crate::vfs::LocalBackend::new("/")), "fixture endpoint");
+        let remote = TransferPlace::remote(
+            std::sync::Arc::new(crate::vfs::LocalBackend::new("/")),
+            "fixture endpoint",
+        );
         let remote_job = paste_job(&selection, &remote, "/to", CopyMode::Copy).unwrap();
         let remote_repeat = resume_job(&remote_job, &roots);
-        assert!(std::sync::Arc::ptr_eq(remote_job.target.backend().unwrap(), remote_repeat.target.backend().unwrap()));
-        let mut moving = original; moving.mode = CopyMode::Move;
+        assert!(std::sync::Arc::ptr_eq(
+            remote_job.target.backend().unwrap(),
+            remote_repeat.target.backend().unwrap()
+        ));
+        let mut moving = original;
+        moving.mode = CopyMode::Move;
         let recovery = resume_job(&moving, &roots);
         assert_eq!(recovery.id, moving.id);
         assert_eq!(recovery.recovery, crate::transfer::RecoveryMode::Resume);
@@ -213,12 +228,21 @@ mod compatibility_tests {
         let never_planned = resume_job(&moving, &[]);
         assert_eq!(never_planned.resume.as_deref(), Some([].as_slice()));
         let entry = super::super::transfer_center::FinishedEntry {
-            id: 1, progress: crate::transfer::TransferProgress::new(moving.kind(), "Move", 0, 0),
-            canceled: true, failure: None, errors: vec![], issues: vec![], roots: vec![],
-            job: Some(Box::new(moving)), purpose: super::super::transfer_center::TransferPurpose::Copy,
+            id: 1,
+            progress: crate::transfer::TransferProgress::new(moving.kind(), "Move", 0, 0),
+            canceled: true,
+            failure: None,
+            errors: vec![],
+            issues: vec![],
+            roots: vec![],
+            job: Some(Box::new(moving)),
+            purpose: super::super::transfer_center::TransferPurpose::Copy,
             show_issues: false,
         };
-        assert!(entry.can_resume(), "the visible button also covers local Move jobs");
+        assert!(
+            entry.can_resume(),
+            "the visible button also covers local Move jobs"
+        );
     }
 }
 
@@ -240,7 +264,9 @@ fn build_job(
         id: crate::transfer::new_job_id(),
         recoverable: true,
         recovery: crate::transfer::RecoveryMode::New,
-        folders: crate::transfer::FolderConflictPolicy::new(crate::transfer::FolderConflict::KeepBoth),
+        folders: crate::transfer::FolderConflictPolicy::new(
+            crate::transfer::FolderConflict::KeepBoth,
+        ),
         source: selection.source.endpoint.clone(),
         target: target.endpoint.clone(),
         target_dir: target_dir.to_string(),

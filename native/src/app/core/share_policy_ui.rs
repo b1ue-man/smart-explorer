@@ -70,13 +70,26 @@ impl App {
         for grant in &self.share_profiles.direct_grants {
             ui.horizontal_wrapped(|ui| {
                 ui.label(&grant.device_name);
-                ui.label(if grant.write { "Schreibrecht erlaubt" } else { "Nur lesen" });
-                if ui.button("Geräteeinstellungen …").clicked() { device = Some(grant.device_id.clone()); }
+                ui.label(if grant.write {
+                    "Schreibrecht erlaubt"
+                } else {
+                    "Nur lesen"
+                });
+                if ui.button("Geräteeinstellungen …").clicked() {
+                    device = Some(grant.device_id.clone());
+                }
             });
         }
-        if self.share_profiles.direct_grants.is_empty() { ui.label("Noch keine Geräte für meine Freigaben zugelassen."); }
+        if self.share_profiles.direct_grants.is_empty() {
+            ui.label("Noch keine Geräte für meine Freigaben zugelassen.");
+        }
         if let Some(device) = device {
-            pages_ui::open(self, ui, pages_ui::TAB_DEVICES, pages_ui::SharePage::Grant(device));
+            pages_ui::open(
+                self,
+                ui,
+                pages_ui::TAB_DEVICES,
+                pages_ui::SharePage::Grant(device),
+            );
         }
     }
 }

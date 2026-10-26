@@ -21,8 +21,12 @@ fn vault_task_open_fallback_requires_consent() {
     };
     let unmounted = |_: &str| -> Result<Option<PathBuf>, String> { Ok(None) };
     let mounts = |_: &str| -> Result<PathBuf, String> { Ok(PathBuf::from("T:\\Plan.txt")) };
-    let no_runtime =
-        |_: &str| -> Result<PathBuf, String> { Err(format!("{}: keine Laufwerkslaufzeit", crate::vault::MOUNT_RUNTIME_MISSING)) };
+    let no_runtime = |_: &str| -> Result<PathBuf, String> {
+        Err(format!(
+            "{}: keine Laufwerkslaufzeit",
+            crate::vault::MOUNT_RUNTIME_MISSING
+        ))
+    };
     let result = open_vault_file_with(
         location,
         true,
@@ -32,8 +36,7 @@ fn vault_task_open_fallback_requires_consent() {
         &ask(true),
     );
     assert_eq!(result, VaultFileOpen::Opened);
-    let result =
-        open_vault_file_with(location, true, &unmounted, &mounts, &open_local, &ask(true));
+    let result = open_vault_file_with(location, true, &unmounted, &mounts, &open_local, &ask(true));
     assert_eq!(result, VaultFileOpen::Opened);
     assert_eq!(opened.borrow().len(), 2);
     assert!(

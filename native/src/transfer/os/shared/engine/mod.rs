@@ -11,6 +11,8 @@ mod batch;
 mod batch_get;
 #[path = "batch_put.rs"]
 mod batch_put;
+#[cfg(test)]
+mod batches_backend_compatibility_task_tests;
 #[path = "bottleneck.rs"]
 mod bottleneck;
 #[path = "discovery.rs"]
@@ -19,20 +21,18 @@ mod discovery;
 mod dispatch;
 #[path = "download.rs"]
 mod download;
+mod file_evidence;
+mod file_recovery;
+mod folder_alias_store;
 #[path = "folders.rs"]
 pub(crate) mod folders;
-mod folder_alias_store;
 mod job_store;
-mod file_recovery;
-mod file_evidence;
-#[cfg(test)]
-mod batches_backend_compatibility_task_tests;
 pub(crate) mod record_io;
-pub(crate) use job_store::{unconfirmed_jobs, reopen_job, RecoveryCatalog};
+pub(crate) use job_store::{reopen_job, unconfirmed_jobs, RecoveryCatalog};
 pub(crate) mod folder_reservation;
 pub use folder_alias_store::new_job_id;
 mod selection;
-pub(crate) use selection::{folder_conflicts, count_folder_conflict, FolderPreviewScan};
+pub(crate) use selection::{count_folder_conflict, folder_conflicts, FolderPreviewScan};
 #[path = "issues.rs"]
 mod issues;
 #[path = "legacy.rs"]
@@ -128,7 +128,9 @@ pub(crate) fn run_view(
     first.target = view.target_label.to_string();
     first.discovering = true;
     report(TransferMsg::Progress(first.clone()));
-    let prepared = crate::source_media::with_cancellation(cancel, || view.validate().and_then(|()| prepare(&view, cancel)));
+    let prepared = crate::source_media::with_cancellation(cancel, || {
+        view.validate().and_then(|()| prepare(&view, cancel))
+    });
     let (folders, mut plan, record) = match prepared {
         Ok(prepared) => prepared,
         Err(message) => return report_failure(report, first, message, cancel),
@@ -140,24 +142,58 @@ pub(crate) fn run_view(
     engine.finish(&plan);
 }
 
-type Prepared<'a> = (FolderRegister<'a>, roots::RootPlan, Option<job_store::JobRun>);
+type Prepared<'a> = (
+    FolderRegister<'a>,
+    roots::RootPlan,
+    Option<job_store::JobRun>,
+);
 
 fn prepare<'a>(view: &JobView<'a>, cancel: &AtomicBool) -> Result<Prepared<'a>, String> {
-    let saved_root = job_store::preflight(view).map_err(|error| format!("Gespeicherten Zielroot bestätigen: {error}"))?;
-    let root = if let Some(root) = saved_root { root } else { match view.target {
-        Side::Local => folders::local_target_root(view.source.is_local(), view.target_dir)?,
-        Side::Remote(_) => view.target_dir.to_string(),
-    }};
+    let saved_root = job_store::preflight(view)
+        .map_err(|error| format!("Gespeicherten Zielroot bestätigen: {error}"))?;
+    let root = if let Some(root) = saved_root {
+        root
+    } else {
+        match view.target {
+            Side::Local => folders::local_target_root(view.source.is_local(), view.target_dir)?,
+            Side::Remote(_) => view.target_dir.to_string(),
+        }
+    };
     let target_flow = side_flow(view.target, &root);
-    let record = job_store::begin(view, &root, cancel).map_err(|error| format!("Auftrag {} speichern/wiederaufnehmen: {error}", view.id.unwrap_or("unbestätigt")))?;
+    let record = job_store::begin(view, &root, cancel).map_err(|error| {
+        format!(
+            "Auftrag {} speichern/wiederaufnehmen: {error}",
+            view.id.unwrap_or("unbestätigt")
+        )
+    })?;
     let mut folders = FolderRegister::new(view.target, &root, target_flow.clone());
     if let Some(planner) = roots::remote_planner(view, &target_flow, cancel)? {
         folders = folders.with_planner(planner);
     }
-    let alias_required = record.as_ref().map(|record| record.prepare_apply()).transpose().map_err(|error| error.to_string())?.unwrap_or(false);
-    let plan = roots::plan(view, &folders, cancel, record.as_ref().map_or(&[][..], |record| record.completed_roots()), record.as_ref().map_or(&[][..], |record| record.saved_file_roots()), alias_required)?;
+    let alias_required = record
+        .as_ref()
+        .map(|record| record.prepare_apply())
+        .transpose()
+        .map_err(|error| error.to_string())?
+        .unwrap_or(false);
+    let plan = roots::plan(
+        view,
+        &folders,
+        cancel,
+        record
+            .as_ref()
+            .map_or(&[][..], |record| record.completed_roots()),
+        record
+            .as_ref()
+            .map_or(&[][..], |record| record.saved_file_roots()),
+        alias_required,
+    )?;
     roots::check_local_targets(view, &plan)?;
-    if let Some(record) = &record { record.confirm_sources(view).map_err(|error| format!("Quellbelege speichern: {error}"))?; }
+    if let Some(record) = &record {
+        record
+            .confirm_sources(view)
+            .map_err(|error| format!("Quellbelege speichern: {error}"))?;
+    }
     Ok((folders, plan, record))
 }
 
@@ -399,7 +435,9 @@ impl<'a> Engine<'a> {
         local::prune_moved_dirs(self, plan);
         if let Some(record) = &self.job_record {
             let complete = self.issues.total() == 0 && !self.user_cancel.load(Ordering::Acquire);
-            if let Err(error) = record.finish(complete) { self.issue("", &format!("Jobabschluss speichern: {error}")); }
+            if let Err(error) = record.finish(complete) {
+                self.issue("", &format!("Jobabschluss speichern: {error}"));
+            }
         }
         let mut progress = self.progress(0);
         progress.done = true;

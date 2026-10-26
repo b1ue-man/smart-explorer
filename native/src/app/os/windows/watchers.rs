@@ -116,7 +116,9 @@ impl App {
     /// Apply only topology changes; unaffected watches keep their native state.
     pub(in crate::app) fn update_drive_watches(&mut self, removed: &[String], added: &[String]) {
         use notify::{RecursiveMode, Watcher};
-        let Some(watcher) = self.watcher.as_mut() else { return; };
+        let Some(watcher) = self.watcher.as_mut() else {
+            return;
+        };
         let mut errors = Vec::new();
         for root in removed {
             // Device removal can already have invalidated the native watch.
@@ -128,8 +130,15 @@ impl App {
         if let Some(rx) = &self.watcher_rx {
             while let Ok(message) = rx.try_recv() {
                 match message {
-                    Ok(event) if !event.paths.iter().any(|path| removed.iter().any(|root|
-                        crate::app::drive_snapshot::contains(root, &path.to_string_lossy()))) => retained.push(event),
+                    Ok(event)
+                        if !event.paths.iter().any(|path| {
+                            removed.iter().any(|root| {
+                                crate::app::drive_snapshot::contains(root, &path.to_string_lossy())
+                            })
+                        }) =>
+                    {
+                        retained.push(event)
+                    }
                     Err(error) => errors.push(error.to_string()),
                     _ => {}
                 }
@@ -140,7 +149,9 @@ impl App {
                 errors.push(format!("{root}: {error}"));
             }
         }
-        for error in errors { self.push_app_error("Ordnerindex-Watcher", error); }
+        for error in errors {
+            self.push_app_error("Ordnerindex-Watcher", error);
+        }
         self.apply_drive_watcher_events(retained);
     }
 
@@ -181,19 +192,23 @@ impl App {
 
     fn apply_drive_watcher_events(&mut self, events: Vec<notify::Event>) {
         for event in &events {
-            if matches!(event.kind, notify::EventKind::Access(_)) { continue; }
+            if matches!(event.kind, notify::EventKind::Access(_)) {
+                continue;
+            }
             for path in &event.paths {
                 let path = path.to_string_lossy();
                 if self.remote.is_none() && crate::scanner::retry_contains(&self.root_path, &path) {
                     self.read_access.invalidate_partial();
                 }
                 for tab in &mut self.tabs {
-                    if tab.remote.is_none() && crate::scanner::retry_contains(&tab.root_path, &path) {
+                    if tab.remote.is_none() && crate::scanner::retry_contains(&tab.root_path, &path)
+                    {
                         tab.read_access.invalidate_partial();
                     }
                 }
-                if self.analytics_source.as_ref().is_some_and(|source| !source.is_remote()
-                    && crate::scanner::retry_contains(source.root(), &path)) {
+                if self.analytics_source.as_ref().is_some_and(|source| {
+                    !source.is_remote() && crate::scanner::retry_contains(source.root(), &path)
+                }) {
                     if self.analytics_access.invalidate_partial() {
                         self.analytics_state = StorageRunState::Partial;
                     }

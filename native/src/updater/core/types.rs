@@ -59,9 +59,7 @@ impl StagedUpdate {
     }
 
     pub(super) fn validate_schema(&self) -> Result<(), String> {
-        if !matches!(self.schema, 1 | 2)
-            || (self.schema == 2) != self.launcher.is_some()
-        {
+        if !matches!(self.schema, 1 | 2) || (self.schema == 2) != self.launcher.is_some() {
             return Err(format!(
                 "Nicht unterstuetztes Staging-Manifest-Schema {}",
                 self.schema
@@ -76,7 +74,9 @@ impl StagedUpdate {
             return Err("Gestagtes Update enthaelt eine ungueltige Version".to_string());
         }
         if super::core::parse_ver(&self.version) > (0, 5, 184) && self.launcher.is_none() {
-            return Err("Diese Update-Version benoetigt einen SHA-256-geprueften MCP-Starter".into());
+            return Err(
+                "Diese Update-Version benoetigt einen SHA-256-geprueften MCP-Starter".into(),
+            );
         }
         Ok(())
     }

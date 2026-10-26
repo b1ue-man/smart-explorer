@@ -133,14 +133,25 @@ pub(crate) fn ui(ui: &mut egui::Ui) {
         });
         return;
     };
-    ui.label(if report.encoders.is_empty() { "Bildschirmübertragung nicht verfügbar – kein geeigneter Kodierer vorhanden." } else { "Die Verbindung wählt automatisch eine gemeinsam unterstützte Bildübertragung." });
-    egui::CollapsingHeader::new("Kodierungsdiagnose").id_salt("screen_codec_diagnostics").show(ui, |ui| {
-        for (title, entries) in [("Senden", &report.encoders), ("Empfangen", &report.decoders)] {
-            ui.strong(title);
-            for entry in entries { ui.label(RichText::new(entry_line(entry)).small()); }
-        }
-        ui.small(format!("OpenH264-Version: {}", report.openh264.version));
+    ui.label(if report.encoders.is_empty() {
+        "Bildschirmübertragung nicht verfügbar – kein geeigneter Kodierer vorhanden."
+    } else {
+        "Die Verbindung wählt automatisch eine gemeinsam unterstützte Bildübertragung."
     });
+    egui::CollapsingHeader::new("Kodierungsdiagnose")
+        .id_salt("screen_codec_diagnostics")
+        .show(ui, |ui| {
+            for (title, entries) in [
+                ("Senden", &report.encoders),
+                ("Empfangen", &report.decoders),
+            ] {
+                ui.strong(title);
+                for entry in entries {
+                    ui.label(RichText::new(entry_line(entry)).small());
+                }
+            }
+            ui.small(format!("OpenH264-Version: {}", report.openh264.version));
+        });
     let openh264 = &report.openh264;
     ui.horizontal_wrapped(|ui| {
         let mut wanted = openh264.state == OpenH264State::Enabled;
@@ -207,20 +218,22 @@ pub(crate) fn ui(ui: &mut egui::Ui) {
 fn licenses_window(ctx: &egui::Context, shared: &Arc<Mutex<CodecState>>) {
     let mut open = true;
     crate::app::dialog_geometry::window(ctx, "share_screen_codec_ui.0", "Bildschirm – Lizenzen")
-            .id(egui::Id::new("Bildschirm – Lizenzen"))
+        .id(egui::Id::new("Bildschirm – Lizenzen"))
         .open(&mut open)
         .default_size([680.0, 520.0])
         .max_size(theme::window_content_limit(ctx))
         .show(ctx, |ui| {
-            egui::ScrollArea::vertical().min_scrolled_height(0.0).max_height(crate::app::dialog_geometry::remaining_height(ui, 1.0))
-                    .show(ui, |ui| {
-                for entry in crate::screen::core::licenses::screen_licenses() {
-                    ui.heading(entry.component);
-                    ui.label(RichText::new(entry.license).strong());
-                    ui.label(RichText::new(entry.text).monospace().small());
-                    ui.separator();
-                }
-            });
+            egui::ScrollArea::vertical()
+                .min_scrolled_height(0.0)
+                .max_height(crate::app::dialog_geometry::remaining_height(ui, 1.0))
+                .show(ui, |ui| {
+                    for entry in crate::screen::core::licenses::screen_licenses() {
+                        ui.heading(entry.component);
+                        ui.label(RichText::new(entry.license).strong());
+                        ui.label(RichText::new(entry.text).monospace().small());
+                        ui.separator();
+                    }
+                });
         });
     if !open {
         lock(shared).licenses_open = false;
@@ -240,22 +253,27 @@ fn license_window(
     };
     let mut open = true;
     let mut accept = false;
-    crate::app::dialog_geometry::window(ctx, "share_screen_codec_ui.1", "OpenH264 – Lizenz von Cisco")
-            .id(egui::Id::new("OpenH264 – Lizenz von Cisco"))
-        .open(&mut open)
-        .default_size([680.0, 520.0])
-        .max_size(theme::window_content_limit(ctx))
-        .show(ctx, |ui| {
-            ui.label(OPENH264_NOTICE);
-            egui::ScrollArea::vertical().min_scrolled_height(0.0)
-                .max_height(crate::app::dialog_geometry::remaining_height(ui, 2.0))
-                .show(ui, |ui| {
-                    ui.label(RichText::new(license).monospace().small())
-                });
-            let downloadable = idle && state != OpenH264State::Enabled;
-            let button = egui::Button::new("Annehmen und herunterladen");
-            accept = ui.add_enabled(downloadable, button).clicked();
-        });
+    crate::app::dialog_geometry::window(
+        ctx,
+        "share_screen_codec_ui.1",
+        "OpenH264 – Lizenz von Cisco",
+    )
+    .id(egui::Id::new("OpenH264 – Lizenz von Cisco"))
+    .open(&mut open)
+    .default_size([680.0, 520.0])
+    .max_size(theme::window_content_limit(ctx))
+    .show(ctx, |ui| {
+        ui.label(OPENH264_NOTICE);
+        egui::ScrollArea::vertical()
+            .min_scrolled_height(0.0)
+            .max_height(crate::app::dialog_geometry::remaining_height(ui, 2.0))
+            .show(ui, |ui| {
+                ui.label(RichText::new(license).monospace().small())
+            });
+        let downloadable = idle && state != OpenH264State::Enabled;
+        let button = egui::Button::new("Annehmen und herunterladen");
+        accept = ui.add_enabled(downloadable, button).clicked();
+    });
     if accept {
         let accepted = accepted.to_string();
         run(shared, ctx, OpenH264Action::Enable { accepted });

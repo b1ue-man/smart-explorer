@@ -77,7 +77,9 @@ pub(super) fn job(
         id: crate::transfer::new_job_id(),
         recoverable: true,
         recovery: crate::transfer::RecoveryMode::New,
-        folders: crate::transfer::FolderConflictPolicy::new(crate::transfer::FolderConflict::KeepBoth),
+        folders: crate::transfer::FolderConflictPolicy::new(
+            crate::transfer::FolderConflict::KeepBoth,
+        ),
         source,
         target,
         target_dir: fwd(target_dir),

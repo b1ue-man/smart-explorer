@@ -22,9 +22,14 @@ pub(crate) struct NodeAccess {
 }
 impl NodeAccess {
     pub(super) fn new() -> Self {
-        Self { registry: Arc::new(AccessLeaseRegistry::default()), lifecycle: Mutex::new(()) }
+        Self {
+            registry: Arc::new(AccessLeaseRegistry::default()),
+            lifecycle: Mutex::new(()),
+        }
     }
-    pub(crate) fn registry(&self) -> &Arc<AccessLeaseRegistry> { &self.registry }
+    pub(crate) fn registry(&self) -> &Arc<AccessLeaseRegistry> {
+        &self.registry
+    }
 
     /// `request` contains host-resolved identities. The adapter verifies its
     /// current OS session/user generation inside `admit`, attaches the stop
@@ -38,14 +43,21 @@ impl NodeAccess {
         confirmation: Option<AccessConfirmation>,
         admit: impl FnOnce(&AccessHandle) -> Result<T, AccessRevocation>,
     ) -> Result<(T, AccessHandle), AccessRevocation> {
-        let _lifecycle = self.lifecycle.lock().map_err(|_| AccessRevocation::Unavailable)?;
+        let _lifecycle = self
+            .lifecycle
+            .lock()
+            .map_err(|_| AccessRevocation::Unavailable)?;
         let state = auth.lock().map_err(|_| AccessRevocation::Unavailable)?;
-        let handle = self.registry.admit(&state, principal, request, confirmation, now_secs())?;
+        let handle = self
+            .registry
+            .admit(&state, principal, request, confirmation, now_secs())?;
         let resource = admit(&handle)?;
         Ok((resource, handle))
     }
     fn invalidate_session<T>(
-        &self, auth: &Mutex<ShareAuthState>, session: &SessionId,
+        &self,
+        auth: &Mutex<ShareAuthState>,
+        session: &SessionId,
         publish: impl FnOnce() -> T,
     ) -> Result<(usize, T), AccessRevocation> {
         let _state = auth.lock().map_err(|_| {
@@ -57,15 +69,23 @@ impl NodeAccess {
     }
 
     fn admit_existing<T>(
-        &self, auth: &Mutex<ShareAuthState>, handle: &AccessHandle,
+        &self,
+        auth: &Mutex<ShareAuthState>,
+        handle: &AccessHandle,
         admit: impl FnOnce(&AccessHandle) -> Result<T, AccessRevocation>,
     ) -> Result<T, AccessRevocation> {
-        let _lifecycle = self.lifecycle.lock().map_err(|_| AccessRevocation::Unavailable)?;
+        let _lifecycle = self
+            .lifecycle
+            .lock()
+            .map_err(|_| AccessRevocation::Unavailable)?;
         let state = auth.lock().map_err(|_| AccessRevocation::Unavailable)?;
-        self.registry.admit_existing(&state, handle, now_secs(), admit)
+        self.registry
+            .admit_existing(&state, handle, now_secs(), admit)
     }
     fn invalidate_user<T>(
-        &self, auth: &Mutex<ShareAuthState>, user: &UserId,
+        &self,
+        auth: &Mutex<ShareAuthState>,
+        user: &UserId,
         publish: impl FnOnce() -> T,
     ) -> Result<(usize, T), AccessRevocation> {
         let _state = auth.lock().map_err(|_| {
@@ -76,12 +96,17 @@ impl NodeAccess {
         Ok((revoked, publish()))
     }
     pub(super) fn stop(&self) {
-        let _lifecycle = self.lifecycle.lock().unwrap_or_else(PoisonError::into_inner);
+        let _lifecycle = self
+            .lifecycle
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         self.registry.close(AccessRevocation::HostStopped);
     }
 }
 impl Drop for NodeAccess {
-    fn drop(&mut self) { self.stop(); }
+    fn drop(&mut self) {
+        self.stop();
+    }
 }
 
 impl ShareIrohNode {
@@ -95,19 +120,23 @@ impl ShareIrohNode {
         confirmation: Option<AccessConfirmation>,
         admit: impl FnOnce(&AccessHandle) -> Result<T, AccessRevocation>,
     ) -> Result<(T, AccessHandle), AccessRevocation> {
-        self.access.admit(&self.auth, principal, request, confirmation, |handle| {
-            self.require_sharing_active().map_err(|_| AccessRevocation::HostStopped)?;
-            admit(handle)
-        })
+        self.access
+            .admit(&self.auth, principal, request, confirmation, |handle| {
+                self.require_sharing_active()
+                    .map_err(|_| AccessRevocation::HostStopped)?;
+                admit(handle)
+            })
     }
     /// Publish a resource after an authorized async probe without consuming or
     /// copying its Ask receipt again. Keep lifecycle -> auth -> lease -> callback.
     pub(crate) fn admit_existing_access<T>(
-        &self, handle: &AccessHandle,
+        &self,
+        handle: &AccessHandle,
         admit: impl FnOnce(&AccessHandle) -> Result<T, AccessRevocation>,
     ) -> Result<T, AccessRevocation> {
         self.access.admit_existing(&self.auth, handle, |handle| {
-            self.require_sharing_active().map_err(|_| AccessRevocation::HostStopped)?;
+            self.require_sharing_active()
+                .map_err(|_| AccessRevocation::HostStopped)?;
             admit(handle)
         })
     }
@@ -116,19 +145,26 @@ impl ShareIrohNode {
     /// auth. Session IDs include the host generation, never just a recycled
     /// OS numeric ID. Admission checks these facts inside its callback.
     pub(crate) fn invalidate_access_session<T>(
-        &self, session: &SessionId, publish: impl FnOnce() -> T,
+        &self,
+        session: &SessionId,
+        publish: impl FnOnce() -> T,
     ) -> Result<(usize, T), AccessRevocation> {
         self.access.invalidate_session(&self.auth, session, publish)
     }
     /// Atomically replace the adapter's user facts and revoke that user's
     /// app/login operations. TCP and unrelated users retain their authority.
     pub(crate) fn invalidate_access_user<T>(
-        &self, user: &UserId, publish: impl FnOnce() -> T,
+        &self,
+        user: &UserId,
+        publish: impl FnOnce() -> T,
     ) -> Result<(usize, T), AccessRevocation> {
         self.access.invalidate_user(&self.auth, user, publish)
     }
     pub(super) fn start_access_expiry(&self) {
-        self.rt.spawn(access_expiry(Arc::downgrade(&self.auth), self.access_registry().clone()));
+        self.rt.spawn(access_expiry(
+            Arc::downgrade(&self.auth),
+            self.access_registry().clone(),
+        ));
     }
 }
 
@@ -139,7 +175,9 @@ async fn access_expiry(auth: Weak<Mutex<ShareAuthState>>, registry: Arc<AccessLe
     let mut changed = registry.changes();
     loop {
         let wait = {
-            if registry.is_closed() { return; }
+            if registry.is_closed() {
+                return;
+            }
             let Some(auth) = auth.upgrade() else {
                 registry.close(AccessRevocation::HostStopped);
                 return;

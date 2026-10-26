@@ -18,8 +18,12 @@ use super::types::{
 };
 
 impl MountFilesystem for MountEngine {
-    fn capacity_snapshot(&self) -> crate::vfs::CapacitySnapshot { MountEngine::capacity_snapshot(self) }
-    fn cache_capacity_budget(&self, available_bytes: u64) -> u64 { MountEngine::cache_capacity_budget(self, available_bytes) }
+    fn capacity_snapshot(&self) -> crate::vfs::CapacitySnapshot {
+        MountEngine::capacity_snapshot(self)
+    }
+    fn cache_capacity_budget(&self, available_bytes: u64) -> u64 {
+        MountEngine::cache_capacity_budget(self, available_bytes)
+    }
     fn volume_facts(&self) -> VolumeFacts {
         VolumeFacts {
             id: self.config.id.clone(),

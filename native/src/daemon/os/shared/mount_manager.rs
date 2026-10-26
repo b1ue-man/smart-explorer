@@ -17,10 +17,10 @@ pub(super) const STOP_GRACE: Duration = Duration::from_secs(330);
 const RESTART_DETAIL: &str =
     "Laufwerk nach Daemon-Neustart zur Wiederherstellung bereit; bitte erneut versuchen";
 
-#[path = "mount_manager_state.rs"]
-mod entry_state;
 #[path = "mount_capacity.rs"]
 mod capacity;
+#[path = "mount_manager_state.rs"]
+mod entry_state;
 #[path = "mount_manager_host.rs"]
 mod host;
 // DRV-M7: the lock participant of vault drives and its channel.
@@ -33,12 +33,12 @@ mod start_cache;
 #[path = "mount_manager_start.rs"]
 mod start_path;
 // DRV-M7: the end of vault drives and their return after an unlock.
+#[path = "mount_recovery_transaction.rs"]
+mod recovery_transaction;
 #[path = "mount_termination.rs"]
 pub(in crate::daemon) mod termination;
 #[path = "mount_manager_capabilities.rs"]
 mod write_capabilities;
-#[path = "mount_recovery_transaction.rs"]
-mod recovery_transaction;
 
 use entry_state::{
     clear_backend_runtime, finish_clean, finish_exit, random_token, removable, snapshot,

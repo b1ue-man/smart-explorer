@@ -74,11 +74,20 @@ pub(crate) struct GopHeader {
 
 impl GopHeader {
     fn check(&self) -> io::Result<()> {
-        if self.family_layout_revision.is_some_and(|revision| revision == 0 || self.frame_contract.is_none()) {
-            return Err(invalid("family layout requires a nonzero revision and a v2 picture contract"));
+        if self
+            .family_layout_revision
+            .is_some_and(|revision| revision == 0 || self.frame_contract.is_none())
+        {
+            return Err(invalid(
+                "family layout requires a nonzero revision and a v2 picture contract",
+            ));
         }
-        if let Some(contract) = self.frame_contract { contract.validate()?; contract.limits.check(self.size)?; }
-        else { self.size.check_frame()?; }
+        if let Some(contract) = self.frame_contract {
+            contract.validate()?;
+            contract.limits.check(self.size)?;
+        } else {
+            self.size.check_frame()?;
+        }
         match (self.codec, self.profile) {
             (CodecKind::H264, Some(_)) | (CodecKind::Tiles, None) => Ok(()),
             _ => Err(invalid("picture stream profile does not match its codec")),
@@ -101,12 +110,14 @@ impl GopHeader {
 
     /// Complete legacy header only. A v2 prefix cannot grant allocations.
     pub(crate) fn decode(bytes: &[u8; GOP_HEADER_BYTES]) -> io::Result<Self> {
-        let (header,extended)=Self::decode_prefix(bytes)?;
-        if extended {return Err(invalid("v2 picture header requires its contract extension"));}
+        let (header, extended) = Self::decode_prefix(bytes)?;
+        if extended {
+            return Err(invalid("v2 picture header requires its contract extension"));
+        }
         Ok(header)
     }
 
-    pub(crate) fn decode_prefix(bytes:&[u8;GOP_HEADER_BYTES])->io::Result<(Self,bool)> {
+    pub(crate) fn decode_prefix(bytes: &[u8; GOP_HEADER_BYTES]) -> io::Result<(Self, bool)> {
         let mut reader = BeReader::new(bytes);
         if reader.bytes(4)? != GOP_MAGIC {
             return Err(invalid("picture stream does not start with SCRV"));
@@ -137,26 +148,40 @@ impl GopHeader {
             profile,
             size,
         };
-        if version==GOP_VERSION {header.check()?;} else {
-            if size.width==0 || size.height==0 || size.width>super::frame_budget::MAX_RESOURCE_SIDE
-                || size.height>super::frame_budget::MAX_RESOURCE_SIDE {
+        if version == GOP_VERSION {
+            header.check()?;
+        } else {
+            if size.width == 0
+                || size.height == 0
+                || size.width > super::frame_budget::MAX_RESOURCE_SIDE
+                || size.height > super::frame_budget::MAX_RESOURCE_SIDE
+            {
                 return Err(invalid("invalid v2 picture dimensions"));
             }
-            if !matches!((codec,profile),(CodecKind::H264,Some(_))|(CodecKind::Tiles,None)) {
+            if !matches!(
+                (codec, profile),
+                (CodecKind::H264, Some(_)) | (CodecKind::Tiles, None)
+            ) {
                 return Err(invalid("picture stream profile does not match its codec"));
             }
         }
-        Ok((header,version==super::frame_budget::FRAME_PROTOCOL))
+        Ok((header, version == super::frame_budget::FRAME_PROTOCOL))
     }
 
     /// Largest record payload of this stream's codec.
     pub(crate) fn record_limit(&self) -> usize {
-        let codec=if self.frame_contract.is_some_and(|c| c.hybrid_regions) {MAX_RECORD_BYTES} else {match self.codec {
-            CodecKind::H264 => MAX_RECORD_BYTES,
-            CodecKind::Tiles => MAX_TILES_RECORD_BYTES,
-        }};
-        self.frame_contract.map_or(codec,|contract|super::frame_size_caps::PacketBudget::for_contract(Some(contract))
-            .map_or(0,|budget|codec.min(budget.record_bytes)))
+        let codec = if self.frame_contract.is_some_and(|c| c.hybrid_regions) {
+            MAX_RECORD_BYTES
+        } else {
+            match self.codec {
+                CodecKind::H264 => MAX_RECORD_BYTES,
+                CodecKind::Tiles => MAX_TILES_RECORD_BYTES,
+            }
+        };
+        self.frame_contract.map_or(codec, |contract| {
+            super::frame_size_caps::PacketBudget::for_contract(Some(contract))
+                .map_or(0, |budget| codec.min(budget.record_bytes))
+        })
     }
 }
 
@@ -194,7 +219,10 @@ impl RecordSequence {
         if record.flags & !KNOWN_FLAGS != 0 {
             return Err(invalid("frame record has unknown flags"));
         }
-        if record.has_more() && header.codec != CodecKind::Tiles && !header.frame_contract.is_some_and(|c| c.hybrid_regions) {
+        if record.has_more()
+            && header.codec != CodecKind::Tiles
+            && !header.frame_contract.is_some_and(|c| c.hybrid_regions)
+        {
             return Err(invalid("only tile frames span several records"));
         }
         let base_flags = record.flags & !FLAG_MORE;
@@ -236,9 +264,14 @@ pub(crate) async fn write_gop_header<W: AsyncWrite + Unpin>(
 ) -> io::Result<()> {
     writer.write_all(&header.encode()?).await?;
     if let Some(contract) = header.frame_contract {
-        let extension = GopExtension { contract, family_layout_revision: header.family_layout_revision };
+        let extension = GopExtension {
+            contract,
+            family_layout_revision: header.family_layout_revision,
+        };
         let json = serde_json::to_vec(&extension).map_err(io::Error::other)?;
-        if json.len() > 1024 { return Err(invalid("screen contract exceeds 1 KiB")); }
+        if json.len() > 1024 {
+            return Err(invalid("screen contract exceeds 1 KiB"));
+        }
         writer.write_all(&(json.len() as u16).to_be_bytes()).await?;
         writer.write_all(&json).await?;
     }
@@ -248,11 +281,14 @@ pub(crate) async fn write_gop_header<W: AsyncWrite + Unpin>(
 pub(crate) async fn read_gop_header<R: AsyncRead + Unpin>(reader: &mut R) -> io::Result<GopHeader> {
     let mut bytes = [0u8; GOP_HEADER_BYTES];
     reader.read_exact(&mut bytes).await?;
-    let (mut header,extended) = GopHeader::decode_prefix(&bytes)?;
+    let (mut header, extended) = GopHeader::decode_prefix(&bytes)?;
     if extended {
         let len = reader.read_u16().await? as usize;
-        if len > 1024 { return Err(invalid("screen contract exceeds 1 KiB")); }
-        let mut json = vec![0;len]; reader.read_exact(&mut json).await?;
+        if len > 1024 {
+            return Err(invalid("screen contract exceeds 1 KiB"));
+        }
+        let mut json = vec![0; len];
+        reader.read_exact(&mut json).await?;
         let extension: GopExtension = serde_json::from_slice(&json).map_err(io::Error::other)?;
         header.frame_contract = Some(extension.contract);
         header.family_layout_revision = extension.family_layout_revision;
@@ -290,23 +326,31 @@ pub(crate) async fn read_frame_record<R: AsyncRead + Unpin>(
     reader: &mut R,
     header: &GopHeader,
 ) -> io::Result<Option<FrameRecord>> {
-    let mut budget=FrameReadBudget::default();
-    read_frame_record_budgeted(reader,header,&mut budget).await
+    let mut budget = FrameReadBudget::default();
+    read_frame_record_budgeted(reader, header, &mut budget).await
 }
 
 #[derive(Default)]
-pub(crate) struct FrameReadBudget { frame: Option<u64>, records:usize, bytes:usize }
+pub(crate) struct FrameReadBudget {
+    frame: Option<u64>,
+    records: usize,
+    bytes: usize,
+}
 
 pub(crate) async fn read_frame_record_budgeted<R: AsyncRead + Unpin>(
-    reader: &mut R, header: &GopHeader, budget: &mut FrameReadBudget,
+    reader: &mut R,
+    header: &GopHeader,
+    budget: &mut FrameReadBudget,
 ) -> io::Result<Option<FrameRecord>> {
-    let bound=super::frame_size_caps::PacketBudget::for_contract(header.frame_contract)?;
-    read_frame_record_admitted(reader,header,budget,bound).await
+    let bound = super::frame_size_caps::PacketBudget::for_contract(header.frame_contract)?;
+    read_frame_record_admitted(reader, header, budget, bound).await
 }
 pub(crate) async fn read_frame_record_admitted<R: AsyncRead + Unpin>(
-    reader:&mut R,header:&GopHeader,budget:&mut FrameReadBudget,
-    bound:super::frame_size_caps::PacketBudget,
-)->io::Result<Option<FrameRecord>> {
+    reader: &mut R,
+    header: &GopHeader,
+    budget: &mut FrameReadBudget,
+    bound: super::frame_size_caps::PacketBudget,
+) -> io::Result<Option<FrameRecord>> {
     let mut head = [0u8; RECORD_HEADER_BYTES];
     if reader.read(&mut head[..1]).await? == 0 {
         return Ok(None);
@@ -320,11 +364,20 @@ pub(crate) async fn read_frame_record_admitted<R: AsyncRead + Unpin>(
     if len > header.record_limit().min(bound.record_bytes) {
         return Err(invalid("frame record exceeds the limit of its codec"));
     }
-    if budget.frame!=Some(frame_id) {budget.frame=Some(frame_id);budget.records=0;budget.bytes=0;}
-    budget.records=budget.records.saturating_add(1);
-    budget.bytes=budget.bytes.saturating_add(RECORD_HEADER_BYTES).saturating_add(len);
-    if budget.records>bound.records || budget.bytes>bound.encoded_bytes {
-        return Err(invalid("frame transaction exceeds negotiated packet budget"));
+    if budget.frame != Some(frame_id) {
+        budget.frame = Some(frame_id);
+        budget.records = 0;
+        budget.bytes = 0;
+    }
+    budget.records = budget.records.saturating_add(1);
+    budget.bytes = budget
+        .bytes
+        .saturating_add(RECORD_HEADER_BYTES)
+        .saturating_add(len);
+    if budget.records > bound.records || budget.bytes > bound.encoded_bytes {
+        return Err(invalid(
+            "frame transaction exceeds negotiated packet budget",
+        ));
     }
     let mut payload = vec![0u8; len];
     reader.read_exact(&mut payload).await?;
@@ -338,26 +391,49 @@ pub(crate) async fn read_frame_record_admitted<R: AsyncRead + Unpin>(
 
 /// Repack lossless records at whole tile boundaries; pixels and frame identity
 /// are unchanged. A small v2 budget must not make a legal full tile frame stall.
-pub(crate) fn repack_tiles(records:Vec<Vec<u8>>,limit:usize)->io::Result<Vec<Vec<u8>>> {
-    let mut out=Vec::new();let mut packet=Vec::with_capacity(limit);packet.extend_from_slice(&[0,0]);let mut count=0u16;
+pub(crate) fn repack_tiles(records: Vec<Vec<u8>>, limit: usize) -> io::Result<Vec<Vec<u8>>> {
+    let mut out = Vec::new();
+    let mut packet = Vec::with_capacity(limit);
+    packet.extend_from_slice(&[0, 0]);
+    let mut count = 0u16;
     for record in records {
-        if record.len()<2 {return Err(invalid("truncated tile record"));}
-        let tiles=u16::from_be_bytes([record[0],record[1]]);let mut at=2usize;
-        for _ in 0..tiles {
-            let head=record.get(at..at.saturating_add(11)).ok_or_else(||invalid("truncated tile header"))?;
-            let len=u32::from_be_bytes([head[7],head[8],head[9],head[10]]) as usize;
-            let end=at.checked_add(11).and_then(|n|n.checked_add(len)).filter(|n|*n<=record.len())
-                .ok_or_else(||invalid("truncated tile payload"))?;
-            if end-at+2>limit {return Err(invalid("one tile exceeds negotiated record budget"));}
-            if packet.len()+end-at>limit || count==u16::MAX {
-                packet[..2].copy_from_slice(&count.to_be_bytes());out.push(packet);
-                packet=Vec::with_capacity(limit);packet.extend_from_slice(&[0,0]);count=0;
-            }
-            packet.extend_from_slice(&record[at..end]);count+=1;at=end;
+        if record.len() < 2 {
+            return Err(invalid("truncated tile record"));
         }
-        if at!=record.len() {return Err(invalid("trailing tile record bytes"));}
+        let tiles = u16::from_be_bytes([record[0], record[1]]);
+        let mut at = 2usize;
+        for _ in 0..tiles {
+            let head = record
+                .get(at..at.saturating_add(11))
+                .ok_or_else(|| invalid("truncated tile header"))?;
+            let len = u32::from_be_bytes([head[7], head[8], head[9], head[10]]) as usize;
+            let end = at
+                .checked_add(11)
+                .and_then(|n| n.checked_add(len))
+                .filter(|n| *n <= record.len())
+                .ok_or_else(|| invalid("truncated tile payload"))?;
+            if end - at + 2 > limit {
+                return Err(invalid("one tile exceeds negotiated record budget"));
+            }
+            if packet.len() + end - at > limit || count == u16::MAX {
+                packet[..2].copy_from_slice(&count.to_be_bytes());
+                out.push(packet);
+                packet = Vec::with_capacity(limit);
+                packet.extend_from_slice(&[0, 0]);
+                count = 0;
+            }
+            packet.extend_from_slice(&record[at..end]);
+            count += 1;
+            at = end;
+        }
+        if at != record.len() {
+            return Err(invalid("trailing tile record bytes"));
+        }
     }
-    if count>0 {packet[..2].copy_from_slice(&count.to_be_bytes());out.push(packet);}
+    if count > 0 {
+        packet[..2].copy_from_slice(&count.to_be_bytes());
+        out.push(packet);
+    }
     Ok(out)
 }
 

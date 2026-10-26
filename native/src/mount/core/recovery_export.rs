@@ -1,6 +1,8 @@
 //! Read-only interpretation of captured journal bytes. Does not open a
 //! spool, rotate a journal, clean files or contact a provider.
-use super::journal_record::{apply, decode_record, DeletePhase, RecoveredJournal, MAX_RECORD_BYTES};
+use super::journal_record::{
+    apply, decode_record, DeletePhase, RecoveredJournal, MAX_RECORD_BYTES,
+};
 use super::recovery_manifest::{RecoveryGap, RecoveryGapKind, RecoveryJournal, RecoveryManifest};
 use std::collections::HashSet;
 
@@ -8,24 +10,44 @@ use std::collections::HashSet;
 /// ciphertext path keys. Normalize only the decoded view; their original
 /// manifest and journal bytes, hashes and ownership evidence remain intact.
 pub(crate) fn sealed_inventory_view(manifest: &mut RecoveryManifest) {
-    if !manifest.sealed { return; }
+    if !manifest.sealed {
+        return;
+    }
     for journal in &mut manifest.journals {
         journal.entries.clear();
         journal.deletes.clear();
         journal.namespace_intents.clear();
     }
-    manifest.gaps.retain(|gap| !matches!(gap.kind,
-        RecoveryGapKind::MissingPayload | RecoveryGapKind::RemoteQuarantineNotBackedUp
-        | RecoveryGapKind::RemoteStageNotBackedUp));
-    let subjects: HashSet<_> = manifest.files.iter().filter(|file|
-        file.components.last().is_some_and(|name| name == "stages.json" || name.starts_with("journal.jsonl")))
+    manifest.gaps.retain(|gap| {
+        !matches!(
+            gap.kind,
+            RecoveryGapKind::MissingPayload
+                | RecoveryGapKind::RemoteQuarantineNotBackedUp
+                | RecoveryGapKind::RemoteStageNotBackedUp
+        )
+    });
+    let subjects: HashSet<_> = manifest
+        .files
+        .iter()
+        .filter(|file| {
+            file.components
+                .last()
+                .is_some_and(|name| name == "stages.json" || name.starts_with("journal.jsonl"))
+        })
         .map(|file| file.components.join("/"))
-        .chain(manifest.journals.iter().map(|journal| journal.components.join("/"))).collect();
+        .chain(
+            manifest
+                .journals
+                .iter()
+                .map(|journal| journal.components.join("/")),
+        )
+        .collect();
     let mut subjects: Vec<_> = subjects.into_iter().collect();
     subjects.sort();
     for subject in subjects {
-        if !manifest.gaps.iter().any(|gap|
-            gap.kind == RecoveryGapKind::JournalInventoryUnknown && gap.subject == subject) {
+        if !manifest.gaps.iter().any(|gap| {
+            gap.kind == RecoveryGapKind::JournalInventoryUnknown && gap.subject == subject
+        }) {
             gap(manifest, RecoveryGapKind::JournalInventoryUnknown, subject,
                 "Versiegelte Zustandsdatei als Rohbytes gesichert; offene Änderungen, Löschungen und Namespaceabsichten bleiben ohne Schlüssel unbekannt. Eine ältere Ciphertextinventur ist kein Zustandsbeleg");
         }
@@ -46,7 +68,10 @@ pub(crate) fn inspect_journal(
         gap(manifest, RecoveryGapKind::JournalInventoryUnknown, subject,
             "Versiegeltes Journal vollständig als Rohbytes gesichert; ohne Schlüssel sind offene Änderungen, Löschungen und Namespaceabsichten unbekannt. Keine Payloadlücke aus Ciphertextpfaden abgeleitet");
         manifest.journals.push(RecoveryJournal {
-            components, entries: Vec::new(), deletes: Vec::new(), namespace_intents: Vec::new(),
+            components,
+            entries: Vec::new(),
+            deletes: Vec::new(),
+            namespace_intents: Vec::new(),
         });
         return Ok(());
     }
@@ -54,16 +79,26 @@ pub(crate) fn inspect_journal(
     let mut remaining = bytes;
     while !remaining.is_empty() {
         let Some(end) = remaining.iter().position(|byte| *byte == b'\n') else {
-            gap(manifest, RecoveryGapKind::TornJournalTail, subject.clone(),
-                "Unvollständiger Journalabschluss bleibt im Originaljournal erhalten");
+            gap(
+                manifest,
+                RecoveryGapKind::TornJournalTail,
+                subject.clone(),
+                "Unvollständiger Journalabschluss bleibt im Originaljournal erhalten",
+            );
             break;
         };
         let line = &remaining[..end];
         remaining = &remaining[end + 1..];
-        if line.is_empty() { continue; }
+        if line.is_empty() {
+            continue;
+        }
         if line.len() > MAX_RECORD_BYTES {
-            gap(manifest, RecoveryGapKind::UnreadableJournal, subject.clone(),
-                "Journalzeile überschreitet die unterstützte Größe; Originalbytes bleiben erhalten");
+            gap(
+                manifest,
+                RecoveryGapKind::UnreadableJournal,
+                subject.clone(),
+                "Journalzeile überschreitet die unterstützte Größe; Originalbytes bleiben erhalten",
+            );
             break;
         }
         match decode_record(line) {
@@ -76,13 +111,21 @@ pub(crate) fn inspect_journal(
         }
     }
     let parent = &components[..components.len() - 1];
-    let saved: HashSet<_> = manifest.files.iter().map(|file| file.components.clone()).collect();
+    let saved: HashSet<_> = manifest
+        .files
+        .iter()
+        .map(|file| file.components.clone())
+        .collect();
     for entry in recovered.entries.values() {
         let mut payload = parent.to_vec();
         payload.extend(["files".to_string(), entry.spool_name.clone()]);
         if !saved.contains(&payload) {
-            gap(manifest, RecoveryGapKind::MissingPayload, payload.join("/"),
-                "Referenzierte lokale Änderung fehlt; keine Remoteversion ersetzt diese Änderung");
+            gap(
+                manifest,
+                RecoveryGapKind::MissingPayload,
+                payload.join("/"),
+                "Referenzierte lokale Änderung fehlt; keine Remoteversion ersetzt diese Änderung",
+            );
         }
     }
     for delete in recovered.deletes.values() {
@@ -94,16 +137,30 @@ pub(crate) fn inspect_journal(
     }
     let mut snapshot = RecoveryJournal {
         components,
-        entries: recovered.entries.values().map(serde_json::to_value)
-            .collect::<Result<_, _>>().map_err(std::io::Error::other)?,
-        deletes: recovered.deletes.values().map(serde_json::to_value)
-            .collect::<Result<_, _>>().map_err(std::io::Error::other)?,
-        namespace_intents: recovered.namespace_conflicts.values()
-            .map(serde_json::to_value).collect::<Result<_, _>>().map_err(std::io::Error::other)?,
+        entries: recovered
+            .entries
+            .values()
+            .map(serde_json::to_value)
+            .collect::<Result<_, _>>()
+            .map_err(std::io::Error::other)?,
+        deletes: recovered
+            .deletes
+            .values()
+            .map(serde_json::to_value)
+            .collect::<Result<_, _>>()
+            .map_err(std::io::Error::other)?,
+        namespace_intents: recovered
+            .namespace_conflicts
+            .values()
+            .map(serde_json::to_value)
+            .collect::<Result<_, _>>()
+            .map_err(std::io::Error::other)?,
     };
     snapshot.entries.sort_by_key(serde_json::Value::to_string);
     snapshot.deletes.sort_by_key(serde_json::Value::to_string);
-    snapshot.namespace_intents.sort_by_key(serde_json::Value::to_string);
+    snapshot
+        .namespace_intents
+        .sort_by_key(serde_json::Value::to_string);
     manifest.journals.push(snapshot);
     Ok(())
 }
@@ -122,16 +179,32 @@ pub(crate) fn inspect_stages(manifest: &mut RecoveryManifest, subject: &str, byt
                         "Remote-Uploadstage ist referenziert; lokale Payloads sind separat im Hashmanifest erfasst");
                 }
             } else {
-                gap(manifest, RecoveryGapKind::UnreadableJournal, subject.into(),
-                    "Stage-Ledger hat keine lesbare Stagezuordnung; Originalbytes bleiben erhalten");
+                gap(
+                    manifest,
+                    RecoveryGapKind::UnreadableJournal,
+                    subject.into(),
+                    "Stage-Ledger hat keine lesbare Stagezuordnung; Originalbytes bleiben erhalten",
+                );
             }
         }
-        Err(_) => gap(manifest, RecoveryGapKind::UnreadableJournal, subject.into(),
-            "Stage-Ledger ist nicht lesbar; Originalbytes bleiben erhalten"),
+        Err(_) => gap(
+            manifest,
+            RecoveryGapKind::UnreadableJournal,
+            subject.into(),
+            "Stage-Ledger ist nicht lesbar; Originalbytes bleiben erhalten",
+        ),
     }
 }
 
-pub(crate) fn gap(manifest: &mut RecoveryManifest, kind: RecoveryGapKind,
-    subject: String, detail: &str) {
-    manifest.gaps.push(RecoveryGap { kind, subject, detail: detail.into() });
+pub(crate) fn gap(
+    manifest: &mut RecoveryManifest,
+    kind: RecoveryGapKind,
+    subject: String,
+    detail: &str,
+) {
+    manifest.gaps.push(RecoveryGap {
+        kind,
+        subject,
+        detail: detail.into(),
+    });
 }

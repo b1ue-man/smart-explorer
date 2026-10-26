@@ -26,7 +26,8 @@ fn host_figures_ui(
                 ),
                 |ui| {
                     if let Some(apps) = node_view(tree, &[row.name], &approx, 256) {
-                        egui::ScrollArea::vertical().min_scrolled_height(0.0)
+                        egui::ScrollArea::vertical()
+                            .min_scrolled_height(0.0)
                             .max_height(super::dialog_geometry::remaining_height(ui, 2.0))
                             .show(ui, |ui| {
                                 for app in apps.children {
@@ -230,7 +231,10 @@ impl App {
         }
         if let Some(scan_source) = controls.rescan_source {
             if controls.accept_drive_identity && !scan_source.is_remote() {
-                self.accept_drive_consumer(super::drive_snapshot::DriveConsumer::Analytics, scan_source.root());
+                self.accept_drive_consumer(
+                    super::drive_snapshot::DriveConsumer::Analytics,
+                    scan_source.root(),
+                );
             }
             self.start_analytics_source(scan_source);
         } else if controls.pick_folder {

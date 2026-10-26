@@ -486,8 +486,16 @@ impl Backend for Fake {
 }
 
 impl crate::vfs::BackendExtensions for Fake {
-    fn directory_reservation_supported(&self, root: &str) -> bool { crate::vfs::directory_reservation_supported(&self.inner, root) }
-    fn create_dir_exclusive(&self, path: &str) -> VfsResult<()> { crate::vfs::create_dir_exclusive(&self.inner, path) }
-    fn directory_identity(&self, path: &str) -> VfsResult<Option<String>> { crate::vfs::directory_identity(&self.inner, path) }
-    fn file_identity(&self, path: &str) -> VfsResult<Option<String>> { crate::vfs::file_identity(&self.inner, path) }
+    fn directory_reservation_supported(&self, root: &str) -> bool {
+        crate::vfs::directory_reservation_supported(&self.inner, root)
+    }
+    fn create_dir_exclusive(&self, path: &str) -> VfsResult<()> {
+        crate::vfs::create_dir_exclusive(&self.inner, path)
+    }
+    fn directory_identity(&self, path: &str) -> VfsResult<Option<String>> {
+        crate::vfs::directory_identity(&self.inner, path)
+    }
+    fn file_identity(&self, path: &str) -> VfsResult<Option<String>> {
+        crate::vfs::file_identity(&self.inner, path)
+    }
 }

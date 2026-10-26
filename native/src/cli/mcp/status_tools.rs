@@ -10,7 +10,9 @@ use serde_json::{json, Value};
 pub(super) fn status(session: &Session) -> Result<CallToolResult, String> {
     let runtime = crate::mcp_launcher::status_value();
     if runtime["state"] == "update_in_progress" || runtime["state"] == "update_recovery_required" {
-        return Ok(response::ok(json!({"mcp":{"runtime":runtime,"session_directory":session.directory,"jobs":session.jobs.list().iter().map(|job|job.summary_value()).collect::<Vec<_>>()}})));
+        return Ok(response::ok(
+            json!({"mcp":{"runtime":runtime,"session_directory":session.directory,"jobs":session.jobs.list().iter().map(|job|job.summary_value()).collect::<Vec<_>>()}}),
+        ));
     }
     let _operation = crate::mcp_launcher::operation()?;
     session.negotiate_runtime()?;

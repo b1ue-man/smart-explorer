@@ -29,7 +29,9 @@ pub(crate) const SCREEN_CAPABILITY: &str = "screen";
 /// Largest display side a viewer may announce: the largest texture side of
 /// current GPUs.
 pub(crate) const MAX_DISPLAY_SIDE: u32 = 16_384;
-fn is_false(value:&bool)->bool {!*value}
+fn is_false(value: &bool) -> bool {
+    !*value
+}
 
 /// Limits a host names in `HELLO_OK` (SCR-M8).
 #[allow(dead_code)] // Staged: the Android host of SCR-M8 names them.
@@ -198,10 +200,17 @@ impl ScreenClientHello {
                 return Err(invalid("screen display size is outside 1..=16384"));
             }
         }
-        if let Some(caps) = self.frame_capabilities { caps.validate()?; }
-        if self.metadata_only && (self.mode != SessionMode::View || (self.icon_version != Some(super::app_icon::ICON_VERSION)
-            && self.family_version != Some(super::family_protocol::FAMILY_PROTOCOL))) {
-            return Err(invalid("metadata requires the negotiated icon contract and view permission"));
+        if let Some(caps) = self.frame_capabilities {
+            caps.validate()?;
+        }
+        if self.metadata_only
+            && (self.mode != SessionMode::View
+                || (self.icon_version != Some(super::app_icon::ICON_VERSION)
+                    && self.family_version != Some(super::family_protocol::FAMILY_PROTOCOL)))
+        {
+            return Err(invalid(
+                "metadata requires the negotiated icon contract and view permission",
+            ));
         }
         if self.max_fps == 0 {
             return Err(invalid("screen frame rate must be at least 1"));
@@ -266,7 +275,9 @@ pub(crate) struct ScreenHelloOk {
 
 impl ScreenHelloOk {
     pub(crate) fn validate(&self) -> io::Result<()> {
-        if let Some(contract) = self.frame_contract { contract.validate()?; }
+        if let Some(contract) = self.frame_contract {
+            contract.validate()?;
+        }
         if self.encoders.len() > MAX_CODEC_OFFERS {
             return Err(invalid("screen hello lists more than 32 encoders"));
         }

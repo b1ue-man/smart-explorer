@@ -95,12 +95,20 @@ pub(super) unsafe extern "system" fn get_disk_free_space(
                 .into());
             }
             let (mut available, mut local_total, mut local_free) = (0, 0, 0);
-            if GetDiskFreeSpaceExW(context.cache_root_wide.as_ptr(), &mut available,
-                &mut local_total, &mut local_free) == 0 {
+            if GetDiskFreeSpaceExW(
+                context.cache_root_wide.as_ptr(),
+                &mut available,
+                &mut local_total,
+                &mut local_free,
+            ) == 0
+            {
                 return Err(win32(GetLastError()));
             }
             let budget = context.filesystem.cache_capacity_budget(available);
-            let capacity = crate::mount::MountCapacity::from_budget(context.filesystem.capacity_snapshot(), budget);
+            let capacity = crate::mount::MountCapacity::from_budget(
+                context.filesystem.capacity_snapshot(),
+                budget,
+            );
             *free_for_caller = capacity.available_bytes;
             *total_bytes = capacity.total_bytes;
             *total_free = capacity.available_bytes;
@@ -128,12 +136,17 @@ pub(super) unsafe extern "system" fn get_volume_information(
             };
             let cache_label;
             let snapshot = context.filesystem.capacity_snapshot();
-            let label = if !matches!(snapshot.state,
-                crate::vfs::CapacityState::ProviderKnown | crate::vfs::CapacityState::AccountQuota)
-                || snapshot.total_bytes.is_none() || snapshot.available_bytes.is_none() {
+            let label = if !matches!(
+                snapshot.state,
+                crate::vfs::CapacityState::ProviderKnown | crate::vfs::CapacityState::AccountQuota
+            ) || snapshot.total_bytes.is_none()
+                || snapshot.available_bytes.is_none()
+            {
                 cache_label = format!("Cache – {}", label);
                 &cache_label
-            } else { label };
+            } else {
+                label
+            };
             write_wide(volume_name, volume_name_size, label, Some(32))
                 .map_err(|_| insufficient_buffer())?;
             write_wide(file_system_name, file_system_name_size, "SmartEx", None)

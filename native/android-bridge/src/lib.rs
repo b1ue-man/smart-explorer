@@ -17,14 +17,14 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 // SCR-M8: pictures and control messages of this phone as screen host.
-mod screen_jni;
-mod screen_capture_jni;
 #[cfg(feature = "android-instrumentation-fixtures")]
 mod android_image_fixture_jni;
-mod login_jni;
 mod login_bitmap_jni;
 mod login_bitmap_owner;
 mod login_bitmap_pixels;
+mod login_jni;
+mod screen_capture_jni;
+mod screen_jni;
 // DRV-M8: proxy file descriptors of the documents provider.
 mod io;
 

@@ -1,14 +1,14 @@
 //! Readable authority per exact relationship. Reachable alternatives retain
 //! their source and conditions; this view is never an authorization union.
-use std::collections::BTreeMap;
-use serde::{Deserialize, Serialize};
+use crate::share::access_authorize::principal_grant;
 use crate::share::access_constraints::AccessConstraints;
 use crate::share::access_grant::{AccessGrant, AccountProfile, Capability, CapabilityDecision};
-use crate::share::access_authorize::principal_grant;
 use crate::share::exec_policy::ExecGrant;
 use crate::share::fs::ShareExportConfig;
 use crate::share::relation_proof::ProvenPrincipal;
 use crate::share::types::{DirectGrantState, ExecGrantTarget, ShareAuthState};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccessGrantView {
@@ -25,14 +25,18 @@ pub struct AccessGrantView {
     #[serde(default)]
     pub legacy_reader_disables_grant: bool,
 }
-fn legacy_version() -> u64 { 1 }
+fn legacy_version() -> u64 {
+    1
+}
 impl AccessGrantView {
     pub fn new(grant: &AccessGrant, own_label: &str, now: i64) -> Self {
         Self {
             account: grant.account.clone(),
             account_label: grant.account.label(own_label),
-            capabilities: grant.capabilities()
-                .filter(|(capability, decision)| capability.is_exec() || decision.is_on()).collect(),
+            capabilities: grant
+                .capabilities()
+                .filter(|(capability, decision)| capability.is_exec() || decision.is_on())
+                .collect(),
             valid_until: grant.valid_until,
             expired: grant.expired_at(now),
             version: grant.version(),
@@ -86,49 +90,82 @@ pub(crate) fn device_access_view(
 ) -> DeviceAccessView {
     let mut view = DeviceAccessView::default();
     for direct in &state.direct_grants {
-        if direct.device_id != device_id || direct.public_key != public_key { continue; }
+        if direct.device_id != device_id || direct.public_key != public_key {
+            continue;
+        }
         let principal = ProvenPrincipal {
-            relation_kind: "direct".into(), relation_id: state.identity.direct_lookup_id.clone(),
-            device_id: direct.device_id.clone(), device_name: direct.device_name.clone(),
-            public_key: direct.public_key.clone(), fingerprint: direct.fingerprint.clone(),
+            relation_kind: "direct".into(),
+            relation_id: state.identity.direct_lookup_id.clone(),
+            device_id: direct.device_id.clone(),
+            device_name: direct.device_name.clone(),
+            public_key: direct.public_key.clone(),
+            fingerprint: direct.fingerprint.clone(),
             node_id: direct.node_id.clone(),
         };
-        let active = direct.state == DirectGrantState::Accepted && principal_grant(state, &principal).is_some();
-        append(&mut view, AccessRelationView {
-            target: ExecGrantTarget::Direct {
-                device_id: direct.device_id.clone(), public_key: direct.public_key.clone(),
-                fingerprint: direct.fingerprint.clone(), node_id: direct.node_id.clone(),
+        let active = direct.state == DirectGrantState::Accepted
+            && principal_grant(state, &principal).is_some();
+        append(
+            &mut view,
+            AccessRelationView {
+                target: ExecGrantTarget::Direct {
+                    device_id: direct.device_id.clone(),
+                    public_key: direct.public_key.clone(),
+                    fingerprint: direct.fingerprint.clone(),
+                    node_id: direct.node_id.clone(),
+                },
+                relation_kind: "direct".into(),
+                relation_id: state.identity.direct_lookup_id.clone(),
+                relation_name: "Direkt".into(),
+                active,
+                policy_revision: direct.exec.policy_revision,
+                changed_at: direct.exec.changed_at,
+                grant: AccessGrantView::new(&direct.exec.access_grant(), own_label, now),
+                programs: direct.exec.programs.clone(),
+                exports: state.default_direct_exports.clone(),
+                may_write: direct.write,
             },
-            relation_kind: "direct".into(), relation_id: state.identity.direct_lookup_id.clone(),
-            relation_name: "Direkt".into(), active,
-            policy_revision: direct.exec.policy_revision, changed_at: direct.exec.changed_at,
-            grant: AccessGrantView::new(&direct.exec.access_grant(), own_label, now),
-            programs: direct.exec.programs.clone(), exports: state.default_direct_exports.clone(),
-            may_write: direct.write,
-        }, &direct.exec, now);
+            &direct.exec,
+            now,
+        );
     }
     for room in &state.rooms {
         for member in &room.members {
-            if member.device_id != device_id || member.public_key != public_key { continue; }
+            if member.device_id != device_id || member.public_key != public_key {
+                continue;
+            }
             let principal = ProvenPrincipal {
-                relation_kind: "room".into(), relation_id: room.room_id.clone(),
-                device_id: member.device_id.clone(), device_name: member.device_name.clone(),
-                public_key: member.public_key.clone(), fingerprint: member.fingerprint.clone(),
+                relation_kind: "room".into(),
+                relation_id: room.room_id.clone(),
+                device_id: member.device_id.clone(),
+                device_name: member.device_name.clone(),
+                public_key: member.public_key.clone(),
+                fingerprint: member.fingerprint.clone(),
                 node_id: member.node_id.clone(),
             };
-            append(&mut view, AccessRelationView {
-                target: ExecGrantTarget::RoomMember {
-                    room_id: room.room_id.clone(), device_id: member.device_id.clone(),
-                    public_key: member.public_key.clone(), fingerprint: member.fingerprint.clone(),
-                    node_id: member.node_id.clone(),
+            append(
+                &mut view,
+                AccessRelationView {
+                    target: ExecGrantTarget::RoomMember {
+                        room_id: room.room_id.clone(),
+                        device_id: member.device_id.clone(),
+                        public_key: member.public_key.clone(),
+                        fingerprint: member.fingerprint.clone(),
+                        node_id: member.node_id.clone(),
+                    },
+                    relation_kind: "room".into(),
+                    relation_id: room.room_id.clone(),
+                    relation_name: room.name.clone(),
+                    active: principal_grant(state, &principal).is_some(),
+                    policy_revision: member.exec.policy_revision,
+                    changed_at: member.exec.changed_at,
+                    grant: AccessGrantView::new(&member.exec.access_grant(), own_label, now),
+                    programs: member.exec.programs.clone(),
+                    exports: room.exports.clone(),
+                    may_write: room.policy.members_may_write,
                 },
-                relation_kind: "room".into(), relation_id: room.room_id.clone(),
-                relation_name: room.name.clone(), active: principal_grant(state, &principal).is_some(),
-                policy_revision: member.exec.policy_revision, changed_at: member.exec.changed_at,
-                grant: AccessGrantView::new(&member.exec.access_grant(), own_label, now),
-                programs: member.exec.programs.clone(), exports: room.exports.clone(),
-                may_write: room.policy.members_may_write,
-            }, &member.exec, now);
+                &member.exec,
+                now,
+            );
         }
     }
     view
@@ -140,8 +177,12 @@ fn append(view: &mut DeviceAccessView, relation: AccessRelationView, policy: &Ex
             decision.is_on() && access.constraints.available_at(*capability, now)
         }) {
             view.reachable.push(ReachableAccess {
-                capability, source: relation.target.clone(), decision, account: access.account.clone(),
-                programs: policy.programs.clone(), valid_until: access.valid_until,
+                capability,
+                source: relation.target.clone(),
+                decision,
+                account: access.account.clone(),
+                programs: policy.programs.clone(),
+                valid_until: access.valid_until,
                 constraints: access.constraints.clone(),
             });
         }
@@ -152,9 +193,18 @@ fn append(view: &mut DeviceAccessView, relation: AccessRelationView, policy: &Ex
 impl crate::share::ShareService {
     /// Authoritative worker snapshot, rather than a UI-side union of profiles.
     pub(crate) fn device_access_view(
-        &self, device_id: &str, public_key: &str, own_label: &str, now: i64,
+        &self,
+        device_id: &str,
+        public_key: &str,
+        own_label: &str,
+        now: i64,
     ) -> Result<DeviceAccessView, String> {
-        let state = self.auth.lock().map_err(|_| "Share authorization state is locked".to_string())?;
-        Ok(device_access_view(&state, device_id, public_key, own_label, now))
+        let state = self
+            .auth
+            .lock()
+            .map_err(|_| "Share authorization state is locked".to_string())?;
+        Ok(device_access_view(
+            &state, device_id, public_key, own_label, now,
+        ))
     }
 }

@@ -42,19 +42,24 @@ impl App {
             .id_salt("settings_update_source_v2")
             .show(ui, |ui| {
                 let update_payload = update_payload_name();
-                let mut form = crate::app::settings_form::Form::new(ui, "update_source_form", &["Updatequelle"]);
+                let mut form = crate::app::settings_form::Form::new(
+                    ui,
+                    "update_source_form",
+                    &["Updatequelle"],
+                );
                 form.row_labelled(ui, "Updatequelle", |ui, field_label| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.update_feed_draft)
-                        .hint_text("Feed-Ordner oder Git/HTTPS-URL…")
-                        .desired_width(f32::INFINITY),
-                ).labelled_by(field_label)
-                .on_hover_text(format!(
-                    "Quelle mit version.txt und {update_payload}. Entweder ein Ordner \
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.update_feed_draft)
+                            .hint_text("Feed-Ordner oder Git/HTTPS-URL…")
+                            .desired_width(f32::INFINITY),
+                    )
+                    .labelled_by(field_label)
+                    .on_hover_text(format!(
+                        "Quelle mit version.txt und {update_payload}. Entweder ein Ordner \
              (lokal/Netzlaufwerk) ODER eine https-URL bzw. ein GitHub-Repo-Link \
              (z. B. https://github.com/b1ue-man/smart-explorer) — dann updatet \
              sich die App direkt aus dem Git. Beim Start wird automatisch geprüft."
-                ));
+                    ));
                 });
                 ui.horizontal(|ui| {
                     if ui.small_button("Speichern").clicked() {

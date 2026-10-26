@@ -78,7 +78,6 @@ pub(crate) fn wait_for_pid_exit(pid: u32, timeout: Duration) -> Result<(), Strin
 }
 
 fn request_daemon_stop_marker() {
-
     let sync = appdata_dir().join("sync");
     let _ = std::fs::create_dir_all(&sync);
     let _ = std::fs::write(sync.join("daemon.stop"), "stop");
@@ -111,8 +110,12 @@ pub(crate) fn target_is_running(_target: &Path) -> Result<bool, StopTargetError>
 #[cfg(target_os = "linux")]
 pub(crate) fn stop_target_processes_for_update(target: &Path) -> Result<(), StopTargetError> {
     let marker = appdata_dir().join("sync/daemon.stop");
-    let owned = target.parent().is_some_and(|root| smart_explorer::mcp_launcher::stop_marker_is_owned(root, &marker).unwrap_or(false));
-    if !owned { request_daemon_stop_marker(); }
+    let owned = target.parent().is_some_and(|root| {
+        smart_explorer::mcp_launcher::stop_marker_is_owned(root, &marker).unwrap_or(false)
+    });
+    if !owned {
+        request_daemon_stop_marker();
+    }
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     loop {
         let running = linux_target_pids(target)?;
@@ -182,8 +185,12 @@ pub(crate) fn stop_target_processes_for_update(_target: &Path) -> Result<(), Sto
 #[cfg(windows)]
 pub(crate) fn stop_target_processes_for_update(target: &Path) -> Result<(), StopTargetError> {
     let marker = appdata_dir().join("sync/daemon.stop");
-    let owned = target.parent().is_some_and(|root| smart_explorer::mcp_launcher::stop_marker_is_owned(root, &marker).unwrap_or(false));
-    if !owned { request_daemon_stop_marker(); }
+    let owned = target.parent().is_some_and(|root| {
+        smart_explorer::mcp_launcher::stop_marker_is_owned(root, &marker).unwrap_or(false)
+    });
+    if !owned {
+        request_daemon_stop_marker();
+    }
     std::thread::sleep(Duration::from_millis(500));
 
     let natural_deadline = std::time::Instant::now() + Duration::from_secs(30);

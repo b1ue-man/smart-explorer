@@ -23,23 +23,43 @@ impl StreamIdentity {
         stream_id: Option<String>,
         logical_size: Option<(i32, i32)>,
     ) -> Self {
-        Self { node_id, serial, session, stream_id, logical_size, state: AtomicU8::new(0), latest: Mutex::new(None) }
+        Self {
+            node_id,
+            serial,
+            session,
+            stream_id,
+            logical_size,
+            state: AtomicU8::new(0),
+            latest: Mutex::new(None),
+        }
     }
 
-    pub(crate) fn connected(&self) -> bool { self.state.load(Ordering::Acquire) == 1 }
+    pub(crate) fn connected(&self) -> bool {
+        self.state.load(Ordering::Acquire) == 1
+    }
 
-    pub(crate) fn expired(&self) -> bool { self.state.load(Ordering::Acquire) == 2 }
+    pub(crate) fn expired(&self) -> bool {
+        self.state.load(Ordering::Acquire) == 2
+    }
 
     pub(crate) fn invalidate(&self) {
         self.state.store(2, Ordering::Release);
-        if let Some(latest) = self.latest.lock().unwrap_or_else(PoisonError::into_inner).as_ref().and_then(Weak::upgrade) {
+        if let Some(latest) = self
+            .latest
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .and_then(Weak::upgrade)
+        {
             latest.fail("portal_source_expired: choose the source again".into());
         }
     }
 
     pub(super) fn attach(&self, latest: Weak<super::LatestFrame>) {
         *self.latest.lock().unwrap_or_else(PoisonError::into_inner) = Some(latest);
-        if self.expired() { self.invalidate(); }
+        if self.expired() {
+            self.invalidate();
+        }
     }
 
     /// PAUSED is a connected, deliberately inactive stream, not a lost source.
@@ -47,7 +67,9 @@ impl StreamIdentity {
         if new < 0 || (new == 0 && old != 0) {
             self.invalidate();
         } else if new >= 2 {
-            let _ = self.state.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire);
+            let _ = self
+                .state
+                .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire);
         }
     }
 
@@ -57,7 +79,10 @@ impl StreamIdentity {
 
     pub(super) fn target(&self) -> (u32, Option<String>) {
         match self.serial {
-            Some(serial) => (super::super::pipewire_abi::PW_ID_ANY, Some(serial.to_string())),
+            Some(serial) => (
+                super::super::pipewire_abi::PW_ID_ANY,
+                Some(serial.to_string()),
+            ),
             None => (self.node_id, None),
         }
     }
@@ -70,8 +95,13 @@ mod tests {
 
     #[test]
     fn batches_task_p4d_portal_identity_expires_permanently_on_disconnect() {
-        let first = Arc::new(StreamIdentity::new(42, Some(u64::MAX), "/session/first".into(),
-            Some("selected-window".into()), Some((960, 540))));
+        let first = Arc::new(StreamIdentity::new(
+            42,
+            Some(u64::MAX),
+            "/session/first".into(),
+            Some("selected-window".into()),
+            Some((960, 540)),
+        ));
         let latest = Arc::new(super::super::LatestFrame::default());
         first.attach(Arc::downgrade(&latest));
         assert!(!first.belongs_to("/session/first"));

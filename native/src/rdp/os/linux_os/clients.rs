@@ -1,18 +1,31 @@
-use crate::rdp::core::{CertificatePolicy, ClientCapability, ClientKind, HostService, StartRequest};
-use crate::rdp::os::shared::process::{capture,find_tool};
-use std::{net::SocketAddr,path::PathBuf,process::{Command,Stdio}};
+use crate::rdp::core::{
+    CertificatePolicy, ClientCapability, ClientKind, HostService, StartRequest,
+};
 use crate::rdp::os::shared::clients::ClientProcess;
+use crate::rdp::os::shared::process::{capture, find_tool};
 use std::io::IsTerminal;
+use std::{
+    net::SocketAddr,
+    path::PathBuf,
+    process::{Command, Stdio},
+};
 fn executable(id: &str) -> Option<PathBuf> {
-    match id { "xfreerdp3" => find_tool(&["xfreerdp3", "xfreerdp"]),
-        "wlfreerdp3" => find_tool(&["wlfreerdp3", "wlfreerdp"]), _ => None }
+    match id {
+        "xfreerdp3" => find_tool(&["xfreerdp3", "xfreerdp"]),
+        "wlfreerdp3" => find_tool(&["wlfreerdp3", "wlfreerdp"]),
+        _ => None,
+    }
 }
 fn version(path: &std::path::Path) -> Option<String> {
     let version = capture(path, &["/version"]).ok()?;
     // Restrict the adapter to the reviewed command-line major; the actual
     // binary's help must also advertise the options used below.
-    if !version.split(|c: char| !c.is_ascii_alphanumeric() && c != '.')
-        .any(|word| word.starts_with("3.")) { return None; }
+    if !version
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '.')
+        .any(|word| word.starts_with("3."))
+    {
+        return None;
+    }
     let help = capture(path, &["/help"]).ok()?;
     if !help.contains("fingerprint:") || !help.contains("program:") || !help.contains("deny") {
         return None;
@@ -41,19 +54,38 @@ pub(crate) fn inventory() -> Vec<ClientCapability> {
             detail })
     }).collect()
 }
-pub(crate) fn launch(request: &StartRequest, service: &HostService, listener: SocketAddr) -> Result<ClientProcess, String> {
-    let certificate = service.certificate_sha256.as_ref()
+pub(crate) fn launch(
+    request: &StartRequest,
+    service: &HostService,
+    listener: SocketAddr,
+) -> Result<ClientProcess, String> {
+    let certificate = service
+        .certificate_sha256
+        .as_ref()
         .ok_or_else(|| "Host certificate fingerprint is unavailable".to_string())?;
     let executable = executable(&request.client_id)
         .ok_or_else(|| "FreeRDP executable is unavailable".to_string())?;
     super::client_trust::verify(&executable)?;
     let mut command = Command::new(executable);
-    command.arg(format!("/v:{listener}"))
-        .arg(format!("/cert:deny,fingerprint:sha256:{}", certificate.as_str()))
+    command
+        .arg(format!("/v:{listener}"))
+        .arg(format!(
+            "/cert:deny,fingerprint:sha256:{}",
+            certificate.as_str()
+        ))
         .arg("/sec:rdp:off"); // preserve TLS/NLA; forbid classic unauthenticated RDP security.
-    if let Some(alias) = &request.remote_app { command.arg(format!("/app:program:||{alias}")); }
-    let child = command.stdin(Stdio::inherit()).stdout(Stdio::inherit()).stderr(Stdio::inherit()).spawn()
+    if let Some(alias) = &request.remote_app {
+        command.arg(format!("/app:program:||{alias}"));
+    }
+    let child = command
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
         .map_err(|e| format!("Cannot start installed FreeRDP client: {e}"))?;
-    Ok(ClientProcess { child, resources:Box::new(()) })
+    Ok(ClientProcess {
+        child,
+        resources: Box::new(()),
+    })
 }
 pub(crate) fn hide_probe_console(_: &mut Command) {}

@@ -19,11 +19,18 @@ pub(super) fn is_retryable_read(request: &FsRequest) -> bool {
 mod reservation_compatibility_tests {
     use super::*;
     #[test]
-    fn batches_task_transfer_compat_reserved_share_rename_accepts_only_unit_reply_and_never_read_retries() {
-        let request = FsRequest::RenameReservedDirectory { src: "/owned".into(), dst: "/final".into() };
+    fn batches_task_transfer_compat_reserved_share_rename_accepts_only_unit_reply_and_never_read_retries(
+    ) {
+        let request = FsRequest::RenameReservedDirectory {
+            src: "/owned".into(),
+            dst: "/final".into(),
+        };
         assert!(!is_retryable_read(&request));
         assert!(response_matches(&request, &FsResponse::Ok));
-        assert!(!response_matches(&request, &FsResponse::DirectoryReservationSupported { supported: true }));
+        assert!(!response_matches(
+            &request,
+            &FsResponse::DirectoryReservationSupported { supported: true }
+        ));
     }
 }
 
@@ -32,8 +39,12 @@ pub(super) fn response_matches(request: &FsRequest, response: &FsResponse) -> bo
         return true;
     }
     match request {
-        FsRequest::DirectoryReservationSupported { .. } => matches!(response, FsResponse::DirectoryReservationSupported { .. }),
-        FsRequest::DirectoryIdentity { .. } => matches!(response, FsResponse::DirectoryIdentity { .. }),
+        FsRequest::DirectoryReservationSupported { .. } => {
+            matches!(response, FsResponse::DirectoryReservationSupported { .. })
+        }
+        FsRequest::DirectoryIdentity { .. } => {
+            matches!(response, FsResponse::DirectoryIdentity { .. })
+        }
         FsRequest::FileIdentity { .. } => matches!(response, FsResponse::FileIdentity { .. }),
         FsRequest::Capacity { .. } => matches!(response, FsResponse::Capacity { .. }),
         FsRequest::Capabilities { .. } => matches!(response, FsResponse::Capabilities { .. }),

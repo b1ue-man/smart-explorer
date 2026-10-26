@@ -11,9 +11,19 @@ pub struct GenerationChild {
     pub(in crate::mcp_launcher) _lifecycle: Option<std::fs::File>,
 }
 impl GenerationChild {
-    pub fn id(&self) -> u32 { self.process.id() }
-    pub fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>> { self.process.try_wait() }
-    pub fn wait(&mut self) -> std::io::Result<ExitStatus> { self.process.wait() }
-    pub fn kill(&mut self) -> std::io::Result<()> { self.process.kill() }
-    pub fn request_stop(&self) -> bool { super::os::request_stop(self.id()) }
+    pub fn id(&self) -> u32 {
+        self.process.id()
+    }
+    pub fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>> {
+        self.process.try_wait()
+    }
+    pub fn wait(&mut self) -> std::io::Result<ExitStatus> {
+        self.process.wait()
+    }
+    pub fn kill(&mut self) -> std::io::Result<()> {
+        self.process.kill()
+    }
+    pub fn request_stop(&self) -> bool {
+        super::os::request_stop(self.id())
+    }
 }

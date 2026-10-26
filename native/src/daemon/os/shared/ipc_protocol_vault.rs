@@ -80,9 +80,17 @@ pub(crate) enum VaultIpcRequest {
     /// Every entered site with its state and the newest events (C7.1 T1;
     /// se Desktop polls it, S5 H5).
     Status,
-    MountPolicy { site: String },
-    SetRootTrust { site: String, trusted: bool },
-    SetCleartextCopyPolicy { site: String, always: bool },
+    MountPolicy {
+        site: String,
+    },
+    SetRootTrust {
+        site: String,
+        trusted: bool,
+    },
+    SetCleartextCopyPolicy {
+        site: String,
+        always: bool,
+    },
     /// Unlock with a password (T6); `remember` stores or forgets it (T11).
     Unlock {
         site: String,
@@ -91,7 +99,9 @@ pub(crate) enum VaultIpcRequest {
         remember: Option<bool>,
     },
     /// Unlock with the remembered password (`--saved-password`).
-    UnlockSaved { site: String },
+    UnlockSaved {
+        site: String,
+    },
     /// Lock one site or, without `site`, all (T7).
     Lock {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -101,7 +111,9 @@ pub(crate) enum VaultIpcRequest {
     },
     /// The cleartext view of an unlocked site: after `Opened` the connection
     /// carries the agent protocol (T8).
-    Open { site: String },
+    Open {
+        site: String,
+    },
     /// Seal cleartext items (protocol fields, local data) for `site`.
     Seal {
         site: String,
@@ -117,7 +129,9 @@ pub(crate) enum VaultIpcRequest {
     /// VLT-M12 (C3.6, contract V1): the spool key of a vault drive, asked by
     /// its drive host with the host's session token instead of the daemon
     /// token; never the masterkey.
-    SpoolKey { mount_id: String },
+    SpoolKey {
+        mount_id: String,
+    },
     /// VLT-M8 (C6): compares the vault job `job` (ID, name or ID prefix).
     /// `groups` are group keys; empty: every group but `structure`. The
     /// answer is the head; the entries stay in the worker and come with
@@ -136,7 +150,10 @@ pub(crate) enum VaultIpcRequest {
         offset: u64,
     },
     /// The two versions of a text conflict, for the merge view (T20).
-    CompareText { job: String, item: String },
+    CompareText {
+        job: String,
+        item: String,
+    },
     /// One action on one entry, or with `all` the collective action
     /// (`keep-a`, `keep-b`) on every conflict with two files (T19).
     /// `confirmed`: the user answered the question the action asks.
@@ -157,7 +174,9 @@ pub(crate) enum VaultIpcRequest {
         content: SecretText,
     },
     /// „Tresor prüfen“ for one site (T21).
-    Check { site: String },
+    Check {
+        site: String,
+    },
 }
 
 impl VaultIpcRequest {
@@ -165,7 +184,10 @@ impl VaultIpcRequest {
     /// drive restore (S2 K7): the read-only status of se Desktop does not,
     /// nor does the key request of a drive host the worker started itself.
     pub(crate) fn promotes_daemon(&self) -> bool {
-        !matches!(self, Self::Status | Self::MountPolicy { .. } | Self::SpoolKey { .. })
+        !matches!(
+            self,
+            Self::Status | Self::MountPolicy { .. } | Self::SpoolKey { .. }
+        )
     }
 }
 
@@ -175,7 +197,9 @@ impl VaultIpcRequest {
 pub(crate) enum VaultIpcReply {
     Status(VaultStatusView),
     MountPolicy(crate::vault::MountPolicy),
-    PolicySaved { site: String },
+    PolicySaved {
+        site: String,
+    },
     Unlocked {
         site: String,
         epoch: u64,

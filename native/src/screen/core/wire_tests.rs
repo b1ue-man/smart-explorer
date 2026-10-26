@@ -236,7 +236,7 @@ fn app_entry() -> AppEntry {
 
 fn video_header() -> GopHeader {
     GopHeader {
-            family_layout_revision: None,
+        family_layout_revision: None,
         frame_contract: None,
         gop_id: 0x0102_0304_0506_0708,
         kind: StreamKind::Video,
@@ -248,7 +248,7 @@ fn video_header() -> GopHeader {
 
 fn tiles_header() -> GopHeader {
     GopHeader {
-            family_layout_revision: None,
+        family_layout_revision: None,
         frame_contract: None,
         gop_id: 9,
         kind: StreamKind::Preview,

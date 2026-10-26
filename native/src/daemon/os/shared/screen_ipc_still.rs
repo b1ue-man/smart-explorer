@@ -16,8 +16,11 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 use super::ipc_protocol::screen::{RelayEnd, StreamRequest};
-use super::screen_ipc_client::{screen_stream, screen_metadata_stream, screen_metadata_stream_for_node, StreamControl, StreamEvent};
-use crate::screen::core::app_icon::{IconRequest,IconReply};
+use super::screen_ipc_client::{
+    screen_metadata_stream, screen_metadata_stream_for_node, screen_stream, StreamControl,
+    StreamEvent,
+};
+use crate::screen::core::app_icon::{IconReply, IconRequest};
 use crate::screen::core::negotiate::CodecOffer;
 use crate::screen::core::pixel_convert::{BgraImage, FrameSize};
 use crate::screen::core::snapshot::decode_snapshot_with_limits;
@@ -55,12 +58,20 @@ struct Relayed {
 }
 
 impl Relayed {
-    fn open(target: PeerOpenTarget, source: Option<SourceId>, metadata: bool) -> Result<Self, String> {
+    fn open(
+        target: PeerOpenTarget,
+        source: Option<SourceId>,
+        metadata: bool,
+    ) -> Result<Self, String> {
         Self::open_for_node(target, source, metadata, None)
     }
 
-    fn open_for_node(target: PeerOpenTarget, source: Option<SourceId>, metadata: bool,
-        expected_node: Option<&str>) -> Result<Self, String> {
+    fn open_for_node(
+        target: PeerOpenTarget,
+        source: Option<SourceId>,
+        metadata: bool,
+        expected_node: Option<&str>,
+    ) -> Result<Self, String> {
         let request = StreamRequest {
             expected_node: expected_node.map(str::to_owned),
             mode: SessionMode::View,
@@ -75,7 +86,9 @@ impl Relayed {
                 Some(expected) => screen_metadata_stream_for_node(target, expected)?,
                 None => screen_metadata_stream(target)?,
             }
-        } else {screen_stream(target, request)?};
+        } else {
+            screen_stream(target, request)?
+        };
         let control = stream.control();
         let (sender, events) = mpsc::sync_channel(1);
         std::thread::Builder::new()
@@ -280,8 +293,12 @@ fn snapshot_over(
         }
     };
     session.close();
-    let limits = header.frame_contract.map_or(crate::screen::core::frame_budget::FrameLimits::LEGACY, |contract| contract.limits);
-    let image = decode_snapshot_with_limits(&records, header.size, limits).map_err(|error| error.to_string())?;
+    let limits = header.frame_contract.map_or(
+        crate::screen::core::frame_budget::FrameLimits::LEGACY,
+        |contract| contract.limits,
+    );
+    let image = decode_snapshot_with_limits(&records, header.size, limits)
+        .map_err(|error| error.to_string())?;
     let source = source.map_or_else(|| primary_source(&hello), |source| source.to_string());
     Ok(StillImage { image, source })
 }
@@ -345,22 +362,29 @@ mod families;
 pub(crate) use families::{screen_families, screen_families_for_node};
 
 /// A current authorized list target's PNG; unavailable or older peers return None.
-pub(crate) fn screen_icon(target: PeerOpenTarget, request: IconRequest) -> Result<Option<IconReply>,String> {
-    request.validate().map_err(|error|error.to_string())?;
-    let mut session=Relayed::open(target,None,true)?;
-    let hello=accept(&mut session,Some(READ_TIMEOUT),&mut |_|{})?;
-    if hello.icon_version!=Some(crate::screen::core::app_icon::ICON_VERSION) {return Ok(None);}
-    session.send(&ViewerFrame::IconRequest(request.clone())).map_err(|error|error.to_string())?;
-    let deadline=Instant::now()+READ_TIMEOUT;
+pub(crate) fn screen_icon(
+    target: PeerOpenTarget,
+    request: IconRequest,
+) -> Result<Option<IconReply>, String> {
+    request.validate().map_err(|error| error.to_string())?;
+    let mut session = Relayed::open(target, None, true)?;
+    let hello = accept(&mut session, Some(READ_TIMEOUT), &mut |_| {})?;
+    if hello.icon_version != Some(crate::screen::core::app_icon::ICON_VERSION) {
+        return Ok(None);
+    }
+    session
+        .send(&ViewerFrame::IconRequest(request.clone()))
+        .map_err(|error| error.to_string())?;
+    let deadline = Instant::now() + READ_TIMEOUT;
     loop {
-        match event_before(&mut session,deadline)? {
-            StreamEvent::Host(HostFrame::IconReply(response)) if response.request==request=>{
-                response.validate().map_err(|error|error.to_string())?;
+        match event_before(&mut session, deadline)? {
+            StreamEvent::Host(HostFrame::IconReply(response)) if response.request == request => {
+                response.validate().map_err(|error| error.to_string())?;
                 return Ok(response.content);
             }
-            StreamEvent::Host(HostFrame::Error(error))=>return Err(error_text(&error)),
-            StreamEvent::End(end)=>return Err(end_text(&end)),
-            _=>{}
+            StreamEvent::Host(HostFrame::Error(error)) => return Err(error_text(&error)),
+            StreamEvent::End(end) => return Err(end_text(&end)),
+            _ => {}
         }
     }
 }

@@ -217,8 +217,10 @@ pub(crate) fn rename_no_replace(source: &Path, destination: &Path) -> io::Result
     // dependency on the application's android_fs module for this ladder.
     let source_path = Path::new(std::ffi::OsStr::from_bytes(source.as_bytes()));
     if std::fs::symlink_metadata(source_path)?.is_dir() {
-        return Err(io::Error::new(io::ErrorKind::Unsupported,
-            "Atomic directory rename requires filesystem RENAME_NOREPLACE support"));
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Atomic directory rename requires filesystem RENAME_NOREPLACE support",
+        ));
     }
     let destination_path = Path::new(std::ffi::OsStr::from_bytes(destination.as_bytes()));
     hard_link_no_replace(source_path, destination_path)

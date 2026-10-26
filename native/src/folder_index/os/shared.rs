@@ -27,15 +27,24 @@ impl FolderIndex {
         Self::build_async_excluding(roots, persist_path, tx, cancel, Vec::new())
     }
 
-    pub(crate) fn save_with_cancel(&self, path: &std::path::Path, cancel: &AtomicBool) -> io::Result<bool> {
+    pub(crate) fn save_with_cancel(
+        &self,
+        path: &std::path::Path,
+        cancel: &AtomicBool,
+    ) -> io::Result<bool> {
         self.save_cancellable(path, || cancel.load(Ordering::Acquire))
             .map(|outcome| matches!(outcome, persistence::SaveOutcome::Saved))
     }
 
     /// Certified immutable subtrees are merged by the caller after this walk;
     /// exclude them also when reached through an enclosing root such as `/`.
-    pub(crate) fn build_async_excluding(roots: Vec<PathBuf>, persist_path: PathBuf,
-        tx: Sender<IndexMsg>, cancel: Arc<AtomicBool>, excluded: Vec<PathBuf>) -> io::Result<()> {
+    pub(crate) fn build_async_excluding(
+        roots: Vec<PathBuf>,
+        persist_path: PathBuf,
+        tx: Sender<IndexMsg>,
+        cancel: Arc<AtomicBool>,
+        excluded: Vec<PathBuf>,
+    ) -> io::Result<()> {
         std::thread::Builder::new()
             .name("index-builder".into())
             .spawn(move || run_builder(roots, persist_path, tx, cancel, excluded))

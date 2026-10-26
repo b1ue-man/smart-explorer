@@ -60,7 +60,8 @@ pub use super::os::shared::{
 
 pub(crate) fn random_b64(bytes: usize) -> Result<String, String> {
     let mut buf = vec![0u8; bytes];
-    getrandom::getrandom(&mut buf).map_err(|_| "Sichere OAuth-Zufallswerte konnten nicht erzeugt werden".to_string())?;
+    getrandom::getrandom(&mut buf)
+        .map_err(|_| "Sichere OAuth-Zufallswerte konnten nicht erzeugt werden".to_string())?;
     Ok(URL_SAFE_NO_PAD.encode(&buf))
 }
 
@@ -137,8 +138,10 @@ fn url_dec(s: &str) -> String {
     while i < b.len() {
         match b[i] {
             b'%' if i + 2 < b.len() => {
-                let h = std::str::from_utf8(&b[i + 1..i + 3]).ok()
-                    .and_then(|hex| u8::from_str_radix(hex, 16).ok()).unwrap_or(b'%');
+                let h = std::str::from_utf8(&b[i + 1..i + 3])
+                    .ok()
+                    .and_then(|hex| u8::from_str_radix(hex, 16).ok())
+                    .unwrap_or(b'%');
                 out.push(h);
                 i += 3;
             }
@@ -180,7 +183,8 @@ pub fn authorize(p: Provider) -> Result<Tokens, String> {
 
 /// A canceled mobile task must not persist a late browser result.
 pub fn authorize_cancellable(
-    p: Provider, cancelled: &std::sync::atomic::AtomicBool,
+    p: Provider,
+    cancelled: &std::sync::atomic::AtomicBool,
 ) -> Result<Tokens, String> {
     super::os::oauth_flow::authorize(p, cancelled)
 }
@@ -205,7 +209,8 @@ pub(crate) fn refresh_access_with_identity(
 pub(crate) fn refresh_endpoint(p: Provider) -> Result<String, super::AuthError> {
     #[cfg(test)]
     if let Some(url) = sync_reliability_task_refresh_hook::endpoint()
-        .map_err(|_| super::AuthError::new(super::AuthState::StorageError))? {
+        .map_err(|_| super::AuthError::new(super::AuthState::StorageError))?
+    {
         return Ok(url);
     }
     Ok(p.token_url().into())
@@ -215,7 +220,9 @@ pub(crate) fn validate_auth_account(p: Provider, account: &str) -> Result<(), su
     super::os::coordinator::validate_account(p, account)
 }
 
-pub fn auth_status(p: Provider) -> super::AuthStatus { super::os::coordinator::status(p) }
+pub fn auth_status(p: Provider) -> super::AuthStatus {
+    super::os::coordinator::status(p)
+}
 
 pub(crate) fn auth_success_revision(p: Provider) -> Option<i64> {
     super::os::coordinator::success_revision(p)

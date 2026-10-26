@@ -4,7 +4,13 @@ pub(crate) const RDP_PROBE_VERSION: u16 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum HostKind { WindowsWorkstation, WindowsServer, Gnome, Krdp, Xrdp }
+pub(crate) enum HostKind {
+    WindowsWorkstation,
+    WindowsServer,
+    Gnome,
+    Krdp,
+    Xrdp,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -42,22 +48,33 @@ impl SessionMode {
 pub(crate) struct CertificateFingerprint(String);
 impl CertificateFingerprint {
     pub(crate) fn parse(value: &str) -> Result<Self, String> {
-        if value.len() > 95 { return Err("RDP SHA-256 fingerprint exceeds canonical digest length".into()); }
-        let normalized: String = value.chars().filter(|c| *c == ':' || c.is_ascii_hexdigit())
-            .filter(|c| *c != ':').collect();
+        if value.len() > 95 {
+            return Err("RDP SHA-256 fingerprint exceeds canonical digest length".into());
+        }
+        let normalized: String = value
+            .chars()
+            .filter(|c| *c == ':' || c.is_ascii_hexdigit())
+            .filter(|c| *c != ':')
+            .collect();
         if value.chars().any(|c| c != ':' && !c.is_ascii_hexdigit()) || normalized.len() != 64 {
             return Err("RDP certificate fingerprint must be exactly one SHA-256 digest".into());
         }
         Ok(Self(normalized.to_ascii_uppercase()))
     }
-    pub(crate) fn as_str(&self) -> &str { &self.0 }
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 impl TryFrom<String> for CertificateFingerprint {
     type Error = String;
-    fn try_from(value: String) -> Result<Self, String> { Self::parse(&value) }
+    fn try_from(value: String) -> Result<Self, String> {
+        Self::parse(&value)
+    }
 }
 impl From<CertificateFingerprint> for String {
-    fn from(value: CertificateFingerprint) -> Self { value.0 }
+    fn from(value: CertificateFingerprint) -> Self {
+        value.0
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,8 +86,11 @@ pub(crate) struct PublishedApp {
 }
 impl PublishedApp {
     pub(crate) fn valid_alias(alias: &str) -> bool {
-        !alias.is_empty() && alias.len() <= 256
-            && alias.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-' | b'.'))
+        !alias.is_empty()
+            && alias.len() <= 256
+            && alias
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-' | b'.'))
     }
 }
 
@@ -95,12 +115,18 @@ pub(crate) struct HostService {
 }
 impl HostService {
     pub(crate) fn startable(&self) -> Result<(), String> {
-        if let Some(reason) = &self.unavailable_reason { return Err(reason.clone()); }
+        if let Some(reason) = &self.unavailable_reason {
+            return Err(reason.clone());
+        }
         if !self.running || self.port.is_none_or(|port| port == 0) {
             return Err("RDP service has no proved active TCP listener".into());
         }
-        if self.session_mode == SessionMode::Unknown { return Err(self.session_mode.notice().into()); }
-        if self.tls != Some(true) { return Err("TLS support of the RDP service is not proved".into()); }
+        if self.session_mode == SessionMode::Unknown {
+            return Err(self.session_mode.notice().into());
+        }
+        if self.tls != Some(true) {
+            return Err("TLS support of the RDP service is not proved".into());
+        }
         Ok(())
     }
 }
@@ -116,42 +142,95 @@ pub(crate) struct HostProbe {
 }
 impl HostProbe {
     pub(crate) fn unavailable(platform: &str, reason: &str) -> Self {
-        Self { version: RDP_PROBE_VERSION, platform: platform.into(), services: Vec::new(),
-            unavailable_reason: Some(reason.into()), diagnostics: Vec::new() }
+        Self {
+            version: RDP_PROBE_VERSION,
+            platform: platform.into(),
+            services: Vec::new(),
+            unavailable_reason: Some(reason.into()),
+            diagnostics: Vec::new(),
+        }
     }
     pub(crate) fn validate(&self) -> Result<(), String> {
-        if self.version != RDP_PROBE_VERSION || self.services.len() > 32 || self.platform.len() > 64
-            || self.diagnostics.len() > 128 || self.diagnostics.iter().any(|s| s.len() > 4096)
-            || self.unavailable_reason.as_ref().is_some_and(|s| s.len() > 4096) {
+        if self.version != RDP_PROBE_VERSION
+            || self.services.len() > 32
+            || self.platform.len() > 64
+            || self.diagnostics.len() > 128
+            || self.diagnostics.iter().any(|s| s.len() > 4096)
+            || self
+                .unavailable_reason
+                .as_ref()
+                .is_some_and(|s| s.len() > 4096)
+        {
             return Err("Unsupported or oversized RDP host inventory".into());
         }
         let mut ids = std::collections::BTreeSet::new();
         for service in &self.services {
-            if !PublishedApp::valid_alias(&service.id) || !ids.insert(&service.id)
-                || service.remote_apps.len() > 1024 || service.evidence.len() > 128
+            if !PublishedApp::valid_alias(&service.id)
+                || !ids.insert(&service.id)
+                || service.remote_apps.len() > 1024
+                || service.evidence.len() > 128
                 || service.evidence.iter().any(|s| s.len() > 4096)
                 || service.version.as_ref().is_some_and(|s| s.len() > 256)
-                || service.certificate_source.as_ref().is_some_and(|s| s.len() > 4096)
-                || service.unavailable_reason.as_ref().is_some_and(|s| s.len() > 4096) {
+                || service
+                    .certificate_source
+                    .as_ref()
+                    .is_some_and(|s| s.len() > 4096)
+                || service
+                    .unavailable_reason
+                    .as_ref()
+                    .is_some_and(|s| s.len() > 4096)
+            {
                 return Err("Invalid RDP service inventory".into());
             }
             let mode_matches = match service.kind {
-                HostKind::WindowsWorkstation => service.session_mode == SessionMode::WindowsConsoleLocked,
-                HostKind::WindowsServer => service.session_mode == SessionMode::WindowsServerSession,
-                HostKind::Gnome => matches!(service.session_mode, SessionMode::SharedConsole | SessionMode::HeadlessUserSession | SessionMode::RemoteLogin | SessionMode::Unknown),
-                HostKind::Krdp => matches!(service.session_mode, SessionMode::SharedConsole | SessionMode::ExclusiveConsole | SessionMode::AdditionalConsoleDisplay | SessionMode::Unknown),
-                HostKind::Xrdp => matches!(service.session_mode, SessionMode::SeparateXorg | SessionMode::SeparateXvnc | SessionMode::Unknown),
+                HostKind::WindowsWorkstation => {
+                    service.session_mode == SessionMode::WindowsConsoleLocked
+                }
+                HostKind::WindowsServer => {
+                    service.session_mode == SessionMode::WindowsServerSession
+                }
+                HostKind::Gnome => matches!(
+                    service.session_mode,
+                    SessionMode::SharedConsole
+                        | SessionMode::HeadlessUserSession
+                        | SessionMode::RemoteLogin
+                        | SessionMode::Unknown
+                ),
+                HostKind::Krdp => matches!(
+                    service.session_mode,
+                    SessionMode::SharedConsole
+                        | SessionMode::ExclusiveConsole
+                        | SessionMode::AdditionalConsoleDisplay
+                        | SessionMode::Unknown
+                ),
+                HostKind::Xrdp => matches!(
+                    service.session_mode,
+                    SessionMode::SeparateXorg | SessionMode::SeparateXvnc | SessionMode::Unknown
+                ),
             };
-            if !mode_matches || service.certificate_sha256.is_some() && service.certificate_source.as_ref().is_none_or(|s| s.is_empty()) {
-                return Err("RDP session mode or certificate provenance contradicts the service inventory".into());
+            if !mode_matches
+                || service.certificate_sha256.is_some()
+                    && service
+                        .certificate_source
+                        .as_ref()
+                        .is_none_or(|s| s.is_empty())
+            {
+                return Err(
+                    "RDP session mode or certificate provenance contradicts the service inventory"
+                        .into(),
+                );
             }
             if !service.remote_apps.is_empty() && service.kind != HostKind::WindowsServer {
                 return Err("RemoteApp requires a proved Windows Server RDS inventory".into());
             }
             let mut aliases = std::collections::BTreeSet::new();
-            if service.remote_apps.iter().any(|app| !PublishedApp::valid_alias(&app.alias)
-                || !aliases.insert(&app.alias) || app.collection.is_empty()
-                || app.collection.len() > 256 || app.display_name.len() > 1024) {
+            if service.remote_apps.iter().any(|app| {
+                !PublishedApp::valid_alias(&app.alias)
+                    || !aliases.insert(&app.alias)
+                    || app.collection.is_empty()
+                    || app.collection.len() > 256
+                    || app.display_name.len() > 1024
+            }) {
                 return Err("Invalid or ambiguous published RemoteApp alias".into());
             }
         }
@@ -171,7 +250,10 @@ pub(crate) enum CertificatePolicy {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum ClientKind { Mstsc, FreeRdp3 }
+pub(crate) enum ClientKind {
+    Mstsc,
+    FreeRdp3,
+}
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct ClientCapability {
     pub(crate) id: String,

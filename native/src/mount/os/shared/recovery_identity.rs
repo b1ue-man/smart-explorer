@@ -3,10 +3,16 @@
 use crate::local_access::{DirectoryHandle, EntryKind};
 use crate::mount::recovery_identity::{self, RecoveryBackendIdentity, IDENTITY_FILE};
 use crate::mount::{MountConfig, MountId};
-use std::{ffi::OsStr, io::{self, Write}, path::Path};
+use std::{
+    ffi::OsStr,
+    io::{self, Write},
+    path::Path,
+};
 
-pub(crate) fn read_mount_recovery_identity(base: &Path, config: &MountConfig)
-    -> io::Result<Option<RecoveryBackendIdentity>> {
+pub(crate) fn read_mount_recovery_identity(
+    base: &Path,
+    config: &MountConfig,
+) -> io::Result<Option<RecoveryBackendIdentity>> {
     let directory = match open_cache(base, &config.id)? {
         Some(directory) => directory,
         None => return Ok(None),
@@ -17,16 +23,18 @@ pub(crate) fn read_mount_recovery_identity(base: &Path, config: &MountConfig)
         Err(error) => return Err(error),
     };
     let bytes = super::recovery_export_io::read_bounded(file)?;
-    let identity: RecoveryBackendIdentity = serde_json::from_slice(&bytes)
-        .map_err(|_| recovery_identity::conflict())?;
+    let identity: RecoveryBackendIdentity =
+        serde_json::from_slice(&bytes).map_err(|_| recovery_identity::conflict())?;
     identity.validate_for(&config.source)?;
     Ok(Some(identity))
 }
 
 /// An absent proof may be established only before the cache contains any
 /// journal history or payload. Never infer an old account from a new login.
-pub(crate) fn preflight_mount_recovery_identity(base: &Path, config: &MountConfig)
-    -> io::Result<Option<RecoveryBackendIdentity>> {
+pub(crate) fn preflight_mount_recovery_identity(
+    base: &Path,
+    config: &MountConfig,
+) -> io::Result<Option<RecoveryBackendIdentity>> {
     let identity = read_mount_recovery_identity(base, config)?;
     if identity.is_none() {
         if let Some(directory) = open_cache(base, &config.id)? {
@@ -36,11 +44,19 @@ pub(crate) fn preflight_mount_recovery_identity(base: &Path, config: &MountConfi
     Ok(identity)
 }
 
-pub(crate) fn bind_mount_recovery_identity(base: &Path, config: &MountConfig,
-    identity: &RecoveryBackendIdentity, _lease: &crate::mount::RecoveryCacheLease) -> io::Result<()> {
+pub(crate) fn bind_mount_recovery_identity(
+    base: &Path,
+    config: &MountConfig,
+    identity: &RecoveryBackendIdentity,
+    _lease: &crate::mount::RecoveryCacheLease,
+) -> io::Result<()> {
     identity.validate_for(&config.source)?;
     if let Some(stored) = read_mount_recovery_identity(base, config)? {
-        return if stored == *identity { Ok(()) } else { Err(recovery_identity::conflict()) };
+        return if stored == *identity {
+            Ok(())
+        } else {
+            Err(recovery_identity::conflict())
+        };
     }
     let parent = DirectoryHandle::open_root(base)?;
     let directory = match parent.open_child(OsStr::new(config.id.as_str())) {
@@ -48,7 +64,11 @@ pub(crate) fn bind_mount_recovery_identity(base: &Path, config: &MountConfig,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             let pending = format!(".identity-cache-{}.pending", MountId::new_random()?);
             drop(parent.create_private_child(OsStr::new(&pending))?);
-            super::recovery_storage::publish(&base.join(pending), &base.join(config.id.as_str()), false)?;
+            super::recovery_storage::publish(
+                &base.join(pending),
+                &base.join(config.id.as_str()),
+                false,
+            )?;
             parent.open_child(OsStr::new(config.id.as_str()))?
         }
         Err(error) => return Err(error),
@@ -84,19 +104,26 @@ fn open_cache(base: &Path, id: &MountId) -> io::Result<Option<DirectoryHandle>> 
 fn require_empty_cache(directory: &DirectoryHandle) -> io::Result<()> {
     for entry in directory.read_directory()? {
         let entry = entry?;
-        if entry.is_link_like { return Err(recovery_identity::missing()); }
+        if entry.is_link_like {
+            return Err(recovery_identity::missing());
+        }
         match (entry.name.to_str(), entry.kind) {
             (Some("files"), EntryKind::Directory) => {
-                if directory.open_child(&entry.name)?.read_directory()?.next().is_some() {
+                if directory
+                    .open_child(&entry.name)?
+                    .read_directory()?
+                    .next()
+                    .is_some()
+                {
                     return Err(recovery_identity::missing());
                 }
             }
             (Some("journal.jsonl"), EntryKind::File)
-                if directory.open_regular_child(&entry.name)?.metadata()?.len() == 0 => {},
+                if directory.open_regular_child(&entry.name)?.metadata()?.len() == 0 => {}
             // A crash before the first identity rename cannot have produced
             // mounted data. This private metadata stage grants no authority;
             // it may coexist with a retry only while journal/files are empty.
-            (Some(name), EntryKind::File) if pending_identity_name(name) => {},
+            (Some(name), EntryKind::File) if pending_identity_name(name) => {}
             _ => return Err(recovery_identity::missing()),
         }
     }

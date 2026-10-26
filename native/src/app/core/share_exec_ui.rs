@@ -106,9 +106,13 @@ pub(in crate::app) fn ui_exec_target(app: &mut App, ui: &mut egui::Ui, target_ke
         ui.label(&view.relation);
     });
     egui::CollapsingHeader::new("Identität abgleichen")
-        .id_salt(("access_identity", &view.target_key)).show(ui, |ui| {
-            ui.label("Fingerabdruck"); ui.monospace(&view.fingerprint);
-            if ui.button("Fingerabdruck kopieren").clicked() { ui.ctx().copy_text(view.fingerprint.clone()); }
+        .id_salt(("access_identity", &view.target_key))
+        .show(ui, |ui| {
+            ui.label("Fingerabdruck");
+            ui.monospace(&view.fingerprint);
+            if ui.button("Fingerabdruck kopieren").clicked() {
+                ui.ctx().copy_text(view.fingerprint.clone());
+            }
         });
     for (capability, label) in [
         (Capability::ExecCommands, "Befehle"),
@@ -266,7 +270,11 @@ fn intro(ui: &mut egui::Ui) {
 fn provider_line(ui: &mut egui::Ui, provider: &crate::share::ExecProviderStatus) {
     ui.horizontal_wrapped(|ui| {
         ui.label(format!("Mein Konto: {}", provider.user_label));
-        egui::CollapsingHeader::new("Kontodiagnose").id_salt("exec_provider_diagnostics").show(ui, |ui| { ui.monospace(format!("Kapselung: {}", provider.provider)); });
+        egui::CollapsingHeader::new("Kontodiagnose")
+            .id_salt("exec_provider_diagnostics")
+            .show(ui, |ui| {
+                ui.monospace(format!("Kapselung: {}", provider.provider));
+            });
         if !provider.available {
             ui.colored_label(
                 theme::danger(ui),
@@ -317,7 +325,12 @@ fn run_dialog(
 
 /// One change at the revision the surface showed; the answer as notice or
 /// error with the next step (C6).
-fn apply_access(app: &mut App, view: &ExecDeviceView, change: AccessGrantChange, revision: u64) -> bool {
+fn apply_access(
+    app: &mut App,
+    view: &ExecDeviceView,
+    change: AccessGrantChange,
+    revision: u64,
+) -> bool {
     let mut saved = false;
     let name = &view.device_name;
     match crate::daemon::mutate_access_grant(view.target.clone(), change, Some(revision)) {
@@ -366,16 +379,37 @@ fn exec_device_views(profiles: &crate::share::ShareProfiles) -> Vec<ExecDeviceVi
         .into_iter()
         .map(|view| {
             let no_name = match &view.target {
-                crate::share::ExecGrantTarget::Direct { device_id, public_key, .. } => profiles.direct_grants.iter()
-                    .find(|grant| &grant.device_id == device_id && &grant.public_key == public_key).is_some_and(|grant| grant.device_name.trim().is_empty()),
-                crate::share::ExecGrantTarget::RoomMember { room_id, device_id, public_key, .. } => profiles.rooms.iter()
-                    .filter(|room| &room.room_id == room_id).flat_map(|room| &room.members)
-                    .find(|member| &member.device_id == device_id && &member.public_key == public_key).is_some_and(|member| member.device_name.trim().is_empty()),
+                crate::share::ExecGrantTarget::Direct {
+                    device_id,
+                    public_key,
+                    ..
+                } => profiles
+                    .direct_grants
+                    .iter()
+                    .find(|grant| &grant.device_id == device_id && &grant.public_key == public_key)
+                    .is_some_and(|grant| grant.device_name.trim().is_empty()),
+                crate::share::ExecGrantTarget::RoomMember {
+                    room_id,
+                    device_id,
+                    public_key,
+                    ..
+                } => profiles
+                    .rooms
+                    .iter()
+                    .filter(|room| &room.room_id == room_id)
+                    .flat_map(|room| &room.members)
+                    .find(|member| {
+                        &member.device_id == device_id && &member.public_key == public_key
+                    })
+                    .is_some_and(|member| member.device_name.trim().is_empty()),
             };
             let mut view = device_view(view);
-            if no_name { view.device_name = "Gerät ohne Namen".into(); }
+            if no_name {
+                view.device_name = "Gerät ohne Namen".into();
+            }
             view
-        }).collect()
+        })
+        .collect()
 }
 
 fn device_view(view: crate::share::ExecTargetView) -> ExecDeviceView {
@@ -415,4 +449,6 @@ mod accounts_ui_tests;
 mod tests;
 
 /// Account management is owned by the local device settings.
-pub(in crate::app) fn ui_host_accounts(ui: &mut egui::Ui) { accounts_ui::ui_accounts(ui); }
+pub(in crate::app) fn ui_host_accounts(ui: &mut egui::Ui) {
+    accounts_ui::ui_accounts(ui);
+}

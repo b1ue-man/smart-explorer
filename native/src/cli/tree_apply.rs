@@ -28,16 +28,44 @@ pub(super) fn apply_transfer(
             let entry = &plan.entries[index];
             plan.validate_source_entry(source, index)?;
             plan.validate_destination_ancestry(destination, index)?;
-            validate_destination_state(destination, &entry.destination_path, &entry.destination, false)?;
-            let id = match &entry.destination { DestinationState::File(meta) => meta.id.as_deref(), _ => None };
-            if !spool.matches(index, destination, &entry.destination_path, id, observer)? { return Err(format!("Zielinhalt weicht beim Wiederaufnehmen ab: {}", entry.destination_path)); }
-            validate_destination_state(destination, &entry.destination_path, &entry.destination, false)?;
+            validate_destination_state(
+                destination,
+                &entry.destination_path,
+                &entry.destination,
+                false,
+            )?;
+            let id = match &entry.destination {
+                DestinationState::File(meta) => meta.id.as_deref(),
+                _ => None,
+            };
+            if !spool.matches(index, destination, &entry.destination_path, id, observer)? {
+                return Err(format!(
+                    "Zielinhalt weicht beim Wiederaufnehmen ab: {}",
+                    entry.destination_path
+                ));
+            }
+            validate_destination_state(
+                destination,
+                &entry.destination_path,
+                &entry.destination,
+                false,
+            )?;
         } else {
             publish_file(source, destination, &plan, spool, index, observer)?;
         }
         let path = plan.entries[index].destination_path.clone();
-        let confirmed = destination.stat(&path).map_err(|error| format!("Veröffentlichtes Ziel bestätigen: {error}"))?;
-        if confirmed.is_dir || confirmed.is_symlink || confirmed.special || confirmed.size != plan.entries[index].source.size { return Err(format!("Veröffentlichtes Ziel ist nicht die erwartete Datei: {path}")); }
+        let confirmed = destination
+            .stat(&path)
+            .map_err(|error| format!("Veröffentlichtes Ziel bestätigen: {error}"))?;
+        if confirmed.is_dir
+            || confirmed.is_symlink
+            || confirmed.special
+            || confirmed.size != plan.entries[index].source.size
+        {
+            return Err(format!(
+                "Veröffentlichtes Ziel ist nicht die erwartete Datei: {path}"
+            ));
+        }
         plan.entries[index].destination = DestinationState::File(confirmed);
         observer.file_done(Counter::Written);
     }

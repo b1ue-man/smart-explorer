@@ -21,26 +21,37 @@ pub(super) struct Access {
 
 impl Access {
     pub(super) fn new(consent: MountAccess, session: Arc<VaultSession>) -> Self {
-        Self { consent, session, revoked: AtomicBool::new(false) }
+        Self {
+            consent,
+            session,
+            revoked: AtomicBool::new(false),
+        }
     }
 
-    pub(super) fn revoke(&self) { self.revoked.store(true, Ordering::Release); }
+    pub(super) fn revoke(&self) {
+        self.revoked.store(true, Ordering::Release);
+    }
 
     pub(super) fn check(&self) -> io::Result<()> {
-        if !self.revoked.load(Ordering::Acquire) && !self.session.is_locked()
-            && self.consent.check().is_ok() && !self.session.is_locked()
+        if !self.revoked.load(Ordering::Acquire)
+            && !self.session.is_locked()
+            && self.consent.check().is_ok()
+            && !self.session.is_locked()
             && !self.revoked.load(Ordering::Acquire)
         {
             return Ok(());
         }
         self.revoke();
-        Err(io::Error::new(io::ErrorKind::PermissionDenied,
-            "Die Speicherfreigabe dieses Tresors fehlt oder wurde widerrufen"))
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Die Speicherfreigabe dieses Tresors fehlt oder wurde widerrufen",
+        ))
     }
 }
 
 pub(super) fn protect(
-    inner: Arc<dyn MountFilesystem>, access: Option<Arc<Access>>,
+    inner: Arc<dyn MountFilesystem>,
+    access: Option<Arc<Access>>,
 ) -> Arc<dyn MountFilesystem> {
     match access {
         Some(access) => Arc::new(Protected { inner, access }),
@@ -66,20 +77,29 @@ macro_rules! checked {
 
 impl MountFilesystem for Protected {
     fn capacity_snapshot(&self) -> crate::vfs::CapacitySnapshot {
-        if self.access.check().is_ok() { return self.inner.capacity_snapshot(); }
+        if self.access.check().is_ok() {
+            return self.inner.capacity_snapshot();
+        }
         let facts = self.inner.volume_facts();
         crate::vfs::CapacitySnapshot::unknown(
-            format!("mount:{}", facts.id.as_str()), facts.root.as_str())
+            format!("mount:{}", facts.id.as_str()),
+            facts.root.as_str(),
+        )
     }
 
     fn cache_capacity_budget(&self, available_bytes: u64) -> u64 {
-        if self.access.check().is_ok() { self.inner.cache_capacity_budget(available_bytes) }
-        else { 0 }
+        if self.access.check().is_ok() {
+            self.inner.cache_capacity_budget(available_bytes)
+        } else {
+            0
+        }
     }
 
     fn volume_facts(&self) -> VolumeFacts {
         let mut facts = self.inner.volume_facts();
-        if self.access.check().is_err() { facts.read_only = true; }
+        if self.access.check().is_err() {
+            facts.read_only = true;
+        }
         facts
     }
 

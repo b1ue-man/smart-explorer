@@ -89,9 +89,12 @@ impl PeerMountLease {
     pub(super) fn file_identity_scope(&self) -> io::Result<String> {
         self.check_live()?;
         serde_json::to_string(&(
-            &self.virtual_root, &self.target.mount_key, &self.target.path,
+            &self.virtual_root,
+            &self.target.mount_key,
+            &self.target.path,
             self.target.backend.namespace_identity(),
-        )).map_err(io::Error::other)
+        ))
+        .map_err(io::Error::other)
     }
 
     pub(super) fn authorize(

@@ -18,7 +18,9 @@ use std::sync::Arc;
 
 use openh264::decoder::{Decoder, DecoderConfig};
 use openh264::OpenH264API;
-use openh264_sys2::{SBufferInfo, DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER, videoFormatI420};
+use openh264_sys2::{
+    videoFormatI420, SBufferInfo, DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER,
+};
 
 use super::codec_inventory::openh264_decoder_offers;
 pub(crate) use super::openh264_encode::OpenH264EncoderFactory;
@@ -27,9 +29,7 @@ use crate::screen::core::codec_registry::{
     DecoderFactory, EncoderFactory, OpenH264Report, OpenH264State,
 };
 use crate::screen::core::decoded_frame::{DecodedFrame, FrameIdentities};
-use crate::screen::core::host_backend::{
-    Chroma, ScreenDecoder, YuvPicture,
-};
+use crate::screen::core::host_backend::{Chroma, ScreenDecoder, YuvPicture};
 use crate::screen::core::negotiate::CodecOffer;
 #[cfg(test)]
 use crate::screen::core::negotiate::H264Profile;
@@ -94,7 +94,10 @@ impl DecoderFactory for OpenH264DecoderFactory {
     }
 
     fn open(&self, header: &GopHeader) -> io::Result<Box<dyn ScreenDecoder>> {
-        let limits = header.frame_contract.map_or(crate::screen::core::frame_budget::FrameLimits::LEGACY, |c| c.limits);
+        let limits = header.frame_contract.map_or(
+            crate::screen::core::frame_budget::FrameLimits::LEGACY,
+            |c| c.limits,
+        );
         limits.check(header.size)?;
         let decoder = Decoder::with_api_config(load(&self.store)?, DecoderConfig::new())
             .map_err(coder_error)?;
@@ -159,7 +162,12 @@ fn copy_plane(
 }
 
 /// Copies a geometry-validated decoded picture into tight owned I420 planes.
-fn copy_picture(planes: (&[u8], &[u8], &[u8]), strides: (usize, usize, usize), size: FrameSize, out: &mut I420Image) -> io::Result<()> {
+fn copy_picture(
+    planes: (&[u8], &[u8], &[u8]),
+    strides: (usize, usize, usize),
+    size: FrameSize,
+    out: &mut I420Image,
+) -> io::Result<()> {
     let (width, height) = (size.width as usize, size.height as usize);
     let (y_stride, u_stride, v_stride) = strides;
     let chroma = size.chroma();
@@ -179,9 +187,17 @@ impl ScreenDecoder for OpenH264Decoder {
     fn decode(&mut self, record: &FrameRecord) -> io::Result<bool> {
         self.decoded = None;
         let size = self.size;
-        crate::screen::core::frame_size_caps::check_avc_dimensions(&record.payload,size,self.limits)?;
-        self.frames = self.frames.checked_add(1).ok_or_else(|| io::Error::other("OpenH264 timestamp overflow"))?;
-        self.identities.insert(self.frames, DecodedFrame::from_record(record))?;
+        crate::screen::core::frame_size_caps::check_avc_dimensions(
+            &record.payload,
+            size,
+            self.limits,
+        )?;
+        self.frames = self
+            .frames
+            .checked_add(1)
+            .ok_or_else(|| io::Error::other("OpenH264 timestamp overflow"))?;
+        self.identities
+            .insert(self.frames, DecodedFrame::from_record(record))?;
         let mut dst = [std::ptr::null_mut(); 3];
         let mut buffer = SBufferInfo::default();
         // The pinned 0.9.9 safe wrapper does not set uiInBsTimeStamp and its
@@ -190,38 +206,82 @@ impl ScreenDecoder for OpenH264Decoder {
         let api = unsafe { self.decoder.raw_api() };
         buffer.uiInBsTimeStamp = self.frames;
         // SAFETY: input bytes and writable output structs live through the call.
-        let status = unsafe { api.decode_frame_no_delay(record.payload.as_ptr(),
-            record.payload.len() as c_int, dst.as_mut_ptr(), &mut buffer) };
-        if status != 0 { return Err(io::Error::other(format!("OpenH264 decode failed: {status}"))); }
+        let status = unsafe {
+            api.decode_frame_no_delay(
+                record.payload.as_ptr(),
+                record.payload.len() as c_int,
+                dst.as_mut_ptr(),
+                &mut buffer,
+            )
+        };
+        if status != 0 {
+            return Err(io::Error::other(format!(
+                "OpenH264 decode failed: {status}"
+            )));
+        }
         if buffer.iBufferStatus == 0 {
             // Preserve Decoder::decode's existing automatic flush behavior.
             let mut remaining: c_int = 0;
-            if unsafe { api.get_option(DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER, (&mut remaining as *mut c_int).cast()) } != 0 {
+            if unsafe {
+                api.get_option(
+                    DECODER_OPTION_NUM_OF_FRAMES_REMAINING_IN_BUFFER,
+                    (&mut remaining as *mut c_int).cast(),
+                )
+            } != 0
+            {
                 return Err(io::Error::other("OpenH264 buffered-frame query failed"));
             }
-            if remaining == 0 { return Ok(false); }
+            if remaining == 0 {
+                return Ok(false);
+            }
             buffer = Default::default();
-            if unsafe { api.flush_frame(dst.as_mut_ptr(), &mut buffer) } != 0 || buffer.iBufferStatus != 1 {
+            if unsafe { api.flush_frame(dst.as_mut_ptr(), &mut buffer) } != 0
+                || buffer.iBufferStatus != 1
+            {
                 return Err(io::Error::other("OpenH264 buffered-frame flush failed"));
             }
         }
-        if buffer.iBufferStatus != 1 { return Err(io::Error::other("invalid OpenH264 output status")); }
+        if buffer.iBufferStatus != 1 {
+            return Err(io::Error::other("invalid OpenH264 output status"));
+        }
         let identity = self.identities.take(buffer.uiOutYuvTimeStamp)?;
         // SAFETY: a ready I420 output describes the decoder-owned plane buffers.
         let info = unsafe { buffer.UsrData.sSystemBuffer };
-        if info.iWidth != size.width as c_int || info.iHeight != size.height as c_int
-            || info.iFormat != videoFormatI420 || info.iStride[0] < info.iWidth
-            || info.iStride[1] < size.chroma().width as c_int || dst.iter().any(|p| p.is_null()) {
-            return Err(io::Error::other("OpenH264 output contradicts its I420 stream geometry"));
+        if info.iWidth != size.width as c_int
+            || info.iHeight != size.height as c_int
+            || info.iFormat != videoFormatI420
+            || info.iStride[0] < info.iWidth
+            || info.iStride[1] < size.chroma().width as c_int
+            || dst.iter().any(|p| p.is_null())
+        {
+            return Err(io::Error::other(
+                "OpenH264 output contradicts its I420 stream geometry",
+            ));
         }
-        let strides = (info.iStride[0] as usize, info.iStride[1] as usize, info.iStride[1] as usize);
-        let length = |stride: usize, rows: usize| stride.checked_mul(rows).filter(|n| *n <= isize::MAX as usize)
-            .ok_or_else(|| io::Error::other("OpenH264 plane size overflows address space"));
-        let lengths = (length(strides.0, size.height as usize)?, length(strides.1, size.chroma().height as usize)?);
+        let strides = (
+            info.iStride[0] as usize,
+            info.iStride[1] as usize,
+            info.iStride[1] as usize,
+        );
+        let length = |stride: usize, rows: usize| {
+            stride
+                .checked_mul(rows)
+                .filter(|n| *n <= isize::MAX as usize)
+                .ok_or_else(|| io::Error::other("OpenH264 plane size overflows address space"))
+        };
+        let lengths = (
+            length(strides.0, size.height as usize)?,
+            length(strides.1, size.chroma().height as usize)?,
+        );
         // SAFETY: geometry/positive strides were checked; OpenH264 owns these
         // readable planes until its next call. copy_picture owns the result.
-        let slices = unsafe { (std::slice::from_raw_parts(dst[0], lengths.0),
-            std::slice::from_raw_parts(dst[1], lengths.1), std::slice::from_raw_parts(dst[2], lengths.1)) };
+        let slices = unsafe {
+            (
+                std::slice::from_raw_parts(dst[0], lengths.0),
+                std::slice::from_raw_parts(dst[1], lengths.1),
+                std::slice::from_raw_parts(dst[2], lengths.1),
+            )
+        };
         copy_picture(slices, strides, size, &mut self.planes)?;
         if self.yuv {
             // The copied planes become the output; the output's old buffers
@@ -252,7 +312,9 @@ impl ScreenDecoder for OpenH264Decoder {
         Ok(true)
     }
 
-    fn decoded_frame(&self) -> Option<DecodedFrame> { self.decoded }
+    fn decoded_frame(&self) -> Option<DecodedFrame> {
+        self.decoded
+    }
 
     fn picture(&self) -> &BgraImage {
         &self.picture
@@ -276,11 +338,8 @@ impl ScreenDecoder for OpenH264Decoder {
 pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
-#[path = "openh264_codec_tests.rs"]
-pub(crate) mod tests;
-#[cfg(test)]
-#[path = "openh264_yuv_tests.rs"]
-mod yuv_tests;
+#[path = "batches_quality_acceptance_task_tests.rs"]
+mod quality_acceptance_tests;
 #[cfg(test)]
 #[path = "quality_acceptance_baseline.rs"]
 mod quality_baseline;
@@ -288,5 +347,8 @@ mod quality_baseline;
 #[path = "quality_acceptance_provenance.rs"]
 mod quality_provenance;
 #[cfg(test)]
-#[path = "batches_quality_acceptance_task_tests.rs"]
-mod quality_acceptance_tests;
+#[path = "openh264_codec_tests.rs"]
+pub(crate) mod tests;
+#[cfg(test)]
+#[path = "openh264_yuv_tests.rs"]
+mod yuv_tests;

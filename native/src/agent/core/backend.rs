@@ -360,12 +360,17 @@ impl Backend for AgentBackend {
     fn rename_no_replace(&self, src: &str, dst: &str) -> VfsResult<()> {
         // Ordinary provider renames retain their existing protocol semantics.
         // Reserved directories use the distinct strict extension/frame.
-        let request = Frame::RenameNoReplace { src: src.into(), dst: dst.into() };
+        let request = Frame::RenameNoReplace {
+            src: src.into(),
+            dst: dst.into(),
+        };
         let lease = self.pool.lease();
         let (mux, reply) = lease.mutation_call(request)?;
         match reply {
             Frame::Ok => Ok(()),
-            Frame::Err(error) => Err(Frame::folder_error(&error).unwrap_or_else(|| agent_error(error))),
+            Frame::Err(error) => {
+                Err(Frame::folder_error(&error).unwrap_or_else(|| agent_error(error)))
+            }
             other => {
                 lease.invalidate(&mux);
                 Err(unexpected("no-replace", &other))

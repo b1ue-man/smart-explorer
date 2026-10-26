@@ -42,16 +42,23 @@ impl MountPolicy {
     }
 }
 
-pub(crate) fn stored_policy(record: &super::registry_types::SiteRecord) -> Result<OpenPolicy, String> {
+pub(crate) fn stored_policy(
+    record: &super::registry_types::SiteRecord,
+) -> Result<OpenPolicy, String> {
     let mut values = record.extra.iter().filter(|(key, _)| key == POLICY_KEY);
-    let Some((_, value)) = values.next() else { return Ok(OpenPolicy::default()); };
+    let Some((_, value)) = values.next() else {
+        return Ok(OpenPolicy::default());
+    };
     if values.next().is_some() {
         return Err("Mehrdeutige Tresor-Öffnungsrichtlinie".into());
     }
     serde_json::from_str(value).map_err(|_| "Ungültige Tresor-Öffnungsrichtlinie".into())
 }
 
-pub(crate) fn store_policy(record: &mut super::registry_types::SiteRecord, policy: &OpenPolicy) -> Result<(), String> {
+pub(crate) fn store_policy(
+    record: &mut super::registry_types::SiteRecord,
+    policy: &OpenPolicy,
+) -> Result<(), String> {
     let value = serde_json::to_string(policy).map_err(|error| error.to_string())?;
     record.extra.retain(|(key, _)| key != POLICY_KEY);
     record.extra.push((POLICY_KEY.into(), value));

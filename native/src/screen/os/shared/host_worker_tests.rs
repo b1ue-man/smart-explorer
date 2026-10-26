@@ -25,7 +25,7 @@ pub(crate) fn worker_program() -> PathBuf {
 
 fn tiles() -> CodecChoice {
     CodecChoice {
-            max_macroblocks_per_second: None,
+        max_macroblocks_per_second: None,
         codec: CodecKind::Tiles,
         profile: None,
         encoder_hardware: false,
@@ -42,13 +42,33 @@ fn screen_task_host_worker_exits_on_update_stop() {
     let data = tempfile::tempdir().unwrap();
     let size = FrameSize::new(320, 180);
     let admission = crate::screen::core::capture_test_support::session(None);
-    let data_key = if cfg!(windows) {"APPDATA"} else {"XDG_DATA_HOME"};
-    let env = vec![(data_key.to_owned(), data.path().to_string_lossy().into_owned())];
-    let prepared = prepared::PreparedWorker::new(&worker_program(), &env, "fixture",
-        admission.session(), &SourceId::Synthetic, Some(size), false, admission.clone(), None).unwrap();
+    let data_key = if cfg!(windows) {
+        "APPDATA"
+    } else {
+        "XDG_DATA_HOME"
+    };
+    let env = vec![(
+        data_key.to_owned(),
+        data.path().to_string_lossy().into_owned(),
+    )];
+    let prepared = prepared::PreparedWorker::new(
+        &worker_program(),
+        &env,
+        "fixture",
+        admission.session(),
+        &SourceId::Synthetic,
+        Some(size),
+        false,
+        admission.clone(),
+        None,
+    )
+    .unwrap();
     let output = crate::screen::core::host_codec_adapters::HostOutputPlan::new(
-        crate::screen::core::host_codec_adapters::HostContract::Legacy, size,
-        crate::screen::core::host_codec_adapters::HostCodecPlan::Tiles).unwrap();
+        crate::screen::core::host_codec_adapters::HostContract::Legacy,
+        size,
+        crate::screen::core::host_codec_adapters::HostCodecPlan::Tiles,
+    )
+    .unwrap();
     use crate::screen::core::host_backend::PreparedSource;
     let plan = prepared.capture_plan(&output).unwrap().unwrap();
     let grant = admission.authority().approve(plan).unwrap();
@@ -75,7 +95,15 @@ fn screen_task_host_worker_exits_on_update_stop() {
     std::fs::write(sync.join("daemon.stop"), "stop").unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     let status = loop {
-        if let Some(status) = link.lock().unwrap().child.as_mut().unwrap().try_wait().unwrap() {
+        if let Some(status) = link
+            .lock()
+            .unwrap()
+            .child
+            .as_mut()
+            .unwrap()
+            .try_wait()
+            .unwrap()
+        {
             break status;
         }
         assert!(

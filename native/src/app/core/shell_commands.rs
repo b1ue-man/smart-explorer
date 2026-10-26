@@ -41,7 +41,8 @@ impl App {
         ui.add_enabled_ui(!self.root_path.is_empty(), |ui| self.ui_new_menu(ui));
         ui.menu_button("Verbindung", |ui| {
             ui.set_width(300.0);
-            egui::ScrollArea::vertical().min_scrolled_height(0.0)
+            egui::ScrollArea::vertical()
+                .min_scrolled_height(0.0)
                 .max_height(super::dialog_geometry::remaining_height(ui, 2.0))
                 .show(ui, |ui| self.ui_menu_connect(ui));
             if crate::mount::drive_mount_supported() && ui.button("Remote-Laufwerke…").clicked() {
@@ -51,7 +52,8 @@ impl App {
         });
         ui.menu_button("Sync", |ui| {
             ui.set_width(320.0);
-            egui::ScrollArea::vertical().min_scrolled_height(0.0)
+            egui::ScrollArea::vertical()
+                .min_scrolled_height(0.0)
                 .max_height(super::dialog_geometry::remaining_height(ui, 2.0))
                 .show(ui, |ui| self.ui_menu_sync(ui));
         });

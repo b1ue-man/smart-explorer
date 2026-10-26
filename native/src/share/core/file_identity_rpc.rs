@@ -6,8 +6,8 @@ use crate::share::{
     session::relation_kind_id,
     wire::{discardable_stage, FsRequest, FsResponse},
 };
-use std::io;
 use sha2::{Digest, Sha256};
+use std::io;
 
 const MAX_IDENTITY: usize = 65_536;
 
@@ -86,23 +86,27 @@ pub(in crate::share) fn host(access: &FsAccess, path: &str) -> io::Result<Option
     {
         return Err(denied("Share file identity export changed"));
     }
-    identity.map(|identity| {
-        if identity.len() > MAX_IDENTITY {
-            return Err(peer_stream::invalid("File identity exceeds protocol limit"));
-        }
-        let bound = serde_json::to_string(&(
-            "share-file-v1",
-            scope,
-            &target.mount_key,
-            target.backend.namespace_identity(),
-            identity,
-        ))
-        .map_err(io::Error::other)?;
-        // The proof binds physical root/account facts without disclosing
-        // host-local root paths through the remote metadata interface.
-        Ok(format!("share-file-v1:{:x}", Sha256::digest(bound.as_bytes())))
-    })
-    .transpose()
+    identity
+        .map(|identity| {
+            if identity.len() > MAX_IDENTITY {
+                return Err(peer_stream::invalid("File identity exceeds protocol limit"));
+            }
+            let bound = serde_json::to_string(&(
+                "share-file-v1",
+                scope,
+                &target.mount_key,
+                target.backend.namespace_identity(),
+                identity,
+            ))
+            .map_err(io::Error::other)?;
+            // The proof binds physical root/account facts without disclosing
+            // host-local root paths through the remote metadata interface.
+            Ok(format!(
+                "share-file-v1:{:x}",
+                Sha256::digest(bound.as_bytes())
+            ))
+        })
+        .transpose()
 }
 
 pub(in crate::share) async fn serve(
@@ -132,8 +136,7 @@ pub(in crate::share) async fn serve(
 fn peer_binding(backend: &PeerBackend) -> io::Result<String> {
     let endpoint = backend.current_endpoint()?;
     let (kind, relation) = relation_kind_id(&endpoint);
-    serde_json::to_string(&(kind, relation, &endpoint.presence.node_id))
-        .map_err(io::Error::other)
+    serde_json::to_string(&(kind, relation, &endpoint.presence.node_id)).map_err(io::Error::other)
 }
 
 pub(super) fn client(backend: &PeerBackend, path: &str) -> io::Result<Option<String>> {

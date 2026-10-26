@@ -11,8 +11,7 @@ use super::exec_access_view::{ExecClientNotice, ReceivedHelloOk};
 use super::exec_auth::build_client_hello;
 use super::exec_client_active::TransportClosed;
 use super::exec_client_messages::{
-    authentication, classify_io, client_failure_message, disconnected, failure,
-    peer_name, protocol,
+    authentication, classify_io, client_failure_message, disconnected, failure, peer_name, protocol,
 };
 use super::exec_heartbeat::{ExecHeartbeatPolicy, EXEC_HEARTBEAT_POLICY};
 #[cfg(test)]
@@ -92,18 +91,19 @@ pub(crate) struct ExecClientSession {
     pub(crate) notice: watch::Receiver<ExecClientNotice>,
 }
 
-#[path = "exec_client_spawn.rs"]
-mod spawn;
 #[path = "exec_client_input.rs"]
 mod input;
+#[path = "exec_client_spawn.rs"]
+mod spawn;
 pub(crate) use input::ExecInputSender;
 #[cfg(test)]
 pub(crate) fn batches_fixture_sender(
-    data: mpsc::Sender<ExecClientInput>, cancel: watch::Sender<bool>,
+    data: mpsc::Sender<ExecClientInput>,
+    cancel: watch::Sender<bool>,
 ) -> ExecInputSender {
     ExecInputSender::new(data, cancel)
 }
-pub(crate) use spawn::{spawn_connected, spawn_connected_retained, spawn_connected_cancellable};
+pub(crate) use spawn::{spawn_connected, spawn_connected_cancellable, spawn_connected_retained};
 
 pub(crate) async fn run_connected(
     connection: Connection,
@@ -117,7 +117,12 @@ pub(crate) async fn run_connected(
 ) -> Result<ExecTerminal, ExecClientFailure> {
     let cancel_connection = connection.clone();
     let (operation_input, operation_rx) = mpsc::channel(INPUT_CAPACITY);
-    let forwarding = self::input::forward(&cancel_connection, input, cancellation.clone(), operation_input);
+    let forwarding = self::input::forward(
+        &cancel_connection,
+        input,
+        cancellation.clone(),
+        operation_input,
+    );
     let result = run_connected_inner(
         connection,
         endpoint,
@@ -128,17 +133,21 @@ pub(crate) async fn run_connected(
         notice,
     );
     tokio::pin!(result, forwarding);
-    let abandoned = super::route_protocol::close_if_abandoned_during_pause(&cancel_connection, events.closed());
+    let abandoned =
+        super::route_protocol::close_if_abandoned_during_pause(&cancel_connection, events.closed());
     let cancelled = super::route_protocol::close_if_abandoned_during_pause(
-        &cancel_connection, self::input::cancelled(&mut cancellation));
+        &cancel_connection,
+        self::input::cancelled(&mut cancellation),
+    );
     tokio::pin!(abandoned, cancelled);
     let mut forwarded = false;
-    let result = loop { tokio::select! {
-        result = &mut result => break result,
-        _ = &mut forwarding, if !forwarded => forwarded = true,
-        _ = &mut abandoned => break result.await,
-        _ = &mut cancelled => break result.await,
-    }
+    let result = loop {
+        tokio::select! {
+            result = &mut result => break result,
+            _ = &mut forwarding, if !forwarded => forwarded = true,
+            _ = &mut abandoned => break result.await,
+            _ = &mut cancelled => break result.await,
+        }
     };
     if let Err(error) = &result {
         let _ = tokio::time::timeout(
@@ -172,25 +181,30 @@ async fn run_connected_inner(
     // stream. If both sides call open_bi() and wait for the peer's first frame,
     // QUIC never exposes either stream because an empty local stream is not
     // announced on the wire.
-    let (send, recv) = super::route_protocol::run_with_route(&connection, HANDSHAKE_TIMEOUT, None,
-        async { connection.accept_bi().await.map_err(io::Error::other) })
+    let (send, recv) =
+        super::route_protocol::run_with_route(&connection, HANDSHAKE_TIMEOUT, None, async {
+            connection.accept_bi().await.map_err(io::Error::other)
+        })
         .await
         .map_err(|error| disconnected(error, false))?;
     let close_watch = connection.clone();
-    let result = super::route_protocol::scope(connection.clone(), run_stream_with_transport(
-        send,
-        recv,
-        endpoint,
-        identity,
-        start,
-        input,
-        events,
-        EXEC_HEARTBEAT_POLICY,
-        Box::pin(async move {
-            let _ = close_watch.closed().await;
-        }),
-        &notice,
-    ))
+    let result = super::route_protocol::scope(
+        connection.clone(),
+        run_stream_with_transport(
+            send,
+            recv,
+            endpoint,
+            identity,
+            start,
+            input,
+            events,
+            EXEC_HEARTBEAT_POLICY,
+            Box::pin(async move {
+                let _ = close_watch.closed().await;
+            }),
+            &notice,
+        ),
+    )
     .await;
     connection.close(VarInt::from_u32(0x4558), b"Exec session completed");
     result
@@ -276,8 +290,13 @@ where
     let ReceivedHelloOk { hello, access } =
         handshake(&mut send, &mut recv, &endpoint, &identity).await?;
     if let Some(connection) = super::route_protocol::current_connection() {
-        super::route_monitor::authenticated_remote_capability(&connection,
-            hello.features.iter().any(|feature| feature == "route_policy_v1"));
+        super::route_monitor::authenticated_remote_capability(
+            &connection,
+            hello
+                .features
+                .iter()
+                .any(|feature| feature == "route_policy_v1"),
+        );
     }
     notice.send_modify(|notice| notice.access = access);
     emit(
@@ -305,7 +324,12 @@ where
         .digest()
         .map_err(|error| protocol(error, false, "invalid_start"))?;
     if events.is_closed() {
-        return Err(failure(ExecClientFailureKind::Local,"session_closed","local Exec session closed before Start",false));
+        return Err(failure(
+            ExecClientFailureKind::Local,
+            "session_closed",
+            "local Exec session closed before Start",
+            false,
+        ));
     }
     // This flag is set before the only Start write. Even a partial write is an
     // ambiguous handoff and must never be retried by this client.

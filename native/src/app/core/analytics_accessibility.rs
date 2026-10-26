@@ -1,5 +1,5 @@
-use crate::app::theme;
 use super::prelude::*;
+use crate::app::theme;
 
 /// A virtualized, keyboard- and screen-reader-friendly representation of the
 /// current treemap level. The painted treemap remains the fast spatial view;
@@ -27,7 +27,8 @@ pub(super) fn treemap_accessible_list(
                 .color(theme::muted(ui)),
             );
             let row_height = ui.spacing().interact_size.y.max(24.0);
-            egui::ScrollArea::vertical().min_scrolled_height(0.0)
+            egui::ScrollArea::vertical()
+                .min_scrolled_height(0.0)
                 .id_salt(("analytics_element_scroll", base))
                 .max_height(super::dialog_geometry::remaining_height(ui, 2.0))
                 .auto_shrink([false, false])

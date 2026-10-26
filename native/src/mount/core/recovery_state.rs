@@ -26,9 +26,16 @@ pub(crate) fn fail_next_recovery_at(point: Option<RecoveryCommitPoint>) {
 pub(crate) fn recovery_checkpoint(point: RecoveryCommitPoint) -> std::io::Result<()> {
     #[cfg(test)]
     if RECOVERY_FAULT.with(|fault| {
-        if fault.get() == Some(point) { fault.set(None); true } else { false }
+        if fault.get() == Some(point) {
+            fault.set(None);
+            true
+        } else {
+            false
+        }
     }) {
-        return Err(std::io::Error::other(format!("Injected recovery boundary failure: {point:?}")));
+        return Err(std::io::Error::other(format!(
+            "Injected recovery boundary failure: {point:?}"
+        )));
     }
     let _ = point;
     Ok(())

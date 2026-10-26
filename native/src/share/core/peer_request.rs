@@ -108,7 +108,13 @@ impl PeerBackend {
             } else {
                 Instant::now() + io_deadline::PEER_OP_TIMEOUT
             };
-            match self.request_once_with_route(opened, req.clone(), lease.clone(), response_deadline, absolute || retryable) {
+            match self.request_once_with_route(
+                opened,
+                req.clone(),
+                lease.clone(),
+                response_deadline,
+                absolute || retryable,
+            ) {
                 Ok(response) => {
                     let response = decode_resp(response)?;
                     super::peer_telemetry::report_fs_success(
@@ -129,7 +135,11 @@ impl PeerBackend {
     }
 
     pub(super) fn request_once(
-        &self, opened: OpenedPeerStream, req: FsRequest, lease: Option<String>, deadline: Instant,
+        &self,
+        opened: OpenedPeerStream,
+        req: FsRequest,
+        lease: Option<String>,
+        deadline: Instant,
     ) -> io::Result<FsResponse> {
         self.request_once_with_route(opened, req, lease, deadline, true)
     }
@@ -153,14 +163,18 @@ impl PeerBackend {
                 return Err(error);
             }
         };
-        let result = self.node.block_on_route(opened.generation, io_deadline::run_for_until(
-            "peer filesystem request",
-            timeout, absolute.then_some(deadline),
-            async {
-                send_ctrl(&mut opened.send, &Ctrl::Fs { req, lease }).await?;
-                recv_resp_wire(&mut opened.recv).await
-            },
-        ));
+        let result = self.node.block_on_route(
+            opened.generation,
+            io_deadline::run_for_until(
+                "peer filesystem request",
+                timeout,
+                absolute.then_some(deadline),
+                async {
+                    send_ctrl(&mut opened.send, &Ctrl::Fs { req, lease }).await?;
+                    recv_resp_wire(&mut opened.recv).await
+                },
+            ),
+        );
         let result = result.and_then(|response| {
             response_matches(&expected, &response)
                 .then_some(response)
@@ -263,9 +277,9 @@ impl PeerBackend {
                 }
             };
             let connection = opened.connection.clone();
-            let result = self
-                .node
-                .block_on_route(opened.generation, io_deadline::run_for_until(operation, timeout, Some(attempt_deadline), async {
+            let result = self.node.block_on_route(
+                opened.generation,
+                io_deadline::run_for_until(operation, timeout, Some(attempt_deadline), async {
                     send_ctrl(
                         &mut opened.send,
                         &Ctrl::Fs {
@@ -275,7 +289,8 @@ impl PeerBackend {
                     )
                     .await?;
                     recv_resp_wire(&mut opened.recv).await
-                }));
+                }),
+            );
             match result {
                 Ok(response) => match decode_resp(response) {
                     Ok(FsResponse::Data { size }) => {
@@ -339,9 +354,9 @@ impl PeerBackend {
                     return Err(error);
                 }
             };
-            let result = self
-                .node
-                .block_on_route(opened.generation, io_deadline::run_for_until(operation, timeout, Some(response_deadline), async {
+            let result = self.node.block_on_route(
+                opened.generation,
+                io_deadline::run_for_until(operation, timeout, Some(response_deadline), async {
                     send_ctrl(
                         &mut opened.send,
                         &Ctrl::Fs {
@@ -351,7 +366,8 @@ impl PeerBackend {
                     )
                     .await?;
                     recv_resp_wire(&mut opened.recv).await
-                }));
+                }),
+            );
             let response = match result {
                 Ok(response) => decode_resp(response)?,
                 Err(error) => {

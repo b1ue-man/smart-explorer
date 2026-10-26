@@ -18,15 +18,19 @@ pub(in crate::app) fn confirm_yes_no(title: &str, msg: &str) -> bool {
 }
 
 pub(in crate::app) fn list_drives() -> Vec<String> {
-    read_drive_inventory().map(|entries| entries.into_iter().map(|entry| entry.root).collect())
+    read_drive_inventory()
+        .map(|entries| entries.into_iter().map(|entry| entry.root).collect())
         .unwrap_or_else(|_| vec!["/".to_string()])
 }
 
 pub(in crate::app) fn drive_info_list(drives: &[String]) -> Vec<(String, u64, u64)> {
-    drives.iter().map(|root| {
-        let (free, total) = drive_inventory::read_drive_capacity(root);
-        (root.clone(), free, total)
-    }).collect()
+    drives
+        .iter()
+        .map(|root| {
+            let (free, total) = drive_inventory::read_drive_capacity(root);
+            (root.clone(), free, total)
+        })
+        .collect()
 }
 
 pub(in crate::app) fn reveal_path_in_file_manager(path: &str) {
@@ -241,7 +245,7 @@ mod drive_events;
 #[path = "linux_os/drive_inventory.rs"]
 mod drive_inventory;
 pub(crate) use drive_events::start_drive_events;
-pub(crate) use drive_inventory::{read_drive_inventory, read_drive_capacity};
+pub(crate) use drive_inventory::{read_drive_capacity, read_drive_inventory};
 
 pub(in crate::app) fn local_path_text(path: &std::path::Path) -> String {
     path.to_string_lossy().into_owned()

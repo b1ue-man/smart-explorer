@@ -211,7 +211,7 @@ pub(crate) fn list() -> io::Result<Option<WindowList>> {
             },
             title: toplevel.title.clone(),
             app: toplevel.app_id.clone(),
-            app_id: (!toplevel.app_id.is_empty()).then(||toplevel.app_id.clone()),
+            app_id: (!toplevel.app_id.is_empty()).then(|| toplevel.app_id.clone()),
             icon: None,
             pid: None,
             monitor: None,

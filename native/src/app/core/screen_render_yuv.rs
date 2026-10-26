@@ -1,7 +1,10 @@
 //! Slot-owned YUV textures, bind groups and parameters; shared pipeline stays immutable.
-use eframe::{egui,egui_wgpu::{self,wgpu}};
-use super::screen_wgpu_yuv::{YuvFrame,YuvResources,coefficients};
-use crate::screen::core::{pixel_convert::FrameSize,host_backend::Chroma};
+use super::screen_wgpu_yuv::{coefficients, YuvFrame, YuvResources};
+use crate::screen::core::{host_backend::Chroma, pixel_convert::FrameSize};
+use eframe::{
+    egui,
+    egui_wgpu::{self, wgpu},
+};
 struct Planes {
     size: FrameSize,
     i420: bool,
@@ -63,24 +66,49 @@ fn write_plane(
     );
 }
 
-pub(crate) struct YuvImage { params:wgpu::Buffer, planes:Option<Planes>,view:Option<[f32;4]> }
+pub(crate) struct YuvImage {
+    params: wgpu::Buffer,
+    planes: Option<Planes>,
+    view: Option<[f32; 4]>,
+}
 impl YuvImage {
-    pub(crate) fn new(device:&wgpu::Device)->Self {
+    pub(crate) fn new(device: &wgpu::Device) -> Self {
         let params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("screen viewer yuv"),
             size: 48,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        Self {params,planes:None,view:None}
+        Self {
+            params,
+            planes: None,
+            view: None,
+        }
     }
-    pub(crate) fn compatible(&self,frame:&YuvFrame)->bool {self.planes.as_ref().is_some_and(|p|p.size==frame.size&&p.i420==matches!(frame.picture.chroma,Chroma::I420{..}))}
-    pub(crate) fn destroy(&self) {if let Some(p)=&self.planes {p.y.destroy();p.u.destroy();p.v.destroy();}self.params.destroy();}
+    pub(crate) fn compatible(&self, frame: &YuvFrame) -> bool {
+        self.planes.as_ref().is_some_and(|p| {
+            p.size == frame.size && p.i420 == matches!(frame.picture.chroma, Chroma::I420 { .. })
+        })
+    }
+    pub(crate) fn destroy(&self) {
+        if let Some(p) = &self.planes {
+            p.y.destroy();
+            p.u.destroy();
+            p.v.destroy();
+        }
+        self.params.destroy();
+    }
     /// Uploads `frame` unless it is already there.
-    pub(crate) fn upload(&mut self, resources:&YuvResources, device: &wgpu::Device, queue: &wgpu::Queue, frame: &YuvFrame) {
+    pub(crate) fn upload(
+        &mut self,
+        resources: &YuvResources,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        frame: &YuvFrame,
+    ) {
         let limit = device.limits().max_texture_dimension_2d;
         if !frame.fits() || frame.size.width > limit || frame.size.height > limit {
-            self.planes=None;
+            self.planes = None;
             return;
         }
         let picture = &frame.picture;
@@ -123,7 +151,20 @@ impl YuvImage {
             }
         }
         let [a, b, c, d] = coefficients(picture.matrix);
-        let values = [a, b, c, d, if i420 { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0];
+        let values = [
+            a,
+            b,
+            c,
+            d,
+            if i420 { 1.0 } else { 0.0 },
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            1.0,
+        ];
         let mut bytes = [0u8; 48];
         for (slot, value) in bytes.chunks_exact_mut(4).zip(values) {
             slot.copy_from_slice(&value.to_ne_bytes());
@@ -131,7 +172,13 @@ impl YuvImage {
         queue.write_buffer(&self.params, 0, &bytes);
     }
 
-    fn new_planes(&self, resources:&YuvResources, device: &wgpu::Device, size: FrameSize, i420: bool) -> Planes {
+    fn new_planes(
+        &self,
+        resources: &YuvResources,
+        device: &wgpu::Device,
+        size: FrameSize,
+        i420: bool,
+    ) -> Planes {
         let chroma = size.chroma();
         let y = plane_texture(
             device,
@@ -208,19 +255,34 @@ impl YuvImage {
         }
     }
 
-    pub(crate) fn set_view(&mut self, queue: &wgpu::Queue, rect: egui::Rect, ppp:f32, screen:[u32;2]) {
-        let Some(values) = super::screen_viewport::viewport_uv(rect,ppp,screen) else { return; };
-        self.view=Some(values);
-        let mut bytes = [0u8;16];
-        for (slot,value) in bytes.chunks_exact_mut(4).zip(values) { slot.copy_from_slice(&value.to_ne_bytes()); }
-        queue.write_buffer(&self.params,32,&bytes);
+    pub(crate) fn set_view(
+        &mut self,
+        queue: &wgpu::Queue,
+        rect: egui::Rect,
+        ppp: f32,
+        screen: [u32; 2],
+    ) {
+        let Some(values) = super::screen_viewport::viewport_uv(rect, ppp, screen) else {
+            return;
+        };
+        self.view = Some(values);
+        let mut bytes = [0u8; 16];
+        for (slot, value) in bytes.chunks_exact_mut(4).zip(values) {
+            slot.copy_from_slice(&value.to_ne_bytes());
+        }
+        queue.write_buffer(&self.params, 32, &bytes);
     }
 
-    pub(crate) fn matches_view(&self,rect:egui::Rect,ppp:f32,screen:[u32;2])->bool {
-        self.view==super::screen_viewport::viewport_uv(rect,ppp,screen)
+    pub(crate) fn matches_view(&self, rect: egui::Rect, ppp: f32, screen: [u32; 2]) -> bool {
+        self.view == super::screen_viewport::viewport_uv(rect, ppp, screen)
     }
     /// Draws the uploaded picture over the render pass's viewport.
-    pub(crate) fn draw(&self, resources:&YuvResources, pass: &mut wgpu::RenderPass<'_>, nearest: bool) {
+    pub(crate) fn draw(
+        &self,
+        resources: &YuvResources,
+        pass: &mut wgpu::RenderPass<'_>,
+        nearest: bool,
+    ) {
         let Some(planes) = self.planes.as_ref() else {
             return;
         };

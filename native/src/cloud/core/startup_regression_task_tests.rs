@@ -7,7 +7,8 @@ fn refresh_access_from(provider: Provider, url: &str) -> Result<Tokens, String> 
     // This existing fixture isolates token exchange, not the Drive identity API.
     super::super::os::coordinator::refresh(provider, url, None, |_| {
         Ok("startup-regression-fixture-account".into())
-    }).map_err(|error| error.to_string())
+    })
+    .map_err(|error| error.to_string())
 }
 
 struct Fixture {
@@ -74,7 +75,10 @@ fn startup_regression_task_refresh_sends_preserved_client_id_and_token() {
             match listener.accept() {
                 Ok((stream, _)) => break stream,
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    assert!(std::time::Instant::now() < deadline, "missing OAuth request");
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "missing OAuth request"
+                    );
                     std::thread::sleep(Duration::from_millis(10));
                 }
                 Err(error) => panic!("OAuth provider accept failed: {error}"),

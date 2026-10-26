@@ -11,10 +11,10 @@ mod authorization_policy;
 mod backend;
 #[path = "core/backend_capabilities.rs"]
 mod backend_capabilities;
-#[path = "core/capacity.rs"]
-mod capacity;
 #[path = "core/blocking.rs"]
 mod blocking;
+#[path = "core/capacity.rs"]
+mod capacity;
 #[path = "core/configuration_runtime.rs"]
 mod configuration_runtime;
 #[path = "core/connection_events.rs"]
@@ -86,35 +86,6 @@ mod discovery_exchange;
 #[path = "core/discovery_exchange_owner.rs"]
 mod discovery_exchange_owner;
 pub(crate) use discovery_exchange_owner::{DiscoveryExchangeCancellation, DiscoveryExchangeOwner};
-#[path = "core/route_state.rs"]
-pub(crate) mod route_state;
-#[path = "core/route_diagnostics.rs"]
-pub(crate) mod route_diagnostics;
-#[path = "core/route_policy.rs"]
-mod route_policy;
-#[path = "core/route_protocol.rs"]
-pub(crate) mod route_protocol;
-#[path = "core/route_cancellation.rs"]
-pub(crate) mod route_cancellation;
-#[path = "core/node_routes.rs"]
-mod node_routes;
-#[path = "core/node_access.rs"]
-pub(crate) mod node_access;
-#[path = "os/shared/route_adapter.rs"]
-mod route_adapter;
-#[path = "os/shared/route_monitor.rs"]
-pub(crate) mod route_monitor;
-#[path = "os/shared/route_history.rs"]
-mod route_history;
-#[cfg(windows)]
-#[path = "os/windows/route_interfaces.rs"]
-mod route_interfaces;
-#[cfg(target_os = "linux")]
-#[path = "os/linux_os/route_interfaces.rs"]
-mod route_interfaces;
-#[cfg(target_os = "android")]
-#[path = "os/android/route_interfaces.rs"]
-mod route_interfaces;
 #[path = "core/discovery_exchange_port_impl.rs"]
 mod discovery_exchange_port_impl;
 #[path = "core/discovery_offer_book.rs"]
@@ -187,6 +158,35 @@ mod exec_job;
 mod exec_platform;
 #[path = "core/exec_policy.rs"]
 mod exec_policy;
+#[path = "core/node_access.rs"]
+pub(crate) mod node_access;
+#[path = "core/node_routes.rs"]
+mod node_routes;
+#[path = "os/shared/route_adapter.rs"]
+mod route_adapter;
+#[path = "core/route_cancellation.rs"]
+pub(crate) mod route_cancellation;
+#[path = "core/route_diagnostics.rs"]
+pub(crate) mod route_diagnostics;
+#[path = "os/shared/route_history.rs"]
+mod route_history;
+#[cfg(windows)]
+#[path = "os/windows/route_interfaces.rs"]
+mod route_interfaces;
+#[cfg(target_os = "linux")]
+#[path = "os/linux_os/route_interfaces.rs"]
+mod route_interfaces;
+#[cfg(target_os = "android")]
+#[path = "os/android/route_interfaces.rs"]
+mod route_interfaces;
+#[path = "os/shared/route_monitor.rs"]
+pub(crate) mod route_monitor;
+#[path = "core/route_policy.rs"]
+mod route_policy;
+#[path = "core/route_protocol.rs"]
+pub(crate) mod route_protocol;
+#[path = "core/route_state.rs"]
+pub(crate) mod route_state;
 // Pure `/proc` logic of the Android exec host; the Linux host tests cover it.
 #[path = "core/analysis_admission.rs"]
 mod analysis_admission;
@@ -317,6 +317,8 @@ mod legacy_probe_persist;
 pub(crate) mod lifecycle_view;
 #[path = "core/line.rs"]
 mod line;
+#[path = "core/login_transport.rs"]
+pub(crate) mod login_transport;
 #[path = "core/mount_lease.rs"]
 mod mount_lease;
 #[path = "core/mount_lease_cleanup.rs"]
@@ -329,24 +331,12 @@ mod node;
 mod node_accept;
 #[path = "core/node_screen.rs"]
 pub(crate) mod node_screen;
-#[path = "core/node_tcp.rs"]
-pub(crate) mod node_tcp;
-#[path = "core/login_transport.rs"]
-pub(crate) mod login_transport;
-#[path = "core/node_tcp_link.rs"]
-mod node_tcp_link;
-#[path = "core/tcp_forward.rs"]
-pub(crate) mod tcp_forward;
-#[path = "core/tcp_wire.rs"]
-pub(crate) mod tcp_wire;
-#[path = "core/tcp_registry.rs"]
-pub(crate) mod tcp_registry;
-#[path = "os/shared/tcp_sockets.rs"]
-pub(crate) mod tcp_sockets;
-#[path = "os/shared/tcp_pump.rs"]
-pub(crate) mod tcp_pump;
 #[path = "core/node_sessions.rs"]
 mod node_sessions;
+#[path = "core/node_tcp.rs"]
+pub(crate) mod node_tcp;
+#[path = "core/node_tcp_link.rs"]
+mod node_tcp_link;
 #[path = "core/peer_endpoint_source.rs"]
 mod peer_endpoint_source;
 #[path = "core/peer_fs_logging.rs"]
@@ -458,6 +448,16 @@ mod system;
 #[cfg(not(windows))]
 #[path = "os/linux_os/system.rs"]
 mod system;
+#[path = "core/tcp_forward.rs"]
+pub(crate) mod tcp_forward;
+#[path = "os/shared/tcp_pump.rs"]
+pub(crate) mod tcp_pump;
+#[path = "core/tcp_registry.rs"]
+pub(crate) mod tcp_registry;
+#[path = "os/shared/tcp_sockets.rs"]
+pub(crate) mod tcp_sockets;
+#[path = "core/tcp_wire.rs"]
+pub(crate) mod tcp_wire;
 #[path = "core/tracked_signal_dispatch.rs"]
 mod tracked_signal_dispatch;
 #[path = "core/tracked_signal_outbox.rs"]
@@ -489,6 +489,8 @@ include!("api_exports.rs");
 
 #[path = "core/analysis_resources.rs"]
 mod analysis_resources;
+#[path = "core/apps_wire.rs"]
+pub(crate) mod apps_wire;
 #[path = "core/fair_admission.rs"]
 mod fair_admission;
 #[path = "core/fs_delete.rs"]
@@ -526,6 +528,10 @@ mod host_remove_tree;
 mod host_stream;
 #[path = "os/shared/host_watch.rs"]
 mod host_watch;
+#[path = "core/node_apps.rs"]
+mod node_apps;
+#[path = "core/node_apps_link.rs"]
+mod node_apps_link;
 #[path = "core/node_policy.rs"]
 mod node_policy;
 #[path = "core/peer_duplicates.rs"]
@@ -540,10 +546,6 @@ mod peer_list_batch;
 mod peer_stream;
 #[path = "core/peer_watch.rs"]
 mod peer_watch;
-#[path = "os/shared/storage_duplicate_host.rs"]
-mod storage_duplicate_host;
-#[path = "os/shared/storage_roots.rs"]
-mod storage_roots;
 #[path = "core/quic_stats.rs"]
 mod quic_stats;
 #[path = "core/quic_stats_hub.rs"]
@@ -553,17 +555,15 @@ mod quic_stats_proc;
 #[cfg(test)]
 #[path = "core/quic_stats_tests.rs"]
 mod quic_stats_tests;
-#[path = "core/transfer_meter.rs"]
-mod transfer_meter;
-#[path = "core/apps_wire.rs"]
-pub(crate) mod apps_wire;
-#[path = "core/node_apps.rs"]
-mod node_apps;
-#[path = "core/node_apps_link.rs"]
-mod node_apps_link;
 #[path = "core/service_routes.rs"]
 mod service_routes;
+#[path = "os/shared/storage_duplicate_host.rs"]
+mod storage_duplicate_host;
+#[path = "os/shared/storage_roots.rs"]
+mod storage_roots;
+#[path = "core/transfer_meter.rs"]
+mod transfer_meter;
 pub use service_routes::{
-    ShareRouteSnapshot, DeviceRouteDiagnostics, ConnectionRouteDiagnostics,
-    RouteBudgetView, RouteMeasurementView, ROUTE_PAYLOAD_MEASUREMENT_NOTE,
+    ConnectionRouteDiagnostics, DeviceRouteDiagnostics, RouteBudgetView, RouteMeasurementView,
+    ShareRouteSnapshot, ROUTE_PAYLOAD_MEASUREMENT_NOTE,
 };

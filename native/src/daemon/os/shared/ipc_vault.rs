@@ -69,8 +69,13 @@ pub(in crate::daemon) fn serve(
             Ok(policy) => IpcResponse::Vault(VaultIpcReply::MountPolicy(policy)),
             Err(error) => failure(error, None),
         },
-        VaultIpcRequest::SetRootTrust { site, trusted } => policy_saved(&site, crate::vault::set_root_trust(&site, trusted)),
-        VaultIpcRequest::SetCleartextCopyPolicy { site, always } => policy_saved(&site, crate::vault::set_cleartext_copy_policy(&site, always)),
+        VaultIpcRequest::SetRootTrust { site, trusted } => {
+            policy_saved(&site, crate::vault::set_root_trust(&site, trusted))
+        }
+        VaultIpcRequest::SetCleartextCopyPolicy { site, always } => policy_saved(
+            &site,
+            crate::vault::set_cleartext_copy_policy(&site, always),
+        ),
         VaultIpcRequest::Unlock {
             site,
             password,

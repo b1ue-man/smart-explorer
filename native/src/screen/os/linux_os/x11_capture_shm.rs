@@ -13,7 +13,11 @@ pub(super) struct Segment {
 unsafe impl Send for Segment {}
 
 impl Segment {
-    pub(super) fn create(conn: &CaptureConnection, len: usize, grant: &CaptureGrant) -> io::Result<Self> {
+    pub(super) fn create(
+        conn: &CaptureConnection,
+        len: usize,
+        grant: &CaptureGrant,
+    ) -> io::Result<Self> {
         let slice = grant.claim(CaptureOwner::NativeSurface, len as u64)?;
         // SAFETY: plain system calls; the descriptor is owned right away.
         let (fd, map) = unsafe {
@@ -39,14 +43,23 @@ impl Segment {
             (fd, map)
         };
         // From here on the mapping goes away with the segment.
-        let mut segment = Self { id: 0, map, len, slice: Some(slice) };
+        let mut segment = Self {
+            id: 0,
+            map,
+            len,
+            slice: Some(slice),
+        };
         segment.id = conn.generate_id().map_err(failed)?;
         // The server gets its own descriptor; ours closes with `fd`.
         let shared = fd.try_clone()?;
-        let attach = conn.shm_attach_fd(segment.id, shared, false).map_err(failed)
+        let attach = conn
+            .shm_attach_fd(segment.id, shared, false)
+            .map_err(failed)
             .and_then(|cookie| cookie.check().map_err(failed));
         if let Err(error) = attach {
-            if let Some(slice) = segment.slice.take() {conn.stream().gate().retain(slice);}
+            if let Some(slice) = segment.slice.take() {
+                conn.stream().gate().retain(slice);
+            }
             return Err(error);
         }
         Ok(segment)
@@ -60,10 +73,14 @@ impl Segment {
     /// Tells the server to let go of the segment, then unmaps it.
     pub(super) fn release(mut self, conn: &CaptureConnection) {
         if self.id != 0 {
-            let detached = conn.shm_detach(self.id).map_err(failed)
+            let detached = conn
+                .shm_detach(self.id)
+                .map_err(failed)
                 .and_then(|cookie| cookie.check().map_err(failed));
             if detached.is_err() {
-                if let Some(slice) = self.slice.take() {conn.stream().gate().retain(slice);}
+                if let Some(slice) = self.slice.take() {
+                    conn.stream().gate().retain(slice);
+                }
             }
         }
     }
@@ -75,4 +92,3 @@ impl Drop for Segment {
         unsafe { libc::munmap(self.map, self.len) };
     }
 }
-

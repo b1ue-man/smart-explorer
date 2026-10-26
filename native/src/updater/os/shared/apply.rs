@@ -85,7 +85,12 @@ fn launch_helper(
     ];
 
     if let Some(launcher) = bundle.launcher() {
-        args.extend(["--launcher-staged".into(), path_arg(launcher.path()), "--launcher-sha256".into(), launcher.sha256().to_string()]);
+        args.extend([
+            "--launcher-staged".into(),
+            path_arg(launcher.path()),
+            "--launcher-sha256".into(),
+            launcher.sha256().to_string(),
+        ]);
     }
 
     // Keep this immediately adjacent to the process boundary. The helper also

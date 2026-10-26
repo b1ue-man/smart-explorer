@@ -212,165 +212,180 @@ pub(crate) fn parse_video_format(bytes: &[u8]) -> Option<(VideoFormat, FrameSize
     Some((format?, frame?))
 }
 
-fn int_property(body:&mut Vec<u8>,key:u32,value:u32) {
-    property(body,key);pod(body,4,&value.to_le_bytes());
+fn int_property(body: &mut Vec<u8>, key: u32, value: u32) {
+    property(body, key);
+    pod(body, 4, &value.to_le_bytes());
 }
 
 /// Functional consumer minimum, never an observed pool count or stride.
 /// PipeWire 0.3.65 buffers.c parses buffers/stride as optional. Omitting the
 /// count preserves its server fallback; a size range prevents the 8192-byte
 /// fallback from becoming too small for an unconfigured video producer.
-pub(crate) fn consumer_buffers_pod(size:FrameSize)->std::io::Result<Vec<u8>> {
-    let minimum=size.width.checked_mul(size.height).and_then(|n|n.checked_mul(4))
-        .filter(|n|*n!=0 && *n<=i32::MAX as u32)
-        .ok_or_else(||std::io::Error::other("pipewire invalid consumer minimum"))?;
-    let mut body=Vec::new();word(&mut body,0x40004);word(&mut body,5);
-    int_property(&mut body,2,1);
-    property(&mut body,3);choice(&mut body,CHOICE_RANGE,4,4,&[minimum,minimum,i32::MAX as u32]);
-    property(&mut body,6);choice(&mut body,4,4,4,&[(1<<1)|(1<<2)]);
-    let mut out=Vec::new();pod(&mut out,TYPE_OBJECT,&body);Ok(out)
+pub(crate) fn consumer_buffers_pod(size: FrameSize) -> std::io::Result<Vec<u8>> {
+    let minimum = size
+        .width
+        .checked_mul(size.height)
+        .and_then(|n| n.checked_mul(4))
+        .filter(|n| *n != 0 && *n <= i32::MAX as u32)
+        .ok_or_else(|| std::io::Error::other("pipewire invalid consumer minimum"))?;
+    let mut body = Vec::new();
+    word(&mut body, 0x40004);
+    word(&mut body, 5);
+    int_property(&mut body, 2, 1);
+    property(&mut body, 3);
+    choice(
+        &mut body,
+        CHOICE_RANGE,
+        4,
+        4,
+        &[minimum, minimum, i32::MAX as u32],
+    );
+    property(&mut body, 6);
+    choice(&mut body, 4, 4, 4, &[(1 << 1) | (1 << 2)]);
+    let mut out = Vec::new();
+    pod(&mut out, TYPE_OBJECT, &body);
+    Ok(out)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-fn word(out: &mut Vec<u8>, value: u32) {
-    out.extend_from_slice(&value.to_le_bytes());
-}
-
-fn pad(out: &mut Vec<u8>) {
-    while out.len() % 8 != 0 {
-        out.push(0);
+    fn word(out: &mut Vec<u8>, value: u32) {
+        out.extend_from_slice(&value.to_le_bytes());
     }
-}
 
-/// An `Id` pod: size 4, type 3, the id, 4 bytes of padding.
-fn id_pod(out: &mut Vec<u8>, id: u32) {
-    word(out, 4);
-    word(out, 3);
-    word(out, id);
-    word(out, 0);
-}
-
-/// A choice pod over `values` of `child_size` bytes and `child_type`.
-fn choice_pod(out: &mut Vec<u8>, kind: u32, child_size: u32, child_type: u32, values: &[u32]) {
-    let body_size = 8 + 8 + values.len() as u32 * 4;
-    word(out, body_size);
-    word(out, 19);
-    word(out, kind);
-    word(out, 0);
-    word(out, child_size);
-    word(out, child_type);
-    for value in values {
-        word(out, *value);
+    fn pad(out: &mut Vec<u8>) {
+        while out.len() % 8 != 0 {
+            out.push(0);
+        }
     }
-    pad(out);
-}
 
-#[test]
-fn screen_task_spa_pod_enum_format_bytes() {
-    // Written out from the description of `spa/param/video/format-utils.h`
-    // and `spa/pod/pod.h`: object, then key/flags/pod for each property.
-    let mut body = Vec::new();
-    word(&mut body, 0x40003); // SPA_TYPE_OBJECT_Format
-    word(&mut body, 3); // SPA_PARAM_EnumFormat
-    word(&mut body, 1); // mediaType
-    word(&mut body, 0);
-    id_pod(&mut body, 2); // video
-    word(&mut body, 2); // mediaSubtype
-    word(&mut body, 0);
-    id_pod(&mut body, 1); // raw
-    word(&mut body, 0x20001); // VIDEO_format
-    word(&mut body, 0);
-    choice_pod(&mut body, 3, 4, 3, &[8, 8, 7, 12, 11]); // Enum of Ids
-    word(&mut body, 0x20003); // VIDEO_size
-    word(&mut body, 0);
-    choice_pod(&mut body, 1, 8, 10, &[1920, 1080, 1, 1, 16384, 16384]); // Range
-    word(&mut body, 0x20004); // VIDEO_framerate
-    word(&mut body, 0);
-    choice_pod(&mut body, 1, 8, 11, &[0, 1, 0, 1, 1000, 1]);
-    let mut expected = Vec::new();
-    word(&mut expected, body.len() as u32);
-    word(&mut expected, 15); // Object
-    expected.extend_from_slice(&body);
-    pad(&mut expected);
-    let built = enum_format_pod();
-    assert_eq!(built, expected);
-    let size = u32::from_le_bytes(built[0..4].try_into().unwrap()) as usize;
-    assert_eq!(size, built.len() - 8);
-    assert_eq!(built.len() % 8, 0);
-    // No VIDEO_modifier (key 0x20005): producers keep to shared memory.
-    assert!(!built
-        .windows(4)
-        .any(|word| word == 0x20005u32.to_le_bytes()));
-}
+    /// An `Id` pod: size 4, type 3, the id, 4 bytes of padding.
+    fn id_pod(out: &mut Vec<u8>, id: u32) {
+        word(out, 4);
+        word(out, 3);
+        word(out, id);
+        word(out, 0);
+    }
 
-#[test]
-fn spa_pod_negotiated_format_is_read_and_garbage_is_not() {
-    let mut body = Vec::new();
-    word(&mut body, 0x40003);
-    word(&mut body, 4); // SPA_PARAM_Format
-    word(&mut body, 1);
-    word(&mut body, 0);
-    id_pod(&mut body, 2);
-    word(&mut body, 0x20001);
-    word(&mut body, 0);
-    id_pod(&mut body, 12); // BGRA
-    word(&mut body, 0x20003);
-    word(&mut body, 0);
-    word(&mut body, 8);
-    word(&mut body, 10); // Rectangle
-    word(&mut body, 1920);
-    word(&mut body, 1080);
-    word(&mut body, 0x20004);
-    word(&mut body, 0);
-    word(&mut body, 8);
-    word(&mut body, 11); // Fraction
-    word(&mut body, 60);
-    word(&mut body, 1);
-    let mut pod = Vec::new();
-    word(&mut pod, body.len() as u32);
-    word(&mut pod, 15);
-    pod.extend_from_slice(&body);
-    assert_eq!(
-        parse_video_format(&pod),
-        Some((VideoFormat::Bgra, FrameSize::new(1920, 1080)))
-    );
-    // The offer holds choices, not values: nothing negotiated.
-    assert_eq!(parse_video_format(&enum_format_pod()), None);
-    assert_eq!(parse_video_format(&pod[..pod.len() - 5]), None);
-    assert_eq!(parse_video_format(&[0u8; 3]), None);
-    assert_eq!(parse_video_format(&[]), None);
-}
+    /// A choice pod over `values` of `child_size` bytes and `child_type`.
+    fn choice_pod(out: &mut Vec<u8>, kind: u32, child_size: u32, child_type: u32, values: &[u32]) {
+        let body_size = 8 + 8 + values.len() as u32 * 4;
+        word(out, body_size);
+        word(out, 19);
+        word(out, kind);
+        word(out, 0);
+        word(out, child_size);
+        word(out, child_type);
+        for value in values {
+            word(out, *value);
+        }
+        pad(out);
+    }
 
-/// `spa_pod_fixate` turns the choices of the negotiated format into choices
-/// of the kind `None` that keep their values; the first one is the value
-/// (KWin through the KDE portal). A choice that still offers alternatives is
-/// no negotiated format.
-#[test]
-fn spa_pod_negotiated_format_reads_fixated_choices() {
-    let object = |format_kind: u32, size_kind: u32| {
+    #[test]
+    fn screen_task_spa_pod_enum_format_bytes() {
+        // Written out from the description of `spa/param/video/format-utils.h`
+        // and `spa/pod/pod.h`: object, then key/flags/pod for each property.
+        let mut body = Vec::new();
+        word(&mut body, 0x40003); // SPA_TYPE_OBJECT_Format
+        word(&mut body, 3); // SPA_PARAM_EnumFormat
+        word(&mut body, 1); // mediaType
+        word(&mut body, 0);
+        id_pod(&mut body, 2); // video
+        word(&mut body, 2); // mediaSubtype
+        word(&mut body, 0);
+        id_pod(&mut body, 1); // raw
+        word(&mut body, 0x20001); // VIDEO_format
+        word(&mut body, 0);
+        choice_pod(&mut body, 3, 4, 3, &[8, 8, 7, 12, 11]); // Enum of Ids
+        word(&mut body, 0x20003); // VIDEO_size
+        word(&mut body, 0);
+        choice_pod(&mut body, 1, 8, 10, &[1920, 1080, 1, 1, 16384, 16384]); // Range
+        word(&mut body, 0x20004); // VIDEO_framerate
+        word(&mut body, 0);
+        choice_pod(&mut body, 1, 8, 11, &[0, 1, 0, 1, 1000, 1]);
+        let mut expected = Vec::new();
+        word(&mut expected, body.len() as u32);
+        word(&mut expected, 15); // Object
+        expected.extend_from_slice(&body);
+        pad(&mut expected);
+        let built = enum_format_pod();
+        assert_eq!(built, expected);
+        let size = u32::from_le_bytes(built[0..4].try_into().unwrap()) as usize;
+        assert_eq!(size, built.len() - 8);
+        assert_eq!(built.len() % 8, 0);
+        // No VIDEO_modifier (key 0x20005): producers keep to shared memory.
+        assert!(!built
+            .windows(4)
+            .any(|word| word == 0x20005u32.to_le_bytes()));
+    }
+
+    #[test]
+    fn spa_pod_negotiated_format_is_read_and_garbage_is_not() {
         let mut body = Vec::new();
         word(&mut body, 0x40003);
         word(&mut body, 4); // SPA_PARAM_Format
+        word(&mut body, 1);
+        word(&mut body, 0);
+        id_pod(&mut body, 2);
         word(&mut body, 0x20001);
         word(&mut body, 0);
-        choice_pod(&mut body, format_kind, 4, 3, &[8, 12, 11]); // BGRx first
+        id_pod(&mut body, 12); // BGRA
         word(&mut body, 0x20003);
         word(&mut body, 0);
-        choice_pod(&mut body, size_kind, 8, 10, &[1280, 800, 1, 1, 4096, 4096]);
+        word(&mut body, 8);
+        word(&mut body, 10); // Rectangle
+        word(&mut body, 1920);
+        word(&mut body, 1080);
+        word(&mut body, 0x20004);
+        word(&mut body, 0);
+        word(&mut body, 8);
+        word(&mut body, 11); // Fraction
+        word(&mut body, 60);
+        word(&mut body, 1);
         let mut pod = Vec::new();
         word(&mut pod, body.len() as u32);
         word(&mut pod, 15);
         pod.extend_from_slice(&body);
-        pod
-    };
-    assert_eq!(
-        parse_video_format(&object(0, 0)),
-        Some((VideoFormat::Bgrx, FrameSize::new(1280, 800)))
-    );
-    assert_eq!(parse_video_format(&object(3, 0)), None);
-    assert_eq!(parse_video_format(&object(0, 1)), None);
-}
+        assert_eq!(
+            parse_video_format(&pod),
+            Some((VideoFormat::Bgra, FrameSize::new(1920, 1080)))
+        );
+        // The offer holds choices, not values: nothing negotiated.
+        assert_eq!(parse_video_format(&enum_format_pod()), None);
+        assert_eq!(parse_video_format(&pod[..pod.len() - 5]), None);
+        assert_eq!(parse_video_format(&[0u8; 3]), None);
+        assert_eq!(parse_video_format(&[]), None);
+    }
 
+    /// `spa_pod_fixate` turns the choices of the negotiated format into choices
+    /// of the kind `None` that keep their values; the first one is the value
+    /// (KWin through the KDE portal). A choice that still offers alternatives is
+    /// no negotiated format.
+    #[test]
+    fn spa_pod_negotiated_format_reads_fixated_choices() {
+        let object = |format_kind: u32, size_kind: u32| {
+            let mut body = Vec::new();
+            word(&mut body, 0x40003);
+            word(&mut body, 4); // SPA_PARAM_Format
+            word(&mut body, 0x20001);
+            word(&mut body, 0);
+            choice_pod(&mut body, format_kind, 4, 3, &[8, 12, 11]); // BGRx first
+            word(&mut body, 0x20003);
+            word(&mut body, 0);
+            choice_pod(&mut body, size_kind, 8, 10, &[1280, 800, 1, 1, 4096, 4096]);
+            let mut pod = Vec::new();
+            word(&mut pod, body.len() as u32);
+            word(&mut pod, 15);
+            pod.extend_from_slice(&body);
+            pod
+        };
+        assert_eq!(
+            parse_video_format(&object(0, 0)),
+            Some((VideoFormat::Bgrx, FrameSize::new(1280, 800)))
+        );
+        assert_eq!(parse_video_format(&object(3, 0)), None);
+        assert_eq!(parse_video_format(&object(0, 1)), None);
+    }
 }

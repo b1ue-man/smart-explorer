@@ -15,7 +15,8 @@ pub(crate) const MAX_ICON_PIXELS: u32 = MAX_ICON_SIDE * MAX_ICON_SIDE;
 pub(crate) const MAX_ICON_BYTES: usize = 256 * 1024;
 pub(crate) const MAX_ICON_BASE64_BYTES: usize = MAX_ICON_BYTES.div_ceil(3) * 4;
 pub(crate) const MAX_ICON_REQUEST_BYTES: usize = 4096;
-pub(crate) const MAX_ICON_REPLY_BYTES: usize = MAX_ICON_BASE64_BYTES + MAX_ICON_REQUEST_BYTES * 2 + 1024;
+pub(crate) const MAX_ICON_REPLY_BYTES: usize =
+    MAX_ICON_BASE64_BYTES + MAX_ICON_REQUEST_BYTES * 2 + 1024;
 pub(crate) const MAX_APP_ID_BYTES: usize = 1024;
 
 pub(crate) fn invalid(message: &str) -> io::Error {
@@ -30,7 +31,9 @@ pub(crate) fn checked_pixels(width: u32, height: u32) -> io::Result<usize> {
     if width == 0 || height == 0 || width > MAX_ICON_SIDE || height > MAX_ICON_SIDE {
         return Err(invalid("icon dimensions exceed the icon budget"));
     }
-    width.checked_mul(height).filter(|pixels| *pixels <= MAX_ICON_PIXELS)
+    width
+        .checked_mul(height)
+        .filter(|pixels| *pixels <= MAX_ICON_PIXELS)
         .and_then(|pixels| usize::try_from(pixels).ok())
         .ok_or_else(|| invalid("icon pixel count exceeds the icon budget"))
 }
@@ -46,9 +49,14 @@ pub(crate) struct IconRef {
 
 impl IconRef {
     pub(crate) fn validate(&self) -> io::Result<()> {
-        if self.version != ICON_VERSION || !valid_app_id(&self.app_id)
+        if self.version != ICON_VERSION
+            || !valid_app_id(&self.app_id)
             || self.sha256.len() != 64
-            || !self.sha256.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+            || !self
+                .sha256
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
             return Err(invalid("invalid icon reference"));
         }
         checked_pixels(self.width, self.height)?;
@@ -80,17 +88,25 @@ impl IconRequest {
     pub(crate) fn validate(&self) -> io::Result<()> {
         self.icon.validate()?;
         let valid = match &self.target {
-            IconTarget::Window { id } => !id.is_empty() && id.len() <= super::window_list::MAX_ID_BYTES
-                && id.bytes().all(|byte| byte.is_ascii_graphic()),
+            IconTarget::Window { id } => {
+                !id.is_empty()
+                    && id.len() <= super::window_list::MAX_ID_BYTES
+                    && id.bytes().all(|byte| byte.is_ascii_graphic())
+            }
             IconTarget::App { app_id } => valid_app_id(app_id) && *app_id == self.icon.app_id,
         };
-        if !valid { return Err(invalid("invalid icon target")); }
+        if !valid {
+            return Err(invalid("invalid icon target"));
+        }
         Ok(())
     }
 
     /// The caller must enforce current screen-list permission before obtaining `list`.
     /// A missing/changed entry, app or hash fails closed without touching an OS source.
-    pub(crate) fn authorize<'a>(&self, list: &'a WindowList) -> io::Result<AuthorizedIconEntry<'a>> {
+    pub(crate) fn authorize<'a>(
+        &self,
+        list: &'a WindowList,
+    ) -> io::Result<AuthorizedIconEntry<'a>> {
         self.validate()?;
         match &self.target {
             IconTarget::Window { id } => {
@@ -99,17 +115,27 @@ impl IconRequest {
                     entry.icon.as_ref() == Some(&self.icon)
                         && entry.app_id.as_deref() == Some(self.icon.app_id.as_str())
                 }) {
-                    if entries.next().is_none() { return Ok(AuthorizedIconEntry::Window(entry)); }
+                    if entries.next().is_none() {
+                        return Ok(AuthorizedIconEntry::Window(entry));
+                    }
                 }
             }
             IconTarget::App { app_id } => {
                 let mut entries = list.apps.iter().filter(|entry| &entry.app_id == app_id);
-                if let Some(entry) = entries.next().filter(|entry| entry.icon.as_ref() == Some(&self.icon)) {
-                    if entries.next().is_none() { return Ok(AuthorizedIconEntry::App(entry)); }
+                if let Some(entry) = entries
+                    .next()
+                    .filter(|entry| entry.icon.as_ref() == Some(&self.icon))
+                {
+                    if entries.next().is_none() {
+                        return Ok(AuthorizedIconEntry::App(entry));
+                    }
                 }
             }
         }
-        Err(io::Error::new(io::ErrorKind::PermissionDenied, "icon entry is absent, ambiguous or changed"))
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "icon entry is absent, ambiguous or changed",
+        ))
     }
 }
 
@@ -129,18 +155,27 @@ pub(crate) struct IconResponse {
 impl IconResponse {
     pub(crate) fn validate(&self) -> io::Result<()> {
         self.request.validate()?;
-        if let Some(content) = &self.content { content.bytes_for(&self.request.icon)?; }
+        if let Some(content) = &self.content {
+            content.bytes_for(&self.request.icon)?;
+        }
         Ok(())
     }
 }
 
 impl IconReply {
     pub(crate) fn new(app_id: &str, png: &[u8]) -> io::Result<Self> {
-        if !valid_app_id(app_id) { return Err(invalid("invalid icon app identity")); }
+        if !valid_app_id(app_id) {
+            return Err(invalid("invalid icon app identity"));
+        }
         let (width, height) = png_dimensions(png)?;
         Ok(Self {
-            icon: IconRef { version: ICON_VERSION, app_id: app_id.into(),
-                sha256: format!("{:x}", Sha256::digest(png)), width, height },
+            icon: IconRef {
+                version: ICON_VERSION,
+                app_id: app_id.into(),
+                sha256: format!("{:x}", Sha256::digest(png)),
+                width,
+                height,
+            },
             png_base64: STANDARD.encode(png),
         })
     }
@@ -148,12 +183,17 @@ impl IconReply {
     pub(crate) fn bytes_for(&self, expected: &IconRef) -> io::Result<Vec<u8>> {
         expected.validate()?;
         if &self.icon != expected || self.png_base64.len() > MAX_ICON_BASE64_BYTES {
-            return Err(invalid("icon reply does not match its reference or byte budget"));
+            return Err(invalid(
+                "icon reply does not match its reference or byte budget",
+            ));
         }
-        let png = STANDARD.decode(&self.png_base64).map_err(|_| invalid("invalid icon base64"))?;
+        let png = STANDARD
+            .decode(&self.png_base64)
+            .map_err(|_| invalid("invalid icon base64"))?;
         let (width, height) = png_dimensions(&png)?;
         if (width, height) != (expected.width, expected.height)
-            || format!("{:x}", Sha256::digest(&png)) != expected.sha256 {
+            || format!("{:x}", Sha256::digest(&png)) != expected.sha256
+        {
             return Err(invalid("icon hash or dimensions changed"));
         }
         Ok(png)
@@ -162,8 +202,12 @@ impl IconReply {
 
 /// Check the PNG IHDR before the decoder allocates its image/scanline buffers.
 pub(crate) fn png_dimensions(png: &[u8]) -> io::Result<(u32, u32)> {
-    if png.len() > MAX_ICON_BYTES || png.len() < 33 || &png[..8] != b"\x89PNG\r\n\x1a\n"
-        || png[8..12] != [0, 0, 0, 13] || &png[12..16] != b"IHDR" {
+    if png.len() > MAX_ICON_BYTES
+        || png.len() < 33
+        || &png[..8] != b"\x89PNG\r\n\x1a\n"
+        || png[8..12] != [0, 0, 0, 13]
+        || &png[12..16] != b"IHDR"
+    {
         return Err(invalid("invalid or oversized icon PNG"));
     }
     let width = u32::from_be_bytes([png[16], png[17], png[18], png[19]]);
@@ -176,26 +220,49 @@ pub(crate) fn png_dimensions(png: &[u8]) -> io::Result<(u32, u32)> {
 pub(crate) fn decode_png(png: &[u8]) -> io::Result<(u32, u32, Vec<u8>)> {
     let (width, height) = png_dimensions(png)?;
     let mut decoder = png::Decoder::new(Cursor::new(png));
-    decoder.set_limits(png::Limits { bytes: MAX_ICON_BYTES * 8 });
+    decoder.set_limits(png::Limits {
+        bytes: MAX_ICON_BYTES * 8,
+    });
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
-    let mut reader = decoder.read_info().map_err(|_| invalid("invalid icon PNG header"))?;
-    let bytes = reader.output_buffer_size().filter(|bytes| *bytes <= MAX_ICON_BYTES)
+    let mut reader = decoder
+        .read_info()
+        .map_err(|_| invalid("invalid icon PNG header"))?;
+    let bytes = reader
+        .output_buffer_size()
+        .filter(|bytes| *bytes <= MAX_ICON_BYTES)
         .ok_or_else(|| invalid("decoded icon exceeds its pixel budget"))?;
     let mut decoded = vec![0; bytes];
-    let output = reader.next_frame(&mut decoded).map_err(|_| invalid("invalid icon PNG pixels"))?;
-    if output.width != width || output.height != height || reader.info().animation_control.is_some() {
+    let output = reader
+        .next_frame(&mut decoded)
+        .map_err(|_| invalid("invalid icon PNG pixels"))?;
+    if output.width != width || output.height != height || reader.info().animation_control.is_some()
+    {
         return Err(invalid("animated or inconsistent icon PNG"));
     }
     let mut rgba = Vec::with_capacity(checked_pixels(width, height)? * 4);
     let decoded = &decoded[..output.buffer_size()];
     match output.color_type {
         png::ColorType::Rgba => rgba.extend_from_slice(decoded),
-        png::ColorType::Rgb => for p in decoded.chunks_exact(3) { rgba.extend_from_slice(&[p[0],p[1],p[2],255]); },
-        png::ColorType::GrayscaleAlpha => for p in decoded.chunks_exact(2) { rgba.extend_from_slice(&[p[0],p[0],p[0],p[1]]); },
-        png::ColorType::Grayscale => for p in decoded { rgba.extend_from_slice(&[*p,*p,*p,255]); },
+        png::ColorType::Rgb => {
+            for p in decoded.chunks_exact(3) {
+                rgba.extend_from_slice(&[p[0], p[1], p[2], 255]);
+            }
+        }
+        png::ColorType::GrayscaleAlpha => {
+            for p in decoded.chunks_exact(2) {
+                rgba.extend_from_slice(&[p[0], p[0], p[0], p[1]]);
+            }
+        }
+        png::ColorType::Grayscale => {
+            for p in decoded {
+                rgba.extend_from_slice(&[*p, *p, *p, 255]);
+            }
+        }
         png::ColorType::Indexed => return Err(invalid("unexpanded icon palette")),
     }
-    if rgba.len() != checked_pixels(width, height)? * 4 { return Err(invalid("invalid icon pixel length")); }
+    if rgba.len() != checked_pixels(width, height)? * 4 {
+        return Err(invalid("invalid icon pixel length"));
+    }
     Ok((width, height, rgba))
 }
 

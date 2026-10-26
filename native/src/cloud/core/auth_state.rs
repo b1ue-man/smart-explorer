@@ -50,27 +50,55 @@ pub struct AuthError {
 
 impl AuthError {
     pub(crate) fn new(state: AuthState) -> Self {
-        Self { state, provider: None }
+        Self {
+            state,
+            provider: None,
+        }
     }
 
     pub(crate) fn provider(status: u16, code: &str) -> Self {
         // Never persist descriptions, response bodies or an untrusted error value.
         let code = match code {
-            "invalid_grant" | "invalid_client" | "unauthorized_client" |
-            "access_denied" | "invalid_request" | "invalid_scope" |
-            "temporarily_unavailable" | "server_error" | "admin_policy_enforced" |
-            "rateLimitExceeded" | "userRateLimitExceeded" | "sharingRateLimitExceeded" | "quotaExceeded" => code,
+            "invalid_grant"
+            | "invalid_client"
+            | "unauthorized_client"
+            | "access_denied"
+            | "invalid_request"
+            | "invalid_scope"
+            | "temporarily_unavailable"
+            | "server_error"
+            | "admin_policy_enforced"
+            | "rateLimitExceeded"
+            | "userRateLimitExceeded"
+            | "sharingRateLimitExceeded"
+            | "quotaExceeded" => code,
             _ => "provider_error",
         };
         let state = if code == "invalid_grant" {
             AuthState::ReauthorizeRequired
-        } else if status >= 500 || status == 429 || matches!(code, "temporarily_unavailable" | "server_error")
-            || (status == 403 && matches!(code, "rateLimitExceeded" | "userRateLimitExceeded" | "sharingRateLimitExceeded" | "quotaExceeded")) {
+        } else if status >= 500
+            || status == 429
+            || matches!(code, "temporarily_unavailable" | "server_error")
+            || (status == 403
+                && matches!(
+                    code,
+                    "rateLimitExceeded"
+                        | "userRateLimitExceeded"
+                        | "sharingRateLimitExceeded"
+                        | "quotaExceeded"
+                ))
+        {
             AuthState::NetworkError
         } else {
             AuthState::ProviderError
         };
-        Self { state, provider: Some(ProviderFailure { http_status: Some(status), code: code.into() }) }
+        Self {
+            state,
+            provider: Some(ProviderFailure {
+                http_status: Some(status),
+                code: code.into(),
+            }),
+        }
     }
 }
 
@@ -79,7 +107,9 @@ impl std::fmt::Display for AuthError {
         f.write_str(self.state.message())?;
         if let Some(error) = &self.provider {
             write!(f, " [OAuth {}", error.code)?;
-            if let Some(status) = error.http_status { write!(f, "; HTTP {status}")?; }
+            if let Some(status) = error.http_status {
+                write!(f, "; HTTP {status}")?;
+            }
             f.write_str("]")?;
         }
         Ok(())
@@ -122,15 +152,27 @@ pub(crate) struct Session {
 
 impl Session {
     pub(crate) fn advance(&mut self) -> Result<(), AuthError> {
-        self.generation = self.generation.checked_add(1)
+        self.generation = self
+            .generation
+            .checked_add(1)
             .ok_or_else(|| AuthError::new(AuthState::StorageError))?;
         Ok(())
     }
 
-    pub(crate) fn check_account(&self, account: &str, expected: Option<&str>) -> Result<(), AuthError> {
-        if account.is_empty() { return Err(AuthError::new(AuthState::IdentityUnverified)); }
+    pub(crate) fn check_account(
+        &self,
+        account: &str,
+        expected: Option<&str>,
+    ) -> Result<(), AuthError> {
+        if account.is_empty() {
+            return Err(AuthError::new(AuthState::IdentityUnverified));
+        }
         if expected.is_some_and(|key| key != account)
-            || self.account_key.as_deref().is_some_and(|key| key != account) {
+            || self
+                .account_key
+                .as_deref()
+                .is_some_and(|key| key != account)
+        {
             return Err(AuthError::new(AuthState::IdentityConflict));
         }
         Ok(())

@@ -25,12 +25,12 @@ use crate::screen::core::metrics::ClockSync;
 use crate::screen::core::negotiate::{CodecOffer, CodecPreference};
 use crate::screen::core::registry::{SessionView, StopSelector};
 use crate::screen::core::viewer_client::{ViewerError, ViewerRequest, ViewerSession};
-use crate::screen::os::session_memory::handshake;
 use crate::screen::core::wire;
 use crate::screen::core::wire_control::{
     decode_viewer_frame, encode_host_frame, HostFrame, ViewerFrame,
 };
 use crate::screen::core::wire_hello::{ScreenErrorCode, SessionMode};
+use crate::screen::os::session_memory::handshake;
 use crate::share::access_grant::CapabilityDecision;
 use crate::share::{PeerOpenTarget, ShareService};
 
@@ -118,9 +118,16 @@ impl ShareHost {
             }
             ScreenIpcRequest::Metadata { target }
             | ScreenIpcRequest::PinnedMetadata { target, .. } => {
-                let request=StreamRequest {mode:SessionMode::View,source:Some(crate::screen::core::window_list::SourceId::Synthetic),
-                    decoders:vec![CodecOffer::tiles()],display_size:None,max_fps:1,frame_capabilities:None,expected_node:metadata_pin};
-                return self.screen_stream(stream,&target,request,true);
+                let request = StreamRequest {
+                    mode: SessionMode::View,
+                    source: Some(crate::screen::core::window_list::SourceId::Synthetic),
+                    decoders: vec![CodecOffer::tiles()],
+                    display_size: None,
+                    max_fps: 1,
+                    frame_capabilities: None,
+                    expected_node: metadata_pin,
+                };
+                return self.screen_stream(stream, &target, request, true);
             }
         };
         let response = match reply {
@@ -263,15 +270,26 @@ impl ShareHost {
         request: StreamRequest,
         metadata: bool,
     ) -> io::Result<()> {
-        if request.expected_node.as_deref().is_some_and(|expected| expected.trim().is_empty()) {
+        if request
+            .expected_node
+            .as_deref()
+            .is_some_and(|expected| expected.trim().is_empty())
+        {
             return write_response(&mut stream, &node_pin_failure().response());
         }
         let (service, link) = match self.screen_link(target) {
             Ok(linked) => linked,
             Err(error) => return write_response(&mut stream, &Failure::from(error).response()),
         };
-        if request.expected_node.as_deref().is_some_and(|expected| link.connection.remote_id().to_string() != expected) {
-            link.connection.close(iroh::endpoint::VarInt::from_u32(0x5345), b"screen node pin changed");
+        if request
+            .expected_node
+            .as_deref()
+            .is_some_and(|expected| link.connection.remote_id().to_string() != expected)
+        {
+            link.connection.close(
+                iroh::endpoint::VarInt::from_u32(0x5345),
+                b"screen node pin changed",
+            );
             return write_response(&mut stream, &Failure {
                 code: Some("screen_node_changed".into()),
                 msg: "Die authentifizierte Bildschirmgegenstelle stimmt nicht mit dem bestaetigten Nodepin ueberein".into(),
@@ -283,7 +301,7 @@ impl ShareHost {
         )?;
         let (out_tx, mut out_rx) = mpsc::channel::<(u8, Vec<u8>)>(RELAY_QUEUE);
         let (in_tx, in_rx) = mpsc::channel::<Option<ViewerFrame>>(64);
-        let memory=std::sync::Arc::new(std::sync::Mutex::new(None));
+        let memory = std::sync::Arc::new(std::sync::Mutex::new(None));
         let viewer = ViewerRequest {
             mode: request.mode,
             source: request.source,
@@ -292,9 +310,14 @@ impl ShareHost {
             max_fps: request.max_fps,
             frame_capabilities: request.frame_capabilities,
         };
-        service
-            .screen_runtime()
-            .spawn(relay_session(link, viewer, out_tx, in_rx, metadata,memory.clone()));
+        service.screen_runtime().spawn(relay_session(
+            link,
+            viewer,
+            out_tx,
+            in_rx,
+            metadata,
+            memory.clone(),
+        ));
         let mut input = stream.try_clone()?;
         let reader = std::thread::Builder::new()
             .name("screen-relay-input".into())
@@ -304,7 +327,8 @@ impl ShareHost {
                 break;
             }
         }
-        drop(out_rx);drop(memory);
+        drop(out_rx);
+        drop(memory);
         let _ = stream.shutdown(std::net::Shutdown::Both);
         let _ = reader.join();
         Ok(())
@@ -312,7 +336,10 @@ impl ShareHost {
 }
 
 fn node_pin_failure() -> Failure {
-    Failure { code: Some("screen_node_required".into()), msg: "Der bestaetigte Nodepin fehlt".into() }
+    Failure {
+        code: Some("screen_node_required".into()),
+        msg: "Der bestaetigte Nodepin fehlt".into(),
+    }
 }
 
 fn viewer_request(
@@ -362,7 +389,7 @@ async fn relay_session(
     out: mpsc::Sender<(u8, Vec<u8>)>,
     mut input: mpsc::Receiver<Option<ViewerFrame>>,
     metadata: bool,
-    memory:std::sync::Arc<std::sync::Mutex<crate::screen::core::frame_memory::MemoryHold>>,
+    memory: std::sync::Arc<std::sync::Mutex<crate::screen::core::frame_memory::MemoryHold>>,
 ) {
     let connection = link.connection.clone();
     let pending_out = out.clone();
@@ -372,8 +399,11 @@ async fn relay_session(
             let _ = pending_out.try_send((RELAY_HELLO, json));
         }
     };
-    let opened=if metadata {crate::screen::core::viewer_client::handshake_metadata(connection,build,announce).await}
-        else {handshake(connection,build,announce).await};
+    let opened = if metadata {
+        crate::screen::core::viewer_client::handshake_metadata(connection, build, announce).await
+    } else {
+        handshake(connection, build, announce).await
+    };
     let mut session = match opened {
         Ok(session) => session,
         Err(error) => {
@@ -381,12 +411,14 @@ async fn relay_session(
             return;
         }
     };
-    *memory.lock().unwrap_or_else(std::sync::PoisonError::into_inner)=session.memory.clone();
+    *memory
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = session.memory.clone();
     let path = path_of(&session.connection).0.key().to_string();
     let accepted = RelayHello::Accepted {
         hello: session.hello.clone(),
         path,
-        local_limits:session.local_limits,
+        local_limits: session.local_limits,
     };
     if let Ok(json) = wire::to_json(&accepted) {
         if out.send((RELAY_HELLO, json)).await.is_err() {

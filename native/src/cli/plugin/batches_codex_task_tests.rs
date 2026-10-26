@@ -11,18 +11,28 @@ fn batches_p13_codex_owned_command_edit_preserves_comments_filters_env_and_serve
     let original_fields = fields(&doc["mcp_servers"][SERVER]).unwrap();
     let owner = json!({"entry_sha256":super::managed::hash(&serde_json::to_vec(&original_fields).unwrap())});
     assert!(owner_matches(&doc["mcp_servers"][SERVER], &owner));
-    set_owned(&mut doc["mcp_servers"][SERVER], "command", value("/fixture/new-launcher"));
+    set_owned(
+        &mut doc["mcp_servers"][SERVER],
+        "command",
+        value("/fixture/new-launcher"),
+    );
     let rendered = doc.to_string();
     assert!(rendered.starts_with("# user heading\nmodel = 'user-model'\n"));
     for preserved in [
-        "# command comment", "args = ['mcp']", "enabled_tools = ['se.read']",
-        "startup_timeout_sec = 41", "USER_SETTING = 'keep'",
+        "# command comment",
+        "args = ['mcp']",
+        "enabled_tools = ['se.read']",
+        "startup_timeout_sec = 41",
+        "USER_SETTING = 'keep'",
         "[mcp_servers.user_server]\ncommand = 'user-tool'\nargs = ['--keep']",
     ] {
         assert!(rendered.contains(preserved), "lost {preserved}");
     }
     let parsed = document(Some(rendered.as_bytes())).unwrap();
-    assert_eq!(fields(&parsed["mcp_servers"][SERVER]).unwrap(), json!({"command":"/fixture/new-launcher","args":["mcp"]}));
+    assert_eq!(
+        fields(&parsed["mcp_servers"][SERVER]).unwrap(),
+        json!({"command":"/fixture/new-launcher","args":["mcp"]})
+    );
     assert!(!owner_matches(&parsed["mcp_servers"][SERVER], &owner));
 }
 
@@ -30,7 +40,8 @@ fn batches_p13_codex_owned_command_edit_preserves_comments_filters_env_and_serve
 fn batches_p13_codex_ownership_rejects_command_args_changes_but_keeps_user_options() {
     let original = document(Some(CONFIG.as_bytes())).unwrap();
     let expected = fields(&original["mcp_servers"][SERVER]).unwrap();
-    let owner = json!({"entry_sha256":super::managed::hash(&serde_json::to_vec(&expected).unwrap())});
+    let owner =
+        json!({"entry_sha256":super::managed::hash(&serde_json::to_vec(&expected).unwrap())});
     let mut changed = document(Some(CONFIG.as_bytes())).unwrap();
     changed["mcp_servers"][SERVER]["startup_timeout_sec"] = value(73);
     changed["mcp_servers"][SERVER]["env"]["USER_SETTING"] = value("edited");
@@ -38,7 +49,8 @@ fn batches_p13_codex_ownership_rejects_command_args_changes_but_keeps_user_optio
     changed["mcp_servers"][SERVER]["command"] = value("user-command");
     assert!(!owner_matches(&changed["mcp_servers"][SERVER], &owner));
     let mut changed = document(Some(CONFIG.as_bytes())).unwrap();
-    changed["mcp_servers"][SERVER]["args"] = value(toml_edit::Array::from_iter(["mcp", "--changed"]));
+    changed["mcp_servers"][SERVER]["args"] =
+        value(toml_edit::Array::from_iter(["mcp", "--changed"]));
     assert!(!owner_matches(&changed["mcp_servers"][SERVER], &owner));
     changed["mcp_servers"][SERVER]["args"] = value(42);
     assert!(fields(&changed["mcp_servers"][SERVER]).is_err());
@@ -52,7 +64,10 @@ fn batches_p13_codex_failed_registration_restores_absence_or_previous_owned_byte
     let staged = b"[mcp_servers.smart-explorer]\ncommand = 'new'\nargs = ['mcp']\n";
     std::fs::write(&path, staged).unwrap();
     super::restore_owned(&path, None, staged).unwrap();
-    assert!(!path.exists(), "failed first registration must restore absence");
+    assert!(
+        !path.exists(),
+        "failed first registration must restore absence"
+    );
 
     std::fs::write(&path, staged).unwrap();
     super::restore_owned(&path, Some(CONFIG.as_bytes()), staged).unwrap();
@@ -69,22 +84,36 @@ fn batches_p13_codex_failed_registration_restores_absence_or_previous_owned_byte
 #[test]
 #[cfg(not(windows))]
 fn batches_p13_legacy_codex_environment_is_owned_before_and_after_migration() {
-    let root=tempfile::tempdir().unwrap();
-    let executable=root.path().join("se");
-    let marker=json!({"version":"0.5.184","executable":executable});
+    let root = tempfile::tempdir().unwrap();
+    let executable = root.path().join("se");
+    let marker = json!({"version":"0.5.184","executable":executable});
     let config=format!("# user's heading\n[mcp_servers.smart-explorer]\ncommand = {}\nargs = ['mcp']\n[mcp_servers.smart-explorer.env]\nXDG_DATA_HOME = '/fixture/data'\nXDG_RUNTIME_DIR = '/fixture/runtime'\nDBUS_SESSION_BUS_ADDRESS = 'unix:path=/fixture/bus'\n[mcp_servers.user_server]\ncommand = 'keep'\n",serde_json::to_string(&executable.to_string_lossy()).unwrap());
-    let mut doc=document(Some(config.as_bytes())).unwrap();
-    let table=&doc["mcp_servers"][SERVER];
-    assert!(super::legacy_entry_matches(table,&marker,super::files::LEGACY_SKILL.as_bytes()));
-    super::verify_removable_entry(table,None,true).unwrap();
-    let managed_env=super::legacy_managed_env(table);
-    assert_eq!(managed_env,json!({"XDG_DATA_HOME":"/fixture/data","XDG_RUNTIME_DIR":"/fixture/runtime","DBUS_SESSION_BUS_ADDRESS":"unix:path=/fixture/bus"}));
-    set_owned(&mut doc["mcp_servers"][SERVER],"command",value("/fixture/launcher"));
-    let table=&doc["mcp_servers"][SERVER];
-    let owner=json!({"managed_env":managed_env,"entry_sha256":super::managed::hash(&serde_json::to_vec(&fields(table).unwrap()).unwrap())});
-    super::verify_removable_entry(table,Some(&owner),false).unwrap();
-    doc["mcp_servers"].as_table_like_mut().unwrap().remove(SERVER);
-    let result=doc.to_string();
+    let mut doc = document(Some(config.as_bytes())).unwrap();
+    let table = &doc["mcp_servers"][SERVER];
+    assert!(super::legacy_entry_matches(
+        table,
+        &marker,
+        super::files::LEGACY_SKILL.as_bytes()
+    ));
+    super::verify_removable_entry(table, None, true).unwrap();
+    let managed_env = super::legacy_managed_env(table);
+    assert_eq!(
+        managed_env,
+        json!({"XDG_DATA_HOME":"/fixture/data","XDG_RUNTIME_DIR":"/fixture/runtime","DBUS_SESSION_BUS_ADDRESS":"unix:path=/fixture/bus"})
+    );
+    set_owned(
+        &mut doc["mcp_servers"][SERVER],
+        "command",
+        value("/fixture/launcher"),
+    );
+    let table = &doc["mcp_servers"][SERVER];
+    let owner = json!({"managed_env":managed_env,"entry_sha256":super::managed::hash(&serde_json::to_vec(&fields(table).unwrap()).unwrap())});
+    super::verify_removable_entry(table, Some(&owner), false).unwrap();
+    doc["mcp_servers"]
+        .as_table_like_mut()
+        .unwrap()
+        .remove(SERVER);
+    let result = doc.to_string();
     assert!(result.starts_with("# user's heading\n"));
     assert!(result.contains("[mcp_servers.user_server]\ncommand = 'keep'"));
 }
@@ -93,44 +122,72 @@ fn batches_p13_legacy_codex_environment_is_owned_before_and_after_migration() {
 #[test]
 fn batches_p13_legacy_windows_codex_does_not_adopt_user_unix_environment() {
     let doc=document(Some(b"[mcp_servers.smart-explorer]\ncommand = 'fixture-se'\nargs = ['mcp']\n[mcp_servers.smart-explorer.env]\nXDG_DATA_HOME = 'user-data'\n")).unwrap();
-    let table=&doc["mcp_servers"][SERVER];
-    assert_eq!(super::legacy_managed_env(table),json!({}));
-    assert!(super::verify_removable_entry(table,None,true).unwrap_err().contains("user environment"));
+    let table = &doc["mcp_servers"][SERVER];
+    assert_eq!(super::legacy_managed_env(table), json!({}));
+    assert!(super::verify_removable_entry(table, None, true)
+        .unwrap_err()
+        .contains("user environment"));
 }
 
 #[test]
 fn batches_p13_codex_uninstall_retains_user_env_filters_and_changed_owned_values() {
     let config=b"[mcp_servers.smart-explorer]\ncommand = '/fixture/se'\nargs = ['mcp']\n[mcp_servers.smart-explorer.env]\nXDG_DATA_HOME = '/fixture/data'\n";
-    let original=document(Some(config)).unwrap();let table=&original["mcp_servers"][SERVER];
-    let owner=json!({"managed_env":super::legacy_managed_env(table),"entry_sha256":super::managed::hash(&serde_json::to_vec(&fields(table).unwrap()).unwrap())});
-    for change in ["env","filter","managed_env","command","args"] {
-        let mut doc=document(Some(config)).unwrap();
+    let original = document(Some(config)).unwrap();
+    let table = &original["mcp_servers"][SERVER];
+    let owner = json!({"managed_env":super::legacy_managed_env(table),"entry_sha256":super::managed::hash(&serde_json::to_vec(&fields(table).unwrap()).unwrap())});
+    for change in ["env", "filter", "managed_env", "command", "args"] {
+        let mut doc = document(Some(config)).unwrap();
         match change {
-            "env"=>doc["mcp_servers"][SERVER]["env"]["USER_SETTING"]=value("keep"),
-            "filter"=>doc["mcp_servers"][SERVER]["enabled_tools"]=value(toml_edit::Array::from_iter(["se.read"])),
-            "managed_env"=>doc["mcp_servers"][SERVER]["env"]["XDG_DATA_HOME"]=value("/user/changed"),
-            "command"=>doc["mcp_servers"][SERVER]["command"]=value("user-command"),
-            _=>doc["mcp_servers"][SERVER]["args"]=value(toml_edit::Array::from_iter(["mcp","--user"])),
+            "env" => doc["mcp_servers"][SERVER]["env"]["USER_SETTING"] = value("keep"),
+            "filter" => {
+                doc["mcp_servers"][SERVER]["enabled_tools"] =
+                    value(toml_edit::Array::from_iter(["se.read"]))
+            }
+            "managed_env" => {
+                doc["mcp_servers"][SERVER]["env"]["XDG_DATA_HOME"] = value("/user/changed")
+            }
+            "command" => doc["mcp_servers"][SERVER]["command"] = value("user-command"),
+            _ => {
+                doc["mcp_servers"][SERVER]["args"] =
+                    value(toml_edit::Array::from_iter(["mcp", "--user"]))
+            }
         }
-        let before=doc.to_string();
-        assert!(super::verify_removable_entry(&doc["mcp_servers"][SERVER],Some(&owner),false).is_err());
-        assert_eq!(doc.to_string(),before);
-        if matches!(change,"env"|"filter") {assert!(super::verify_removable_entry(&doc["mcp_servers"][SERVER],None,true).is_err());}
+        let before = doc.to_string();
+        assert!(
+            super::verify_removable_entry(&doc["mcp_servers"][SERVER], Some(&owner), false)
+                .is_err()
+        );
+        assert_eq!(doc.to_string(), before);
+        if matches!(change, "env" | "filter") {
+            assert!(
+                super::verify_removable_entry(&doc["mcp_servers"][SERVER], None, true).is_err()
+            );
+        }
     }
-    assert!(super::verify_removable_entry(table,None,false).is_err());
-    let mut missing=owner.clone();missing.as_object_mut().unwrap().remove("managed_env");
-    assert!(super::verify_removable_entry(table,Some(&missing),false).is_err());
+    assert!(super::verify_removable_entry(table, None, false).is_err());
+    let mut missing = owner.clone();
+    missing.as_object_mut().unwrap().remove("managed_env");
+    assert!(super::verify_removable_entry(table, Some(&missing), false).is_err());
 }
 
 #[test]
 fn batches_p13_missing_codex_host_keeps_legacy_registration_evidence() {
-    let root=tempfile::tempdir().unwrap();let skill=root.path().join("SKILL.md");let marker=root.path().join(".se-generated.json");
-    let legacy_marker=serde_json::to_vec(&json!({"version":"0.5.184","executable":root.path().join("se")})).unwrap();
-    std::fs::write(&skill,super::files::LEGACY_SKILL).unwrap();std::fs::write(&marker,&legacy_marker).unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let skill = root.path().join("SKILL.md");
+    let marker = root.path().join(".se-generated.json");
+    let legacy_marker =
+        serde_json::to_vec(&json!({"version":"0.5.184","executable":root.path().join("se")}))
+            .unwrap();
+    std::fs::write(&skill, super::files::LEGACY_SKILL).unwrap();
+    std::fs::write(&marker, &legacy_marker).unwrap();
     super::preflight_skill_at(root.path()).unwrap();
-    assert_eq!(std::fs::read(&marker).unwrap(),legacy_marker);
-    assert_eq!(std::fs::read(&skill).unwrap(),super::files::LEGACY_SKILL.as_bytes());
-    std::fs::write(&skill,b"user-edited skill").unwrap();
+    assert_eq!(std::fs::read(&marker).unwrap(), legacy_marker);
+    assert_eq!(
+        std::fs::read(&skill).unwrap(),
+        super::files::LEGACY_SKILL.as_bytes()
+    );
+    std::fs::write(&skill, b"user-edited skill").unwrap();
     assert!(super::preflight_skill_at(root.path()).is_err());
-    assert_eq!(std::fs::read(skill).unwrap(),b"user-edited skill");assert_eq!(std::fs::read(marker).unwrap(),legacy_marker);
+    assert_eq!(std::fs::read(skill).unwrap(), b"user-edited skill");
+    assert_eq!(std::fs::read(marker).unwrap(), legacy_marker);
 }

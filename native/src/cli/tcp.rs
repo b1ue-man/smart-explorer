@@ -1,44 +1,82 @@
 //! `se tcp start/list/status/close`, with identical JSON and daemon semantics.
+use crate::share::tcp_forward::{
+    TcpDestination, TcpStart, TunnelId, TunnelView, TCP_LOCAL_ACCESS_NOTICE,
+};
 use clap::{Args, Subcommand};
 use serde_json::{json, Value};
-use crate::share::tcp_forward::{TcpDestination, TcpStart, TunnelId, TunnelView, TCP_LOCAL_ACCESS_NOTICE};
 
 #[derive(Args)]
-pub(super) struct TcpArgs { #[command(subcommand)] command: TcpCommand }
+pub(super) struct TcpArgs {
+    #[command(subcommand)]
+    command: TcpCommand,
+}
 #[derive(Subcommand)]
 enum TcpCommand {
     /// Expose one authorized service through an ephemeral local loopback port.
     Start {
         device: String,
-        #[arg(long, default_value = "loopback")] target_host: String,
-        #[arg(long)] target_port: u16,
-        #[arg(long, default_value_t = 0)] local_port: u16,
-        #[arg(long, default_value_t = 900)] lifetime_secs: u32,
+        #[arg(long, default_value = "loopback")]
+        target_host: String,
+        #[arg(long)]
+        target_port: u16,
+        #[arg(long, default_value_t = 0)]
+        local_port: u16,
+        #[arg(long, default_value_t = 900)]
+        lifetime_secs: u32,
         /// Confirm that every local process can reach the forwarded service.
-        #[arg(long)] acknowledge_local_access: bool,
-        #[arg(long)] json: bool,
+        #[arg(long)]
+        acknowledge_local_access: bool,
+        #[arg(long)]
+        json: bool,
     },
-    List { #[arg(long)] json: bool },
-    Status { id: String, #[arg(long)] json: bool },
-    Close { id: String, #[arg(long)] json: bool },
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    Status {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Close {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
 }
 pub(super) fn run(args: TcpArgs) -> Result<i32, String> {
     match args.command {
-        TcpCommand::Start { device, target_host, target_port, local_port, lifetime_secs, acknowledge_local_access, json } => {
+        TcpCommand::Start {
+            device,
+            target_host,
+            target_port,
+            local_port,
+            lifetime_secs,
+            acknowledge_local_access,
+            json,
+        } => {
             let (target, name) = super::screen::device_target(&device)?;
             let request = TcpStart {
-                destination: TcpDestination::from_host_port(&target_host, target_port)?, local_port,
-                acknowledge_local_access, lifetime_secs,
+                destination: TcpDestination::from_host_port(&target_host, target_port)?,
+                local_port,
+                acknowledge_local_access,
+                lifetime_secs,
             };
             request.validate()?;
             let tunnel = crate::daemon::tcp_start(target, request, || {
                 eprintln!("Warte auf TCP-Bestätigung an {name} …");
             })?;
-            output(json, &json!({"tunnel": tunnel, "local_access_notice": TCP_LOCAL_ACCESS_NOTICE}), || text(&tunnel));
+            output(
+                json,
+                &json!({"tunnel": tunnel, "local_access_notice": TCP_LOCAL_ACCESS_NOTICE}),
+                || text(&tunnel),
+            );
         }
         TcpCommand::List { json } => {
             let tunnels = crate::daemon::tcp_list()?;
-            output(json, &json!({"tunnels": tunnels}), || tunnels.iter().map(text).collect::<Vec<_>>().join("\n"));
+            output(json, &json!({"tunnels": tunnels}), || {
+                tunnels.iter().map(text).collect::<Vec<_>>().join("\n")
+            });
         }
         TcpCommand::Status { id, json } => {
             let tunnel = crate::daemon::tcp_status(TunnelId::parse(&id)?)?
@@ -47,8 +85,12 @@ pub(super) fn run(args: TcpArgs) -> Result<i32, String> {
         }
         TcpCommand::Close { id, json } => {
             let closed = crate::daemon::tcp_close(TunnelId::parse(&id)?)?;
-            if !closed { return Err(format!("No active TCP tunnel {id}")); }
-            output(json, &json!({"id": id, "closed": true}), || format!("closed\t{id}"));
+            if !closed {
+                return Err(format!("No active TCP tunnel {id}"));
+            }
+            output(json, &json!({"id": id, "closed": true}), || {
+                format!("closed\t{id}")
+            });
         }
     }
     Ok(0)
@@ -65,5 +107,9 @@ fn text(tunnel: &TunnelView) -> String {
         tunnel.last_error.as_deref().unwrap_or(""))
 }
 fn output(json: bool, value: &Value, text: impl FnOnce() -> String) {
-    if json { println!("{value}"); } else { println!("{}", text()); }
+    if json {
+        println!("{value}");
+    } else {
+        println!("{}", text());
+    }
 }

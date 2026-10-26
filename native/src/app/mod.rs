@@ -75,30 +75,30 @@ mod delete_worker;
 #[path = "desktop_modules.rs"]
 mod desktop_modules;
 pub(crate) use desktop_modules::*;
-#[path = "core/dialogs.rs"]
-mod dialogs;
-#[path = "core/dialog_geometry.rs"]
-mod dialog_geometry;
-#[path = "os/shared/dialog_geometry_store.rs"]
-mod dialog_geometry_store;
-#[path = "core/settings_navigation.rs"]
-mod settings_navigation;
-#[path = "core/settings_form.rs"]
-mod settings_form;
 #[path = "core/device_rights_model.rs"]
 mod device_rights_model;
 #[path = "core/device_rights_ui.rs"]
 mod device_rights_ui;
-#[path = "core/partial_scan.rs"]
-mod partial_scan;
-#[path = "core/folder_conflict_ui.rs"]
-mod folder_conflict_ui;
+#[path = "core/dialog_geometry.rs"]
+mod dialog_geometry;
+#[path = "os/shared/dialog_geometry_store.rs"]
+mod dialog_geometry_store;
+#[path = "core/dialogs.rs"]
+mod dialogs;
 #[path = "os/shared/drag_drop.rs"]
 mod drag_drop;
 #[path = "core/drains_connect.rs"]
 mod drains_connect;
 #[path = "drive_modules.rs"]
 mod drive_modules;
+#[path = "core/folder_conflict_ui.rs"]
+mod folder_conflict_ui;
+#[path = "core/partial_scan.rs"]
+mod partial_scan;
+#[path = "core/settings_form.rs"]
+mod settings_form;
+#[path = "core/settings_navigation.rs"]
+mod settings_navigation;
 pub(crate) use drive_modules::*;
 #[path = "os/shared/file_actions.rs"]
 mod file_actions;
@@ -249,8 +249,26 @@ mod scanning;
 #[path = "screen_modules.rs"]
 mod screen_modules;
 pub(crate) use screen_modules::*;
+#[path = "core/family_device_ui.rs"]
+mod family_device_ui;
+#[path = "core/family_picker.rs"]
+mod family_picker;
+#[path = "core/family_viewer.rs"]
+mod family_viewer;
+#[path = "core/family_viewer_events.rs"]
+mod family_viewer_events;
+#[path = "core/family_viewer_session.rs"]
+mod family_viewer_session;
+#[path = "core/login_viewer.rs"]
+pub(crate) mod login_viewer;
+#[path = "core/mount_recovery_ui.rs"]
+mod mount_recovery_ui;
 #[path = "core/share.rs"]
 mod share;
+#[path = "core/share_app_grant_ui.rs"]
+mod share_app_grant_ui;
+#[path = "core/share_apps_ui.rs"]
+mod share_apps_ui;
 #[path = "core/share_discovery_events.rs"]
 mod share_discovery_events;
 #[path = "core/share_discovery_state.rs"]
@@ -261,33 +279,17 @@ mod share_discovery_ui;
 mod share_exec_jobs_ui;
 #[path = "core/share_exec_ui.rs"]
 mod share_exec_ui;
-#[path = "core/share_tcp_ui.rs"]
-mod share_tcp_ui;
-#[path = "core/share_routes_ui.rs"]
-mod share_routes_ui;
-#[path = "core/share_rdp_ui.rs"]
-mod share_rdp_ui;
-#[path = "core/share_apps_ui.rs"]
-mod share_apps_ui;
-#[path = "core/share_app_grant_ui.rs"]
-mod share_app_grant_ui;
-#[path = "core/login_viewer.rs"]
-pub(crate) mod login_viewer;
 #[path = "core/share_login_ui.rs"]
 mod share_login_ui;
-#[path = "core/family_viewer.rs"]
-mod family_viewer;
-#[path = "core/family_viewer_session.rs"]
-mod family_viewer_session;
-#[path = "core/family_viewer_events.rs"]
-mod family_viewer_events;
-#[path = "core/family_picker.rs"]
-mod family_picker;
-#[path = "core/family_device_ui.rs"]
-mod family_device_ui;
+#[path = "core/share_rdp_ui.rs"]
+mod share_rdp_ui;
 #[cfg(test)]
 #[path = "core/share_remote_task_tests.rs"]
 mod share_remote_task_tests;
+#[path = "core/share_routes_ui.rs"]
+mod share_routes_ui;
+#[path = "core/share_tcp_ui.rs"]
+mod share_tcp_ui;
 #[path = "core/shell_commands.rs"]
 mod shell_commands;
 #[path = "core/shell_toolbar.rs"]
@@ -362,6 +364,8 @@ mod transfer_helpers;
 mod transfer_jobs;
 #[path = "core/transfer_lifecycle.rs"]
 mod transfer_lifecycle;
+#[path = "core/transfer_recovery_ui.rs"]
+mod transfer_recovery_ui;
 #[path = "core/transfer_route.rs"]
 mod transfer_route;
 #[path = "core/transfer_rows.rs"]
@@ -375,10 +379,6 @@ mod transfer_targets;
 mod transfer_test_support;
 #[path = "core/transfer_window.rs"]
 mod transfer_window;
-#[path = "core/transfer_recovery_ui.rs"]
-mod transfer_recovery_ui;
-#[path = "core/mount_recovery_ui.rs"]
-mod mount_recovery_ui;
 #[path = "core/treemap.rs"]
 mod treemap;
 #[path = "core/ui_preferences.rs"]

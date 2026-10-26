@@ -1,12 +1,17 @@
 //! Platform facts enter the portable exact-image ledger at this one boundary.
+use crate::screen::core::frame_memory::{self, CapacityCeiling};
+use crate::screen::core::image_admission::{
+    self, ImageAdmission, ImageOwnerLimits, LocalImagePolicy,
+};
 use std::io;
 use std::sync::Arc;
-use crate::screen::core::frame_memory::{self, CapacityCeiling};
-use crate::screen::core::image_admission::{self, ImageAdmission, ImageOwnerLimits, LocalImagePolicy};
 
 pub(crate) fn local_image_policy() -> LocalImagePolicy {
     let facts = super::session_memory::facts();
-    LocalImagePolicy {facts, ceiling: super::session_memory::capacity_ceiling(facts)}
+    LocalImagePolicy {
+        facts,
+        ceiling: super::session_memory::capacity_ceiling(facts),
+    }
 }
 pub(crate) fn admit_images(limits: ImageOwnerLimits) -> io::Result<Arc<ImageAdmission>> {
     image_admission::admit_images(local_image_policy(), limits)

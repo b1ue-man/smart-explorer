@@ -105,14 +105,14 @@ pub(crate) async fn read_frame<R: AsyncRead + Unpin>(
     reader: &mut R,
     limit: usize,
 ) -> io::Result<(u8, Vec<u8>)> {
-    let mut header=[0u8;5];
+    let mut header = [0u8; 5];
     reader.read_exact(&mut header).await?;
-    let tag=header[0];
-    let length=u32::from_be_bytes([header[1],header[2],header[3],header[4]]) as usize;
-    if length>limit.min(tag_limit(tag)) {
+    let tag = header[0];
+    let length = u32::from_be_bytes([header[1], header[2], header[3], header[4]]) as usize;
+    if length > limit.min(tag_limit(tag)) {
         return Err(invalid("screen frame exceeds the limit of its tag"));
     }
-    let mut payload=vec![0u8;length];
+    let mut payload = vec![0u8; length];
     reader.read_exact(&mut payload).await?;
     Ok((tag, payload))
 }

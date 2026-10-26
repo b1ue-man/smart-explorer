@@ -12,28 +12,45 @@ mod linux_file_proof;
 pub(super) use linux_file_proof::stable_handle_identity;
 
 pub(super) fn stable_path_identity(path: &Path) -> io::Result<String> {
-    let name = path.file_name().ok_or_else(|| io::Error::new(
-        io::ErrorKind::InvalidInput, "file identity requires a child name"))?;
-    let parent_path = path.parent().filter(|parent| !parent.as_os_str().is_empty())
+    let name = path.file_name().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "file identity requires a child name",
+        )
+    })?;
+    let parent_path = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
     let parent = crate::local_access::ConfinedDirectory::open_root(parent_path)?;
     let selected = parent.selected_entry(name)?;
     let identity = stable_handle_identity(&selected)?;
     if stable_handle_identity(&parent.selected_entry(name)?)? != identity {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "file changed during identity query"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "file changed during identity query",
+        ));
     }
     Ok(identity)
 }
 
 pub(super) fn open_publication_file(
-    parent: &crate::local_access::ConfinedDirectory, name: &std::ffi::OsStr,
-) -> io::Result<File> { parent.open_file(name, false, false, false, false) }
+    parent: &crate::local_access::ConfinedDirectory,
+    name: &std::ffi::OsStr,
+) -> io::Result<File> {
+    parent.open_file(name, false, false, false, false)
+}
 
 pub(super) fn open_move_publication_file(
-    parent: &crate::local_access::ConfinedDirectory, name: &std::ffi::OsStr,
-) -> io::Result<File> { open_publication_file(parent, name) }
+    parent: &crate::local_access::ConfinedDirectory,
+    name: &std::ffi::OsStr,
+) -> io::Result<File> {
+    open_publication_file(parent, name)
+}
 
-pub(super) fn confirm_publication_namespace(parent: &crate::local_access::ConfinedDirectory) -> io::Result<()> {
+pub(super) fn confirm_publication_namespace(
+    parent: &crate::local_access::ConfinedDirectory,
+) -> io::Result<()> {
     parent.file().sync_all()
 }
 
@@ -75,7 +92,9 @@ pub(super) fn same_file_object(left: &File, right: &File) -> io::Result<bool> {
 /// remote rename. Different devices cannot be one rename mount; statx also
 /// detects separate bind mounts of the same underlying device when available.
 pub(super) fn different_rename_boundary(source: &File, target_parent: &File) -> io::Result<bool> {
-    if source.metadata()?.dev() != target_parent.metadata()?.dev() { return Ok(true); }
+    if source.metadata()?.dev() != target_parent.metadata()?.dev() {
+        return Ok(true);
+    }
     let source_mount = rename_mount(source)?;
     let target_mount = rename_mount(target_parent)?;
     Ok(matches!((source_mount, target_mount), (Some(left), Some(right)) if left != right))
@@ -88,17 +107,39 @@ fn rename_mount(file: &File) -> io::Result<Option<u64>> {
     let mut facts = Statx([0; 256]);
     // Linux's fixed statx UAPI places stx_mnt_id at byte144. Only a returned
     // STATX_MNT_ID mask constitutes a mount fact on kernels supporting it.
-    let status = unsafe { libc::syscall(libc::SYS_statx, file.as_raw_fd(), c"".as_ptr(),
-        libc::AT_EMPTY_PATH | libc::AT_SYMLINK_NOFOLLOW, 0x1000u32, facts.0.as_mut_ptr()) };
+    let status = unsafe {
+        libc::syscall(
+            libc::SYS_statx,
+            file.as_raw_fd(),
+            c"".as_ptr(),
+            libc::AT_EMPTY_PATH | libc::AT_SYMLINK_NOFOLLOW,
+            0x1000u32,
+            facts.0.as_mut_ptr(),
+        )
+    };
     if status != 0 {
         let error = io::Error::last_os_error();
-        if matches!(error.raw_os_error(), Some(libc::ENOSYS | libc::EINVAL | libc::EOPNOTSUPP
-            | libc::EPERM | libc::EACCES)) { return Ok(None); }
+        if matches!(
+            error.raw_os_error(),
+            Some(libc::ENOSYS | libc::EINVAL | libc::EOPNOTSUPP | libc::EPERM | libc::EACCES)
+        ) {
+            return Ok(None);
+        }
         return Err(error);
     }
-    let mask = u32::from_ne_bytes(facts.0[..4].try_into().map_err(|_| io::Error::other("incomplete statx mask"))?);
-    if mask & 0x1000 == 0 { return Ok(None); }
-    let mount = u64::from_ne_bytes(facts.0[144..152].try_into().map_err(|_| io::Error::other("incomplete statx mount ID"))?);
+    let mask = u32::from_ne_bytes(
+        facts.0[..4]
+            .try_into()
+            .map_err(|_| io::Error::other("incomplete statx mask"))?,
+    );
+    if mask & 0x1000 == 0 {
+        return Ok(None);
+    }
+    let mount = u64::from_ne_bytes(
+        facts.0[144..152]
+            .try_into()
+            .map_err(|_| io::Error::other("incomplete statx mount ID"))?,
+    );
     Ok(Some(mount))
 }
 
@@ -111,10 +152,24 @@ pub(super) fn require_local_publication_observation(parent: &File) -> io::Result
     let kind = unsafe { facts.assume_init() }.f_type as u64 & 0xffff_ffff;
     // Reviewed local kernel filesystems. NFS/FUSE/network and unqualified
     // stacks must retain both objects after an ambiguous mutation error.
-    if matches!(kind, 0xef53 | 0x5846_5342 | 0x9123_683e | 0x0102_1994
-        | 0x4d44 | 0x2011_bab0 | 0xf2f5_2010 | 0x5346_544e) { Ok(()) }
-    else { Err(io::Error::new(io::ErrorKind::Unsupported,
-        "filesystem cannot establish nonpublication from local namespace observations")) }
+    if matches!(
+        kind,
+        0xef53
+            | 0x5846_5342
+            | 0x9123_683e
+            | 0x0102_1994
+            | 0x4d44
+            | 0x2011_bab0
+            | 0xf2f5_2010
+            | 0x5346_544e
+    ) {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "filesystem cannot establish nonpublication from local namespace observations",
+        ))
+    }
 }
 
 /// An open file's identity together with the metadata it was read from: one

@@ -2,8 +2,8 @@
 //! the live channel and recheck under the auth lock before admitting work,
 //! on policy/session changes and at its deadline. A summary of relationships
 //! can never substitute for this exact relationship binding.
-use crate::share::access_constraints::{earlier, AccessRequest, SessionId, UserId};
 use crate::share::access_authorize::{principal_grant, request_for};
+use crate::share::access_constraints::{earlier, AccessRequest, SessionId, UserId};
 use crate::share::access_grant::{AccountProfile, CapabilityDecision};
 use crate::share::relation_proof::ProvenPrincipal;
 use crate::share::types::ShareAuthState;
@@ -16,8 +16,16 @@ pub(crate) struct AccessConfirmation {
     revision: u64,
 }
 pub(crate) fn confirmation(
-    principal: ProvenPrincipal, request: AccessRequest, revision: u64,
-) -> AccessConfirmation { AccessConfirmation { principal, request, revision } }
+    principal: ProvenPrincipal,
+    request: AccessRequest,
+    revision: u64,
+) -> AccessConfirmation {
+    AccessConfirmation {
+        principal,
+        request,
+        revision,
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AccessRevocation {
@@ -56,25 +64,48 @@ impl AccessLease {
         let allowed = match decision {
             CapabilityDecision::Allow => true,
             CapabilityDecision::Ask => confirmed.is_some_and(|confirmation| {
-                confirmation.principal == *principal && confirmation.request == request
+                confirmation.principal == *principal
+                    && confirmation.request == request
                     && confirmation.revision == grant.policy_revision
             }),
             CapabilityDecision::Off => false,
         };
-        if !allowed { return Err(AccessRevocation::PermissionWithdrawn); }
+        if !allowed {
+            return Err(AccessRevocation::PermissionWithdrawn);
+        }
         let access = grant.access_grant();
-        let end = earliest(access.valid_until, access.constraints.end_for(&request, now));
-        Ok(Self { principal: principal.clone(), request, account: access.account, decision, end })
+        let end = earliest(
+            access.valid_until,
+            access.constraints.end_for(&request, now),
+        );
+        Ok(Self {
+            principal: principal.clone(),
+            request,
+            account: access.account,
+            decision,
+            end,
+        })
     }
-    pub(crate) fn principal(&self) -> &ProvenPrincipal { &self.principal }
-    pub(crate) fn request(&self) -> &AccessRequest { &self.request }
-    pub(crate) fn deadline(&self) -> Option<i64> { self.end }
+    pub(crate) fn principal(&self) -> &ProvenPrincipal {
+        &self.principal
+    }
+    pub(crate) fn request(&self) -> &AccessRequest {
+        &self.request
+    }
+    pub(crate) fn deadline(&self) -> Option<i64> {
+        self.end
+    }
     /// Only a channel no longer covered by its own concrete grant closes.
     /// Removing an unrelated app, user, port or host leaves this lease alive.
     /// The caller owns cancellation and input release; this pure decision
     /// never records a mutating job as successfully completed.
-    pub(crate) fn recheck(&mut self, state: &ShareAuthState, now: i64) -> Result<(), AccessRevocation> {
-        let grant = principal_grant(state, &self.principal).ok_or(AccessRevocation::RelationEnded)?;
+    pub(crate) fn recheck(
+        &mut self,
+        state: &ShareAuthState,
+        now: i64,
+    ) -> Result<(), AccessRevocation> {
+        let grant =
+            principal_grant(state, &self.principal).ok_or(AccessRevocation::RelationEnded)?;
         let access = grant.access_grant();
         if access.expired_at(now) {
             return Err(AccessRevocation::Expired);
@@ -86,11 +117,20 @@ impl AccessLease {
         if decision == CapabilityDecision::Off {
             return Err(if self.end.is_some_and(|end| end <= now) {
                 AccessRevocation::Expired
-            } else { AccessRevocation::PermissionWithdrawn });
+            } else {
+                AccessRevocation::PermissionWithdrawn
+            });
         }
-        if decision.rank() < self.decision.rank() { return Err(AccessRevocation::DecisionNarrowed); }
-        let end = earliest(access.valid_until, access.constraints.end_for(&self.request, now));
-        if earlier(end, self.end) { return Err(AccessRevocation::EarlierDeadline); }
+        if decision.rank() < self.decision.rank() {
+            return Err(AccessRevocation::DecisionNarrowed);
+        }
+        let end = earliest(
+            access.valid_until,
+            access.constraints.end_for(&self.request, now),
+        );
+        if earlier(end, self.end) {
+            return Err(AccessRevocation::EarlierDeadline);
+        }
         self.end = end;
         // A lease upgraded Ask -> Allow must observe a subsequent Allow -> Ask.
         self.decision = decision;
@@ -120,14 +160,23 @@ pub(crate) struct AccessLeaseRegistry {
 impl Default for AccessLeaseRegistry {
     fn default() -> Self {
         let (changed, _) = tokio::sync::watch::channel(());
-        Self { inner: Default::default(), changed }
+        Self {
+            inner: Default::default(),
+            changed,
+        }
     }
 }
 #[derive(Default)]
 struct LeaseEntries {
     closed: bool,
     next: u64,
-    entries: std::collections::BTreeMap<u64, (AccessLease, tokio::sync::watch::Sender<Option<AccessRevocation>>)>,
+    entries: std::collections::BTreeMap<
+        u64,
+        (
+            AccessLease,
+            tokio::sync::watch::Sender<Option<AccessRevocation>>,
+        ),
+    >,
 }
 impl AccessLeaseRegistry {
     /// Keep the auth lock held through this call and resource admission, so
@@ -141,24 +190,41 @@ impl AccessLeaseRegistry {
         now: i64,
     ) -> Result<AccessHandle, AccessRevocation> {
         let lease = AccessLease::admit(state, principal, request, confirmed, now)?;
-        let mut inner = self.inner.lock().map_err(|_| AccessRevocation::Unavailable)?;
-        if inner.closed { return Err(AccessRevocation::HostStopped); }
-        let id = inner.next.checked_add(1).ok_or(AccessRevocation::Unavailable)?;
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| AccessRevocation::Unavailable)?;
+        if inner.closed {
+            return Err(AccessRevocation::HostStopped);
+        }
+        let id = inner
+            .next
+            .checked_add(1)
+            .ok_or(AccessRevocation::Unavailable)?;
         inner.next = id;
         let (stop, revoked) = tokio::sync::watch::channel(None);
         inner.entries.insert(id, (lease, stop));
         drop(inner);
         self.changed.send_replace(());
-        Ok(AccessHandle { id, registry: self.clone(), revoked })
+        Ok(AccessHandle {
+            id,
+            registry: self.clone(),
+            revoked,
+        })
     }
     /// Recheck against the candidate under its auth lock before publishing
     /// that candidate. Only newly uncovered operations receive a stop signal.
     pub(crate) fn recheck(&self, state: &ShareAuthState, now: i64) -> usize {
-        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut revoked = 0;
         let mut changed = false;
         for (lease, stop) in inner.entries.values_mut() {
-            if stop.borrow().is_some() { continue; }
+            if stop.borrow().is_some() {
+                continue;
+            }
             let before = lease.deadline();
             if let Err(reason) = lease.recheck(state, now) {
                 stop.send_replace(Some(reason));
@@ -167,7 +233,9 @@ impl AccessLeaseRegistry {
             changed |= before != lease.deadline();
         }
         drop(inner);
-        if changed || revoked != 0 { self.changed.send_replace(()); }
+        if changed || revoked != 0 {
+            self.changed.send_replace(());
+        }
         revoked
     }
     pub(crate) fn changes(&self) -> tokio::sync::watch::Receiver<()> {
@@ -177,14 +245,29 @@ impl AccessLeaseRegistry {
     /// keeps lifecycle and auth through the callback, as for initial admission.
     /// Ask confirmation was consumed by this same lease, never reconstructed.
     pub(crate) fn admit_existing<T>(
-        self: &std::sync::Arc<Self>, state: &ShareAuthState, handle: &AccessHandle, now: i64,
+        self: &std::sync::Arc<Self>,
+        state: &ShareAuthState,
+        handle: &AccessHandle,
+        now: i64,
         admit: impl FnOnce(&AccessHandle) -> Result<T, AccessRevocation>,
     ) -> Result<T, AccessRevocation> {
-        if !std::sync::Arc::ptr_eq(self, &handle.registry) { return Err(AccessRevocation::Unavailable); }
-        let mut inner = self.inner.lock().map_err(|_| AccessRevocation::Unavailable)?;
-        if inner.closed { return Err(AccessRevocation::HostStopped); }
-        let (lease, stop) = inner.entries.get_mut(&handle.id).ok_or(AccessRevocation::Unavailable)?;
-        if let Some(reason) = *stop.borrow() { return Err(reason); }
+        if !std::sync::Arc::ptr_eq(self, &handle.registry) {
+            return Err(AccessRevocation::Unavailable);
+        }
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| AccessRevocation::Unavailable)?;
+        if inner.closed {
+            return Err(AccessRevocation::HostStopped);
+        }
+        let (lease, stop) = inner
+            .entries
+            .get_mut(&handle.id)
+            .ok_or(AccessRevocation::Unavailable)?;
+        if let Some(reason) = *stop.borrow() {
+            return Err(reason);
+        }
         if let Err(reason) = lease.recheck(state, now) {
             stop.send_replace(Some(reason));
             drop(inner);
@@ -200,7 +283,10 @@ impl AccessLeaseRegistry {
     /// Permanently deny admission and wake every owning adapter. Handles
     /// stay registered until their adapters finish releasing resources.
     pub(crate) fn close(&self, reason: AccessRevocation) -> usize {
-        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         inner.closed = true;
         let mut revoked = 0;
         for (_, stop) in inner.entries.values() {
@@ -230,9 +316,14 @@ impl AccessLeaseRegistry {
         })
     }
     fn invalidate_matching(
-        &self, reason: AccessRevocation, matches: impl Fn(&AccessRequest) -> bool,
+        &self,
+        reason: AccessRevocation,
+        matches: impl Fn(&AccessRequest) -> bool,
     ) -> usize {
-        let inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut revoked = 0;
         for (lease, stop) in inner.entries.values() {
             if stop.borrow().is_none() && matches(lease.request()) {
@@ -243,9 +334,16 @@ impl AccessLeaseRegistry {
         revoked
     }
     pub(crate) fn next_deadline(&self) -> Option<i64> {
-        let inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        inner.entries.values().filter(|(_, stop)| stop.borrow().is_none())
-            .filter_map(|(lease, _)| lease.deadline()).min()
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        inner
+            .entries
+            .values()
+            .filter(|(_, stop)| stop.borrow().is_none())
+            .filter_map(|(lease, _)| lease.deadline())
+            .min()
     }
 }
 /// Holding this handle registers the live operation; dropping it removes
@@ -256,15 +354,21 @@ pub(crate) struct AccessHandle {
     revoked: tokio::sync::watch::Receiver<Option<AccessRevocation>>,
 }
 impl AccessHandle {
-    pub(crate) fn reason(&self) -> Option<AccessRevocation> { *self.revoked.borrow() }
+    pub(crate) fn reason(&self) -> Option<AccessRevocation> {
+        *self.revoked.borrow()
+    }
     pub(crate) fn revoked(&self) -> tokio::sync::watch::Receiver<Option<AccessRevocation>> {
         self.revoked.clone()
     }
 }
 impl Drop for AccessHandle {
     fn drop(&mut self) {
-        self.registry.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-            .entries.remove(&self.id);
+        self.registry
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entries
+            .remove(&self.id);
         self.registry.changed.send_replace(());
     }
 }

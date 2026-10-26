@@ -125,7 +125,11 @@ pub(super) fn download(
             Some(Member::Done(Ok(outcome))) => finished(engine, outcome),
             Some(Member::Done(Err(failure))) => {
                 engine.stats.unmoved(received);
-                let attempt = if failure.at == super::ops::At::Unknown { Attempt::MaybePublished } else { Attempt::NotPublished };
+                let attempt = if failure.at == super::ops::At::Unknown {
+                    Attempt::MaybePublished
+                } else {
+                    Attempt::NotPublished
+                };
                 failures.member(file, failure, attempt);
             }
             Some(Member::NotSent(error)) => {

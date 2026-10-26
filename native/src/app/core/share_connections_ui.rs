@@ -18,30 +18,66 @@ impl App {
         let mut changed = false;
         let wide = ui.available_width() >= egui::TextStyle::Body.resolve(ui.style()).size * 50.0;
         if wide {
-            egui::Grid::new("shared_connection_rights").num_columns(4).striped(true).show(ui, |ui| {
-                ui.strong("Verbindung");
-                let headers = [ui.strong("Freigeben").id, ui.strong("Nur lesen").id, ui.strong("Schreiben").id];
-                ui.end_row();
-                for connection in &saved {
-                    let account = connection.account();
-                    let old = config.connection_access(&account);
-                    let mut selected = old.is_some();
-                    let mut access = old.unwrap_or(crate::share::ExportAccess::ReadOnly);
-                    let label = ui.add_sized([240.0, 0.0], egui::Label::new(connection.display()).wrap()).on_hover_text(&account);
-                    let selection = ui.checkbox(&mut selected, "").labelled_by(label.id).labelled_by(headers[0]).changed();
-                    let read = ui.add_enabled(selected, egui::RadioButton::new(access == crate::share::ExportAccess::ReadOnly, "")).labelled_by(label.id).labelled_by(headers[1]);
-                    let write = ui.add_enabled(selected, egui::RadioButton::new(access == crate::share::ExportAccess::ReadWrite, "")).labelled_by(label.id).labelled_by(headers[2]);
-                    if read.clicked() { access = crate::share::ExportAccess::ReadOnly; }
-                    if write.clicked() { access = crate::share::ExportAccess::ReadWrite; }
-                    if selection || read.clicked() || write.clicked() {
-                        match config.set_connection_access(&account, selected.then_some(access)) {
-                            Ok(did_change) => changed |= did_change,
-                            Err(error) => self.error_msg = Some(error),
-                        }
-                    }
+            egui::Grid::new("shared_connection_rights")
+                .num_columns(4)
+                .striped(true)
+                .show(ui, |ui| {
+                    ui.strong("Verbindung");
+                    let headers = [
+                        ui.strong("Freigeben").id,
+                        ui.strong("Nur lesen").id,
+                        ui.strong("Schreiben").id,
+                    ];
                     ui.end_row();
-                }
-            });
+                    for connection in &saved {
+                        let account = connection.account();
+                        let old = config.connection_access(&account);
+                        let mut selected = old.is_some();
+                        let mut access = old.unwrap_or(crate::share::ExportAccess::ReadOnly);
+                        let label = ui
+                            .add_sized([240.0, 0.0], egui::Label::new(connection.display()).wrap())
+                            .on_hover_text(&account);
+                        let selection = ui
+                            .checkbox(&mut selected, "")
+                            .labelled_by(label.id)
+                            .labelled_by(headers[0])
+                            .changed();
+                        let read = ui
+                            .add_enabled(
+                                selected,
+                                egui::RadioButton::new(
+                                    access == crate::share::ExportAccess::ReadOnly,
+                                    "",
+                                ),
+                            )
+                            .labelled_by(label.id)
+                            .labelled_by(headers[1]);
+                        let write = ui
+                            .add_enabled(
+                                selected,
+                                egui::RadioButton::new(
+                                    access == crate::share::ExportAccess::ReadWrite,
+                                    "",
+                                ),
+                            )
+                            .labelled_by(label.id)
+                            .labelled_by(headers[2]);
+                        if read.clicked() {
+                            access = crate::share::ExportAccess::ReadOnly;
+                        }
+                        if write.clicked() {
+                            access = crate::share::ExportAccess::ReadWrite;
+                        }
+                        if selection || read.clicked() || write.clicked() {
+                            match config.set_connection_access(&account, selected.then_some(access))
+                            {
+                                Ok(did_change) => changed |= did_change,
+                                Err(error) => self.error_msg = Some(error),
+                            }
+                        }
+                        ui.end_row();
+                    }
+                });
         } else {
             for connection in &saved {
                 let account = connection.account();
@@ -50,15 +86,41 @@ impl App {
                 let mut access = old.unwrap_or(crate::share::ExportAccess::ReadOnly);
                 let mut edited = false;
                 egui::Frame::group(ui.style()).show(ui, |ui| {
-                    ui.add(egui::Label::new(connection.display()).wrap()).on_hover_text(&account);
-                    let mut form = crate::app::settings_form::Form::new(ui, &account, &["Freigeben", "Zugriff"]);
-                    edited |= form.row_labelled(ui, "Freigeben", |ui, label| ui.checkbox(&mut selected, "Für diese Beziehung").labelled_by(label).changed());
+                    ui.add(egui::Label::new(connection.display()).wrap())
+                        .on_hover_text(&account);
+                    let mut form = crate::app::settings_form::Form::new(
+                        ui,
+                        &account,
+                        &["Freigeben", "Zugriff"],
+                    );
+                    edited |= form.row_labelled(ui, "Freigeben", |ui, label| {
+                        ui.checkbox(&mut selected, "Für diese Beziehung")
+                            .labelled_by(label)
+                            .changed()
+                    });
                     form.row(ui, "Zugriff", |ui| {
                         ui.add_enabled_ui(selected, |ui| {
                             egui::ComboBox::from_id_salt(("shared_connection_access", &account))
-                                .selected_text(if access == crate::share::ExportAccess::ReadOnly { "Nur lesen" } else { "Lesen und Schreiben" }).show_ui(ui, |ui| {
-                                    edited |= ui.selectable_value(&mut access, crate::share::ExportAccess::ReadOnly, "Nur lesen").changed();
-                                    edited |= ui.selectable_value(&mut access, crate::share::ExportAccess::ReadWrite, "Lesen und Schreiben").changed();
+                                .selected_text(if access == crate::share::ExportAccess::ReadOnly {
+                                    "Nur lesen"
+                                } else {
+                                    "Lesen und Schreiben"
+                                })
+                                .show_ui(ui, |ui| {
+                                    edited |= ui
+                                        .selectable_value(
+                                            &mut access,
+                                            crate::share::ExportAccess::ReadOnly,
+                                            "Nur lesen",
+                                        )
+                                        .changed();
+                                    edited |= ui
+                                        .selectable_value(
+                                            &mut access,
+                                            crate::share::ExportAccess::ReadWrite,
+                                            "Lesen und Schreiben",
+                                        )
+                                        .changed();
                                 });
                         });
                     });

@@ -20,8 +20,12 @@ use std::time::Duration;
 /// transfer (no batch support, a large file, nothing else small queued).
 pub(super) fn members(engine: &Engine<'_>, file: &FileWork) -> Option<Vec<FileWork>> {
     let limits = engine.batch?;
-    if file.retried || file.alone || engine.resume || engine.view.recovery == crate::transfer::RecoveryMode::Resume
-        || !packet_source(engine, file) {
+    if file.retried
+        || file.alone
+        || engine.resume
+        || engine.view.recovery == crate::transfer::RecoveryMode::Resume
+        || !packet_source(engine, file)
+    {
         return None;
     }
     let (target, small) = {
@@ -45,8 +49,9 @@ pub(super) fn members(engine: &Engine<'_>, file: &FileWork) -> Option<Vec<FileWo
     // Probe after releasing the queue mutex; optical/probe-error entries go
     // back as single files before any packet reader can acquire their permit.
     for mut candidate in candidates {
-        if packet_source(engine, &candidate) { more.push(candidate); }
-        else {
+        if packet_source(engine, &candidate) {
+            more.push(candidate);
+        } else {
             candidate.alone = true;
             single.push(candidate);
         }
@@ -120,7 +125,9 @@ impl<'e, 'a> Failures<'e, 'a> {
         let engine = self.engine;
         if attempt != Attempt::MaybePublished {
             if let Err(error) = super::file_recovery::unpublished(engine, &file) {
-                engine.fatal(format!("Unveröffentlichten Dateibeleg zurücknehmen: {error}"));
+                engine.fatal(format!(
+                    "Unveröffentlichten Dateibeleg zurücknehmen: {error}"
+                ));
                 return;
             }
         }

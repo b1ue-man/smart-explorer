@@ -143,12 +143,16 @@ impl ScreenLink {
                 "screen host identity does not match the pinned device",
             ));
         }
-        crate::share::route_monitor::authenticated_remote_capability(&self.connection,
-            server.challenge.starts_with("rp1."));
+        crate::share::route_monitor::authenticated_remote_capability(
+            &self.connection,
+            server.challenge.starts_with("rp1."),
+        );
         let (relation_kind, relation_id) = relation_kind_id(&self.endpoint);
         let identity = &self.identity;
         let mut hello = ScreenClientHello {
-            family_version: server.family_version.filter(|version|*version==crate::screen::core::family_protocol::FAMILY_PROTOCOL),
+            family_version: server.family_version.filter(|version| {
+                *version == crate::screen::core::family_protocol::FAMILY_PROTOCOL
+            }),
             icon_version: None,
             metadata_only: false,
             protocol_version: SCREEN_PROTOCOL_VERSION,

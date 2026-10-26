@@ -194,7 +194,8 @@ fn file_menu(ui: &mut egui::Ui, item: &ItemId, file: &DesktopFile, cx: &mut Cx<'
         }
     }
     if file.is_dir && ui.button(file_manager_label()).clicked() {
-        cx.actions.open(OpenRequest::Folder(folder.join(&file.name)));
+        cx.actions
+            .open(OpenRequest::Folder(folder.join(&file.name)));
         ui.close_menu();
     }
     if ui.button("Umbenennen").clicked() {

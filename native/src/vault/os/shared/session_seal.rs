@@ -22,9 +22,16 @@ impl SessionRegister {
         use_sealer: impl FnOnce(&Sealer) -> Result<T, FormatError>,
     ) -> io::Result<T> {
         let (session, _) = self.session(site).ok_or_else(|| vault_locked(site))?;
-        if matches!(purpose, SealPurpose::TransferJob | SealPurpose::TransferAlias) {
-            let record = crate::vault::RegistryStore::open_default().resolve(site).map_err(|_| vault_locked(site))?;
-            if record.vault_id != session.config().jti { return Err(vault_locked(site)); }
+        if matches!(
+            purpose,
+            SealPurpose::TransferJob | SealPurpose::TransferAlias
+        ) {
+            let record = crate::vault::RegistryStore::open_default()
+                .resolve(site)
+                .map_err(|_| vault_locked(site))?;
+            if record.vault_id != session.config().jti {
+                return Err(vault_locked(site));
+            }
         }
         session.with_key(|key| {
             let sealer = Sealer::new(key, purpose)?;

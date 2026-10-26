@@ -14,8 +14,8 @@ use tokio::sync::mpsc;
 
 use super::rate_control::PathKind;
 use super::wire_binary::{
-    read_gop_header, write_frame_record, write_gop_header, FrameRecord,
-    GopHeader, RecordSequence, StreamKind, FLAG_KEYFRAME, FLAG_MORE, RECORD_HEADER_BYTES,
+    read_gop_header, write_frame_record, write_gop_header, FrameRecord, GopHeader, RecordSequence,
+    StreamKind, FLAG_KEYFRAME, FLAG_MORE, RECORD_HEADER_BYTES,
 };
 use super::wire_control::{FrameAck, ViewerFrame};
 
@@ -66,12 +66,17 @@ pub(crate) fn loss_counters(connection: &Connection) -> (u64, u64) {
 
 /// Production connections pause their active write budget during route discovery.
 /// Standalone transports without an enabled Share policy retain their original bounded IO path.
-pub(crate) async fn write_with_route<T>(connection: &Connection,budget: std::time::Duration,
-    future: impl std::future::Future<Output=io::Result<T>>) -> io::Result<T> {
+pub(crate) async fn write_with_route<T>(
+    connection: &Connection,
+    budget: std::time::Duration,
+    future: impl std::future::Future<Output = io::Result<T>>,
+) -> io::Result<T> {
     if connection.application_path_policy().enabled {
-        crate::share::route_protocol::run_with_route(connection,budget,None,future).await
+        crate::share::route_protocol::run_with_route(connection, budget, None, future).await
     } else {
-        tokio::time::timeout(budget,future).await.map_err(|_|io::Error::new(io::ErrorKind::TimedOut,"screen write stalled"))?
+        tokio::time::timeout(budget, future)
+            .await
+            .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "screen write stalled"))?
     }
 }
 
@@ -102,13 +107,25 @@ impl GopWriter {
         keyframe: bool,
         records: Vec<Vec<u8>>,
     ) -> io::Result<u64> {
-        let records=if self.header.frame_contract.is_some_and(|c|!c.hybrid_regions)
-            && self.header.codec==super::negotiate::CodecKind::Tiles {
-            super::wire_binary::repack_tiles(records,self.header.record_limit())?
-        } else {records};
-        let budget=super::frame_size_caps::PacketBudget::for_contract(self.header.frame_contract)?;
-        let total=records.iter().try_fold(0usize,|n,r|n.checked_add(r.len()).and_then(|n|n.checked_add(RECORD_HEADER_BYTES)));
-        if records.len()>budget.records || total.is_none_or(|n|n>budget.encoded_bytes) {return Err(super::wire::invalid("frame exceeds derived packet budget"));}
+        let records = if self
+            .header
+            .frame_contract
+            .is_some_and(|c| !c.hybrid_regions)
+            && self.header.codec == super::negotiate::CodecKind::Tiles
+        {
+            super::wire_binary::repack_tiles(records, self.header.record_limit())?
+        } else {
+            records
+        };
+        let budget =
+            super::frame_size_caps::PacketBudget::for_contract(self.header.frame_contract)?;
+        let total = records.iter().try_fold(0usize, |n, r| {
+            n.checked_add(r.len())
+                .and_then(|n| n.checked_add(RECORD_HEADER_BYTES))
+        });
+        if records.len() > budget.records || total.is_none_or(|n| n > budget.encoded_bytes) {
+            return Err(super::wire::invalid("frame exceeds derived packet budget"));
+        }
         let count = records.len();
         let mut bytes = 0u64;
         for (index, payload) in records.into_iter().enumerate() {
@@ -127,25 +144,47 @@ impl GopWriter {
         }
         Ok(bytes)
     }
-    pub(crate) async fn write_frame_admitted(&mut self, frame_id: u64, capture_ts_us: u64,
-        keyframe: bool, mut records: super::capture_records::CapturedRecords) -> io::Result<u64> {
-        let budget = super::frame_size_caps::PacketBudget::for_contract(self.header.frame_contract)?;
-        let total = records.iter().try_fold(0usize, |n,r| n.checked_add(r.len()).and_then(|n|n.checked_add(RECORD_HEADER_BYTES)));
-        if records.len() > budget.records || total.is_none_or(|n| n > budget.encoded_bytes)
-            || records.iter().any(|record| record.len() > self.header.record_limit()) {
+    pub(crate) async fn write_frame_admitted(
+        &mut self,
+        frame_id: u64,
+        capture_ts_us: u64,
+        keyframe: bool,
+        mut records: super::capture_records::CapturedRecords,
+    ) -> io::Result<u64> {
+        let budget =
+            super::frame_size_caps::PacketBudget::for_contract(self.header.frame_contract)?;
+        let total = records.iter().try_fold(0usize, |n, r| {
+            n.checked_add(r.len())
+                .and_then(|n| n.checked_add(RECORD_HEADER_BYTES))
+        });
+        if records.len() > budget.records
+            || total.is_none_or(|n| n > budget.encoded_bytes)
+            || records
+                .iter()
+                .any(|record| record.len() > self.header.record_limit())
+        {
             return Err(super::wire::invalid("admitted records exceed GOP contract"));
         }
         let count = records.len();
         records.reverse();
         let mut written = 0u64;
         for index in 0..count {
-            let bytes = records.pop()?.ok_or_else(|| super::wire::invalid("admitted record disappeared"))?;
+            let bytes = records
+                .pop()?
+                .ok_or_else(|| super::wire::invalid("admitted record disappeared"))?;
             let (payload, lease) = bytes.into_parts();
-            let mut flags = if keyframe {FLAG_KEYFRAME} else {0};
-            if index + 1 < count {flags |= FLAG_MORE;}
+            let mut flags = if keyframe { FLAG_KEYFRAME } else { 0 };
+            if index + 1 < count {
+                flags |= FLAG_MORE;
+            }
             written += (payload.len() + RECORD_HEADER_BYTES) as u64;
-            let record = FrameRecord {frame_id,capture_ts_us,flags,payload};
-            write_frame_record(&mut self.send,&self.header,&record).await?;
+            let record = FrameRecord {
+                frame_id,
+                capture_ts_us,
+                flags,
+                payload,
+            };
+            write_frame_record(&mut self.send, &self.header, &record).await?;
             drop(record);
             drop(lease);
         }
@@ -188,40 +227,57 @@ pub(crate) async fn accept_picture_streams(
     events: mpsc::Sender<PictureEvent>,
     acks: mpsc::Sender<ViewerFrame>,
 ) {
-    accept_picture_streams_with_contract(connection,events,acks,None).await;
+    accept_picture_streams_with_contract(connection, events, acks, None).await;
 }
 
 pub(crate) async fn accept_picture_streams_with_contract(
-    connection: Connection, events: mpsc::Sender<PictureEvent>, acks: mpsc::Sender<ViewerFrame>,
+    connection: Connection,
+    events: mpsc::Sender<PictureEvent>,
+    acks: mpsc::Sender<ViewerFrame>,
     contract: Option<super::frame_budget::FrameContract>,
 ) {
-    accept_picture_streams_with_memory(connection,events,acks,contract,None).await;
+    accept_picture_streams_with_memory(connection, events, acks, contract, None).await;
 }
 pub(crate) async fn accept_picture_streams_with_memory(
-    connection:Connection,events:mpsc::Sender<PictureEvent>,acks:mpsc::Sender<ViewerFrame>,
-    contract:Option<super::frame_budget::FrameContract>,memory:super::frame_memory::MemoryHold,
+    connection: Connection,
+    events: mpsc::Sender<PictureEvent>,
+    acks: mpsc::Sender<ViewerFrame>,
+    contract: Option<super::frame_budget::FrameContract>,
+    memory: super::frame_memory::MemoryHold,
 ) {
-    let local=match contract {
-        Some(contract)=>Some(contract.limits),
-        None=>match memory.as_ref().map(|lease|super::frame_budget::legacy_limits(lease.bytes(),None)).transpose() {
-            Ok(limits)=>limits,Err(_)=>return,
+    let local = match contract {
+        Some(contract) => Some(contract.limits),
+        None => match memory
+            .as_ref()
+            .map(|lease| super::frame_budget::legacy_limits(lease.bytes(), None))
+            .transpose()
+        {
+            Ok(limits) => limits,
+            Err(_) => return,
         },
     };
-    accept_picture_streams_admitted(connection,events,acks,contract,memory,local).await;
+    accept_picture_streams_admitted(connection, events, acks, contract, memory, local).await;
 }
 pub(crate) async fn accept_picture_streams_admitted(
-    connection:Connection,events:mpsc::Sender<PictureEvent>,acks:mpsc::Sender<ViewerFrame>,
-    contract:Option<super::frame_budget::FrameContract>,memory:super::frame_memory::MemoryHold,
-    local:Option<super::frame_budget::FrameLimits>,
+    connection: Connection,
+    events: mpsc::Sender<PictureEvent>,
+    acks: mpsc::Sender<ViewerFrame>,
+    contract: Option<super::frame_budget::FrameContract>,
+    memory: super::frame_memory::MemoryHold,
+    local: Option<super::frame_budget::FrameLimits>,
 ) {
-    let readers=std::sync::Arc::new(tokio::sync::Semaphore::new(VIEWER_UNI_STREAMS as usize));
+    let readers = std::sync::Arc::new(tokio::sync::Semaphore::new(VIEWER_UNI_STREAMS as usize));
     while let Ok(recv) = connection.accept_uni().await {
-        let Ok(permit)=readers.clone().acquire_owned().await else {return;};
-        let (events,acks)=(events.clone(),acks.clone());let memory=memory.clone();
+        let Ok(permit) = readers.clone().acquire_owned().await else {
+            return;
+        };
+        let (events, acks) = (events.clone(), acks.clone());
+        let memory = memory.clone();
         tokio::spawn(async move {
-            let _permit=permit;
-            let bytes=memory.as_ref().map(|lease|lease.bytes());let _memory=memory;
-            read_picture_stream(recv,events,acks,contract,bytes,local).await;
+            let _permit = permit;
+            let bytes = memory.as_ref().map(|lease| lease.bytes());
+            let _memory = memory;
+            read_picture_stream(recv, events, acks, contract, bytes, local).await;
         });
     }
 }
@@ -231,8 +287,8 @@ async fn read_picture_stream(
     events: mpsc::Sender<PictureEvent>,
     acks: mpsc::Sender<ViewerFrame>,
     contract: Option<super::frame_budget::FrameContract>,
-    memory_bytes:Option<u64>,
-    local:Option<super::frame_budget::FrameLimits>,
+    memory_bytes: Option<u64>,
+    local: Option<super::frame_budget::FrameLimits>,
 ) {
     let header = match read_gop_header(&mut recv).await {
         Ok(header) => header,
@@ -241,29 +297,58 @@ async fn read_picture_stream(
             return;
         }
     };
-    let contract_matches=super::frame_budget::contract_matches(header.frame_contract,contract);
-    let exceeds=memory_bytes.is_some_and(|bytes| {
-        let owners=if header.frame_contract.is_some() {super::frame_budget::VERSIONED_WORKING_IMAGES} else {super::frame_budget::WORKING_IMAGES};
-        header.size.pixels().saturating_mul(4*owners)>bytes
+    let contract_matches = super::frame_budget::contract_matches(header.frame_contract, contract);
+    let exceeds = memory_bytes.is_some_and(|bytes| {
+        let owners = if header.frame_contract.is_some() {
+            super::frame_budget::VERSIONED_WORKING_IMAGES
+        } else {
+            super::frame_budget::WORKING_IMAGES
+        };
+        header.size.pixels().saturating_mul(4 * owners) > bytes
     });
-    if !contract_matches || exceeds || local.is_some_and(|limits|limits.check(header.size).is_err()) {
-        let _ = recv.stop(STREAM_RESET_CODE); return;
+    if !contract_matches
+        || exceeds
+        || local.is_some_and(|limits| limits.check(header.size).is_err())
+    {
+        let _ = recv.stop(STREAM_RESET_CODE);
+        return;
     }
-    let Ok(budget)=super::frame_size_caps::PacketBudget::for_receive(header.frame_contract,local) else {
-        let _=recv.stop(STREAM_RESET_CODE);return;
+    let Ok(budget) =
+        super::frame_size_caps::PacketBudget::for_receive(header.frame_contract, local)
+    else {
+        let _ = recv.stop(STREAM_RESET_CODE);
+        return;
     };
     let mut sequence = RecordSequence::default();
-    let mut allocation_budget=super::wire_binary::FrameReadBudget::default();
-    let mut current=0;let mut records=0usize;let mut bytes=0usize;
+    let mut allocation_budget = super::wire_binary::FrameReadBudget::default();
+    let mut current = 0;
+    let mut records = 0usize;
+    let mut bytes = 0usize;
     loop {
-        let record = match super::wire_binary::read_frame_record_admitted(&mut recv,&header,&mut allocation_budget,budget).await {
+        let record = match super::wire_binary::read_frame_record_admitted(
+            &mut recv,
+            &header,
+            &mut allocation_budget,
+            budget,
+        )
+        .await
+        {
             Ok(Some(record)) => record,
             Ok(None) if !sequence.is_open() => return,
             Ok(None) | Err(_) => break,
         };
-        if current!=record.frame_id {current=record.frame_id;records=0;bytes=0;}
-        records=records.saturating_add(1);bytes=bytes.saturating_add(record.payload.len()).saturating_add(RECORD_HEADER_BYTES);
-        if records>budget.records || bytes>budget.encoded_bytes {break;}
+        if current != record.frame_id {
+            current = record.frame_id;
+            records = 0;
+            bytes = 0;
+        }
+        records = records.saturating_add(1);
+        bytes = bytes
+            .saturating_add(record.payload.len())
+            .saturating_add(RECORD_HEADER_BYTES);
+        if records > budget.records || bytes > budget.encoded_bytes {
+            break;
+        }
         let received_us = now_us();
         if sequence.accept(&header, &record).is_err() {
             break;

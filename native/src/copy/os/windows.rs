@@ -22,14 +22,22 @@ mod publication_failure;
 pub(super) use publication_failure::require_local_publication_observation;
 
 pub(super) fn open_publication_file(
-    parent: &crate::local_access::ConfinedDirectory, name: &std::ffi::OsStr,
-) -> io::Result<File> { parent.open_publication_file(name) }
+    parent: &crate::local_access::ConfinedDirectory,
+    name: &std::ffi::OsStr,
+) -> io::Result<File> {
+    parent.open_publication_file(name)
+}
 
 pub(super) fn open_move_publication_file(
-    parent: &crate::local_access::ConfinedDirectory, name: &std::ffi::OsStr,
-) -> io::Result<File> { parent.open_move_publication_file(name) }
+    parent: &crate::local_access::ConfinedDirectory,
+    name: &std::ffi::OsStr,
+) -> io::Result<File> {
+    parent.open_move_publication_file(name)
+}
 
-pub(super) fn confirm_publication_namespace(parent: &crate::local_access::ConfinedDirectory) -> io::Result<()> {
+pub(super) fn confirm_publication_namespace(
+    parent: &crate::local_access::ConfinedDirectory,
+) -> io::Result<()> {
     parent.confirm_publication_namespace()
 }
 

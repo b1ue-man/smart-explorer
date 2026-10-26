@@ -359,7 +359,8 @@ async fn wait_result_ack_from_reader(
     protocol: &mut ServerProtocolState,
     exec_id: &ExecId,
 ) -> io::Result<()> {
-    let deadline = super::route_protocol::active_now() + EXEC_HEARTBEAT_POLICY.server_result_ack_timeout();
+    let deadline =
+        super::route_protocol::active_now() + EXEC_HEARTBEAT_POLICY.server_result_ack_timeout();
     loop {
         let frame = super::route_protocol::timeout_until(deadline, frames.next())
             .await
@@ -396,8 +397,9 @@ async fn send_frame_bounded<W: AsyncWrite + Unpin>(
     frame: &ServerFrame,
     peer_deadline: tokio::time::Instant,
 ) -> io::Result<()> {
-    let write_deadline =
-        (super::route_protocol::active_now() + EXEC_HEARTBEAT_POLICY.write_timeout).min(peer_deadline);
+    let write_deadline = (super::route_protocol::active_now()
+        + EXEC_HEARTBEAT_POLICY.write_timeout)
+        .min(peer_deadline);
     super::route_protocol::timeout_until(write_deadline, send_server_frame(send, frame))
         .await
         .map_err(|_| timed_out("Exec-Peer nimmt keine Ausgabeframes mehr an"))?

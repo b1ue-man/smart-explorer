@@ -237,7 +237,9 @@ impl Backend for LocalBackend {
         let staged = super::promotion::unique_staging_path(self, dst, "copy")?;
         let result = (|| {
             let _guard = optical::guard(&local_platform::to_os(src))?;
-            if let Some(guard) = &_guard { guard.set_mode(crate::source_media::ReadMode::Sequential); }
+            if let Some(guard) = &_guard {
+                guard.set_mode(crate::source_media::ReadMode::Sequential);
+            }
             let mut reader = self.open_regular(src)?;
             let permissions = reader.metadata()?.permissions();
             let mut writer = local_platform::create_new_private(&local_platform::to_os(&staged))?;
@@ -362,7 +364,8 @@ impl Backend for LocalBackend {
             let mut file = self.open_regular(path)?;
             file.seek(SeekFrom::Start(offset))?;
             Ok(file)
-        }).map(Some)
+        })
+        .map(Some)
     }
     fn supports_range_reads(&self, path: &str) -> bool {
         optical::ranges(&local_platform::to_os(path))
@@ -379,7 +382,8 @@ impl Backend for LocalBackend {
             let mut file = self.open_regular(path)?;
             file.seek(SeekFrom::Start(offset))?;
             Ok(file.take(len))
-        }).map(Some)
+        })
+        .map(Some)
     }
     fn flow_identity(&self, path: &str) -> String {
         self.flow_key(path)

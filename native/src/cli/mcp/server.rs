@@ -35,9 +35,11 @@ impl ServerHandler for SeServer {
             Some(runtime) => format!("{}\nThis process uses immutable runtime {} of installation {} (generation {}). Its tool catalog stays fixed until this MCP process ends. New capabilities require the host to start a new MCP process.", catalog::INSTRUCTIONS, runtime.contract.runtime_sha256, runtime.installation.manifest.installation_id, runtime.installation.manifest.generation),
             None => catalog::INSTRUCTIONS.to_string(),
         };
-        let instructions=if crate::mcp_launcher::migration_entry() {
+        let instructions = if crate::mcp_launcher::migration_entry() {
             format!("{instructions}\nThis one-time migration was started through installed se. It uses the normal update-stop contract and will close for an update. Reconnect through the registered launcher after the profile refresh; this connection has no update retention exception.")
-        }else{instructions};
+        } else {
+            instructions
+        };
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(
                 Implementation::new("smart-explorer", env!("CARGO_PKG_VERSION"))
@@ -78,13 +80,24 @@ async fn dispatch(
     request: &CallToolRequestParams,
     context: &RequestContext<RoleServer>,
 ) -> Result<CallToolResult, String> {
-    let observation = matches!(request.name.as_ref(), "job_status" | "job_cancel" | "status")
-        || (request.name == "sessions" && request.arguments.as_ref().and_then(|a| a.get("action")).and_then(|a| a.as_str()) == Some("close"));
-    let mut operation = if observation { None } else {
+    let observation = matches!(
+        request.name.as_ref(),
+        "job_status" | "job_cancel" | "status"
+    ) || (request.name == "sessions"
+        && request
+            .arguments
+            .as_ref()
+            .and_then(|a| a.get("action"))
+            .and_then(|a| a.as_str())
+            == Some("close"));
+    let mut operation = if observation {
+        None
+    } else {
         let guard = crate::mcp_launcher::operation()?;
-        let negotiation=session.clone();
-        tokio::task::spawn_blocking(move ||negotiation.negotiate_runtime()).await
-            .map_err(|error|format!("runtime negotiation worker failed: {error}"))??;
+        let negotiation = session.clone();
+        tokio::task::spawn_blocking(move || negotiation.negotiate_runtime())
+            .await
+            .map_err(|error| format!("runtime negotiation worker failed: {error}"))??;
         guard
     };
     let args = Args::new(request.arguments.as_ref());
@@ -143,11 +156,26 @@ async fn dispatch(
             job_view::started_job_answer(&job, &args, context).await
         }
         "screen" => blocking(move || screen_tool::screen(&Args::new(owned.as_ref()))).await,
-        "screen_window" => blocking(move || super::screen_window_tool::open(&Args::new(owned.as_ref()))).await,
-        "tcp_forward" => blocking(move || super::tcp_tool::tcp_forward(&Args::new(owned.as_ref()))).await,
+        "screen_window" => {
+            blocking(move || super::screen_window_tool::open(&Args::new(owned.as_ref()))).await
+        }
+        "tcp_forward" => {
+            blocking(move || super::tcp_tool::tcp_forward(&Args::new(owned.as_ref()))).await
+        }
         "apps" => blocking(move || super::apps_tool::apps(&Args::new(owned.as_ref()))).await,
         "login" => blocking(move || super::login_tool::login(&Args::new(owned.as_ref()))).await,
-        "rdp" => blocking(move || super::rdp_tool::rdp(&Args::new(owned.as_ref()), |target| crate::daemon::apps_rdp_probe(target, Some(std::time::Duration::from_secs(30)), || {}))).await,
+        "rdp" => {
+            blocking(move || {
+                super::rdp_tool::rdp(&Args::new(owned.as_ref()), |target| {
+                    crate::daemon::apps_rdp_probe(
+                        target,
+                        Some(std::time::Duration::from_secs(30)),
+                        || {},
+                    )
+                })
+            })
+            .await
+        }
         "screen_input" => {
             blocking(move || screen_tool::screen_input(&Args::new(owned.as_ref()))).await
         }
@@ -161,8 +189,17 @@ async fn dispatch(
         "job_input" => job_view::input_tool(session, &args),
         "job_cancel" => job_view::cancel_tool(session, &args, context).await,
         "sessions" => {
-            if observation { blocking_observe(move || sessions_tool::sessions(&session_for_work, &Args::new(owned.as_ref()))).await }
-            else { blocking(move || sessions_tool::sessions(&session_for_work, &Args::new(owned.as_ref()))).await }
+            if observation {
+                blocking_observe(move || {
+                    sessions_tool::sessions(&session_for_work, &Args::new(owned.as_ref()))
+                })
+                .await
+            } else {
+                blocking(move || {
+                    sessions_tool::sessions(&session_for_work, &Args::new(owned.as_ref()))
+                })
+                .await
+            }
         }
         other => Err(format!("unknown tool `{other}`")),
     }
@@ -175,14 +212,16 @@ async fn blocking(
         let _operation = crate::mcp_launcher::operation()?;
         work()
     })
-        .await
-        .map_err(|error| format!("tool worker failed: {error}"))?
+    .await
+    .map_err(|error| format!("tool worker failed: {error}"))?
 }
 
 async fn blocking_observe(
     work: impl FnOnce() -> Result<CallToolResult, String> + Send + 'static,
 ) -> Result<CallToolResult, String> {
-    tokio::task::spawn_blocking(work).await.map_err(|error|format!("status worker failed: {error}"))?
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|error| format!("status worker failed: {error}"))?
 }
 
 async fn start(
@@ -192,8 +231,8 @@ async fn start(
         let _operation = crate::mcp_launcher::operation()?;
         work()
     })
-        .await
-        .map_err(|error| format!("job start failed: {error}"))?
+    .await
+    .map_err(|error| format!("job start failed: {error}"))?
 }
 
 /// Runs the server until the client closes standard input or a desktop update

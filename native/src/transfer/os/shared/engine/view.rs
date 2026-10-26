@@ -105,7 +105,9 @@ impl<'a> JobView<'a> {
 
     pub(crate) fn gate_root(&self) -> String {
         match self.items {
-            JobItems::Roots { base: Some(base), .. } => base.clone(),
+            JobItems::Roots {
+                base: Some(base), ..
+            } => base.clone(),
             _ => super::super::engine_names::parent_path(super::first_source(self.items)),
         }
     }

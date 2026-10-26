@@ -1,14 +1,8 @@
 //! OpenH264 encoder; the productive entrypoint keeps every product copy admitted.
-use std::io;
-use std::os::raw::{c_int, c_void};
-use openh264::encoder::{BitRate, Complexity, Encoder, EncoderConfig, FrameRate, FrameType,
-    Profile, RateControlMode, UsageType, VuiConfig};
-use openh264::formats::YUVSlices;
-use openh264::OpenH264API;
 use super::codec_inventory::openh264_encoder_offers;
+use super::openh264_capture::{admitted_i420, capture_limit, copy_access_unit};
 use super::openh264_codec::{coder_error, load, OPENH264_NAME};
 use super::openh264_install::OpenH264Store;
-use super::openh264_capture::{admitted_i420, copy_access_unit, capture_limit};
 use crate::screen::core::capture_admission::CaptureGrant;
 use crate::screen::core::capture_image::CapturedImage;
 use crate::screen::core::codec_registry::EncoderFactory;
@@ -17,6 +11,14 @@ use crate::screen::core::host_stage::StageRequest;
 use crate::screen::core::negotiate::{CodecChoice, CodecOffer, H264Profile};
 use crate::screen::core::pixel_convert::{bgra_to_i420, BgraImage, FrameSize, YuvMatrix};
 use crate::screen::core::rate_control::{MAX_BITRATE_BPS, MIN_BITRATE_BPS};
+use openh264::encoder::{
+    BitRate, Complexity, Encoder, EncoderConfig, FrameRate, FrameType, Profile, RateControlMode,
+    UsageType, VuiConfig,
+};
+use openh264::formats::YUVSlices;
+use openh264::OpenH264API;
+use std::io;
+use std::os::raw::{c_int, c_void};
 
 // ISVCEncoder SetOption values pinned by openh264-sys2 0.9.9.
 const ENCODER_OPTION_BITRATE: c_int = 5;
@@ -24,7 +26,10 @@ const ENCODER_OPTION_MAX_BITRATE: c_int = 6;
 const SPATIAL_LAYER_0: c_int = 0;
 const SPATIAL_LAYER_ALL: c_int = 4;
 #[repr(C)]
-struct BitrateInfo {layer: c_int, bitrate: c_int}
+struct BitrateInfo {
+    layer: c_int,
+    bitrate: c_int,
+}
 
 pub(crate) struct OpenH264EncoderFactory {
     pub(super) store: OpenH264Store,
@@ -48,15 +53,25 @@ impl EncoderFactory for OpenH264EncoderFactory {
         Ok(Box::new(self.create(choice, size, fps, None)?))
     }
 
-    fn open_admitted(&self, choice: &CodecChoice, size: FrameSize, fps: u32,
-        grant: CaptureGrant) -> io::Result<Box<dyn ScreenEncoder>> {
+    fn open_admitted(
+        &self,
+        choice: &CodecChoice,
+        size: FrameSize,
+        fps: u32,
+        grant: CaptureGrant,
+    ) -> io::Result<Box<dyn ScreenEncoder>> {
         Ok(Box::new(self.create(choice, size, fps, Some(grant))?))
     }
 }
 
 impl OpenH264EncoderFactory {
-    fn create(&self, choice: &CodecChoice, size: FrameSize, fps: u32,
-        grant: Option<CaptureGrant>) -> io::Result<OpenH264Encoder> {
+    fn create(
+        &self,
+        choice: &CodecChoice,
+        size: FrameSize,
+        fps: u32,
+        grant: Option<CaptureGrant>,
+    ) -> io::Result<OpenH264Encoder> {
         if choice.profile != Some(H264Profile::ConstrainedBaseline) {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
@@ -171,29 +186,49 @@ impl OpenH264Encoder {
 }
 
 impl ScreenEncoder for OpenH264Encoder {
-    fn encode_captured(&mut self, frame: &CapturedImage, request: &StageRequest)
-        -> io::Result<CapturedEncodedFrame> {
-        let grant = self.grant.clone().ok_or_else(|| io::Error::other("OpenH264 encoder has no capture grant"))?;
+    fn encode_captured(
+        &mut self,
+        frame: &CapturedImage,
+        request: &StageRequest,
+    ) -> io::Result<CapturedEncodedFrame> {
+        let grant = self
+            .grant
+            .clone()
+            .ok_or_else(|| io::Error::other("OpenH264 encoder has no capture grant"))?;
         let maximum = capture_limit(&grant, frame, request, self.size)?;
         let target = clamp_bitrate(request.target_bps);
         let first = self.encoder.is_none();
-        if !first {self.retune(target);}
+        if !first {
+            self.retune(target);
+        }
         let yuv = admitted_i420(&grant, frame)?;
         let yuv = yuv.resource();
         let (width, height) = (self.size.width as usize, self.size.height as usize);
         let encoder = self.started(target)?;
-        if request.keyframe && !first {encoder.force_intra_frame();}
-        let source = YUVSlices::new((&yuv.y, &yuv.u, &yuv.v), (width, height),
-            (width, width / 2, width / 2));
+        if request.keyframe && !first {
+            encoder.force_intra_frame();
+        }
+        let source = YUVSlices::new(
+            (&yuv.y, &yuv.u, &yuv.v),
+            (width, height),
+            (width, width / 2, width / 2),
+        );
         let stream = encoder.encode(&source).map_err(coder_error)?;
         let keyframe = stream.frame_type() == FrameType::IDR;
         if request.keyframe && !keyframe {
-            return Err(io::Error::other("OpenH264 gave no IDR for a requested key frame"));
+            return Err(io::Error::other(
+                "OpenH264 gave no IDR for a requested key frame",
+            ));
         }
         let records = if stream.frame_type() == FrameType::Skip {
             crate::screen::core::capture_records::CapturedRecords::empty(&grant)?
-        } else {copy_access_unit(&grant, &stream, maximum)?};
-        Ok(CapturedEncodedFrame {keyframe: keyframe && !records.is_empty(), records})
+        } else {
+            copy_access_unit(&grant, &stream, maximum)?
+        };
+        Ok(CapturedEncodedFrame {
+            keyframe: keyframe && !records.is_empty(),
+            records,
+        })
     }
 
     fn name(&self) -> String {
@@ -211,7 +246,9 @@ impl ScreenEncoder for OpenH264Encoder {
         target_bps: u64,
     ) -> io::Result<EncodedFrame> {
         if self.grant.is_some() {
-            return Err(io::Error::other("admitted OpenH264 encoder requires encode_captured"));
+            return Err(io::Error::other(
+                "admitted OpenH264 encoder requires encode_captured",
+            ));
         }
         if frame.size() != self.size {
             return Err(io::Error::new(
@@ -256,4 +293,3 @@ impl ScreenEncoder for OpenH264Encoder {
         })
     }
 }
-

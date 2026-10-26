@@ -1,7 +1,5 @@
 //! Mounted optical media: physical-device arbitration, never a raw-disc reader.
 mod permit;
-mod reader;
-mod status;
 #[cfg(target_os = "linux")]
 #[path = "os/linux.rs"]
 mod platform;
@@ -11,9 +9,14 @@ mod platform;
 #[cfg(not(any(windows, target_os = "linux")))]
 #[path = "os/unsupported.rs"]
 mod platform;
+mod reader;
+mod status;
 
-pub use permit::{acquire, acquire_current, acquire_file, acquire_file_current, acquire_source, with_cancellation, Guard, Priority};
-pub use reader::{guard_reader, guard_file_reader, GuardedIterator};
+pub use permit::{
+    acquire, acquire_current, acquire_file, acquire_file_current, acquire_source,
+    with_cancellation, Guard, Priority,
+};
+pub use reader::{guard_file_reader, guard_reader, GuardedIterator};
 pub use status::{snapshots, ReadMode, Status};
 use std::{io, path::Path};
 
@@ -30,7 +33,9 @@ pub struct Source {
 /// This may contact the mounted filesystem and belongs on a worker thread.
 pub fn probe(path: &Path) -> io::Result<Option<Source>> {
     #[cfg(test)]
-    if let Some(source) = test_profiles::probe(path) { return Ok(Some(source)); }
+    if let Some(source) = test_profiles::probe(path) {
+        return Ok(Some(source));
+    }
     platform::probe(path)
 }
 
@@ -47,15 +52,21 @@ pub fn sequential_copy(
     let mut buffer = vec![0; OPTICAL_BLOCK_BYTES];
     let mut total = 0u64;
     loop {
-        if cancel.load(std::sync::atomic::Ordering::Acquire) || permit::context_canceled() { return Ok(None); }
+        if cancel.load(std::sync::atomic::Ordering::Acquire) || permit::context_canceled() {
+            return Ok(None);
+        }
         let count = loop {
-            if cancel.load(std::sync::atomic::Ordering::Acquire) || permit::context_canceled() { return Ok(None); }
+            if cancel.load(std::sync::atomic::Ordering::Acquire) || permit::context_canceled() {
+                return Ok(None);
+            }
             match reader.read(&mut buffer) {
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
                 result => break result?,
             }
         };
-        if count == 0 { return Ok(Some(total)); }
+        if count == 0 {
+            return Ok(Some(total));
+        }
         writer.write_all(&buffer[..count])?;
         total = total.saturating_add(count as u64);
         progress(count as u64);
@@ -80,4 +91,6 @@ pub(crate) mod test_profiles;
 mod tests;
 
 /// Facts bound to an existing handle, preserving retained-root authority.
-pub fn probe_file(file: &std::fs::File) -> io::Result<Option<Source>> { platform::probe_file(file) }
+pub fn probe_file(file: &std::fs::File) -> io::Result<Option<Source>> {
+    platform::probe_file(file)
+}

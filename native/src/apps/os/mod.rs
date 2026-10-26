@@ -1,5 +1,4 @@
 pub(crate) mod host;
-pub(crate) mod shared;
 #[cfg(windows)]
 #[path = "windows/mod.rs"]
 pub(crate) mod platform;
@@ -12,3 +11,4 @@ pub(crate) mod platform;
 #[cfg(not(any(windows, target_os = "linux", target_os = "android")))]
 #[path = "shared/unsupported.rs"]
 pub(crate) mod platform;
+pub(crate) mod shared;

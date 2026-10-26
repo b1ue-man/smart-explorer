@@ -68,8 +68,14 @@ fn get(handle: i64) -> Result<Arc<Open>, i32> {
         return Err(libc::EACCES);
     }
     let access = open.slot.check_access().and_then(|_| {
-        if super::docs_vault::released(&open.root) { Ok(()) }
-        else { Err(io::Error::new(io::ErrorKind::PermissionDenied, "Dokument nicht freigegeben")) }
+        if super::docs_vault::released(&open.root) {
+            Ok(())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Dokument nicht freigegeben",
+            ))
+        }
     });
     if let Err(error) = access {
         if !open.revoked.swap(true, Ordering::AcqRel) {

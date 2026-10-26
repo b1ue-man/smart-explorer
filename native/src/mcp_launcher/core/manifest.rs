@@ -34,29 +34,42 @@ pub struct Manifest {
     pub ipc_contract_id: String,
     pub shared_state_contract_id: String,
     pub supported_runtimes: Vec<RuntimeContract>,
-    pub compatibility_catalog_sha256:String,
+    pub compatibility_catalog_sha256: String,
 }
 
 pub fn is_sha256(value: &str) -> bool {
-    value.len() == 64 && value.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 pub fn is_id(value: &str) -> bool {
-    !value.is_empty() && value.len() <= 128
-        && value.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
 }
 
 impl Manifest {
     pub fn validate(&self, executable_name: &str) -> Result<(), String> {
-        if serde_json::to_vec(self).map_err(|e|e.to_string())?.len()>256*1024 {return Err("runtime_manifest_exceeds_record_budget".into());}
+        if serde_json::to_vec(self).map_err(|e| e.to_string())?.len() > 256 * 1024 {
+            return Err("runtime_manifest_exceeds_record_budget".into());
+        }
         if self.schema != SCHEMA || self.launcher_protocol != LAUNCHER_PROTOCOL {
             return Err("runtime_manifest_schema_unsupported".into());
         }
-        if !is_id(&self.installation_id) || !is_id(&self.committed_transaction_id)
-            || !is_id(&self.product_version) || !is_id(&self.launcher_product_version)
-            || self.generation == 0 || !is_sha256(&self.runtime_sha256)
-            || !is_sha256(&self.launcher_sha256) || !is_sha256(&self.compatibility_catalog_sha256)
-            || !is_id(&self.ipc_contract_id) || !is_id(&self.shared_state_contract_id)
+        if !is_id(&self.installation_id)
+            || !is_id(&self.committed_transaction_id)
+            || !is_id(&self.product_version)
+            || !is_id(&self.launcher_product_version)
+            || self.generation == 0
+            || !is_sha256(&self.runtime_sha256)
+            || !is_sha256(&self.launcher_sha256)
+            || !is_sha256(&self.compatibility_catalog_sha256)
+            || !is_id(&self.ipc_contract_id)
+            || !is_id(&self.shared_state_contract_id)
         {
             return Err("runtime_manifest_invalid_identity_or_contract".into());
         }
@@ -79,7 +92,8 @@ impl Manifest {
         let mut runtimes = BTreeSet::new();
         runtimes.insert(&self.runtime_sha256);
         for runtime in &self.supported_runtimes {
-            if !is_sha256(&runtime.runtime_sha256) || !runtimes.insert(&runtime.runtime_sha256)
+            if !is_sha256(&runtime.runtime_sha256)
+                || !runtimes.insert(&runtime.runtime_sha256)
                 || !is_id(&runtime.ipc_contract_id)
                 || !is_id(&runtime.shared_state_contract_id)
             {
@@ -90,17 +104,17 @@ impl Manifest {
     }
 
     pub fn permits(&self, runtime: &RuntimeContract) -> bool {
-        implements_contract_pair(&runtime.ipc_contract_id,&runtime.shared_state_contract_id)
-        && ((runtime.runtime_sha256 == self.runtime_sha256
-            && runtime.ipc_contract_id == self.ipc_contract_id
-            && runtime.shared_state_contract_id == self.shared_state_contract_id)
-            || self.supported_runtimes.contains(runtime))
+        implements_contract_pair(&runtime.ipc_contract_id, &runtime.shared_state_contract_id)
+            && ((runtime.runtime_sha256 == self.runtime_sha256
+                && runtime.ipc_contract_id == self.ipc_contract_id
+                && runtime.shared_state_contract_id == self.shared_state_contract_id)
+                || self.supported_runtimes.contains(runtime))
     }
 }
 
 /// This is a semantic offer by this build. It is not inferred from a version,
 /// Ping, schema hash or successful JSON decoding. Add a pair only alongside
 /// its actual adapter and the release-suite compatibility cases.
-pub fn implements_contract_pair(ipc:&str,state:&str)->bool {
-    ipc==IPC_CONTRACT && state==STATE_CONTRACT
+pub fn implements_contract_pair(ipc: &str, state: &str) -> bool {
+    ipc == IPC_CONTRACT && state == STATE_CONTRACT
 }

@@ -25,15 +25,19 @@ pub(crate) trait PublicationObserver {
     /// Only a durable revocation permits deleting its stage/restoring source.
     fn publication_preparation_failed(&self, staged: &Path, target: &Path) -> io::Result<()> {
         let _ = (staged, target);
-        Err(io::Error::new(io::ErrorKind::Unsupported,
-            "publication observer cannot confirm durable preparation revocation"))
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "publication observer cannot confirm durable preparation revocation",
+        ))
     }
     /// Called only after live namespace evidence establishes nonpublication.
     /// Persist the negative authorization before stage discard or source restore.
     fn publication_failed(&self, staged: &Path, target: &Path) -> io::Result<()> {
         let _ = (staged, target);
-        Err(io::Error::new(io::ErrorKind::Unsupported,
-            "publication observer cannot confirm durable publication revocation"))
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "publication observer cannot confirm durable publication revocation",
+        ))
     }
 }
 
@@ -66,8 +70,11 @@ pub(super) fn before(
 }
 
 pub(super) fn preparation_failed(
-    observer: Option<&dyn PublicationObserver>, staged: &Path, target: &Path,
-    cause: &io::Error, quarantine: Option<&super::move_guard::QuarantinedSource>,
+    observer: Option<&dyn PublicationObserver>,
+    staged: &Path,
+    target: &Path,
+    cause: &io::Error,
+    quarantine: Option<&super::move_guard::QuarantinedSource>,
 ) -> io::Result<()> {
     observer.map_or(Ok(()), |observer|
         observer.publication_preparation_failed(staged, target)).map_err(|error| {
@@ -86,20 +93,31 @@ pub(super) fn after(
     file: &File,
     quarantine: Option<&super::move_guard::QuarantinedSource>,
 ) -> io::Result<()> {
-    observer.map_or(Ok(()), |observer| observer.after_publish_handle(target, file)).map_err(|error| {
-        let retained = quarantine.map_or(String::new(), |source| {
-            format!("; secured move source remains at {}", source.path.display())
-        });
-        io::Error::new(error.kind(), format!(
-            "destination committed at {}{retained}; publication receipt failed: {error}",
-            target.display()
-        ))
-    })
+    observer
+        .map_or(Ok(()), |observer| {
+            observer.after_publish_handle(target, file)
+        })
+        .map_err(|error| {
+            let retained = quarantine.map_or(String::new(), |source| {
+                format!("; secured move source remains at {}", source.path.display())
+            });
+            io::Error::new(
+                error.kind(),
+                format!(
+                    "destination committed at {}{retained}; publication receipt failed: {error}",
+                    target.display()
+                ),
+            )
+        })
 }
 
 pub(super) fn commit_failed(
-    observer: Option<&dyn PublicationObserver>, staged: &Path, target: &Path, file: &File,
-    cause: &io::Error, quarantine: Option<&super::move_guard::QuarantinedSource>,
+    observer: Option<&dyn PublicationObserver>,
+    staged: &Path,
+    target: &Path,
+    file: &File,
+    cause: &io::Error,
+    quarantine: Option<&super::move_guard::QuarantinedSource>,
 ) -> io::Result<()> {
     crate::copy::publication_proof::confirm_unpublished(staged, target, file, cause)
         .and_then(|()| observer.map_or(Ok(()), |observer| observer.publication_failed(staged, target)))

@@ -17,10 +17,10 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
+use crate::screen::core::capture_admission::CaptureOwner;
+use crate::screen::core::capture_bytes::AdmittedBytes;
 use crate::screen::core::registry::ScreenRegistry;
 use crate::screen::core::wire_binary::MAX_RECORD_BYTES;
-use crate::screen::core::capture_bytes::AdmittedBytes;
-use crate::screen::core::capture_admission::CaptureOwner;
 
 pub(crate) const FLAG_KEYFRAME: u32 = 0x1;
 pub(crate) const FLAG_STILL: u32 = 0x2;
@@ -66,7 +66,9 @@ impl Picture {
         self.flags & FLAG_STILL != 0
     }
 
-    pub(crate) fn captured_video(&self) -> bool { self.flags & FLAG_CAPTURED_VIDEO != 0 }
+    pub(crate) fn captured_video(&self) -> bool {
+        self.flags & FLAG_CAPTURED_VIDEO != 0
+    }
 
     pub(crate) fn epoch(&self) -> u32 {
         self.flags >> EPOCH_SHIFT
@@ -130,12 +132,15 @@ impl Channel {
     /// Queues `message` for the app.
     pub(crate) fn send(&self, message: Value) {
         let mut state = lock(&self.state);
-        if message.get("op").and_then(Value::as_str)==Some("configure") {
+        if message.get("op").and_then(Value::as_str) == Some("configure") {
             // Retire old queued storage atomically with its epoch. A producer
             // cannot enqueue an old-epoch owner between clear and rebinding.
             state.1.pictures.clear();
-            state.1.active_epoch=message.get("epoch").and_then(Value::as_u64).and_then(|epoch|u32::try_from(epoch).ok());
-            state.1.encoder_failure=None;
+            state.1.active_epoch = message
+                .get("epoch")
+                .and_then(Value::as_u64)
+                .and_then(|epoch| u32::try_from(epoch).ok());
+            state.1.encoder_failure = None;
         }
         if state.1.control.len() >= MAX_CONTROL {
             state.1.control.pop_front();
@@ -162,7 +167,9 @@ impl Channel {
             if let Phase::Ended(reason) = &state.0 {
                 return Err(reason.clone());
             }
-            if let Some(reason) = state.1.encoder_failure.take() { return Err(format!("encoder_failed: {reason}")); }
+            if let Some(reason) = state.1.encoder_failure.take() {
+                return Err(format!("encoder_failed: {reason}"));
+            }
             while let Some(picture) = state.1.pictures.pop_front() {
                 if accept(&picture) {
                     return Ok(Some(picture));
@@ -190,12 +197,19 @@ impl Channel {
         state.0.clone()
     }
 
-    fn set_phase(&self,phase:Phase)->bool {
-        let mut state=lock(&self.state);
-        if matches!(state.0,Phase::Ended(_)) {return false;}
-        if matches!(phase,Phase::Ended(_)) {state.1.pictures.clear();self.capture.retire();}
-        state.0=phase;
-        drop(state);self.changed.notify_all();true
+    fn set_phase(&self, phase: Phase) -> bool {
+        let mut state = lock(&self.state);
+        if matches!(state.0, Phase::Ended(_)) {
+            return false;
+        }
+        if matches!(phase, Phase::Ended(_)) {
+            state.1.pictures.clear();
+            self.capture.retire();
+        }
+        state.0 = phase;
+        drop(state);
+        self.changed.notify_all();
+        true
     }
 
     fn push(&self, generation: u64, data: &[u8], flags: u32) -> i32 {
@@ -203,49 +217,88 @@ impl Channel {
         if matches!(state.0, Phase::Ended(_)) {
             return PUSH_UNKNOWN;
         }
-        let Ok(grant) = self.capture.grant(generation) else {return PUSH_INVALID;};
-        let epoch=flags>>EPOCH_SHIFT;
-        if flags & (FLAG_STILL|FLAG_CAPTURED_VIDEO|FLAG_KEYFRAME)!=0 && epoch!=0
-            && state.1.active_epoch.is_some_and(|active|active!=epoch) {return PUSH_OK;}
-        if flags & 0x8 !=0 {
-            if data.len()>4096 {return PUSH_INVALID;}
-            if state.1.active_epoch.is_some_and(|active|active!=epoch) {return PUSH_OK;}
-            state.1.encoder_failure=Some(String::from_utf8_lossy(data).into_owned());
-            state.1.pictures.clear();self.changed.notify_all();return PUSH_OK;
+        let Ok(grant) = self.capture.grant(generation) else {
+            return PUSH_INVALID;
+        };
+        let epoch = flags >> EPOCH_SHIFT;
+        if flags & (FLAG_STILL | FLAG_CAPTURED_VIDEO | FLAG_KEYFRAME) != 0
+            && epoch != 0
+            && state.1.active_epoch.is_some_and(|active| active != epoch)
+        {
+            return PUSH_OK;
         }
-        if flags & 0x20 !=0 {
-            if data.len()!=9 || data[0]>1 {return PUSH_INVALID;}
-            state.1.pictures.clear();state.1.encoder_failure=None;state.1.waiting_keyframe=true;
-            let Ok(data)=self.capture.activity_ack(data) else {return PUSH_INVALID;};
-            let picture=Picture {data,flags};
-            state.1.pictures.push_back(picture);self.changed.notify_all();return PUSH_OK;
+        if flags & 0x8 != 0 {
+            if data.len() > 4096 {
+                return PUSH_INVALID;
+            }
+            if state.1.active_epoch.is_some_and(|active| active != epoch) {
+                return PUSH_OK;
+            }
+            state.1.encoder_failure = Some(String::from_utf8_lossy(data).into_owned());
+            state.1.pictures.clear();
+            self.changed.notify_all();
+            return PUSH_OK;
         }
-        let queued_bytes: usize = state.1.pictures.iter().map(|p|p.data.len()).sum();
-        let raw=flags & (FLAG_STILL|FLAG_CAPTURED_VIDEO)!=0;
-        let overflow=if raw {!state.1.pictures.is_empty()} else {queued_bytes.saturating_add(data.len())>16*1024*1024};
+        if flags & 0x20 != 0 {
+            if data.len() != 9 || data[0] > 1 {
+                return PUSH_INVALID;
+            }
+            state.1.pictures.clear();
+            state.1.encoder_failure = None;
+            state.1.waiting_keyframe = true;
+            let Ok(data) = self.capture.activity_ack(data) else {
+                return PUSH_INVALID;
+            };
+            let picture = Picture { data, flags };
+            state.1.pictures.push_back(picture);
+            self.changed.notify_all();
+            return PUSH_OK;
+        }
+        let queued_bytes: usize = state.1.pictures.iter().map(|p| p.data.len()).sum();
+        let raw = flags & (FLAG_STILL | FLAG_CAPTURED_VIDEO) != 0;
+        let overflow = if raw {
+            !state.1.pictures.is_empty()
+        } else {
+            queued_bytes.saturating_add(data.len()) > 16 * 1024 * 1024
+        };
         if state.1.pictures.len() >= MAX_QUEUED || overflow {
             state.1.pictures.clear();
             state.1.waiting_keyframe = true;
-            if state.1.control.len() < MAX_CONTROL { state.1.control.push_back(json!({"op":"keyframe"}).to_string()); }
+            if state.1.control.len() < MAX_CONTROL {
+                state
+                    .1
+                    .control
+                    .push_back(json!({"op":"keyframe"}).to_string());
+            }
         }
         if flags & FLAG_STILL == 0 {
-            if flags & FLAG_KEYFRAME != 0 { state.1.waiting_keyframe = false; }
-            else if state.1.waiting_keyframe { return PUSH_OK; }
+            if flags & FLAG_KEYFRAME != 0 {
+                state.1.waiting_keyframe = false;
+            } else if state.1.waiting_keyframe {
+                return PUSH_OK;
+            }
         }
         // Queue eviction and grant validation happen under this lock, BEFORE
         // the replacement copy. Producer + queued + consumer remain three J.
-        let Ok(data)=AdmittedBytes::copy(&grant,CaptureOwner::Transport,data) else {return PUSH_INVALID;};
-        let picture=Picture {data,flags};
+        let Ok(data) = AdmittedBytes::copy(&grant, CaptureOwner::Transport, data) else {
+            return PUSH_INVALID;
+        };
+        let picture = Picture { data, flags };
         state.1.pictures.push_back(picture);
         self.changed.notify_all();
         PUSH_OK
     }
 
-    pub(crate) fn begin_capture(&self, size: crate::screen::core::pixel_convert::FrameSize, kind: u32)
-        -> std::io::Result<u64> {
-        let state=lock(&self.state);
-        if matches!(state.0,Phase::Ended(_)) {return Err(std::io::Error::other("Android capture session ended"));}
-        self.capture.begin(size,kind)
+    pub(crate) fn begin_capture(
+        &self,
+        size: crate::screen::core::pixel_convert::FrameSize,
+        kind: u32,
+    ) -> std::io::Result<u64> {
+        let state = lock(&self.state);
+        if matches!(state.0, Phase::Ended(_)) {
+            return Err(std::io::Error::other("Android capture session ended"));
+        }
+        self.capture.begin(size, kind)
     }
 
     fn take_control(&self, timeout: Duration) -> Option<String> {
@@ -277,7 +330,7 @@ pub(crate) struct Prereqs {
     pub app_window_capture: bool,
     pub display: Option<(u32, u32)>,
     /// Available Java allocator bytes observed before this source opens; absent means legacy.
-    pub working_bytes:Option<u64>,
+    pub working_bytes: Option<u64>,
     /// Reported MediaCodec profiles, hardware and explicit dimensional capability evidence.
     pub encoders: Vec<crate::screen::core::negotiate::CodecOffer>,
     /// Running apps: (package, label).
@@ -374,7 +427,9 @@ fn register_channel(start: HostStart) -> Arc<Channel> {
 
 /// Instrumentation owns its producer; never emit a product controller start/stop.
 #[cfg(all(target_os = "android", feature = "android-instrumentation-fixtures"))]
-pub(crate) fn open_fixture(start: HostStart) -> Arc<Channel> {register_channel(start)}
+pub(crate) fn open_fixture(start: HostStart) -> Arc<Channel> {
+    register_channel(start)
+}
 #[cfg(all(target_os = "android", feature = "android-instrumentation-fixtures"))]
 pub(crate) fn close_fixture(id: u64) {
     if let Some(channel) = with(|register| register.channels.remove(&id)) {
@@ -405,35 +460,63 @@ pub(crate) fn channels() -> Vec<Arc<Channel>> {
 pub(crate) fn push(id: u64, data: &[u8], flags: u32) -> i32 {
     // Legacy entrypoint carries only bounded lifecycle messages. Product
     // pixels/access units must identify their granted generation explicitly.
-    if flags & (0x8|0x20)==0 {return PUSH_INVALID;}
-    let Some(channel)=channel(id) else {return PUSH_UNKNOWN;};
-    let Some(grant)=channel.capture.current() else {return PUSH_INVALID;};
-    push_admitted(id,grant.generation().value(),data,flags)
+    if flags & (0x8 | 0x20) == 0 {
+        return PUSH_INVALID;
+    }
+    let Some(channel) = channel(id) else {
+        return PUSH_UNKNOWN;
+    };
+    let Some(grant) = channel.capture.current() else {
+        return PUSH_INVALID;
+    };
+    push_admitted(id, grant.generation().value(), data, flags)
 }
-pub(crate) fn push_admitted(id:u64,generation:u64,data:&[u8],flags:u32)->i32 {
+pub(crate) fn push_admitted(id: u64, generation: u64, data: &[u8], flags: u32) -> i32 {
     let raw = flags & (FLAG_STILL | FLAG_CAPTURED_VIDEO) != 0;
-    let limit=if raw {64*1024*1024+MAX_RECORD_BYTES+20} else {MAX_RECORD_BYTES};
+    let limit = if raw {
+        64 * 1024 * 1024 + MAX_RECORD_BYTES + 20
+    } else {
+        MAX_RECORD_BYTES
+    };
     if data.is_empty() || data.len() > limit {
         return PUSH_INVALID;
     }
     if raw {
-        let Some(header) = data.get(..8) else { return PUSH_INVALID; };
-        let width = u32::from_le_bytes([header[0],header[1],header[2],header[3]]);
-        let height = u32::from_le_bytes([header[4],header[5],header[6],header[7]]);
-        let size = crate::screen::core::pixel_convert::FrameSize::new(width,height);
-        let Ok(bytes)=crate::screen::core::frame_budget::FrameLimits::RESOURCE.check(size) else {return PUSH_INVALID;};
-        let expected = bytes.checked_add(if flags & FLAG_CAPTURED_VIDEO != 0 { 20 } else { 8 });
-        let unchanged=flags & 0x10 != 0 && flags & FLAG_CAPTURED_VIDEO != 0 && data.len()==20;
+        let Some(header) = data.get(..8) else {
+            return PUSH_INVALID;
+        };
+        let width = u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
+        let height = u32::from_le_bytes([header[4], header[5], header[6], header[7]]);
+        let size = crate::screen::core::pixel_convert::FrameSize::new(width, height);
+        let Ok(bytes) = crate::screen::core::frame_budget::FrameLimits::RESOURCE.check(size) else {
+            return PUSH_INVALID;
+        };
+        let expected = bytes.checked_add(if flags & FLAG_CAPTURED_VIDEO != 0 {
+            20
+        } else {
+            8
+        });
+        let unchanged = flags & 0x10 != 0 && flags & FLAG_CAPTURED_VIDEO != 0 && data.len() == 20;
         if !unchanged {
-            let video=if flags & FLAG_CAPTURED_VIDEO!=0 {
-                let Some(len)=data.get(16..20) else {return PUSH_INVALID;};
-                u32::from_le_bytes([len[0],len[1],len[2],len[3]]) as usize
-            } else {0};
-            if video>MAX_RECORD_BYTES || expected.and_then(|n|n.checked_add(video))!=Some(data.len()) {return PUSH_INVALID;}
+            let video = if flags & FLAG_CAPTURED_VIDEO != 0 {
+                let Some(len) = data.get(16..20) else {
+                    return PUSH_INVALID;
+                };
+                u32::from_le_bytes([len[0], len[1], len[2], len[3]]) as usize
+            } else {
+                0
+            };
+            if video > MAX_RECORD_BYTES
+                || expected.and_then(|n| n.checked_add(video)) != Some(data.len())
+            {
+                return PUSH_INVALID;
+            }
         }
     }
-    let Some(channel) = channel(id) else { return PUSH_UNKNOWN; };
-    channel.push(generation,data,flags)
+    let Some(channel) = channel(id) else {
+        return PUSH_UNKNOWN;
+    };
+    channel.push(generation, data, flags)
 }
 
 /// `screenControl`: the next message for session `id` (channel 0: input),
@@ -466,7 +549,11 @@ pub(crate) fn send_input(message: Value) {
 /// stills.
 pub(crate) fn ready(id: u64, phase: Phase) -> Result<(), String> {
     let channel = channel(id).ok_or_else(|| format!("Keine Bildschirmsitzung {id}"))?;
-    if !channel.set_phase(phase) {return Err(format!("Bildschirmsitzung {id} ist beendet; Codecbestätigung verworfen"));}
+    if !channel.set_phase(phase) {
+        return Err(format!(
+            "Bildschirmsitzung {id} ist beendet; Codecbestätigung verworfen"
+        ));
+    }
     session_event(id, "streaming", None);
     Ok(())
 }
@@ -475,7 +562,9 @@ pub(crate) fn ready(id: u64, phase: Phase) -> Result<(), String> {
 /// device locked, „Beenden“ in its notification).
 pub(crate) fn ended(id: u64, reason: &str) -> Result<(), String> {
     let channel = channel(id).ok_or_else(|| format!("Keine Bildschirmsitzung {id}"))?;
-    if channel.set_phase(Phase::Ended(reason.into())) {session_event(id,"ended",Some(reason));}
+    if channel.set_phase(Phase::Ended(reason.into())) {
+        session_event(id, "ended", Some(reason));
+    }
     Ok(())
 }
 

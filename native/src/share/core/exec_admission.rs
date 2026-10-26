@@ -47,10 +47,11 @@ pub(in crate::share) async fn handle_connection(
     // The server must write the fresh challenge first. Opening the stream here
     // makes that first write announce it to the client and avoids an empty-QUIC
     // stream deadlock during the initial Exec handshake.
-    let (mut send, mut recv) = crate::share::route_protocol::timeout_until(handshake_deadline, connection.open_bi())
-        .await
-        .map_err(|_| timed_out("Exec-Handshake Timeout"))?
-        .map_err(eio)?;
+    let (mut send, mut recv) =
+        crate::share::route_protocol::timeout_until(handshake_deadline, connection.open_bi())
+            .await
+            .map_err(|_| timed_out("Exec-Handshake Timeout"))?
+            .map_err(eio)?;
     let identity = node
         .auth
         .lock()
@@ -153,8 +154,13 @@ pub(in crate::share) async fn handle_connection(
     .await
     .map_err(|_| timed_out("Exec-Providerpruefung Timeout"))?
     .map_err(eio)?;
-    crate::share::route_monitor::authenticated_remote_capability(&connection,
-        client_hello.client_features.iter().any(|feature| feature == "route_policy_v1"));
+    crate::share::route_monitor::authenticated_remote_capability(
+        &connection,
+        client_hello
+            .client_features
+            .iter()
+            .any(|feature| feature == "route_policy_v1"),
+    );
     let mut features = host_features(terminal_supported);
     features.push("route_policy_v1".into());
     features.extend(host_access_features().map(String::from));
@@ -181,7 +187,8 @@ pub(in crate::share) async fn handle_connection(
         finish_send_and_wait_until(
             &mut send,
             &connection,
-            crate::share::route_protocol::active_now() + EXEC_HEARTBEAT_POLICY.server_result_ack_timeout(),
+            crate::share::route_protocol::active_now()
+                + EXEC_HEARTBEAT_POLICY.server_result_ack_timeout(),
         )
         .await?;
         return Err(io::Error::new(
@@ -190,9 +197,10 @@ pub(in crate::share) async fn handle_connection(
         ));
     }
 
-    let first = crate::share::route_protocol::timeout_for(HANDSHAKE_TIMEOUT, recv_client_frame(&mut recv))
-        .await
-        .map_err(|_| timed_out("Exec-Start Timeout"))??;
+    let first =
+        crate::share::route_protocol::timeout_for(HANDSHAKE_TIMEOUT, recv_client_frame(&mut recv))
+            .await
+            .map_err(|_| timed_out("Exec-Start Timeout"))??;
     let mut protocol = ServerProtocolState::default();
     protocol.accept(&first)?;
     let ClientFrame::Start { start, .. } = first else {

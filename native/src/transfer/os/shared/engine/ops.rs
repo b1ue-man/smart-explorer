@@ -267,22 +267,26 @@ pub(crate) fn transfer<'e>(
     meter: &Meter<'_>,
     buffer: &mut [u8],
 ) -> OpResult {
-    if let Some(outcome) = super::file_recovery::resume(engine, file)? { return Ok(outcome); }
-    crate::source_media::with_cancellation(engine.stop_flag(), || match (engine.view.source, engine.view.target) {
-        (Side::Local, Side::Local) => super::local::copy_file(engine, file, meter),
-        (Side::Local, Side::Remote(target)) => {
-            super::upload::upload(engine, target, file, parent_created, meter, buffer)
+    if let Some(outcome) = super::file_recovery::resume(engine, file)? {
+        return Ok(outcome);
+    }
+    crate::source_media::with_cancellation(engine.stop_flag(), || {
+        match (engine.view.source, engine.view.target) {
+            (Side::Local, Side::Local) => super::local::copy_file(engine, file, meter),
+            (Side::Local, Side::Remote(target)) => {
+                super::upload::upload(engine, target, file, parent_created, meter, buffer)
+            }
+            (Side::Remote(source), Side::Local) => {
+                super::download::download(engine, source, file, carry, meter, buffer)
+            }
+            (Side::Remote(source), Side::Remote(target)) => super::remote_copy::copy(
+                engine,
+                super::remote_copy::Pair { source, target },
+                file,
+                parent_created,
+                meter,
+            ),
         }
-        (Side::Remote(source), Side::Local) => {
-            super::download::download(engine, source, file, carry, meter, buffer)
-        }
-        (Side::Remote(source), Side::Remote(target)) => super::remote_copy::copy(
-            engine,
-            super::remote_copy::Pair { source, target },
-            file,
-            parent_created,
-            meter,
-        ),
     })
 }
 

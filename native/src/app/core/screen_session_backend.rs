@@ -1,10 +1,16 @@
 //! Production transport and renderer admission.
 use super::screen_session::Shared;
-use std::{io,sync::Arc};
-use eframe::egui;
-use crate::{share::PeerOpenTarget,daemon::{StreamRequest,StreamEvent}};
-use crate::screen::core::{wire_control::ViewerFrame,wire_binary::GopHeader,host_backend::ScreenDecoder,negotiate::CodecOffer};
+use crate::screen::core::{
+    host_backend::ScreenDecoder, negotiate::CodecOffer, wire_binary::GopHeader,
+    wire_control::ViewerFrame,
+};
 use crate::share::access_grant::CapabilityDecision;
+use crate::{
+    daemon::{StreamEvent, StreamRequest},
+    share::PeerOpenTarget,
+};
+use eframe::egui;
+use std::{io, sync::Arc};
 /// Wakes the GUI thread (production: `Context::request_repaint`).
 pub(crate) type Wake = Arc<dyn Fn() + Send + Sync>;
 
@@ -51,12 +57,18 @@ impl Backend {
     pub(crate) fn production(ctx: &egui::Context) -> Self {
         let registry = Arc::new(crate::screen::os::codec_inventory::registry());
         let offers = registry.decoder_offers();
-        let renderer=ctx.clone();
+        let renderer = ctx.clone();
         let open: Opener = Arc::new(
-            move |target: PeerOpenTarget, mut request: StreamRequest, shared:&Shared| -> Result<StreamLink, String> {
-                if let Some(owner)=super::screen_render_owner::get(&renderer) {owner.attach(&shared.retirement);}
-                let (caps,memory)=super::screen_render_caps::admit_wait(&renderer,shared).map_err(|error|error.to_string())?;
-                request.frame_capabilities=Some(caps);
+            move |target: PeerOpenTarget,
+                  mut request: StreamRequest,
+                  shared: &Shared|
+                  -> Result<StreamLink, String> {
+                if let Some(owner) = super::screen_render_owner::get(&renderer) {
+                    owner.attach(&shared.retirement);
+                }
+                let (caps, memory) = super::screen_render_caps::admit_wait(&renderer, shared)
+                    .map_err(|error| error.to_string())?;
+                request.frame_capabilities = Some(caps);
                 let mut stream = crate::daemon::screen_stream(target, request)?;
                 let control = stream.control();
                 let (sender, closer) = (control.clone(), control);
@@ -68,9 +80,9 @@ impl Backend {
                 })
             },
         );
-        let renderer=ctx.clone();
-        let decoder: DecoderOpener = Arc::new(move |header:&GopHeader| {
-            super::screen_render_caps::check(&renderer,header.size)?;
+        let renderer = ctx.clone();
+        let decoder: DecoderOpener = Arc::new(move |header: &GopHeader| {
+            super::screen_render_caps::check(&renderer, header.size)?;
             registry.open_decoder(header)
         });
         let probe: Prober = Arc::new(|target| {

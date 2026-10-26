@@ -53,7 +53,10 @@ pub fn retry_mount(id: MountId) -> Result<MountSnapshot, String> {
     mount_request(|token| IpcRequest::RetryMount { token, id })
 }
 
-pub fn save_remove_mount(id: MountId, destination: PathBuf) -> Result<crate::mount::InactiveMountRecovery, String> {
+pub fn save_remove_mount(
+    id: MountId,
+    destination: PathBuf,
+) -> Result<crate::mount::InactiveMountRecovery, String> {
     let req = super::ipc_protocol::DriveIpcRequest::RecoverySaveRemove { id, destination };
     match recovery_request(req)? {
         IpcResponse::MountRecovery { recovery } => Ok(recovery),
@@ -68,7 +71,9 @@ pub fn list_mount_recoveries() -> Result<Vec<crate::mount::InactiveMountRecovery
     }
 }
 
-pub fn import_mount_recovery(package: PathBuf) -> Result<crate::mount::InactiveMountRecovery, String> {
+pub fn import_mount_recovery(
+    package: PathBuf,
+) -> Result<crate::mount::InactiveMountRecovery, String> {
     match recovery_request(super::ipc_protocol::DriveIpcRequest::RecoveryImport { package })? {
         IpcResponse::MountRecovery { recovery } => Ok(recovery),
         _ => Err("Unerwartete Recoveryimport-IPC-Antwort".into()),
@@ -136,12 +141,20 @@ pub struct MountHostSession {
 }
 
 impl MountHostSession {
-    pub(crate) fn report_capacity(&self, capacity: crate::mount::MountCapacityReport) -> Result<(), String> {
+    pub(crate) fn report_capacity(
+        &self,
+        capacity: crate::mount::MountCapacityReport,
+    ) -> Result<(), String> {
         let mut stream = host_stream(self.ipc_addr, Duration::from_secs(2))?;
-        write_request(&mut stream, &IpcRequest::MountHostExt {
-            id: self.id.clone(), session_token: self.session_token.clone(),
-            req: super::ipc_protocol::MountHostRequest::Capacity { capacity },
-        }).map_err(|error| error.to_string())?;
+        write_request(
+            &mut stream,
+            &IpcRequest::MountHostExt {
+                id: self.id.clone(),
+                session_token: self.session_token.clone(),
+                req: super::ipc_protocol::MountHostRequest::Capacity { capacity },
+            },
+        )
+        .map_err(|error| error.to_string())?;
         match read_response(&mut stream).map_err(|error| error.to_string())? {
             IpcResponse::Ok => Ok(()),
             IpcResponse::Err { msg, .. } => Err(msg),

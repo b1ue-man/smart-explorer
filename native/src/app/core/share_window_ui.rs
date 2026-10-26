@@ -10,19 +10,28 @@ impl App {
         ctx.request_repaint();
     }
 
-    pub(in crate::app) fn open_share_request_count(&self) -> usize { pages_ui::open_request_count(&self.share_profiles) }
+    pub(in crate::app) fn open_share_request_count(&self) -> usize {
+        pages_ui::open_request_count(&self.share_profiles)
+    }
 
     pub(in crate::app) fn ui_share_settings_content(&mut self, ui: &mut egui::Ui) {
         use crate::app::settings_ui::SettingsPage;
         let page = crate::app::settings_navigation::canonical(self.settings.page);
         let valid = crate::app::settings_navigation::for_share_tab(self.share_tab) == page;
         if !valid {
-            if let Some(tab) = crate::app::settings_navigation::default_share_tab(page) { self.share_tab = tab; }
+            if let Some(tab) = crate::app::settings_navigation::default_share_tab(page) {
+                self.share_tab = tab;
+            }
         }
         self.ui_share_top(ui);
         let tabs: &[usize] = match page {
             SettingsPage::ThisDevice => &[pages_ui::TAB_THIS_DEVICE, pages_ui::TAB_EXPORTS],
-            SettingsPage::Devices => &[pages_ui::TAB_DEVICES, pages_ui::TAB_REQUESTS, pages_ui::TAB_EXEC, pages_ui::TAB_SCREEN],
+            SettingsPage::Devices => &[
+                pages_ui::TAB_DEVICES,
+                pages_ui::TAB_REQUESTS,
+                pages_ui::TAB_EXEC,
+                pages_ui::TAB_SCREEN,
+            ],
             SettingsPage::Rooms => &[pages_ui::TAB_ROOMS],
             SettingsPage::Connections => &[pages_ui::TAB_NETWORK],
             SettingsPage::Diagnostics => &[pages_ui::TAB_DIAGNOSTICS, pages_ui::TAB_TRASH],
@@ -31,12 +40,18 @@ impl App {
         let requests = pages_ui::open_request_count(&self.share_profiles);
         ui.horizontal_wrapped(|ui| {
             for &tab in tabs {
-                if tab == pages_ui::TAB_TRASH && !crate::host_trash::available() { continue; }
+                if tab == pages_ui::TAB_TRASH && !crate::host_trash::available() {
+                    continue;
+                }
                 let label = if tab == pages_ui::TAB_REQUESTS && requests > 0 {
                     format!("Anfragen ({requests})")
-                } else { pages_ui::tab_label(tab).to_string() };
+                } else {
+                    pages_ui::tab_label(tab).to_string()
+                };
                 if ui.selectable_label(self.share_tab == tab, label).clicked() {
-                    if self.share_tab == tab { pages_ui::back(ui); }
+                    if self.share_tab == tab {
+                        pages_ui::back(ui);
+                    }
                     self.share_tab = tab;
                 }
             }
@@ -48,8 +63,12 @@ impl App {
             pages_ui::TAB_EXPORTS => self.ui_share_exports(ui),
             pages_ui::TAB_NETWORK => {
                 lan_ui::ui(self, ui);
-                egui::CollapsingHeader::new(format!("Quick Share (LAN) · {} gefunden", self.qs_devices.len()))
-                    .id_salt("quickshare_devices").show(ui, |ui| self.ui_quickshare_devices(ui));
+                egui::CollapsingHeader::new(format!(
+                    "Quick Share (LAN) · {} gefunden",
+                    self.qs_devices.len()
+                ))
+                .id_salt("quickshare_devices")
+                .show(ui, |ui| self.ui_quickshare_devices(ui));
             }
             pages_ui::TAB_TRASH => self.ui_share_host_trash(ui),
             pages_ui::TAB_REQUESTS => lifecycle_ui::ui_requests(self, ui),
@@ -106,11 +125,29 @@ fn exec_page(app: &mut App, ui: &mut egui::Ui) {
         }
         if let Some(view) = crate::share::resolve_exec_target(&app.share_profiles, &key) {
             let (device_id, public_key) = match &view.target {
-                crate::share::ExecGrantTarget::Direct { device_id, public_key, .. } |
-                crate::share::ExecGrantTarget::RoomMember { device_id, public_key, .. } => (device_id.clone(), public_key.clone()),
+                crate::share::ExecGrantTarget::Direct {
+                    device_id,
+                    public_key,
+                    ..
+                }
+                | crate::share::ExecGrantTarget::RoomMember {
+                    device_id,
+                    public_key,
+                    ..
+                } => (device_id.clone(), public_key.clone()),
             };
-            pages_ui::open(app, ui, pages_ui::TAB_DEVICES, pages_ui::SharePage::Device { device_id, public_key });
-        } else { ui.label("Dieses Gerät ist nicht mehr freigegeben oder hat eine neue Identität."); }
+            pages_ui::open(
+                app,
+                ui,
+                pages_ui::TAB_DEVICES,
+                pages_ui::SharePage::Device {
+                    device_id,
+                    public_key,
+                },
+            );
+        } else {
+            ui.label("Dieses Gerät ist nicht mehr freigegeben oder hat eine neue Identität.");
+        }
         return;
     }
     if let Some(key) = crate::app::share_exec_ui::ui_exec_overview(app, ui) {

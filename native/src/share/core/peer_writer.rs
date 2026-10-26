@@ -150,9 +150,9 @@ impl PeerWriter {
         let Some(mut recv) = self.recv.take() else {
             return Err(eio("Peer-Schreibantwort geschlossen"));
         };
-        let result = self
-            .node
-            .block_on_route(self.generation, super::io_deadline::run("peer write finish", async {
+        let result = self.node.block_on_route(
+            self.generation,
+            super::io_deadline::run("peer write finish", async {
                 send_ctrl(
                     &mut send,
                     &Ctrl::Fs {
@@ -162,7 +162,8 @@ impl PeerWriter {
                 )
                 .await?;
                 recv_resp_wire(&mut recv).await
-            }));
+            }),
+        );
         match result {
             Ok(response) => match decode_resp(response) {
                 Ok(FsResponse::Ok) => match send.finish().map_err(eio) {
@@ -234,10 +235,13 @@ impl Write for PeerWriter {
                 let Some(send) = self.send.as_mut() else {
                     return Err(eio("Peer-Schreibkanal geschlossen"));
                 };
-                self.node.block_on_route(self.generation, super::io_deadline::run(
-                    "peer write data chunk",
-                    send_tagged(send, tag, &bytes),
-                ))
+                self.node.block_on_route(
+                    self.generation,
+                    super::io_deadline::run(
+                        "peer write data chunk",
+                        send_tagged(send, tag, &bytes),
+                    ),
+                )
             };
             if stats::enabled() {
                 stats::meter().add(stats::Phase::NetWait, started.elapsed());

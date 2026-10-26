@@ -45,10 +45,16 @@ impl ShareHost {
 fn validate_for_this_host(change: &AccessGrantChange) -> Result<(), String> {
     // A per-user daemon cannot establish the administratively protected
     // machine authority needed before login or on the secure desktop.
-    if change.capabilities.get(&Capability::LoginAccess).is_some_and(|decision| decision.is_on()) {
+    if change
+        .capabilities
+        .get(&Capability::LoginAccess)
+        .is_some_and(|decision| decision.is_on())
+    {
         return Err("login_access must be granted through the protected machine policy, not the user daemon".into());
     }
-    if let Some(constraints) = &change.constraints { constraints.validate()?; }
+    if let Some(constraints) = &change.constraints {
+        constraints.validate()?;
+    }
     let other_account = change
         .account
         .as_ref()

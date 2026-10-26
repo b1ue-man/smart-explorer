@@ -9,7 +9,9 @@ use super::fs_list::{reject_trash, require_writable};
 use super::location::{is_same_or_below, parent_path, Loc};
 use super::runtime::{Runtime, TaskCtx};
 use crate::filter::CompiledFilter;
-use crate::transfer::{Endpoint, FolderConflict, FolderConflictPolicy, JobItems, Layout, TransferJob};
+use crate::transfer::{
+    Endpoint, FolderConflict, FolderConflictPolicy, JobItems, Layout, TransferJob,
+};
 use crate::types::{Conflict, CopyMode, FilterDef};
 use serde_json::{json, Value};
 #[cfg(test)]
@@ -94,16 +96,26 @@ fn parse(args: &Value) -> Result<Plan, ApiError> {
         "keep-both" | "keepBoth" => Ok(FolderConflict::KeepBoth),
         "skip" => Ok(FolderConflict::Skip),
         "fail" => Ok(FolderConflict::Fail),
-        value => Err(ApiError::invalid(format!("Unbekannte Ordnerkonfliktregel: {value}"))),
+        value => Err(ApiError::invalid(format!(
+            "Unbekannte Ordnerkonfliktregel: {value}"
+        ))),
     };
-    let mut folders = FolderConflictPolicy::new(parse_folder(opt_str(args, "folderConflict").unwrap_or("keep-both"))?);
+    let mut folders = FolderConflictPolicy::new(parse_folder(
+        opt_str(args, "folderConflict").unwrap_or("keep-both"),
+    )?);
     if let Some(choices) = args.get("folderConflicts").and_then(Value::as_object) {
         for (location, choice) in choices {
             let source = Loc::parse(location)?;
-            if !sources.iter().any(|item| item.kind == source.kind && item.prefix == source.prefix && item.path == source.path) {
-                return Err(ApiError::invalid("Ordnerentscheidung gehört nicht zur Quellauswahl"));
+            if !sources.iter().any(|item| {
+                item.kind == source.kind && item.prefix == source.prefix && item.path == source.path
+            }) {
+                return Err(ApiError::invalid(
+                    "Ordnerentscheidung gehört nicht zur Quellauswahl",
+                ));
             }
-            let choice = choice.as_str().ok_or_else(|| ApiError::invalid("Ordnerentscheidung muss ein Text sein"))?;
+            let choice = choice
+                .as_str()
+                .ok_or_else(|| ApiError::invalid("Ordnerentscheidung muss ein Text sein"))?;
             folders.roots.insert(source.path, parse_folder(choice)?);
         }
     }
@@ -177,8 +189,18 @@ pub(crate) fn preview_job(rt: &Runtime, args: &Value) -> Result<TransferJob, Api
     let plan = parse(args)?;
     let source = endpoint(rt, &plan.sources[0])?;
     let target = endpoint(rt, &plan.target)?;
-    let paths = plan.sources.iter().map(|source| source.path.clone()).collect();
-    Ok(plan_job(&plan, paths, source, target, (String::new(), String::new())))
+    let paths = plan
+        .sources
+        .iter()
+        .map(|source| source.path.clone())
+        .collect();
+    Ok(plan_job(
+        &plan,
+        paths,
+        source,
+        target,
+        (String::new(), String::new()),
+    ))
 }
 
 /// The engine job of a transfer that involves a connection: the selected
@@ -204,13 +226,23 @@ fn plan_job(
         items: JobItems::Roots {
             // Destinations are cut below the base without its trailing slash
             // (a volume root `/` becomes the empty base).
-            base: plan.filter.as_ref().map(|(_, base)| base.trim_end_matches('/').to_string())
-                .or_else(|| (plan.sources[0].is_local() && plan.target.is_local()).then(|| common_parent(&paths).trim_end_matches('/').to_string())),
+            base: plan
+                .filter
+                .as_ref()
+                .map(|(_, base)| base.trim_end_matches('/').to_string())
+                .or_else(|| {
+                    (plan.sources[0].is_local() && plan.target.is_local())
+                        .then(|| common_parent(&paths).trim_end_matches('/').to_string())
+                }),
             paths,
         },
         layout: Layout::Tree,
         filter: plan.filter.clone(),
-        conflict: if plan.sources[0].is_local() && plan.target.is_local() { plan.conflict } else { Conflict::Rename },
+        conflict: if plan.sources[0].is_local() && plan.target.is_local() {
+            plan.conflict
+        } else {
+            Conflict::Rename
+        },
         mode: plan.mode,
         source_label,
         target_label,

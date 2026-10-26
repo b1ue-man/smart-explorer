@@ -1,7 +1,7 @@
 //! Private worker request values, distinct from peer selectors.
-use serde::{Deserialize, Serialize};
-use crate::remote_window::WindowPin;
 use super::pixel_convert::FrameSize;
+use crate::remote_window::WindowPin;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct OpenFamily {

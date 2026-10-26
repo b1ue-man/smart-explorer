@@ -1,8 +1,8 @@
 //! Pure AccessV2 target conditions. Identities are host-resolved stable IDs;
 //! they are never executable paths, display names or a request to switch users.
-use std::net::IpAddr;
-use serde::{Deserialize, Serialize};
 use crate::share::access_grant::Capability;
+use serde::{Deserialize, Serialize};
+use std::net::IpAddr;
 
 macro_rules! identity {
     ($name:ident) => {
@@ -12,23 +12,32 @@ macro_rules! identity {
         impl $name {
             pub fn parse(value: &str) -> Result<Self, String> {
                 if value.trim().is_empty() || value.chars().any(misleading_identity) {
-                    return Err(concat!(stringify!($name), " must be a nonempty plain identity").into());
+                    return Err(
+                        concat!(stringify!($name), " must be a nonempty plain identity").into(),
+                    );
                 }
                 Ok(Self(value.into()))
             }
-            pub fn as_str(&self) -> &str { &self.0 }
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
         }
         impl TryFrom<String> for $name {
             type Error = String;
-            fn try_from(value: String) -> Result<Self, String> { Self::parse(&value) }
+            fn try_from(value: String) -> Result<Self, String> {
+                Self::parse(&value)
+            }
         }
         impl From<$name> for String {
-            fn from(value: $name) -> Self { value.0 }
+            fn from(value: $name) -> Self {
+                value.0
+            }
         }
     };
 }
 fn misleading_identity(character: char) -> bool {
-    character.is_control() || matches!(character,
+    character.is_control()
+        || matches!(character,
         '\u{200e}' | '\u{200f}' | '\u{2028}' | '\u{2029}'
         | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}')
 }
@@ -41,21 +50,32 @@ identity!(NodeId);
 #[serde(try_from = "u16", into = "u16")]
 pub struct TcpPort(u16);
 impl TcpPort {
-    pub fn get(self) -> u16 { self.0 }
+    pub fn get(self) -> u16 {
+        self.0
+    }
 }
 impl TryFrom<u16> for TcpPort {
     type Error = String;
     fn try_from(value: u16) -> Result<Self, String> {
-        if value == 0 { Err("TCP destination port must be nonzero".into()) } else { Ok(Self(value)) }
+        if value == 0 {
+            Err("TCP destination port must be nonzero".into())
+        } else {
+            Ok(Self(value))
+        }
     }
 }
 impl From<TcpPort> for u16 {
-    fn from(value: TcpPort) -> Self { value.0 }
+    fn from(value: TcpPort) -> Self {
+        value.0
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum TcpDirection { PeerToHost, HostToPeer }
+pub enum TcpDirection {
+    PeerToHost,
+    HostToPeer,
+}
 
 /// DNS names have an explicit IP allowlist. The socket adapter must resolve
 /// freshly, check each selected IP here and connect to that checked IP itself.
@@ -64,8 +84,13 @@ pub enum TcpDirection { PeerToHost, HostToPeer }
 pub enum TcpHost {
     #[default]
     Loopback,
-    Ip { address: IpAddr },
-    Dns { name: String, addresses: Vec<IpAddr> },
+    Ip {
+        address: IpAddr,
+    },
+    Dns {
+        name: String,
+        addresses: Vec<IpAddr>,
+    },
 }
 impl TcpHost {
     fn validate(&self) -> Result<(), String> {
@@ -73,39 +98,66 @@ impl TcpHost {
         match self {
             Self::Loopback => Ok(()),
             Self::Ip { address } if plain_ip(address) => Ok(()),
-            Self::Dns { name, addresses } if valid_dns_name(name)
-                && !addresses.is_empty() && addresses.iter().all(plain_ip) => Ok(()),
+            Self::Dns { name, addresses }
+                if valid_dns_name(name)
+                    && !addresses.is_empty()
+                    && addresses.iter().all(plain_ip) =>
+            {
+                Ok(())
+            }
             _ => Err("TCP host needs an exact IP or a DNS name with explicit allowed IPs".into()),
         }
     }
     fn allows(&self, requested: &TcpHost, resolved: IpAddr) -> bool {
         match (self, requested) {
             (Self::Loopback, Self::Loopback) => resolved.is_loopback(),
-            (Self::Ip { address }, Self::Ip { address: requested }) =>
-                address == requested && *address == resolved,
-            (Self::Dns { name, addresses }, Self::Dns { name: requested, .. }) =>
-                name.eq_ignore_ascii_case(requested) && addresses.contains(&resolved),
+            (Self::Ip { address }, Self::Ip { address: requested }) => {
+                address == requested && *address == resolved
+            }
+            (
+                Self::Dns { name, addresses },
+                Self::Dns {
+                    name: requested, ..
+                },
+            ) => name.eq_ignore_ascii_case(requested) && addresses.contains(&resolved),
             _ => false,
         }
     }
     fn covers(&self, old: &Self) -> bool {
         match (self, old) {
-            (Self::Dns { name, addresses }, Self::Dns { name: before, addresses: ips }) =>
-                name.eq_ignore_ascii_case(before) && contains_all(addresses, ips),
+            (
+                Self::Dns { name, addresses },
+                Self::Dns {
+                    name: before,
+                    addresses: ips,
+                },
+            ) => name.eq_ignore_ascii_case(before) && contains_all(addresses, ips),
             _ => self == old,
         }
     }
 }
 fn valid_dns_name(name: &str) -> bool {
-    name.len() <= 253 && name.parse::<IpAddr>().is_err() && name.split('.').all(|label| {
-        !label.is_empty() && label.len() <= 63 && !label.starts_with('-') && !label.ends_with('-')
-            && label.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-    })
+    name.len() <= 253
+        && name.parse::<IpAddr>().is_err()
+        && name.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum LoginOperation { Login, Unlock, SecureDesktop, UserSession }
+pub enum LoginOperation {
+    Login,
+    Unlock,
+    SecureDesktop,
+    UserSession,
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -139,13 +191,18 @@ pub struct TcpForwardRule {
 }
 impl TcpForwardRule {
     fn covers(&self, old: &Self) -> bool {
-        self.initiator == old.initiator && self.target == old.target
-            && self.direction == old.direction && self.host.covers(&old.host)
-            && contains_all(&self.ports, &old.ports) && !earlier(self.valid_until, old.valid_until)
+        self.initiator == old.initiator
+            && self.target == old.target
+            && self.direction == old.direction
+            && self.host.covers(&old.host)
+            && contains_all(&self.ports, &old.ports)
+            && !earlier(self.valid_until, old.valid_until)
     }
     fn allows(&self, request: &TcpForwardRequest, now: i64) -> bool {
-        self.initiator == request.initiator && self.target == request.target
-            && self.direction == request.direction && self.ports.contains(&request.port)
+        self.initiator == request.initiator
+            && self.target == request.target
+            && self.direction == request.direction
+            && self.ports.contains(&request.port)
             && self.host.allows(&request.host, request.resolved_ip)
             && !ended(self.valid_until, now)
     }
@@ -177,11 +234,17 @@ impl AccessConstraints {
     /// at this time; it is a display fact, never an operation authorization.
     pub fn available_at(&self, capability: Capability, now: i64) -> bool {
         match capability {
-            Capability::AppLaunch => self.app_launch.as_ref()
+            Capability::AppLaunch => self
+                .app_launch
+                .as_ref()
                 .is_some_and(|app| !ended(app.valid_until, now)),
-            Capability::LoginAccess => self.login_access.as_ref()
+            Capability::LoginAccess => self
+                .login_access
+                .as_ref()
                 .is_some_and(|login| !ended(login.valid_until, now)),
-            Capability::TcpForward => self.tcp_forward.iter()
+            Capability::TcpForward => self
+                .tcp_forward
+                .iter()
                 .any(|rule| !ended(rule.valid_until, now)),
             _ => true,
         }
@@ -211,14 +274,23 @@ impl AccessConstraints {
     pub fn allows(&self, request: &AccessRequest, now: i64) -> bool {
         match request {
             AccessRequest::AppLaunch(request) => self.app_launch.as_ref().is_some_and(|app| {
-                app.app_ids.contains(&request.app_id) && app.sessions.contains(&request.session)
-                    && app.users.contains(&request.user) && !ended(app.valid_until, now)
+                app.app_ids.contains(&request.app_id)
+                    && app.sessions.contains(&request.session)
+                    && app.users.contains(&request.user)
+                    && !ended(app.valid_until, now)
             }),
-            AccessRequest::LoginAccess(request) => self.login_access.as_ref().is_some_and(|login| {
-                login.users.contains(&request.user) && login.sessions.contains(&request.session)
-                    && login.operations.contains(&request.operation) && !ended(login.valid_until, now)
-            }),
-            AccessRequest::TcpForward(request) => self.tcp_forward.iter().any(|rule| rule.allows(request, now)),
+            AccessRequest::LoginAccess(request) => {
+                self.login_access.as_ref().is_some_and(|login| {
+                    login.users.contains(&request.user)
+                        && login.sessions.contains(&request.session)
+                        && login.operations.contains(&request.operation)
+                        && !ended(login.valid_until, now)
+                })
+            }
+            AccessRequest::TcpForward(request) => self
+                .tcp_forward
+                .iter()
+                .any(|rule| rule.allows(request, now)),
         }
     }
     /// Conservative set containment, shared by all persisted/runtime callers.
@@ -226,19 +298,24 @@ impl AccessConstraints {
         match capability {
             Capability::AppLaunch => old.app_launch.as_ref().is_some_and(|old| {
                 self.app_launch.as_ref().is_none_or(|new| {
-                    !contains_all(&new.app_ids, &old.app_ids) || !contains_all(&new.sessions, &old.sessions)
-                        || !contains_all(&new.users, &old.users) || earlier(new.valid_until, old.valid_until)
+                    !contains_all(&new.app_ids, &old.app_ids)
+                        || !contains_all(&new.sessions, &old.sessions)
+                        || !contains_all(&new.users, &old.users)
+                        || earlier(new.valid_until, old.valid_until)
                 })
             }),
             Capability::LoginAccess => old.login_access.as_ref().is_some_and(|old| {
                 self.login_access.as_ref().is_none_or(|new| {
-                    !contains_all(&new.sessions, &old.sessions) || !contains_all(&new.users, &old.users)
-                        || !contains_all(&new.operations, &old.operations) || earlier(new.valid_until, old.valid_until)
+                    !contains_all(&new.sessions, &old.sessions)
+                        || !contains_all(&new.users, &old.users)
+                        || !contains_all(&new.operations, &old.operations)
+                        || earlier(new.valid_until, old.valid_until)
                 })
             }),
-            Capability::TcpForward => old.tcp_forward.iter().any(|old| {
-                !self.tcp_forward.iter().any(|new| new.covers(old))
-            }),
+            Capability::TcpForward => old
+                .tcp_forward
+                .iter()
+                .any(|old| !self.tcp_forward.iter().any(|new| new.covers(old))),
             _ => false,
         }
     }
@@ -247,27 +324,51 @@ impl AccessConstraints {
     pub fn end_for(&self, request: &AccessRequest, now: i64) -> Option<i64> {
         match request {
             AccessRequest::AppLaunch(_) => self.app_launch.as_ref().and_then(|app| app.valid_until),
-            AccessRequest::LoginAccess(_) => self.login_access.as_ref().and_then(|login| login.valid_until),
+            AccessRequest::LoginAccess(_) => self
+                .login_access
+                .as_ref()
+                .and_then(|login| login.valid_until),
             AccessRequest::TcpForward(request) => {
-                let matching: Vec<_> = self.tcp_forward.iter().filter(|rule| rule.allows(request, now)).collect();
-                if matching.iter().any(|rule| rule.valid_until.is_none()) { None }
-                else { matching.iter().filter_map(|rule| rule.valid_until).max() }
+                let matching: Vec<_> = self
+                    .tcp_forward
+                    .iter()
+                    .filter(|rule| rule.allows(request, now))
+                    .collect();
+                if matching.iter().any(|rule| rule.valid_until.is_none()) {
+                    None
+                } else {
+                    matching.iter().filter_map(|rule| rule.valid_until).max()
+                }
             }
         }
     }
     pub fn deadlines(&self) -> impl Iterator<Item = i64> + '_ {
-        self.app_launch.iter().filter_map(|app| app.valid_until)
-            .chain(self.login_access.iter().filter_map(|login| login.valid_until))
+        self.app_launch
+            .iter()
+            .filter_map(|app| app.valid_until)
+            .chain(
+                self.login_access
+                    .iter()
+                    .filter_map(|login| login.valid_until),
+            )
             .chain(self.tcp_forward.iter().filter_map(|rule| rule.valid_until))
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct AppLaunchRequest { pub app_id: AppId, pub session: SessionId, pub user: UserId }
+pub struct AppLaunchRequest {
+    pub app_id: AppId,
+    pub session: SessionId,
+    pub user: UserId,
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LoginAccessRequest { pub session: SessionId, pub user: UserId, pub operation: LoginOperation }
+pub struct LoginAccessRequest {
+    pub session: SessionId,
+    pub user: UserId,
+    pub operation: LoginOperation,
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TcpForwardRequest {
@@ -281,7 +382,9 @@ pub struct TcpForwardRequest {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "capability", content = "target", rename_all = "snake_case")]
 pub enum AccessRequest {
-    AppLaunch(AppLaunchRequest), LoginAccess(LoginAccessRequest), TcpForward(TcpForwardRequest),
+    AppLaunch(AppLaunchRequest),
+    LoginAccess(LoginAccessRequest),
+    TcpForward(TcpForwardRequest),
 }
 impl AccessRequest {
     pub fn capability(&self) -> Capability {
@@ -292,11 +395,23 @@ impl AccessRequest {
         }
     }
 }
-fn contains_all<T: PartialEq>(new: &[T], old: &[T]) -> bool { old.iter().all(|item| new.contains(item)) }
-pub(crate) fn earlier(new: Option<i64>, old: Option<i64>) -> bool {
-    match (old, new) { (_, None) => false, (None, Some(_)) => true, (Some(old), Some(new)) => new < old }
+fn contains_all<T: PartialEq>(new: &[T], old: &[T]) -> bool {
+    old.iter().all(|item| new.contains(item))
 }
-fn ended(end: Option<i64>, now: i64) -> bool { end.is_some_and(|end| now >= end) }
+pub(crate) fn earlier(new: Option<i64>, old: Option<i64>) -> bool {
+    match (old, new) {
+        (_, None) => false,
+        (None, Some(_)) => true,
+        (Some(old), Some(new)) => new < old,
+    }
+}
+fn ended(end: Option<i64>, now: i64) -> bool {
+    end.is_some_and(|end| now >= end)
+}
 fn valid_end(end: Option<i64>) -> Result<(), String> {
-    if end.is_some_and(|end| end <= 0) { Err("condition expiry must be after 1970".into()) } else { Ok(()) }
+    if end.is_some_and(|end| end <= 0) {
+        Err("condition expiry must be after 1970".into())
+    } else {
+        Ok(())
+    }
 }

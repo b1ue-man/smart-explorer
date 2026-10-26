@@ -96,9 +96,13 @@ fn is_local(location: &str) -> bool {
 /// `vault_locked`; nothing is opened then.
 pub(super) fn source(site: &str, mount_dir: &Path) -> io::Result<Source> {
     if !released(&RootId::Vault(site.to_string())) {
-        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "Dieser Tresor ist nicht für Apps freigegeben"));
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Dieser Tresor ist nicht für Apps freigegeben",
+        ));
     }
-    let (session, _) = crate::vault::register().session(site)
+    let (session, _) = crate::vault::register()
+        .session(site)
         .ok_or_else(|| crate::vault::vault_locked(site))?;
     let bridge = crate::vault::vault_drive_bridge();
     let backend = bridge
@@ -212,9 +216,12 @@ pub(super) fn released(root: &RootId) -> bool {
             RootId::Devices => settings.devices,
             RootId::GDrive => settings.connections.iter().any(|id| id == GDRIVE),
             RootId::Conn(account) => settings.connections.contains(account),
-            RootId::Vault(site) => settings.vaults.contains(site) && is_unlocked(site)
-                && docs_engines::opened(&docs_engines::EngineKey::Root(root.clone()))
-                    .is_none_or(|slot| slot.check_access().is_ok()),
+            RootId::Vault(site) => {
+                settings.vaults.contains(site)
+                    && is_unlocked(site)
+                    && docs_engines::opened(&docs_engines::EngineKey::Root(root.clone()))
+                        .is_none_or(|slot| slot.check_access().is_ok())
+            }
         }
 }
 

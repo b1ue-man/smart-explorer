@@ -28,7 +28,11 @@ pub(super) fn with_direct_bytes<R>(
     let length = usize::try_from(length).ok()?;
     let address = env.get_direct_buffer_address(src).ok()?;
     let capacity = env.get_direct_buffer_capacity(src).ok()?;
-    if address.is_null() || length > isize::MAX as usize || capacity > isize::MAX as usize || start.checked_add(length)? > capacity {
+    if address.is_null()
+        || length > isize::MAX as usize
+        || capacity > isize::MAX as usize
+        || start.checked_add(length)? > capacity
+    {
         return None;
     }
     // SAFETY: the range lies within the buffer's capacity (checked above);

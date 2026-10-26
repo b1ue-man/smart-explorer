@@ -175,11 +175,18 @@ impl AccessProtocolSupport {
     pub(crate) fn host(available: &[Capability]) -> Self {
         Self {
             access_versions: vec![1, 2],
-            contextual_capabilities: available.iter().copied()
-                .filter(|capability| capability.requires_context()).collect(),
+            contextual_capabilities: available
+                .iter()
+                .copied()
+                .filter(|capability| capability.requires_context())
+                .collect(),
         }
     }
-    pub(crate) fn supports(&self, request: &crate::share::access_constraints::AccessRequest) -> bool {
-        self.access_versions.contains(&2) && self.contextual_capabilities.contains(&request.capability())
+    pub(crate) fn supports(
+        &self,
+        request: &crate::share::access_constraints::AccessRequest,
+    ) -> bool {
+        self.access_versions.contains(&2)
+            && self.contextual_capabilities.contains(&request.capability())
     }
 }

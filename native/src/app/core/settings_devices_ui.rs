@@ -73,8 +73,11 @@ fn refresh(shared: &Shared, ctx: &egui::Context) {
             ctx.request_repaint();
         });
     if let Err(error) = spawned {
-        let mut panel = lock(shared); panel.loading = false;
-        panel.error = Some(format!("Laufwerksstatus konnte nicht geladen werden: {error}"));
+        let mut panel = lock(shared);
+        panel.loading = false;
+        panel.error = Some(format!(
+            "Laufwerksstatus konnte nicht geladen werden: {error}"
+        ));
     }
 }
 
@@ -130,8 +133,11 @@ fn switch(shared: &Shared, ctx: &egui::Context, on: bool, place: String) {
             ctx.request_repaint();
         });
     if let Err(error) = spawned {
-        let mut panel = lock(shared); panel.busy = false;
-        panel.error = Some(format!("Laufwerksänderung konnte nicht gestartet werden: {error}"));
+        let mut panel = lock(shared);
+        panel.busy = false;
+        panel.error = Some(format!(
+            "Laufwerksänderung konnte nicht gestartet werden: {error}"
+        ));
     }
 }
 
@@ -247,7 +253,11 @@ impl App {
 fn ui_place(ui: &mut egui::Ui, place: &mut String, enabled: bool, busy: bool) -> bool {
     let mut changed = false;
     ui.add_enabled_ui(!enabled && !busy, |ui| {
-        let label = if cfg!(windows) { "Laufwerksbuchstabe" } else { "Einhängeort" };
+        let label = if cfg!(windows) {
+            "Laufwerksbuchstabe"
+        } else {
+            "Einhängeort"
+        };
         let mut form = crate::app::settings_form::Form::new(ui, "devices_place_form", &[label]);
         form.row_labelled(ui, label, |ui, field_label| {
             if cfg!(windows) {
@@ -267,14 +277,17 @@ fn ui_place(ui: &mut egui::Ui, place: &mut String, enabled: bool, busy: bool) ->
                                 .selectable_value(place, letter.to_string(), letter.to_string())
                                 .changed();
                         }
-                    }).response.labelled_by(field_label);
+                    })
+                    .response
+                    .labelled_by(field_label);
             } else {
                 changed = ui
                     .add(
                         egui::TextEdit::singleline(place)
                             .hint_text("Standard (~/SmartExplorer/Geräte)")
                             .desired_width(280.0),
-                    ).labelled_by(field_label)
+                    )
+                    .labelled_by(field_label)
                     .changed();
             }
         });

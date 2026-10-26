@@ -40,16 +40,16 @@ use crate::screen::core::wire_control::{
 use crate::screen::core::wire_hello::{SessionMode, MAX_DISPLAY_SIDE};
 use crate::share::{PeerOpenTarget, ShareProfiles};
 
-#[path = "screen_view_json.rs"]
-mod json_shapes;
-#[path = "screen_view_run.rs"]
-mod run;
-#[path = "screen_view_presented.rs"]
-mod presented;
-#[path = "screen_icons.rs"]
-mod icons;
 #[path = "screen_family.rs"]
 mod family;
+#[path = "screen_icons.rs"]
+mod icons;
+#[path = "screen_view_json.rs"]
+mod json_shapes;
+#[path = "screen_view_presented.rs"]
+mod presented;
+#[path = "screen_view_run.rs"]
+mod run;
 use json_shapes::{camel, devices_json, probe_key, ProbeFacts};
 use run::{find, lock, ViewSession};
 
@@ -63,13 +63,15 @@ pub fn screen_pull(session: u64, dst: &mut [u8], timeout: Duration) -> i32 {
 
 /// Handles `screen.*` methods of the viewer; `None` = not one of them.
 pub(super) fn handle(method: &str, args: &Value) -> Option<Result<Value, ApiError>> {
-    if let Some(result)=family::handle(method,args){return Some(result);}
+    if let Some(result) = family::handle(method, args) {
+        return Some(result);
+    }
     Some(match method {
         "screen.devices" => Ok(devices(args)),
         "screen.probe" => probe(args),
         "screen.windows" => windows(args),
         "screen.icon" => icon(args),
-        "screen.viewIcon" => session_arg(args).and_then(|session|icons::request(&session,args)),
+        "screen.viewIcon" => session_arg(args).and_then(|session| icons::request(&session, args)),
         "screen.viewOpen" => view_open(args),
         "screen.viewSetMode" => set_mode(args),
         "screen.viewInput" => input(args),
@@ -203,11 +205,11 @@ fn windows(args: &Value) -> Result<Value, ApiError> {
     Ok(camel(serde_json::to_value(&list).unwrap_or(Value::Null)))
 }
 
-fn icon(args:&Value)->Result<Value,ApiError> {
-    let target=Target::parse(args)?;
+fn icon(args: &Value) -> Result<Value, ApiError> {
+    let target = Target::parse(args)?;
     target.check(&profiles())?;
-    let reply=crate::daemon::screen_icon(target.peer(),icons::parse(args)?)
-        .map_err(|message|ApiError::new("network",message))?;
+    let reply = crate::daemon::screen_icon(target.peer(), icons::parse(args)?)
+        .map_err(|message| ApiError::new("network", message))?;
     Ok(serde_json::to_value(reply).unwrap_or(Value::Null))
 }
 
@@ -265,9 +267,16 @@ fn decoders_arg(args: &Value, mode: SessionMode) -> Result<Vec<CodecOffer>, ApiE
                 };
                 let offer = CodecOffer::h264(profile, opt_bool(entry, "hardware", false))
                     .with_pixel_access(opt_bool(entry, "pixelAccess", false));
-                let mut offer=size_args(entry,"maxWidth","maxHeight").map_or(offer,|max|offer.with_max(max));
-                offer.max_macroblocks=entry.get("maxMacroblocks").and_then(Value::as_u64).filter(|n|*n>0);
-                offer.max_macroblocks_per_second=entry.get("maxMacroblocksPerSecond").and_then(Value::as_u64).filter(|n|*n>0);
+                let mut offer = size_args(entry, "maxWidth", "maxHeight")
+                    .map_or(offer, |max| offer.with_max(max));
+                offer.max_macroblocks = entry
+                    .get("maxMacroblocks")
+                    .and_then(Value::as_u64)
+                    .filter(|n| *n > 0);
+                offer.max_macroblocks_per_second = entry
+                    .get("maxMacroblocksPerSecond")
+                    .and_then(Value::as_u64)
+                    .filter(|n| *n > 0);
                 offer
             }
             _ => return Err(invalid("Decoder: „codec“ ist h264 oder tiles.")),
@@ -295,23 +304,33 @@ fn view_open(args: &Value) -> Result<Value, ApiError> {
         "preview" => SessionMode::Preview,
         _ => return Err(invalid("„mode“ ist view, control oder preview.")),
     };
-    let frame_capabilities = size_args(args, "textureWidth", "textureHeight").map(|texture| {
-        use crate::screen::core::frame_budget::FrameCapabilities;
-        let capabilities = match args.get("workingBytes") {
-            None | Some(Value::Null) => FrameCapabilities::legacy_resources(texture),
-            Some(value) => FrameCapabilities::resources(texture).with_working_budget(value.as_u64()
-                .ok_or_else(|| invalid("Ungültiges Bildspeicherbudget."))?)
-                .map_err(|error| invalid(error.to_string()))?,
-        };
-        capabilities.validate().map_err(|error| invalid(error.to_string()))?;
-        Ok::<_, ApiError>(capabilities)
-    }).transpose()?;
+    let frame_capabilities = size_args(args, "textureWidth", "textureHeight")
+        .map(|texture| {
+            use crate::screen::core::frame_budget::FrameCapabilities;
+            let capabilities = match args.get("workingBytes") {
+                None | Some(Value::Null) => FrameCapabilities::legacy_resources(texture),
+                Some(value) => FrameCapabilities::resources(texture)
+                    .with_working_budget(
+                        value
+                            .as_u64()
+                            .ok_or_else(|| invalid("Ungültiges Bildspeicherbudget."))?,
+                    )
+                    .map_err(|error| invalid(error.to_string()))?,
+            };
+            capabilities
+                .validate()
+                .map_err(|error| invalid(error.to_string()))?;
+            Ok::<_, ApiError>(capabilities)
+        })
+        .transpose()?;
     if let Some(bytes) = args.get("workingBytes").and_then(Value::as_u64) {
-        crate::screen::core::frame_budget::FrameLimits::RESOURCE.with_working_budget(bytes)
+        crate::screen::core::frame_budget::FrameLimits::RESOURCE
+            .with_working_budget(bytes)
             .map_err(|error| invalid(error.to_string()))?;
         crate::screen::os::image_memory::observe_capacity_ceiling(
-            crate::screen::core::frame_memory::CapacityCeiling::bounded(bytes))
-            .map_err(|error| invalid(error.to_string()))?;
+            crate::screen::core::frame_memory::CapacityCeiling::bounded(bytes),
+        )
+        .map_err(|error| invalid(error.to_string()))?;
     }
     let request = StreamRequest {
         mode,
@@ -320,7 +339,7 @@ fn view_open(args: &Value) -> Result<Value, ApiError> {
         display_size: size_args(args, "displayWidth", "displayHeight"),
         max_fps: fps_arg(args, "maxFps")?.unwrap_or(30),
         frame_capabilities,
-        expected_node: opt_str(args,"expectedNodeId").map(str::to_string),
+        expected_node: opt_str(args, "expectedNodeId").map(str::to_string),
     };
     let id = run::start(mode, target.peer(), request, own_device())?;
     Ok(json!({ "session": id }))
@@ -355,10 +374,17 @@ fn set_mode(args: &Value) -> Result<Value, ApiError> {
 fn visibility(args: &Value) -> Result<Value, ApiError> {
     let session = session_arg(args)?;
     let report: crate::screen::core::visibility::ViewerVisibility = serde_json::from_value(
-        args.get("report").cloned().ok_or_else(|| invalid("Sichtbarkeitsbericht fehlt"))?,
-    ).map_err(|error| invalid(error.to_string()))?;
-    report.validate().map_err(|error| invalid(error.to_string()))?;
-    if report.hidden() { session.release_pressed(); }
+        args.get("report")
+            .cloned()
+            .ok_or_else(|| invalid("Sichtbarkeitsbericht fehlt"))?,
+    )
+    .map_err(|error| invalid(error.to_string()))?;
+    report
+        .validate()
+        .map_err(|error| invalid(error.to_string()))?;
+    if report.hidden() {
+        session.release_pressed();
+    }
     session.send(&ViewerFrame::Visibility(report))?;
     Ok(json!({}))
 }
@@ -398,7 +424,9 @@ fn parse_events(args: &Value) -> Result<Vec<InputEvent>, ApiError> {
 
 fn input(args: &Value) -> Result<Value, ApiError> {
     let session = session_arg(args)?;
-    if lock(&session.family).is_some(){return family::route_input(&session,parse_events(args)?).map(|()|json!({}));}
+    if lock(&session.family).is_some() {
+        return family::route_input(&session, parse_events(args)?).map(|()| json!({}));
+    }
     if !session.control_allowed.load(Ordering::SeqCst) {
         return Err(no_control());
     }

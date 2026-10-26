@@ -66,7 +66,9 @@ pub(super) async fn frame(
 ) -> io::Result<(u8, Vec<u8>)> {
     let next = framing::recv_tagged_limited(recv, super::fs_response::STREAM_FRAME_LIMIT);
     tokio::pin!(next);
-    let deadline = super::route_protocol::active_deadline_error(super::route_protocol::active_now() + Duration::from_secs(seconds));
+    let deadline = super::route_protocol::active_deadline_error(
+        super::route_protocol::active_now() + Duration::from_secs(seconds),
+    );
     tokio::pin!(deadline);
     let mut poll = tokio::time::interval(Duration::from_millis(100));
     loop {

@@ -69,7 +69,9 @@ fn emit(roots: bool, documents: Vec<String>, commit_failed: bool) {
     }
 }
 
-pub(super) fn capacity_changed() { emit(true, Vec::new(), false); }
+pub(super) fn capacity_changed() {
+    emit(true, Vec::new(), false);
+}
 
 /// A root came or went (vault unlocked or locked, settings changed).
 fn root_changed(root: &RootId) {
@@ -137,8 +139,12 @@ fn root_json(root: &RootId, title: &str, create: bool, local_only: bool) -> Valu
     };
     let capacity = docs_engines::opened(&EngineKey::Root(root.clone()))
         .map(|slot| slot.fs.capacity_snapshot());
-    let bounded = capacity.as_ref().filter(|value| matches!(value.state,
-        crate::vfs::CapacityState::ProviderKnown | crate::vfs::CapacityState::AccountQuota));
+    let bounded = capacity.as_ref().filter(|value| {
+        matches!(
+            value.state,
+            crate::vfs::CapacityState::ProviderKnown | crate::vfs::CapacityState::AccountQuota
+        )
+    });
     let android_bytes = |value: Option<u64>| value.and_then(|value| i64::try_from(value).ok());
     json!({
         "totalBytes": android_bytes(bounded.and_then(|value| value.total_bytes)),

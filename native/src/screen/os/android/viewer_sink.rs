@@ -64,12 +64,15 @@ struct Queued {
 #[derive(Default)]
 struct QueueState {
     items: VecDeque<Queued>,
-    bytes:usize,
+    bytes: usize,
     waiting_keyframe: bool,
     ended: bool,
 }
 impl QueueState {
-    fn clear(&mut self) {self.items.clear();self.bytes=0;}
+    fn clear(&mut self) {
+        self.items.clear();
+        self.bytes = 0;
+    }
 }
 
 /// What `PullQueue::push` did.
@@ -85,19 +88,42 @@ pub(crate) struct Pushed {
 pub(crate) struct PullQueue {
     state: Mutex<QueueState>,
     ready: Condvar,
-    frame_bytes:std::sync::atomic::AtomicUsize,
-    frame_items:std::sync::atomic::AtomicUsize,
+    frame_bytes: std::sync::atomic::AtomicUsize,
+    frame_items: std::sync::atomic::AtomicUsize,
 }
 
 impl PullQueue {
-    fn set_frame_limits(&self,limits:crate::screen::core::frame_budget::FrameLimits,size:FrameSize,contract:Option<crate::screen::core::frame_budget::FrameContract>,admitted:bool)->std::io::Result<()> {
+    fn set_frame_limits(
+        &self,
+        limits: crate::screen::core::frame_budget::FrameLimits,
+        size: FrameSize,
+        contract: Option<crate::screen::core::frame_budget::FrameContract>,
+        admitted: bool,
+    ) -> std::io::Result<()> {
         limits.check(size)?;
-        let admitted=admitted && (contract.is_some() || limits.working_bytes<crate::screen::core::frame_budget::MAX_WORKING_BYTES);
-        let budget=crate::screen::core::frame_size_caps::PacketBudget::for_receive(contract,admitted.then_some(limits))?;
-        let bound=budget.encoded_bytes;
-        let bound=if contract.is_none() && !admitted {bound.max(64*1024*1024)} else {bound};
-        self.frame_bytes.store(bound,std::sync::atomic::Ordering::Release);
-        self.frame_items.store(if contract.is_some() || admitted {budget.records} else {0},std::sync::atomic::Ordering::Release);
+        let admitted = admitted
+            && (contract.is_some()
+                || limits.working_bytes < crate::screen::core::frame_budget::MAX_WORKING_BYTES);
+        let budget = crate::screen::core::frame_size_caps::PacketBudget::for_receive(
+            contract,
+            admitted.then_some(limits),
+        )?;
+        let bound = budget.encoded_bytes;
+        let bound = if contract.is_none() && !admitted {
+            bound.max(64 * 1024 * 1024)
+        } else {
+            bound
+        };
+        self.frame_bytes
+            .store(bound, std::sync::atomic::Ordering::Release);
+        self.frame_items.store(
+            if contract.is_some() || admitted {
+                budget.records
+            } else {
+                0
+            },
+            std::sync::atomic::Ordering::Release,
+        );
         Ok(())
     }
     /// Queues a picture; `now_us` is the clock of the stall rule.
@@ -112,29 +138,55 @@ impl PullQueue {
         }
         let tiles = flags & FLAG_TILES_BGRA != 0;
         let mut stalled = false;
-        let configured=self.frame_bytes.load(std::sync::atomic::Ordering::Acquire);
-        let bound=if configured==0 {64*1024*1024} else {configured};
-        let slots=self.frame_items.load(std::sync::atomic::Ordering::Acquire);
-        let slots=if slots==0 {usize::MAX} else {slots};
-        if data.len()>bound {state.clear();state.waiting_keyframe=true;return none(true);}
-        if flags&FLAG_NEW_STREAM!=0 {state.clear();}
-        let started=Instant::now();
+        let configured = self.frame_bytes.load(std::sync::atomic::Ordering::Acquire);
+        let bound = if configured == 0 {
+            64 * 1024 * 1024
+        } else {
+            configured
+        };
+        let slots = self.frame_items.load(std::sync::atomic::Ordering::Acquire);
+        let slots = if slots == 0 { usize::MAX } else { slots };
+        if data.len() > bound {
+            state.clear();
+            state.waiting_keyframe = true;
+            return none(true);
+        }
+        if flags & FLAG_NEW_STREAM != 0 {
+            state.clear();
+        }
+        let started = Instant::now();
         // Backpressure preserves a complete lossless transaction when the app
         // consumes its dirty records more slowly than the network receives them.
-        while !tiles && (state.items.len()>=slots || state.bytes.saturating_add(data.len())>bound) {
-            let elapsed=u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
-            let age=state.items.front().map_or(0,|front|now_us.saturating_add(elapsed).saturating_sub(front.queued_us));
-            if age>=STALL_US {break;}
-            state=self.ready.wait_timeout(state,Duration::from_micros(STALL_US-age))
-                .unwrap_or_else(PoisonError::into_inner).0;
-            if state.ended {return none(false);}
+        while !tiles
+            && (state.items.len() >= slots || state.bytes.saturating_add(data.len()) > bound)
+        {
+            let elapsed = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+            let age = state.items.front().map_or(0, |front| {
+                now_us
+                    .saturating_add(elapsed)
+                    .saturating_sub(front.queued_us)
+            });
+            if age >= STALL_US {
+                break;
+            }
+            state = self
+                .ready
+                .wait_timeout(state, Duration::from_micros(STALL_US - age))
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+            if state.ended {
+                return none(false);
+            }
         }
-        let now_us=now_us.saturating_add(u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX));
-        if (!tiles && (state.items.len()>=slots || state.bytes.saturating_add(data.len()) > bound)) || (!tiles
-            && state
-                .items
-                .front()
-                .is_some_and(|front| now_us.saturating_sub(front.queued_us) > STALL_US))
+        let now_us =
+            now_us.saturating_add(u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX));
+        if (!tiles
+            && (state.items.len() >= slots || state.bytes.saturating_add(data.len()) > bound))
+            || (!tiles
+                && state
+                    .items
+                    .front()
+                    .is_some_and(|front| now_us.saturating_sub(front.queued_us) > STALL_US))
         {
             state.clear();
             state.waiting_keyframe = true;
@@ -153,19 +205,19 @@ impl PullQueue {
             // Only the newest tile picture is kept; it keeps the mark of the
             // group start the app has not seen yet.
             let mut inherited = 0;
-            let mut removed=0usize;
+            let mut removed = 0usize;
             state.items.retain(|old| {
                 if old.flags & FLAG_TILES_BGRA == 0 {
                     return true;
                 }
                 inherited |= old.flags & FLAG_NEW_STREAM;
-                removed=removed.saturating_add(old.data.len());
+                removed = removed.saturating_add(old.data.len());
                 false
             });
-            state.bytes=state.bytes.saturating_sub(removed);
+            state.bytes = state.bytes.saturating_sub(removed);
             flags |= inherited;
         }
-        state.bytes=state.bytes.saturating_add(data.len());
+        state.bytes = state.bytes.saturating_add(data.len());
         state.items.push_back(Queued {
             pts_us,
             flags,
@@ -206,7 +258,7 @@ impl PullQueue {
                 dst[12..16].copy_from_slice(&wire_len.to_le_bytes());
                 dst[HEADER_BYTES..HEADER_BYTES + len].copy_from_slice(&front.data);
                 state.items.pop_front();
-                state.bytes=state.bytes.saturating_sub(len);
+                state.bytes = state.bytes.saturating_sub(len);
                 self.ready.notify_all();
                 return total;
             }
@@ -270,7 +322,7 @@ pub(crate) struct ViewerSink {
     broken_frame: Option<u64>,
     /// The next queued picture starts a group for the app.
     new_stream: bool,
-    local_limits:Option<crate::screen::core::frame_budget::FrameLimits>,
+    local_limits: Option<crate::screen::core::frame_budget::FrameLimits>,
 }
 
 impl ViewerSink {
@@ -283,10 +335,15 @@ impl ViewerSink {
             broken: None,
             broken_frame: None,
             new_stream: false,
-            local_limits:None,
+            local_limits: None,
         }
     }
-    pub(crate) fn bind_local_limits(&mut self,limits:Option<crate::screen::core::frame_budget::FrameLimits>) {self.local_limits=limits;}
+    pub(crate) fn bind_local_limits(
+        &mut self,
+        limits: Option<crate::screen::core::frame_budget::FrameLimits>,
+    ) {
+        self.local_limits = limits;
+    }
 
     /// At most one key frame request is open (`KEYFRAME_RETRY_US`).
     fn request(&self, reason: KeyframeReason, gop_id: u64, now_us: u64) -> Option<SinkOutput> {
@@ -302,7 +359,9 @@ impl ViewerSink {
         if self.gop.as_ref().is_some_and(|gop| gop.id == gop_id) {
             self.gop = None;
         }
-        if gop_id < self.latest_gop { return None; }
+        if gop_id < self.latest_gop {
+            return None;
+        }
         self.broken = Some(gop_id);
         self.request(KeyframeReason::Reset, gop_id, now_us)
     }
@@ -318,15 +377,24 @@ impl ViewerSink {
         if header.gop_id < self.latest_gop {
             return out;
         }
-        let admitted=crate::screen::core::frame_size_caps::PacketBudget::for_receive(header.frame_contract,self.local_limits)
-            .map_or(0,|budget|budget.record_bytes);
-        if record.payload.len()>header.record_limit().min(admitted) {
-            self.broken=Some(header.gop_id);self.broken_frame=Some(record.frame_id);
-            out.extend(self.request(KeyframeReason::DecodeError,header.gop_id,now_us));return out;
+        let admitted = crate::screen::core::frame_size_caps::PacketBudget::for_receive(
+            header.frame_contract,
+            self.local_limits,
+        )
+        .map_or(0, |budget| budget.record_bytes);
+        if record.payload.len() > header.record_limit().min(admitted) {
+            self.broken = Some(header.gop_id);
+            self.broken_frame = Some(record.frame_id);
+            out.extend(self.request(KeyframeReason::DecodeError, header.gop_id, now_us));
+            return out;
         }
         let keyframe = record.is_keyframe();
         if self.broken == Some(header.gop_id) {
-            if !keyframe || self.broken_frame.is_some_and(|frame| record.frame_id <= frame) {
+            if !keyframe
+                || self
+                    .broken_frame
+                    .is_some_and(|frame| record.frame_id <= frame)
+            {
                 return out;
             }
             self.broken = None;
@@ -334,31 +402,56 @@ impl ViewerSink {
             self.gop = None;
         }
         if self.gop.as_ref().is_none_or(|gop| gop.id != header.gop_id) {
-            if !record.is_keyframe() { self.broken=Some(header.gop_id); self.broken_frame=Some(record.frame_id);
-                out.extend(self.request(KeyframeReason::Reset,header.gop_id,now_us)); return out; }
-            let limits=header.frame_contract.map(|contract|contract.limits).or(self.local_limits)
-                .unwrap_or(crate::screen::core::frame_budget::FrameLimits::LEGACY);
-            if header.frame_contract.is_some_and(|c|c.validate().is_err()) || limits.check(header.size).is_err()
-                || self.queue.set_frame_limits(limits,header.size,header.frame_contract,self.local_limits.is_some()).is_err() {
-                self.broken=Some(header.gop_id);self.broken_frame=Some(record.frame_id);
-                out.extend(self.request(KeyframeReason::DecodeError,header.gop_id,now_us));return out;
+            if !record.is_keyframe() {
+                self.broken = Some(header.gop_id);
+                self.broken_frame = Some(record.frame_id);
+                out.extend(self.request(KeyframeReason::Reset, header.gop_id, now_us));
+                return out;
             }
-            let hybrid = header.frame_contract.is_some_and(|c|c.hybrid_regions);
+            let limits = header
+                .frame_contract
+                .map(|contract| contract.limits)
+                .or(self.local_limits)
+                .unwrap_or(crate::screen::core::frame_budget::FrameLimits::LEGACY);
+            if header.frame_contract.is_some_and(|c| c.validate().is_err())
+                || limits.check(header.size).is_err()
+                || self
+                    .queue
+                    .set_frame_limits(
+                        limits,
+                        header.size,
+                        header.frame_contract,
+                        self.local_limits.is_some(),
+                    )
+                    .is_err()
+            {
+                self.broken = Some(header.gop_id);
+                self.broken_frame = Some(record.frame_id);
+                out.extend(self.request(KeyframeReason::DecodeError, header.gop_id, now_us));
+                return out;
+            }
+            let hybrid = header.frame_contract.is_some_and(|c| c.hybrid_regions);
             let tiles: Option<Box<dyn ScreenDecoder>> = match header.codec {
                 CodecKind::H264 => None,
                 CodecKind::Tiles if hybrid => None,
-                CodecKind::Tiles => match TilesScreenDecoder::new_with_limits(header.size,limits) {
-                    Ok(decoder) => Some(Box::new(crate::screen::core::frame_reference::ReferenceDecoder::new(Box::new(decoder)))),
-                    Err(_) => {
-                        self.broken = Some(header.gop_id);
-                        out.extend(self.request(
-                            KeyframeReason::DecodeError,
-                            header.gop_id,
-                            now_us,
-                        ));
-                        return out;
+                CodecKind::Tiles => {
+                    match TilesScreenDecoder::new_with_limits(header.size, limits) {
+                        Ok(decoder) => Some(Box::new(
+                            crate::screen::core::frame_reference::ReferenceDecoder::new(Box::new(
+                                decoder,
+                            )),
+                        )),
+                        Err(_) => {
+                            self.broken = Some(header.gop_id);
+                            out.extend(self.request(
+                                KeyframeReason::DecodeError,
+                                header.gop_id,
+                                now_us,
+                            ));
+                            return out;
+                        }
                     }
-                },
+                }
             };
             self.gop = Some(Gop {
                 id: header.gop_id,
@@ -374,47 +467,85 @@ impl ViewerSink {
                 size: header.size,
             });
         }
-        if self.gop.as_ref().is_some_and(|gop|gop.hybrid) {
-            let parsed = crate::screen::core::frame_protocol::decode(&record.payload,header.size);
-            let (stamp,operation) = match parsed {
+        if self.gop.as_ref().is_some_and(|gop| gop.hybrid) {
+            let parsed = crate::screen::core::frame_protocol::decode(&record.payload, header.size);
+            let (stamp, operation) = match parsed {
                 Ok(value) if value.0.frame_id == record.frame_id => value,
-                _ => { self.broken = Some(header.gop_id); self.broken_frame = Some(record.frame_id);
-                    out.extend(self.request(KeyframeReason::DecodeError,header.gop_id,now_us)); return out; }
+                _ => {
+                    self.broken = Some(header.gop_id);
+                    self.broken_frame = Some(record.frame_id);
+                    out.extend(self.request(KeyframeReason::DecodeError, header.gop_id, now_us));
+                    return out;
+                }
             };
-            let begins = matches!(operation,crate::screen::core::frame_protocol::Operation::Begin);
+            let begins = matches!(
+                operation,
+                crate::screen::core::frame_protocol::Operation::Begin
+            );
             drop(operation);
-            if self.new_stream && !begins { return out; }
-            let mut flags = FLAG_HYBRID | FLAG_LAST_OF_PICTURE | FLAG_GOP_ID | FLAG_FRAME_ID
+            if self.new_stream && !begins {
+                return out;
+            }
+            let mut flags = FLAG_HYBRID
+                | FLAG_LAST_OF_PICTURE
+                | FLAG_GOP_ID
+                | FLAG_FRAME_ID
                 | (((header.gop_id & 0xFFFF) as u32) << GOP_SHIFT);
-            if keyframe { flags |= FLAG_KEYFRAME; }
-            if record.has_more() { flags |= FLAG_MORE_PARTS; }
-            if begins { flags |= FLAG_HYBRID_BEGIN; }
-            if self.new_stream { flags |= FLAG_NEW_STREAM; }
+            if keyframe {
+                flags |= FLAG_KEYFRAME;
+            }
+            if record.has_more() {
+                flags |= FLAG_MORE_PARTS;
+            }
+            if begins {
+                flags |= FLAG_HYBRID_BEGIN;
+            }
+            if self.new_stream {
+                flags |= FLAG_NEW_STREAM;
+            }
             let data = pull_identity(header.gop_id, record.frame_id, &record.payload);
-            let pushed = self.queue.push(record.capture_ts_us,flags,data,now_us);
-            if pushed.queued { self.new_stream = false; }
-            if pushed.stalled { self.broken = Some(header.gop_id); self.broken_frame = Some(stamp.frame_id);
-                out.extend(self.request(KeyframeReason::Reset,header.gop_id,now_us)); }
+            let pushed = self.queue.push(record.capture_ts_us, flags, data, now_us);
+            if pushed.queued {
+                self.new_stream = false;
+            }
+            if pushed.stalled {
+                self.broken = Some(header.gop_id);
+                self.broken_frame = Some(stamp.frame_id);
+                out.extend(self.request(KeyframeReason::Reset, header.gop_id, now_us));
+            }
             return out;
         }
         let mut flags = if keyframe { FLAG_KEYFRAME } else { 0 };
         let data = match self.gop.as_mut().and_then(|gop| gop.tiles.as_mut()) {
             None if record.has_more() => return out,
             None => {
-                let mut flags=flags|FLAG_LAST_OF_PICTURE|FLAG_GOP_ID|FLAG_FRAME_ID
-                    |(((header.gop_id&0xFFFF) as u32)<<GOP_SHIFT);
-                if self.new_stream {flags|=FLAG_NEW_STREAM;}
-                let data=pull_identity(header.gop_id,record.frame_id,&record.payload);
-                let pushed=self.queue.push(record.capture_ts_us,flags,data,now_us);
-                if pushed.queued {self.new_stream=false;}
-                if pushed.stalled {self.new_stream=true;out.extend(self.request(KeyframeReason::Reset,header.gop_id,now_us));}
+                let mut flags = flags
+                    | FLAG_LAST_OF_PICTURE
+                    | FLAG_GOP_ID
+                    | FLAG_FRAME_ID
+                    | (((header.gop_id & 0xFFFF) as u32) << GOP_SHIFT);
+                if self.new_stream {
+                    flags |= FLAG_NEW_STREAM;
+                }
+                let data = pull_identity(header.gop_id, record.frame_id, &record.payload);
+                let pushed = self.queue.push(record.capture_ts_us, flags, data, now_us);
+                if pushed.queued {
+                    self.new_stream = false;
+                }
+                if pushed.stalled {
+                    self.new_stream = true;
+                    out.extend(self.request(KeyframeReason::Reset, header.gop_id, now_us));
+                }
                 return out;
-            },
+            }
             Some(decoder) => match decoder.decode(record) {
                 Ok(true) => {
                     flags |= FLAG_TILES_BGRA;
-                    let mut stamped=pull_identity(header.gop_id,record.frame_id,decoder.picture().data());
-                    for pixel in stamped[16..].chunks_exact_mut(4) {pixel.swap(0,2);}
+                    let mut stamped =
+                        pull_identity(header.gop_id, record.frame_id, decoder.picture().data());
+                    for pixel in stamped[16..].chunks_exact_mut(4) {
+                        pixel.swap(0, 2);
+                    }
                     stamped
                 }
                 Ok(false) => return out,

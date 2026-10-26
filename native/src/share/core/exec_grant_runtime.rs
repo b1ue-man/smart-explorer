@@ -122,7 +122,12 @@ pub(super) fn apply_exact_with_access(
         access.recheck(&candidate, super::core::now_secs());
     }
     *state = candidate;
-    Ok(ExecGrantMutation { target, principal, policy, authorization_epoch: next_epoch })
+    Ok(ExecGrantMutation {
+        target,
+        principal,
+        policy,
+        authorization_epoch: next_epoch,
+    })
 }
 
 /// Installs the next policy of one grant: a grant whose Exec capabilities

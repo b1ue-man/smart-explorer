@@ -5,6 +5,8 @@
 //! (also in persistent shell sessions that terminals can join), and every
 //! other `se` command. Agent hosts start it over stdio; `se plugin`
 //! installs it. Design and host contracts: docs/AI_AGENT_PLUGIN.md.
+#[path = "mcp/apps_tool.rs"]
+mod apps_tool;
 #[path = "mcp/args.rs"]
 mod args;
 #[path = "mcp/catalog.rs"]
@@ -27,26 +29,22 @@ mod file_write;
 mod job_view;
 #[path = "mcp/jobs.rs"]
 mod jobs;
+#[path = "mcp/login_shutdown.rs"]
+mod login_shutdown;
+#[path = "mcp/login_tool.rs"]
+mod login_tool;
 #[path = "mcp/os/mod.rs"]
 mod os;
+#[path = "mcp/rdp_shutdown.rs"]
+mod rdp_shutdown;
+#[path = "mcp/rdp_tool.rs"]
+mod rdp_tool;
 #[path = "mcp/response.rs"]
 mod response;
 #[path = "mcp/screen_tool.rs"]
 mod screen_tool;
 #[path = "mcp/screen_window_tool.rs"]
 mod screen_window_tool;
-#[path = "mcp/tcp_tool.rs"]
-mod tcp_tool;
-#[path = "mcp/apps_tool.rs"]
-mod apps_tool;
-#[path = "mcp/rdp_tool.rs"]
-mod rdp_tool;
-#[path = "mcp/rdp_shutdown.rs"]
-mod rdp_shutdown;
-#[path = "mcp/login_tool.rs"]
-mod login_tool;
-#[path = "mcp/login_shutdown.rs"]
-mod login_shutdown;
 #[path = "mcp/search_tool.rs"]
 mod search_tool;
 #[path = "mcp/server.rs"]
@@ -63,6 +61,8 @@ mod spool;
 mod status_tools;
 #[path = "mcp/targets.rs"]
 mod targets;
+#[path = "mcp/tcp_tool.rs"]
+mod tcp_tool;
 #[path = "mcp/transfer_tools.rs"]
 mod transfer_tools;
 #[path = "mcp/update_stop.rs"]
@@ -94,6 +94,8 @@ own sessions end with it.";
 pub(super) struct McpArgs {}
 
 pub(super) fn run(_args: McpArgs) -> Result<i32, String> {
-    if let Some(code) = crate::mcp_launcher::launch_from_installed()? { return Ok(code); }
+    if let Some(code) = crate::mcp_launcher::launch_from_installed()? {
+        return Ok(code);
+    }
     server::serve()
 }

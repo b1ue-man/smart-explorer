@@ -8,6 +8,8 @@ mod args;
 mod bookkeeping;
 #[path = "smart_explorer_updater/hash.rs"]
 mod hash;
+#[path = "smart_explorer_updater/installer.rs"]
+mod installer;
 #[path = "smart_explorer_updater/instance.rs"]
 mod instance;
 #[path = "smart_explorer_updater/launch.rs"]
@@ -20,16 +22,14 @@ mod legacy_intent;
 mod legacy_recovery;
 #[path = "smart_explorer_updater/logging.rs"]
 mod logging;
+#[path = "smart_explorer_updater/mcp.rs"]
+mod mcp;
 #[path = "smart_explorer_updater/parent.rs"]
 mod parent;
 #[path = "smart_explorer_updater/path_safety.rs"]
 mod path_safety;
 #[path = "smart_explorer_updater/process.rs"]
 mod process;
-#[path = "smart_explorer_updater/mcp.rs"]
-mod mcp;
-#[path = "smart_explorer_updater/installer.rs"]
-mod installer;
 #[path = "smart_explorer_updater/replace.rs"]
 mod replace;
 
@@ -45,8 +45,14 @@ use std::time::Duration;
 
 fn main() {
     let raw: Vec<String> = std::env::args().collect();
-    if raw.get(1).is_some_and(|arg|arg=="--install-bundle") {
-        match installer::run(&raw) {Ok(())=>return,Err(error)=>{eprintln!("Smart Explorer installer: {error}");std::process::exit(1);}}
+    if raw.get(1).is_some_and(|arg| arg == "--install-bundle") {
+        match installer::run(&raw) {
+            Ok(()) => return,
+            Err(error) => {
+                eprintln!("Smart Explorer installer: {error}");
+                std::process::exit(1);
+            }
+        }
     }
     if !args::has_key(&raw, "--apply") {
         return;
@@ -149,39 +155,62 @@ fn apply_update(mut args: ApplyArgs) -> Result<(), ApplyFailure> {
         .map_err(|error| format!("Updater-Helferpfad unbekannt: {error}"))?;
     validate_modern_paths(&args, &helper)?;
     verify_sha256(&helper, &args.helper_sha256)?;
-    if args.install_mode != args::InstallMode::CliOnly { verify_sha256(&args.staged, &args.staged_sha256)?; }
+    if args.install_mode != args::InstallMode::CliOnly {
+        verify_sha256(&args.staged, &args.staged_sha256)?;
+    }
     verify_sha256(&args.cli_staged, &args.cli_sha256)?;
 
     // Historical callers supplied three payloads. Resolve the fourth from the
     // exact hash-bound source before any stop, archive, replacement or Prepare.
-    let legacy_launcher=if args.launcher_staged.is_none() {
-        let root=args.cli_target.parent().ok_or_else(||"CLI installation root missing".to_string())?;
-        smart_explorer::updater::complete_legacy_launcher(&smart_explorer::updater::LegacyLauncherRequest {
-            installation_root:root,version:&args.version,cli_staged:&args.cli_staged,
-            app_sha256:&args.staged_sha256,cli_sha256:&args.cli_sha256,helper_sha256:&args.helper_sha256,
-        })?
-    }else{None};
-    if let Some(completed)=&legacy_launcher {
-        args.launcher_staged=Some(completed.payload().path().to_path_buf());
-        args.launcher_sha256=Some(completed.payload().sha256().into());
+    let legacy_launcher = if args.launcher_staged.is_none() {
+        let root = args
+            .cli_target
+            .parent()
+            .ok_or_else(|| "CLI installation root missing".to_string())?;
+        smart_explorer::updater::complete_legacy_launcher(
+            &smart_explorer::updater::LegacyLauncherRequest {
+                installation_root: root,
+                version: &args.version,
+                cli_staged: &args.cli_staged,
+                app_sha256: &args.staged_sha256,
+                cli_sha256: &args.cli_sha256,
+                helper_sha256: &args.helper_sha256,
+            },
+        )?
+    } else {
+        None
+    };
+    if let Some(completed) = &legacy_launcher {
+        args.launcher_staged = Some(completed.payload().path().to_path_buf());
+        args.launcher_sha256 = Some(completed.payload().sha256().into());
         append_log("Historical three-payload update completed with a launcher from the exact verified release");
     }
     wait_for_pid_exit(args.parent_pid, Duration::from_secs(300))?;
     let _instance = instance::acquire(&args.target)?;
     validate_modern_paths(&args, &helper)?;
-    if let Some(completed)=&legacy_launcher {completed.revalidate()?;}
+    if let Some(completed) = &legacy_launcher {
+        completed.revalidate()?;
+    }
     let mut mcp_update = mcp::McpUpdate::prepare(&args)?;
     if mcp_update.already_completed() {
         installer::refresh_after_commit(&args);
-        let mut bookkeeping=PreparedBookkeeping::prepare(&args.last_applied,&args.error_file,&args.version,&[&args.manifest])?;
-        finish_bookkeeping(&args,&helper,&mut bookkeeping);
+        let mut bookkeeping = PreparedBookkeeping::prepare(
+            &args.last_applied,
+            &args.error_file,
+            &args.version,
+            &[&args.manifest],
+        )?;
+        finish_bookkeeping(&args, &helper, &mut bookkeeping);
         append_log("MCP recovery completed the exact already-installed candidate; no duplicate replacement or app start");
         return Ok(());
     }
     // The background daemon can be either the GUI executable or the standalone
     // terminal companion. Wait for both images before replacing either one;
     // retrying a locked CLI for only a few seconds is not a safe handoff.
-    for target in [&args.target, &args.cli_target].into_iter().filter(|target|target.exists()) {
+    for target in [&args.target, &args.cli_target]
+        .into_iter()
+        .filter(|target| target.exists())
+    {
         if let Err(e) = stop_target_processes_for_update(target) {
             if e.needs_elevation {
                 return Err(elevation_refused("Prozessbereinigung").into());
@@ -191,13 +220,12 @@ fn apply_update(mut args: ApplyArgs) -> Result<(), ApplyFailure> {
     }
 
     if args.target.exists() && args.install_mode != args::InstallMode::CliOnly {
-    if let Err(error) = archive_current_app(&args.target, &args.target_sha256, &args.archive) {
-        if error.needs_elevation {
-            return Err(elevation_refused("Programmdatei archivieren").into());
+        if let Err(error) = archive_current_app(&args.target, &args.target_sha256, &args.archive) {
+            if error.needs_elevation {
+                return Err(elevation_refused("Programmdatei archivieren").into());
+            }
+            return Err(format!("Aktuelle Programmdatei archivieren: {}", error.msg).into());
         }
-        return Err(format!("Aktuelle Programmdatei archivieren: {}", error.msg).into());
-    }
-
     }
     let mut replacements = vec![
         Replacement {
@@ -215,13 +243,15 @@ fn apply_update(mut args: ApplyArgs) -> Result<(), ApplyFailure> {
             expected_target_sha256: None,
         },
     ];
-    if args.install_mode != args::InstallMode::CliOnly { replacements.push(Replacement {
+    if args.install_mode != args::InstallMode::CliOnly {
+        replacements.push(Replacement {
             label: "Smart Explorer",
             staged: &args.staged,
             target: &args.target,
             sha256: &args.staged_sha256,
             expected_target_sha256: args.target.exists().then_some(args.target_sha256.as_str()),
-        }); }
+        });
+    }
 
     let mut transaction = match replace_transaction_with_retries(&replacements) {
         Ok(transaction) => transaction,
@@ -231,7 +261,11 @@ fn apply_update(mut args: ApplyArgs) -> Result<(), ApplyFailure> {
         Err(error) => return Err(format!("Update-Transaktion: {}", error.msg).into()),
     };
 
-    if let Err(error) = if args.install_mode == args::InstallMode::CliOnly { verify_sha256(&args.cli_target, &args.cli_sha256) } else { verify_sha256(&args.target, &args.staged_sha256) } {
+    if let Err(error) = if args.install_mode == args::InstallMode::CliOnly {
+        verify_sha256(&args.cli_target, &args.cli_sha256)
+    } else {
+        verify_sha256(&args.target, &args.staged_sha256)
+    } {
         return Err(restore_failed_update(
             &args,
             transaction,
@@ -254,7 +288,8 @@ fn apply_update(mut args: ApplyArgs) -> Result<(), ApplyFailure> {
         }
     };
     let completion = if args.install_mode == args::InstallMode::GuiAck {
-        spawn_verified_acknowledged(&args.target, &args.staged_sha256, &["--updated"]).map_err(|error|error.to_string())
+        spawn_verified_acknowledged(&args.target, &args.staged_sha256, &["--updated"])
+            .map_err(|error| error.to_string())
     } else {
         installer::verify_completion(&args)
     };
@@ -274,13 +309,19 @@ fn apply_update(mut args: ApplyArgs) -> Result<(), ApplyFailure> {
     }
 
     if let Err(error) = mcp_update.commit() {
-        return Err(restore_failed_update(&args, transaction, format!("MCP-Generationsabschluss: {error}")));
+        return Err(restore_failed_update(
+            &args,
+            transaction,
+            format!("MCP-Generationsabschluss: {error}"),
+        ));
     }
     drop(mcp_update);
     installer::refresh_after_commit(&args);
     if let Some(root) = args.cli_target.parent() {
         if root.join("mcp/current.v1.json").exists() {
-            if let Err(error) = smart_explorer::mcp_launcher::garbage_collect(root) { append_log(&format!("MCP cleanup retained generations: {error}")); }
+            if let Err(error) = smart_explorer::mcp_launcher::garbage_collect(root) {
+                append_log(&format!("MCP cleanup retained generations: {error}"));
+            }
         }
     }
     transaction.finalize();
@@ -302,7 +343,14 @@ fn restore_failed_update(
 ) -> ApplyFailure {
     let rollback_error = transaction.rollback().err();
     if args.install_mode != args::InstallMode::GuiAck {
-        return format!("{failure}; verified installation rollback{}; no GUI or MCP process was started", rollback_error.as_deref().map(|e|format!(" failed: {e}")).unwrap_or_else(||" completed".into())).into();
+        return format!(
+            "{failure}; verified installation rollback{}; no GUI or MCP process was started",
+            rollback_error
+                .as_deref()
+                .map(|e| format!(" failed: {e}"))
+                .unwrap_or_else(|| " completed".into())
+        )
+        .into();
     }
     let candidate = match verified_previous_candidate(args, rollback_error.as_deref()) {
         Ok(candidate) => candidate,
@@ -359,9 +407,16 @@ fn finish_bookkeeping(
             ));
         }
     }
-    let mut cleanup = vec![("staged CLI",args.cli_staged.as_path()),("staged helper",helper)];
-    if args.install_mode != args::InstallMode::CliOnly {cleanup.push(("staged app",args.staged.as_path()));}
-    if let Some(launcher)=args.launcher_staged.as_ref() {cleanup.push(("staged MCP launcher",launcher));}
+    let mut cleanup = vec![
+        ("staged CLI", args.cli_staged.as_path()),
+        ("staged helper", helper),
+    ];
+    if args.install_mode != args::InstallMode::CliOnly {
+        cleanup.push(("staged app", args.staged.as_path()));
+    }
+    if let Some(launcher) = args.launcher_staged.as_ref() {
+        cleanup.push(("staged MCP launcher", launcher));
+    }
     for (label, path) in cleanup {
         if let Err(error) = std::fs::remove_file(path) {
             if error.kind() != std::io::ErrorKind::NotFound {
@@ -375,7 +430,7 @@ fn finish_bookkeeping(
 }
 
 fn validate_modern_paths(args: &ApplyArgs, helper: &std::path::Path) -> Result<(), String> {
-    let mut paths:Vec<(&str,&std::path::Path)>=vec![
+    let mut paths: Vec<(&str, &std::path::Path)> = vec![
         ("Programmziel", &args.target),
         ("gestagte App", &args.staged),
         ("laufender Helfer", helper),
@@ -388,7 +443,9 @@ fn validate_modern_paths(args: &ApplyArgs, helper: &std::path::Path) -> Result<(
         ("Staging-Manifest", &args.manifest),
         ("Rollback-Pin", &args.pin_file),
     ];
-    if let Some(launcher)=args.launcher_staged.as_ref() {paths.push(("gestagter MCP-Starter",launcher));}
+    if let Some(launcher) = args.launcher_staged.as_ref() {
+        paths.push(("gestagter MCP-Starter", launcher));
+    }
     path_safety::validate_distinct_paths(&paths)
 }
 

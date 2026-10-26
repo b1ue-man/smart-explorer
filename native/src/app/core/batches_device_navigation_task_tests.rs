@@ -12,38 +12,65 @@ use std::path::PathBuf;
 
 struct Sink;
 impl Outbox for Sink {
-    fn send(&self, _: SurfaceMessage) -> bool { true }
+    fn send(&self, _: SurfaceMessage) -> bool {
+        true
+    }
 }
 
 struct Host;
 impl SurfaceHost for Host {
-    fn monitor_key(&self) -> &str { "device-navigation" }
-    fn monitors(&self) -> &[Monitor] { &[] }
-    fn work_area(&self) -> Option<[i32; 4]> { None }
-    fn native_window(&self) -> Option<NativeWindow> { None }
+    fn monitor_key(&self) -> &str {
+        "device-navigation"
+    }
+    fn monitors(&self) -> &[Monitor] {
+        &[]
+    }
+    fn work_area(&self) -> Option<[i32; 4]> {
+        None
+    }
+    fn native_window(&self) -> Option<NativeWindow> {
+        None
+    }
     fn request_repaint(&self) {}
-    fn take_wallpaper_change(&self) -> bool { false }
+    fn take_wallpaper_change(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Default)]
-struct Actions { calls: usize }
+struct Actions {
+    calls: usize,
+}
 impl SurfaceActions for Actions {
-    fn open(&mut self, _: OpenRequest) { self.calls += 1; }
-    fn run(&mut self, _: DesktopOp) { self.calls += 1; }
-    fn set_clipboard(&mut self, _: &egui::Context, _: Vec<PathBuf>, _: bool) { self.calls += 1; }
+    fn open(&mut self, _: OpenRequest) {
+        self.calls += 1;
+    }
+    fn run(&mut self, _: DesktopOp) {
+        self.calls += 1;
+    }
+    fn set_clipboard(&mut self, _: &egui::Context, _: Vec<PathBuf>, _: bool) {
+        self.calls += 1;
+    }
     fn clipboard(&mut self, _: Option<&str>) -> Option<(Vec<PathBuf>, bool)> {
         self.calls += 1;
         None
     }
-    fn take_notices(&mut self) -> Vec<String> { Vec::new() }
+    fn take_notices(&mut self) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 fn direct() -> PeerOpenTarget {
-    PeerOpenTarget::Direct { contact_id: "saved-direct".into() }
+    PeerOpenTarget::Direct {
+        contact_id: "saved-direct".into(),
+    }
 }
 
 fn room() -> PeerOpenTarget {
-    PeerOpenTarget::RoomDevice { room_id: "saved-room".into(), device_id: "remote-device".into() }
+    PeerOpenTarget::RoomDevice {
+        room_id: "saved-room".into(),
+        device_id: "remote-device".into(),
+    }
 }
 
 fn request() -> LaunchRequest {
@@ -60,15 +87,26 @@ fn request() -> LaunchRequest {
 fn state(target: &PeerOpenTarget) -> State {
     let request = request();
     let window = WindowBinding {
-        app_id: request.app_id.clone(), user_id: request.user_id.clone(),
-        session_id: request.session_id.clone(), window_id: "family-lease".into(), generation: 17,
+        app_id: request.app_id.clone(),
+        user_id: request.user_id.clone(),
+        session_id: request.session_id.clone(),
+        window_id: "family-lease".into(),
+        generation: 17,
     };
     State {
         restored: true,
-        saved: Some(store::Saved { target: target.clone(), request: request.clone(), name: "Saved app".into() }),
+        saved: Some(store::Saved {
+            target: target.clone(),
+            request: request.clone(),
+            name: "Saved app".into(),
+        }),
         receipt: Some(LaunchReceipt {
-            request, launch_id: "launch-evidence".into(), dispatch_id: "dispatch-evidence".into(),
-            state: LaunchState::Started, reason: "confirmed receipt".into(), pid: None,
+            request,
+            launch_id: "launch-evidence".into(),
+            dispatch_id: "dispatch-evidence".into(),
+            state: LaunchState::Started,
+            reason: "confirmed receipt".into(),
+            pid: None,
             window: Some(window),
         }),
         node: Some("authenticated-node".into()),
@@ -90,24 +128,45 @@ fn text_shapes(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
         }
     }
     let mut result = Vec::new();
-    for shape in shapes { walk(&shape.shape, &mut result); }
+    for shape in shapes {
+        walk(&shape.shape, &mut result);
+    }
     result
 }
 
 /// This is the same common product entrypoint used by eframe and OutputView::run_ui.
-fn frame(ctx: &egui::Context, view: &mut ViewModel, ui: &mut SurfaceState, actions: &mut Actions) -> Vec<String> {
-    let output = ctx.run(egui::RawInput {
-        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1800.0, 1000.0))),
-        ..Default::default()
-    }, |ctx| show_surface(ctx, view, ui, &Host, actions));
+fn frame(
+    ctx: &egui::Context,
+    view: &mut ViewModel,
+    ui: &mut SurfaceState,
+    actions: &mut Actions,
+) -> Vec<String> {
+    let output = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1800.0, 1000.0),
+            )),
+            ..Default::default()
+        },
+        |ctx| show_surface(ctx, view, ui, &Host, actions),
+    );
     text_shapes(&output.shapes)
 }
 
 fn view() -> ViewModel {
     let mut config = DesktopConfig::initial(SystemItems::initial(None, None));
-    config.background = Background { kind: BackgroundKind::Color, value: Some("#102030".into()) };
-    ViewModel::new("device-navigation", Box::new(Sink), false,
-        config, Vec::new())
+    config.background = Background {
+        kind: BackgroundKind::Color,
+        value: Some("#102030".into()),
+    };
+    ViewModel::new(
+        "device-navigation",
+        Box::new(Sink),
+        false,
+        config,
+        Vec::new(),
+    )
 }
 
 #[test]
@@ -122,18 +181,48 @@ fn batches_task_device_navigation_surface_draws_picker_and_p4_errors() {
     seed(&ctx, &direct(), state(&direct()));
     open_surface(&ctx, direct(), "Saved direct".into());
     open_surface(&ctx, direct(), "Duplicate same identity".into());
-    ctx.data_mut(|data| data.insert_temp(egui::Id::new("family-open-error"), "Current generation refused".to_string()));
+    ctx.data_mut(|data| {
+        data.insert_temp(
+            egui::Id::new("family-open-error"),
+            "Current generation refused".to_string(),
+        )
+    });
     // egui windows may spend the first frame measuring their content.
     frame(&ctx, &mut view, &mut ui, &mut actions);
     let text = frame(&ctx, &mut view, &mut ui, &mut actions);
-    assert_eq!(text.iter().filter(|text| text.as_str() == "Programme · Saved direct").count(), 1);
-    assert!(text.iter().any(|text| text == "Bestätigtes Appfenster öffnen"));
+    assert_eq!(
+        text.iter()
+            .filter(|text| text.as_str() == "Programme · Saved direct")
+            .count(),
+        1
+    );
+    assert!(text
+        .iter()
+        .any(|text| text == "Bestätigtes Appfenster öffnen"));
     assert!(text.iter().any(|text| text == "Current generation refused"));
-    assert!(!text.iter().any(|text| text.contains("Anschluss an die aktuelle Fernfensterauswahl")));
-    assert!(!text.iter().any(|text| text.contains("Duplicate same identity")));
-    let saved = ctx.data(|data| data.get_temp::<Shared>(egui::Id::new(("device-apps", direct().endpoint_prefix(), None::<&str>)))).unwrap();
-    assert_eq!(saved.lock().unwrap().saved.as_ref().unwrap().request, request());
-    assert_eq!(actions.calls, 0, "Drawing must not invoke surface file actions");
+    assert!(!text
+        .iter()
+        .any(|text| text.contains("Anschluss an die aktuelle Fernfensterauswahl")));
+    assert!(!text
+        .iter()
+        .any(|text| text.contains("Duplicate same identity")));
+    let saved = ctx
+        .data(|data| {
+            data.get_temp::<Shared>(egui::Id::new((
+                "device-apps",
+                direct().endpoint_prefix(),
+                None::<&str>,
+            )))
+        })
+        .unwrap();
+    assert_eq!(
+        saved.lock().unwrap().saved.as_ref().unwrap().request,
+        request()
+    );
+    assert_eq!(
+        actions.calls, 0,
+        "Drawing must not invoke surface file actions"
+    );
 }
 
 #[test]
@@ -156,11 +245,17 @@ fn batches_task_device_navigation_surface_keeps_direct_room_and_output_contexts_
     frame(&second, &mut second_view, &mut second_ui, &mut actions);
     let second_text = frame(&second, &mut second_view, &mut second_ui, &mut actions);
     for target in [direct(), room()] {
-        assert!(first_text.iter().any(|text| text == &format!("Programme · {}", target.endpoint_prefix())));
+        assert!(first_text
+            .iter()
+            .any(|text| text == &format!("Programme · {}", target.endpoint_prefix())));
     }
     assert!(!first_text.iter().any(|text| text.contains("Second output")));
-    assert!(second_text.iter().any(|text| text == "Programme · Second output"));
-    assert!(!second_text.iter().any(|text| text.contains("share://room/")));
+    assert!(second_text
+        .iter()
+        .any(|text| text == "Programme · Second output"));
+    assert!(!second_text
+        .iter()
+        .any(|text| text.contains("share://room/")));
     assert_eq!(actions.calls, 0);
 }
 
@@ -173,7 +268,12 @@ fn batches_task_device_navigation_confirmed_receipt_keeps_identity_and_rejects_i
         assert_eq!(result.request, request());
         assert_eq!(result.node_id, "authenticated-node");
         assert_eq!(result.window.generation, 17);
-        for denied in [LaunchState::OutcomeUnknown, LaunchState::ConsentRequired, LaunchState::Denied, LaunchState::Unsupported] {
+        for denied in [
+            LaunchState::OutcomeUnknown,
+            LaunchState::ConsentRequired,
+            LaunchState::Denied,
+            LaunchState::Unsupported,
+        ] {
             let mut invalid = state(&target);
             invalid.receipt.as_mut().unwrap().state = denied;
             assert!(confirmed(&target, &invalid).is_none());

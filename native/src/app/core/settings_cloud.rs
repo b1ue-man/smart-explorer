@@ -14,17 +14,44 @@ impl App {
         let auth = crate::cloud::auth_status(p);
         ui.label(RichText::new(&auth.message).small());
         if let Some(error) = &auth.provider_error {
-            ui.label(RichText::new(format!("OAuth: {}{}", error.code,
-                error.http_status.map(|status| format!(" (HTTP {status})")).unwrap_or_default())).small());
+            ui.label(
+                RichText::new(format!(
+                    "OAuth: {}{}",
+                    error.code,
+                    error
+                        .http_status
+                        .map(|status| format!(" (HTTP {status})"))
+                        .unwrap_or_default()
+                ))
+                .small(),
+            );
         }
         if let Some(changed) = auth.client_changed_at {
-            ui.label(RichText::new(format!("Client-ID zuletzt geändert: {}", cloud_time(changed))).small().color(theme::muted(ui)));
+            ui.label(
+                RichText::new(format!(
+                    "Client-ID zuletzt geändert: {}",
+                    cloud_time(changed)
+                ))
+                .small()
+                .color(theme::muted(ui)),
+            );
         }
         if let Some(login) = auth.login_at {
-            ui.label(RichText::new(format!("Angemeldet seit: {}", cloud_time(login))).small().color(theme::muted(ui)));
+            ui.label(
+                RichText::new(format!("Angemeldet seit: {}", cloud_time(login)))
+                    .small()
+                    .color(theme::muted(ui)),
+            );
         }
         if let Some(refresh) = auth.last_refresh_at {
-            ui.label(RichText::new(format!("Letzte erfolgreiche Erneuerung: {}", cloud_time(refresh))).small().color(theme::muted(ui)));
+            ui.label(
+                RichText::new(format!(
+                    "Letzte erfolgreiche Erneuerung: {}",
+                    cloud_time(refresh)
+                ))
+                .small()
+                .color(theme::muted(ui)),
+            );
         }
         if auth.signed_in {
             ui.horizontal(|ui| {
@@ -51,32 +78,48 @@ impl App {
                 }
             });
         }
-        let mut form = crate::app::settings_form::Form::new(ui, "gdrive_credentials", &["Client-ID", "Client-Secret"]);
-        form.row_labelled(ui, "Client-ID", |ui, field_label| {
-        ui.add(
-            egui::TextEdit::singleline(&mut self.cloud_client_id_draft)
-                .hint_text("OAuth Client-ID (…apps.googleusercontent.com)")
-                .desired_width(f32::INFINITY),
-        ).labelled_by(field_label)
-        .on_hover_text(
-            "Aus DEINEM eigenen Google-Cloud-Projekt (Desktop-OAuth-Client). \
-             Diese App ist kein Dienst — siehe Anleitung unten / docs/CLOUD_SETUP.md.",
+        let mut form = crate::app::settings_form::Form::new(
+            ui,
+            "gdrive_credentials",
+            &["Client-ID", "Client-Secret"],
         );
+        form.row_labelled(ui, "Client-ID", |ui, field_label| {
+            ui.add(
+                egui::TextEdit::singleline(&mut self.cloud_client_id_draft)
+                    .hint_text("OAuth Client-ID (…apps.googleusercontent.com)")
+                    .desired_width(f32::INFINITY),
+            )
+            .labelled_by(field_label)
+            .on_hover_text(
+                "Aus DEINEM eigenen Google-Cloud-Projekt (Desktop-OAuth-Client). \
+             Diese App ist kein Dienst — siehe Anleitung unten / docs/CLOUD_SETUP.md.",
+            );
         });
         form.row_labelled(ui, "Client-Secret", |ui, field_label| {
-        ui.add(
-            egui::TextEdit::singleline(&mut self.cloud_secret_draft)
-                .hint_text("Client-Secret (von Google, falls vergeben)")
-                .password(true)
-                .desired_width(f32::INFINITY),
-        ).labelled_by(field_label);
+            ui.add(
+                egui::TextEdit::singleline(&mut self.cloud_secret_draft)
+                    .hint_text("Client-Secret (von Google, falls vergeben)")
+                    .password(true)
+                    .desired_width(f32::INFINITY),
+            )
+            .labelled_by(field_label);
         });
         ui.horizontal(|ui| {
             if self.cloud_authing {
                 ui.spinner();
                 ui.label("Browser-Anmeldung läuft…");
             } else if ui
-                .small_button(if matches!(auth.state, crate::cloud::AuthState::ReauthorizeRequired | crate::cloud::AuthState::ClientChanged) { "Anmeldung erneuern" } else { "Mit Google verbinden" })
+                .small_button(
+                    if matches!(
+                        auth.state,
+                        crate::cloud::AuthState::ReauthorizeRequired
+                            | crate::cloud::AuthState::ClientChanged
+                    ) {
+                        "Anmeldung erneuern"
+                    } else {
+                        "Mit Google verbinden"
+                    },
+                )
                 .on_hover_text("Speichert die Client-ID und öffnet den Browser zur Anmeldung")
                 .clicked()
             {
@@ -155,11 +198,14 @@ impl App {
             });
         ui.separator();
     }
-
 }
 
 fn cloud_time(at: i64) -> String {
     chrono::DateTime::<chrono::Utc>::from_timestamp(at, 0)
-        .map(|at| at.with_timezone(&chrono::Local).format("%d.%m.%Y %H:%M").to_string())
+        .map(|at| {
+            at.with_timezone(&chrono::Local)
+                .format("%d.%m.%Y %H:%M")
+                .to_string()
+        })
         .unwrap_or_else(|| "Zeitpunkt nicht darstellbar".into())
 }

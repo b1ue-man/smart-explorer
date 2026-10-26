@@ -52,28 +52,41 @@ pub(in crate::daemon) fn bound_snapshot_for_ipc(
 }
 
 fn bound_routes(routes: &mut Option<crate::share::ShareRouteSnapshot>) {
-    let Some(routes) = routes else { return; };
+    let Some(routes) = routes else {
+        return;
+    };
     if let Some(error) = &mut routes.error {
         routes.truncated |= error.len() > MAX_STATUS_TEXT_BYTES;
         truncate_utf8(error, MAX_STATUS_TEXT_BYTES);
     }
     for peer in &mut routes.peers {
         for connection in &mut peer.connections {
-            routes.truncated |= connection.reason.len() > MAX_STATUS_TEXT_BYTES || connection.protocol.len() > 128;
+            routes.truncated |=
+                connection.reason.len() > MAX_STATUS_TEXT_BYTES || connection.protocol.len() > 128;
             truncate_utf8(&mut connection.reason, MAX_STATUS_TEXT_BYTES);
             truncate_utf8(&mut connection.protocol, 128);
         }
     }
     while serde_json::to_vec(&*routes).map_or(usize::MAX, |bytes| bytes.len()) > MAX_ROUTE_BYTES {
-        if !drop_route_detail(routes) { break; }
+        if !drop_route_detail(routes) {
+            break;
+        }
     }
 }
 
 /// Preserve current state before older measurements; never alter identity selectors.
 fn drop_route_detail(routes: &mut crate::share::ShareRouteSnapshot) -> bool {
-    if let Some(peer) = routes.peers.iter_mut().find(|peer| !peer.measurements.is_empty()) {
+    if let Some(peer) = routes
+        .peers
+        .iter_mut()
+        .find(|peer| !peer.measurements.is_empty())
+    {
         peer.measurements.remove(0);
-    } else if let Some(peer) = routes.peers.iter_mut().find(|peer| peer.connections.len() > 1) {
+    } else if let Some(peer) = routes
+        .peers
+        .iter_mut()
+        .find(|peer| peer.connections.len() > 1)
+    {
         peer.connections.pop();
     } else if routes.peers.pop().is_none() {
         return false;

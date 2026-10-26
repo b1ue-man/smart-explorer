@@ -20,7 +20,7 @@ pub(in crate::daemon) struct HostGrant {
 pub(in crate::daemon) struct BackendStreamLease {
     manager: MountManager,
     id: MountId,
-    _startup_lease:Option<super::start_path::StartupLease>,
+    _startup_lease: Option<super::start_path::StartupLease>,
 }
 
 impl Drop for BackendStreamLease {
@@ -186,7 +186,7 @@ impl MountManager {
             BackendStreamLease {
                 manager: self.clone(),
                 id: id.clone(),
-                _startup_lease:entry.startup_lease.clone(),
+                _startup_lease: entry.startup_lease.clone(),
             },
         ))
     }
@@ -294,9 +294,14 @@ impl MountManager {
         super::termination::reported(&entry.config, &status);
         // The start operation ends only at authenticated Mounted, or at an
         // actually reaped child. A Failed report can precede child shutdown.
-        if matches!(&status,MountStatus::Mounted {..}|MountStatus::MountedAt {..}) {
-            if let Some(lease)=&entry.startup_lease {lease.mounted();}
-            entry.startup_lease=None;
+        if matches!(
+            &status,
+            MountStatus::Mounted { .. } | MountStatus::MountedAt { .. }
+        ) {
+            if let Some(lease) = &entry.startup_lease {
+                lease.mounted();
+            }
+            entry.startup_lease = None;
         }
         entry.status = status;
         Ok(snapshot(entry))

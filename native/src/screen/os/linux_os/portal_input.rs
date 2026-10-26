@@ -15,9 +15,7 @@
 //! StartOptions)`, `notify_*(…, options)`); they could not be built here.
 use std::sync::{Arc, Mutex, PoisonError};
 
-use ashpd::desktop::remote_desktop::{
-    DeviceType, KeyState, RemoteDesktop, SelectDevicesOptions,
-};
+use ashpd::desktop::remote_desktop::{DeviceType, KeyState, RemoteDesktop, SelectDevicesOptions};
 use ashpd::desktop::screencast::{
     CursorMode, OpenPipeWireRemoteOptions, Screencast, SelectSourcesOptions, SourceType,
 };
@@ -25,8 +23,8 @@ use ashpd::desktop::{PersistMode, Session};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use super::pipewire_abi;
-use super::pipewire_stream::{LatestFrame, PwStream};
 use super::pipewire_stream::identity::StreamIdentity;
+use super::pipewire_stream::{LatestFrame, PwStream};
 use super::portal_session::source_binding;
 use super::portal_session::{
     refusal, register_host_app_once, set, PortalOptions, PortalState, Refusal, PIPEWIRE_MISSING,
@@ -38,7 +36,10 @@ use crate::screen::os::input_keys::SasGuard;
 
 pub(super) enum Batch {
     Input(Vec<InputEvent>),
-    Release {identity:Arc<StreamIdentity>,events:Vec<InputEvent>},
+    Release {
+        identity: Arc<StreamIdentity>,
+        events: Vec<InputEvent>,
+    },
 }
 
 /// The input of this host process's session; `None` without one.
@@ -55,18 +56,37 @@ pub(super) struct SessionInput {
 }
 
 impl SessionInput {
-    pub(super) fn input_sink(&self,memory:&Arc<super::pipewire_stream::memory::CaptureMemory>)->Arc<dyn crate::screen::core::host_backend::ScreenInputSink> {
-        crate::screen::os::host_backend::prepared::portal_input_sink(self.lease.clone(),memory)
+    pub(super) fn input_sink(
+        &self,
+        memory: &Arc<super::pipewire_stream::memory::CaptureMemory>,
+    ) -> Arc<dyn crate::screen::core::host_backend::ScreenInputSink> {
+        crate::screen::os::host_backend::prepared::portal_input_sink(self.lease.clone(), memory)
     }
 }
-pub(super) fn release_only(events:&[InputEvent])->bool {
-    events.len()<=crate::screen::core::input_model::MAX_INPUT_EVENTS && events.iter().all(|event|matches!(event,
-        InputEvent::Key {down:false,..}|InputEvent::Button {down:false,..}
-        |InputEvent::Touch {id:0,phase:TouchPhase::End|TouchPhase::Cancel,..}))
+pub(super) fn release_only(events: &[InputEvent]) -> bool {
+    events.len() <= crate::screen::core::input_model::MAX_INPUT_EVENTS
+        && events.iter().all(|event| {
+            matches!(
+                event,
+                InputEvent::Key { down: false, .. }
+                    | InputEvent::Button { down: false, .. }
+                    | InputEvent::Touch {
+                        id: 0,
+                        phase: TouchPhase::End | TouchPhase::Cancel,
+                        ..
+                    }
+            )
+        })
 }
 impl Drop for SessionInput {
     fn drop(&mut self) {
-        if let Some(binding) = self.lease.binding.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
+        if let Some(binding) = self
+            .lease
+            .binding
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+        {
             binding.invalidate();
         }
     }
@@ -75,10 +95,21 @@ impl Drop for SessionInput {
 /// The channel of a new session; its sender becomes this process's input.
 pub(super) fn open_channel() -> SessionInput {
     let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
-    let lease = Arc::new(InputLease { sender, binding: Mutex::new(None) });
-    let old = INPUT.lock().unwrap_or_else(PoisonError::into_inner).replace(lease.clone());
+    let lease = Arc::new(InputLease {
+        sender,
+        binding: Mutex::new(None),
+    });
+    let old = INPUT
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .replace(lease.clone());
     if let Some(old) = old {
-        if let Some(binding) = old.binding.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
+        if let Some(binding) = old
+            .binding
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+        {
             binding.invalidate();
         }
     }
@@ -92,19 +123,28 @@ pub(crate) fn inject(events: &[InputEvent]) -> Result<(), ControlBlock> {
         .unwrap_or_else(PoisonError::into_inner)
         .clone()
         .ok_or(ControlBlock::ControlUnavailable)?;
-    send_input(&lease,events)
+    send_input(&lease, events)
 }
 
-pub(super) fn send_input(lease:&InputLease,events:&[InputEvent])->Result<(),ControlBlock> {
+pub(super) fn send_input(lease: &InputLease, events: &[InputEvent]) -> Result<(), ControlBlock> {
     let binding = lease.binding.lock().unwrap_or_else(PoisonError::into_inner);
     if !binding.as_ref().is_some_and(|binding| binding.connected()) {
         return Err(ControlBlock::ControlUnavailable);
     }
-    if binding.as_ref().is_some_and(|binding| binding.logical_size.is_none())
-        && events.iter().any(|event| matches!(event, InputEvent::PointerAbs { .. } | InputEvent::Touch { .. })) {
+    if binding
+        .as_ref()
+        .is_some_and(|binding| binding.logical_size.is_none())
+        && events.iter().any(|event| {
+            matches!(
+                event,
+                InputEvent::PointerAbs { .. } | InputEvent::Touch { .. }
+            )
+        })
+    {
         return Err(ControlBlock::ControlUnavailable);
     }
-    lease.sender
+    lease
+        .sender
         .send(Batch::Input(events.to_vec()))
         .map_err(|_| ControlBlock::ControlUnavailable)
 }
@@ -115,13 +155,13 @@ pub(super) fn thread_main(
     stopped: tokio::sync::oneshot::Receiver<()>,
     options: PortalOptions,
     inputs: SessionInput,
-    memory:Arc<super::pipewire_stream::memory::CaptureMemory>,
+    memory: Arc<super::pipewire_stream::memory::CaptureMemory>,
 ) {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build();
     match runtime {
-        Ok(runtime) => runtime.block_on(run(state, stopped, options, inputs,memory)),
+        Ok(runtime) => runtime.block_on(run(state, stopped, options, inputs, memory)),
         Err(error) => set(
             state,
             PortalState::Failed(format!("portal_runtime: {error}")),
@@ -140,7 +180,7 @@ async fn run(
     stopped: tokio::sync::oneshot::Receiver<()>,
     options: PortalOptions,
     mut inputs: SessionInput,
-    memory:Arc<super::pipewire_stream::memory::CaptureMemory>,
+    memory: Arc<super::pipewire_stream::memory::CaptureMemory>,
 ) {
     use futures_util::future::{select, Either};
     let api = match pipewire_abi::load_named(options.pipewire_library) {
@@ -170,25 +210,36 @@ async fn run(
     let closed = match session.receive_closed().await {
         Ok(closed) => closed,
         Err(error) => {
-            set(state, PortalState::Failed(format!("portal_closed_subscription: {error}")));
+            set(
+                state,
+                PortalState::Failed(format!("portal_closed_subscription: {error}")),
+            );
             let _ = session.close().await;
             return;
         }
     };
     let mut closed = Box::pin(closed);
-    let mut stop = Box::pin(async { let _ = select(Box::pin(closed.next()), stopped).await; });
+    let mut stop = Box::pin(async {
+        let _ = select(Box::pin(closed.next()), stopped).await;
+    });
     let flow = Box::pin(negotiate(&remote, &screencast, &session));
     match select(flow, stop.as_mut()).await {
         Either::Left((Ok(granted), _)) => {
-            let latest=super::portal_session::latest_for_state(state);
+            let latest = super::portal_session::latest_for_state(state);
             let Granted { identity, fd } = granted;
             let path = identity.session.clone();
             // A replaced input channel cannot attach a grant that arrived after replacement.
             let attached = {
                 let current = INPUT.lock().unwrap_or_else(PoisonError::into_inner);
-                let owned = current.as_ref().is_some_and(|current| Arc::ptr_eq(current, &inputs.lease));
+                let owned = current
+                    .as_ref()
+                    .is_some_and(|current| Arc::ptr_eq(current, &inputs.lease));
                 if owned {
-                    *inputs.lease.binding.lock().unwrap_or_else(PoisonError::into_inner) = Some(identity.clone());
+                    *inputs
+                        .lease
+                        .binding
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner) = Some(identity.clone());
                 }
                 owned
             };
@@ -197,10 +248,12 @@ async fn run(
                 let _ = session.close().await;
                 return;
             }
-            match PwStream::start(api, fd, identity.clone(), latest.clone(),memory) {
+            match PwStream::start(api, fd, identity.clone(), latest.clone(), memory) {
                 Ok(stream) => {
                     set(state, PortalState::Streaming(latest.clone()));
-                    let mut stream_stop=Box::pin(async {let _=select(stop.as_mut(),Box::pin(latest.wait_failure())).await;});
+                    let mut stream_stop = Box::pin(async {
+                        let _ = select(stop.as_mut(), Box::pin(latest.wait_failure())).await;
+                    });
                     let mut sas = SasGuard::new();
                     loop {
                         let next = Box::pin(inputs.receiver.recv());
@@ -208,7 +261,10 @@ async fn run(
                         match select(stream_stop.as_mut(), next).await {
                             Either::Right((Some(batch), _)) => {
                                 let sent=Box::pin(crate::screen::os::host_backend::prepared::dispatch_portal_batch(&remote,&session,&identity,&path,batch,&mut sas));
-                                if matches!(select(stream_stop.as_mut(), sent).await, Either::Left(_)) {
+                                if matches!(
+                                    select(stream_stop.as_mut(), sent).await,
+                                    Either::Left(_)
+                                ) {
                                     identity.invalidate();
                                     break;
                                 }
@@ -226,14 +282,17 @@ async fn run(
                     // Close the receiver first: the accepted queue is finite
                     // and an old sink can never switch to a replacement lease.
                     inputs.receiver.close();
-                    let drain=async {
-                        while let Some(batch)=inputs.receiver.recv().await {
-                            if matches!(&batch,Batch::Release {..}) {
-                                crate::screen::os::host_backend::prepared::dispatch_portal_batch(&remote,&session,&identity,&path,batch,&mut sas).await;
+                    let drain = async {
+                        while let Some(batch) = inputs.receiver.recv().await {
+                            if matches!(&batch, Batch::Release { .. }) {
+                                crate::screen::os::host_backend::prepared::dispatch_portal_batch(
+                                    &remote, &session, &identity, &path, batch, &mut sas,
+                                )
+                                .await;
                             }
                         }
                     };
-                    let _=tokio::time::timeout(std::time::Duration::from_secs(2),drain).await;
+                    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), drain).await;
                 }
                 Err(error) => set(state, PortalState::Failed(error.to_string())),
             }
@@ -321,11 +380,11 @@ pub(super) fn stream_point(size: (f64, f64), x: u16, y: u16) -> (f64, f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    static SERIAL:Mutex<()>=Mutex::new(());
+    static SERIAL: Mutex<()> = Mutex::new(());
 
     #[test]
     fn screen_task_wayland_stream_points_and_no_input_before_consent() {
-        let _serial=SERIAL.lock().unwrap();
+        let _serial = SERIAL.lock().unwrap();
         assert_eq!(stream_point((1920.0, 1080.0), 0, 0), (0.0, 0.0));
         assert_eq!(
             stream_point((1920.0, 1080.0), 65_535, 65_535),
@@ -340,40 +399,74 @@ mod tests {
 
     #[test]
     fn batches_task_capture_linux_portal_release_retains_exact_old_lease_without_pixels() {
-        let _serial=SERIAL.lock().unwrap();
-        let channel=|id,session:&str| {
-            let (sender,receiver)=tokio::sync::mpsc::unbounded_channel();
-            let identity=Arc::new(StreamIdentity::new(id,Some(id as u64),session.into(),None,Some((640,480))));
-            let lease=Arc::new(InputLease {sender,binding:Mutex::new(Some(identity.clone()))});
-            (SessionInput {receiver,lease},identity)
+        let _serial = SERIAL.lock().unwrap();
+        let channel = |id, session: &str| {
+            let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+            let identity = Arc::new(StreamIdentity::new(
+                id,
+                Some(id as u64),
+                session.into(),
+                None,
+                Some((640, 480)),
+            ));
+            let lease = Arc::new(InputLease {
+                sender,
+                binding: Mutex::new(Some(identity.clone())),
+            });
+            (SessionInput { receiver, lease }, identity)
         };
-        let (mut old,identity)=channel(17,"old-session");
-        let (mut new,_)=channel(18,"new-session");
-        let admission=crate::screen::os::host_backend::prepared::test_admission("portal-release");
-        let memory=Arc::new(super::super::pipewire_stream::memory::CaptureMemory::new(
-            crate::screen::core::capture_admission::SourceKey::new("portal-release","portal").unwrap(),admission));
-        let sink=old.input_sink(&memory);
+        let (mut old, identity) = channel(17, "old-session");
+        let (mut new, _) = channel(18, "new-session");
+        let admission = crate::screen::os::host_backend::prepared::test_admission("portal-release");
+        let memory = Arc::new(super::super::pipewire_stream::memory::CaptureMemory::new(
+            crate::screen::core::capture_admission::SourceKey::new("portal-release", "portal")
+                .unwrap(),
+            admission,
+        ));
+        let sink = old.input_sink(&memory);
         struct Restore(Option<Arc<InputLease>>);
         impl Drop for Restore {
-            fn drop(&mut self) {*INPUT.lock().unwrap()=self.0.take();}
-        }
-        let _restore=Restore(INPUT.lock().unwrap().replace(new.lease.clone()));
-        identity.invalidate(); // Native close/expiry cannot redirect release.
-        assert!(sink.inject(&[],1,false).is_err());
-        drop(memory); // No image grant or capture owner remains.
-        let releases=[InputEvent::Key {hid_usage:4,down:false},
-            InputEvent::Button {button:PointerButton::Left,down:false}];
-        assert_eq!(sink.release(&releases),Ok(()));
-        match old.receiver.try_recv().unwrap() {
-            Batch::Release {identity:bound,events}=>{
-                assert!(Arc::ptr_eq(&bound,&identity));assert_eq!(events,releases);
+            fn drop(&mut self) {
+                *INPUT.lock().unwrap() = self.0.take();
             }
-            Batch::Input(_)=>panic!("release became ordinary input"),
+        }
+        let _restore = Restore(INPUT.lock().unwrap().replace(new.lease.clone()));
+        identity.invalidate(); // Native close/expiry cannot redirect release.
+        assert!(sink.inject(&[], 1, false).is_err());
+        drop(memory); // No image grant or capture owner remains.
+        let releases = [
+            InputEvent::Key {
+                hid_usage: 4,
+                down: false,
+            },
+            InputEvent::Button {
+                button: PointerButton::Left,
+                down: false,
+            },
+        ];
+        assert_eq!(sink.release(&releases), Ok(()));
+        match old.receiver.try_recv().unwrap() {
+            Batch::Release {
+                identity: bound,
+                events,
+            } => {
+                assert!(Arc::ptr_eq(&bound, &identity));
+                assert_eq!(events, releases);
+            }
+            Batch::Input(_) => panic!("release became ordinary input"),
         }
         assert!(new.receiver.try_recv().is_err());
-        assert!(sink.release(&[InputEvent::Key {hid_usage:4,down:true}]).is_err());
-        assert!(sink.release(&[InputEvent::Text {text:"x".into()}]).is_err());
-        old.receiver.close();assert!(sink.release(&releases).is_err());
+        assert!(sink
+            .release(&[InputEvent::Key {
+                hid_usage: 4,
+                down: true
+            }])
+            .is_err());
+        assert!(sink
+            .release(&[InputEvent::Text { text: "x".into() }])
+            .is_err());
+        old.receiver.close();
+        assert!(sink.release(&releases).is_err());
         assert!(new.receiver.try_recv().is_err());
     }
 }

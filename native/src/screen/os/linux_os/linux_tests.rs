@@ -82,13 +82,30 @@ fn screen_task_wayland_monitors_single_portal_entry() {
     }
     // The test picture stays what it was.
     use crate::screen::core::host_backend::HostOutputPlan;
-    use crate::screen::core::host_codec_adapters::{HostContract,HostCodecPlan};
-    let admission=prepared::test_admission("linux-synthetic");
-    let prepared=backend.prepare_session_source("fixture","linux-synthetic",&SourceId::Synthetic,
-        Some(FrameSize::new(320,180)),false,admission.clone()).ok().expect("synthetic prepares");
-    let output=HostOutputPlan::new(HostContract::Legacy,FrameSize::new(320,180),HostCodecPlan::Tiles).unwrap();
-    let grant=admission.authority().approve(prepared.capture_plan(&output).unwrap().unwrap()).unwrap();
-    let mut synthetic=prepared.activate(grant).ok().expect("synthetic activates");
+    use crate::screen::core::host_codec_adapters::{HostCodecPlan, HostContract};
+    let admission = prepared::test_admission("linux-synthetic");
+    let prepared = backend
+        .prepare_session_source(
+            "fixture",
+            "linux-synthetic",
+            &SourceId::Synthetic,
+            Some(FrameSize::new(320, 180)),
+            false,
+            admission.clone(),
+        )
+        .ok()
+        .expect("synthetic prepares");
+    let output = HostOutputPlan::new(
+        HostContract::Legacy,
+        FrameSize::new(320, 180),
+        HostCodecPlan::Tiles,
+    )
+    .unwrap();
+    let grant = admission
+        .authority()
+        .approve(prepared.capture_plan(&output).unwrap().unwrap())
+        .unwrap();
+    let mut synthetic = prepared.activate(grant).ok().expect("synthetic activates");
     assert!(matches!(
         synthetic.capture(1, true).unwrap(),
         SourceFrame::Frame(_)
@@ -196,20 +213,38 @@ fn screen_task_linux_without_pipewire_starts() {
         .contains(&LIMIT_PIPEWIRE_MISSING.to_string()));
     // Preparation returns before the dialog; unavailable PipeWire is
     // reported without activating an unfinanced capture source.
-    let admission=prepared::test_admission("linux-missing-pipewire");
-    let source=backend.prepare_session_source("fixture","linux-missing-pipewire",
-        &SourceId::Monitor(PORTAL_MONITOR_ID.into()),None,false,admission).ok().expect("portal prepares");
-    let output=crate::screen::core::host_backend::HostOutputPlan::new(
-        crate::screen::core::host_codec_adapters::HostContract::Legacy,FrameSize::new(320,180),
-        crate::screen::core::host_codec_adapters::HostCodecPlan::Tiles).unwrap();
-    let started=Instant::now();
+    let admission = prepared::test_admission("linux-missing-pipewire");
+    let source = backend
+        .prepare_session_source(
+            "fixture",
+            "linux-missing-pipewire",
+            &SourceId::Monitor(PORTAL_MONITOR_ID.into()),
+            None,
+            false,
+            admission,
+        )
+        .ok()
+        .expect("portal prepares");
+    let output = crate::screen::core::host_backend::HostOutputPlan::new(
+        crate::screen::core::host_codec_adapters::HostContract::Legacy,
+        FrameSize::new(320, 180),
+        crate::screen::core::host_codec_adapters::HostCodecPlan::Tiles,
+    )
+    .unwrap();
+    let started = Instant::now();
     loop {
         match source.capture_plan(&output) {
-            Err(error)=>{assert!(error.to_string().contains("pipewire_missing"));break;}
-            Ok(None)=>{},
-            Ok(Some(_))=>panic!("missing PipeWire cannot offer native buffers"),
+            Err(error) => {
+                assert!(error.to_string().contains("pipewire_missing"));
+                break;
+            }
+            Ok(None) => {}
+            Ok(Some(_)) => panic!("missing PipeWire cannot offer native buffers"),
         }
-        assert!(started.elapsed()<Duration::from_secs(20),"still waiting for missing PipeWire");
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "still waiting for missing PipeWire"
+        );
         std::thread::sleep(Duration::from_millis(20));
     }
 }

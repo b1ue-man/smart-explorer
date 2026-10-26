@@ -187,12 +187,18 @@ impl TransferPlan {
                     work.source_path
                 ));
             }
-            let destination_state =
-                inspect_destination(destination, &work.destination_path, fresh.is_dir, force || resume)?;
+            let destination_state = inspect_destination(
+                destination,
+                &work.destination_path,
+                fresh.is_dir,
+                force || resume,
+            )?;
             budget.reserve_auxiliary_text(destination_state_text(&destination_state))?;
             let index = entries.len();
             entries.push(PlanEntry {
-                resume_existing: resume && !fresh.is_dir && matches!(destination_state, DestinationState::File(_)),
+                resume_existing: resume
+                    && !fresh.is_dir
+                    && matches!(destination_state, DestinationState::File(_)),
                 source_path: work.source_path,
                 destination_path: work.destination_path,
                 source: fresh.clone(),
