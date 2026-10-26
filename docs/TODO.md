@@ -25,11 +25,14 @@ quellseitig behoben. Die daraus entstandenen Struktur-, Compiler- und
 JNI-Korrekturen sind integriert. Lauf `40381452096` für `0425aa46` bestätigt
 die Kompilierung der Windows-/Linux-Prüfbinärdatei und CLI sowie der
 Android-Rustbibliothek einschließlich JNI. Alle Jobs dieses Versuchs sind beendet.
-Offen sind die [begrenzten Kotlin-Konsum- und Capturekorrekturen sowie der
-Messabschlussfehler L02](plaene/2026-10-24-batches/rv1-compilerplan.md).
-Drei Autoren verantworten jeweils ihren vollständigen Fixzyklus. Main korrigiert
-anschließend die belegten veralteten beziehungsweise plattformfremden
-Pflichtauswahlen im selben Manifest. Die vollständige Funktionsabnahme und
+Die [begrenzten Kotlin-Konsum- und Capturekorrekturen sowie der
+Messabschluss L02](plaene/2026-10-24-batches/rv1-compilerplan.md) sind mit
+jeweils eigener vollständiger Autorenreview in `00c97f88`, `69f86c46` und
+`578357a8` integriert. Die belegten veralteten beziehungsweise plattformfremden
+Pflichtauswahlen sind im selben Manifest korrigiert; alle bestehenden
+Ressourcenfälle bleiben erhalten. Der statische Abgleich mit den gespeicherten
+Binärlisten und ausdrücklich getrennten neuen Quellfällen meldet keine offene
+Zuordnung. Die vollständige Funktionsabnahme über denselben Remote-Einstieg und
 der eine terminale Remote-Release stehen aus; ein Compilererfolg ist kein
 Funktions- oder Leistungsnachweis.
 

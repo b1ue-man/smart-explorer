@@ -548,3 +548,15 @@ Abbruchreihenfolge ist ausdrücklich eine noch zu prüfende Ursache. Der
 [Korrekturplan](../plaene/2026-10-24-batches/rv1-compilerplan.md) erhält
 sämtliche Profile und Leistungsorakel. Kein lokaler Build-/Testlauf und
 kein zusätzlicher Suiteeinstieg werden eingeführt.
+
+Die anschließenden K/L02-Quellkorrekturen sind mit eigener vollständiger
+Autorenreview in `00c97f88`, `69f86c46` und `578357a8` integriert. Die
+Auswahlkorrektur erhält sämtliche bestehenden Ressourcenfallnamen und
+Androidklassen, verschiebt mobile Rustgrenzen zur vorhandenen Linuxstufe und
+bindet den tatsächlich vorhandenen Snapshotnachfolger. Die neuen
+P27-Abschlussfälle sind als Linuxintegrationen desselben Einstiegs registriert.
+Ein statischer Vergleich mit beiden gespeicherten Binärlisten bestätigt die
+bestehenden Zuordnungen; neue Abschlussfälle sind dabei ausdrücklich nur durch
+ihre Quelldefinitionen belegt. Keine lokale Funktionsausführung und kein
+Leistungsnachweis folgen aus diesem Vergleich. P27-Netzprofile, Orakel,
+Qualitätsprofile und GL-Ledger bleiben unverändert.

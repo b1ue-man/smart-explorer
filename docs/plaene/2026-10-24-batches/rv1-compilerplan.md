@@ -392,3 +392,50 @@ L02 bleibt ein eigenes zusammenhängendes Messlebensdauer-Ergebnis. Für jedes
 Ergebnis ist ein einzelner Autor für Fehlerfunktion, vollständige Verknüpfungskarte,
 konkreten Plan, Fix und anschließende Anti-Regressionsreview verantwortlich.
 Mains gemeinsames Manifest folgt erst nach den vollständigen Quellkorrekturen.
+
+Der vollständige statische Vergleich umfasst zusätzlich alle native Marker
+und jede Ressourcenfallzuordnung mit den tatsächlichen Defaultplattformen
+des Runners. Dadurch ist dieselbe Plattformabweichung auch in `R9-L7-Tickets`
+belegt: Seine fünf `android_*`-Fälle liegen sämtlich unter
+`mobile::domains::login_images`. Dieser vorhandene Nachweis wird ausdrücklich
+Linux zugeordnet. Der Abschnitt selbst enthält keine Gerätefälle; der
+zusätzliche JNI-Nachweis bleibt von dieser Zuordnung unberührt. Weder
+Fallnamen noch Prüfaussagen entfallen.
+
+## Abgeschlossene K/L02-Quellkorrekturen und Auswahlbindung
+
+Alle drei Autoren haben ihren eigenen vollständigen Analyse-, Plan-, Fix- und
+Nachreviewzyklus beendet. Die Integrationscommits sind `00c97f88` (K01/K03–K09),
+`69f86c46` (K02/K10/K11 und die verbundenen Budgetfixtureaufrufe) sowie
+`578357a8` (L02). Main hat die vollständigen neuen Berichtsabschnitte und Diffs
+gelesen; statische Kotlin-/Rust-Syntax, XML und Whitespace sind ohne Befund.
+Der Iconsersatz erhält die bisherigen serialisierten Namen. Capturefehler
+erreichen beim Erststart und bei Rekonfiguration denselben Epochfehlerweg;
+beide temporären Besitzer erhalten ihren Abschlussversuch. Displayreuse,
+Projektionsidentität und fester JNI-Puffer bleiben erhalten.
+
+L02 hält zuerst sämtliche direkten Messfutures an, bevor ihre Ressourcen
+freigegeben werden. Bereite echte Rückgaben und Panics bleiben sichtbar;
+alle eigenen Handles werden vor der Rückgabe gejoint. Der genaue Zeitpunkt
+des bisherigen ACK-Fehlers bleibt aus dem alten Log unbekannt. Produktregler,
+Netzprofile, Messkörper und Leistungsorakel bleiben unverändert. Die neuen
+kleinen Abschlussfälle sind Linux zugeordnet und werden innerhalb desselben
+Suiteeinstiegs ausgeführt; sie ersetzen keinen P27-Leistungsnachweis.
+
+Mains L01/W01-Korrektur ist vollständig im gemeinsamen Manifest umgesetzt:
+Snapshotnachfolger, mobile Pflichtpräfixe, beide Androidtextintegrationen und
+`R9-L7-Tickets` sind ihrer tatsächlichen Plattform zugeordnet.
+`R20-Androidtext-Vertrag` erhält die beiden bisherigen Rust- und JVM-Fälle;
+die verbleibenden gemeinsamen R20-Grenzen gelten weiter für Windows und Linux.
+`R21-P27-Messabschluss` enthält sämtliche vom L02-Autor benannten Fälle.
+Alle bisherigen Ressourcenfallnamen, Androidklassen, P27-Profile, Qualitäts-
+und GL-Ledgerzuordnungen bleiben erhalten.
+
+Der statische vollständige Auswahlvergleich verwendet die gespeicherten
+Binärlisten von `40381452096` und kennzeichnet die neuen Abschlussfälle
+getrennt als nur im Quelltext vorhanden. Pflichtpräfixe, genaue Integrationen,
+Meilensteinmarker und Ressourcenfälle stimmen damit für beide Plattformen.
+Es wurde keine Binärdatei und kein Fall lokal ausgeführt. Typ-, Funktions-
+und Leistungsbestätigung bleiben bis zur Auswertung desselben Remote-Einstiegs
+offen. Main aktualisiert vorher den vollständigen Rootgraph und pusht den
+gemeinsamen Kandidaten; die Veröffentlichung bleibt der eine terminale Schritt.

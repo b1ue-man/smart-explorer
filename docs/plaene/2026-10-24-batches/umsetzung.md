@@ -1223,3 +1223,20 @@ Autorenzyklen: Iconkonsum, Android-Capture/Puffer und Messlebensdauer. Main
 besitzt die anschließende gemeinsame Manifestkorrektur. Sämtliche bisherigen
 Funktionsverträge und V7-Orakel bleiben erhalten. Es folgt ausschließlich
 derselbe Remote-Suiteeinstieg; kein Release wurde gestartet.
+
+Die drei vollständigen Autorenzyklen sind jetzt integriert: Iconkonsum in
+`00c97f88`, Capturestart und Budgetbindung in `69f86c46`, gemeinsamer
+Messabschluss in `578357a8`. Main hat die geänderten Quellen und die eigenen
+anschließenden Anti-Regressionsreviews gelesen. Kotlin-/Rust-AST, XML und
+Whitespace sind statisch ohne Befund; das ist keine Typ- oder Laufzeitabnahme.
+
+Das gemeinsame Manifest bindet den tatsächlichen Snapshotnachfolger, ordnet
+mobile Text-/Bitmapfälle Linux zu und erhält den zusätzlichen JVM-/JNI-Nachweis.
+`R20-Androidtext-Vertrag` trennt die Textgrenze von den gemeinsamen
+Desktopintegrationen. `R21-P27-Messabschluss` nimmt die gezielten
+Lebensdauerfälle innerhalb desselben Linuxeinstiegs auf; Netzprofile,
+Messzeitfenster und V7-Orakel bleiben unverändert. Der statische Auswahlvergleich
+gegen beide vorhandenen Binärlisten trennt die neuen, noch nicht kompilierten
+Abschlussfälle ausdrücklich vom vorhandenen Bestand. Kein bestehender
+Ressourcenfall entfällt. Nach Rootgraphrefresh und gemeinsamem Push folgt
+ausschließlich derselbe Remote-Fixloop.

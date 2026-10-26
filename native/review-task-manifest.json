@@ -46,7 +46,7 @@
       "batches_task_b6_snapshot_",
       "batches_task_b6_abandoned_capture_",
       "batches_task_b6_decoder_end_",
-      "batches_task_b6_first_worker_snapshot_",
+      "batches_task_b6_worker_snapshot_",
       "batches_task_b6_renderer_",
       "batches_task_capture_",
       "batches_task_image_",
@@ -55,7 +55,6 @@
       "batches_task_login_image_",
       "batches_task_b6_login_image_",
       "batches_capture_task_android_",
-      "batches_login_image_task_tests::android_",
       "batches_task_b6_quality_",
       "batches_task_device_navigation_",
       "batches_task_transfer_compat_",
@@ -112,8 +111,6 @@
       "perm_task_unknown_access_version_fail_closed",
       "desktop_task_screen_target_json",
       "screen_task_viewer_target_parse",
-      "screen_task_android_screen_keys_file_current",
-      "screen_task_android_strings_match_desktop_sources",
       "handshake_io_enforces_one_absolute_deadline_for_a_stalled_peer",
       "perm_task_gui_accounts_page_states",
       "perm_task_gui_setup_without_pkexec_shows_sudo_command",
@@ -123,7 +120,16 @@
       "batches_task_b6_linux_cgroup_ancestors_constrain_session_headroom",
       "batches_task_b6_cgroup_namespace_root_needs_kernel_root_evidence",
       "remote_drive_task_dokany_msi_outcomes_preserve_actionable_exit_codes",
-      "remote_drive_task_dokany_library_and_driver_versions_use_separate_domains"
+      "remote_drive_task_dokany_library_and_driver_versions_use_separate_domains",
+      "screen_task_android_screen_keys_file_current",
+      "screen_task_android_strings_match_desktop_sources",
+      "p27_task_shutdown_preserves_ack_and_picture_dependencies_until_quiesced",
+      "p27_task_shutdown_preserves_ready_transport_and_pipeline_failures",
+      "p27_task_shutdown_reports_ack_loss_before_explicit_stop",
+      "p27_task_shutdown_rejects_early_success",
+      "p27_task_shutdown_preserves_panic_and_joins_remaining_children",
+      "p27_task_shutdown_drop_aborts_owned_children",
+      "p27_task_shutdown_cancelled_finish_keeps_child_ownership"
     ],
     "environment_dependent": [
       "batches_task_b6_renderer_wgpu_upload_without_surface_and_retire_after_later_draw",
@@ -137,7 +143,8 @@
       "batches_task_capture_linux_x11_",
       "batches_task_capture_linux_pipewire_",
       "batches_task_b6_x11_",
-      "batches_family_x11_"
+      "batches_family_x11_",
+      "batches_login_image_task_tests::android_"
     ],
     "windows_required_prefixes": [
       "batches_capture_windows_",
@@ -1043,7 +1050,10 @@
         "android_supported_geometry_remains_the_existing_login_limit",
         "android_heap_offer_is_not_expanded_by_a_second_private_pool"
       ],
-      "device_cases": []
+      "device_cases": [],
+      "native_platforms": [
+        "linux"
+      ]
     },
     {
       "id": "R9-L8-HWUI",
@@ -1743,8 +1753,8 @@
         "P19",
         "P24"
       ],
-      "expected": "Die korrigierten Modul- und Typgrenzen erhalten Gerätezugriff, gespeicherte Rechte, Bildschirmmetadaten und Zielidentität. Versteckte Sitzungen bleiben pausierbar, fortsetzbar und im Freigabeindikator beendbar; leere GDrive-Zwischenseiten beenden keinen laufenden Scan. Kontenstatus und aufklappbare Version bleiben erreichbar, der Administrator-Fallback bleibt kopierbar, Desktopdateiaktionen und die absolute Execfrist bleiben erhalten. Android nennt viewer_hidden ausdrücklich und zeigt denselben Pausentext wie Desktop.",
-      "scope": "Bestehende direkt betroffene Vertragsfälle einschließlich gerenderter egui-Kontenansicht und datengetriebener Rust-/Kotlin-Textzuordnung; keine physische Geräte-, Providerkonto- oder grafische Desktopabnahme. Die Typbestätigung für Windows, Linux und Android gehört zu den bestehenden Compilerstufen desselben Einstiegs.",
+      "expected": "Die korrigierten Modul- und Typgrenzen erhalten Gerätezugriff, gespeicherte Rechte, Bildschirmmetadaten und Zielidentität. Versteckte Sitzungen bleiben pausierbar, fortsetzbar und im Freigabeindikator beendbar; leere GDrive-Zwischenseiten beenden keinen laufenden Scan. Kontenstatus und aufklappbare Version bleiben erreichbar, der Administrator-Fallback bleibt kopierbar, Desktopdateiaktionen und die absolute Execfrist bleiben erhalten.",
+      "scope": "Bestehende direkt betroffene Vertragsfälle einschließlich gerenderter egui-Kontenansicht; keine physische Geräte-, Providerkonto- oder grafische Desktopabnahme. Die Typbestätigung für Windows, Linux und Android gehört zu den bestehenden Compilerstufen desselben Einstiegs.",
       "native_platforms": [
         "linux",
         "windows"
@@ -1770,18 +1780,54 @@
         "perm_task_unknown_access_version_fail_closed",
         "desktop_task_screen_target_json",
         "screen_task_viewer_target_parse",
-        "screen_task_android_screen_keys_file_current",
-        "screen_task_android_strings_match_desktop_sources",
         "handshake_io_enforces_one_absolute_deadline_for_a_stalled_peer",
         "perm_task_gui_accounts_page_states",
         "perm_task_gui_setup_without_pkexec_shows_sudo_command",
         "desktop_task_desktop_ops_rename_trash_copy"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R20-Androidtext-Vertrag",
+      "milestones": [
+        "P24"
+      ],
+      "expected": "Android nennt viewer_hidden ausdrücklich und zeigt denselben Pausentext wie Desktop.",
+      "scope": "Datengetriebene Rust-Textzuordnung im Unix-Testmodul und bestehende Kotlin-JVM-Textfälle; keine Android-Gerätedarstellung. Der Rustbestand ist für Windows nicht kompiliert.",
+      "native_platforms": [
+        "linux"
+      ],
+      "native_cases": [
+        "screen_task_android_screen_keys_file_current",
+        "screen_task_android_strings_match_desktop_sources"
       ],
       "device_cases": [],
       "unit_cases": [
         "app.smartexplorer.android.ui.screen.ScreenTextsTest#screen_task_android_texts_match_desktop",
         "app.smartexplorer.android.ui.screen.ScreenTextsTest#a_detail_follows_only_where_the_desktop_shows_one"
       ]
+    },
+    {
+      "id": "R21-P27-Messabschluss",
+      "milestones": [
+        "P27",
+        "L02"
+      ],
+      "expected": "Gemeinsamer Messabschluss hält direkte Aufgaben vor der Ressourcenfreigabe an, erhält reale Fehler und Panics und verliert beim Abbruch keine eigenen Aufgaben.",
+      "scope": "Linux-Aufgabenbesitzer mit vorhandenen Tokio-Primitiven; kein eigener Leistungsbeleg. Die tatsächliche Pipeline-, Relay- und ACK-Messung bleibt unverändert im bestehenden P27-Netzlauf.",
+      "native_platforms": [
+        "linux"
+      ],
+      "native_cases": [
+        "p27_task_shutdown_preserves_ack_and_picture_dependencies_until_quiesced",
+        "p27_task_shutdown_preserves_ready_transport_and_pipeline_failures",
+        "p27_task_shutdown_reports_ack_loss_before_explicit_stop",
+        "p27_task_shutdown_rejects_early_success",
+        "p27_task_shutdown_preserves_panic_and_joins_remaining_children",
+        "p27_task_shutdown_drop_aborts_owned_children",
+        "p27_task_shutdown_cancelled_finish_keeps_child_ownership"
+      ],
+      "device_cases": []
     }
   ]
 }
