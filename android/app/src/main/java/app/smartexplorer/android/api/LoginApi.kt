@@ -2,7 +2,7 @@ package app.smartexplorer.android.api
 
 import app.smartexplorer.android.core.Core
 import app.smartexplorer.android.core.NativeBridge
-import java.nio.ByteBuffer
+import app.smartexplorer.android.screen.ScreenFrameLimits
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -35,8 +35,8 @@ object LoginApi {
         val result = Core.call("login.target", buildJsonObject { put("target", supplied) }) as JsonObject
         return LoginTarget(result["target"] as JsonObject)
     }
-    suspend fun open(target: LoginTarget, user: String, acknowledged: Boolean): Long = Core.request<LoginOpened>("login.viewOpen", buildJsonObject {
-        put("target", target.body); put("target_user", user); put("acknowledge_machine_pin", acknowledged)
+    suspend fun open(target: LoginTarget, user: String, acknowledged: Boolean, imageOwner: Long): Long = Core.request<LoginOpened>("login.viewOpen", buildJsonObject {
+        put("target", target.body); put("target_user", user); put("acknowledge_machine_pin", acknowledged); put("image_owner", imageOwner); put("heap_offer", ScreenFrameLimits.workingBytes())
     }).session
     suspend fun status(id: Long): LoginState = Core.request("login.viewStatus", args(id))
     suspend fun localStatus(): JsonObject = Core.call("login.status") as JsonObject
@@ -47,7 +47,6 @@ object LoginApi {
         put("token", Core.json.encodeToJsonElement(LoginToken.serializer(), token)); put("presentation_epoch", epoch); put("events", JsonArray(events))
     }) }
     suspend fun sas(id: Long, token: LoginToken, epoch: Long) { Core.call("login.viewSas", args(id) { put("token", Core.json.encodeToJsonElement(LoginToken.serializer(), token)); put("presentation_epoch", epoch) }) }
-    fun pull(id: Long, dst: ByteBuffer, wait: Int): Int = NativeBridge.loginPull(id, dst, wait)
     fun releaseFast(id: Long) { if (id > 0) NativeBridge.loginRelease(id) }
     fun closeFast(id: Long) { if (id > 0) NativeBridge.loginClose(id) }
     private fun args(id: Long, extra: kotlinx.serialization.json.JsonObjectBuilder.() -> Unit = {}) = buildJsonObject { put("session", id); extra() }

@@ -1,18 +1,17 @@
 package app.smartexplorer.android.ui.login
 
-import android.graphics.Bitmap
 import app.smartexplorer.android.api.LoginApi
 import app.smartexplorer.android.api.LoginState
 import app.smartexplorer.android.api.LoginTarget
 import app.smartexplorer.android.api.LoginToken
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
@@ -21,7 +20,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 
-data class LoginPicture(val bitmap: Bitmap, val token: LoginToken)
+internal data class LoginPresentationStamp(val localEpoch: Long, val presentationEpoch: Long)
 private sealed interface LoginAction {
     val epoch: Long
     data class Focus(override val epoch: Long, val focused: Boolean, val control: Boolean) : LoginAction
@@ -30,12 +29,13 @@ private sealed interface LoginAction {
     data class Sas(override val epoch: Long, val token: LoginToken, val presentationEpoch: Long) : LoginAction
 }
 /** One owner, one bounded command queue and one latest bitmap. No input retry. */
-class LoginSession(private val target: LoginTarget, private val user: String, private val acknowledged: Boolean) {
+class LoginSession(private val target: LoginTarget, private val user: String, private val acknowledged: Boolean, internal val images: LoginImagePane) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val ended = AtomicBoolean(false)
     private val started = AtomicBoolean(false)
     private val epoch = AtomicLong(1)
     private val confirmedFocus = AtomicLong(0)
+    private val renderers = HashSet<LoginBitmapRenderer>()
     private val commands = Channel<LoginAction>(8)
     private val current = MutableStateFlow(LoginState())
     val state = current.asStateFlow()
@@ -46,10 +46,22 @@ class LoginSession(private val target: LoginTarget, private val user: String, pr
     @Volatile private var control = false
     @Volatile private var proof = ""
     @Volatile private var drawn: LoginToken? = null
+    internal fun registerRenderer(renderer: LoginBitmapRenderer) {
+        synchronized(renderers) { if (ended.get()) renderer.close() else renderers.add(renderer) }
+    }
+    internal fun unregisterRenderer(renderer: LoginBitmapRenderer) { synchronized(renderers) { renderers.remove(renderer) } }
     fun start() { if (!started.compareAndSet(false, true)) return; scope.launch {
         try {
-            id = LoginApi.open(target, user, acknowledged)
-            if (ended.get()) { LoginApi.closeFast(id); return@launch }
+            // Capture the native ID even when Close cancels the coroutine while
+            // Core.request switches dispatchers. Native Open only starts its owner.
+            withContext(NonCancellable) {
+                val handle = images.openHandle()
+                if (!ended.get()) {
+                    id = LoginApi.open(target, user, acknowledged, handle)
+                    if (ended.get()) LoginApi.closeFast(id)
+                }
+            }
+            if (ended.get()) return@launch
             launch { poll() }; launch { pictures() }
             for (action in commands) {
                 if (action.epoch != epoch.get() || ended.get()) continue
@@ -71,30 +83,10 @@ class LoginSession(private val target: LoginTarget, private val user: String, pr
     }
     private suspend fun pictures() {
         try {
-            var bytes = ByteBuffer.allocateDirect(88).order(ByteOrder.LITTLE_ENDIAN)
-            var colors = IntArray(0)
             while (!ended.get()) {
-                val read = LoginApi.pull(id, bytes, 250)
-                if (read == -1) continue
-                if (read == -2) { fail(LoginApi.status(id).reason ?: "Anmeldeverbindung beendet."); return }
-                require(read == -3 || read >= 88) { "Ungültiger Login-Bildkanal ($read)." }
-                bytes.position(0)
-                require(bytes.int == 0x3142474c) { "Ungültiger Login-Bildheader." }
-                val width = bytes.int; val height = bytes.int; val length = bytes.int; val frame = bytes.long
-                val hash = ByteArray(64); bytes.get(hash)
-                val digest = String(hash, Charsets.US_ASCII)
-                val pixels = width.toLong() * height.toLong()
-                require(width in 1..4096 && height in 1..4096 && pixels <= 9_437_184 && length.toLong() == pixels * 4 && frame > 0 && digest.length == 64 && digest.all { it in "0123456789abcdef" }) { "Loginbild überschreitet die geprüften Grenzen." }
-                val total = 88 + length
-                if (read == -3) { require(total > bytes.capacity()); bytes = ByteBuffer.allocateDirect(total).order(ByteOrder.LITTLE_ENDIAN); continue }
-                require(read == total && total <= bytes.capacity()) { "Loginbildlänge stimmt nicht." }
-                if (colors.size != pixels.toInt()) colors = IntArray(pixels.toInt())
-                bytes.position(88); bytes.asIntBuffer().get(colors)
-                // LE BGRA becomes the documented packed ARGB integer form;
-                // setPixels performs the conversion to Android's native format.
-                val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-                bitmap.setPixels(colors, 0, width, 0, 0, width, height)
-                publishPicture(LoginPicture(bitmap, LoginToken(frame, width, height, digest)))
+                val next = images.take(id)
+                if (next == null) { delay(25); continue }
+                publishPicture(next)
             }
         } catch (cancel: CancellationException) { throw cancel
         } catch (_: OutOfMemoryError) { fail("Speicher für das begrenzte Loginbild fehlt.")
@@ -107,12 +99,13 @@ class LoginSession(private val target: LoginTarget, private val user: String, pr
         if (!windowFocused || !allowControl) LoginApi.releaseFast(id)
         enqueue(LoginAction.Focus(next, windowFocused, allowControl))
     }
-    fun presented(token: LoginToken) {
-        if (ended.get()) return
+    internal fun presentationStamp() = LoginPresentationStamp(epoch.get(), current.value.presentation_epoch)
+    internal fun presented(token: LoginToken, stamp: LoginPresentationStamp) {
+        if (ended.get() || stamp.localEpoch != epoch.get() || stamp.presentationEpoch != current.value.presentation_epoch) return
         drawn = token
-        val key = "${epoch.get()}:${current.value.presentation_epoch}:${token.digest}"
+        val key = "${stamp.localEpoch}:${stamp.presentationEpoch}:${token.digest}"
         if (proof == key && current.value.input_ready) return
-        proof = key; enqueue(LoginAction.Presented(epoch.get(), token, current.value.presentation_epoch))
+        proof = key; enqueue(LoginAction.Presented(stamp.localEpoch, token, stamp.presentationEpoch))
     }
     fun input(token: LoginToken, events: List<JsonObject>) {
         if (ended.get() || !focused || !control || confirmedFocus.get() != epoch.get() || !current.value.input_ready || token != drawn || events.isEmpty()) return
@@ -129,11 +122,20 @@ class LoginSession(private val target: LoginTarget, private val user: String, pr
         if (next.presentation_epoch == old.presentation_epoch && next.frame != null && old.frame != null && next.frame.frame_id < old.frame.frame_id) return
         current.value = next
     }
-    @Synchronized private fun publishPicture(next: LoginPicture) { if (!ended.get()) image.value = next }
+    @Synchronized private fun publishPicture(next: LoginPicture) {
+        if (ended.get()) { next.close(); return }
+        val previous = image.value
+        image.value = next
+        previous?.close()
+    }
     private fun enqueue(action: LoginAction) { if (!ended.get() && commands.trySend(action).isFailure) fail("Login-Eingabewarteschlange voll; Sitzung ohne Wiederholung beendet.") }
     private fun fail(reason: String) { current.value = current.value.copy(state = "ended", reason = reason, input_ready = false); close() }
     fun close() {
-        if (ended.compareAndSet(false, true)) { epoch.incrementAndGet(); synchronized(this) { drawn = null; image.value = null; current.value = current.value.copy(state = "ended", input_ready = false) }
-            try { LoginApi.closeFast(id) } finally { commands.close(); scope.cancel() } }
+        if (ended.compareAndSet(false, true)) { epoch.incrementAndGet(); synchronized(this) { drawn = null; val previous = image.value; image.value = null; previous?.close(); current.value = current.value.copy(state = "ended", input_ready = false) }
+            try { LoginApi.closeFast(id) } finally {
+                val owned = synchronized(renderers) { renderers.toList().also { renderers.clear() } }
+                owned.forEach { it.close() }
+                commands.close(); scope.cancel()
+            } }
     }
 }

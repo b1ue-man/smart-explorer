@@ -1,5 +1,5 @@
 //! Explicit pinned machine targets; this domain never mutates normal device grants.
-use std::{collections::BTreeMap, sync::{Arc, Mutex, atomic::{AtomicU64, Ordering}}, time::Duration};
+use std::{collections::BTreeMap, sync::{Arc, Mutex, atomic::{AtomicU64, Ordering}}};
 use serde_json::{json, Value};
 use crate::{login::{FrameToken, GatewayTarget, ViewerSession}, mobile::ApiError, screen::core::input_model::{InputEvent, key_usage, MAX_INPUT_EVENTS}};
 static SESSIONS: Mutex<BTreeMap<u64, Arc<ViewerSession>>> = Mutex::new(BTreeMap::new());
@@ -30,7 +30,12 @@ pub(super) fn handle(method: &str, args: &Value) -> Option<Result<Value, ApiErro
             let mut sessions = SESSIONS.lock().map_err(|_| ApiError::internal("login viewer registry is unavailable"))?;
             sessions.retain(|_, session| session.snapshot().state != "ended");
             if sessions.len() >= 64 { return Err(ApiError::new("busy", "login viewer session admission is full")); }
-            let session = ViewerSession::start(target, user.into(), true).map_err(invalid)?; sessions.insert(id, session);
+            let owner = args.get("image_owner").and_then(Value::as_u64).ok_or_else(|| invalid("stable login image owner is required"))?;
+            let heap = args.get("heap_offer").and_then(Value::as_u64).ok_or_else(|| invalid("Android heap offer is required"))?;
+            let images = super::login_images::bind(owner, id, heap).map_err(invalid)?;
+            let session = match ViewerSession::start_with_images(target, user.into(), true, images) {
+                Ok(session) => session, Err(error) => {super::login_images::unbind(id); return Err(invalid(error));}
+            }; sessions.insert(id, session);
             Ok(json!({"session":id}))
         }
         "login.viewStatus" => Ok(json!(session(args)?.snapshot())),
@@ -54,12 +59,13 @@ pub(super) fn handle(method: &str, args: &Value) -> Option<Result<Value, ApiErro
         _ => return Err(invalid("unknown login viewer method")),
     })())
 }
-/// Binary JNI path only; no image is serialized into a Core/MCP response.
-pub fn login_pull(id: u64, bytes: &mut [u8], wait: Duration) -> i32 {
-    let session = SESSIONS.lock().ok().and_then(|sessions| sessions.get(&id).cloned());
-    session.map_or(-2, |session| session.pull(bytes, wait))
+/// Whole immutable frame transfer; callers must pre-admit the bitmap destination.
+pub(super) fn take_image_frame(id: u64) -> Option<crate::login::ViewerFrame> {
+    let session = SESSIONS.lock().ok()?.get(&id).cloned()?;
+    session.take_frame()
 }
 pub fn login_close(id: u64) {
+    super::login_images::unbind(id);
     if let Some(session) = SESSIONS.lock().ok().and_then(|mut sessions| sessions.remove(&id)) { session.close(); }
 }
 pub fn login_release(id: u64) {
