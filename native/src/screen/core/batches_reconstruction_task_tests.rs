@@ -122,6 +122,51 @@ fn batches_task_b6_lossless_correction_matches_every_source_pixel() {
     assert!(decoder.decode(&record(id, Operation::Commit, false)).unwrap());
     assert_eq!(decoder.picture().size(), SIZE);
     assert_eq!(decoder.picture().data(), expected.data());
+    let quality=crate::screen::core::quality_acceptance_metrics::measure(&expected,decoder.picture()).unwrap();
+    assert_eq!(quality.different_pixels,0);
+    assert_eq!(quality.ssim_luma,1.0);
+    assert!(quality.psnr_infinite);
+    crate::screen::core::quality_acceptance_metrics::evidence("deterministic-lossless-still",serde_json::json!({
+        "capture_sha256":crate::screen::core::quality_acceptance_metrics::sha256(expected.data()),
+        "quality":quality,"physical_codec":false,"result":"passed"}));
+}
+
+#[test]
+fn batches_task_b6_quality_reference_loss_recovers_only_with_complete_keyframe() {
+    use crate::screen::core::quality_acceptance_metrics as metrics;
+    let mut decoder=decoder(VideoOutput::Current);
+    let before=seed(&mut decoder);
+    let expected=image(211);
+    let incomplete=stamp(2,0);
+    assert!(!decoder.decode(&record(incomplete,Operation::Begin,true)).unwrap());
+    assert!(!decoder.decode(&record(incomplete,
+        frame_protocol::lossless(&expected,grid(SIZE)[0]).unwrap(),true)).unwrap());
+    assert!(decoder.decode(&record(incomplete,Operation::Commit,true)).is_err());
+    assert_unpublished(&decoder,&before);
+    assert!(decoder.decode(&record(stamp(3,1),Operation::Begin,false)).is_err());
+    assert_unpublished(&decoder,&before);
+    let held=metrics::measure(&expected,decoder.picture()).unwrap();
+    assert!(held.different_pixels>0);
+    let recovery=stamp(4,0);
+    assert!(!decoder.decode(&record(recovery,Operation::Begin,true)).unwrap());
+    for rect in grid(SIZE) {
+        assert!(!decoder.decode(&record(recovery,frame_protocol::lossless(&expected,rect).unwrap(),true)).unwrap());
+        assert_unpublished(&decoder,&before);
+    }
+    let commit=record(recovery,Operation::Commit,true);
+    assert!(decoder.decode(&commit).unwrap());
+    assert_eq!(decoder.decoded_frame(),Some(DecodedFrame::from_record(&commit)));
+    let recovered=metrics::measure(&expected,decoder.picture()).unwrap();
+    assert_eq!(recovered.different_pixels,0);
+    assert_eq!(recovered.ssim_luma,1.0);
+    assert!(recovered.psnr_infinite);
+    metrics::evidence("deterministic-reference-recovery",serde_json::json!({
+        "capture_sha256":metrics::sha256(expected.data()),
+        "withheld_frame_ids":[2,3],"accepted_recovery_frame_id":4,
+        "capture_to_held_last_valid":held,"capture_to_first_complete_keyframe":recovered,
+        "missing_output_quality":null,"physical_codec":false,
+        "scope":"real hybrid transaction/reference gate with a replacement video decoder; no physical codec-quality pass",
+        "result":"passed"}));
 }
 
 #[test]

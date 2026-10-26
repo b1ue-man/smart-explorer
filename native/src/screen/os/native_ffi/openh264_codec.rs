@@ -281,3 +281,12 @@ pub(crate) mod tests;
 #[cfg(test)]
 #[path = "openh264_yuv_tests.rs"]
 mod yuv_tests;
+#[cfg(test)]
+#[path = "quality_acceptance_baseline.rs"]
+mod quality_baseline;
+#[cfg(test)]
+#[path = "quality_acceptance_provenance.rs"]
+mod quality_provenance;
+#[cfg(test)]
+#[path = "batches_quality_acceptance_task_tests.rs"]
+mod quality_acceptance_tests;
