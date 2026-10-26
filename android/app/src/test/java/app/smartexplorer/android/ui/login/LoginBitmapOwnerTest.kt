@@ -79,4 +79,16 @@ class LoginBitmapOwnerTest {
         assertNull(session.drawnToken())
         assertFalse(session.state.value.input_ready)
     }
+    @Test fun a_new_draw_after_focus_loss_cannot_create_a_presentation_proof() {
+        val session = LoginSession(LoginTarget(JsonObject(emptyMap())),"fixture-user",true,LoginImagePane())
+        val token = LoginToken(1,2,2,"b".repeat(64))
+        session.focus(true, true)
+        session.presented(token, session.presentationStamp())
+        assertEquals(token, session.drawnToken())
+        session.release()
+        session.focus(false, true)
+        session.presented(token, session.presentationStamp())
+        assertNull(session.drawnToken())
+        session.close()
+    }
 }
