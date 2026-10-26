@@ -34,18 +34,30 @@ internal class MediaPlaybackState(context: Context) {
         audioManager?.abandonAudioFocusRequest(focus)
     }
     private var released = false
+    private var displayHolder: SurfaceHolder? = null
 
     fun display(holder: SurfaceHolder?) {
-        if (!released) player.setDisplay(holder)
+        if (released) return
+        // MediaPlayer updates only its current holder. Clear the old holder's
+        // wake request before setDisplay replaces it, including on release.
+        player.setScreenOnWhilePlaying(false)
+        player.setDisplay(holder)
+        displayHolder = holder
+        player.setScreenOnWhilePlaying(holder != null)
+    }
+
+    fun clearDisplay(holder: SurfaceHolder) {
+        // A delayed callback from a replaced SurfaceView must not detach its successor.
+        if (displayHolder === holder) display(null)
     }
 
     fun release() {
         if (released) return
+        display(null)
         released = true
         started = false
         audioManager?.abandonAudioFocusRequest(focus)
         onFocusChange = {}
-        player.setDisplay(null)
         player.setOnPreparedListener(null)
         player.setOnCompletionListener(null)
         player.setOnErrorListener(null)

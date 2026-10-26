@@ -1,12 +1,13 @@
 # Medienvorschau
 
-Stand 2026-10-25; P32 ist im Quellstand umgesetzt; Remote-Abnahme und Veröffentlichung sind noch nicht belegt.
+Stand 2026-10-26; P32 und der RA-01-Wakefix sind im Quellstand umgesetzt; Remote-Abnahme und Veröffentlichung sind noch nicht belegt.
 
 | Fähigkeit | Vorhandener Einstieg | P32-Ergebnis |
 |---|---|---|
 | Android Bilder, Videos und Audio | `android/app/src/main/java/app/smartexplorer/android/ui/viewer/MediaViewer.kt` mit `MediaSet.kt`/`MediaLoader.kt` | Vorhandene Vollbildvorschau und Pager erhalten; Anordnung folgt der tatsächlichen Fensterfläche. |
 | Bildzoom | `ImagePage.kt` | Zoom und normierter Bildmittelpunkt über Hoch-/Querformatwechsel erhalten; Pinch, Doppeltipp und Wischen bleiben. |
 | Video-/Audiowiedergabe | `PlayerPage.kt` | Wiedergabeposition und Pause über Größen-/Surfacewechsel erhalten; genau eine aktive Playerinstanz. |
+| Bildschirm während Video wachhalten | `MediaPlaybackState.kt` und `PlayerPage.kt` | Nur laufende Videowiedergabe mit gebundener Surface hält den Bildschirm wach; Pause, Ende, Fehler, Hintergrund, Seitenwechsel und Schließen geben die Anforderung frei. Audio und Bilder erhalten keine Wachanforderung. |
 | Ausrichtung | Dialog der Medienvorschau | Android-Systemeinstellungen bestimmen Rotation und Rotationssperre. Keine eigene Appauswahl und keine requestedOrientation-Zuweisung. |
 | Extern öffnen | Bestehendes Vorschau-Menü | „In App öffnen“ und „Öffnen mit…“ erhalten. |
 
@@ -19,5 +20,13 @@ Bedienaufwand im Quellstand: Anpassung an die Android-Systemausrichtung ohne zus
 Die am 2026-10-25 präzisierte Nutzervorgabe bestimmt ausschließlich Android-Systemeinstellungen. Der zuvor angenommene Appumschalter und seine Activityanforderung sind entfernt. MainActivity lässt `screenOrientation` ungesetzt; die [Android-Systemrichtlinie](https://developer.android.com/guide/topics/manifest/activity-element#screen) bestimmt die Orientierung (Quelle geprüft am 2026-10-25). Die Anordnung folgt deshalb ausschließlich den echten Fensterconstraints. Mediendateien und EXIF werden nicht verändert; es wurde keine Playerbibliothek ergänzt. MainActivity verarbeitet im Manifest Größen-/Orientierungsänderungen, damit der übergeordnete Vorschauzustand beim Drehen erhalten bleibt.
 
 Beim Activityereignis `ON_STOP` sichert die Vorschau die Position, pausiert und gibt den Audiofokus frei. Nach Rückkehr ist ausdrücklich Play nötig. Ein verspäteter Preparedcallback darf die Wiedergabe im Hintergrund nicht starten. Ein fehlender AudioManager verhindert den Start, ohne einen Nullzugriff auszulösen. Diese Grenzen gehören zur gemeinsamen Remote-Abnahme.
+
+Die Videowachhaltung verwendet den gebundenen SurfaceHolder des vorhandenen
+MediaPlayers. Beim Surfacewechsel wird die Wachanforderung des alten Holders vor
+dem Wechsel gelöscht; verspätete Destroy-/Release-Rückrufe können den neueren
+Holder nicht lösen. Position, Wiedergabeabsicht und die Android-Systemausrichtung
+bleiben unabhängig davon erhalten. Grundlage, geprüft am 2026-10-26:
+[MediaPlayer.setScreenOnWhilePlaying](https://developer.android.com/reference/android/media/MediaPlayer#setScreenOnWhilePlaying(boolean))
+und [AOSP Android 15 MediaPlayer, setDisplay/updateSurfaceScreenOn](https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/android-15.0.0_r1/media/java/android/media/MediaPlayer.java).
 
 APIgrundlagen, geprüft am 2026-10-25: [MediaPlayer-Zustände und Surfacebindung](https://developer.android.com/reference/android/media/MediaPlayer), [Surfacelebenszyklus](https://developer.android.com/reference/android/view/SurfaceHolder.Callback), [kleine UIzustände speichern](https://developer.android.com/develop/ui/compose/state-saving).
