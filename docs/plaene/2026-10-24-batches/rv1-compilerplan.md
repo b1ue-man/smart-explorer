@@ -99,3 +99,15 @@ X11-, Transfer-, Recovery- und Snapshotgruppen bleiben unverändert ausgewählt.
 Kein Fall ist durch diese Registrierung bereits ausgeführt. Der vollständige
 Rootgraph wird vor dem gemeinsamen Push aktualisiert; danach folgt ausschließlich
 derselbe Remote-Suiteeinstieg für den neuen exakten Kandidaten.
+
+### Vorbereitung des integrierten Kandidaten
+
+Lauf `40366764400` für `531230bc5344494ec01b307f3424e3120ad0c29c`
+hat ausschließlich Rustformatierung in Loginbildfixture, Recoveryrename und
+lokaler Dateiidentität geliefert. Die Lockdatei ist unverändert, die
+Größenprüfung meldet keinen Befund. Main hat Kandidat, Archiv- und Patchhash
+geprüft und den Patch unverändert übernommen. Der statische Vergleich erhält
+sämtliche syntaktischen Blatttoken bis auf das zusätzliche abschließende
+Argumentkomma; Syntax und Modulgrößen bleiben gültig. Keine Produktfunktion
+oder Fixtureaussage wurde geändert. Die Compiler- und Gerätestufen dieses
+Versuchs wurden übersprungen. Der folgende Kandidat bleibt im selben Fixloop.

@@ -1173,3 +1173,10 @@ Integrationsgrenzen und die zulässigen statischen Prüfungen ausgewertet.
 Die direkt betroffenen vorhandenen Vertragsfälle sind im selben Manifest unter
 `R20-Compiler-Integrationen` ergänzt. Compiler- und Funktionsbestätigung bleiben
 bis zum nächsten erfolgreichen Lauf dieses Suiteeinstiegs offen.
+
+Der integrierte Kandidat `531230bc` ist auf Main und Fixbranch gepusht.
+Sein Lauf `40366764400` meldet ausschließlich einen Formatpatch für drei
+Rustquellen, keine Lockänderung und keine Größenverletzung. Main hat den
+gebundenen Patch unverändert übernommen und die erhaltenen syntaktischen
+Blatttoken, Syntax und Größen statisch bestätigt. Compiler- und Gerätestufen
+dieses Versuchs sind übersprungen. Es folgt derselbe Remote-Suiteeinstieg.

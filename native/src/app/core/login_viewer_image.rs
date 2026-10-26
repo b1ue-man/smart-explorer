@@ -267,8 +267,9 @@ mod tests {
     fn batches_task_b6_login_image_real_ipc_show_keeps_local_claims_until_render_retirement() {
         let fixture = crate::daemon::login_image_fixture(FrameSize::new(8, 8)).unwrap();
         assert!(fixture.wait_frame(std::time::Duration::from_secs(3)));
-        let memory =
-            fixture.image_admission(crate::app::screen_modules::screen_image_memory::owner_limits().unwrap());
+        let memory = fixture.image_admission(
+            crate::app::screen_modules::screen_image_memory::owner_limits().unwrap(),
+        );
         let ctx = egui::Context::default();
         let driver = ControlledDriver::install(&ctx);
         let mut pane = LoginImage::default();

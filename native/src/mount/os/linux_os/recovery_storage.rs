@@ -28,21 +28,10 @@ pub(crate) fn publish(source: &Path, target: &Path, replace: bool) -> io::Result
     let no_replace: libc::c_uint = libc::RENAME_NOREPLACE as libc::c_uint;
     #[cfg(not(target_os = "android"))]
     let no_replace: libc::c_uint = libc::RENAME_NOREPLACE;
-    let flags = if replace {
-        0
-    } else {
-        no_replace
-    };
+    let flags = if replace { 0 } else { no_replace };
     // SAFETY: both names and the same held parent descriptor stay alive.
-    let result = unsafe {
-        libc::renameat2(
-            fd,
-            source_name.as_ptr(),
-            fd,
-            target_name.as_ptr(),
-            flags,
-        )
-    };
+    let result =
+        unsafe { libc::renameat2(fd, source_name.as_ptr(), fd, target_name.as_ptr(), flags) };
     if result != 0 {
         return Err(io::Error::last_os_error());
     }
