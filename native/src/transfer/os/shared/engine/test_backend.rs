@@ -15,6 +15,10 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+#[path = "test_backend_streams.rs"]
+mod streams;
+use streams::{FakeReader, FakeWriter, Guard};
+
 pub(super) fn fwd(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
@@ -76,99 +80,6 @@ pub(super) struct Ranges {
     pub requests: Mutex<Vec<(u64, u64)>>,
     /// Requests answered with `Ok(None)`.
     pub refused: AtomicUsize,
-}
-
-struct Guard {
-    counters: Arc<Counters>,
-    reading: bool,
-}
-
-impl Guard {
-    fn new(counters: &Arc<Counters>, reading: bool) -> Self {
-        let active = counters.active.fetch_add(1, Ordering::SeqCst) + 1;
-        counters.max_active.fetch_max(active, Ordering::SeqCst);
-        let (mine, other) = if reading {
-            (&counters.reads_open, &counters.writes_open)
-        } else {
-            (&counters.writes_open, &counters.reads_open)
-        };
-        mine.fetch_add(1, Ordering::SeqCst);
-        if other.load(Ordering::SeqCst) > 0 {
-            counters.overlap.store(true, Ordering::SeqCst);
-        }
-        Self {
-            counters: counters.clone(),
-            reading,
-        }
-    }
-}
-
-impl Drop for Guard {
-    fn drop(&mut self) {
-        self.counters.active.fetch_sub(1, Ordering::SeqCst);
-        let mine = if self.reading {
-            &self.counters.reads_open
-        } else {
-            &self.counters.writes_open
-        };
-        mine.fetch_sub(1, Ordering::SeqCst);
-    }
-}
-
-struct FakeReader {
-    inner: Box<dyn Read + Send>,
-    fault: Option<ReadFault>,
-    delivered: usize,
-    delay: Duration,
-    extra: Option<Vec<u8>>,
-    _guard: Guard,
-}
-
-impl Read for FakeReader {
-    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        if !self.delay.is_zero() {
-            std::thread::sleep(self.delay);
-        }
-        if let Some(fault) = self.fault {
-            let allowed = fault.after.unwrap_or(0).saturating_sub(self.delivered);
-            if allowed == 0 {
-                return Err(io::Error::new(fault.kind, "fixture read fault"));
-            }
-            let limit = allowed.min(buffer.len());
-            let read = self.inner.read(&mut buffer[..limit])?;
-            self.delivered += read;
-            return Ok(read);
-        }
-        let read = self.inner.read(buffer)?;
-        if read == 0 {
-            if let Some(extra) = self.extra.take() {
-                let length = extra.len().min(buffer.len());
-                buffer[..length].copy_from_slice(&extra[..length]);
-                return Ok(length);
-            }
-        }
-        self.delivered += read;
-        Ok(read)
-    }
-}
-
-struct FakeWriter {
-    inner: Box<dyn Write + Send>,
-    fault: Option<io::ErrorKind>,
-    _guard: Guard,
-}
-
-impl Write for FakeWriter {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        if let Some(kind) = self.fault {
-            return Err(io::Error::new(kind, "fixture write fault"));
-        }
-        self.inner.write(bytes)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.inner.flush()
-    }
 }
 
 /// A remote connection over a local folder.
