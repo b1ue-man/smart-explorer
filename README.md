@@ -1507,6 +1507,10 @@ Ohne `-AndroidApkDirectory` baut der lokale Wrapper die APK selbst über
 Android-SDK, `cargo-ndk` sowie die Signaturvariablen `ANDROID_KEYSTORE_FILE`,
 `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` und `ANDROID_KEY_PASSWORD`
 (Details in `docs/RELEASING.md`).
+Die APK-Prüfung liest außerdem mit dem gepinnten NDK-`llvm-nm` die tatsächlichen
+JNI-Exporte und die DEX-Klassen: Die Releaseprüfung verweigert eine APK mit
+einem Zugang zu den Android-Bildfixtures. Debug-Instrumentierung und Release verwenden getrennte
+JNI-Verzeichnisse; diese Prüfung baut die APK nicht erneut.
 
 > **Wichtig:** Damit anonyme Clients aus dem Git updaten können, muss das Repo
 > **public** sein (`raw.githubusercontent.com` braucht sonst Auth). Siehe
