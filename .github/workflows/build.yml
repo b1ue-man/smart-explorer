@@ -764,9 +764,11 @@ jobs:
           cp ../release-native/share-server/se-share-server.exe out/se-share-server.exe
           cp ../release-native/share-server/se-share-server-linux out/se-share-server-linux
           cp ../install-linux.sh out/install-linux.sh
+          cp install-login-service.ps1 out/install-login-service.ps1
+          cp install-login-service.sh out/install-login-service.sh
           staged_count="$(find out -maxdepth 1 -type f -printf '.' | wc -c)"
-          if [ "$staged_count" -ne 24 ]; then
-            echo "::error::Staged release candidate contains $staged_count files, expected exactly 24."
+          if [ "$staged_count" -ne 26 ]; then
+            echo "::error::Staged release candidate contains $staged_count files, expected exactly 26."
             exit 1
           fi
           echo "Committed feed and release assets match Cargo.toml ($ver); out/ now contains the verified committed bytes."
@@ -856,6 +858,8 @@ jobs:
             [pscustomobject]@{ Source = ".\release-native\update-feed\smart-explorer-android.apk"; Staged = ".\release-candidate\smart-explorer-android.apk" },
             [pscustomobject]@{ Source = ".\release-native\update-feed\smart-explorer-android.apk.sha256"; Staged = ".\release-candidate\smart-explorer-android.apk.sha256" },
             [pscustomobject]@{ Source = ".\install-linux.sh"; Staged = ".\release-candidate\install-linux.sh" },
+            [pscustomobject]@{ Source = ".\native\install-login-service.ps1"; Staged = ".\release-candidate\install-login-service.ps1" },
+            [pscustomobject]@{ Source = ".\native\install-login-service.sh"; Staged = ".\release-candidate\install-login-service.sh" },
             [pscustomobject]@{ Source = ".\release-native\smart_explorer_command.dll"; Staged = ".\release-candidate\smart_explorer_command.dll" },
             [pscustomobject]@{ Source = ".\release-native\share-server\se-share-server.exe"; Staged = ".\release-candidate\se-share-server.exe" },
             [pscustomobject]@{ Source = ".\release-native\share-server\se-share-server-linux"; Staged = ".\release-candidate\se-share-server-linux" },
@@ -866,8 +870,8 @@ jobs:
             "*",
             [System.IO.SearchOption]::AllDirectories
           ))
-          if ($assetMappings.Count -ne 24 -or $stagedFiles.Count -ne 24) {
-            throw "release candidate must contain exactly 24 mapped assets; mapped=$($assetMappings.Count), downloaded=$($stagedFiles.Count)"
+          if ($assetMappings.Count -ne 26 -or $stagedFiles.Count -ne 26) {
+            throw "release candidate must contain exactly 26 mapped assets; mapped=$($assetMappings.Count), downloaded=$($stagedFiles.Count)"
           }
           $mappedSources = @{}
           $mappedStaged = @{}
@@ -955,18 +959,20 @@ jobs:
             "release-native/update-feed/smart-explorer-android.apk|native/out/smart-explorer-android.apk"
             "release-native/update-feed/smart-explorer-android.apk.sha256|native/out/smart-explorer-android.apk.sha256"
             "install-linux.sh|native/out/install-linux.sh"
+            "native/install-login-service.ps1|native/out/install-login-service.ps1"
+            "native/install-login-service.sh|native/out/install-login-service.sh"
             "release-native/smart_explorer_command.dll|native/out/smart_explorer_command.dll"
             "release-native/share-server/se-share-server.exe|native/out/se-share-server.exe"
             "release-native/share-server/se-share-server-linux|native/out/se-share-server-linux"
             "release-native/update-feed/version.txt|native/out/version.txt"
           )
-          if [ "${#asset_mappings[@]}" -ne 24 ]; then
-            echo "::error::Internal release mapping does not contain exactly 24 assets."
+          if [ "${#asset_mappings[@]}" -ne 26 ]; then
+            echo "::error::Internal release mapping does not contain exactly 26 assets."
             exit 1
           fi
           downloaded_count="$(find native/out -type f -printf '.' | wc -c)"
-          if [ "$downloaded_count" -ne 24 ]; then
-            echo "::error::Downloaded release candidate contains $downloaded_count files, expected exactly 24."
+          if [ "$downloaded_count" -ne 26 ]; then
+            echo "::error::Downloaded release candidate contains $downloaded_count files, expected exactly 26."
             exit 1
           fi
           declare -A mapped_committed=()
@@ -1125,6 +1131,8 @@ jobs:
             native/out/smart-explorer-android.apk
             native/out/smart-explorer-android.apk.sha256
             native/out/install-linux.sh
+            native/out/install-login-service.ps1
+            native/out/install-login-service.sh
             native/out/smart_explorer_command.dll
             native/out/se-share-server.exe
             native/out/se-share-server-linux

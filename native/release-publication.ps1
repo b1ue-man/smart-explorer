@@ -153,13 +153,15 @@ function Get-PublicationReleaseAssetMap {
         [pscustomobject]@{ LocalPath = Join-Path $feed "smart-explorer-android.apk"; PublishedName = "smart-explorer-android.apk" },
         [pscustomobject]@{ LocalPath = Join-Path $feed "smart-explorer-android.apk.sha256"; PublishedName = "smart-explorer-android.apk.sha256" },
         [pscustomobject]@{ LocalPath = Join-Path $RepoRoot "install-linux.sh"; PublishedName = "install-linux.sh" },
+        [pscustomobject]@{ LocalPath = Join-Path $RepoRoot "native/install-login-service.ps1"; PublishedName = "install-login-service.ps1" },
+        [pscustomobject]@{ LocalPath = Join-Path $RepoRoot "native/install-login-service.sh"; PublishedName = "install-login-service.sh" },
         [pscustomobject]@{ LocalPath = Join-Path $releaseRoot "smart_explorer_command.dll"; PublishedName = "smart_explorer_command.dll" },
         [pscustomobject]@{ LocalPath = Join-Path $releaseRoot "share-server/se-share-server.exe"; PublishedName = "se-share-server.exe" },
         [pscustomobject]@{ LocalPath = Join-Path $releaseRoot "share-server/se-share-server-linux"; PublishedName = "se-share-server-linux" },
         [pscustomobject]@{ LocalPath = Join-Path $feed "version.txt"; PublishedName = "version.txt" }
     )
-    if ($items.Count -ne 24) {
-        throw "Internal release publication map must contain exactly 24 assets."
+    if ($items.Count -ne 26) {
+        throw "Internal release publication map must contain exactly 26 assets."
     }
     return $items
 }
@@ -490,7 +492,8 @@ function Assert-PublicationInstallerPayloads {
                 "Smart Explorer.exe",
                 "Smart Explorer Updater.exe",
                 "se.exe",
-                "se-mcp-launcher.exe"
+                "se-mcp-launcher.exe",
+                "install-login-service.ps1"
             ) `
             -WorkingDirectory $RepoRoot `
             -TimeoutSeconds 300 `
@@ -509,6 +512,11 @@ function Assert-PublicationInstallerPayloads {
             if ((Get-PublicationSha256 $embedded) -ne (Get-PublicationSha256 $payload)) {
                 throw "Installer payload '$($pair[0])' differs from feed payload '$($pair[1])'."
             }
+        }
+        $embeddedLoginInstaller = Join-Path $extractRoot "install-login-service.ps1"
+        $sourceLoginInstaller = Join-Path $RepoRoot "native/install-login-service.ps1"
+        if ((Get-PublicationSha256 $embeddedLoginInstaller) -ne (Get-PublicationSha256 $sourceLoginInstaller)) {
+            throw "Installer login administration script differs from the published source asset."
         }
     } finally {
         Remove-Item -LiteralPath $extractRoot -Recurse -Force -ErrorAction SilentlyContinue
@@ -1524,8 +1532,8 @@ function Wait-ReleasePublicationAssets {
             -Asset $asset `
             -Version $Version
     }
-    if ($expected.Count -ne 24) {
-        throw "Expected release publication set must contain exactly 24 assets."
+    if ($expected.Count -ne 26) {
+        throw "Expected release publication set must contain exactly 26 assets."
     }
 
     $tag = "v$Version"
@@ -1552,11 +1560,11 @@ function Wait-ReleasePublicationAssets {
             if ($unknown.Count -gt 0) {
                 throw "GitHub Release '$tag' contains unexpected asset(s): $($unknown -join ', ')"
             }
-            if ($remote.Count -gt 24) {
-                throw "GitHub Release '$tag' contains $($remote.Count) assets, expected exactly 24."
+            if ($remote.Count -gt 26) {
+                throw "GitHub Release '$tag' contains $($remote.Count) assets, expected exactly 26."
             }
             $missing = @($expected.Keys | Where-Object { -not $remote.ContainsKey($_) })
-            if ($missing.Count -eq 0 -and $remote.Count -eq 24) {
+            if ($missing.Count -eq 0 -and $remote.Count -eq 26) {
                 $digestPending = @()
                 foreach ($name in $expected.Keys) {
                     $want = $expected[$name]
@@ -1578,20 +1586,20 @@ function Wait-ReleasePublicationAssets {
                         Tag = $tag
                         ReleaseId = [long]$release.id
                         Url = [string]$release.html_url
-                        AssetCount = 24
+                        AssetCount = 26
                         Verified = $true
                     }
                 }
                 $lastState = "digest pending for $($digestPending -join ', ')"
             } else {
-                $lastState = "$($remote.Count)/24 assets; missing $($missing -join ', ')"
+                $lastState = "$($remote.Count)/26 assets; missing $($missing -join ', ')"
             }
         }
         if (-not (Wait-ReleasePublicationDelay -Deadline $Deadline)) {
             break
         }
     }
-    throw "Timed out waiting for exact 24-asset GitHub Release '$tag' (last state: $lastState)."
+    throw "Timed out waiting for exact 26-asset GitHub Release '$tag' (last state: $lastState)."
 }
 
 function Invoke-ReleasePublicationLinuxCliUpdate {

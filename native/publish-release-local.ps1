@@ -511,6 +511,9 @@ $buildSourceCommit = (Invoke-ReleasePublicationGit `
 if ($buildSourceCommit -notmatch '^[0-9a-fA-F]{40,64}$') {
     throw "Could not bind the complete Windows/WSL build to one source commit."
 }
+foreach ($loginInstaller in @("install-login-service.ps1", "install-login-service.sh")) {
+    Assert-NonEmptyFile (Join-Path $scriptRoot $loginInstaller)
+}
 $action = if ($CheckEnvOnly) { "Checking" } else { "Building" }
 Write-Host "$action complete local release v$version ..."
 

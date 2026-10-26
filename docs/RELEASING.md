@@ -587,7 +587,7 @@ For a human-operated workstation release, use the same wrapper directly:
    hash, the installer's embedded
    app/updater/`se`/MCP-launcher bytes and pinned Dokany MSI, the manifest's exact
    source-parent binding, and the
-   exact 24 publication assets,
+   exact 26 publication assets,
    rejects any build-time drift in tracked sub-workspace lockfiles,
    creates `Release Smart Explorer vX.Y.Z [release candidate]`, fast-forwards
    `main`, and pushes exactly one immutable `vX.Y.Z` tag. If and only if that
@@ -596,7 +596,7 @@ For a human-operated workstation release, use the same wrapper directly:
    follows that mutually exclusive publication run. The marked main-branch
    commit skips its redundant development CI run; the tag run performs the
    static exact committed Linux/Windows candidate gates and publishes the
-   GitHub Release. The wrapper polls that exact run, checks all 24 published asset
+   GitHub Release. The wrapper polls that exact run, checks all 26 published asset
    digests against the expected committed bytes, and only then reports success.
    Binary and script assets remain byte-exact. For `version.txt`, the verifier
    hashes the canonical UTF-8/LF Git representation so a Windows wrapper's
@@ -757,7 +757,7 @@ same consumer through its one exact internal dispatch after creating the ref.
 Both variants run only the static publication consumer: version consistency,
 all eight desktop payload hashes plus the Android APK hash, Windows
 build-manifest source-parent binding, portable Windows/feed equality, installer payload equality,
-ELF linkage, DLL exports, and the exact 24-file map are checked directly from
+ELF linkage, DLL exports, and the exact 26-file map are checked directly from
 the candidate commit. The publication job downloads that staged set, fails if
 any byte differs from the same commit or any extra/missing asset exists, checks
 the nine sidecars again, binds the immutable tag, and uploads those bytes. It
@@ -808,13 +808,56 @@ diagnostic `cargo build`; the canonical bundle script rejects
 `RUSTFLAGS` and `CARGO_ENCODED_RUSTFLAGS` because release payloads must use the
 same compiler flags on every machine.
 
+## Optional login services
+
+The exact publication map includes `install-login-service.ps1` and
+`install-login-service.sh` from `native/`. The Windows setup also embeds the
+PowerShell script next to `se.exe`; the release candidate check extracts it and
+compares its SHA-256 with the source asset. Both scripts receive the same
+committed-byte and published-digest verification as `install-linux.sh`. They are
+administration assets, not additional auto-update payloads.
+`.gitattributes` pins both scripts to LF so the Windows candidate digest and
+Linux publication bytes agree independently of `core.autocrlf`.
+
+Neither the regular Windows setup nor `install-linux.sh` installs or enables the
+privileged login services. An administrator explicitly downloads the script and
+the platform app payload from the same `vX.Y.Z` release and checks the app against
+its matching `.sha256` file. `se login provision DIRECTORY --grants-file FILE
+--network-file FILE` creates the private configuration bundle and prints the
+platform installation command with its required arguments. Replace its
+`RELEASE_IMAGE`/`RELEASE_EXE`, `APPROVED_HASH`, `RELEASE_VERSION` and `BUNDLE`
+placeholders with those exact inputs. Windows requires an elevated PowerShell;
+Linux requires root and invokes
+`bash ./install-login-service.sh install RELEASE_IMAGE APPROVED_HASH RELEASE_VERSION BUNDLE/policy.json BUNDLE/machine-key.json BUNDLE/gateway-network.json`. Keep `machine-key.json` private; only the
+public machine target is distributed to an authorized viewer.
+
+For an administrative update, repeat that platform's `Install`/`install` command
+with the new release image, its approved SHA-256, its exact version and the
+intended protected configuration records. Use the already provisioned machine
+identity to preserve the machine pin. This is a separate administrative
+transaction; the per-user app updater does not replace these services.
+
+To remove the services, run `.\install-login-service.ps1 -Action Uninstall` in
+elevated PowerShell or `bash ./install-login-service.sh uninstall` as root.
+Uninstall stops and removes the managed service registrations. It retains the
+protected policy, private machine identity, network configuration and release
+generations, so removal does not silently discard grants or change the machine
+pin. It is not an instruction to delete those retained records.
+
+The installer verifies the image version, image hash, policy, machine identity
+and network bundle before activating services. The host's reported login
+capabilities remain authoritative: unsupported secure-desktop, greeter or
+session configurations are refused. Publishing these assets does not establish
+that every OS login configuration has passed a live test.
+
 ## Android APK: build, signing, and feed
 
 The Android app (`android/`, Rust bridge `native/android-bridge`) ships in the
 same release transaction as the desktop builds: the update feed and the GitHub
 Release carry `smart-explorer-android.apk` plus its `sha256sum`-format sidecar,
 whose introduction raised the publication set from 18 to 20 assets. The two
-desktop MCP launchers and their sidecars bring the current contract to 24.
+desktop MCP launchers and their sidecars brought the contract to 24; the Windows
+and Linux login administration scripts bring the current contract to 26.
 Distribution is sideload
 only (GitHub Release and in-app update); there is no Google Play listing.
 
@@ -1065,7 +1108,8 @@ So a release is "done" only when, for the new version: `Cargo.toml` = feed
 the manifest's `source_commit` equals the release-candidate commit's sole
 parent; and the GitHub Release is visible with the Windows/Linux app, updater,
 `se` and MCP-launcher payloads and hashes, the Android APK and its hash, installer,
-`install-linux.sh`, context-menu DLL, both share-server payloads, and
+`install-linux.sh`, `install-login-service.ps1`, `install-login-service.sh`,
+context-menu DLL, both share-server payloads, and
 `version.txt`.
 
 ### Troubleshooting: socket access denied

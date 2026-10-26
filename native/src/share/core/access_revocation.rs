@@ -173,6 +173,27 @@ impl AccessLeaseRegistry {
     pub(crate) fn changes(&self) -> tokio::sync::watch::Receiver<()> {
         self.changed.subscribe()
     }
+    /// Attach a resource to this registry's existing concrete lease. The caller
+    /// keeps lifecycle and auth through the callback, as for initial admission.
+    /// Ask confirmation was consumed by this same lease, never reconstructed.
+    pub(crate) fn admit_existing<T>(
+        self: &std::sync::Arc<Self>, state: &ShareAuthState, handle: &AccessHandle, now: i64,
+        admit: impl FnOnce(&AccessHandle) -> Result<T, AccessRevocation>,
+    ) -> Result<T, AccessRevocation> {
+        if !std::sync::Arc::ptr_eq(self, &handle.registry) { return Err(AccessRevocation::Unavailable); }
+        let mut inner = self.inner.lock().map_err(|_| AccessRevocation::Unavailable)?;
+        if inner.closed { return Err(AccessRevocation::HostStopped); }
+        let (lease, stop) = inner.entries.get_mut(&handle.id).ok_or(AccessRevocation::Unavailable)?;
+        if let Some(reason) = *stop.borrow() { return Err(reason); }
+        if let Err(reason) = lease.recheck(state, now) {
+            stop.send_replace(Some(reason));
+            drop(inner);
+            self.changed.send_replace(());
+            return Err(reason);
+        }
+        drop(inner);
+        admit(handle)
+    }
     pub(crate) fn is_closed(&self) -> bool {
         self.inner.lock().map_or(true, |inner| inner.closed)
     }

@@ -1101,6 +1101,18 @@ Danach aktualisiert sich `se` selbst mit `se update` (siehe
 legt dafür `update_source.txt` neben `se` an, falls dort noch keine liegt; eine
 vorhandene Update-Quelle einer Desktop-Installation bleibt unverändert.
 
+**Optionaler Zugriff auf den Anmeldebildschirm:** Der Release enthält
+`install-login-service.ps1` für Windows und `install-login-service.sh` für Linux.
+Der Windows-Installer legt das PowerShell-Skript zusätzlich neben `se.exe` ab.
+Beide Skripte sind auch als einzelne Dateien auf der
+[Releases-Seite](https://github.com/b1ue-man/smart-explorer/releases) verfügbar.
+Wähle Skript, App-Payload und SHA-256 aus derselben Releaseversion. Die normale
+App-Installation richtet keinen privilegierten Login-Dienst ein. Der ausdrückliche
+Administrationsschritt benötigt unter Windows Administratorrechte und unter Linux
+root; Rechte- und Netzwerkdateien entstehen zuvor mit `se login provision`.
+Installationsvertrag und Plattformgrenzen stehen in
+[`docs/RELEASING.md`](docs/RELEASING.md#optional-login-services).
+
 **Windows-Grundinstallation:** Die Smart-Explorer-Basis bleibt ohne Admin und
 ohne Setup-Zwang nutzbar. Die optionale systemweite Dokany-Laufzeit für echte
 Remote-Laufwerke kann eine Administratorbestätigung anfordern. Zwei Wege:
@@ -1462,7 +1474,7 @@ Der vollständige Flow (bauen → Feed → GitHub-Release → Selbst-Update) ste
    baut unter Windows/WSL oder Linux alle Plattformartefakte, prüft die acht
    Desktop-Feed-Hashes, die eingebetteten App-/Updater-/`se`-/MCP-Starter-Bytes, den
    gebundenen Quell-Commit, APK-Version, -Hash und -Signaturzertifikat sowie
-   24 Release-Assets, committet und pusht den
+   26 Release-Assets, committet und pusht den
    exakten Kandidaten nach `main` und
    startet genau eine statische Exact-Byte-Publikation. Normalerweise geschieht
    das über einen unveränderlichen Tag; nur wenn dessen Push technisch abgelehnt
