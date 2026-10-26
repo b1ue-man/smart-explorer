@@ -11,11 +11,12 @@ use std::{
     ptr::{null, null_mut},
     time::{Duration, Instant},
 };
+use windows::Win32::System::SystemServices::SE_GROUP_ENABLED;
 use windows_sys::Win32::{
     Foundation::{
         ERROR_BROKEN_PIPE, ERROR_NO_DATA, ERROR_PIPE_CONNECTED, ERROR_PIPE_LISTENING, HANDLE,
     },
-    Security::{self, TokenGroups, TokenRestrictedSids, SE_GROUP_ENABLED, TOKEN_QUERY},
+    Security::{self, TokenGroups, TokenRestrictedSids, TOKEN_QUERY},
     Storage::FileSystem::{
         CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, OPEN_EXISTING, PIPE_ACCESS_DUPLEX,
         SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT,
@@ -166,7 +167,7 @@ fn group_enabled(
     }
     let items = unsafe { std::slice::from_raw_parts(groups.Groups.as_ptr(), count) };
     for group in items {
-        if (restricted || group.Attributes & SE_GROUP_ENABLED != 0)
+        if (restricted || group.Attributes & (SE_GROUP_ENABLED as u32) != 0)
             && security::sid_string(group.Sid)? == wanted
         {
             return Ok(true);

@@ -1,5 +1,5 @@
 //! Desktop-app files of strand S4 (screen, plan 2026-10-17 „Rechte, se
-//! Desktop, Tresore“). `app/mod.rs` includes this file once; later S4
+//! Desktop, Tresore“). `app/mod.rs` declares this module once; later S4
 //! packages declare their app files here instead of in `app/mod.rs`.
 
 // SCR-M2: the indicator window of `--screen-indicator` (V9 start kind
@@ -113,3 +113,13 @@ mod screen_render_cpu;
 
 #[path = "core/screen_view_widget_render.rs"]
 mod screen_view_widget_render;
+
+// Family and login viewers share the private screen state and renderer owners.
+#[path = "core/family_viewer.rs"]
+pub(super) mod family_viewer;
+#[path = "core/family_viewer_events.rs"]
+pub(super) mod family_viewer_events;
+#[path = "core/family_viewer_session.rs"]
+pub(super) mod family_viewer_session;
+#[path = "core/login_viewer.rs"]
+pub(crate) mod login_viewer;
