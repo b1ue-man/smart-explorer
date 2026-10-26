@@ -467,3 +467,34 @@ ist unverändert übernommen. Die syntaktischen Blatttoken bleiben bis auf
 ein abschließendes Argumentkomma gleich; Syntax, Aussagen und Modulgrößen
 bleiben erhalten. Kein lokaler Formatter oder Compiler wurde aufgerufen.
 Dieser Vorbereitungsbefund ist noch keine funktionale Abnahme.
+
+## Lauf 40368746815: Modul-, Plattform- und JNI-Grenzen
+
+Der [Lauf](https://github.com/b1ue-man/smart-explorer/actions/runs/40368746815)
+verwendete `b233e5336a0ee177e19382a7adf592d297dcf202`. Die Vorbereitung
+ist erfolgreich. Windows und Linux scheitern an nativen Modul-/Typgrenzen;
+Android erreicht `smart_explorer_android` und meldet vier Diagnosen für zwei
+Booleanübergaben. Die Android-Gerätestufe wurde übersprungen. Main hat die
+vollständigen Compilerartefakte und das Android-Buildlog ausgewertet.
+
+Archiv-SHA256 für diesen Kandidaten:
+
+| Stufe | SHA256 |
+|---|---|
+| Vorbereitung | `3a4bd5a5a44e9e36a3d809cafd4034737fc5f34b1f8469d62f9c413b1b1f43c9` |
+| Windows | `b4c703354514aa987297cc28eacb59c858e82ba2eabbaa589b577612a5e55883` |
+| Linux | `72c157d2fed58d8e87c02dc2bbeb40223e1dabebf174282dd8c4e45c12b8f94e` |
+| Android-Build | `8877cc034ec9594ddbd216e51852f6cf98854b0e51d36dc4a4e842081eb07327` |
+
+Die [begrenzte Fortsetzung](../plaene/2026-10-24-batches/rv1-compilerplan.md)
+ordnet D01–D21 und J01–J04 vollständigen Autorenzyklen zu. Der Suiteeinstieg
+bleibt unverändert. Aus den Compilerabbrüchen wird keine Funktionsabnahme
+abgeleitet; Veröffentlichung bleibt der eine terminale Schritt.
+
+Die daraus folgenden fünf Quellkorrekturen sind separat committed und vom
+jeweiligen selben Autor nachgeprüft. `R20-Compiler-Integrationen` enthält nun
+auch die vorhandenen Vertragsfälle für Android-Statustexte, Kontenstatus und
+Version, Administrator-Fallback, Desktopdateiaktionen und absolute Execfrist.
+Keine frühere Auswahl wurde entfernt. Der Eintritt und die Auswertung bleiben
+bei `native/test-review-task.sh`; die Ergänzung behauptet keinen bereits
+ausgeführten Nachweis.

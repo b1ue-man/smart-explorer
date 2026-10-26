@@ -111,3 +111,85 @@ sämtliche syntaktischen Blatttoken bis auf das zusätzliche abschließende
 Argumentkomma; Syntax und Modulgrößen bleiben gültig. Keine Produktfunktion
 oder Fixtureaussage wurde geändert. Die Compiler- und Gerätestufen dieses
 Versuchs wurden übersprungen. Der folgende Kandidat bleibt im selben Fixloop.
+
+## Fortsetzung nach Lauf 40368746815
+
+Der Kandidat `b233e5336a0ee177e19382a7adf592d297dcf202` hat die
+Vorbereitung bestanden. Alle Jobs sind beendet. Windows und Linux melden
+weitere Compilerdiagnosen; Android erreicht die separate JNI-Brücke und
+scheitert dort an zwei Boolean-Argumenten. Die Gerätestufe ist übersprungen.
+Main hat alle nativen JSONL-Diagnosen und das vollständige Android-Buildlog
+ausgewertet sowie sämtliche Archive an Kandidat und SHA256 gebunden geprüft.
+Nach Normalisierung der Plattformpfade ergeben sich D01–D21; die vier
+JNI-Diagnosen sind J01–J04. Diese Kennungen zählen keine unabhängigen
+Funktionsfehler. Frühere Diagnosekennungen bleiben historische Belege.
+
+### Bestand, Quellen und konkrete Fortsetzung
+
+Der aktuelle vollständige Graph und die tatsächlichen Moduldefinitionen
+belegen fehlende Imports in ausgegliederten GUI-/Renderer-/Fixturemodulen.
+Die X11-Diagnosen betreffen eine geliehene Propertyantwort und den Fehlertyp
+einer Servertransaktion. Die Android-Zustandsfixture ist außerdem mit ihrer
+Kotlin-Schlüsselliste, Textzuordnung und Ressource verkettet; diese Verbindung
+gehört vollständig zum bisherigen Zustandsautor.
+
+Zusätzlich geprüft am 2026-10-26:
+
+- [windows 0.58.0, Shellquelle](https://raw.githubusercontent.com/microsoft/windows-rs/0.58.0/crates/libs/windows/src/Windows/Win32/UI/Shell/mod.rs): `ShellExecuteExW` und `SHELLEXECUTEINFOW` benötigen `Win32_System_Registry`. Das Feature fehlt im bestehenden `windows`-Abschnitt; der vorhandene Shellstart muss einschließlich PIDL, Prozessbezug und Abschluss erhalten bleiben.
+- [windows-sys 0.59.0, Tastatur-/Mausquelle](https://raw.githubusercontent.com/microsoft/windows-rs/0.59.0/crates/libs/sys/src/Windows/Win32/UI/Input/KeyboardAndMouse/mod.rs): `IsWindowEnabled` gehört zu diesem Namespace. Das zugehörige Feature ist bereits aktiviert. Die Enabled-Prüfung bleibt Teil der Fensterkontrolle.
+- [jni-sys 0.4.1, jboolean](https://docs.rs/jni-sys/0.4.1/jni_sys/type.jboolean.html): Der Alias bezeichnet `bool`. Die Brücke bindet `jni = 0.22.4`; Kotlin übergibt Booleanwerte und die nativen Capturefunktionen erwarten bool. Buffer-/Decoderbesitz darf bei der Typkorrektur seine Bedeutung nicht ändern.
+
+| Bestehender Fixautor | Begrenzte Korrekturfläche | Konkretes erhaltenes Ergebnis |
+|---|---|---|
+| `fix_device_navigation` | D01–D03, D07–D12, D14–D16, D21: Desktopaktionen/-menü, Kontenaktionen, Routenanzeige, Execdeadlinefixture und erforderliches Windows-Feature | Ordnerkonfliktbehandlung, Appoberfläche, Kontoverwaltung, Routendiagnose, Execdeadline und derselbe Shellstart bleiben über ihre vorhandenen Zugänge wirksam. Nur dieser Autor darf das benötigte Manifestfeature ergänzen. |
+| `fix_vault_retry` | D04–D05: Kapazitätsanzeige und optische Statusanzeige | Dieselben vorhandenen Kapazitäts-, Unbekannt-, Wartemodus- und Leserwerte erscheinen über die bestehende egui-Instanz. Keine neue GUI-Abhängigkeit. |
+| `fix_x11_family` | D13, D18–D20: Linux-Sichtbarkeitsproperty und native Windows-/X11-Fensteradapter | Unbekannte Sichtbarkeit bleibt konservativ; Enabled-/Fokusprüfung, eindeutige Fensterbindung und Serverfreigabe bleiben unverändert wirksam. |
+| `fix_capture_restart` | D06, J01–J04: YUV-Renderereigentümer und zwei JNI-Captureeinstiege | Derselbe private Rendererbesitzer und dieselben Kotlin-Booleanwerte bestimmen Bild-, Decoder- und Bufferzulassung ohne zusätzliche Pixelkopie oder vorzeitige Freigabe. |
+| `fix_screen_budget` | D17: vollständiger Android-Zustandsvertrag aus Rustfixture, Schlüsselliste, Kotlintextzuordnung und Ressource | `viewer_hidden` hat auf Android denselben verständlichen Pausentext wie auf Desktop; sämtliche bisherigen Zustands-/Fehler-/End-/Blocktexte bleiben erhalten. |
+
+Die konkrete Dateifreigabe je Autor ist überschneidungsfrei und enthält nur
+seine Fehlerstellen, ihre tatsächlichen Definitionen und angeschlossenen
+Konsumenten. Jeder Autor besitzt erneut seine vollständige Funktionskarte,
+seinen konkreten Fixplan, die Änderung und die anschließende eigene
+Anti-Regressionsreview. Die Quellenfragen sind vor dem jeweiligen Edit zu
+klären. Main übernimmt ausschließlich gemeinsame Registrierung, Integration,
+Graph, Commits, Push und denselben Remote-Suite-/Releaseablauf. Die erhaltenen
+Fixtureaussagen dürfen nicht zur Beseitigung einer Diagnose entfernt werden.
+Die Erwartung jeder Zeile wird durch die vorhandenen zugehörigen Fälle in
+derselben Remote-Suite bestätigt; zusätzlich nötige bestehende Fallnamen
+melden die Autoren gesammelt an Main. Kein lokaler Lauf ist autorisiert.
+
+### Integrierte D/J-Korrekturen
+
+Alle fünf Autoren haben Fehlerliste, vollständige betroffene Verknüpfungskarte,
+vorherigen Fixplan, Umsetzung und anschließende eigene Anti-Regressionsreview
+abgeschlossen. Main hat die jeweiligen vollständigen Diffs und Berichte gelesen;
+statisches Rust-/Kotlin-/TOML-/XMLparsing, Whitespace und Modulgrößen melden
+keinen Befund. Diese Rückmeldung ist kein Compiler- oder Funktionsnachweis.
+
+| Korrekturgrenze | Separater Commit |
+|---|---|
+| Kapazitäts- und optische Leseranzeige | `7a1f0931` |
+| YUV-Besitzer und beide JNI-Booleanübergaben | `f9306ea9` |
+| Vollständige Android-Hidden-Textkette | `31560a85` |
+| X11-Sichtbarkeit/-Bindung und Windows-Enabled-API | `cd0be5a9` |
+| Desktopaktionen, Konten, Routendiagnose, Execfrist und Windows-Shellfeature | `f86bcb63` |
+
+Der Geräteautor hat außerdem die unmittelbar verbundene Kontenfixture korrigiert:
+Sie prüft weiterhin Einrichtungsstatus und Version, öffnet dafür jedoch den
+tatsächlich vorhandenen Diagnosebereich. Alle übrigen Assertions bleiben erhalten.
+Das zusätzliche Windows-API-Feature verändert weder Crate- noch Paketversion.
+
+`R20-Compiler-Integrationen` nimmt die sechs vorhandenen Fälle
+`screen_task_android_screen_keys_file_current`,
+`screen_task_android_strings_match_desktop_sources`,
+`handshake_io_enforces_one_absolute_deadline_for_a_stalled_peer`,
+`perm_task_gui_accounts_page_states`,
+`perm_task_gui_setup_without_pkexec_shows_sudo_command` und
+`desktop_task_desktop_ops_rename_trash_copy` auf. Die vorhandene JVM-Klasse
+`ScreenTextsTest` wird einschließlich ihres Detailtextfalls ausgewählt. Alle
+vorherigen Auswahlen bleiben erhalten; es gibt keinen zusätzlichen Suiteeinstieg.
+
+Nach dem vollständigen Rootgraphrefresh und gemeinsamen Push wird ausschließlich
+derselbe Remote-Einstieg für den exakten neuen Kandidaten wiederholt. Compiler-,
+Funktions- und Veröffentlichungserfolg sind zu diesem Zeitpunkt nicht bestätigt.
