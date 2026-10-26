@@ -398,7 +398,7 @@ pub(crate) fn host_indicator(registry: &Arc<ScreenRegistry>) -> Arc<dyn SessionI
 
 #[path = "codec_facade.rs"]
 mod codec_facade;
-use codec_facade::{media_foundation_codecs, openh264_codecs, openh264_switched_on};
 #[cfg(test)]
 use codec_facade::media_foundation_present;
+use codec_facade::{media_foundation_codecs, openh264_codecs, openh264_switched_on};
 pub(crate) use codec_facade::{openh264_action, openh264_license, OpenH264Action};

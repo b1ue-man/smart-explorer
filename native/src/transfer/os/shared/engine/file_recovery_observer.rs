@@ -2,8 +2,8 @@
 use std::io;
 
 use super::{
-    active, after, after_checked, failure, observe, preparation_failed, previous_target,
-    revoke, snapshot, Engine, FileWork, Path, Side, SourceGuard,
+    active, after, after_checked, failure, observe, preparation_failed, previous_target, revoke,
+    snapshot, Engine, FileWork, Path, Side, SourceGuard,
 };
 
 pub(in crate::transfer::engine) struct LocalObserver<'e, 'a> {

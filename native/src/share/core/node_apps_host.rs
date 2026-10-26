@@ -394,7 +394,10 @@ impl ShareIrohNode {
     }
 }
 
-pub(super) fn access_request(request: &LaunchRequest, catalog: &CatalogSnapshot) -> io::Result<AccessRequest> {
+pub(super) fn access_request(
+    request: &LaunchRequest,
+    catalog: &CatalogSnapshot,
+) -> io::Result<AccessRequest> {
     if request.target_device_id != catalog.device_id
         || request.user_id != catalog.session.user_id
         || request.session_id != catalog.session.session_id

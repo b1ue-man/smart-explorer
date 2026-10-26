@@ -2,12 +2,12 @@
 use std::io;
 use std::sync::Arc;
 
-use super::{
-    query, stream, unexpected, vfs, AgentBackend, AtomicBool, BackendExtensions,
-    ChangeNotice, ChangeSignalMode, ChangeSubscription, Duration, Frame, Ordering,
-    Sender, VfsResult, CANCEL_POLL,
-};
 use super::super::ext_wire::change_from_wire;
+use super::{
+    query, stream, unexpected, vfs, AgentBackend, AtomicBool, BackendExtensions, ChangeNotice,
+    ChangeSignalMode, ChangeSubscription, Duration, Frame, Ordering, Sender, VfsResult,
+    CANCEL_POLL,
+};
 
 fn send_notice(
     tx: &Sender<ChangeNotice>,
@@ -32,7 +32,10 @@ fn send_notice(
 }
 
 impl AgentBackend {
-    pub(super) fn agent_change_signal_mode(&self, root: &str) -> VfsResult<Option<ChangeSignalMode>> {
+    pub(super) fn agent_change_signal_mode(
+        &self,
+        root: &str,
+    ) -> VfsResult<Option<ChangeSignalMode>> {
         if !self.serves_peer() {
             if self.features().service {
                 return Ok(None);

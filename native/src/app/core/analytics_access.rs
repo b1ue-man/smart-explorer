@@ -57,7 +57,6 @@ pub(super) fn should_log_failure(state: StorageRunState, offer: bool) -> bool {
     state == StorageRunState::Failed && !offer
 }
 
-
 impl App {
     pub(super) fn log_analytics_outcome(&mut self) {
         if !should_log_failure(self.analytics_state, self.analytics_access.offer) {

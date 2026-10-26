@@ -20,10 +20,14 @@ impl CodecRegistry {
         }
         request
             .frame_contract
-            .map_or(super::super::frame_budget::FrameLimits::LEGACY, |c| c.limits)
+            .map_or(super::super::frame_budget::FrameLimits::LEGACY, |c| {
+                c.limits
+            })
             .check(request.size)?;
         if request.size.pixels() > request.choice.max_pixels {
-            return Err(super::super::wire::invalid("frame exceeds codec pixel limit"));
+            return Err(super::super::wire::invalid(
+                "frame exceeds codec pixel limit",
+            ));
         }
         let mut opened = if let Some(contract) = request
             .frame_contract
@@ -60,18 +64,24 @@ impl CodecRegistry {
         }
         let limits = request
             .frame_contract
-            .map_or(super::super::frame_budget::FrameLimits::LEGACY, |c| c.limits);
+            .map_or(super::super::frame_budget::FrameLimits::LEGACY, |c| {
+                c.limits
+            });
         limits.check(request.size)?;
         if request.size.pixels() > request.choice.max_pixels {
-            return Err(super::super::wire::invalid("frame exceeds codec pixel limit"));
+            return Err(super::super::wire::invalid(
+                "frame exceeds codec pixel limit",
+            ));
         }
         let mut opened = if request.choice.codec == CodecKind::Tiles {
             OpenedEncoder {
-                encoder: Box::new(super::super::host_codec_adapters::AdmittedTilesEncoder::new(
-                    request.size,
-                    limits,
-                    grant.clone(),
-                )?),
+                encoder: Box::new(
+                    super::super::host_codec_adapters::AdmittedTilesEncoder::new(
+                        request.size,
+                        limits,
+                        grant.clone(),
+                    )?,
+                ),
                 factory: TILES_NAME.into(),
                 hardware: false,
             }
@@ -168,7 +178,9 @@ impl CodecRegistry {
         if let Some(contract) = contract {
             contract.validate()?;
         }
-        let limits = contract.map_or(super::super::frame_budget::FrameLimits::LEGACY, |c| c.limits);
+        let limits = contract.map_or(super::super::frame_budget::FrameLimits::LEGACY, |c| {
+            c.limits
+        });
         limits.check(size)?;
         if size.pixels() > choice.max_pixels {
             return Err(super::super::wire::invalid(
@@ -236,7 +248,9 @@ impl CodecRegistry {
         }
         header
             .frame_contract
-            .map_or(super::super::frame_budget::FrameLimits::LEGACY, |c| c.limits)
+            .map_or(super::super::frame_budget::FrameLimits::LEGACY, |c| {
+                c.limits
+            })
             .check(header.size)?;
         let raw = self.open_decoder_raw(header)?;
         let decoder: Box<dyn ScreenDecoder> =
@@ -294,5 +308,4 @@ impl CodecRegistry {
             },
         ))
     }
-
 }

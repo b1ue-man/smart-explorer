@@ -7,7 +7,6 @@ mod navigation;
 use navigation::picker_child_path;
 
 impl App {
-
     pub(in crate::app) fn ui_picker(&mut self, ctx: &egui::Context) {
         if self.picker.is_none() {
             return;

@@ -268,7 +268,6 @@ fn resolve(entry: &DesktopIcon, dirs: &[PathBuf], theme: &str) -> Option<IconRep
     }
 }
 
-
 pub(crate) fn attach(list: &mut WindowList) {
     let dirs = super::app_units::data_dirs(&|name| std::env::var(name).ok());
     let entries = catalog(&dirs);

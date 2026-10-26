@@ -1,6 +1,8 @@
 //! Shared admission metadata and actual resource-retirement fixture owners.
 use crate::screen::core::{
-    capture_admission::{CaptureAuthority, CaptureGeneration, CaptureOwner, CapturePlan, SourceKey},
+    capture_admission::{
+        CaptureAuthority, CaptureGeneration, CaptureOwner, CapturePlan, SourceKey,
+    },
     capture_grant::{CaptureGrant, CaptureSlice, DelegatedCaptureCredit},
     capture_plan::CapturePhases,
     frame_budget::{FrameContract, FrameLimits, FRAME_PROTOCOL},

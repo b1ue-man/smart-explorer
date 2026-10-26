@@ -1,9 +1,9 @@
 //! Platform codec inventory, user switch, license and maintenance operations.
-use super::{Arc, DecoderFactory, EncoderFactory, Factories, OpenH264Report, Path};
 #[cfg(windows)]
 use super::mf_common;
 #[cfg(any(windows, target_os = "linux"))]
 use super::{openh264_codec, openh264_install, openh264_pins};
+use super::{Arc, DecoderFactory, EncoderFactory, Factories, OpenH264Report, Path};
 
 /// The Media Foundation transforms of this host (Windows); none elsewhere.
 #[cfg(windows)]

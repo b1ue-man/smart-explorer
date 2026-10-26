@@ -266,14 +266,9 @@ fn batches_task_capture_integration_new_plan_keeps_an_old_prepared_reply_receiva
         limits: FrameLimits::LEGACY,
         family_layout_revision: None,
         reply: Box::new(WorkerReply::Raw(
-            CaptureImageBuilder::new(
-                size,
-                FrameLimits::LEGACY,
-                &old,
-                CaptureOwner::SourcePixels,
-            )
-            .unwrap()
-            .freeze(),
+            CaptureImageBuilder::new(size, FrameLimits::LEGACY, &old, CaptureOwner::SourcePixels)
+                .unwrap()
+                .freeze(),
         )),
     };
     let prepared = capture_transport::prepare_owned(&reply, image, &old)

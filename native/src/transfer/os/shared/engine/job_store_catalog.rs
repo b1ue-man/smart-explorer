@@ -2,8 +2,8 @@
 use std::io;
 
 use super::{
-    path, read_record, record_context, record_io, root, valid_id, Endpoint,
-    JobRecord, Mutex, RecordContext, RecordKind, TransferJob,
+    path, read_record, record_context, record_io, root, valid_id, Endpoint, JobRecord, Mutex,
+    RecordContext, RecordKind, TransferJob,
 };
 
 pub(crate) fn unconfirmed_jobs() -> io::Result<Vec<JobRecord>> {

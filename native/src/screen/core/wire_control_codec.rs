@@ -15,10 +15,9 @@ use super::{
 pub(crate) fn encode_viewer_frame(frame: &ViewerFrame) -> io::Result<(u8, Vec<u8>)> {
     Ok(match frame {
         ViewerFrame::ListFamilies => (super::super::wire::LIST_FAMILIES, b"{}".to_vec()),
-        ViewerFrame::FamilySnapshot => (
-            super::super::wire::FAMILY_SNAPSHOT_REQUEST,
-            b"{}".to_vec()
-        ),
+        ViewerFrame::FamilySnapshot => {
+            (super::super::wire::FAMILY_SNAPSHOT_REQUEST, b"{}".to_vec())
+        }
         ViewerFrame::FamilyOperation(request) => {
             request.validate()?;
             (super::super::wire::FAMILY_OPERATION, to_json(request)?)
@@ -125,18 +124,19 @@ pub(crate) fn encode_host_frame(frame: &HostFrame) -> io::Result<(u8, Vec<u8>)> 
             list.validate()?;
             (super::super::wire::FAMILIES, to_json(list)?)
         }
-        HostFrame::FamilySnapshot(snapshot) => (
-            super::super::wire::FAMILY_SNAPSHOT,
-            snapshot.encode()?
-        ),
+        HostFrame::FamilySnapshot(snapshot) => {
+            (super::super::wire::FAMILY_SNAPSHOT, snapshot.encode()?)
+        }
         HostFrame::FamilyOperation(result) => {
             result.validate()?;
-            (super::super::wire::FAMILY_OPERATION_RESULT, to_json(result)?)
+            (
+                super::super::wire::FAMILY_OPERATION_RESULT,
+                to_json(result)?,
+            )
         }
-        HostFrame::FamilyInput(result) => (
-            super::super::wire::FAMILY_INPUT_RESULT,
-            to_json(result)?
-        ),
+        HostFrame::FamilyInput(result) => {
+            (super::super::wire::FAMILY_INPUT_RESULT, to_json(result)?)
+        }
         HostFrame::VisibilityAck(ack) => (VISIBILITY_ACK, to_json(ack)?),
         HostFrame::State(report) => (STATE, to_json(report)?),
         HostFrame::Pong(pong) => (

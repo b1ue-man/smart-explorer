@@ -28,10 +28,10 @@ use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::session_state::SessionState;
 use crate::screen::core::wire_hello::ScreenErrorCode;
 
-#[path = "bridge_source_input.rs"]
-mod input;
 #[path = "bridge_source_capture.rs"]
 mod capture;
+#[path = "bridge_source_input.rs"]
+mod input;
 
 pub(crate) use input::decode_still;
 
@@ -94,7 +94,6 @@ impl BridgeSource {
     fn synthetic(&self) -> bool {
         self.channel.start.source == "synthetic"
     }
-
 }
 
 /// How long one delta picture may take: two frame intervals, at least 50 ms.

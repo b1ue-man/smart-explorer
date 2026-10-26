@@ -158,7 +158,6 @@ impl X11Adapter {
         }
         Ok(process)
     }
-
 }
 
 impl WindowAdapter for X11Adapter {

@@ -2,8 +2,8 @@
 use std::io;
 
 use super::{
-    read_record, record_context, Backend, Endpoint, JobItems, JobRecord, JobView,
-    LocalBackend, RecordKind, Side, SourceGuard, StoredEndpoint,
+    read_record, record_context, Backend, Endpoint, JobItems, JobRecord, JobView, LocalBackend,
+    RecordKind, Side, SourceGuard, StoredEndpoint,
 };
 
 pub(in crate::transfer::engine) fn endpoint(side: Side<'_>) -> StoredEndpoint {
@@ -17,7 +17,10 @@ pub(in crate::transfer::engine) fn endpoint(side: Side<'_>) -> StoredEndpoint {
     }
 }
 
-pub(in crate::transfer::engine) fn with_backend<T>(side: Side<'_>, operation: impl FnOnce(&dyn Backend) -> T) -> T {
+pub(in crate::transfer::engine) fn with_backend<T>(
+    side: Side<'_>,
+    operation: impl FnOnce(&dyn Backend) -> T,
+) -> T {
     match side {
         Side::Local => operation(&LocalBackend::new("/")),
         Side::Remote(backend) => operation(backend),

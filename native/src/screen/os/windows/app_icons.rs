@@ -418,7 +418,6 @@ fn catalog_items() -> Option<std::collections::BTreeMap<String, Option<IShellIte
     None // Truncation cannot prove a unique catalog identity.
 }
 
-
 /// Used only after the AppHost's installed catalog has bound this ID to a visible entry.
 pub(crate) fn catalog_icon(app_id: &str) -> Option<IconReply> {
     if !crate::screen::core::app_icon::valid_app_id(app_id) {
