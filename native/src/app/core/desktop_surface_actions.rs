@@ -12,6 +12,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 
 use eframe::egui;
 
+use crate::app::folder_conflict_ui;
 use crate::app::platform_helpers::{
     clipboard_file_ops_supported, open_local_path, read_clipboard_files, write_clipboard_files,
     ClipboardEffect,
@@ -94,7 +95,7 @@ pub(crate) struct SystemActions {
     inbox: Receiver<String>,
     /// The surface's own clipboard (menu entry "Einfügen").
     own: Option<(Vec<PathBuf>, bool)>,
-    folders: std::collections::VecDeque<super::folder_conflict_ui::Admission>,
+    folders: std::collections::VecDeque<folder_conflict_ui::Admission>,
 }
 
 impl SystemActions {
@@ -221,7 +222,7 @@ impl SurfaceActions for SystemActions {
                 self.notice(format!("{path}: {error}"));
             }
             if let Some(job) = job {
-                match super::folder_conflict_ui::Admission::new(job) {
+                match folder_conflict_ui::Admission::new(job) {
                     Ok(admission) => self.folders.push_back(admission),
                     Err(error) => self.notice(error),
                 }

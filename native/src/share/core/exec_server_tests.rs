@@ -9,6 +9,7 @@ use crate::share::exec_terminal::{
     host_denial, host_features, ExecTerminalRequest, ExecTerminalSize,
 };
 use crate::share::exec_types::{ExecCommand, ExecId, ExecStart, ExecTerminal, ExecTerminalKind};
+use crate::share::io_deadline;
 
 fn id(byte: &str) -> ExecId {
     ExecId::parse(byte.repeat(16)).unwrap()
