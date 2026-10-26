@@ -297,11 +297,12 @@ def native_tests(binary, logs, env):
     fixture_env = env.copy()
     if os.name != "nt":
         # One isolated display for the existing single library invocation.
+        # Keep it across fixture clients; the last disconnect must not reset it.
         # xvfb-run owns its authority file/server and returns the binary's status.
         fixture_env.pop("WAYLAND_DISPLAY", None)
         fixture_env.update(SE_SCREEN_TASK_X11="1", XDG_SESSION_TYPE="x11")
         args = ["xvfb-run", "--auto-servernum", "--error-file=" + str(logs / "xvfb.log"),
-            "--server-args=-screen 0 1280x720x24 -nolisten tcp", *args]
+            "--server-args=-screen 0 1280x720x24 -nolisten tcp -noreset", *args]
     run(args, log, fixture_env, seconds=7200)
     result = log.read_text(errors="replace")
     for name in selected:
