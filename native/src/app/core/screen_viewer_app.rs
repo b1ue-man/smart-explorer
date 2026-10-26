@@ -6,7 +6,7 @@
 //! Latenz“ chooses `AutoNoVsync`, which only the next start of the viewer
 //! applies. `Mailbox` is never set: eframe does not ask the surface first,
 //! and a surface without it ends the program.
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use eframe::egui::{self, ViewportCommand};
 use eframe::egui_wgpu::{self, wgpu};
@@ -70,11 +70,14 @@ pub(crate) struct ScreenViewerApp {
     toolbar_open: bool,
     toolbar_height: f32,
     title: String,
+    exit_chord_held: bool,
+    fullscreen_hint_until: Option<Instant>,
 }
 
 impl ScreenViewerApp {
     pub(crate) fn new(cc: &eframe::CreationContext<'_>, start: Start, prefs: ViewerPrefs) -> Self {
         let ctx = &cc.egui_ctx;
+        ctx.data_mut(|data| data.insert_temp(egui::Id::new("screen_renderer_wgpu"),cc.wgpu_render_state.is_some()));
         let gpu = cc
             .wgpu_render_state
             .as_ref()
@@ -109,6 +112,8 @@ impl ScreenViewerApp {
             toolbar_open: false,
             toolbar_height: 0.0,
             title: String::new(),
+            exit_chord_held: false,
+            fullscreen_hint_until: None,
         }
     }
 
@@ -137,7 +142,8 @@ impl ScreenViewerApp {
         };
         let mut chosen = None;
         egui::CentralPanel::default().show(ctx, |ui| chosen = grid.show(ui));
-        if local_keys(&ctx.input(|input| input.events.clone())).contains(&LocalKey::Fullscreen) {
+        let keys = local_keys(&ctx.input(|input| input.events.clone()));
+        if keys.contains(&LocalKey::Fullscreen) || self.fullscreen && keys.contains(&LocalKey::ExitFullscreen) {
             return vec![Transition::Fullscreen];
         }
         chosen.map(Transition::View).into_iter().collect()
@@ -160,7 +166,10 @@ impl ScreenViewerApp {
                 }
             }
         }
-        let status = view.status_text();
+        let mut status = view.status_text();
+        if status.is_empty() && view.control_on && view.session.as_ref().is_some_and(|session| !session.input_ready()) {
+            status = "Warte auf ein vollständiges aktuelles Bild …".into();
+        }
         let name = view.device_name(common);
         let denied = view
             .session
@@ -237,10 +246,13 @@ impl ScreenViewerApp {
                 result = Some(view.widget.show(ui, session, &params));
             });
         if let Some(result) = result {
-            view.follow_size(result.display, &common.prefs);
+            let hidden = ctx.data(|data| data.get_temp::<super::screen_visibility::WindowVisibility>(egui::Id::new("screen_window_visibility")))
+                .is_some_and(|window| window.hidden());
+            if !hidden { view.follow_size(result.display, &common.prefs); }
             for local in result.locals {
                 match local {
                     LocalKey::Fullscreen => out.push(Transition::Fullscreen),
+                    LocalKey::ExitFullscreen => if self.fullscreen { out.push(Transition::Fullscreen); },
                     LocalKey::Stats => common.stats_on = !common.stats_on,
                     LocalKey::ToggleControl => {
                         let offered = view.session.as_ref().is_some_and(|s| {
@@ -291,7 +303,11 @@ impl ScreenViewerApp {
         match transition {
             Transition::Close => ctx.send_viewport_cmd(ViewportCommand::Close),
             Transition::Fullscreen => {
+                if let Mode::View(view) = &mut self.mode {
+                    if let Some(session) = &view.session { view.widget.release_input(session); }
+                }
                 self.fullscreen = !self.fullscreen;
+                self.fullscreen_hint_until = self.fullscreen.then(|| Instant::now()+Duration::from_secs(4));
                 self.toolbar_open = false;
                 ctx.send_viewport_cmd(ViewportCommand::Fullscreen(self.fullscreen));
             }
@@ -335,14 +351,42 @@ impl ScreenViewerApp {
 }
 
 impl eframe::App for ScreenViewerApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        let visibility = super::screen_visibility_os::sample(frame,ctx);
+        let exit = visibility.exit_chord && !self.exit_chord_held;
+        self.exit_chord_held = visibility.exit_chord;
+        ctx.data_mut(|data| data.insert_temp(egui::Id::new("screen_window_visibility"),visibility));
+        if exit && self.fullscreen {
+            self.transition(ctx,Transition::Fullscreen);
+            ctx.input_mut(|input| input.events.clear());
+        }
         if crate::app::update_stop_ui::close_requested(ctx) {
             ctx.send_viewport_cmd(ViewportCommand::Close);
         }
         if self.want_fullscreen {
             self.want_fullscreen = false;
             self.fullscreen = true;
+            self.fullscreen_hint_until = Some(Instant::now()+Duration::from_secs(4));
             ctx.send_viewport_cmd(ViewportCommand::Fullscreen(true));
+        }
+        if self.fullscreen {
+            let overlay = egui::Area::new(egui::Id::new("screen_fullscreen_exit"))
+                .order(egui::Order::Foreground).anchor(egui::Align2::RIGHT_TOP,[-8.0,8.0]).show(ctx,|ui| {
+                    if self.fullscreen_hint_until.is_some_and(|until| Instant::now() < until) {
+                        ui.label("Strg+Alt+Pause · Strg+Alt+Umschalt+F · F11");
+                    }
+                    if ui.button("Vollbild verlassen").on_hover_text("Strg+Alt+Pause · Strg+Alt+Umschalt+F · F11").clicked() {
+                        self.transition(ctx,Transition::Fullscreen);
+                        ctx.input_mut(|input| input.events.clear());
+                    }
+                });
+            if ctx.input(|input| input.pointer.hover_pos().is_some_and(|pos| overlay.response.rect.contains(pos))) {
+                if let Mode::View(view) = &mut self.mode {
+                    if let Some(session) = &view.session { view.widget.release_input(session); }
+                }
+                ctx.input_mut(|input| input.events.retain(|event| !matches!(event,
+                    egui::Event::PointerButton { .. } | egui::Event::PointerMoved(_) | egui::Event::MouseWheel { .. })));
+            }
         }
         self.set_title(ctx);
         let transitions = match self.mode {
@@ -352,6 +396,6 @@ impl eframe::App for ScreenViewerApp {
         for transition in transitions {
             self.transition(ctx, transition);
         }
-        ctx.request_repaint_after(Duration::from_millis(500));
+        ctx.request_repaint_after(Duration::from_millis(if self.fullscreen { 50 } else { 500 }));
     }
 }

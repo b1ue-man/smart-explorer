@@ -76,6 +76,7 @@ object ScreenTexts {
         "monitor_not_found" -> R.string.screen_reason_monitor_not_found
         "window_not_found" -> R.string.screen_reason_window_not_found
         "portal_selects_source" -> R.string.screen_reason_portal_selects_source
+        "source_identity_unavailable" -> R.string.screen_reason_source_identity_unavailable
         "no_display" -> R.string.screen_reason_no_display
         else -> null
     }

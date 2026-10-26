@@ -175,6 +175,8 @@ fn screen_task_viewer_ask_tile_has_no_preview() {
 
 fn tile_header(gop_id: u64, size: FrameSize) -> GopHeader {
     GopHeader {
+            family_layout_revision: None,
+        frame_contract: None,
         gop_id,
         kind: StreamKind::Video,
         codec: CodecKind::Tiles,

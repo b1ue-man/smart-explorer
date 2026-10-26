@@ -21,7 +21,8 @@ use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SA
 use windows::Win32::Graphics::Dxgi::{IDXGIAdapter, IDXGIDevice};
 use windows::Win32::System::WinRT::Direct3D11::CreateDirect3D11DeviceFromDXGIDevice;
 
-use crate::screen::core::pixel_convert::{downscale_bgra, BgraImage, BgraView, FrameSize};
+use crate::screen::core::pixel_convert::{BgraImage,FrameSize};
+use crate::screen::core::frame_budget::{FrameLimits,MAX_WORKING_BYTES};
 
 /// The Direct3D device of one source in both of its forms.
 pub(super) struct DeviceSet {
@@ -97,11 +98,32 @@ pub(super) fn create_on(adapter: Option<&IDXGIAdapter>) -> windows::core::Result
     })
 }
 
-/// The size a picture of `width` × `height` has after read-back: its own,
-/// or the largest size within the frame limits when it is larger (a 5K
-/// monitor); `BgraImage` and the host process frames stop at 4096 × 2304.
-pub(super) fn delivered_size(width: u32, height: u32) -> FrameSize {
-    FrameSize::new(width.max(1), height.max(1)).fit_within(FrameSize::MAX)
+impl DeviceSet {
+    pub(super) fn frame_limits(&self)->FrameLimits {
+        // SAFETY: immutable query on this live D3D11 device.
+        let side=if unsafe {self.device.GetFeatureLevel()}.0>=D3D_FEATURE_LEVEL_11_0.0 {16384} else {8192};
+        FrameLimits {max_size:FrameSize::new(side,side),..FrameLimits::RESOURCE}
+    }
+    pub(super) fn capture_limits(&self,native:FrameSize)->io::Result<FrameLimits> {
+        let mut limits=self.frame_limits();
+        let bytes=native.checked_bgra_len()? as u64;
+        if native.width==0 || native.height==0 || native.width>limits.max_size.width || native.height>limits.max_size.height {
+            return Err(io::Error::other("capture exceeds this D3D11 device's texture dimensions"));
+        }
+        // Two native capture buffers replace two of the eight working images.
+        // When native exceeds a working image, six delivered images share the rest.
+        if bytes>MAX_WORKING_BYTES/8 {
+            let remaining=MAX_WORKING_BYTES.checked_sub(bytes.checked_mul(2).ok_or_else(||io::Error::other("capture bytes overflow"))?)
+                .ok_or_else(||io::Error::other("native capture buffers exceed 512 MiB"))?;
+            limits.max_pixels=limits.max_pixels.min(remaining/6/4);
+        }
+        limits.check(limits.fit(native))?;
+        Ok(limits)
+    }
+    pub(super) fn delivered_size(&self,width:u32,height:u32)->io::Result<FrameSize> {
+        let native=FrameSize::new(width,height);
+        Ok(self.capture_limits(native)?.fit(native))
+    }
 }
 
 /// The staging texture of the read-back and its size.
@@ -121,6 +143,7 @@ impl Readback {
         devices: &DeviceSet,
         size: FrameSize,
     ) -> io::Result<&ID3D11Texture2D> {
+        devices.frame_limits().check(size)?;
         if self.staging.as_ref().map(|(_, have)| *have) != Some(size) {
             let desc = D3D11_TEXTURE2D_DESC {
                 Width: size.width,
@@ -174,10 +197,14 @@ impl Readback {
                 "the capture texture is not an 8-bit BGRA texture",
             ));
         }
-        let size = FrameSize::new(width.min(desc.Width), height.min(desc.Height));
+        if width>desc.Width || height>desc.Height {return Err(io::Error::other("capture content exceeds its texture; full reference unavailable"));}
+        let size=FrameSize::new(width,height);
         if size.width == 0 || size.height == 0 {
             return Err(io::Error::other("the capture texture is empty"));
         }
+        let limits=devices.capture_limits(size)?;
+        let target=limits.fit(size);
+        if target!=size {return self.read_scaled(devices,source,size,target,limits);}
         let staging = self.staging_for(devices, size)?.clone();
         // SAFETY: both textures belong to this device; the box lies inside
         // the source.
@@ -206,11 +233,41 @@ impl Readback {
             }
         }
         let tight = self.map_rows(devices, &staging, size)?;
-        if size.is_valid_frame() {
-            return BgraImage::from_vec(size, tight);
+        BgraImage::from_vec_with_limits(size,tight,limits)
+    }
+
+    /// Read only a bounded native row band, retaining every source pixel when reducing.
+    fn read_scaled(&mut self,devices:&DeviceSet,source:&ID3D11Texture2D,native:FrameSize,target:FrameSize,limits:FrameLimits)->io::Result<BgraImage> {
+        let mut out=BgraImage::new_with_limits(target,limits)?;
+        let span=|i:u32,dst:u32,src:u32| ((u64::from(i)*u64::from(src)/u64::from(dst)) as u32,
+            ((u64::from(i+1)*u64::from(src)/u64::from(dst)) as u32).max(i+1));
+        let columns:Vec<_>=(0..target.width).map(|x|span(x,target.width,native.width)).collect();
+        for y in 0..target.height {
+            let (top,bottom)=span(y,target.height,native.height);
+            let mut sums=vec![[0u64;4];target.width as usize];
+            let mut row=top;
+            while row<bottom {
+                let rows=(bottom-row).min(64);let band=FrameSize::new(native.width,rows);
+                let staging=self.staging_for(devices,band)?.clone();
+                let region=D3D11_BOX {left:0,top:row,front:0,right:native.width,bottom:row+rows,back:1};
+                // SAFETY: the band and the source box are checked within the two textures.
+                unsafe {devices.context.CopySubresourceRegion(&staging,0,0,0,0,source,0,Some(&region));}
+                let data=self.map_rows(devices,&staging,band)?;
+                for line in data.chunks_exact(native.width as usize*4) {
+                    for (sum,&(left,right)) in sums.iter_mut().zip(&columns) {
+                        for pixel in line[left as usize*4..right as usize*4].chunks_exact(4) {
+                            for (s,v) in sum.iter_mut().zip(pixel) {*s+=u64::from(*v);}
+                        }
+                    }
+                }
+                row+=rows;
+            }
+            for ((pixel,sum),&(left,right)) in out.row_mut(y).chunks_exact_mut(4).zip(sums).zip(&columns) {
+                let count=u64::from(bottom-top)*u64::from(right-left);
+                for (v,s) in pixel.iter_mut().zip(sum) {*v=((s+count/2)/count) as u8;}
+            }
         }
-        let view = BgraView::new(size, size.width as usize * 4, &tight)?;
-        downscale_bgra(&view, delivered_size(size.width, size.height))
+        Ok(out)
     }
 
     /// Maps `staging` and copies its rows into one tight buffer.
@@ -220,6 +277,7 @@ impl Readback {
         staging: &ID3D11Texture2D,
         size: FrameSize,
     ) -> io::Result<Vec<u8>> {
+        let len=devices.frame_limits().check(size)?;
         let row = size.width as usize * 4;
         let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
         // SAFETY: the staging texture was created with CPU read access.
@@ -230,9 +288,11 @@ impl Readback {
                 .map_err(io::Error::other)?;
         }
         let pitch = mapped.RowPitch as usize;
-        let mut tight = vec![0u8; row * size.height as usize];
-        if pitch >= row && !mapped.pData.is_null() {
-            let total = pitch * (size.height as usize - 1) + row;
+        let total=pitch.checked_mul(size.height as usize-1).and_then(|n|n.checked_add(row))
+            .filter(|n|*n<=MAX_WORKING_BYTES as usize/8);
+        let usable=pitch>=row && !mapped.pData.is_null() && total.is_some();
+        let mut tight = if usable {vec![0u8;len]} else {Vec::new()};
+        if let Some(total)=total.filter(|_|usable) {
             // SAFETY: a mapped staging texture holds `RowPitch` bytes per
             // row for `Height` rows, the last row at least `row` bytes.
             let mapped_rows =
@@ -246,7 +306,7 @@ impl Readback {
         }
         // SAFETY: the subresource was mapped above.
         unsafe { devices.context.Unmap(staging, 0) };
-        if pitch < row || mapped.pData.is_null() {
+        if !usable {
             return Err(io::Error::other("the mapped capture texture is unusable"));
         }
         Ok(tight)

@@ -21,6 +21,9 @@ internal fun epochFlags(epoch: Int): Int = (epoch and 0xFFFF) shl 16
  * previews and snapshots without the system dialog; nothing of a still is kept or logged.
  */
 internal class ScreenStillSource(private val sink: (ByteBuffer, Int) -> Int) {
+    @Volatile private var active=true
+    @Volatile private var generation=0L
+    @Synchronized fun setCaptureActive(value: Boolean) {generation=Math.addExact(generation,1);active=value}
     private var lastAt = 0L
     private var buffer: ByteBuffer = ByteBuffer.allocateDirect(0)
 
@@ -33,30 +36,37 @@ internal class ScreenStillSource(private val sink: (ByteBuffer, Int) -> Int) {
      * Android gave no picture. Waits for the interval first.
      */
     fun capture(service: ScreenControlService, done: (Int?) -> Unit) {
+        val admittedGeneration=generation
+        if(!active) {done(null);return}
         val wait = waitMs()
         if (wait > 0) SystemClock.sleep(wait)
-        lastAt = SystemClock.uptimeMillis()
-        service.still { bitmap ->
-            if (bitmap == null) {
-                done(null)
-            } else {
-                done(push(bitmap))
-                bitmap.recycle()
+        synchronized(this) {
+            if(!active || generation!=admittedGeneration) {done(null);return}
+            lastAt = SystemClock.uptimeMillis()
+            service.still { bitmap ->
+                if (bitmap == null) {
+                    done(null)
+                } else {
+                    try {done(synchronized(this) {if(active && generation==admittedGeneration) push(bitmap) else null})}
+                    finally {bitmap.recycle()}
+                }
             }
         }
     }
 
     /** Packs [bitmap] (ARGB_8888: R, G, B, A in memory) and pushes it. */
     fun push(bitmap: Bitmap): Int {
-        val pixels = bitmap.byteCount
-        val total = HEADER + pixels
-        if (buffer.capacity() < total) buffer = ByteBuffer.allocateDirect(total)
-        buffer.clear()
-        buffer.order(ByteOrder.LITTLE_ENDIAN)
-        buffer.putInt(bitmap.width)
-        buffer.putInt(bitmap.height)
-        bitmap.copyPixelsToBuffer(buffer)
-        return sink(buffer, total)
+        val expected=try {ScreenFrameLimits.checkedBytes(bitmap.width,bitmap.height).toLong()} catch (_: IllegalArgumentException) {return -2}
+        val compatible=if(bitmap.config==Bitmap.Config.ARGB_8888) bitmap else bitmap.copy(Bitmap.Config.ARGB_8888,false) ?: return -2
+        try {
+            if(compatible.byteCount.toLong()!=expected) return -2
+            val total=Math.addExact(HEADER,expected.toInt())
+            if(buffer.capacity()<total) buffer=ByteBuffer.allocateDirect(total)
+            buffer.clear(); buffer.order(ByteOrder.LITTLE_ENDIAN)
+            buffer.putInt(compatible.width); buffer.putInt(compatible.height)
+            compatible.copyPixelsToBuffer(buffer)
+            return sink(buffer,total)
+        } finally { if(compatible!==bitmap) compatible.recycle() }
     }
 
     companion object {

@@ -181,7 +181,20 @@ impl CodecRegistry {
 
     /// The viewer's decoders for its hello.
     pub(crate) fn decoder_offers(&self) -> Vec<CodecOffer> {
-        ordered_offers(self.decoders.iter().map(|factory| factory.offers()))
+        ordered_offers(self.decoders.iter().map(|factory| factory.offers().into_iter().map(|offer|offer.with_pixel_access(true)).collect()))
+    }
+
+    /// The worker and in-process capture use the same negotiated wrapper.
+    pub(crate) fn open_encoder_for_stage(&self, request: &super::host_stage::StageRequest, refused: &[String]) -> io::Result<OpenedEncoder> {
+        if let Some(contract)=request.frame_contract {contract.validate()?;}
+        request.frame_contract.map_or(super::frame_budget::FrameLimits::LEGACY,|c|c.limits).check(request.size)?;
+        if request.size.pixels()>request.choice.max_pixels {return Err(super::wire::invalid("frame exceeds codec pixel limit"));}
+        let mut opened = if let Some(contract) = request.frame_contract.filter(|_| request.choice.codec == CodecKind::Tiles) {
+            OpenedEncoder { encoder: Box::new(TilesScreenEncoder::new_with_limits(request.size,contract.limits)?),
+                factory: TILES_NAME.into(), hardware: false }
+        } else { self.open_encoder_with_contract(&request.choice,request.size,request.fps,refused,request.frame_contract)? };
+        opened.encoder = super::host_hybrid::wrap(opened.encoder,request)?;
+        Ok(opened)
     }
 
     /// Opens an encoder for `choice` at `size`. H.264 tries every factory
@@ -205,9 +218,18 @@ impl CodecRegistry {
         fps: u32,
         refused: &[String],
     ) -> io::Result<OpenedEncoder> {
+        self.open_encoder_with_contract(choice,size,fps,refused,None)
+    }
+
+    pub(crate) fn open_encoder_with_contract(&self,choice: &CodecChoice,size: FrameSize,fps: u32,refused: &[String],
+        contract: Option<super::frame_budget::FrameContract>) -> io::Result<OpenedEncoder> {
+        if let Some(contract)=contract {contract.validate()?;}
+        let limits=contract.map_or(super::frame_budget::FrameLimits::LEGACY,|c|c.limits);
+        limits.check(size)?;
+        if size.pixels()>choice.max_pixels {return Err(super::wire::invalid("frame exceeds selected codec pixel limit"));}
         if choice.codec == CodecKind::Tiles {
             return Ok(OpenedEncoder {
-                encoder: Box::new(TilesScreenEncoder::new(size)?),
+                encoder: Box::new(TilesScreenEncoder::new_with_limits(size,limits)?),
                 factory: TILES_NAME.into(),
                 hardware: false,
             });
@@ -219,8 +241,7 @@ impl CodecRegistry {
             }
             let fitting = factory.offers().into_iter().find(|offer| {
                 offers_stream(offer, choice.codec, choice.profile)
-                    && size.width <= offer.max_size().width
-                    && size.height <= offer.max_size().height
+                    && offer.supports_size_rate(size,fps,contract)
             });
             if let Some(offer) = fitting {
                 candidates.push((offer.hardware, factory));
@@ -262,8 +283,23 @@ impl CodecRegistry {
     /// Opens a decoder for the picture group of `header`: `tiles` directly,
     /// H.264 with the first factory whose profile decodes the stream's.
     pub(crate) fn open_decoder(&self, header: &GopHeader) -> io::Result<Box<dyn ScreenDecoder>> {
+        if let Some(contract)=header.frame_contract {contract.validate()?;}
+        header.frame_contract.map_or(super::frame_budget::FrameLimits::LEGACY,|c|c.limits).check(header.size)?;
+        let raw = self.open_decoder_raw(header)?;
+        let decoder: Box<dyn ScreenDecoder> = if let Some(contract) = header.frame_contract.filter(|c| c.hybrid_regions) {
+            Box::new(super::viewer_reconstruct::HybridDecoder::new(raw,header.size,contract)?)
+        } else { raw };
+        let guarded=if header.codec==CodecKind::H264 && !header.frame_contract.is_some_and(|c|c.hybrid_regions) {
+            super::frame_reference::ReferenceDecoder::new_video(decoder)
+        } else { super::frame_reference::ReferenceDecoder::new(decoder) };
+        Ok(Box::new(guarded))
+    }
+
+    fn open_decoder_raw(&self, header: &GopHeader) -> io::Result<Box<dyn ScreenDecoder>> {
         if header.codec == CodecKind::Tiles {
-            return Ok(Box::new(TilesScreenDecoder::new(header.size)?));
+            return Ok(Box::new(if let Some(contract) = header.frame_contract {
+                TilesScreenDecoder::new_with_limits(header.size, contract.limits)?
+            } else { TilesScreenDecoder::new(header.size)? }));
         }
         let mut refusals: Vec<String> = Vec::new();
         for factory in &self.decoders {
@@ -273,8 +309,7 @@ impl CodecRegistry {
                         (Some(decoder), Some(stream)) => decoder.decodes(stream),
                         _ => false,
                     }
-                    && header.size.width <= offer.max_size().width
-                    && header.size.height <= offer.max_size().height
+                    && offer.supports_size_rate(header.size,0,header.frame_contract)
             });
             if !decodes {
                 continue;

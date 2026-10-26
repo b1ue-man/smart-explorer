@@ -41,6 +41,9 @@ pub(crate) struct ScreenTarget {
     /// Start in full screen (`se screen view --fullscreen`).
     #[serde(default)]
     pub fullscreen: bool,
+    /// App receipt's authenticated node pin; ordinary screen routes omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_node: Option<String>,
 }
 
 impl ScreenTarget {
@@ -53,6 +56,7 @@ impl ScreenTarget {
             source: None,
             control: false,
             fullscreen: false,
+            expected_node: None,
         }
     }
 
@@ -65,6 +69,7 @@ impl ScreenTarget {
             source: None,
             control: false,
             fullscreen: false,
+            expected_node: None,
         }
     }
 

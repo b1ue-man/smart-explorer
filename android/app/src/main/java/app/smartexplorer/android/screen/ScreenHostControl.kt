@@ -28,6 +28,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -54,17 +56,27 @@ internal object ScreenHostControl {
 
     private class HostSession(val start: ScreenHostStart) {
         val lock = Any()
+        val readyLock = Mutex()
 
         @Volatile
         var ended = false
+        @Volatile var captureActive=true
 
         @Volatile
         var config: EncoderConfig? = null
         var encoder: ScreenEncoder? = null
-        var projection: MediaProjection? = null
+        @Volatile var encoderToken:Any?=null
+        @Volatile var encoderReadyToken:Any?=null
+        var pendingCapture:Long?=null
+        var frames: ScreenProjectionFrames? = null
+        @Volatile var projection: MediaProjection? = null
+        @Volatile var identity: ScreenProjectionIdentity? = null
         var display: VirtualDisplay? = null
         var synthetic: SyntheticSurfaceSource? = null
-        val still = ScreenStillSource { buffer, length -> NativeBridge.screenPush(start.session, buffer, 0, length, 0, FLAG_STILL) }
+        val still = ScreenStillSource { buffer, length ->
+            if (hostLocked() || ended || !captureActive || projection != null) -1
+            else NativeBridge.screenPush(start.session, buffer, 0, length, 0, FLAG_STILL)
+        }
     }
 
     /**
@@ -129,6 +141,10 @@ internal object ScreenHostControl {
         return bounds.width() to bounds.height()
     }
 
+    private fun hostLocked(): Boolean = app.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true
+
+    fun requestedSource(session: Long): String? = sessions[session]?.start?.source
+
     /** The consent activity of a question takes [session]; `false` when someone already did. */
     fun claim(session: Long): Boolean = claimed.add(session)
 
@@ -144,6 +160,8 @@ internal object ScreenHostControl {
         try {
             when {
                 start.source == "synthetic" -> ScreenApi.ready(start.session, start.maxWidth, start.maxHeight, "synthetic", false, false)
+                hostLocked() -> { ScreenApi.ended(start.session, "host_locked"); teardown(session) }
+                ScreenProjectionIdentity.requiresPackageProof(start.source) -> requestConsent(start)
                 start.still -> {
                     if (ScreenControlService.current() == null) {
                         ScreenApi.ended(start.session, "accessibility_off")
@@ -186,13 +204,19 @@ internal object ScreenHostControl {
                 Log.e(TAG, "screenControl fehlt in der nativen Bibliothek", e)
                 return
             } ?: continue
+            if (session.start.source != "synthetic" && hostLocked()) {
+                scope.launch { endQuietly(id, "host_locked") }
+                teardown(session)
+                return
+            }
             val message = try {
                 Core.json.parseToJsonElement(raw) as? JsonObject
             } catch (e: IllegalArgumentException) {
                 null
             } ?: continue
             when (message.text("op")) {
-                "configure" -> {
+                "configure" -> synchronized(session.lock) {
+                    session.pendingCapture=null
                     session.config = EncoderConfig(
                         epoch = message.int("epoch"),
                         width = message.int("width"),
@@ -200,14 +224,51 @@ internal object ScreenHostControl {
                         fps = message.int("fps").coerceAtLeast(1),
                         bitrate = message.long("bitrate").coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
                         profile = message.text("profile") ?: "high",
+                        hybrid = message["hybrid"] == JsonPrimitive(true),
+                        codec = message.text("codec") ?: "h264",
                     )
                     applyConfig(session)
+                }
+                "capture_active" -> try { synchronized(session.lock) {
+                    val active=message["active"]==JsonPrimitive(true)
+                    if(session.ended) return@synchronized
+                    session.captureActive=active;session.still.setCaptureActive(active)
+                    if(!active) {
+                        session.pendingCapture=null
+                        session.display?.surface=null
+                        session.synthetic?.stop();session.synthetic=null
+                        check(session.frames?.close()!=false) {"Capturethread konnte nicht pausiert werden"};session.frames=null
+                        session.encoder?.release();session.encoder=null
+                    }
+                    val packet=java.nio.ByteBuffer.allocateDirect(9).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                    packet.put(if(active) 1.toByte() else 0.toByte());packet.putLong(message.long("request"))
+                    NativeBridge.screenPush(id,packet,0,9,0,0x20)
+                }} catch(e: RuntimeException) {encoderFailed(session,session.config?.epoch ?: 0,"Capturezustand: ${e.message}")}
+                "capture" -> synchronized(session.lock) {
+                    val frame=message.long("frameId")
+                    if(frame>0 && session.captureActive && !session.ended) {
+                        val token=session.encoderToken
+                        if(session.config?.hybrid==true && (token==null || session.encoderReadyToken!==token || session.frames==null))
+                            session.pendingCapture=frame
+                        else session.frames?.capture(frame)
+                    }
                 }
                 "keyframe" -> synchronized(session.lock) { session.encoder?.requestKeyFrame() }
                 "bitrate" -> synchronized(session.lock) {
                     session.encoder?.setBitrate(message.long("bps").coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
                 }
-                "still" -> ScreenControlService.current()?.let { service -> session.still.capture(service) {} }
+                "still" -> {
+                    val projected=synchronized(session.lock) {
+                        val config=session.config
+                        val identity=session.identity
+                        if(config==null) null else session.frames?.also { frames -> frames.captureStill(message.long("frameId")) { pixels ->
+                            captureCurrent(session,identity,config.epoch) && pushStill(session,config,pixels)
+                        } }
+                    }
+                    // An app chosen in MediaProjection must never fall back to a full-display screenshot.
+                    if(projected==null && session.start.still && session.projection==null && !session.ended)
+                        ScreenControlService.current()?.let { service -> session.still.capture(service) {} }
+                }
                 "consent" -> scope.launch { requestConsent(session.start) }
                 "stop" -> teardown(session)
             }
@@ -219,43 +280,84 @@ internal object ScreenHostControl {
         val config = session.config ?: return@synchronized
         val synthetic = session.start.source == "synthetic"
         val projection = session.projection
-        if (session.ended || (!synthetic && projection == null)) return@synchronized
+        val identity = session.identity
+        if (session.ended || !session.captureActive || (!synthetic && projection == null)) return@synchronized
+        if (!synthetic && (hostLocked() || projection == null || identity?.matches(projection) != true)) return@synchronized
         val epoch = config.epoch
+        if(config.codec=="tiles" && projection!=null) {
+            session.encoderToken=null;session.encoderReadyToken=null
+            val frames=ScreenProjectionFrames(config.width,config.height,{ _,pixels ->
+                captureCurrent(session, identity, epoch) && pushStill(session,config,pixels)
+            },{ reason -> encoderFailed(session,epoch,reason) })
+            val oldFrames=session.frames; val oldEncoder=session.encoder
+            session.display=attachSurface(session,config,frames.surface)
+            session.frames=frames; session.encoder=null
+            oldFrames?.close(); oldEncoder?.release()
+            return@synchronized
+        }
+        val token=Any()
+        session.encoderToken=token;session.encoderReadyToken=null
         val encoder = try {
             ScreenEncoder(config) { buffer, offset, length, pts, key ->
-                val flags = epochFlags(epoch) or (if (key) FLAG_KEYFRAME else 0)
+                if (!captureCurrent(session,identity,epoch) || session.encoderToken!==token ||
+                    (config.hybrid && session.encoderReadyToken!==token)) return@ScreenEncoder -1
+                val flags = epochFlags(epoch) or (if (key) FLAG_KEYFRAME else 0) or (if(config.hybrid) 0x4 or (if(length==20) 0x10 else 0) else 0)
                 NativeBridge.screenPush(session.start.session, buffer, offset, length, pts, flags)
             }
         } catch (e: RuntimeException) {
             Log.w(TAG, "Kodierer nicht gestartet: ${e.message}")
-            scope.launch { endQuietly(session.start.session, "capture_failed") }
+            encoderFailed(session,epoch,e.message ?: "MediaCodec-Konfiguration abgelehnt")
             return@synchronized
         }
+        encoder.setFailureHandler {reason->if(session.encoderToken===token && captureCurrent(session,identity,epoch)) encoderFailed(session,epoch,reason)}
         session.synthetic?.stop()
+        val oldFrames=session.frames
         val old = session.encoder
         if (synthetic) {
             session.synthetic = SyntheticSurfaceSource(encoder.surface, config.width, config.height, config.fps)
         } else if (projection != null) {
-            val dpi = app.resources.displayMetrics.densityDpi
-            val display = session.display
-            if (display == null) {
-                session.display = projection.createVirtualDisplay(
-                    "se-screen-${session.start.session}",
-                    config.width,
-                    config.height,
-                    dpi,
-                    DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                    encoder.surface,
-                    null,
-                    null,
-                )
-            } else {
-                display.resize(config.width, config.height, dpi)
-                display.surface = encoder.surface
-            }
+            val frames=if(config.hybrid) ScreenProjectionFrames(config.width,config.height,{ frame,pixels ->
+                captureCurrent(session,identity,epoch) && session.encoderToken===token &&
+                    session.encoderReadyToken===token && encoder.queueRgba(pixels,frame)
+            },{ reason -> if(session.encoderToken===token && captureCurrent(session,identity,epoch)) encoderFailed(session,epoch,reason) }) else null
+            session.frames=frames
+            val output=frames?.surface ?: encoder.surface
+            session.display=attachSurface(session,config,output)
         }
         session.encoder = encoder
+        if(projection!=null && identity!=null) scope.launch {reportProjectionReady(session,identity,projection)}
+        oldFrames?.close()
         old?.release()
+    }
+
+    private fun captureCurrent(session: HostSession, identity: ScreenProjectionIdentity?, epoch: Int): Boolean {
+        if (session.ended || !session.captureActive || session.config?.epoch != epoch) return false
+        if (session.start.source == "synthetic") return true
+        val projection = session.projection ?: return false
+        return !hostLocked() && session.identity === identity && identity?.matches(projection) == true
+    }
+
+    private fun attachSurface(session: HostSession, config: EncoderConfig, surface: android.view.Surface): VirtualDisplay {
+        check(session.captureActive) {"Capture ist pausiert"}
+        val dpi=app.resources.displayMetrics.densityDpi
+        val display=session.display
+        if(display!=null) { display.resize(config.width,config.height,dpi); display.surface=surface; return display }
+        return requireNotNull(session.projection).createVirtualDisplay("se-screen-${session.start.session}",
+            config.width,config.height,dpi,DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,surface,null,null)
+    }
+
+    private fun pushStill(session: HostSession, config: EncoderConfig, pixels: ByteArray): Boolean {
+        if (!captureCurrent(session,session.identity,config.epoch)) return false
+        val packet=java.nio.ByteBuffer.allocateDirect(Math.addExact(pixels.size,8)).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        packet.putInt(config.width); packet.putInt(config.height); packet.put(pixels)
+        return NativeBridge.screenPush(session.start.session,packet,0,packet.capacity(),0,epochFlags(config.epoch) or FLAG_STILL)>=0
+    }
+
+    private fun encoderFailed(session: HostSession, epoch: Int, reason: String) {
+        Log.w(TAG,"Kodierer ${session.start.session}: $reason")
+        val bytes=reason.toByteArray(Charsets.UTF_8).take(4096).toByteArray()
+        val packet=java.nio.ByteBuffer.allocateDirect(bytes.size).put(bytes)
+        NativeBridge.screenPush(session.start.session,packet,0,bytes.size,0,epochFlags(epoch) or 0x8)
     }
 
     /** [ScreenHostService] holds the system dialog's projection for [session]. */
@@ -281,32 +383,77 @@ internal object ScreenHostControl {
             gone()
             return
         }
-        projection.registerCallback(
-            object : MediaProjection.Callback() {
+        if (hostLocked() || ScreenProjectionIdentity.requiresPackageProof(host.start.source)) {
+            projection.stop()
+            scope.launch { projectionFailed(session, if (hostLocked()) "host_locked" else ScreenProjectionIdentity.UNVERIFIED_APP) }
+            gone()
+            return
+        }
+        val identity = ScreenProjectionIdentity(projection)
+        val attached = synchronized(host.lock) {
+            if (host.ended || host.projection != null) false
+            else { host.projection=projection; host.identity=identity; true }
+        }
+        if (!attached) {
+            // One consent result creates one projection. Never replace an active grant silently.
+            if (host.projection !== projection) projection.stop()
+            gone()
+            return
+        }
+        val callback = object : MediaProjection.Callback() {
+                override fun onCapturedContentResize(width: Int, height: Int) {
+                    if(host.identity === identity && identity.resized(projection,width,height) && !host.ended)
+                        scope.launch { reportProjectionReady(host,identity,projection) }
+                }
                 override fun onStop() {
-                    if (!host.ended) {
+                    if (host.identity === identity && identity.matches(projection) && !host.ended) {
+                        identity.invalidate()
                         val locked = context.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true
                         scope.launch { endQuietly(session, if (locked) "host_locked" else "host_stopped") }
                         teardown(host)
                     }
                     gone()
                 }
-            },
-            Handler(Looper.getMainLooper()),
-        )
-        synchronized(host.lock) { host.projection = projection }
-        pendingConsent.remove(session)
-        val (width, height) = displaySize()
-        val (name, hardware) = ScreenEncoder.best() ?: ("mediacodec" to false)
-        scope.launch {
-            try {
-                ScreenApi.ready(session, width, height, name, hardware, projection = true)
-            } catch (e: CoreException) {
-                teardown(host)
             }
+        try {
+            projection.registerCallback(callback,Handler(Looper.getMainLooper()))
+        } catch (_: RuntimeException) {
+            scope.launch { projectionFailed(session,"capture_failed") }
+            teardown(host)
+            gone()
+            return
         }
+        pendingConsent.remove(session)
+        scope.launch { reportProjectionReady(host,identity,projection) }
         applyConfig(host)
         refreshNotification()
+    }
+
+    private suspend fun reportProjectionReady(host: HostSession, identity: ScreenProjectionIdentity, projection: MediaProjection) {
+        host.readyLock.withLock {
+            if (host.identity !== identity || !identity.matches(projection) || host.ended || hostLocked()) return@withLock
+            // Snapshot the exact configured encoder under the source lock, then release
+            // that lock while the Native ready call is pending. A newer token cannot inherit it.
+            val binding=synchronized(host.lock) {
+                if(host.identity !== identity || !identity.matches(projection) || host.ended || hostLocked()) null
+                else Triple(identity.size() ?: displaySize(),host.encoder,host.encoderToken)
+            } ?: return@withLock
+            val actual=binding.second
+            val best=ScreenEncoder.best() ?: ("mediacodec" to false)
+            try {
+                ScreenApi.ready(host.start.session,binding.first.first,binding.first.second,
+                    actual?.name ?: best.first,actual?.hardware ?: best.second,true)
+                synchronized(host.lock) {
+                    if(host.identity===identity && identity.matches(projection) && !host.ended &&
+                        host.encoder===actual && host.encoderToken===binding.third && actual!=null) {
+                        host.encoderReadyToken=binding.third
+                        if(host.captureActive) host.pendingCapture?.let {frame ->
+                            host.frames?.let {frames -> host.pendingCapture=null;frames.capture(frame)}
+                        }
+                    }
+                }
+            } catch (_: CoreException) {teardown(host)}
+        }
     }
 
     suspend fun projectionFailed(session: Long, reason: String) {
@@ -332,7 +479,7 @@ internal object ScreenHostControl {
     fun sessionsView(): List<ScreenHostSession> = sessions.values.map {
         ScreenHostSession(
             session = it.start.session,
-            source = it.start.source,
+            source = if (it.identity != null) ScreenProjectionIdentity.SOURCE else it.start.source,
             still = it.start.still,
             viewerName = it.start.viewerName,
             viewerDeviceId = it.start.viewerDeviceId,
@@ -344,14 +491,18 @@ internal object ScreenHostControl {
         synchronized(session.lock) {
             if (session.ended) return
             session.ended = true
+            session.identity?.invalidate()
             session.synthetic?.stop()
             session.display?.release()
+            session.frames?.close()
             session.encoder?.release()
             session.projection?.stop()
             session.synthetic = null
             session.display = null
             session.encoder = null
+            session.frames = null
             session.projection = null
+            session.identity = null
         }
         val id = session.start.session
         sessions.remove(id)
@@ -392,6 +543,7 @@ internal object ScreenHostControl {
                     null
                 } ?: continue
                 val events = message["events"] as? JsonArray ?: continue
+                if (hostLocked()) continue
                 val service = ScreenControlService.current() ?: continue
                 for (action in mapper.map(events)) {
                     val done = CountDownLatch(1)

@@ -466,7 +466,7 @@ class ScreenTaskTest {
 
     /**
      * SCR-M9 on the device: the encoder of the host side draws the test picture, its access units
-     * go through the pull layout (16 bytes of head, little endian, the first picture marked as the
+     * go through the pull layout (16-byte head and full GOP/frame IDs, little endian, the first picture marked as the
      * start of a group) into the viewer's MediaCodec decoder, and the barcode is read from what the
      * decoder rendered. The decoder also offers `tiles`.
      */
@@ -488,28 +488,31 @@ class ScreenTaskTest {
         }
         val source = SyntheticSurfaceSource(encoder.surface, config.width, config.height, config.fps)
         var started = false
+        var deliveredFrame = 0L
         var held: Triple<ByteArray, Long, Boolean>? = null
         val pictures = PictureSource { dst, timeoutMs ->
             val next = held ?: units.poll(timeoutMs.toLong(), TimeUnit.MILLISECONDS)
             when {
                 next == null -> -1
                 !started && !next.third -> -1
-                dst.capacity() < 16 + next.first.size -> {
+                dst.capacity() < 32 + next.first.size -> {
                     held = next
-                    dst.order(ByteOrder.LITTLE_ENDIAN).putInt(12, next.first.size)
+                    dst.order(ByteOrder.LITTLE_ENDIAN).putInt(12, 16 + next.first.size)
                     -3
                 }
                 else -> {
                     held = null
-                    val flags = (if (next.third) 1 else 0) or (if (!started) 4 else 0) or (1 shl 16)
+                    val flags = (if (next.third) 1 else 0) or (if (!started) 4 else 0) or (1 shl 16) or 0x100 or 0x80
                     started = true
                     dst.order(ByteOrder.LITTLE_ENDIAN)
                     dst.putLong(0, next.second)
                     dst.putInt(8, flags)
-                    dst.putInt(12, next.first.size)
-                    dst.position(16)
+                    dst.putInt(12, 16 + next.first.size)
+                    dst.putLong(16, 1L)
+                    dst.putLong(24, ++deliveredFrame)
+                    dst.position(32)
                     dst.put(next.first)
-                    16 + next.first.size
+                    32 + next.first.size
                 }
             }
         }
@@ -519,7 +522,7 @@ class ScreenTaskTest {
         val decoder = ScreenDecoder(
             sessionId = 1,
             source = pictures,
-            streamOf = { if (it == 1) stream else null },
+            streamOf = { if (it == 1L) stream else null },
             surface = { reader.surface },
             listener = object : ScreenDecoder.Listener {
                 override fun onSize(width: Int, height: Int) = Unit

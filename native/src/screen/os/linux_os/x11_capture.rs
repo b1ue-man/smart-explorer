@@ -2,15 +2,15 @@
 //! session of `DISPLAY`, read with MIT-SHM into a memfd that the server
 //! shares (`attach_fd`), or with plain `GetImage` when the server has no
 //! usable MIT-SHM (the limit `x11_no_shm` says so). Windows come from their
-//! composite pixmap when a compositor runs, else from the root window at the
-//! window's place (overlapping windows then show: `x11_window_overlaps_
-//! without_compositor`). The pointer is blended in from XFixes. DAMAGE is not
+//! composite pixmap when a compositor runs. Explicit raw windows may fall back
+//! to the root crop (`x11_window_overlaps_without_compositor`); family members
+//! require their own pixmap and fail without it. The pointer is blended in
+//! from XFixes. DAMAGE is not
 //! used (compositors hide the root's damage); a picture equal to the last one
-//! by a 64-bit FNV-1a hash is `Unchanged`.
+//! by hash and exact pixel comparison is `Unchanged`.
 use std::ffi::c_void;
 use std::io;
 use std::os::fd::{FromRawFd, OwnedFd};
-
 use x11rb::connection::Connection;
 use x11rb::errors::ReplyError;
 use x11rb::protocol::composite::ConnectionExt as _;
@@ -20,18 +20,16 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::protocol::ErrorKind;
 use x11rb::rust_connection::RustConnection;
-
 use super::x11_cursor;
 use super::x11_monitors;
 use super::x11_windows::{self, Atoms};
 use crate::screen::core::host_backend::{ScreenSource, SourceFrame, SourceRefusal};
 use crate::screen::core::pixel_convert::{BgraImage, FrameSize};
+use crate::screen::core::frame_budget::FrameLimits;
 use crate::screen::core::session_state::SessionState;
 use crate::screen::core::window_list::SourceId;
-
 /// `WM_STATE` value of a window in the normal state (ICCCM 4.1.3.1).
 const WM_STATE_NORMAL: u32 = 1;
-
 /// FNV-1a over 64-bit words of the picture (the tail is zero-padded).
 pub(crate) fn picture_hash(data: &[u8]) -> u64 {
     const START: u64 = 0xCBF2_9CE4_8422_2325;
@@ -51,16 +49,13 @@ pub(crate) fn picture_hash(data: &[u8]) -> u64 {
     }
     hash
 }
-
 fn failed(error: impl std::fmt::Display) -> io::Error {
     io::Error::other(format!("x11: {error}"))
 }
-
 /// A request that cannot be sent: the connection (`DISPLAY`) is lost.
 fn lost(error: x11rb::errors::ConnectionError) -> io::Error {
     io::Error::new(io::ErrorKind::BrokenPipe, error)
 }
-
 /// A connection error ends the session (`BrokenPipe`); an error about a
 /// window means it is gone.
 fn reply_error(error: ReplyError, window: bool) -> io::Error {
@@ -78,7 +73,6 @@ fn reply_error(error: ReplyError, window: bool) -> io::Error {
         ReplyError::X11Error(error) => failed(format!("{:?}", error.error_kind)),
     }
 }
-
 /// A memfd shared with the X server.
 struct Segment {
     id: u32,
@@ -186,16 +180,18 @@ pub(crate) fn probe() -> Option<ServerFacts> {
     })
 }
 
-enum Target {
-    Monitor { id: String, x: i32, y: i32 },
-    Window(Window),
-}
+#[path = "x11_capture_target.rs"]
+mod capture_target;
+use capture_target::Target;
 
 /// What one pass over the target found.
 enum Pass {
     Paused(SessionState),
     Image(BgraImage, i32, i32),
 }
+
+#[derive(Clone,Copy,PartialEq,Eq)]
+enum WindowPixels { RawFallback, OwnPixmap }
 
 /// A monitor or window of the X11 session.
 pub(crate) struct X11Source {
@@ -204,19 +200,30 @@ pub(crate) struct X11Source {
     atoms: Atoms,
     legacy_state: Atom,
     target: Target,
+    source:SourceId,
+    geometry:Option<super::x11_input::Area>,
+    geometry_changed:bool,
+    reference_generation:u64,
     size: FrameSize,
     shm: bool,
     compositor: bool,
+    window_pixels:WindowPixels,
     cursor: bool,
     segment: Option<Segment>,
     last_hash: Option<u64>,
+    last_image: Option<BgraImage>,
 }
-
 fn refuse(reason: &str) -> SourceRefusal {
     SourceRefusal::new(reason)
 }
 
 impl X11Source {
+    pub(crate) fn open_family_window(native:crate::remote_window::NativeWindowId)->Result<Self,SourceRefusal> {
+        let mut source=Self::open(&SourceId::Window(native.0.to_string()))?;
+        if !source.compositor {return Err(refuse("x11_family_capture_requires_compositor"));}
+        source.window_pixels=WindowPixels::OwnPixmap;
+        Ok(source)
+    }
     /// Opens `source` on the server of `DISPLAY`.
     pub(crate) fn open(source: &SourceId) -> Result<Self, SourceRefusal> {
         let (conn, screen_number) =
@@ -248,49 +255,18 @@ impl X11Source {
             atoms,
             legacy_state,
             target: Target::Window(0),
+            source:source.clone(),geometry:None,geometry_changed:false,reference_generation:0,
             size: FrameSize::new(0, 0),
             shm,
             compositor,
+            window_pixels:WindowPixels::RawFallback,
             cursor,
             segment: None,
             last_hash: None,
+            last_image: None,
         };
         opened.aim(source)?;
         Ok(opened)
-    }
-
-    /// Resolves the source to a target and its size.
-    fn aim(&mut self, source: &SourceId) -> Result<(), SourceRefusal> {
-        match source {
-            SourceId::Monitor(id) => {
-                let monitors = x11_monitors::list(&self.conn, self.root)
-                    .map_err(|error| refuse(&error.to_string()))?;
-                let monitor = monitors
-                    .iter()
-                    .find(|monitor| &monitor.id == id)
-                    .ok_or_else(|| refuse("monitor_not_found"))?;
-                self.size = FrameSize::new(monitor.width, monitor.height);
-                self.target = Target::Monitor {
-                    id: id.clone(),
-                    x: monitor.x,
-                    y: monitor.y,
-                };
-            }
-            SourceId::Window(id) => {
-                let window =
-                    x11_windows::parse_window_id(id).ok_or_else(|| refuse("window_not_found"))?;
-                let (_, _, width, height) =
-                    x11_windows::root_geometry(&self.conn, self.root, window)
-                        .map_err(|_| refuse("window_not_found"))?;
-                self.size = FrameSize::new(u32::from(width), u32::from(height));
-                self.target = Target::Window(window);
-            }
-            SourceId::Synthetic => return Err(refuse("capture_unavailable")),
-        }
-        if self.size.check_frame().is_err() {
-            return Err(refuse("source_exceeds_frame_limit"));
-        }
-        Ok(())
     }
 
     fn ensure_segment(&mut self, len: usize) -> io::Result<()> {
@@ -318,7 +294,8 @@ impl X11Source {
         size: FrameSize,
         window: bool,
     ) -> io::Result<Vec<u8>> {
-        let (width, height, len) = (size.width as u16, size.height as u16, size.bgra_len());
+        let len=FrameLimits::RESOURCE.check(size)?;
+        let (width,height)=(size.width as u16,size.height as u16);
         let mut data = vec![0u8; len];
         if self.shm {
             self.ensure_segment(len)?;
@@ -368,7 +345,7 @@ impl X11Source {
     fn pass_monitor(&mut self, x: i32, y: i32) -> io::Result<Pass> {
         let size = self.size;
         let data = self.read(self.root, x as i16, y as i16, size, false)?;
-        Ok(Pass::Image(BgraImage::from_vec(size, data)?, x, y))
+        Ok(Pass::Image(BgraImage::from_vec_with_limits(size,data,FrameLimits::RESOURCE)?, x, y))
     }
 
     fn pass_window(&mut self, window: Window) -> io::Result<Pass> {
@@ -386,15 +363,25 @@ impl X11Source {
         }
         let (x, y, width, height) = x11_windows::root_geometry(&self.conn, self.root, window)?;
         let size = FrameSize::new(u32::from(width), u32::from(height));
-        size.check_frame()?;
+        FrameLimits::RESOURCE.check(size)?;
         self.size = size;
+        if self.window_pixels==WindowPixels::OwnPixmap {
+            // Compositors may disappear after selection. NameWindowPixmap must
+            // still name this member's current storage; never substitute root.
+            if !compositor_running(&self.conn,&self.atoms) {
+                return Err(io::Error::new(io::ErrorKind::Unsupported,"x11_family_capture_requires_compositor"));
+            }
+            let data=self.read_pixmap(window,size).map_err(|error|
+                io::Error::new(error.kind(),format!("x11_family_member_pixmap_failed: {error}")))?;
+            return Ok(Pass::Image(BgraImage::from_vec_with_limits(size,data,FrameLimits::RESOURCE)?,x,y));
+        }
         if self.compositor {
             if let Ok(data) = self.read_pixmap(window, size) {
-                return Ok(Pass::Image(BgraImage::from_vec(size, data)?, x, y));
+                return Ok(Pass::Image(BgraImage::from_vec_with_limits(size,data,FrameLimits::RESOURCE)?, x, y));
             }
         }
         let data = self.read(self.root, x as i16, y as i16, size, true)?;
-        Ok(Pass::Image(BgraImage::from_vec(size, data)?, x, y))
+        Ok(Pass::Image(BgraImage::from_vec_with_limits(size,data,FrameLimits::RESOURCE)?, x, y))
     }
 
     /// The window's own pixels from the compositor's pixmap.
@@ -410,55 +397,25 @@ impl X11Source {
         data
     }
 
-    /// The monitor's place and size may change (RandR); look it up again.
-    /// `false` when it is gone or its picture would exceed the frame limits.
-    fn refresh_monitor(&mut self, id: &str) -> bool {
-        let Ok(monitors) = x11_monitors::list(&self.conn, self.root) else {
-            return false;
-        };
-        let Some(monitor) = monitors.iter().find(|monitor| monitor.id == id) else {
-            return false;
-        };
-        let size = FrameSize::new(monitor.width, monitor.height);
-        if !size.is_valid_frame() {
-            return false;
-        }
-        self.size = size;
-        self.target = Target::Monitor {
-            id: id.to_string(),
-            x: monitor.x,
-            y: monitor.y,
-        };
-        true
-    }
 
-    fn pass(&mut self) -> io::Result<Pass> {
-        match &self.target {
-            Target::Monitor { id, x, y } => {
-                let (id, x, y) = (id.clone(), *x, *y);
-                match self.pass_monitor(x, y) {
-                    Err(error) if error.kind() != io::ErrorKind::BrokenPipe => {
-                        // The area may no longer fit the root: once more
-                        // with the monitor as it is now.
-                        if self.refresh_monitor(&id) {
-                            if let Target::Monitor { x, y, .. } = self.target {
-                                return self.pass_monitor(x, y);
-                            }
-                        }
-                        Err(error)
-                    }
-                    other => other,
-                }
-            }
-            Target::Window(window) => {
-                let window = *window;
-                self.pass_window(window)
-            }
-        }
-    }
 }
-
 impl ScreenSource for X11Source {
+    fn legacy_input_invalid(&self)->bool {self.geometry_changed}
+    fn reference_generation(&self)->u64 {self.reference_generation}
+    fn inject_input(&mut self,_backend:&dyn crate::screen::core::host_backend::ScreenHostBackend,
+        reference:u64,presented:bool,events:&[crate::screen::core::input_model::InputEvent])
+        ->Result<(),crate::screen::core::wire_control::ControlBlock> {
+        use crate::screen::core::wire_control::ControlBlock;
+        if reference!=self.reference_generation{return Err(ControlBlock::ControlUnavailable);}
+        let current=self.current_area().map_err(|_|ControlBlock::ControlUnavailable)?;
+        if self.geometry!=Some(current) {
+            self.note_geometry(current).map_err(|_|ControlBlock::ControlUnavailable)?;
+            return Err(ControlBlock::ControlUnavailable);
+        }
+        if self.last_image.is_none()||(!presented&&self.geometry_changed){return Err(ControlBlock::ControlUnavailable);}
+        super::x11_input::inject_bound(&self.source,current,events)
+    }
+    fn frame_limits(&self)->FrameLimits {FrameLimits::RESOURCE}
     fn size(&self) -> FrameSize {
         self.size
     }
@@ -474,16 +431,21 @@ impl ScreenSource for X11Source {
                 x11_cursor::blend(image.data_mut(), size, x, y, &cursor);
             }
         }
+        let captured=super::x11_input::Area {x,y,width:image.size().width as i32,height:image.size().height as i32};
+        let current=self.current_area()?;
+        self.note_geometry(current)?;
+        if current!=captured{return Ok(SourceFrame::Paused(SessionState::Starting));}
         let hash = picture_hash(image.data());
-        let same = self.last_hash == Some(hash);
+        let same = self.last_hash == Some(hash) && self.last_image.as_ref().is_some_and(|last|
+            last.size()==image.size() && last.data()==image.data());
         self.last_hash = Some(hash);
+        if !same { self.last_image=Some(image.clone()); }
         if same && !keyframe {
             return Ok(SourceFrame::Unchanged);
         }
         Ok(SourceFrame::Frame(image))
     }
 }
-
 impl Drop for X11Source {
     fn drop(&mut self) {
         if let Some(segment) = self.segment.take() {

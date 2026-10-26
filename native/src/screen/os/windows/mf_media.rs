@@ -21,7 +21,7 @@ use windows::Win32::Media::MediaFoundation::{
 
 use super::mf_common::{platform, EncoderSetup};
 use crate::screen::core::negotiate::H264Profile;
-use crate::screen::core::pixel_convert::{bgra_to_i420, BgraImage, FrameSize, YuvMatrix};
+use crate::screen::core::pixel_convert::{bgra_to_i420_with_limits, BgraImage, FrameSize, YuvMatrix};
 
 fn pack(high: u32, low: u32) -> u64 {
     (u64::from(high) << 32) | u64::from(low)
@@ -39,6 +39,7 @@ fn media_type() -> io::Result<IMFMediaType> {
 
 /// A progressive video type of `subtype`, `size` and `fps`.
 pub(super) fn video_type(subtype: &GUID, size: FrameSize, fps: u32) -> io::Result<IMFMediaType> {
+    crate::screen::core::frame_budget::FrameLimits::RESOURCE.check(size)?;
     let media = media_type()?;
     // SAFETY: plain attribute writes on an owned media type.
     unsafe {
@@ -77,7 +78,7 @@ pub(super) fn h264_type(setup: &EncoderSetup, bitrate: u32) -> io::Result<IMFMed
 
 /// NV12 bytes (tight) of `frame` in BT.709 limited range.
 pub(super) fn nv12_bytes(frame: &BgraImage) -> io::Result<Vec<u8>> {
-    let yuv = bgra_to_i420(&frame.view(), YuvMatrix::Bt709)?;
+    let yuv = bgra_to_i420_with_limits(&frame.view(),YuvMatrix::Bt709,crate::screen::core::frame_budget::FrameLimits::RESOURCE)?;
     let mut out = Vec::with_capacity(yuv.y.len() + yuv.u.len() * 2);
     out.extend_from_slice(&yuv.y);
     for (u, v) in yuv.u.iter().zip(&yuv.v) {
@@ -89,6 +90,7 @@ pub(super) fn nv12_bytes(frame: &BgraImage) -> io::Result<Vec<u8>> {
 
 /// A sample with one buffer of `len` bytes, filled by `fill` when given.
 fn sample_with(len: usize, fill: Option<&[u8]>) -> io::Result<IMFSample> {
+    if len>64*1024*1024 {return Err(io::Error::other("MF sample exceeds a resource-bounded working image"));}
     let platform = platform()?;
     let size = u32::try_from(len.max(1))
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "sample is too large"))?;
@@ -131,12 +133,18 @@ pub(super) fn input_sample(bytes: &[u8], time: i64, duration: i64) -> io::Result
 
 /// The bytes of `sample` in one piece.
 pub(super) fn sample_bytes(sample: &IMFSample) -> io::Result<Vec<u8>> {
+    sample_bytes_bounded(sample,crate::screen::core::wire_binary::MAX_RECORD_BYTES)
+}
+pub(super) fn sample_bytes_bounded(sample:&IMFSample,max:usize)->io::Result<Vec<u8>> {
+    // Check before MF coalesces the buffers, which can allocate a second full sample.
+    if unsafe {sample.GetTotalLength()?} as usize>max {return Err(io::Error::other("MF output exceeds admitted sample bytes"));}
     // SAFETY: the buffer stays locked only while its bytes are copied.
     unsafe {
         let buffer = sample.ConvertToContiguousBuffer()?;
         let mut data: *mut u8 = std::ptr::null_mut();
         let mut length = 0u32;
         buffer.Lock(&mut data, None, Some(std::ptr::addr_of_mut!(length)))?;
+        if length as usize>max {buffer.Unlock()?;return Err(io::Error::other("MF locked output exceeds admitted sample bytes"));}
         let bytes = if data.is_null() {
             Vec::new()
         } else {
@@ -192,8 +200,12 @@ pub(super) enum Output {
 /// One `ProcessOutput` on stream 0; a transform that does not provide its
 /// samples gets one of its announced size, at least `fallback` bytes.
 pub(super) fn process_output(transform: &IMFTransform, fallback: usize) -> io::Result<Output> {
+    process_output_bounded(transform,fallback,64*1024*1024)
+}
+pub(super) fn process_output_bounded(transform:&IMFTransform,fallback:usize,max:usize)->io::Result<Output> {
     // SAFETY: a plain query of the output stream.
     let info = unsafe { transform.GetOutputStreamInfo(0)? };
+    if fallback>max || info.cbSize as usize>max {return Err(io::Error::other("MF output buffer exceeds admitted image bytes"));}
     let provides =
         (MFT_OUTPUT_STREAM_PROVIDES_SAMPLES.0 | MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES.0) as u32;
     let own = if info.dwFlags & provides != 0 {

@@ -1,15 +1,16 @@
 //! Framing of the screen control stream (strand S4, decision C3). A frame is
 //! the Exec frame head of 5 bytes, tag `u8` and length `u32` big-endian,
-//! written and read by `exec_protocol::{write_payload, read_payload}`. The
+//! written by `exec_protocol::write_payload`; the reader checks the tag's
+//! individual byte budget before allocating its payload. The
 //! payload of a tag is JSON or a fixed big-endian layout. Every length that
 //! arrives from the network is checked against a fixed limit before memory
 //! for it is requested.
 use std::io;
 
 use serde::{de::DeserializeOwned, Serialize};
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 
-use crate::share::exec_protocol::{read_payload, write_payload};
+use crate::share::exec_protocol::write_payload;
 
 /// ALPN of the screen protocol. The endpoint keeps the FS, Exec and LAN-link
 /// ALPNs; a peer without this one ends the TLS handshake with alert 120,
@@ -36,6 +37,13 @@ pub(crate) const LIST_WINDOWS: u8 = 21;
 pub(crate) const SNAPSHOT: u8 = 22;
 pub(crate) const CONTROL_REQUEST: u8 = 23;
 pub(crate) const PREVIEW_ACK: u8 = 24;
+pub(crate) const VISIBILITY: u8 = 25;
+pub(crate) const ICON_REQUEST: u8 = 26;
+pub(crate) const PRESENTED: u8 = 27;
+pub(crate) const LIST_FAMILIES: u8 = 28;
+pub(crate) const FAMILY_SNAPSHOT_REQUEST: u8 = 29;
+pub(crate) const FAMILY_OPERATION: u8 = 30;
+pub(crate) const FAMILY_INPUT: u8 = 31;
 // Host to viewer. Tag 35 stays free: still images travel as a picture
 // stream of the kind `snapshot`.
 pub(crate) const STATE: u8 = 32;
@@ -44,8 +52,15 @@ pub(crate) const WINDOWS: u8 = 34;
 pub(crate) const STATS: u8 = 36;
 pub(crate) const CONTROL_STATE: u8 = 37;
 pub(crate) const ERROR: u8 = 38;
+pub(crate) const VISIBILITY_ACK: u8 = 39;
+pub(crate) const ICON_REPLY: u8 = 40;
+pub(crate) const FAMILIES: u8 = 41;
+pub(crate) const FAMILY_SNAPSHOT: u8 = 42;
+pub(crate) const FAMILY_OPERATION_RESULT: u8 = 43;
+pub(crate) const FAMILY_INPUT_RESULT: u8 = 44;
 
-/// Every control frame except `WINDOWS`; the 64 KiB of `MAX_HANDSHAKE_BYTES`
+/// Control frames except `WINDOWS` and the separately bounded icon frames;
+/// the 64 KiB of `MAX_HANDSHAKE_BYTES`
 /// in the Exec protocol.
 pub(crate) const MAX_CONTROL_BYTES: usize = 64 * 1024;
 /// `WINDOWS`: the most every viewer of protocol version 1 reads; the
@@ -60,10 +75,12 @@ pub(crate) fn supports_version(version: u16) -> bool {
 
 /// The byte limit of the payload of `tag`.
 pub(crate) fn tag_limit(tag: u8) -> usize {
-    if tag == WINDOWS {
-        MAX_WINDOWS_BYTES
-    } else {
-        MAX_CONTROL_BYTES
+    match tag {
+        WINDOWS | FAMILIES | FAMILY_SNAPSHOT | FAMILY_OPERATION_RESULT => MAX_WINDOWS_BYTES,
+        ICON_REQUEST => super::app_icon::MAX_ICON_REQUEST_BYTES,
+        ICON_REPLY => super::app_icon::MAX_ICON_REPLY_BYTES,
+        PRESENTED => 16,
+        _ => MAX_CONTROL_BYTES,
     }
 }
 
@@ -82,22 +99,21 @@ pub(crate) async fn write_frame<W: AsyncWrite + Unpin>(
 
 /// Reads one frame. `limit` is the largest payload the reading side accepts
 /// at all (`MAX_CONTROL_BYTES` on the host, `MAX_WINDOWS_BYTES` on the
-/// viewer); a longer head is refused before the payload is allocated, and a
-/// payload above the limit of its own tag afterwards.
+/// viewer). Both the caller's ceiling and the individual tag ceiling are
+/// checked from the fixed-size header before payload allocation.
 pub(crate) async fn read_frame<R: AsyncRead + Unpin>(
     reader: &mut R,
     limit: usize,
 ) -> io::Result<(u8, Vec<u8>)> {
-    let (tag, payload) = read_payload(reader, limit).await.map_err(|error| {
-        if error.kind() == io::ErrorKind::InvalidData {
-            invalid("screen frame exceeds its byte limit")
-        } else {
-            error
-        }
-    })?;
-    if payload.len() > tag_limit(tag) {
+    let mut header=[0u8;5];
+    reader.read_exact(&mut header).await?;
+    let tag=header[0];
+    let length=u32::from_be_bytes([header[1],header[2],header[3],header[4]]) as usize;
+    if length>limit.min(tag_limit(tag)) {
         return Err(invalid("screen frame exceeds the limit of its tag"));
     }
+    let mut payload=vec![0u8;length];
+    reader.read_exact(&mut payload).await?;
     Ok((tag, payload))
 }
 

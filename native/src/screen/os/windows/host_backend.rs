@@ -91,7 +91,13 @@ impl ScreenHostBackend for WindowsBackend {
     }
 
     fn windows(&self) -> io::Result<WindowList> {
-        Ok(window_list::list(self.limits()))
+        let mut list=window_list::list(self.limits());
+        super::app_icons::attach(&mut list);
+        Ok(list)
+    }
+
+    fn icon(&self, entry: crate::screen::core::app_icon::AuthorizedIconEntry<'_>) -> io::Result<Option<crate::screen::core::app_icon::IconReply>> {
+        super::app_icons::load(entry)
     }
 
     fn open_source(
@@ -112,6 +118,13 @@ impl ScreenHostBackend for WindowsBackend {
         }
     }
 
+    fn open_family_member(&self,native:crate::remote_window::NativeWindowId)
+        ->Result<Box<dyn ScreenSource>,SourceRefusal> {
+        // WindowsSource's window branch opens WGC CreateForWindow only. Its
+        // DXGI fallback is confined to monitors; a failed window never crops one.
+        self.open_source(&SourceId::Window(native.0.to_string()),None)
+    }
+
     fn open_encoder(
         &self,
         choice: &CodecChoice,
@@ -120,8 +133,18 @@ impl ScreenHostBackend for WindowsBackend {
         SyntheticBackend.open_encoder(choice, size)
     }
 
+    fn open_encoder_for_stage(&self, request: &crate::screen::core::host_stage::StageRequest) -> io::Result<Box<dyn ScreenEncoder>> {
+        Ok(crate::screen::os::codec_inventory::registry().open_encoder_with_contract(&request.choice, request.size, request.fps, &[], request.frame_contract)?.encoder)
+    }
+
     fn inject(&self, events: &[InputEvent]) -> Result<(), ControlBlock> {
         super::input_send::inject(events)
+    }
+    fn inject_family(&self,member:&crate::remote_window::CaptureMember,events:&[InputEvent])->Result<(),ControlBlock> {
+        super::input_send::inject_family(member.geometry,events)
+    }
+    fn release_input(&self,events:&[InputEvent])->Result<(),ControlBlock> {
+        super::input_send::release(events)
     }
 }
 

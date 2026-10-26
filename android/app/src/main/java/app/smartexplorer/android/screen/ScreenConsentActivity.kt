@@ -51,6 +51,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 class ScreenConsentActivity : ComponentActivity() {
     private var session: Long = 0
     private var waiting by mutableStateOf(false)
+    private var unverifiedApp by mutableStateOf(false)
 
     private val capture = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val data = result.data
@@ -67,7 +68,14 @@ class ScreenConsentActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             SmartExplorerTheme {
-                if (waiting) {
+                if (unverifiedApp) {
+                    AlertDialog(
+                        onDismissRequest = { finish() },
+                        title = { Text("App-Zuordnung nicht prüfbar") },
+                        text = { Text(ScreenProjectionIdentity.APP_EXPLANATION) },
+                        confirmButton = { TextButton(onClick = { finish() }) { Text("Schließen") } },
+                    )
+                } else if (waiting) {
                     AlertDialog(
                         onDismissRequest = {},
                         title = { Text("Bildschirmfreigabe wird vorbereitet") },
@@ -85,6 +93,7 @@ class ScreenConsentActivity : ComponentActivity() {
         }
         if (savedInstanceState != null) {
             session = savedInstanceState.getLong(EXTRA_SESSION)
+            unverifiedApp = savedInstanceState.getBoolean(EXTRA_UNVERIFIED_APP)
             return
         }
         val approvalId = intent.getStringExtra(EXTRA_APPROVAL_ID)
@@ -101,6 +110,7 @@ class ScreenConsentActivity : ComponentActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         outState.putLong(EXTRA_SESSION, session)
+        outState.putBoolean(EXTRA_UNVERIFIED_APP, unverifiedApp)
     }
 
     /** The S1 answer first, then the system dialog for the session the core starts for [deviceId]. */
@@ -123,6 +133,16 @@ class ScreenConsentActivity : ComponentActivity() {
     private fun askSystem(id: Long) {
         session = id
         ScreenHostNotifier.cancelConsent(this, id)
+        if (ScreenProjectionIdentity.requiresPackageProof(ScreenHostControl.requestedSource(id).orEmpty())) {
+            unverifiedApp = true
+            lifecycleScope.launch { ScreenHostControl.projectionFailed(id, ScreenProjectionIdentity.UNVERIFIED_APP) }
+            return
+        }
+        if (getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked == true) {
+            lifecycleScope.launch { ScreenHostControl.projectionFailed(id, "host_locked") }
+            finish()
+            return
+        }
         val manager = getSystemService(MediaProjectionManager::class.java)
         if (manager == null) {
             lifecycleScope.launch { endQuietly(id, "capture_failed") }
@@ -145,6 +165,7 @@ class ScreenConsentActivity : ComponentActivity() {
         const val EXTRA_APPROVAL_ID = "approvalId"
         const val EXTRA_DECISION = "decision"
         const val EXTRA_DEVICE_ID = "deviceId"
+        private const val EXTRA_UNVERIFIED_APP = "unverifiedApp"
         private const val START_WAIT_MS = 30_000L
 
         /** For a session the core started ([ScreenHostStart]). */

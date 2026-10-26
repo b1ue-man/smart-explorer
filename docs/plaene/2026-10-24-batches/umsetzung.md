@@ -117,6 +117,7 @@ Fernfenster, Programmstart und RDP besitzen abgegrenzte Umsetzungsaufträge.
 | B6 ausgehandelte Paket-/Queue-/Pullspeichergrenzen (80) | `decoder_identity` (Folgeauftrag) | `gpt-6.1-sol`, `xhigh` | 9 |
 | B8 Pixmapgrenze für X11-Familienmitglieder (81) | `review_batch8` (Folgeauftrag) | Nutzervorgabe `gpt-6-astra`, `xhigh` | 9 |
 | B6 Nachreview des vollständigen Paket-/IPC-/Decoderbudgets (83) | `review_b6_final` (Folgeauftrag) | Nutzervorgabe `gpt-6-astra`, `xhigh` | 9 |
+| B6 Android-Skalierung und vollständige Bildbesitzerbilanz (84) | `decoder_identity` (Folgeauftrag) | `gpt-6.1-sol`, `xhigh` | 9 |
 
 Belegt sind die expliziten Modell-/Effortparameter der genannten Hostaufrufe.
 Antwortmodell-Metadaten sind über das verwendete Collaboration-Werkzeug nicht
@@ -195,14 +196,17 @@ statisch. Der B2-Nachreview schließt N1–N11 einschließlich des Crossdevice-
 Stagefallbacks vor unklarer Mutation. B4 ist statisch geschlossen. B2 und B4
 sind mit `d0138b4a` und `c5d3e899` auf `main` gepusht.
 Der finale B5-Nachreview schließt R01–R06 einschließlich des unabhängigen
-lokalen Exec-IPC-Abbruchs statisch. B6 korrigiert noch Decoder-/Latenzgrenzen.
-B7 korrigiert die fünf Befunde zu X11-Geometrie, Installerrollback,
-Dienstbereitschaft, IPv6-Loopback und Skriptdistribution. B8 schließt seine fünf
-Befunde einschließlich der Erstgrant-Zusammenführung statisch.
-Kein Bericht ersetzt
-die gemeinsame Remote-Abnahme.
+lokalen Exec-IPC-Abbruchs statisch. B6-R1 bis B6-R8 sind nach den
+Decoder-, Referenz-, Qualitäts- und Speicherbesitzerkorrekturen statisch
+geschlossen. B7-01 bis B7-06 und B7-R1 sind statisch geschlossen; B8
+einschließlich Erstgrant-Zusammenführung und Pixmapgrenze ebenfalls.
+Kein Bericht ersetzt die gemeinsame Remote-Abnahme.
 
 ## Integrationsbefunde
+
+Die Einträge dokumentieren die zeitliche Folge der Integration. Frühere
+offene Befunde beziehen sich auf den jeweiligen Zwischenstand; der aktuelle
+Reviewstatus steht im Abschnitt „Zusätzlicher Reviewauftrag“.
 
 - P26: Der gemeinsame Credentialrecord und die Tokenrotation sind integriert.
   Bei der Autorprüfung wurde die Sperre persistierter terminaler
@@ -498,3 +502,56 @@ noch aus; dafür wurde kein lokaler Build oder Test gestartet.
   Unmittelbare PullQueue-Layoutfälle behalten ihren rohen Payloadvertrag.
   Die Sessioncache-Erwartungen benutzen vollständige `Long`-IDs. Diese
   Vertragsanpassung ist noch kein ausgeführter Funktionsnachweis.
+- B6-Android-Vorallokation und Surfacewechsel: Die SPS-Prüfung erhält auf allen
+  vier Decodereingängen das angenommene Bildbudget und prüft codierte Maße
+  einschließlich des bereits geltenden maximalen 15-Pixel-Paddings vor
+  `configure` beziehungsweise `queueInputBuffer`. Der lokale Encoder behält
+  seine getrennte Quellgrenze. `ScreenSession` besitzt den Pullbuffer nun über
+  Surfacepausen hinweg; Full und Preview reichen dieselbe Instanz weiter.
+  Damit hängt die Wiederverwendung nicht mehr von einem noch laufenden
+  Vorgängerthread ab. Diese beiden Main-Anschlüsse liegen im B6-Nachreview.
+- Gemeinsamer Integrationscheckpoint: `1aea1216` verbindet die Batchmodule mit
+  Native-Root, Backends, Daemon, CLI/MCP, Android-Bridge und Oberflächen. Er
+  enthält außerdem die aktualisierten Oberflächendokumente und ist auf `main`
+  gepusht. Der abschließende B6-Quellcheckpoint folgt; keine Veröffentlichung.
+- B6 verbleibende R7-Grenze: Die CPU-Skalierung in `ScreenScaling.resize`
+  begrenzte Ziel-IntArray und Zielbitmap nur global, obwohl eine gültige kleine
+  Quelle innerhalb eines kleineren v2-Budgets auf einen großen Viewport
+  vergrößert werden kann. Auswahl 84 beauftragt die durchgängige Budgetbindung
+  einschließlich Quell-/Zielarrays, Skalierungszwischenpuffern, wartenden
+  Ausgaben und Full-/Preview-Übergabe. Die bereits korrigierten SPS-,
+  Session-Pullbuffer- und R4-Grenzen bleiben erhalten. Area-Verkleinerung,
+  Catmull-Rom-Vergrößerung und Native-Zoom bleiben gefordert; ein wirklich
+  nicht finanzierbares Ziel liefert den konkreten Ressourcenfehler vor der
+  Allokation. Der Nachreview bleibt ausschließlich für diese Grenze offen.
+
+- B6-Scalerkandidat: Die Umsetzung besitzt jetzt einen sitzungsweiten
+  `ScreenScaleWorker` mit einer laufenden Skalierung, einem zusammengefassten
+  Folgeauftrag und expliziten Ausgabeleases bis zur Compose-Ablösung.
+  `ScreenResample` erhält Area-Verkleinerung und Catmull-Rom-Vergrößerung;
+  Native-Zoom verwendet einen identischen Pixelcrop ohne Floatzeilen.
+  v2 reserviert `20I+32(R+1099)+(E−I)≤W` bei `I≤W/24`; Android
+  bilanziert 13 feste Bildbesitzer und die tatsächlichen Skalierungsausgaben
+  samt Zwischenpuffern gegen den Rest. Eine Erstzulassung berücksichtigt
+  außerdem die nächste Ersetzung derselben Zielgröße. Die letzten
+  Autorabschlussmeldungen scheiterten an Modellkapazität. Main übernahm
+  die vollständige statische Abschlusslektüre; Rust-/Kotlin-AST und
+  Whitespaceprüfung sind ohne Befund. Die Produktionsfläche liegt jetzt
+  beim abschließenden Astra-Nachreview. Kein Compiler-/Laufzeitbeleg.
+
+- B6-Abschlussnachreview: Astra hat R7 nach vollständiger Lektüre der
+  Scaler-/Lease-/Composegrenzen statisch geschlossen. Die 8-MiB-Bilanz mit
+  `I=349524`, `N=39`, `R=40624`, `E=412510` und `Pull=349556` ergibt
+  `8388602` Byte; die tatsächliche Skalierungsreserve beträgt `2446674` Byte.
+  Diese Rechnung begrenzt lebende Produktpuffer, nicht Prozess-RSS,
+  MediaCodec-/Treiberpuffer oder die spätere Speicherfreigabe durch GC.
+  Unfinanzierbare Ziele liefern vor großen Allokationen den Ressourcenfehler.
+  Rootgraph nach den abschließenden Nativeänderungen vollständig als AST
+  extrahiert und geclustert; die vier Dokumente unter `native/src` bleiben
+  durch `--code-only` außerhalb dieses AST-Graphen.
+
+- B6-Auflösungsgrenze des aktuellen Kandidaten: `MAX_WORKING_BYTES=512 MiB`
+  und `I≤W/24` begrenzen v2 auf 5.592.405 Pixel. 3840×2160 wird dadurch
+  verkleinert; die getrennten Legacy-/RAW-Verträge werden nicht auf diese
+  Reserve umgestellt. Die Wirkung auf P30/P31 ist ausdrücklich im
+  Gesamtreview zu beurteilen, statt Auflösungsparität zu behaupten.

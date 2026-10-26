@@ -57,6 +57,9 @@ pub(super) struct Inner {
 
 pub(super) fn hello(view: CapabilityDecision) -> ScreenHelloOk {
     ScreenHelloOk {
+        family_version: None,
+        icon_version: None,
+        frame_contract: None,
         authorization: ScreenAuthorization {
             view,
             control: CapabilityDecision::Allow,

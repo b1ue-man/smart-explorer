@@ -1,8 +1,9 @@
 //! Window lists and still pictures of another device through the relayed
 //! viewer session (SCR-M4, U16-5): `se screen windows`, `se screen snapshot`
-//! and the MCP tool `screen`. Both open `ScreenIpcRequest::Stream` in the
-//! mode `view` (at most one picture a second), send `LIST_WINDOWS` or
-//! `SNAPSHOT` once and end the session. Until the host accepts, nothing
+//! and the MCP tool `screen`. Lists use a negotiated metadata channel;
+//! older hosts receive LIST_WINDOWS over their synthetic source. Neither
+//! list path opens screen capture. Snapshots retain the view stream and
+//! SNAPSHOT request. Each call ends its session. Until the host accepts, nothing
 //! limits the wait (its user may be asked, C7) unless the caller sets
 //! `accept_within`; then the session is ended and the call fails with
 //! `approval_pending`. After the acceptance the answer takes at most
@@ -15,10 +16,11 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 use super::ipc_protocol::screen::{RelayEnd, StreamRequest};
-use super::screen_ipc_client::{screen_stream, StreamControl, StreamEvent};
+use super::screen_ipc_client::{screen_stream, screen_metadata_stream, screen_metadata_stream_for_node, StreamControl, StreamEvent};
+use crate::screen::core::app_icon::{IconRequest,IconReply};
 use crate::screen::core::negotiate::CodecOffer;
 use crate::screen::core::pixel_convert::{BgraImage, FrameSize};
-use crate::screen::core::snapshot::decode_snapshot;
+use crate::screen::core::snapshot::decode_snapshot_with_limits;
 use crate::screen::core::viewer_client::refusal_text;
 use crate::screen::core::window_list::{SourceId, WindowList};
 use crate::screen::core::wire_binary::StreamKind;
@@ -53,17 +55,29 @@ struct Relayed {
 }
 
 impl Relayed {
-    fn open(target: PeerOpenTarget, source: Option<SourceId>) -> Result<Self, String> {
+    fn open(target: PeerOpenTarget, source: Option<SourceId>, metadata: bool) -> Result<Self, String> {
+        Self::open_for_node(target, source, metadata, None)
+    }
+
+    fn open_for_node(target: PeerOpenTarget, source: Option<SourceId>, metadata: bool,
+        expected_node: Option<&str>) -> Result<Self, String> {
         let request = StreamRequest {
+            expected_node: expected_node.map(str::to_owned),
             mode: SessionMode::View,
             source,
             decoders: vec![CodecOffer::tiles()],
             display_size: None,
             max_fps: 1,
+            frame_capabilities: None,
         };
-        let mut stream = screen_stream(target, request)?;
+        let mut stream = if metadata {
+            match expected_node {
+                Some(expected) => screen_metadata_stream_for_node(target, expected)?,
+                None => screen_metadata_stream(target)?,
+            }
+        } else {screen_stream(target, request)?};
         let control = stream.control();
-        let (sender, events) = mpsc::channel();
+        let (sender, events) = mpsc::sync_channel(1);
         std::thread::Builder::new()
             .name("screen-still-reader".into())
             .spawn(move || loop {
@@ -241,16 +255,23 @@ fn snapshot_over(
     let deadline = Instant::now() + read;
     let mut records = Vec::new();
     let mut stream = None;
-    let size = loop {
+    let header = loop {
         match event_before(session, deadline)? {
             StreamEvent::Record { header, record } if header.kind == StreamKind::Snapshot => {
-                if *stream.get_or_insert(header.gop_id) != header.gop_id {
+                let accepted_header = *stream.get_or_insert(header);
+                if accepted_header.gop_id != header.gop_id {
                     continue;
+                }
+                if accepted_header != header {
+                    return Err("snapshot picture metadata changed within one group".into());
+                }
+                if header.frame_contract != hello.frame_contract {
+                    return Err("snapshot frame contract differs from the accepted session".into());
                 }
                 let more = record.has_more();
                 records.push(record);
                 if !more {
-                    break header.size;
+                    break header;
                 }
             }
             StreamEvent::Host(HostFrame::Error(error)) => return Err(error_text(&error)),
@@ -259,7 +280,8 @@ fn snapshot_over(
         }
     };
     session.close();
-    let image = decode_snapshot(&records, size).map_err(|error| error.to_string())?;
+    let limits = header.frame_contract.map_or(crate::screen::core::frame_budget::FrameLimits::LEGACY, |contract| contract.limits);
+    let image = decode_snapshot_with_limits(&records, header.size, limits).map_err(|error| error.to_string())?;
     let source = source.map_or_else(|| primary_source(&hello), |source| source.to_string());
     Ok(StillImage { image, source })
 }
@@ -279,7 +301,7 @@ pub(crate) fn screen_windows_within(
     accept_within: Option<Duration>,
     mut pending: impl FnMut(Capability),
 ) -> Result<WindowList, String> {
-    let mut session = Relayed::open(target, None)?;
+    let mut session = Relayed::open(target, None, true)?;
     windows_over(&mut session, accept_within, READ_TIMEOUT, &mut pending)
 }
 
@@ -303,7 +325,7 @@ pub(crate) fn screen_snapshot_within(
     accept_within: Option<Duration>,
     mut pending: impl FnMut(Capability),
 ) -> Result<StillImage, String> {
-    let mut session = Relayed::open(target, source.clone())?;
+    let mut session = Relayed::open(target, source.clone(), false)?;
     snapshot_over(
         &mut session,
         source,
@@ -317,3 +339,28 @@ pub(crate) fn screen_snapshot_within(
 #[cfg(test)]
 #[path = "screen_ipc_still_tests.rs"]
 mod tests;
+
+#[path = "screen_ipc_families.rs"]
+mod families;
+pub(crate) use families::{screen_families, screen_families_for_node};
+
+/// A current authorized list target's PNG; unavailable or older peers return None.
+pub(crate) fn screen_icon(target: PeerOpenTarget, request: IconRequest) -> Result<Option<IconReply>,String> {
+    request.validate().map_err(|error|error.to_string())?;
+    let mut session=Relayed::open(target,None,true)?;
+    let hello=accept(&mut session,Some(READ_TIMEOUT),&mut |_|{})?;
+    if hello.icon_version!=Some(crate::screen::core::app_icon::ICON_VERSION) {return Ok(None);}
+    session.send(&ViewerFrame::IconRequest(request.clone())).map_err(|error|error.to_string())?;
+    let deadline=Instant::now()+READ_TIMEOUT;
+    loop {
+        match event_before(&mut session,deadline)? {
+            StreamEvent::Host(HostFrame::IconReply(response)) if response.request==request=>{
+                response.validate().map_err(|error|error.to_string())?;
+                return Ok(response.content);
+            }
+            StreamEvent::Host(HostFrame::Error(error))=>return Err(error_text(&error)),
+            StreamEvent::End(end)=>return Err(end_text(&end)),
+            _=>{}
+        }
+    }
+}

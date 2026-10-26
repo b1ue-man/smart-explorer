@@ -14,7 +14,7 @@ use super::screen_prefs::Fit;
 use super::screen_session::{Picture, PictureData, ViewerSession};
 use super::screen_stats_overlay;
 use super::screen_texture_cpu::CpuTexture;
-use super::screen_wgpu_yuv::{paint_callback, YuvFrame};
+use super::screen_wgpu_yuv::YuvFrame;
 use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::wire_control::ViewerFrame;
 
@@ -48,40 +48,19 @@ pub(crate) struct ViewResult {
 
 enum Current {
     Cpu(FrameSize),
-    Gpu(Arc<YuvFrame>),
+    Gpu(Arc<YuvFrame>, super::screen_presented::PresentedFrame),
 }
 
 impl Current {
     fn size(&self) -> FrameSize {
         match self {
             Self::Cpu(size) => *size,
-            Self::Gpu(frame) => frame.size,
+            Self::Gpu(frame, _) => frame.size,
         }
     }
 }
 
-/// Where the picture of `size` lies in `area` (points). `pan` shifts a 1:1
-/// picture that is larger than the area.
-pub(crate) fn image_rect(area: Rect, size: FrameSize, fit: Fit, ppp: f32, pan: Vec2) -> Rect {
-    let (w, h) = (size.width as f32, size.height as f32);
-    let dest = match fit {
-        Fit::Fit => {
-            let scale = (area.width() / w).min(area.height() / h);
-            Vec2::new(w * scale, h * scale)
-        }
-        Fit::Actual => Vec2::new(w / ppp, h / ppp),
-    };
-    let place = |dest: f32, room: f32, start: f32, pan: f32| {
-        if dest <= room {
-            start + (room - dest) / 2.0
-        } else {
-            start - pan.clamp(0.0, dest - room)
-        }
-    };
-    let x = place(dest.x, area.width(), area.min.x, pan.x);
-    let y = place(dest.y, area.height(), area.min.y, pan.y);
-    Rect::from_min_size(Pos2::new(x, y), dest)
-}
+pub(crate) use super::screen_viewport::image_rect;
 
 /// The pan after `dt` seconds with the pointer at `hover`: toward the edge it
 /// is near, while the picture is larger than the area there.
@@ -125,6 +104,7 @@ pub(crate) struct ViewWidget {
     /// The GPU path takes the planes; cleared when a picture did not fit it.
     gpu: bool,
     was_focused: bool,
+    visibility: super::screen_visibility::VisibilityTracker,
 }
 
 impl ViewWidget {
@@ -136,19 +116,22 @@ impl ViewWidget {
             mapper: None,
             gpu,
             was_focused: true,
+            visibility: super::screen_visibility::VisibilityTracker::default(),
         }
     }
 
     fn accept(&mut self, ctx: &egui::Context, session: &ViewerSession, picture: Picture) {
         match picture.data {
             PictureData::Bgra(image) => {
-                self.cpu.update(ctx, &image);
+                self.cpu.update_frame(ctx, &image, picture.presented);
                 self.current = Some(Current::Cpu(picture.size));
             }
             PictureData::Yuv(planes) => {
                 let frame = YuvFrame::new(picture.size, planes);
-                if self.gpu && frame.fits() {
-                    self.current = Some(Current::Gpu(Arc::new(frame)));
+                let fits_texture = super::screen_wgpu_yuv::texture_limit().is_some_and(|limit|
+                    frame.size.width <= limit && frame.size.height <= limit);
+                if self.gpu && frame.fits() && fits_texture {
+                    self.current = Some(Current::Gpu(Arc::new(frame), picture.presented));
                 } else {
                     // The next pictures come as BGRA.
                     self.gpu = false;
@@ -181,6 +164,16 @@ impl ViewWidget {
         self.flush(session, true);
     }
 
+    pub(crate) fn source_changed(&mut self, session: &ViewerSession) {
+        self.release_input(session);
+        session.invalidate_input();
+        let _ = session.take_picture();
+        self.current = None;
+        self.cpu = CpuTexture::default();
+        self.pan = Vec2::ZERO;
+        self.visibility.invalidate();
+    }
+
     /// The mapper, made on demand (tests).
     #[cfg(test)]
     pub(crate) fn mapper_mut(
@@ -204,8 +197,17 @@ impl ViewWidget {
         params: &ViewParams,
     ) -> ViewResult {
         let ctx = ui.ctx().clone();
+        let window = ctx.data(|data| data.get_temp::<super::screen_visibility::WindowVisibility>(egui::Id::new("screen_window_visibility"))).unwrap_or_default();
+        if window.hidden() {
+            self.release_input(session);
+            self.current = None;
+            self.cpu = CpuTexture::default();
+        }
+        session.refresh_visibility();
         if let Some(picture) = session.take_picture() {
-            self.accept(&ctx, session, picture);
+            if !window.hidden() && session.can_present(picture.presented) {
+                self.accept(&ctx, session, picture);
+            }
         }
         let ppp = ctx.pixels_per_point();
         let available = ui.available_size();
@@ -227,22 +229,37 @@ impl ViewWidget {
             }
             let dest = image_rect(area, size, params.fit, ppp, self.pan);
             let nearest = params.fit == Fit::Actual;
+            let mut rendered = false;
             match self.current.as_ref() {
                 Some(Current::Cpu(_)) => {
+                    self.cpu.prepare(&ctx, if nearest { [size.width as usize, size.height as usize] }
+                        else { [(dest.width()*ppp).round().max(1.0) as usize, (dest.height()*ppp).round().max(1.0) as usize] });
+                    if self.cpu.failed() {
+                        painter.text(area.center(),Align2::CENTER_CENTER,"Bildskalierung nicht verfügbar: Renderer- oder Speicherressource fehlt.",FontId::proportional(16.0),Color32::WHITE);
+                    }
                     if let Some(texture) = self.cpu.id() {
                         let uv = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
                         painter.image(texture, dest, uv, Color32::WHITE);
+                        rendered = !self.cpu.failed();
+                        if rendered {
+                            if let Some(frame) = self.cpu.presented_frame().filter(|frame| session.can_present(*frame)) {
+                                painter.add(super::screen_presented::cpu_callback(dest,session.presented_callback(frame),
+                                    ctx.data(|data| data.get_temp::<bool>(egui::Id::new("screen_renderer_wgpu"))).unwrap_or(true)));
+                            }
+                        }
                     }
                 }
-                Some(Current::Gpu(frame)) => {
-                    painter.add(paint_callback(dest, frame.clone(), nearest));
+                Some(Current::Gpu(frame, presented)) => {
+                    painter.add(super::screen_wgpu_yuv::paint_presented(dest, frame.clone(), nearest,
+                        session.presented_callback(*presented)));
+                    rendered = true;
                 }
                 None => {}
             }
             if params.dimmed {
                 painter.rect_filled(dest, 0.0, Color32::from_black_alpha(128));
             }
-            shown = Some(Geometry { rect: dest, size });
+            shown = rendered.then_some(Geometry { rect: dest, size });
         } else if !params.status.is_empty() {
             painter.text(
                 area.center(),
@@ -254,6 +271,14 @@ impl ViewWidget {
         }
         if let Some(lines) = params.stats {
             screen_stats_overlay::show(ui, area, lines);
+        }
+        if let Some(report) = self.visibility.report(&window, area.intersect(ui.clip_rect()), shown.as_ref(), ppp) {
+            if report.state == crate::screen::core::visibility::VisibilityState::Hidden {
+                self.release_input(session);
+                self.current = None;
+                self.cpu = CpuTexture::default();
+            }
+            session.set_visibility(report);
         }
         let (locals, escape) = self.input(ui, session, &response, params, shown.as_ref());
         ViewResult {
@@ -303,7 +328,7 @@ impl ViewWidget {
         else {
             return (locals, escape);
         };
-        if !params.control {
+        if !params.control || !session.input_ready() || geometry.is_none() {
             if self.mapper.is_some() {
                 self.release_input(session);
             }

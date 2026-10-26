@@ -24,6 +24,9 @@ use crate::screen::core::pixel_convert::{BgraImage, FrameSize};
 #[path = "pipewire_trace.rs"]
 mod trace;
 use trace::Trace;
+#[path = "pipewire_identity.rs"]
+pub(super) mod identity;
+use identity::StreamIdentity;
 
 /// What `take` found.
 pub(crate) enum Taken {
@@ -33,67 +36,9 @@ pub(crate) enum Taken {
     Failed(String),
 }
 
-#[derive(Default)]
-struct LatestInner {
-    seq: u64,
-    taken: u64,
-    image: Option<BgraImage>,
-    failure: Option<String>,
-}
-
-/// The newest picture of the stream and its failure, shared between the
-/// loop's thread and the capture.
-#[derive(Default)]
-pub(crate) struct LatestFrame {
-    inner: Mutex<LatestInner>,
-    trace: Trace,
-}
-
-impl LatestFrame {
-    fn lock(&self) -> MutexGuard<'_, LatestInner> {
-        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    pub(crate) fn publish(&self, image: BgraImage) {
-        let mut inner = self.lock();
-        inner.seq += 1;
-        inner.image = Some(image);
-    }
-
-    /// What the stream did so far (the failure text of a silent stream).
-    #[cfg(test)]
-    pub(crate) fn describe(&self) -> String {
-        let pictures = self.lock().seq;
-        format!("{pictures} pictures; {}", self.trace.describe())
-    }
-
-    /// The stream runs, but every buffer it sent so far was an empty or
-    /// corrupted chunk: it only reports cursor moves, no screen change (the
-    /// source sends a picture only when the screen changes).
-    #[cfg(test)]
-    pub(crate) fn only_empty_chunks(&self) -> bool {
-        self.lock().seq == 0 && self.trace.only_empty_chunks()
-    }
-
-    pub(crate) fn fail(&self, reason: String) {
-        self.lock().failure.get_or_insert(reason);
-    }
-
-    /// A picture newer than the last one taken; else `Unchanged`, but with
-    /// `keyframe` the last picture again (a key frame always has one).
-    pub(crate) fn take(&self, keyframe: bool) -> Taken {
-        let mut inner = self.lock();
-        if let Some(reason) = &inner.failure {
-            return Taken::Failed(reason.clone());
-        }
-        let fresh = inner.seq != inner.taken;
-        inner.taken = inner.seq;
-        match &inner.image {
-            Some(image) if fresh || keyframe => Taken::Frame(image.clone()),
-            _ => Taken::Unchanged,
-        }
-    }
-}
+#[path = "pipewire_pause.rs"]
+mod pause;
+pub(crate) use pause::LatestFrame;
 
 /// Copies `size.height` rows of `src` (rows `stride` bytes apart, 4 bytes
 /// per pixel in `format`) into a tight BGRA image with opaque alpha.
@@ -135,6 +80,14 @@ struct CallbackData {
     latest: Arc<LatestFrame>,
     stream: AtomicPtr<c_void>,
     format: Mutex<Option<(VideoFormat, FrameSize)>>,
+    identity: Arc<StreamIdentity>,
+}
+
+impl CallbackData {
+    fn fail(&self, reason: String) {
+        self.latest.fail(reason);
+        self.identity.invalidate();
+    }
 }
 
 fn guarded(data: *mut c_void, work: impl FnOnce(&CallbackData)) {
@@ -143,18 +96,20 @@ fn guarded(data: *mut c_void, work: impl FnOnce(&CallbackData)) {
     let data = unsafe { &*(data as *const CallbackData) };
     let outcome = catch_unwind(AssertUnwindSafe(|| work(data)));
     if outcome.is_err() {
-        data.latest.fail("pipewire_callback: panic".into());
+        data.fail("pipewire_callback: panic".into());
     }
 }
 
 unsafe extern "C" fn on_state_changed(
     data: *mut c_void,
-    _old: c_int,
+    old: c_int,
     new: c_int,
     error: *const c_char,
 ) {
     guarded(data, |data| {
         data.latest.trace.state(new);
+        data.latest.on_state_changed(old,new);
+        data.identity.on_state(old, new);
         if new == PW_STREAM_STATE_ERROR {
             let text = if error.is_null() {
                 "unknown".to_string()
@@ -164,7 +119,9 @@ unsafe extern "C" fn on_state_changed(
                     .to_string_lossy()
                     .into_owned()
             };
-            data.latest.fail(format!("pipewire_stream: {text}"));
+            data.fail(format!("pipewire_stream: {text}"));
+        } else if data.identity.expired() {
+            data.latest.fail("portal_source_expired: choose the source again".into());
         }
     });
 }
@@ -196,11 +153,11 @@ unsafe extern "C" fn on_param_changed(data: *mut c_void, id: u32, param: *const 
                     .format(&format!("{format:?} {}x{}", size.width, size.height));
                 *lock_format(data) = Some((format, size));
             }
-            Some((_, size)) => data.latest.fail(format!(
+            Some((_, size)) => data.fail(format!(
                 "pipewire_size: {}x{} is outside the 4096 x 2304 frame limit",
                 size.width, size.height
             )),
-            None => data.latest.fail("pipewire_format".into()),
+            None => data.fail("pipewire_format".into()),
         }
     });
 }
@@ -230,8 +187,8 @@ unsafe extern "C" fn on_process(data: *mut c_void) {
             if last.is_null() {
                 return;
             }
-            if let Some(image) = copy_picture(data, last) {
-                data.latest.publish(image);
+            if data.latest.is_capture_active() && data.identity.connected() {
+                if let Some(image) = copy_picture(data, last) { data.latest.publish(image); }
             }
             (data.api.stream_queue_buffer)(stream, last);
         }
@@ -279,15 +236,14 @@ unsafe fn copy_picture(data: &CallbackData, buffer: *mut PwBuffer) -> Option<Bgr
     let offset = chunk.offset as usize;
     let mapped = block.maxsize as usize;
     if offset >= mapped {
-        data.latest
-            .fail("pipewire_buffer: offset beyond the buffer".into());
+        data.fail("pipewire_buffer: offset beyond the buffer".into());
         return None;
     }
     let bytes = std::slice::from_raw_parts(block.data.cast::<u8>().add(offset), mapped - offset);
     match convert_rows(bytes, stride, format, size) {
         Ok(image) => Some(image),
         Err(error) => {
-            data.latest.fail(error.to_string());
+            data.fail(error.to_string());
             None
         }
     }
@@ -316,15 +272,19 @@ impl PwStream {
     pub(crate) fn start(
         api: Arc<PipewireApi>,
         fd: OwnedFd,
-        node_id: u32,
+        identity: Arc<StreamIdentity>,
         latest: Arc<LatestFrame>,
     ) -> io::Result<Self> {
         let name = CString::new("smart-explorer-screen").map_err(io::Error::other)?;
+        identity.attach(Arc::downgrade(&latest));
+        if identity.expired() { return Err(io::Error::other("portal_source_expired")); }
+        latest.suspend_before_connect();
         let mut data = Box::new(CallbackData {
             api: api.clone(),
             latest,
             stream: AtomicPtr::new(null_mut()),
             format: Mutex::new(None),
+            identity,
         });
         let mut events = Box::new(PwStreamEvents {
             version: PW_VERSION_STREAM_EVENTS,
@@ -344,8 +304,9 @@ impl PwStream {
         // SAFETY: the calls follow the documented PipeWire order; every
         // object is checked for null and given back on failure.
         let created =
-            unsafe { create(&api, fd, node_id, &name, &mut data, &mut events, &mut hook) };
+            unsafe { create(&api, fd, &name, &mut data, &mut events, &mut hook) };
         let (thread_loop, context, core, stream) = created?;
+        data.latest.attach(api.clone(),thread_loop,stream);
         Ok(Self {
             api,
             thread_loop,
@@ -367,7 +328,6 @@ impl PwStream {
 unsafe fn create(
     api: &Arc<PipewireApi>,
     fd: OwnedFd,
-    node_id: u32,
     name: &CString,
     data: &mut CallbackData,
     events: &mut PwStreamEvents,
@@ -394,7 +354,7 @@ unsafe fn create(
     let stream = if core.is_null() {
         null_mut()
     } else {
-        make_stream(api, core, node_id, name, data, events, hook)
+        make_stream(api, core, name, data, events, hook)
     };
     if stream.is_null() {
         if !core.is_null() {
@@ -422,7 +382,6 @@ unsafe fn create(
 unsafe fn make_stream(
     api: &PipewireApi,
     core: *mut c_void,
-    node_id: u32,
     name: &CString,
     data: &mut CallbackData,
     events: &mut PwStreamEvents,
@@ -435,8 +394,17 @@ unsafe fn make_stream(
         "Capture",
         "media.role",
         "Screen",
+        "node.dont-fallback",
+        "true",
+        "node.dont-move",
+        "true",
+        "node.dont-reconnect",
+        "true",
     ]
     .map(|text| CString::new(text).unwrap_or_default());
+    let (node_id, serial) = data.identity.target();
+    let target = CString::new(serial.as_deref().unwrap_or("")).unwrap_or_default();
+    let target_key = CString::new("target.object").unwrap_or_default();
     let properties = (api.properties_new)(
         keys[0].as_ptr(),
         keys[1].as_ptr(),
@@ -444,6 +412,11 @@ unsafe fn make_stream(
         keys[3].as_ptr(),
         keys[4].as_ptr(),
         keys[5].as_ptr(),
+        keys[6].as_ptr(), keys[7].as_ptr(),
+        keys[8].as_ptr(), keys[9].as_ptr(),
+        keys[10].as_ptr(), keys[11].as_ptr(),
+        if serial.is_some() { target_key.as_ptr() } else { null() },
+        target.as_ptr(),
         null::<c_char>(),
     );
     if properties.is_null() {
@@ -461,7 +434,8 @@ unsafe fn make_stream(
     let mut words = vec![0u64; bytes.len().div_ceil(8)];
     std::ptr::copy_nonoverlapping(bytes.as_ptr(), words.as_mut_ptr().cast::<u8>(), bytes.len());
     let mut params: [*const SpaPod; 1] = [words.as_ptr().cast()];
-    let flags = PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS;
+    let flags = PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS
+        | super::pipewire_abi::PW_STREAM_FLAG_INACTIVE | super::pipewire_abi::PW_STREAM_FLAG_DONT_RECONNECT;
     let result = (api.stream_connect)(
         stream,
         PW_DIRECTION_INPUT,
@@ -479,6 +453,8 @@ unsafe fn make_stream(
 
 impl Drop for PwStream {
     fn drop(&mut self) {
+        self._data.identity.invalidate();
+        self._data.latest.detach();
         let api = &self.api;
         // SAFETY: the objects are ours and still alive; they go in the
         // reverse order of their creation, the loop stops after them.

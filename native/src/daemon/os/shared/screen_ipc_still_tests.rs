@@ -53,6 +53,9 @@ impl StillSession for Script {
 
 fn hello(monitors: Vec<MonitorInfo>) -> ScreenHelloOk {
     ScreenHelloOk {
+        family_version: None,
+        icon_version: None,
+        frame_contract: None,
         authorization: ScreenAuthorization {
             view: CapabilityDecision::Allow,
             control: CapabilityDecision::Off,
@@ -195,6 +198,8 @@ fn records(image: &BgraImage, kind: StreamKind, gop_id: u64) -> Vec<Option<Strea
         .unwrap();
     let count = payloads.len();
     let header = GopHeader {
+            family_layout_revision: None,
+        frame_contract: None,
         gop_id,
         kind,
         codec: crate::screen::core::negotiate::CodecKind::Tiles,

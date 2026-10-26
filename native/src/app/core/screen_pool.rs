@@ -56,11 +56,13 @@ pub(crate) fn preview_gap_ms(interval_ms: u64) -> u64 {
 
 pub(crate) fn preview_request(offers: &[CodecOffer], edge: u32, interval_ms: u64) -> StreamRequest {
     StreamRequest {
+            expected_node: None,
         mode: SessionMode::Preview,
         source: None,
         decoders: offers.to_vec(),
         display_size: Some(FrameSize::new(edge, edge)),
         max_fps: preview_fps(interval_ms),
+        frame_capabilities: renderer_capabilities(),
     }
 }
 
@@ -71,6 +73,7 @@ pub(crate) fn full_request(
     control: bool,
 ) -> StreamRequest {
     StreamRequest {
+            expected_node: None,
         mode: if control {
             SessionMode::Control
         } else {
@@ -80,7 +83,15 @@ pub(crate) fn full_request(
         decoders: offers.to_vec(),
         display_size: Some(display),
         max_fps: FULL_FPS,
+        frame_capabilities: renderer_capabilities(),
     }
+}
+
+fn renderer_capabilities() -> Option<crate::screen::core::frame_budget::FrameCapabilities> {
+    let side = super::screen_wgpu_yuv::texture_limit()?;
+    Some(crate::screen::core::frame_budget::FrameCapabilities::legacy_resources(
+        FrameSize::new(side, side),
+    ))
 }
 
 /// `SET_MODE` to the full view with the viewer's settings.

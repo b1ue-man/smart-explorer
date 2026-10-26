@@ -25,6 +25,7 @@ fn no_display_reason(reason: &str) -> String {
         "monitor_not_found" => "Bildschirm nicht gefunden",
         "window_not_found" => "Fenster nicht gefunden",
         "portal_selects_source" => "die Quelle wählt der Nutzer am Gerät",
+        "source_identity_unavailable" => "Android bestätigt keine Paketidentität. Android-Systemauswahl öffnen und die Quelle am Gerät auswählen",
         "no_display" => "keine Anzeige",
         other => other,
     }

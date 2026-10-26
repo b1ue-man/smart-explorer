@@ -30,6 +30,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.smartexplorer.android.R
 import app.smartexplorer.android.api.ScreenWindows
+import app.smartexplorer.android.screen.ScreenIconRef
+import app.smartexplorer.android.screen.ScreenIconTarget
 
 /** What the viewer asks the host for besides the picture: the shown source and the two quality switches. */
 data class ViewSettings(val source: String? = null, val sharpness: Boolean = false, val lossless: Boolean = false)
@@ -78,6 +80,10 @@ internal fun ScreenTopBar(
     onSettings: (ViewSettings) -> Unit,
     onStatus: (() -> Unit)?,
     onClose: () -> Unit,
+    nativePixels: Boolean = false,
+    onNativePixels: () -> Unit = {},
+    immersive: Boolean = false,
+    onFullscreen: () -> Unit = {},
 ) {
     Surface(color = Color.Black.copy(alpha = 0.6f), contentColor = Color.White) {
         Column(Modifier.statusBarsPadding().padding(horizontal = 8.dp, vertical = 4.dp)) {
@@ -94,9 +100,13 @@ internal fun ScreenTopBar(
                 if (controlOn && (ui.input.text || ui.input.keyboard)) {
                     TextButton(onClick = onKeyboard) { Text(stringResource(R.string.screen_view_keyboard)) }
                 }
+                TextButton(onClick = onNativePixels) { Text(if (nativePixels) "Einpassen" else "1:1") }
+                TextButton(onClick = onFullscreen) { Text(if (immersive) "Vollbild verlassen" else "Vollbild") }
                 SettingsMenu(settings, onSettings)
                 TextButton(onClick = onClose, modifier = Modifier.testTag("screen_view_close")) { Text(stringResource(R.string.screen_view_close)) }
             }
+            if (immersive) Text("Zurück oder Randgeste · Strg+Alt+Pause · Strg+Alt+Umschalt+F · F11", style = MaterialTheme.typography.bodySmall)
+            ui.codecFallback?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             if (status.isNotEmpty()) {
                 val modifier = if (onStatus != null) Modifier.clickable(onClick = onStatus) else Modifier
                 Text(status, style = MaterialTheme.typography.bodySmall, modifier = modifier)
@@ -112,7 +122,8 @@ private fun WindowsMenu(ui: ScreenSessionState, source: String?, onSource: (Stri
         TextButton(onClick = { open = true; onList() }) { Text(stringResource(R.string.screen_view_windows)) }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             val pick = { id: String? -> open = false; onSource(id) }
-            DropdownMenuItem(text = { Text(stringResource(R.string.screen_view_whole_screen)) }, onClick = { pick(null) })
+            val systemSelected = "android_system_selected_source" in ui.limits
+            DropdownMenuItem(text = { Text(if (systemSelected) "Android-Systemauswahl" else stringResource(R.string.screen_view_whole_screen)) }, onClick = { pick(null) })
             ui.monitors.forEachIndexed { index, monitor ->
                 val label = if (monitor.width == 0) stringResource(R.string.screen_view_monitor_pick_on_host) else monitor.name
                 DropdownMenuItem(
@@ -122,21 +133,37 @@ private fun WindowsMenu(ui: ScreenSessionState, source: String?, onSource: (Stri
             }
             if ("wayland_window_pick_on_host" in ui.limits) {
                 Text(stringResource(R.string.screen_view_window_pick_on_host), Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
-            } else {
-                windowEntries(ui.windows).forEach { (label, id) ->
-                    DropdownMenuItem(text = { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) }, onClick = { pick(id) })
-                }
+            }
+            if (systemSelected) Text("Die Quelle wird auf dem Android-Gerät im Systemdialog ausgewählt.", Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+            windowEntries(ui.windows).forEach { entry ->
+                DropdownMenuItem(
+                    text = { Text(entry.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    leadingIcon = {
+                        ScreenAppIcon(
+                            peer = ui.iconPeer,
+                            target = entry.target,
+                            reference = entry.icon.takeIf { ui.iconVersion == 1 },
+                            fetch = { request -> ui.iconFetch?.invoke(request) },
+                        )
+                    },
+                    enabled = !systemSelected && !ui.limits.contains("wayland_window_pick_on_host"),
+                    onClick = { pick(entry.source) },
+                )
             }
             DropdownMenuItem(text = { Text(stringResource(R.string.screen_view_windows_refresh)) }, onClick = onList)
         }
     }
 }
 
-/** (label, source) of every window and app of a window list; a window is „{title} ({app})“. */
+private data class WindowIconEntry(val label: String, val source: String, val target: ScreenIconTarget, val icon: ScreenIconRef?)
+
+/** Actual window/package target, label and reference remain one row. */
 @Composable
-private fun windowEntries(list: ScreenWindows?): List<Pair<String, String>> {
-    val windows = list?.windows.orEmpty().map { stringResource(R.string.screen_view_window_entry, it.title, it.app) to "window:${it.id}" }
-    val apps = list?.apps.orEmpty().map { it.name.ifBlank { it.appId } to "window:${it.appId}" }
+private fun windowEntries(list: ScreenWindows?): List<WindowIconEntry> {
+    val windows = list?.windows.orEmpty().map {
+        WindowIconEntry(stringResource(R.string.screen_view_window_entry, it.title, it.app), "window:${it.id}", ScreenIconTarget.window(it.id), it.icon)
+    }
+    val apps = list?.apps.orEmpty().map { WindowIconEntry(it.name.ifBlank { it.appId }, "window:${it.appId}", ScreenIconTarget.app(it.appId), it.icon) }
     return windows + apps
 }
 

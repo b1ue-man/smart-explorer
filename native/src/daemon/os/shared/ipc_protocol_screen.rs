@@ -11,6 +11,7 @@
 //! reply of the host's handshake as JSON, also `pending`), `RELAY_HOST` (a
 //! host control frame: its tag and payload as on the screen wire),
 //! `RELAY_RECORD` (a picture record: the 20-byte head of its picture group,
+//! the optional length-prefixed flattened v2 contract/family-revision JSON,
 //! the 21-byte record head, the payload), `RELAY_BROKEN` (a picture group
 //! broke off: its id `u64`), `RELAY_CLOCK` (host clock minus viewer clock in
 //! µs, `i64`), `RELAY_END` (JSON `{code, detail}`). Client to worker:
@@ -38,6 +39,9 @@ pub(crate) const WATCH_WAIT_SECS: u64 = 25;
 /// What a viewer session asks the host for (the client hello's fields).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct StreamRequest {
+    /// Authenticated node of an app-start receipt; never inferred from a fresh target lookup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) expected_node: Option<String>,
     pub(crate) mode: SessionMode,
     #[serde(default)]
     pub(crate) source: Option<SourceId>,
@@ -45,6 +49,8 @@ pub(crate) struct StreamRequest {
     pub(crate) decoders: Vec<CodecOffer>,
     #[serde(default)]
     pub(crate) display_size: Option<FrameSize>,
+    #[serde(default)]
+    pub(crate) frame_capabilities: Option<crate::screen::core::frame_budget::FrameCapabilities>,
     pub(crate) max_fps: u16,
 }
 
@@ -64,11 +70,17 @@ pub(crate) struct BenchRequest {
 pub(crate) enum ScreenIpcRequest {
     /// Rights, platform, codecs, monitors and limits of `target`'s screen.
     Probe { target: PeerOpenTarget },
+    /// List/icons without opening the host's capture source.
+    Metadata { target: PeerOpenTarget },
+    /// An old daemon must reject the variant instead of silently ignoring the pin.
+    PinnedMetadata { target: PeerOpenTarget, expected_node: String },
     /// A viewer session relayed over this connection.
     Stream {
         target: PeerOpenTarget,
         request: StreamRequest,
     },
+    /// Requires a nonempty expected_node in request before opening the stream.
+    PinnedStream { target: PeerOpenTarget, request: StreamRequest },
     /// A measurement with the test picture of `target`.
     Bench {
         target: PeerOpenTarget,
@@ -135,7 +147,7 @@ pub(crate) const RELAY_VIEWER: u8 = 16;
 pub(crate) const RELAY_CLOSE: u8 = 17;
 
 /// Largest relay payload: a picture record (16 MiB) with both heads.
-pub(crate) const MAX_RELAY_BYTES: usize = 16 * 1024 * 1024 + 64;
+pub(crate) const MAX_RELAY_BYTES: usize = 16 * 1024 * 1024 + 64 + 1026;
 /// Largest relay payload from the client: one viewer control frame.
 pub(crate) const MAX_RELAY_VIEWER_BYTES: usize = 64 * 1024 + 1;
 
@@ -161,6 +173,16 @@ pub(crate) enum RelayHello {
     },
 }
 
+/// Same flattened v2 extension as the remote picture stream. Legacy v2 JSON
+/// without a family revision retains exactly its existing meaning.
+#[derive(Serialize, Deserialize)]
+struct RelayGopExtension {
+    #[serde(flatten)]
+    contract: crate::screen::core::frame_budget::FrameContract,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    family_layout_revision: Option<u64>,
+}
+
 /// The relay payload of one picture record: its picture group's head, the
 /// record head and the payload.
 pub(crate) fn encode_relay_record(
@@ -169,9 +191,28 @@ pub(crate) fn encode_relay_record(
 ) -> std::io::Result<Vec<u8>> {
     let len = u32::try_from(record.payload.len())
         .map_err(|_| std::io::Error::other("picture record is too large"))?;
-    let mut body =
-        Vec::with_capacity(GOP_HEADER_BYTES + RECORD_HEADER_BYTES + record.payload.len());
-    body.extend_from_slice(&header.encode()?);
+    let head = header.encode()?;
+    if record.payload.len() > header.record_limit() {
+        return Err(std::io::Error::other("picture record exceeds its frame contract"));
+    }
+    let extension = if let Some(contract) = header.frame_contract {
+        let extension = RelayGopExtension { contract, family_layout_revision: header.family_layout_revision };
+        let bytes = serde_json::to_vec(&extension).map_err(std::io::Error::other)?;
+        if bytes.len() > 1024 {
+            return Err(std::io::Error::other("screen relay contract exceeds 1 KiB"));
+        }
+        Some(bytes)
+    } else { None };
+    let overhead = GOP_HEADER_BYTES + RECORD_HEADER_BYTES
+        + extension.as_ref().map_or(0, |bytes| bytes.len() + 2);
+    let capacity = record.payload.len().checked_add(overhead)
+        .ok_or_else(|| std::io::Error::other("screen relay record length overflow"))?;
+    let mut body = Vec::with_capacity(capacity);
+    body.extend_from_slice(&head);
+    if let Some(bytes) = extension {
+        body.extend_from_slice(&(bytes.len() as u16).to_be_bytes());
+        body.extend_from_slice(&bytes);
+    }
     body.extend_from_slice(&len.to_be_bytes());
     body.extend_from_slice(&record.frame_id.to_be_bytes());
     body.extend_from_slice(&record.capture_ts_us.to_be_bytes());
@@ -189,7 +230,27 @@ pub(crate) fn decode_relay_record(payload: &[u8]) -> std::io::Result<(GopHeader,
         .ok_or_else(|| invalid("screen relay record is too short"))?;
     let mut bytes = [0u8; GOP_HEADER_BYTES];
     bytes.copy_from_slice(head);
-    let header = GopHeader::decode(&bytes)?;
+    let mut header = GopHeader::decode(&bytes)?;
+    let rest = if header.frame_contract.is_some() {
+        let (length, data) = rest.split_at_checked(2)
+            .ok_or_else(|| invalid("screen relay contract length is missing"))?;
+        let length = u16::from_be_bytes([length[0], length[1]]) as usize;
+        if length > 1024 {
+            return Err(invalid("screen relay contract exceeds 1 KiB"));
+        }
+        let (json, remaining) = data.split_at_checked(length)
+            .ok_or_else(|| invalid("screen relay contract is truncated"))?;
+        let extension: RelayGopExtension =
+            serde_json::from_slice(json).map_err(std::io::Error::other)?;
+        header.frame_contract = Some(extension.contract);
+        header.family_layout_revision = extension.family_layout_revision;
+        // Reuse the header's full validation, including a nonzero family
+        // revision bound to a v2 contract, without altering the received values.
+        header.encode()?;
+        remaining
+    } else {
+        rest
+    };
     let (fields, data) = rest
         .split_at_checked(RECORD_HEADER_BYTES)
         .ok_or_else(|| invalid("screen relay record is too short"))?;
@@ -230,10 +291,20 @@ pub(crate) fn read_relay(
     reader: &mut impl std::io::Read,
     limit: usize,
 ) -> std::io::Result<(u8, Vec<u8>)> {
+    read_relay_budgeted(reader, limit, limit)
+}
+
+/// Picture records have the accepted session's tighter allocation ceiling;
+/// control frames retain their existing independent protocol limit.
+pub(crate) fn read_relay_budgeted(
+    reader: &mut impl std::io::Read,
+    limit: usize,
+    record_limit: usize,
+) -> std::io::Result<(u8, Vec<u8>)> {
     let mut head = [0u8; 5];
     reader.read_exact(&mut head)?;
     let len = u32::from_be_bytes([head[1], head[2], head[3], head[4]]) as usize;
-    if len > limit {
+    if len > limit || (head[0] == RELAY_RECORD && len > record_limit) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "screen relay frame exceeds its limit",
@@ -286,6 +357,8 @@ mod tests {
         // A picture record crosses the relay unchanged; a length that does
         // not match is refused.
         let header = GopHeader {
+            family_layout_revision: None,
+            frame_contract: None,
             gop_id: 7,
             kind: crate::screen::core::wire_binary::StreamKind::Video,
             codec: crate::screen::core::negotiate::CodecKind::Tiles,
@@ -299,8 +372,26 @@ mod tests {
             payload: vec![1, 2, 3],
         };
         let body = encode_relay_record(&header, &record).unwrap();
-        assert_eq!(decode_relay_record(&body).unwrap(), (header, record));
+        assert_eq!(decode_relay_record(&body).unwrap(), (header, record.clone()));
         let cut = &body[..body.len() - 1];
         assert!(decode_relay_record(cut).is_err());
+
+        // A family layout belongs to the actual v2 picture header across IPC.
+        // Legacy v2 extensions still have no layout revision.
+        let mut header = header;
+        header.frame_contract = Some(crate::screen::core::frame_budget::FrameContract {
+            version: crate::screen::core::frame_budget::FRAME_PROTOCOL,
+            limits: crate::screen::core::frame_budget::FrameLimits::LEGACY,
+            hybrid_regions: true,
+        });
+        let body = encode_relay_record(&header, &record).unwrap();
+        assert_eq!(decode_relay_record(&body).unwrap(), (header, record.clone()));
+        header.family_layout_revision = Some(u64::MAX);
+        let body = encode_relay_record(&header, &record).unwrap();
+        assert_eq!(decode_relay_record(&body).unwrap(), (header, record));
+        header.family_layout_revision = Some(0);
+        assert!(encode_relay_record(&header, &FrameRecord {
+            frame_id: 43, capture_ts_us: 1_001, flags: 1, payload: vec![1],
+        }).is_err());
     }
 }

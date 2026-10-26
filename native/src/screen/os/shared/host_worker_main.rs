@@ -24,7 +24,8 @@ use crate::screen::core::host_backend::{
 };
 use crate::screen::core::host_stage::{StageEncoder, StageFrame, StageRequest};
 use crate::screen::core::negotiate::CodecChoice;
-use crate::screen::core::pixel_convert::downscale_bgra;
+use crate::screen::core::pixel_convert::downscale_bgra_with_limits;
+use crate::screen::core::frame_budget::FrameLimits;
 use crate::screen::core::wire_hello::ScreenErrorCode;
 use crate::screen::core::worker_wire::{read_message, send_reply, WorkerReply, WorkerRequest};
 
@@ -55,6 +56,7 @@ struct Running {
     hardware: bool,
     epoch: u64,
     choice: CodecChoice,
+    frame_contract: Option<crate::screen::core::frame_budget::FrameContract>,
 }
 
 struct Worker {
@@ -67,6 +69,9 @@ struct Worker {
     checked: Instant,
     /// The session may control (`OPEN` with `control`).
     control: bool,
+    capture_active: bool,
+    reference_generation:u64,
+    family: Option<super::host_worker_client::family_backend::WorkerFamily>,
 }
 
 fn failed(code: ScreenErrorCode, error: impl ToString) -> WorkerReply {
@@ -123,6 +128,9 @@ pub(crate) fn run_host_worker() -> i32 {
         produced: 0,
         checked: Instant::now(),
         control: false,
+        capture_active: true,
+        reference_generation:0,
+        family:None,
     };
     let mut input = io::stdin().lock();
     let mut output = io::stdout().lock();
@@ -144,6 +152,12 @@ pub(crate) fn run_host_worker() -> i32 {
             }
         };
         let reply = worker.handle(request);
+        let generation=worker.source.as_ref().map_or(0,|source|source.reference_generation());
+        if generation!=worker.reference_generation {worker.reference_generation=generation;worker.encoder=None;}
+        let regions=worker.source.as_ref().is_none_or(|source|source.supports_frame_regions());
+        let limits=worker.source.as_ref().map_or(FrameLimits::LEGACY,|source|source.frame_limits());
+        let family_layout_revision=worker.source.as_ref().and_then(|source|source.family_layout_revision());
+        let reply=WorkerReply::Reference {generation,regions,limits,family_layout_revision,reply:Box::new(reply)};
         if let Err(error) = send_reply(&mut output, &reply) {
             eprintln!("screen host process: {error}");
             return 1;
@@ -154,13 +168,45 @@ pub(crate) fn run_host_worker() -> i32 {
 impl Worker {
     fn handle(&mut self, request: WorkerRequest) -> WorkerReply {
         match request {
+            WorkerRequest::OpenFamily(open) => {
+                self.family=None; self.source=None; self.encoder=None;
+                CONTROL.store(open.control,Ordering::SeqCst);self.control=open.control;self.capture_active=true;
+                match super::host_worker_client::family_backend::WorkerFamily::open(open,self.backend.clone()) {
+                    Ok((family,source))=>{let size=source.size();self.reference_generation=source.reference_generation();
+                        self.family=Some(family);self.source=Some(source);WorkerReply::Opened {size}},
+                    Err(error)=>WorkerReply::Refused {reason:error.to_string()},
+                }
+            }
+            WorkerRequest::Family(command) => {
+                use crate::screen::core::worker_family::{FamilyCommand,FamilyReply};
+                let result=match (self.family.as_mut(),command) {
+                    (Some(family),FamilyCommand::Snapshot)=>family.snapshot().map(|snapshot|FamilyReply::Snapshot(Some(snapshot))),
+                    (None,FamilyCommand::Snapshot)=>Ok(FamilyReply::Snapshot(None)),
+                    (Some(family),FamilyCommand::Operation(request))=>family.operation(request).map(FamilyReply::Operation),
+                    (Some(family),FamilyCommand::Input(request))=>family.input(request).map(FamilyReply::Input),
+                    _=>Err(io::Error::new(io::ErrorKind::PermissionDenied,"source_has_no_window_family")),
+                };
+                match result {Ok(reply)=>WorkerReply::Family(reply),Err(error)=>capture_failed(&error)}
+            }
+            WorkerRequest::Release(events) => {
+                let allowed=events.iter().all(|event|matches!(event,
+                    crate::screen::core::input_model::InputEvent::Key {down:false,..}
+                    |crate::screen::core::input_model::InputEvent::Button {down:false,..}
+                    |crate::screen::core::input_model::InputEvent::Touch {phase:crate::screen::core::input_model::TouchPhase::End|crate::screen::core::input_model::TouchPhase::Cancel,..}));
+                let blocked=if !allowed || !self.control {Some(crate::screen::core::wire_control::ControlBlock::ControlUnavailable)}
+                    else if let Some(family)=self.family.as_mut() {family.release().err()} else {self.backend.release_input(&events).err()};
+                WorkerReply::InputDone {blocked,legacy_reconnect:self.source.as_ref().is_some_and(|s|s.legacy_input_invalid())}
+            }
             WorkerRequest::Open(open) => {
+                self.family=None;self.source=None;
                 self.encoder = None;
                 CONTROL.store(open.control, Ordering::SeqCst);
                 self.control = open.control;
+                self.capture_active=true;
                 match self.backend.open_source(&open.source, open.wanted) {
                     Ok(source) => {
                         let size = source.size();
+                        self.reference_generation=source.reference_generation();
                         super::note_input_target(&open.source);
                         self.source = Some(source);
                         WorkerReply::Opened { size }
@@ -170,15 +216,23 @@ impl Worker {
                     },
                 }
             }
+            WorkerRequest::SetCaptureActive(active) => {
+                self.capture_active=false; self.encoder=None;
+                match self.source.as_mut().ok_or_else(||io::Error::other("screen source unavailable")).and_then(|source|source.set_capture_active(active)) {
+                    Ok(()) => {self.capture_active=active; WorkerReply::CaptureActive(active)},
+                    Err(error) => capture_failed(&error),
+                }
+            }
             WorkerRequest::Produce(request) => self.produce(&request),
             WorkerRequest::Capture { frame_id } => self.raw(frame_id),
-            WorkerRequest::Input(events) => {
-                let blocked = if !self.control || self.source.is_none() {
+            WorkerRequest::Input(input) => {
+                let blocked = if !self.control || self.source.is_none() || self.family.is_some() {
                     Some(crate::screen::core::wire_control::ControlBlock::ControlUnavailable)
                 } else {
-                    self.backend.inject(&events).err()
+                    self.source.as_mut().and_then(|source|source.inject_input(self.backend.as_ref(),
+                        input.reference_generation,input.presented,&input.events).err())
                 };
-                WorkerReply::InputDone { blocked }
+                WorkerReply::InputDone { blocked,legacy_reconnect:self.source.as_ref().is_some_and(|s|s.legacy_input_invalid()) }
             }
             WorkerRequest::Close => failed(ScreenErrorCode::CaptureFailed, "closed"),
         }
@@ -186,6 +240,7 @@ impl Worker {
 
     /// One raw picture for a still image.
     fn raw(&mut self, frame_id: u64) -> WorkerReply {
+        if !self.capture_active {return failed(ScreenErrorCode::CaptureFailed,"screen capture is paused");}
         let Some(source) = self.source.as_mut() else {
             return failed(ScreenErrorCode::CaptureFailed, "no source is open");
         };
@@ -200,18 +255,45 @@ impl Worker {
     }
 
     fn produce(&mut self, request: &StageRequest) -> WorkerReply {
+        if !self.capture_active { return self.source.as_ref().map_or_else(||failed(ScreenErrorCode::CaptureFailed,"screen source unavailable"),|source|WorkerReply::Frame(StageFrame::Unchanged {source_size:source.size()})); }
         self.crash_hook();
         self.check_openh264();
+        let refresh = request.keyframe
+            || self.encoder.as_ref().is_none_or(|running| {
+                running.epoch != request.encoder_epoch
+                    || running.choice != request.choice
+                    || running.frame_contract != request.frame_contract
+                    || running.encoder.size() != request.size
+                    || running.encoder.needs_refresh()
+            });
         let Some(source) = self.source.as_mut() else {
             return failed(ScreenErrorCode::CaptureFailed, "no source is open");
         };
         let source_size = source.size();
+        let limits=request.frame_contract.map_or(FrameLimits::LEGACY,|contract|contract.limits)
+            .intersect(source.frame_limits());
+        if let Err(error)=limits.check(request.size) {return failed(ScreenErrorCode::CaptureFailed,error);}
+        let before=source.reference_generation();
+        if before!=self.reference_generation {
+            self.reference_generation=before;self.encoder=None;
+            return WorkerReply::Frame(StageFrame::Unchanged {source_size});
+        }
         // A request made for an older, larger source waits for the next.
         if request.size.width > source_size.width || request.size.height > source_size.height {
             return WorkerReply::Frame(StageFrame::Unchanged { source_size });
         }
         let capture_ts_us = now_us();
-        let image = match source.capture(request.frame_id, request.keyframe) {
+        let captured=source.capture(request.frame_id,refresh);
+        let after=source.reference_generation();let source_size=source.size();
+        if after!=before {
+            self.reference_generation=after;self.encoder=None;
+            return match captured {
+                Ok(SourceFrame::Paused(state))=>WorkerReply::Frame(StageFrame::Paused(state)),
+                Err(error)=>capture_failed(&error),
+                _=>WorkerReply::Frame(StageFrame::Unchanged {source_size}),
+            };
+        }
+        let image = match captured {
             Ok(SourceFrame::Frame(image)) => image,
             Ok(SourceFrame::Unchanged) => {
                 let source_size = source.size();
@@ -221,10 +303,13 @@ impl Worker {
             Err(error) => return capture_failed(&error),
         };
         let source_size = image.size();
+        if request.size.width > source_size.width || request.size.height > source_size.height {
+            return WorkerReply::Frame(StageFrame::Unchanged { source_size });
+        }
         let image = if image.size() == request.size {
             image
         } else {
-            match downscale_bgra(&image.view(), request.size) {
+            match downscale_bgra_with_limits(&image.view(), request.size, limits) {
                 Ok(image) => image,
                 Err(error) => return failed(ScreenErrorCode::CaptureFailed, error),
             }
@@ -240,7 +325,7 @@ impl Worker {
             };
             match running
                 .encoder
-                .encode(&image, request.keyframe, request.target_bps)
+                .encode_frame(&image, request)
             {
                 Ok(frame) => break (frame, running),
                 Err(error) => {
@@ -255,6 +340,11 @@ impl Worker {
         };
         if frame.records.is_empty() {
             return WorkerReply::Frame(StageFrame::Unchanged { source_size });
+        }
+        if let Err(error) = crate::screen::core::frame_size_caps::validate_encoded_budget(
+            request.frame_contract, request.choice.codec, &frame.records,
+        ) {
+            return failed(ScreenErrorCode::EncoderFailed, error);
         }
         let encoder = StageEncoder {
             name: running.encoder.name(),
@@ -277,22 +367,20 @@ impl Worker {
         let current = self.encoder.as_ref().is_some_and(|running| {
             running.epoch == request.encoder_epoch
                 && running.choice == request.choice
+                && running.frame_contract == request.frame_contract
                 && running.encoder.size() == request.size
         });
         if !current {
             self.encoder = None;
-            let opened = codec_inventory::registry().open_encoder_except(
-                &request.choice,
-                request.size,
-                request.fps,
-                &self.refused,
-            )?;
+            let opened = codec_inventory::registry()
+                .open_encoder_for_stage(request, &self.refused)?;
             self.encoder = Some(Running {
                 encoder: opened.encoder,
                 factory: opened.factory,
                 hardware: opened.hardware,
                 epoch: request.encoder_epoch,
                 choice: request.choice,
+                frame_contract: request.frame_contract,
             });
         }
         self.encoder

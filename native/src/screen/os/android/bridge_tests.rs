@@ -33,22 +33,26 @@ fn register_app(accessibility: &str) {
         prereqs.registered = true;
         prereqs.accessibility = accessibility.into();
         prereqs.display = Some((1080, 2400));
-        prereqs.encoders = vec![("high".into(), true), ("cb".into(), true)];
+        prereqs.encoders = vec![crate::screen::core::negotiate::CodecOffer::h264(H264Profile::High, true), crate::screen::core::negotiate::CodecOffer::h264(H264Profile::ConstrainedBaseline, true)];
     });
 }
 
 fn request(codec: CodecKind, epoch: u64, keyframe: bool) -> StageRequest {
     StageRequest {
+        frame_contract: None,
+        visible_rects: None,
         frame_id: epoch * 10,
         keyframe,
         target_bps: 4_000_000,
         size: FrameSize::new(540, 1200),
         choice: CodecChoice {
+            max_macroblocks_per_second: None,
             codec,
             profile: (codec == CodecKind::H264).then_some(H264Profile::High),
             encoder_hardware: true,
             decoder_hardware: true,
             max_size: FrameSize::MAX,
+            max_pixels: crate::screen::core::pixel_convert::MAX_FRAME_PIXELS,
         },
         encoder_epoch: epoch,
         fps: 30,

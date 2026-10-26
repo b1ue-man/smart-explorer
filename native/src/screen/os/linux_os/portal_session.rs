@@ -26,6 +26,8 @@ use crate::screen::core::session_state::SessionState;
 
 #[path = "portal_connection.rs"]
 pub(super) mod connection;
+#[path = "portal_source_binding.rs"]
+pub(super) mod source_binding;
 
 /// Size of a portal source until the first picture names the real one.
 pub(crate) const PORTAL_PROVISIONAL: FrameSize = FrameSize::new(1280, 720);
@@ -36,6 +38,7 @@ pub(crate) const PIPEWIRE_MISSING: &str = "pipewire_missing";
 pub(crate) enum PortalState {
     /// The dialog may be open; the stream is not there yet.
     Waiting,
+    WaitingInactive,
     Streaming(Arc<LatestFrame>),
     /// The user declined (response code 1 or 2 of the portal).
     Denied(String),
@@ -112,7 +115,12 @@ impl PortalHandle {
 }
 
 pub(super) fn set(state: &Mutex<PortalState>, next: PortalState) {
-    *state.lock().unwrap_or_else(PoisonError::into_inner) = next;
+    let mut state=state.lock().unwrap_or_else(PoisonError::into_inner);
+    if let PortalState::Streaming(latest)=&next {
+        let active=!matches!(&*state,PortalState::WaitingInactive);
+        if let Err(error)=latest.set_capture_active(active) {*state=PortalState::Failed(error.to_string());return;}
+    }
+    *state=next;
 }
 
 fn thread_main(
@@ -147,7 +155,7 @@ pub(super) fn refusal(error: ashpd::Error) -> Refusal {
 
 /// What the dialog chose.
 struct Chosen {
-    node_id: u32,
+    identity: Arc<super::pipewire_stream::identity::StreamIdentity>,
     fd: std::os::fd::OwnedFd,
 }
 
@@ -188,22 +196,31 @@ async fn run(
             return;
         }
     };
+    use futures_util::future::{select, Either};
+    use futures_util::StreamExt;
+    let closed = match session.receive_closed().await {
+        Ok(closed) => closed,
+        Err(error) => {
+            set(state, PortalState::Failed(format!("portal_closed_subscription: {error}")));
+            let _ = session.close().await;
+            return;
+        }
+    };
+    let mut closed = Box::pin(closed);
     let flow = Box::pin(negotiate(&screencast, &session));
     let stop = Box::pin(async {
-        let _ = stopped.await;
+        let _ = select(Box::pin(closed.next()), stopped).await;
     });
-    use futures_util::future::{select, Either};
     match select(flow, stop).await {
         Either::Left((Ok(chosen), stop)) => {
             let latest = Arc::new(LatestFrame::default());
-            match PwStream::start(api, chosen.fd, chosen.node_id, latest.clone()) {
+            let identity = chosen.identity;
+            match PwStream::start(api, chosen.fd, identity.clone(), latest.clone()) {
                 Ok(stream) => {
                     set(state, PortalState::Streaming(latest.clone()));
-                    let closed = Box::pin(session_closed(&session));
-                    match select(closed, stop).await {
-                        Either::Left(_) => latest.fail("portal_closed".into()),
-                        Either::Right(_) => {}
-                    }
+                    stop.await;
+                    latest.fail("portal_closed".into());
+                    identity.invalidate();
                     drop(stream);
                 }
                 Err(error) => set(state, PortalState::Failed(error.to_string())),
@@ -211,20 +228,9 @@ async fn run(
         }
         Either::Left((Err(Refusal::Denied(text)), _)) => set(state, PortalState::Denied(text)),
         Either::Left((Err(Refusal::Failed(text)), _)) => set(state, PortalState::Failed(text)),
-        Either::Right(_) => {}
+        Either::Right(_) => set(state, PortalState::Failed("portal_closed".into())),
     }
     let _ = session.close().await;
-}
-
-/// Completes when the portal closes the session (the user ended the share).
-async fn session_closed(session: &ashpd::desktop::Session<ashpd::desktop::screencast::Screencast>) {
-    use futures_util::StreamExt;
-    if let Ok(closed) = session.receive_closed().await {
-        let mut closed = Box::pin(closed);
-        closed.next().await;
-        return;
-    }
-    std::future::pending::<()>().await;
 }
 
 /// Source selection, start, token storage and the PipeWire descriptor.
@@ -233,7 +239,7 @@ async fn negotiate(
     session: &ashpd::desktop::Session<ashpd::desktop::screencast::Screencast>,
 ) -> Result<Chosen, Refusal> {
     use ashpd::desktop::screencast::{
-        CursorMode, OpenPipeWireRemoteOptions, SelectSourcesOptions, SourceType, StartCastOptions,
+        CursorMode, OpenPipeWireRemoteOptions, SelectSourcesOptions, SourceType,
     };
     use ashpd::desktop::PersistMode;
     let stored = portal_tokens::load();
@@ -251,28 +257,20 @@ async fn negotiate(
         .await
         .map_err(refusal)?;
     selected.response().map_err(refusal)?;
-    let started = screencast
-        .start(session, None, StartCastOptions::default())
-        .await
-        .map_err(refusal)?;
-    let streams = started.response().map_err(refusal)?;
+    let streams = source_binding::start(screencast, session).await?;
     // The portal hands out a fresh token with every start; the old one is
     // replaced at once.
-    if let Some(token) = streams.restore_token() {
+    if let Some(token) = streams.restore_token.as_deref() {
         if let Err(error) = portal_tokens::save(TokenKind::ScreenCast, token) {
             eprintln!("screen host process: portal token not stored: {error}");
         }
     }
-    let node_id = streams
-        .streams()
-        .first()
-        .map(ashpd::desktop::screencast::Stream::pipe_wire_node_id)
-        .ok_or_else(|| Refusal::Failed("portal: the portal chose no stream".into()))?;
+    let identity = streams.selected(session, screencast.version())?;
     let fd = screencast
         .open_pipe_wire_remote(session, OpenPipeWireRemoteOptions::default())
         .await
         .map_err(refusal)?;
-    Ok(Chosen { node_id, fd })
+    Ok(Chosen { identity, fd })
 }
 
 /// Registers the program with the portal once per process; a portal before
@@ -315,7 +313,7 @@ impl PortalSource {
     #[cfg(test)]
     pub(crate) fn describe(&self) -> String {
         match &*self.handle.lock() {
-            PortalState::Waiting => {
+            PortalState::Waiting | PortalState::WaitingInactive => {
                 "portal: no answer to Start yet (dialog or portal service)".into()
             }
             PortalState::Streaming(latest) => format!("portal: streaming; {}", latest.describe()),
@@ -338,13 +336,21 @@ impl PortalSource {
 }
 
 impl ScreenSource for PortalSource {
+    fn set_capture_active(&mut self,active:bool) -> io::Result<()> {
+        let mut state=self.handle.lock();
+        match &*state {
+            PortalState::Waiting | PortalState::WaitingInactive => { *state=if active {PortalState::Waiting} else {PortalState::WaitingInactive}; Ok(()) },
+            PortalState::Streaming(latest) => {latest.set_capture_active(active)?; self.had_frame=false; Ok(())},
+            PortalState::Denied(reason) | PortalState::Failed(reason) => Err(io::Error::new(io::ErrorKind::NotConnected,reason.clone())),
+        }
+    }
     fn size(&self) -> FrameSize {
         self.size
     }
 
     fn capture(&mut self, _frame_id: u64, keyframe: bool) -> io::Result<SourceFrame> {
         let latest = match &*self.handle.lock() {
-            PortalState::Waiting => return Ok(SourceFrame::Paused(SessionState::WaitingForPortal)),
+            PortalState::Waiting | PortalState::WaitingInactive => return Ok(SourceFrame::Paused(SessionState::WaitingForPortal)),
             PortalState::Streaming(latest) => latest.clone(),
             PortalState::Denied(text) => {
                 return Err(io::Error::new(

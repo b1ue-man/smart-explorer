@@ -144,6 +144,7 @@ pub(crate) fn apps_of_units(
         apps.push(AppEntry {
             app_id: unit.app_id,
             name: display,
+            icon: None,
             pid: None,
         });
     }

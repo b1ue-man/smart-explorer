@@ -19,6 +19,39 @@ use crate::screen::core::codec_registry::{DecoderFactory, EncoderFactory, OpenH2
 use crate::screen::core::host_backend::{ScreenHostBackend, SessionIndicator};
 use crate::screen::core::registry::ScreenRegistry;
 
+#[path = "shared/app_icons.rs"]
+pub(crate) mod app_icon_raster;
+#[cfg(windows)]
+#[path = "windows/app_icons.rs"]
+pub(crate) mod app_icons;
+#[cfg(target_os = "linux")]
+#[path = "linux_os/app_icons.rs"]
+pub(crate) mod app_icons;
+#[cfg(any(target_os = "android", test))]
+#[path = "android/app_icons.rs"]
+pub(crate) mod android_app_icons;
+#[cfg(target_os = "android")]
+pub(crate) use android_app_icons as app_icons;
+
+#[cfg(windows)]
+#[path = "windows/login_source.rs"]
+mod login_source;
+#[cfg(target_os = "linux")]
+#[path = "linux_os/login_source.rs"]
+mod login_source;
+#[cfg(any(windows, target_os = "linux"))]
+pub(crate) use login_source::{open_login_source, inject_login_input, login_geometry_current};
+#[cfg(not(any(windows, target_os = "linux")))]
+pub(crate) fn login_geometry_current() -> std::io::Result<bool> { Ok(false) }
+#[cfg(not(any(windows, target_os = "linux")))]
+pub(crate) fn open_login_source() -> std::io::Result<Box<dyn crate::screen::core::host_backend::ScreenSource>> {
+    Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "login capture is unavailable on this platform"))
+}
+#[cfg(not(any(windows, target_os = "linux")))]
+pub(crate) fn inject_login_input(_events: &[crate::screen::core::input_model::InputEvent]) -> std::io::Result<()> {
+    Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "login input is unavailable on this platform"))
+}
+
 #[path = "shared/codec_inventory.rs"]
 pub(crate) mod codec_inventory;
 // Android has no host process (the app captures): the client stays unused there.
@@ -135,6 +168,18 @@ pub(crate) mod portal_tokens;
 #[cfg(windows)]
 #[path = "windows/secure_desktop.rs"]
 mod secure_desktop;
+/// Ordinary window operations never cross a locked or disconnected desktop.
+#[cfg(windows)]
+pub(crate) fn window_control_block() -> Option<crate::screen::core::wire_control::ControlBlock> {
+    use crate::screen::core::wire_control::ControlBlock;
+    if !secure_desktop::session_active() {
+        Some(ControlBlock::ControlUnavailable)
+    } else if secure_desktop::on_secure_desktop() {
+        Some(ControlBlock::SecureDesktop)
+    } else {
+        None
+    }
+}
 #[cfg(target_os = "linux")]
 #[path = "linux_os/session_detect.rs"]
 pub(crate) mod session_detect;

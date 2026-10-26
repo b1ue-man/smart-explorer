@@ -11,8 +11,10 @@
 //! time), 8–11 `flags`, 12–15 `len`, then `len` payload bytes. Flags: bit 0
 //! key frame, bit 1 finished tile picture (R,G,B,A), bit 2 first picture of
 //! a new picture group, bit 3 the access unit is complete (always set);
-//! bits 16–31 are the low 16 bits of the group number that the matching
-//! `stream` event names.
+//! bits 16–31 retain the low 16 group bits as a legacy hint only. Flag 0x100
+//! prefixes the payload with the full little-endian `gop_id u64`; flag 0x80
+//! follows it with `frame_id u64`. Every ViewerSink output sets both flags,
+//! including v1 wire streams. Only the full GOP identifies its `stream` event.
 use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
@@ -30,6 +32,11 @@ pub(crate) const FLAG_KEYFRAME: u32 = 0x1;
 /// (the flag keeps the name of the contract).
 pub(crate) const FLAG_TILES_BGRA: u32 = 0x2;
 pub(crate) const FLAG_NEW_STREAM: u32 = 0x4;
+pub(crate) const FLAG_HYBRID: u32 = 0x10;
+pub(crate) const FLAG_MORE_PARTS: u32 = 0x20;
+pub(crate) const FLAG_FRAME_ID: u32 = 0x80;
+pub(crate) const FLAG_GOP_ID: u32 = 0x100;
+const FLAG_HYBRID_BEGIN: u32 = 0x40;
 pub(crate) const FLAG_LAST_OF_PICTURE: u32 = 0x8;
 pub(crate) const GOP_SHIFT: u32 = 16;
 /// `screenPull` answers.
@@ -57,8 +64,12 @@ struct Queued {
 #[derive(Default)]
 struct QueueState {
     items: VecDeque<Queued>,
+    bytes:usize,
     waiting_keyframe: bool,
     ended: bool,
+}
+impl QueueState {
+    fn clear(&mut self) {self.items.clear();self.bytes=0;}
 }
 
 /// What `PullQueue::push` did.
@@ -74,9 +85,20 @@ pub(crate) struct Pushed {
 pub(crate) struct PullQueue {
     state: Mutex<QueueState>,
     ready: Condvar,
+    frame_bytes:std::sync::atomic::AtomicUsize,
+    frame_items:std::sync::atomic::AtomicUsize,
 }
 
 impl PullQueue {
+    fn set_frame_limits(&self,limits:crate::screen::core::frame_budget::FrameLimits,size:FrameSize,contract:Option<crate::screen::core::frame_budget::FrameContract>)->std::io::Result<()> {
+        limits.check(size)?;
+        let budget=crate::screen::core::frame_size_caps::PacketBudget::for_contract(contract)?;
+        let bound=budget.encoded_bytes;
+        let bound=if contract.is_none() {bound.max(64*1024*1024)} else {bound};
+        self.frame_bytes.store(bound,std::sync::atomic::Ordering::Release);
+        self.frame_items.store(if contract.is_some() {budget.records} else {0},std::sync::atomic::Ordering::Release);
+        Ok(())
+    }
     /// Queues a picture; `now_us` is the clock of the stall rule.
     pub(crate) fn push(&self, pts_us: u64, mut flags: u32, data: Vec<u8>, now_us: u64) -> Pushed {
         let mut state = lock(&self.state);
@@ -89,20 +111,39 @@ impl PullQueue {
         }
         let tiles = flags & FLAG_TILES_BGRA != 0;
         let mut stalled = false;
-        if !tiles
+        let configured=self.frame_bytes.load(std::sync::atomic::Ordering::Acquire);
+        let bound=if configured==0 {64*1024*1024} else {configured};
+        let slots=self.frame_items.load(std::sync::atomic::Ordering::Acquire);
+        let slots=if slots==0 {usize::MAX} else {slots};
+        if data.len()>bound {state.clear();state.waiting_keyframe=true;return none(true);}
+        if flags&FLAG_NEW_STREAM!=0 {state.clear();}
+        let started=Instant::now();
+        // Backpressure preserves a complete lossless transaction when the app
+        // consumes its dirty records more slowly than the network receives them.
+        while !tiles && (state.items.len()>=slots || state.bytes.saturating_add(data.len())>bound) {
+            let elapsed=u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+            let age=state.items.front().map_or(0,|front|now_us.saturating_add(elapsed).saturating_sub(front.queued_us));
+            if age>=STALL_US {break;}
+            state=self.ready.wait_timeout(state,Duration::from_micros(STALL_US-age))
+                .unwrap_or_else(PoisonError::into_inner).0;
+            if state.ended {return none(false);}
+        }
+        let now_us=now_us.saturating_add(u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX));
+        if (!tiles && (state.items.len()>=slots || state.bytes.saturating_add(data.len()) > bound)) || (!tiles
             && state
                 .items
                 .front()
-                .is_some_and(|front| now_us.saturating_sub(front.queued_us) > STALL_US)
+                .is_some_and(|front| now_us.saturating_sub(front.queued_us) > STALL_US))
         {
-            state.items.clear();
+            state.clear();
             state.waiting_keyframe = true;
             stalled = true;
         }
         if flags & FLAG_NEW_STREAM != 0 {
-            state.items.clear();
+            state.clear();
         }
-        if flags & FLAG_KEYFRAME != 0 {
+        let begins = flags & FLAG_HYBRID == 0 || flags & FLAG_HYBRID_BEGIN != 0;
+        if flags & FLAG_KEYFRAME != 0 && begins {
             state.waiting_keyframe = false;
         } else if !tiles && state.waiting_keyframe {
             return none(stalled);
@@ -111,15 +152,19 @@ impl PullQueue {
             // Only the newest tile picture is kept; it keeps the mark of the
             // group start the app has not seen yet.
             let mut inherited = 0;
+            let mut removed=0usize;
             state.items.retain(|old| {
                 if old.flags & FLAG_TILES_BGRA == 0 {
                     return true;
                 }
                 inherited |= old.flags & FLAG_NEW_STREAM;
+                removed=removed.saturating_add(old.data.len());
                 false
             });
+            state.bytes=state.bytes.saturating_sub(removed);
             flags |= inherited;
         }
+        state.bytes=state.bytes.saturating_add(data.len());
         state.items.push_back(Queued {
             pts_us,
             flags,
@@ -160,6 +205,8 @@ impl PullQueue {
                 dst[12..16].copy_from_slice(&wire_len.to_le_bytes());
                 dst[HEADER_BYTES..HEADER_BYTES + len].copy_from_slice(&front.data);
                 state.items.pop_front();
+                state.bytes=state.bytes.saturating_sub(len);
+                self.ready.notify_all();
                 return total;
             }
             if state.ended {
@@ -181,7 +228,7 @@ impl PullQueue {
     pub(crate) fn close(&self) {
         let mut state = lock(&self.state);
         state.ended = true;
-        state.items.clear();
+        state.clear();
         self.ready.notify_all();
     }
 
@@ -206,7 +253,8 @@ pub(crate) enum SinkOutput {
 
 struct Gop {
     id: u64,
-    tiles: Option<TilesScreenDecoder>,
+    tiles: Option<Box<dyn ScreenDecoder>>,
+    hybrid: bool,
 }
 
 /// Turns the records of the relayed session into queued pictures.
@@ -218,6 +266,7 @@ pub(crate) struct ViewerSink {
     latest_gop: u64,
     /// A group whose records are skipped until its next key frame.
     broken: Option<u64>,
+    broken_frame: Option<u64>,
     /// The next queued picture starts a group for the app.
     new_stream: bool,
 }
@@ -230,6 +279,7 @@ impl ViewerSink {
             gop: None,
             latest_gop: 0,
             broken: None,
+            broken_frame: None,
             new_stream: false,
         }
     }
@@ -248,6 +298,7 @@ impl ViewerSink {
         if self.gop.as_ref().is_some_and(|gop| gop.id == gop_id) {
             self.gop = None;
         }
+        if gop_id < self.latest_gop { return None; }
         self.broken = Some(gop_id);
         self.request(KeyframeReason::Reset, gop_id, now_us)
     }
@@ -263,19 +314,34 @@ impl ViewerSink {
         if header.gop_id < self.latest_gop {
             return out;
         }
+        if record.payload.len()>header.record_limit() {
+            self.broken=Some(header.gop_id);self.broken_frame=Some(record.frame_id);
+            out.extend(self.request(KeyframeReason::DecodeError,header.gop_id,now_us));return out;
+        }
         let keyframe = record.is_keyframe();
         if self.broken == Some(header.gop_id) {
-            if !keyframe {
+            if !keyframe || self.broken_frame.is_some_and(|frame| record.frame_id <= frame) {
                 return out;
             }
             self.broken = None;
+            self.broken_frame = None;
             self.gop = None;
         }
         if self.gop.as_ref().is_none_or(|gop| gop.id != header.gop_id) {
-            let tiles = match header.codec {
+            if !record.is_keyframe() { self.broken=Some(header.gop_id); self.broken_frame=Some(record.frame_id);
+                out.extend(self.request(KeyframeReason::Reset,header.gop_id,now_us)); return out; }
+            let limits=header.frame_contract.map_or(crate::screen::core::frame_budget::FrameLimits::LEGACY,|c|c.limits);
+            if header.frame_contract.is_some_and(|c|c.validate().is_err()) || limits.check(header.size).is_err()
+                || self.queue.set_frame_limits(limits,header.size,header.frame_contract).is_err() {
+                self.broken=Some(header.gop_id);self.broken_frame=Some(record.frame_id);
+                out.extend(self.request(KeyframeReason::DecodeError,header.gop_id,now_us));return out;
+            }
+            let hybrid = header.frame_contract.is_some_and(|c|c.hybrid_regions);
+            let tiles: Option<Box<dyn ScreenDecoder>> = match header.codec {
                 CodecKind::H264 => None,
-                CodecKind::Tiles => match TilesScreenDecoder::new(header.size) {
-                    Ok(decoder) => Some(decoder),
+                CodecKind::Tiles if hybrid => None,
+                CodecKind::Tiles => match TilesScreenDecoder::new_with_limits(header.size,limits) {
+                    Ok(decoder) => Some(Box::new(crate::screen::core::frame_reference::ReferenceDecoder::new(Box::new(decoder)))),
                     Err(_) => {
                         self.broken = Some(header.gop_id);
                         out.extend(self.request(
@@ -290,6 +356,7 @@ impl ViewerSink {
             self.gop = Some(Gop {
                 id: header.gop_id,
                 tiles,
+                hybrid,
             });
             self.latest_gop = header.gop_id;
             self.new_stream = true;
@@ -300,24 +367,59 @@ impl ViewerSink {
                 size: header.size,
             });
         }
+        if self.gop.as_ref().is_some_and(|gop|gop.hybrid) {
+            let parsed = crate::screen::core::frame_protocol::decode(&record.payload,header.size);
+            let (stamp,operation) = match parsed {
+                Ok(value) if value.0.frame_id == record.frame_id => value,
+                _ => { self.broken = Some(header.gop_id); self.broken_frame = Some(record.frame_id);
+                    out.extend(self.request(KeyframeReason::DecodeError,header.gop_id,now_us)); return out; }
+            };
+            let begins = matches!(operation,crate::screen::core::frame_protocol::Operation::Begin);
+            drop(operation);
+            if self.new_stream && !begins { return out; }
+            let mut flags = FLAG_HYBRID | FLAG_LAST_OF_PICTURE | FLAG_GOP_ID | FLAG_FRAME_ID
+                | (((header.gop_id & 0xFFFF) as u32) << GOP_SHIFT);
+            if keyframe { flags |= FLAG_KEYFRAME; }
+            if record.has_more() { flags |= FLAG_MORE_PARTS; }
+            if begins { flags |= FLAG_HYBRID_BEGIN; }
+            if self.new_stream { flags |= FLAG_NEW_STREAM; }
+            let data = pull_identity(header.gop_id, record.frame_id, &record.payload);
+            let pushed = self.queue.push(record.capture_ts_us,flags,data,now_us);
+            if pushed.queued { self.new_stream = false; }
+            if pushed.stalled { self.broken = Some(header.gop_id); self.broken_frame = Some(stamp.frame_id);
+                out.extend(self.request(KeyframeReason::Reset,header.gop_id,now_us)); }
+            return out;
+        }
         let mut flags = if keyframe { FLAG_KEYFRAME } else { 0 };
         let data = match self.gop.as_mut().and_then(|gop| gop.tiles.as_mut()) {
             None if record.has_more() => return out,
-            None => record.payload.clone(),
+            None => {
+                let mut flags=flags|FLAG_LAST_OF_PICTURE|FLAG_GOP_ID|FLAG_FRAME_ID
+                    |(((header.gop_id&0xFFFF) as u32)<<GOP_SHIFT);
+                if self.new_stream {flags|=FLAG_NEW_STREAM;}
+                let data=pull_identity(header.gop_id,record.frame_id,&record.payload);
+                let pushed=self.queue.push(record.capture_ts_us,flags,data,now_us);
+                if pushed.queued {self.new_stream=false;}
+                if pushed.stalled {self.new_stream=true;out.extend(self.request(KeyframeReason::Reset,header.gop_id,now_us));}
+                return out;
+            },
             Some(decoder) => match decoder.decode(record) {
                 Ok(true) => {
                     flags |= FLAG_TILES_BGRA;
-                    bgra_to_rgba(decoder.picture().data())
+                    let mut stamped=pull_identity(header.gop_id,record.frame_id,decoder.picture().data());
+                    for pixel in stamped[16..].chunks_exact_mut(4) {pixel.swap(0,2);}
+                    stamped
                 }
                 Ok(false) => return out,
                 Err(_) => {
                     self.broken = Some(header.gop_id);
+                    self.broken_frame = Some(record.frame_id);
                     out.extend(self.request(KeyframeReason::DecodeError, header.gop_id, now_us));
                     return out;
                 }
             },
         };
-        if keyframe {
+        if keyframe && header.codec == CodecKind::Tiles {
             lock(&self.keyframes).on_keyframe();
         }
         let gop_bits = ((header.gop_id & 0xFFFF) as u32) << GOP_SHIFT;
@@ -325,6 +427,7 @@ impl ViewerSink {
         if self.new_stream {
             flags |= FLAG_NEW_STREAM;
         }
+        flags |= FLAG_GOP_ID | FLAG_FRAME_ID;
         let pushed = self.queue.push(record.capture_ts_us, flags, data, now_us);
         if pushed.queued {
             self.new_stream = false;
@@ -335,6 +438,15 @@ impl ViewerSink {
         }
         out
     }
+}
+
+/// The JNI queue owns immutable identities even after newer stream events arrive.
+fn pull_identity(gop_id: u64, frame_id: u64, payload: &[u8]) -> Vec<u8> {
+    let mut stamped = Vec::with_capacity(payload.len().saturating_add(16));
+    stamped.extend_from_slice(&gop_id.to_le_bytes());
+    stamped.extend_from_slice(&frame_id.to_le_bytes());
+    stamped.extend_from_slice(payload);
+    stamped
 }
 
 /// The byte order Android's `ARGB_8888` bitmaps take from a buffer.

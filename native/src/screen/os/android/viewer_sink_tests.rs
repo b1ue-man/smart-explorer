@@ -17,6 +17,8 @@ use crate::screen::core::wire_control::{KeyframeReason, KeyframeRequest};
 
 fn header(gop_id: u64, codec: CodecKind, size: FrameSize) -> GopHeader {
     GopHeader {
+            family_layout_revision: None,
+        frame_contract: None,
         gop_id,
         kind: StreamKind::Video,
         codec,
@@ -150,12 +152,15 @@ fn screen_task_android_pull_stall_resets() {
         [SinkOutput::NewStream { gop: 2, .. }]
     ));
     let (n, dst) = pull(&queue, 64);
-    assert_eq!(n, 16 + 4);
+    assert_eq!(n, 32 + 4);
     let flags = word(&dst, 8);
     assert_eq!(flags & FLAG_KEYFRAME, FLAG_KEYFRAME);
     assert_eq!(flags & FLAG_NEW_STREAM, FLAG_NEW_STREAM);
     assert_eq!(flags >> GOP_SHIFT, 2);
-    assert_eq!(dst[16..20], *b"idr2");
+    assert_eq!(flags & (FLAG_GOP_ID | FLAG_FRAME_ID), FLAG_GOP_ID | FLAG_FRAME_ID);
+    assert_eq!(dst[16..24], 2u64.to_le_bytes());
+    assert_eq!(dst[24..32], 5u64.to_le_bytes());
+    assert_eq!(dst[32..36], *b"idr2");
 }
 
 #[test]
@@ -200,14 +205,16 @@ fn screen_task_android_sink_groups_and_tiles() {
     pixels[..4].copy_from_slice(&[1, 2, 3, 255]);
     assert!(feed(&mut sink, &pixels, false, 200).is_empty());
     assert_eq!(queue.len(), 1);
-    let (n, dst) = pull(&queue, 16 + size.bgra_len());
-    assert_eq!(n as usize, 16 + size.bgra_len());
+    let (n, dst) = pull(&queue, 32 + size.bgra_len());
+    assert_eq!(n as usize, 32 + size.bgra_len());
     let flags = word(&dst, 8);
     assert_eq!(flags & FLAG_TILES_BGRA, FLAG_TILES_BGRA);
     assert_eq!(flags & FLAG_NEW_STREAM, FLAG_NEW_STREAM);
     assert_eq!(dst[0..8], 200u64.to_le_bytes());
     // BGRA (1, 2, 3, 255) arrives as R, G, B, A.
-    assert_eq!(dst[16..20], [3, 2, 1, 255]);
+    assert_eq!(dst[16..24], 3u64.to_le_bytes());
+    assert_eq!(dst[24..32], 200u64.to_le_bytes());
+    assert_eq!(dst[32..36], [3, 2, 1, 255]);
     // Records of an older group are stale.
     let stale = header(2, CodecKind::H264, size);
     assert!(sink

@@ -162,7 +162,9 @@ impl ScreenEncoder for AsyncEncoder {
                 Event::HaveOutput => match process_output(&self.transform, fallback)? {
                     Output::Sample(out) => {
                         let key = is_keyframe(&out);
-                        return frame_of(vec![sample_bytes(&out)?], key, keyframe);
+                        let frame=frame_of(vec![sample_bytes(&out)?],key,keyframe)?;
+                        for data in &frame.records {crate::screen::core::frame_size_caps::check_avc_dimensions(data,self.setup.size,crate::screen::core::frame_budget::FrameLimits::RESOURCE)?;}
+                        return Ok(frame);
                     }
                     Output::NeedInput => {}
                     Output::StreamChange => {

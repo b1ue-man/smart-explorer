@@ -10,7 +10,7 @@
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use eframe::egui::{self, Align2, Color32, CursorIcon, FontId, Pos2, Rect, Sense, Vec2};
+use eframe::egui::{self, Vec2};
 
 use super::screen_devices::{entries, DeviceEntry, Devices, GridScope};
 use super::screen_pool::{
@@ -20,7 +20,8 @@ use super::screen_session::{Backend, ProbeInfo, ViewerSession};
 use super::screen_target::ScreenTarget;
 use super::screen_texts::state_text;
 use super::screen_texture_cpu::CpuTexture;
-use super::screen_tile_face::Face;
+use super::screen_tile_face::{Face, draw_tile};
+use super::screen_prefs::Fit;
 use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::session_state::SessionState;
 use crate::screen::core::wire_control::ViewerFrame;
@@ -34,28 +35,31 @@ const DEFAULT_WIDTH: f32 = 240.0;
 const NO_ANSWER: Duration = Duration::from_secs(10);
 /// The choices of „Aktualisierung“.
 const INTERVALS: [(u64, &str); 4] = [(500, "0,5 s"), (1000, "1 s"), (2000, "2 s"), (5000, "5 s")];
-const LABEL_HEIGHT: f32 = 24.0;
+
 
 type ProbeSlot = Arc<Mutex<Option<Result<ProbeInfo, String>>>>;
 
-enum Probe {
+pub(super) enum Probe {
     Idle,
     Running(ProbeSlot),
     Done(ProbeInfo),
     Failed(String),
 }
 
-struct Tile {
-    entry: DeviceEntry,
-    probe: Probe,
-    session: Option<ViewerSession>,
-    texture: CpuTexture,
-    picture: Option<FrameSize>,
-    accepted_at: Option<Instant>,
-    requested_edge: u32,
+pub(super) struct Tile {
+    pub(super) entry: DeviceEntry,
+    pub(super) probe: Probe,
+    pub(super) session: Option<ViewerSession>,
+    pub(super) texture: CpuTexture,
+    pub(super) picture: Option<FrameSize>,
+    pub(super) accepted_at: Option<Instant>,
+    pub(super) requested_edge: u32,
     /// The session ended with an error; a click opens a new one.
-    failed: Option<String>,
-    limit: bool,
+    pub(super) failed: Option<String>,
+    pub(super) limit: bool,
+    pub(super) pan: Vec2,
+    pub(super) wait_frame: bool,
+    pub(super) visibility: super::screen_visibility::VisibilityTracker,
 }
 
 impl Tile {
@@ -70,10 +74,13 @@ impl Tile {
             requested_edge: 0,
             failed: None,
             limit: false,
+            pan: Vec2::ZERO,
+            wait_frame: false,
+            visibility: super::screen_visibility::VisibilityTracker::default(),
         }
     }
 
-    fn face(&self) -> Face {
+    pub(super) fn face(&self) -> Face {
         if !self.entry.online {
             return Face::Offline;
         }
@@ -94,6 +101,7 @@ impl Tile {
         if self.picture.is_some() {
             return Face::Picture;
         }
+        if self.wait_frame { return Face::Waiting("Warte auf ein vollständiges aktuelles Bild …".into()); }
         let Some(session) = &self.session else {
             return Face::Waiting(state_text(SessionState::Connecting, None));
         };
@@ -125,6 +133,7 @@ pub(crate) struct ScreenTileGrid {
     applied_interval: u64,
     /// A full session that returns to its tile.
     pending: Option<ViewerSession>,
+    fit: Fit,
 }
 
 impl ScreenTileGrid {
@@ -139,6 +148,7 @@ impl ScreenTileGrid {
             interval_ms: DEFAULT_PREVIEW_INTERVAL_MS,
             applied_interval: DEFAULT_PREVIEW_INTERVAL_MS,
             pending: None,
+            fit: Fit::Fit,
         }
     }
 
@@ -286,9 +296,12 @@ impl ScreenTileGrid {
             return;
         };
         if let Some(picture) = session.take_picture() {
-            if let super::screen_session::PictureData::Bgra(image) = picture.data {
-                tile.texture.update(ctx, &image);
-                tile.picture = Some(picture.size);
+            if !tile.wait_frame || session.input_ready() {
+                if let super::screen_session::PictureData::Bgra(image) = picture.data {
+                    tile.texture.update(ctx, &image);
+                    tile.picture = Some(picture.size);
+                    tile.wait_frame = false;
+                }
             }
         }
         let (ended, accepted) = {
@@ -341,7 +354,7 @@ impl ScreenTileGrid {
                             }
                             group = room;
                         }
-                        if let Some(target) = draw_tile(ui, tile, width) {
+                        if let Some(target) = draw_tile(ui, tile, width, self.fit) {
                             clicked = Some(target);
                         }
                     }
@@ -380,6 +393,8 @@ impl ScreenTileGrid {
                         ui.selectable_value(&mut self.interval_ms, ms, label);
                     }
                 });
+            ui.selectable_value(&mut self.fit,Fit::Fit,"Einpassen");
+            ui.selectable_value(&mut self.fit,Fit::Actual,"1:1 · Ziehen zum Verschieben");
             ui.label("Größe:");
             ui.add(egui::Slider::new(&mut self.width, MIN_WIDTH..=MAX_WIDTH).show_value(false));
         });
@@ -395,77 +410,6 @@ impl ScreenTileGrid {
             }
         }
     }
-}
-
-/// Draws one tile; its target when the user clicked a tile that can be opened.
-fn draw_tile(ui: &mut egui::Ui, tile: &mut Tile, width: f32) -> Option<ScreenTarget> {
-    let face = tile.face();
-    let image_height = width * 9.0 / 16.0;
-    let (rect, response) = ui.allocate_exact_size(
-        Vec2::new(width, image_height + LABEL_HEIGHT),
-        Sense::click(),
-    );
-    let painter = ui.painter_at(rect);
-    let image_area = Rect::from_min_size(rect.min, Vec2::new(width, image_height));
-    painter.rect_filled(image_area, 4.0, Color32::from_gray(24));
-    match (&face, tile.picture, tile.texture.id()) {
-        (Face::Picture, Some(size), Some(texture)) => {
-            let scale = (width / size.width as f32).min(image_height / size.height as f32);
-            let dest = Rect::from_center_size(
-                image_area.center(),
-                Vec2::new(size.width as f32 * scale, size.height as f32 * scale),
-            );
-            let uv = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
-            painter.image(texture, dest, uv, Color32::WHITE);
-            let streaming = tile
-                .session
-                .as_ref()
-                .is_none_or(|session| session.info().state == SessionState::Streaming);
-            if !streaming {
-                painter.rect_filled(dest, 0.0, Color32::from_black_alpha(128));
-            }
-        }
-        _ => {
-            let galley = painter.layout(
-                face.text(),
-                FontId::proportional(13.0),
-                Color32::from_gray(200),
-                width - 16.0,
-            );
-            let at = image_area.center() - galley.size() / 2.0;
-            painter.galley(at, galley, Color32::from_gray(200));
-        }
-    }
-    let label_center = Pos2::new(rect.min.x + 6.0, rect.max.y - LABEL_HEIGHT / 2.0);
-    painter.circle_filled(
-        Pos2::new(rect.max.x - 10.0, label_center.y),
-        5.0,
-        face.dot(),
-    );
-    painter.text(
-        label_center,
-        Align2::LEFT_CENTER,
-        &tile.entry.name,
-        FontId::proportional(13.0),
-        ui.visuals().text_color(),
-    );
-    let openable = matches!(face, Face::Picture | Face::Ask);
-    let retry = matches!(face, Face::ProbeFailed(_) | Face::Failed(_) | Face::Limit);
-    if openable || retry {
-        response.clone().on_hover_cursor(CursorIcon::PointingHand);
-    }
-    if !response.clicked() {
-        return None;
-    }
-    if retry {
-        tile.probe = Probe::Idle;
-        tile.failed = None;
-        tile.limit = false;
-        tile.session = None;
-        tile.picture = None;
-        return None;
-    }
-    openable.then(|| tile.entry.target.clone())
 }
 
 #[cfg(test)]

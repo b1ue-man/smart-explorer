@@ -21,7 +21,8 @@ use super::authorize::{
 use super::gop_stream::path_of;
 use super::host_backend::{ConsentBroker, ScreenHostBackend, SessionIndicator};
 use super::host_pipeline::Pipeline;
-use super::negotiate::{negotiate, CodecPreference};
+use super::frame_budget::{FrameCapabilities, FrameContract};
+use super::negotiate::{negotiate_for_contract, CodecPreference};
 use super::registry::{NewSession, ScreenRegistry, SessionHandle};
 use super::session_state::{EndReason, SessionState};
 use super::window_list::SourceId;
@@ -71,6 +72,8 @@ struct Start<'a> {
     send: &'a mut SendStream,
     principal: &'a ProvenPrincipal,
     mode: SessionMode,
+    icon_version: Option<u8>,
+    family_version: Option<u16>,
 }
 
 impl Start<'_> {
@@ -98,6 +101,7 @@ impl Start<'_> {
         &self,
         authorization: ScreenAuthorization,
         approval: ApprovalKind,
+        frame_contract: Option<FrameContract>,
     ) -> ScreenHelloOk {
         let backend = self.context.backend.as_ref();
         ScreenHelloOk {
@@ -108,6 +112,9 @@ impl Start<'_> {
             monitors: backend.monitors(),
             limits: backend.limits(),
             approval,
+            frame_contract,
+            icon_version: self.icon_version,
+            family_version: self.family_version,
         }
     }
 
@@ -181,6 +188,8 @@ pub(crate) async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Res
         send: &mut send,
         principal: &principal,
         mode: hello.mode,
+        icon_version: hello.icon_version.filter(|version|*version==super::app_icon::ICON_VERSION),
+        family_version: hello.family_version.filter(|version|*version==super::family_protocol::FAMILY_PROTOCOL),
     };
     let mode = hello.mode;
     let now = crate::share::core_now_secs();
@@ -198,7 +207,7 @@ pub(crate) async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Res
     let asked = match decide(mode, view.decision, control.decision) {
         SessionDecision::Refused(code) => return start.refuse(code, false).await,
         SessionDecision::InfoOnly => {
-            let ok = start.hello_ok(authorization, ApprovalKind::NotRequired);
+            let ok = start.hello_ok(authorization, ApprovalKind::NotRequired, None);
             send_hello_reply(&mut *start.send, &HelloReply::Accepted(ok)).await?;
             let _ = start.send.finish();
             let _ = tokio::time::timeout(CLOSE_GRACE, connection.closed()).await;
@@ -207,11 +216,34 @@ pub(crate) async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Res
         SessionDecision::Allowed => None,
         SessionDecision::Ask(capability) => Some(capability),
     };
+    if hello.metadata_only {
+        let new=NewSession {principal:principal.clone(),device_name,mode,source:"metadata".into(),
+            path:path_of(&connection).0.key().into(),started_at:now,
+            state:SessionState::Starting,screen_content:false};
+        let Some(handle)=start.register(new) else {return start.refuse(ScreenErrorCode::PermissionDenied,false).await;};
+        let approval=match asked {
+            None=>ApprovalKind::NotRequired,
+            Some(capability)=>match start.confirm(&handle,capability,view).await {
+                Ok(approval)=>approval,
+                Err(code)=>return start.refuse(code,true).await,
+            },
+        };
+        let ok=start.hello_ok(authorization,approval,None);
+        send_hello_reply(&mut send,&HelloReply::Accepted(ok)).await?;
+        log_event(context.audit,&principal,mode,"session_started",Some(approval_result(approval)),Some("metadata only"));
+        return super::icon_host::serve_metadata(&context,&principal,&connection,send,recv,handle,
+            hello.family_version==Some(super::family_protocol::FAMILY_PROTOCOL)).await;
+    }
     let backend = context.backend.as_ref();
     let Some(source_id) = hello.source.clone().or_else(|| primary_monitor(backend)) else {
         return start.refuse(ScreenErrorCode::NoDisplay, false).await;
     };
     let screen_content = source_id.is_screen_content();
+    let family_selected=super::family_protocol::selector(&source_id).is_some();
+    if family_selected && (hello.family_version!=Some(super::family_protocol::FAMILY_PROTOCOL)
+        || hello.frame_capabilities.is_none()) {
+        return start.refuse(ScreenErrorCode::ScreenUnsupported,false).await;
+    }
     if screen_content && !backend.graphical_session() {
         return start.refuse(ScreenErrorCode::NoDisplay, false).await;
     }
@@ -253,7 +285,7 @@ pub(crate) async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Res
             }
         }
     };
-    let source = match backend.open_source(&source_id, hello.display_size) {
+    let source = match super::family_listing::open(&context,&principal,&source_id,hello.display_size,mode==SessionMode::Control) {
         Ok(source) => source,
         Err(refusal) => {
             let reason = Some(refusal.reason.as_str());
@@ -268,6 +300,10 @@ pub(crate) async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Res
             return start.refuse(ScreenErrorCode::NoDisplay, true).await;
         }
     };
+    if handle.stop_signal().borrow().is_some() || !super::family_listing::admitted(&context,&principal,mode==SessionMode::Control) {
+        drop(source);
+        return start.refuse(ScreenErrorCode::PermissionDenied,false).await;
+    }
     if mode == SessionMode::Control && handle.take_control().is_err() {
         return start.refuse(ScreenErrorCode::ControlBusy, false).await;
     }
@@ -287,11 +323,29 @@ pub(crate) async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Res
                 .await;
         }
     }
-    let choices = negotiate(&backend.encoders(), &hello.decoders, CodecPreference::Auto);
+    // The opened source supplies its proven capture limit. Codec offers and the
+    // actual viewer renderer independently narrow the end-to-end contract.
+    let source_limits = source.frame_limits();
+    source_limits.validate()?;
+    let host_capabilities = FrameCapabilities {
+        version: super::frame_budget::FRAME_PROTOCOL, frames: source_limits,
+        texture_size: source_limits.max_size, hybrid_regions: source.supports_frame_regions(),
+    };
+    let mut contract = FrameContract::negotiate(Some(host_capabilities), hello.frame_capabilities)?;
+    let mut choices = negotiate_for_contract(
+        &backend.encoders(), &hello.decoders, CodecPreference::Auto, contract,
+    );
+    if choices.is_empty() && contract.is_some_and(|contract| contract.hybrid_regions)
+        && hello.decoders.iter().any(|offer| offer.codec == super::negotiate::CodecKind::H264)
+    {
+        // A surface-only decoder can still use the existing video path.
+        if let Some(contract) = contract.as_mut() { contract.hybrid_regions = false; }
+        choices = negotiate_for_contract(&backend.encoders(), &hello.decoders, CodecPreference::Auto, contract);
+    }
     let Some(choice) = choices.first().copied() else {
         return start.refuse(ScreenErrorCode::EncoderFailed, false).await;
     };
-    let ok = start.hello_ok(authorization, approval);
+    let ok = start.hello_ok(authorization, approval, contract);
     send_hello_reply(&mut send, &HelloReply::Accepted(ok)).await?;
     let result = Some(approval_result(approval));
     log_event(
@@ -315,6 +369,12 @@ pub(crate) async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Res
         hello.display_size,
         context.inject_resets.clone(),
     );
+    pipeline.set_frame_contract(contract)?;
+    if let Some(tiles) = negotiate_for_contract(
+        &backend.encoders(), &hello.decoders, CodecPreference::Tiles, contract,
+    ).first() {
+        pipeline.set_tile_limit(tiles.max_size);
+    }
     if mode == SessionMode::Preview {
         pipeline.set_mode(StreamKind::Preview, None, None);
     }
@@ -326,6 +386,10 @@ pub(crate) async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Res
         &principal,
         mode,
         pipeline,
+        contract.is_some(),
+        hello.icon_version == Some(super::app_icon::ICON_VERSION),
+        hello.family_version == Some(super::family_protocol::FAMILY_PROTOCOL),
+        super::family_protocol::selector(&source_id).map(str::to_owned),
     );
     session.run(recv, max_fps).await;
     Ok(())

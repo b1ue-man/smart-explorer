@@ -17,7 +17,7 @@ use crate::screen::core::host_backend::{
 use crate::screen::core::host_stage::{StageEncoder, StageFrame, StageRequest};
 use crate::screen::core::negotiate::CodecKind;
 use crate::screen::core::pacing::STALE_STREAM_US;
-use crate::screen::core::pixel_convert::{downscale_bgra, FrameSize};
+use crate::screen::core::pixel_convert::{downscale_bgra, downscale_bgra_with_limits, FrameSize};
 use crate::screen::core::session_state::SessionState;
 use crate::screen::core::wire_binary::{GopHeader, StreamKind};
 
@@ -46,6 +46,11 @@ impl Pipeline {
         connection: &Connection,
         max: Option<FrameSize>,
     ) -> Result<(), PipelineError> {
+        self.snapshot_epoch(connection,max,self.work.epoch()).await
+    }
+    pub(super) async fn snapshot_epoch(&mut self,connection:&Connection,max:Option<FrameSize>,work_epoch:u64)->Result<(),PipelineError> {
+        let work=self.work.clone();
+        if !work.current(work_epoch) {return Err(PipelineError::capture(io::Error::from(io::ErrorKind::Interrupted)));}
         let mut stage = self
             .stage
             .take()
@@ -61,9 +66,13 @@ impl Pipeline {
         let (stage, shot) =
             joined.map_err(|error| PipelineError::capture(io::Error::other(error)))?;
         self.stage = Some(stage);
+        if !work.current(work_epoch) {self.reset_stream();return Err(PipelineError::capture(io::Error::from(io::ErrorKind::Interrupted)));}
+        self.sync_source_reference();
         let (records, size, capture_ts_us) = shot?;
         let header = GopHeader {
+            family_layout_revision: None,
             gop_id: self.next_gop_id,
+            frame_contract: None,
             kind: StreamKind::Snapshot,
             codec: CodecKind::Tiles,
             profile: None,
@@ -71,15 +80,22 @@ impl Pipeline {
         };
         self.next_gop_id += 1;
         let stale = Duration::from_micros(STALE_STREAM_US);
-        let mut gop = tokio::time::timeout(stale, GopWriter::open(connection, header))
-            .await
+        let opened=tokio::select! {biased;
+            _=work.cancelled(work_epoch)=>return Err(PipelineError::capture(io::Error::from(io::ErrorKind::Interrupted))),
+            result=tokio::time::timeout(stale,GopWriter::open(connection,header))=>result,
+        };
+        let mut gop = opened
             .map_err(|error| PipelineError::capture(io::Error::other(error)))?
             .map_err(PipelineError::capture)?;
-        gop.write_frame(frame_id, capture_ts_us, true, records)
-            .await
-            .map_err(PipelineError::capture)?;
-        gop.finish();
-        Ok(())
+        let written=tokio::select! {biased;
+            _=work.cancelled(work_epoch)=>Err(io::Error::from(io::ErrorKind::Interrupted)),
+            result=gop.write_frame(frame_id,capture_ts_us,true,records)=>result,
+        };
+        if !work.current(work_epoch) {gop.reset();return Err(PipelineError::capture(io::Error::from(io::ErrorKind::Interrupted)));}
+        match written {
+            Ok(_)=>{gop.finish();Ok(())},
+            Err(error)=>{gop.reset();Err(PipelineError::capture(error))},
+        }
     }
 }
 
@@ -101,7 +117,7 @@ fn still_tiles(
             return Err(PipelineError::capture(error));
         }
     };
-    let size = image.size().fit_within(limit);
+    let size = crate::screen::core::frame_budget::FrameLimits::LEGACY.fit(image.size().fit_within(limit));
     let image = if image.size() == size {
         image
     } else {
@@ -129,20 +145,23 @@ pub(super) fn produce(
                 capture_ts_us,
                 encoder,
                 ..
-            } => Captured::Encoded {
+            } => {
+                super::super::frame_size_caps::validate_encoded_budget(request.frame_contract,request.choice.codec,&records)
+                    .map_err(PipelineError::encoder)?;
+                Captured::Encoded {
                 frame: EncodedFrame { records, keyframe },
                 capture_ts_us,
                 encoder,
-            },
+            }},
             StageFrame::Unchanged { .. } => Captured::Unchanged,
             StageFrame::Paused(state) => Captured::Paused(state),
         });
     }
     if stage.encoder.is_none() {
         let encoder = backend
-            .open_encoder(&request.choice, request.size)
+            .open_encoder_for_stage(request)
             .map_err(PipelineError::encoder)?;
-        stage.encoder = Some(encoder);
+        stage.encoder = Some(crate::screen::core::host_hybrid::wrap(encoder,request).map_err(PipelineError::encoder)?);
     }
     capture_and_encode(stage, request)
 }
@@ -154,26 +173,41 @@ fn capture_and_encode(
     request: &StageRequest,
 ) -> Result<Captured, PipelineError> {
     let capture_ts_us = now_us();
+    let generation=stage.source.reference_generation();
     let captured = stage
         .source
-        .capture(request.frame_id, request.keyframe)
-        .map_err(PipelineError::capture)?;
+        .capture(request.frame_id, request.keyframe || stage.encoder.as_ref().is_some_and(|e|e.needs_refresh()));
+    if stage.source.reference_generation()!=generation {
+        stage.encoder=None;
+        return match captured {
+            Ok(SourceFrame::Paused(state))=>Ok(Captured::Paused(state)),
+            Err(error)=>Err(PipelineError::capture(error)),
+            _=>Ok(Captured::Unchanged),
+        };
+    }
+    let captured=captured.map_err(PipelineError::capture)?;
     let image = match captured {
         SourceFrame::Frame(image) => image,
         SourceFrame::Unchanged => return Ok(Captured::Unchanged),
         SourceFrame::Paused(state) => return Ok(Captured::Paused(state)),
     };
+    if image.size().width<request.size.width || image.size().height<request.size.height { return Ok(Captured::Unchanged); }
+    let limits = request.frame_contract.map_or(super::super::frame_budget::FrameLimits::LEGACY, |c| c.limits)
+        .intersect(stage.source.frame_limits_for_contract(request.frame_contract));
+    limits.check(request.size).map_err(PipelineError::capture)?;
     let image = if image.size() == request.size {
         image
     } else {
-        downscale_bgra(&image.view(), request.size).map_err(PipelineError::capture)?
+        downscale_bgra_with_limits(&image.view(), request.size, limits).map_err(PipelineError::capture)?
     };
     let encoder = stage
         .encoder
         .as_mut()
         .ok_or_else(|| PipelineError::encoder(io::Error::other("no screen encoder")))?;
     let frame = encoder
-        .encode(&image, request.keyframe, request.target_bps)
+        .encode_frame(&image, request)
+        .map_err(PipelineError::encoder)?;
+    super::super::frame_size_caps::validate_encoded_budget(request.frame_contract,request.choice.codec,&frame.records)
         .map_err(PipelineError::encoder)?;
     let encoder = StageEncoder {
         name: encoder.name(),

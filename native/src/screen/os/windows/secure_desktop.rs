@@ -19,8 +19,8 @@ pub(super) fn is_default_desktop(name: &str) -> bool {
 
 /// Whether the input desktop is not the user's: opening it fails (the
 /// secure desktop of a UAC prompt or the lock screen belongs to the system)
-/// or its name is not `Default`. When the name cannot be read the desktop
-/// opened, so it is not secure.
+/// or its name is not `Default`. An unreadable desktop identity cannot
+/// authorize capture or input and is treated as protected.
 pub(super) fn on_secure_desktop() -> bool {
     // SAFETY: no handle is inherited; the access right only reads objects.
     let desktop =
@@ -51,13 +51,13 @@ pub(super) fn on_secure_desktop() -> bool {
                 .unwrap_or(NAME_UNITS);
             !is_default_desktop(&String::from_utf16_lossy(&name[..end]))
         }
-        Err(_) => false,
+        Err(_) => true,
     }
 }
 
 /// Whether the session of this process is connected (`WTSActive`). Any
 /// other connect state, for example a disconnected remote session, is not;
-/// a failing query never pauses a session, so it counts as active.
+/// a failing or truncated query cannot authorize the process session.
 pub(super) fn session_active() -> bool {
     use windows_sys::Win32::System::RemoteDesktop::{
         WTSActive, WTSConnectState, WTSFreeMemory, WTSQuerySessionInformationW,
@@ -77,14 +77,14 @@ pub(super) fn session_active() -> bool {
         )
     };
     if queried == 0 || buffer.is_null() {
-        return true;
+        return false;
     }
     let state = if bytes as usize >= std::mem::size_of::<i32>() {
         // SAFETY: the connect state is one `WTS_CONNECTSTATE_CLASS` (an
         // int) in a buffer of at least that many bytes.
         unsafe { buffer.cast::<i32>().read_unaligned() }
     } else {
-        WTSActive
+        -1
     };
     // SAFETY: the buffer came from the query above and is freed once.
     unsafe { WTSFreeMemory(buffer.cast()) };

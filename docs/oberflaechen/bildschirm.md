@@ -1,6 +1,6 @@
 # Oberflächen der Bildschirmverbindung
 
-Stand: 2026-10-21, Lauf 2 des Doku-Laufs U42 (SCR-M11). Alle Pakete des Strangs S4 sind im Quelltext committet: U09, U10, U13, U16, U19, U22, U25, U27 und U28 sowie R15c. Gebaut und ausgeführt ist davon in diesem Lauf nichts; das prüft die Stapel-Suite. Belege als `Datei:Zeile` am Stand dieses Dokuments. Abkürzung: `N/` = `native/src/`, `A/` = `android/app/src/main/java/app/smartexplorer/android/`. Pflege: jede Änderung an einer Bildschirmfähigkeit aktualisiert diese Datei im selben Commit (Regel in `docs/oberflaechen/INDEX.md`).
+Stand: 2026-10-26, laufender Quellkandidat. Die gemeinsame Remote-Suite und Veröffentlichung stehen aus. Bestehende S4-Bedienwege bleiben erhalten; die Ergänzungen zu Bildreferenzen, Icons, Größen und Skalierung stehen in Abschnitt 11. Maschinenlogin, TCP, RDP, Programme und Fensterfamilien stehen in [fernzugriff.md](fernzugriff.md). Abkürzungen: `N/` = `native/src/`, `A/` = `android/app/src/main/java/app/smartexplorer/android/`. Historische Zeilennummern vor Abschnitt 11 stammen aus dem S4-Bestandsbericht; für neue Verträge sind die genannten Symbole maßgeblich.
 
 Erreichbarkeit: CLI, IPC, Betrachter, Anzeigefenster und Tab 9 sind verdrahtet. Tab 9 (`TAB_SCREEN`) steht in `N/app/core/share_window_ui.rs:66`. Die Registrierungen der Module stehen in den Commits `9456b8ad` (U10), `f4599a0e` (U19), `f83d1d94` (U16), `ecca6583` (U22), `1dc11011` (U25) und `33744c73` (U27).
 
@@ -113,7 +113,7 @@ Quellen: `monitor:<id>`, `window:<id>` und `synthetic`. Auf Windows (SCR-M4) ist
 
 Fensterliste (alle Plattformen): Die Liste hat keine Eintragszahl. Ihre Grenze ist der 1-MiB-Rahmen von Protokoll v1 (`MAX_WINDOWS_BYTES`, `N/screen/core/wire.rs:54`). `WindowList::bounded` nimmt die Teile in der Reihenfolge Grenzen, Fenster, Apps auf und lässt jeden Eintrag weg, der nicht mehr hineinpasst; ein Eintrag wird nie abgeschnitten (`N/screen/core/window_list.rs:171-190`). Titel und Namen bleiben unverkürzt. Fenster ohne gültige Kennung fallen weg; eine ungültige Monitor-Kennung wird leer (`window_list.rs:172-176`).
 
-Aufnahme (Windows): Graphics Capture ab Windows 10 1903 für Monitore und Fenster, für einen Monitor ohne Graphics Capture die DXGI-Duplikation (`N/screen/os/windows/capture_wgc.rs`, `capture_dxgi.rs`); jedes Bild wird auf die CPU zurückgelesen (`d3d_device.rs`, 8,3 MB je Bild bei 1920 × 1080), Alpha ist 255. Aufnahmezustände vor jedem Bild in dieser Reihenfolge: `session_inactive`, `secure_desktop`, bei einem Fenster „Fenster existiert nicht mehr“ (die Sitzung endet mit `capture_failed`) und `window_minimized` (`N/screen/os/windows/capture_source.rs`). Eine Quelle, die nicht öffnet, nennt `monitor_not_found`, `window_not_found`, `session_inactive`, `window_capture_unsupported` oder `capture_unavailable` als Grund von `no_display`. Ein Monitor über 4096 × 2304 Pixel wird auf diese Größe verkleinert.
+Aufnahme (Windows): Graphics Capture ab Windows 10 1903 für Monitore und Fenster, für einen Monitor ohne Graphics Capture die DXGI-Duplikation (`N/screen/os/windows/capture_wgc.rs`, `capture_dxgi.rs`); jedes Bild wird auf die CPU zurückgelesen (`d3d_device.rs`, 8,3 MB je Bild bei 1920 × 1080), Alpha ist 255. Aufnahmezustände vor jedem Bild in dieser Reihenfolge: `session_inactive`, `secure_desktop`, bei einem Fenster „Fenster existiert nicht mehr“ (die Sitzung endet mit `capture_failed`) und `window_minimized` (`N/screen/os/windows/capture_source.rs`). Eine Quelle, die nicht öffnet, nennt `monitor_not_found`, `window_not_found`, `session_inactive`, `window_capture_unsupported` oder `capture_unavailable` als Grund von `no_display`. Ohne ausgehandelten v2-Bildvertrag bleibt die bisherige v1-Pixelgrenze erhalten. Mit v2 bestimmen tatsächliche Capture-, Codec-, Renderer- und Ressourcengrenzen die Bildgröße; eine reine FPS-Grenze verkleinert die Pixel nicht.
 
 `SNAPSHOT` liefert ein verlustfreies Standbild der Quelle der Sitzung auf einem eigenen Bildstrom (`N/screen/core/host_capture.rs`); die Quelle des Rahmens (`SnapshotRequest.source`) wird vom Host nicht ausgewertet, die Quelle benennt die Sitzung (`StreamRequest.source`). Die Oberflächen: `se screen windows` und `se screen snapshot` (Abschnitt 3) und das MCP-Werkzeug `screen`. Der Client dafür ist `N/daemon/os/shared/screen_ipc_still.rs` (über `ScreenIpcRequest::Stream`, ohne neue IPC-Varianten): bis zur Annahme durch das Gerät gibt es keine Frist (Rückfrage beim Nutzer), danach höchstens 30 Sekunden; das PNG schreibt `N/screen/core/snapshot.rs` (8 Bit RGB, verlustfrei).
 
@@ -158,7 +158,7 @@ Stand SCR-M7 (U25), Desktop (Windows und Linux). Der Betrachter ist ein eigener 
 
 - Sitzungen: `N/mobile/os/shared/domains/screen_view_run.rs` führt die laufenden Betrachtersitzungen (Tabelle, Sitzungsfaden, Ereignisse und Warteschlange der Bilder). Eine Sitzung endet einmal: beim Ereignis `ended`, bei geschlossener Warteschlange (`screenPull` liefert −2) oder beim Entfernen aus der Tabelle.
 - Bildabruf: `screenPull(session, dst, timeoutMs)` schreibt das nächste Bild in den direkten Puffer `dst` (`native/android-bridge/src/screen_jni.rs:131-134`). Rückgaben: Anzahl geschriebener Bytes; −1 Zeitüberschreitung; −2 Sitzung beendet; −3 `dst` zu klein, Bytes 12 bis 15 nennen die Länge der Nutzlast, es wird nichts kopiert; −4 Puffer nicht direkt (`N/screen/os/android/viewer_sink.rs:36-39`, `:152-157`).
-- Kopf eines Bildes, Little-Endian (`viewer_sink.rs:1-19`): Bytes 0 bis 7 `pts_us` (Aufnahmezeit des Hosts), 8 bis 11 `flags` (Bit 0 Schlüsselbild; Bit 1 fertiges Kachelbild in RGBA; Bit 2 erstes Bild einer neuen Bildgruppe; Bit 3 Zugriffseinheit vollständig; Bits 16 bis 31 die Gruppennummer), 12 bis 15 `len`, danach `len` Bytes Nutzlast. Die Nutzlast beginnt bei Offset 16.
+- Kopf eines Bildes, Little-Endian (`viewer_sink.rs`): Bytes 0 bis 7 `pts_us`, 8 bis 11 `flags`, 12 bis 15 `len`. Die Identitätsflags `0x100 | 0x80` verlangen anschließend die vollständige GOP-ID und Frame-ID als je `u64LE`; Codecbytes beginnen bei Offset 32. `len` umfasst beide Identitäten und die Codecbytes. Die oberen 16 Flagbits sind kein ausreichender GOP-Beleg. Auch ein tatsächlich ausgehandelter v1-Wirestrom erhält diese Identität am internen JNI-Pullanschluss.
 - H.264: Die Zugriffseinheiten gehen im Annex-B-Format unverändert an die App; SPS und PPS stehen vor jedem IDR (`viewer_sink.rs:1-8`). Der Dekoder (MediaCodec) liest über `pullLarger`, wenn ein Bild nicht in den Eingangspuffer passt (`A/ui/screen/ScreenDecoder.kt:104-114`).
 - Kacheln: Der Kern setzt die Kachelbilder zu einem fertigen Bild in der Bytefolge R, G, B, A zusammen (`viewer_sink.rs:3-4`, `:310`, `bgra_to_rgba` in `:341`). Die App zeichnet sie als Bitmap (`ScreenDecoder.kt:33-34`).
 - Stau: Ist das älteste Bild der Warteschlange älter als `STALL_US`, leert der Kern die Warteschlange und fordert ein Schlüsselbild an (`viewer_sink.rs:6-9`).
@@ -192,15 +192,37 @@ Stand SCR-M8 (U27). Der Host läuft im Dienst `A/screen/ScreenHostService.kt`. D
 | Desktop | Umlaufzeit im Statistikfeld | der Worker meldet nur den Uhrversatz; das Feld zeigt „–“ |
 | CLI | Rückfragen beantworten unter `se screen` | Rückfragen beantworten die Oberflächen von S1 für alle Rechte gemeinsam |
 
-## 11. Offene Punkte
+## 11. Ergänzungen des laufenden Gesamtkandidaten
 
-- Die Bildschirmzeilen des Zugriffsrechts übergibt `N/mobile/os/shared/domains/share_access.rs:76` fest als grafische Sitzung (`graphical_session: true`). Das ist beabsichtigt, weil die App die grafische Sitzung des Telefons ist (`share_access.rs:72-73`). Die Aufrufer aus dem Stand U10 übergeben den Wert nicht mehr fest.
-- `endpoint_for_screen` (`N/share/core/node_screen_link.rs:151`) kopiert das private `endpoint_for_target` (`N/share/core/service.rs:230`). Wird jene Funktion für das Modul sichtbar, entfällt die Kopie.
-- Die Annahmen zur iroh-Schnittstelle (`Path::rtt`, `Connection::stats`, `TransportErrorCode::crypto`) sind ohne Build nicht geprüft; die Stapel-Suite prüft sie.
-- Hardware-Kodierer über VA-API (`SCREEN-VAAPI`) und NVENC: nicht umgesetzt (Plan `strang-bildschirm.md`, SCR-M11).
-## 11. Offene Punkte
+| Fähigkeit | Oberflächen und konkrete Quellgrenze |
+|---|---|
+| Appicons | Desktopquellmenü und Kacheln (`N/app/core/screen_icons.rs`, `screen_icon_requests.rs`); Androidquellmenü (`A/ui/screen/ScreenIcons.kt`), `screen.viewIcon` und Screen-IPC. Cacheeinträge sind an Gegenstelle, Appidentität und Inhaltsdigest gebunden; Viewer erhalten begrenzte Rasterdaten. |
+| Sichtbarkeit und Eingabefreigabe | Desktop `screen_visibility.rs` mit OS-Adaptern; Android `ScreenVisibility.kt`. Host `host_capture_pause.rs` und `host_reference.rs` binden Wiederaufnahme an eine neue Referenz. Fokusverlust allein beweist keine Verdeckung. Unsichere Verdeckung bleibt sichtbar beziehungsweise unknown. |
+| Vollbild und Skalierung | Desktop `screen_viewport.rs`, `screen_scaling.rs`, `screen_wgpu_yuv.wgsl`; Android `ScreenViewBars.kt`, `ScreenScaling.kt`, `ScreenScaleWorker.kt` und `ScreenResample.kt`. Lokaler Ausstieg bleibt erreichbar. Pixelmaßstab, Verkleinerung und Vergrößerung verwenden getrennte Darstellungsregeln. |
+| Qualitätswechsel | `N/screen/core/host_quality.rs` hält Vollbild- und Vorschaugrößen/-raten getrennt. Fehlende optionale Größen-/FPS-Felder behalten die Wahl des adressierten Modus. `lossless` wählt Tiles; `sharpness` begrenzt die Rate. Ein tatsächlicher Codecfehler bleibt als sichtbarer verlustfreier Rückfall bestehen. |
+| Hybridregionen und Ausgabeidentität | `frame_protocol.rs`, `frame_reference.rs`, `viewer_reconstruct.rs`: Begin/Video/Moves/Dirty/Commit beziehen sich auf denselben Captureframe. MFT-/OpenH264-Ausgaben tragen ihre tatsächliche Eingabeidentität. Androids Encoder und Hybriddecoder bestätigen reale Einzelinputausgabe; ein ungeeigneter Codec führt zum expliziten verlustfreien Rückfall. |
+| Darstellungsbeleg | Desktop `screen_presented.rs` und Android `ScreenPresentedFrame` bestätigen die tatsächlich konsumierte GOP-/Frame-/Epochenidentität. Empfang allein schaltet Eingabe nicht frei. Familienansichten binden zusätzlich die Layoutrevision. |
+| Größen- und Speicherangebot | `frame_budget.rs` und `ScreenFrameLimits.kt` binden v2-Grenzen vor Paket-, Queue-, Pull- und Decoderallokationen. Full und Preview teilen einen sitzungseigenen Skalierungsbesitzer; Zwischenpuffer und gehaltene Ausgaben werden vor der Allokation gegen das angenommene Budget zugelassen. Die statische Bilanz gilt für lebende Produktpuffer; Prozess-RSS, Codec-/Treiberpuffer und GC sind kein Bestandteil dieser Zusage. Speicher- und Geräteverhalten wurden noch nicht ausgeführt. |
 
-- Drei Aufrufer von `capability_catalog` übergeben fest `graphical_session: true`: `N/app/core/share_exec_programs_ui.rs:251`, `N/cli/share/grants_access.rs:102`, `N/mobile/os/shared/domains/share_access.rs:75`. Sie sollen `crate::screen::graphical_session()` übergeben; bis dahin zeigen sie die Bildschirmzeilen auch ohne grafische Sitzung und unter Android.
-- Die Verteilerzeile für Tab 9 in `N/app/core/share_window_ui.rs` fehlt (Datei von U24).
-- `endpoint_for_screen` (`N/share/core/node_screen_link.rs:151`) kopiert das private `ShareService::endpoint_for_target`; wird jene Funktion für das Modul sichtbar, entfällt die Kopie.
-- Die Annahmen zur iroh-Schnittstelle (`Path::rtt`, `Connection::stats`, `TransportErrorCode::crypto`) sind ohne Build nicht geprüft; die Aufgabensuite prüft sie.
+Bei der derzeitigen v2-Reserve von 24 Bildäquivalenten und höchstens 512 MiB
+Arbeitsbudget liegt das maximale Pixelangebot bei 5.592.405 Pixeln. Ein
+3840×2160-Bild wird im v2-Weg deshalb verkleinert. Die getrennten Legacy-/RAW-
+Grenzen bleiben erhalten; daraus folgt keine allgemeine Auflösungsparität.
+Diese praktische Grenze ist Bestandteil des anschließenden Gesamtreviews.
+
+CLI und MCP erhalten Metadaten, Quellen, Standbilder und Steuerbefehle über
+bestehende Screen-Verträge. Livebilder werden von Desktop-/Androidrenderern
+gezeichnet; MCP ist weiterhin kein Videoplayer. Die gemeinsame Suite muss die
+geänderten Wire-, IPC-, JNI- und Darstellungsgrenzen zusammen prüfen.
+
+## 12. Prüfstatus und historische Inventurkorrekturen
+
+Der aktuelle Code registriert Tab 9 in `share_window_ui.rs`. Desktop und CLI
+verwenden beim Capabilitykatalog `crate::screen::graphical_session()`;
+Android meldet die tatsächlich grafische App weiterhin ausdrücklich als solche.
+Die widersprüchlichen früheren offenen Listen sind damit ersetzt.
+
+Dieser Dokumentstand bestätigt keine Hardwarecodecs, GUIgesten oder
+Remote-CI-Ausführung. Statische Befunde und verbliebene Beweisgrenzen stehen in
+[Review B6](../plaene/2026-10-24-batches/review-b6.md). Offene Produktarbeit steht
+nur in [TODO](../TODO.md); frühere SCR-M11-Pläne sind historische Evidenz.

@@ -1,6 +1,10 @@
 package app.smartexplorer.android.api
 
 import app.smartexplorer.android.core.Core
+import app.smartexplorer.android.screen.ScreenIconReply
+import app.smartexplorer.android.screen.ScreenIconRequest
+import app.smartexplorer.android.screen.AppIcons
+import app.smartexplorer.android.screen.ScreenIconRef
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -24,6 +28,35 @@ const val ACCESSIBILITY_OFF = "off"
 /** „Eingeschränkte Einstellungen“ block the switch (sideloaded app, Android 13+). */
 const val ACCESSIBILITY_RESTRICTED = "restricted"
 
+/** Native-derived limits for live product byte buffers, separate from codec-owned memory. */
+@Serializable
+data class ScreenBufferBudget(
+    val workingBytes:Long, val imageBytes:Int, val recordBytes:Int,
+    val packetBytes:Int, val pullBytes:Int, val legacy:Boolean = false,
+    val recordOverheadBytes:Int=1099,
+) {
+    init {
+        require(workingBytes in 32..512L*1024*1024 && imageBytes in 1..64*1024*1024)
+        require(imageBytes.toLong()*(if(legacy)8 else 24)<=workingBytes && recordBytes in 1..16*1024*1024)
+        require(packetBytes>=imageBytes && pullBytes.toLong()==maxOf(imageBytes,recordBytes).toLong()+32)
+        require(recordOverheadBytes>=1099)
+        if(!legacy) require(imageBytes.toLong()*20+(recordBytes.toLong()+recordOverheadBytes)*32+(packetBytes-imageBytes)<=workingBytes)
+    }
+    fun checkedBytes(width:Int,height:Int):Int =
+        app.smartexplorer.android.screen.ScreenFrameLimits.checkedBytes(width,height).also {require(it<=imageBytes)}
+    /** Thirteen image owners remain outside the single CPU scaler: native
+     * tiles/queue (4), pull (1), decoder (3), Full/Preview snapshots (2), one
+     * posted snapshot (1), and running/next ScaleRequest sources (2).
+     * Result bitmaps, source/target arrays and filter rows lease this remainder.
+     * Legacy retains its absolute geometry rather than claiming a v2 total. */
+    fun scalingBytes():Long = if(legacy) 512L*1024*1024 else workingBytes-
+        imageBytes.toLong()*13-(recordBytes.toLong()+recordOverheadBytes)*32-(packetBytes-imageBytes)
+    companion object {
+        val LEGACY=ScreenBufferBudget(512L*1024*1024,4096*2304*4,16*1024*1024,
+            64*1024*1024,4096*2304*4+32,true)
+    }
+}
+
 /** What the app reports and the core keeps (`screen.hostPrereqs`). */
 @Serializable
 data class ScreenPrereqs(
@@ -34,17 +67,23 @@ data class ScreenPrereqs(
 
 /** One H.264 encoder of MediaCodec: `cb` or `high`. */
 @Serializable
-data class ScreenEncoderOffer(val profile: String, val hardware: Boolean)
+data class ScreenEncoderOffer(
+    val profile: String, val hardware: Boolean,
+    val maxWidth: Int? = null, val maxHeight: Int? = null,
+    val maxMacroblocks: Long? = null, val maxMacroblocksPerSecond: Long? = null,
+)
 
 /** A running app as the viewer's window list shows it. */
 @Serializable
-data class ScreenAppEntry(val packageName: String, val label: String)
+data class ScreenAppEntry(val packageName: String, val label: String, val icon: ScreenIconRef? = null)
 
 /** One host session (`screen.hostSessions`). */
 @Serializable
 data class ScreenHostSession(
     val session: Long,
+    /** Actual system-selected capture has no verifiable package identity. */
     val source: String = "",
+    val requestedSource: String = "",
     val still: Boolean = false,
     val viewerName: String = "",
     val viewerDeviceId: String = "",
@@ -72,6 +111,7 @@ object ScreenApi {
     ): ScreenPrereqs = Core.request<ScreenPrereqs>(
         "screen.hostPrereqs",
         buildJsonObject {
+            put("workingBytes", app.smartexplorer.android.screen.ScreenFrameLimits.workingBytes())
             accessibility?.let { put("accessibility", it) }
             usageAccess?.let { put("usageAccess", it) }
             appWindowCapture?.let { put("appWindowCapture", it) }
@@ -92,6 +132,10 @@ object ScreenApi {
                             buildJsonObject {
                                 put("profile", it.profile)
                                 put("hardware", it.hardware)
+                                it.maxWidth?.let { value -> put("maxWidth",value) }
+                                it.maxHeight?.let { value -> put("maxHeight",value) }
+                                it.maxMacroblocks?.let { value -> put("maxMacroblocks",value) }
+                                it.maxMacroblocksPerSecond?.let { value -> put("maxMacroblocksPerSecond",value) }
                             }
                         },
                     ),
@@ -105,6 +149,10 @@ object ScreenApi {
                             buildJsonObject {
                                 put("package", it.packageName)
                                 put("label", it.label)
+                                it.icon?.let { icon ->
+                                    put("icon", Core.json.encodeToJsonElement(ScreenIconRef.serializer(), icon))
+                                    AppIcons.contentFor(icon)?.let { content -> put("iconPngBase64", content.png_base64) }
+                                }
                             }
                         },
                     ),
@@ -170,6 +218,19 @@ object ScreenApi {
     suspend fun windows(relation: String, relationId: String, deviceId: String?): ScreenWindows =
         Core.request("screen.windows", targetArgs(relation, relationId, deviceId))
 
+    suspend fun icon(relation: String, relationId: String, deviceId: String?, request: ScreenIconRequest): ScreenIconReply? =
+        Core.request("screen.icon", buildJsonObject {
+            put("relation", relation); put("relationId", relationId)
+            if (deviceId != null) put("deviceId", deviceId)
+            put("request", Core.json.encodeToJsonElement(ScreenIconRequest.serializer(), request))
+        })
+
+    suspend fun viewIcon(session: Long, request: ScreenIconRequest): ScreenIconReply? =
+        Core.request("screen.viewIcon", buildJsonObject {
+            put("session", session)
+            put("request", Core.json.encodeToJsonElement(ScreenIconRequest.serializer(), request))
+        })
+
     /** Opens a session ([mode] `view`, `control` or `preview`); its progress comes as events. */
     suspend fun viewOpen(
         relation: String,
@@ -181,12 +242,16 @@ object ScreenApi {
         displayWidth: Int,
         displayHeight: Int,
         maxFps: Int,
+        rendererLimit: Pair<Int, Int>? = null,
+        expectedNodeId: String? = null,
     ): Long {
         val args = buildJsonObject {
             put("relation", relation)
             put("relationId", relationId)
             if (deviceId != null) put("deviceId", deviceId)
             put("mode", mode)
+            put("workingBytes", app.smartexplorer.android.screen.ScreenFrameLimits.workingBytes())
+            expectedNodeId?.let { put("expectedNodeId", it) }
             if (source != null) put("source", source)
             putJsonArray("decoders") {
                 decoders.forEach { offer ->
@@ -196,6 +261,10 @@ object ScreenApi {
             put("displayWidth", displayWidth)
             put("displayHeight", displayHeight)
             put("maxFps", maxFps)
+            rendererLimit?.let { (width, height) ->
+                put("textureWidth", width)
+                put("textureHeight", height)
+            }
         }
         val answer = Core.call("screen.viewOpen", args) as? JsonObject
         return answer?.get("session")?.toString()?.toLongOrNull() ?: 0L
@@ -230,6 +299,13 @@ object ScreenApi {
     }
 
     /** Sends input events (the serde form of the core's `InputEvent`); the answer is the count. */
+    suspend fun viewVisibility(session: Long, report: JsonObject) {
+        Core.call("screen.viewVisibility", buildJsonObject {
+            put("session", session)
+            put("report", report)
+        })
+    }
+
     suspend fun viewInput(session: Long, events: List<JsonObject>): Int {
         val args = buildJsonObject {
             put("session", session)
@@ -255,6 +331,14 @@ object ScreenApi {
     }
 
     /** Ends the session; closing twice is fine. */
+    suspend fun viewPresented(session: Long, gopId: Long, frameId: Long) {
+        Core.call("screen.viewPresented", buildJsonObject {
+            put("session", session)
+            put("gopId", gopId)
+            put("frameId", frameId)
+        })
+    }
+
     suspend fun viewClose(session: Long) {
         Core.call("screen.viewClose", buildJsonObject { put("session", session) })
     }
@@ -322,10 +406,12 @@ data class ScreenWindow(
     val app: String = "",
     val minimized: Boolean = false,
     val focused: Boolean = false,
+    val appId: String? = null,
+    val icon: ScreenIconRef? = null,
 )
 
 @Serializable
-data class ScreenApp(val appId: String, val name: String = "")
+data class ScreenApp(val appId: String, val name: String = "", val icon: ScreenIconRef? = null)
 
 /** `screen.windows` and the `windows` event. */
 @Serializable
@@ -346,4 +432,7 @@ data class DecoderOffer(
     val hardware: Boolean = false,
     val maxWidth: Int? = null,
     val maxHeight: Int? = null,
+    val pixelAccess: Boolean = false,
+    val maxMacroblocks: Long? = null,
+    val maxMacroblocksPerSecond: Long? = null,
 )

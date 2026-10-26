@@ -49,19 +49,41 @@ pub(super) struct ViewSession {
     pub control_allowed: AtomicBool,
     pub keyframes: Arc<Mutex<KeyframeRequester>>,
     pub pressed: Mutex<PressedInputs>,
+    pub icons:super::icons::IconState,
+    pub icons_supported:AtomicBool,
+    pub presented_supported: AtomicBool,
+    pub latest_gop: AtomicU64,
+    pub family: Mutex<Option<crate::screen::core::family_viewer::FamilyViewer>>,
+    pub family_presented: AtomicBool,
+    family_picture: Mutex<Option<(u64,u64)>>,
 }
 
 impl ViewSession {
     pub(super) fn send(&self, frame: &ViewerFrame) -> Result<(), ApiError> {
+        if lock(&self.family).is_some() && matches!(frame,ViewerFrame::Input(_)) {
+            return Err(ApiError::new("permission","Familieneingabe benötigt Snapshot und Fokusbestätigung."));
+        }
+        if let ViewerFrame::Presented {gop_id,..}=frame {
+            if lock(&self.family).as_ref().is_some_and(|family|family.snapshot.as_ref().is_none_or(|snapshot|
+                *lock(&self.family_picture)!=Some((*gop_id,snapshot.layout_revision)))) {return Ok(());}
+        }
         let send = lock(&self.link)
             .as_ref()
             .map(|link| link.send.clone())
             .ok_or_else(|| ApiError::new("busy", "Die Sitzung ist noch nicht verbunden."))?;
-        send(frame).map_err(|error| ApiError::new("network", error.to_string()))
+        send(frame).map_err(|error| ApiError::new("network", error.to_string()))?;
+        if let ViewerFrame::Presented {gop_id,..}=frame {
+            if lock(&self.family).as_ref().is_some_and(|family|family.snapshot.as_ref().is_some_and(|snapshot|
+                *lock(&self.family_picture)==Some((*gop_id,snapshot.layout_revision)))) {
+                self.family_presented.store(true,Ordering::SeqCst);
+            }
+        }
+        Ok(())
     }
 
     /// Releases what is still pressed (the host does too, at the end).
     pub(super) fn release_pressed(&self) {
+        if let Some(family)=lock(&self.family).as_mut(){family.disarm();return;}
         let events = lock(&self.pressed).release_all();
         if !events.is_empty() {
             let _ = self.send(&ViewerFrame::Input(events));
@@ -76,6 +98,7 @@ impl ViewSession {
     }
 
     fn shut(&self) {
+        self.icons.clear();
         self.release_pressed();
         self.queue.close();
         let link = lock(&self.link).take();
@@ -113,6 +136,11 @@ fn new_session(mode: SessionMode) -> Arc<ViewSession> {
         control_allowed: AtomicBool::new(false),
         keyframes: Arc::new(Mutex::new(KeyframeRequester::default())),
         pressed: Mutex::new(PressedInputs::default()),
+        icons:super::icons::IconState::default(),
+        icons_supported:AtomicBool::new(false),
+        presented_supported: AtomicBool::new(false),
+        latest_gop: AtomicU64::new(0),
+        family:Mutex::new(None),family_presented:AtomicBool::new(false),family_picture:Mutex::new(None),
     });
     lock(&SESSIONS).insert(id, session.clone());
     session
@@ -126,6 +154,7 @@ pub(super) fn start(
     own: String,
 ) -> Result<u64, ApiError> {
     let session = new_session(mode);
+    *lock(&session.family)=request.source.as_ref().and_then(crate::screen::core::family_viewer::FamilyViewer::for_source);
     let id = session.id;
     std::thread::Builder::new()
         .name(format!("screen-view-{id}"))
@@ -152,6 +181,7 @@ pub(super) fn open_for_tests(mode: SessionMode, send: Option<SendFrame>) -> Arc<
 
 /// Ends the session once: the `ended` event, the queue, the table entry.
 fn finish(session: &ViewSession, code: &str, detail: Option<String>) {
+    session.icons.clear();
     if !session.ended.swap(true, Ordering::SeqCst) {
         emit(
             session.id,
@@ -211,6 +241,13 @@ fn on_event(
             emit(id, "pending", json!({ "capability": name }));
         }
         StreamEvent::Accepted { hello, path } => {
+            if lock(&session.family).is_some() && (hello.family_version!=Some(1)||hello.frame_contract.is_none_or(|contract|
+                contract.version!=crate::screen::core::frame_budget::FRAME_PROTOCOL)) {
+                finish(session,"window_family_unsupported",Some("Familien-/Bildvertrag fehlt.".into()));session.shut();return;
+            }
+            session.presented_supported.store(hello.frame_contract.is_some_and(|contract|
+                contract.version == crate::screen::core::frame_budget::FRAME_PROTOCOL), Ordering::SeqCst);
+            session.icons_supported.store(hello.icon_version==Some(crate::screen::core::app_icon::ICON_VERSION),Ordering::SeqCst);
             let allowed = session.mode == SessionMode::Control
                 && hello.authorization.control != CapabilityDecision::Off;
             session.control_allowed.store(allowed, Ordering::SeqCst);
@@ -218,6 +255,13 @@ fn on_event(
         }
         StreamEvent::Host(frame) => on_host_frame(session, encoder, own, frame),
         StreamEvent::Record { header, record } => {
+            if let Some(family)=lock(&session.family).as_ref() {
+                if header.gop_id<session.latest_gop.load(Ordering::SeqCst){return;}
+                let Some(snapshot)=&family.snapshot else {return;};
+                if header.family_layout_revision!=Some(snapshot.layout_revision){return;}
+                *lock(&session.family_picture)=Some((header.gop_id,snapshot.layout_revision));
+            }
+            session.latest_gop.fetch_max(header.gop_id, Ordering::SeqCst);
             for output in sink.record(&header, &record, now_us()) {
                 on_sink_output(session, encoder, output);
             }
@@ -249,6 +293,7 @@ fn on_sink_output(session: &ViewSession, encoder: &(String, bool), output: SinkO
                 "gop": gop,
                 "encoder": encoder.0,
                 "hardware": encoder.1,
+                "familyLayoutRevision": lock(&session.family_picture).as_ref().map(|(_,layout)|*layout),
             }),
         ),
         SinkOutput::Keyframe(request) => {
@@ -259,6 +304,17 @@ fn on_sink_output(session: &ViewSession, encoder: &(String, bool), output: SinkO
 
 fn on_host_frame(session: &ViewSession, encoder: &mut (String, bool), own: &str, frame: HostFrame) {
     let id = session.id;
+    if let Some(result)=super::family::event(session,&frame) {
+        match result {
+            Ok(true)=>{
+                let _=session.send(&ViewerFrame::KeyframeRequest(crate::screen::core::wire_control::KeyframeRequest {
+                    reason:crate::screen::core::wire_control::KeyframeReason::Reset,gop_id:Some(session.latest_gop.load(Ordering::SeqCst)) }));
+            }
+            Err(error)=>{finish(session,"invalid_family",Some(error.to_string()));session.shut();}
+            _=>{}
+        }
+        return;
+    }
     match frame {
         HostFrame::State(report) => {
             if let Some(stream) = &report.stream {
@@ -271,7 +327,11 @@ fn on_host_frame(session: &ViewSession, encoder: &mut (String, bool), own: &str,
             let list = serde_json::to_value(&list).unwrap_or(Value::Null);
             emit(id, "windows", camel(list));
         }
+        HostFrame::IconReply(response)=>session.icons.deliver(&format!("session:{}",session.id),response),
         HostFrame::Stats(stats) => emit(id, "stats", stats_fields(&stats)),
+        HostFrame::VisibilityAck(ack) => emit(id, "visibilityAck", json!({
+            "geometryGeneration": ack.geometry_generation, "minFrameId": ack.min_frame_id,
+        })),
         HostFrame::ControlState(state) => {
             let holder = state.holder.map(|holder| {
                 if holder.device_id == own {
@@ -291,5 +351,7 @@ fn on_host_frame(session: &ViewSession, encoder: &mut (String, bool), own: &str,
             emit(id, "error", fields);
         }
         HostFrame::Pong(_) => {}
+        HostFrame::Families(_) | HostFrame::FamilySnapshot(_) | HostFrame::FamilyOperation(_)
+            | HostFrame::FamilyInput(_) => {},
     }
 }

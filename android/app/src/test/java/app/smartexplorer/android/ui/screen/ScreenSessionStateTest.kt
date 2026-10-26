@@ -42,8 +42,8 @@ class ScreenSessionStateTest {
         assertEquals(listOf("no_key_events"), state.limits)
         assertTrue("touch and a control right allow „Steuern“", state.canControl)
         state = state.apply(event("""{"type":"screenView","session":3,"kind":"stream","codec":"h264","profile":"high","width":1080,"height":2400,"gop":65538,"encoder":"c2","hardware":true}"""))
-        assertEquals("the low 16 bits of the group number", 2, state.streams.keys.single())
-        assertEquals(1080, state.streams.getValue(2).width)
+        assertEquals("the complete native group number", 65538L, state.streams.keys.single())
+        assertEquals(1080, state.streams.getValue(65538L).width)
         state = state.apply(event("""{"type":"screenView","session":3,"kind":"state","state":"streaming","reason":null}"""))
         assertEquals("streaming", state.state)
         state = state.apply(event("""{"type":"screenView","session":3,"kind":"controlState","holder":"other","blocked":"secure_desktop"}"""))
@@ -74,7 +74,7 @@ class ScreenSessionStateTest {
             state = state.apply(ScreenViewEvent.Stream(1, "h264", "cb", 100, 50, gop, "e", false))
         }
         assertEquals(ScreenSessionState.STREAM_CACHE, state.streams.size)
-        assertTrue(40 in state.streams && 25 in state.streams && 24 !in state.streams)
+        assertTrue(40L in state.streams && 25L in state.streams && 24L !in state.streams)
     }
 
     @Test

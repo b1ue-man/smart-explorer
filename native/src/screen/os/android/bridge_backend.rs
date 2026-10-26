@@ -25,7 +25,7 @@ use crate::screen::core::host_backend::{
     TilesScreenEncoder,
 };
 use crate::screen::core::input_model::{InputCapabilities, InputEvent, SystemAction};
-use crate::screen::core::negotiate::{CodecChoice, CodecKind, CodecOffer, H264Profile};
+use crate::screen::core::negotiate::{CodecChoice, CodecKind, CodecOffer};
 use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::registry::ScreenRegistry;
 use crate::screen::core::session_state::SessionState;
@@ -37,15 +37,16 @@ use crate::screen::core::wire_hello::{
 };
 
 /// The platform limits of an Android host (C5, `HELLO_OK`).
-pub(crate) const LIMITS: [&str; 3] = [
+pub(crate) const LIMITS: [&str; 4] = [
     LIMIT_CONSENT_EACH_SESSION,
     LIMIT_NO_KEY_EVENTS,
     LIMIT_STILL_MAX_3_PER_SECOND,
+    "android_system_selected_source",
 ];
 /// Reason of `no_display` while the app has not registered as host.
 pub(crate) const HOST_APP_NOT_RUNNING: &str = "android_host_app_not_running";
-/// Reason of `no_display` for an app window before Android 14 QPR2.
-pub(crate) const APP_WINDOW_UNAVAILABLE: &str = "app_window_capture_unavailable";
+/// Public MediaProjection callbacks cannot prove the selected package identity.
+pub(crate) const APP_WINDOW_UNAVAILABLE: &str = "source_identity_unavailable";
 /// The monitor id of the phone's display.
 pub(crate) const DISPLAY_ID: &str = "0";
 
@@ -53,13 +54,6 @@ pub(crate) const DISPLAY_ID: &str = "0";
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct BridgeBackend;
 
-fn profile(key: &str) -> Option<H264Profile> {
-    match key {
-        "cb" => Some(H264Profile::ConstrainedBaseline),
-        "high" => Some(H264Profile::High),
-        _ => None,
-    }
-}
 
 impl ScreenHostBackend for BridgeBackend {
     fn platform(&self) -> HostPlatform {
@@ -76,7 +70,7 @@ impl ScreenHostBackend for BridgeBackend {
         };
         vec![MonitorInfo {
             id: DISPLAY_ID.into(),
-            name: "Bildschirm".into(),
+            name: "Android-Systemauswahl".into(),
             x: 0,
             y: 0,
             width,
@@ -86,11 +80,8 @@ impl ScreenHostBackend for BridgeBackend {
     }
 
     fn encoders(&self) -> Vec<CodecOffer> {
-        let mut offers: Vec<CodecOffer> = channels::prereqs()
-            .encoders
-            .iter()
-            .filter_map(|(key, hardware)| profile(key).map(|p| CodecOffer::h264(p, *hardware)))
-            .collect();
+        let mut offers = channels::prereqs().encoders;
+        offers.truncate(crate::screen::core::negotiate::MAX_CODEC_OFFERS-1);
         offers.push(CodecOffer::tiles());
         offers
     }
@@ -129,6 +120,7 @@ impl ScreenHostBackend for BridgeBackend {
             .map(|(package, label)| AppEntry {
                 app_id: package.clone(),
                 name: label.clone(),
+                icon: super::android_app_icons::reference(package),
                 pid: None,
             })
             .collect();
@@ -144,6 +136,10 @@ impl ScreenHostBackend for BridgeBackend {
         })
     }
 
+    fn icon(&self, entry: crate::screen::core::app_icon::AuthorizedIconEntry<'_>) -> io::Result<Option<crate::screen::core::app_icon::IconReply>> {
+        super::android_app_icons::load(entry)
+    }
+
     fn open_source(
         &self,
         source: &SourceId,
@@ -157,7 +153,7 @@ impl ScreenHostBackend for BridgeBackend {
             SourceId::Monitor(id) if id != DISPLAY_ID => {
                 return Err(SourceRefusal::new("unknown_monitor"))
             }
-            SourceId::Window(_) if !prereqs.app_window_capture => {
+            SourceId::Window(_) => {
                 return Err(SourceRefusal::new(APP_WINDOW_UNAVAILABLE))
             }
             _ => {}
