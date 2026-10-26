@@ -154,7 +154,7 @@ object ScreenApi {
                                 put("label", it.label)
                                 it.icon?.let { icon ->
                                     put("icon", Core.json.encodeToJsonElement(ScreenIconRef.serializer(), icon))
-                                    AppIcons.contentFor(icon)?.let { content -> put("iconPngBase64", content.png_base64) }
+                                    AppIcons.contentFor(icon)?.let { content -> put("iconPngBase64", content.pngBase64) }
                                 }
                             }
                         },

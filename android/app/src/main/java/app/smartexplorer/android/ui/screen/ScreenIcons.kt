@@ -6,9 +6,6 @@ import android.util.Base64
 import android.util.LruCache
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.size
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Apps
-import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -16,10 +13,12 @@ import androidx.compose.runtime.produceState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.unit.dp
+import app.smartexplorer.android.R
 import app.smartexplorer.android.screen.ScreenIconRef
 import app.smartexplorer.android.screen.ScreenIconReply
 import app.smartexplorer.android.screen.ScreenIconRequest
 import app.smartexplorer.android.screen.ScreenIconTarget
+import app.smartexplorer.android.ui.common.SeIcon
 import java.security.MessageDigest
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -109,5 +108,5 @@ fun ScreenAppIcon(
         }
     }
     if (bitmap != null) Image(bitmap!!.asImageBitmap(), contentDescription = null, modifier = modifier)
-    else Icon(Icons.Outlined.Apps, contentDescription = "Programmsymbol nicht verfügbar", modifier = modifier)
+    else SeIcon(R.drawable.ic_apps, contentDescription = "Programmsymbol nicht verfügbar", modifier = modifier)
 }

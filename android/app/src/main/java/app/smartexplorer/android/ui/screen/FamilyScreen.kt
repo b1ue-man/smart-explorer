@@ -41,7 +41,7 @@ fun FamilyWindowMenu(family: FamilySession, onBack: () -> Unit,
         Box(Modifier.align(Alignment.TopStart).padding(8.dp)) {
             TextButton(onClick = { expanded = !expanded }) {
                 ScreenAppIcon(peer = state.iconPeer,
-                    target = root?.icon?.app_id?.let { ScreenIconTarget.app(it) }
+                    target = root?.icon?.appId?.let { ScreenIconTarget.app(it) }
                         ?: ScreenIconTarget.window(family.entry.window.id),
                     reference = root?.icon.takeIf { state.iconVersion == 1 },
                     fetch = { request -> state.iconFetch?.invoke(request) })
