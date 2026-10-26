@@ -38,6 +38,10 @@ Korrekturgruppen sind durch ihre bisherigen Autoren samt eigener Nachreview
 abgeschlossen und separat committed; dazu gehört die vollständige
 Android-Textzuordnung für `viewer_hidden`. Die bestehenden verbundenen Fälle
 sind im gemeinsamen Manifest registriert. Ihre Remote-Bestätigung steht aus.
+Lauf `40379623936` hat ausschließlich einen Formatpatch für die JNI-
+Capturefunktion geliefert. Dieser Patch ist unverändert übernommen; sämtliche
+syntaktischen Bestandteile bleiben gleich. Lockdatei und Modulgrößen sind in
+Ordnung; Compiler- und Funktionsstufen dieses Versuchs wurden übersprungen.
 Die vollständige funktionale Suiteauswertung und Veröffentlichung stehen aus.
 
 This table is the live list of remaining work, roughly by value. The lower
