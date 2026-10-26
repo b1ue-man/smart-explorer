@@ -10970,9 +10970,9 @@
     "semantic_hash": "854eb1aa5019dd0fb1d3a3301a67299a"
   },
   "screen/core/batches_rate_reference_task_tests.rs": {
-    "mtime": 1793047074.8278413,
-    "ast_hash": "1fca0d8d59c225a1941790cdc453ea0c",
-    "semantic_hash": "1fca0d8d59c225a1941790cdc453ea0c"
+    "mtime": 1793050476.2567902,
+    "ast_hash": "7fa500d2b5d6eb25cd24a8116c92b6d7",
+    "semantic_hash": "7fa500d2b5d6eb25cd24a8116c92b6d7"
   },
   "screen/core/batches_rate_reference_tasks.rs": {
     "mtime": 1793047544.3456657,
