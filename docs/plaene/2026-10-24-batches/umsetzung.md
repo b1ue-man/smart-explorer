@@ -1257,3 +1257,11 @@ M01–M13. Main hat disjunkte Schreibflächen vorbereitet. Android war beim
 Abruf 22:10:07 UTC noch im Checkout. Kein Fixagent dieses Durchgangs wird
 während der Pipeline aktiviert; weder Quelle noch Leistungsgrenzwert wurden
 aufgrund der fehlgeschlagenen Fälle verändert.
+
+
+Android-Nachtrag zum selben Lauf: Abruf 22:40:17 UTC und gebundenes Artefakt
+liefern A01–A03; M14 ergänzt nach zwei Quellenpässen den Funktionsplan.
+Alle Build-/Teststufen sind beendet. Ohne Handoffprovenienz kann kein Gerätejob
+mehr starten. Der Plan präzisiert deshalb die Startgrenze auf das tatsächliche
+Ende dieser Arbeitsstufen; bloße Cache-Nachbereitung ist kein zusätzlicher
+Haltepunkt. Modellwahl und getrennte Fixaufträge folgen jetzt, ohne neue Suite.

@@ -8,9 +8,11 @@ kein zusätzlicher Funktionsauftrag und keine neue Testkampagne.
 
 Windows und Linux kompilieren die Bibliotheks-Prüfbinärdatei, `se` und
 `egui_glow` erfolgreich. Ihre Funktionsstufen sind fehlgeschlagen. Die
-Vorbereitung ist erfolgreich. Android war beim Statusabruf 22:10:07 UTC
-noch im Checkout; sein Ergebnis ist unbekannt. Während der Pipeline
-werden keine Umsetzungsagenten aktiviert und keine Quellkorrekturen begonnen.
+Vorbereitung ist erfolgreich. Beim Statusabruf 22:40:17 UTC war auch die
+Android-Build-/JVM-Stufe beendet. Native Bibliothek und App-APK wurden gebaut;
+Instrumentation-Kompilierung und JVM-Prüfung scheiterten. Nur Cache-Nachbereitung
+war noch aktiv. Die unten dokumentierte Startgrenze ersetzt das zunächst
+vorgesehene Warten auf sämtliche CI-Nachbereitung.
 
 Ziel dieses Fixdurchgangs: die tatsächlich fehlgeschlagenen Funktionen
 und fehlerhaften Prüfvoraussetzungen korrigieren, ohne Bestandsschutz,
@@ -72,8 +74,9 @@ Binärfällen übernommen; erfolgreicher Stdout ist keine Fehlerquelle.
 
 ## Reihenfolge und Abschlussgrenze
 
-Nach vollständigem Pipelineende wird Android ergänzt. Erst dann werden
-Detailmeilensteine, zweite Lückenrecherche und Agentenzuschnitt abgeschlossen.
+Android wird anhand seines abgeschlossenen Fehlerartefakts ergänzt. Erst nach
+Detailmeilensteinen, zweiter Lückenrecherche und vollständigen Schreibflächen
+folgt die Modellwahl. Agenten beginnen erst nach Ende der Build-/Testarbeit.
 Jeder Quellfix erhält seine Autorenreview. Main integriert Schnittstellen,
 registriert nötige Fälle im bestehenden Manifest und aktualisiert den Rootgraph.
 Nach Commit und Push läuft ausschließlich derselbe Remote-Einstieg erneut.
@@ -178,7 +181,7 @@ Der Quellabgleich präzisiert die Erhaltungsgrenzen:
 Damit sind die begrenzten Desktop-Ergebnisse und ihre kritischen APIfragen
 für den Zuschnitt geklärt. Nicht belegte Detailursachen werden ausdrücklich
 vom zuständigen Fixautor innerhalb seiner zugewiesenen Kette geklärt.
-Androidbefunde können den Zuschnitt nach vollständigem Pipelineende ergänzen.
+Die nachstehend ausgewerteten Androidbefunde ergänzen den Zuschnitt um M14.
 
 ## Detaillierte Desktopmeilensteine
 
@@ -204,7 +207,69 @@ im jeweiligen begrenzten Scope festgehalten.
 | M12 X11-Fixture | F39–F40 | Ausschließlich Xvfb-Lebensdauer im gemeinsamen Runner und zugehörige Capturefixture | Main behält Suiteausführung; Capture-/Resizeorakel bleiben erhalten. |
 | M13 Netzwechselepoche | F42 | Iroh-/Noq-Grenze und tatsächlicher Netzwechselfall | Unabhängig; alte Tokens verlieren ihre Freigabe vor Nutzverkehr der nächsten Generation. |
 
-M01–M13 erhalten getrennte Schreibflächen; Main integriert die gemeinsamen
+M01–M14 erhalten getrennte Schreibflächen; Main integriert die gemeinsamen
 Verhaltensgrenzen. Höchstens sieben Fixautoren gleichzeitig zusätzlich zu Main.
-Noch keine Modellwahl oder Aktivierung erfolgt: Voraussetzung ist das Ende des
-laufenden CI-Jobs und der Abgleich des dann vollständigen Androidbefunds.
+Die Modellwahl folgt erst nach dem hier abgeschlossenen Androidabgleich.
+
+
+## Android: Erstbefund, Quellenabgleich und Detailmeilenstein
+
+Der vollständig ausgewertete Android-Fehlerbestand desselben Kandidaten:
+
+| Kennung | Beobachtung | Erhaltungsgrenze |
+|---|---|---|
+| A01 | `BatchesDeviceNavigationTaskTest.kt:5` importiert `assertDoesNotExist` als nicht vorhandene Top-Level-Funktion. | Die vorhandenen Member-Assertions sowie echte Activity-/Intent-/Navigationswege bleiben erhalten. |
+| A02 | Sämtliche Fälle in `LoginBitmapOwnerTest` scheitern vor ihrem Prüfkörper: `SmartExplorerApp.onCreate` startet `BackgroundController`, dessen WorkManager in Robolectric nicht initialisiert ist. | Native Bitmap-/Canvasprüfung, Retain/Retire und verspätete Präsentationsnachweise bleiben erhalten; keine Änderung am produktiven Appstart für eine isolierte Besitzerfixture. |
+| A03 | Zwei `BatchesMediaStateTest`-Vergleiche melden identisch dargestellte `Offset`-Werte als ungleich. | Bildfokus, begrenztes Panning und Nullversatz bei eingepasstem Bild bleiben quantitativ geprüft; Android-Systemrotation bleibt allein maßgeblich. |
+
+Erstplan: Fixtureumgebung, tatsächliche Compose-API und geometrische Gleichheit
+an ihren vorhandenen Aufrufern klären. Eine fehlschlagende Fixture belegt noch
+keinen Produktdefekt. Die Instrumentation-APK fehlt, daher ist die Geräteabnahme
+nicht erfolgt. Das erfolgreich gebaute App-APK ersetzt diese Abnahme nicht.
+
+Erster Quellenpass, Abruf 2026-10-26:
+
+- Das [Compose-BOM 2026.06.01](https://dl.google.com/dl/android/maven2/androidx/compose/compose-bom/2026.06.01/compose-bom-2026.06.01.pom)
+  bindet `ui-test`, `ui-geometry` und `ui-util` an 1.11.4. Die direkt abgerufenen
+  offiziellen Source-JARs bestätigen `SemanticsNodeInteraction.assertDoesNotExist`
+  als Member. Die Android-Referenzseite scheiterte am Abrufgrößenlimit;
+  die versionsgebundene Paketquelle ist der maßgebliche Beleg.
+- [Robolectric 4.14.1 Config.java](https://github.com/robolectric/robolectric/blob/robolectric-4.14.1/annotations/src/main/java/org/robolectric/annotation/Config.java)
+  und die [Konfigurationsdokumentation](https://robolectric.org/configuring/)
+  bestätigen den klassenbezogenen Ersatz der Manifest-Application.
+  `DriveTaskProviderTest` und `BatchesScreenStateTest` benutzen im Projekt
+  bereits eine einfache `Application` für isolierte Android-Prüfungen.
+- [Compose ui-geometry 1.11.4](https://dl.google.com/dl/android/maven2/androidx/compose/ui/ui-geometry/1.11.4/ui-geometry-1.11.4-sources.jar)
+  definiert `Offset` als Value-Class über einem gepackten Long.
+  [ui-util 1.11.4](https://dl.google.com/dl/android/maven2/androidx/compose/ui/ui-util/1.11.4/ui-util-1.11.4-sources.jar)
+  packt beide `Float.toRawBits`. Die Darstellung rundet beide Komponenten.
+
+Zweiter Lückenabgleich: `MediaGeometry.clamp` kann bei einer Achsgrenze von
+null durch `-x` beziehungsweise `-y` negatives Null liefern. Damit ist ein
+bitweiser Offsetvergleich für geometrische Gleichheit ungeeignet; die Aussage
+über gültige Koordinaten muss bestehen bleiben. Die Loginfälle benötigen
+Android-Rasterung, aber keinen WorkManager, Corestart oder Hintergrunddienst.
+Der Fixautor belegt diese vollständigen Aufrufergrenzen selbst und behält die
+vorhandenen Funktionsassertions bei. Kein Prüffall wird entfernt.
+
+| Meilenstein | Befunde | Änderungsgrenze | Erwartetes Ergebnis |
+|---|---|---|---|
+| M14 Android-UI-Fixtures | A01–A03 | Genau die Navigations-Instrumentation sowie Loginbitmap- und Mediengeometrie-JVM-Fixtures | Bestehende Benutzerverträge werden unter passender isolierter Umgebung und korrekter API-/Zahlensemantik erreicht. Nachweis über denselben Remote-Einstieg; kein lokaler Lauf. |
+
+## Präzisierte Agentenstartgrenze
+
+Die Projektregel verbietet Agentenstarts während laufender Suite-, Build-,
+Paket- oder Releaseprozesse. Beim Abruf 22:40:17 UTC sind sämtliche solchen
+Arbeitsstufen dieses Laufs beendet. Die Android-Stufe wartet in
+`review-task-native.py::run` synchron auf `android/test-android-task.sh`;
+dessen Gradleaufruf verwendet `--no-daemon`. Das abgeschlossene Handoff
+lieferte kein `ready=true`, der APK-Upload wurde deshalb übersprungen.
+Der nachgelagerte Gerätejob benötigt ausdrücklich dieses `handoff_ready=true`
+und kann für diesen fehlgeschlagenen Kandidaten nicht mehr starten.
+Nur Rust-/Java-/Python-/Checkout-Nachbereitung verblieb im Jobstatus.
+
+Daher entfällt das selbst gesetzte Warten auf das gesamte Cache-Postprocessing.
+Nach Abschluss dieses Plans dürfen Fixautoren arbeiten. Das ist keine Aussage,
+dass der gesamte CI-Lauf bereits abgeschlossen oder erfolgreich wäre. Der
+nächste Statusabruf bleibt frühestens 23:10:17 UTC; kein zusätzlicher Lauf,
+kein Abbruch und kein Release werden dadurch ausgelöst.
