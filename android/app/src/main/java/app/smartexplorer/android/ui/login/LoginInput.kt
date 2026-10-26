@@ -9,6 +9,7 @@ import android.os.SystemClock
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import android.widget.FrameLayout
 import android.view.ViewConfiguration
 import app.smartexplorer.android.api.ScreenInputCaps
 import app.smartexplorer.android.ui.screen.Finger
@@ -17,14 +18,31 @@ import app.smartexplorer.android.ui.screen.InputHost
 import app.smartexplorer.android.ui.screen.ScreenInputMapper
 import app.smartexplorer.android.ui.screen.TouchKind
 
-/** The bitmap is acknowledged only after onDraw actually draws its fitted bounds. */
-class LoginCanvas(context: Context, private val owner: LoginSession) : View(context) {
+/** Input/IME coordinates stay in the containing View; pixels have an explicit renderer owner. */
+class LoginCanvas(context: Context, private val owner: LoginSession) : FrameLayout(context) {
     private val paint = Paint(Paint.FILTER_BITMAP_FLAG)
     private val rect = RectF()
     private val visible = android.graphics.Rect()
     private var picture: LoginPicture? = null
     private var drawn: app.smartexplorer.android.api.LoginToken? = null
     private var control = false
+    private var generation = 1L
+    private var requested: Pair<LoginPictureDescriptor, LoginPresentationStamp>? = null
+    private val renderer = LoginBitmapRenderer(owner.images) {
+        post { if (isAttachedToWindow && owner.state.value.state !in listOf("ended", "stopping")) { resetHardwareSurface(); submitHardware() } }
+    }
+    private var surface = newSurface()
+    private fun newSurface() = LoginBitmapSurface(context, renderer, resized = {
+        post { if (isAttachedToWindow) { resetHardwareSurface(); submitHardware() } }
+    }) { requested = null; submitHardware() }
+    private fun resetHardwareSurface() {
+        renderer.close()
+        removeView(surface)
+        surface = newSurface()
+        addView(surface, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        requested = null
+    }
+    private val retryRender = Runnable { requested = null; submitHardware() }
     private val config = ViewConfiguration.get(context)
     private val mapper = ScreenInputMapper(InputHost.DESKTOP,
         InputConfig(ViewConfiguration.getLongPressTimeout().toLong(), config.scaledTouchSlop.toFloat(), config.scaledVerticalScrollFactor),
@@ -37,35 +55,90 @@ class LoginCanvas(context: Context, private val owner: LoginSession) : View(cont
             flush()
         }
     }
-    init { isFocusableInTouchMode = true; isFocusable = true; setBackgroundColor(Color.BLACK) }
+    init {
+        isFocusableInTouchMode = true; isFocusable = true
+        setBackgroundColor(Color.BLACK); setWillNotDraw(false)
+        clipChildren = true; clipToPadding = true
+        owner.registerRenderer(renderer)
+        addView(surface, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+    }
     fun update(next: LoginPicture?, allowControl: Boolean) {
         if (control && !allowControl) release()
-        picture = next; control = allowControl
-        owner.focus(hasWindowFocus(), allowControl); invalidate()
+        if (picture?.identity != next?.identity) {
+            val old = picture
+            picture = next?.retain()
+            old?.close()
+            requested = null
+        }
+        surface.visibility = if (picture == null) INVISIBLE else VISIBLE
+        control = allowControl
+        owner.focus(hasWindowFocus(), allowControl)
+        if (picture == null) { generation++; requested = null; drawn = null; renderer.clear() }
+        submitHardware(); invalidate()
+    }
+    private fun fit(image: LoginPicture) {
+        val scale = minOf(width.toFloat() / image.token.width, height.toFloat() / image.token.height)
+        val w = image.token.width * scale; val h = image.token.height * scale
+        rect.set((width - w) / 2, (height - h) / 2, (width + w) / 2, (height + h) / 2)
+    }
+    private fun fullyVisible(): Boolean = width > 0 && height > 0 && isShown && isAttachedToWindow && windowVisibility == VISIBLE &&
+        getLocalVisibleRect(visible) && visible.left <= rect.left && visible.top <= rect.top && visible.right >= rect.right && visible.bottom >= rect.bottom
+    private fun confirm(image: LoginPicture, stamp: LoginPresentationStamp, expectedGeneration: Long) {
+        if (generation != expectedGeneration || picture?.identity != image.identity || stamp != owner.presentationStamp()) return
+        if (!fullyVisible()) { if (drawn != null) release(); return }
+        drawn = image.token; owner.presented(image.token, stamp)
+    }
+    private fun submitHardware() {
+        if (owner.state.value.state in listOf("ended", "stopping") || !isHardwareAccelerated) return
+        val image = picture ?: return
+        if (width <= 0 || height <= 0) return
+        fit(image)
+        if (!fullyVisible()) { if (drawn != null) release(); return }
+        val stamp = owner.presentationStamp()
+        val request = image.identity to stamp
+        if (requested == request) return
+        requested = request
+        val expectedGeneration = generation
+        if (!surface.render(image, rect) { post { confirm(image, stamp, expectedGeneration) } }) {
+            requested = null
+            removeCallbacks(retryRender); postDelayed(retryRender, 25)
+        }
     }
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        if (owner.state.value.state in listOf("ended", "stopping")) return
+        if (canvas.isHardwareAccelerated) { submitHardware(); return }
+        // A real software Canvas consumes pixels synchronously. No software layer
+        // is forced and no Bitmap is recorded into a framework hardware display list.
         val image = picture ?: return
-        if (width <= 0 || height <= 0 || !isShown || windowVisibility != VISIBLE) return
-        val scale = minOf(width.toFloat() / image.bitmap.width, height.toFloat() / image.bitmap.height)
-        val w = image.bitmap.width * scale; val h = image.bitmap.height * scale
-        rect.set((width - w) / 2, (height - h) / 2, (width + w) / 2, (height + h) / 2)
-        canvas.drawBitmap(image.bitmap, null, rect, paint)
-        if (getLocalVisibleRect(visible) && visible.left <= rect.left && visible.top <= rect.top && visible.right >= rect.right && visible.bottom >= rect.bottom) {
-            drawn = image.token; owner.presented(image.token)
-        } else { release() }
+        if (width <= 0 || height <= 0) return
+        fit(image)
+        if (!fullyVisible()) { if (drawn != null) release(); return }
+        val stamp = owner.presentationStamp(); val expectedGeneration = generation
+        val borrow = image.borrow() ?: return
+        try { borrow.draw(canvas, rect, paint) } finally { borrow.close() }
+        confirm(image, stamp, expectedGeneration)
     }
     override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
         super.onWindowFocusChanged(hasWindowFocus)
-        if (!hasWindowFocus) release()
-        owner.focus(hasWindowFocus, control); drawn = null; invalidate()
+        if (!hasWindowFocus) { release(); resetHardwareSurface() }
+        owner.focus(hasWindowFocus, control); drawn = null; requested = null; submitHardware(); invalidate()
     }
-    override fun onDetachedFromWindow() { release(); super.onDetachedFromWindow() }
+    override fun onDetachedFromWindow() {
+        release(); renderer.close(); owner.unregisterRenderer(renderer); picture?.close(); picture = null
+        super.onDetachedFromWindow()
+    }
+    override fun onAttachedToWindow() { super.onAttachedToWindow(); owner.registerRenderer(renderer); if (picture == null) picture = owner.picture.value?.retain(); requested = null; invalidate() }
+    override fun onVisibilityChanged(changedView: View, visibility: Int) {
+        super.onVisibilityChanged(changedView, visibility)
+        if (!isAttachedToWindow) return
+        if (visibility != VISIBLE) { release(); resetHardwareSurface() } else { owner.focus(hasWindowFocus(), control); requested = null; invalidate() }
+    }
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
-        if (w != oldw || h != oldh) { release(); owner.focus(hasWindowFocus(), control); invalidate() }
+        if (w != oldw || h != oldh) { release(); resetHardwareSurface(); owner.focus(hasWindowFocus(), control); requested = null; submitHardware(); invalidate() }
     }
-    private fun release() { removeCallbacks(longPress); mapper.releaseAll(); owner.release(); drawn = null }
+    private fun release() { removeCallbacks(retryRender); generation++; requested = null; removeCallbacks(longPress); mapper.releaseAll(); owner.release(); drawn = null }
     private fun flush() {
         val token = drawn; val events = mapper.drain()
         if (token == null || !control || !hasWindowFocus() || !owner.state.value.input_ready) { if (events.isNotEmpty()) release(); return }

@@ -46,7 +46,9 @@ import kotlinx.serialization.json.put
 @Composable
 fun LoginViewScreen(target: LoginTarget, targetUser: String, onClose: () -> Unit) {
     var attempt by remember(target, targetUser) { mutableIntStateOf(0) }
-    val session = remember(target, targetUser, attempt) { LoginSession(target, targetUser, true) }
+    val images = remember(target, targetUser) { LoginImagePane() }
+    val session = remember(target, targetUser, attempt) { LoginSession(target, targetUser, true, images) }
+    DisposableEffect(images) { onDispose { images.close() } }
     val state by session.state.collectAsState()
     val picture by session.picture.collectAsState()
     var control by remember(session) { mutableStateOf(false) }

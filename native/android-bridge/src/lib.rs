@@ -18,7 +18,11 @@ use std::time::Duration;
 
 // SCR-M8: pictures and control messages of this phone as screen host.
 mod screen_jni;
+mod screen_capture_jni;
 mod login_jni;
+mod login_bitmap_jni;
+mod login_bitmap_owner;
+mod login_bitmap_pixels;
 // DRV-M8: proxy file descriptors of the documents provider.
 mod io;
 

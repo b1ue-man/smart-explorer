@@ -31,6 +31,8 @@ mod screen_host;
 mod screen_view;
 #[path = "login_view.rs"]
 mod login_view;
+#[path = "login_images.rs"]
+mod login_images;
 // DRV-M8: the documents provider (`docs.*`) and its proxy descriptors.
 #[path = "docs.rs"]
 mod docs;
@@ -113,8 +115,14 @@ mod vault_open_policy;
 // SCR-M8: the binary calls of the JNI bridge (`screen_jni.rs`).
 pub use docs_io::{doc_fsync, doc_open, doc_read, doc_release, doc_size, doc_write};
 pub use screen_host::{screen_control, screen_push};
+pub use screen_host::{
+    screen_capture_address, screen_capture_begin, screen_capture_claim,
+    screen_capture_release, screen_push_admitted,
+};
 pub use screen_view::screen_pull;
-pub use login_view::{login_pull, login_close, login_release};
+pub use login_view::{login_close, login_release};
+pub use login_images::{LoginBitmapTicket, LoginBitmapLease, LoginRenderTarget,
+    login_image_owner_create, login_image_owner_close, login_bitmap_take, login_render_target_claim};
 // U31 S2: the label of a vault for task titles outside this module.
 pub(crate) use vaults::label_of as vault_label;
 

@@ -1,6 +1,7 @@
 package app.smartexplorer.android.core
 
 import android.content.Context
+import android.graphics.Bitmap
 import java.nio.ByteBuffer
 
 /**
@@ -25,6 +26,13 @@ object NativeBridge {
      */
     external fun screenPush(session: Long, src: ByteBuffer, offset: Int, length: Int, ptsUs: Long, flags: Int): Int
 
+    /** Native-owned capture storage remains valid until its last producer or consumer releases it. */
+    external fun screenCaptureBegin(session: Long, width: Int, height: Int, kind: Int): Long
+    external fun screenCaptureClaim(session: Long, generation: Long, owner: Int, bytes: Long, buffer: Boolean): Long
+    external fun screenCaptureBuffer(token: Long): ByteBuffer?
+    external fun screenCaptureRelease(token: Long)
+    external fun screenPushAdmitted(session: Long, generation: Long, src: ByteBuffer, offset: Int, length: Int, ptsUs: Long, flags: Int): Int
+
     /**
      * The next control message (JSON) of [session], session 0 for the input of the controlling
      * viewer; `null` when none came within [timeoutMs] (at most 5 s).
@@ -46,8 +54,15 @@ object NativeBridge {
      */
     external fun screenPull(session: Long, dst: ByteBuffer, timeoutMs: Int): Int
 
-    /** Bounded binary image transfer of an explicitly authenticated login session. */
-    external fun loginPull(session: Long, dst: ByteBuffer, timeoutMs: Int): Int
+    /** Stable pane ledger and opaque image tickets. Pixel storage never crosses a ByteBuffer. */
+    external fun loginImageOwnerCreate(heapOffer: Long): Long
+    external fun loginImageOwnerClose(owner: Long)
+    external fun loginBitmapTake(session: Long, owner: Long): String?
+    external fun loginBitmapBorrow(owner: Long, picture: Long, generation: Long): Bitmap?
+    external fun loginBitmapEndBorrow(owner: Long, picture: Long, generation: Long)
+    external fun loginBitmapRetire(owner: Long, picture: Long, generation: Long)
+    external fun loginRenderTargetClaim(owner: Long, width: Int, height: Int): Long
+    external fun loginRenderTargetRelease(owner: Long, target: Long)
 
     /** Ends this owned login session and releases its input state. */
     external fun loginClose(session: Long)

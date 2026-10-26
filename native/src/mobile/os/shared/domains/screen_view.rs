@@ -306,6 +306,13 @@ fn view_open(args: &Value) -> Result<Value, ApiError> {
         capabilities.validate().map_err(|error| invalid(error.to_string()))?;
         Ok::<_, ApiError>(capabilities)
     }).transpose()?;
+    if let Some(bytes) = args.get("workingBytes").and_then(Value::as_u64) {
+        crate::screen::core::frame_budget::FrameLimits::RESOURCE.with_working_budget(bytes)
+            .map_err(|error| invalid(error.to_string()))?;
+        crate::screen::os::image_memory::observe_capacity_ceiling(
+            crate::screen::core::frame_memory::CapacityCeiling::bounded(bytes))
+            .map_err(|error| invalid(error.to_string()))?;
+    }
     let request = StreamRequest {
         mode,
         source: source_arg(args)?,
