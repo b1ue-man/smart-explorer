@@ -22,27 +22,36 @@ impl RendererOwner {
             let receipt=image.frame.clone().and_then(receipt);let weak=Arc::downgrade(self);let slot=slot.clone();let clip=painter.clip_rect();
             painter.add(egui::PaintCallback {rect,callback:Arc::new(eframe::egui_glow::CallbackFn::new(move|info,_| {
                 let Some(owner)=weak.upgrade() else{return;};if owner.closed()||!image.generation.active()||image.frame.as_ref().is_some_and(|frame|!frame.active()){return;}
-                let mut backend=lock(&owner.backend);let Backend::Glow(gl)=&mut *backend else{return;};if !gl.available() {return;}let mut s=lock(&slot.state);
+                let mut backend=lock(&owner.backend);let Backend::Glow(gl)=&mut *backend else{return;};
+                if !gl.available() {drop(backend);owner.quarantine_slots();return;}
+                let mut s=lock(&slot.state);
                 if s.retiring.is_some()||!image.generation.same(&s.generation){return;}
-                if s.resident.as_ref().is_none_or(|r|!r.package.same_image(&Package::Cpu(image.clone()))) {
-                    let selected=Package::Cpu(image.clone());
-                    let stale=!s.candidate.as_ref().is_some_and(|p|p.same_image(&selected))
-                        &&!s.resident.as_ref().is_some_and(|r|r.package.same_image(&selected));
-                    let busy=s.resident.as_ref().is_some_and(|r|!r.upload.drain.confirmed());
-                    let resize=s.resident.as_ref().is_some_and(|r|matches!(&r.native,Native::Glow(old) if old.size!=image.image.size));
-                    // An output prepared before after_update must not bypass its
-                    // resize admission or upload an already replaced candidate.
-                    if stale||busy||resize {draw_fallback(gl,&mut s,rect,clip,info,&fallback_stamp,&fallback);return;}
-                    let Ok(claims)=s.claim_upload(&selected) else{draw_fallback(gl,&mut s,rect,clip,info,&fallback_stamp,&fallback);return;};
-                    let previous=s.resident.take();
-                    let existing=previous.as_ref().and_then(|r|match &r.native {Native::Glow(image)=>Some(*image),_=>None});
-                    let attempt=gl.upload(existing,&image);
-                    let retirement=if attempt.result.is_err() {gl.retire(attempt.image.id)} else {Drain::default()};
-                    if !finish_glow_upload(&mut s,selected,claims,previous,attempt,retirement) {return;}
-                }
-                let Some(Native::Glow(native))=s.resident.as_ref().map(|r|&r.native) else{return;};
-                let result=gl.draw(native.id,rect,clip,info);
-                if finish_glow_draw(&mut s,result,|id|gl.retire(id)) {if let Some(receipt)=&receipt {receipt();}}
+                let draw=|gl:&mut super::screen_render_glow::GlowBackend,s:&mut SlotState| {
+                    if s.resident.as_ref().is_none_or(|r|!r.package.same_image(&Package::Cpu(image.clone()))) {
+                        let selected=Package::Cpu(image.clone());
+                        let stale=!s.candidate.as_ref().is_some_and(|p|p.same_image(&selected))
+                            &&!s.resident.as_ref().is_some_and(|r|r.package.same_image(&selected));
+                        let busy=s.resident.as_ref().is_some_and(|r|!r.upload.drain.confirmed());
+                        let resize=s.resident.as_ref().is_some_and(|r|matches!(&r.native,Native::Glow(old) if old.size!=image.image.size));
+                        // An output prepared before after_update must not bypass its
+                        // resize admission or upload an already replaced candidate.
+                        if stale||busy||resize {draw_fallback(gl,s,rect,clip,info,&fallback_stamp,&fallback);return;}
+                        let Ok(claims)=s.claim_upload(&selected) else{draw_fallback(gl,s,rect,clip,info,&fallback_stamp,&fallback);return;};
+                        let previous=s.resident.take();
+                        let existing=previous.as_ref().and_then(|r|match &r.native {Native::Glow(image)=>Some(*image),_=>None});
+                        let attempt=gl.upload(existing,&image,|| {
+                            selected.revoke_presentation();
+                            if let Some(previous)=&previous {previous.package.revoke_presentation();}
+                            s.revoke_presentations();
+                        });
+                        if !finish_glow_upload(s,selected,claims,previous,attempt,|id|gl.retire(id)) {return;}
+                    }
+                    let Some(Native::Glow(native))=s.resident.as_ref().map(|r|&r.native) else{return;};
+                    let result=gl.draw(native.id,rect,clip,info);
+                    if finish_glow_draw(s,result,|id|gl.retire(id)) {if let Some(receipt)=&receipt {receipt();}}
+                };
+                draw(gl,&mut s);let quarantined=!gl.available();drop(s);drop(backend);
+                if quarantined {owner.quarantine_slots();}
             }))});true
         } else {
             let Some(resident)=state.resident.as_ref().filter(|r|r.package.active()) else{return false;};
@@ -62,8 +71,12 @@ impl RendererOwner {
 /// A failed overwrite never restores the old package as a valid texture image.
 /// Both its source and the attempted source survive until the actual delete drain.
 pub(super) fn finish_glow_upload(s:&mut SlotState,package:Package,claims:GpuClaims,previous:Option<Resident>,
-    attempt:GlowUpload,retirement:Drain)->bool {
+    attempt:GlowUpload,retire:impl FnOnce(egui::TextureId)->Drain)->bool {
     if attempt.result.is_err() {
+        // Revoke before retire: its compatibility glFinish may block the GUI.
+        package.revoke_presentation();
+        if let Some(previous)=&previous {previous.package.revoke_presentation();}
+        s.revoke_presentations();let retirement=retire(attempt.image.id);
         if s.candidate.is_none() {s.candidate=Some(package.clone());}
         s.retiring=Some(Retirement {upload:UploadTicket {drain:attempt.drain,package:package.clone(),staging:claims.staging},
             package,drain:retirement,surface:claims.surface,superseded:previous.map(|resident|resident.package)});
@@ -74,8 +87,10 @@ pub(super) fn finish_glow_upload(s:&mut SlotState,package:Package,claims:GpuClai
 }
 pub(super) fn finish_glow_draw(s:&mut SlotState,result:Result<(),GlOperationError>,retire:impl FnOnce(egui::TextureId)->Drain)->bool {
     if result.is_ok() {return s.resident.as_ref().is_some_and(|resident|resident.package.active()&&matches!(resident.native,Native::Glow(_)));}
+    s.revoke_presentations();
     if let Some(resident)=s.resident.take() {
-        let id=match &resident.native {Native::Glow(image)=>image.id,_=>{s.resident=Some(resident);return false;}};
+        let id=match &resident.native {Native::Glow(image)=>image.id,
+            #[cfg(test)] Native::Controlled(id,_)=>*id,_=>{s.resident=Some(resident);return false;}};
         if s.candidate.is_none() {s.candidate=Some(resident.package.clone());}
         s.retiring=Some(Retirement {drain:retire(id),package:resident.package,upload:resident.upload,surface:resident.surface,superseded:None});
     }

@@ -35,14 +35,16 @@ impl GlowBackend {
         self.quarantined |= error.state_unreliable();
     }
     fn quarantine(&mut self,error:GlOperationError) {self.observe(error);self.quarantined=true;}
-    pub(crate) fn upload(&mut self,existing:Option<GlowImage>,image:&PreparedImage)->GlowUpload {
+    pub(crate) fn upload(&mut self,existing:Option<GlowImage>,image:&PreparedImage,failed:impl Fn())->GlowUpload {
         let id=existing.map(|image|image.id).unwrap_or_else(||{let id=egui::TextureId::Managed(self.next);self.next+=1;id});
         let mut result=if self.available() {
             let create=self.create;image.image.upload_glow(&mut self.painter,id,||native_texture(create))
         } else {Err(self.error.unwrap_or_else(GlOperationError::texture_creation_failed))};
-        if let Err(error)=result {self.observe(error);}
+        // The completion fallback can call glFinish. Revoke the old displayed
+        // proof as soon as upload fails, before waiting for that completion.
+        if let Err(error)=result {failed();self.observe(error);}
         let drain=self.checkpoint();
-        if !self.available() {result=Err(self.error.unwrap_or_else(GlOperationError::texture_creation_failed));}
+        if !self.available() {failed();result=Err(self.error.unwrap_or_else(GlOperationError::texture_creation_failed));}
         GlowUpload {image:GlowImage {id,size:image.image.size},result,drain}
     }
     pub(crate) fn draw(&mut self,id:egui::TextureId,rect:egui::Rect,clip:egui::Rect,info:egui::PaintCallbackInfo)->Result<(),GlOperationError> {

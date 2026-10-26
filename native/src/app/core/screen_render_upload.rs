@@ -9,15 +9,20 @@ use super::screen_presented::PresentedFrame;
 
 #[derive(Clone)]
 pub(crate) struct Generation(Arc<GenerationState>);
-struct GenerationState {active:AtomicBool,guard:Option<Arc<dyn Fn()->bool+Send+Sync>>}
+struct GenerationState {active:AtomicBool,guard:Option<Arc<dyn Fn()->bool+Send+Sync>>,revoked:Option<Arc<dyn Fn()+Send+Sync>>}
 impl std::fmt::Debug for Generation {fn fmt(&self,f:&mut std::fmt::Formatter<'_>)->std::fmt::Result {f.debug_struct("Generation").field("active",&self.0.active.load(Ordering::Acquire)).finish_non_exhaustive()}}
 impl PartialEq for Generation {fn eq(&self,rhs:&Self)->bool {self.same(rhs)}}
 impl Eq for Generation {}
-impl Default for Generation {fn default()->Self {Self(Arc::new(GenerationState {active:AtomicBool::new(true),guard:None}))}}
+impl Default for Generation {fn default()->Self {Self(Arc::new(GenerationState {active:AtomicBool::new(true),guard:None,revoked:None}))}}
 impl Generation {
-    pub(crate) fn guarded(guard:Arc<dyn Fn()->bool+Send+Sync>)->Self {Self(Arc::new(GenerationState {active:AtomicBool::new(true),guard:Some(guard)}))}
+    pub(crate) fn guarded(guard:Arc<dyn Fn()->bool+Send+Sync>)->Self {Self(Arc::new(GenerationState {active:AtomicBool::new(true),guard:Some(guard),revoked:None}))}
+    pub(crate) fn revocable(guard:Arc<dyn Fn()->bool+Send+Sync>,revoked:Arc<dyn Fn()+Send+Sync>)->Self {
+        Self(Arc::new(GenerationState {active:AtomicBool::new(true),guard:Some(guard),revoked:Some(revoked)}))
+    }
     pub(crate) fn active(&self)->bool {self.0.active.load(Ordering::Acquire)&&self.0.guard.as_ref().is_none_or(|guard|guard())}
-    pub(crate) fn revoke(&self) {self.0.active.store(false,Ordering::Release);}
+    pub(crate) fn revoke(&self) {
+        if self.0.active.swap(false,Ordering::AcqRel) {if let Some(revoked)=&self.0.revoked {revoked();}}
+    }
     pub(crate) fn same(&self,rhs:&Self)->bool {Arc::ptr_eq(&self.0,&rhs.0)}
 }
 #[derive(Clone)]
@@ -43,6 +48,7 @@ impl Package {
     pub(crate) fn generation(&self)->&Generation { match self { Self::Cpu(p)=>&p.generation,Self::Yuv{generation,..}=>generation } }
     pub(crate) fn frame(&self)->Option<PresentedFrame> { match self { Self::Cpu(p)=>p.frame.clone(),Self::Yuv{stamp,..}=>Some(stamp.clone()) } }
     pub(crate) fn memory(&self)->MemoryHold { match self { Self::Cpu(p)=>p.memory.clone(),Self::Yuv{frame,..}=>frame.memory.clone() } }
+    pub(super) fn revoke_presentation(&self) {if let Some(frame)=self.frame() {frame.validity.revoke();}}
     pub(super) fn upload_claims(&self,surface:Option<ImageHold>)->std::io::Result<GpuClaims> {
         match self {Self::Cpu(image)=>image.image.upload_claims(surface),Self::Yuv{..}=>Ok(GpuClaims::default())}
     }
@@ -62,6 +68,18 @@ pub(super) struct SlotState {
     pub(super) admission:Option<Weak<MemoryLease>>,
 }
 impl SlotState {
+    pub(super) fn revoke_presentations(&self) {
+        for package in self.candidate.iter().chain(self.resident.iter().map(|resident|&resident.package)) {
+            package.revoke_presentation();
+        }
+        if let Some(retiring)=&self.retiring {
+            retiring.package.revoke_presentation();retiring.upload.package.revoke_presentation();
+            if let Some(previous)=&retiring.superseded {previous.revoke_presentation();}
+        }
+    }
+    pub(super) fn quarantine(&mut self) {
+        self.revoke_presentations();self.generation.revoke();self.candidate=None;self.next_upload=None;
+    }
     pub(super) fn claim_upload(&mut self,package:&Package)->std::io::Result<GpuClaims> {
         match self.next_upload.take() {Some(claims)=>Ok(claims),None=>package.upload_claims(self.resident.as_ref().and_then(|r|r.surface.clone()))}
     }

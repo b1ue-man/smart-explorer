@@ -21,7 +21,7 @@ fn successful_upload(slot:&RenderSlot,package:Package) {
     let mut s=lock(&slot.state);let claims=s.claim_upload(&package).unwrap();let previous=s.resident.take();
     assert!(finish_glow_upload(&mut s,package,claims,previous,GlowUpload {
         image:GlowImage {id:egui::TextureId::Managed(1),size:[2,2]},result:Ok(()),drain:Drain::default(),
-    },Drain::default()));
+    },|_|Drain::default()));
 }
 
 #[test]
@@ -42,7 +42,7 @@ fn batches_task_b6_glow_failed_overwrite_has_no_resident_and_keeps_both_sources_
     assert!(!finish_glow_upload(&mut s,package,claims,previous,GlowUpload {
         image:GlowImage {id:egui::TextureId::Managed(1),size:[2,2]},
         result:Err(GlOperationError::from_gl_code(glow::INVALID_OPERATION)),drain:Drain::default(),
-    },Drain::default()));
+    },|_|Drain::default()));
     assert!(s.resident.is_none());assert!(s.retiring.as_ref().unwrap().superseded.is_some());drop(s);
     assert_eq!(owner.live_count(ImageRole::ColorSource).unwrap(),2);
     assert_eq!(owner.live_count(ImageRole::RenderSurface).unwrap(),1);
@@ -86,7 +86,7 @@ fn batches_task_b6_glow_oom_attempt_keeps_real_claims_until_native_instance_retu
     assert!(error.state_unreliable());
     assert!(!finish_glow_upload(&mut s,package,claims,None,GlowUpload {
         image:GlowImage {id:egui::TextureId::Managed(1),size:[2,2]},result:Err(error),drain:Drain::default(),
-    },Drain::default()));drop(s);
+    },|_|Drain::default()));drop(s);
     assert!(!driver.draw(&slot,frame,Arc::new(||panic!("OOM is not a successful presentation"))));
     driver.owner.shutdown(&ctx,None);
     assert_eq!(owner.live_count(ImageRole::RenderSurface).unwrap(),1);

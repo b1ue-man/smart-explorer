@@ -51,7 +51,7 @@ impl Shared {
     /// Captured before decoding, so cancellation cannot bless an in-flight old image.
     pub(crate) fn begin_frame(&self, gop_id: u64, frame_id: u64) -> PresentedFrame {
         let mut state = lock(&self.presentation);
-        if state.gop_id != gop_id {
+        if state.gop_id != gop_id || !state.validity.active() {
             state.gop_id = gop_id;
             state.invalidate();
             lock(&self.resume).block();
