@@ -75,6 +75,13 @@ pub(super) fn retire(env: &mut Env<'_>, key: Key) {
     if let Ok(mut owners) = BITMAPS.lock() {if let Some(owner) = owners.get_mut(&key) {owner.retiring = true;}}
     cleanup(env, key);
 }
+pub(super) fn discard_descriptor(env: &mut Env<'_>, owner: u64, descriptor: &str) {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(descriptor) else {return;};
+    if value["owner"].as_u64() != Some(owner) {return;}
+    if let (Some(picture), Some(generation)) = (value["picture"].as_u64(), value["generation"].as_u64()) {
+        retire(env, (owner, picture, generation));
+    }
+}
 fn cleanup(env: &mut Env<'_>, key: Key) {
     let Ok(mut owners) = BITMAPS.lock() else {return;};
     let Some(owner) = owners.get_mut(&key) else {return;};

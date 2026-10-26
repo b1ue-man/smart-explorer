@@ -51,9 +51,17 @@ internal class LoginBitmapRenderer(private val pane: LoginImagePane, private val
         if (width <= 0 || height <= 0 || pane.handle == 0L) return false
         val ticket = pane.calls.claimTarget(pane.handle, width, height)
         if (ticket == 0L) return false
-        val next = Target(texture, width, height, ticket)
-        targets.add(next); current = next
-        retainedLoginTargets[next] = this
+        val next = try { Target(texture, width, height, ticket) }
+        catch (failure: Throwable) { pane.calls.releaseTarget(pane.handle, ticket); throw failure }
+        try {
+            targets.add(next)
+            retainedLoginTargets[next] = this
+        } catch (failure: Throwable) {
+            targets.remove(next); retainedLoginTargets.remove(next)
+            pane.calls.releaseTarget(pane.handle, ticket)
+            throw failure
+        }
+        current = next
         if (old != null) { old.closed = true; pane.worker.execute { retire(old) } }
         pane.worker.execute {
             try {
@@ -75,7 +83,8 @@ internal class LoginBitmapRenderer(private val pane: LoginImagePane, private val
         val target = current ?: return
         if (target.closed || target.failed) return
         val held = picture.retain() ?: return
-        val frame = Frame(held, RectF(rect), presented)
+        val frame = try { Frame(held, RectF(rect), presented) }
+        catch (failure: Throwable) { held.close(); throw failure }
         // Exactly one pending picture; StateFlow replacement never retires a recorded borrow.
         // Pending has never recorded a Bitmap borrow, so replacing its reference
         // cannot wait for RenderThread. Coalesce work while a renderer is blocked.

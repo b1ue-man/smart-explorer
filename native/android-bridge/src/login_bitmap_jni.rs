@@ -24,13 +24,21 @@ pub extern "system" fn Java_app_smartexplorer_android_core_NativeBridge_loginBit
         match JString::from_str(env, &text) {
             Ok(result) => Ok(result), Err(error) => {
                 // Descriptor creation failed after publication into the registry.
-                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
-                    if let (Some(owner), Some(picture), Some(generation)) = (value["owner"].as_u64(), value["picture"].as_u64(), value["generation"].as_u64()) {super::login_bitmap_owner::retire(env, (owner,picture,generation));}
-                }
+                super::login_bitmap_owner::discard_descriptor(env, owner, &text);
                 Err(error)
             }
         }
     }).into_outcome() {Outcome::Ok(result) => result, _ => JString::default()}
+}
+#[no_mangle]
+pub extern "system" fn Java_app_smartexplorer_android_core_NativeBridge_loginBitmapDiscard<'local>(mut unowned: EnvUnowned<'local>, _this: JObject<'local>, owner: jlong, descriptor: JString<'local>) {
+    let _ = unowned.with_env(|env| -> jni::errors::Result<()> {
+        if let Ok(owner) = u64::try_from(owner) {
+            let descriptor = descriptor.try_to_string(env)?;
+            super::login_bitmap_owner::discard_descriptor(env, owner, &descriptor);
+        }
+        Ok(())
+    });
 }
 #[no_mangle]
 pub extern "system" fn Java_app_smartexplorer_android_core_NativeBridge_loginBitmapBorrow<'local>(mut unowned: EnvUnowned<'local>, _this: JObject<'local>, owner: jlong, picture: jlong, generation: jlong) -> JObject<'local> {
