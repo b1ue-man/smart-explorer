@@ -1,8 +1,11 @@
 //! One process-wide accounting pool for viewer and host session promises.
-use crate::screen::core::{frame_budget::MAX_SESSION_WORKING_BYTES,frame_memory::{self,MemoryFacts,MemoryLease}};
+use crate::screen::core::{frame_budget::MAX_SESSION_WORKING_BYTES,frame_memory::{self,CapacityCeiling,MemoryFacts,MemoryLease}};
 pub(crate) fn facts()->Option<MemoryFacts> {super::platform_session_memory::facts()}
+pub(crate) fn capacity_ceiling(facts:Option<MemoryFacts>)->CapacityCeiling {super::platform_session_memory::ceiling(facts)}
+pub(crate) fn observe_platform_ceiling(ceiling:CapacityCeiling) {super::platform_session_memory::observe_ceiling(ceiling);}
 pub(crate) fn reserve(requested:u64)->std::io::Result<MemoryLease> {
-    frame_memory::reserve(facts(),requested.min(MAX_SESSION_WORKING_BYTES))
+    let facts=facts();
+    frame_memory::reserve_with_ceiling(facts,capacity_ceiling(facts),requested.min(MAX_SESSION_WORKING_BYTES))
 }
 #[cfg(test)]
 #[path="batches_memory_task_tests.rs"]

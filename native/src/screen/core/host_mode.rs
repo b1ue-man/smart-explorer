@@ -54,6 +54,7 @@ impl Pipeline {
             memory:self.memory.clone(),
             source,
             encoder: None,
+            encoder_book: None,
         });
         self.quality.size = self.fitted_size();
         self.invalidate_reference();

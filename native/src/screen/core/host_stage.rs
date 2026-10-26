@@ -41,10 +41,10 @@ pub(crate) struct StageEncoder {
 
 /// What a stage delivered for one frame; `source_size` is the size of the
 /// source at capture time.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) enum StageFrame {
     Encoded {
-        records: Vec<Vec<u8>>,
+        records: super::capture_records::CapturedRecords,
         keyframe: bool,
         capture_ts_us: u64,
         encoder: StageEncoder,

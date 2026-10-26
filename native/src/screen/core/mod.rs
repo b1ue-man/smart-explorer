@@ -42,11 +42,19 @@ pub(crate) mod control_sender;
 pub(crate) mod frame_budget;
 pub(crate) mod frame_memory;
 pub(crate) mod capture_admission;
+pub(crate) mod capture_import;
+#[cfg(test)]
+mod batches_capture_import_task_tests;
 pub(crate) mod capture_plan;
 pub(crate) mod capture_grant;
 pub(crate) mod capture_bytes;
 pub(crate) mod capture_image;
+pub(crate) mod image_admission;
+#[cfg(test)]
+mod batches_image_admission_task_tests;
 pub(crate) mod capture_source_contract;
+pub(crate) mod capture_records;
+pub(crate) mod capture_transport;
 pub(crate) mod host_codec_adapters;
 #[cfg(test)]
 mod batches_capture_admission_task_tests;
@@ -60,6 +68,7 @@ pub(crate) mod frame_protocol;
 pub(crate) mod frame_reference;
 pub(crate) mod gop_stream;
 pub(crate) mod host_backend;
+pub(crate) mod host_admission;
 pub(crate) mod host_pipeline;
 pub(crate) mod host_hybrid;
 pub(crate) mod host_server;
@@ -104,8 +113,18 @@ pub(crate) mod wire_binary;
 pub(crate) mod wire_control;
 pub(crate) mod wire_hello;
 pub(crate) mod worker_wire;
+pub(crate) mod worker_capture_wire;
 
 pub(crate) mod family_protocol;
 pub(crate) mod family_viewer;
 pub(crate) mod family_listing;
 pub(crate) mod worker_family;
+
+#[cfg(test)]
+pub(crate) mod capture_test_support;
+
+#[cfg(test)]
+pub(crate) mod batches_capture_pipeline_task_tests;
+
+#[cfg(test)]
+pub(crate) mod batches_capture_worker_task_tests;

@@ -98,20 +98,38 @@ fn barcode_bits(frame_id: u64) -> u128 {
     (u128::from(frame_id) << 32) | u128::from(crc)
 }
 
-fn fill(image: &mut BgraImage, x0: i64, y0: i64, width: u32, height: u32, colour: [u8; 4]) {
+pub(crate) trait SyntheticCanvas {
+    fn size(&self) -> FrameSize;
+    fn pixels(&mut self) -> &mut [u8];
+    fn row(&mut self, y: u32) -> Option<&mut [u8]>;
+}
+impl SyntheticCanvas for BgraImage {
+    fn size(&self) -> FrameSize {self.size()}
+    fn pixels(&mut self) -> &mut [u8] {self.data_mut()}
+    fn row(&mut self, y: u32) -> Option<&mut [u8]> {
+        if y < self.size().height {Some(self.row_mut(y))} else {None}
+    }
+}
+impl SyntheticCanvas for super::capture_image::CaptureImageBuilder {
+    fn size(&self) -> FrameSize {self.size()}
+    fn pixels(&mut self) -> &mut [u8] {self.pixels_mut()}
+    fn row(&mut self, y: u32) -> Option<&mut [u8]> {self.row_mut(y)}
+}
+fn fill(image: &mut impl SyntheticCanvas, x0: i64, y0: i64, width: u32, height: u32, colour: [u8; 4]) {
     let size = image.size();
     let left = x0.clamp(0, i64::from(size.width)) as usize;
     let right = (x0 + i64::from(width)).clamp(0, i64::from(size.width)) as usize;
     let top = y0.clamp(0, i64::from(size.height)) as u32;
     let bottom = (y0 + i64::from(height)).clamp(0, i64::from(size.height)) as u32;
     for y in top..bottom {
-        for pixel in image.row_mut(y)[left * 4..right * 4].chunks_exact_mut(4) {
+        let Some(row) = image.row(y) else {continue;};
+        for pixel in row[left * 4..right * 4].chunks_exact_mut(4) {
             pixel.copy_from_slice(&colour);
         }
     }
 }
 
-fn draw_text(image: &mut BgraImage, text: &str, x: i64, y: i64, scale: u32) {
+fn draw_text(image: &mut impl SyntheticCanvas, text: &str, x: i64, y: i64, scale: u32) {
     for (index, character) in text.chars().enumerate() {
         let Some(glyph) = character.to_digit(16).map(|digit| GLYPHS[digit as usize]) else {
             continue;
@@ -131,13 +149,13 @@ fn draw_text(image: &mut BgraImage, text: &str, x: i64, y: i64, scale: u32) {
 }
 
 /// Draws the picture of `frame_id` into `image` (at least 128 × 72).
-pub(crate) fn render(frame_id: u64, image: &mut BgraImage) -> io::Result<()> {
+pub(crate) fn render(frame_id: u64, image: &mut impl SyntheticCanvas) -> io::Result<()> {
     let size = image.size();
     if size.width < MIN_SYNTHETIC_SIZE.width || size.height < MIN_SYNTHETIC_SIZE.height {
         return Err(invalid("synthetic frames need at least 128 x 72 pixels"));
     }
     let layout = Layout::of(size);
-    for pixel in image.data_mut().chunks_exact_mut(4) {
+    for pixel in image.pixels().chunks_exact_mut(4) {
         pixel.copy_from_slice(&BACKGROUND);
     }
     let bits = barcode_bits(frame_id);

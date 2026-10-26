@@ -121,3 +121,7 @@ impl HybridEncoder {
         Ok(EncodedFrame { records, keyframe: key })
     }
 }
+
+#[path = "captured_hybrid.rs"]
+mod captured;
+pub(crate) use captured::{wrap_captured, CapturedExternalHybrid};

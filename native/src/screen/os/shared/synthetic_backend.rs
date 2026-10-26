@@ -11,11 +11,18 @@ use crate::screen::core::host_backend::{
 };
 use crate::screen::core::input_model::{InputCapabilities, InputEvent};
 use crate::screen::core::negotiate::{CodecChoice, CodecKind, CodecOffer};
-use crate::screen::core::pixel_convert::{BgraImage, FrameSize};
+use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::synthetic::{render, MIN_SYNTHETIC_SIZE};
 use crate::screen::core::window_list::{ListSource, MonitorInfo, SourceId, WindowList};
 use crate::screen::core::wire_control::ControlBlock;
 use crate::screen::core::wire_hello::HostPlatform;
+use crate::screen::core::capture_admission::{CaptureGeneration,CaptureGrant,CaptureOwner,CapturePlan,SessionAdmission,SourceKey};
+use crate::screen::core::capture_image::{CapturedImage,CaptureImageBuilder};
+use crate::screen::core::capture_plan::CapturePhases;
+use crate::screen::core::capture_source_contract::{HostOutputPlan,PreparedSource,PreparedSourceInfo};
+use crate::screen::core::host_codec_adapters::HostInputPixels;
+use crate::screen::core::frame_budget::FrameLimits;
+use std::sync::Arc;
 
 /// Size of the test picture when the viewer names none.
 pub(crate) const DEFAULT_SYNTHETIC_SIZE: FrameSize = FrameSize::new(1280, 720);
@@ -46,6 +53,24 @@ fn platform() -> HostPlatform {
 pub(crate) struct SyntheticBackend;
 
 impl ScreenHostBackend for SyntheticBackend {
+    fn capacity_ceiling(&self,facts:Option<crate::screen::core::frame_memory::MemoryFacts>)->crate::screen::core::frame_memory::CapacityCeiling {
+        super::session_memory::capacity_ceiling(facts)
+    }
+    fn prepare_session_source(&self, _owner: &str, session: &str, source: &SourceId,
+        wanted: Option<FrameSize>, _control: bool, admission: Arc<SessionAdmission>)
+        -> Result<Box<dyn PreparedSource>,SourceRefusal> {
+        if admission.session() != session {return Err(SourceRefusal::new("synthetic_session_mismatch"));}
+        if *source != SourceId::Synthetic {return Err(SourceRefusal::new(CAPTURE_UNAVAILABLE));}
+        Ok(Box::new(PreparedSynthetic {key: SourceKey::new(session,"synthetic")
+            .map_err(|error| SourceRefusal::new(&error.to_string()))?, size: synthetic_size(wanted)}))
+    }
+    fn open_encoder_for_stage_admitted(&self, request: &crate::screen::core::host_stage::StageRequest,
+        grant: CaptureGrant) -> io::Result<Box<dyn ScreenEncoder>> {
+        if request.choice.codec != CodecKind::Tiles {return Err(io::Error::new(io::ErrorKind::Unsupported,"synthetic_has_no_h264"));}
+        let limits = request.frame_contract.map_or(FrameLimits::LEGACY,|contract|contract.limits);
+        let encoder = Box::new(crate::screen::core::host_codec_adapters::AdmittedTilesEncoder::new(request.size,limits,grant.clone())?);
+        crate::screen::core::host_hybrid::wrap_captured(encoder,request,grant)
+    }
     fn memory_facts(&self)->Option<crate::screen::core::frame_memory::MemoryFacts> {super::session_memory::facts()}
     fn platform(&self) -> HostPlatform {
         platform()
@@ -83,12 +108,10 @@ impl ScreenHostBackend for SyntheticBackend {
     fn open_source(
         &self,
         source: &SourceId,
-        wanted: Option<FrameSize>,
+        _wanted: Option<FrameSize>,
     ) -> Result<Box<dyn ScreenSource>, SourceRefusal> {
         match source {
-            SourceId::Synthetic => SyntheticSource::new(wanted)
-                .map(|source| Box::new(source) as Box<dyn ScreenSource>)
-                .map_err(|error| SourceRefusal::new(&error.to_string())),
+            SourceId::Synthetic => Err(SourceRefusal::new("synthetic_capture_requires_prepare_activate")),
             SourceId::Monitor(_) | SourceId::Window(_) => {
                 Err(SourceRefusal::new(CAPTURE_UNAVAILABLE))
             }
@@ -116,32 +139,63 @@ impl ScreenHostBackend for SyntheticBackend {
 
 /// The test picture as a source: a new picture for every frame id.
 pub(crate) struct SyntheticSource {
-    image: BgraImage,
+    image: Option<CapturedImage>,
+    size: FrameSize,
+    grant: CaptureGrant,
 }
-
-impl SyntheticSource {
-    /// At the viewer's size within 128 × 72 and 4096 × 2304, else 1280 × 720.
-    pub(crate) fn new(wanted: Option<FrameSize>) -> io::Result<Self> {
-        let size = wanted
+fn synthetic_size(wanted: Option<FrameSize>) -> FrameSize {
+    wanted
             .filter(|size| {
                 size.is_valid_frame()
                     && size.width >= MIN_SYNTHETIC_SIZE.width
                     && size.height >= MIN_SYNTHETIC_SIZE.height
             })
-            .unwrap_or(DEFAULT_SYNTHETIC_SIZE);
-        Ok(Self {
-            image: BgraImage::new(size)?,
-        })
+            .unwrap_or(DEFAULT_SYNTHETIC_SIZE)
+}
+struct PreparedSynthetic {key: SourceKey, size: FrameSize}
+impl PreparedSource for PreparedSynthetic {
+    fn source_key(&self) -> &SourceKey {&self.key}
+    fn description(&self) -> PreparedSourceInfo {
+        PreparedSourceInfo {native_size:Some(self.size),capture_limits:FrameLimits::LEGACY,
+            supports_regions:true,state:crate::screen::core::session_state::SessionState::Starting,
+            generation:CaptureGeneration::new(1)}
+    }
+    fn capture_plan(&self, output: &HostOutputPlan) -> io::Result<Option<CapturePlan>> {
+        let mut plan = CapturePlan::new(self.key.clone(),CaptureGeneration::new(1));
+        plan.add_bgra(CaptureOwner::SourcePixels,self.size,2,CapturePhases::ALL)?;
+        output.append_to(&mut plan,if output.size()==self.size {HostInputPixels::BorrowedSource} else {HostInputPixels::SeparateImage})?;
+        Ok(Some(plan))
+    }
+    fn activate(self: Box<Self>, grant: CaptureGrant) -> Result<Box<dyn ScreenSource>,SourceRefusal> {
+        self.description().check_grant(&self.key,&grant).map_err(|error|SourceRefusal::new(&error.to_string()))?;
+        Ok(Box::new(SyntheticSource {image:None,size:self.size,grant}))
     }
 }
 
 impl ScreenSource for SyntheticSource {
     fn size(&self) -> FrameSize {
-        self.image.size()
+        self.size
     }
+    fn capture_grant(&self) -> Option<CaptureGrant> {Some(self.grant.clone())}
+    fn reference_generation(&self) -> u64 {self.grant.generation().value()}
 
     fn capture(&mut self, frame_id: u64, _keyframe: bool) -> io::Result<SourceFrame> {
-        render(frame_id, &mut self.image)?;
-        Ok(SourceFrame::Frame(self.image.clone()))
+        self.image=None;
+        let mut image = match CaptureImageBuilder::new(self.size,FrameLimits::LEGACY,&self.grant,CaptureOwner::SourcePixels) {
+            Ok(image)=>image,
+            Err(error) if error.kind()==io::ErrorKind::WouldBlock=>return Ok(SourceFrame::Unchanged),
+            Err(error)=>return Err(error),
+        };
+        render(frame_id, &mut image)?;
+        let image=image.freeze();
+        self.image=Some(image.clone());
+        Ok(SourceFrame::Frame(image))
+    }
+}
+
+impl Drop for SyntheticSource {
+    fn drop(&mut self) {
+        self.image = None;
+        if !self.grant.is_member() {let _ = self.grant.retire();}
     }
 }

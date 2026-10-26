@@ -21,6 +21,8 @@ use crate::screen::core::registry::ScreenRegistry;
 
 #[path="shared/session_memory.rs"]
 pub(crate) mod session_memory;
+#[path = "shared/image_memory.rs"]
+pub(crate) mod image_memory;
 #[cfg(target_os="linux")]
 #[path="linux_os/session_memory.rs"]
 mod platform_session_memory;
@@ -52,11 +54,17 @@ mod login_source;
 #[path = "linux_os/login_source.rs"]
 mod login_source;
 #[cfg(any(windows, target_os = "linux"))]
-pub(crate) use login_source::{open_login_source, inject_login_input, login_geometry_current};
+pub(crate) use login_source::{open_login_source, prepare_login_source, inject_login_input, login_geometry_current};
 #[cfg(not(any(windows, target_os = "linux")))]
 pub(crate) fn login_geometry_current() -> std::io::Result<bool> { Ok(false) }
 #[cfg(not(any(windows, target_os = "linux")))]
 pub(crate) fn open_login_source() -> std::io::Result<Box<dyn crate::screen::core::host_backend::ScreenSource>> {
+    Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "login capture is unavailable on this platform"))
+}
+#[cfg(not(any(windows, target_os = "linux")))]
+pub(crate) fn prepare_login_source(
+    _admission: Arc<crate::screen::core::capture_admission::SessionAdmission>,
+) -> std::io::Result<Box<dyn crate::screen::core::capture_source_contract::PreparedSource>> {
     Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "login capture is unavailable on this platform"))
 }
 #[cfg(not(any(windows, target_os = "linux")))]
@@ -108,6 +116,15 @@ mod worker_lifetime {
 #[path = "native_ffi/openh264_codec.rs"]
 pub(crate) mod openh264_codec;
 #[cfg(any(windows, target_os = "linux"))]
+#[path = "native_ffi/openh264_encode.rs"]
+mod openh264_encode;
+#[cfg(any(windows, target_os = "linux"))]
+#[path = "native_ffi/openh264_capture.rs"]
+mod openh264_capture;
+#[cfg(all(test, any(windows, target_os = "linux")))]
+#[path = "native_ffi/batches_capture_codec_task_tests.rs"]
+mod batches_capture_openh264_task_tests;
+#[cfg(any(windows, target_os = "linux"))]
 #[path = "native_ffi/openh264_install.rs"]
 pub(crate) mod openh264_install;
 #[cfg(any(windows, target_os = "linux"))]
@@ -123,6 +140,18 @@ mod capture_dxgi;
 #[cfg(windows)]
 #[path = "windows/capture_source.rs"]
 mod capture_source;
+#[cfg(windows)]
+#[path = "windows/capture_prepared.rs"]
+mod capture_prepared;
+#[cfg(windows)]
+#[path = "windows/capture_retirement.rs"]
+mod capture_retirement;
+#[cfg(windows)]
+#[path = "windows/capture_slots.rs"]
+mod capture_slots;
+#[cfg(windows)]
+#[path = "windows/capture_readback.rs"]
+mod capture_readback;
 #[cfg(windows)]
 #[path = "windows/capture_wgc.rs"]
 mod capture_wgc;
@@ -159,6 +188,18 @@ mod mf_encoder_sync;
 #[cfg(windows)]
 #[path = "windows/mf_media.rs"]
 mod mf_media;
+#[cfg(windows)]
+#[path = "windows/mf_buffer_lease.rs"]
+mod mf_buffer_lease;
+#[cfg(windows)]
+#[path = "windows/mf_capture_media.rs"]
+mod mf_capture_media;
+#[cfg(windows)]
+#[path = "windows/mf_capture_output.rs"]
+mod mf_capture_output;
+#[cfg(all(test, windows))]
+#[path = "windows/batches_capture_codec_task_tests.rs"]
+mod batches_capture_mf_task_tests;
 #[cfg(windows)]
 #[path = "windows/monitors.rs"]
 mod monitors;
@@ -242,6 +283,18 @@ pub(crate) mod bridge_backend;
 #[cfg(any(target_os = "android", test))]
 #[path = "android/bridge_channels.rs"]
 pub(crate) mod bridge_channels;
+#[cfg(any(target_os = "android", test))]
+#[path = "android/capture_admission.rs"]
+mod android_capture_admission;
+#[cfg(any(target_os = "android", test))]
+#[path = "android/capture_prepared.rs"]
+mod android_capture_prepared;
+#[cfg(any(target_os = "android", test))]
+#[path = "android/capture_arena.rs"]
+pub(crate) mod android_capture_arena;
+#[cfg(all(target_os = "android", feature = "android-instrumentation-fixtures"))]
+#[path = "android/capture_fixture.rs"]
+pub(crate) mod android_capture_fixture;
 #[cfg(any(target_os = "android", test))]
 #[path = "android/bridge_source.rs"]
 mod bridge_source;

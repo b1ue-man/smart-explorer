@@ -27,6 +27,10 @@ pub(crate) const TILES_NAME: &str = "tiles";
 
 /// One encoder implementation of the platform (an MFT, OpenH264).
 pub(crate) trait EncoderFactory: Send + Sync {
+    fn open_admitted(&self, _choice: &CodecChoice, _size: FrameSize, _fps: u32,
+        _grant: super::capture_admission::CaptureGrant) -> io::Result<Box<dyn ScreenEncoder>> {
+        Err(io::Error::new(io::ErrorKind::Unsupported,"encoder_factory_has_no_capture_admission"))
+    }
     /// Name for statistics and `se screen codec`.
     fn name(&self) -> String;
     /// What it encodes: codec, profile, hardware and largest frame.
@@ -194,6 +198,36 @@ impl CodecRegistry {
                 factory: TILES_NAME.into(), hardware: false }
         } else { self.open_encoder_with_contract(&request.choice,request.size,request.fps,refused,request.frame_contract)? };
         opened.encoder = super::host_hybrid::wrap(opened.encoder,request)?;
+        Ok(opened)
+    }
+    pub(crate) fn open_encoder_for_stage_admitted(&self, request: &super::host_stage::StageRequest,
+        refused: &[String], grant: super::capture_admission::CaptureGrant) -> io::Result<OpenedEncoder> {
+        if let Some(contract) = request.frame_contract {contract.validate()?;}
+        let limits = request.frame_contract.map_or(super::frame_budget::FrameLimits::LEGACY, |c| c.limits);
+        limits.check(request.size)?;
+        if request.size.pixels() > request.choice.max_pixels {return Err(super::wire::invalid("frame exceeds codec pixel limit"));}
+        let mut opened = if request.choice.codec == CodecKind::Tiles {
+            OpenedEncoder {encoder: Box::new(super::host_codec_adapters::AdmittedTilesEncoder::new(request.size,limits,grant.clone())?),
+                factory: TILES_NAME.into(), hardware: false}
+        } else {
+            let mut candidates: Vec<_> = self.encoders.iter().filter_map(|factory| {
+                if refused.contains(&factory.name()) {return None;}
+                factory.offers().into_iter().find(|offer| offers_stream(offer,request.choice.codec,request.choice.profile)
+                    && offer.supports_size_rate(request.size,request.fps,request.frame_contract)).map(|offer| (offer.hardware,factory))
+            }).collect();
+            candidates.sort_by_key(|(hardware,_)| *hardware != request.choice.encoder_hardware);
+            let mut selected = None;
+            let mut refusals = Vec::new();
+            for (hardware,factory) in candidates {
+                match factory.open_admitted(&request.choice,request.size,request.fps,grant.clone()) {
+                    Ok(encoder) => {selected = Some(OpenedEncoder {encoder,factory:factory.name(),hardware}); break;}
+                    Err(error) => refusals.push(format!("{}: {error}",factory.name())),
+                }
+            }
+            selected.ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported,
+                format!("no admitted {} encoder opened: {}",request.choice.codec.key(),refusals.join("; "))))?
+        };
+        opened.encoder = super::host_hybrid::wrap_captured(opened.encoder,request,grant)?;
         Ok(opened)
     }
 

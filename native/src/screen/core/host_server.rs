@@ -38,6 +38,8 @@ use crate::share::relation_proof::ProvenPrincipal;
 #[path = "host_session.rs"]
 mod session;
 use session::Session;
+#[path="host_server_start.rs"]
+mod startup;
 
 /// Time the last frames of a session get before the connection closes.
 const CLOSE_GRACE: Duration = Duration::from_secs(2);
@@ -285,19 +287,17 @@ pub(crate) async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Res
             }
         }
     };
-    let source = match super::family_listing::open(&context,&principal,&source_id,hello.display_size,mode==SessionMode::Control) {
-        Ok(source) => source,
-        Err(refusal) => {
-            let reason = Some(refusal.reason.as_str());
-            log_event(
-                context.audit,
-                &principal,
-                mode,
-                "session_refused",
-                None,
-                reason,
-            );
-            return start.refuse(ScreenErrorCode::NoDisplay, true).await;
+    let startup::Ready{source,contract,choice,admission}=match startup::prepare(&context,&principal,&hello,&source_id,&connection,&handle).await {
+        Ok(ready)=>ready,
+        Err(startup::Failure::Cancelled)=>return Ok(()),
+        Err(startup::Failure::Encoder)=>return start.refuse(ScreenErrorCode::EncoderFailed,false).await,
+        Err(startup::Failure::Capture(error))=>{
+            log_event(context.audit,&principal,mode,"session_refused",None,Some(&error.to_string()));
+            return start.refuse(ScreenErrorCode::CaptureFailed,true).await;
+        }
+        Err(startup::Failure::Source(refusal))=>{
+            log_event(context.audit,&principal,mode,"session_refused",None,Some(refusal.reason.as_str()));
+            return start.refuse(ScreenErrorCode::NoDisplay,true).await;
         }
     };
     if handle.stop_signal().borrow().is_some() || !super::family_listing::admitted(&context,&principal,mode==SessionMode::Control) {
@@ -323,33 +323,6 @@ pub(crate) async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Res
                 .await;
         }
     }
-    // The opened source supplies its proven capture limit. Codec offers and the
-    // actual viewer renderer independently narrow the end-to-end contract.
-    let source_limits = source.frame_limits();
-    source_limits.validate_capture()?;
-    let _memory=match super::frame_memory::reserve(backend.memory_facts(),
-        backend.session_memory_ceiling().min(hello.frame_capabilities.map_or(
-            super::frame_budget::MAX_WORKING_BYTES,|caps|caps.frames.working_bytes))) {
-        Ok(lease) if hello.frame_capabilities.is_some() || lease.bytes()==super::frame_budget::MAX_WORKING_BYTES=>lease,
-        _=>return start.refuse(ScreenErrorCode::CaptureFailed,false).await,
-    };
-    let mut host_capabilities=FrameCapabilities::admitted(source_limits.max_size,_memory.bytes())?;
-    host_capabilities.frames=host_capabilities.frames.for_capture(source_limits);
-    host_capabilities.hybrid_regions=source.supports_frame_regions();
-    let mut contract = FrameContract::negotiate(Some(host_capabilities), hello.frame_capabilities)?;
-    let mut choices = negotiate_for_contract(
-        &backend.encoders(), &hello.decoders, CodecPreference::Auto, contract,
-    );
-    if choices.is_empty() && contract.is_some_and(|contract| contract.hybrid_regions)
-        && hello.decoders.iter().any(|offer| offer.codec == super::negotiate::CodecKind::H264)
-    {
-        // A surface-only decoder can still use the existing video path.
-        if let Some(contract) = contract.as_mut() { contract.hybrid_regions = false; }
-        choices = negotiate_for_contract(&backend.encoders(), &hello.decoders, CodecPreference::Auto, contract);
-    }
-    let Some(choice) = choices.first().copied() else {
-        return start.refuse(ScreenErrorCode::EncoderFailed, false).await;
-    };
     let ok = start.hello_ok(authorization, approval, contract);
     send_hello_reply(&mut send, &HelloReply::Accepted(ok)).await?;
     let result = Some(approval_result(approval));
@@ -374,7 +347,7 @@ pub(crate) async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Res
         hello.display_size,
         context.inject_resets.clone(),
     );
-    pipeline.hold_memory(std::sync::Arc::new(_memory));
+    pipeline.hold_admission(admission);
     pipeline.set_frame_contract(contract)?;
     if let Some(tiles) = negotiate_for_contract(
         &backend.encoders(), &hello.decoders, CodecPreference::Tiles, contract,
