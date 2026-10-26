@@ -315,8 +315,13 @@ unveränderten Produktfiltern. M12 erhält den X11-Server zwischen Capturefälle
 M11 normalisiert ausschließlich CRLF der eingebetteten Vergleichstexte; die
 rohen Releasehashes und Qualitätsanforderungen bleiben unverändert.
 
-Aktiv sind M01, M04, M09, M10 und M13. Der Scope wird ausschließlich um
-konkret benötigte Aufrufer erweitert. M01 erhält die bisherige
+M04 (`49974aa4`), M01 (`3c54f558`), M09 (`5209fe97`) und M13 (`98a9ed1f`)
+sind ebenfalls mit ihrem vollständigen eigenen Autorenzyklus integriert.
+Mains begrenzte Integrationsprüfung fand keine neue offene Quellabweichung.
+Bei Iroh `socket.rs` kann Tree-sitter eine bereits zuvor identische
+Cfg-Annotation im Options-Destructuring nicht parsen; dieser unveränderte
+Grammatikbefund ist im M13-Bericht ausdrücklich erhalten und kein behaupteter
+Compilerpass. M01 erhält die bisherige
 VFS-Operationsqualifikation für Sync, Backup und Mounts getrennt vom neuen
 strikten Transfer-Replaybeweis. Eine allgemeine fehlende Stromausfallgarantie
 ist kein Beleg eines zusätzlichen bestehenden VFS-Funktionsfehlers. M04 erhält
@@ -326,5 +331,16 @@ Root-Abfrage der HTTP-Fixture belegt; ein Produktpagerfehler ist nicht belegt.
 M13 entzieht alte Freigaben vor Rebind und erhält einen Wartezustand während
 der Netzwerkvorbereitung; nach deren Ende beginnt eine frische Auswahlfrist,
 ohne absolute Operationdeadlines zu verlängern. Ein veralteter Offline-Status
-darf den neuen Netzwechsel nicht abbrechen. Die abschließende eigene
-Anti-Regressionsreview jedes dieser Autoren steht noch vor der Integration.
+darf den neuen Netzwechsel nicht abbrechen. Diese Autoren haben ihre eigene
+anschließende Anti-Regressionsreview abgeschlossen.
+
+Aktiv bleibt M10. Die weitere zugewiesene Quelllektüre belegt dieselbe falsche
+Rootannahme in den vorhandenen Scan-/Stat-/Read-/Trash-, Paging-/Cache-,
+Wiederholungs-/IncompleteSearch-, Datei-/Ordneranlage-, Leerantwort-,
+Inhaltsersatz- und Rename-/Copy-Promotion-Fixtures. Der gleiche Autor erweitert
+seinen Plan und seine Kettenkarte um diese konkrete Vertragsfläche und
+korrigiert explizite Requestfolgen; der Server antwortet nicht automatisch auf
+fehlende Schritte. Bestehende Namen und Schutzorakel bleiben erhalten. Main
+registriert die betroffenen vorhandenen Fälle und die beiden neuen Scanfälle
+gezielt in derselben Suite. Produktpager, Rechte und Persistenz werden nicht
+wegen einer Fixtureabweichung gelockert.
