@@ -276,7 +276,13 @@ fn write_document(directory: &Path, file_name: &str, document: &Value) -> io::Re
     // Large delete/stage inventories live in the hash-bound manifest, not
     // duplicated inside the legacy 1-MiB registry. Listing hydrates them.
     let mut stored = document.clone();
-    if let Some(records) = stored[FIELD]["records"].as_array_mut() {
+    // Mutable indexing would insert a null records field on this lookup.
+    // A legacy active document must keep its optional recovery field absent.
+    if let Some(records) = stored
+        .get_mut(FIELD)
+        .and_then(|book| book.get_mut("records"))
+        .and_then(Value::as_array_mut)
+    {
         for record in records {
             record["gaps"] = serde_json::json!([]);
             if let Some(object) = record.as_object_mut() {
