@@ -1,6 +1,6 @@
 //! Controlled backend/queue events; no GL driver, privileged input or SAS executes.
 use super::*;
-use crate::app::{
+use crate::app::screen_modules::{
     screen_image_memory::{owner_limits, CpuPixels, ImageAccess},
     screen_render_cpu::{finish_glow_draw, finish_glow_upload},
     screen_render_glow::{GlowImage, GlowUpload},
@@ -80,7 +80,7 @@ fn uploaded(slot: &RenderSlot, package: Package) {
 fn receipt(
     session: &Arc<ViewerSession>,
     frame: &PresentedFrame,
-) -> crate::app::screen_presented::Presented {
+) -> crate::app::screen_modules::screen_presented::Presented {
     let session = session.clone();
     let token = frame.login.as_ref().unwrap().clone();
     let epoch = frame.epoch;
@@ -268,7 +268,7 @@ fn batches_task_b6_login_renderer_context_quarantine_revokes_every_slot_without_
 
 #[test]
 fn batches_task_b6_screen_renderer_failure_revokes_input_and_reuses_visibility_floor() {
-    use crate::app::screen_session::{Shared, ViewerSession as ScreenSession};
+    use crate::app::screen_modules::screen_session::{Shared, ViewerSession as ScreenSession};
     use crate::screen::core::{
         session_state::SessionState,
         visibility::{ViewerVisibility, VisibilityState},

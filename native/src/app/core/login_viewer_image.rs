@@ -261,14 +261,14 @@ mod renderer_failure_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::screen_render_owner::ControlledDriver;
+    use crate::app::screen_modules::screen_render_owner::ControlledDriver;
     use crate::screen::core::image_admission::ImageRole;
     #[test]
     fn batches_task_b6_login_image_real_ipc_show_keeps_local_claims_until_render_retirement() {
         let fixture = crate::daemon::login_image_fixture(FrameSize::new(8, 8)).unwrap();
         assert!(fixture.wait_frame(std::time::Duration::from_secs(3)));
         let memory =
-            fixture.image_admission(crate::app::screen_image_memory::owner_limits().unwrap());
+            fixture.image_admission(crate::app::screen_modules::screen_image_memory::owner_limits().unwrap());
         let ctx = egui::Context::default();
         let driver = ControlledDriver::install(&ctx);
         let mut pane = LoginImage::default();

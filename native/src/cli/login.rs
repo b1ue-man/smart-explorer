@@ -120,9 +120,13 @@ pub(super) fn run(args: LoginArgs) -> Result<i32, String> {
             let mut viewer =
                 LoginViewer::open(target_file(&file)?, target_user, acknowledge_machine_pin)?;
             let started = viewer.command(LoginCommand::Start)?;
+            let pixel_bytes = started
+                .image
+                .as_ref()
+                .map_or(0, |image| image.image().data().len());
             output(
                 json,
-                json!({"reply":started.reply,"pixel_bytes":started.pixels.len()}),
+                json!({"reply":started.reply,"pixel_bytes":pixel_bytes}),
             );
             if viewer.view().challenge.is_none() {
                 return Ok(0);
@@ -154,9 +158,13 @@ pub(super) fn run(args: LoginArgs) -> Result<i32, String> {
                         }
                         let command: LoginCommand = serde_json::from_slice(&bytes).map_err(text)?;
                         let frame = viewer.command(command)?;
+                        let pixel_bytes = frame
+                            .image
+                            .as_ref()
+                            .map_or(0, |image| image.image().data().len());
                         output(
                             json,
-                            json!({"reply":frame.reply,"pixel_bytes":frame.pixels.len(),"pixel_stream_in_json":false}),
+                            json!({"reply":frame.reply,"pixel_bytes":pixel_bytes,"pixel_stream_in_json":false}),
                         );
                         if viewer.view().challenge.is_none() {
                             break;

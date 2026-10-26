@@ -118,7 +118,11 @@ pub(super) fn login(args: &Args) -> Result<CallToolResult, String> {
             match result {
                 Ok(frame) => {
                     let terminal = frame.reply.view.challenge.is_none();
-                    let value = json!({"reply":frame.reply,"pixel_bytes":frame.pixels.len(),"live_image_stream":false});
+                    let pixel_bytes = frame
+                        .image
+                        .as_ref()
+                        .map_or(0, |image| image.image().data().len());
+                    let value = json!({"reply":frame.reply,"pixel_bytes":pixel_bytes,"live_image_stream":false});
                     if terminal {
                         remove(&id)?;
                     }

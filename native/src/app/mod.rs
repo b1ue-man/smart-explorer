@@ -249,18 +249,11 @@ mod scanning;
 #[path = "screen_modules.rs"]
 mod screen_modules;
 pub(crate) use screen_modules::*;
+use screen_modules::{family_viewer, family_viewer_events, family_viewer_session};
 #[path = "core/family_device_ui.rs"]
 mod family_device_ui;
 #[path = "core/family_picker.rs"]
 mod family_picker;
-#[path = "core/family_viewer.rs"]
-mod family_viewer;
-#[path = "core/family_viewer_events.rs"]
-mod family_viewer_events;
-#[path = "core/family_viewer_session.rs"]
-mod family_viewer_session;
-#[path = "core/login_viewer.rs"]
-pub(crate) mod login_viewer;
 #[path = "core/share.rs"]
 mod share;
 #[path = "core/share_app_grant_ui.rs"]
