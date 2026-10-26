@@ -57,7 +57,7 @@ pub extern "system" fn Java_app_smartexplorer_android_core_NativeBridge_screenCa
                 generation,
                 owner,
                 bytes,
-                buffer != 0,
+                buffer,
             ) as jlong)
         })
         .into_outcome()
