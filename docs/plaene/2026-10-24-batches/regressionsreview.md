@@ -74,8 +74,10 @@ Kontextmenü-DLL, beide Shareserverpayloads und `version.txt`.
 Vor dem Reviewstart werden der dann aktuelle vollständig integrierte
 Kandidatencommit und seine gesamte geänderte Dateioberfläche festgehalten.
 Der Arbeitsbasiscommit `bea312ea` ersetzt diese Releasevergleichsbasis nicht.
-Der genaue Reviewkandidatencommit steht noch nicht fest, weil Coreintegration,
-Android-Fixtures und der Glow-Batchreviewfix noch bearbeitet werden.
+Der genaue Reviewkandidatencommit steht noch nicht fest, weil die belegten
+Batchreviewkorrekturen an Android-Besitzübergaben, Renderer-Eingabefreigaben und
+Capture-/Workerintegration noch bearbeitet werden. Die Coreintegration und die
+Android-Fixtureanschlüsse sind bereits als Quellmeilensteine integriert.
 
 ## Erwartetes Ergebnis und Grenzen
 
