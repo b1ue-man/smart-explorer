@@ -1,46 +1,20 @@
 //! Source fixtures for the one final remote task suite; never a local entrypoint.
 use super::capture_admission::{
-    CaptureAuthority, CaptureGeneration, CaptureOwner, CapturePlan, SessionAdmission, SourceKey,
+    CaptureGeneration, CaptureOwner, CapturePlan, SourceKey,
 };
-use super::capture_grant::{CaptureGrant, CaptureSlice, DelegatedCaptureCredit};
 use super::capture_plan::{CapturePhases, HostPhase};
-use super::frame_budget::{FrameContract, FrameLimits, FRAME_PROTOCOL, MAX_WORKING_BYTES};
-use super::frame_memory::{CapacityCeiling, MemoryFacts, MemoryPool};
+use super::frame_budget::MAX_WORKING_BYTES;
+use super::frame_memory::{CapacityCeiling, MemoryPool};
 use super::host_codec_adapters::{HostCodecPlan, HostContract, HostInputPixels, HostOutputPlan};
 use super::pixel_convert::FrameSize;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
-const MIB: u64 = 1024 * 1024;
+use std::sync::Arc;
 
-fn facts() -> Option<MemoryFacts> {
-    Some(MemoryFacts {
-        available_physical: 4096 * MIB,
-        available_commit: 4096 * MIB,
-        available_address_space: 4096 * MIB,
-    })
-}
-fn contract(bytes: u64) -> FrameContract {
-    FrameContract {
-        version: FRAME_PROTOCOL,
-        limits: FrameLimits {
-            max_size: FrameSize::new(64, 64),
-            max_pixels: 4096,
-            working_bytes: bytes,
-        },
-        hybrid_regions: true,
-    }
-}
-fn plan(session: &str, source: &str, generation: u64, bytes: u64) -> CapturePlan {
-    let mut plan = CapturePlan::new(
-        SourceKey::new(session, source).unwrap(),
-        CaptureGeneration::new(generation),
-    );
-    plan.add_bytes(CaptureOwner::SourcePixels, bytes, 1, CapturePhases::ALL)
-        .unwrap();
-    plan
-}
+#[path = "batches_capture_admission_fixture.rs"]
+mod fixture;
+use fixture::{contract, facts, plan, MIB};
+#[path = "batches_capture_admission_lifetime_task_tests.rs"]
+mod lifetime;
+
 #[test]
 fn batches_task_capture_explicit_cohort_is_not_the_first_small_request() {
     let pool = Arc::new(MemoryPool::default());
@@ -254,90 +228,6 @@ fn batches_task_capture_family_member_binding_keeps_one_root_total() {
     assert!(same_member.claim(CaptureOwner::SourcePixels, 4).is_ok());
 }
 
-struct Retirement {
-    hold: Option<CaptureSlice>,
-    retired: Arc<AtomicBool>,
-}
-impl Drop for Retirement {
-    fn drop(&mut self) {
-        drop(self.hold.take());
-        self.retired.store(true, Ordering::SeqCst);
-    }
-}
-#[test]
-fn batches_task_capture_delegation_consumes_one_parent_backing_until_last_slice() {
-    let pool = Arc::new(MemoryPool::default());
-    let admission = pool
-        .admit_session(facts(), CapacityCeiling::bounded(256 * MIB), 64 * MIB, "s")
-        .unwrap();
-    admission.bind_contract(Some(contract(64 * MIB))).unwrap();
-    let first = admission
-        .authority()
-        .approve(plan("s", "a", 1, 96 * MIB))
-        .unwrap();
-    let second_admission = pool
-        .admit_session(
-            facts(),
-            CapacityCeiling::bounded(256 * MIB),
-            64 * MIB,
-            "second",
-        )
-        .unwrap();
-    second_admission
-        .bind_contract(Some(contract(64 * MIB)))
-        .unwrap();
-    let second = second_admission
-        .authority()
-        .approve(plan("second", "b", 1, 96 * MIB))
-        .unwrap();
-    let viewer = pool
-        .reserve_with_ceiling(facts(), CapacityCeiling::bounded(256 * MIB), 64 * MIB)
-        .unwrap();
-    assert_eq!(viewer.bytes(), 64 * MIB);
-    assert!(pool
-        .reserve_with_ceiling(facts(), CapacityCeiling::bounded(256 * MIB), MIB)
-        .is_err());
-    let retired = Arc::new(AtomicBool::new(false));
-    let worker_plan = plan("s", "a", 1, 96 * MIB);
-    let credit = DelegatedCaptureCredit::from_verified_parent(
-        first.source().clone(),
-        first.generation(),
-        worker_plan.peak_bytes(),
-        worker_plan.owner_limits(),
-        Retirement {
-            hold: Some(first.claim(CaptureOwner::SourcePixels, 96 * MIB).unwrap()),
-            retired: retired.clone(),
-        },
-    )
-    .unwrap();
-    let worker = CaptureGrant::from_delegated(worker_plan, credit).unwrap();
-    let worker_clone = worker.clone();
-    let result = worker.claim(CaptureOwner::SourcePixels, MIB).unwrap();
-    drop(worker);
-    drop(worker_clone);
-    drop(first);
-    assert!(!retired.load(Ordering::SeqCst));
-    assert_eq!(admission.additional_bytes().unwrap(), 32 * MIB);
-    drop(result);
-    assert!(retired.load(Ordering::SeqCst));
-    assert_eq!(admission.additional_bytes().unwrap(), 0);
-    assert_eq!(second_admission.additional_bytes().unwrap(), 32 * MIB);
-    drop(second);
-    assert_eq!(second_admission.additional_bytes().unwrap(), 0);
-}
-#[test]
-fn batches_task_capture_delegation_rejects_mismatched_limits() {
-    let candidate = plan("s", "a", 1, 10);
-    let credit = DelegatedCaptureCredit::from_verified_parent(
-        candidate.source().clone(),
-        candidate.generation(),
-        11,
-        candidate.owner_limits(),
-        (),
-    )
-    .unwrap();
-    assert!(CaptureGrant::from_delegated(candidate, credit).is_err());
-}
 #[test]
 fn batches_task_capture_checked_plan_arithmetic_is_transactional() {
     let mut candidate = plan("s", "a", 1, 1);
@@ -373,40 +263,6 @@ fn batches_task_capture_parallel_alias_grants_share_one_atomic_total() {
     assert_eq!(held.len(), 1);
     assert_eq!(grant.live_bytes().unwrap(), 2);
     drop(held);
-    assert_eq!(grant.live_bytes().unwrap(), 0);
-}
-struct NativeResource {
-    grant: CaptureGrant,
-    observed: Arc<AtomicBool>,
-}
-impl Drop for NativeResource {
-    fn drop(&mut self) {
-        self.observed
-            .store(self.grant.live_bytes().unwrap() == 4, Ordering::SeqCst);
-    }
-}
-#[test]
-fn batches_task_capture_native_resource_dies_before_its_last_slice() {
-    let pool = Arc::new(MemoryPool::default());
-    let admission = pool
-        .admit_session(facts(), CapacityCeiling::desktop(facts()), 64 * MIB, "s")
-        .unwrap();
-    admission.bind_contract(Some(contract(64 * MIB))).unwrap();
-    let grant = admission.authority().approve(plan("s", "a", 1, 4)).unwrap();
-    let observed = Arc::new(AtomicBool::new(false));
-    let resource = grant
-        .claim(CaptureOwner::SourcePixels, 4)
-        .unwrap()
-        .allocate(|| {
-            assert_eq!(grant.live_bytes().unwrap(), 4);
-            Ok(NativeResource {
-                grant: grant.clone(),
-                observed: observed.clone(),
-            })
-        })
-        .unwrap();
-    drop(resource);
-    assert!(observed.load(Ordering::SeqCst));
     assert_eq!(grant.live_bytes().unwrap(), 0);
 }
 #[test]
@@ -465,51 +321,4 @@ fn batches_task_capture_serial_family_sums_persistence_and_maximum_transient() {
     assert!(b.claim(CaptureOwner::SourcePixels, 6).is_err());
     drop(transient_a);
     assert_eq!(b.claim(CaptureOwner::SourcePixels, 6).unwrap().bytes(), 6);
-}
-struct VerifiedDispatcher;
-impl CaptureAuthority for VerifiedDispatcher {
-    fn approve(&self, plan: CapturePlan) -> std::io::Result<CaptureGrant> {
-        let credit = DelegatedCaptureCredit::from_verified_parent(
-            plan.source().clone(),
-            plan.generation(),
-            plan.peak_bytes(),
-            plan.owner_limits(),
-            (),
-        )?;
-        CaptureGrant::from_delegated(plan, credit)
-    }
-}
-struct SessionRetirement(Arc<AtomicBool>);
-impl Drop for SessionRetirement {
-    fn drop(&mut self) {
-        self.0.store(true, Ordering::SeqCst);
-    }
-}
-#[test]
-fn batches_task_capture_delegated_session_prepares_and_resizes_without_a_child_pool() {
-    let retired = Arc::new(AtomicBool::new(false));
-    let session = SessionAdmission::from_verified_parent(
-        "worker",
-        64 * MIB,
-        Some(contract(64 * MIB)),
-        Arc::new(VerifiedDispatcher),
-        SessionRetirement(retired.clone()),
-    )
-    .unwrap();
-    assert_eq!(session.session(), "worker");
-    assert_eq!(session.working_bytes(), 64 * MIB);
-    let authority = session.authority();
-    assert!(authority
-        .approve(plan("wrong-session", "a", 1, 10))
-        .is_err());
-    let first = authority.approve(plan("worker", "a", 1, 10)).unwrap();
-    let second = authority.approve(plan("worker", "a", 2, 20)).unwrap();
-    let held = first.claim(CaptureOwner::SourcePixels, 10).unwrap();
-    drop(session);
-    drop(authority);
-    drop(first);
-    drop(second);
-    assert!(!retired.load(Ordering::SeqCst));
-    drop(held);
-    assert!(retired.load(Ordering::SeqCst));
 }
