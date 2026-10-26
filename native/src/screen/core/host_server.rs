@@ -326,11 +326,16 @@ pub(crate) async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Res
     // The opened source supplies its proven capture limit. Codec offers and the
     // actual viewer renderer independently narrow the end-to-end contract.
     let source_limits = source.frame_limits();
-    source_limits.validate()?;
-    let host_capabilities = FrameCapabilities {
-        version: super::frame_budget::FRAME_PROTOCOL, frames: source_limits,
-        texture_size: source_limits.max_size, hybrid_regions: source.supports_frame_regions(),
+    source_limits.validate_capture()?;
+    let _memory=match super::frame_memory::reserve(backend.memory_facts(),
+        backend.session_memory_ceiling().min(hello.frame_capabilities.map_or(
+            super::frame_budget::MAX_WORKING_BYTES,|caps|caps.frames.working_bytes))) {
+        Ok(lease) if hello.frame_capabilities.is_some() || lease.bytes()==super::frame_budget::MAX_WORKING_BYTES=>lease,
+        _=>return start.refuse(ScreenErrorCode::CaptureFailed,false).await,
     };
+    let mut host_capabilities=FrameCapabilities::admitted(source_limits.max_size,_memory.bytes())?;
+    host_capabilities.frames=host_capabilities.frames.for_capture(source_limits);
+    host_capabilities.hybrid_regions=source.supports_frame_regions();
     let mut contract = FrameContract::negotiate(Some(host_capabilities), hello.frame_capabilities)?;
     let mut choices = negotiate_for_contract(
         &backend.encoders(), &hello.decoders, CodecPreference::Auto, contract,
@@ -369,6 +374,7 @@ pub(crate) async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Res
         hello.display_size,
         context.inject_resets.clone(),
     );
+    pipeline.hold_memory(std::sync::Arc::new(_memory));
     pipeline.set_frame_contract(contract)?;
     if let Some(tiles) = negotiate_for_contract(
         &backend.encoders(), &hello.decoders, CodecPreference::Tiles, contract,

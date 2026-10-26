@@ -31,24 +31,20 @@ pub(crate) fn yuv_to_rgb(y: u8, u: u8, v: u8, matrix: YuvMatrix) -> [u8; 3] {
 }
 
 type Tap = (usize, f32);
-fn taps(source: usize, target: usize, pixel: usize) -> Vec<Tap> {
-    let scale = source as f64 / target as f64;
-    if scale >= 1.0 {
-        let lo = pixel as f64 * scale;
-        let hi = (pixel + 1) as f64 * scale;
-        (lo.floor() as usize..(hi.ceil() as usize).min(source))
-            .map(|i| (i, ((hi.min((i + 1) as f64) - lo.max(i as f64)) / scale) as f32))
-            .collect()
+fn taps(source:usize,target:usize,pixel:usize,cancel:&impl Fn()->bool)->Option<Vec<Tap>> {
+    let scale=source as f64/target as f64;let mut out=Vec::new();
+    if scale>=1.0 {
+        let lo=pixel as f64*scale;let hi=(pixel+1) as f64*scale;
+        let range=lo.floor() as usize..(hi.ceil() as usize).min(source);out.try_reserve_exact(range.len()).ok()?;
+        for i in range {if cancel() {return None;}out.push((i,((hi.min((i+1) as f64)-lo.max(i as f64))/scale) as f32));}
     } else {
-        let center = (pixel as f64 + 0.5) * scale - 0.5;
-        let first = center.floor() as isize;
-        (first - 1..=first + 2).map(|i| {
-            let x = (center - i as f64).abs();
-            let weight = if x < 1.0 { 1.5*x*x*x - 2.5*x*x + 1.0 }
-                else if x < 2.0 { -0.5*x*x*x + 2.5*x*x - 4.0*x + 2.0 } else { 0.0 };
-            (i.clamp(0, source as isize - 1) as usize, weight as f32)
-        }).collect()
-    }
+        out.try_reserve_exact(4).ok()?;let center=(pixel as f64+0.5)*scale-0.5;let first=center.floor() as isize;
+        for i in first-1..=first+2 {
+            if cancel() {return None;}let x=(center-i as f64).abs();
+            let weight=if x<1.0 {1.5*x*x*x-2.5*x*x+1.0} else if x<2.0 {-0.5*x*x*x+2.5*x*x-4.0*x+2.0} else {0.0};
+            out.push((i.clamp(0,source as isize-1) as usize,weight as f32));
+        }
+    }Some(out)
 }
 // Use the encoded signal domain on both CPU and GPU. The YUV matrix is
 // linear in those signals, so RGB and plane reconstruction share the same
@@ -64,7 +60,8 @@ pub(crate) fn resample_with_cancel(source:&ColorImage,target:[usize;2],cancel:&i
     let [sw, sh] = source.size;
     let [tw, th] = target;
     if [sw, sh, tw, th].contains(&0) || sw.checked_mul(sh)? != source.pixels.len() { return None; }
-    let xt: Vec<_> = (0..tw).map(|x| taps(sw,tw,x)).collect();
+    let mut xt=Vec::new();xt.try_reserve_exact(tw).ok()?;
+    for x in 0..tw {if cancel() {return None;}xt.push(taps(sw,tw,x,cancel)?);}
     let horizontal = |y: usize| -> Option<Vec<[f32;3]>> {
         if cancel() { return None; }
         let mut row = Vec::new(); row.try_reserve_exact(tw).ok()?;
@@ -82,7 +79,7 @@ pub(crate) fn resample_with_cancel(source:&ColorImage,target:[usize;2],cancel:&i
     let mut pixels = Vec::new(); pixels.try_reserve_exact(tw.checked_mul(th)?).ok()?;
     for y in 0..th {
         if cancel() { return None; }
-        let weights = taps(sh,th,y);
+        let weights = taps(sh,th,y,cancel)?;
         cache.retain(|sy,_| weights.iter().any(|(needed,_)| needed == sy));
         let mut row = Vec::new(); row.try_reserve_exact(tw).ok()?; row.resize(tw,[0.0;3]);
         for (sy,weight) in weights {

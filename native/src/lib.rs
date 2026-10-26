@@ -197,7 +197,7 @@ pub fn run_gui() -> eframe::Result<()> {
     #[cfg(windows)]
     shell_menu::init_com();
 
-    eframe::run_native(
+    app::screen_render_app::run_native(
         "Smart Explorer",
         options,
         Box::new(|cc| {

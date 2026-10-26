@@ -107,3 +107,30 @@ fn screen_task_hello_maps_onto_relation_proof() {
         assert_eq!(ScreenErrorCode::from_key(code.key()), Some(code));
     }
 }
+
+#[test]
+fn batches_task_b6_hello_class_is_backward_compatible_before_client_offer() {
+    use crate::screen::core::frame_budget::{FrameCapabilities,FrameContract,MAX_WORKING_BYTES};
+    let modern=server_hello();
+    let mut old_json=serde_json::to_value(&modern).unwrap();
+    old_json.as_object_mut().unwrap().remove("frame_memory_class");
+    let old:ScreenServerHello=serde_json::from_value(old_json).unwrap();
+    assert_eq!(old.frame_memory_class,None);
+    let caps=FrameCapabilities::admitted(FrameSize::new(16384,16384),768*1024*1024).unwrap();
+    let modern_offer=caps.for_server(modern.frame_memory_class).unwrap();
+    let old_offer=caps.for_server(old.frame_memory_class).unwrap();
+    assert_eq!(old_offer.frames.working_bytes,MAX_WORKING_BYTES);
+    assert!(modern_offer.frames.check(FrameSize::new(3840,2160)).is_ok());
+    let mut hello=client_hello();hello.frame_capabilities=Some(old_offer);hello.validate().unwrap();
+    // This is the old implementation's additional validator ceiling.
+    assert!(hello.frame_capabilities.unwrap().frames.working_bytes<=512*1024*1024);
+    let accepted=FrameContract::negotiate(Some(modern_offer),Some(old_offer)).unwrap().unwrap();
+    assert_eq!(accepted.limits.working_bytes,MAX_WORKING_BYTES);
+    assert_ne!(accepted.limits.fit(FrameSize::new(3840,2160)),FrameSize::new(3840,2160));
+    assert_eq!(screen_transcript(&old,&hello),screen_transcript(&modern,&hello));
+    // An old serde reader ignores the optional new JSON marker.
+    #[derive(Deserialize)]
+    struct OldServer {protocol_version:u16,challenge:String}
+    let legacy:OldServer=serde_json::from_slice(&serde_json::to_vec(&modern).unwrap()).unwrap();
+    assert_eq!(legacy.protocol_version,modern.protocol_version);assert_eq!(legacy.challenge,modern.challenge);
+}

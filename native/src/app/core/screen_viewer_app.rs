@@ -22,7 +22,6 @@ use super::screen_tile_grid::ScreenTileGrid;
 use super::screen_toolbar_ui::{self, ToolbarAction, ToolbarInput};
 use super::screen_view_widget::ViewParams;
 use super::screen_viewer_view::{device_list, Common, ViewState};
-use super::screen_wgpu_yuv;
 use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::session_state::SessionState;
 
@@ -78,10 +77,7 @@ impl ScreenViewerApp {
     pub(crate) fn new(cc: &eframe::CreationContext<'_>, start: Start, prefs: ViewerPrefs) -> Self {
         let ctx = &cc.egui_ctx;
         ctx.data_mut(|data| data.insert_temp(egui::Id::new("screen_renderer_wgpu"),cc.wgpu_render_state.is_some()));
-        let gpu = cc
-            .wgpu_render_state
-            .as_ref()
-            .is_some_and(screen_wgpu_yuv::install);
+        let gpu=super::screen_render_owner::get(ctx).is_some_and(|owner|owner.yuv());
         let backend = Backend::production(ctx);
         let devices = super::screen_devices::Devices::start(ctx);
         let common = Common {
@@ -322,10 +318,10 @@ impl ScreenViewerApp {
             ScreenTileGrid::new(self.scope.clone(), backend, self.common.devices.clone());
         if let Mode::View(view) = &mut self.mode {
             if let Some(session) = view.session.take() {
-                view.widget.release_input(&session);
+                view.widget.release_input(&session);session.invalidate_input();
                 let edge = preview_edge(240.0, ctx.pixels_per_point());
                 if let Some(session) = to_tile(session, edge, DEFAULT_PREVIEW_INTERVAL_MS) {
-                    grid.adopt(session);
+                    grid.adopt(session,view.widget.take_texture());
                 }
             }
         }
@@ -340,9 +336,10 @@ impl ScreenViewerApp {
         };
         let open = ViewState::open_options(&self.common, display);
         let state = match tile {
-            Some(session) => {
+            Some((session,texture)) => {
                 let session = to_view(&self.common.backend, Some(session), &target, &open);
-                ViewState::with_session(target, session, display, self.common.gpu)
+                let mut state=ViewState::with_session(target, session, display, self.common.gpu);
+                state.widget.adopt_texture(texture);state
             }
             None => ViewState::new(target, self.common.gpu),
         };

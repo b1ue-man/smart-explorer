@@ -47,7 +47,7 @@ fn run_viewer(start: Start, title: &str) -> i32 {
     };
     let (first, second) = (start.clone(), start);
     let (first_prefs, second_prefs) = (prefs.clone(), prefs);
-    let result = eframe::run_native(
+    let result = super::screen_render_app::run_native(
         APP_ID,
         wgpu,
         Box::new(move |cc| Ok(Box::new(ScreenViewerApp::new(cc, first, first_prefs)))),
@@ -61,7 +61,7 @@ fn run_viewer(start: Start, title: &str) -> i32 {
         viewport: viewport(title),
         ..Default::default()
     };
-    exit_code(eframe::run_native(
+    exit_code(super::screen_render_app::run_native(
         APP_ID,
         glow,
         Box::new(move |cc| Ok(Box::new(ScreenViewerApp::new(cc, second, second_prefs)))),
@@ -112,7 +112,7 @@ fn error_window(message: &str) -> i32 {
         ..Default::default()
     };
     let text = message.to_string();
-    let _ = eframe::run_native(
+    let _ = super::screen_render_app::run_native(
         APP_ID,
         options,
         Box::new(move |_cc| Ok(Box::new(ErrorWindow(text)))),

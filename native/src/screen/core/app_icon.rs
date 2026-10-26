@@ -198,3 +198,7 @@ pub(crate) fn decode_png(png: &[u8]) -> io::Result<(u32, u32, Vec<u8>)> {
     if rgba.len() != checked_pixels(width, height)? * 4 { return Err(invalid("invalid icon pixel length")); }
     Ok((width, height, rgba))
 }
+
+#[cfg(test)]
+#[path = "batches_icon_task_tests.rs"]
+mod batches_task_tests;

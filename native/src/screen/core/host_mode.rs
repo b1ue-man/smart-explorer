@@ -51,6 +51,7 @@ impl Pipeline {
         self.source_generation=source.reference_generation();
         self.frame_contract = self.negotiated_contract.map(|mut c| {c.hybrid_regions &= source.supports_frame_regions();c});
         self.stage = Some(Stage {
+            memory:self.memory.clone(),
             source,
             encoder: None,
         });

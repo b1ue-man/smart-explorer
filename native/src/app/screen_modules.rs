@@ -86,3 +86,17 @@ mod screen_viewer_misc_tests;
 #[cfg(test)]
 #[path = "core/screen_viewer_tests.rs"]
 mod screen_viewer_tests;
+
+#[path="core/screen_render_upload.rs"] mod screen_render_upload;
+#[path="core/screen_render_owner.rs"] mod screen_render_owner;
+#[path="core/screen_render_wgpu.rs"] mod screen_render_wgpu;
+#[path="core/screen_render_glow.rs"] mod screen_render_glow;
+#[path="core/screen_render_yuv.rs"] mod screen_render_yuv;
+#[path="core/screen_render_app.rs"] pub(crate) mod screen_render_app;
+#[path="core/screen_texture_worker.rs"] mod screen_texture_worker;
+#[path="core/screen_session_backend.rs"] mod screen_session_backend;
+#[path="core/screen_decode_run.rs"] mod screen_decode_run;
+
+#[path="core/screen_render_cpu.rs"] mod screen_render_cpu;
+
+#[path="core/screen_view_widget_render.rs"] mod screen_view_widget_render;

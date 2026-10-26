@@ -29,6 +29,9 @@ impl ScreenSource for FailingSource {
 struct FailingBackend(io::ErrorKind);
 
 impl ScreenHostBackend for FailingBackend {
+    fn memory_facts(&self)->Option<crate::screen::core::frame_memory::MemoryFacts> {
+        Some(crate::screen::core::frame_memory::MemoryFacts {available_physical:1<<40,available_commit:1<<40,available_address_space:1<<40})
+    }
     fn platform(&self) -> HostPlatform {
         SyntheticBackend.platform()
     }
@@ -80,6 +83,8 @@ impl ScreenHostBackend for FailingBackend {
 
 fn worker(kind: io::ErrorKind) -> Worker {
     Worker {
+        admitted:Some(None),memory:Some(Arc::new(crate::screen::core::frame_memory::MemoryPool::default())
+            .reserve(None,crate::screen::core::frame_budget::MAX_WORKING_BYTES).unwrap()),
         backend: Arc::new(FailingBackend(kind)),
         source: None,
         encoder: None,
@@ -138,7 +143,7 @@ fn screen_task_worker_maps_permission_denied_to_no_display() {
     let size = FrameSize::new(320, 180);
     let produced = worker.handle(WorkerRequest::Produce(request(size)));
     assert_eq!(code_of(produced), ScreenErrorCode::NoDisplay);
-    let raw = worker.handle(WorkerRequest::Capture { frame_id: 2 });
+    let raw = worker.handle(WorkerRequest::Capture { frame_id: 2,frame_contract:None });
     assert_eq!(code_of(raw), ScreenErrorCode::NoDisplay);
 }
 
@@ -194,4 +199,41 @@ fn screen_task_worker_input_needs_control_session() {
     };
     let (tag, payload) = done.encode().unwrap();
     assert_eq!(Reply::decode(tag, &payload).unwrap(), done);
+}
+
+struct SnapshotSource;
+impl ScreenSource for SnapshotSource {
+    fn size(&self)->FrameSize {FrameSize::new(640,360)}
+    fn capture(&mut self,_id:u64,_key:bool)->io::Result<SourceFrame> {
+        let mut image=crate::screen::core::pixel_convert::BgraImage::new(self.size())?;
+        for pixel in image.data_mut().chunks_exact_mut(4) {pixel.copy_from_slice(&[1,2,3,255]);}
+        Ok(SourceFrame::Frame(image))
+    }
+}
+#[test]
+fn batches_task_b6_first_worker_snapshot_admits_contract_and_prevents_later_growth() {
+    use crate::screen::core::frame_budget::{FrameCapabilities,FrameContract};
+    let mut worker=worker(io::ErrorKind::BrokenPipe);worker.admitted=None;worker.memory=None;
+    worker.source=Some(Box::new(SnapshotSource));
+    let mut caps=FrameCapabilities::admitted(FrameSize::new(640,360),4*1024*1024).unwrap();caps.hybrid_regions=false;
+    let contract=FrameContract::negotiate(Some(caps),Some(caps)).unwrap();
+    let capture=WorkerRequest::Capture {frame_id:1,frame_contract:contract};
+    let (tag,payload)=capture.encode().unwrap();
+    let raw=worker.handle(WorkerRequest::decode(tag,&payload).unwrap());
+    let WorkerReply::Raw(image)=raw else {panic!("first snapshot must capture after admission");};
+    let limits=contract.unwrap().limits;
+    assert_eq!(image.size(),limits.fit(FrameSize::new(640,360)));
+    assert_eq!(worker.memory.as_ref().unwrap().bytes(),limits.working_bytes);
+    let mut next=request(image.size());next.frame_contract=contract;next.frame_id=2;
+    assert!(matches!(worker.handle(WorkerRequest::Produce(next.clone())),WorkerReply::Frame(StageFrame::Encoded {..})));
+    let bigger=FrameCapabilities::admitted(FrameSize::new(640,360),8*1024*1024).unwrap();
+    let bigger=FrameContract::negotiate(Some(bigger),Some(bigger)).unwrap();
+    assert!(matches!(worker.handle(WorkerRequest::Capture {frame_id:3,frame_contract:bigger}),WorkerReply::Failed {..}));
+    next.frame_contract=bigger;
+    assert!(matches!(worker.handle(WorkerRequest::Produce(next)),WorkerReply::Failed {..}));
+    assert_eq!(worker.memory.as_ref().unwrap().bytes(),limits.working_bytes);
+    // Missing optional field keeps the original legacy request semantics.
+    let legacy=WorkerRequest::decode(tag,br#"{"frame_id":4}"#).unwrap();
+    assert!(matches!(&legacy,WorkerRequest::Capture {frame_contract:None,..}));
+    assert!(matches!(worker.handle(legacy),WorkerReply::Failed {..}));
 }

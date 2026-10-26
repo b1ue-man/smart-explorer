@@ -19,6 +19,18 @@ use crate::screen::core::codec_registry::{DecoderFactory, EncoderFactory, OpenH2
 use crate::screen::core::host_backend::{ScreenHostBackend, SessionIndicator};
 use crate::screen::core::registry::ScreenRegistry;
 
+#[path="shared/session_memory.rs"]
+pub(crate) mod session_memory;
+#[cfg(target_os="linux")]
+#[path="linux_os/session_memory.rs"]
+mod platform_session_memory;
+#[cfg(windows)]
+#[path="windows/session_memory.rs"]
+mod platform_session_memory;
+#[cfg(not(any(windows,target_os="linux")))]
+#[path="android/session_memory.rs"]
+mod platform_session_memory;
+
 #[path = "shared/app_icons.rs"]
 pub(crate) mod app_icon_raster;
 #[cfg(windows)]

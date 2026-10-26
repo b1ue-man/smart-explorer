@@ -40,6 +40,20 @@ pub(crate) mod codec_registry;
 pub(crate) mod decoded_frame;
 pub(crate) mod control_sender;
 pub(crate) mod frame_budget;
+pub(crate) mod frame_memory;
+pub(crate) mod capture_admission;
+pub(crate) mod capture_plan;
+pub(crate) mod capture_grant;
+pub(crate) mod capture_bytes;
+pub(crate) mod capture_image;
+pub(crate) mod capture_source_contract;
+pub(crate) mod host_codec_adapters;
+#[cfg(test)]
+mod batches_capture_admission_task_tests;
+#[cfg(test)]
+mod batches_capture_image_task_tests;
+#[cfg(test)]
+mod batches_4k_task_tests;
 pub(crate) mod frame_size_caps;
 pub(crate) mod frame_regions;
 pub(crate) mod frame_protocol;

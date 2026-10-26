@@ -1,4 +1,8 @@
 //! Versioned end-to-end size evidence. A missing offer keeps the v1 limits.
+#[cfg(test)]
+#[path = "batches_frame_budget_task_tests.rs"]
+mod batches_task_tests;
+
 use std::io;
 use serde::{Deserialize, Serialize};
 use super::pixel_convert::FrameSize;
@@ -9,6 +13,10 @@ pub(crate) const FRAME_PROTOCOL: u8 = 2;
 pub(crate) const MAX_RESOURCE_SIDE: u32 = 16_384;
 /// Hard allocation ceiling, not a claim that any device supports these dimensions.
 pub(crate) const MAX_WORKING_BYTES: u64 = 512 * 1024 * 1024;
+/// Extended v2 ceiling: the existing 4096x2304 image envelope with 24 owners.
+/// This is never device evidence; admission must supply an actual memory lease.
+pub(crate) const MAX_SESSION_WORKING_BYTES: u64 = 24 * 4 * 4096 * 2304;
+pub(crate) const EXTENDED_MEMORY_CLASS: u8 = 1;
 pub(crate) const WORKING_IMAGES: u64 = 8;
 /// V2 also reserves CPU resampling and old/new renderer output ownership.
 pub(crate) const VERSIONED_WORKING_IMAGES:u64=24;
@@ -31,9 +39,14 @@ impl FrameLimits {
     pub(crate) fn validate(self) -> io::Result<()> {
         if self.max_size.width == 0 || self.max_size.height == 0
             || self.max_size.width > MAX_RESOURCE_SIDE || self.max_size.height > MAX_RESOURCE_SIDE
-            || self.max_pixels == 0 || self.working_bytes < WORKING_IMAGES * 4 || self.working_bytes > MAX_WORKING_BYTES {
+            || self.max_pixels == 0 || self.working_bytes < WORKING_IMAGES * 4 || self.working_bytes > MAX_SESSION_WORKING_BYTES {
             return Err(invalid("invalid screen resource capability"));
         }
+        Ok(())
+    }
+    pub(crate) fn validate_capture(self)->io::Result<()> {
+        self.validate()?;
+        if self.working_bytes>MAX_WORKING_BYTES {return Err(invalid("raw capture exceeds legacy allocation ceiling"));}
         Ok(())
     }
     pub(crate) fn check(self, size: FrameSize) -> io::Result<usize> {
@@ -59,6 +72,14 @@ impl FrameLimits {
             if self.max_pixels==0 {return Err(invalid("working memory cannot hold a screen frame transaction"));}
         }
         Ok(self)
+    }
+    /// Narrow source geometry and its individual capture allocation, retaining
+    /// the independent admitted session budget for the 24 product owners.
+    pub(crate) fn for_capture(self, source: Self) -> Self {
+        Self {max_size: FrameSize::new(self.max_size.width.min(source.max_size.width),
+            self.max_size.height.min(source.max_size.height)),
+            max_pixels:self.max_pixels.min(source.max_pixels).min(source.working_bytes/WORKING_IMAGES/4),
+            working_bytes:self.working_bytes}
     }
     pub(crate) fn intersect(self, rhs: Self) -> Self {
         Self { max_size: FrameSize::new(self.max_size.width.min(rhs.max_size.width),
@@ -88,6 +109,18 @@ pub(crate) struct FrameCapabilities {
     pub hybrid_regions: bool,
 }
 impl FrameCapabilities {
+    pub(crate) fn admitted(texture_size:FrameSize,bytes:u64)->io::Result<Self> {
+        let mut caps=Self::resources(texture_size);
+        caps.frames.working_bytes=bytes.min(MAX_SESSION_WORKING_BYTES);
+        caps.frames.max_pixels=caps.frames.working_bytes/VERSIONED_WORKING_IMAGES/4;
+        caps.with_working_budget(bytes)
+    }
+    /// Apply the peer's protocol class before sending ClientHello.
+    pub(crate) fn for_server(self,class:Option<u8>)->io::Result<Self> {
+        self.with_working_budget(if class==Some(EXTENDED_MEMORY_CLASS) {
+            MAX_SESSION_WORKING_BYTES
+        } else {MAX_WORKING_BYTES})
+    }
     pub(crate) fn resources(texture_size:FrameSize)->Self {
         let texture_size=FrameSize::new(texture_size.width.min(MAX_RESOURCE_SIDE),texture_size.height.min(MAX_RESOURCE_SIDE));
         Self {version:FRAME_PROTOCOL,frames:FrameLimits {max_size:texture_size,
@@ -136,5 +169,15 @@ impl FrameContract {
         }
         super::frame_size_caps::PacketBudget::for_contract(Some(self))?;
         Ok(())
+    }
+}
+
+/// Exact Accepted binding, including rejection of both mixed legacy/v2 pairs.
+pub(crate) fn contract_matches(actual:Option<FrameContract>,accepted:Option<FrameContract>)->bool {
+    match (actual,accepted) {
+        (None,None)=>true,
+        (Some(actual),Some(accepted))=>actual.version==accepted.version && actual.limits==accepted.limits
+            && (!actual.hybrid_regions || accepted.hybrid_regions),
+        _=>false,
     }
 }

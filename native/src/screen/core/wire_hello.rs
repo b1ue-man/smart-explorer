@@ -81,6 +81,9 @@ impl SessionMode {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ScreenServerHello {
+    /// Protocol support only; the subsequent offers carry actual resource evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_memory_class: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub family_version: Option<u16>,
     pub protocol_version: u16,
@@ -102,6 +105,7 @@ impl ScreenServerHello {
         server_node_id: String,
     ) -> Self {
         Self {
+            frame_memory_class: Some(super::frame_budget::EXTENDED_MEMORY_CLASS),
             protocol_version: SCREEN_PROTOCOL_VERSION,
             challenge,
             server_device_id,

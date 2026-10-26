@@ -18,12 +18,12 @@ pub(crate) fn run(target:ScreenTarget)->i32 {
         .with_app_id("app.smartexplorer.family").with_inner_size([960.0,640.0])
         .with_min_inner_size([320.0,200.0]).with_fullscreen(fullscreen).with_icon(crate::window_icon());
     let first=target.clone();let first_prefs=prefs.clone();
-    let result=eframe::run_native("app.smartexplorer.family",eframe::NativeOptions {
+    let result=super::screen_render_app::run_native("app.smartexplorer.family",eframe::NativeOptions {
         renderer:eframe::Renderer::Wgpu,wgpu_options:super::screen_viewer_app::wgpu_configuration(prefs.low_latency),
         viewport:viewport(),..Default::default()
     },Box::new(move|cc|Ok(Box::new(FamilyViewerApp::new(cc,first,first_prefs)))));
     if result.is_ok(){return 0;}
-    let result=eframe::run_native("app.smartexplorer.family",eframe::NativeOptions {
+    let result=super::screen_render_app::run_native("app.smartexplorer.family",eframe::NativeOptions {
         renderer:eframe::Renderer::Glow,viewport:viewport(),..Default::default()
     },Box::new(move|cc|Ok(Box::new(FamilyViewerApp::new(cc,target,prefs)))));
     if let Err(error)=result {eprintln!("Fernfenster: {error}");1}else{0}
@@ -43,7 +43,7 @@ impl FamilyViewerApp {
         let fullscreen=target.fullscreen;
         let ctx=&cc.egui_ctx;
         ctx.data_mut(|d|d.insert_temp(egui::Id::new("screen_renderer_wgpu"),cc.wgpu_render_state.is_some()));
-        let gpu=cc.wgpu_render_state.as_ref().is_some_and(super::screen_wgpu_yuv::install);
+        let gpu=super::screen_render_owner::get(ctx).is_some_and(|owner|owner.yuv());
         let device=target.device_id.clone()
             .unwrap_or_else(||target.relation_id.clone());
         Self {control:target.control,target,backend:Backend::production(ctx),session:None,

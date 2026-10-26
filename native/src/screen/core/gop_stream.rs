@@ -171,13 +171,20 @@ pub(crate) async fn accept_picture_streams_with_contract(
     connection: Connection, events: mpsc::Sender<PictureEvent>, acks: mpsc::Sender<ViewerFrame>,
     contract: Option<super::frame_budget::FrameContract>,
 ) {
+    accept_picture_streams_with_memory(connection,events,acks,contract,None).await;
+}
+pub(crate) async fn accept_picture_streams_with_memory(
+    connection:Connection,events:mpsc::Sender<PictureEvent>,acks:mpsc::Sender<ViewerFrame>,
+    contract:Option<super::frame_budget::FrameContract>,memory:super::frame_memory::MemoryHold,
+) {
     let readers=std::sync::Arc::new(tokio::sync::Semaphore::new(VIEWER_UNI_STREAMS as usize));
     while let Ok(recv) = connection.accept_uni().await {
         let Ok(permit)=readers.clone().acquire_owned().await else {return;};
-        let (events,acks)=(events.clone(),acks.clone());
+        let (events,acks)=(events.clone(),acks.clone());let memory=memory.clone();
         tokio::spawn(async move {
             let _permit=permit;
-            read_picture_stream(recv,events,acks,contract).await;
+            let bytes=memory.as_ref().map(|lease|lease.bytes());let _memory=memory;
+            read_picture_stream(recv,events,acks,contract,bytes).await;
         });
     }
 }
@@ -187,6 +194,7 @@ async fn read_picture_stream(
     events: mpsc::Sender<PictureEvent>,
     acks: mpsc::Sender<ViewerFrame>,
     contract: Option<super::frame_budget::FrameContract>,
+    memory_bytes:Option<u64>,
 ) {
     let header = match read_gop_header(&mut recv).await {
         Ok(header) => header,
@@ -195,14 +203,12 @@ async fn read_picture_stream(
             return;
         }
     };
-    let contract_matches = match (header.frame_contract, contract) {
-        (None, None) => true,
-        (Some(actual), Some(negotiated)) => actual.version == negotiated.version
-            && actual.limits == negotiated.limits
-            && (!actual.hybrid_regions || negotiated.hybrid_regions),
-        _ => false,
-    };
-    if !contract_matches {
+    let contract_matches=super::frame_budget::contract_matches(header.frame_contract,contract);
+    let exceeds=memory_bytes.is_some_and(|bytes| {
+        let owners=if header.frame_contract.is_some() {super::frame_budget::VERSIONED_WORKING_IMAGES} else {super::frame_budget::WORKING_IMAGES};
+        header.size.pixels().saturating_mul(4*owners)>bytes
+    });
+    if !contract_matches || exceeds {
         let _ = recv.stop(STREAM_RESET_CODE); return;
     }
     let Ok(budget)=super::frame_size_caps::PacketBudget::for_contract(header.frame_contract) else {

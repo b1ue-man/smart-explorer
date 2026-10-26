@@ -24,7 +24,8 @@ use crate::screen::core::gop_stream::{now_us, path_of, PictureEvent};
 use crate::screen::core::metrics::ClockSync;
 use crate::screen::core::negotiate::{CodecOffer, CodecPreference};
 use crate::screen::core::registry::{SessionView, StopSelector};
-use crate::screen::core::viewer_client::{handshake, ViewerError, ViewerRequest, ViewerSession};
+use crate::screen::core::viewer_client::{ViewerError, ViewerRequest, ViewerSession};
+use crate::screen::os::session_memory::handshake;
 use crate::screen::core::wire;
 use crate::screen::core::wire_control::{
     decode_viewer_frame, encode_host_frame, HostFrame, ViewerFrame,
@@ -282,6 +283,7 @@ impl ShareHost {
         )?;
         let (out_tx, mut out_rx) = mpsc::channel::<(u8, Vec<u8>)>(RELAY_QUEUE);
         let (in_tx, in_rx) = mpsc::channel::<Option<ViewerFrame>>(64);
+        let memory=std::sync::Arc::new(std::sync::Mutex::new(None));
         let viewer = ViewerRequest {
             mode: request.mode,
             source: request.source,
@@ -292,7 +294,7 @@ impl ShareHost {
         };
         service
             .screen_runtime()
-            .spawn(relay_session(link, viewer, out_tx, in_rx, metadata));
+            .spawn(relay_session(link, viewer, out_tx, in_rx, metadata,memory.clone()));
         let mut input = stream.try_clone()?;
         let reader = std::thread::Builder::new()
             .name("screen-relay-input".into())
@@ -302,7 +304,7 @@ impl ShareHost {
                 break;
             }
         }
-        drop(out_rx);
+        drop(out_rx);drop(memory);
         let _ = stream.shutdown(std::net::Shutdown::Both);
         let _ = reader.join();
         Ok(())
@@ -360,6 +362,7 @@ async fn relay_session(
     out: mpsc::Sender<(u8, Vec<u8>)>,
     mut input: mpsc::Receiver<Option<ViewerFrame>>,
     metadata: bool,
+    memory:std::sync::Arc<std::sync::Mutex<crate::screen::core::frame_memory::MemoryHold>>,
 ) {
     let connection = link.connection.clone();
     let pending_out = out.clone();
@@ -378,6 +381,7 @@ async fn relay_session(
             return;
         }
     };
+    *memory.lock().unwrap_or_else(std::sync::PoisonError::into_inner)=session.memory.clone();
     let path = path_of(&session.connection).0.key().to_string();
     let accepted = RelayHello::Accepted {
         hello: session.hello.clone(),

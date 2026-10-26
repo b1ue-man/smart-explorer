@@ -139,6 +139,8 @@ impl WorkerBackend {
 }
 
 impl ScreenHostBackend for WorkerBackend {
+    fn memory_facts(&self)->Option<crate::screen::core::frame_memory::MemoryFacts> {self.inner.memory_facts()}
+    fn session_memory_ceiling(&self)->u64 {self.inner.session_memory_ceiling()}
     fn platform(&self) -> HostPlatform {
         self.inner.platform()
     }

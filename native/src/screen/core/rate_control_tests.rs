@@ -26,8 +26,8 @@ fn screen_task_rate_control_backs_off_on_delay_gradient() {
         START_RELAY_BPS
     );
 
-    // Two seconds of 6 Mbit/s over a constant 20 ms path: no overuse, and
-    // the target grows (by 1.08 per second while the encoder uses it).
+    // Constant delivery permits probing, bounded by 1.25 times the measured
+    // receive rate rather than unbounded growth on a quiet screen.
     let signals: Vec<DelaySignal> = (0..60)
         .map(|index| frame(&mut rate, index, 20_000, false))
         .collect();
@@ -40,8 +40,8 @@ fn screen_task_rate_control_backs_off_on_delay_gradient() {
     let grown = rate.target_bps();
     assert!(grown > START_DIRECT_BPS, "target grew to {grown}");
     assert!(
-        grown < START_DIRECT_BPS * 12 / 10,
-        "at most 1.08 per second"
+        grown <= rate.receive_rate_bps().unwrap() * 5 / 4,
+        "probe must stay within measured delivery headroom"
     );
 
     // A queue builds up: every frame arrives 6 ms later than the one
@@ -88,14 +88,14 @@ fn screen_task_rate_control_loss_rules() {
     // 2–10 %: hold.
     assert_eq!(rate.on_loss_counters(3_000, 250), Some(0.05));
     assert_eq!(rate.target_bps(), 5_400_000);
-    // Below 2 %: × 1.05.
+    // Below 2 %: release the loss ceiling; the delay target still bounds it.
     assert_eq!(rate.on_loss_counters(4_000, 260), Some(0.01));
-    assert_eq!(rate.target_bps(), 5_670_000);
+    assert_eq!(rate.target_bps(), START_DIRECT_BPS);
     // Both boundaries hold: exactly 10 % and exactly 2 %.
     assert_eq!(rate.on_loss_counters(5_000, 360), Some(0.1));
-    assert_eq!(rate.target_bps(), 5_670_000);
+    assert_eq!(rate.target_bps(), START_DIRECT_BPS);
     assert_eq!(rate.on_loss_counters(6_000, 380), Some(0.02));
-    assert_eq!(rate.target_bps(), 5_670_000);
+    assert_eq!(rate.target_bps(), START_DIRECT_BPS);
     // Growth from loss never passes the delay-based target.
     for second in 0..10 {
         rate.on_loss_counters(7_000 + second * 1_000, 380);
@@ -126,20 +126,19 @@ fn screen_task_rate_control_quality_ladder() {
             size: source
         }
     );
-    // Lower targets lower the frame rate first, down to 10/s ...
+    // Lower targets lower cadence while preserving every source pixel.
     assert_eq!(quality_for(2_000_000, source, 30).size, source);
     assert_eq!(quality_for(2_000_000, source, 30).fps, 19);
-    // ... then the resolution by 0.75 per step, down to a long edge of 320.
     let low = quality_for(500_000, source, 30);
-    assert_eq!(low.fps, MIN_LADDER_FPS);
-    assert_eq!(low.size, FrameSize::new(1080, 607));
+    assert_eq!(low.fps, 4);
+    assert_eq!(low.size, source);
     assert_eq!(
         quality_for(MIN_BITRATE_BPS, source, 30).size,
-        FrameSize::new(607, 341)
+        source
     );
     let bottom = quality_for(10_000, source, 30).size;
-    assert_eq!(bottom, FrameSize::new(341, 191));
-    assert!(bottom.width >= MIN_LONG_EDGE);
+    assert_eq!(bottom, source);
+    assert_eq!(quality_for(10_000, source, 30).fps, 1);
     let small_source = FrameSize::new(300, 200);
     assert_eq!(quality_for(10_000, small_source, 30).size, small_source);
     // Up only with 25 % headroom, down at once.

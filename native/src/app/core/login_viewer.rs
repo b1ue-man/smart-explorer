@@ -14,10 +14,10 @@ impl Default for LoginViewerPane {
         control: false, session: None, image: image::LoginImage::default(), imported: Arc::new(Mutex::new(None)), loading: false, error: None, shown: Instant::now() } }
 }
 impl LoginViewerPane {
-    pub(crate) fn stop(&mut self) { if let Some(session) = self.session.take() { session.release(); session.close(); } self.control = false; self.image = image::LoginImage::default(); }
+    pub(crate) fn stop(&mut self) { if let Some(session) = self.session.take() { session.release(); session.close(); } self.control = false; self.image.reset(); }
     pub(crate) fn cleanup(&mut self) {
         if self.shown.elapsed() > Duration::from_secs(2) { self.stop(); }
-        else if self.session.as_ref().is_some_and(|session| session.snapshot().state == "ended") { self.image = image::LoginImage::default(); }
+        else if self.session.as_ref().is_some_and(|session| session.snapshot().state == "ended") { self.image.reset(); }
     }
     pub(crate) fn needs_tick(&self) -> bool { self.session.as_ref().is_some_and(|session| session.snapshot().state != "ended") }
     pub(crate) fn show(&mut self, ui: &mut egui::Ui) {
@@ -49,7 +49,7 @@ impl LoginViewerPane {
         });
         ui.horizontal(|ui| {
             if ui.add_enabled(!running && self.target.is_some() && self.acknowledge && !self.user.is_empty(), egui::Button::new("Anmeldung starten")).clicked() {
-                self.image = image::LoginImage::default(); self.error = None; self.control = false;
+                self.image.reset(); self.error = None; self.control = false;
                 if let Some(target) = self.target.clone() { match ViewerSession::start(target, self.user.clone(), self.acknowledge) {
                     Ok(session) => self.session = Some(session), Err(error) => self.error = Some(error.to_string()),
                 } }

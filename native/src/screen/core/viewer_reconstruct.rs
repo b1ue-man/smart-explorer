@@ -1,4 +1,8 @@
 //! Atomic reconstruction of one v2 frame. No partial or mixed-base picture escapes.
+#[cfg(test)]
+#[path = "batches_reconstruction_task_tests.rs"]
+mod batches_task_tests;
+
 use std::io;
 use super::decoded_frame::{DecodedFrame, DecoderFallback};
 use super::frame_budget::FrameContract;

@@ -8,7 +8,7 @@
 use eframe::egui_wgpu::wgpu;
 
 use super::*;
-use crate::screen::core::pixel_convert::{i420_to_bgra, BgraImage, I420Image};
+use crate::screen::core::pixel_convert::{i420_to_bgra, BgraImage, I420Image, YuvMatrix};
 
 const SIDE: u32 = 64;
 const TOLERANCE: i32 = 2;
@@ -104,7 +104,8 @@ fn render(
     resources: &mut YuvResources,
     frame: &YuvFrame,
 ) -> Vec<u8> {
-    resources.upload(device, queue, frame);
+    let mut image=super::super::screen_render_yuv::YuvImage::new(device);
+    image.upload(resources,device,queue,frame);
     let extent = wgpu::Extent3d {
         width: SIDE,
         height: SIDE,
@@ -143,7 +144,7 @@ fn render(
             timestamp_writes: None,
             occlusion_query_set: None,
         });
-        resources.draw(&mut pass, true);
+        image.draw(resources,&mut pass,true);
     }
     encoder.copy_texture_to_buffer(
         wgpu::ImageCopyTexture {

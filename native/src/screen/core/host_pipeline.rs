@@ -35,7 +35,7 @@ use super::wire_hello::ScreenErrorCode;
 
 #[path = "host_capture.rs"]
 mod capture;
-use capture::{produce, Captured, Stage};
+use capture::{produce, Captured, Stage, StageOutput};
 #[path = "host_mode.rs"]
 mod mode;
 #[path = "host_quality.rs"]
@@ -162,6 +162,7 @@ pub(crate) struct Pipeline {
     encoder_epoch: u64,
     /// The running encoder and its picture size.
     running: Option<(StageEncoder, FrameSize)>,
+    memory:super::frame_memory::MemoryHold,
 }
 
 impl Pipeline {
@@ -184,12 +185,13 @@ impl Pipeline {
             work:Arc::new(work_control::WorkControl::default()),
             backend,
             frame_contract: None,
-            negotiated_contract: None,
+            negotiated_contract: None, memory:None,
             sender: super::sender_budget::SenderBudget::for_peer(connection.remote_id().to_string()),
             route_epoch: None,
             source_size,source_generation,presentation:ReferencePresentation::new(),
             capture_active: true, capture_applied:Some(true), capture_requested:true,capture_ready:None,capture_transition:None,visible_rects: None,
             stage: Some(Stage {
+                memory:None,
                 source,
                 encoder: None,
             }),
@@ -226,6 +228,10 @@ impl Pipeline {
         pipeline
     }
 
+    pub(crate) fn hold_memory(&mut self,memory:std::sync::Arc<super::frame_memory::MemoryLease>) {
+        if let Some(stage)=&mut self.stage {stage.memory=Some(memory.clone());}
+        self.memory=Some(memory);
+    }
     pub(crate) fn set_frame_contract(&mut self, contract: Option<super::frame_budget::FrameContract>) -> io::Result<()> {
         if let Some(contract) = contract { contract.validate()?; self.bounds = contract.limits.max_size; self.display = self.bounds; }
         self.negotiated_contract = contract;
@@ -420,10 +426,10 @@ impl Pipeline {
         let encoding_started = std::time::Instant::now();
         let joined = tokio::task::spawn_blocking(move || {
             let produced = produce(&mut stage, backend.as_ref(), &request);
-            (stage, produced, request)
+            StageOutput {result:(produced,request),stage}
         })
         .await;
-        let (stage, produced, request) =
+        let StageOutput {stage,result:(produced,request)} =
             joined.map_err(|error| PipelineError::capture(io::Error::other(error)))?;
         self.stage = Some(stage);
         if !self.work.current(work_epoch) {self.reset_stream();return Ok(Produced::Reset);}

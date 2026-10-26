@@ -18,7 +18,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use super::gop_stream::{
-    accept_picture_streams_with_contract, now_us, picture_channel, PictureEvent, VIEWER_UNI_STREAMS,
+    accept_picture_streams_with_memory, now_us, picture_channel, PictureEvent, VIEWER_UNI_STREAMS,
 };
 use super::negotiate::CodecOffer;
 use super::pixel_convert::FrameSize;
@@ -130,6 +130,7 @@ pub(crate) struct ViewerSession {
     pub host: mpsc::Receiver<io::Result<HostFrame>>,
     pub pictures: mpsc::Receiver<PictureEvent>,
     tasks: Vec<JoinHandle<()>>,
+    pub(crate) memory: super::frame_memory::MemoryHold,
 }
 
 impl ViewerSession {
@@ -153,7 +154,7 @@ pub(crate) async fn handshake(
     build: impl FnOnce(&ScreenServerHello) -> io::Result<ScreenClientHello>,
     on_pending: impl FnMut(Capability),
 ) -> Result<ViewerSession, ViewerError> {
-    handshake_for(connection,build,on_pending,false).await
+    handshake_for(connection,|server|build(server).map(|hello|(hello,None)),on_pending,false).await
 }
 
 /// A list/icon channel. Older hosts retain LIST_WINDOWS over the synthetic source only.
@@ -162,12 +163,20 @@ pub(crate) async fn handshake_metadata(
     build: impl FnOnce(&ScreenServerHello) -> io::Result<ScreenClientHello>,
     on_pending: impl FnMut(Capability),
 ) -> Result<ViewerSession, ViewerError> {
-    handshake_for(connection,build,on_pending,true).await
+    handshake_for(connection,|server|build(server).map(|hello|(hello,None)),on_pending,true).await
+}
+
+pub(crate) async fn handshake_admitted(
+    connection:Connection,
+    build:impl FnOnce(&ScreenServerHello)->io::Result<(ScreenClientHello,super::frame_memory::MemoryHold)>,
+    on_pending:impl FnMut(Capability),
+)->Result<ViewerSession,ViewerError> {
+    handshake_for(connection,build,on_pending,false).await
 }
 
 async fn handshake_for(
     connection: Connection,
-    build: impl FnOnce(&ScreenServerHello) -> io::Result<ScreenClientHello>,
+    build: impl FnOnce(&ScreenServerHello) -> io::Result<(ScreenClientHello,super::frame_memory::MemoryHold)>,
     mut on_pending: impl FnMut(Capability),
     metadata: bool,
 ) -> Result<ViewerSession, ViewerError> {
@@ -180,7 +189,8 @@ async fn handshake_for(
         connection.close(VIEWER_CLOSE, b"screen protocol version");
         return Err(ViewerError::Unsupported);
     }
-    let mut hello = build(&server)?;
+    let (mut hello,memory) = build(&server)?;
+    hello.frame_capabilities=hello.frame_capabilities.map(|caps|caps.for_server(server.frame_memory_class)).transpose()?;
     hello.family_version = server.family_version.filter(|version|*version==super::family_protocol::FAMILY_PROTOCOL);
     if hello.source.as_ref().is_some_and(|source|super::family_protocol::selector(source).is_some()) && hello.family_version.is_none() {
         return Err(ViewerError::Unsupported);
@@ -204,6 +214,9 @@ async fn handshake_for(
             }
         }
     };
+    if !metadata && accepted.frame_contract.is_none() && memory.as_ref().is_some_and(|lease|lease.bytes()<super::frame_budget::MAX_WORKING_BYTES) {
+        return Err(ViewerError::Io(io::Error::other("legacy host requires the complete legacy memory budget")));
+    }
     if accepted.icon_version.is_some() && accepted.icon_version!=hello.icon_version {
         return Err(ViewerError::Io(io::Error::other("host enabled an unoffered icon contract")));
     }
@@ -261,11 +274,11 @@ async fn handshake_for(
             }
         }
     });
-    let streams = tokio::spawn(accept_picture_streams_with_contract(
+    let streams = tokio::spawn(accept_picture_streams_with_memory(
         connection.clone(),
         pictures_tx,
         control.clone(),
-        accepted.frame_contract,
+        accepted.frame_contract, memory.clone(),
     ));
     let pings = control.clone();
     let clock = tokio::spawn(async move {
@@ -290,6 +303,7 @@ async fn handshake_for(
         host,
         pictures,
         tasks: vec![writer, reader, streams, clock],
+        memory,
     })
 }
 

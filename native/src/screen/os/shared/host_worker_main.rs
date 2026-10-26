@@ -60,6 +60,7 @@ struct Running {
 }
 
 struct Worker {
+    admitted:Option<Option<crate::screen::core::frame_budget::FrameContract>>,
     backend: Arc<dyn ScreenHostBackend>,
     source: Option<Box<dyn ScreenSource>>,
     encoder: Option<Running>,
@@ -72,6 +73,7 @@ struct Worker {
     capture_active: bool,
     reference_generation:u64,
     family: Option<super::host_worker_client::family_backend::WorkerFamily>,
+    memory:Option<crate::screen::core::frame_memory::MemoryLease>,
 }
 
 fn failed(code: ScreenErrorCode, error: impl ToString) -> WorkerReply {
@@ -121,6 +123,7 @@ pub(crate) fn run_host_worker() -> i32 {
         }
     };
     let mut worker = Worker {
+        admitted:None,memory:None,
         backend: super::platform_backend(),
         source: None,
         encoder: None,
@@ -224,7 +227,7 @@ impl Worker {
                 }
             }
             WorkerRequest::Produce(request) => self.produce(&request),
-            WorkerRequest::Capture { frame_id } => self.raw(frame_id),
+            WorkerRequest::Capture { frame_id,frame_contract } => self.raw(frame_id,frame_contract),
             WorkerRequest::Input(input) => {
                 let blocked = if !self.control || self.source.is_none() || self.family.is_some() {
                     Some(crate::screen::core::wire_control::ControlBlock::ControlUnavailable)
@@ -239,12 +242,13 @@ impl Worker {
     }
 
     /// One raw picture for a still image.
-    fn raw(&mut self, frame_id: u64) -> WorkerReply {
+    fn raw(&mut self, frame_id: u64,contract:Option<crate::screen::core::frame_budget::FrameContract>) -> WorkerReply {
+        if let Err(error)=self.admit(contract) {return failed(ScreenErrorCode::CaptureFailed,error);}
         if !self.capture_active {return failed(ScreenErrorCode::CaptureFailed,"screen capture is paused");}
         let Some(source) = self.source.as_mut() else {
             return failed(ScreenErrorCode::CaptureFailed, "no source is open");
         };
-        match source.capture(frame_id, true) {
+        match source.capture_snapshot(frame_id,contract) {
             Ok(SourceFrame::Frame(image)) => WorkerReply::Raw(image),
             Ok(SourceFrame::Paused(state)) => WorkerReply::Frame(StageFrame::Paused(state)),
             Ok(SourceFrame::Unchanged) => {
@@ -254,7 +258,24 @@ impl Worker {
         }
     }
 
+    /// RAW snapshots and encoded frames share one immutable session promise.
+    fn admit(&mut self,contract:Option<crate::screen::core::frame_budget::FrameContract>)->io::Result<()> {
+        if let Some(contract)=contract {contract.validate()?;}
+        if let Some(previous)=self.admitted {
+            let same=match (contract,previous) {
+                (None,None)=>true,(Some(a),Some(b))=>a.version==b.version && a.limits==b.limits,_=>false,
+            };
+            if !same {return Err(io::Error::other("worker request changed admitted frame contract"));}
+        } else {
+            let bytes=contract.map_or(crate::screen::core::frame_budget::MAX_WORKING_BYTES,|contract|contract.limits.working_bytes);
+            let lease=crate::screen::core::frame_memory::reserve(self.backend.memory_facts(),bytes)?;
+            if lease.bytes()!=bytes {return Err(io::Error::other("worker cannot honor session memory promise"));}
+            self.memory=Some(lease);self.admitted=Some(contract);
+        }
+        Ok(())
+    }
     fn produce(&mut self, request: &StageRequest) -> WorkerReply {
+        if let Err(error)=self.admit(request.frame_contract) {return failed(ScreenErrorCode::CaptureFailed,error);}
         if !self.capture_active { return self.source.as_ref().map_or_else(||failed(ScreenErrorCode::CaptureFailed,"screen source unavailable"),|source|WorkerReply::Frame(StageFrame::Unchanged {source_size:source.size()})); }
         self.crash_hook();
         self.check_openh264();
@@ -271,7 +292,7 @@ impl Worker {
         };
         let source_size = source.size();
         let limits=request.frame_contract.map_or(FrameLimits::LEGACY,|contract|contract.limits)
-            .intersect(source.frame_limits());
+            .for_capture(source.frame_limits());
         if let Err(error)=limits.check(request.size) {return failed(ScreenErrorCode::CaptureFailed,error);}
         let before=source.reference_generation();
         if before!=self.reference_generation {

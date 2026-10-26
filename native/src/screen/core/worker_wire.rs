@@ -192,6 +192,8 @@ struct ProduceWire {
 #[derive(Serialize, Deserialize)]
 struct CaptureWire {
     frame_id: u64,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    frame_contract:Option<super::frame_budget::FrameContract>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -227,6 +229,7 @@ pub(crate) enum WorkerRequest {
     Produce(StageRequest),
     Capture {
         frame_id: u64,
+        frame_contract:Option<super::frame_budget::FrameContract>,
     },
     /// The controlling viewer's input (SCR-M6).
     Input(BoundInput),
@@ -261,10 +264,10 @@ impl WorkerRequest {
                 };
                 (PRODUCE, to_json(&wire)?)
             }
-            Self::Capture { frame_id } => (
+            Self::Capture { frame_id,frame_contract } => (
                 CAPTURE,
                 to_json(&CaptureWire {
-                    frame_id: *frame_id,
+                    frame_id: *frame_id,frame_contract:*frame_contract,
                 })?,
             ),
             Self::Input(input) => (
@@ -320,8 +323,9 @@ impl WorkerRequest {
             }
             CAPTURE => {
                 let wire: CaptureWire = from_json(payload)?;
+                if let Some(contract)=wire.frame_contract {contract.validate()?;}
                 Ok(Self::Capture {
-                    frame_id: wire.frame_id,
+                    frame_id: wire.frame_id,frame_contract:wire.frame_contract,
                 })
             }
             BOUND_INPUT => {

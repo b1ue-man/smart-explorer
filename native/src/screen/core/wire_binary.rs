@@ -99,7 +99,14 @@ impl GopHeader {
         Ok(out)
     }
 
+    /// Complete legacy header only. A v2 prefix cannot grant allocations.
     pub(crate) fn decode(bytes: &[u8; GOP_HEADER_BYTES]) -> io::Result<Self> {
+        let (header,extended)=Self::decode_prefix(bytes)?;
+        if extended {return Err(invalid("v2 picture header requires its contract extension"));}
+        Ok(header)
+    }
+
+    pub(crate) fn decode_prefix(bytes:&[u8;GOP_HEADER_BYTES])->io::Result<(Self,bool)> {
         let mut reader = BeReader::new(bytes);
         if reader.bytes(4)? != GOP_MAGIC {
             return Err(invalid("picture stream does not start with SCRV"));
@@ -124,18 +131,22 @@ impl GopHeader {
         let header = Self {
             gop_id,
             family_layout_revision: None,
-            frame_contract: (version == super::frame_budget::FRAME_PROTOCOL).then_some(super::frame_budget::FrameContract {
-                version, hybrid_regions: true, limits: super::frame_budget::FrameLimits {
-                    max_size: size, max_pixels: size.pixels(), working_bytes: super::frame_budget::MAX_WORKING_BYTES,
-                },
-            }),
+            frame_contract: None,
             kind,
             codec,
             profile,
             size,
         };
-        header.check()?;
-        Ok(header)
+        if version==GOP_VERSION {header.check()?;} else {
+            if size.width==0 || size.height==0 || size.width>super::frame_budget::MAX_RESOURCE_SIDE
+                || size.height>super::frame_budget::MAX_RESOURCE_SIDE {
+                return Err(invalid("invalid v2 picture dimensions"));
+            }
+            if !matches!((codec,profile),(CodecKind::H264,Some(_))|(CodecKind::Tiles,None)) {
+                return Err(invalid("picture stream profile does not match its codec"));
+            }
+        }
+        Ok((header,version==super::frame_budget::FRAME_PROTOCOL))
     }
 
     /// Largest record payload of this stream's codec.
@@ -237,8 +248,8 @@ pub(crate) async fn write_gop_header<W: AsyncWrite + Unpin>(
 pub(crate) async fn read_gop_header<R: AsyncRead + Unpin>(reader: &mut R) -> io::Result<GopHeader> {
     let mut bytes = [0u8; GOP_HEADER_BYTES];
     reader.read_exact(&mut bytes).await?;
-    let mut header = GopHeader::decode(&bytes)?;
-    if header.frame_contract.is_some() {
+    let (mut header,extended) = GopHeader::decode_prefix(&bytes)?;
+    if extended {
         let len = reader.read_u16().await? as usize;
         if len > 1024 { return Err(invalid("screen contract exceeds 1 KiB")); }
         let mut json = vec![0;len]; reader.read_exact(&mut json).await?;

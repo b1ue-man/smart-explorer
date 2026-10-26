@@ -46,6 +46,7 @@ fn platform() -> HostPlatform {
 pub(crate) struct SyntheticBackend;
 
 impl ScreenHostBackend for SyntheticBackend {
+    fn memory_facts(&self)->Option<crate::screen::core::frame_memory::MemoryFacts> {super::session_memory::facts()}
     fn platform(&self) -> HostPlatform {
         platform()
     }

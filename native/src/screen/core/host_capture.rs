@@ -12,12 +12,15 @@ use iroh::endpoint::Connection;
 use super::{Pipeline, PipelineError};
 use crate::screen::core::gop_stream::{now_us, GopWriter};
 use crate::screen::core::host_backend::{
-    EncodedFrame, ScreenEncoder, ScreenHostBackend, ScreenSource, SourceFrame, TilesScreenEncoder,
+    EncodedFrame, ScreenEncoder, ScreenHostBackend, ScreenSource, SourceFrame,
 };
 use crate::screen::core::host_stage::{StageEncoder, StageFrame, StageRequest};
 use crate::screen::core::negotiate::CodecKind;
 use crate::screen::core::pacing::STALE_STREAM_US;
-use crate::screen::core::pixel_convert::{downscale_bgra, downscale_bgra_with_limits, FrameSize};
+use crate::screen::core::pixel_convert::{downscale_bgra_with_limits, FrameSize};
+use crate::screen::core::frame_budget::{FrameContract, FrameLimits};
+use crate::screen::core::frame_size_caps::{PacketBudget, validate_encoded_budget};
+use crate::screen::core::tiles_codec::{TileEncoder, MIN_RECORD_LIMIT, MAX_TILES_RECORD_BYTES};
 use crate::screen::core::session_state::SessionState;
 use crate::screen::core::wire_binary::{GopHeader, StreamKind};
 
@@ -25,6 +28,17 @@ use crate::screen::core::wire_binary::{GopHeader, StreamKind};
 pub(super) struct Stage {
     pub(super) source: Box<dyn ScreenSource>,
     pub(super) encoder: Option<Box<dyn ScreenEncoder>>,
+    pub(super) memory: super::super::frame_memory::MemoryHold,
+}
+
+/// A detached/aborted blocking task drops its result before the Stage lease.
+pub(super) struct StageOutput<T> { pub(super) result:T, pub(super) stage:Stage }
+struct Snapshot { records:Vec<Vec<u8>>, size:FrameSize, capture_ts_us:u64, contract:Option<FrameContract>, family_layout_revision:Option<u64> }
+impl Snapshot {
+    fn header(&self,gop_id:u64)->GopHeader {
+        GopHeader {family_layout_revision:self.family_layout_revision,gop_id,frame_contract:self.contract,
+            kind:StreamKind::Snapshot,codec:CodecKind::Tiles,profile:None,size:self.size}
+    }
 }
 
 /// What capture and encoding of one frame gave.
@@ -51,33 +65,30 @@ impl Pipeline {
     pub(super) async fn snapshot_epoch(&mut self,connection:&Connection,max:Option<FrameSize>,work_epoch:u64)->Result<(),PipelineError> {
         let work=self.work.clone();
         if !work.current(work_epoch) {return Err(PipelineError::capture(io::Error::from(io::ErrorKind::Interrupted)));}
+        // Snapshot consumes a newer GOP id: retire live state now so its next
+        // frame is a fresh keyframe and old presentation receipts stay invalid.
+        self.reset_stream();
         let mut stage = self
             .stage
             .take()
             .ok_or_else(|| PipelineError::capture(io::Error::other("no screen source")))?;
         let frame_id = self.next_frame_id;
         self.next_frame_id += 1;
-        let limit = max.unwrap_or(FrameSize::MAX);
+        let contract=self.frame_contract;
+        let limit = max.unwrap_or_else(||contract.map_or(FrameSize::MAX,|c|c.limits.max_size));
         let joined = tokio::task::spawn_blocking(move || {
-            let shot = still_tiles(&mut stage, frame_id, limit);
-            (stage, shot)
+            let result = still_tiles(&mut stage, frame_id, limit, contract);
+            StageOutput {result,stage}
         })
         .await;
-        let (stage, shot) =
+        let StageOutput {stage,result:shot} =
             joined.map_err(|error| PipelineError::capture(io::Error::other(error)))?;
         self.stage = Some(stage);
         if !work.current(work_epoch) {self.reset_stream();return Err(PipelineError::capture(io::Error::from(io::ErrorKind::Interrupted)));}
         self.sync_source_reference();
-        let (records, size, capture_ts_us) = shot?;
-        let header = GopHeader {
-            family_layout_revision: None,
-            gop_id: self.next_gop_id,
-            frame_contract: None,
-            kind: StreamKind::Snapshot,
-            codec: CodecKind::Tiles,
-            profile: None,
-            size,
-        };
+        let shot = shot?;
+        let header = shot.header(self.next_gop_id);
+        let Snapshot {records,capture_ts_us,..}=shot;
         self.next_gop_id += 1;
         let stale = Duration::from_micros(STALE_STREAM_US);
         let opened=tokio::select! {biased;
@@ -104,11 +115,16 @@ fn still_tiles(
     stage: &mut Stage,
     frame_id: u64,
     limit: FrameSize,
-) -> Result<(Vec<Vec<u8>>, FrameSize, u64), PipelineError> {
+    contract:Option<FrameContract>,
+) -> Result<Snapshot, PipelineError> {
+    let contract=contract.map(|mut contract| {contract.hybrid_regions=false;contract});
+    if let Some(contract)=contract {contract.validate().map_err(PipelineError::capture)?;}
+    let limits=contract.map_or(FrameLimits::LEGACY,|c|c.limits)
+        .intersect(stage.source.frame_limits_for_contract(contract));
     let capture_ts_us = now_us();
     let image = match stage
         .source
-        .capture(frame_id, true)
+        .capture_snapshot(frame_id, contract)
         .map_err(PipelineError::capture)?
     {
         SourceFrame::Frame(image) => image,
@@ -117,17 +133,24 @@ fn still_tiles(
             return Err(PipelineError::capture(error));
         }
     };
-    let size = crate::screen::core::frame_budget::FrameLimits::LEGACY.fit(image.size().fit_within(limit));
+    let size = limits.fit(image.size().fit_within(limit));
+    limits.check(size).map_err(PipelineError::capture)?;
     let image = if image.size() == size {
         image
     } else {
-        downscale_bgra(&image.view(), size).map_err(PipelineError::capture)?
+        downscale_bgra_with_limits(&image.view(), size,limits).map_err(PipelineError::capture)?
     };
-    let mut encoder = TilesScreenEncoder::new(size).map_err(PipelineError::encoder)?;
-    let frame = encoder
-        .encode(&image, true, 0)
+    let budget=PacketBudget::for_contract(contract).map_err(PipelineError::encoder)?;
+    let mut encoder=TileEncoder::new_with_limits(size,limits).map_err(PipelineError::encoder)?;
+    // The tile API's minimum is one full tile; a smaller image still emits
+    // only its actual pixels. Validate actual records against the contract.
+    let records=encoder.encode(&image.view(),true,budget.record_bytes.clamp(MIN_RECORD_LIMIT,MAX_TILES_RECORD_BYTES))
         .map_err(PipelineError::encoder)?;
-    Ok((frame.records, size, capture_ts_us))
+    if records.iter().any(|record|record.len()>budget.record_bytes) {
+        return Err(PipelineError::encoder(io::Error::other("snapshot record exceeds accepted budget")));
+    }
+    validate_encoded_budget(contract,CodecKind::Tiles,&records).map_err(PipelineError::encoder)?;
+    Ok(Snapshot {records,size,capture_ts_us,contract,family_layout_revision:stage.source.family_layout_revision()})
 }
 
 /// One frame as `request` says: in the host process when the source runs
@@ -219,3 +242,7 @@ fn capture_and_encode(
         encoder,
     })
 }
+
+#[cfg(test)]
+#[path="batches_snapshot_task_tests.rs"]
+mod tests;
