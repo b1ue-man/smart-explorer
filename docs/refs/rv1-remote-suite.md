@@ -71,6 +71,12 @@ statischen Anti-Regressionsreviews selbst abgeschlossen; diese Registrierung
 behauptet noch keine ausgeführte Funktion. Belege stehen in
 `docs/plaene/2026-10-24-batches/regressionsreview.md`.
 
+Nach der fachlichen Modulaufteilung ergänzt R19 die bereits bestehenden Fälle
+`remote_drive_task_dokany_msi_outcomes_preserve_actionable_exit_codes` und
+`remote_drive_task_dokany_library_and_driver_versions_use_separate_domains`.
+Sie prüfen unter Linux die unmittelbar verschobenen reinen Runtimetypen;
+MSI-Ausführung und Kernel-/FUSEmount sind nicht Gegenstand dieser Registrierung.
+
 Die Ressourcenabschnitte C1–C11, L1–L8, Android-F2–F6, Android-M1–M3/M5–M8, Glow-F3
 und Capture-R2–R5/Linux verwenden
 zusätzlich explizite Falllisten in `resource_milestones`. Der Runner löst diese
