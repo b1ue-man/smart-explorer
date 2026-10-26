@@ -112,3 +112,7 @@ pub(crate) fn is_text_key(key: Key) -> bool {
                 | Key::Questionmark
         )
 }
+
+#[cfg(test)]
+#[path = "batches_exit_task_tests.rs"]
+mod batches_task_tests;

@@ -46,3 +46,7 @@ pub(crate) fn desktop_entry(
     })?;
     folder_location(locator, with)
 }
+
+#[cfg(test)]
+#[path = "batches_folder_open_task_tests.rs"]
+mod batches_task_tests;

@@ -18,8 +18,8 @@
 #   emulator-run          G4/G5/G6 on the booted emulator (inside android-emulator-runner);
 #                         needs SE_TASK_ARTIFACTS=<dir with apk/ and bin/>
 #
-#   review-build --out D  RV1: only x86_64 JNI/APKs and directly affected JVM classes.
-#                         Called through native/test-review-task.sh, no separate RV1 pipeline.
+#   review-build --out D  B1–B8/P31/P32: x86_64 JNI/APKs and manifest-selected JVM classes.
+#                         Called through native/test-review-task.sh, no separate pipeline.
 #
 # AGENTS.md: never run on the workstation – remote CI only, outer timeout ≥ 30 minutes.
 set -Eeuo pipefail
@@ -471,7 +471,7 @@ resolve_ndk() {
   grep -Fq "$version" "$ndk_home/source.properties" || die "NDK $version is not installed at $ndk_home"
   export ANDROID_NDK_HOME="$ndk_home"
   llvm_bin="$ndk_home/toolchains/llvm/prebuilt/linux-x86_64/bin"
-  [[ -x "$llvm_bin/llvm-objdump" && -x "$llvm_bin/llvm-readelf" ]] || die "NDK $version lacks llvm-objdump/llvm-readelf"
+  [[ -x "$llvm_bin/llvm-objdump" && -x "$llvm_bin/llvm-readelf" && -x "$llvm_bin/llvm-nm" ]] || die "NDK $version lacks llvm-objdump/llvm-readelf/llvm-nm"
 }
 
 assert_16k_aligned() {
@@ -487,7 +487,7 @@ assert_16k_aligned() {
 }
 
 cmd_android_build() {
-  local out=$1 target tree forbidden maven apk test_apk jni_libs="$android_dir/app/src/main/jniLibs"
+  local out=$1 target tree forbidden maven apk test_apk jni_libs="$android_dir/app/src/debug/jniLibs"
   require_tools cargo rustup jq java python3 sha256sum
   resolve_ndk
   for target in aarch64-linux-android x86_64-linux-android; do
@@ -509,11 +509,11 @@ cmd_android_build() {
   done
 
   step "G3 arm64-v8a type check of the JNI bridge (cargo ndk check)"
-  (cd "$native_dir" && cargo ndk -t arm64-v8a --platform 30 check --locked -p smart_explorer_android)
+  (cd "$native_dir" && cargo ndk -t arm64-v8a --platform 30 check --locked -p smart_explorer_android --features android-instrumentation-fixtures)
 
   step "G3 x86_64 JNI library for the emulator (cargo ndk build, dev profile)"
   rm -f -- "$jni_libs"/*/libsmart_explorer_android.so
-  (cd "$native_dir" && cargo ndk -t x86_64 --platform 30 -o "$jni_libs" build --locked -p smart_explorer_android)
+  (cd "$native_dir" && cargo ndk -t x86_64 --platform 30 -o "$jni_libs" build --locked -p smart_explorer_android --features android-instrumentation-fixtures)
   [[ -s "$jni_libs/x86_64/libsmart_explorer_android.so" ]] || die "cargo-ndk produced no x86_64 library"
   assert_16k_aligned "$jni_libs/x86_64/libsmart_explorer_android.so"
 
@@ -538,6 +538,7 @@ cmd_android_build() {
   apk="$(find "$android_dir/app/build/outputs/apk/debug" -maxdepth 1 -name '*.apk' | sort | head -n 1)"
   test_apk="$(find "$android_dir/app/build/outputs/apk/androidTest/debug" -maxdepth 1 -name '*.apk' | sort | head -n 1)"
   [[ -s "$apk" && -s "$test_apk" ]] || die "debug APK or test APK missing"
+  python3 "$android_dir/check-image-fixture-package.py" debug --apk "$apk" --test-apk "$test_apk" --nm "$llvm_bin/llvm-nm"
   python3 - "$apk" <<'PY'
 import sys
 import zipfile
@@ -554,7 +555,7 @@ PY
   step "android-build passed: G3 (tree, arm64 check, x86_64 .so 16 KB, APKs, JVM unit tests)"
 }
 
-# RV1 reuses NDK discovery/alignment but builds only the emulator component.
+# The active batch reuses NDK discovery/alignment and builds only the emulator component.
 cmd_review_build() {
   local out=$1 maven gradle_status=0 apk test_apk
   local signing=()
@@ -565,10 +566,10 @@ cmd_review_build() {
   if ! cargo ndk --version 2>/dev/null | grep -q '4\.1\.2'; then
     cargo install cargo-ndk --locked --version 4.1.2
   fi
-  local jni_libs="$android_dir/app/src/main/jniLibs"
+  local jni_libs="$android_dir/app/src/debug/jniLibs"
   # The runner checks out no committed development JNI. Never mix an old ABI into this APK.
   rm -f -- "$jni_libs"/*/libsmart_explorer_android.so
-  (cd "$native_dir" && cargo ndk -t x86_64 --platform 30 -o "$jni_libs" build --locked -p smart_explorer_android)
+  (cd "$native_dir" && cargo ndk -t x86_64 --platform 30 -o "$jni_libs" build --locked -p smart_explorer_android --features android-instrumentation-fixtures)
   [[ -s "$jni_libs/x86_64/libsmart_explorer_android.so" ]] || die 'Missing x86_64 JNI'
   assert_16k_aligned "$jni_libs/x86_64/libsmart_explorer_android.so"
   maven="$(cd "$native_dir" && cargo metadata --locked --format-version 1 --filter-platform x86_64-linux-android |
@@ -576,15 +577,20 @@ cmd_review_build() {
            if length == 1 then .[0] else error("expected exactly one rustls-platform-verifier-android") end')"
   maven="$(dirname "$maven")/maven"
   [[ -d "$maven/rustls/rustls-platform-verifier" ]] || die 'Missing verifier Maven repository'
-  local classes=(
-    app.smartexplorer.android.api.ReviewTaskAnalyzeShapesTest
-    app.smartexplorer.android.api.SyncConflictVariantTest
-    app.smartexplorer.android.ui.share.WeakPinTest
-    app.smartexplorer.android.ui.sync.JobDraftTest
-    app.smartexplorer.android.service.ReviewTaskCpuTasksTest
-  ) filters=() cls spec
+  local classes=() filters=() cls spec manifest_classes
   if [[ "${2:-}" == sync-reliability ]]; then
     classes=(app.smartexplorer.android.api.SyncConflictVariantTest app.smartexplorer.android.ui.sync.JobDraftTest)
+  else
+    manifest_classes="$(python3 - "$repo_root/native/review-task-manifest.json" <<'CLASSES'
+import json,sys
+plan=json.load(open(sys.argv[1], encoding='utf-8'))
+assert plan['schema']==1, 'Unsupported task manifest'
+classes=plan['android']['unit_classes']
+assert classes and len(classes)==len(set(classes)), 'Empty or duplicate JVM selection'
+print('\n'.join(classes))
+CLASSES
+)"
+    mapfile -t classes <<<"$manifest_classes"
   fi
   for cls in "${classes[@]}"; do filters+=(--tests "$cls"); done
   local results="$android_dir/app/build/test-results/testDebugUnitTest"
@@ -598,6 +604,7 @@ cmd_review_build() {
   apk="$(find "$android_dir/app/build/outputs/apk/debug" -maxdepth 1 -name '*.apk' | sort | head -n 1)"
   test_apk="$(find "$android_dir/app/build/outputs/apk/androidTest/debug" -maxdepth 1 -name '*.apk' | sort | head -n 1)"
   if [[ -s "$apk" && -s "$test_apk" ]]; then
+    python3 "$android_dir/check-image-fixture-package.py" debug --apk "$apk" --test-apk "$test_apk" --nm "$llvm_bin/llvm-nm"
     mkdir -p "$out"
     cp -- "$apk" "$out/app-debug.apk"
     cp -- "$test_apk" "$out/app-debug-androidTest.apk"
@@ -612,9 +619,9 @@ records={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in root.glob('*
 META
   else
     gradle_status=1
-    echo 'RV1 debug/test APK missing' >&2
+    echo 'Task debug/test APK missing' >&2
   fi
-  [[ "$gradle_status" -eq 0 ]] || die 'RV1 Android build/affected JVM behavior failed; inspect logs'
+  [[ "$gradle_status" -eq 0 ]] || die 'Android build/affected JVM behavior failed; inspect logs'
 }
 
 # ---------------------------------------------------------------------------------------------

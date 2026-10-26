@@ -1,0 +1,1176 @@
+{
+  "schema": 1,
+  "baseline": "bea312ea79731d913a7dd3e79de2f5404401208a",
+  "scope": "B1–B8, P31, P32; eine gemeinsame kandidatengebundene Remote-Suite",
+  "native": {
+    "prefixes": [
+      "batches_",
+      "p18d_"
+    ],
+    "exclude": [
+      "batches_task_optical_process_child"
+    ],
+    "required_prefixes": [
+      "batches_task_drive_",
+      "batches_task_vault_",
+      "batches_task_recovery_",
+      "batches_task_capacity_",
+      "batches_task_oauth_",
+      "batches_task_optical_",
+      "batches_task_p14_",
+      "batches_p13_",
+      "batches_task_folder_",
+      "batches_task_picker_",
+      "batches_task_dialog_",
+      "p18d_",
+      "batches_task_settings_",
+      "batches_task_partial_",
+      "batches_task_b5_",
+      "batches_task_b6_",
+      "batches_task_b7_",
+      "batches_task_p29_",
+      "batches_login_",
+      "batches_rdp_",
+      "batches_family_",
+      "batches_app_",
+      "batches_task_b6_native_4k_",
+      "batches_task_b6_4k_lossless_",
+      "batches_task_b6_extended_gop_",
+      "batches_task_b6_memory_",
+      "batches_task_b6_unknown_commit_",
+      "batches_task_b6_small_android_",
+      "batches_task_b6_hello_class_",
+      "batches_task_b6_cpu_source_",
+      "batches_task_b6_preview_",
+      "batches_task_b6_snapshot_",
+      "batches_task_b6_abandoned_capture_",
+      "batches_task_b6_decoder_end_",
+      "batches_task_b6_first_worker_snapshot_",
+      "batches_task_b6_renderer_",
+      "batches_task_capture_",
+      "batches_task_image_",
+      "batches_task_capture_import_",
+      "batches_task_login_capture_",
+      "batches_task_login_image_",
+      "batches_task_b6_login_image_",
+      "batches_capture_task_android_",
+      "batches_login_image_task_tests::android_"
+    ],
+    "integrations": [
+      "pair_identity_includes_each_backend_endpoint",
+      "engine_provider_literal_walk_keeps_existing_encoded_root_and_connection",
+      "failed_apply_paths_stay_out_of_new_baseline_and_retry",
+      "backup_failure_blocks_overwrite_and_delete",
+      "keep_both_copy_failure_blocks_resolution_and_recovers",
+      "destination_drift_after_backup_blocks_promotion",
+      "source_drift_from_planned_signature_blocks_copy",
+      "sync_reliability_task_protection_first_partial_run_never_seeds_full_index",
+      "partial_agent_hash_walk_error_never_falls_back_to_listing",
+      "review_task_omissions_protect_and_report_by_kind",
+      "transfer_engine_task_folder_refusals_are_not_kept",
+      "vault_task_open_fallback_requires_consent",
+      "mount_recovery_cache_task_startup_shows_details_and_later_failures_still_alert",
+      "screen_task_grid_switch_reuses_connection",
+      "screen_task_negotiate_matrix",
+      "screen_task_wire_roundtrip_all_tags",
+      "screen_task_wire_picture_stream_roundtrip",
+      "screen_task_frame_limits_reject_oversize",
+      "screen_task_worker_maps_permission_denied_to_no_display",
+      "screen_task_worker_keeps_other_capture_errors_as_capture_failed",
+      "screen_task_worker_input_needs_control_session",
+      "screen_task_host_worker_exits_on_update_stop",
+      "screen_task_rate_control_backs_off_on_delay_gradient",
+      "screen_task_rate_control_loss_rules",
+      "screen_task_rate_control_quality_ladder",
+      "screen_task_registry_session_view_json_shape"
+    ],
+    "linux_integrations": [
+      "batches_task_b6_linux_cgroup_ancestors_constrain_session_headroom",
+      "batches_task_b6_cgroup_namespace_root_needs_kernel_root_evidence"
+    ],
+    "environment_dependent": [
+      "batches_task_b6_renderer_wgpu_upload_without_surface_and_retire_after_later_draw",
+      "batches_task_b6_renderer_wgpu_yuv_planes_leave_slot_on_cpu_fallback",
+      "batches_task_capture_openh264_au_keeps_credit_and_decoder_contract",
+      "batches_task_capture_mf_sync_admitted_roundtrip",
+      "batches_task_capture_mf_async_admitted_roundtrip"
+    ],
+    "linux_required_prefixes": [
+      "batches_task_capture_linux_x11_",
+      "batches_task_capture_linux_pipewire_"
+    ],
+    "windows_required_prefixes": [
+      "batches_capture_windows_",
+      "batches_task_capture_mf_"
+    ],
+    "glow_scope": {
+      "prefix": "batches_task_b6_glow_scope_",
+      "cases": [
+        "batches_task_b6_glow_scope_keeps_internally_consumed_multiple_errors",
+        "batches_task_b6_glow_scope_release_check_is_active_and_nested_failure_reaches_caller",
+        "batches_task_b6_glow_scope_reports_creation_failure_and_does_not_mix_contexts",
+        "batches_task_b6_glow_scope_retains_lost_and_repeated_error_states_without_a_timeout",
+        "batches_task_b6_glow_scope_drop_and_success_leave_no_stale_ledger"
+      ]
+    }
+  },
+  "android": {
+    "unit_classes": [
+      "app.smartexplorer.android.ui.screen.BatchesScreenBudgetTest",
+      "app.smartexplorer.android.ui.screen.BatchesScreenStateTest",
+      "app.smartexplorer.android.ui.screen.ScreenSessionStateTest",
+      "app.smartexplorer.android.ui.viewer.BatchesMediaStateTest",
+      "app.smartexplorer.android.ui.viewer.MediaSetTest",
+      "app.smartexplorer.android.ui.share.WeakPinTest",
+      "app.smartexplorer.android.screen.ScreenCaptureBudgetTest",
+      "app.smartexplorer.android.ui.login.LoginBitmapOwnerTest",
+      "app.smartexplorer.android.screen.ScreenEncoderOwnershipTest"
+    ],
+    "device_classes": [
+      "app.smartexplorer.android.task.BatchesPresentationTaskTest",
+      "app.smartexplorer.android.task.ScreenTaskTest#screen_task_android_viewer_decodes_barcode",
+      "app.smartexplorer.android.task.ScreenTaskTest#screen_task_android_grid_switch",
+      "app.smartexplorer.android.task.ScreenTaskTest#screen_task_android_host_bench_synthetic",
+      "app.smartexplorer.android.task.BatchesCaptureTaskTest",
+      "app.smartexplorer.android.task.LoginImageTaskTest",
+      "app.smartexplorer.android.task.ScreenTaskTest#screen_task_android_still_interval_respected",
+      "app.smartexplorer.android.task.ScreenTaskTest#screen_task_android_still_secure_window_black",
+      "app.smartexplorer.android.task.ScreenTaskTest#screen_task_android_host_snapshot_nonblack"
+    ],
+    "video_argument": "batchesVideoPath",
+    "video_duration_seconds": 12
+  },
+  "milestones": [
+    {
+      "point": "P1",
+      "milestones": [
+        "P1a",
+        "P1b",
+        "P1c",
+        "P1d",
+        "P1e",
+        "P1f"
+      ],
+      "expected": "Signierte Einmalzulassung, genaue Sitzungs-/Benutzerrechte und aktuelle Bildreferenz.",
+      "native_markers": [
+        "batches_login_",
+        "batches_rdp_",
+        "batches_task_b7_"
+      ],
+      "android_units": [],
+      "android_device": []
+    },
+    {
+      "point": "P2",
+      "milestones": [
+        "P2a"
+      ],
+      "expected": "Angehängter Android-Widgethost liefert während Drag einmalig seine wirklichen Pixel.",
+      "native_markers": [],
+      "android_units": [],
+      "android_device": [
+        "app.smartexplorer.android.task.BatchesPresentationTaskTest#batches_android_widget_drag_uses_pixels_from_the_attached_host_once"
+      ]
+    },
+    {
+      "point": "P3",
+      "milestones": [
+        "P3a",
+        "P3b"
+      ],
+      "expected": "Iconabruf bleibt an eindeutigen Eintrag, App, Hash, PNG- und Pixelgrenze gebunden.",
+      "native_markers": [
+        "icon_"
+      ],
+      "android_units": [],
+      "android_device": []
+    },
+    {
+      "point": "P4",
+      "milestones": [
+        "P4a",
+        "P4b",
+        "P4c",
+        "P4d",
+        "P4e"
+      ],
+      "expected": "Fensterfamilien erhalten Besitzer, Handle-/Layoutgeneration, Fokus und Rechteentzug.",
+      "native_markers": [
+        "family_"
+      ],
+      "android_units": [],
+      "android_device": []
+    },
+    {
+      "point": "P5",
+      "milestones": [
+        "P5a",
+        "P5b",
+        "P5c"
+      ],
+      "expected": "Dauerhafter Startbeleg liegt vor OS-Dispatch; Wiederholung startet nicht erneut.",
+      "native_markers": [
+        "app_"
+      ],
+      "android_units": [],
+      "android_device": []
+    },
+    {
+      "point": "P6",
+      "milestones": [
+        "P6a",
+        "P6b"
+      ],
+      "expected": "Sichtbarkeitsgeneration und aktuelle Präsentation begrenzen Eingaben; Unbekannt bleibt sichtbar.",
+      "native_markers": [
+        "visibility_",
+        "resume_gate_",
+        "presentation_",
+        "batches_task_b6_preview_"
+      ],
+      "android_units": [
+        "app.smartexplorer.android.ui.screen.BatchesScreenBudgetTest",
+        "app.smartexplorer.android.ui.screen.BatchesScreenStateTest",
+        "app.smartexplorer.android.ui.screen.ScreenSessionStateTest"
+      ],
+      "android_device": [
+        "app.smartexplorer.android.task.BatchesPresentationTaskTest#batches_android_bitmap_reports_the_identity_from_its_actual_draw"
+      ]
+    },
+    {
+      "point": "P7",
+      "milestones": [
+        "P7a",
+        "P7b"
+      ],
+      "expected": "Referenzverlust veröffentlicht kein abhängiges Bild; Androiddecoder meldet tatsächliche Ausgabeidentität.",
+      "native_markers": [
+        "batches_task_b6_"
+      ],
+      "android_units": [
+        "app.smartexplorer.android.ui.screen.BatchesScreenBudgetTest",
+        "app.smartexplorer.android.ui.screen.BatchesScreenStateTest",
+        "app.smartexplorer.android.ui.screen.ScreenSessionStateTest"
+      ],
+      "android_device": [
+        "app.smartexplorer.android.task.ScreenTaskTest#screen_task_android_viewer_decodes_barcode"
+      ]
+    },
+    {
+      "point": "P9",
+      "milestones": [
+        "P9a",
+        "P9b"
+      ],
+      "expected": "Lokale Vollbildausstiege erzeugen keine Remote-Tastenkombination und lösen gehaltene Modifier.",
+      "native_markers": [
+        "exit_"
+      ],
+      "android_units": [],
+      "android_device": []
+    },
+    {
+      "point": "P10",
+      "milestones": [
+        "P10a",
+        "P10b"
+      ],
+      "expected": "Nur betroffene Laufwerksidentitäten werden invalidiert; kein Wechsel auf fremdes gleichnamiges Medium.",
+      "native_markers": [
+        "batches_task_drive_"
+      ],
+      "android_units": [],
+      "android_device": []
+    },
+    {
+      "point": "P11",
+      "milestones": [
+        "P11a",
+        "P11b"
+      ],
+      "expected": "Optische Leser teilen Gerätebesitz; Abbruch und Medienwechsel erhalten Quellen und Isolation.",
+      "native_markers": [
+        "batches_task_optical_"
+      ],
+      "android_units": [],
+      "android_device": []
+    },
+    {
+      "point": "P13",
+      "milestones": [
+        "P13a",
+        "P13b",
+        "P13c"
+      ],
+      "expected": "Starter/Runtime/Vertrag und Eigentumsmarker bleiben gebunden; Profile erhalten Benutzerfelder und Rollback.",
+      "native_markers": [
+        "batches_p13_"
+      ],
+      "android_units": [],
+      "android_device": []
+    },
+    {
+      "point": "P14",
+      "milestones": [
+        "P14a",
+        "P14b",
+        "P14c"
+      ],
+      "expected": "Quellen-/Zielidentität und bestätigte Veröffentlichung überleben Wiederanlauf; keine doppelte oder fremde Übernahme.",
+      "native_markers": [
+        "batches_task_p14_"
+      ],
+      "android_units": [],
+      "android_device": []
+    },
+    {
+      "point": "P15",
+      "milestones": [
+        "P15a",
+        "P15b"
+      ],
+      "expected": "Ordnerroute erhält Literalnamen und Remote-Locator; Systemdateimanager bekommt lokale Pfade.",
+      "native_markers": [
+        "batches_task_folder_"
+      ],
+      "android_units": [],
+      "android_device": []
+    },
+    {
+      "point": "P16",
+      "milestones": [
+        "P16a",
+        "P16b"
+      ],
+      "expected": "Nutzbare Pickerhöhe berücksichtigt tatsächliche Schriftmaße, Chrome, Aktionszeilen und Arbeitsfläche.",
+      "native_markers": [
+        "batches_task_picker_"
+      ],
+      "android_units": [],
+      "android_device": []
+    },
+    {
+      "point": "P17",
+      "milestones": [
+        "P17a",
+        "P17b"
+      ],
+      "expected": "Das tatsächliche egui-Fenster bleibt nach Verkleinerung der Arbeitsfläche erreichbar.",
+      "native_markers": [
+        "batches_task_dialog_"
+      ],
+      "android_units": [],
+      "android_device": []
+    },
+    {
+      "point": "P18",
+      "milestones": [
+        "P18a",
+        "P18b",
+        "P18c",
+        "P18d"
+      ],
+      "expected": "Rechtezulassung und Entzug binden Ziel, Benutzer, Beziehung, Ablauf und laufende Kanäle.",
+      "native_markers": [
+        "p18d_"
+      ],
+      "android_units": [],
+      "android_device": []
+    },
+    {
+      "point": "P19",
+      "milestones": [
+        "P19a",
+        "P19b",
+        "P19c"
+      ],
+      "expected": "Einstellungsbereiche erhalten Alt-Share-Tab-Bedeutungen; Routenfreigabe und Exec-Abbruch bleiben wirksam.",
+      "native_markers": [
+        "batches_task_settings_"
+      ],
+      "android_units": [],
+      "android_device": []
+    },
+    {
+      "point": "P20",
+      "milestones": [
+        "P20a",
+        "P20b"
+      ],
+      "expected": "Alle zwölf Einstellungsbereiche sind eindeutig zugeordnet und Navigation bleibt kompatibel.",
+      "native_markers": [
+        "batches_task_settings_"
+      ],
+      "android_units": [],
+      "android_device": []
+    },
+    {
+      "point": "P21",
+      "milestones": [
+        "P21a",
+        "P21b",
+        "P21c"
+      ],
+      "expected": "Rootvertrauen und Klartextzustimmung bleiben getrennt; tatsächliche Identität und Live-Widerruf gelten.",
+      "native_markers": [
+        "batches_task_vault_"
+      ],
+      "android_units": [],
+      "android_device": []
+    },
+    {
+      "point": "P22",
+      "milestones": [
+        "P22a",
+        "P22b",
+        "P22c"
+      ],
+      "expected": "Rohdaten und Recoverybesitz bleiben bei Manipulation, Konflikt und injiziertem Ownershipfehler erhalten.",
+      "native_markers": [
+        "batches_task_recovery_"
+      ],
+      "android_units": [],
+      "android_device": []
+    },
+    {
+      "point": "P23",
+      "milestones": [
+        "P23a",
+        "P23b"
+      ],
+      "expected": "Providerquota, Cachebudget, Unbekannt, unbegrenzt, Read-only und Ablauf bleiben unterscheidbar.",
+      "native_markers": [
+        "batches_task_capacity_"
+      ],
+      "android_units": [],
+      "android_device": []
+    },
+    {
+      "point": "P24",
+      "milestones": [
+        "P24a",
+        "P24b"
+      ],
+      "expected": "Teilscans erhalten geschützte Auslassungen und ersetzen ausschließlich den betroffenen Teilbaum.",
+      "native_markers": [
+        "batches_task_partial_"
+      ],
+      "android_units": [],
+      "android_device": []
+    },
+    {
+      "point": "P26",
+      "milestones": [
+        "P26a",
+        "P26b",
+        "P26c"
+      ],
+      "expected": "Refreshrotation wird dauerhaft übernommen; Parallelität, Konto-/Clientwechsel und Fehler geben keine falsche Identität frei.",
+      "native_markers": [
+        "batches_task_oauth_"
+      ],
+      "android_units": [],
+      "android_device": []
+    },
+    {
+      "point": "P27",
+      "milestones": [
+        "P27a",
+        "P27b"
+      ],
+      "expected": "Peerbezogenes Senderbudget hält Geschwisterschulden, begrenzte Steuerreserve, Fairness und rückstaubedingte Ratenreaktion.",
+      "native_markers": [
+        "sender_",
+        "rate_path_change_",
+        "screen_task_rate_control_"
+      ],
+      "android_units": [],
+      "android_device": [
+        "app.smartexplorer.android.task.ScreenTaskTest#screen_task_android_host_bench_synthetic"
+      ]
+    },
+    {
+      "point": "P28",
+      "milestones": [
+        "P28a",
+        "P28b",
+        "P28c",
+        "P28d"
+      ],
+      "expected": "Echter STREAM-/DATAGRAM-Sendegate sperrt vor Zulassung und nach Netzepochwechsel; Frist bleibt begrenzt.",
+      "native_markers": [
+        "batches_task_b5_"
+      ],
+      "android_units": [],
+      "android_device": []
+    },
+    {
+      "point": "P29",
+      "milestones": [
+        "P29a",
+        "P29b",
+        "P29c"
+      ],
+      "expected": "PIN-Eingabe bleibt exakt und vertraulich; Terminalkopplung behält ihren tatsächlichen Besitzer bis zum Abschluss.",
+      "native_markers": [
+        "batches_task_p29_"
+      ],
+      "android_units": [
+        "app.smartexplorer.android.ui.share.WeakPinTest"
+      ],
+      "android_device": []
+    },
+    {
+      "point": "P30",
+      "milestones": [
+        "P30a",
+        "P30b",
+        "P30c"
+      ],
+      "expected": "Zugelassener v2-Vertrag erhält native 3840×2160 nach verlustfreier Vollkorrektur bei angeschlossener 2-Mbit/s-Qualitätspolitik; Legacy, kleine Heaps, parallele Zusagen und gehaltene Rendererbilder bleiben begrenzt.",
+      "native_markers": [
+        "batches_task_b6_",
+        "batches_task_capture_"
+      ],
+      "android_units": [
+        "app.smartexplorer.android.ui.screen.BatchesScreenBudgetTest",
+        "app.smartexplorer.android.ui.screen.BatchesScreenStateTest",
+        "app.smartexplorer.android.ui.screen.ScreenSessionStateTest"
+      ],
+      "android_device": [
+        "app.smartexplorer.android.task.BatchesPresentationTaskTest#batches_android_scaler_preserves_identity_and_bounds_pending_outputs",
+        "app.smartexplorer.android.task.BatchesPresentationTaskTest#batches_android_native_pixel_crop_and_resample_obey_budget_geometry",
+        "app.smartexplorer.android.task.ScreenTaskTest#screen_task_android_grid_switch"
+      ]
+    },
+    {
+      "point": "P31",
+      "milestones": [
+        "P31a",
+        "P31b"
+      ],
+      "expected": "Video, Moves und Dirty werden nur mit derselben vollständigen Referenz atomar veröffentlicht.",
+      "native_markers": [
+        "batches_task_b6_"
+      ],
+      "android_units": [
+        "app.smartexplorer.android.ui.screen.BatchesScreenBudgetTest",
+        "app.smartexplorer.android.ui.screen.BatchesScreenStateTest",
+        "app.smartexplorer.android.ui.screen.ScreenSessionStateTest"
+      ],
+      "android_device": [
+        "app.smartexplorer.android.task.BatchesPresentationTaskTest#batches_android_bitmap_reports_the_identity_from_its_actual_draw",
+        "app.smartexplorer.android.task.ScreenTaskTest#screen_task_android_viewer_decodes_barcode"
+      ]
+    },
+    {
+      "point": "P32",
+      "milestones": [
+        "P32a",
+        "P32b",
+        "P32c"
+      ],
+      "expected": "Android-Systemlayoutwechsel erhält Bildzoom, Video-/Audiopause und Wiedergabeposition.",
+      "native_markers": [],
+      "android_units": [
+        "app.smartexplorer.android.ui.viewer.BatchesMediaStateTest",
+        "app.smartexplorer.android.ui.viewer.MediaSetTest"
+      ],
+      "android_device": [
+        "app.smartexplorer.android.task.BatchesPresentationTaskTest#batches_android_image_zoom_survives_system_layout_change",
+        "app.smartexplorer.android.task.BatchesPresentationTaskTest#batches_android_audio_pause_seek_and_resume_survive_system_layout_change",
+        "app.smartexplorer.android.task.BatchesPresentationTaskTest#batches_android_video_pause_seek_and_resume_survive_system_layout_change"
+      ]
+    }
+  ],
+  "compatibility": {
+    "K1": [
+      "pair_identity_includes_each_backend_endpoint",
+      "engine_provider_literal_walk_keeps_existing_encoded_root_and_connection",
+      "batches_task_p14_equal_paths_on_distinct_remote_connections_do_not_share_receipts"
+    ],
+    "K2": [
+      "p18d_",
+      "batches_login_",
+      "batches_task_vault_"
+    ],
+    "K3": [
+      "backup_failure_blocks_overwrite_and_delete",
+      "failed_apply_paths_stay_out_of_new_baseline_and_retry",
+      "sync_reliability_task_protection_first_partial_run_never_seeds_full_index",
+      "batches_task_recovery_"
+    ],
+    "K4": [
+      "batches_task_b5_",
+      "batches_task_b7_",
+      "batches_app_",
+      "batches_p13_"
+    ],
+    "K5": [
+      "screen_task_wire_roundtrip_all_tags",
+      "screen_task_registry_session_view_json_shape",
+      "Android JNI/APK compilation and actual presentation fixtures"
+    ],
+    "K6": [
+      "candidate-bound remote rustfmt/size report",
+      "fresh static overall review",
+      "root AST graph refresh"
+    ]
+  },
+  "unverified": [
+    "Physische Android-Sensorrotation und OEM-Codec-/GPUvarianten; das Emulatorlayout ist kein Nachweis eines realen Sensors.",
+    "Physische optische Laufwerke, USB-Hotplug und Windows-/Linux-Desktopereignisse auf tatsächlicher Hardware.",
+    "Echte Anbieterzugänge für Google Drive, SFTP, FTP/FTPS, WebDAV; die Suite verwendet isolierte Produktfixtures.",
+    "Windows Winlogon/Lock/UAC, Linux Displaymanager/Wayland-Portal und reale RDP/RemoteApp-Serverkonten.",
+    "Migration zwischen physischen Netzinterfaces, öffentliche Relaystrecke und Durchsatz-/Latenzvergleich auf einer produktiven Verbindung.",
+    "Vollständige Daemon-Recoverytransaktion einschließlich System-Autostart und vollständiger Host-CLI-Refresh mit laufenden Fremdagenten.",
+    "Vollständige visuelle Abnahme aller Desktop-Rechteformulare und Android-Multiwindowgrößen.",
+    "Realer Glow-GL-Kontext, Treiber-Fences und verworfene native Fensterausgaben; kontrollierte Rendererfixtures belegen ausschließlich die produktive Besitzerzustandsmaschine. WGPU-Ausführung wird bei fehlendem Adapter ausdrücklich als nicht ausgeführt berichtet.",
+    "Android-Besitzfix: tatsächlicher Handler-/Listener-/Bitmapwrapper-OOM, Codecqueuefehler und reale fragmentierte Access-Units bleiben ohne Injektion; die konkrete Quellprüfung und die engeren JVM-/Emulatorbelege stehen in fix-android-capturebesitz.md."
+  ],
+  "report_semantics": "Passed bezeichnet ausschließlich die aufgeführten ausgeführten Fixtures. Die dokumentierten Hardware-, Zugangsdaten- und vollständigen Oberflächenlücken werden dadurch nicht zu bestätigten Meilensteinergebnissen.",
+  "resource_milestones": [
+    {
+      "id": "R9-C1",
+      "milestones": [
+        "C1"
+      ],
+      "expected": "Gemeinsame Kapazität, genaue Klassen und Generationen; reservierter Besitz endet erst mit dem letzten tatsächlichen Besitzer.",
+      "scope": "Benannte produktive Besitzgrenzen; kein vollständiger Plattform-/Treiber-RSS-Nachweis.",
+      "native_cases": [
+        "batches_task_capture_explicit_cohort_is_not_the_first_small_request",
+        "batches_task_capture_classes_and_total_are_checked_together",
+        "batches_task_capture_split_and_free_credits_have_no_artificial_fragmentation",
+        "batches_task_capture_legacy_4k_reuses_w_instead_of_booking_w_plus_c",
+        "batches_task_capture_extra_is_exact_and_survives_the_last_result",
+        "batches_task_capture_source_generation_and_live_identity_retirement",
+        "batches_task_capture_family_member_binding_keeps_one_root_total",
+        "batches_task_capture_delegation_consumes_one_parent_backing_until_last_slice",
+        "batches_task_capture_delegation_rejects_mismatched_limits",
+        "batches_task_capture_checked_plan_arithmetic_is_transactional",
+        "batches_task_capture_parallel_alias_grants_share_one_atomic_total",
+        "batches_task_capture_native_resource_dies_before_its_last_slice",
+        "batches_task_capture_serial_family_sums_persistence_and_maximum_transient",
+        "batches_task_capture_delegated_session_prepares_and_resizes_without_a_child_pool"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R9-C2-Bilder",
+      "milestones": [
+        "C2"
+      ],
+      "expected": "Bildaliase teilen einen Slice; Konversionen und echte Kopien erhalten vorher ihre eigene Zusage.",
+      "scope": "Benannte produktive Besitzgrenzen; kein vollständiger Plattform-/Treiber-RSS-Nachweis.",
+      "native_cases": [
+        "batches_task_capture_image_aliases_share_pixels_and_one_slice",
+        "batches_task_capture_image_allocation_fails_before_uncovered_pixels",
+        "batches_task_capture_regions_are_admitted_and_bound_to_the_pixels",
+        "batches_task_capture_image_transformations_claim_real_copies_and_keep_aliases",
+        "batches_task_capture_bytes_and_regions_reject_another_grant_with_equal_identity",
+        "batches_task_capture_library_allocator_runs_after_claim_and_cannot_grow_result"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R9-C2-OpenH264",
+      "milestones": [
+        "C2"
+      ],
+      "expected": "I420-Zulassung vor Konversion und Access-Unit-Besitz durch den Decoderübergang.",
+      "scope": "Benannte produktive Besitzgrenzen; kein vollständiger Plattform-/Treiber-RSS-Nachweis.",
+      "native_cases": [
+        "batches_task_capture_openh264_denies_i420_before_unfunded_conversion",
+        "batches_task_capture_openh264_au_keeps_credit_and_decoder_contract"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R9-C2-MF",
+      "milestones": [
+        "C2"
+      ],
+      "expected": "COM-Bufferaliase, fester AU-Puffer und zugelassene synchrone/asynchrone MFT-Übergänge.",
+      "scope": "Benannte produktive Besitzgrenzen; kein vollständiger Plattform-/Treiber-RSS-Nachweis.",
+      "native_cases": [
+        "batches_task_capture_mf_buffer_credit_lasts_through_final_com_alias",
+        "batches_task_capture_mf_copies_multiple_buffers_with_one_fixed_au",
+        "batches_task_capture_mf_sync_admitted_roundtrip",
+        "batches_task_capture_mf_async_admitted_roundtrip"
+      ],
+      "device_cases": [],
+      "native_platforms": [
+        "windows"
+      ]
+    },
+    {
+      "id": "R9-C5",
+      "milestones": [
+        "C5"
+      ],
+      "expected": "Windowsflächen, Rotation, Cache und Resize halten den vereinbarten Capturebesitz.",
+      "scope": "Deterministische Windows-Adapter-/Besitzfälle; kein physischer WGC-/DXGI-Gerätelauf.",
+      "native_cases": [
+        "batches_capture_windows_native_slots_match_wgc_dxgi_rotation",
+        "batches_capture_windows_band_has_fixed_tail_capacity_and_explicit_sums",
+        "batches_capture_windows_cache_alias_and_last_result_retain_session",
+        "batches_capture_windows_exhausted_slots_do_not_call_allocator",
+        "batches_capture_windows_resize_rejects_before_native_allocation_with_old_owner",
+        "batches_capture_windows_rotation_preserves_pixels_and_source_generation",
+        "batches_capture_windows_grantless_native_and_login_entries_refuse"
+      ],
+      "device_cases": [],
+      "native_platforms": [
+        "windows"
+      ]
+    },
+    {
+      "id": "R9-C6",
+      "milestones": [
+        "C6"
+      ],
+      "expected": "X11-Replykopf und Cursorzulassung gehen Allokationen voraus; native und CPU-Besitzer bleiben getrennt.",
+      "scope": "Benannte produktive Besitzgrenzen; kein vollständiger Plattform-/Treiber-RSS-Nachweis.",
+      "native_cases": [
+        "batches_task_capture_linux_x11_cursor_header_precedes_parent_approval",
+        "batches_task_capture_linux_x11_oversized_cursor_is_rejected_before_credit_request",
+        "batches_task_capture_linux_x11_exact_reply_and_immutable_last_owner",
+        "batches_task_capture_linux_x11_malformed_reply_never_opens_parser_gate",
+        "batches_task_capture_linux_x11_shm_and_getimage_count_distinct_native_owners"
+      ],
+      "device_cases": [],
+      "native_platforms": [
+        "linux"
+      ]
+    },
+    {
+      "id": "R9-C7-Importvertrag",
+      "milestones": [
+        "C7"
+      ],
+      "expected": "Ungebundene Importberechtigung gilt nur für exakte Quelle und Verbindung, nie für Bildallokation.",
+      "scope": "Benannte produktive Besitzgrenzen; kein vollständiger Plattform-/Treiber-RSS-Nachweis.",
+      "native_cases": [
+        "batches_task_capture_import_unbound_is_exact_and_is_not_image_authority",
+        "batches_task_capture_import_old_connection_cannot_close_a_new_connection",
+        "batches_task_capture_prepared_drop_ends_new_import_authority_but_keeps_live_mapping"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R9-C7-PipeWire",
+      "milestones": [
+        "C7"
+      ],
+      "expected": "Aktive Negotiation, reentrante Pause, ganze FD-Maps, Formatwechsel und tatsächliches Mapping-/Callbackende.",
+      "scope": "Produktiver Importcontroller mit instrumentierten nativen Grenzen; kein live verbundener Wayland-Compositor.",
+      "native_cases": [
+        "batches_task_capture_linux_pipewire_unconfigured_producer_negotiates_before_image_grant",
+        "batches_task_capture_linux_pipewire_resume_reenters_a_second_receive_barrier",
+        "batches_task_capture_linux_pipewire_memptr_chunks_and_metadata_use_prior_whole_map",
+        "batches_task_capture_linux_pipewire_exact_fd_objects_aliases_padding_and_pages",
+        "batches_task_capture_linux_pipewire_consumer_minimum_omits_guessed_count_and_stride",
+        "batches_task_capture_linux_pipewire_resize_keeps_old_mapping_and_last_cpu_owner",
+        "batches_task_capture_linux_pipewire_retirement_waits_for_native_views_and_callback_return",
+        "batches_task_capture_linux_pipewire_formats_pause_identity_and_three_actual_cpu_slots",
+        "batches_task_capture_linux_pipewire_import_and_image_share_the_session_authority",
+        "batches_task_capture_linux_pipewire_unbound_import_has_no_image_right",
+        "batches_task_capture_linux_pipewire_close_late_grant_and_native_failures_never_map",
+        "batches_task_capture_linux_portal_release_retains_exact_old_lease_without_pixels"
+      ],
+      "device_cases": [],
+      "native_platforms": [
+        "linux"
+      ]
+    },
+    {
+      "id": "R9-C9",
+      "milestones": [
+        "C9"
+      ],
+      "expected": "Androidgeneration, Arena, Queue, Resize und kleine Heapgrenze bleiben an echte Credits gebunden.",
+      "scope": "Native Channel-/Arenafälle auf dem Host und echte JNI-Ablehnung unbekannter Sitzungen; erfolgreiche Geräteaufnahme ist separat zu belegen.",
+      "native_cases": [
+        "batches_capture_task_android_pending_metadata_cannot_allocate",
+        "batches_capture_task_android_three_rgba_slots_are_preallocated_credits",
+        "batches_capture_task_android_queue_evicts_before_replacement_copy",
+        "batches_capture_task_android_resize_and_close_keep_old_callback_owner",
+        "batches_capture_task_android_small_heap_is_not_raised_for_native_buffers",
+        "batches_capture_task_android_accessibility_fits_source_only_output_before_begin",
+        "batches_capture_task_android_synthetic_source_only_adds_and_reuses_output_grant",
+        "batches_capture_task_android_refused_resize_preserves_previous_generation_and_owner",
+        "batches_capture_task_android_wide_native_still_scales_once_without_false_resize",
+        "batches_capture_task_android_synthetic_without_display_keeps_defined_default"
+      ],
+      "device_cases": [
+        "app.smartexplorer.android.task.BatchesCaptureTaskTest#unknownSessionCannotObtainPixelsOrExternalResourceCredit"
+      ]
+    },
+    {
+      "id": "R9-C10",
+      "milestones": [
+        "C10"
+      ],
+      "expected": "Privilegierte Helperantworten halten disjunkte Parenttickets; EOF, Prozessende und letzter Bildbesitz bleiben getrennt.",
+      "scope": "Benannte produktive Besitzgrenzen; kein vollständiger Plattform-/Treiber-RSS-Nachweis.",
+      "native_cases": [
+        "batches_task_login_capture_disjoint_parent_slot_and_shared_capacity",
+        "batches_task_login_capture_cursor_reply_requires_live_main_without_raw_slot",
+        "batches_task_login_capture_header_and_retired_grant_refuse_allocation",
+        "batches_task_login_capture_reader_rejects_wrong_cookie_and_pixel_probe",
+        "batches_task_login_capture_eof_exit_and_last_pixel_are_distinct_ends",
+        "batches_task_login_capture_exit_still_waits_for_reader_and_close_refuses_grants",
+        "batches_task_login_capture_prepared_source_cannot_activate_after_refused_grant"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R9-L1",
+      "milestones": [
+        "L1"
+      ],
+      "expected": "Lokale Bildrollen sind atomar gemeinsam gebucht; Beobachtung, Aliase und Retirement behalten exakte Besitzer.",
+      "scope": "Benannte produktive Besitzgrenzen; kein vollständiger Plattform-/Treiber-RSS-Nachweis.",
+      "native_cases": [
+        "batches_task_image_claims_are_exact_and_atomic_across_roles_and_root",
+        "batches_task_image_small_first_claim_does_not_freeze_the_platform_envelope",
+        "batches_task_image_observation_bounds_stale_controllers_and_all_pool_paths",
+        "batches_task_image_split_merge_preserves_one_slot_and_releases_each_byte_once",
+        "batches_task_image_bytes_and_pixels_are_immutable_shared_owners",
+        "batches_task_image_builder_rejects_foreign_admission_and_denies_before_allocate",
+        "batches_task_capture_retirement_keeps_only_live_slices_and_forbids_new_claims",
+        "batches_task_capture_delegated_retirement_notifies_only_real_retired_ownership",
+        "batches_task_image_competing_claims_never_partially_acquire_one_slot",
+        "batches_task_image_split_cannot_create_extra_objects_in_one_role_slot"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R9-L2",
+      "milestones": [
+        "L2"
+      ],
+      "expected": "Produktiver PNG-Sender und zeilenweiser Empfang behalten Bildbesitz über Headerablehnung und Decoderabbruch.",
+      "scope": "Benannte produktive Besitzgrenzen; kein vollständiger Plattform-/Treiber-RSS-Nachweis.",
+      "native_cases": [
+        "batches_task_login_image_productive_png_keeps_sender_and_last_receiver_owner",
+        "batches_task_login_image_declared_png_larger_than_raw_and_refusal_before_body",
+        "batches_task_login_image_cancelled_future_keeps_blocking_decoder_until_actual_end"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R9-L3-L4",
+      "milestones": [
+        "L3",
+        "L4"
+      ],
+      "expected": "Produktive IPC-Writequittung und Viewerübergabe behalten reale Rawbilder und Registrybesitz.",
+      "scope": "Benannte produktive Besitzgrenzen; kein vollständiger Plattform-/Treiber-RSS-Nachweis.",
+      "native_cases": [
+        "batches_task_login_image_productive_ipc_viewer_keeps_two_real_raw_slots",
+        "batches_task_login_image_writer_completion_keeps_real_registry_owner"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R9-L5-L6",
+      "milestones": [
+        "L5",
+        "L6"
+      ],
+      "expected": "Lokale Konversion, Skalierung, Upload und Renderretirement behalten getrennte reale Bildclaims.",
+      "scope": "Reale PNG-/IPC-/LoginImage-Kette mit kontrollierter Renderer-Endgrenze; zusätzliche WGPU-/Glow-Fälle bleiben separat ausgewiesen.",
+      "native_cases": [
+        "batches_task_b6_login_image_context_without_renderer_cannot_claim_gpu_success",
+        "batches_task_b6_login_image_conversion_has_distinct_raw_and_color_claims_and_keeps_old_on_backpressure",
+        "batches_task_b6_login_image_output_and_scratch_are_claimed_before_filter_allocation",
+        "batches_task_b6_login_image_worker_cancel_retains_source_and_successful_unpublished_output_until_exit",
+        "batches_task_b6_login_image_reset_keeps_pane_slot_until_explicit_retirement",
+        "batches_task_b6_login_image_upload_completion_preserves_surface_and_reframe_keeps_original_color_claim",
+        "batches_task_b6_login_image_resize_keeps_old_draw_until_exact_replacement_claims_exist",
+        "batches_task_b6_login_image_roles_bound_native_4k_and_tall_wide_scratch_without_changing_screen_contract",
+        "batches_task_b6_login_image_real_ipc_show_keeps_local_claims_until_render_retirement"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R9-L7-Tickets",
+      "milestones": [
+        "L7"
+      ],
+      "expected": "Bitmaptickets halten Rawbytes bis NDK-Fillübergabe; Sessionwechsel und Close umgehen keinen Bitmapplatz.",
+      "scope": "Reale Rust-Slices und Ticketrechnung ohne JNI/NDK/GlobalRef; tatsächliche JNI-Instrumentgrenze wird zusätzlich angebunden.",
+      "native_cases": [
+        "android_bitmap_ticket_keeps_raw_until_fill_and_observes_real_stride",
+        "android_reconnect_and_close_cannot_turn_held_pixels_into_a_third_slot",
+        "android_ticket_rejects_foreign_claim_and_token_without_bitmap_allocation",
+        "android_supported_geometry_remains_the_existing_login_limit",
+        "android_heap_offer_is_not_expanded_by_a_second_private_pool"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R9-L8-HWUI",
+      "milestones": [
+        "L8"
+      ],
+      "expected": "Close ohne Folgedraw und TextureView-Detach warten auf tatsächlichen öffentlichen Rendererabbau.",
+      "scope": "Echter HWUI-/TextureView-Lauf mit simulierten NativeCalls; keine Behauptung nativer Bitmapticketabnahme.",
+      "native_cases": [],
+      "device_cases": [
+        "app.smartexplorer.android.task.LoginImageTaskTest#close_without_followup_draw_waits_for_public_destroy_off_ui",
+        "app.smartexplorer.android.task.LoginImageTaskTest#texture_detach_transfers_release_responsibility_until_renderer_ends"
+      ]
+    },
+    {
+      "id": "R9-F2-F5-Android-Capture",
+      "milestones": [
+        "C9",
+        "F2",
+        "F3",
+        "F4",
+        "F5"
+      ],
+      "expected": "Tatsächliche Produktgrants, MediaCodec-Ausgabe, Barcodeempfang und nachgewiesenes Decoder-/ImageReader-/Syntheticende; budgetierte Accessibility- und Projection-Stills.",
+      "scope": "Echter Android-Emulatorpfad; keine Aussage über physische OEMcodecs oder Rotationssensoren.",
+      "native_cases": [],
+      "device_cases": [
+        "app.smartexplorer.android.task.ScreenTaskTest#screen_task_android_host_bench_synthetic",
+        "app.smartexplorer.android.task.ScreenTaskTest#screen_task_android_viewer_decodes_barcode",
+        "app.smartexplorer.android.task.ScreenTaskTest#screen_task_android_still_interval_respected",
+        "app.smartexplorer.android.task.ScreenTaskTest#screen_task_android_still_secure_window_black",
+        "app.smartexplorer.android.task.ScreenTaskTest#screen_task_android_host_snapshot_nonblack"
+      ]
+    },
+    {
+      "id": "R9-F6-Login-JNI",
+      "milestones": [
+        "L7",
+        "L8",
+        "F6"
+      ],
+      "expected": "Produktiver ViewerFrame, echtes JNI-/NDK-Bitmap, HWUI, GlobalRef, Rollenclaims und tatsächliches Recycle einschließlich verworfenem Rohdeskriptor.",
+      "scope": "Native Bildübergabe und Androidrenderer; keine Netzwerkanmeldung, kein echter SAS-/Sicherer-Desktopnachweis.",
+      "native_cases": [],
+      "device_cases": [
+        "app.smartexplorer.android.task.LoginImageTaskTest#viewer_frame_jni_ndk_bitmap_retires_after_hwui_destroy",
+        "app.smartexplorer.android.task.LoginImageTaskTest#viewer_frame_jni_texture_detach_keeps_owner_until_renderer_ends",
+        "app.smartexplorer.android.task.LoginImageTaskTest#viewer_frame_jni_bitmap_slots_wait_for_real_retirement",
+        "app.smartexplorer.android.task.LoginImageTaskTest#viewer_frame_jni_discarded_descriptor_releases_native_owner"
+      ]
+    },
+    {
+      "id": "R9-C3-C4-Worker",
+      "milestones": [
+        "C3",
+        "C4"
+      ],
+      "expected": "Private Prepare-/Activate-Grenze hält ursprüngliche Credits durch Rawbilder und Records; grantloser Start, fremde Credits und Abbruch liefern keine ungedeckten Bildbytes.",
+      "scope": "Produktive native Besitz- und Wiregrenzen mit deterministischen Quellen; kein vollständiger Plattform-/Treiber-RSS-Nachweis.",
+      "native_cases": [
+        "batches_task_capture_worker_raw_and_records_roundtrip_under_the_original_credit",
+        "batches_task_capture_worker_wrong_credit_is_refused_before_payload_read",
+        "batches_task_capture_worker_grantless_open_is_refused",
+        "batches_task_capture_worker_cancel_wakes_an_inflight_resource_request",
+        "batches_task_capture_worker_eof_does_not_release_credit_before_process_exit",
+        "batches_task_capture_worker_confirmed_exit_keeps_buffered_parent_reply_authority",
+        "batches_task_capture_worker_retirement_reduction_is_monotonic_until_final_ack"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R9-C8-Familie",
+      "milestones": [
+        "C8"
+      ],
+      "expected": "Familienmitglieder verwenden eine serielle Produktionsspur mit erhaltenem gemeinsamen Besitz und produktivem Familienplan.",
+      "scope": "Produktive native Besitz- und Wiregrenzen mit deterministischen Quellen; kein vollständiger Plattform-/Treiber-RSS-Nachweis.",
+      "native_cases": [
+        "batches_task_capture_family_source_only_members_share_one_serial_producer_lane"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R9-C11-Quellenwechsel",
+      "milestones": [
+        "C11"
+      ],
+      "expected": "Quellenwechsel teilt die bestehende W/X-Bank, trennt alte und neue Generationsidentitäten und beendet ausschließlich den tatsächlichen Prepared-Besitzer.",
+      "scope": "Produktive native Besitz- und Wiregrenzen mit deterministischen Quellen; kein vollständiger Plattform-/Treiber-RSS-Nachweis.",
+      "native_cases": [
+        "batches_task_capture_source_switch_reuses_one_bank_with_fresh_generation_identity",
+        "batches_task_capture_old_prepared_owner_cannot_close_its_replacement",
+        "batches_task_capture_failed_metadata_constructor_releases_its_early_owner"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R9-F3-Glow",
+      "milestones": [
+        "L6",
+        "F3-Glow"
+      ],
+      "expected": "Fehlgeschlagene Uploads und Draws liefern keine neue Präsentationsquittung; alte und neue Besitzer bleiben bis zum tatsächlichen Ressourcenende gebunden.",
+      "scope": "Produktive Ergebnis-/Besitzübergänge mit kontrollierten GL-Fehlern; Vendor-Fehlerledger im gesondert ausgewiesenen Teil derselben Suite, kein physischer Treiberfehler.",
+      "native_cases": [
+        "batches_task_b6_glow_zero_texture_name_returns_error_without_a_panic_hook",
+        "batches_task_b6_glow_failed_overwrite_has_no_resident_and_keeps_both_sources_until_drain",
+        "batches_task_b6_glow_successful_upload_followed_by_failed_draw_never_quittiert_new_stamp",
+        "batches_task_b6_glow_oom_attempt_keeps_real_claims_until_native_instance_return"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R9-F3-Eingabefreigabe",
+      "milestones": [
+        "F3"
+      ],
+      "expected": "Ein tatsächlicher Rendererfehler entzieht bestehende Login-Input-/SAS- und Screen-Eingabebelege vor Retirement; alte Fehler entwerten keine neue gültige Darstellung.",
+      "scope": "Kontrollierte Renderer- und Queueereignisse mit produktiven Besitzern und Guards; kein echter GL-Treiberfehler und kein ausgeführter SAS-Systemaufruf.",
+      "native_cases": [
+        "batches_task_b6_login_renderer_overwrite_revokes_input_sas_and_queue_before_retire",
+        "batches_task_b6_login_renderer_draw_failure_recovers_and_ignores_late_revocation",
+        "batches_task_b6_login_renderer_context_quarantine_revokes_every_slot_without_freeing_claims",
+        "batches_task_b6_screen_renderer_failure_revokes_input_and_reuses_visibility_floor",
+        "batches_task_b6_login_renderer_failure_interrupts_input_and_sas_before_send",
+        "batches_task_b6_login_image_renderer_failure_reframes_same_pixels_before_sas_recovers",
+        "batches_task_b6_login_successful_overwrite_keeps_drawn_queue_proofs"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R9-Android-M1-M3",
+      "milestones": [
+        "Android-M1",
+        "Android-M2",
+        "Android-M3"
+      ],
+      "expected": "Fehlgeschlagene Claim-/Aliasübernahme und Konstruktion verlieren keinen Besitzer; geschlossene Produzenten bleiben bis zum tatsächlichen Threadende gebunden.",
+      "scope": "Produktive Kotlin-Besitzerzustände mit kontrollierten Factoryfehlern und JVM-Threads; kein JNI-Aufruf, kein echter MediaCodec-/ImageReader-Lauf. Die Gerätegrenze steht separat unter R9-F2-F5-Android-Capture.",
+      "native_cases": [],
+      "device_cases": [],
+      "unit_cases": [
+        "app.smartexplorer.android.screen.ScreenCaptureBudgetTest#callbackAndWorkerRetainTheSamePromiseUntilBothEnd",
+        "app.smartexplorer.android.screen.ScreenCaptureBudgetTest#aClosedHolderCannotCreateAReplacementOwner",
+        "app.smartexplorer.android.screen.ScreenCaptureBudgetTest#failedTokenAdoptionReturnsTheRegisteredNativeTokenExactlyOnce",
+        "app.smartexplorer.android.screen.ScreenCaptureBudgetTest#failedAliasFactoryLeavesOnlyTheTwoActualOwners",
+        "app.smartexplorer.android.screen.ScreenEncoderOwnershipTest#failedConstructionReturnsEveryAcquiredResourceInOrder",
+        "app.smartexplorer.android.screen.ScreenEncoderOwnershipTest#rejectedCodecCanBeReplacedWithoutReleasingTheSurfaceClaim",
+        "app.smartexplorer.android.screen.ScreenEncoderOwnershipTest#failedPlatformDestructionKeepsTheClaimAndTheOriginalFailure",
+        "app.smartexplorer.android.screen.ScreenEncoderOwnershipTest#abortedConstructionRejectsALateDrainBeforeAnyResourceAccess",
+        "app.smartexplorer.android.screen.ScreenEncoderOwnershipTest#enteredDrainKeepsItsResourcesUntilItsActualEnd",
+        "app.smartexplorer.android.screen.ScreenEncoderOwnershipTest#failedProducerWrapperDoesNotPublishAUserOrLoseAnAlias",
+        "app.smartexplorer.android.screen.ScreenEncoderOwnershipTest#creatorRollbackNeedsNoJoinOfTheStillRunningCreator",
+        "app.smartexplorer.android.screen.ScreenEncoderOwnershipTest#completedLeaseStillWaitsForTheClosingWorkerToReturn",
+        "app.smartexplorer.android.screen.ScreenEncoderOwnershipTest#interruptedDrainStillWaitsForTheProducerAndRestoresItsFlag"
+      ]
+    },
+    {
+      "id": "R9-Android-M5",
+      "milestones": [
+        "Android-M5"
+      ],
+      "expected": "Projection-Konstruktionsbesitz beendet den gestarteten Produzenten vor Reader und Claim; frühes Produzentenende bleibt beim Konstruktorbesitzer.",
+      "scope": "Produktiver Kotlin-Konstruktorbesitzer mit JVM-Threads und Ersatzressourcen; echter Handler-/Listener-OOM, Handlerfinally und Android-close-Timeout sind ausschließlich statisch geprüft.",
+      "unit_cases": [
+        "app.smartexplorer.android.screen.ScreenEncoderOwnershipTest#projectionRollbackEndsItsStartedWorkerBeforeTheReaderAndClaim",
+        "app.smartexplorer.android.screen.ScreenEncoderOwnershipTest#producerEndBeforeStartupTransferLeavesTheConstructorResponsible"
+      ],
+      "native_cases": [],
+      "device_cases": []
+    },
+    {
+      "id": "R9-Android-M6",
+      "milestones": [
+        "Android-M6"
+      ],
+      "expected": "Der vorhandene tatsächliche Accessibility-Screenshotpfad erhält Stillintervall und geschützte Fensterbehandlung.",
+      "scope": "Normaler Emulator-Screenshotpfad. OOM beim Bitmapwrapper und Anfrageabschluss werden nicht injiziert; ihre Besitzreihenfolge ist eine statische Autorprüfung.",
+      "device_cases": [
+        "app.smartexplorer.android.task.ScreenTaskTest#screen_task_android_still_interval_respected",
+        "app.smartexplorer.android.task.ScreenTaskTest#screen_task_android_still_secure_window_black"
+      ],
+      "native_cases": []
+    },
+    {
+      "id": "R9-Android-M7",
+      "milestones": [
+        "Android-M7"
+      ],
+      "expected": "View-/Deskriptorfehler verlieren keinen AU-Owner; erfolgreiche Ausgabe hält ihren Owner bis zum Verbraucherabschluss.",
+      "scope": "Produktive Ownershipslot-Factories mit Ersatzbesitzern; keine tatsächliche ART-/MediaCodec-Allokation oder echte fragmentierte AU injiziert.",
+      "unit_cases": [
+        "app.smartexplorer.android.screen.ScreenEncoderOwnershipTest#failedPixelViewConstructionReturnsItsActualAllocationOwner",
+        "app.smartexplorer.android.screen.ScreenEncoderOwnershipTest#failedAccessUnitDescriptorLeavesItsOwnerForTeardown",
+        "app.smartexplorer.android.screen.ScreenEncoderOwnershipTest#completedAccessUnitTransfersItsExistingOwnerUntilConsumerEnd"
+      ],
+      "native_cases": [],
+      "device_cases": []
+    },
+    {
+      "id": "R9-Android-M8",
+      "milestones": [
+        "Android-M8"
+      ],
+      "expected": "Hybridinputfehler halten Pendinginput und Verbraucherbesitz auseinander; Retry und fehlgeschlagener Retain verlieren keinen Besitzer.",
+      "scope": "Produktiver Kotlin-Pendingbesitz mit kontrollierten Fehlern; queueInputBuffer-Fehler, Admission-OOM und anschließende Pixel-Repeatentscheidung sind ausschließlich statisch geprüft.",
+      "unit_cases": [
+        "app.smartexplorer.android.screen.ScreenEncoderOwnershipTest#hybridQueueFailureClearsTheExactPendingInputAndAllowsRetry",
+        "app.smartexplorer.android.screen.ScreenEncoderOwnershipTest#queueAbortCannotCloseAnInputAlreadyOwnedByTheOutputConsumer",
+        "app.smartexplorer.android.screen.ScreenEncoderOwnershipTest#hybridInputRetainFailureNeverPublishesAReplacement"
+      ],
+      "native_cases": [],
+      "device_cases": []
+    },
+    {
+      "id": "R9-CAP-R2-R5",
+      "milestones": [
+        "CAP-R2",
+        "CAP-R3",
+        "CAP-R4",
+        "CAP-R5"
+      ],
+      "expected": "Cursorzusatzbedarf erhält Bild- und Familiencredits; Bildversand und Retirement bleiben ohne Lockzyklus; Quellenwechsel erhält korrekte Referenzen, Parentbesitz und den weiter nutzbaren Worker. Konkrete native Pause-/NoDisplay-Gründe bleiben erhalten.",
+      "scope": "Produktive Grants, Broker, Delegation, Transporte und Worker mit kontrollierten Quellen-/Retirementereignissen; keine reale X11-/PipeWire-Sitzung.",
+      "native_cases": [
+        "batches_task_capture_integration_broker_admits_the_bound_family_member_cursor",
+        "batches_task_capture_integration_broker_checks_cursor_member_whitelist_and_generation",
+        "batches_task_capture_integration_cursor_credit_does_not_replace_parent_image",
+        "batches_task_capture_integration_delegated_supplement_preserves_member_identity",
+        "batches_task_capture_integration_family_cursor_preserves_root_and_changed_flag",
+        "batches_task_capture_integration_new_plan_keeps_an_old_prepared_reply_receivable",
+        "batches_task_capture_integration_prepared_transport_finishes_under_its_original_reference",
+        "batches_task_capture_integration_remote_member_supplement_uses_the_image_book",
+        "batches_task_capture_integration_retirement_before_transport_is_a_nonallocating_stale_reply",
+        "batches_task_capture_integration_supplement_keeps_image_and_exact_live_owners",
+        "batches_task_capture_integration_supplement_rejects_foreign_identity_and_image_owners",
+        "batches_task_capture_integration_worker_prepared_picture_keeps_its_captured_reference",
+        "batches_task_capture_integration_worker_retired_transport_waits_then_answers_the_next_picture",
+        "batches_task_capture_integration_worker_turnover_during_capture_preserves_pause_and_liveness",
+        "batches_task_capture_integration_worker_turnover_preserves_native_pause_reason",
+        "batches_task_capture_integration_worker_write_and_retirement_finish_without_lock_cycle"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R9-CAP-Linux",
+      "milestones": [
+        "CAP-R1",
+        "CAP-R2",
+        "CAP-R3",
+        "CAP-R5"
+      ],
+      "expected": "Der Linuxzweig bindet den SHM-Typ korrekt; der X11-Gate hält Raw-/ARGB-Cursorbesitz separat; PipeWire kann dasselbe Format nach vorübergehendem Creditdruck erneut zulassen.",
+      "scope": "Linux-Kompilierung im selben inkrementellen Komponentenbau sowie produktive Gate-/Formatzustände mit kontrollierten Bytes; keine echte XFixes-/MIT-SHM-/Portal-Sitzung.",
+      "native_platforms": [
+        "linux"
+      ],
+      "native_cases": [
+        "batches_task_capture_linux_x11_supplement_grants_raw_and_argb_without_retiring_image",
+        "batches_task_capture_linux_pipewire_retries_the_same_format_after_live_credit_pressure"
+      ],
+      "device_cases": []
+    }
+  ]
+}

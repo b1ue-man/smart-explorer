@@ -48,3 +48,7 @@ pub(crate) fn validate_manifest(manifest: &RecoveryManifest) -> io::Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "batches_recovery_task_tests.rs"]
+mod batches_recovery_task_tests;

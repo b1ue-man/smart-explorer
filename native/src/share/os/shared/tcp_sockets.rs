@@ -8,6 +8,10 @@ use crate::share::tcp_forward::{TcpDestination, TcpStart};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
+#[cfg(test)]
+#[path = "batches_tcp_task_tests.rs"]
+mod batches_tcp_task_tests;
+
 pub(crate) async fn resolve(destination: &TcpDestination) -> io::Result<Vec<SocketAddr>> {
     destination.validate().map_err(io::Error::other)?;
     let port = destination.port.get();

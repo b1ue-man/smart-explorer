@@ -286,3 +286,7 @@ pub(super) fn config_changed(provider: Provider, cfg: &ClientConfig) -> std::io:
 pub(crate) fn test_clear_runtime_failure() {
     if let Ok(mut value) = RUNTIME_FAILURE.lock() { *value = None; }
 }
+
+#[cfg(test)]
+#[path = "batches_auth_task_tests.rs"]
+mod batches_auth_task_tests;

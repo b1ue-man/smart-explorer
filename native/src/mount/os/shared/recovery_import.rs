@@ -209,3 +209,7 @@ fn copy_verified(input: &DirectoryHandle, output: &DirectoryHandle) -> io::Resul
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "batches_recovery_task_tests.rs"]
+mod batches_recovery_task_tests;

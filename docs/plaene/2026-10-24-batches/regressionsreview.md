@@ -74,10 +74,11 @@ Kontextmenü-DLL, beide Shareserverpayloads und `version.txt`.
 Vor dem Reviewstart werden der dann aktuelle vollständig integrierte
 Kandidatencommit und seine gesamte geänderte Dateioberfläche festgehalten.
 Der Arbeitsbasiscommit `bea312ea` ersetzt diese Releasevergleichsbasis nicht.
-Der genaue Reviewkandidatencommit steht noch nicht fest, weil die belegten
-Batchreviewkorrekturen an Android-Besitzübergaben, Renderer-Eingabefreigaben und
-Capture-/Workerintegration noch bearbeitet werden. Die Coreintegration und die
-Android-Fixtureanschlüsse sind bereits als Quellmeilensteine integriert.
+Die Batchreviewkorrekturen an Android-Besitzübergaben (`8ac10dc8`),
+Renderer-Eingabefreigaben (`43f46c8f`) und Capture-/Workerintegration (`f945ef59`)
+sind einschließlich der eigenen statischen Anti-Regressionsreview des jeweils
+zuständigen Fixautors integriert. Der genaue Reviewkandidatencommit wird nach
+dem gemeinsamen Suiteanschluss und der Aktualisierung des Quellgraphen fixiert.
 
 ## Erwartetes Ergebnis und Grenzen
 

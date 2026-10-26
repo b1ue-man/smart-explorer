@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Single RV1 task-level entrypoint. Remote CI only; never run on the workstation.
+# Single B1–B8/P31/P32 task-level entrypoint. Remote CI only; never run on the workstation.
 set -Eeuo pipefail
 [[ "${GITHUB_ACTIONS:-}" == true || "${SMART_EXPLORER_REMOTE_RUNNER:-}" == 1 ]] || {
-  echo 'RV1 acceptance runs only on the configured remote runner.' >&2
+  echo 'Batch acceptance runs only on the configured remote runner.' >&2
   exit 2
 }
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -21,5 +21,5 @@ case "$stage" in
   native) exec python3 "$root/native/review-task-native.py" "$@" ;;
   android-build) exec python3 "$root/native/review-task-native.py" --android-build "$@" ;;
   device) exec python3 "$root/native/review-task-device.py" "$@" ;;
-  *) echo "Unknown RV1 stage: $stage" >&2; exit 2 ;;
+  *) echo "Unknown task stage: $stage" >&2; exit 2 ;;
 esac

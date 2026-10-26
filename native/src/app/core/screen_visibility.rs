@@ -98,3 +98,7 @@ impl ResumeGate {
     }
     pub(crate) fn ready(&self) -> bool { (self.generation == 0 || self.visible) && self.ready }
 }
+
+#[cfg(test)]
+#[path = "batches_visibility_task_tests.rs"]
+mod batches_task_tests;

@@ -57,3 +57,7 @@ pub(crate) fn store_policy(record: &mut super::registry_types::SiteRecord, polic
     record.extra.push((POLICY_KEY.into(), value));
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "batches_open_policy_task_tests.rs"]
+mod batches_open_policy_task_tests;
