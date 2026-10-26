@@ -402,3 +402,25 @@ und bleiben unter den Modulgrenzen. Die ursprünglichen Qualitätsfixtures samt
 eingefrorenen Releaseblöcken sind bytegleich; weder Paketauflösung noch Formatter
 liefen lokal. Die Wiederholung bleibt derselbe Suiteeinstieg. Dieser Versuch
 belegt Quellvorbereitung, noch keine Kompilierung oder funktionale Abnahme.
+
+## Lauf 40344852826: gemeinsamer Vendor-Konstruktorfehler
+
+Der [Lauf](https://github.com/b1ue-man/smart-explorer/actions/runs/40344852826)
+prüfte `7fb96ef00bfb864509c4b0918aac211f7eafb5b6`. Die Vorbereitung war
+erfolgreich: Abhängigkeits- und Formatpatch sind leer; die Lockdatei blieb bei
+SHA256 `72c269cf0cda3db0b072dcec437d30e2cc5fa342ca6fc47abe6c7c318f5081a4`.
+
+Linux, Windows und Android scheiterten übereinstimmend an Rustfehler E0451 in
+`vendor/noq-proto-1.3.0/src/connection/mod.rs:376`: Der Struct-Updateausdruck
+des Verbindungskonstruktors benötigt Zugriff auf drei private Zählerfelder
+des Kindmoduls `application_path_policy`. Linux- und Windowsartefakte enthalten
+denselben Fehler sowohl für die Bibliothek als auch für den `se`-Worker;
+das Android-Buildlog bestätigt dieselbe Ursache. Die Android-Gerätestufe
+wurde übersprungen. Die getrennten Glow-Fälle liefen auf Linux und Windows;
+daraus folgt keine Abnahme der gesamten Suite oder der Produktbibliothek.
+
+Die Korrektur bleibt im selben Fixloop. Ihr eigener Bericht
+[fix-path-policy-construction.md](../plaene/2026-10-24-batches/fix-path-policy-construction.md)
+bindet den legalen Konstruktor an erhaltene Anfangswerte, RNG-Reihenfolge,
+Opt-in-Semantik und Pfadfreigaben. Der folgende Kandidat wird ausschließlich
+über denselben Remote-Suiteeinstieg bewertet. Kein Release ist gestartet.
