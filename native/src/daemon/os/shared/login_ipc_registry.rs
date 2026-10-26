@@ -12,8 +12,8 @@ pub(super) struct Entry {
     socket: TcpStream,
 }
 struct Lease { entry: Arc<Entry>, id: String }
-/// Handler and async transport task each retain one lease. The final release
-/// removes the registry record, after both owners have completed or dropped.
+/// Handler, transport, blocking decoder and undelivered/writing images retain
+/// this lease. Only their final actual release removes the registry record.
 #[derive(Clone)]
 pub(super) struct Owner { pub entry: Arc<Entry>, _lease: Arc<Lease> }
 pub(super) fn register(view: LoginSessionView, cancel: Arc<LoginCancellation>, socket: TcpStream) -> io::Result<Owner> {
