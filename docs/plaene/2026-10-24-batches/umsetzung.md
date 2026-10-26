@@ -1016,3 +1016,52 @@ Bildwidgetfokus, damit der SAS-Button weiterhin bedienbar bleibt. Die
 Quellenfixture enthält die tatsächliche kontrollierte Retirement-/Uploadfolge
 beim Refokus. Rust-AST und Whitespace sind statisch geprüft; keine Fixture wurde
 ausgeführt. Der Commit ist ein Entwicklungscheckpoint, kein Release.
+
+
+### Captureintegration und aktuelle Batchbefunde, 2026-10-26
+
+Die folgenden kohärenten Quellmeilensteine sind auf `main` committed und bis
+`f120f910` erfolgreich auf `origin/main` gepusht:
+
+| Commit | Konkreter Anschluss |
+|---|---|
+| `e3e778ea` | Login-Bitmap-/Rendererclaims werden bei fehlschlagender Kotlinübernahme zurückgegeben; Rohdeskriptorrollback behält genaue Ownerbindung. |
+| `4e9f4202` | Erststart, Worker, Familienproduktion und Quellenwechsel teilen die reale Parentautorität; Rawbilder und Encoderecords behalten ihre Zusage bis zum tatsächlichen Besitzerende. |
+| `b03182fe` | X11-/PipeWire-Import- und Portalinputbesitz sind an konkrete Quelle, Verbindung und Ressourcenende angeschlossen; frühe Portalvorbereitung besitzt ihr eigenes Registrierungsticket. |
+| `2fb02432` | Android-Capture-/Loginfixtures verwenden reale Grants, JNI, NDK und HWUI. Die Syntheticquelle behält ohne Displaymetadaten ihren seit v0.5.184 belegten Standard 1280×720. |
+| `f120f910` | Der gepinnte Glow-Painter reicht intern gelesene GL-Fehler durch Upload und Draw weiter; fehlgeschlagene Versuche erzeugen keinen neuen Präsentationsbeleg. |
+| `105bd6a3` | Die bestehende Android-Releaseprüfung verweigert tatsächliche APK-Dateien mit Bildfixture-Klasse oder zugehörigen JNI-Exporten; noch kein Release ausgeführt. |
+
+Diese Commits sind Entwicklungskandidaten. Es wurde keine lokale Kompilierung,
+kein lokaler Testlauf und keine Releaseausführung vorgenommen. Der normale
+Android-Batchreview und der zusammenhängende Core-/Worker-/Linux-Batchreview
+sind mit `gpt-6-astra`/`xhigh` als Startparametern beauftragt. Die tatsächlichen
+Antwortmodellmetadaten und der Creditsverbrauch sind nicht zugänglich.
+
+Die abgeschlossenen Berichte `review-android-bildfixtures.md` und
+`review-capture-integration.md` liefern belegte Fehler. Android betrifft
+Claim-/Aliasübernahme, Encoderkonstruktion und Workerabschluss; die Kettenprüfung
+des Fixautors hat zusätzlich konkrete Besitzübergaben in ProjectionFrames,
+ControlService, CodecLatency und queueRgba erfasst. Capture betrifft den fehlenden
+SHM-Typimport, Cursorzusatzbedarf gegenüber Parent und Familie, den
+Ausgabe-/Retirement-Lockzyklus und den Workerabbruch bei Formatwechsel.
+
+Der Nachreview von `f120f910` in `review-login-bildspeicher.md` bestätigt die
+GL-Fehlerweitergabe, belegt aber eine verbleibende Login-Eingabelücke: Ein bereits
+bestätigtes Bild kann nach einem späteren Upload-/Drawfehler weiter Input/SAS
+autorisieren. Dieser Restbefund ist nicht als behoben markiert.
+
+Drei getrennte Fixaufträge sind mit `gpt-6.1-sol` und Effort `max` als
+Startparametern beauftragt: `android_capture_ownership_fix`,
+`renderer_input_revocation_fix` und `capture_integration_fix`. Bereits diese
+normalen Batchfixes folgen vollständig dem präzisierten Zuständigkeitsvertrag:
+Jeder zuständige Fixautor erstellt selbst Funktionsauflistung, vollständige
+direkte/indirekte Kettenkarte, Fixplan, Umsetzung und eigene Anti-Regressionsreview.
+Die ursprünglichen Reviewer liefern Fehlerbefunde und übernehmen keinen Teil
+dieses Fixzyklus. Die statischen Befunde behaupten keine praktisch ausgeführten
+Fehlerfälle. Alle vorbereiteten Verhaltensfälle gehören zum selben Remoteeinstieg.
+
+Die frische normale Gesamtreview und die zwei unabhängigen Regressionsreviews
+gegen `v0.5.184` bleiben nach Integration dieser Korrekturen ausstehend. Erst
+danach folgt die eine Remote-Task-Suite mit ihrem Fixloop und der eine terminale
+vollständige Remote-Release.
