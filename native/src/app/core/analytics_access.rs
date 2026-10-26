@@ -1,7 +1,10 @@
 use super::{App, StorageRunState, StorageScanSource};
 use crate::analytics::ScanIssue;
-use crate::app::theme;
 use eframe::egui;
+
+#[path = "analytics_access_issues.rs"]
+mod issues;
+pub(super) use issues::{issue_report, issues_ui};
 
 #[derive(Default)]
 pub(super) struct AnalyticsAccess {
@@ -54,59 +57,6 @@ pub(super) fn should_log_failure(state: StorageRunState, offer: bool) -> bool {
     state == StorageRunState::Failed && !offer
 }
 
-pub(super) fn issue_report(issues: &[ScanIssue], suppressed: u64, denied: u64) -> String {
-    let mut report = format!(
-        "{} Leseproblem(e), davon {denied} Zugriff verweigert.\n",
-        (issues.len() as u64).saturating_add(suppressed)
-    );
-    for issue in issues {
-        report.push_str(&format!("{}: {}\n", issue.path, issue.detail));
-    }
-    if suppressed > 0 {
-        report.push_str(&format!(
-            "{suppressed} weitere Probleme sind nicht einzeln gespeichert.\n"
-        ));
-    }
-    report
-}
-
-pub(super) fn issues_ui(
-    ui: &mut egui::Ui,
-    issues: &[ScanIssue],
-    suppressed: u64,
-    denied: u64,
-    notes: &[String],
-) {
-    for note in notes {
-        ui.label(egui::RichText::new(note).small().color(theme::muted(ui)));
-    }
-    if issues.is_empty() && suppressed == 0 {
-        return;
-    }
-    egui::CollapsingHeader::new("Leseprobleme – betroffene Pfade und Details")
-        .id_salt("analytics_read_issues")
-        .show(ui, |ui| {
-            if ui.button("Bericht kopieren").clicked() {
-                ui.ctx().copy_text(issue_report(issues, suppressed, denied));
-            }
-            egui::ScrollArea::vertical()
-                .min_scrolled_height(0.0)
-                .id_salt("analytics_read_issues_scroll")
-                .max_height(super::dialog_geometry::remaining_height(ui, 2.0))
-                .show(ui, |ui| {
-                    for issue in issues {
-                        ui.label(egui::RichText::new(&issue.path).strong());
-                        ui.label(&issue.detail);
-                        ui.separator();
-                    }
-                    if suppressed > 0 {
-                        ui.label(format!(
-                            "{suppressed} weitere Probleme nicht einzeln gespeichert."
-                        ));
-                    }
-                });
-        });
-}
 
 impl App {
     pub(super) fn log_analytics_outcome(&mut self) {
@@ -499,54 +449,5 @@ pub(super) fn access_ui(ui: &mut egui::Ui, state: &AnalyticsAccess) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn analytics_access_task_remote_access_never_requests_local_privileges() {
-        let source = StorageScanSource::remote(
-            std::sync::Arc::new(crate::vfs::LocalBackend::new("/")),
-            "/remote",
-            "fixture",
-        );
-        assert!(!access_offer(5, Some(&source), |_| panic!(
-            "remote scan must not query local authority"
-        )));
-        let local = StorageScanSource::local("C:/");
-        assert!(access_offer(1, Some(&local), |root| root == "C:/"));
-        assert!(!access_offer(0, Some(&local), |_| panic!("no denial")));
-        assert!(!should_log_failure(StorageRunState::Partial, false));
-        assert!(!should_log_failure(StorageRunState::Failed, true));
-        assert!(should_log_failure(StorageRunState::Failed, false));
-    }
-    #[test]
-    fn analytics_access_task_report_lists_each_retained_path_and_omissions() {
-        let issues: Vec<_> = (0..24)
-            .map(|index| ScanIssue {
-                path: format!("C:/blocked-{index}/"),
-                detail: "Zugriff verweigert".into(),
-            })
-            .collect();
-        let report = issue_report(&issues, 3, 27);
-        for issue in &issues {
-            assert!(report.contains(&issue.path));
-        }
-        assert!(report.contains("3 weitere Probleme"));
-        assert!(report.contains("27 Zugriff verweigert"));
-    }
-    #[test]
-    fn analytics_access_task_new_scan_resets_prompt_without_canceling_consented_launch() {
-        let (_tx, rx) = crossbeam_channel::bounded(1);
-        let mut state = AnalyticsAccess {
-            permission_denied: 3,
-            offer: true,
-            pending: Some(rx),
-            message: Some("previous".into()),
-            ..Default::default()
-        };
-        state.reset_scan();
-        assert_eq!(state.permission_denied, 0);
-        assert!(!state.offer);
-        assert!(state.message.is_none());
-        assert!(state.pending.is_some());
-    }
-}
+#[path = "analytics_access_tests.rs"]
+mod tests;
