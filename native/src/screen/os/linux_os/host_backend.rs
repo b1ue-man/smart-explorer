@@ -13,7 +13,9 @@
 //! says so in its limits.
 use std::io;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Arc,OnceLock};
+#[path="capture_prepared.rs"]
+pub(super) mod prepared;
 
 use super::portal_session::{PortalOptions, PortalSource};
 use super::portal_tokens::{self, TokenKind};
@@ -149,6 +151,7 @@ fn wayland_list() -> WindowList {
 }
 
 impl ScreenHostBackend for LinuxBackend {
+    fn memory_facts(&self)->Option<crate::screen::core::frame_memory::MemoryFacts> {super::session_memory::facts()}
     fn platform(&self) -> HostPlatform {
         HostPlatform::Linux
     }
@@ -233,43 +236,71 @@ impl ScreenHostBackend for LinuxBackend {
         super::app_icons::load(entry)
     }
 
+    fn prepare_session_source(&self,owner:&str,session:&str,source:&SourceId,wanted:Option<FrameSize>,
+        control:bool,admission:Arc<crate::screen::core::capture_admission::SessionAdmission>)
+        ->Result<Box<dyn crate::screen::core::host_backend::PreparedSource>,SourceRefusal> {
+        if admission.session()!=session {return Err(SourceRefusal::new("capture_session_mismatch"));}
+        if matches!(source,SourceId::Synthetic) {
+            return SyntheticBackend.prepare_session_source(owner,session,source,wanted,control,admission);
+        }
+        let key=crate::screen::core::capture_admission::SourceKey::new(session,&format!("linux:{source:?}"))
+            .map_err(|error|SourceRefusal::new(&error.to_string()))?;
+        match self.session {
+            SessionKind::None=>Err(SourceRefusal::new("no_display")),
+            SessionKind::X11=>prepared::X11Prepared::new(source,key,admission,false)
+                .map(|source|Box::new(source) as Box<dyn crate::screen::core::host_backend::PreparedSource>),
+            SessionKind::Wayland=>match source {
+                SourceId::Monitor(id) if id==PORTAL_MONITOR_ID=>{
+                    let desktop=std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+                    crate::screen::core::host_admission::prepare_registered(
+                        key.clone(),admission.clone(),|| {
+                            prepared::PortalPrepared::new(PortalOptions {
+                                remote_desktop:control && remote_desktop_portal(&desktop),
+                                pipewire_library:self.pipewire_library},key,admission)
+                                .map(|source|Box::new(source) as Box<dyn crate::screen::core::host_backend::PreparedSource>)
+                                .map_err(|error|SourceRefusal::new(&format!("portal: {error}")))
+                        })
+                }
+                _=>Err(SourceRefusal::new(PORTAL_SELECTS_SOURCE)),
+            }
+        }
+    }
+    fn prepare_family_member(&self,_owner:&str,session:&str,native:crate::remote_window::NativeWindowId,
+        admission:Arc<crate::screen::core::capture_admission::SessionAdmission>)
+        ->Result<Box<dyn crate::screen::core::host_backend::PreparedSource>,SourceRefusal> {
+        if admission.session()!=session {return Err(SourceRefusal::new("capture_session_mismatch"));}
+        match self.session {
+            SessionKind::X11=>{
+                let source=SourceId::Window(native.0.to_string());
+                let key=crate::screen::core::capture_admission::SourceKey::new(session,&format!("linux:{source:?}"))
+                    .map_err(|error|SourceRefusal::new(&error.to_string()))?;
+                prepared::X11Prepared::new(&source,key,admission,true)
+                    .map(|source|Box::new(source) as Box<dyn crate::screen::core::host_backend::PreparedSource>)
+            }
+            SessionKind::Wayland=>Err(SourceRefusal::new(PORTAL_SELECTS_SOURCE)),
+            SessionKind::None=>Err(SourceRefusal::new("no_display")),
+        }
+    }
+
     fn open_source(
         &self,
         source: &SourceId,
         wanted: Option<FrameSize>,
     ) -> Result<Box<dyn ScreenSource>, SourceRefusal> {
-        if matches!(source, SourceId::Synthetic) {
-            return SyntheticBackend.open_source(source, wanted);
+        let _=wanted;
+        if self.session==SessionKind::None && !matches!(source,SourceId::Synthetic) {
+            return Err(SourceRefusal::new("no_display"));
         }
-        match self.session {
-            SessionKind::None => Err(SourceRefusal::new("no_display")),
-            SessionKind::X11 => x11_capture::X11Source::open(source)
-                .map(|opened| Box::new(opened) as Box<dyn ScreenSource>),
-            SessionKind::Wayland => match source {
-                SourceId::Monitor(id) if id == PORTAL_MONITOR_ID => {
-                    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
-                    let options = PortalOptions {
-                        remote_desktop: crate::screen::os::host_worker_main::session_controls()
-                            && remote_desktop_portal(&desktop),
-                        pipewire_library: self.pipewire_library,
-                    };
-                    PortalSource::open(options)
-                        .map(|opened| Box::new(opened) as Box<dyn ScreenSource>)
-                        .map_err(|error| SourceRefusal::new(&format!("portal: {error}")))
-                }
-                _ => Err(SourceRefusal::new(PORTAL_SELECTS_SOURCE)),
-            },
+        if self.session==SessionKind::Wayland && !matches!(source,SourceId::Synthetic)
+            && !matches!(source,SourceId::Monitor(id) if id==PORTAL_MONITOR_ID) {
+            return Err(SourceRefusal::new(PORTAL_SELECTS_SOURCE));
         }
+        Err(SourceRefusal::new("capture_grant_required"))
     }
 
-    fn open_family_member(&self,native:crate::remote_window::NativeWindowId)
+    fn open_family_member(&self,_native:crate::remote_window::NativeWindowId)
         ->Result<Box<dyn ScreenSource>,SourceRefusal> {
-        match self.session {
-            SessionKind::X11=>x11_capture::X11Source::open_family_window(native)
-                .map(|source|Box::new(source) as Box<dyn ScreenSource>),
-            SessionKind::Wayland=>Err(SourceRefusal::new(PORTAL_SELECTS_SOURCE)),
-            SessionKind::None=>Err(SourceRefusal::new("no_display")),
-        }
+        Err(SourceRefusal::new("capture_grant_required"))
     }
 
     fn open_encoder(
@@ -282,6 +313,12 @@ impl ScreenHostBackend for LinuxBackend {
 
     fn open_encoder_for_stage(&self, request: &crate::screen::core::host_stage::StageRequest) -> io::Result<Box<dyn ScreenEncoder>> {
         Ok(crate::screen::os::codec_inventory::registry().open_encoder_with_contract(&request.choice, request.size, request.fps, &[], request.frame_contract)?.encoder)
+    }
+
+    fn open_encoder_for_stage_admitted(&self,request:&crate::screen::core::host_stage::StageRequest,
+        grant:crate::screen::core::capture_admission::CaptureGrant)->io::Result<Box<dyn ScreenEncoder>> {
+        Ok(crate::screen::os::codec_inventory::registry()
+            .open_encoder_for_stage_admitted(request,&[],grant)?.encoder)
     }
 
     fn inject(&self, events: &[InputEvent]) -> Result<(), ControlBlock> {

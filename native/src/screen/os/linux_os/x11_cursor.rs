@@ -3,9 +3,13 @@
 //! from XFixes (`GetCursorImage`, ARGB32 with premultiplied alpha) blended
 //! onto the CPU copy. Outside the captured area nothing is drawn.
 use std::io;
+use std::sync::Arc;
+use super::x11_capture::admission_stream::{CaptureConnection, Gate};
+use crate::screen::core::capture_admission::{CaptureAuthority,CaptureGrant,CaptureSlice};
 
 use x11rb::connection::Connection;
 use x11rb::protocol::xfixes::ConnectionExt as _;
+use x11rb::protocol::xproto::ConnectionExt as _;
 
 use crate::screen::core::pixel_convert::FrameSize;
 
@@ -29,20 +33,27 @@ pub(crate) fn enable<C: Connection>(conn: &C) -> io::Result<()> {
     Ok(())
 }
 
-/// The current pointer image.
-pub(crate) fn fetch<C: Connection>(conn: &C) -> io::Result<CursorImage> {
-    let reply = conn
-        .xfixes_get_cursor_image()
-        .map_err(io::Error::other)?
-        .reply()
-        .map_err(io::Error::other)?;
-    Ok(CursorImage {
-        x: i32::from(reply.x) - i32::from(reply.xhot),
-        y: i32::from(reply.y) - i32::from(reply.yhot),
-        width: u32::from(reply.width),
-        height: u32::from(reply.height),
-        argb: reply.cursor_image,
-    })
+/// The parsed pixels are destroyed before their promise.
+pub(crate) struct AdmittedCursor {pub image:CursorImage,_slice:CaptureSlice}
+/// The actual dimensions arrive in the fixed reply header, before either
+/// x11rb's raw buffer or its parsed ARGB Vec is allowed to grow.
+pub(crate) fn fetch(conn:&CaptureConnection, gate:&Gate, grant:&CaptureGrant,
+    authority:Arc<dyn CaptureAuthority>)->io::Result<AdmittedCursor> {
+    let fence=conn.get_input_focus().map_err(io::Error::other)?;
+    let sequence=fence.sequence_number().checked_add(1).ok_or_else(||io::Error::other("x11 sequence exhausted"))?;
+    fence.reply().map_err(io::Error::other)?;
+    gate.cursor(sequence,grant,authority)?;
+    let cookie=conn.xfixes_get_cursor_image().map_err(io::Error::other)?;
+    if cookie.sequence_number()!=sequence {return Err(io::Error::other("x11 cursor sequence changed"));}
+    let reply=cookie.reply().map_err(io::Error::other)?;
+    let slice=gate.finish()?.ok_or_else(||io::Error::other("cursor reply without admitted pixels"))?;
+    if reply.cursor_image.capacity() as u64 * 4 > slice.bytes() {
+        return Err(io::Error::other("cursor parser exceeded admitted capacity"));
+    }
+    Ok(AdmittedCursor {image:CursorImage {
+        x:i32::from(reply.x)-i32::from(reply.xhot),y:i32::from(reply.y)-i32::from(reply.yhot),
+        width:u32::from(reply.width),height:u32::from(reply.height),argb:reply.cursor_image,
+    },_slice:slice})
 }
 
 /// Blends `cursor` onto the BGRA picture `target` of `size`, whose top-left
