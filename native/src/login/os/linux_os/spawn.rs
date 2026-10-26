@@ -2,15 +2,26 @@
 use std::{fs::File, io::{self, Read, Seek, SeekFrom, Write}, os::{fd::{AsRawFd, FromRawFd}, unix::process::CommandExt}, process::{Child, Command, Stdio}, time::{Duration, Instant}};
 use crate::login::{core::model::{SessionBinding, HELPER_SWITCH, PROBE_SWITCH}, os::shared::{child::{Lifetime, Spawned}, denied, installation::{self, Installation}}};
 struct Life(Child);
-impl Drop for Life { fn drop(&mut self) { self.stop(); } }
+impl Drop for Life { fn drop(&mut self) { let _ = self.stop(); } }
 impl Lifetime for Life {
     fn process_id(&self) -> u32 { self.0.id() }
-    fn stop(&mut self) {
-        if self.0.try_wait().ok().flatten().is_some() { return; }
+    fn stop(&mut self) -> bool {
+        match self.0.try_wait() {Ok(Some(_)) => return true, Ok(None) => {}, Err(_) => return false}
         unsafe { libc::kill(self.0.id() as i32, libc::SIGTERM); }
         let end = Instant::now() + Duration::from_secs(2);
-        while Instant::now() < end { if self.0.try_wait().ok().flatten().is_some() { return; } std::thread::sleep(Duration::from_millis(20)); }
-        let _ = self.0.kill(); let _ = self.0.wait();
+        while Instant::now() < end {
+            match self.0.try_wait() {Ok(Some(_)) => return true, Ok(None) => {}, Err(_) => return false}
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        // kill success is not an exit fact. A failed/nonresponsive wait remains
+        // in the retirement owner and keeps its admission alive.
+        let _ = self.0.kill();
+        let end = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < end {
+            match self.0.try_wait() {Ok(Some(_)) => return true, Ok(None) => {}, Err(_) => return false}
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        false
     }
 }
 pub(crate) fn spawn(install: &Installation, binding: &SessionBinding, probe: bool) -> io::Result<Spawned> {
