@@ -1425,8 +1425,9 @@ Der vollständige Flow (bauen → Feed → GitHub-Release → Selbst-Update) ste
 **[`docs/RELEASING.md`](docs/RELEASING.md)**. Kurz:
 
 1. Den gesamten vorgesehenen Aufgabenblock fertigstellen und über seine eine
-   automatisierte Task-Suite validieren. Der gepushte Head-Commit endet dafür
-   in `[task candidate]`, damit die allgemeine Push-Matrix übersprungen wird und
+   automatisierte Task-Suite validieren. Die Nachricht des gepushten Head-Commits
+   enthält dafür `[task candidate]`; ein Marker im Betreff gilt auch mit
+   zusätzlichem Committext. Damit wird die allgemeine Push-Matrix übersprungen und
    nur die exakt an den SHA gebundene Task-Suite Build-/Test-Arbeit ausführt.
    Zwischencommits sind keine Releases.
    Der Sync-Verlässlichkeitsblock nutzt ausschließlich `sync-reliability-task.yml`

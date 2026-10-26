@@ -139,6 +139,7 @@ Fernfenster, Programmstart und RDP besitzen abgegrenzte Umsetzungsaufträge.
 | B6-R9 produktiver Login-Empfang und Desktop-/Android-Bildbesitz, Ergänzungsplan | `capture_admission_plan` (Folgeauftrag) | Nutzervorgabe `gpt-6-astra`, `max` | 9 |
 | B6-R9 Windows-Capture vor Allokation und letzter Bildbesitz | `capture_windows` | `gpt-6.1-sol`, `high` | 8 |
 | B6-R9 Linux-Capture, X11-Replygrenze und PipeWire-Verhandlung | `capture_linux` | `gpt-6.1-sol`, `xhigh` | 9 |
+| B6-R9 Host-/Workerzulassung, Bildtransfer und Familienbesitz | `capture_core` (Folgeauftrag) | `gpt-6.1-sol`, `xhigh` | 9 |
 
 Belegt sind die expliziten Modell-/Effortparameter der genannten Hostaufrufe.
 Antwortmodell-Metadaten sind über das verwendete Collaboration-Werkzeug nicht
@@ -878,3 +879,34 @@ delegierten `SessionAdmission`-Kontext auch im Kindprozess verwendbar.
 Familienpläne unterscheiden nun gleichzeitig lebende von seriell transienten
 Mitgliedern; ihre tatsächlichen Slices unterliegen weiterhin einem gemeinsamen
 Summenzähler. Diese Kernanschlüsse sind Quellcodebefunde ohne Laufzeitabnahme.
+
+
+Der Besitzerkern und das Rendererpaket sind als Quellcheckpoint `8baeebbc`
+auf `main` gepusht. Die vorherige native Plattformaktivierung ist damit nicht
+als vollständig korrigiert erklärt. Der nächste zusammenhängende Anschluss
+gehört dem bisherigen Kernagenten: Hostpipeline, Prepare/Activate, private
+Workercredits, Antwortbesitz, synthetische Quelle und Familienkomposition.
+Die erneute Codex-Auswahl (21 Punkte, Grad 9, coding) bestätigt seine
+bestehende Startkonfiguration `gpt-6.1-sol`/`xhigh`. Native MF-/OpenH264-Adapter
+bleiben eine folgende abgegrenzte Integration am dabei festgelegten Codecvertrag.
+
+
+### Korrektur des unbeabsichtigten Push-Laufs
+
+Der Push von `8baeebbc` löste entgegen der beabsichtigten Task-Markierung den
+allgemeinen Lauf [40275123530](https://github.com/b1ue-man/smart-explorer/actions/runs/40275123530)
+aus. Der Workflow verwendete `endsWith` für die gesamte Commitnachricht;
+der Marker stand im Betreff, danach folgte ein Committext. Der Windowsjob
+begann seinen Schritt „Native Windows library tests“. Main forderte nach
+Feststellung den Abbruch an; die API bestätigte den Auftrag mit HTTP 202.
+GitHub bestätigt den Abschluss als `completed/cancelled` am
+2026-10-26 um 05:44:04 UTC. Welche einzelnen Tests bis dahin ausgeführt wurden,
+ist nicht belegt. Der Lauf ist keine vereinbarte Task-Abnahme und liefert
+keinen bestätigten Meilenstein. Frühere Aussagen „kein Build/Test gestartet“
+bezeichnen ausschließlich den Stand vor diesem unbeabsichtigten Push-Auslöser.
+
+Der Push-Guard prüft den ausdrücklich gesetzten `[task candidate]`-Marker
+künftig mit `contains`; README und Releaseanleitung beschreiben dieselbe
+Semantik. Die geplante Reihenfolge bleibt Gesamtreview, genau eine gezielte
+Remote-Suite und ein terminaler Remote-Release. Während des unbeabsichtigten Laufs wurde kein zusätzlicher
+Umsetzungsagent gestartet.

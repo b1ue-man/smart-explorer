@@ -697,7 +697,8 @@ promote `release-native`, write `version.txt`, or publish anything.
 
 On every ordinary branch push and pull request, `build.yml` runs development
 validation on native Windows and Ubuntu/mingw. A pushed candidate whose head
-commit ends in `[task candidate]` is the deliberate exception: the ordinary
+commit message contains `[task candidate]` is the deliberate exception: a marker
+in the subject remains effective when the commit also has a body. The ordinary
 matrix stays skipped while the one exact-SHA task-level workflow evaluates the
 batch. The ordinary matrix otherwise covers formatting, dependency audit,
 Windows-target checks, native Windows library and standalone-`se` tests,
