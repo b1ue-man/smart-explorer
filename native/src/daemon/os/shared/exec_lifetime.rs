@@ -14,6 +14,10 @@ use crate::daemon::{exec_state::ExecState, ipc_protocol::{
 // The existing local Exec frame deadline also bounds the control attachment.
 const ATTACH_TIMEOUT: Duration = super::LOCAL_EVENT_WRITE_TIMEOUT;
 
+#[cfg(test)]
+#[path = "batches_exec_lifetime_task_tests.rs"]
+mod batches_exec_lifetime_task_tests;
+
 #[derive(Default)]
 struct OwnerState {
     claimed: bool,

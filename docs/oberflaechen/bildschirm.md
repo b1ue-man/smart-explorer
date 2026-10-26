@@ -215,12 +215,17 @@ interne Ressourcenrechnung, keine physische Reservierung gegen fremde Prozesse.
 Die aktuelle Renderergrenze verwendet konkrete `RendererOwner`-/`RenderSlot`-
 Besitzer für CPU-/YUV-Uploads, Renderflächen und ausstehendes Retirement. Der
 Glow-F3-Quellkandidat gibt fehlgeschlagene Uploads und Draws bis zur
-Präsentationsentscheidung weiter. Der statische Nachreview hat zusätzlich eine
-noch zu korrigierende Weiterverwendung alter Login-Eingabebelege nach einem
-Rendererfehler festgestellt. Der Capture-Batchreview belegt Fehler an
-Cursorzulassung, SHM-Import, Worker-Ausgabesperre und Formatwechsel; deren
-Korrektur läuft im selben Gesamtbatch. Dieser Dokumentstand bestätigt weder
-die vollständige Speicherbilanz noch einen ausgeführten 4K-Nachweis.
+Präsentationsentscheidung weiter. Der anschließende Quellfix `43f46c8f` entzieht
+auch bereits bestätigte Login-Input-/SAS-Belege am tatsächlichen Fehlerpfad;
+veraltete Callbacks können keine neue gültige Darstellung entwerten. Die eigene
+statische Anti-Regressionsreview steht in
+[`fix-renderer-eingabefreigabe.md`](../plaene/2026-10-24-batches/fix-renderer-eingabefreigabe.md).
+Ein echter GL-/SAS-Lauf ist weiterhin nicht ausgeführt. Der Capturefix
+`f945ef59` korrigiert Cursorzulassung, SHM-Import, Worker-Ausgabesperre und
+Formatwechsel; seine eigene statische Anti-Regressionsreview steht in
+[`fix-capture-integration.md`](../plaene/2026-10-24-batches/fix-capture-integration.md).
+Dieser Dokumentstand bestätigt weder die vollständige Speicherbilanz noch
+einen ausgeführten 4K-Nachweis.
 
 CLI und MCP erhalten Metadaten, Quellen, Standbilder und Steuerbefehle über
 bestehende Screen-Verträge. Livebilder werden von Desktop-/Androidrenderern

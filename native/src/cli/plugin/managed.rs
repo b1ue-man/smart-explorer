@@ -1,4 +1,7 @@
 //! Compare-before-replace transactions for our own profile fields and files.
+#[cfg(test)]
+#[path = "batches_managed_task_tests.rs"]
+mod batches_managed_task_tests;
 use std::path::Path;
 use std::io::Write;
 use serde_json::Value;

@@ -994,7 +994,7 @@ Core-/Workerintegration, Linux-Imports, Android-Fixtureanschluss, gemeinsame
 Remote-Suite und terminaler Remote-Release bleiben noch offen.
 
 
-### Präzisierung der Reviews und Android-Fixtureplanung, 2026-10-26
+### Historischer Zwischenstand der Reviews und Android-Fixtureplanung, 2026-10-26
 
 Der Login-Batchreview liegt in `review-login-bildspeicher.md`. F1 (Rollback nach
 nativer Androidbildübernahme) und F2 (frische Präsentationsbelege nach
@@ -1018,7 +1018,7 @@ beim Refokus. Rust-AST und Whitespace sind statisch geprüft; keine Fixture wurd
 ausgeführt. Der Commit ist ein Entwicklungscheckpoint, kein Release.
 
 
-### Captureintegration und aktuelle Batchbefunde, 2026-10-26
+### Captureintegration und Batchbefunde vor den abschließenden Fixes, 2026-10-26
 
 Die folgenden kohärenten Quellmeilensteine sind auf `main` committed und bis
 `f120f910` erfolgreich auf `origin/main` gepusht:
@@ -1065,3 +1065,28 @@ Die frische normale Gesamtreview und die zwei unabhängigen Regressionsreviews
 gegen `v0.5.184` bleiben nach Integration dieser Korrekturen ausstehend. Erst
 danach folgt die eine Remote-Task-Suite mit ihrem Fixloop und der eine terminale
 vollständige Remote-Release.
+
+
+### Integrierte Batchfixes und gemeinsamer Reviewkandidat, 2026-10-26
+
+Die drei zuständigen Fixautoren haben ihren vollständigen Zyklus jeweils
+selbst abgeschlossen: Funktionsauflistung, direkte und indirekte Kettenkarte,
+Fixplan, Umsetzung und eigene statische Anti-Regressionsreview. Die
+ursprünglichen Reviewer haben keinen Teil dieses Fixzyklus übernommen.
+
+| Commit | Konkretes Ergebnis und eigener Abschlussbericht |
+|---|---|
+| `8ac10dc8` | Android erhält Claim-/Aliasbesitz bei fehlgeschlagener Übernahme, Konstruktor- und Threadstartfehlern sowie Projection-, Screenshot-, Access-Unit- und Hybridinputübergaben. Bericht: [fix-android-capturebesitz.md](fix-android-capturebesitz.md). |
+| `43f46c8f` | Ein tatsächlicher Glow-Upload-/Drawfehler entzieht bereits bestätigte Login-Input-/SAS-Belege vor einem möglichen blockierenden Abschluss. Veraltete Callbacks lassen eine neue gültige Darstellung bestehen. Bericht: [fix-renderer-eingabefreigabe.md](fix-renderer-eingabefreigabe.md). |
+| `f945ef59` | Bildgebundene Cursorcredits ersetzen keinen Parentgrant; Workertransport hält Ressourcen außerhalb der Ausgabesperre; alte Antworten und konkrete Pausengründe bleiben bei Quellenwechsel erhalten; PipeWire kann denselben Formatbedarf nach temporärem Creditmangel erneut zulassen. Bericht: [fix-capture-integration.md](fix-capture-integration.md). |
+
+Die Aussagen in den vorstehenden chronologischen Zwischenständen über noch
+laufende Coreintegration, Linuximporte, Android-Fixtureanschlüsse und diese
+Batchfixes sind damit historisch. Die gemeinsame Suiteauswahl enthält ihre
+konkreten vorbereiteten Verhaltensfälle. Die lokale AST-/Textprüfung liefert
+keinen Typ-, Compiler-, Geräte- oder Laufzeitnachweis.
+
+Die normale frische Gesamtreview und die beiden zusätzlichen unabhängigen
+Regressionsreviews gegen den tatsächlich letzten veröffentlichten Release
+stehen noch aus. Erst danach folgen die eine Remote-Task-Suite einschließlich
+notwendiger Fixwiederholungen und der eine terminale vollständige Remote-Release.

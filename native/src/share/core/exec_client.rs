@@ -97,6 +97,12 @@ mod spawn;
 #[path = "exec_client_input.rs"]
 mod input;
 pub(crate) use input::ExecInputSender;
+#[cfg(test)]
+pub(crate) fn batches_fixture_sender(
+    data: mpsc::Sender<ExecClientInput>, cancel: watch::Sender<bool>,
+) -> ExecInputSender {
+    ExecInputSender::new(data, cancel)
+}
 pub(crate) use spawn::{spawn_connected, spawn_connected_retained, spawn_connected_cancellable};
 
 pub(crate) async fn run_connected(

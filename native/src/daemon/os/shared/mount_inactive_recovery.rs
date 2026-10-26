@@ -228,3 +228,7 @@ fn replace_private(directory: &Path, file_name: &str, bytes: &[u8]) -> io::Resul
 }
 
 fn invalid(detail: &str) -> io::Error { io::Error::new(io::ErrorKind::InvalidData, detail) }
+
+#[cfg(test)]
+#[path = "batches_recovery_owner_task_tests.rs"]
+mod batches_recovery_owner_task_tests;

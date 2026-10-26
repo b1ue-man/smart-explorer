@@ -1,4 +1,7 @@
 //! The update owner never waits for operations while holding control.lock.
+#[cfg(all(test, any(windows, target_os = "linux")))]
+#[path = "batches_lifecycle_task_tests.rs"]
+mod batches_lifecycle_task_tests;
 use crate::mcp_launcher::{os,Installation,Manifest};
 use crate::mcp_launcher::core::lifecycle::{Phase,UpdateState,InstallationTarget};
 use crate::mcp_launcher::installation::{atomic_bytes,atomic_json,hash_bytes};

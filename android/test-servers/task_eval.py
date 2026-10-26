@@ -33,7 +33,8 @@ def source_tests(root: Path) -> dict:
         if not package:
             continue
         classes = [(m.start(), m.group(1)) for m in re.finditer(r"^(?:internal\s+)?class\s+(\w+)", text, re.M)]
-        for match in re.finditer(r"@Test\b[^\n]*\n\s*(?:@\w+[^\n]*\n\s*)*fun\s+(\w+)", text):
+        # Kotlin permits @Test and fun on the same line as well as separate lines.
+        for match in re.finditer(r"@Test\b(?:[ \t]*|[^\n]*\n\s*(?:@\w+[^\n]*\n\s*)*)fun\s+(\w+)", text):
             owner = [name for start, name in classes if start < match.start()]
             if not owner:
                 raise SystemExit(f"{path}: @Test outside a class")

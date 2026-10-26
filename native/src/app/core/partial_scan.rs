@@ -190,3 +190,7 @@ pub(super) fn prepare_partial_analytics(previous: &crate::analytics::SizeNode,
 fn same_retry_path(a: &str, b: &str) -> bool {
     crate::scanner::retry_contains(a, b) && crate::scanner::retry_contains(b, a)
 }
+
+#[cfg(test)]
+#[path = "batches_partial_scan_task_tests.rs"]
+mod batches_task_tests;

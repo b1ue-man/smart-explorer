@@ -213,3 +213,7 @@ pub(crate) fn recovery_identity(site: &str) -> Result<serde_json::Value, String>
         "root_binding": binding, "binding_status": status,
     }))
 }
+
+#[cfg(test)]
+#[path = "batches_resolved_policy_task_tests.rs"]
+mod batches_resolved_policy_task_tests;

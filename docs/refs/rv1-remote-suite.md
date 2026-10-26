@@ -1,4 +1,149 @@
-# RV1: schmale Remote-Suite-APIs
+# Gemeinsame Remote-Task-Suite
+
+## Aktiver Gesamtbatch B1–B8, P31 und P32
+
+Stand und Primärquellen erneut geprüft am 2026-10-26. Der bestehende Einstieg
+`.github/workflows/review-task.yml` → `native/test-review-task.sh` wird für den
+vollständigen laufenden Gesamtbatch verwendet. Die Ausführung ist noch nicht
+erfolgt. Maßgeblich sind `docs/plaene/2026-10-24-batches/batches.md`,
+`vertraege.md`, `umsetzung.md` und `native/review-task-manifest.json`.
+Vor dem ersten Lauf müssen der normale frische Astra/xhigh-Gesamtreview und die
+zusätzlichen unabhängigen Astra/max- und Sol-6.1/max-Regressionsreviews erfolgt
+sein. Alle Agenten laufen über Codex. Die Regressionen werden gegen den
+veröffentlichten Tag v0.5.184 geprüft; Scope, API-Beleg und Fixvertrag stehen in
+`docs/plaene/2026-10-24-batches/regressionsreview.md`. Jeder aus diesen beiden
+Reviews hervorgehende Fix einschließlich Verknüpfungskarte, Plan und anschließender
+Anti-Regressionsprüfung bleibt vollständig bei demselben Sol-6.1/max-Fixagenten.
+Die Laufzeitbestätigung nutzt ausschließlich diese eine Remote-Suite.
+
+Das Manifest bindet alle aktiven P-Meilenstein-IDs an die konkrete Auswahl und
+deren erwartetes Verhalten. Der native Runner entdeckt die verfügbaren Namen
+aus dem tatsächlich gebauten Library-Testhost, verwendet nur `batches_`,
+`p18d_` und die ausdrücklich benannten direkt betroffenen Integrationen und
+startet diese Auswahl einmal pro Zielplattform. Ein ausschließlich vom
+optischen Besitzerfixture gestarteter Kindprozess ist aus dem Hauptlauf
+entfernt. Fehlende Namen oder fehlende erfolgreiche Abschlüsse sind Fehler.
+Das Manifest und die Ergebnisdateien nennen ausdrücklich die Grenzen ohne
+Live-Anbieter, physische Medien, reale sichere Desktops, öffentliche
+Netzpfade, OEM-Codecs und vollständige visuelle Abnahme. Ein Fixtureerfolg
+bestätigt nur die aufgeführten ausgeführten Fälle.
+
+Die Ressourcenabschnitte C1–C11, L1–L8, Android-F2–F6, Android-M1–M3/M5–M8, Glow-F3
+und Capture-R2–R5/Linux verwenden
+zusätzlich explizite Falllisten in `resource_milestones`. Der Runner löst diese
+Namen gegen die wirklich ausgewählten Methoden auf und nennt fehlende,
+mehrdeutige und nicht ausgeführte Fälle getrennt. C3/C4 benennen insbesondere
+Prepare/Activate, Originalcredits, grantlosen Start, Abbruch, EOF, Prozessende
+und gepufferte Antworten. C8 bindet den produktiven seriellen Familienplaner;
+C11 trennt neue Quellenidentität von weiterhin gemeinsamem W/X-Besitz. Die
+Registrierung der Fälle ist kein Beleg ihrer Ausführung. Android-M1–M3 benennt
+die Claim-/Alias-, Konstruktor- und Produzentenabschlussfälle aus
+`fix-android-capturebesitz.md`; M5–M8 ergänzen Projection-, Screenshot-, AU-
+und Hybridinputgrenzen. Echte Android-Allokations- und Codecfehler ohne
+Injektion bleiben dort ausdrücklich statisch geprüft. F3-Eingabefreigabe bindet die kontrollierten
+Login-/SAS-/Screen-Guardfälle aus `fix-renderer-eingabefreigabe.md`. Die
+Ressourcenbesitzer bleiben in diesen Fällen produktiv, die injizierten
+Fehlerereignisse sind keine beobachteten Gerätedefekte. Capture-R2–R5 bindet
+Parent-/Familienzusatzcredits, den echten Transportbesitz und Worker-Turnover
+an die Fälle aus `fix-capture-integration.md`; Capture-Linux ergänzt X11-Cursor
+und PipeWire-Wiederzulassung. Kontrollierte Protokoll- und Lebensdauerfälle
+ersetzen keinen echten X11-/Wayland-Compositorlauf.
+
+OpenH264 wird für den betroffenen Codecfall ausschließlich aus dem vorhandenen
+Cisco-Pin mit festem HTTPS-Ziel, komprimierter Größe und SHA-256 bereitgestellt.
+Der Download findet im temporären Remote-Fixtureprofil statt. Fehlendes Netz
+wird als nicht verfügbare Voraussetzung protokolliert; falsche Bytes sind ein
+Fehler. OpenH264- und Media-Foundation-Fälle können eine ausdrücklich benannte
+Nichtausführung melden, die nicht als bestanden zählt.
+
+Die beiden WGPU-Rendererfälle sind im Manifest ausdrücklich umgebungsabhängig.
+Fehlt tatsächlich ein Adapter, liefern sie eine benannte strukturierte
+Nichtausführung. Der Runner übernimmt diese Fälle in `not_executed`, entfernt
+sie aus `passed_fixtures` und aus den ausgeführten Meilensteinbelegen. Ein
+unbekannter oder doppelt gemeldeter Ausnahmename scheitert. `SE_SCREEN_TASK_GPU=1`
+macht einen fehlenden Adapter weiterhin zum Fehler. Der kontrollierte
+Glow-Besitzernachweis behauptet keinen realen GL-Kontext oder Treiber-Fence.
+Der gepinnte `egui_glow`-Library-Testhost gehört zu demselben Suiteeinstieg:
+`native.glow_scope` benennt ausschließlich seine Fehlerledgerfälle. Der Runner
+verwendet denselben Lock und Buildcache, filtert auf genau deren Präfix und
+schreibt `glow-scope-acceptance.json` mit Kandidat, Binärhash und tatsächlichen
+Abschlüssen. Kontrollierte GL-Fehlerwerte gelten nicht als physischer Treiberfehler.
+Die Library benötigt dafür keine Upstream-Fensterbeispiel-Devabhängigkeiten;
+der begrenzte Vendor-Manifestunterschied steht in
+`vendor/SMART_EXPLORER_GL_ERRORS.md`.
+Der am 2026-10-26 erneut geprüfte
+[libtest-Schalter `--show-output`](https://doc.rust-lang.org/rustc/tests/index.html#--show-output)
+stellt auch die Ausgaben erfolgreich zurückgekehrter Fälle für diese Auswertung bereit.
+
+Linux und Windows verwenden je einen inkrementellen Library-Testhost und die
+Entwicklungs-CLI `se` für den tatsächlich gestarteten Screenworker. Die
+Buildfingerprints schließen die gepinnten Iroh-/Noq- und egui_glow-Quellen unter
+Root-`vendor/` ein. Quelle, Compilerstand, Buildoptionen und Ausgabehash müssen zum Cache passen.
+Der unveränderte Share-Server wird für diese Auswahl nicht neu gebaut.
+AppData-/XDG-Verzeichnisse liegen in temporären Fixtureprofilen; HOME und
+CODEX_HOME werden nicht umgebogen. Die native Auswahl läuft seriell wegen
+prozessweiter Fixturevariablen; Relay-Umgebungsüberschreibungen werden entfernt.
+
+Android baut einmal x86_64-JNI, Debug-APK und Instrumentation-APK und führt die
+JVM-Klassen aus dem Manifest aus. `unit-acceptance.json` ordnet die tatsächlich
+ausgewerteten Gradle-XML-Ergebnisse den P-Meilensteinen und den expliziten
+Ressourcenfällen zu; diese Zuordnung startet keinen zusätzlichen JVM-Lauf.
+Der bestehende Quellauswerter berücksichtigt sowohl `@Test fun` auf einer Zeile
+als auch getrennte Annotation-/Funktionszeilen. Das standardmäßig abgeschaltete Cargo-Feature
+`android-instrumentation-fixtures` ist ausschließlich für diesen Debugbau
+aktiv. Gradle verwendet dessen Bibliotheken aus `src/debug/jniLibs`; Release
+verwendet weiterhin die getrennten produktiven Bytes aus `src/main/jniLibs`.
+`android/check-image-fixture-package.py` liest die tatsächlichen DEX-Klassendefinitionen
+und die dynamischen JNI-Exporte mit NDK-`llvm-nm`: Debug braucht die Fixtureklasse
+und ihre vollständigen Exporte; die Test-APK enthält keine eigene `.so`.
+Der terminale Release prüft an der bereits gebauten APK, dass Fixtureklasse und
+JNI-Exporte fehlen. Er erzeugt dafür keinen zusätzlichen Build. Eine aktivierte
+Fixturefunktion in einem optimierten Rustbau wird bereits per `compile_error!`
+abgewiesen. Diese Quellanschlüsse sind noch kein ausgeführter APK-Nachweis.
+
+Nur diese beiden Debug-/Instrumentation-APKs werden mit Kandidaten-SHA
+und SHA-256 an den Emulator übergeben. Der Gerätehelfer entdeckt den installierten
+Runner, dessen Zielpaket und das app-private Verzeichnis selbst. Er erzeugt auf
+dem Remote-Runner ein zwölf Sekunden langes H.264/AAC-Video und übergibt dessen
+wirklichen Pfad als `batchesVideoPath`. Die Instrumentation führt die gesamte
+Auswahl in einem Aufruf aus; der bestehende strenge Auswerter akzeptiert keine
+übersprungenen oder fehlenden Fälle. Systemlayoutwechsel werden über Androids
+Rotationszustand ausgelöst und in den Fixtures zurückgesetzt; das belegt keinen
+physischen Rotationssensor.
+
+Die Routineprüfung umfasst echte Dateien und Recovery-Dokumente, atomare
+Bildrekonstruktion, gepinnte TCP-Sockets, den realen Iroh-/Noq-Sendegate,
+Compose-Darstellung sowie Androids Medienwiedergabe. Mock-Provideridentitäten,
+synthetische Ressourcenfakten und simulierte OS-Dispatchs sind in den jeweiligen
+Fixtures ausdrücklich gekennzeichnet. Der native Größen-/Formatbericht bleibt
+kandidatengebunden; Rustfmt wird ausschließlich remote ausgeführt. Die
+STDIN-Übergabe formatiert nur den übergebenen Text: Die am 2026-10-26 gelesene
+[Rustfmt-Modulauflösung](https://github.com/rust-lang/rustfmt/blob/master/src/formatting.rs)
+schaltet die rekursive Auflösung bei `FileName::Stdin` ausdrücklich ab. Damit
+wird aus diesem Bericht kein zusätzlicher Formatlauf über ungeänderte Module. Die nativen
+Jobs haben 360 Minuten, Android-Build 240 Minuten und der Gerätejob 360 Minuten.
+Eine Fehlerkorrektur verwendet denselben Einstieg und den inkrementellen Cache.
+Releasebau und Veröffentlichung gehören nicht in diese Entwicklungssuite.
+
+API-Belege: [libtest-Auswahl](https://doc.rust-lang.org/rustc/tests/index.html),
+[Android Instrumentation](https://developer.android.com/studio/test/command-line),
+[FFmpeg-Filter](https://ffmpeg.org/ffmpeg-filters.html),
+[Python subprocess](https://docs.python.org/3/library/subprocess.html).
+
+API-Abgleich der Paketgrenze, 2026-10-26:
+[Android-Quellvarianten](https://developer.android.com/build/build-variants#sourcesets),
+[AOSP-DEX-Klassen-, Typ- und Stringtabellen](https://source.android.com/docs/core/runtime/dex-format),
+[LLVM-nm für dynamische definierte Exporte](https://llvm.org/docs/CommandGuide/llvm-nm.html).
+Die erlaubte gleichzeilige Kotlin-Annotation wurde am 2026-10-26 gegen
+[Kotlin: Java annotations](https://kotlinlang.org/docs/annotations.html#java-annotations)
+abgeglichen; alle im aktuellen Androidbestand vorhandenen Testdeklarationen
+werden durch den statischen Quellabgleich erfasst. Das ist keine Testausführung.
+
+## Historische RV1-Recherche und damalige Runnerfälle
+
+Die folgenden Abschnitte halten frühere RV1-/Sync-Untersuchungen fest. Ihre
+FUSE-, Volume-, Altversions- und Share-Serverauswahl gehört nicht automatisch
+zum aktuellen Gesamtbatch; die aktive Auswahl steht ausschließlich im Manifest.
 
 Geprüft am 2026-10-03. Diese API-Lückenprüfung betrifft ausschließlich die gemeinsame
 Abnahme des vorhandenen RV1-Plans, keinen zusätzlichen Projekt-Review.

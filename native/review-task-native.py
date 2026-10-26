@@ -1,48 +1,74 @@
 #!/usr/bin/env python3
-"""Native stages of the single RV1 remote suite; no local execution."""
+"""Native stages of the one B1–B8/P31/P32 remote suite; no local execution."""
 import argparse
-import ast
 import difflib
 import hashlib
-import ipaddress
 import json
 import os
 from pathlib import Path
+import platform
+import re
 import shutil
 import signal
 import subprocess
 import sys
 import tempfile
+import urllib.error
 import urllib.request
+import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parent.parent
-BASE = "7fc17ecf355b6473a506d756ad4c1fb2d2c0d173"
-PREFIXES = ["review_task_", "rv1_remote_provider_task_", "sync_paths_task_", "sync_links_task_", "engine_provider_"]
-EXTRA = ["walks_searches_and_hashes_report_listing_failures",
-    "transfer_engine_task_sized_stage_commits_only_exact_length",
-    "desktop_merge_preserves_crlf_final_separator_and_empty_line",
-    "desktop_merge_excluding_all_lines_does_not_create_newline",
-    "desktop_merge_rejects_lossy_and_mixed_text_without_changing_bytes",
-    "desktop_job_state_failed_attempt_does_not_hide_prior_success",
-    "desktop_job_state_block_takes_precedence_over_old_success_result",
-    "apply_one_removes_action_only_after_success",
-    "rename_swap_copies_both_final_paths_without_deleting_them",
-    "rename_swap_applies_and_persists_both_final_paths",
-    "ignored_remove_feed_never_becomes_a_delete_action",
-    "canceled_and_over_budget_feeds_fail_closed"]
-LINUX = ["link_like_destination_root_never_reaches_external_victim",
-    "link_like_destination_child_never_receives_copied_content",
-    "android_shared_storage_revoke_selection_and_weak_lifetime",
-    "android_shared_storage_registration_covers_both_revoke_orderings",
-    "android_sync_confirmation_consumed_once_preserves_later_change",
-    "android_sync_start_errors_keep_the_shared_failure_kind",
-    "android_sync_state_keeps_attempt_success_and_live_runner_distinct",
-    "android_host_platform_unknown_totals_are_not_zero"]
+BASE = "bea312ea79731d913a7dd3e79de2f5404401208a"
+MANIFEST = ROOT / "native/review-task-manifest.json"
+
+
+def manifest():
+    value = json.loads(MANIFEST.read_text())
+    if value["schema"] != 1 or value["baseline"] != BASE:
+        raise RuntimeError("Task manifest and reviewed baseline disagree.")
+    return value
 
 
 def sha(path):
     with Path(path).open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def openh264_fixture(directory, logs, env):
+    """Supply the existing codec fixture from the exact checked-in Cisco pin."""
+    if platform.machine().lower() not in {"x86_64", "amd64"}:
+        return
+    source = (ROOT / "native/src/screen/os/native_ffi/openh264_pins.rs").read_text()
+    target = 'windows' if os.name == "nt" else 'target_os = "linux"'
+    marker = '#[cfg(all(' + target + ', target_arch = "x86_64"))]'
+    if source.count(marker) != 1:
+        raise RuntimeError("OpenH264 fixture has no unique platform pin.")
+    block = source.split(marker, 1)[1].split("});", 1)[0]
+    url = re.search(r'url: "([^"]+)"', block).group(1)
+    expected = re.search(r'compressed_sha256: "([0-9a-f]{64})"', block).group(1)
+    size = int(re.search(r'compressed_size: ([0-9_]+)', block).group(1).replace("_", ""))
+    if not url.startswith("https://ciscobinary.openh264.org/") or size > 16 * 1024 * 1024:
+        raise RuntimeError("OpenH264 fixture pin exceeds its download boundary.")
+    path = Path(env["SE_SCREEN_TASK_OPENH264"]) if env.get("SE_SCREEN_TASK_OPENH264") else directory / "openh264.bz2"
+    if not env.get("SE_SCREEN_TASK_OPENH264"):
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, request, response, code, message, headers, new_url):
+                return None
+        try:
+            with urllib.request.build_opener(NoRedirect()).open(url, timeout=30) as response:
+                data = response.read(size + 1)
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            (logs / "openh264-prerequisite.json").write_text(json.dumps({
+                "status": "unavailable", "url": url, "reason": str(error)}, indent=2))
+            return
+        if len(data) != size or hashlib.sha256(data).hexdigest() != expected:
+            raise RuntimeError("OpenH264 download disagrees with its checked-in size or SHA-256.")
+        path.write_bytes(data)
+    if path.stat().st_size != size or sha(path) != expected:
+        raise RuntimeError("OpenH264 fixture disagrees with its checked-in size or SHA-256.")
+    env["SE_SCREEN_TASK_OPENH264"] = str(path.resolve())
+    (logs / "openh264-prerequisite.json").write_text(json.dumps({
+        "status": "available", "url": url, "compressed_sha256": expected}, indent=2))
 
 
 def interrupted(signum, frame):
@@ -63,7 +89,7 @@ def run(command, log, env, seconds=3600, cwd=ROOT, stderr=None):
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0)
             try:
                 code = proc.wait(timeout=seconds)
-            except (subprocess.TimeoutExpired, KeyboardInterrupt):
+            except (subprocess.TimeoutExpired, KeyboardInterrupt) as interruption:
                 if os.name == "nt":
                     subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], timeout=45, check=False)
                 else:
@@ -79,6 +105,8 @@ def run(command, log, env, seconds=3600, cwd=ROOT, stderr=None):
                         except ProcessLookupError:
                             pass
                 proc.wait(timeout=45)
+                if isinstance(interruption, KeyboardInterrupt):
+                    raise
                 raise RuntimeError("Deadline reached; owned child tree stopped. Inspect logs before retrying.")
         finally:
             if stderr:
@@ -97,7 +125,8 @@ def fingerprint(crate, target, env):
         inputs.append("vendor/iroh-relay-1.0.0")
     if crate == "native":
         inputs += ["native/build_support", "native/dokany-private", "native/prepare-dokany-private.ps1",
-            "native/app.rc", "native/app.manifest"]
+            "native/app.rc", "native/app.manifest", "vendor/iroh-1.3.0",
+            "vendor/noq-1.3.0", "vendor/noq-proto-1.3.0", "vendor/egui_glow-0.29.1"]
     digest = hashlib.sha256()
     for name in sorted(filter(None, output(["git", "ls-files", "-z", "--", *inputs]).split("\0"))):
         digest.update(name.encode())
@@ -109,8 +138,8 @@ def fingerprint(crate, target, env):
     return digest.hexdigest()
 
 
-def artifact(crate, name, kind, cache, logs, env):
-    stamp = fingerprint(crate, (name, kind), env)
+def artifact(crate, name, kind, cache, logs, env, package=None):
+    stamp = fingerprint(crate, (name, kind, package), env)
     dest = cache / crate / (name + ("-test" if kind == "test" else "") + (".exe" if os.name == "nt" else ""))
     meta = dest.with_suffix(dest.suffix + ".json")
     try:
@@ -122,8 +151,8 @@ def artifact(crate, name, kind, cache, logs, env):
         pass
     args = ["cargo", "test" if kind == "test" else "build", "--locked"]
     if crate == "native":
-        args += ["-p", "smart_explorer"]
-    args += ["--lib"] if name == "smart_explorer" else ["--bin", name]
+        args += ["-p", package or "smart_explorer"]
+    args += ["--lib"] if name in {"smart_explorer", "egui_glow"} else ["--bin", name]
     if kind == "test":
         args += ["--no-run"]
     args += ["--message-format=json"]
@@ -177,89 +206,144 @@ def format_patch(logs, env, candidate):
         raise RuntimeError("Changed Rust needs the candidate-bound remote format.patch or scoped size correction: " + "; ".join(problems))
 
 
-def lan_facts(logs, env):
-    if os.name == "nt":
-        values = json.loads(output(["powershell", "-NoProfile", "-Command",
-            "@((Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.AddressState -eq 'Preferred' }) | ForEach-Object { "
-            "[pscustomobject]@{ip=$_.IPAddress;index=$_.InterfaceIndex;name=$_.InterfaceAlias} }) | ConvertTo-Json -Compress"]))
-        if isinstance(values, dict):
-            values = [values]
-    else:
-        values = [{"ip": address["local"], "index": interface["ifindex"], "name": interface["ifname"]}
-            for interface in json.loads(output(["ip", "-j", "-4", "addr", "show", "up"]))
-            for address in interface.get("addr_info", []) if address.get("family") == "inet"]
-    choices = [value for value in values if any(ipaddress.ip_address(value["ip"]) in ipaddress.ip_network(net)
-        for net in ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"])
-        and not any(word in value["name"].lower() for word in ["docker", "veth", "loopback", "br-"])]
-    if not choices:
-        raise RuntimeError("The runner lacks a real private IPv4 interface for S09; no loopback fallback.")
-    facts = choices[0]
-    (logs / "lan-interface.json").write_text(json.dumps(facts, indent=2))
-    env.update(SE_REVIEW_LAN_IP=facts["ip"], SE_REVIEW_LAN_IFINDEX=str(facts["index"]), SE_REVIEW_LAN_IFNAME=facts["name"])
+def milestone_evidence(stage, selected, unavailable=(), platform=None):
+    rows = []
+    for point in manifest()["milestones"]:
+        key = {"native": "native_markers", "unit": "android_units", "device": "android_device"}[stage]
+        markers = point[key]
+        observed = sorted(name for name in selected if any(marker in name for marker in markers))
+        if markers and not observed:
+            raise RuntimeError("No selected fixture for " + point["point"] + " in " + stage)
+        if observed:
+            rows.append({"point": point["point"], "milestones": point["milestones"],
+                "expected": point["expected"], "executed_fixtures": observed,
+                "scope": "listed fixtures only; unverified boundaries remain unverified"})
+    # Resource ownership milestones need every named boundary. A generic batch
+    # prefix cannot prove that JNI, native import or renderer retirement ran.
+    platform = platform or ("windows" if os.name == "nt" else "linux")
+    skipped = {item["fixture"]: item["reason"] for item in unavailable}
+    for point in manifest().get("resource_milestones", []):
+        if stage == "native" and platform not in point.get("native_platforms", ["linux", "windows"]):
+            continue
+        cases = point.get(stage + "_cases", [])
+        if not cases:
+            continue
+        observed, omitted = [], []
+        for case in cases:
+            matches = [name for name in [*selected, *skipped]
+                if (name.endswith("::" + case) if stage == "native" else name == case)]
+            if len(matches) != 1:
+                raise RuntimeError("Missing or ambiguous resource boundary: " + point["id"] + ": " + case)
+            name = matches[0]
+            if name in skipped:
+                omitted.append({"fixture": name, "reason": skipped[name]})
+            else:
+                observed.append(name)
+        rows.append({"point": point["id"], "milestones": point["milestones"],
+            "expected": point["expected"], "executed_fixtures": observed,
+            "not_executed": omitted, "scope": point["scope"],
+            "result": "partially_verified" if omitted and observed else "unverified" if omitted else "passed"})
+    return rows
 
 
-def integrations():
-    # Reuse the established compatibility manifest without executing its suite.
-    tree = ast.parse((ROOT / "native/test-sync-paths-task.py").read_text())
-    for node in tree.body:
-        if isinstance(node, ast.Assign) and any(isinstance(name, ast.Name) and name.id == "INTEGRATIONS" for name in node.targets):
-            return ast.literal_eval(node.value) + EXTRA + ([] if os.name == "nt" else LINUX)
-    raise RuntimeError("Established compatibility manifest is absent.")
+def android_unit_evidence(logs, candidate):
+    """Map the already evaluated Gradle XML to this candidate's milestones."""
+    plan = manifest()
+    classes = set(plan["android"]["unit_classes"])
+    observed = set()
+    results = sorted((logs / "unit-test-results").glob("TEST-*.xml"))
+    if not results:
+        raise RuntimeError("No evaluated Android JVM XML was retained.")
+    for path in results:
+        for case in ET.parse(path).getroot().iter("testcase"):
+            name = f"{case.get('classname')}#{case.get('name')}"
+            if case.get("classname") not in classes or name in observed:
+                raise RuntimeError("Unexpected or duplicate Android JVM result: " + name)
+            if any(child.tag in {"failure", "error", "skipped"} for child in case):
+                raise RuntimeError("Unsuccessful Android JVM result: " + name)
+            observed.add(name)
+    if {name.split("#", 1)[0] for name in observed} != classes:
+        raise RuntimeError("Android JVM results omit a selected class.")
+    (logs / "unit-acceptance.json").write_text(json.dumps({
+        "candidate": candidate, "manifest_sha256": sha(MANIFEST),
+        "passed_fixtures": sorted(observed),
+        "milestone_evidence": milestone_evidence("unit", observed),
+        "result": "passed", "scope": "Selected JVM cases only; no Android codec or device execution."}, indent=2))
 
 
-def native_tests(binary, logs, env, server=False):
-    label = "server" if server else "native"
-    listing = logs / (label + "-available.txt")
+def native_tests(binary, logs, env):
+    plan = manifest()["native"]
+    listing = logs / "native-available.txt"
     run([binary, "--list", "--format", "terse"], listing, env, seconds=120)
     available = [line.removesuffix(": test") for line in listing.read_text().splitlines() if line.endswith(": test")]
-    filters = ["review_task_"] if server else list(PREFIXES)
-    if not server:
-        for suffix in integrations():
-            found = [name for name in available if name.endswith("::" + suffix)]
-            if len(found) != 1:
-                raise RuntimeError("Missing or ambiguous directly affected integration: " + suffix)
-            filters.append(suffix)
-    selected = [name for name in available if any(value in name for value in filters)]
-    if not selected:
-        raise RuntimeError("The fixture lacks RV1 acceptance cases.")
-    if not server:
-        for marker in ["review_task_y156_", "review_task_s09_transport_", "real_share_cross_peer",
-            "engine_provider_publication_", "engine_provider_account_identity_"]:
-            if not any(marker in name for name in selected):
-                raise RuntimeError("Missing mandatory RV1 signal: " + marker)
-    (logs / (label + "-selection.json")).write_text(json.dumps(selected, indent=2))
-    args = [binary, "--include-ignored", "--test-threads=1", *filters]
-    run_env = env
-    if os.name != "nt" and not server:
-        watch_limits = [name for name in selected if name.endswith("::review_task_watch_limit_falls_back_to_polling")]
-        if len(watch_limits) != 1:
-            raise RuntimeError("Missing or ambiguous real watch-limit acceptance.")
-        run_env = dict(env, SE_REVIEW_WATCH_LIMIT_CASE=watch_limits[0])
-        args = ["bash", ROOT / "native/review-task-runtime.sh", *args]
-    log = logs / (label + "-suite.log")
-    run(args, log, run_env, seconds=7200)
+    filters = list(plan["prefixes"])
+    platform = "windows" if os.name == "nt" else "linux"
+    for suffix in plan["integrations"] + plan.get(platform + "_integrations", []):
+        found = [name for name in available if name.endswith("::" + suffix)]
+        if len(found) != 1:
+            raise RuntimeError("Missing or ambiguous directly affected integration: " + suffix)
+        filters.append(suffix)
+    selected = sorted(name for name in available if any(value in name for value in filters)
+        and not any(name.endswith("::" + skip) for skip in plan["exclude"]))
+    for marker in plan["required_prefixes"] + plan.get(platform + "_required_prefixes", []):
+        if not any(marker in name for name in selected):
+            raise RuntimeError("Missing required batch behavior: " + marker)
+    (logs / "native-selection.json").write_text(json.dumps(selected, indent=2))
+    args = [binary, "--include-ignored", "--show-output", "--test-threads=1", *filters]
+    for suffix in plan["exclude"]:
+        args += ["--skip", suffix]
+    log = logs / "native-suite.log"
+    run(args, log, env, seconds=7200)
     result = log.read_text(errors="replace")
     for name in selected:
         if f"test {name} ... ok" not in result:
             raise RuntimeError("Missing successful acceptance: " + name)
-    (logs / (label + "-acceptance.json")).write_text(json.dumps({"candidate": env["CANDIDATE_SHA"],
-        "binary_sha256": sha(binary), "platform": sys.platform, "selected": selected, "result": "passed"}, indent=2))
+    unavailable = []
+    for line in result.splitlines():
+        if not line.startswith("SE_TASK_UNVERIFIED_JSON="):
+            continue
+        item = json.loads(line.split("=", 1)[1])
+        suffix, reason = item.get("fixture"), item.get("reason")
+        if suffix not in plan.get("environment_dependent", []) or not isinstance(reason, str) or not reason:
+            raise RuntimeError("Unrecognized environment-dependent fixture result: " + line)
+        matches = [name for name in selected if name.endswith("::" + suffix)]
+        if len(matches) != 1 or any(row["fixture"] == matches[0] for row in unavailable):
+            raise RuntimeError("Ambiguous or repeated unverified fixture: " + str(suffix))
+        unavailable.append({"fixture": matches[0], "reason": reason})
+    not_executed = {row["fixture"] for row in unavailable}
+    completed = [name for name in selected if name not in not_executed]
+    evidence = milestone_evidence("native", completed, unavailable, platform)
+    (logs / "native-acceptance.json").write_text(json.dumps({"candidate": env["CANDIDATE_SHA"],
+        "manifest_sha256": sha(MANIFEST), "binary_sha256": sha(binary), "platform": platform,
+        "selected": selected, "passed_fixtures": completed, "not_executed": unavailable,
+        "milestone_evidence": evidence, "result": "passed_with_unverified_environment" if unavailable else "passed",
+        "unverified": manifest()["unverified"]}, indent=2))
     print(result[-16000:])
 
 
-def published_legacy(logs):
-    request = urllib.request.Request("https://api.github.com/repos/b1ue-man/smart-explorer/releases/tags/v0.5.126",
-        headers={"Accept": "application/vnd.github+json", "User-Agent": "rv1-remote-suite"})
-    with urllib.request.urlopen(request, timeout=60) as response:
-        release = json.load(response)
-    assets = {asset["name"]: asset["browser_download_url"] for asset in release["assets"]}
-    for name in ["se", "se.sha256"]:
-        with urllib.request.urlopen(assets[name], timeout=120) as response, (logs / name).open("wb") as out:
-            shutil.copyfileobj(response, out)
-    if (logs / "se.sha256").read_text().split()[0].lower() != sha(logs / "se"):
-        raise RuntimeError("Published legacy CLI failed its accompanying SHA-256.")
-    (logs / "se").chmod(0o700)
-    return logs / "se"
+def glow_scope_tests(binary, logs, env):
+    """Only the modified vendor error ledger, within this same task suite."""
+    plan = manifest()["native"]["glow_scope"]
+    listing = logs / "glow-scope-available.txt"
+    run([binary, "--list", "--format", "terse"], listing, env, seconds=120)
+    available = [line.removesuffix(": test") for line in listing.read_text().splitlines() if line.endswith(": test")]
+    selected = sorted(name for name in available if plan["prefix"] in name)
+    for case in plan["cases"]:
+        if sum(name.endswith("::" + case) for name in selected) != 1:
+            raise RuntimeError("Missing or ambiguous vendor GL error boundary: " + case)
+    if len(selected) != len(plan["cases"]):
+        raise RuntimeError("Vendor GL error selection differs from the task manifest.")
+    log = logs / "glow-scope-suite.log"
+    run([binary, plan["prefix"], "--show-output", "--test-threads=1"], log, env, seconds=1800)
+    result = log.read_text(errors="replace")
+    for name in selected:
+        if f"test {name} ... ok" not in result:
+            raise RuntimeError("Missing successful vendor GL error boundary: " + name)
+    (logs / "glow-scope-acceptance.json").write_text(json.dumps({
+        "candidate": env["CANDIDATE_SHA"], "manifest_sha256": sha(MANIFEST),
+        "binary_sha256": sha(binary), "package": "egui_glow", "version": "0.29.1",
+        "selected": selected, "passed_fixtures": selected, "result": "passed",
+        "scope": "Real vendor error ledger with controlled GL error reads; no physical GL context or driver failure."}, indent=2))
 
 
 def main():
@@ -276,12 +360,15 @@ def main():
     if candidate != os.environ.get("CANDIDATE_SHA"):
         raise RuntimeError("Candidate differs from checkout.")
     signal.signal(signal.SIGTERM, interrupted)
-    env = dict(os.environ, RUST_BACKTRACE="1", SMART_EXPLORER_ANALYTICS_TASK="1", SMART_EXPLORER_COPY_PASTE_TASK="1")
+    env = dict(os.environ, RUST_BACKTRACE="1", SMART_EXPLORER_ANALYTICS_TASK="1",
+        SMART_EXPLORER_COPY_PASTE_TASK="1", TOKIO_WORKER_THREADS="2")
+    manifest()
     if args.android_build:
         if args.out is None:
             raise RuntimeError("Android handoff needs --out.")
         run(["bash", ROOT / "android/test-android-task.sh", "review-build", "--out", args.out],
             logs / "android-build.log", env, seconds=12600)
+        android_unit_evidence(logs, candidate)
         return
     if args.binary_cache is None:
         raise RuntimeError("Native stage needs --binary-cache.")
@@ -296,40 +383,25 @@ def main():
             print("FAILED:", failures[-1], flush=True)
             return None
     stage("format", lambda: format_patch(logs, env, candidate))
-    with tempfile.TemporaryDirectory(prefix="rv1-native-") as profile:
+    with tempfile.TemporaryDirectory(prefix="batches-native-") as profile:
         for name, child in {"APPDATA": "roaming", "LOCALAPPDATA": "local", "XDG_CONFIG_HOME": "config",
             "XDG_DATA_HOME": "data", "XDG_CACHE_HOME": "cache", "XDG_RUNTIME_DIR": "runtime"}.items():
             path = Path(profile) / child
             path.mkdir(mode=0o700)
             env[name] = str(path)
+        stage("openh264-prerequisite", lambda: openh264_fixture(Path(profile), logs, env))
         fixture = stage("library-build", lambda: artifact("native", "smart_explorer", "test", args.binary_cache, logs, env))
-        if fixture and stage("runner-interface", lambda: (lan_facts(logs, env), True)[1]):
+        cli = stage("worker-development", lambda: artifact("native", "se", "dev", args.binary_cache, logs, env))
+        if fixture and cli:
+            env["SE_SCREEN_TASK_WORKER"] = str(cli.resolve())
             stage("native-behavior", lambda: native_tests(fixture, logs, env))
-        if os.name != "nt":
-            server_fixture = stage("server-build", lambda: artifact("share-server", "se-share-server", "test", args.binary_cache, logs, env))
-            if server_fixture:
-                stage("server-behavior", lambda: native_tests(server_fixture, logs, env, server=True))
-            cli = stage("cli-development", lambda: artifact("native", "se", "dev", args.binary_cache, logs, env))
-            server = stage("server-development", lambda: artifact("share-server", "se-share-server", "dev", args.binary_cache, logs, env))
-            if cli and server:
-                legacy = stage("published-legacy", lambda: published_legacy(logs))
-                if legacy:
-                    mixed_env = dict(env, SMART_EXPLORER_SE_BINARY=str(cli), SMART_EXPLORER_SHARE_SERVER_BINARY=str(server),
-                        SMART_EXPLORER_LEGACY_SE_BINARY=str(legacy), SMART_EXPLORER_KEEP_E2E_ROOT="1", TMPDIR=str(logs))
-                    stage("mixed-version", lambda: run(["bash", ROOT / "native/test-share-mixed-version-e2e.sh"],
-                        logs / "mixed-version.log", mixed_env, seconds=1800))
-                if args.out:
-                    args.out.mkdir(parents=True, exist_ok=True)
-                    records = {}
-                    for name, binary in [("se", cli), ("se-share-server", server)]:
-                        dest = args.out / name
-                        shutil.copy2(binary, dest)
-                        records[name] = sha(dest)
-                    (args.out / "provenance.json").write_text(json.dumps({"candidate": candidate, "artifacts": records}, indent=2))
+        glow = stage("glow-scope-build", lambda: artifact("native", "egui_glow", "test", args.binary_cache, logs, env, package="egui_glow"))
+        if glow:
+            stage("glow-scope-behavior", lambda: glow_scope_tests(glow, logs, env))
     (logs / "summary.json").write_text(json.dumps({"candidate": candidate, "failures": failures}, indent=2))
     if failures:
         raise SystemExit("\n".join(failures))
-    print("RV1 native behavior acceptance passed for", candidate, flush=True)
+    print("B1–B8 native suite evaluated for", candidate, "— executed and unverified cases are separate in native-acceptance.json", flush=True)
 
 
 if __name__ == "__main__":

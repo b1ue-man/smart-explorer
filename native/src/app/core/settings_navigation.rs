@@ -45,3 +45,7 @@ pub(super) fn default_share_tab(page: SettingsPage) -> Option<usize> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+#[path = "batches_settings_task_tests.rs"]
+mod batches_task_tests;

@@ -348,3 +348,7 @@ impl App {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "batches_drive_task_tests.rs"]
+mod batches_drive_task_tests;

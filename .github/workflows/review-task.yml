@@ -23,8 +23,6 @@ jobs:
   linux:
     runs-on: ubuntu-24.04
     timeout-minutes: 360
-    outputs:
-      handoff_ready: ${{ steps.handoff.outputs.ready }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -40,9 +38,7 @@ jobs:
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: |
-            native
-            share-server
+          workspaces: native
           shared-key: rv1-native
           cache-on-failure: true
       - name: Prepare the isolated Linux runtime
@@ -51,43 +47,26 @@ jobs:
           set -Eeuo pipefail
           sudo -n true
           sudo apt-get update
-          sudo apt-get install -y jq socat sshfs openssh-sftp-server dosfstools exfatprogs exfat-fuse libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0
       - uses: actions/cache/restore@v4
         id: outputs
         with:
           path: |
             native/target
-            share-server/target
             .review-task-cache
           key: rv1-${{ runner.os }}-${{ steps.rust.outputs.cachekey }}-${{ github.sha }}-${{ github.run_attempt }}
           restore-keys: rv1-${{ runner.os }}-${{ steps.rust.outputs.cachekey }}-
       - name: Run the complete native stage
         shell: bash
         timeout-minutes: 340
-        run: bash native/test-review-task.sh --stage native --binary-cache "$GITHUB_WORKSPACE/.review-task-cache" --out "$RUNNER_TEMP/review-task-bin"
+        run: bash native/test-review-task.sh --stage native --binary-cache "$GITHUB_WORKSPACE/.review-task-cache"
       - uses: actions/cache/save@v4
         if: ${{ always() && steps.outputs.outcome == 'success' }}
         with:
           path: |
             native/target
-            share-server/target
             .review-task-cache
           key: ${{ steps.outputs.outputs.cache-primary-key }}
-      - name: Discover the source-bound device handoff
-        id: handoff
-        if: ${{ always() }}
-        shell: bash
-        run: |
-          if [[ -s "$RUNNER_TEMP/review-task-bin/provenance.json" ]]; then
-            echo 'ready=true' >> "$GITHUB_OUTPUT"
-          fi
-      - uses: actions/upload-artifact@v4
-        if: ${{ always() && steps.handoff.outputs.ready == 'true' }}
-        with:
-          name: review-task-bin-${{ inputs.candidate_sha }}
-          path: ${{ runner.temp }}/review-task-bin
-          if-no-files-found: error
-          overwrite: true
       - uses: actions/upload-artifact@v4
         if: ${{ always() }}
         with:
@@ -113,9 +92,7 @@ jobs:
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: |
-            native
-            share-server
+          workspaces: native
           shared-key: rv1-native
           cache-on-failure: true
       - uses: actions/cache/restore@v4
@@ -123,7 +100,6 @@ jobs:
         with:
           path: |
             native/target
-            share-server/target
             .review-task-cache
           key: rv1-${{ runner.os }}-${{ steps.rust.outputs.cachekey }}-${{ github.sha }}-${{ github.run_attempt }}
           restore-keys: rv1-${{ runner.os }}-${{ steps.rust.outputs.cachekey }}-
@@ -136,7 +112,6 @@ jobs:
         with:
           path: |
             native/target
-            share-server/target
             .review-task-cache
           key: ${{ steps.outputs.outputs.cache-primary-key }}
       - uses: actions/upload-artifact@v4
@@ -211,8 +186,8 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
   device:
-    needs: [linux, android-build]
-    if: ${{ always() && !cancelled() && needs.linux.outputs.handoff_ready == 'true' && needs.android-build.outputs.handoff_ready == 'true' }}
+    needs: [android-build]
+    if: ${{ always() && !cancelled() && needs.android-build.outputs.handoff_ready == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     steps:
@@ -228,14 +203,12 @@ jobs:
         with:
           name: review-task-apk-${{ inputs.candidate_sha }}
           path: ${{ runner.temp }}/review-task-artifacts/apk
-      - uses: actions/download-artifact@v4
-        with:
-          name: review-task-bin-${{ inputs.candidate_sha }}
-          path: ${{ runner.temp }}/review-task-artifacts/bin
-      - name: Enable KVM for the isolated emulator
+      - name: Prepare the owned media fixture and isolated emulator
         shell: bash
         run: |
           sudo -n true
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm

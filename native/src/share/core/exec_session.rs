@@ -18,6 +18,17 @@ use super::node::ShareIrohNode;
 
 type Notices = Mutex<HashMap<ExecId, watch::Receiver<ExecClientNotice>>>;
 
+#[cfg(test)]
+#[path = "batches_exec_fixture.rs"]
+mod batches_exec_fixture;
+
+#[cfg(test)]
+impl ShareExecInput {
+    pub(crate) fn batches_fixture() -> batches_exec_fixture::ExecInputFixture {
+        batches_exec_fixture::input()
+    }
+}
+
 fn notices() -> &'static Notices {
     static NOTICES: OnceLock<Notices> = OnceLock::new();
     NOTICES.get_or_init(Notices::default)

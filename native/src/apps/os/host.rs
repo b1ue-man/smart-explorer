@@ -6,6 +6,10 @@ use crate::apps::core::model::*;
 use super::shared::{journal::Journal, platform::{HostPlatform, PlatformCatalog}};
 use crate::screen::core::app_icon::{IconRef,IconReply};
 
+#[cfg(test)]
+#[path = "batches_launch_task_tests.rs"]
+mod batches_launch_task_tests;
+
 #[derive(serde::Serialize,serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PeerRequestBinding {version:u8,owner:String,request:LaunchRequest}

@@ -6,6 +6,10 @@ use super::route_diagnostics::{milliseconds, RouteBudget};
 use super::route_state::{RouteClass, RoutePhase, RouteStatus};
 const MAX_FROZEN_CANDIDATES: usize = 128;
 
+#[cfg(test)]
+#[path = "batches_route_task_tests.rs"]
+pub(crate) mod batches_route_task_tests;
+
 #[derive(Clone, Debug)]
 pub(crate) struct RouteCandidate {
     pub(crate) key: String,

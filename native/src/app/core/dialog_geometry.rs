@@ -182,3 +182,7 @@ fn reachable_rect(ctx: &egui::Context) -> egui::Rect {
     screen.shrink2(egui::vec2((screen.width() / 4.0).min(16.0),
         (screen.height() / 4.0).min(16.0)))
 }
+
+#[cfg(test)]
+#[path = "batches_dialog_task_tests.rs"]
+mod batches_task_tests;
