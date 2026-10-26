@@ -27,6 +27,8 @@ pub(crate) enum SessionState {
     SecureDesktop,
     /// The shown window is minimized (Windows `IsIconic`).
     WindowMinimized,
+    /// This session's viewer has no visible consumer; control stays alive.
+    ViewerHidden,
     /// The Android host locked; media projection ended.
     HostLocked,
     /// The host's user session is disconnected (Windows).
@@ -50,6 +52,7 @@ impl SessionState {
             Self::Streaming => "streaming",
             Self::SecureDesktop => "secure_desktop",
             Self::WindowMinimized => "window_minimized",
+            Self::ViewerHidden => "viewer_hidden",
             Self::HostLocked => "host_locked",
             Self::SessionInactive => "session_inactive",
             Self::NoDisplay => "no_display",

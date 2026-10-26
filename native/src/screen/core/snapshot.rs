@@ -5,7 +5,7 @@
 //! lives in `os/`, the transport in the daemon.
 use std::io;
 
-use super::pixel_convert::{downscale_bgra, BgraImage, FrameSize};
+use super::pixel_convert::{downscale_bgra_with_limits, BgraImage, FrameSize};
 use super::tiles_codec::TileDecoder;
 use super::wire_binary::FrameRecord;
 
@@ -28,7 +28,8 @@ fn invalid_input(text: &str) -> io::Error {
 /// picture carries nothing and is dropped.
 pub(crate) fn encode_png(image: &BgraImage) -> io::Result<Vec<u8>> {
     let size = image.size();
-    let mut rgb = Vec::with_capacity(size.width as usize * size.height as usize * 3);
+    let bytes=super::frame_budget::FrameLimits::RESOURCE.check(size)?;
+    let mut rgb=Vec::with_capacity(bytes/4*3);
     for pixel in image.data().chunks_exact(4) {
         rgb.extend_from_slice(&[pixel[2], pixel[1], pixel[0]]);
     }
@@ -48,7 +49,7 @@ fn png_at(image: &BgraImage, size: FrameSize) -> io::Result<Vec<u8>> {
     if image.size() == size {
         return encode_png(image);
     }
-    encode_png(&downscale_bgra(&image.view(), size)?)
+    encode_png(&downscale_bgra_with_limits(&image.view(),size,super::frame_budget::FrameLimits::RESOURCE)?)
 }
 
 fn long_edge(size: FrameSize) -> u32 {
@@ -91,15 +92,23 @@ pub(crate) fn fit(
 /// to a black picture of the stream's `size`. The last record must end the
 /// frame.
 pub(crate) fn decode_snapshot(records: &[FrameRecord], size: FrameSize) -> io::Result<BgraImage> {
+    decode_snapshot_with_limits(records,size,super::frame_budget::FrameLimits::LEGACY)
+}
+pub(crate) fn decode_snapshot_with_limits(records:&[FrameRecord],size:FrameSize,limits:super::frame_budget::FrameLimits)->io::Result<BgraImage> {
+    limits.check(size)?;
     let Some(last) = records.last() else {
         return Err(invalid_input("the snapshot has no records"));
     };
     if last.has_more() {
         return Err(invalid_input("the snapshot ends in the middle of a frame"));
     }
-    let mut decoder = TileDecoder::new(size)?;
-    for record in records {
-        decoder.apply_record(&record.payload)?;
+    if !last.is_keyframe() || records.iter().any(|record|record.frame_id!=last.frame_id || !record.is_keyframe()) {
+        return Err(invalid_input("snapshot does not contain one complete reference frame"));
+    }
+    let mut decoder=TileDecoder::new_with_limits(size,limits)?;
+    for (index,record) in records.iter().enumerate() {
+        if record.has_more()!=(index+1<records.len()) {return Err(invalid_input("snapshot frame boundaries are inconsistent"));}
+        decoder.apply_frame_record(record)?;
     }
     Ok(decoder.image().clone())
 }

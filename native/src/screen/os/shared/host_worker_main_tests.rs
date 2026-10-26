@@ -87,21 +87,28 @@ fn worker(kind: io::ErrorKind) -> Worker {
         produced: 0,
         checked: Instant::now(),
         control: false,
+        capture_active: true,
+        reference_generation: 0,
+        family: None,
     }
 }
 
 fn request(size: FrameSize) -> StageRequest {
     StageRequest {
+        frame_contract: None,
+        visible_rects: None,
         frame_id: 1,
         keyframe: true,
         target_bps: 1_000_000,
         size,
         choice: CodecChoice {
+            max_macroblocks_per_second: None,
             codec: CodecKind::Tiles,
             profile: None,
             encoder_hardware: false,
             decoder_hardware: false,
             max_size: FrameSize::MAX,
+            max_pixels: crate::screen::core::pixel_convert::MAX_FRAME_PIXELS,
         },
         encoder_epoch: 1,
         fps: 30,
@@ -147,14 +154,16 @@ fn screen_task_worker_keeps_other_capture_errors_as_capture_failed() {
 /// (SCR-M6); the frames survive the wire unchanged.
 #[test]
 fn screen_task_worker_input_needs_control_session() {
-    use crate::screen::core::worker_wire::{WorkerReply as Reply, WorkerRequest as Request};
+    use crate::screen::core::worker_wire::{BoundInput, WorkerReply as Reply, WorkerRequest as Request};
     let events = vec![InputEvent::Text { text: "x".into() }];
+    let input = BoundInput { events, reference_generation: 0, presented: false };
     let mut viewing = worker(io::ErrorKind::BrokenPipe);
     open(&mut viewing);
     assert_eq!(
-        viewing.handle(Request::Input(events.clone())),
+        viewing.handle(Request::Input(input.clone())),
         Reply::InputDone {
-            blocked: Some(ControlBlock::ControlUnavailable)
+            blocked: Some(ControlBlock::ControlUnavailable),
+            legacy_reconnect: false,
         }
     );
     let mut controlling = worker(io::ErrorKind::BrokenPipe);
@@ -166,18 +175,22 @@ fn screen_task_worker_input_needs_control_session() {
     assert!(matches!(opened, Reply::Opened { .. }));
     // The test backend refuses input: its reason travels back.
     assert_eq!(
-        controlling.handle(Request::Input(events.clone())),
+        controlling.handle(Request::Input(input.clone())),
         Reply::InputDone {
-            blocked: Some(ControlBlock::UnsupportedOnHost)
+            blocked: Some(ControlBlock::UnsupportedOnHost),
+            legacy_reconnect: false,
         }
     );
-    let (tag, payload) = Request::Input(events.clone()).encode().unwrap();
+    let (tag, payload) = Request::Input(input.clone()).encode().unwrap();
+    assert_eq!(tag, 10, "private input carries its capture reference");
+    assert!(Request::decode(5, &payload).is_err(), "unbound private input is refused");
     assert_eq!(
         Request::decode(tag, &payload).unwrap(),
-        Request::Input(events)
+        Request::Input(input)
     );
     let done = Reply::InputDone {
         blocked: Some(ControlBlock::ElevatedWindow),
+        legacy_reconnect: true,
     };
     let (tag, payload) = done.encode().unwrap();
     assert_eq!(Reply::decode(tag, &payload).unwrap(), done);

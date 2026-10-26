@@ -14,7 +14,7 @@ use tokio::sync::mpsc;
 
 use super::rate_control::PathKind;
 use super::wire_binary::{
-    read_frame_record, read_gop_header, write_frame_record, write_gop_header, FrameRecord,
+    read_frame_record_budgeted, read_gop_header, write_frame_record, write_gop_header, FrameRecord,
     GopHeader, RecordSequence, StreamKind, FLAG_KEYFRAME, FLAG_MORE, RECORD_HEADER_BYTES,
 };
 use super::wire_control::{FrameAck, ViewerFrame};
@@ -64,6 +64,17 @@ pub(crate) fn loss_counters(connection: &Connection) -> (u64, u64) {
     (stats.udp_tx.datagrams, stats.lost_packets)
 }
 
+/// Production connections pause their active write budget during route discovery.
+/// Standalone transports without an enabled Share policy retain their original bounded IO path.
+pub(crate) async fn write_with_route<T>(connection: &Connection,budget: std::time::Duration,
+    future: impl std::future::Future<Output=io::Result<T>>) -> io::Result<T> {
+    if connection.application_path_policy().enabled {
+        crate::share::route_protocol::run_with_route(connection,budget,None,future).await
+    } else {
+        tokio::time::timeout(budget,future).await.map_err(|_|io::Error::new(io::ErrorKind::TimedOut,"screen write stalled"))?
+    }
+}
+
 /// The host's picture stream of one picture group.
 pub(crate) struct GopWriter {
     send: SendStream,
@@ -91,6 +102,13 @@ impl GopWriter {
         keyframe: bool,
         records: Vec<Vec<u8>>,
     ) -> io::Result<u64> {
+        let records=if self.header.frame_contract.is_some_and(|c|!c.hybrid_regions)
+            && self.header.codec==super::negotiate::CodecKind::Tiles {
+            super::wire_binary::repack_tiles(records,self.header.record_limit())?
+        } else {records};
+        let budget=super::frame_size_caps::PacketBudget::for_contract(self.header.frame_contract)?;
+        let total=records.iter().try_fold(0usize,|n,r|n.checked_add(r.len()).and_then(|n|n.checked_add(RECORD_HEADER_BYTES)));
+        if records.len()>budget.records || total.is_none_or(|n|n>budget.encoded_bytes) {return Err(super::wire::invalid("frame exceeds derived packet budget"));}
         let count = records.len();
         let mut bytes = 0u64;
         for (index, payload) in records.into_iter().enumerate() {
@@ -146,8 +164,21 @@ pub(crate) async fn accept_picture_streams(
     events: mpsc::Sender<PictureEvent>,
     acks: mpsc::Sender<ViewerFrame>,
 ) {
+    accept_picture_streams_with_contract(connection,events,acks,None).await;
+}
+
+pub(crate) async fn accept_picture_streams_with_contract(
+    connection: Connection, events: mpsc::Sender<PictureEvent>, acks: mpsc::Sender<ViewerFrame>,
+    contract: Option<super::frame_budget::FrameContract>,
+) {
+    let readers=std::sync::Arc::new(tokio::sync::Semaphore::new(VIEWER_UNI_STREAMS as usize));
     while let Ok(recv) = connection.accept_uni().await {
-        tokio::spawn(read_picture_stream(recv, events.clone(), acks.clone()));
+        let Ok(permit)=readers.clone().acquire_owned().await else {return;};
+        let (events,acks)=(events.clone(),acks.clone());
+        tokio::spawn(async move {
+            let _permit=permit;
+            read_picture_stream(recv,events,acks,contract).await;
+        });
     }
 }
 
@@ -155,6 +186,7 @@ async fn read_picture_stream(
     mut recv: RecvStream,
     events: mpsc::Sender<PictureEvent>,
     acks: mpsc::Sender<ViewerFrame>,
+    contract: Option<super::frame_budget::FrameContract>,
 ) {
     let header = match read_gop_header(&mut recv).await {
         Ok(header) => header,
@@ -163,13 +195,31 @@ async fn read_picture_stream(
             return;
         }
     };
+    let contract_matches = match (header.frame_contract, contract) {
+        (None, None) => true,
+        (Some(actual), Some(negotiated)) => actual.version == negotiated.version
+            && actual.limits == negotiated.limits
+            && (!actual.hybrid_regions || negotiated.hybrid_regions),
+        _ => false,
+    };
+    if !contract_matches {
+        let _ = recv.stop(STREAM_RESET_CODE); return;
+    }
+    let Ok(budget)=super::frame_size_caps::PacketBudget::for_contract(header.frame_contract) else {
+        let _=recv.stop(STREAM_RESET_CODE);return;
+    };
     let mut sequence = RecordSequence::default();
+    let mut allocation_budget=super::wire_binary::FrameReadBudget::default();
+    let mut current=0;let mut records=0usize;let mut bytes=0usize;
     loop {
-        let record = match read_frame_record(&mut recv, &header).await {
+        let record = match read_frame_record_budgeted(&mut recv, &header,&mut allocation_budget).await {
             Ok(Some(record)) => record,
             Ok(None) if !sequence.is_open() => return,
             Ok(None) | Err(_) => break,
         };
+        if current!=record.frame_id {current=record.frame_id;records=0;bytes=0;}
+        records=records.saturating_add(1);bytes=bytes.saturating_add(record.payload.len()).saturating_add(RECORD_HEADER_BYTES);
+        if records>budget.records || bytes>budget.encoded_bytes {break;}
         let received_us = now_us();
         if sequence.accept(&header, &record).is_err() {
             break;

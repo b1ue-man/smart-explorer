@@ -249,6 +249,8 @@ fn ewmh_entry<C: Connection>(
         id: window_id(window),
         title: title(conn, atoms, window)?,
         app: app_of_wm_class(&class),
+        app_id: None,
+        icon: None,
         pid,
         monitor: monitor_at(
             monitors,
@@ -296,6 +298,8 @@ fn query_tree<C: Connection>(
             id: window_id(window),
             title,
             app: app_of_wm_class(&class),
+            app_id: None,
+            icon: None,
             pid: None,
             monitor: monitor_at(
                 monitors,

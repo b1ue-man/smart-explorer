@@ -6,47 +6,34 @@
 //! picture, and no conversion on the CPU. The shader uses limited range and
 //! the matrix of the stream; the CPU conversion of `pixel_convert` is the
 //! reference (±2 per channel, `screen_task_viewer_yuv_shader_matches_cpu`).
-//! The sampler is linear when the picture is scaled and nearest at 1:1.
+//! Reconstruction integrates the texel footprint when reducing, uses Catmull-Rom
+//! cubic convolution when enlarging, and exact luma texels at native size.
 //! `install` puts the resources into the renderer; without them (no wgpu
 //! surface, a shader the device refuses) the viewer draws BGRA on the CPU.
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use eframe::egui;
 use eframe::egui_wgpu::{self, wgpu};
 
 use crate::screen::core::host_backend::{Chroma, YuvPicture};
-use crate::screen::core::pixel_convert::{FrameSize, YuvMatrix};
+use crate::screen::core::pixel_convert::FrameSize;
 
 /// The shader (`screen_wgpu_yuv.wgsl`): a full-screen triangle and the
 /// conversion of the planes to RGB.
 const SHADER: &str = include_str!("screen_wgpu_yuv.wgsl");
 
-/// The factors of the shader: `r = y + a·cr`, `g = y − b·cb − c·cr`,
-/// `b = y + d·cb`, with full-range chroma (BT.601 and BT.709).
-pub(crate) fn coefficients(matrix: YuvMatrix) -> [f32; 4] {
-    match matrix {
-        YuvMatrix::Bt601 => [1.402, 0.344_136, 0.714_136, 1.772],
-        YuvMatrix::Bt709 => [1.5748, 0.187_324, 0.468_124, 1.8556],
-    }
-}
-
-/// The shader's arithmetic on the CPU, for one sample.
+pub(crate) use super::screen_scaling::coefficients;
 #[cfg(test)]
-pub(crate) fn yuv_to_rgb(y: u8, u: u8, v: u8, matrix: YuvMatrix) -> [u8; 3] {
-    let [a, b, c, d] = coefficients(matrix);
-    let luma = (f32::from(y) / 255.0 - 16.0 / 255.0) * (255.0 / 219.0);
-    let cb = (f32::from(u) / 255.0 - 128.0 / 255.0) * (255.0 / 224.0);
-    let cr = (f32::from(v) / 255.0 - 128.0 / 255.0) * (255.0 / 224.0);
-    let channel = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u8;
-    [
-        channel(luma + a * cr),
-        channel(luma - b * cb - c * cr),
-        channel(luma + d * cb),
-    ]
-}
+pub(crate) use super::screen_scaling::yuv_to_rgb;
 
 static NEXT_UID: AtomicU64 = AtomicU64::new(1);
+static TEXTURE_LIMIT: AtomicU32 = AtomicU32::new(0);
+/// Device capability, never a guessed constant; usable by frame negotiation.
+pub(crate) fn texture_limit() -> Option<u32> {
+    let limit = TEXTURE_LIMIT.load(Ordering::Relaxed);
+    (limit > 0).then_some(limit)
+}
 
 /// A picture's planes as the GPU path takes them; made once per picture.
 pub(crate) struct YuvFrame {
@@ -67,11 +54,13 @@ impl YuvFrame {
 
     /// Whether the planes hold what `size` needs.
     pub(crate) fn fits(&self) -> bool {
+        if crate::screen::core::frame_budget::FrameLimits::RESOURCE.check(self.size).is_err() { return false; }
         let chroma = self.size.chroma();
         let plane = |data: &[u8], stride: usize, row: usize, rows: usize| {
             row > 0
                 && stride >= row
-                && data.len() >= stride.saturating_mul(rows.saturating_sub(1)) + row
+                && stride.checked_mul(rows.saturating_sub(1)).and_then(|n| n.checked_add(row))
+                    .is_some_and(|needed| data.len() >= needed)
         };
         let (w, h) = (self.size.width as usize, self.size.height as usize);
         let (cw, ch) = (chroma.width as usize, chroma.height as usize);
@@ -242,7 +231,7 @@ impl YuvResources {
         };
         let params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("screen viewer yuv"),
-            size: 32,
+            size: 48,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -260,7 +249,9 @@ impl YuvResources {
 
     /// Uploads `frame` unless it is already there.
     pub(crate) fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, frame: &YuvFrame) {
-        if !frame.fits() {
+        let limit = device.limits().max_texture_dimension_2d;
+        if !frame.fits() || frame.size.width > limit || frame.size.height > limit {
+            self.planes=None;
             return;
         }
         let picture = &frame.picture;
@@ -303,8 +294,8 @@ impl YuvResources {
             }
         }
         let [a, b, c, d] = coefficients(picture.matrix);
-        let values = [a, b, c, d, if i420 { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0];
-        let mut bytes = [0u8; 32];
+        let values = [a, b, c, d, if i420 { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0];
+        let mut bytes = [0u8; 48];
         for (slot, value) in bytes.chunks_exact_mut(4).zip(values) {
             slot.copy_from_slice(&value.to_ne_bytes());
         }
@@ -388,6 +379,13 @@ impl YuvResources {
         }
     }
 
+    fn set_view(&self, queue: &wgpu::Queue, rect: egui::Rect, screen: &egui_wgpu::ScreenDescriptor) {
+        let Some(values) = super::screen_viewport::viewport_uv(rect,screen.pixels_per_point,screen.size_in_pixels) else { return; };
+        let mut bytes = [0u8;16];
+        for (slot,value) in bytes.chunks_exact_mut(4).zip(values) { slot.copy_from_slice(&value.to_ne_bytes()); }
+        queue.write_buffer(&self.params,32,&bytes);
+    }
+
     /// Draws the uploaded picture over the render pass's viewport.
     pub(crate) fn draw(&self, pass: &mut wgpu::RenderPass<'_>, nearest: bool) {
         let Some(planes) = self.planes.as_ref() else {
@@ -403,6 +401,8 @@ impl YuvResources {
 pub(crate) struct YuvCallback {
     pub frame: Arc<YuvFrame>,
     pub nearest: bool,
+    pub rect: egui::Rect,
+    pub presented: Option<super::screen_presented::Presented>,
 }
 
 impl egui_wgpu::CallbackTrait for YuvCallback {
@@ -410,12 +410,13 @@ impl egui_wgpu::CallbackTrait for YuvCallback {
         &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        _screen: &egui_wgpu::ScreenDescriptor,
+        screen: &egui_wgpu::ScreenDescriptor,
         _encoder: &mut wgpu::CommandEncoder,
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
         if let Some(yuv) = resources.get_mut::<YuvResources>() {
             yuv.upload(device, queue, &self.frame);
+            yuv.set_view(queue,self.rect,screen);
         }
         Vec::new()
     }
@@ -427,7 +428,10 @@ impl egui_wgpu::CallbackTrait for YuvCallback {
         resources: &egui_wgpu::CallbackResources,
     ) {
         if let Some(yuv) = resources.get::<YuvResources>() {
-            yuv.draw(pass, self.nearest);
+            if yuv.planes.as_ref().is_some_and(|planes| planes.uploaded == self.frame.uid) {
+                yuv.draw(pass, self.nearest);
+                if let Some(presented) = &self.presented { presented(); }
+            }
         }
     }
 }
@@ -435,6 +439,7 @@ impl egui_wgpu::CallbackTrait for YuvCallback {
 /// Puts the resources into the renderer; `false` when the device refuses
 /// the shader or the pipeline (the viewer then converts on the CPU).
 pub(crate) fn install(state: &egui_wgpu::RenderState) -> bool {
+    TEXTURE_LIMIT.store(state.device.limits().max_texture_dimension_2d, Ordering::Relaxed);
     state.device.push_error_scope(wgpu::ErrorFilter::Validation);
     let resources = YuvResources::new(&state.device, state.target_format);
     let refused = tokio::runtime::Builder::new_current_thread()
@@ -454,7 +459,13 @@ pub(crate) fn paint_callback(
     frame: Arc<YuvFrame>,
     nearest: bool,
 ) -> egui::PaintCallback {
-    egui_wgpu::Callback::new_paint_callback(rect, YuvCallback { frame, nearest })
+    egui_wgpu::Callback::new_paint_callback(rect, YuvCallback { frame, nearest, rect, presented: None })
+}
+
+/// Same YUV draw, with proof emitted only when these exact planes were drawn.
+pub(crate) fn paint_presented(rect: egui::Rect, frame: Arc<YuvFrame>, nearest: bool,
+    presented: super::screen_presented::Presented) -> egui::PaintCallback {
+    egui_wgpu::Callback::new_paint_callback(rect, YuvCallback { frame, nearest, rect, presented: Some(presented) })
 }
 
 #[cfg(test)]

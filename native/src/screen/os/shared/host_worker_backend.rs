@@ -111,6 +111,7 @@ pub(crate) struct WorkerBackend {
     openh264_dir: Option<PathBuf>,
     /// The host processes of sessions that may control, newest last.
     controls: Mutex<Vec<Weak<Mutex<super::WorkerLink>>>>,
+    families: Mutex<super::family_backend::FamilyPins>,
 }
 
 impl WorkerBackend {
@@ -128,6 +129,7 @@ impl WorkerBackend {
             program,
             openh264_dir,
             controls: Mutex::new(Vec::new()),
+            families: Mutex::new(super::family_backend::FamilyPins::default()),
         }
     }
 
@@ -164,12 +166,48 @@ impl ScreenHostBackend for WorkerBackend {
     fn windows(&self) -> io::Result<WindowList> {
         self.inner.windows()
     }
+    fn family_windows(&self, owner: &str) -> io::Result<crate::screen::core::family_protocol::FamilyListing> {
+        // Fail explicitly on Wayland/Android rather than deriving app rights
+        // from their normal portal/system-selected source lists.
+        let list = self.inner.windows()?;
+        self.families.lock().map_err(|_| io::Error::other("family_pin_store_poisoned"))?.list(owner, list)
+    }
+    fn register_family_pin(&self,owner:&str,request_id:&str,pin:crate::remote_window::WindowPin)
+        ->io::Result<crate::screen::core::family_protocol::FamilyListEntry> {
+        if let Some(entry)=self.families.lock().map_err(|_|io::Error::other("family_pin_store_poisoned"))?
+            .receipt(owner,request_id,&pin)? {return Ok(entry);}
+        let metadata=self.inner.windows()?.bounded();
+        self.families.lock().map_err(|_|io::Error::other("family_pin_store_poisoned"))?.register(owner,request_id,pin,metadata)
+    }
+    fn open_session_source(&self, owner: &str, session: &str, source: &SourceId,
+        wanted: Option<FrameSize>, control: bool) -> Result<Box<dyn ScreenSource>, SourceRefusal> {
+        if crate::screen::core::family_protocol::selector(source).is_none() {
+            return self.open_source(source, wanted);
+        }
+        let pinned = self.families.lock().map_err(|_| SourceRefusal::new("family_pin_store_poisoned"))?
+            .take(owner, source).map_err(|error| SourceRefusal::new(&error.to_string()))?;
+        let (program, env): (Option<&std::path::Path>, &[(String,String)]) = match &self.program {
+            WorkerProgram::Installation {gui,current} => (program_for(gui.as_deref(),current.as_deref(),source), &[]),
+            #[cfg(test)]
+            WorkerProgram::Fixed {path,env} => (Some(path.as_path()), env.as_slice()),
+            #[cfg(test)]
+            WorkerProgram::InProcess => return Err(SourceRefusal::new("family_worker_required")),
+        };
+        let program = program.ok_or_else(|| SourceRefusal::new("family_host_program_unavailable"))?;
+        Ok(Box::new(pinned.open(program, env, session, control, wanted)?))
+    }
+    fn icon(&self,entry:crate::screen::core::app_icon::AuthorizedIconEntry<'_>) -> io::Result<Option<crate::screen::core::app_icon::IconReply>> {
+        self.inner.icon(entry)
+    }
 
     fn open_source(
         &self,
         source: &SourceId,
         wanted: Option<FrameSize>,
     ) -> Result<Box<dyn ScreenSource>, SourceRefusal> {
+        if crate::screen::core::family_protocol::selector(source).is_some() {
+            return Err(SourceRefusal::new("family_selection_requires_authenticated_session"));
+        }
         let (program, env): (Option<&std::path::Path>, &[(String, String)]) = match &self.program {
             WorkerProgram::Installation { gui, current } => {
                 (program_for(gui.as_deref(), current.as_deref(), source), &[])
@@ -205,6 +243,10 @@ impl ScreenHostBackend for WorkerBackend {
             .encoder)
     }
 
+    fn open_encoder_for_stage(&self, request: &crate::screen::core::host_stage::StageRequest) -> io::Result<Box<dyn ScreenEncoder>> {
+        Ok(self.codecs().open_encoder_with_contract(&request.choice, request.size, request.fps, &[], request.frame_contract)?.encoder)
+    }
+
     fn inject(&self, events: &[InputEvent]) -> Result<(), ControlBlock> {
         #[cfg(test)]
         if self.program == WorkerProgram::InProcess {
@@ -218,7 +260,7 @@ impl ScreenHostBackend for WorkerBackend {
             .rev()
             .find_map(Weak::upgrade);
         let link = link.ok_or(ControlBlock::ControlUnavailable)?;
-        send_input(&link, events)
+        send_bound_input(&link, events,None,false)
     }
 }
 
@@ -226,7 +268,7 @@ impl ScreenHostBackend for WorkerBackend {
 /// running picture request, then at most as long for the answer (a host
 /// process that does not answer is ended, like for a picture). Nothing of
 /// the batch is logged.
-fn send_input(link: &SharedLink, events: &[InputEvent]) -> Result<(), ControlBlock> {
+pub(super) fn send_bound_input(link: &SharedLink, events: &[InputEvent],reference:Option<u64>,presented:bool) -> Result<(), ControlBlock> {
     let deadline = Instant::now() + INPUT_TIMEOUT;
     let mut guard = loop {
         match link.try_lock() {
@@ -240,10 +282,13 @@ fn send_input(link: &SharedLink, events: &[InputEvent]) -> Result<(), ControlBlo
             }
         }
     };
-    match guard.ask(&WorkerRequest::Input(events.to_vec()), INPUT_TIMEOUT) {
-        Ok(WorkerReply::InputDone { blocked: None }) => Ok(()),
+    let input=crate::screen::core::worker_wire::BoundInput {events:events.to_vec(),
+        reference_generation:reference.unwrap_or_else(||guard.facts.generation.load(std::sync::atomic::Ordering::Acquire)),presented};
+    match guard.ask(&WorkerRequest::Input(input), INPUT_TIMEOUT) {
+        Ok(WorkerReply::InputDone { blocked: None,.. }) => Ok(()),
         Ok(WorkerReply::InputDone {
             blocked: Some(blocked),
+            ..
         }) => Err(blocked),
         _ => Err(ControlBlock::ControlUnavailable),
     }

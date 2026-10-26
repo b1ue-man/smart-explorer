@@ -91,6 +91,15 @@ pub(super) fn prereqs_json(prereqs: &Prereqs) -> Value {
 }
 
 fn prereqs(args: &Value) -> Result<Value, ApiError> {
+    let working_bytes = match args.get("workingBytes") {
+        None | Some(Value::Null) => None,
+        Some(value) => {
+            let bytes = value.as_u64().ok_or_else(|| invalid("Ungültiges Bildspeicherbudget."))?;
+            crate::screen::core::frame_budget::FrameLimits::RESOURCE.with_working_budget(bytes)
+                .map_err(|error| invalid(error.to_string()))?;
+            Some(bytes)
+        }
+    };
     let accessibility = match opt_str(args, "accessibility") {
         None => None,
         Some(state @ ("on" | "off" | "restricted")) => Some(state.to_string()),
@@ -105,9 +114,18 @@ fn prereqs(args: &Value) -> Result<Value, ApiError> {
         Some(list) => Some(
             list.iter()
                 .filter_map(|entry| {
-                    let profile = entry.get("profile").and_then(Value::as_str)?;
-                    matches!(profile, "cb" | "high")
-                        .then(|| (profile.to_string(), opt_bool(entry, "hardware", false)))
+                    use crate::screen::core::negotiate::{CodecOffer,H264Profile};
+                    let profile=match entry.get("profile").and_then(Value::as_str)? {
+                        "cb" => H264Profile::ConstrainedBaseline,"high" => H264Profile::High,_ => return None,
+                    };
+                    let mut offer=CodecOffer::h264(profile,opt_bool(entry,"hardware",false));
+                    let side=|key| entry.get(key).and_then(Value::as_u64).and_then(|n|u32::try_from(n).ok()).filter(|n|*n>0 && *n<=16_384);
+                    if let (Some(width),Some(height))=(side("maxWidth"),side("maxHeight")) {
+                        offer=offer.with_max(crate::screen::core::pixel_convert::FrameSize::new(width,height));
+                    }
+                    offer.max_macroblocks=entry.get("maxMacroblocks").and_then(Value::as_u64).filter(|n|*n>0);
+                    offer.max_macroblocks_per_second=entry.get("maxMacroblocksPerSecond").and_then(Value::as_u64).filter(|n|*n>0);
+                    Some(offer)
                 })
                 .collect::<Vec<_>>(),
         ),
@@ -123,9 +141,21 @@ fn prereqs(args: &Value) -> Result<Value, ApiError> {
             })
             .collect::<Vec<(String, String)>>()
     });
+    if let Some(list)=args.get("apps").and_then(Value::as_array) {
+        let icons=list.iter().take(128).filter_map(|entry| {
+            let package=entry.get("package")?.as_str()?;
+            let icon:crate::screen::core::app_icon::IconRef=serde_json::from_value(entry.get("icon")?.clone()).ok()?;
+            if icon.app_id!=package {return None;}
+            let png_base64=entry.get("iconPngBase64")?.as_str()?;
+            if png_base64.len()>crate::screen::core::app_icon::MAX_ICON_BASE64_BYTES {return None;}
+            Some(crate::screen::core::app_icon::IconReply {icon,png_base64:png_base64.into()})
+        }).collect();
+        let _=crate::screen::os::android_app_icons::replace_registered(icons);
+    }
     channels::set_event_sink(emit);
     let stored = channels::set_prereqs(|stored| {
         stored.registered = true;
+        if let Some(bytes) = working_bytes { stored.working_bytes = Some(bytes); }
         if let Some(accessibility) = accessibility {
             stored.accessibility = accessibility;
         }
@@ -166,7 +196,8 @@ pub(super) fn sessions() -> Value {
             };
             json!({
                 "session": channel.id,
-                "source": start.source,
+                "source": if projection { "system-selected" } else { start.source.as_str() },
+                "requestedSource": start.source,
                 "still": start.still,
                 "viewerName": start.viewer_name,
                 "viewerDeviceId": start.viewer_device_id,
@@ -214,15 +245,16 @@ fn ready(args: &Value) -> Result<Value, ApiError> {
             "„encoder“ ist länger, als ein Steuerrahmen (64 KiB) zum Betrachter trägt.",
         ));
     }
+    let projection = opt_bool(args, "projection", false);
     let phase = Phase::Ready {
         width: size_arg(args, "width")?,
         height: size_arg(args, "height")?,
         encoder: encoder.to_string(),
         hardware: opt_bool(args, "hardware", false),
-        projection: opt_bool(args, "projection", false),
+        projection,
     };
     channels::ready(id, phase).map_err(|message| ApiError::new("not_found", message))?;
-    Ok(json!({}))
+    Ok(json!({"source": if projection { "system-selected" } else { "requested-source" }}))
 }
 
 fn ended(args: &Value) -> Result<Value, ApiError> {

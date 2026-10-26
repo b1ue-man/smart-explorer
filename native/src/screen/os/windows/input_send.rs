@@ -168,12 +168,17 @@ pub(super) fn records(
     desk: Area,
     sas: &mut SasGuard,
 ) -> Vec<INPUT> {
+    records_with_position(events,area,desk,sas,absolute)
+}
+
+fn records_with_position(events:&[InputEvent],area:Area,desk:Area,sas:&mut SasGuard,
+    position:fn(Area,Area,u16,u16)->(i32,i32))->Vec<INPUT> {
     const MOVE: u32 = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
     let mut out = Vec::with_capacity(events.len() * 2);
     for event in events {
         match event {
             InputEvent::PointerAbs { x, y } => {
-                let (ax, ay) = absolute(area, desk, *x, *y);
+                let (ax, ay) = position(area, desk, *x, *y);
                 out.push(mouse(MOVE, ax, ay, 0));
             }
             InputEvent::Button { button, down } => {
@@ -222,7 +227,7 @@ pub(super) fn records(
             }
             // One finger as the left button; further fingers are left out.
             InputEvent::Touch { id: 0, phase, x, y } => {
-                let (ax, ay) = absolute(area, desk, *x, *y);
+                let (ax, ay) = position(area, desk, *x, *y);
                 out.push(mouse(MOVE, ax, ay, 0));
                 match phase {
                     TouchPhase::Start => out.push(mouse(MOUSEEVENTF_LEFTDOWN, 0, 0, 0)),
@@ -255,6 +260,70 @@ pub(crate) fn inject(events: &[InputEvent]) -> Result<(), ControlBlock> {
     let area = target_area(&target).ok_or(ControlBlock::ControlUnavailable)?;
     let inputs = records(events, area, virtual_desktop(), &mut state.sas);
     drop(state);
+    submit(&inputs)
+}
+
+/// Family positions use the very physical rectangle admitted by HostSession.
+/// The raw monitor/window path above deliberately retains its old mapping.
+pub(crate) fn inject_family(geometry:crate::remote_window::CaptureGeometry,events:&[InputEvent])->Result<(),ControlBlock> {
+    if secure_desktop::on_secure_desktop(){return Err(ControlBlock::SecureDesktop);}
+    if input_integrity::foreground_blocked(){return Err(ControlBlock::ElevatedWindow);}
+    if !geometry.valid(){return Err(ControlBlock::ControlUnavailable);}
+    monitors::ensure_dpi_aware();
+    let area=Area {left:geometry.x,top:geometry.y,
+        width:i32::try_from(geometry.width).map_err(|_|ControlBlock::ControlUnavailable)?,
+        height:i32::try_from(geometry.height).map_err(|_|ControlBlock::ControlUnavailable)?};
+    let desk=virtual_desktop();
+    if desk.width<=0||desk.height<=0{return Err(ControlBlock::ControlUnavailable);}
+    for event in events {
+        if let InputEvent::PointerAbs {x,y}|InputEvent::Touch {x,y,..}=event {
+            let px=i64::from(area.left)+i64::from(*x)*i64::from(area.width-1)/65_535;
+            let py=i64::from(area.top)+i64::from(*y)*i64::from(area.height-1)/65_535;
+            if px<i64::from(desk.left)||py<i64::from(desk.top)||px>=i64::from(desk.left)+i64::from(desk.width)
+                ||py>=i64::from(desk.top)+i64::from(desk.height){return Err(ControlBlock::ControlUnavailable);}
+            let (ax,ay)=family_absolute(area,desk,*x,*y);
+            // Reject a pixel the 16-bit desktop coordinate cannot represent.
+            if i64::from(ax)*i64::from(desk.width)/65_536+i64::from(desk.left)!=px
+                ||i64::from(ay)*i64::from(desk.height)/65_536+i64::from(desk.top)!=py {
+                return Err(ControlBlock::ControlUnavailable);
+            }
+        }
+    }
+    let inputs=records_with_position(events,area,desk,&mut state().sas,family_absolute);
+    submit(&inputs)
+}
+
+fn family_absolute(area:Area,desk:Area,x:u16,y:u16)->(i32,i32) {
+    // Pixel centers avoid the edge-rounding error described by Microsoft's
+    // UIAutomation Input.SendMouseInput implementation (source.dot.net).
+    let axis=|pos:u16,start:i32,length:i32,origin:i32,span:i32| {
+        let pixel=i64::from(start)-i64::from(origin)+i64::from(pos)*i64::from(length-1)/65_535;
+        (((pixel*2+1)*32_768)/i64::from(span)).clamp(0,65_535) as i32
+    };
+    (axis(x,area.left,area.width,desk.left,desk.width),axis(y,area.top,area.height,desk.top,desk.height))
+}
+
+/// Compensating ups never query or activate the now-unusable target. UIPI is
+/// still enforced by SendInput itself; failed releases remain pending upstream.
+pub(crate) fn release(events:&[InputEvent])->Result<(),ControlBlock> {
+    if secure_desktop::on_secure_desktop(){return Err(ControlBlock::SecureDesktop);}
+    let mut releases=Vec::with_capacity(events.len());
+    for event in events {
+        match event {
+            InputEvent::Key {down:false,..}|InputEvent::Button {down:false,..}=>releases.push(event.clone()),
+            InputEvent::Touch {id,phase:TouchPhase::End|TouchPhase::Cancel,..}=>{
+                if *id==0 {releases.push(InputEvent::Button {button:PointerButton::Left,down:false});}
+            }
+            _=>return Err(ControlBlock::ControlUnavailable),
+        }
+    }
+    // No accepted event uses coordinates; the one-pixel value is never read.
+    let unused=Area {left:0,top:0,width:1,height:1};
+    let inputs=records(&releases,unused,unused,&mut state().sas);
+    submit(&inputs)
+}
+
+fn submit(inputs:&[INPUT])->Result<(),ControlBlock> {
     if inputs.is_empty() {
         return Ok(());
     }

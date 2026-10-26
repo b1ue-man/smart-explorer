@@ -39,6 +39,10 @@ fn server_hello() -> ScreenServerHello {
 
 fn client_hello() -> ScreenClientHello {
     ScreenClientHello {
+        family_version: None,
+        icon_version: None,
+        metadata_only: false,
+        frame_capabilities: None,
         protocol_version: SCREEN_PROTOCOL_VERSION,
         relation_kind: "direct".into(),
         relation_id: "lookup".into(),
@@ -62,6 +66,9 @@ fn client_hello() -> ScreenClientHello {
 
 fn replies() -> Vec<HelloReply> {
     let accepted = ScreenHelloOk {
+        family_version: None,
+        icon_version: None,
+        frame_contract: None,
         authorization: ScreenAuthorization {
             view: CapabilityDecision::Allow,
             control: CapabilityDecision::Ask,
@@ -229,6 +236,8 @@ fn app_entry() -> AppEntry {
 
 fn video_header() -> GopHeader {
     GopHeader {
+            family_layout_revision: None,
+        frame_contract: None,
         gop_id: 0x0102_0304_0506_0708,
         kind: StreamKind::Video,
         codec: CodecKind::H264,
@@ -239,6 +248,8 @@ fn video_header() -> GopHeader {
 
 fn tiles_header() -> GopHeader {
     GopHeader {
+            family_layout_revision: None,
+        frame_contract: None,
         gop_id: 9,
         kind: StreamKind::Preview,
         codec: CodecKind::Tiles,

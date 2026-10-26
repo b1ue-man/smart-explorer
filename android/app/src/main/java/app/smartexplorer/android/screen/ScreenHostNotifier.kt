@@ -53,7 +53,7 @@ internal object ScreenHostNotifier {
         val controlled = sessions.any { it.projection }
         return NotificationCompat.Builder(context, CHANNEL_SCREEN)
             .setSmallIcon(R.drawable.ic_lock)
-            .setContentTitle(if (controlled) "Bildschirm wird geteilt" else "Bildschirm-Vorschau wird geteilt")
+            .setContentTitle(if (controlled) "Android-Systemauswahl wird geteilt" else "Bildschirm-Vorschau wird geteilt")
             .setContentText(names.joinToString(", ").ifBlank { "Bildschirmfreigabe läuft" })
             .setOngoing(true)
             .setOnlyAlertOnce(true)
@@ -71,7 +71,9 @@ internal object ScreenHostNotifier {
         return NotificationCompat.Builder(context, Notifications.CHANNEL_ACCESS_APPROVAL)
             .setSmallIcon(R.drawable.ic_lock)
             .setContentTitle("$who möchte den Bildschirm sehen")
-            .setContentText("Freigeben öffnet die Android-Abfrage „Bildschirm teilen“")
+            .setContentText(if (ScreenProjectionIdentity.requiresPackageProof(start.source))
+                "App-Zuordnung nicht prüfbar. Öffnen zeigt den Weg zur Android-Systemauswahl."
+                else "Freigeben öffnet Android: App oder ganzen Bildschirm auswählen")
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .setContentIntent(open)

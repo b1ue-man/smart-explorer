@@ -362,11 +362,13 @@ fn screen_task_windows_bench_real_capture() {
     let mut source = backend.open_source(&window.source_id(), None).unwrap();
     let first = next_picture(source.as_mut(), Duration::from_secs(5));
     let choice = CodecChoice {
+            max_macroblocks_per_second: None,
         codec: CodecKind::Tiles,
         profile: None,
         encoder_hardware: false,
         decoder_hardware: false,
         max_size: FrameSize::MAX,
+        max_pixels: crate::screen::core::pixel_convert::MAX_FRAME_PIXELS,
     };
     let mut encoder = crate::screen::os::codec_inventory::registry()
         .open_encoder(&choice, first.size(), 60)

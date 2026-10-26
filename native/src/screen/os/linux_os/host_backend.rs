@@ -224,7 +224,13 @@ impl ScreenHostBackend for LinuxBackend {
     }
 
     fn windows(&self) -> io::Result<WindowList> {
-        self.list_windows()
+        let mut list=self.list_windows()?;
+        super::app_icons::attach(&mut list);
+        Ok(list)
+    }
+
+    fn icon(&self, entry: crate::screen::core::app_icon::AuthorizedIconEntry<'_>) -> io::Result<Option<crate::screen::core::app_icon::IconReply>> {
+        super::app_icons::load(entry)
     }
 
     fn open_source(
@@ -256,6 +262,16 @@ impl ScreenHostBackend for LinuxBackend {
         }
     }
 
+    fn open_family_member(&self,native:crate::remote_window::NativeWindowId)
+        ->Result<Box<dyn ScreenSource>,SourceRefusal> {
+        match self.session {
+            SessionKind::X11=>x11_capture::X11Source::open_family_window(native)
+                .map(|source|Box::new(source) as Box<dyn ScreenSource>),
+            SessionKind::Wayland=>Err(SourceRefusal::new(PORTAL_SELECTS_SOURCE)),
+            SessionKind::None=>Err(SourceRefusal::new("no_display")),
+        }
+    }
+
     fn open_encoder(
         &self,
         choice: &CodecChoice,
@@ -264,11 +280,23 @@ impl ScreenHostBackend for LinuxBackend {
         SyntheticBackend.open_encoder(choice, size)
     }
 
+    fn open_encoder_for_stage(&self, request: &crate::screen::core::host_stage::StageRequest) -> io::Result<Box<dyn ScreenEncoder>> {
+        Ok(crate::screen::os::codec_inventory::registry().open_encoder_with_contract(&request.choice, request.size, request.fps, &[], request.frame_contract)?.encoder)
+    }
+
     fn inject(&self, events: &[InputEvent]) -> Result<(), ControlBlock> {
         match self.session {
             SessionKind::X11 => super::x11_input::inject(events),
             SessionKind::Wayland => super::portal_input::inject(events),
             SessionKind::None => Err(ControlBlock::UnsupportedOnHost),
+        }
+    }
+    fn release_input(&self,events:&[InputEvent])->Result<(),ControlBlock> {
+        match self.session {
+            SessionKind::X11=>super::x11_input::release(events),
+            // Keep the actual portal session/device grant boundary unchanged.
+            SessionKind::Wayland=>super::portal_input::inject(events),
+            SessionKind::None=>Err(ControlBlock::UnsupportedOnHost),
         }
     }
 }

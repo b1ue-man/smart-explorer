@@ -14,9 +14,13 @@ use super::session_state::SessionState;
 use super::wire_hello::ScreenErrorCode;
 
 /// What the pipeline asks a stage for one frame.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct StageRequest {
     pub frame_id: u64,
+    /// Present only after both endpoints confirmed the v2 contract.
+    pub frame_contract: Option<super::frame_budget::FrameContract>,
+    /// Encoder-input coordinates; None means unverified geometry and transfers full deltas.
+    pub visible_rects: Option<Vec<super::visibility::VisibleRect>>,
     pub keyframe: bool,
     pub target_bps: u64,
     /// Size of the picture group, the encoder's input.

@@ -31,11 +31,56 @@ pub(crate) enum SourceFrame {
     Paused(SessionState),
 }
 
-/// One capture source of the host (`monitor:<id>`, `window:<id>`,
-/// `synthetic`); whether it shows screen content says its `SourceId`.
+/// Release-only endpoint belonging to one existing source.
+pub(crate) trait ScreenInputSink:Send+Sync {
+    fn legacy_input_invalid(&self)->bool {false}
+    fn inject(&self,_events:&[InputEvent],_reference_generation:u64,_presented:bool)->Result<(),ControlBlock> {
+        Err(ControlBlock::ControlUnavailable)
+    }
+    fn release(&self,events:&[InputEvent])->Result<(),ControlBlock>;
+    fn family_snapshot(&self) -> io::Result<Option<crate::remote_window::FamilySnapshot>> { Ok(None) }
+    fn family_operation(&self, _request: super::family_protocol::FamilyOperation,
+        _active: std::sync::Arc<std::sync::atomic::AtomicBool>)
+        -> io::Result<super::family_protocol::FamilyOperationResult> {
+        Err(io::Error::new(io::ErrorKind::Unsupported, "source_has_no_window_family"))
+    }
+    fn family_input(&self, _request: super::family_protocol::FamilyInput,
+        _active: std::sync::Arc<std::sync::atomic::AtomicBool>)
+        -> io::Result<super::family_protocol::FamilyInputResult> {
+        Err(io::Error::new(io::ErrorKind::Unsupported, "source_has_no_window_family"))
+    }
+}
+/// One capture source; its SourceId determines whether it contains screen content.
 pub(crate) trait ScreenSource: Send {
+    fn legacy_input_invalid(&self)->bool {false}
+    /// Runs in the original capture worker after the admitted request waited
+    /// in IPC. Platform sources may additionally verify their live geometry.
+    fn inject_input(&mut self,backend:&dyn ScreenHostBackend,reference_generation:u64,_presented:bool,events:&[InputEvent])
+        ->Result<(),ControlBlock> {
+        if reference_generation!=self.reference_generation(){return Err(ControlBlock::ControlUnavailable);}
+        backend.inject(events)
+    }
+    /// Release-only endpoint retained across a source change or an in-flight capture.
+    fn input_sink(&self)->Option<std::sync::Arc<dyn ScreenInputSink>> {None}
     /// Size of the source's pictures; a change starts a new picture stream.
     fn size(&self) -> FrameSize;
+    /// Proven capture allocation bound; unmodified adapters keep their old ceiling.
+    fn frame_limits(&self) -> super::frame_budget::FrameLimits {
+        super::frame_budget::FrameLimits::LEGACY
+    }
+    /// The allocation bound for this negotiated session; legacy adapters may
+    /// retain a distinct surface-backed path without changing their v2 offer.
+    fn frame_limits_for_contract(&self, contract: Option<super::frame_budget::FrameContract>) -> super::frame_budget::FrameLimits {
+        contract.map_or_else(||self.frame_limits(),|contract|self.frame_limits().intersect(contract.limits))
+    }
+    /// Matching raw/video pixels permit hybrid reconstruction; false retains the v2 size contract without hybrid operations.
+    fn supports_frame_regions(&self) -> bool { true }
+    /// Geometry/content identity beyond dimensions, such as a window-family revision.
+    fn reference_generation(&self) -> u64 { 0 }
+    /// Layout captured into the most recent successful family image.
+    fn family_layout_revision(&self) -> Option<u64> { None }
+    /// Stop background production while retaining the authorized source identity.
+    fn set_capture_active(&mut self, _active: bool) -> io::Result<()> { Ok(()) }
     /// The picture of encoded frame `frame_id` (the synthetic source draws
     /// the id into its barcode). With `keyframe` a source delivers its last
     /// picture even when nothing changed, so a key frame always has one.
@@ -57,6 +102,11 @@ pub(crate) trait ScreenEncoder: Send {
     /// Encoder name for statistics (`tiles`, an MFT, `openh264`).
     fn name(&self) -> String;
     fn size(&self) -> FrameSize;
+    /// A pending lossless correction needs one repeated capture after motion stops.
+    fn needs_refresh(&self) -> bool { false }
+    fn encode_frame(&mut self, frame: &BgraImage, request: &super::host_stage::StageRequest) -> io::Result<EncodedFrame> {
+        self.encode(frame, request.keyframe, request.target_bps)
+    }
     /// Encodes `frame` (of `size()`); no records when nothing changed.
     fn encode(
         &mut self,
@@ -92,8 +142,13 @@ pub(crate) struct YuvPicture {
 
 pub(crate) trait ScreenDecoder: Send {
     fn name(&self) -> String;
-    /// Applies one record; `true` when it completed a picture.
+    /// Applies one record; `true` when an actual picture is available. A video
+    /// decoder may return an older submitted picture; use `decoded_frame` for
+    /// its identity, never the record most recently passed to this method.
     fn decode(&mut self, record: &FrameRecord) -> io::Result<bool>;
+    /// Identity of the picture produced by the last `decode` that returned `true`.
+    /// `None` is unproven output and must never receive a presentation receipt.
+    fn decoded_frame(&self) -> Option<super::decoded_frame::DecodedFrame> { None }
     /// The last completed picture.
     fn picture(&self) -> &BgraImage;
     /// Asks to keep the decoded planes (`yuv_picture`) and to skip the
@@ -124,6 +179,7 @@ impl SourceRefusal {
 /// The screen host of one platform.
 pub(crate) trait ScreenHostBackend: Send + Sync {
     fn platform(&self) -> HostPlatform;
+    fn icon(&self, _entry: super::app_icon::AuthorizedIconEntry<'_>) -> io::Result<Option<super::app_icon::IconReply>> {Ok(None)}
     /// A graphical session exists in which the screen can be shown.
     fn graphical_session(&self) -> bool;
     fn monitors(&self) -> Vec<MonitorInfo>;
@@ -132,6 +188,21 @@ pub(crate) trait ScreenHostBackend: Send + Sync {
     /// Platform limits for `HELLO_OK` (`consent_each_session`, …).
     fn limits(&self) -> Vec<String>;
     fn windows(&self) -> io::Result<WindowList>;
+    fn family_windows(&self, _owner: &str) -> io::Result<super::family_protocol::FamilyListing> {
+        Err(io::Error::new(io::ErrorKind::Unsupported, "window_family_listing_unavailable"))
+    }
+    /// Trusted host launch correlation only; publication remains ScreenView metadata.
+    fn register_family_pin(&self,_owner:&str,_request_id:&str,_pin:crate::remote_window::WindowPin)
+        ->io::Result<super::family_protocol::FamilyListEntry> {
+        Err(io::Error::new(io::ErrorKind::Unsupported,"verified_family_registration_unavailable"))
+    }
+    fn open_session_source(&self, _owner: &str, _session: &str, source: &SourceId,
+        wanted: Option<FrameSize>, _control: bool) -> Result<Box<dyn ScreenSource>, SourceRefusal> {
+        if super::family_protocol::selector(source).is_some() {
+            return Err(SourceRefusal::new("window_family_unavailable"));
+        }
+        self.open_source(source, wanted)
+    }
     /// Opens `source`; `wanted` is the size a viewer asked for, used by
     /// sources without a size of their own (`synthetic`).
     fn open_source(
@@ -139,13 +210,31 @@ pub(crate) trait ScreenHostBackend: Send + Sync {
         source: &SourceId,
         wanted: Option<FrameSize>,
     ) -> Result<Box<dyn ScreenSource>, SourceRefusal>;
+    /// Opens only this member's own surface. A desktop/root crop is forbidden,
+    /// including when the independent capture API stops working after opening.
+    fn open_family_member(&self, _native: crate::remote_window::NativeWindowId)
+        -> Result<Box<dyn ScreenSource>, SourceRefusal> {
+        Err(SourceRefusal::new("window_family_member_capture_unsupported"))
+    }
     fn open_encoder(
         &self,
         choice: &CodecChoice,
         size: FrameSize,
     ) -> io::Result<Box<dyn ScreenEncoder>>;
+    /// Carries the negotiated image and codec-rate contract to in-process encoders.
+    fn open_encoder_for_stage(&self, request: &super::host_stage::StageRequest) -> io::Result<Box<dyn ScreenEncoder>> {
+        self.open_encoder(&request.choice, request.size)
+    }
     /// Injects the input of the controlling viewer.
     fn inject(&self, events: &[InputEvent]) -> Result<(), ControlBlock>;
+    /// Family coordinates are relative to the exact admitted capture geometry.
+    fn inject_family(&self, _member: &crate::remote_window::CaptureMember, events: &[InputEvent]) -> Result<(), ControlBlock> {
+        self.inject(events)
+    }
+    /// Release previously injected controls even after their window loses focus.
+    fn release_input(&self, events: &[InputEvent]) -> Result<(), ControlBlock> {
+        self.inject(events)
+    }
 }
 
 /// The host user's sign that the screen is watched (C7): the window
@@ -194,6 +283,12 @@ impl TilesScreenEncoder {
     }
 }
 
+impl TilesScreenEncoder {
+    pub(crate) fn new_with_limits(size: FrameSize, limits: super::frame_budget::FrameLimits) -> io::Result<Self> {
+        Ok(Self { encoder: TileEncoder::new_with_limits(size, limits)? })
+    }
+}
+
 impl ScreenEncoder for TilesScreenEncoder {
     fn name(&self) -> String {
         "tiles".into()
@@ -201,6 +296,10 @@ impl ScreenEncoder for TilesScreenEncoder {
 
     fn size(&self) -> FrameSize {
         self.encoder.size()
+    }
+    fn encode_frame(&mut self,frame:&BgraImage,request:&super::host_stage::StageRequest) -> io::Result<EncodedFrame> {
+        let records=self.encoder.encode_visible(&frame.view(),request.keyframe,MAX_TILES_RECORD_BYTES,request.visible_rects.as_deref())?;
+        Ok(EncodedFrame {records,keyframe:request.keyframe})
     }
 
     fn encode(
@@ -219,13 +318,21 @@ impl ScreenEncoder for TilesScreenEncoder {
 /// The lossless tile codec as a `ScreenDecoder`.
 pub(crate) struct TilesScreenDecoder {
     decoder: TileDecoder,
+    decoded: Option<super::decoded_frame::DecodedFrame>,
 }
 
 impl TilesScreenDecoder {
     pub(crate) fn new(size: FrameSize) -> io::Result<Self> {
         Ok(Self {
             decoder: TileDecoder::new(size)?,
+            decoded: None,
         })
+    }
+}
+
+impl TilesScreenDecoder {
+    pub(crate) fn new_with_limits(size: FrameSize, limits: super::frame_budget::FrameLimits) -> io::Result<Self> {
+        Ok(Self { decoder: TileDecoder::new_with_limits(size, limits)?, decoded: None })
     }
 }
 
@@ -235,9 +342,13 @@ impl ScreenDecoder for TilesScreenDecoder {
     }
 
     fn decode(&mut self, record: &FrameRecord) -> io::Result<bool> {
-        self.decoder.apply_record(&record.payload)?;
-        Ok(!record.has_more())
+        self.decoded = None;
+        let complete = self.decoder.apply_frame_record(record)?;
+        if complete { self.decoded = Some(super::decoded_frame::DecodedFrame::from_record(record)); }
+        Ok(complete)
     }
+
+    fn decoded_frame(&self) -> Option<super::decoded_frame::DecodedFrame> { self.decoded }
 
     fn picture(&self) -> &BgraImage {
         self.decoder.image()

@@ -192,6 +192,7 @@ impl ViewState {
 
     fn send_keys(&self, events: Vec<InputEvent>) {
         if let (Some(session), true) = (&self.session, self.control_on) {
+            if !session.input_ready() { return; }
             session.send(ViewerFrame::Input(events));
         }
     }
@@ -234,6 +235,7 @@ impl ViewState {
             ToolbarAction::Source(source) => {
                 self.source = source.clone();
                 if let Some(session) = &self.session {
+                    self.widget.source_changed(session);
                     let mode = full_set_mode(source.clone(), display, &common.prefs);
                     session.send(ViewerFrame::SetMode(mode));
                 }

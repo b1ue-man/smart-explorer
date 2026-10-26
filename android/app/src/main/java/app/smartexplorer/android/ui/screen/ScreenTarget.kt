@@ -21,6 +21,7 @@ data class ScreenTarget(
     val deviceId: String?,
     val source: String? = null,
     val control: Boolean = false,
+    val expectedNodeId: String? = null,
 ) {
     /** The JSON of `NavRequest.OpenScreen`: `{"relation","relation_id","device_id","source","control"}`. */
     fun toJson(): String = ScreenTargetJson.encode(this)
@@ -58,6 +59,7 @@ object ScreenTargetJson {
             deviceId = deviceId,
             source = field("source")?.takeIf { it.isNotEmpty() },
             control = (obj["control"] as? JsonPrimitive)?.booleanOrNull ?: false,
+            expectedNodeId = field("expected_node").also { require(it == null || it.isNotBlank()) { "Leerer Geräteschlüssel" } },
         )
     }
 
@@ -67,5 +69,6 @@ object ScreenTargetJson {
         put("device_id", target.deviceId)
         put("source", target.source)
         put("control", target.control)
+        target.expectedNodeId?.let { put("expected_node", it) }
     }.toString()
 }

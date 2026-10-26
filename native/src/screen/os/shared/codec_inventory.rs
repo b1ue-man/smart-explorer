@@ -170,6 +170,8 @@ mod tests {
                 encoder_hardware: true,
                 decoder_hardware: false,
                 max_size: FrameSize::MAX,
+                max_pixels: crate::screen::core::pixel_convert::MAX_FRAME_PIXELS,
+                max_macroblocks_per_second: None,
             }
         );
         assert!(choices
@@ -192,6 +194,8 @@ mod tests {
                 encoder_hardware: false,
                 decoder_hardware: false,
                 max_size: OPENH264_MAX_ENCODE,
+                max_pixels: OPENH264_MAX_ENCODE.pixels(),
+                max_macroblocks_per_second: None,
             }
         );
         // A viewer with Constrained Baseline only never gets High.

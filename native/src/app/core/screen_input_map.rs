@@ -13,16 +13,17 @@
 use std::collections::VecDeque;
 
 use eframe::egui::{
-    Event, ImeEvent, Key, Modifiers, MouseWheelUnit, PointerButton as EguiButton, Pos2, Rect,
+    Event, ImeEvent, Key, Modifiers, MouseWheelUnit, PointerButton as EguiButton, Pos2,
     TouchPhase as EguiPhase,
 };
 
 use super::screen_input_keys::{is_text_key, key_usage_of, local_key};
+#[cfg(test)]
+use crate::screen::core::{input_model::pixel_to_pointer, pixel_convert::FrameSize};
 use crate::screen::core::input_model::{
-    key_usage, pixel_to_pointer, InputCapabilities, InputEvent, PointerButton, PressedInputs,
+    key_usage, InputCapabilities, InputEvent, PointerButton, PressedInputs,
     TouchPhase, MAX_INPUT_EVENTS, MAX_TEXT_BYTES,
 };
-use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::wire::MAX_CONTROL_BYTES;
 
 /// Wheel notches per line of a mouse wheel in lines (1/120 notch units).
@@ -34,36 +35,7 @@ const LINES_PER_PAGE: f32 = 10.0;
 /// Room kept free in a batch for its count and the largest fixed event.
 const BATCH_MARGIN: usize = 16;
 
-/// Where the picture lies on the screen and how large its source is.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Geometry {
-    /// The picture's area in points.
-    pub rect: Rect,
-    /// Pixels of the source.
-    pub size: FrameSize,
-}
-
-impl Geometry {
-    /// The pointer position 0–65535 of `pos`, if it lies on the picture.
-    pub(crate) fn pointer_at(&self, pos: Pos2) -> Option<(u16, u16)> {
-        self.rect.contains(pos).then(|| self.clamped(pos))
-    }
-
-    /// The same, with positions beyond the picture on its edge.
-    pub(crate) fn clamped(&self, pos: Pos2) -> (u16, u16) {
-        let axis = |value: f32, start: f32, length: f32, pixels: u32| {
-            let share = if length > 0.0 {
-                ((value - start) / length).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            ((share * pixels as f32) as u32).min(pixels.saturating_sub(1))
-        };
-        let px = axis(pos.x, self.rect.min.x, self.rect.width(), self.size.width);
-        let py = axis(pos.y, self.rect.min.y, self.rect.height(), self.size.height);
-        pixel_to_pointer(px, py, self.size)
-    }
-}
+pub(crate) use super::screen_viewport::Geometry;
 
 fn button_of(button: EguiButton) -> PointerButton {
     match button {
@@ -104,6 +76,7 @@ pub(crate) struct InputMapper {
     hover_inside: bool,
     /// Keys the viewer kept for itself: their release is not sent either.
     swallowed: Vec<Key>,
+    suppress_modifiers: bool,
     /// Keys the host receives as `Text`: neither press nor release is sent.
     text_keys: Vec<Key>,
     wheel_rest: (f32, f32),
@@ -126,6 +99,7 @@ impl InputMapper {
             last_sent: None,
             hover_inside: false,
             swallowed: Vec::new(),
+            suppress_modifiers: false,
             text_keys: Vec::new(),
             wheel_rest: (0.0, 0.0),
             touch_active: false,
@@ -145,9 +119,9 @@ impl InputMapper {
         let released = self.pressed.release_all();
         self.backlog.extend(released);
         self.held_buttons.clear();
-        self.swallowed.clear();
         self.text_keys.clear();
         self.mods = Modifiers::NONE;
+        self.suppress_modifiers = true;
         self.touch_active = false;
     }
 
@@ -173,6 +147,25 @@ impl InputMapper {
 
     /// Maps the events of one frame; `frame_mods` are the modifiers at its end.
     pub(crate) fn process(&mut self, events: &[Event], frame_mods: Modifiers, geometry: &Geometry) {
+        if events.iter().any(|event| matches!(event, Event::Key {
+            key, modifiers, pressed: true, ..
+        } if matches!(local_key(*key, *modifiers), Some(super::screen_input_keys::LocalKey::Fullscreen | super::screen_input_keys::LocalKey::ExitFullscreen)))) {
+            self.release_all();
+            self.suppress_modifiers = true;
+            for event in events {
+                if let Event::Key { key, modifiers, pressed:true, .. } = event {
+                    if local_key(*key,*modifiers).is_some() && !self.swallowed.contains(key) { self.swallowed.push(*key); }
+                }
+            }
+            return;
+        }
+        if self.suppress_modifiers {
+            if frame_mods.ctrl || frame_mods.alt || frame_mods.shift {
+                for event in events { if let Event::Key { key, pressed:false, .. } = event { self.swallowed.retain(|held| held != key); } }
+                return;
+            }
+            self.suppress_modifiers = false;
+        }
         // egui reports a touch as a touch and as pointer events; the host
         // that takes touches gets the touch only.
         let touching = self.caps.touch
@@ -339,6 +332,7 @@ impl InputMapper {
 
     fn key(&mut self, key: Key, pressed: bool, repeat: bool, modifiers: Modifiers) {
         if local_key(key, modifiers).is_some() {
+            if !pressed { self.swallowed.retain(|held| *held != key); }
             if pressed && !self.swallowed.contains(&key) {
                 self.swallowed.push(key);
             }

@@ -19,7 +19,10 @@ use libloading::Library;
 pub(crate) const LIBRARY_NAME: &str = "libpipewire-0.3.so.0";
 pub(crate) const PW_DIRECTION_INPUT: c_int = 0;
 pub(crate) const PW_STREAM_FLAG_AUTOCONNECT: u32 = 1 << 0;
+pub(crate) const PW_STREAM_FLAG_INACTIVE: u32 = 1 << 1;
 pub(crate) const PW_STREAM_FLAG_MAP_BUFFERS: u32 = 1 << 2;
+pub(crate) const PW_STREAM_FLAG_DONT_RECONNECT: u32 = 1 << 7;
+pub(crate) const PW_ID_ANY: u32 = u32::MAX;
 pub(crate) const SPA_PARAM_FORMAT: u32 = 4;
 pub(crate) const PW_STREAM_STATE_ERROR: c_int = -1;
 /// `SPA_CHUNK_FLAG_CORRUPTED`: the chunk's data must not be looked at.
@@ -140,6 +143,7 @@ pub(crate) struct PipewireApi {
         unsafe extern "C" fn(*mut c_void, c_int, u32, u32, *mut *const SpaPod, u32) -> c_int,
     pub stream_dequeue_buffer: unsafe extern "C" fn(*mut c_void) -> *mut PwBuffer,
     pub stream_queue_buffer: unsafe extern "C" fn(*mut c_void, *mut PwBuffer) -> c_int,
+    pub stream_set_active: unsafe extern "C" fn(*mut c_void,bool) -> c_int,
     pub stream_disconnect: unsafe extern "C" fn(*mut c_void) -> c_int,
     pub stream_destroy: unsafe extern "C" fn(*mut c_void),
     /// The version string, for the log only.
@@ -183,6 +187,7 @@ pub(crate) fn load_from(name: &str) -> io::Result<PipewireApi> {
         stream_connect: symbol(&library, "pw_stream_connect")?,
         stream_dequeue_buffer: symbol(&library, "pw_stream_dequeue_buffer")?,
         stream_queue_buffer: symbol(&library, "pw_stream_queue_buffer")?,
+        stream_set_active: symbol(&library,"pw_stream_set_active")?,
         stream_disconnect: symbol(&library, "pw_stream_disconnect")?,
         stream_destroy: symbol(&library, "pw_stream_destroy")?,
         get_library_version: symbol(&library, "pw_get_library_version")?,

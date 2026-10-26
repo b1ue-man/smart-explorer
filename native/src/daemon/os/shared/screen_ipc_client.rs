@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use super::ipc_protocol::screen::{
-    decode_relay_record, read_relay, write_relay, BenchRequest, RelayEnd, RelayHello,
+    decode_relay_record, read_relay_budgeted, write_relay, BenchRequest, RelayEnd, RelayHello,
     ScreenIpcReply, ScreenIpcRequest, StreamRequest, MAX_RELAY_BYTES, RELAY_BROKEN, RELAY_CLOCK,
     RELAY_CLOSE, RELAY_END, RELAY_HELLO, RELAY_HOST, RELAY_RECORD, RELAY_VIEWER, WATCH_WAIT_SECS,
 };
@@ -18,9 +18,11 @@ use super::ipc_protocol::{
     read_response, set_stream_timeout, write_request, IpcRequest, IpcResponse,
 };
 use crate::screen::core::bench::{BenchOptions, BenchReport};
+use crate::screen::core::frame_budget::FrameContract;
+use crate::screen::core::frame_size_caps::PacketBudget;
 use crate::screen::core::registry::SessionView;
 use crate::screen::core::wire::from_json;
-use crate::screen::core::wire_binary::{FrameRecord, GopHeader};
+use crate::screen::core::wire_binary::{FrameRecord, GopHeader, GOP_HEADER_BYTES, RECORD_HEADER_BYTES};
 use crate::screen::core::wire_control::{
     decode_host_frame, encode_viewer_frame, HostFrame, ViewerFrame,
 };
@@ -195,6 +197,8 @@ pub(crate) enum StreamEvent {
 pub(crate) struct ScreenStream {
     events: TcpStream,
     input: Arc<Mutex<TcpStream>>,
+    /// None until Accepted; Some(None) is an explicitly legacy session.
+    frame_contract: Option<Option<FrameContract>>,
 }
 
 /// Opens a relayed viewer session with `target`.
@@ -203,9 +207,34 @@ pub(crate) fn screen_stream(
     target: PeerOpenTarget,
     request: StreamRequest,
 ) -> Result<ScreenStream, String> {
+    if let Some(expected) = request.expected_node.as_deref() {
+        require_node_pin(expected)?;
+        open_stream(ScreenIpcRequest::PinnedStream {target,request})
+    } else {
+        open_stream(ScreenIpcRequest::Stream {target,request})
+    }
+}
+
+pub(crate) fn screen_metadata_stream(target: PeerOpenTarget) -> Result<ScreenStream,String> {
+    open_stream(ScreenIpcRequest::Metadata {target})
+}
+
+pub(crate) fn screen_metadata_stream_for_node(target: PeerOpenTarget, expected_node: &str) -> Result<ScreenStream,String> {
+    require_node_pin(expected_node)?;
+    open_stream(ScreenIpcRequest::PinnedMetadata {target, expected_node: expected_node.to_owned()})
+}
+
+fn require_node_pin(expected_node: &str) -> Result<(),String> {
+    if expected_node.trim().is_empty() {
+        return Err("screen_node_required: Der bestaetigte Nodepin fehlt".into());
+    }
+    Ok(())
+}
+
+fn open_stream(request: ScreenIpcRequest) -> Result<ScreenStream,String> {
     crate::daemon::ensure_worker_ready()?;
     let mut stream = open(
-        ScreenIpcRequest::Stream { target, request },
+        request,
         Some(PROBE_TIMEOUT),
     )?;
     match read_response(&mut stream).map_err(|error| error.to_string())? {
@@ -218,6 +247,7 @@ pub(crate) fn screen_stream(
     Ok(ScreenStream {
         events: stream,
         input: Arc::new(Mutex::new(input)),
+        frame_contract: None,
     })
 }
 
@@ -225,8 +255,36 @@ pub(crate) fn screen_stream(
 impl ScreenStream {
     /// The next event; blocks until one arrives.
     pub(crate) fn next_event(&mut self) -> io::Result<StreamEvent> {
-        let (tag, payload) = read_relay(&mut self.events, MAX_RELAY_BYTES)?;
-        decode_event(tag, &payload)
+        let record_limit = match self.frame_contract {
+            Some(contract) => PacketBudget::for_contract(contract)?.record_bytes
+                + GOP_HEADER_BYTES + RECORD_HEADER_BYTES + 1026,
+            None => 0,
+        };
+        let (tag, payload) = read_relay_budgeted(&mut self.events, MAX_RELAY_BYTES, record_limit)?;
+        let event = decode_event(tag, &payload)?;
+        match &event {
+            StreamEvent::Accepted { hello, .. } => {
+                if self.frame_contract.is_some() {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, "duplicate screen relay acceptance"));
+                }
+                if let Some(contract) = hello.frame_contract { contract.validate()?; }
+                self.frame_contract = Some(hello.frame_contract);
+            }
+            StreamEvent::Record { header, .. } => {
+                let matches = match (header.frame_contract, self.frame_contract) {
+                    (None, Some(None)) => true,
+                    (Some(actual), Some(Some(accepted))) => actual.version == accepted.version
+                        && actual.limits == accepted.limits
+                        && (!actual.hybrid_regions || accepted.hybrid_regions),
+                    _ => false,
+                };
+                if !matches {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, "screen relay frame contract changed"));
+                }
+            }
+            _ => {}
+        }
+        Ok(event)
     }
 
     /// Sends a control frame to the host (`SET_MODE`, `INPUT`, …).

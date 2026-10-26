@@ -96,6 +96,11 @@ pub(crate) struct WindowEntry {
     pub id: String,
     pub title: String,
     pub app: String,
+    /// Verified platform identity; the display label is never an icon lookup key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<super::app_icon::IconRef>,
     #[serde(default)]
     pub pid: Option<u32>,
     #[serde(default)]
@@ -110,6 +115,8 @@ pub(crate) struct WindowEntry {
 pub(crate) struct AppEntry {
     pub app_id: String,
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<super::app_icon::IconRef>,
     #[serde(default)]
     pub pid: Option<u32>,
 }
@@ -173,6 +180,18 @@ impl WindowList {
         for window in &mut self.windows {
             if window.monitor.as_deref().is_some_and(|id| !valid_id(id)) {
                 window.monitor = None;
+            }
+            if window.icon.as_ref().is_some_and(|icon| {
+                icon.validate().is_err() || window.app_id.as_deref() != Some(icon.app_id.as_str())
+            }) {
+                window.icon = None;
+            }
+        }
+        for app in &mut self.apps {
+            if app.icon.as_ref().is_some_and(|icon| {
+                icon.validate().is_err() || icon.app_id != app.app_id
+            }) {
+                app.icon = None;
             }
         }
         let skeleton = WindowList {

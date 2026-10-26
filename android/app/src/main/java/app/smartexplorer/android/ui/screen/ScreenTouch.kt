@@ -8,6 +8,7 @@ import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 /** Which kind of device the input goes to (`platform` of the host). */
 enum class InputHost { DESKTOP, ANDROID }
@@ -34,10 +35,18 @@ class ViewTransform(private val onChange: () -> Unit = {}) {
     var panY = 0f
         private set
 
+    private var nativeSize: Pair<Float, Float>? = null
+    fun nativePixels(width: Int?, height: Int?) {
+        nativeSize = if (width != null && height != null && width > 0 && height > 0) width.toFloat() to height.toFloat() else null
+        reset()
+    }
+
     /** Size of the zoomed picture inside a view of [viewW]×[viewH] for a picture of [aspect] (width/height). */
     fun contentSize(viewW: Float, viewH: Float, aspect: Float): Pair<Float, Float> {
+        val native = nativeSize
+        if (native != null) return (native.first * zoom).roundToInt().toFloat() to (native.second * zoom).roundToInt().toFloat()
         val fitW = min(viewW, viewH * aspect)
-        return fitW * zoom to fitW / aspect * zoom
+        return (fitW * zoom).roundToInt().coerceAtLeast(1).toFloat() to (fitW / aspect * zoom).roundToInt().coerceAtLeast(1).toFloat()
     }
 
     /** Zooms by [scale] around the view point ([focusX], [focusY]); the point stays under the finger. */
@@ -78,8 +87,8 @@ class ViewTransform(private val onChange: () -> Unit = {}) {
     /** The position 0–65535 across the source of a view point (clamped to the picture). */
     fun toSource(x: Float, y: Float, viewW: Float, viewH: Float, aspect: Float): Pair<Int, Int> {
         val (w, h) = contentSize(viewW, viewH, aspect)
-        val left = (viewW - w) / 2 + panX
-        val top = (viewH - h) / 2 + panY
+        val left = ((viewW - w) / 2 + panX).roundToInt().toFloat()
+        val top = ((viewH - h) / 2 + panY).roundToInt().toFloat()
         val axis = { value: Float, size: Float -> (value / size * FULL_RANGE).toInt().coerceIn(0, FULL_RANGE.toInt()) }
         return axis(x - left, w) to axis(y - top, h)
     }
@@ -108,6 +117,12 @@ fun Modifier.mapperTouchInput(mapper: ScreenInputMapper, longPressMs: Long, onIn
                 }
                 if (event == null) {
                     mapper.onTick(SystemClock.uptimeMillis())
+                    onInput()
+                    continue
+                }
+                if (event.changes.any { it.isConsumed }) {
+                    mapper.onTouch(TouchKind.CANCEL,SystemClock.uptimeMillis(),emptyList(),-1)
+                    down.clear()
                     onInput()
                     continue
                 }

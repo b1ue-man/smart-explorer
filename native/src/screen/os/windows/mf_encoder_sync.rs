@@ -17,7 +17,7 @@ use windows::Win32::Media::MediaFoundation::{
 use super::mf_common::{ensure_com, EncoderSetup};
 use super::mf_media::{
     configure_encoder, h264_type, input_sample, is_keyframe, nv12_bytes, nv12_type, process_output,
-    sample_bytes, set_value, Output,
+    sample_bytes_bounded, set_value, Output,
 };
 use crate::screen::core::host_backend::{EncodedFrame, ScreenEncoder};
 use crate::screen::core::pixel_convert::{BgraImage, FrameSize};
@@ -80,7 +80,11 @@ pub(super) fn stop(transform: &IMFTransform) {
 /// The records of one encoded frame: one access unit, or an error when the
 /// frame is missing or a requested key frame is none.
 pub(super) fn frame_of(parts: Vec<Vec<u8>>, key: bool, wanted: bool) -> io::Result<EncodedFrame> {
-    let bytes: Vec<u8> = parts.concat();
+    let total=parts.iter().try_fold(0usize,|sum,part|sum.checked_add(part.len()))
+        .filter(|n|*n<=crate::screen::core::wire_binary::MAX_RECORD_BYTES)
+        .ok_or_else(||io::Error::other("MF access unit exceeds 16 MiB"))?;
+    let mut bytes=Vec::with_capacity(total);
+    for part in parts {bytes.extend_from_slice(&part);}
     if bytes.is_empty() {
         return Err(io::Error::other(
             "Media Foundation gave no picture for the frame",
@@ -158,11 +162,13 @@ impl ScreenEncoder for SyncEncoder {
         unsafe { self.transform.ProcessInput(0, &sample, 0)? };
         let fallback = self.setup.size.bgra_len();
         let (mut parts, mut key) = (Vec::new(), false);
+        let mut total=0usize;
         loop {
             match process_output(&self.transform, fallback)? {
                 Output::Sample(out) => {
                     key |= is_keyframe(&out);
-                    parts.push(sample_bytes(&out)?);
+                    let part=sample_bytes_bounded(&out,crate::screen::core::wire_binary::MAX_RECORD_BYTES-total)?;
+                    total+=part.len();parts.push(part);
                 }
                 Output::NeedInput => break,
                 Output::StreamChange => {
@@ -170,7 +176,9 @@ impl ScreenEncoder for SyncEncoder {
                 }
             }
         }
-        frame_of(parts, key, keyframe)
+        let frame=frame_of(parts,key,keyframe)?;
+        for data in &frame.records {crate::screen::core::frame_size_caps::check_avc_dimensions(data,self.setup.size,crate::screen::core::frame_budget::FrameLimits::RESOURCE)?;}
+        Ok(frame)
     }
 }
 

@@ -36,8 +36,12 @@ pub(crate) use screen_launch::{run_screen_grid, run_screen_view};
 mod screen_pool;
 #[path = "core/screen_prefs.rs"]
 mod screen_prefs;
+#[path = "core/screen_presented.rs"]
+mod screen_presented;
 #[path = "core/screen_session.rs"]
 mod screen_session;
+#[path = "core/screen_render_caps.rs"]
+pub(crate) mod screen_render_caps;
 #[path = "core/screen_stats_overlay.rs"]
 mod screen_stats_overlay;
 #[path = "core/screen_target.rs"]
@@ -54,6 +58,18 @@ mod screen_tile_grid;
 mod screen_toolbar_ui;
 #[path = "core/screen_view_widget.rs"]
 mod screen_view_widget;
+#[path = "core/screen_visibility.rs"]
+mod screen_visibility;
+#[path = "core/screen_scaling.rs"]
+mod screen_scaling;
+#[path = "core/screen_icons.rs"]
+mod screen_icons;
+#[path = "core/screen_icon_requests.rs"]
+mod screen_icon_requests;
+#[path = "core/screen_viewport.rs"]
+mod screen_viewport;
+#[path = "os/shared/screen_visibility.rs"]
+mod screen_visibility_os;
 #[path = "core/screen_viewer_app.rs"]
 mod screen_viewer_app;
 #[path = "core/screen_viewer_view.rs"]

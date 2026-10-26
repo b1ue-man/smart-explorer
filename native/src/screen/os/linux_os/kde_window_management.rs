@@ -146,6 +146,8 @@ pub(crate) fn list() -> io::Result<Option<WindowList>> {
             id: clean_id(key),
             title: window.title.clone(),
             app: window.app_id.clone(),
+            app_id: (!window.app_id.is_empty()).then(||window.app_id.clone()),
+            icon: None,
             pid: window.pid,
             monitor: None,
             minimized: window.flags & STATE_MINIMIZED != 0,

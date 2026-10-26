@@ -22,7 +22,8 @@ use windows::Win32::Media::MediaFoundation::{
     IMFActivate, IMFTransform, MFMediaType_Video, MFT_FRIENDLY_NAME_Attribute, MFVideoFormat_H264,
     MFVideoFormat_NV12, MFSTARTUP_NOSOCKET, MFT_CATEGORY_VIDEO_DECODER, MFT_CATEGORY_VIDEO_ENCODER,
     MFT_ENUM_FLAG, MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_SORTANDFILTER, MFT_ENUM_FLAG_SYNCMFT,
-    MFT_REGISTER_TYPE_INFO, MF_VERSION,
+    MFT_REGISTER_TYPE_INFO, MF_VERSION,MF_MT_FRAME_SIZE,MF_MT_MPEG2_PROFILE,MF_MT_MPEG2_LEVEL,MF_MT_SUBTYPE,
+    eAVEncH264VProfile_ConstrainedBase,eAVEncH264VProfile_Base,eAVEncH264VProfile_High,
 };
 use windows::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, COINIT_MULTITHREADED};
 
@@ -251,7 +252,7 @@ pub(super) fn codecs() -> (Vec<Arc<dyn EncoderFactory>>, Vec<Arc<dyn DecoderFact
     ] {
         for (index, name) in list.iter().enumerate() {
             let name = name.clone();
-            encoders.push(Arc::new(MfEncoderFactory { kind, index, name }));
+            encoders.push(Arc::new(MfEncoderFactory {kind,index,name,caps:OnceLock::new()}));
         }
     }
     let decoders: Vec<Arc<dyn DecoderFactory>> = found
@@ -260,7 +261,7 @@ pub(super) fn codecs() -> (Vec<Arc<dyn EncoderFactory>>, Vec<Arc<dyn DecoderFact
         .enumerate()
         .map(|(index, name)| {
             let name = name.clone();
-            Arc::new(MfDecoderFactory { index, name }) as Arc<dyn DecoderFactory>
+            Arc::new(MfDecoderFactory {index,name,caps:OnceLock::new()}) as Arc<dyn DecoderFactory>
         })
         .collect();
     (encoders, decoders)
@@ -279,6 +280,7 @@ struct MfEncoderFactory {
     kind: Kind,
     index: usize,
     name: String,
+    caps:OnceLock<Vec<CodecOffer>>,
 }
 
 impl EncoderFactory for MfEncoderFactory {
@@ -288,10 +290,10 @@ impl EncoderFactory for MfEncoderFactory {
 
     fn offers(&self) -> Vec<CodecOffer> {
         let hardware = self.kind == Kind::HardwareEncoder;
-        vec![
-            CodecOffer::h264(H264Profile::High, hardware),
-            CodecOffer::h264(H264Profile::ConstrainedBaseline, hardware),
-        ]
+        self.caps.get_or_init(|| {
+            let mut offers=vec![CodecOffer::h264(H264Profile::High,hardware),CodecOffer::h264(H264Profile::ConstrainedBaseline,hardware)];
+            offers.extend(confirmed_offers(self.kind,self.index,&self.name,hardware));offers
+        }).clone()
     }
 
     fn open(
@@ -303,6 +305,8 @@ impl EncoderFactory for MfEncoderFactory {
         let profile = choice
             .profile
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "H.264 needs a profile"))?;
+        crate::screen::core::frame_budget::FrameLimits::RESOURCE.check(size)?;
+        if size.pixels()>choice.max_pixels {return Err(io::Error::other("MF frame exceeds selected codec pixel limit"));}
         if size != size.even() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -328,6 +332,7 @@ impl EncoderFactory for MfEncoderFactory {
 struct MfDecoderFactory {
     index: usize,
     name: String,
+    caps:OnceLock<Vec<CodecOffer>>,
 }
 
 impl DecoderFactory for MfDecoderFactory {
@@ -336,10 +341,11 @@ impl DecoderFactory for MfDecoderFactory {
     }
 
     fn offers(&self) -> Vec<CodecOffer> {
-        vec![
-            CodecOffer::h264(H264Profile::High, false).with_max(FrameSize::MAX),
-            CodecOffer::h264(H264Profile::ConstrainedBaseline, false).with_max(FrameSize::MAX),
-        ]
+        self.caps.get_or_init(|| {
+            let mut offers=vec![CodecOffer::h264(H264Profile::High,false).with_max(FrameSize::MAX),
+                CodecOffer::h264(H264Profile::ConstrainedBaseline,false).with_max(FrameSize::MAX)];
+            offers.extend(confirmed_offers(Kind::Decoder,self.index,&self.name,false));offers
+        }).clone()
     }
 
     fn open(&self, header: &GopHeader) -> io::Result<Box<dyn ScreenDecoder>> {
@@ -351,4 +357,32 @@ impl DecoderFactory for MfDecoderFactory {
             header,
         )?))
     }
+}
+
+/// Only a complete advertised H.264 type is evidence for an extended dimension.
+/// Partial/absent types leave the historical offer intact; SetType at open remains decisive.
+fn confirmed_offers(kind:Kind,index:usize,name:&str,hardware:bool)->Vec<CodecOffer> {
+    let Ok(transform)=activate(kind,index,name) else {return Vec::new();};
+    let mut offers=Vec::new();
+    for index in 0..64 {
+        // SAFETY: enumerating types on a newly activated transform, without streaming.
+        let media=unsafe {if kind==Kind::Decoder {transform.GetInputAvailableType(0,index)} else {transform.GetOutputAvailableType(0,index)}};
+        let Ok(media)=media else {break;};
+        if unsafe {media.GetGUID(&MF_MT_SUBTYPE)}.ok()!=Some(MFVideoFormat_H264) {continue;}
+        let read=||->windows::core::Result<(u32,u32,u64)> {unsafe {
+            Ok((media.GetUINT32(&MF_MT_MPEG2_PROFILE)?,media.GetUINT32(&MF_MT_MPEG2_LEVEL)?,media.GetUINT64(&MF_MT_FRAME_SIZE)?))
+        }};
+        let Ok((profile,level,packed))=read() else {continue;};
+        let profile=if profile==eAVEncH264VProfile_High.0 as u32 {H264Profile::High}
+            else if profile==eAVEncH264VProfile_Base.0 as u32 || profile==eAVEncH264VProfile_ConstrainedBase.0 as u32 {H264Profile::ConstrainedBaseline}
+            else {continue;};
+        let Some(level)=crate::screen::core::frame_size_caps::avc_limits(level) else {continue;};
+        let size=FrameSize::new((packed>>32) as u32,packed as u32);
+        if !level.supports(size,0) {continue;}
+        let max=crate::screen::core::frame_budget::FrameLimits::RESOURCE.max_size;
+        let mut offer=CodecOffer::h264(profile,hardware).with_max(FrameSize::new(size.width.min(max.width),size.height.min(max.height)));
+        offer.max_macroblocks=Some(level.macroblocks);offer.max_macroblocks_per_second=Some(level.macroblocks_per_second);
+        if !offers.contains(&offer) {offers.push(offer);}
+    }
+    offers
 }

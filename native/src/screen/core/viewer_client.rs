@@ -18,7 +18,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use super::gop_stream::{
-    accept_picture_streams, now_us, picture_channel, PictureEvent, VIEWER_UNI_STREAMS,
+    accept_picture_streams_with_contract, now_us, picture_channel, PictureEvent, VIEWER_UNI_STREAMS,
 };
 use super::negotiate::CodecOffer;
 use super::pixel_convert::FrameSize;
@@ -48,6 +48,7 @@ pub(crate) struct ViewerRequest {
     pub decoders: Vec<CodecOffer>,
     pub display_size: Option<FrameSize>,
     pub max_fps: u16,
+    pub frame_capabilities: Option<super::frame_budget::FrameCapabilities>,
 }
 
 /// Why a session did not start or ended.
@@ -150,20 +151,47 @@ impl Drop for ViewerSession {
 pub(crate) async fn handshake(
     connection: Connection,
     build: impl FnOnce(&ScreenServerHello) -> io::Result<ScreenClientHello>,
-    mut on_pending: impl FnMut(Capability),
+    on_pending: impl FnMut(Capability),
 ) -> Result<ViewerSession, ViewerError> {
-    let accepted = tokio::time::timeout(HANDSHAKE_TIMEOUT, connection.accept_bi())
-        .await
-        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "screen host sent no hello"))?;
-    let (mut send, mut recv) = accepted.map_err(io::Error::other)?;
-    let server = tokio::time::timeout(HANDSHAKE_TIMEOUT, recv_server_hello(&mut recv))
-        .await
-        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "screen host sent no hello"))??;
+    handshake_for(connection,build,on_pending,false).await
+}
+
+/// A list/icon channel. Older hosts retain LIST_WINDOWS over the synthetic source only.
+pub(crate) async fn handshake_metadata(
+    connection: Connection,
+    build: impl FnOnce(&ScreenServerHello) -> io::Result<ScreenClientHello>,
+    on_pending: impl FnMut(Capability),
+) -> Result<ViewerSession, ViewerError> {
+    handshake_for(connection,build,on_pending,true).await
+}
+
+async fn handshake_for(
+    connection: Connection,
+    build: impl FnOnce(&ScreenServerHello) -> io::Result<ScreenClientHello>,
+    mut on_pending: impl FnMut(Capability),
+    metadata: bool,
+) -> Result<ViewerSession, ViewerError> {
+    let (mut send, mut recv) = crate::share::route_protocol::run_with_route(
+        &connection, HANDSHAKE_TIMEOUT, None,
+        async { connection.accept_bi().await.map_err(io::Error::other) }).await?;
+    let server = crate::share::route_protocol::run_with_route(
+        &connection, HANDSHAKE_TIMEOUT, None, recv_server_hello(&mut recv)).await?;
     if !supports_version(server.protocol_version) {
         connection.close(VIEWER_CLOSE, b"screen protocol version");
         return Err(ViewerError::Unsupported);
     }
-    let hello = build(&server)?;
+    let mut hello = build(&server)?;
+    hello.family_version = server.family_version.filter(|version|*version==super::family_protocol::FAMILY_PROTOCOL);
+    if hello.source.as_ref().is_some_and(|source|super::family_protocol::selector(source).is_some()) && hello.family_version.is_none() {
+        return Err(ViewerError::Unsupported);
+    }
+    hello.icon_version = server.icon_version.filter(|version|*version==super::app_icon::ICON_VERSION);
+    hello.metadata_only = metadata && (hello.icon_version.is_some() || hello.family_version.is_some());
+    if metadata {
+        hello.mode = SessionMode::View;
+        hello.source = Some(SourceId::Synthetic);
+        hello.frame_capabilities = None;
+    }
     connection.set_max_concurrent_uni_streams(VarInt::from_u32(VIEWER_UNI_STREAMS));
     send_client_hello(&mut send, &hello).await?;
     let accepted = loop {
@@ -176,11 +204,43 @@ pub(crate) async fn handshake(
             }
         }
     };
+    if accepted.icon_version.is_some() && accepted.icon_version!=hello.icon_version {
+        return Err(ViewerError::Io(io::Error::other("host enabled an unoffered icon contract")));
+    }
+    if accepted.family_version.is_some() && accepted.family_version != hello.family_version {
+        return Err(ViewerError::Io(io::Error::other("host enabled an unoffered window family protocol")));
+    }
+    if hello.source.as_ref().is_some_and(|source|super::family_protocol::selector(source).is_some()) && accepted.family_version.is_none() {
+        return Err(ViewerError::Unsupported);
+    }
+    if let Some(contract) = accepted.frame_contract {
+        let offered = hello.frame_capabilities.ok_or_else(|| io::Error::other("host enabled an unoffered frame protocol"))?;
+        offered.validate()?;
+        if contract.version != offered.version || (contract.hybrid_regions && !offered.hybrid_regions)
+            || contract.limits.max_size.width > offered.frames.max_size.width.min(offered.texture_size.width)
+            || contract.limits.max_size.height > offered.frames.max_size.height.min(offered.texture_size.height)
+            || contract.limits.max_pixels > offered.frames.max_pixels || contract.limits.working_bytes > offered.frames.working_bytes {
+            return Err(ViewerError::Io(io::Error::other("host frame contract exceeds viewer's capability evidence")));
+        }
+    }
     let (control, mut outgoing) = mpsc::channel::<ViewerFrame>(CONTROL_QUEUE);
     let (host_tx, host) = mpsc::channel(CONTROL_QUEUE);
     let (pictures_tx, pictures) = picture_channel();
+    let icons_supported=accepted.icon_version==Some(super::app_icon::ICON_VERSION);
+    let pending_icons=std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::<super::app_icon::IconRequest,std::time::Instant>::new()));
+    let sent_icons=pending_icons.clone();
     let writer = tokio::spawn(async move {
         while let Some(frame) = outgoing.recv().await {
+            if let ViewerFrame::IconRequest(request)=&frame {
+                if !icons_supported {continue;}
+                let admitted={
+                    let mut pending=sent_icons.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    pending.retain(|_,at|at.elapsed()<Duration::from_secs(30));
+                    if pending.len()>=8 || pending.contains_key(request) {false}
+                    else {pending.insert(request.clone(),std::time::Instant::now());true}
+                };
+                if !admitted {continue;}
+            }
             if send_viewer_frame(&mut send, &frame).await.is_err() {
                 return;
             }
@@ -190,16 +250,22 @@ pub(crate) async fn handshake(
     let reader = tokio::spawn(async move {
         loop {
             let frame = recv_host_frame(&mut recv).await;
+            if let Ok(HostFrame::IconReply(response))=&frame {
+                // At most eight correlated icon replies may enter the host-frame queue.
+                if pending_icons.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .remove(&response.request).is_none() {continue;}
+            }
             let failed = frame.is_err();
             if host_tx.send(frame).await.is_err() || failed {
                 return;
             }
         }
     });
-    let streams = tokio::spawn(accept_picture_streams(
+    let streams = tokio::spawn(accept_picture_streams_with_contract(
         connection.clone(),
         pictures_tx,
         control.clone(),
+        accepted.frame_contract,
     ));
     let pings = control.clone();
     let clock = tokio::spawn(async move {

@@ -7,7 +7,9 @@
 //! last call without waiting for an event, keeps the newest and closes the
 //! older. Every picture is read back to the CPU (`d3d_device::Readback`).
 use std::io;
-use std::sync::OnceLock;
+use std::sync::{OnceLock,Arc};
+use std::sync::atomic::{AtomicBool,Ordering};
+use windows::Foundation::{TypedEventHandler,EventRegistrationToken};
 use std::time::{Duration, Instant};
 
 use windows::core::Interface;
@@ -22,7 +24,7 @@ use windows::Win32::System::WinRT::Direct3D11::IDirect3DDxgiInterfaceAccess;
 use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
 
 use super::capture_source::{Grabber, FIRST_FRAME_WAIT};
-use super::d3d_device::{delivered_size, DeviceSet, Readback};
+use super::d3d_device::{DeviceSet, Readback};
 use super::monitors;
 use crate::screen::core::host_backend::SourceFrame;
 use crate::screen::core::pixel_convert::{BgraImage, FrameSize};
@@ -100,22 +102,28 @@ fn create(devices: &DeviceSet, target: &Target) -> windows::core::Result<Live> {
         // SAFETY: a window handle value; a window that is gone makes the call fail.
         Target::Window(hwnd) => unsafe { interop.CreateForWindow(HWND(*hwnd as *mut _))? },
     };
+    create_for_item(devices,item)
+}
+
+fn create_for_item(devices: &DeviceSet,item: GraphicsCaptureItem) -> windows::core::Result<Live> {
     let reported = item.Size()?;
     let pool_size = if reported.Width > 0 && reported.Height > 0 {
         reported
     } else {
         FALLBACK_SIZE
     };
+    devices.capture_limits(FrameSize::new(pool_size.Width as u32,pool_size.Height as u32))
+        .map_err(|_|windows::core::Error::from(windows::Win32::Foundation::E_INVALIDARG))?;
     let pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
         &devices.winrt,
         FORMAT,
         POOL_BUFFERS,
         pool_size,
     )?;
-    let session = pool.CreateCaptureSession(&item)?;
+    let session = match pool.CreateCaptureSession(&item) {Ok(session)=>session,Err(error)=>{let _=pool.Close();return Err(error);}};
     // Older builds always include the pointer.
     let _ = session.SetIsCursorCaptureEnabled(true);
-    session.StartCapture()?;
+    if let Err(error)=session.StartCapture() {let _=session.Close();let _=pool.Close();return Err(error);}
     Ok(Live {
         _item: item,
         pool,
@@ -127,8 +135,10 @@ fn create(devices: &DeviceSet, target: &Target) -> windows::core::Result<Live> {
 /// One monitor or window recorded with Graphics Capture.
 pub(super) struct WgcCapture {
     devices: DeviceSet,
-    target: Target,
-    live: Live,
+    live: Option<Live>,
+    item: GraphicsCaptureItem,
+    closed: Arc<AtomicBool>,
+    closed_token: EventRegistrationToken,
     readback: Readback,
     last: Option<BgraImage>,
     size: FrameSize,
@@ -137,11 +147,14 @@ pub(super) struct WgcCapture {
 impl WgcCapture {
     pub(super) fn open(devices: DeviceSet, target: Target) -> windows::core::Result<Self> {
         let live = create(&devices, &target)?;
-        let size = delivered_size(live.pool_size.Width as u32, live.pool_size.Height as u32);
+        let size=devices.delivered_size(live.pool_size.Width as u32,live.pool_size.Height as u32)
+            .map_err(|_|windows::core::Error::from(windows::Win32::Foundation::E_INVALIDARG))?;
+        let item=live._item.clone(); let closed=Arc::new(AtomicBool::new(false));
+        let flag=closed.clone();
+        let closed_token=match item.Closed(&TypedEventHandler::<GraphicsCaptureItem,windows::core::IInspectable>::new(move |_,_|{flag.store(true,Ordering::Release);Ok(())})) {Ok(token)=>token,Err(error)=>{live.close();return Err(error);}};
         Ok(Self {
             devices,
-            target,
-            live,
+            live: Some(live), item, closed, closed_token,
             readback: Readback::default(),
             last: None,
             size,
@@ -152,7 +165,8 @@ impl WgcCapture {
     fn newest(&self) -> io::Result<Option<Direct3D11CaptureFrame>> {
         let mut newest: Option<Direct3D11CaptureFrame> = None;
         loop {
-            match self.live.pool.TryGetNextFrame() {
+            let live=self.live.as_ref().ok_or_else(||io::Error::other("WGC capture is paused"))?;
+            match live.pool.TryGetNextFrame() {
                 Ok(frame) => {
                     if let Some(older) = newest.replace(frame) {
                         let _ = older.Close();
@@ -170,19 +184,23 @@ impl WgcCapture {
         }
     }
 
-    fn read(&mut self, frame: &Direct3D11CaptureFrame) -> io::Result<BgraImage> {
+    fn read(&mut self, frame: &Direct3D11CaptureFrame) -> io::Result<Option<BgraImage>> {
         let content = frame.ContentSize().map_err(io::Error::other)?;
         if content.Width <= 0 || content.Height <= 0 {
             return Err(io::Error::other("the capture frame has no content"));
         }
-        if content != self.live.pool_size {
-            self.live
+        let live=self.live.as_mut().ok_or_else(||io::Error::other("WGC capture is paused"))?;
+        self.devices.capture_limits(FrameSize::new(content.Width as u32,content.Height as u32))?;
+        if content != live.pool_size {
+            live
                 .pool
                 .Recreate(&self.devices.winrt, FORMAT, POOL_BUFFERS, content)
                 .map_err(io::Error::other)?;
-            self.live.pool_size = content;
+            live.pool_size = content;
             self.readback.reset();
             self.last = None;
+            // This frame may still belong to the old pool and contain a clipped resize.
+            return Ok(None);
         }
         let surface = frame.Surface().map_err(io::Error::other)?;
         let access: IDirect3DDxgiInterfaceAccess = surface.cast().map_err(io::Error::other)?;
@@ -194,22 +212,29 @@ impl WgcCapture {
             &texture,
             content.Width as u32,
             content.Height as u32,
-        )
+        ).map(Some)
     }
 }
 
 impl Grabber for WgcCapture {
+    fn frame_limits(&self)->crate::screen::core::frame_budget::FrameLimits {
+        let size=self.live.as_ref().map(|live|FrameSize::new(live.pool_size.Width as u32,live.pool_size.Height as u32)).unwrap_or(self.size);
+        self.devices.capture_limits(size).unwrap_or(crate::screen::core::frame_budget::FrameLimits::LEGACY)
+    }
+    fn source_available(&self) -> bool {!self.closed.load(Ordering::Acquire)}
     fn size(&self) -> FrameSize {
         self.size
     }
 
     fn capture(&mut self, keyframe: bool) -> io::Result<SourceFrame> {
+        if self.closed.load(Ordering::Acquire) {return Err(io::Error::new(io::ErrorKind::NotFound,"WGC source closed"));}
+        if self.live.is_none() {return Ok(SourceFrame::Unchanged);}
         let deadline = Instant::now() + FIRST_FRAME_WAIT;
         loop {
             if let Some(frame) = self.newest()? {
                 let image = self.read(&frame);
                 let _ = frame.Close();
-                let image = image?;
+                let Some(image)=image? else {continue;};
                 self.size = image.size();
                 self.last = Some(image.clone());
                 return Ok(SourceFrame::Frame(image));
@@ -228,22 +253,34 @@ impl Grabber for WgcCapture {
         }
     }
 
-    fn reopen(&mut self) -> io::Result<()> {
-        self.live.close();
-        self.live = create(&self.devices, &self.target).map_err(io::Error::other)?;
-        self.readback.reset();
-        self.last = None;
-        self.size = delivered_size(
-            self.live.pool_size.Width as u32,
-            self.live.pool_size.Height as u32,
-        );
+    fn set_capture_active(&mut self,active:bool) -> io::Result<()> {
+        if self.closed.load(Ordering::Acquire) {return Err(io::Error::new(io::ErrorKind::NotFound,"original WGC source closed"));}
+        if !active {
+            if let Some(live)=self.live.take() {
+                let session=live.session.Close(); let pool=live.pool.Close();
+                if session.is_err() || pool.is_err() {self.closed.store(true,Ordering::Release);}
+                session.map_err(io::Error::other)?; pool.map_err(io::Error::other)?;
+            }
+            self.last=None; self.readback.reset(); return Ok(());
+        }
+        if self.closed.load(Ordering::Acquire) {return Err(io::Error::new(io::ErrorKind::NotFound,"original WGC source closed"));}
+        if self.live.is_none() {
+            let live=create_for_item(&self.devices,self.item.clone()).map_err(io::Error::other)?;
+            self.size=self.devices.delivered_size(live.pool_size.Width as u32,live.pool_size.Height as u32)?;
+            self.live=Some(live);
+        }
         Ok(())
     }
+    fn reopen(&mut self) -> io::Result<()> {
+        self.set_capture_active(false)?; self.set_capture_active(true)
+    }
+
 }
 
 impl Drop for WgcCapture {
     fn drop(&mut self) {
         // Closing the session ends the capture (and the border Windows draws).
-        self.live.close();
+        if let Some(live)=self.live.take() {live.close();}
+        let _=self.item.RemoveClosed(self.closed_token);
     }
 }

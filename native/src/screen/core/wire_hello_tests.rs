@@ -14,6 +14,10 @@ fn server_hello() -> ScreenServerHello {
 
 fn client_hello() -> ScreenClientHello {
     ScreenClientHello {
+        family_version: None,
+        icon_version: None,
+        metadata_only: false,
+        frame_capabilities: None,
         protocol_version: SCREEN_PROTOCOL_VERSION,
         relation_kind: "direct".into(),
         relation_id: "lookup".into(),
@@ -71,14 +75,17 @@ fn screen_task_hello_maps_onto_relation_proof() {
     assert!(!SessionMode::Probe.may_ask() && !SessionMode::Preview.may_ask());
     for broken in [
         ScreenClientHello {
+            family_version: None,
             protocol_version: 2,
             ..client.clone()
         },
         ScreenClientHello {
+            family_version: None,
             max_fps: 0,
             ..client.clone()
         },
         ScreenClientHello {
+            family_version: None,
             display_size: Some(FrameSize::new(0, 1080)),
             ..client.clone()
         },

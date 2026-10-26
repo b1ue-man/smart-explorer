@@ -29,6 +29,7 @@ pub(crate) const SCREEN_CAPABILITY: &str = "screen";
 /// Largest display side a viewer may announce: the largest texture side of
 /// current GPUs.
 pub(crate) const MAX_DISPLAY_SIDE: u32 = 16_384;
+fn is_false(value:&bool)->bool {!*value}
 
 /// Limits a host names in `HELLO_OK` (SCR-M8).
 #[allow(dead_code)] // Staged: the Android host of SCR-M8 names them.
@@ -80,12 +81,16 @@ impl SessionMode {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ScreenServerHello {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family_version: Option<u16>,
     pub protocol_version: u16,
     pub challenge: String,
     pub server_device_id: String,
     pub server_public_key: String,
     pub server_fingerprint: String,
     pub server_node_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_version: Option<u8>,
 }
 
 impl ScreenServerHello {
@@ -103,6 +108,8 @@ impl ScreenServerHello {
             server_public_key,
             server_fingerprint,
             server_node_id,
+            icon_version: Some(super::app_icon::ICON_VERSION),
+            family_version: Some(super::family_protocol::FAMILY_PROTOCOL),
         }
     }
 
@@ -123,6 +130,8 @@ impl ScreenServerHello {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ScreenClientHello {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family_version: Option<u16>,
     pub protocol_version: u16,
     /// `direct` or `room`.
     pub relation_kind: String,
@@ -144,6 +153,13 @@ pub(crate) struct ScreenClientHello {
     #[serde(default)]
     pub display_size: Option<FrameSize>,
     pub max_fps: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_capabilities: Option<super::frame_budget::FrameCapabilities>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_version: Option<u8>,
+    /// List/icon operations only: no source, encoder, capture or indicator is opened.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub metadata_only: bool,
 }
 
 impl ScreenClientHello {
@@ -177,6 +193,11 @@ impl ScreenClientHello {
             if !side.contains(&size.width) || !side.contains(&size.height) {
                 return Err(invalid("screen display size is outside 1..=16384"));
             }
+        }
+        if let Some(caps) = self.frame_capabilities { caps.validate()?; }
+        if self.metadata_only && (self.mode != SessionMode::View || (self.icon_version != Some(super::app_icon::ICON_VERSION)
+            && self.family_version != Some(super::family_protocol::FAMILY_PROTOCOL))) {
+            return Err(invalid("metadata requires the negotiated icon contract and view permission"));
         }
         if self.max_fps == 0 {
             return Err(invalid("screen frame rate must be at least 1"));
@@ -220,6 +241,8 @@ pub(crate) enum HostPlatform {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ScreenHelloOk {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family_version: Option<u16>,
     pub authorization: ScreenAuthorization,
     pub platform: HostPlatform,
     #[serde(default)]
@@ -231,10 +254,15 @@ pub(crate) struct ScreenHelloOk {
     #[serde(default)]
     pub limits: Vec<String>,
     pub approval: ApprovalKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_contract: Option<super::frame_budget::FrameContract>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_version: Option<u8>,
 }
 
 impl ScreenHelloOk {
     pub(crate) fn validate(&self) -> io::Result<()> {
+        if let Some(contract) = self.frame_contract { contract.validate()?; }
         if self.encoders.len() > MAX_CODEC_OFFERS {
             return Err(invalid("screen hello lists more than 32 encoders"));
         }

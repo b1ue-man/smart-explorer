@@ -45,7 +45,11 @@ pub(super) fn camel(value: Value) -> Value {
     match value {
         Value::Object(map) => Value::Object(
             map.into_iter()
-                .map(|(key, value)| (camel_key(&key), camel(value)))
+                .map(|(key, value)| {
+                    // Icon references are opaque signed/hash-bound native DTOs.
+                    let value = if key == "icon" { value } else { camel(value) };
+                    (camel_key(&key), value)
+                })
                 .collect(),
         ),
         Value::Array(list) => Value::Array(list.into_iter().map(camel).collect()),
@@ -67,6 +71,14 @@ pub(super) fn accepted_fields(hello: &ScreenHelloOk, path: &str) -> Value {
     let mut fields = camel(serde_json::to_value(hello).unwrap_or(Value::Null));
     if let Some(map) = fields.as_object_mut() {
         map.insert("path".into(), json!(path));
+        let limits=hello.frame_contract.map_or(crate::screen::core::frame_budget::FrameLimits::LEGACY,|c|c.limits);
+        if let Ok(budget)=crate::screen::core::frame_size_caps::PacketBudget::for_contract(hello.frame_contract) {
+            map.insert("bufferBudget".into(),json!({"workingBytes":limits.working_bytes,
+                "imageBytes":budget.raw_bytes-8,"recordBytes":budget.record_bytes,
+                "packetBytes":budget.encoded_bytes,"pullBytes":budget.pull_bytes,
+                "recordOverheadBytes":crate::screen::core::frame_size_caps::RECORD_BUFFER_OVERHEAD,
+                "legacy":hello.frame_contract.is_none()}));
+        }
     }
     fields
 }

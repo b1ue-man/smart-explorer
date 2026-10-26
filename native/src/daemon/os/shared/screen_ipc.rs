@@ -80,6 +80,10 @@ impl ShareHost {
         mut stream: TcpStream,
         request: ScreenIpcRequest,
     ) -> io::Result<()> {
+        let metadata_pin = match &request {
+            ScreenIpcRequest::PinnedMetadata { expected_node, .. } => Some(expected_node.clone()),
+            _ => None,
+        };
         let reply = match request {
             ScreenIpcRequest::HostSessions => {
                 let (revision, sessions) = self.screen_sessions(None);
@@ -103,7 +107,19 @@ impl ShareHost {
                 .screen_bench(&mut stream, &target, &options)
                 .map(ScreenIpcReply::Bench),
             ScreenIpcRequest::Stream { target, request } => {
-                return self.screen_stream(stream, &target, request);
+                return self.screen_stream(stream, &target, request, false);
+            }
+            ScreenIpcRequest::PinnedStream { target, request } => {
+                if request.expected_node.is_none() {
+                    return write_response(&mut stream, &node_pin_failure().response());
+                }
+                return self.screen_stream(stream, &target, request, false);
+            }
+            ScreenIpcRequest::Metadata { target }
+            | ScreenIpcRequest::PinnedMetadata { target, .. } => {
+                let request=StreamRequest {mode:SessionMode::View,source:Some(crate::screen::core::window_list::SourceId::Synthetic),
+                    decoders:vec![CodecOffer::tiles()],display_size:None,max_fps:1,frame_capabilities:None,expected_node:metadata_pin};
+                return self.screen_stream(stream,&target,request,true);
             }
         };
         let response = match reply {
@@ -244,11 +260,22 @@ impl ShareHost {
         mut stream: TcpStream,
         target: &PeerOpenTarget,
         request: StreamRequest,
+        metadata: bool,
     ) -> io::Result<()> {
+        if request.expected_node.as_deref().is_some_and(|expected| expected.trim().is_empty()) {
+            return write_response(&mut stream, &node_pin_failure().response());
+        }
         let (service, link) = match self.screen_link(target) {
             Ok(linked) => linked,
             Err(error) => return write_response(&mut stream, &Failure::from(error).response()),
         };
+        if request.expected_node.as_deref().is_some_and(|expected| link.connection.remote_id().to_string() != expected) {
+            link.connection.close(iroh::endpoint::VarInt::from_u32(0x5345), b"screen node pin changed");
+            return write_response(&mut stream, &Failure {
+                code: Some("screen_node_changed".into()),
+                msg: "Die authentifizierte Bildschirmgegenstelle stimmt nicht mit dem bestaetigten Nodepin ueberein".into(),
+            }.response());
+        }
         write_response(
             &mut stream,
             &IpcResponse::Screen(ScreenIpcReply::StreamOpened),
@@ -261,10 +288,11 @@ impl ShareHost {
             decoders: request.decoders,
             display_size: request.display_size,
             max_fps: request.max_fps,
+            frame_capabilities: request.frame_capabilities,
         };
         service
             .screen_runtime()
-            .spawn(relay_session(link, viewer, out_tx, in_rx));
+            .spawn(relay_session(link, viewer, out_tx, in_rx, metadata));
         let mut input = stream.try_clone()?;
         let reader = std::thread::Builder::new()
             .name("screen-relay-input".into())
@@ -281,6 +309,10 @@ impl ShareHost {
     }
 }
 
+fn node_pin_failure() -> Failure {
+    Failure { code: Some("screen_node_required".into()), msg: "Der bestaetigte Nodepin fehlt".into() }
+}
+
 fn viewer_request(
     mode: SessionMode,
     source: Option<crate::screen::core::window_list::SourceId>,
@@ -292,6 +324,7 @@ fn viewer_request(
         decoders,
         display_size: None,
         max_fps: 30,
+        frame_capabilities: None,
     }
 }
 
@@ -326,6 +359,7 @@ async fn relay_session(
     request: ViewerRequest,
     out: mpsc::Sender<(u8, Vec<u8>)>,
     mut input: mpsc::Receiver<Option<ViewerFrame>>,
+    metadata: bool,
 ) {
     let connection = link.connection.clone();
     let pending_out = out.clone();
@@ -335,7 +369,9 @@ async fn relay_session(
             let _ = pending_out.try_send((RELAY_HELLO, json));
         }
     };
-    let mut session = match handshake(connection, build, announce).await {
+    let opened=if metadata {crate::screen::core::viewer_client::handshake_metadata(connection,build,announce).await}
+        else {handshake(connection,build,announce).await};
+    let mut session = match opened {
         Ok(session) => session,
         Err(error) => {
             end(&out, error.code(), Some(error.detail())).await;

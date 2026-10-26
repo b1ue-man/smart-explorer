@@ -31,14 +31,26 @@
 //! `allow(dead_code)` on their module; each such declaration names them.
 
 pub(crate) mod authorize;
+pub(crate) mod app_icon;
+pub(crate) mod icon_host;
+pub(crate) mod icon_cache;
 pub(crate) mod bench;
 pub(crate) mod catalog_entries;
 pub(crate) mod codec_registry;
+pub(crate) mod decoded_frame;
+pub(crate) mod control_sender;
+pub(crate) mod frame_budget;
+pub(crate) mod frame_size_caps;
+pub(crate) mod frame_regions;
+pub(crate) mod frame_protocol;
+pub(crate) mod frame_reference;
 pub(crate) mod gop_stream;
 pub(crate) mod host_backend;
 pub(crate) mod host_pipeline;
+pub(crate) mod host_hybrid;
 pub(crate) mod host_server;
 pub(crate) mod host_stage;
+pub(crate) mod visibility;
 // Not yet used by SCR-M2: `TOOLBAR_KEYS`, `key_usage`, `key_name`,
 // `pointer_to_pixel`, `pixel_to_pointer` and `PressedInputs::is_empty`
 // (input of SCR-M6 and the viewer of SCR-M7).
@@ -61,6 +73,7 @@ pub(crate) mod pixel_convert;
 // Not yet used by SCR-M2: `RateController::receive_rate_bps`.
 #[allow(dead_code)]
 pub(crate) mod rate_control;
+pub(crate) mod sender_budget;
 pub(crate) mod registry;
 // Not yet used by SCR-M2: `SessionTracker`, `SessionState::can_move_to`,
 // `SessionState::is_terminal` and `KeyframeRequester::is_open`.
@@ -70,9 +83,15 @@ pub(crate) mod snapshot;
 pub(crate) mod synthetic;
 pub(crate) mod tiles_codec;
 pub(crate) mod viewer_client;
+pub(crate) mod viewer_reconstruct;
 pub(crate) mod window_list;
 pub(crate) mod wire;
 pub(crate) mod wire_binary;
 pub(crate) mod wire_control;
 pub(crate) mod wire_hello;
 pub(crate) mod worker_wire;
+
+pub(crate) mod family_protocol;
+pub(crate) mod family_viewer;
+pub(crate) mod family_listing;
+pub(crate) mod worker_family;

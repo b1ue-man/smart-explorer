@@ -10,7 +10,7 @@ import app.smartexplorer.android.api.ScreenAppEntry
 /**
  * „Was läuft“ of this phone as host (C5): the apps with a window from the accessibility service
  * (`flagRetrieveInteractiveWindows`), otherwise the apps used in the last [RECENT_MS] from the usage
- * statistics, if the user granted usage access. Package names and labels only.
+ * statistics, if the user granted usage access. Icon references keep that package identity.
  */
 internal object RunningApps {
     private const val RECENT_MS = 60 * 60 * 1000L
@@ -24,9 +24,18 @@ internal object RunningApps {
     }
 
     fun list(context: Context): List<ScreenAppEntry> {
+        val apps = current(context)
+        AppIcons.retainPackages(apps.map { it.packageName }.toSet())
+        return apps
+    }
+
+    private fun entry(context: Context, pkg: String, title: String) =
+        ScreenAppEntry(pkg, label(context, pkg) ?: title, icon = AppIcons.reference(context, pkg))
+
+    private fun current(context: Context): List<ScreenAppEntry> {
         ScreenControlService.current()?.let { service ->
             val windows = service.windowApps()
-            if (windows.isNotEmpty()) return windows.take(MAX_APPS).map { (pkg, title) -> ScreenAppEntry(pkg, label(context, pkg) ?: title) }
+            if (windows.isNotEmpty()) return windows.take(MAX_APPS).map { (pkg, title) -> entry(context, pkg, title) }
         }
         if (!usageAccess(context)) return emptyList()
         val usage = context.getSystemService(UsageStatsManager::class.java) ?: return emptyList()
@@ -37,7 +46,7 @@ internal object RunningApps {
             .map { it.packageName }
             .distinct()
             .take(MAX_APPS)
-            .map { ScreenAppEntry(it, label(context, it) ?: it) }
+            .map { entry(context, it, it) }
     }
 
     private fun label(context: Context, pkg: String): String? = try {

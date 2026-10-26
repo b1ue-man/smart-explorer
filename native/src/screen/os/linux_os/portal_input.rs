@@ -13,11 +13,10 @@
 //! documentation (docs.rs, read 2026-10-19: `create_session(options)`,
 //! `select_devices(session, SelectDevicesOptions)`, `start(session, None,
 //! StartOptions)`, `notify_*(…, options)`); they could not be built here.
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use ashpd::desktop::remote_desktop::{
-    Axis, DeviceType, KeyState, RemoteDesktop, SelectDevicesOptions, StartOptions,
+    Axis, DeviceType, KeyState, RemoteDesktop, SelectDevicesOptions,
 };
 use ashpd::desktop::screencast::{
     CursorMode, OpenPipeWireRemoteOptions, Screencast, SelectSourcesOptions, SourceType,
@@ -27,6 +26,8 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use super::pipewire_abi;
 use super::pipewire_stream::{LatestFrame, PwStream};
+use super::pipewire_stream::identity::StreamIdentity;
+use super::portal_session::source_binding;
 use super::portal_session::{
     refusal, register_host_app_once, set, PortalOptions, PortalState, Refusal, PIPEWIRE_MISSING,
 };
@@ -39,29 +40,55 @@ use crate::screen::os::input_keys::{evdev_code, SasGuard};
 type Batch = Vec<InputEvent>;
 
 /// The input of this host process's session; `None` without one.
-static INPUT: Mutex<Option<UnboundedSender<Batch>>> = Mutex::new(None);
-/// The portal granted keyboard and pointer and the stream runs.
-static READY: AtomicBool = AtomicBool::new(false);
+static INPUT: Mutex<Option<Arc<InputLease>>> = Mutex::new(None);
+
+struct InputLease {
+    sender: UnboundedSender<Batch>,
+    binding: Mutex<Option<Arc<StreamIdentity>>>,
+}
+
+pub(super) struct SessionInput {
+    receiver: UnboundedReceiver<Batch>,
+    lease: Arc<InputLease>,
+}
+
+impl Drop for SessionInput {
+    fn drop(&mut self) {
+        if let Some(binding) = self.lease.binding.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
+            binding.invalidate();
+        }
+    }
+}
 
 /// The channel of a new session; its sender becomes this process's input.
-pub(super) fn open_channel() -> UnboundedReceiver<Batch> {
+pub(super) fn open_channel() -> SessionInput {
     let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
-    *INPUT.lock().unwrap_or_else(PoisonError::into_inner) = Some(sender);
-    READY.store(false, Ordering::SeqCst);
-    receiver
+    let lease = Arc::new(InputLease { sender, binding: Mutex::new(None) });
+    let old = INPUT.lock().unwrap_or_else(PoisonError::into_inner).replace(lease.clone());
+    if let Some(old) = old {
+        if let Some(binding) = old.binding.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
+            binding.invalidate();
+        }
+    }
+    SessionInput { receiver, lease }
 }
 
 /// Hands `events` to the portal session, or names why not.
 pub(crate) fn inject(events: &[InputEvent]) -> Result<(), ControlBlock> {
-    if !READY.load(Ordering::SeqCst) {
-        return Err(ControlBlock::ControlUnavailable);
-    }
-    let sender = INPUT
+    let lease = INPUT
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .clone()
         .ok_or(ControlBlock::ControlUnavailable)?;
-    sender
+    let binding = lease.binding.lock().unwrap_or_else(PoisonError::into_inner);
+    if !binding.as_ref().is_some_and(|binding| binding.connected()) {
+        return Err(ControlBlock::ControlUnavailable);
+    }
+    if binding.as_ref().is_some_and(|binding| binding.logical_size.is_none())
+        && events.iter().any(|event| matches!(event, InputEvent::PointerAbs { .. } | InputEvent::Touch { .. })) {
+        return Err(ControlBlock::ControlUnavailable);
+    }
+    lease.sender
         .send(events.to_vec())
         .map_err(|_| ControlBlock::ControlUnavailable)
 }
@@ -71,7 +98,7 @@ pub(super) fn thread_main(
     state: &Arc<Mutex<PortalState>>,
     stopped: tokio::sync::oneshot::Receiver<()>,
     options: PortalOptions,
-    inputs: UnboundedReceiver<Batch>,
+    inputs: SessionInput,
 ) {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -83,28 +110,19 @@ pub(super) fn thread_main(
             PortalState::Failed(format!("portal_runtime: {error}")),
         ),
     }
-    READY.store(false, Ordering::SeqCst);
 }
 
 /// What the dialog granted.
 struct Granted {
-    node_id: u32,
-    size: (f64, f64),
+    identity: Arc<StreamIdentity>,
     fd: std::os::fd::OwnedFd,
-}
-
-/// The part of the grant the input calls keep using after the pipe went to
-/// the stream.
-struct Target {
-    node_id: u32,
-    size: (f64, f64),
 }
 
 async fn run(
     state: &Arc<Mutex<PortalState>>,
     stopped: tokio::sync::oneshot::Receiver<()>,
     options: PortalOptions,
-    mut inputs: UnboundedReceiver<Batch>,
+    mut inputs: SessionInput,
 ) {
     use futures_util::future::{select, Either};
     let api = match pipewire_abi::load_named(options.pipewire_library) {
@@ -130,36 +148,61 @@ async fn run(
             return;
         }
     };
-    let mut stop = Box::pin(async {
-        let _ = stopped.await;
-    });
+    use futures_util::StreamExt;
+    let closed = match session.receive_closed().await {
+        Ok(closed) => closed,
+        Err(error) => {
+            set(state, PortalState::Failed(format!("portal_closed_subscription: {error}")));
+            let _ = session.close().await;
+            return;
+        }
+    };
+    let mut closed = Box::pin(closed);
+    let mut stop = Box::pin(async { let _ = select(Box::pin(closed.next()), stopped).await; });
     let flow = Box::pin(negotiate(&remote, &screencast, &session));
     match select(flow, stop.as_mut()).await {
         Either::Left((Ok(granted), _)) => {
             let latest = Arc::new(LatestFrame::default());
-            let Granted { node_id, size, fd } = granted;
-            let target = Target { node_id, size };
-            match PwStream::start(api, fd, node_id, latest.clone()) {
+            let Granted { identity, fd } = granted;
+            let path = identity.session.clone();
+            // A replaced input channel cannot attach a grant that arrived after replacement.
+            let attached = {
+                let current = INPUT.lock().unwrap_or_else(PoisonError::into_inner);
+                let owned = current.as_ref().is_some_and(|current| Arc::ptr_eq(current, &inputs.lease));
+                if owned {
+                    *inputs.lease.binding.lock().unwrap_or_else(PoisonError::into_inner) = Some(identity.clone());
+                }
+                owned
+            };
+            if !attached {
+                identity.invalidate();
+                let _ = session.close().await;
+                return;
+            }
+            match PwStream::start(api, fd, identity.clone(), latest.clone()) {
                 Ok(stream) => {
                     set(state, PortalState::Streaming(latest.clone()));
-                    READY.store(true, Ordering::SeqCst);
-                    let mut closed = Box::pin(session_closed(&session));
                     let mut sas = SasGuard::new();
                     loop {
-                        let next = Box::pin(inputs.recv());
-                        match select(next, select(closed.as_mut(), stop.as_mut())).await {
-                            Either::Left((Some(batch), _)) => {
-                                apply(&remote, &session, &target, &batch, &mut sas).await
+                        let next = Box::pin(inputs.receiver.recv());
+                        // Session closure wins over queued input and can cancel a batch mid-await.
+                        match select(stop.as_mut(), next).await {
+                            Either::Right((Some(batch), _)) => {
+                                let sent = Box::pin(apply(&remote, &session, &identity, &path, &batch, &mut sas));
+                                if matches!(select(stop.as_mut(), sent).await, Either::Left(_)) {
+                                    identity.invalidate();
+                                    break;
+                                }
                             }
-                            Either::Left((None, _)) => break,
-                            Either::Right((Either::Left(_), _)) => {
+                            Either::Right((None, _)) => break,
+                            Either::Left(_) => {
+                                identity.invalidate();
                                 latest.fail("portal_closed".into());
                                 break;
                             }
-                            Either::Right((Either::Right(_), _)) => break,
                         }
                     }
-                    READY.store(false, Ordering::SeqCst);
+                    identity.invalidate();
                     drop(stream);
                 }
                 Err(error) => set(state, PortalState::Failed(error.to_string())),
@@ -167,19 +210,9 @@ async fn run(
         }
         Either::Left((Err(Refusal::Denied(text)), _)) => set(state, PortalState::Denied(text)),
         Either::Left((Err(Refusal::Failed(text)), _)) => set(state, PortalState::Failed(text)),
-        Either::Right(_) => {}
+        Either::Right(_) => set(state, PortalState::Failed("portal_closed".into())),
     }
     let _ = session.close().await;
-}
-
-async fn session_closed(session: &Session<RemoteDesktop>) {
-    use futures_util::StreamExt;
-    if let Ok(closed) = session.receive_closed().await {
-        let mut closed = Box::pin(closed);
-        closed.next().await;
-        return;
-    }
-    std::future::pending::<()>().await;
 }
 
 /// Devices, sources, start, token and the PipeWire descriptor.
@@ -212,34 +245,22 @@ async fn negotiate(
         .map_err(refusal)?
         .response()
         .map_err(refusal)?;
-    let started = remote
-        .start(session, None, StartOptions::default())
-        .await
-        .map_err(refusal)?
-        .response()
-        .map_err(refusal)?;
-    if let Some(token) = started.restore_token() {
+    let started = source_binding::start(remote, session).await?;
+    if let Some(token) = started.restore_token.as_deref() {
         if let Err(error) = portal_tokens::save(TokenKind::RemoteDesktop, token) {
             eprintln!("screen host process: portal token not stored: {error}");
         }
     }
     let wanted = DeviceType::Keyboard | DeviceType::Pointer;
-    if !started.devices().contains(wanted) {
+    if started.devices.unwrap_or(0) & wanted.bits() != wanted.bits() {
         return Err(Refusal::Denied("remote_desktop_devices_refused".into()));
     }
-    let stream = started
-        .streams()
-        .first()
-        .ok_or_else(|| Refusal::Failed("portal: the portal chose no stream".into()))?;
-    let size = stream.size().map_or((0.0, 0.0), |(width, height)| {
-        (f64::from(width), f64::from(height))
-    });
-    let node_id = stream.pipe_wire_node_id();
+    let identity = started.selected(session, screencast.version())?;
     let fd = screencast
         .open_pipe_wire_remote(session, OpenPipeWireRemoteOptions::default())
         .await
         .map_err(refusal)?;
-    Ok(Granted { node_id, size, fd })
+    Ok(Granted { identity, fd })
 }
 
 /// Linux button code of `button` (`BTN_LEFT` …).
@@ -271,14 +292,18 @@ pub(super) fn stream_point(size: (f64, f64), x: u16, y: u16) -> (f64, f64) {
 async fn apply(
     remote: &RemoteDesktop,
     session: &Session<RemoteDesktop>,
-    granted: &Target,
+    granted: &StreamIdentity,
+    session_path: &str,
     batch: &[InputEvent],
     sas: &mut SasGuard,
 ) {
     for event in batch {
+        if !granted.belongs_to(session_path) { return; }
         let sent = match event {
             InputEvent::PointerAbs { x, y } | InputEvent::Touch { id: 0, x, y, .. } => {
-                let (px, py) = stream_point(granted.size, *x, *y);
+                // Missing logical size is not permission to use pixel/global-display coordinates.
+                let Some((width, height)) = granted.logical_size else { return; };
+                let (px, py) = stream_point((f64::from(width), f64::from(height)), *x, *y);
                 let moved = remote
                     .notify_pointer_motion_absolute(
                         session,
@@ -379,6 +404,7 @@ async fn apply(
             InputEvent::Touch { .. } | InputEvent::Action { .. } => Ok(()),
         };
         if sent.is_err() {
+            granted.invalidate();
             return;
         }
     }
@@ -396,7 +422,7 @@ mod tests {
             (1919.0, 1079.0)
         );
         // Before the dialog's consent nothing reaches the session.
-        READY.store(false, Ordering::SeqCst);
+        *INPUT.lock().unwrap_or_else(PoisonError::into_inner) = None;
         let text = [InputEvent::Text { text: "x".into() }];
         assert_eq!(inject(&text), Err(ControlBlock::ControlUnavailable));
         assert_eq!(button_code(PointerButton::Left), 0x110);

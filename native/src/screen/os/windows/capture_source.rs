@@ -35,12 +35,16 @@ pub(super) const WINDOW_CAPTURE_UNSUPPORTED: &str = "window_capture_unsupported"
 pub(super) trait Grabber: Send {
     /// Size of the pictures `capture` delivers.
     fn size(&self) -> FrameSize;
+    fn frame_limits(&self)->crate::screen::core::frame_budget::FrameLimits {crate::screen::core::frame_budget::FrameLimits::LEGACY}
+    fn reference_generation(&self)->u64 {0}
     /// The newest picture; `Unchanged` when none arrived and the caller
     /// needs none, the last picture again with `keyframe`, `Paused(Starting)`
     /// when there is none yet after `FIRST_FRAME_WAIT`.
     fn capture(&mut self, keyframe: bool) -> io::Result<SourceFrame>;
     /// Creates the capture session anew.
     fn reopen(&mut self) -> io::Result<()>;
+    fn source_available(&self) -> bool {true}
+    fn set_capture_active(&mut self,_active:bool) -> io::Result<()> {Ok(())}
 }
 
 /// The questions that decide whether a capture pauses.
@@ -118,6 +122,7 @@ pub(super) struct WindowsSource {
     /// The last capture paused on the secure desktop or in an inactive
     /// session: the capture session is made anew before the next picture.
     renew: bool,
+    capture_active: bool,
 }
 
 fn refusal(reason: &str) -> SourceRefusal {
@@ -185,16 +190,26 @@ impl WindowsSource {
             probe: Box::new(probe),
             window,
             renew: false,
+            capture_active: true,
         }
     }
 }
 
 impl ScreenSource for WindowsSource {
+    fn reference_generation(&self)->u64 {self.grabber.reference_generation()}
+    fn frame_limits(&self)->crate::screen::core::frame_budget::FrameLimits {self.grabber.frame_limits()}
+    fn set_capture_active(&mut self,active:bool) -> io::Result<()> {
+        self.capture_active=false;
+        if !self.grabber.source_available() {return Err(io::Error::new(io::ErrorKind::NotFound,"original capture source unavailable"));}
+        if active && state_before_capture(self.window,self.probe.as_mut())?.is_some() {self.renew=true; self.capture_active=true; return Ok(());}
+        self.grabber.set_capture_active(active)?; self.capture_active=active; Ok(())
+    }
     fn size(&self) -> FrameSize {
         self.grabber.size()
     }
 
     fn capture(&mut self, _frame_id: u64, keyframe: bool) -> io::Result<SourceFrame> {
+        if !self.capture_active {return Ok(SourceFrame::Unchanged);}
         if let Some(state) = state_before_capture(self.window, self.probe.as_mut())? {
             self.renew |= matches!(
                 state,

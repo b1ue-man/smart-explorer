@@ -13,21 +13,28 @@
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::atomic::{AtomicBool,AtomicU64,Ordering};
 use std::time::{Duration, Instant};
 
 use crate::screen::core::host_backend::{ScreenSource, SourceFrame, SourceRefusal};
+use crate::screen::core::frame_budget::FrameLimits;
 use crate::screen::core::host_stage::{HostStage, StageError, StageFrame, StageRequest};
 use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::window_list::SourceId;
 use crate::screen::core::wire_hello::ScreenErrorCode;
 use crate::screen::core::worker_wire::{
-    read_message, send_request, OpenRequest, WorkerReply, WorkerRequest,
+    send_request, OpenRequest, WorkerReply, WorkerRequest,
 };
 
+#[path = "host_worker_reader.rs"]
+mod reader;
+use reader::WorkerReader;
 #[path = "host_worker_backend.rs"]
 mod backend;
+#[path = "family_backend.rs"]
+pub(crate) mod family_backend;
 pub(crate) use backend::{watch_registry, WorkerBackend, WorkerProgram};
 
 /// The V9 start switch of the host process (`StartRequest::ScreenHostWorker`).
@@ -43,8 +50,6 @@ const FRAME_TIMEOUT: Duration = Duration::from_secs(10);
 pub(super) const INPUT_TIMEOUT: Duration = Duration::from_secs(2);
 /// Time a closed host process gets to exit before it is killed.
 const EXIT_WAIT: Duration = Duration::from_secs(2);
-
-type Answer = io::Result<Option<(u8, Vec<u8>)>>;
 
 struct SpawnJob {
     command: Command,
@@ -107,11 +112,15 @@ fn wait_for(child: &mut Child, limit: Duration) -> Option<ExitStatus> {
     }
 }
 
+struct SourceFacts {generation:AtomicU64,regions:AtomicBool,limits:Mutex<FrameLimits>,family_layout_revision:AtomicU64,legacy_reconnect:AtomicBool}
+impl Default for SourceFacts {fn default()->Self {Self {generation:AtomicU64::new(0),regions:AtomicBool::new(true),limits:Mutex::new(FrameLimits::LEGACY),family_layout_revision:AtomicU64::new(0),legacy_reconnect:AtomicBool::new(false)}}}
+
 /// One running host process.
 pub(super) struct WorkerLink {
+    facts:Arc<SourceFacts>,
     child: Child,
     input: ChildStdin,
-    answers: Receiver<Answer>,
+    reader: WorkerReader,
 }
 
 impl WorkerLink {
@@ -135,30 +144,24 @@ impl WorkerLink {
             let _ = child.wait();
             return Err(error);
         }
-        let (Some(input), Some(mut output)) = (child.stdin.take(), child.stdout.take()) else {
+        let (Some(input), Some(output)) = (child.stdin.take(), child.stdout.take()) else {
             let _ = child.kill();
             let _ = child.wait();
             return Err(io::Error::other("screen host process has no pipes"));
         };
-        let (sender, answers): (SyncSender<Answer>, Receiver<Answer>) = mpsc::sync_channel(1);
-        let reader = std::thread::Builder::new()
-            .name("screen-host-reader".into())
-            .spawn(move || loop {
-                let answer = read_message(&mut output);
-                let end = !matches!(answer, Ok(Some(_)));
-                if sender.send(answer).is_err() || end {
-                    return;
-                }
-            });
-        if let Err(error) = reader {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(error);
-        }
+        let reader = match WorkerReader::start(output) {
+            Ok(reader) => reader,
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error);
+            }
+        };
         Ok(Self {
+            facts:Arc::new(SourceFacts::default()),
             child,
             input,
-            answers,
+            reader,
         })
     }
 
@@ -168,14 +171,28 @@ impl WorkerLink {
         request: &WorkerRequest,
         limit: Duration,
     ) -> Result<WorkerReply, StageError> {
+        let limits = match request {
+            WorkerRequest::Produce(stage) => stage.frame_contract.map(|contract| contract.limits),
+            _ => None,
+        };
+        if let Err(error) = self.reader.begin(limits) {
+            return Err(self.lost(error));
+        }
         if let Err(error) = send_request(&mut self.input, request) {
             return Err(self.lost(error));
         }
-        match self.answers.recv_timeout(limit) {
-            Ok(Ok(Some((tag, payload)))) => WorkerReply::decode(tag, &payload).map_err(|error| {
-                self.kill();
-                StageError::new(ScreenErrorCode::CaptureFailed, error)
-            }),
+        match self.reader.receive(limit) {
+            Ok(Ok(Some((tag, payload)))) => {
+                let reply=WorkerReply::decode(tag,&payload).map_err(|error| {self.kill();StageError::new(ScreenErrorCode::CaptureFailed,error)})?;
+                let reply=if let WorkerReply::Reference {generation,regions,limits,family_layout_revision,reply}=reply {
+                    if generation<self.facts.generation.load(Ordering::Acquire) {self.kill();return Err(StageError::new(ScreenErrorCode::CaptureFailed,io::Error::other("worker source generation regressed")));}
+                    *self.facts.limits.lock().unwrap_or_else(PoisonError::into_inner)=limits;
+                    self.facts.family_layout_revision.store(family_layout_revision.unwrap_or(0),Ordering::Release);
+                    self.facts.regions.store(regions,Ordering::Release);self.facts.generation.store(generation,Ordering::Release);*reply
+                } else {reply};
+                if let WorkerReply::InputDone {legacy_reconnect,..}=&reply {self.facts.legacy_reconnect.store(*legacy_reconnect,Ordering::Release);}
+                Ok(reply)
+            },
             Ok(Ok(None)) | Err(RecvTimeoutError::Disconnected) => {
                 Err(self.lost(io::Error::from(io::ErrorKind::UnexpectedEof)))
             }
@@ -241,11 +258,77 @@ pub(super) type SharedLink = Arc<Mutex<WorkerLink>>;
 
 /// A source captured and encoded in its host process.
 pub(crate) struct WorkerSource {
+    facts:Arc<SourceFacts>,
     link: SharedLink,
     size: FrameSize,
 }
+struct WorkerInputSink(SharedLink,Arc<SourceFacts>);
+impl WorkerInputSink {
+    fn family(&self, command: crate::screen::core::worker_family::FamilyCommand, active:Option<Arc<AtomicBool>>)
+        -> io::Result<crate::screen::core::worker_family::FamilyReply> {
+        let mut link=self.0.lock().map_err(|_|io::Error::other("family_worker_link_poisoned"))?;
+        if active.is_some_and(|active|!active.load(Ordering::Acquire)) {
+            return Err(io::Error::new(io::ErrorKind::Interrupted,"family_request_cancelled"));
+        }
+        match link.ask(&WorkerRequest::Family(command),INPUT_TIMEOUT).map_err(|failure|failure.error)? {
+            WorkerReply::Family(reply)=>Ok(reply),
+            WorkerReply::Failed {message,..}=>Err(io::Error::other(message)),
+            _=>Err(io::Error::other("unexpected family worker response")),
+        }
+    }
+}
+impl crate::screen::core::host_backend::ScreenInputSink for WorkerInputSink {
+    fn legacy_input_invalid(&self)->bool {self.1.legacy_reconnect.load(Ordering::Acquire)}
+    fn inject(&self,events:&[crate::screen::core::input_model::InputEvent],reference:u64,presented:bool)
+        ->Result<(),crate::screen::core::wire_control::ControlBlock> {
+        backend::send_bound_input(&self.0,events,Some(reference),presented)
+    }
+    fn family_snapshot(&self)->io::Result<Option<crate::remote_window::FamilySnapshot>> {
+        match self.family(crate::screen::core::worker_family::FamilyCommand::Snapshot,None)? {
+            crate::screen::core::worker_family::FamilyReply::Snapshot(snapshot)=>Ok(snapshot),
+            _=>Err(io::Error::other("unexpected family snapshot response")),
+        }
+    }
+    fn family_operation(&self,request:crate::screen::core::family_protocol::FamilyOperation,active:Arc<AtomicBool>)
+        ->io::Result<crate::screen::core::family_protocol::FamilyOperationResult> {
+        match self.family(crate::screen::core::worker_family::FamilyCommand::Operation(request),Some(active))? {
+            crate::screen::core::worker_family::FamilyReply::Operation(result)=>Ok(result),
+            _=>Err(io::Error::other("unexpected family operation response")),
+        }
+    }
+    fn family_input(&self,request:crate::screen::core::family_protocol::FamilyInput,active:Arc<AtomicBool>)
+        ->io::Result<crate::screen::core::family_protocol::FamilyInputResult> {
+        match self.family(crate::screen::core::worker_family::FamilyCommand::Input(request),Some(active))? {
+            crate::screen::core::worker_family::FamilyReply::Input(result)=>Ok(result),
+            _=>Err(io::Error::other("unexpected family input response")),
+        }
+    }
+    fn release(&self,events:&[crate::screen::core::input_model::InputEvent])->Result<(),crate::screen::core::wire_control::ControlBlock> {
+        use crate::screen::core::wire_control::ControlBlock;
+        // The picture request already has FRAME_TIMEOUT; retain this exact worker
+        // until its admitted capture completes, then release its pressed inputs.
+        let mut link=self.0.lock().map_err(|_|ControlBlock::ControlUnavailable)?;
+        match link.ask(&WorkerRequest::Release(events.to_vec()),INPUT_TIMEOUT) {
+            Ok(WorkerReply::InputDone {blocked:None,..})=>Ok(()),
+            Ok(WorkerReply::InputDone {blocked:Some(blocked),..})=>Err(blocked),
+            _=>Err(ControlBlock::ControlUnavailable),
+        }
+    }
+}
 
 impl WorkerSource {
+    pub(crate) fn open_family(program: &Path, env: &[(String,String)],
+        open: crate::screen::core::worker_family::OpenFamily) -> Result<Self, SourceRefusal> {
+        let mut link = WorkerLink::start(program, env)
+            .map_err(|error| SourceRefusal::new(&format!("host_process: {error}")))?;
+        match link.ask(&WorkerRequest::OpenFamily(open), OPEN_TIMEOUT) {
+            Ok(WorkerReply::Opened {size}) => Ok(Self { facts: link.facts.clone(),
+                link: Arc::new(Mutex::new(link)), size }),
+            Ok(WorkerReply::Refused {reason}) => Err(SourceRefusal::new(&reason)),
+            Ok(_) => Err(SourceRefusal::new("unexpected OPEN_FAMILY response")),
+            Err(error) => Err(SourceRefusal::new(&error.error.to_string())),
+        }
+    }
     /// Starts a host process with `program` (and `env` beside the daemon's
     /// environment) and opens `source` there.
     /// `control`: the session may control, so the process prepares input.
@@ -274,6 +357,8 @@ impl WorkerSource {
         });
         match link.ask(&request, OPEN_TIMEOUT) {
             Ok(WorkerReply::Opened { size }) => Ok(Self {
+
+                facts:link.facts.clone(),
                 link: Arc::new(Mutex::new(link)),
                 size,
             }),
@@ -309,8 +394,22 @@ impl WorkerSource {
 }
 
 impl ScreenSource for WorkerSource {
+    fn family_layout_revision(&self)->Option<u64> {let revision=self.facts.family_layout_revision.load(Ordering::Acquire);(revision!=0).then_some(revision)}
+    fn frame_limits(&self)->FrameLimits {*self.facts.limits.lock().unwrap_or_else(PoisonError::into_inner)}
+    fn input_sink(&self)->Option<Arc<dyn crate::screen::core::host_backend::ScreenInputSink>> {Some(Arc::new(WorkerInputSink(self.link.clone(),self.facts.clone())))}
+    fn reference_generation(&self)->u64 {self.facts.generation.load(Ordering::Acquire)}
+    fn supports_frame_regions(&self)->bool {self.facts.regions.load(Ordering::Acquire)}
     fn size(&self) -> FrameSize {
         self.size
+    }
+
+    fn set_capture_active(&mut self, active: bool) -> io::Result<()> {
+        match self.link().ask(&WorkerRequest::SetCaptureActive(active),FRAME_TIMEOUT) {
+            Ok(WorkerReply::CaptureActive(value)) if value==active => Ok(()),
+            Ok(WorkerReply::Failed {message,..}) => Err(io::Error::other(message)),
+            Ok(_) => Err(io::Error::other("unexpected host capture activity acknowledgement")),
+            Err(failure) => Err(failure.error),
+        }
     }
 
     /// One raw picture (still images); video goes through `host_stage`.
@@ -319,7 +418,7 @@ impl ScreenSource for WorkerSource {
             .link()
             .ask(&WorkerRequest::Capture { frame_id }, FRAME_TIMEOUT);
         match answer {
-            Ok(WorkerReply::Raw(image)) => Ok(SourceFrame::Frame(image)),
+            Ok(WorkerReply::Raw(image)) => {self.size=image.size();Ok(SourceFrame::Frame(image))},
             Ok(WorkerReply::Frame(StageFrame::Paused(state))) => Ok(SourceFrame::Paused(state)),
             Ok(WorkerReply::Failed { message, .. }) => Err(io::Error::other(message)),
             Ok(_) => Err(self.unexpected("CAPTURE").error),
@@ -336,7 +435,7 @@ impl HostStage for WorkerSource {
     fn produce(&mut self, request: &StageRequest) -> Result<StageFrame, StageError> {
         let answer = self
             .link()
-            .ask(&WorkerRequest::Produce(*request), FRAME_TIMEOUT)?;
+            .ask(&WorkerRequest::Produce(request.clone()), FRAME_TIMEOUT)?;
         match answer {
             WorkerReply::Frame(frame) => {
                 match &frame {

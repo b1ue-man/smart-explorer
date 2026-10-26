@@ -28,7 +28,7 @@ fn with_direct_bytes<R>(
     let length = usize::try_from(length).ok()?;
     let address = env.get_direct_buffer_address(src).ok()?;
     let capacity = env.get_direct_buffer_capacity(src).ok()?;
-    if address.is_null() || start.checked_add(length)? > capacity {
+    if address.is_null() || length > isize::MAX as usize || capacity > isize::MAX as usize || start.checked_add(length)? > capacity {
         return None;
     }
     // SAFETY: the range lies within the buffer's capacity (checked above);
@@ -48,7 +48,7 @@ fn with_direct_bytes_mut<R>(
 ) -> Option<R> {
     let address = env.get_direct_buffer_address(dst).ok()?;
     let capacity = env.get_direct_buffer_capacity(dst).ok()?;
-    if address.is_null() {
+    if address.is_null() || capacity > isize::MAX as usize {
         return None;
     }
     // SAFETY: the address and capacity are the buffer's own; the app hands
@@ -134,7 +134,10 @@ pub extern "system" fn Java_app_smartexplorer_android_core_NativeBridge_screenCo
 
 /// `external fun screenPull(session: Long, dst: ByteBuffer, timeoutMs: Int):
 /// Int` — the next picture of the viewer session into `dst` (16-byte head,
-/// then the payload; `viewer_sink.rs`): the bytes written, −1 timeout, −2 the
+/// then the payload; `viewer_sink.rs`). Payload flag 0x100 carries the full
+/// little-endian GOP u64, followed by frame u64 with flag 0x80, then codec
+/// bytes. Both identity fields count toward the payload length; low-16 flag
+/// bits are only a hint. Returns the bytes written, −1 timeout, −2 the
 /// session ended, −3 `dst` too small (bytes 12–15 name the payload length),
 /// −4 the buffer was not direct.
 #[no_mangle]

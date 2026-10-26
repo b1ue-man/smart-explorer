@@ -97,6 +97,12 @@ pub(crate) struct CodecOffer {
     #[serde(default)]
     pub hardware: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pixel_access: Option<bool>,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    pub max_macroblocks:Option<u64>,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    pub max_macroblocks_per_second:Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_width: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_height: Option<u32>,
@@ -108,6 +114,7 @@ impl CodecOffer {
             codec: CodecKind::H264,
             profile: Some(profile),
             hardware,
+            pixel_access: None,max_macroblocks:None,max_macroblocks_per_second:None,
             max_width: None,
             max_height: None,
         }
@@ -118,10 +125,13 @@ impl CodecOffer {
             codec: CodecKind::Tiles,
             profile: None,
             hardware: false,
+            pixel_access: Some(true),max_macroblocks:None,max_macroblocks_per_second:None,
             max_width: None,
             max_height: None,
         }
     }
+
+    pub(crate) fn with_pixel_access(self, confirmed: bool) -> Self {Self {pixel_access:Some(confirmed),..self}}
 
     pub(crate) fn with_max(self, size: FrameSize) -> Self {
         Self {
@@ -131,6 +141,18 @@ impl CodecOffer {
         }
     }
 
+    pub(crate) fn pixel_limit(&self,contract:Option<super::frame_budget::FrameContract>)->u64 {
+        let budget=contract.map_or(super::pixel_convert::MAX_FRAME_PIXELS,|c|c.limits.max_pixels);
+        self.max_macroblocks.map_or_else(||if self.codec==CodecKind::Tiles {budget} else {budget.min(super::pixel_convert::MAX_FRAME_PIXELS)},
+            |blocks|blocks.saturating_mul(256).min(budget))
+    }
+    pub(crate) fn supports_size_rate(&self,size:FrameSize,fps:u32,contract:Option<super::frame_budget::FrameContract>)->bool {
+        let max=contract.map_or_else(||self.max_size(),|c|self.max_size_for_contract(c));
+        let blocks=super::frame_size_caps::macroblocks(size);
+        size.width>0 && size.height>0 && size.width<=max.width && size.height<=max.height && size.pixels()<=self.pixel_limit(contract)
+            && self.max_macroblocks.is_none_or(|n|n>0 && blocks<=n)
+            && (fps==0 || self.max_macroblocks_per_second.is_none_or(|n|n>0 && blocks.checked_mul(u64::from(fps)).is_some_and(|rate|rate<=n)))
+    }
     /// The largest frame of this offer within the protocol limit (C2).
     pub(crate) fn max_size(&self) -> FrameSize {
         let side = |value: Option<u32>, limit: u32| value.unwrap_or(limit).clamp(1, limit);
@@ -138,6 +160,19 @@ impl CodecOffer {
             side(self.max_width, FrameSize::MAX.width),
             side(self.max_height, FrameSize::MAX.height),
         )
+    }
+}
+
+impl CodecOffer {
+    pub(crate) fn max_size_for_contract(&self, contract: super::frame_budget::FrameContract) -> FrameSize {
+        let legacy=self.max_size();
+        let explicit=match (self.max_width,self.max_height) {
+            (Some(width),Some(height)) if width>0 && height>0 => FrameSize::new(width,height),
+            _ if self.codec==CodecKind::Tiles => contract.limits.max_size,
+            _ => legacy,
+        };
+        let evidenced=if self.codec==CodecKind::H264 && self.max_macroblocks.is_none() {smaller(explicit,legacy)} else {explicit};
+        smaller(evidenced,contract.limits.max_size)
     }
 }
 
@@ -180,6 +215,8 @@ pub(crate) struct CodecChoice {
     pub encoder_hardware: bool,
     pub decoder_hardware: bool,
     pub max_size: FrameSize,
+    pub max_pixels:u64,
+    pub max_macroblocks_per_second:Option<u64>,
 }
 
 fn smaller(a: FrameSize, b: FrameSize) -> FrameSize {
@@ -197,63 +234,41 @@ fn tier(encoder_hardware: bool, decoder_hardware: bool) -> u8 {
 
 /// All usable pairings in rank order; empty only when `preference` is `H264`
 /// and no H.264 pairing exists. Offers beyond `MAX_CODEC_OFFERS` are ignored.
-pub(crate) fn negotiate(
-    encoders: &[CodecOffer],
-    decoders: &[CodecOffer],
-    preference: CodecPreference,
-) -> Vec<CodecChoice> {
-    let encoders = &encoders[..encoders.len().min(MAX_CODEC_OFFERS)];
-    let decoders = &decoders[..decoders.len().min(MAX_CODEC_OFFERS)];
-    let mut choices: Vec<CodecChoice> = Vec::new();
-    if preference != CodecPreference::Tiles {
-        let mut ranked = Vec::new();
-        for (encoder_index, encoder) in encoders.iter().enumerate() {
-            let (CodecKind::H264, Some(stream)) = (encoder.codec, encoder.profile) else {
-                continue;
-            };
-            for (decoder_index, decoder) in decoders.iter().enumerate() {
-                let (CodecKind::H264, Some(decodes)) = (decoder.codec, decoder.profile) else {
-                    continue;
+pub(crate) fn negotiate(encoders:&[CodecOffer],decoders:&[CodecOffer],preference:CodecPreference)->Vec<CodecChoice> {
+    negotiate_for_contract(encoders,decoders,preference,None)
+}
+pub(crate) fn negotiate_for_contract(encoders:&[CodecOffer],decoders:&[CodecOffer],preference:CodecPreference,
+    contract:Option<super::frame_budget::FrameContract>)->Vec<CodecChoice> {
+    if contract.is_some_and(|c|c.validate().is_err()) {return Vec::new();}
+    let encoders=&encoders[..encoders.len().min(MAX_CODEC_OFFERS)];
+    let decoders=&decoders[..decoders.len().min(MAX_CODEC_OFFERS)];
+    let dimensions=|offer:&CodecOffer|contract.map_or_else(||offer.max_size(),|c|offer.max_size_for_contract(c));
+    let mut choices=Vec::new();
+    if preference!=CodecPreference::Tiles {
+        let mut ranked=Vec::new();
+        for (ei,encoder) in encoders.iter().enumerate() {
+            let (CodecKind::H264,Some(profile))=(encoder.codec,encoder.profile) else {continue;};
+            for (di,decoder) in decoders.iter().enumerate() {
+                if decoder.codec!=CodecKind::H264 || !decoder.profile.is_some_and(|p|p.decodes(profile))
+                    || (contract.is_some_and(|c|c.hybrid_regions) && decoder.pixel_access!=Some(true)) {continue;}
+                let max_pixels=encoder.pixel_limit(contract).min(decoder.pixel_limit(contract));
+                let max_macroblocks_per_second=match (encoder.max_macroblocks_per_second,decoder.max_macroblocks_per_second) {
+                    (Some(a),Some(b))=>Some(a.min(b)),(a,b)=>a.or(b),
                 };
-                if !decodes.decodes(stream) {
-                    continue;
-                }
-                let profile_rank = u8::from(stream != H264Profile::High);
-                let choice = CodecChoice {
-                    codec: CodecKind::H264,
-                    profile: Some(stream),
-                    encoder_hardware: encoder.hardware,
-                    decoder_hardware: decoder.hardware,
-                    max_size: smaller(encoder.max_size(), decoder.max_size()),
-                };
-                let rank = (tier(encoder.hardware, decoder.hardware), profile_rank);
-                ranked.push((rank, encoder_index, decoder_index, choice));
+                if max_pixels==0 || max_macroblocks_per_second==Some(0) {continue;}
+                let choice=CodecChoice {codec:CodecKind::H264,profile:Some(profile),encoder_hardware:encoder.hardware,
+                    decoder_hardware:decoder.hardware,max_size:smaller(dimensions(encoder),dimensions(decoder)),max_pixels,max_macroblocks_per_second};
+                ranked.push(((tier(encoder.hardware,decoder.hardware),u8::from(profile!=H264Profile::High)),ei,di,choice));
             }
         }
-        ranked.sort_by_key(|(rank, encoder_index, decoder_index, _)| {
-            (*rank, *encoder_index, *decoder_index)
-        });
-        for (.., choice) in ranked {
-            if !choices.contains(&choice) {
-                choices.push(choice);
-            }
-        }
+        ranked.sort_by_key(|(rank,ei,di,choice)|(*rank,std::cmp::Reverse(choice.max_pixels.min(choice.max_size.pixels())),*ei,*di));
+        for (_,_,_,choice) in ranked {if !choices.contains(&choice) {choices.push(choice);}}
     }
-    if preference != CodecPreference::H264 {
-        let tile_limit = |offers: &[CodecOffer]| {
-            offers
-                .iter()
-                .filter(|offer| offer.codec == CodecKind::Tiles)
-                .map(CodecOffer::max_size)
-                .fold(FrameSize::MAX, smaller)
-        };
-        choices.push(CodecChoice {
-            codec: CodecKind::Tiles,
-            profile: None,
-            encoder_hardware: false,
-            decoder_hardware: false,
-            max_size: smaller(tile_limit(encoders), tile_limit(decoders)),
-        });
+    if preference!=CodecPreference::H264 {
+        let initial=contract.map_or(FrameSize::MAX,|c|c.limits.max_size);
+        let limit=|offers:&[CodecOffer]|offers.iter().filter(|offer|offer.codec==CodecKind::Tiles).map(dimensions).fold(initial,smaller);
+        choices.push(CodecChoice {codec:CodecKind::Tiles,profile:None,encoder_hardware:false,decoder_hardware:false,
+            max_size:smaller(limit(encoders),limit(decoders)),max_pixels:contract.map_or(super::pixel_convert::MAX_FRAME_PIXELS,|c|c.limits.max_pixels),max_macroblocks_per_second:None});
     }
     choices
 }

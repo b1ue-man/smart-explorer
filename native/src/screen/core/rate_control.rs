@@ -3,13 +3,12 @@
 //! underneath. Two controllers, the target is the smaller of both:
 //! - delay-based from `FRAME_ACK`: slope of the accumulated delay variation
 //!   over the last 20 frames; overuse sets the target to 0.85 × receive rate,
-//!   otherwise it grows by 1.08 per second;
+//!   otherwise it probes by 1.25 per max(RTT, frame interval);
 //! - loss-based from the difference of two cumulative `Connection::stats()`
 //!   readings a second apart: loss above 10 % multiplies by (1 − 0.5 p),
-//!   2–10 % holds, below 2 % multiplies by 1.05.
+//!   2–10 % holds; below 2 % releases the loss ceiling.
 //!
-//! The quality ladder lowers the frame rate down to 10/s first, then the
-//! resolution by 0.75 per step.
+//! Low rates lower cadence. Source pixels stay native for the lossless repair path.
 use std::collections::VecDeque;
 
 use serde::{Deserialize, Serialize};
@@ -34,14 +33,13 @@ pub(crate) const OVERUSE_SLOPE: f64 = 0.05;
 /// reading does not count.
 const OVERUSE_PERSISTENCE: u32 = 3;
 const DECREASE_FACTOR: f64 = 0.85;
-const DELAY_GROWTH_PER_SECOND: f64 = 1.08;
+const INTERVAL_GROWTH: f64 = 1.25;
 const LOSS_HIGH: f64 = 0.10;
 const LOSS_LOW: f64 = 0.02;
-const LOSS_GROWTH: f64 = 1.05;
 /// Window of the receive and send rates.
 const RATE_WINDOW_US: u64 = 1_000_000;
 /// Shortest span for a receive rate.
-const MIN_RATE_SPAN_US: u64 = 100_000;
+const MIN_RATE_SPAN_US: u64 = 1;
 /// Entries of one rate window: one second at 240 frames/s, four times over.
 const MAX_RATE_ENTRIES: usize = 1024;
 /// The delay-based target grows only while the encoder uses at least this
@@ -205,6 +203,8 @@ pub(crate) struct RateController {
     last_update_us: u64,
     overuse_streak: u32,
     loss_counters: Option<(u64, u64)>,
+    interval_us: u64,
+    encode_capacity_bps: Option<u64>,
 }
 
 impl RateController {
@@ -221,6 +221,8 @@ impl RateController {
             last_update_us: now_us,
             overuse_streak: 0,
             loss_counters: None,
+            interval_us: 33_333,
+            encode_capacity_bps: None,
         }
     }
 
@@ -233,15 +235,25 @@ impl RateController {
         clamp_bps(self.delay_target.min(self.loss_target)).round() as u64
     }
 
-    /// The path changed; moving onto the relay caps the target at the relay
-    /// start value, because the relay drops above 1 MiB per destination.
+    /// A new path starts conservatively and discards the previous path's loss ceiling.
     pub(crate) fn set_path(&mut self, path: PathKind) {
-        if path == PathKind::Relay && self.path == PathKind::Direct {
-            let cap = START_RELAY_BPS as f64;
-            self.delay_target = self.delay_target.min(cap);
-            self.loss_target = self.loss_target.min(cap);
+        if path != self.path {
+            self.delay_target = path.start_bps() as f64;
+            self.loss_target = MAX_BITRATE_BPS as f64;
+            self.gradient.reset(); self.received = RateWindow::default(); self.sent = RateWindow::default();
+            self.loss_counters = None; self.overuse_streak = 0;
         }
         self.path = path;
+    }
+
+    pub(crate) fn set_timing(&mut self, rtt_us: u64, frame_interval_us: u64) {
+        self.interval_us = rtt_us.max(frame_interval_us).max(1);
+    }
+
+    pub(crate) fn on_encode(&mut self, bytes: u64, elapsed_us: u64) {
+        if bytes == 0 || elapsed_us == 0 { return; }
+        let sample = (u128::from(bytes) * 8 * 1_000_000 / u128::from(elapsed_us)).min(u128::from(MAX_BITRATE_BPS)) as u64;
+        self.encode_capacity_bps = Some(self.encode_capacity_bps.map_or(sample, |previous| (previous * 7 + sample) / 8));
     }
 
     pub(crate) fn on_frame_sent(&mut self, bytes: u64, now_us: u64) {
@@ -260,11 +272,11 @@ impl RateController {
         if sample.keyframe {
             self.gradient.reset();
             self.overuse_streak = 0;
-            self.last_update_us = now_us;
+            self.grow(now_us);
             return DelaySignal::Learning;
         }
         let Some(slope) = self.gradient.push(sample.send_us, sample.recv_us) else {
-            self.last_update_us = now_us;
+            self.grow(now_us);
             return DelaySignal::Learning;
         };
         if slope <= OVERUSE_SLOPE {
@@ -289,15 +301,16 @@ impl RateController {
     }
 
     fn grow(&mut self, now_us: u64) {
-        let elapsed_us = now_us
-            .saturating_sub(self.last_update_us)
-            .min(RATE_WINDOW_US);
-        self.last_update_us = now_us;
+        if now_us.saturating_sub(self.last_update_us) < self.interval_us { return; }
         self.sent.prune(now_us);
-        let used_bps = (self.sent.bytes * 8) as f64;
-        if used_bps >= APP_LIMITED_SHARE * self.delay_target {
-            let growth = DELAY_GROWTH_PER_SECOND.powf(elapsed_us as f64 / 1_000_000.0);
-            self.delay_target = clamp_bps(self.delay_target * growth);
+        let Some(delivery) = self.received.rate_bps() else { return; };
+        let Some(offered) = self.sent.rate_bps() else { return; };
+        let current = self.delay_target.min(self.loss_target);
+        if offered as f64 >= APP_LIMITED_SHARE * current {
+            let capacity = self.encode_capacity_bps.unwrap_or(MAX_BITRATE_BPS) as f64;
+            let probe = delivery as f64 * INTERVAL_GROWTH;
+            self.delay_target = clamp_bps((current * INTERVAL_GROWTH).min(probe).min(capacity).max(current));
+            self.last_update_us = now_us;
         }
     }
 
@@ -317,7 +330,7 @@ impl RateController {
         self.loss_target = clamp_bps(if loss > LOSS_HIGH {
             current * (1.0 - 0.5 * loss)
         } else if loss < LOSS_LOW {
-            current * LOSS_GROWTH
+            MAX_BITRATE_BPS as f64
         } else {
             current
         });
@@ -328,10 +341,9 @@ impl RateController {
 /// Bits per pixel and frame H.264 needs for readable screen content (A1,
 /// calibrated with `se screen bench`).
 pub(crate) const BITS_PER_PIXEL: f64 = 0.05;
-/// Lowest frame rate of the ladder before the resolution sinks (C3).
+/// V1 configuration constant retained for consumers; native stills may use lower cadence.
 pub(crate) const MIN_LADDER_FPS: u32 = 10;
-/// Smallest long edge of the ladder: the preview size of the group view (C6);
-/// no step goes below it.
+/// The legacy preview edge; source pixels are no longer reduced by the rate controller.
 pub(crate) const MIN_LONG_EDGE: u32 = 320;
 /// A better step is taken only when the target carries it 1.25 times, so
 /// the ladder does not flap around one target.
@@ -349,36 +361,13 @@ impl Quality {
     }
 }
 
-/// The best quality `target_bps` carries: the source size with the highest
-/// frame rate down to 10/s, then 10/s with the size × 0.75 per step, at most
-/// down to the last step whose long edge is still 320 pixels or more.
+/// Keep source pixels and choose a cadence the current target can carry.
+/// Change-driven lossless repair does not need a ten-frame-per-second pixel budget.
 pub(crate) fn quality_for(target_bps: u64, source: FrameSize, max_fps: u32) -> Quality {
     let max_fps = max_fps.max(1);
-    let floor_fps = MIN_LADDER_FPS.min(max_fps);
-    let fps_for = |size: FrameSize| {
-        (target_bps as f64 / (size.pixels().max(1) as f64 * BITS_PER_PIXEL)).floor() as u64
-    };
-    let fps = fps_for(source);
-    if fps >= u64::from(floor_fps) {
-        return Quality {
-            fps: fps.min(u64::from(max_fps)) as u32,
-            size: source,
-        };
-    }
-    let mut size = source;
-    loop {
-        let next = size.scale(3, 4);
-        if fps_for(size) >= u64::from(floor_fps)
-            || next.width.max(next.height) < MIN_LONG_EDGE
-            || next == size
-        {
-            return Quality {
-                fps: floor_fps,
-                size,
-            };
-        }
-        size = next;
-    }
+    let fps = (target_bps as f64 / (source.pixels().max(1) as f64 * BITS_PER_PIXEL)).floor() as u32;
+    Quality { fps: fps.clamp(1,max_fps), size: source }
+
 }
 
 /// The next quality from `current`: down at once when the target no longer

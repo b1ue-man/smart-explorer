@@ -168,6 +168,8 @@ pub(super) fn list(limits: Vec<String>) -> WindowList {
                 id: window_id(hwnd),
                 title: title_of(hwnd),
                 app,
+                app_id: None,
+                icon: None,
                 pid: (pid != 0).then_some(pid),
                 monitor,
                 minimized,

@@ -10,8 +10,9 @@ use crate::screen::core::input_model::key_usage;
 /// Keys the viewer keeps for itself (U25-7); everything else goes to the host.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LocalKey {
-    /// F11.
+    /// F11 / Ctrl+Alt+Shift+F (Ctrl+Alt+Pause comes from the OS adapter).
     Fullscreen,
+    ExitFullscreen,
     /// Ctrl+Shift+S.
     Stats,
     /// Ctrl+Shift+K.
@@ -21,6 +22,7 @@ pub(crate) enum LocalKey {
 pub(crate) fn local_key(key: Key, modifiers: Modifiers) -> Option<LocalKey> {
     match key {
         Key::F11 => Some(LocalKey::Fullscreen),
+        Key::F if modifiers.ctrl && modifiers.alt && modifiers.shift => Some(LocalKey::ExitFullscreen),
         Key::S if modifiers.ctrl && modifiers.shift => Some(LocalKey::Stats),
         Key::K if modifiers.ctrl && modifiers.shift => Some(LocalKey::ToggleControl),
         _ => None,

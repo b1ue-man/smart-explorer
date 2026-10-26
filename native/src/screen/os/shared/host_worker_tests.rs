@@ -25,11 +25,13 @@ pub(crate) fn worker_program() -> PathBuf {
 
 fn tiles() -> CodecChoice {
     CodecChoice {
+            max_macroblocks_per_second: None,
         codec: CodecKind::Tiles,
         profile: None,
         encoder_hardware: false,
         decoder_hardware: false,
         max_size: FrameSize::MAX,
+        max_pixels: crate::screen::core::pixel_convert::MAX_FRAME_PIXELS,
     }
 }
 
@@ -62,6 +64,8 @@ fn screen_task_host_worker_exits_on_update_stop() {
     };
     assert_eq!(source.size(), size);
     let request = StageRequest {
+        frame_contract: None,
+        visible_rects: None,
         frame_id: 1,
         keyframe: true,
         target_bps: 1_000_000,
