@@ -1,6 +1,8 @@
 //! The long P27 fixture is selected once by the common remote runner, in netns.
 #[path = "batches_rate_reference_metrics.rs"]
 mod metrics;
+#[path = "batches_rate_reference_tasks.rs"]
+mod tasks;
 #[path = "batches_rate_reference_transport.rs"]
 mod transport;
 
@@ -283,7 +285,7 @@ async fn screen(map: &iroh::RelayMap, profile: Profile) -> Measurement {
         });
     }
     transport::until(measured.end_us + 2_000_000).await;
-    tasks.finish().await;
+    tasks.finish().await.expect("screen measurement tasks finish");
     measured.observed = observed.lock().unwrap().clone();
     pair.close().await;
     measured

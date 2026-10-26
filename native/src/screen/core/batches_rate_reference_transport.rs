@@ -1,5 +1,4 @@
 //! Private real Iroh relay, production control framing and encoder-free baseline.
-use std::future::Future;
 use std::io;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -8,7 +7,6 @@ use iroh::endpoint::Connection;
 use iroh::{Endpoint, RelayMap, RelayMode};
 use serde_json::Value;
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
 
 use super::metrics::{
     Control, Delivery, Measurement, Observed, ProbeSent, Profile, FRAME_US, STATIONARY_US,
@@ -17,37 +15,10 @@ use super::metrics::{
 use crate::screen::core::gop_stream::{now_us, path_of};
 use crate::screen::core::wire_control::{self, FrameAck, HostFrame, Ping, Pong, ViewerFrame};
 
+pub(super) use super::tasks::Tasks;
+
 pub(super) type Shared = Arc<Mutex<Observed>>;
 const ALPN: &[u8] = b"smart-explorer-p27-private-measurement/1";
-
-#[derive(Default)]
-pub(super) struct Tasks(Vec<JoinHandle<io::Result<()>>>);
-impl Tasks {
-    pub fn spawn(&mut self, future: impl Future<Output = io::Result<()>> + Send + 'static) {
-        self.0.push(tokio::spawn(future));
-    }
-
-    pub async fn finish(mut self) {
-        for task in &self.0 {
-            task.abort();
-        }
-        // Keep unjoined handles in self: if one panics, Drop still aborts
-        // every remaining child instead of detaching a drained handle list.
-        while let Some(task) = self.0.pop() {
-            match task.await {
-                Err(error) if error.is_cancelled() => {}
-                result => panic!("owned measurement task failed: {result:?}"),
-            }
-        }
-    }
-}
-impl Drop for Tasks {
-    fn drop(&mut self) {
-        for task in &self.0 {
-            task.abort();
-        }
-    }
-}
 
 pub(super) fn network(mode: &str, args: &[String]) -> Value {
     let helper = std::env::var_os("SE_P27_NETWORK_HELPER")
@@ -360,7 +331,10 @@ pub(super) async fn reference(map: &RelayMap, profile: Profile) -> Measurement {
         });
     }
     until(measured.end_us + 2_000_000).await;
-    tasks.finish().await;
+    tasks
+        .finish()
+        .await
+        .expect("reference measurement tasks finish");
     measured.observed = observed.lock().unwrap().clone();
     drop(links);
     pair.close().await;
