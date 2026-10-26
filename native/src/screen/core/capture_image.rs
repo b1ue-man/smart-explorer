@@ -4,6 +4,7 @@ use std::sync::Arc;
 use super::capture_admission::{CaptureGeneration, CaptureGrant, CaptureOwner, CaptureSlice, SourceKey};
 pub(crate) use super::capture_bytes::{AdmittedBytes, AdmittedRegions};
 use super::frame_budget::FrameLimits;
+use super::image_admission::{ImageAdmission, ImageRole};
 use super::pixel_convert::{BgraImage, BgraRotation, BgraView, FrameSize};
 use super::wire::invalid;
 
@@ -26,9 +27,17 @@ struct PixelStorage {
 }
 #[derive(Clone)]
 pub(crate) struct CapturedImage {storage: Arc<PixelStorage>}
+impl std::fmt::Debug for CapturedImage {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {self.image().fmt(formatter)}
+}
+impl PartialEq for CapturedImage {
+    fn eq(&self, other: &Self) -> bool {self.image() == other.image()}
+}
+impl Eq for CapturedImage {}
 impl CaptureImageBuilder {
     pub(crate) fn new(size: FrameSize, limits: FrameLimits, grant: &CaptureGrant,
         owner: CaptureOwner) -> io::Result<Self> {
+        if !grant.allows_images() {return Err(invalid("import credit cannot create a captured image"));}
         let bytes = limits.check(size)? as u64;
         let data = AdmittedBytes::new(grant, owner, bytes)?;
         let mut builder = Self::from_bytes(size, limits, grant, data)?;
@@ -38,6 +47,7 @@ impl CaptureImageBuilder {
     /// The only adoption path accepts bytes whose allocation already owns a slice.
     pub(crate) fn from_bytes(size: FrameSize, limits: FrameLimits, grant: &CaptureGrant,
         bytes: AdmittedBytes) -> io::Result<Self> {
+        if !grant.allows_images() {return Err(invalid("import credit cannot create a captured image"));}
         if bytes.len() != limits.check(size)? || !bytes.belongs_to(grant) {
             return Err(invalid("admitted capture bytes have wrong geometry or grant"));
         }
@@ -47,7 +57,28 @@ impl CaptureImageBuilder {
         Ok(Self {image, source: grant.source().clone(), generation: grant.generation(),
             regions: None, pixels, grant: backing})
     }
+    pub(crate) fn new_local(size: FrameSize, limits: FrameLimits, admission: &Arc<ImageAdmission>,
+        role: ImageRole, source: SourceKey, generation: CaptureGeneration) -> io::Result<Self> {
+        let bytes = limits.check(size)? as u64;
+        let data = AdmittedBytes::from_slice(admission.try_claim(role, bytes)?)?;
+        let mut builder = Self::from_local_bytes(size, limits, admission, source, generation, data)?;
+        for pixel in builder.pixels_mut().chunks_exact_mut(4) {pixel[3] = 255;}
+        Ok(builder)
+    }
+    /// Takes an already admitted allocation; no naked Vec adoption is exposed.
+    pub(crate) fn from_local_bytes(size: FrameSize, limits: FrameLimits, admission: &Arc<ImageAdmission>,
+        source: SourceKey, generation: CaptureGeneration, bytes: AdmittedBytes) -> io::Result<Self> {
+        if bytes.len() != limits.check(size)? || !bytes.belongs_to_images(admission) {
+            return Err(invalid("local image bytes have wrong geometry or admission"));
+        }
+        let (data, pixels) = bytes.into_parts();
+        let grant = CaptureGrant::for_local_image(admission.clone(), source.clone(), generation);
+        let image = BgraImage::from_vec_with_limits(size, data, limits)?;
+        Ok(Self {image, source, generation, regions: None, pixels, grant})
+    }
     pub(crate) fn pixels_mut(&mut self) -> &mut [u8] {self.image.data_mut()}
+    pub(crate) fn size(&self) -> FrameSize {self.image.size()}
+    pub(crate) fn view(&self) -> BgraView<'_> {self.image.view()}
     pub(crate) fn row_mut(&mut self, y: u32) -> Option<&mut [u8]> {
         (y < self.image.size().height).then(|| self.image.row_mut(y))
     }
@@ -71,12 +102,20 @@ impl CaptureImageBuilder {
     }
 }
 impl CapturedImage {
+    pub(crate) fn retain_lifetime(
+        &self,
+        lifetime: Arc<dyn super::capture_grant::CaptureCreditLifetime>,
+    ) -> io::Result<()> {
+        self.storage.grant.retain_lifetime(lifetime)
+    }
     pub(crate) fn image(&self) -> &BgraImage {&self.storage.image}
     pub(crate) fn size(&self) -> FrameSize {self.storage.image.size()}
     pub(crate) fn view(&self) -> BgraView<'_> {self.storage.image.view()}
     pub(crate) fn source(&self) -> &SourceKey {&self.storage.source}
     pub(crate) fn generation(&self) -> CaptureGeneration {self.storage.generation}
     pub(crate) fn grant(&self) -> CaptureGrant {self.storage.grant.clone()}
+    pub(crate) fn image_admission(&self) -> Option<Arc<ImageAdmission>> {self.storage.grant.image_admission()}
+    pub(crate) fn image_role(&self) -> Option<ImageRole> {self.storage._pixels.image_role()}
     pub(crate) fn shares_pixels(&self, other: &Self) -> bool {Arc::ptr_eq(&self.storage, &other.storage)}
     pub(crate) fn downscale(&self, size: FrameSize, limits: FrameLimits,
         grant: &CaptureGrant, owner: CaptureOwner) -> io::Result<Self> {
