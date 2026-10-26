@@ -909,6 +909,15 @@ APK, and writes `smart-explorer-android.apk` plus `apk-metadata.json`
 (`version`, `versionCode`, `sha256`, `certSha256`) as the `android-release-apk`
 artifact.
 
+The same verification inspects the existing APK with
+`android/check-image-fixture-package.py`: its DEX class definitions and dynamic
+JNI exports must exclude `AndroidImageFixtureBridge`. The pinned NDK's
+`llvm-nm` is checked during preflight and is also required by `--verify`.
+Verification installs/resolves that same NDK when necessary but never rebuilds
+the handed-over APK. Debug instrumentation alone enables Cargo feature
+`android-instrumentation-fixtures` and uses `src/debug/jniLibs`; release retains
+`src/main/jniLibs`. A release-profile Rust build rejects the fixture feature.
+
 `complete-release` runs only after that job succeeded. It downloads the artifact
 to `$RUNNER_TEMP` and passes it to the wrapper with `-AndroidApkDirectory`.
 Without Android tools, the wrapper checks in its preflight and again before

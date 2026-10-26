@@ -176,6 +176,7 @@ ensure_ndk() {
   fi
   llvm_objdump="$ndk_home/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objdump"
   [ -x "$llvm_objdump" ] || die "NDK $ndk_version lacks $llvm_objdump"
+  [ -x "$(dirname "$llvm_objdump")/llvm-nm" ] || die "NDK $ndk_version lacks llvm-nm"
   export ANDROID_NDK_HOME="$ndk_home"
 }
 
@@ -291,6 +292,7 @@ build_apk() {
 
 verify_apk() {
   local apk=$1 version=$2 code=$3 cert=$4
+  python3 "$script_dir/check-image-fixture-package.py" release --apk "$apk" --nm "$(dirname "$llvm_objdump")/llvm-nm"
   local badging package_line apk_code apk_version certs digests
   local code_pattern="versionCode='([0-9]+)'" name_pattern="versionName='([^']*)'"
   badging="$("$aapt2" dump badging "$apk")" || die "aapt2 could not read $apk"
@@ -388,6 +390,7 @@ if [ "$mode" = verify ]; then
     ) || die "committed sidecar does not bind $verify_source"
   fi
   resolve_sdk
+  ensure_ndk
   resolve_build_tools
   publish_verified "$verify_source" "$version" "$code" "$cert"
   exit 0
