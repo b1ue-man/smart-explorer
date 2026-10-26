@@ -1,5 +1,6 @@
 //! SHM mapping owns its prior promise until checked server detach or connection close.
 use super::*;
+use crate::screen::core::capture_admission::CaptureSlice;
 /// A memfd shared with the X server.
 pub(super) struct Segment {
     pub(super) id: u32,

@@ -150,6 +150,15 @@ impl CaptureAuthority for DelegatedSession {
         grant.check_identity(need.source(),&need.id())?;grant.retain_lifetime(self.lifetime.clone())?;Ok(grant)
     }
     fn approve(&self, plan: CapturePlan) -> io::Result<CaptureGrant> {
+        self.approve_plan(plan, None)
+    }
+    fn approve_supplement(&self, image: &CaptureGrant, plan: CapturePlan) -> io::Result<CaptureGrant> {
+        image.check_supplement(&plan)?;
+        self.approve_plan(plan, Some(image))
+    }
+}
+impl DelegatedSession {
+    fn approve_plan(&self, plan: CapturePlan, image: Option<&CaptureGrant>) -> io::Result<CaptureGrant> {
         let binding = *self.contract.lock().map_err(|_| io::Error::other("delegated session binding poisoned"))?;
         let ContractBinding::Bound(contract) = binding else {return Err(invalid("delegated capture contract is not bound"));};
         if plan.source().session() != self.session.as_ref()
@@ -160,7 +169,8 @@ impl CaptureAuthority for DelegatedSession {
         let generation = plan.generation();
         let total = plan.peak_bytes();
         let owners = plan.owner_limits();
-        let grant = self.authority.approve(plan)?;
+        let grant = if let Some(image) = image {self.authority.approve_supplement(image, plan)?}
+            else {self.authority.approve(plan)?};
         grant.check_identity(&source, generation)?;
         if grant.plan().peak_bytes() != total || grant.plan().owner_limits() != owners {
             return Err(invalid("Parent capture reply differs from requested ownership"));

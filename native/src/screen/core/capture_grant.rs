@@ -210,6 +210,23 @@ impl CaptureGrant {
         !self.inner.plan.is_import()
     }
 
+    pub(crate) fn check_supplement(&self, plan: &CapturePlan) -> io::Result<()> {
+        self.check_identity(plan.source(), plan.generation())?;
+        if !self.allows_images() || self.image_admission().is_some() || plan.is_import()
+            || plan.peak_bytes() == 0 || plan.requirements().iter().any(|item| {
+                item.source() != self.source() || item.generation() != self.generation()
+                    || !matches!(item.owner(), super::capture_plan::CaptureOwner::Readback
+                        | super::capture_plan::CaptureOwner::Metadata)
+            })
+        {
+            return Err(invalid("capture supplement must own only this image's cursor bytes"));
+        }
+        if self.is_retired()? {
+            return Err(io::Error::new(io::ErrorKind::WouldBlock,"capture supplement's image has retired"));
+        }
+        Ok(())
+    }
+
     pub(crate) fn plan(&self) -> &CapturePlan {
         self.member
             .as_ref()

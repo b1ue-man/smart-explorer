@@ -7,13 +7,15 @@ use std::sync::{Arc, Mutex, PoisonError};
 use x11rb::connection::Connection;
 use x11rb::rust_connection::{RustConnection, stream::{PollMode, Stream}};
 use x11rb::utils::RawFdContainer;
-use crate::screen::core::capture_admission::{CaptureAuthority, CaptureGeneration, CaptureGrant, CaptureSlice, SourceKey};
+use crate::screen::core::capture_admission::{CaptureAuthority, CaptureGrant, CaptureSlice};
+#[cfg(test)]
+use crate::screen::core::capture_admission::{CaptureGeneration, SourceKey};
 use crate::screen::core::capture_plan::{CaptureOwner, CapturePhases, CapturePlan};
 
 pub(crate) type CaptureConnection = RustConnection<AdmissionStream>;
 enum Expected {
     Image {sequence: u16, bytes: u64, raw: CaptureSlice},
-    Cursor {sequence: u16, source: SourceKey, generation: CaptureGeneration,
+    Cursor {sequence: u16, image: CaptureGrant,
         authority: Arc<dyn CaptureAuthority>},
 }
 struct State {
@@ -52,7 +54,7 @@ impl Gate {
         let mut state = self.0.lock().map_err(|_|invalid("x11 gate poisoned"))?;
         if state.expected.is_some() || state.raw.is_some() {return Err(invalid("x11 reply already armed"));}
         state.expected = Some(Expected::Cursor {sequence:sequence as u16,
-            source:grant.source().clone(), generation:grant.generation(), authority});
+            image:grant.clone(), authority});
         Ok(())
     }
     /// Called only after Cookie::reply destroyed the raw PacketReader Vec.
@@ -83,7 +85,7 @@ impl Gate {
                     if body != bytes {state.retired.push(raw); return Err(invalid("x11 image reply length changed"));}
                     state.raw = Some(raw);
                 }
-                Expected::Cursor {source,generation,authority,..} => {
+                Expected::Cursor {image,authority,..} => {
                     let width = u16::from_ne_bytes([header[12],header[13]]);
                     let height = u16::from_ne_bytes([header[14],header[15]]);
                     let pixels = u64::from(width) * u64::from(height) * 4;
@@ -92,13 +94,16 @@ impl Gate {
                         || usize::try_from(body + 32).ok().is_none_or(|bytes| bytes > isize::MAX as usize) {
                         return Err(invalid("x11 cursor reply exceeds raw allocation ceiling"));
                     }
-                    let mut plan = CapturePlan::new(source,generation);
+                    let mut plan = CapturePlan::new(image.source().clone(),image.generation());
                     plan.add_bytes(CaptureOwner::Readback,(body+32).max(64),1,CapturePhases::ALL)?;
                     if pixels > 0 {plan.add_bytes(CaptureOwner::Metadata,pixels,1,CapturePhases::ALL)?;}
                     // poll, never read, is the only place that calls Parent.
-                    let grant = authority.approve(plan)?;
+                    let grant = authority.approve_supplement(&image,plan)?;
                     state.raw = Some(grant.claim(CaptureOwner::Readback,(body+32).max(64))?);
                     state.parsed = Some(grant.claim(CaptureOwner::Metadata,pixels)?);
+                    // Both parser owners exist now; this one reply must not
+                    // authorize later allocations. Its slices end separately.
+                    grant.retire()?;
                 }
             }
         } else if body > 64 * 1024 {
@@ -174,3 +179,39 @@ impl Stream for AdmissionStream {
 #[cfg(test)]
 #[path="batches_capture_x11_task_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod supplement_tests {
+    use super::*;
+    #[test]
+    fn batches_task_capture_linux_x11_supplement_grants_raw_and_argb_without_retiring_image() {
+        let admission=crate::screen::core::capture_test_support::session(None);
+        let source=SourceKey::new(admission.session(),"x11-cursor").unwrap();
+        let mut plan=CapturePlan::new(source,CaptureGeneration::new(1));
+        plan.add_bytes(CaptureOwner::SourcePixels,64,2,CapturePhases::ALL).unwrap();
+        let image=admission.authority().approve(plan).unwrap();
+        let gate=Gate::default();
+        gate.cursor(7,&image,admission.authority()).unwrap();
+        {
+            let mut state=gate.0.lock().unwrap();
+            state.header[0]=1;
+            state.header[2..4].copy_from_slice(&7u16.to_ne_bytes());
+            state.header[4..8].copy_from_slice(&8u32.to_ne_bytes());
+            state.header[12..14].copy_from_slice(&4u16.to_ne_bytes());
+            state.header[14..16].copy_from_slice(&2u16.to_ne_bytes());
+            state.filled=32;
+        }
+        assert!(gate.authorize().unwrap());
+        {
+            let state=gate.0.lock().unwrap();
+            assert_eq!(state.raw.as_ref().unwrap().bytes(),64);
+            assert_eq!(state.parsed.as_ref().unwrap().bytes(),32);
+        }
+        let parsed=gate.finish().unwrap().unwrap();
+        assert_eq!(parsed.grant().unwrap().live_bytes().unwrap(),32);
+        assert!(!image.is_retired().unwrap());
+        assert!(image.claim(CaptureOwner::SourcePixels,64).is_ok());
+        drop(parsed);
+        assert!(gate.0.lock().unwrap().failure.is_none());
+    }
+}

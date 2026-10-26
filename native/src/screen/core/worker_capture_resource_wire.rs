@@ -18,6 +18,7 @@ impl ImportNeedWire {
 #[serde(tag="kind",rename_all="snake_case")]
 pub(crate) enum GrantRequest {
     FramePlan{request:u64,plan:PlanWire},
+    SupplementPlan{request:u64,image:u64,plan:PlanWire},
     PreparedImport{request:u64,need:ImportNeedWire},
     RegisterPrepared{request:u64,source:String,parent:Option<String>,selection:Option<SourceId>},
     OwnPrepared{request:u64,source:String,parent:Option<String>,selection:Option<SourceId>},
@@ -29,7 +30,7 @@ pub(crate) enum GrantRequest {
 #[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(tag="kind",content="value",rename_all="snake_case")]
 pub(crate) enum GrantValue {
-    Frame(CreditWire), Import(CreditWire), Registered, Connection(u64),
+    Frame(CreditWire), Supplement(CreditWire), Import(CreditWire), Registered, Connection(u64),
     PreparedOwner {source:String, owner:u64},
 }
 #[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]

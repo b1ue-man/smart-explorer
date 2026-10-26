@@ -110,4 +110,10 @@ fn decode_records(payload:&[u8],grant:&CaptureGrant,contract:Option<FrameContrac
 
 #[path = "capture_transport_wire.rs"]
 mod sending;
-pub(crate) use sending::{picture_grant, send_owned};
+pub(crate) use sending::{picture_grant, prepare_owned, send_prepared};
+#[cfg(test)]
+pub(crate) use sending::send_owned;
+
+#[cfg(test)]
+#[path = "batches_capture_integration_fix_task_tests.rs"]
+mod integration_fix_tests;

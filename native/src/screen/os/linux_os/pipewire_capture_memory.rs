@@ -137,13 +137,23 @@ impl CaptureMemory {
     pub(super) fn frame_work(&self, seen: &mut u64) -> io::Result<Option<(Demand, CaptureGrant)>> {
         let mut inner = self.inner.lock().map_err(|_| io::Error::other("pipewire admission poisoned"))?;
         if inner.stopped || !inner.active || *seen == inner.revision { return Ok(None); }
+        let previous_seen = *seen;
         *seen = inner.revision;
         let Some(demand) = Self::demand(&inner) else { return Ok(None) };
         if let Some(grant) = inner.activation.take() { return Ok(Some((demand, grant))); }
         let output = inner.output.clone().ok_or_else(|| io::Error::other("pipewire output plan missing"))?;
         drop(inner);
         let plan = self.plan_for(&demand, &output)?;
-        self.authority().approve(plan).map(|grant| Some((demand, grant)))
+        match self.authority().approve(plan) {
+            Ok(grant) => Ok(Some((demand, grant))),
+            // Old pictures/transports retain their real credit until their
+            // final owner ends. Retry this same demand after the normal wait.
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                *seen = previous_seen;
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
     }
     pub(super) fn stopped(&self) -> bool {
         self.inner.lock().unwrap_or_else(PoisonError::into_inner).stopped
@@ -206,3 +216,50 @@ pub(super) use super::frame_copy::convert_rows_admitted;
 #[cfg(test)]
 #[path = "batches_capture_pipewire_task_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod turnover_tests {
+    use super::*;
+    use crate::screen::core::{capture_admission::CaptureAuthority,capture_image::CaptureImageBuilder,
+        capture_test_support,host_codec_adapters::{HostCodecPlan,HostContract},frame_budget::FrameLimits};
+    use std::sync::atomic::{AtomicBool,Ordering};
+    struct RetryAuthority {parent:Arc<SessionAdmission>,block:Arc<AtomicBool>}
+    impl CaptureAuthority for RetryAuthority {
+        fn approve(&self,plan:CapturePlan)->io::Result<CaptureGrant> {
+            if self.block.swap(false,Ordering::SeqCst) {
+                return Err(io::Error::new(io::ErrorKind::WouldBlock,"old reply still owns its credit"));
+            }
+            self.parent.authority().approve(plan)
+        }
+    }
+    #[test]
+    fn batches_task_capture_linux_pipewire_retries_the_same_format_after_live_credit_pressure() {
+        let parent=capture_test_support::session(None);
+        let block=Arc::new(AtomicBool::new(false));
+        let delegated=Arc::new(SessionAdmission::from_verified_parent(parent.session(),parent.working_bytes(),None,
+            Arc::new(RetryAuthority {parent:parent.clone(),block:block.clone()}),parent.clone()).unwrap());
+        let source=SourceKey::new(parent.session(),"pipewire-retry").unwrap();
+        let memory=CaptureMemory::new(source,delegated);
+        let size=FrameSize::new(4,3);
+        memory.format(Some((VideoFormat::Bgra,size))).unwrap();
+        let output=HostOutputPlan::new(HostContract::Legacy,size,HostCodecPlan::Tiles).unwrap();
+        let old=memory.authority().approve(memory.capture_plan(&output).unwrap().unwrap()).unwrap();
+        memory.activate(old.clone()).unwrap();
+        let image=CaptureImageBuilder::new(size,FrameLimits::RESOURCE,&old,CaptureOwner::SourcePixels).unwrap().freeze();
+        memory.format(Some((VideoFormat::Bgra,FrameSize::new(8,3)))).unwrap();
+        assert!(old.is_retired().unwrap());
+        assert_eq!(old.live_bytes().unwrap(),48);
+        block.store(true,Ordering::SeqCst);
+        let mut seen=0;
+        assert!(memory.frame_work(&mut seen).unwrap().is_none());
+        assert_eq!(seen,0,"retryable pressure must not consume the new format revision");
+        let (demand,grant)=memory.frame_work(&mut seen).unwrap().unwrap();
+        assert_eq!(demand.generation,memory.generation());
+        assert_eq!(demand.size,FrameSize::new(8,3));
+        assert!(memory.installed(&demand,grant));
+        assert!(memory.frame_work(&mut seen).unwrap().is_none());
+        drop(image);
+        assert_eq!(old.live_bytes().unwrap(),0);
+        memory.stop();
+    }
+}

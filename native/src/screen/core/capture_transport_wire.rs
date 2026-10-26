@@ -8,7 +8,16 @@ pub(crate) fn picture_grant(reply:&WorkerReply)->io::Result<Option<CaptureGrant>
         _=>Ok(None),
     }
 }
+#[cfg(test)]
 pub(crate) fn send_owned(writer:&mut impl Write,reply:&WorkerReply,id:u64,grant:&CaptureGrant)->io::Result<()> {
+    let out=prepare_owned(reply,id,grant)?
+        .ok_or_else(||io::Error::new(io::ErrorKind::Interrupted,"worker picture retired before transport preparation"))?;
+    send_prepared(writer,&out)
+}
+
+/// Acquire and serialize before taking a shared output lock. The caller must
+/// retain this owner until after that lock is released, including write errors.
+pub(crate) fn prepare_owned(reply:&WorkerReply,id:u64,grant:&CaptureGrant)->io::Result<Option<AdmittedBytes>> {
     let WorkerReply::Reference{generation,regions,limits,family_layout_revision,reply}=reply else {
         return Err(invalid("owned worker picture lacks reference metadata"));
     };
@@ -23,7 +32,8 @@ pub(crate) fn send_owned(writer:&mut impl Write,reply:&WorkerReply,id:u64,grant:
         _=>return Err(invalid("owned worker picture has no pixel or record owner")),
     };
     let capacity=length.and_then(|n|n.checked_add(58)).ok_or_else(||invalid("owned worker payload overflow"))?;
-    let mut out=AdmittedBytes::buffer(grant,CaptureOwner::Transport,capacity as u64)?;
+    let Some(slice)=grant.claim_if_active(CaptureOwner::Transport,capacity as u64)? else {return Ok(None);};
+    let mut out=AdmittedBytes::buffer_from_slice(slice)?;
     out.extend_from_slice(&id.to_be_bytes())?;
     out.extend_from_slice(&grant.generation().value().to_be_bytes())?;
     out.extend_from_slice(&generation.to_be_bytes())?;
@@ -49,6 +59,9 @@ pub(crate) fn send_owned(writer:&mut impl Write,reply:&WorkerReply,id:u64,grant:
         }
         _=>return Err(invalid("worker picture changed during serialization")),
     }
+    Ok(Some(out))
+}
+pub(crate) fn send_prepared(writer:&mut impl Write,out:&AdmittedBytes)->io::Result<()> {
     worker_wire::write_message(writer,OWNED_REFERENCE,out.as_slice())
 }
 fn append_size(out:&mut AdmittedBytes,size:FrameSize)->io::Result<()> {

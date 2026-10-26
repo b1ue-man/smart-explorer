@@ -47,6 +47,11 @@ impl PreparedSourceOwnerId {
 }
 pub(crate) trait CaptureAuthority: Send + Sync {
     fn approve(&self, plan: CapturePlan) -> io::Result<CaptureGrant>;
+    /// Additional cursor ownership, never a replacement image/output plan.
+    fn approve_supplement(&self, image: &CaptureGrant, plan: CapturePlan) -> io::Result<CaptureGrant> {
+        image.check_supplement(&plan)?;
+        self.approve(plan)
+    }
     fn register_prepared_source(&self,_source:SourceKey)->io::Result<()> {
         Err(io::Error::new(io::ErrorKind::Unsupported,"authority has no prepared import scope"))
     }

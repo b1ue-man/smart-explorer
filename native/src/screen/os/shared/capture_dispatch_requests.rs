@@ -70,6 +70,16 @@ impl CaptureAuthority for RemoteAuthority {
         let value=self.request(plan.source(),false,|request|GrantRequest::FramePlan{request,plan:PlanWire::new(&plan)})?;
         match value {GrantValue::Frame(credit)=>self.import(plan,credit),value=>{self.release_value(value);Err(io::Error::other("Parent returned another credit class"))}}
     }
+    fn approve_supplement(&self,image:&CaptureGrant,plan:CapturePlan)->io::Result<CaptureGrant> {
+        image.check_supplement(&plan)?;
+        let image=self.id_for(image)?;
+        let value=self.request(plan.source(),false,|request|GrantRequest::SupplementPlan {
+            request,image,plan:PlanWire::new(&plan)})?;
+        match value {
+            GrantValue::Supplement(credit)=>self.import(plan,credit),
+            value=>{self.release_value(value);Err(io::Error::other("Parent returned another supplement credit class"))}
+        }
+    }
     fn register_prepared_source(&self, source: SourceKey) -> io::Result<()> {
         let value = self.prepare_owner_request(&source,false)?;
         if !matches!(value,GrantValue::Registered) {
