@@ -7,7 +7,8 @@ mod platform;
 #[path = "os/shared/publication_proof.rs"]
 mod publication_proof;
 pub(crate) use publication_proof::{
-    confirm_transfer_publication, confirm_transfer_publication_handle,
+    confirm_acknowledged_transfer_publication, confirm_transfer_publication,
+    confirm_transfer_publication_handle,
 };
 #[cfg(windows)]
 #[path = "os/windows.rs"]

@@ -54,6 +54,13 @@ pub(super) fn confirm_publication_namespace(
     parent.file().sync_all()
 }
 
+pub(super) fn confirm_live_publication_namespace(
+    parent: &crate::local_access::ConfinedDirectory,
+    _target: &Path,
+) -> io::Result<()> {
+    confirm_publication_namespace(parent)
+}
+
 pub(super) fn hard_link(source: &Path, target: &Path) -> io::Result<()> {
     std::fs::hard_link(source, target)
 }

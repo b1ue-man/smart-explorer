@@ -252,7 +252,18 @@ pub(in crate::transfer::engine) fn verify_saved(
                 if !view.target.is_local() {
                     return Err(failure("Moveziel ist nicht lokal"));
                 }
-                crate::copy::confirm_transfer_publication(
+                // Only the durable positive receipt carries the successful
+                // concrete platform operation across a restart. An authorized
+                // but unacknowledged crash still needs a fresh parent proof.
+                let confirm = if receipt.confirmed
+                    && receipt.acknowledged
+                    && receipt.publication_authorized
+                {
+                    crate::copy::confirm_acknowledged_transfer_publication
+                } else {
+                    crate::copy::confirm_transfer_publication
+                };
+                confirm(
                     &crate::transfer::walk_listers::native(&proof.path),
                     proof
                         .object

@@ -43,6 +43,13 @@ pub(super) fn confirm_publication_namespace(
     parent.confirm_publication_namespace()
 }
 
+pub(super) fn confirm_live_publication_namespace(
+    _parent: &crate::local_access::ConfinedDirectory,
+    target: &Path,
+) -> io::Result<()> {
+    sync_parent(target)
+}
+
 pub(super) fn hard_link(source: &Path, target: &Path) -> io::Result<()> {
     std::fs::hard_link(
         crate::local_access::normalize_scan_root(source),
@@ -460,8 +467,9 @@ fn open_staged(stage: &Path) -> io::Result<(File, u64)> {
 }
 
 pub(super) fn sync_parent(_path: &Path) -> io::Result<()> {
-    // MOVEFILE_WRITE_THROUGH is used by replacement commits. Opening a
-    // directory for FlushFileBuffers requires extra Win32 privileges and is
-    // not needed for the no-replace MoveFile path.
+    // Finish an already successful MOVEFILE_WRITE_THROUGH operation. Both
+    // no-replace moves and replacement commits use it, including on FAT/exFAT.
+    // This is not confirmation of an arbitrary parent or a lost move reply;
+    // those callers use confirm_publication_namespace on the held directory.
     Ok(())
 }
