@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use crate::mount::{MountConfig, MountId, MountSnapshot};
 
+use super::drive_modules::ipc_protocol_drives::DriveIpcRequest;
 use super::ipc_protocol::{
     read_response, set_stream_timeout, write_request, IpcRequest, IpcResponse,
 };
@@ -50,7 +51,7 @@ pub fn save_remove_mount(
     id: MountId,
     destination: PathBuf,
 ) -> Result<crate::mount::InactiveMountRecovery, String> {
-    let req = super::ipc_protocol::DriveIpcRequest::RecoverySaveRemove { id, destination };
+    let req = DriveIpcRequest::RecoverySaveRemove { id, destination };
     match recovery_request(req)? {
         IpcResponse::MountRecovery { recovery } => Ok(recovery),
         _ => Err("Unerwartete Recovery-IPC-Antwort".into()),
@@ -58,7 +59,7 @@ pub fn save_remove_mount(
 }
 
 pub fn list_mount_recoveries() -> Result<Vec<crate::mount::InactiveMountRecovery>, String> {
-    match recovery_request(super::ipc_protocol::DriveIpcRequest::RecoveryList)? {
+    match recovery_request(DriveIpcRequest::RecoveryList)? {
         IpcResponse::MountRecoveries { recoveries } => Ok(recoveries),
         _ => Err("Unerwartete Recoverybestands-IPC-Antwort".into()),
     }
@@ -67,20 +68,20 @@ pub fn list_mount_recoveries() -> Result<Vec<crate::mount::InactiveMountRecovery
 pub fn import_mount_recovery(
     package: PathBuf,
 ) -> Result<crate::mount::InactiveMountRecovery, String> {
-    match recovery_request(super::ipc_protocol::DriveIpcRequest::RecoveryImport { package })? {
+    match recovery_request(DriveIpcRequest::RecoveryImport { package })? {
         IpcResponse::MountRecovery { recovery } => Ok(recovery),
         _ => Err("Unerwartete Recoveryimport-IPC-Antwort".into()),
     }
 }
 
 pub fn reactivate_mount_recovery(id: String) -> Result<MountSnapshot, String> {
-    match recovery_request(super::ipc_protocol::DriveIpcRequest::RecoveryReactivate { id })? {
+    match recovery_request(DriveIpcRequest::RecoveryReactivate { id })? {
         IpcResponse::Mount { mount } => Ok(mount),
         _ => Err("Unerwartete Recoveryreaktivierungs-IPC-Antwort".into()),
     }
 }
 
-fn recovery_request(req: super::ipc_protocol::DriveIpcRequest) -> Result<IpcResponse, String> {
+fn recovery_request(req: DriveIpcRequest) -> Result<IpcResponse, String> {
     super::ipc_client::ensure_worker_ready()?;
     let (mut stream, token) = authenticated_stream(CONTROL_TIMEOUT)?;
     // A complete local snapshot/import can legitimately exceed the host's

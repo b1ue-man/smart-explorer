@@ -15,9 +15,10 @@ use crate::mount::{
 };
 use crate::vfs::{Backend, BackendHandle, Scheme, VfsMeta, VfsResult};
 
+use super::super::drive_modules::ipc_protocol_mount_host::MountHostRequest;
 use super::super::ipc_protocol::{
     read_response, set_stream_timeout, write_request, IpcRequest, IpcResponse,
-    MountBackendCapabilities, MountHostRequest, VaultIpcReply, VaultIpcRequest,
+    MountBackendCapabilities, VaultIpcReply, VaultIpcRequest,
 };
 use super::super::mount_manager::lock_participant::HostLockWatch;
 use super::super::{mount_process, mount_proxy};

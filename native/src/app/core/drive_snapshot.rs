@@ -326,7 +326,7 @@ impl App {
                 return;
             }
             Err(_) => {
-                self.push_app_error("Laufwerksindex", "Indexworker wurde beendet".into());
+                self.push_app_error("Laufwerksindex", "Indexworker wurde beendet");
                 return;
             }
         };

@@ -261,8 +261,6 @@ mod family_viewer_events;
 mod family_viewer_session;
 #[path = "core/login_viewer.rs"]
 pub(crate) mod login_viewer;
-#[path = "core/mount_recovery_ui.rs"]
-mod mount_recovery_ui;
 #[path = "core/share.rs"]
 mod share;
 #[path = "core/share_app_grant_ui.rs"]
