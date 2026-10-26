@@ -507,3 +507,8 @@ Slices. Beim X11-Anschluss ist das der belegte Parser. Die Kapazitätskontrolle
 nach der Closure ersetzt keinen vorherigen Library-Allokationsbeleg. Ein
 kleineres Resultat darf später nicht über seine tatsächliche Vec-Kapazität
 wachsen. Eine zusätzliche Vollbildkopie ist für diesen Besitzerübergang unnötig.
+
+
+### Ergänzung des produktiven Loginbildpfads
+
+Der [Loginbildplan](login-bildspeicher.md) konkretisiert C10 für den Empfang und die Darstellung in L1–L8. Er verwendet denselben lokalen Pool für tatsächliche Produktkopien und begrenzt Rollen, ohne eine zweite W512-Sitzungszusage einzuführen. Die dortigen Empfangs-/Rendererbesitzer ergänzen die hier geplante Broker-/Helpergruppe; sie ersetzen deren Capturezulassung nicht.

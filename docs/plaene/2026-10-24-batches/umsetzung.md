@@ -910,3 +910,21 @@ künftig mit `contains`; README und Releaseanleitung beschreiben dieselbe
 Semantik. Die geplante Reihenfolge bleibt Gesamtreview, genau eine gezielte
 Remote-Suite und ein terminaler Remote-Release. Während des unbeabsichtigten Laufs wurde kein zusätzlicher
 Umsetzungsagent gestartet.
+
+
+### R9: Android-/Codecanschluss und finaler Loginbildplan
+
+Der vollständige [Loginbildplan](login-bildspeicher.md) ergänzt C10 um L1–L8: tatsächliche lokale Claims, PNG-Zeilendecode, Write-Abschluss, Viewerplätze sowie Desktop-/Android-Endbesitz. Die temporäre Planübergabe wurde vollständig übernommen und entfernt. Die Umsetzung der lokalen Claims folgt nach Übergabe des Capturekerns, damit dessen Dateien einen Autor behalten.
+
+C9 (`capture_android`) und die native Codecgrenze C2 (`capture_codecs`) besitzen getrennte Schreibflächen. Jeweils 21 Kriterienpunkte (4/2/4/3/4/4), Grad 9 und Profil coding liefern über den Codex-Selektor `gpt-6.1-sol`/`xhigh`. Diese Parameter wurden beim Start gesetzt; Antwortmodellmetadaten und gemessener Creditsverbrauch sind nicht zugänglich. Android besitzt Projection, Accessibility, Kotlin-/JNI-Puffer und Rust-Bridge; der Codecauftrag besitzt MF und OpenH264. Gemeinsame Modulregistrierungen verbleiben bei Main.
+
+
+### R9: konkrete Endbesitzkorrektur und C7-Nachtrag
+
+Die Integration fand im Windows-WGC-Fehlerweg einen vorzeitigen Drop: verbrauchendes Close gab den Native-Slice auch bei fehlgeschlagenem Session-/Pool-Close frei. Main hält jetzt Partial-Create und Closefehler in einem eigenen CaptureResources-Besitzer. Erfolg oder bereits geschlossenes Objekt beendet ihn; ansonsten behält ein Cleanupbesitzer Interfaces und Slice. Selbst ein gescheiterter Cleanupthreadstart erhält die Zusage bis zum vom Parent bestätigten Prozessende. Das ist ein Quellfix ohne Windows-Laufzeitbeleg. Microsofts [Framepool-Close](https://learn.microsoft.com/en-us/uwp/api/windows.graphics.capture.direct3d11captureframepool.close) und [Session-Close](https://learn.microsoft.com/en-us/uwp/api/windows.graphics.capture.graphicscapturesession.close) wurden am 2026-10-26 geprüft; ein Fehler wird nicht als erfolgreicher Ressourcenabschluss ausgegeben.
+
+Linux-X11 und die vorbereitenden PipeWireanschlüsse sind zurückgegeben. C7 bleibt offen: INACTIVE kann bereits die Linkvorbereitung verhindern; Formatcallback und späteres update_params beweisen keinen asynchronen Allokationshalt. Der bestehende Astra/max-Planer erarbeitet einen quellengebundenen Nachtrag. Die erneute planning-Auswahl ergibt 21 Punkte/Grad 9 und keinen Katalogkandidaten; die explizite Nutzervorgabe bleibt maßgeblich. Kein dauerhaft ausstehender Waylandpfad gilt als fertig.
+
+C10 besitzt einen getrennten Autor `login_capture` für Broker, Helper, privaten Kanal und OS-Prozessabschluss. L1 besitzt `image_admission` für exakte lokale Bildclaims. Beide coding-Auswahlen: 21 Punkte/Grad 9, `gpt-6.1-sol`/`xhigh`; Startparameter gesetzt, tatsächliche Antwortmodellmetadaten nicht zugänglich. Der Coreautor hat die vier Dateien frame_memory.rs, capture_grant.rs, capture_bytes.rs und capture_image.rs ausdrücklich an L1 abgegeben. Host-/Worker-/Planänderungen bleiben bei ihm.
+
+Der Guardfix `66efeee7` ist auf main gepusht. GitHub-Lauf [40276492134](https://github.com/b1ue-man/smart-explorer/actions/runs/40276492134) ist abgeschlossen mit `skipped`; er hat keine Abnahmesuite ausgeführt.
