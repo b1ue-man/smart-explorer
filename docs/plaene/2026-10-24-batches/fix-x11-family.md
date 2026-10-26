@@ -592,3 +592,298 @@ zusätzlicher Scopebedarf. Diese eigene Fortsetzung wird mit Strukturplan,
 Kartenfortschreibung, Umsetzung und anschließender eigener statischer
 Anti-Regressionsreview übergeben; ein erfolgreicher Remotelauf wird nicht
 behauptet.
+
+## Fortsetzung: C12/C16/C17 aus Remote-Lauf 40354605251
+
+### A: Ergebnis und Grenzen
+
+Grundlage ist `d95dc404e834edfe7be0e1c96be162b36865efa9` im
+isolierten Worktree; vollständige Evidenz:
+`/tmp/smartexplorer-rv1-40354605251/x11-family-errors.json`. Dieser Remote-Lauf
+ist beendet. Die aktuelle Evidenz enthält C12/C16/C17 aus Linux-
+Compilerartefakten. Die Fehler belegen keinen
+Funktionspass. Der bisherige G1/G2-Fixzyklus wird vom selben Autor fortgesetzt.
+
+Beauftragtes Ergebnis: Familienfenster verwenden weiterhin dieselben echten
+Viewer-, Session- und Renderertypen; X11 bleibt bei
+`RustConnection<AdmissionStream>` mit vollständigem bestehenden Header-/
+Raw-/Parser-Speichergate und der öffentlichen API von x11rb 0.13.2.
+Keine Zweittypen, keine Rendererattrappe, keine Umgehung der Speicherzulassung,
+kein Wechsel zum Defaultstream und keine gestrichene Testaussage.
+
+Die endgültige Scope-JSON ersetzt die vorherige Strukturfläche. Schreibbar
+sind ausschließlich die drei genannten X11-Admission-/Capture-/Cursorquellen
+und dieser Bericht. C02–C06 samt Modulregistrierung, Planung und Eigenreview
+gehören laut Mains anschließender Präzisierung vollständig zum Captureautor.
+Er registriert Login- und Familienmodule gemeinsam unter `app::screen_modules`
+und erhält die Aufrufernamen durch private Familienaliases an der Appwurzel.
+Die nachfolgende Familienanalyse ist übergebener Bestandsinput, keine fertige
+Review seiner Umsetzung. Eigene Familienimporte, Getter oder
+Sichtbarkeitsöffnungen sind ausgeschlossen. Keine lokalen Builds, Compiler, Tests,
+Formatter, Server, Installationen, Gitmutationen, Graphupdates oder Unteragenten.
+
+Erstplan: vollständige Compilertexte lesen, ihre tatsächlichen Typdefinitionen
+und Aufrufer verfolgen, die öffentliche gepinnte Stream-API prüfen,
+Erhaltungsplan je Grenze festhalten, schmalen Fix umsetzen und danach eigene
+Anti-Regressionsreview liefern. Die Aufrufkanten der drei im Elternmodul
+deklarierten Capture-Unterdateien werden nach Mains konkreter Lesefreigabe
+ergänzt. Kein Nutzerentscheid ist nötig.
+
+Dokumentationskontext vor dieser Ergänzung: gezieltes `git status --short`
+für die eigene Fläche ohne Ausgabe; letzter Commit `d95dc404 fix(transport):
+initialize path policy within its privacy boundary [task candidate]`.
+Architektur-/Oberflächeneinstiege und `rv1-modulplan.md` wurden für die
+bestehende Familien-/Capture-/Renderergrenze geprüft. Der aktuelle Scope
+erteilt keinen erneuten Graphzugriff; Main hat den Graph laut Auftrag geprüft.
+
+### B: Fehlerhafte Funktionen und berührte Kette
+
+C02–C06 wurden vor Mains Neuzuordnung bereits selbst untersucht. Die fünf
+Tabellenzeilen und die ersten fünf Kartenpunkte halten genau diesen an den
+Captureautor übergebenen Befund fest. Die eigene aktuelle Korrektur und
+nachfolgende Review betreffen C12/C16/C17.
+
+| Befund | Tatsächliche Grenze und Endnutzerfolge |
+|---|---|
+| C02 | `FamilyViewerApp` importiert `ViewerPrefs` über den nicht vorhandenen App-Geschwisterpfad `super::screen_prefs`; die echte Definition liegt in `app::screen_modules::screen_prefs`. Das Familienfenster kann so nicht kompiliert werden. |
+| C03 | `FamilyViewerApp::{new,open,stop,update}` importiert `Backend` und `ViewerSession` über denselben falschen Elternpfad; der echte Session-/Decoder-/Rendererbesitz muss erhalten bleiben. |
+| C04 | `FamilyViewerApp::{new,update}` erreicht `ViewWidget` und `ViewParams` nicht über `super::screen_view_widget`; ein Ersatzwidget würde PRESENTED-/Layout-/Inputgrenzen umgehen und ist ausgeschlossen. |
+| C05 | `family_viewer_events::receive` erreicht den echten `Shared`-Typ nicht. Außerdem muss dessen tatsächliches `resume.ready()`-Gate app-intern erreichbar bleiben, ohne ein zweites Shared oder einen ungeprüften Boolzustand anzulegen. |
+| C06 | `family_viewer_session::{input,operate,disarm}` erreicht den echten `ViewerSession`-Typ nicht. Die vorhandene Inputfreigabe, Sessionwarteschlange und korrelierte Familienoperation dürfen nicht ersetzt werden. |
+| C12 | `x11_admission_stream.rs` importiert `Stream`/`PollMode` über das private Untermodul `rust_connection::stream`, obwohl die gepinnte Bibliothek dieselben Typen an `rust_connection` öffentlich reexportiert. |
+| C16/C17 | `X11Source.conn` und `x11_cursor::fetch` verwenden korrekt den Alias `CaptureConnection = RustConnection<AdmissionStream>`, können dessen Traitbindung wegen C12 aber nicht auflösen. Der Alias und die AdmissionStream-Implementierung bleiben bestehen. |
+
+Die vollständige direkte und indirekte Karte dieser berührten Grenze ist:
+
+1. Im untersuchten Fehlerstand lädt die Appwurzel `screen_modules` einmal
+   und reexportiert dessen freigegebene Inhalte. Dort sind die bestehenden
+   Prefs-, Session-, Widget-, Geräte-, Render-, Sichtbarkeits-, Statistik- und
+   Tastentypen definiert. Die damals direkt unter `app` liegenden Familienmodule
+   müssen dieselben Definitionen benutzen. Mains bestätigter Modulansatz
+   ordnet sie beim Captureautor demselben `screen_modules`-Elternmodul zu.
+2. `family_viewer::run → FamilyViewerApp::{new,open,update}` verwendet
+   `Backend`, `ViewerSession::open`, `ViewWidget::new/show/release_input`,
+   Geräteprofile, `full_request`, GPU-YUV-Eignung, Sichtbarkeitsfakten,
+   Statistik und lokale Tasten. WGPU-/Glow-Auswahl, Titel/Icon, Menü,
+   reguläres Close, Resize und Disconnect bleiben im vorhandenen Appobjekt.
+3. Der echte `ViewerSession` besitzt `Shared`, Outbox und Decoderthread;
+   `send(Input)` routet bei Familiensitzungen zurück an
+   `family_viewer_session::input`. Dieser ruft denselben gemeinsamen
+   `FamilyViewer::input` auf und sendet ausschließlich daraus entstandene
+   Familienframes. `input_ready` prüft weiterhin Presentationgültigkeit und
+   Resume-Gate. Es entsteht kein roher Inputfallback.
+4. `family_viewer_events::receive` verarbeitet Snapshot, korrelierte
+   Operationsantwort und Inputablehnung auf demselben `Shared`. Layoutwechsel
+   invalidiert Presentation; zurückgehaltene Eingaben verlassen das Gate nur,
+   solange dessen wirkliche Bereitschaft offen ist. Iconinhalte bleiben an
+   erwartete Iconreferenz/Hash und echte Sessionmetadaten gebunden.
+5. Der echte `ViewWidget` nimmt Sessionbilder, verwendet die bestehende
+   Presentationidentität, tatsächlichen CPU-/YUV-/GPU-Renderer und meldet
+   Sichtbarkeit. Seine Maus-/Touch-/Tasteneingaben behalten die bisherige
+   Geometrie- und Steuersperre. Die Familien-UI hält dieselbe WindowVisibility-
+   TypeId im egui-Temporärspeicher; ein gleich aussehender Zweittyp wäre falsch.
+6. `X11Source::prepare → AdmissionStream::connect` führt die unveränderte
+   DISPLAY-Auflösung/Authentifizierung durch, übernimmt Setup und eröffnet
+   die äußere `RustConnection<AdmissionStream>` auf demselben Transport.
+   Der Transport sendet nach Setup keine eigenen Requests; die äußere
+   Verbindung besitzt die bekannte Sequenzfolge.
+7. `AdmissionStream::poll → Gate::authorize` lässt den 32-Byte-Replyheader erst
+   nach passender Raw-/Parserzulassung an x11rb weiter. `read` wartet nicht auf
+   Parent-IPC; es hält Header und Body bis zur Gatefreigabe zurück. Fehler,
+   FD-Reihenfolge, Teilreads, Raw-/Parser-Slices und `retired`-Besitz bleiben in
+   denselben vorhandenen Objekten. `write` und `write_vectored` delegieren
+   unverändert an denselben authentifizierten Transport.
+8. `X11Source` besitzt weiter `CaptureConnection`, `Gate`, Admission, SourceKey,
+   Generation und Grant. Capture, Größenwechsel, SHM-/GetImage-Pfad und
+   Wiederzulassung bleiben davon abhängig. `x11_cursor::fetch` verwendet
+   dieselbe Verbindung, erwartet die konkrete Replysequenz, armiert
+   `Gate::cursor`, liest den Reply und hält den zugelassenen Parser-Slice bis
+   zum Ende des zugehörigen Cursorbildes.
+
+Die vorhandene Root-/Host-/Fokus-/Geometrie-/Remote-Framekette aus den
+vorherigen Abschnitten bleibt ihr anschließender Verbraucher. Es wird weder
+ein anderer Worker noch eine andere Familienidentität erzeugt.
+
+### C/D: Konkreter Erhaltungsplan und Quellen
+
+Gewählt für den eigenen Fix: Änderung allein des privaten x11rb-Importpfads
+zum öffentlichen Reexport. Der zunächst betrachtete Zugriff über schmale
+Screen-Exporte oder Resume-Getter ist durch Mains gemeinsame Modulregistrierung
+beim Captureautor ersetzt und wird hier nicht umgesetzt. Verworfen:
+duplizierte `Backend`-/`Shared`-/Widgettypen, neue Sessionobjekte,
+Defaultstream statt AdmissionStream, höhere Speicherbudgets, entfernte
+Assertions oder verbreiterte Plattformrechte.
+
+Herstellerquelle geprüft am 2026-10-26:
+[x11rb 0.13.2, rust_connection/mod.rs](https://raw.githubusercontent.com/psychon/x11rb/v0.13.2/x11rb/src/rust_connection/mod.rs)
+reexportiert `PollMode` und `Stream` öffentlich. Dieselbe Quelle belegt
+`RustConnection<S: Stream>`, `for_connected_stream(stream, setup)` und
+`stream() -> &S`. Der [versionierte Streamvertrag](https://raw.githubusercontent.com/psychon/x11rb/v0.13.2/x11rb/src/rust_connection/stream.rs)
+belegt `poll`, nichtblockierendes `read`/`write`, `write_vectored`, FD-Reihenfolge
+und `WouldBlock`-/Interruptverhalten. Die vorhandene Implementierung verwendet
+genau diese Signaturen. `Cargo.lock:9602` belegt Version 0.13.2. Es ist keine
+Abhängigkeitsänderung nötig.
+
+1. **Kanonische Typanschlüsse, übergeben:** Main hat die vollständig
+   benannten Screenzugänge und Rückkanten erhalten. C02–C06 verbleiben
+   einschließlich Umsetzung und Eigenreview beim Captureautor. Der eigene
+   Bericht behauptet dafür keinen Abschluss und verändert keine Familienquelle.
+2. **Öffentliche X11-API:** Import auf
+   `x11rb::rust_connection::{PollMode, RustConnection, Stream}` ändern.
+   Erwartung: dieselbe bestehende `impl Stream for AdmissionStream` erfüllt
+   die generische CaptureConnection-Bindung; sämtliche Gate-/Leser-/Writer-
+   und Fixturekörper bleiben textgleich. `x11_capture.rs` und `x11_cursor.rs`
+   erhalten nur dann einen Edit, wenn ihr konkreter Verbraucheranschluss
+   eine notwendige weitere API-Korrektur belegt.
+3. **Eigene Anti-Regressionsreview:** vollständigen Diff gegen `d95dc404`
+   entlang der Karte prüfen; Gatezustand, Speicherbesitz, FD-/Sequenzbezug,
+   sämtliche vorhandenen Fallaussagen erhalten. Für die Familienquelle wird
+   ausschließlich das Ausbleiben eines eigenen Edits bestätigt.
+   Nur statische Text-/Syntaxrückmeldung; funktionaler Nachweis ausschließlich
+   in Mains derselben Remote-Suite. Kein zusätzlicher lokaler Testlauf.
+
+### E: Vollständige X11-Funktionskarte und Umsetzung
+
+Die nachgeforderte Lesefläche wurde von Main um `x11_capture_read.rs`,
+`x11_capture_memory.rs`, `x11_capture_source.rs`, `x11_capture_target.rs`
+und `x11_capture_shm.rs` ergänzt. Alle fünf Dateien wurden vollständig
+gelesen. Der abgegrenzte Reviewgegenstand ist die öffentliche Streambindung
+und ihr vollständiger bestehender Capture-/Cursor-/SHM-Verbraucherweg:
+
+| Funktion beziehungsweise Typgrenze | Direkter Anschluss und indirekter Erhaltungsvertrag |
+|---|---|
+| Öffentlicher x11rb-Import; `CaptureConnection` | `Stream` und `PollMode` kommen aus `rust_connection`; `CaptureConnection` bleibt genau `RustConnection<AdmissionStream>`. C12 betrifft den Import, C16 das Feld `X11Source.conn`, C17 den Parameter `x11_cursor::fetch`. |
+| `State::default`, `invalid`, `blocked` | Unveränderte Initialisierung von Header, Teilread, Freigabe, erwarteter Sequenz, Raw-/Parserbesitz, zurückgehaltenen Slices und Fehler; vorhandene `InvalidData`-/`WouldBlock`-Semantik. |
+| `AdmissionStream::{connect,gate}` | Die ursprüngliche Verbindung erledigt DISPLAY, Authentifizierung und Setup; `for_connected_stream` umschließt denselben Transport. SHM-Abschluss erreicht über `conn.stream().gate()` dasselbe Gate. |
+| `AdmissionStream::{poll,read,write,write_vectored}` | `poll` autorisiert den zurückgehaltenen Header vor der Parserfreigabe; `read` liest niemals Parent-IPC und liefert Header/Body nur in begrenzten Teilen; beide Schreibmethoden behalten Transport und FD-Vektoren. Der bestehende endliche Poll und Interruptretry bleiben erhalten. |
+| `Gate::{image,cursor,authorize}` | GetImage bindet die erwartete Sequenz an einen bereits beanspruchten Raw-Slice. XFixes bindet die erwartete Sequenz an den Bildgrant; Headergeometrie bestimmt die ergänzende Raw-/Parserzulassung vor Parserwachstum. Falsche Bildlänge, ungültige Cursorgröße und unarmierte Replies über 64 KiB werden abgewiesen; kleine Metadatenreplies behalten ihren bestehenden Weg. |
+| `Gate::{finish,retain}` | `finish` löst Rawbesitz erst nach abgeschlossener Replyverarbeitung und übergibt den Parserslice. Nicht bestätigter nativer Abschluss bleibt in `retired` gebucht, bis die Verbindung zerstört ist. |
+| `X11Source::{open,prepare,prepared_info,activate}` | Der Testeinstieg verwendet denselben Prepare-/Plan-/Activate-Weg. Prepare hält tatsächliche Quelle, Geometrie und Familien-Pixmapanforderung; Activate prüft aktuelle Geometrie, Compositor und Grant gegen den Plan, bevor der Grant gespeichert wird. |
+| `X11Source::{aim,current_area,note_geometry,pass}` | Monitor-ID beziehungsweise X11-Fenster-ID bleibt dieselbe Quelle; leere oder mehrdeutige Geometrie scheitert. Orts-/Größenwechsel invalidiert Bildcache und Eingabereferenz; jeder Monitorpass liest aktuelle RandR-Geometrie. |
+| `X11Source::{is_normal,pass_monitor,pass_window}` | Minimierte/verborgene Fenster bleiben pausiert. Familienfenster verlangen weiterhin ihre eigene Compositorpixmap; ein verlorener Compositor führt weiter zum Fehler. Der bisher ausdrücklich freigegebene Rohfensterpfad behält seinen Root-Crop-Fallback. |
+| `capture_memory::{plan,verify}`; `X11Source::{plan,pixmap_geometry,admit_geometry}` | SourcePixels, Raw-Readback, SHM-/Pixmap-NativeSurface und Encoderanteile bleiben getrennte Eigentümer. Identität und Generation werden geprüft. Geometriewechsel gibt alte Segmente und Bilder frei, invalidiert die Referenz, behandelt Mitgliedsgrants gesondert und fordert den neuen Plan über dieselbe Authority an. |
+| `X11Source::{ensure_segment,read,read_pixmap}` | SHM beansprucht Segment und Zielbild getrennt. GetImage beansprucht geparste Pixel vor der Allokation und armiert den Rawstream vor dem sequenzgeprüften Request. Pixmapbesitz wird vor Servergrab beansprucht, die Geometrie im Grab erneut geprüft und kein Parent-Aufruf im Grab ausgeführt; unsicheres Free behält den Slice im Gate. |
+| `Segment::{create,bytes,release,drop}` | Derselbe `CaptureConnection` übergibt den duplizierten SHM-FD. Attach-/Detachfehler behalten die Zulassung über `gate.retain`; Mapping und lokaler FD behalten ihre vorhandenen Abschlussbesitzer. |
+| `x11_cursor::{enable,fetch,blend}`; `AdmittedCursor` | XFixes bleibt optional. Fetch prüft Fence-/Cookie-Sequenz, armiert dasselbe Gate, übernimmt den zugelassenen Parser-Slice und prüft die tatsächliche Vec-Kapazität. Der Cursor besitzt zuerst seine ARGB-Pixel und danach den Slice; Blend bleibt auf den erfassten Bildausschnitt begrenzt. |
+| `ScreenSource for X11Source::{capture_grant,legacy_input_invalid,reference_generation,inject_input,frame_limits,size,capture}`; `X11Source::drop` | Capture führt Zielpass, zugelassenen Cursor, Freeze, Geometrienachprüfung, Hash-/Pixelvergleich und Keyframecache zusammen. Input verlangt dieselbe Generation, aktuelle tatsächliche Geometrie und ein vorhandenes Bild vor `inject_bound`. Drop löst Segment und Bildcache vor Grantabschluss. |
+| `picture_hash`, `failed`, `lost`, `reply_error`, `refuse`, `shm_usable`, `compositor_running`, `probe` | Hash-/Fehlerklassifikation und Metadatenproben bleiben unverändert. Die reine Serverprobe verwendet weiterhin ihre eigenständige Metadatenverbindung; der bildproduzierende Pfad verwendet weiterhin ausschließlich den Admissionstream. |
+
+Die gerichtete Vorbereitungskette lautet `prepare → AdmissionStream::connect
+→ CaptureConnection → aim → current_area/note_geometry`; der vom Host
+übergebene Grant wird über `activate → current_area/Compositorprüfung
+→ plan/verify` geprüft. Der Bildweg lautet `ScreenSource::capture → pass`:
+Beim Monitor folgen `current_area → admit_geometry → pass_monitor → read`,
+beim Fenster `pass_window → Zustandsprüfung → admit_geometry → read_pixmap`
+beziehungsweise der erlaubte Rohfensterfallback `read`. `read_pixmap` führt
+über `pixmap_geometry → NativeSurface-Slice → Grab/Name/UnGrab → read
+→ Free/gegebenenfalls Gate::retain`.
+Der GetImage-Zweig von `read` lautet `SourcePixels-Zulassung → Fence-Reply
+→ Gate::image → sequenzgeprüftes GetImage → Stream::{write,write_vectored,
+poll,read}/Gate::authorize → Reply → Gate::finish → CaptureImageBuilder`.
+Der SHM-Zweig von `read` lautet `ensure_segment → Segment::create → derselbe
+Stream → shm_get_image → zugelassene SourcePixels → CaptureImageBuilder`;
+Wiederzulassung und Drop führen über `Segment::release → gate.retain` bei
+unsicherem Detach. Der zusätzliche Cursorzweig lautet `capture
+→ x11_cursor::fetch → Fence-Reply → Gate::cursor → derselbe
+Stream/Gate::authorize → Reply → Gate::finish → AdmittedCursor → blend
+→ freeze`.
+Der nachfolgende Eingabezweig bleibt `inject_input → Referenz-/Geometrieprüfung
+→ inject_bound`. Die im ersten Fixteil untersuchte Host-/Familien-/Fokuskette
+bleibt jenseits dieser unveränderten Adaptergrenze bestehen.
+
+Umgesetzt ist ausschließlich:
+`use x11rb::rust_connection::{PollMode, RustConnection, Stream};`.
+Die vorhandene `impl Stream for AdmissionStream` bindet damit den öffentlich
+reexportierten Bibliothekstrait. Weder eine neue Streamimplementierung noch
+ein Dependency-, Budget-, Quell-, Renderer-, Rechte- oder Eingabevertrag ist
+hinzugekommen. `x11_capture.rs` und `x11_cursor.rs` benötigten keinen Edit.
+
+### F: Eigene anschließende Anti-Regressionsreview
+
+Der Autor hat nach der Importänderung den vollständigen eigenen Produktdiff
+gegen `d95dc404` und die acht Quellen der obigen Karte geprüft. Ein statischer
+Bytevergleich bestätigt: `x11_admission_stream.rs` entspricht exakt dem
+Basisinhalt mit genau dem ersetzten Importblock; die sieben Verbraucherdateien
+sind vollständig bytegleich zur Basis. Damit sind nicht nur einzelne
+Funktionsnamen, sondern sämtliche Zustands-, Funktions-, Fehler- und
+Fixturekörper dieses abgegrenzten Wegs erhalten. Vorhandene Fallnamen und
+Testattribute bleiben gleich; kein Test wurde ausgeführt.
+
+Die APIprüfung an der versionierten Herstellerquelle bestätigt die vier
+vorhandenen Traitsignaturen und den öffentlichen Reexport. Aus diesem Befund
+folgt die Korrektur der gemeldeten privaten Importgrenze; ein tatsächlicher
+erfolgreicher Compilerlauf wird daraus nicht abgeleitet. C16/C17 behalten den
+echten AdmissionStream als generischen Besitzer und werden durch dieselbe
+Traitbindung adressiert.
+
+Die eigene Review hat insbesondere diese Erhaltungsfragen geprüft:
+
+- Header-/Bodyfreigabe und Raw-/Parserzulassung bleiben vor dem Parserwachstum;
+  ausschließlich `poll` kann dabei Parent-Zulassung anfordern.
+- Replysequenz, genaue Bildlänge, Cursorgröße und tatsächliche Parserkapazität
+  behalten ihre vorhandenen Prüfungen. Ein Fehler öffnet keine Ersatzverbindung.
+- Grantidentität, Generation, Referenzwechsel, Mitgliedsgrants und gehaltene
+  Raw-/Parser-/SHM-/Pixmap-Slices behalten dieselben Besitzer und Lebensdauern.
+- Familienpixmaps, Compositorverlust, minimierte Fenster, Root-Crop für den
+  bisherigen Rohfensterpfad, SHM/GetImage und Cursorclipping bleiben vorhanden.
+- Der erfasste Quellbereich und die tatsächliche Eingabegeometrie bleiben vor
+  `inject_bound` gebunden. Der Importfix berührt weder FocusConfirmed noch
+  Eigentümerketten, Modalität, Rechte oder Entwaffnung aus dem G1/G2-Fix.
+- Familien-, Session- und Rendererquellen erhielten durch diesen Autor keinen
+  Edit. Der gemeinsame Modulfix ist Gegenstand des Captureautors; dessen
+  Eigenreview wird hier nicht stellvertretend behauptet.
+
+Statischer Diff-/Whitespacecheck ohne Befund. Im geprüften Sourcebestand hat
+die geänderte Datei 363 Zeilen / 13.233 Bytes. Die unveränderten unmittelbaren
+Verbraucher haben: Capture 386 / 13.786, Cursor 120 / 4.479, Read 184 / 6.628,
+Memory 163 / 5.618, Source 112 / 3.878, Target 87 / 3.507 und SHM 94 / 3.155
+(jeweils Zeilen / Bytes). Alle acht liegen unter 500 Zeilen und 50 KiB;
+kein Formatter wurde lokal ausgeführt. Die neue Importzeile ist 63 Zeichen
+lang und benötigt keine künstliche Verdichtung.
+
+### G: Fälle, Dateien und Übergabegrenze
+
+Keine neue Fallregistrierung und keine Änderung am gemeinsamen Manifest.
+Im gelesenen `native/review-task-manifest.json` sind diese bestehenden
+gezielten Admission-/Cursor-/SHM-Fälle registriert:
+
+- `batches_task_capture_linux_x11_cursor_header_precedes_parent_approval`
+- `batches_task_capture_linux_x11_oversized_cursor_is_rejected_before_credit_request`
+- `batches_task_capture_linux_x11_exact_reply_and_immutable_last_owner`
+- `batches_task_capture_linux_x11_malformed_reply_never_opens_parser_gate`
+- `batches_task_capture_linux_x11_shm_and_getimage_count_distinct_native_owners`
+- `batches_task_capture_linux_x11_supplement_grants_raw_and_argb_without_retiring_image`
+
+Der letzte Fall bleibt mit allen Assertions unverändert in der geänderten
+Streamdatei. Die zehn zuvor in diesem Bericht genannten G1/G2-Fallnamen sind
+im aktuellen Manifest ebenfalls vorhanden. Deren Ausführung und Auswertung
+bleiben Main im selben Remote-Suiteeinstieg vorbehalten.
+
+In dieser Fortsetzung gelesen: `AGENTS.md`, `docs/ARCHITEKTUR.md`,
+`docs/oberflaechen/bildschirm.md`, dieser Bericht,
+`docs/plaene/2026-10-24-batches/rv1-modulplan.md`, `native/Cargo.toml`,
+`native/Cargo.lock`, `native/review-task-manifest.json`,
+`native/src/app/mod.rs`, `native/src/app/screen_modules.rs`,
+`native/src/app/core/{family_viewer,family_viewer_events,family_viewer_session,
+screen_prefs,screen_session,screen_target,screen_view_widget}.rs` sowie
+`native/src/screen/os/linux_os/{x11_admission_stream,x11_capture,x11_cursor,
+x11_capture_read,x11_capture_memory,x11_capture_source,x11_capture_target,
+x11_capture_shm}.rs`. Architektur, Oberflächen, Prefs, Widget, Target und
+Manifest wurden auftragsbezogen in den relevanten Abschnitten gelesen;
+die acht X11-Quellen und die drei Familienkonsumenten wurden vollständig gelesen.
+Zusätzliche Auftragsbelege: `/tmp/smartexplorer-final-review-user-contract.txt`,
+`/tmp/smartexplorer-fix-x11-family-scope.json`,
+`/tmp/smartexplorer-rv1-40354605251/x11-family-errors.json` und
+`/root/.codex/AGENTS.md`. Herstellerquellen: die beiden versionierten x11rb-
+Dateien aus C/D, geprüft am 2026-10-26.
+
+Geändert: ausschließlich dieser Bericht und
+`native/src/screen/os/linux_os/x11_admission_stream.rs`. Keine neue Datei.
+Entscheidung: öffentliche gepinnte API statt Admissionumgehung;
+C02–C06 beim gemeinsamen Modulautor belassen. In der aktuellen eigenen
+Schreibfläche bleibt keine belegte ungeklärte Quellabhängigkeit. Noch nicht
+belegt sind die erfolgreiche Remote-Kompilierung, die funktionale Ausführung
+der registrierten Fälle und der terminale Release; diese Schritte besitzt Main.
+Keine lokalen Builds, Compiler, Tests, Formatter, Server, Installationen,
+Gitmutationen, Graphupdates oder Unteragenten. Der eigene statische Fixzyklus
+ist mit dieser Übergabe beendet.

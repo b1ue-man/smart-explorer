@@ -9,10 +9,7 @@ use std::io::{self, IoSlice};
 use std::os::fd::AsRawFd;
 use std::sync::{Arc, Mutex, PoisonError};
 use x11rb::connection::Connection;
-use x11rb::rust_connection::{
-    stream::{PollMode, Stream},
-    RustConnection,
-};
+use x11rb::rust_connection::{PollMode, RustConnection, Stream};
 use x11rb::utils::RawFdContainer;
 
 pub(crate) type CaptureConnection = RustConnection<AdmissionStream>;
