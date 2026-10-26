@@ -44,7 +44,8 @@ impl WorkerReader {
                                 &payload, &grant, contract,
                             )?)));
                         }
-                        let payload = capture_transport::read_control(&mut output, length)?;
+                        let payload =
+                            capture_transport::read_control(&mut output, tag, length, None)?;
                         match tag {
                             wire::GRANT_REQUEST => {
                                 let request: GrantRequest =

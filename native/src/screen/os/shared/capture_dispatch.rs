@@ -308,7 +308,7 @@ pub(super) fn start(
                     let Some((tag, length)) = capture_transport::read_header(&mut input)? else {
                         return Ok(None);
                     };
-                    let payload = capture_transport::read_control(&mut input, length)?;
+                    let payload = capture_transport::read_control(&mut input, tag, length, None)?;
                     if tag == wire::GRANT_REPLY {
                         authority.deliver(crate::screen::core::wire::from_json(&payload)?);
                         return Ok(Some(None));
@@ -406,7 +406,7 @@ mod supplement_tests {
         let mut input = io::Cursor::new(written.recv_timeout(Duration::from_secs(2)).unwrap());
         let (tag, length) = capture_transport::read_header(&mut input).unwrap().unwrap();
         assert_eq!(tag, wire::GRANT_REQUEST);
-        let payload = capture_transport::read_control(&mut input, length).unwrap();
+        let payload = capture_transport::read_control(&mut input, tag, length, None).unwrap();
         let GrantRequest::SupplementPlan {
             request,
             image,
@@ -441,7 +441,7 @@ mod supplement_tests {
         assert_eq!(tag, wire::RETIRED);
         assert_eq!(
             crate::screen::core::wire::from_json::<u64>(
-                &capture_transport::read_control(&mut input, length).unwrap()
+                &capture_transport::read_control(&mut input, tag, length, None).unwrap()
             )
             .unwrap(),
             24

@@ -127,33 +127,42 @@ pub(crate) fn read_message_with_limits(
         }
     }
     reader.read_exact(&mut head[1..])?;
-    let limit = tag_limit(head[0]).ok_or_else(|| invalid("unknown host process frame"))?;
     let len = u32::from_be_bytes([head[1], head[2], head[3], head[4]]) as usize;
+    let payload = read_payload_with_limits(reader, head[0], len, limits)?;
+    Ok(Some((head[0], payload)))
+}
+
+/// Shared by complete-frame and permanent control readers. A previously read
+/// header does not authorize unowned picture storage or its payload read.
+pub(crate) fn read_payload_with_limits(
+    reader: &mut impl Read,
+    tag: u8,
+    len: usize,
+    limits: Option<FrameLimits>,
+) -> io::Result<Vec<u8>> {
+    let limit = tag_limit(tag).ok_or_else(|| invalid("unknown host process frame"))?;
     if len > limit {
         return Err(invalid("host process frame exceeds the limit of its tag"));
     }
     if matches!(
-        head[0],
+        tag,
         RAW | ENCODED | super::worker_capture_wire::OWNED_REFERENCE
     ) {
         return Err(invalid(
             "worker pictures require a prior owned transport ticket",
         ));
     }
-    if head[0] == REFERENCE {
-        return Ok(Some((
-            REFERENCE,
-            frame_wire::read_reference_payload(reader, len, limits)?,
-        )));
+    if tag == REFERENCE {
+        return frame_wire::read_reference_payload(reader, len, limits);
     }
     if let Some(limits) = limits {
-        if len > frame_wire::negotiated_payload_limit(head[0], limits)? {
+        if len > frame_wire::negotiated_payload_limit(tag, limits)? {
             return Err(invalid("worker reply exceeds PRODUCE working memory"));
         }
     }
     let mut payload = vec![0u8; len];
     reader.read_exact(&mut payload)?;
-    Ok(Some((head[0], payload)))
+    Ok(payload)
 }
 
 /// `OPEN`: the source and the size a viewer asked for.
