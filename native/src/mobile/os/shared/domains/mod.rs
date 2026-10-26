@@ -33,6 +33,10 @@ mod screen_view;
 mod login_view;
 #[path = "login_images.rs"]
 mod login_images;
+#[cfg(all(target_os = "android", feature = "android-instrumentation-fixtures"))]
+mod android_image_fixtures;
+#[cfg(all(target_os = "android", feature = "android-instrumentation-fixtures"))]
+mod login_image_fixture;
 // DRV-M8: the documents provider (`docs.*`) and its proxy descriptors.
 #[path = "docs.rs"]
 mod docs;
@@ -320,3 +324,19 @@ fn update_method(rt: &Runtime, method: &str) -> Option<Result<Value, ApiError>> 
         _ => return None,
     })
 }
+
+#[cfg(all(target_os = "android", feature = "android-instrumentation-fixtures"))]
+pub use android_image_fixtures::{
+    android_fixture_capture_open,
+    android_fixture_capture_state,
+    android_fixture_capture_consume_still,
+    android_fixture_capture_pull_address,
+    android_fixture_capture_release_reader,
+    android_fixture_capture_release_viewer,
+    android_fixture_capture_retire,
+    android_fixture_capture_finish,
+    android_fixture_login_open,
+    android_fixture_login_enqueue,
+    android_fixture_login_state,
+    android_fixture_login_finish,
+};

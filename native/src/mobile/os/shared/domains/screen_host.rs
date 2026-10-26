@@ -47,8 +47,11 @@ pub fn screen_push_admitted(session:u64,generation:u64,data:&[u8],_pts_us:u64,fl
     channels::push_admitted(session,generation,data,flags)
 }
 pub fn screen_capture_begin(session:u64,width:u32,height:u32,kind:u32)->u64 {
-    channels::channel(session).and_then(|channel|channel.begin_capture(
-        crate::screen::core::pixel_convert::FrameSize::new(width,height),kind).ok()).unwrap_or(0)
+    let generation = channels::channel(session).and_then(|channel|channel.begin_capture(
+        crate::screen::core::pixel_convert::FrameSize::new(width,height),kind).ok()).unwrap_or(0);
+    #[cfg(all(target_os = "android", feature = "android-instrumentation-fixtures"))]
+    if generation != 0 {crate::screen::os::android_capture_fixture::observed_begin(session, generation);}
+    generation
 }
 pub fn screen_capture_claim(session:u64,generation:u64,owner:u32,bytes:u64,buffer:bool)->u64 {
     channels::channel(session).and_then(|channel|channel.capture.grant(generation).ok())

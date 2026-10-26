@@ -3,6 +3,9 @@
 // the desktop builds keep the full dead-code and unused-import lints.
 #![cfg_attr(target_os = "android", allow(dead_code, unused_imports))]
 
+#[cfg(all(feature = "android-instrumentation-fixtures", not(debug_assertions)))]
+compile_error!("Android image fixtures are allowed only in a debug instrumentation build");
+
 pub mod agent;
 pub mod agent_proto;
 pub mod analytics;

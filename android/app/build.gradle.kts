@@ -122,6 +122,13 @@ android {
         }
     }
 
+    // Debug JNI contains isolated instrumentation exports; release JNI is built separately.
+    sourceSets {
+        getByName("main").jniLibs.setSrcDirs(emptyList<String>())
+        getByName("debug").jniLibs.setSrcDirs(listOf("src/debug/jniLibs"))
+        getByName("release").jniLibs.setSrcDirs(listOf("src/main/jniLibs"))
+    }
+
     packaging {
         jniLibs {
             useLegacyPackaging = true

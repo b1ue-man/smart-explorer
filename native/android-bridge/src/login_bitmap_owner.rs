@@ -59,7 +59,7 @@ pub(super) fn create(env: &mut Env<'_>, ticket: LoginBitmapTicket) -> jni::error
 pub(super) fn borrow<'local>(env: &mut Env<'local>, key: Key) -> jni::errors::Result<JObject<'local>> {
     let Ok(mut owners) = BITMAPS.lock() else {return Ok(JObject::default());};
     let Some(owner) = owners.get_mut(&key) else {return Ok(JObject::default());};
-    if owner.retiring || owner.locked {return Ok(JObject::default());}
+    if owner.retiring || owner.locked || !owner.lease.is_current() {return Ok(JObject::default());}
     let Some(count) = owner.borrows.checked_add(1) else {return Ok(JObject::default());};
     let bitmap = env.new_local_ref(owner.bitmap.as_obj())?;
     owner.borrows = count;
@@ -103,3 +103,16 @@ pub(super) fn target_claim(owner: u64, width: u32, height: u32) -> u64 {
     targets.insert(id, (owner, target)); id
 }
 pub(super) fn target_release(owner: u64, id: u64) {if let Ok(mut targets) = TARGETS.lock() {if targets.get(&id).is_some_and(|(bound, _)| *bound == owner) {targets.remove(&id);}}}
+
+/// Actual registry owners only; observing creates no GlobalRef or slice alias.
+#[cfg(feature = "android-instrumentation-fixtures")]
+pub(super) fn fixture_state(owner: u64) -> Result<serde_json::Value, String> {
+    let bitmaps = BITMAPS.lock().map_err(|_| "bitmap registry unavailable")?;
+    let targets = TARGETS.lock().map_err(|_| "render target registry unavailable")?;
+    let entries = bitmaps.iter().filter(|((bound, _, _), _)| *bound == owner).map(|((_, picture, generation), bitmap)|
+        serde_json::json!({"picture":picture,"generation":generation,"borrows":bitmap.borrows,
+            "retiring":bitmap.retiring,"locked":bitmap.locked,"bytes":bitmap.lease.bytes()})).collect::<Vec<_>>();
+    let count=entries.len();
+    Ok(serde_json::json!({"bitmap_owners":entries,"global_refs":count,
+        "render_targets":targets.values().filter(|(bound,_)|*bound==owner).count()}))
+}

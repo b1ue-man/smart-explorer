@@ -86,6 +86,21 @@ pub use domains::{
 };
 pub use domains::{login_close, login_release, LoginBitmapTicket, LoginBitmapLease, LoginRenderTarget,
     login_image_owner_create, login_image_owner_close, login_bitmap_take, login_render_target_claim};
+#[cfg(all(target_os = "android", feature = "android-instrumentation-fixtures"))]
+pub use domains::{
+    android_fixture_capture_open,
+    android_fixture_capture_state,
+    android_fixture_capture_consume_still,
+    android_fixture_capture_pull_address,
+    android_fixture_capture_release_reader,
+    android_fixture_capture_release_viewer,
+    android_fixture_capture_retire,
+    android_fixture_capture_finish,
+    android_fixture_login_open,
+    android_fixture_login_enqueue,
+    android_fixture_login_state,
+    android_fixture_login_finish,
+};
 pub(crate) use error::ApiError;
 pub(crate) use runtime::{Runtime, TaskCtx};
 

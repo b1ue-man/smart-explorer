@@ -5,7 +5,6 @@ import android.app.PendingIntent
 import android.app.UiAutomation
 import android.graphics.Bitmap
 import android.graphics.ImageFormat
-import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.media.ImageReader
 import android.media.projection.MediaProjection
@@ -62,6 +61,10 @@ import app.smartexplorer.android.screen.ScreenHostControl
 import app.smartexplorer.android.screen.ScreenHostNotifier
 import app.smartexplorer.android.screen.ScreenHostService
 import app.smartexplorer.android.screen.ScreenStillSource
+import app.smartexplorer.android.screen.ScreenCaptureBudget
+import app.smartexplorer.android.screen.ScreenCaptureBitmap
+import app.smartexplorer.android.screen.ScreenProjectionFrames
+import app.smartexplorer.android.core.NativeBridge
 import app.smartexplorer.android.screen.SyntheticSurfaceSource
 import app.smartexplorer.android.service.approvalNotification
 import app.smartexplorer.android.ui.screen.LocalScreenBackend
@@ -74,7 +77,6 @@ import app.smartexplorer.android.system.Notifications
 import java.nio.ByteOrder
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
-import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import kotlinx.serialization.json.Json
 import kotlinx.coroutines.flow.Flow
@@ -184,16 +186,29 @@ class ScreenTaskTest {
     }
 
     /** One still of the accessibility service, after the 333 ms interval. */
-    private fun still(service: ScreenControlService): Bitmap {
-        var shot: Bitmap? = null
+    private fun still(service: ScreenControlService, fixture: ScreenCaptureFixture): ScreenCaptureBitmap {
+        var shot: ScreenCaptureBitmap? = null
+        var expired = false
+        val lock = Any()
         val done = CountDownLatch(1)
         SystemClock.sleep(ScreenStillSource.MIN_INTERVAL_MS)
-        service.still { bitmap ->
-            shot = bitmap
-            done.countDown()
+        service.still(fixture.budget(),fixture.width,fixture.height) { bitmap ->
+            synchronized(lock) {
+                if(expired) bitmap?.close() else shot=bitmap
+                done.countDown()
+            }
         }
-        assertTrue("Kein Standbild", done.await(5, TimeUnit.SECONDS))
-        return shot ?: throw AssertionError("Android lieferte kein Standbild")
+        val answered=done.await(5,TimeUnit.SECONDS)
+        return synchronized(lock) {
+            expired=true
+            if(!answered) {shot?.close();shot=null;throw AssertionError("Kein Standbild; später Callback bleibt Besitzer")}
+            shot.also {shot=null} ?: throw AssertionError("Android lieferte kein Standbild")
+        }
+    }
+
+    private fun displaySize(): Pair<Int,Int> {
+        val bounds=appContext.getSystemService(WindowManager::class.java).maximumWindowMetrics.bounds
+        return bounds.width() to bounds.height()
     }
 
     private fun darkShare(bitmap: Bitmap, left: Int, top: Int, right: Int, bottom: Int): Double {
@@ -213,41 +228,45 @@ class ScreenTaskTest {
     @Test
     fun screen_task_android_host_bench_synthetic() = coreTest {
         val pushes = mutableListOf<Pair<Int, Boolean>>()
-        var firstKey: ByteArray? = null
+        var firstPrefix: List<Byte>? = null
+        var firstNal: Int? = null
         val config = EncoderConfig(epoch = 1, width = 1280, height = 720, fps = 30, bitrate = 4_000_000, profile = "high")
-        val encoder = ScreenEncoder(config) { buffer, offset, length, _, key ->
-            synchronized(pushes) {
-                if (key && firstKey == null) {
-                    firstKey = ByteArray(minOf(length, 64)).also { bytes ->
-                        val view = buffer.duplicate()
-                        view.position(offset)
-                        view.get(bytes)
+        lateinit var encoderName:String
+        var hardware=false
+        var started=0L
+        ScreenCaptureFixture.open(config.width,config.height,ScreenCaptureBudget.SYNTHETIC_SURFACE).use { fixture ->
+            var encoder:ScreenEncoder?=null
+            var source:SyntheticSurfaceSource?=null
+            try {
+                val opened=ScreenEncoder(config,fixture.budget()) { buffer, offset, length, _, key ->
+                    synchronized(pushes) {
+                        if(key && firstPrefix==null) {
+                            require(length>=5)
+                            firstPrefix=(0 until 4).map {buffer.get(offset+it)}
+                            firstNal=buffer.get(offset+4).toInt() and 0x1F
+                        }
+                        pushes += length to key
                     }
+                    0
                 }
-                pushes += length to key
-            }
-            0
+                encoder=opened;encoderName=opened.name;hardware=opened.hardware
+                source=fixture.source(opened,config)
+                started=SystemClock.uptimeMillis()
+                SystemClock.sleep(3_000)
+            } finally {fixture.retireSynthetic(source,encoder)}
         }
-        val source = SyntheticSurfaceSource(encoder.surface, config.width, config.height, config.fps)
-        val started = SystemClock.uptimeMillis()
-        SystemClock.sleep(3_000)
-        source.stop()
-        encoder.release()
         val seconds = (SystemClock.uptimeMillis() - started) / 1000.0
         val frames = synchronized(pushes) { pushes.toList() }
         val fps = frames.size / seconds
         val kbps = frames.sumOf { it.first } * 8 / 1000.0 / seconds
-        TaskReport.note("screen.host.bench", "encoder=${encoder.name} hardware=${encoder.hardware} fps=%.1f kbps=%.0f frames=${frames.size}".format(fps, kbps))
+        TaskReport.note("screen.host.bench", "encoder=$encoderName hardware=$hardware fps=%.1f kbps=%.0f frames=${frames.size}".format(fps, kbps))
         assertTrue("zu wenige Bilder: ${frames.size}", frames.size >= 45)
         assertTrue("erstes Bild kein Schlüsselbild", frames.first().second)
-        // Annex B, SPS (NAL type 7) in front of the key frame.
-        val head = firstKey ?: throw AssertionError("kein Schlüsselbild")
-        assertEquals(listOf<Byte>(0, 0, 0, 1), head.take(4))
-        assertEquals(7, head[4].toInt() and 0x1F)
-        // The core knows the phone as host with this encoder.
+        assertEquals(listOf<Byte>(0, 0, 0, 1), firstPrefix ?: throw AssertionError("kein Schlüsselbild"))
+        assertEquals(7,firstNal)
         val prereqs = Api.obj(
             "screen.hostPrereqs",
-            args("encoders" to listOf(mapOf("profile" to "high", "hardware" to encoder.hardware)), "display" to mapOf("width" to 1080, "height" to 2400)),
+            args("encoders" to listOf(mapOf("profile" to "high", "hardware" to hardware)), "display" to mapOf("width" to 1080, "height" to 2400)),
         )
         TaskReport.note("screen.hostPrereqs", prereqs.toString())
         assertTrue(Api.obj("screen.hostSessions").array("sessions").isEmpty())
@@ -262,49 +281,63 @@ class ScreenTaskTest {
             projection = it
             projections.countDown()
         }
-        val results = CountDownLatch(1)
-        var result: ActivityResult? = null
-        compose.activityRule.scenario.onActivity { activity ->
-            val manager = activity.getSystemService(MediaProjectionManager::class.java)
-            val launcher = activity.activityResultRegistry.register("screen-probe", ActivityResultContracts.StartActivityForResult()) {
-                result = it
-                results.countDown()
+        try {
+            val results = CountDownLatch(1)
+            var result: ActivityResult? = null
+            compose.activityRule.scenario.onActivity { activity ->
+                val manager = activity.getSystemService(MediaProjectionManager::class.java)
+                val launcher = activity.activityResultRegistry.register("screen-probe", ActivityResultContracts.StartActivityForResult()) {
+                    result = it
+                    results.countDown()
+                }
+                launcher.launch(manager.createScreenCaptureIntent())
             }
-            launcher.launch(manager.createScreenCaptureIntent())
-        }
-        // Without appops the dialog asks: the suite's device answers „Start now“ / „Jetzt starten“.
-        if (!results.await(3, TimeUnit.SECONDS)) {
-            device.wait(Until.findObject(By.text(java.util.regex.Pattern.compile("(?i)(start now|jetzt starten|starten|start)"))), 5_000)?.click()
-            assertTrue("Systemabfrage ohne Antwort", results.await(20, TimeUnit.SECONDS))
-        }
-        val answer = result ?: throw AssertionError("kein Ergebnis")
-        assertEquals(Activity.RESULT_OK, answer.resultCode)
-        ScreenHostService.start(appContext, ScreenHostControl.PROBE_SESSION, answer.resultCode, answer.data!!)
-        assertTrue("keine Projektion", projections.await(10, TimeUnit.SECONDS))
-        val running = projection ?: throw AssertionError("keine Projektion")
-        val bounds = appContext.getSystemService(WindowManager::class.java).maximumWindowMetrics.bounds
-        val width = bounds.width() / 4
-        val height = bounds.height() / 4
-        val reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
-        val display = running.createVirtualDisplay("se-probe", width, height, 160, DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, reader.surface, null, null)
-        var image = reader.acquireLatestImage()
-        val deadline = SystemClock.uptimeMillis() + 5_000
-        while (image == null && SystemClock.uptimeMillis() < deadline) {
-            SystemClock.sleep(100)
-            image = reader.acquireLatestImage()
-        }
-        assertNotNull("kein Bild der Projektion", image)
-        val plane = image!!.planes[0]
-        val bitmap = Bitmap.createBitmap(plane.rowStride / plane.pixelStride, height, Bitmap.Config.ARGB_8888)
-        bitmap.copyPixelsFromBuffer(plane.buffer)
-        image.close()
-        display?.release()
-        running.stop()
-        reader.close()
-        ScreenHostControl.probe = null
-        val dark = darkShare(bitmap, 0, 0, width, height)
-        TaskReport.note("screen.host.snapshot", "size=${width}x$height dark=%.2f".format(dark))
-        assertTrue("Projektion nur schwarz", dark < 0.95)
+            // Without appops the dialog asks: the suite's device answers „Start now“ / „Jetzt starten“.
+            if (!results.await(3, TimeUnit.SECONDS)) {
+                device.wait(Until.findObject(By.text(java.util.regex.Pattern.compile("(?i)(start now|jetzt starten|starten|start)"))), 5_000)?.click()
+                assertTrue("Systemabfrage ohne Antwort", results.await(20, TimeUnit.SECONDS))
+            }
+            val answer = result ?: throw AssertionError("kein Ergebnis")
+            assertEquals(Activity.RESULT_OK, answer.resultCode)
+            ScreenHostService.start(appContext, ScreenHostControl.PROBE_SESSION, answer.resultCode, answer.data!!)
+            assertTrue("keine Projektion", projections.await(10, TimeUnit.SECONDS))
+            val running = projection ?: throw AssertionError("keine Projektion")
+            val bounds = appContext.getSystemService(WindowManager::class.java).maximumWindowMetrics.bounds
+            val width = bounds.width() / 4
+            val height = bounds.height() / 4
+            ScreenCaptureFixture.open(width,height,ScreenCaptureBudget.PROJECTION_TILES).use { fixture ->
+                val done=CountDownLatch(1)
+                val failure=java.util.concurrent.atomic.AtomicReference<String?>()
+                var dark:Double?=null
+                val frames=ScreenProjectionFrames(width,height,fixture.budget(),{_,_->
+                    failure.set("Unexpected regular Projection submit");done.countDown();false
+                },{reason->failure.set(reason);done.countDown()})
+                var display:android.hardware.display.VirtualDisplay?=null
+                try {
+                    frames.captureStill(1) { pixels ->
+                        dark=pixels.access { bytes ->
+                            var black=0;var total=0
+                            for(y in 0 until height step 8) for(x in 0 until width step 8) {
+                                val at=(y*width+x)*4
+                                val sum=(bytes.get(at).toInt() and 255)+(bytes.get(at+1).toInt() and 255)+(bytes.get(at+2).toInt() and 255)
+                                if(sum<30) black++
+                                total++
+                            }
+                            black.toDouble()/total.coerceAtLeast(1)
+                        }
+                        done.countDown();true
+                    }
+                    display=running.createVirtualDisplay("se-probe",width,height,160,DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,frames.surface,null,null)
+                    assertTrue("kein Bild der Projektion",done.await(5,TimeUnit.SECONDS))
+                    failure.get()?.let {throw AssertionError(it)}
+                    val observed=dark ?: throw AssertionError("keine Projektionspixel")
+                    TaskReport.note("screen.host.snapshot","size=${width}x$height dark=%.2f".format(observed))
+                    assertTrue("Projektion nur schwarz",observed<0.95)
+                } finally {
+                    captureCleanup({display?.release()},{check(frames.close()) {"Projection handler has not ended"}},{running.stop()})
+                }
+            }
+        } finally {ScreenHostControl.probe=null;projection?.stop()}
     }
 
     @Test
@@ -313,19 +346,31 @@ class ScreenTaskTest {
         // The connection may have answered a still of an earlier test a moment ago.
         SystemClock.sleep(2 * ScreenStillSource.MIN_INTERVAL_MS)
         val requested = mutableListOf<Long>()
-        val stills = ScreenStillSource { _, length -> if (length > ScreenStillSource.HEADER) 0 else -2 }
-        repeat(4) { round ->
-            val done = CountDownLatch(1)
-            var code: Int? = null
-            stills.capture(service) {
-                code = it
-                done.countDown()
+        val (width,height)=displaySize()
+        ScreenCaptureFixture.open(width,height,ScreenCaptureBudget.ACCESSIBILITY).use { fixture ->
+            val failure=java.util.concurrent.atomic.AtomicReference<Throwable?>()
+            val stills=ScreenStillSource(fixture.session,{width to height}) {buffer,length,generation ->
+                try {
+                    require(length==ScreenStillSource.HEADER+Math.multiplyExact(Math.multiplyExact(width,height),4))
+                    require(buffer.order(ByteOrder.LITTLE_ENDIAN).getInt(0)==width && buffer.getInt(4)==height)
+                    val code=NativeBridge.screenPushAdmitted(fixture.session,generation,buffer,0,length,0L,0x2)
+                    check(code==0) {"Admitted still push refused: $code"}
+                    val consumed=fixture.consumeStill(generation)
+                    check(consumed.int("length")==length)
+                    0
+                } catch(error:Throwable) {failure.set(error);-2}
             }
-            // `capture` has waited out the interval and asked Android by now. The answers come after
-            // a latency that differs from still to still: the requests are what is timed.
-            requested += SystemClock.uptimeMillis()
-            assertTrue("Standbild ${round + 1} ohne Antwort", done.await(5, TimeUnit.SECONDS))
-            assertEquals("Standbild ${round + 1}: Android lieferte keins (Anfragen $requested)", 0, code)
+            try {
+                repeat(4) { round ->
+                    val done = CountDownLatch(1)
+                    var code: Int? = null
+                    stills.capture(service) {code=it;done.countDown()}
+                    requested += SystemClock.uptimeMillis()
+                    assertTrue("Standbild ${round + 1} ohne Antwort", done.await(5, TimeUnit.SECONDS))
+                    failure.get()?.let {throw AssertionError("Real still transfer failed",it)}
+                    assertEquals("Standbild ${round + 1}: Android lieferte keins (Anfragen $requested)", 0, code)
+                }
+            } finally {stills.close()}
         }
         val gaps = requested.zipWithNext { a, b -> b - a }
         TaskReport.note("screen.host.still", "gaps=$gaps")
@@ -338,13 +383,18 @@ class ScreenTaskTest {
         var top = 0
         compose.setContent { Box(Modifier.fillMaxSize().onGloballyPositioned { top = it.boundsInWindow().top.toInt() }) { Text("Geheim") } }
         compose.runOnUiThread { compose.activity.window.addFlags(WindowManager.LayoutParams.FLAG_SECURE) }
-        compose.waitForIdle()
-        SystemClock.sleep(500)
-        val shot = still(service)
-        compose.runOnUiThread { compose.activity.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE) }
-        val dark = darkShare(shot, 0, top + shot.height / 4, shot.width, shot.height * 3 / 4)
-        TaskReport.note("screen.host.secure", "dark=%.2f".format(dark))
-        assertTrue("sicheres Fenster nicht schwarz: $dark", dark > 0.9)
+        try {
+            compose.waitForIdle()
+            SystemClock.sleep(500)
+            val (width,height)=displaySize()
+            ScreenCaptureFixture.open(width,height,ScreenCaptureBudget.ACCESSIBILITY).use { fixture ->
+                still(service,fixture).use {shot ->
+                    val dark = darkShare(shot.bitmap, 0, top + shot.bitmap.height / 4, shot.bitmap.width, shot.bitmap.height * 3 / 4)
+                    TaskReport.note("screen.host.secure", "dark=%.2f".format(dark))
+                    assertTrue("sicheres Fenster nicht schwarz: $dark", dark > 0.9)
+                }
+            }
+        } finally {compose.runOnUiThread {compose.activity.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)}}
     }
 
     @Test
@@ -474,87 +524,73 @@ class ScreenTaskTest {
     fun screen_task_android_viewer_decodes_barcode() {
         assertTrue(ScreenDecoder.offers().any { it.codec == "tiles" })
         val config = EncoderConfig(epoch = 1, width = 1280, height = 720, fps = 30, bitrate = 4_000_000, profile = "high")
-        val units = LinkedBlockingQueue<Triple<ByteArray, Long, Boolean>>()
-        val encoder = ScreenEncoder(config) { buffer, offset, length, ptsUs, key ->
-            val bytes = ByteArray(length)
-            buffer.duplicate().apply {
-                clear()
-                position(offset)
-                limit(offset + length)
-                get(bytes)
-            }
-            units.put(Triple(bytes, ptsUs, key))
-            0
-        }
-        val source = SyntheticSurfaceSource(encoder.surface, config.width, config.height, config.fps)
-        var started = false
-        var deliveredFrame = 0L
-        var held: Triple<ByteArray, Long, Boolean>? = null
-        val pictures = PictureSource { dst, timeoutMs ->
-            val next = held ?: units.poll(timeoutMs.toLong(), TimeUnit.MILLISECONDS)
-            when {
-                next == null -> -1
-                !started && !next.third -> -1
-                dst.capacity() < 32 + next.first.size -> {
-                    held = next
-                    dst.order(ByteOrder.LITTLE_ENDIAN).putInt(12, 16 + next.first.size)
-                    -3
-                }
-                else -> {
-                    held = null
-                    val flags = (if (next.third) 1 else 0) or (if (!started) 4 else 0) or (1 shl 16) or 0x100 or 0x80
-                    started = true
-                    dst.order(ByteOrder.LITTLE_ENDIAN)
-                    dst.putLong(0, next.second)
-                    dst.putInt(8, flags)
-                    dst.putInt(12, 16 + next.first.size)
-                    dst.putLong(16, 1L)
-                    dst.putLong(24, ++deliveredFrame)
-                    dst.position(32)
-                    dst.put(next.first)
-                    32 + next.first.size
-                }
-            }
-        }
-        val reader = ImageReader.newInstance(config.width, config.height, ImageFormat.YUV_420_888, 3)
-        val rendered = java.util.concurrent.atomic.AtomicInteger()
-        val stream = ScreenViewEvent.Stream(1, "h264", "high", config.width, config.height, 1, encoder.name, encoder.hardware)
-        val decoder = ScreenDecoder(
-            sessionId = 1,
-            source = pictures,
-            streamOf = { if (it == 1L) stream else null },
-            surface = { reader.surface },
-            listener = object : ScreenDecoder.Listener {
-                override fun onSize(width: Int, height: Int) = Unit
-                override fun onBitmap(bitmap: Bitmap) = Unit
-                override fun onPicture() {
-                    rendered.incrementAndGet()
-                }
-                override fun onDecodeFailure(consecutive: Int) = Unit
-                override fun onEnded() = Unit
-            },
-        )
+        val fixture=ScreenCaptureFixture.open(config.width,config.height,ScreenCaptureBudget.SYNTHETIC_SURFACE,true)
+        val fullGop = (1L shl 40) + 1
+        val frameBase = 1L shl 42
+        var units:ScreenCaptureQueue?=null
+        var encoder:ScreenEncoder?=null
+        var source:SyntheticSurfaceSource?=null
+        var reader:ImageReader?=null
+        var decoder:ScreenDecoder?=null
+        var pulls:app.smartexplorer.android.ui.screen.ScreenPullBuffers?=null
+        var decoderStarted=false
+        val ended=CountDownLatch(1)
+        val presentations = CopyOnWriteArrayList<app.smartexplorer.android.ui.screen.ScreenPresentedFrame>()
         try {
-            decoder.start()
+            val queue=ScreenCaptureQueue(fixture.budget(),fullGop,frameBase);units=queue
+            val opened=ScreenEncoder(config,fixture.budget()) {buffer,offset,length,pts,key -> queue.push(buffer,offset,length,pts,key)}
+            encoder=opened
+            val synthetic=fixture.source(opened,config);source=synthetic
+            val pictures = PictureSource {dst,timeoutMs -> queue.pull(dst,timeoutMs)}
+            val images=ImageReader.newInstance(config.width,config.height,ImageFormat.YUV_420_888,3);reader=images
+            val fixedPulls=fixture.pulls();pulls=fixedPulls
+            val rendered = java.util.concurrent.atomic.AtomicInteger()
+            val stream = ScreenViewEvent.Stream(1, "h264", "high", config.width, config.height, fullGop, opened.name, opened.hardware)
+            val activeDecoder = ScreenDecoder(
+                sessionId = 1,
+                source = pictures,
+                streamOf = { if (it == fullGop) stream else null },
+                surface = { images.surface },
+                listener = object : ScreenDecoder.Listener {
+                    override fun onSize(width: Int, height: Int) = Unit
+                    override fun onBitmap(bitmap: Bitmap) = Unit
+                    override fun onPicture() {
+                        rendered.incrementAndGet()
+                    }
+                    override fun onSurfaceFrame(frame: app.smartexplorer.android.ui.screen.ScreenPresentedFrame) { presentations += frame }
+                    override fun onDecodeFailure(consecutive: Int) = Unit
+                    override fun onEnded() {ended.countDown()}
+                },
+                bufferBudget={fixture.viewerBudget},pullBuffers=fixedPulls,
+            )
+            decoder=activeDecoder
+            activeDecoder.start();decoderStarted=true
             val deadline = SystemClock.uptimeMillis() + 15_000
             while (rendered.get() < 10 && SystemClock.uptimeMillis() < deadline) SystemClock.sleep(50)
             assertTrue("zu wenige Bilder dekodiert: ${rendered.get()}", rendered.get() >= 10)
-            val first = reader.acquireLatestImage() ?: throw AssertionError("kein Bild des Dekoders")
-            val one = barcode(first)
-            first.close()
+            val one=checkNotNull(images.acquireLatestImage()) {"kein Bild des Dekoders"}.use {barcode(it)}
             val seen = rendered.get()
             while (rendered.get() < seen + 10 && SystemClock.uptimeMillis() < deadline) SystemClock.sleep(50)
-            val second = reader.acquireLatestImage() ?: throw AssertionError("kein zweites Bild")
-            val two = barcode(second)
-            second.close()
-            TaskReport.note("screen.viewer.barcode", "frames=${source.frames} first=$one second=$two")
-            assertTrue("Strichcode $one außerhalb der gezeichneten Bilder", one in 0..source.frames)
-            assertTrue("Strichcode steigt nicht: $one → $two", two > one && two <= source.frames)
+            val two=checkNotNull(images.acquireLatestImage()) {"kein zweites Bild"}.use {barcode(it)}
+            TaskReport.note("screen.viewer.barcode", "frames=${synthetic.frames} first=$one second=$two")
+            assertTrue("Strichcode $one außerhalb der gezeichneten Bilder", one in 0..synthetic.frames)
+            assertTrue("Strichcode steigt nicht: $one → $two", two > one && two <= synthetic.frames)
+            val presentationDeadline = SystemClock.uptimeMillis() + 5_000
+            while (presentations.isEmpty() && SystemClock.uptimeMillis() < presentationDeadline) SystemClock.sleep(10)
+            assertTrue("No actual Surface presentation identity", presentations.isNotEmpty())
+            assertTrue(presentations.all { it.session == 1L && it.gopId == fullGop && it.frameId > frameBase && it.epoch == 0L })
+            queue.checkHealthy()
         } finally {
-            decoder.stop()
-            source.stop()
-            encoder.release()
-            reader.close()
+            var decoderEnded=!decoderStarted
+            var readerEnded=reader==null
+            captureCleanup(
+                {units?.close()},
+                {decoder?.stop();if(decoderStarted) {check(ended.await(5,TimeUnit.SECONDS)) {"Decoder has not relinquished its pull/codec owners"};decoderEnded=true}},
+                {fixture.retireSynthetic(source,encoder)},
+                {if(decoderEnded) {reader?.close();reader=null;readerEnded=true;fixture.releaseReader()}},
+                {if(decoderEnded && readerEnded) {pulls?.relinquishFixedBuffer();pulls=null;fixture.releaseViewer()}},
+                {fixture.close()},
+            )
         }
     }
 
