@@ -1,4 +1,6 @@
 //! Pure registry rendering: no storage or network call on the UI thread.
+use crate::app::prelude::egui;
+
 pub(super) fn render(ui: &mut egui::Ui) {
     let states = crate::source_media::snapshots();
     if states.is_empty() {
