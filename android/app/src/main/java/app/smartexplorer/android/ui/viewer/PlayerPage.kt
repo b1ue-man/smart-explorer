@@ -177,12 +177,12 @@ internal fun PlayerPage(
                         holder.addCallback(object : SurfaceHolder.Callback {
                             override fun surfaceCreated(holder: SurfaceHolder) { playback.display(holder) }
                             override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) = Unit
-                            override fun surfaceDestroyed(holder: SurfaceHolder) { playback.display(null) }
+                            override fun surfaceDestroyed(holder: SurfaceHolder) { playback.clearDisplay(holder) }
                         })
                     }
                 },
                 modifier = Modifier.widthIn(max = fittedWidth).height(fittedHeight).fillMaxWidth(),
-                onRelease = { playback.display(null) },
+                onRelease = { playback.clearDisplay(it.holder) },
             )
         }
         // Tap target above the video: taps toggle the bars, drags reach the pager.
