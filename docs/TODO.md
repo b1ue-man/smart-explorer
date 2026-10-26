@@ -28,8 +28,10 @@ Die Desktop-Funktionsstufen scheitern an konkreten
 Android hat beim Abruf 22:40:17 UTC seine Build-/JVM-Stufe beendet: native
 Bibliothek und App gebaut, Instrumentation-Import sowie Login-/Medienfixtures
 fehlgeschlagen (A01–A03). Die Geräteprüfung konnte ohne Instrumentation-APK
-nicht starten. Der vollständige Korrekturplan umfasst M01–M14; die Modellwahl
-folgt jetzt. Cache-Nachbereitung allein verhindert keine Quellenkorrekturen.
+nicht starten. Der vollständige Korrekturplan umfasst M01–M14. M14 ist
+quellseitig samt eigener Autorenreview integriert; seine Laufzeitbestätigung
+steht aus. M01, M02, M03, M05, M06, M07 und M13 sind in Bearbeitung.
+M04 und M08–M12 folgen innerhalb derselben Korrekturrunde.
 Autorenkorrekturen, erfolgreiche Auswertung über denselben Remote-Einstieg
 und der eine terminale Remote-Release stehen aus.
 Compilererfolg ist kein Funktions- oder Leistungsnachweis.
