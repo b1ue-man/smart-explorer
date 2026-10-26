@@ -111,7 +111,13 @@
       "perm_task_old_reader_sees_new_grant_off",
       "perm_task_unknown_access_version_fail_closed",
       "desktop_task_screen_target_json",
-      "screen_task_viewer_target_parse"
+      "screen_task_viewer_target_parse",
+      "screen_task_android_screen_keys_file_current",
+      "screen_task_android_strings_match_desktop_sources",
+      "handshake_io_enforces_one_absolute_deadline_for_a_stalled_peer",
+      "perm_task_gui_accounts_page_states",
+      "perm_task_gui_setup_without_pkexec_shows_sudo_command",
+      "desktop_task_desktop_ops_rename_trash_copy"
     ],
     "linux_integrations": [
       "batches_task_b6_linux_cgroup_ancestors_constrain_session_headroom",
@@ -242,7 +248,8 @@
       "app.smartexplorer.android.ui.login.LoginBitmapOwnerTest",
       "app.smartexplorer.android.screen.ScreenEncoderOwnershipTest",
       "app.smartexplorer.android.ui.settings.DeviceNavigationRegressionTest",
-      "app.smartexplorer.android.screen.ScreenSessionBudgetRegressionTest"
+      "app.smartexplorer.android.screen.ScreenSessionBudgetRegressionTest",
+      "app.smartexplorer.android.ui.screen.ScreenTextsTest"
     ],
     "device_classes": [
       "app.smartexplorer.android.task.BatchesPresentationTaskTest",
@@ -1733,10 +1740,11 @@
         "P4",
         "P6",
         "P18",
+        "P19",
         "P24"
       ],
-      "expected": "Die korrigierten Modul- und Typgrenzen erhalten Gerätezugriff, gespeicherte Rechte, Bildschirmmetadaten und Zielidentität. Versteckte Sitzungen bleiben pausierbar, fortsetzbar und im Freigabeindikator beendbar; leere GDrive-Zwischenseiten beenden keinen laufenden Scan.",
-      "scope": "Bestehende direkt betroffene Vertragsfälle; keine physische Geräte-, Providerkonto- oder grafische Desktopabnahme. Die Typbestätigung für Windows, Linux und Android gehört zu den bestehenden Compilerstufen desselben Einstiegs.",
+      "expected": "Die korrigierten Modul- und Typgrenzen erhalten Gerätezugriff, gespeicherte Rechte, Bildschirmmetadaten und Zielidentität. Versteckte Sitzungen bleiben pausierbar, fortsetzbar und im Freigabeindikator beendbar; leere GDrive-Zwischenseiten beenden keinen laufenden Scan. Kontenstatus und aufklappbare Version bleiben erreichbar, der Administrator-Fallback bleibt kopierbar, Desktopdateiaktionen und die absolute Execfrist bleiben erhalten. Android nennt viewer_hidden ausdrücklich und zeigt denselben Pausentext wie Desktop.",
+      "scope": "Bestehende direkt betroffene Vertragsfälle einschließlich gerenderter egui-Kontenansicht und datengetriebener Rust-/Kotlin-Textzuordnung; keine physische Geräte-, Providerkonto- oder grafische Desktopabnahme. Die Typbestätigung für Windows, Linux und Android gehört zu den bestehenden Compilerstufen desselben Einstiegs.",
       "native_platforms": [
         "linux",
         "windows"
@@ -1761,9 +1769,19 @@
         "perm_task_old_reader_sees_new_grant_off",
         "perm_task_unknown_access_version_fail_closed",
         "desktop_task_screen_target_json",
-        "screen_task_viewer_target_parse"
+        "screen_task_viewer_target_parse",
+        "screen_task_android_screen_keys_file_current",
+        "screen_task_android_strings_match_desktop_sources",
+        "handshake_io_enforces_one_absolute_deadline_for_a_stalled_peer",
+        "perm_task_gui_accounts_page_states",
+        "perm_task_gui_setup_without_pkexec_shows_sudo_command",
+        "desktop_task_desktop_ops_rename_trash_copy"
       ],
-      "device_cases": []
+      "device_cases": [],
+      "unit_cases": [
+        "app.smartexplorer.android.ui.screen.ScreenTextsTest#screen_task_android_texts_match_desktop",
+        "app.smartexplorer.android.ui.screen.ScreenTextsTest#a_detail_follows_only_where_the_desktop_shows_one"
+      ]
     }
   ]
 }

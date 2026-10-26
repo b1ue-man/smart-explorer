@@ -30,9 +30,14 @@ Die sechs [begrenzten Korrekturgruppen](plaene/2026-10-24-batches/rv1-compilerpl
 sind durch die zuständigen Autoren mit eigener Nachreview abgeschlossen und
 separat committed. Ihre Compiler- und Funktionsbestätigung steht im selben
 Remote-Suiteeinstieg aus.
-Lauf `40366764400` hat ausschließlich Formatänderungen in drei Quellen
-geliefert; dieser gebundene Patch ist übernommen. Lockdatei und Modulgrößen
-sind in Ordnung; die Compilerstufen dieses Versuchs wurden übersprungen.
+Der gebundene Formatpatch aus Lauf `40366764400` ist übernommen. Die
+Vorbereitung des folgenden Laufs `40368746815` ist erfolgreich. Windows und
+Linux melden verbleibende Modul-/Typfehler; Android erreicht die JNI-Brücke
+und scheitert dort an zwei Booleanübergaben. Alle fünf begrenzten
+Korrekturgruppen sind durch ihre bisherigen Autoren samt eigener Nachreview
+abgeschlossen und separat committed; dazu gehört die vollständige
+Android-Textzuordnung für `viewer_hidden`. Die bestehenden verbundenen Fälle
+sind im gemeinsamen Manifest registriert. Ihre Remote-Bestätigung steht aus.
 Die vollständige funktionale Suiteauswertung und Veröffentlichung stehen aus.
 
 This table is the live list of remaining work, roughly by value. The lower

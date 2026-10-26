@@ -1180,3 +1180,24 @@ Rustquellen, keine Lockänderung und keine Größenverletzung. Main hat den
 gebundenen Patch unverändert übernommen und die erhaltenen syntaktischen
 Blatttoken, Syntax und Größen statisch bestätigt. Compiler- und Gerätestufen
 dieses Versuchs sind übersprungen. Es folgt derselbe Remote-Suiteeinstieg.
+
+### Verbleibende Modul-/Typgrenzen und JNI, 2026-10-26
+
+Der formatierte Kandidat `b233e533` ist gepusht. Sein Lauf `40368746815`
+hat die Vorbereitung bestanden; die native Desktopkompilierung und die
+separate Android-JNI-Brücke melden weitere Fehler. Alle Jobs sind beendet,
+die Gerätestufe ist übersprungen. Die vollständige Diagnoseauswertung und
+Primärquellenklärung stehen in [rv1-compilerplan.md](rv1-compilerplan.md).
+Fünf bisherige Fixautoren besitzen jeweils die vollständige Fehlerkarte,
+den vorherigen Plan, die Änderung und die eigene anschließende Nachreview.
+Ihre Flächen sind disjunkt; das erforderliche Windowsfeature gehört allein
+zum Geräteautor, die gesamte Android-Hidden-Textkette zum Zustandsautor.
+Kein Release wurde gestartet.
+
+Die fünf Korrekturgruppen sind inzwischen mit eigenen Nachreviews abgeschlossen
+und in `7a1f0931`, `f9306ea9`, `31560a85`, `cd0be5a9` und `f86bcb63`
+integriert. Der Geräteautor erhält in der korrigierten Kontenfixture den Status-
+und Versionsnachweis über den bestehenden Diagnosebereich. Main hat Diffs,
+Berichte und statische Syntax-/Größenbefunde ausgewertet und die vorhandenen
+verbundenen Fälle im selben Manifest ergänzt. Der nächste Kandidat folgt nach
+Rootgraphrefresh und Push demselben Remote-Suiteeinstieg; noch kein Funktionspass.
