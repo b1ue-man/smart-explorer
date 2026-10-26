@@ -15,6 +15,7 @@ pub struct GenerationInput {
 }
 /// Provision immutable files without changing the confirmed pointer.
 pub fn stage_generation(root:&Path,input:&GenerationInput)->Result<Manifest,String> {
+    if root.join("mcp/uninstall.v1.json").exists() {return Err("installation_uninstall_in_progress".into());}
     let previous=if root.join("mcp/current.v1.json").exists() {Some(Installation::load(root)?)} else {None};
     let history=if previous.is_none() && root.join("mcp/legacy.v1.json").exists() {
         let path=root.join("mcp/legacy.v1.json");os::validate_tree(root,&path)?;
@@ -115,6 +116,7 @@ impl InitialGenerationLease {
         let installation=Installation {root:std::fs::canonicalize(root).map_err(|e|e.to_string())?,manifest:manifest.clone()};
         let owner=installation.lock("update-owner.lock",true)?;
         let _control=installation.lock("control.lock",true)?;
+        if root.join("mcp/uninstall.v1.json").exists() {return Err("installation_uninstall_in_progress".into());}
         if installation.root.join("mcp/current.v1.json").exists() {return Err("initial_generation_already_committed".into());}
         Ok(Self {installation,_owner:owner})
     }

@@ -1,4 +1,9 @@
 //! Owned profile files use recorded fingerprints and the installation's launcher.
+#[cfg(test)]
+#[path = "batches_legacy_lifecycle_task_tests.rs"]
+mod batches_legacy_lifecycle_task_tests;
+#[cfg(test)]
+pub(super) use batches_legacy_lifecycle_task_tests::LEGACY_SKILL;
 use serde_json::{json,Value};
 use std::path::{Path,PathBuf};
 use super::managed;
@@ -11,14 +16,26 @@ const DESCRIPTION:&str="Smart Explorer for AI agents: use its tools first, respe
 const LEGACY_SKILL_SHA256:&str="6d23270eb3dff8c2a3845e06106c75db3808bee4bd72bdc43638eb9f3bf92193";
 
 pub(super) fn executable()->Result<PathBuf,String> {
-    let installation=crate::mcp_launcher::Installation::current()?.ok_or("integration_launcher_missing: reinstall or update Smart Explorer")?;
-    installation.checked_launcher_path()
+    match crate::mcp_launcher::Installation::current()? {
+        Some(installation)=>installation.checked_launcher_path(),
+        None=>crate::mcp_launcher::legacy_entry_path(),
+    }
 }
 pub(super) fn claude_marketplace_dir()->PathBuf {crate::support_dirs::app_data_dir().join("ai-plugins/claude")}
 pub(super) fn codex_skill_dir()->Option<PathBuf> {crate::support_dirs::home_dir().map(|home|home.join(".agents/skills").join(PLUGIN))}
+pub(super) fn installation_for_registration(executable:&Path)->Result<Option<crate::mcp_launcher::Installation>,String> {
+    let installation=crate::mcp_launcher::Installation::for_image(executable)?;
+    if let Some(installation)=&installation {
+        if !installation.registered_launcher_allowed(executable)? {return Err("integration_launcher_changed: retry with the current installation".into());}
+    } else if executable!=crate::mcp_launcher::legacy_entry_path()? {return Err("integration_legacy_entry_mismatch".into());}
+    Ok(installation)
+}
 fn marker(executable:&Path)->Result<Value,String> {
-    let installation=crate::mcp_launcher::Installation::for_image(executable)?.ok_or("integration_installation_missing")?;
-    Ok(json!({"schema":1,"installation_id":installation.manifest.installation_id,"launcher_path":executable,"version":installation.manifest.product_version,"executable":executable}))
+    if let Some(installation)=installation_for_registration(executable)? {
+        Ok(json!({"schema":1,"installation_id":installation.manifest.installation_id,"launcher_path":executable,"version":installation.manifest.product_version,"executable":executable}))
+    } else {
+        Ok(json!({"schema":1,"mode":"legacy_cli","launcher_path":executable,"version":env!("CARGO_PKG_VERSION"),"executable":executable}))
+    }
 }
 pub(super) fn write_claude(executable:&Path)->Result<PathBuf,String> {
     let root=claude_marketplace_dir();
@@ -51,12 +68,25 @@ pub(super) fn write_codex_skill(executable:&Path)->Result<PathBuf,String> {
 pub(super) fn read_marker(directory:&Path)->Option<Value> {
     serde_json::from_slice(&std::fs::read(directory.join(MARKER)).ok()?).ok()
 }
+/// An earlier selective removal may leave empty directories or user notes.
+/// Their existence alone is neither ownership nor a conflict with retry.
+pub(super) fn generated_files_absent(root:&Path)->Result<bool,String> {
+    for name in [MARKER,"SKILL.md",".claude-plugin/marketplace.json","smart-explorer/.claude-plugin/plugin.json","smart-explorer/.mcp.json","smart-explorer/skills/smart-explorer/SKILL.md"] {
+        match std::fs::symlink_metadata(root.join(name)) {
+            Ok(_)=>return Ok(false),Err(error) if error.kind()==std::io::ErrorKind::NotFound=>{},Err(error)=>return Err(error.to_string()),
+        }
+    }
+    Ok(true)
+}
 pub(super) fn verify_owned(directory:&Path)->Result<(),String> {
     let marker=read_marker(directory).ok_or_else(||format!("integration_conflict: {} ownership marker missing",directory.display()))?;
-    let files=marker["fingerprints"].as_object().ok_or("integration_conflict: legacy marker requires migration")?;
+    verify_marker_owned(directory,&marker)
+}
+fn verify_marker_owned(directory:&Path,marker:&Value)->Result<(),String> {
+    if marker.get("schema").is_none() {return legacy_owned_files(directory,&marker).map(|_|());}
     if !has_fingerprints(&marker) {return Err("integration_conflict: ownership fingerprints missing".into());}
-    for (name,expected) in files {
-        verify_owned_file(directory,name,expected,false)?;
+    if let Some(files)=marker["fingerprints"].as_object() {
+        for (name,expected) in files {verify_owned_file(directory,name,expected,false)?;}
     }
     if let Some(fields)=marker["field_fingerprints"].as_object() {
         for (name,expected) in fields {verify_owned_file(directory,name,expected,true)?;}
@@ -77,14 +107,20 @@ fn verify_owned_file(root:&Path,name:&str,expected:&Value,fields:bool)->Result<(
     Ok(())
 }
 pub(super) fn remove_generated(directory:&Path)->Result<bool,String> {
-    if !directory.exists() {return Ok(false);}
+    if generated_files_absent(directory)? {return Ok(false);}
     let _lock=managed::lock()?;
-    verify_owned(directory)?;
+    remove_owned_files(directory)
+}
+fn remove_owned_files(directory:&Path)->Result<bool,String> {
     let marker=read_marker(directory).ok_or("integration_conflict: ownership marker missing")?;
+    verify_marker_owned(directory,&marker)?;
     let mut names=std::collections::BTreeSet::new();
-    for group in ["fingerprints","field_fingerprints"] {
-        if let Some(files)=marker[group].as_object() {for name in files.keys() {names.insert(name.clone());}}
+    if marker.get("schema").is_none() {names.extend(legacy_owned_files(directory,&marker)?);} else {
+        for group in ["fingerprints","field_fingerprints"] {
+            if let Some(files)=marker[group].as_object() {for name in files.keys() {names.insert(name.clone());}}
+        }
     }
+    if names.iter().any(|name|!managed_relative(name)) {return Err("integration_conflict: unknown managed file path".into());}
     for name in names {std::fs::remove_file(directory.join(name)).map_err(|e|e.to_string())?;}
     std::fs::remove_file(directory.join(MARKER)).map_err(|e|e.to_string())?;Ok(true)
 }
@@ -104,17 +140,21 @@ pub(super) fn generated_state(directory:Option<PathBuf>,executable:&Path)->Value
     json!({"generated":true,"path":directory,"version":marker["version"],"current":is_current(&marker,executable)&&conflicts.is_empty(),"integration_conflict":conflicts,"legacy_migration_required":marker.get("schema").is_none()})
 }
 fn is_current(marker:&Value,executable:&Path)->bool {
-    let Ok(Some(installation))=crate::mcp_launcher::Installation::for_image(executable) else {return false;};
+    let Ok(installation)=crate::mcp_launcher::Installation::for_image(executable) else {return false;};
+    let Some(installation)=installation else {
+        return marker["schema"]==1 && marker["mode"]=="legacy_cli" && has_fingerprints(marker)
+            && marker["version"]==env!("CARGO_PKG_VERSION") && marker["executable"]==json!(executable);
+    };
     marker["schema"]==1 && has_fingerprints(marker) && marker["installation_id"].as_str()==Some(installation.manifest.installation_id.as_str())
         && marker["version"].as_str()==Some(installation.manifest.product_version.as_str())
         && marker["launcher_path"].as_str().is_some_and(|path|installation.registered_launcher_allowed(Path::new(path)).unwrap_or(false))
 }
 fn refresh_executable(root:&Path,current:&Path)->Result<PathBuf,String> {
     let Some(marker)=read_marker(root) else {return Ok(current.into());};
-    let installation=crate::mcp_launcher::Installation::for_image(current)?.ok_or("integration_installation_missing")?;
+    let installation=crate::mcp_launcher::Installation::for_image(current)?;
     if marker["schema"]==1 {
         if !has_fingerprints(&marker) {return Err("integration_conflict: ownership fingerprints missing".into());}
-        if marker["installation_id"].as_str()!=Some(installation.manifest.installation_id.as_str()) {return Err("integration_conflict: profile belongs to a different installation".into());}
+        if marker["mode"]!="legacy_cli" && !installation.as_ref().is_some_and(|installation|marker["installation_id"].as_str()==Some(installation.manifest.installation_id.as_str())) {return Err("integration_conflict: profile belongs to a different installation".into());}
         // A marker alone is insufficient: verify every recorded own fingerprint
         // without treating permitted env/server additions as full-file ownership.
         for group in ["fingerprints","field_fingerprints"] {
@@ -125,7 +165,7 @@ fn refresh_executable(root:&Path,current:&Path)->Result<PathBuf,String> {
                 if actual.as_deref()!=expected.as_str() && !own_fields_match(name,&bytes,&marker) {return Err(format!("integration_conflict: {} changed",root.join(name).display()));}
             }}
         }
-        if let Some(path)=marker["launcher_path"].as_str() {
+        if let (Some(installation),Some(path))=(installation.as_ref(),marker["launcher_path"].as_str()) {
             let path=Path::new(path);
             if installation.registered_launcher_allowed(path)? {return Ok(path.into());}
         }
@@ -134,6 +174,7 @@ fn refresh_executable(root:&Path,current:&Path)->Result<PathBuf,String> {
 }
 pub(super) fn refresh()->Result<(),String> {
     let _generator=crate::mcp_launcher::generator_operation()?;
+    let _legacy_update=crate::mcp_launcher::legacy_profile_guard()?;
     let executable=executable()?;
     let claude=claude_marketplace_dir();
     if read_marker(&claude).is_some() {write_claude(&refresh_executable(&claude,&executable)?)?;}
@@ -180,4 +221,25 @@ fn mcp_wholly_owned(bytes:&[u8])->bool {
 
 fn has_fingerprints(marker:&Value)->bool {
     ["fingerprints","field_fingerprints"].iter().any(|group|marker[*group].as_object().is_some_and(|files|!files.is_empty()))
+}
+
+/// The released marker had no fingerprints. Accept only the exact published
+/// file set and content, never use that marker as recursive deletion rights.
+fn legacy_owned_files(root:&Path,marker:&Value)->Result<Vec<String>,String> {
+    if marker.as_object().is_none_or(|marker|marker.len()!=2) || marker.get("schema").is_some() || marker["version"].as_str().is_none_or(str::is_empty)
+        || !marker["executable"].as_str().is_some_and(|value|Path::new(value).is_absolute()) {
+        return Err("integration_conflict: legacy ownership marker invalid".into());
+    }
+    let names:&[&str]=if root.join(".claude-plugin/marketplace.json").exists() {
+        &[".claude-plugin/marketplace.json","smart-explorer/.claude-plugin/plugin.json",
+          "smart-explorer/.mcp.json","smart-explorer/skills/smart-explorer/SKILL.md"]
+    } else {&["SKILL.md"]};
+    for name in names {
+        let bytes=managed::read(&root.join(name))?.ok_or_else(||format!("integration_conflict: {} missing",root.join(name).display()))?;
+        if !legacy_file_matches(name,&bytes,marker)
+            || (name.ends_with("/.mcp.json") && !mcp_wholly_owned(&bytes)) {
+            return Err(format!("integration_conflict: {} legacy owned content changed or contains user fields",root.join(name).display()));
+        }
+    }
+    Ok(names.iter().map(|name|(*name).into()).collect())
 }

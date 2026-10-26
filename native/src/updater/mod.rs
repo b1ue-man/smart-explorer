@@ -56,6 +56,7 @@ pub use terminal::{
     check_feed, desktop_update_possible, detect_installation, replace_cli, stage_update, FeedCheck,
     Installation,
 };
+pub(crate) use terminal::{lock_cli_for_integration,LegacyIntegrationGuard};
 pub use types::{StagedUpdate, UpdateMsg, VerifiedPayload};
 
 #[cfg(test)]

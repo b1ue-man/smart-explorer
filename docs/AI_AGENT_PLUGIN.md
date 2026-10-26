@@ -41,7 +41,9 @@ und damit keinen MCP-Server.
 
 - **Claude Code:** `se` schreibt einen lokalen Plugin-Marketplace nach
   `<App-Daten>/smart_explorer/ai-plugins/claude/` (Plugin `smart-explorer` mit `.mcp.json` →
-  absoluter Pfad des geprüften Installationsstarters + `mcp`, Skill `smart-explorer`) und ruft
+  absoluter Pfad des geprüften Installationsstarters + `mcp`, bei einer bisherigen
+  Nur-Terminal-Installation ohne Managed-Manifest der vorhandene lokale `se`-Pfad,
+  Skill `smart-explorer`) und ruft
   `claude plugin marketplace add <Ordner> --scope user` sowie
   `claude plugin install smart-explorer@smart-explorer --scope user -y`. Claude Code lädt Plugins
   lokaler Marketplaces bei jedem Sitzungsstart direkt aus dem Ordner. Die Tools heißen
@@ -51,10 +53,11 @@ und damit keinen MCP-Server.
 - **Codex:** formatwahrende Änderung von `mcp_servers.smart-explorer` in
   `$CODEX_HOME/config.toml`, ohne `CODEX_HOME` in `~/.codex/config.toml`, sowie der
   Skill unter `~/.agents/skills/smart-explorer/SKILL.md`. Der Eintrag startet den
-  geprüften Installationsstarter mit `mcp`. Eigentumsfingerprints schützen die
+  geprüften Installationsstarter mit `mcp`; ohne Managed-Manifest bleibt der
+  vorhandene absolute lokale `se mcp`-Einstieg verwendbar. Eigentumsfingerprints schützen die
   verwalteten Felder `command` und `args`; Kommentare, unbekannte Schlüssel,
   Toolfilter und vorhandene `env`-Werte bleiben erhalten. Ein neu angelegter
-  Eintrag übernimmt die gesetzten Werte `XDG_DATA_HOME`, `XDG_RUNTIME_DIR` und
+  Eintrag übernimmt auf Linux die gesetzten Werte `XDG_DATA_HOME`, `XDG_RUNTIME_DIR` und
   `DBUS_SESSION_BUS_ADDRESS`. Ein beobachteter Bearbeitungskonflikt erscheint
   als `integration_conflict`; er löst kein Entfernen und erneutes Anlegen aus.
 - **Andere Clients** (Cursor, VS Code, Gemini CLI/Antigravity, OpenCode, Claude Desktop):
@@ -330,6 +333,32 @@ Befehlssitzungen.
 
 ## Updates
 
+Nach dem ersten Selbstupdate einer bisherigen Nur-Terminal-Installation kann
+das Managed-Manifest noch fehlen: Der alte Updater ersetzte ausschließlich `se`.
+`se plugin install claude`, `se plugin install codex` und
+`se plugin config generic` verwenden dann den vorhandenen absoluten CLI-Pfad.
+Diese lokale Auflösung benötigt keinen zusätzlichen Download. Der am
+Prozessstart erfasste Imagehash verhindert dabei, dass eine inzwischen ersetzte
+alte CLI ihre Vorlagen für neue Programmbytes zurückschreibt. Ein späteres
+reguläres Managed-Update stellt die Launcher-/Runtimegeneration bereit und kann
+die eigenen Profile über denselben Eigentumsnachweis auf den Starter migrieren.
+Der alte Updateabschluss und dessen Rollback erhalten keine neue Voraussetzung.
+Legacy-Plugininstallation und Profilauffrischung öffnen die vorhandene CLI
+lesend und benötigen keine Schreibrechte im Installationsverzeichnis.
+Während der Vorlagenerzeugung verhindert ihre Imagelease unter Linux einen
+parallelen aktuellen Terminal-Swap; Windows hält das Image ohne Schreib-/
+Löschfreigabe offen. Eine vorhandene historische Update-Lockdatei wird nur
+gelesen. Die reine Konfigurationsausgabe erzeugt keine Sperrdatei.
+
+Unveränderte mit v0.5.184 erzeugte Claude-/Codex-Profile lassen sich mit
+`se plugin uninstall claude` beziehungsweise `se plugin uninstall codex`
+unmittelbar entfernen. Eine vorherige Migration ist dafür nicht erforderlich.
+Die Migration erkennt die drei früher auf Linux vom Produkt gesetzten
+XDG-/DBus-Schlüssel als eigene Werte; zusätzliche Benutzerschlüssel und
+Toolfilter bleiben geschützt. Bei neuen Eigentumsnachweisen werden auch die
+aufgezeichneten Envwerte vor der Entfernung verglichen. Auf Windows gelten
+manuell hinzugefügte Unix-Envwerte weiterhin als Benutzereinstellungen.
+
 Windows-Installer, Linux-Installer und Desktop-Updater verwenden denselben
 hashgebundenen Helfereinstieg. Unter dem Installationsstamm liegen
 `mcp/launchers/<SHA-256>/`, `mcp/runtimes/<SHA-256>/` und der bestätigte Zeiger
@@ -358,6 +387,16 @@ Neue Fähigkeiten benötigen einen tatsächlichen MCP-Prozessstart über den Hos
 Smart Explorer erzwingt keinen Austausch innerhalb einer laufenden
 stdio-Verbindung und startet bei einer administrativen Installation keinen
 Benutzer-MCP-Server mit Administratorrechten.
+
+Die reguläre Windows-Deinstallation entfernt die nachgewiesen eigenen
+Runtimekopien, Launcher, Manifeste und Installationsmetadaten, bevor sie die
+Hauptprogramme löscht. Die Prozesse dieser Installation müssen zuvor regulär
+geschlossen sein. Eine belegte aktive Nutzung, ein ungeklärter Prozessbesitz,
+eine offene Updatewiederherstellung oder ein Löschfehler beendet den Versuch mit
+einer Meldung und erhält den Deinstallationseintrag für die Wiederholung.
+Fremde Dateien und Benutzerprofile bleiben erhalten. Ein begonnenes Entfernen
+sperrt neue Starts aus der betroffenen MCP-Installation und wird nach einem
+Teilfehler gegen dieselben ursprünglichen Dateihashes fortgesetzt.
 
 ## Grenzen
 

@@ -225,3 +225,27 @@ fn batches_p13_retention_requires_stopping_same_installation_and_supported_contr
     assert!(!state.retains(&id, &runtime));
     transaction.rollback().unwrap();
 }
+
+#[test]
+fn batches_p13_historical_terminal_entry_works_offline_and_rejects_stale_image() {
+    let root=tempfile::tempdir().unwrap();let cli=root.path().join("se");let bytes=b"local-cli-only";
+    std::fs::write(&cli,bytes).unwrap();
+    let hash=hash_bytes(bytes);
+    // No manifest, launcher, feed, HTTP call, host process or profile exists.
+    assert_eq!(crate::mcp_launcher::generator::verified_legacy_entry(&cli,&hash).unwrap(),cli);
+    assert!(!root.path().join("mcp").exists());
+    std::fs::write(&cli,b"replacement version").unwrap();
+    assert_eq!(crate::mcp_launcher::generator::verified_legacy_entry(&cli,&hash).unwrap_err(),"runtime_sha256_mismatch");
+    assert_eq!(std::fs::read(cli).unwrap(),b"replacement version");
+}
+
+#[test]
+fn batches_p13_historical_terminal_entry_does_not_downgrade_existing_managed_state() {
+    for record in ["installation.id","legacy.v1.json","update.v1.json","current.v1.json"] {
+        let root=tempfile::tempdir().unwrap();let cli=root.path().join("se");let bytes=b"local-cli";
+        std::fs::write(&cli,bytes).unwrap();std::fs::create_dir(root.path().join("mcp")).unwrap();
+        std::fs::write(root.path().join("mcp").join(record),b"existing managed record").unwrap();
+        assert!(crate::mcp_launcher::generator::verified_legacy_entry(&cli,&hash_bytes(bytes)).unwrap_err().starts_with("integration_legacy_entry_has_managed_state:"));
+        assert_eq!(std::fs::read(root.path().join("mcp").join(record)).unwrap(),b"existing managed record");
+    }
+}

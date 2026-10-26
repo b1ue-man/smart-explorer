@@ -40,6 +40,7 @@ impl UpdateTransaction {
         if !retire_managed {crate::mcp_launcher::contract_probe::verify_manifest_policy(root,&target)?;}
         let _control=installation.lock("control.lock",true)?;
         let installation=Installation::load(root)?;
+        if root.join("mcp/uninstall.v1.json").exists() {return Err("installation_uninstall_in_progress".into());}
         if target.installation_id!=installation.manifest.installation_id
             || target.generation<=installation.manifest.generation {return Err("update_target_identity_or_generation_invalid".into());}
         if installation.state()?.is_some_and(|state|state.blocks_work() || (state.retire_managed && state.phase==Phase::Committed && installation.manifest==state.previous)) {return Err("update_recovery_required".into());}

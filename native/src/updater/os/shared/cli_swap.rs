@@ -61,6 +61,7 @@ fn sha256_matches(path: &Path, expected: &str) -> bool {
 /// `<name>.update-lock` beside the installed file, holding the owner's PID.
 pub(super) struct UpdateLock {
     path: PathBuf,
+    _image: Option<std::fs::File>,
 }
 
 impl UpdateLock {
@@ -77,9 +78,12 @@ impl UpdateLock {
                 .open(&path)
             {
                 Ok(mut file) => {
+                    let mut lease=Self {path,_image:None};
                     write!(file, "{}", std::process::id())
-                        .map_err(|error| format!("write {}: {error}", path.display()))?;
-                    return Ok(Self { path });
+                        .map_err(|error| format!("write {}: {error}", lease.path.display()))?;
+                    lease._image=crate::mcp_launcher::legacy_update_image(target)
+                        .map_err(|error|format!("legacy_profile_busy: {error}"))?;
+                    return Ok(lease);
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                     let owner = std::fs::read_to_string(&path)
@@ -108,6 +112,20 @@ impl UpdateLock {
         }
         Err(format!("could not lock {}", path.display()))
     }
+}
+
+/// Profile writers only read the historical namespace lock. They never create,
+/// remove or repair a file in a read-only installation directory.
+pub(super) fn check_cli_update_idle(target:&Path)->Result<(),String> {
+    let name=target.file_name().ok_or("installed CLI name missing")?.to_string_lossy();
+    let path=target.with_file_name(format!("{name}.update-lock"));
+    let raw=match std::fs::read_to_string(&path) {
+        Ok(raw)=>raw,Err(error) if error.kind()==std::io::ErrorKind::NotFound=>return Ok(()),
+        Err(error)=>return Err(format!("integration_update_state_unreadable: {}: {error}",path.display())),
+    };
+    let owner=raw.trim().parse::<u32>().ok().filter(|pid|*pid!=0).ok_or_else(||format!("integration_update_state_unknown: {}",path.display()))?;
+    if os::process_alive(owner) {return Err(format!("integration_update_in_progress: process {owner} owns {}",path.display()));}
+    Ok(())
 }
 
 impl Drop for UpdateLock {
@@ -376,5 +394,29 @@ mod tests {
         assert_eq!(orphan_owner("se", "se.update-lock"), None);
         assert_eq!(orphan_owner("se", "se.update-old.x.1"), None);
         assert_eq!(orphan_owner("se", "sed.update-old.1.1"), None);
+    }
+
+    #[cfg(target_os="linux")]
+    #[test]
+    fn batches_p13_profile_image_lease_preserves_cli_swap_commit_and_rollback() {
+        let dir=tempfile::tempdir().unwrap();let (target,staged,sha256)=setup(dir.path());
+        let profile=super::super::terminal::lock_cli_for_integration(&target).unwrap();
+        assert!(UpdateLock::acquire(&target).err().unwrap().starts_with("legacy_profile_busy"));
+        assert_eq!(std::fs::read(&target).unwrap(),b"old se");
+        assert_eq!(names(dir.path()),["se","staged"]);drop(profile);
+        for rollback in [true,false] {
+            let lock=UpdateLock::acquire(&target).unwrap();
+            let replaced=install_cli_in_place(&staged,&sha256,&target,lock).unwrap();
+            replaced.verify_installed().unwrap();
+            assert!(super::super::terminal::lock_cli_for_integration(&target).is_err());
+            if rollback {replaced.rollback().unwrap();assert_eq!(std::fs::read(&target).unwrap(),b"old se");}
+            else {replaced.commit().unwrap();assert_eq!(std::fs::read(&target).unwrap(),b"new se");}
+            drop(super::super::terminal::lock_cli_for_integration(&target).unwrap());
+            assert_eq!(names(dir.path()),["se","staged"]);
+        }
+        let lock=UpdateLock::acquire(&target).unwrap();
+        assert!(install_cli_in_place(&staged,&"0".repeat(64),&target,lock).is_err());
+        assert_eq!(std::fs::read(&target).unwrap(),b"new se");
+        assert_eq!(names(dir.path()),["se"]);
     }
 }

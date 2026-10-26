@@ -987,6 +987,22 @@ contracts and publish `mcp/current.v1.json`. A compatible idle MCP process may
 retain its generation; active operations defer the update. Legacy or incompatible
 processes retain the ordered stop path. See [AI agent integration](AI_AGENT_PLUGIN.md).
 
+A historical terminal-only updater may replace `se` without creating a managed
+installation manifest. That existing path keeps local plugin installation,
+configuration output and profile refresh available through the verified CLI
+image; it requires neither a bootstrap download nor write access to the
+installation directory. A subsequent regular managed
+update can install the launcher generation.
+
+The Windows uninstaller retires the owned MCP runtimes, launcher generations and
+metadata before removing the main executables. Close the processes belonging
+to this installation through their regular shutdown paths. The uninstaller
+checks actual process and lifecycle ownership instead of killing every process
+with the same executable name. Busy owners, an unfinished update recovery or a
+file removal failure retain the uninstall registration and a retryable removal
+path. Unknown or modified files in the MCP tree remain intact; the installation
+directory is never removed recursively.
+
 The normal update path uses a separate helper installed next to the app binary
 (`Smart Explorer Updater.exe` on Windows, `smart_explorer_updater` on Linux) and
 the feed also ships the terminal companion (`se.exe` on Windows, `se` on Linux).

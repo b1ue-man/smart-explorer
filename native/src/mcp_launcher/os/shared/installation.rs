@@ -43,6 +43,7 @@ impl Installation {
                 return Self::load(root).map(Some);
             }
         }
+        if parent.join("mcp/uninstall.v1.json").exists() {return Err("installation_uninstall_in_progress".into());}
         if parent.join("mcp/current.v1.json").exists() { return Self::load(parent).map(Some); }
         Ok(None)
     }
