@@ -38,8 +38,36 @@ impl Session<'_> {
                     .error(ScreenErrorCode::IndicatorUnavailable, detail)
                     .await;
             }
-            match crate::screen::core::family_listing::open(self.context,self.principal,source,None,self.mode==SessionMode::Control) {
-                Ok(opened) => {
+            let (bank,output) = self.pipeline.capture_context()?;
+            let admission = bank.new_source_session()?;
+            let mut stop = self.handle.stop_signal();
+            if stop.borrow().is_some() {return Err(io::Error::from(io::ErrorKind::Interrupted));}
+            struct PreparedResult {
+                result: Result<Box<dyn crate::screen::core::host_backend::PreparedSource>,
+                    crate::screen::core::host_backend::SourceRefusal>,
+                _admission: std::sync::Arc<crate::screen::core::capture_admission::SessionAdmission>,
+            }
+            let context = self.context.clone();
+            let principal = self.principal.clone();
+            let wanted = source.clone();
+            let control = self.mode == SessionMode::Control;
+            let retained = admission.clone();
+            let job = tokio::task::spawn_blocking(move || {
+                let result = crate::screen::core::family_listing::prepare(&context,&principal,&wanted,None,control,retained.clone());
+                PreparedResult {result,_admission:retained}
+            });
+            let prepared = tokio::select! {biased;
+                _ = self.connection.closed() => return Err(io::Error::from(io::ErrorKind::Interrupted)),
+                _ = stop.changed() => return Err(io::Error::from(io::ErrorKind::Interrupted)),
+                prepared = job => prepared.map_err(io::Error::other)?,
+            };
+            match prepared.result {
+                Ok(prepared) => {
+                    let context = self.context.clone();
+                    let principal = self.principal.clone();
+                    let allowed = std::sync::Arc::new(move ||
+                        crate::screen::core::family_listing::admitted(&context,&principal,control));
+                    let opened = crate::screen::core::host_admission::pending(prepared,admission,output,allowed);
                     if self.handle.stop_signal().borrow().is_some()
                         || !crate::screen::core::family_listing::admitted(self.context,self.principal,self.mode==SessionMode::Control) {
                         drop(opened);return Err(io::Error::new(io::ErrorKind::PermissionDenied,"source_permission_revoked"));

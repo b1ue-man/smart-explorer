@@ -39,10 +39,20 @@ pub(crate) struct PipelineActor {
     input_sink:Option<Arc<dyn crate::screen::core::host_backend::ScreenInputSink>>,
     route:Option<(u64,u64,Option<crate::share::route_state::RouteClass>,bool)>,
     mode:QualityMode,
+    admission:Option<Arc<crate::screen::core::capture_admission::SessionAdmission>>,
+    accepted:Option<crate::screen::core::frame_budget::FrameContract>,
+    capture_codec:crate::screen::core::host_codec_adapters::HostCodecPlan,
 }
 impl PipelineActor {
     pub(crate) fn new(mut pipeline:Pipeline,connection:Connection)->Self {
         let stats=pipeline.second(&connection);
+        let admission = pipeline.admission.clone();
+        let accepted = pipeline.negotiated_contract;
+        let capture_codec = if pipeline.choice.codec == CodecKind::Tiles {
+            crate::screen::core::host_codec_adapters::HostCodecPlan::Tiles
+        } else if pipeline.backend.platform() == crate::screen::core::wire_hello::HostPlatform::Windows {
+            crate::screen::core::host_codec_adapters::HostCodecPlan::MediaFoundation {output_buffer_bytes:64*1024*1024}
+        } else {crate::screen::core::host_codec_adapters::HostCodecPlan::OpenH264};
         let work=pipeline.work.clone();
         let input_sink=pipeline.stage.as_ref().and_then(|stage|stage.source.input_sink());
         let mode=pipeline.quality_policy.mode;
@@ -50,7 +60,7 @@ impl PipelineActor {
             presentation:pipeline.presentation_supported(),ready:pipeline.input_reference_ready(),keyframe:pipeline.pacer.keyframe_due(),
             stream:pipeline.stream_info(),totals:pipeline.totals(),stats};
         Self {pipeline:Some(pipeline),connection,work,job:None,job_epoch:0,pending:Pending::default(),completion:None,
-            capture_error:None,fallback_notice:None,facts,blocked:false,stopped:false,known_ack:None,input_sink,route:None,mode}
+            capture_error:None,fallback_notice:None,facts,blocked:false,stopped:false,known_ack:None,input_sink,route:None,mode,admission,accepted,capture_codec}
     }
     fn refresh(&mut self) {
         if let Some(notice)=self.pipeline.as_mut().and_then(|p|p.fallback_notice.take()) {
@@ -147,6 +157,16 @@ impl PipelineActor {
     pub(crate) fn poll_capture_active(&mut self)->Option<io::Result<()>> {
         self.poll();if let Some(error)=self.capture_error.take() {return Some(Err(error));}
         let result=self.pipeline.as_mut()?.poll_capture_active();self.refresh();result
+    }
+    pub(crate) fn capture_context(&self) -> io::Result<(Arc<crate::screen::core::capture_admission::SessionAdmission>,
+        crate::screen::core::host_codec_adapters::HostOutputPlan)>
+    {
+        use crate::screen::core::host_codec_adapters::{HostContract,HostOutputPlan};
+        let admission = self.admission.clone().ok_or_else(||io::Error::other("source switch has no session admission"))?;
+        let limits = self.accepted.map_or(crate::screen::core::frame_budget::FrameLimits::LEGACY,|contract|contract.limits);
+        let output = HostOutputPlan::new(self.accepted.map_or(HostContract::Legacy,HostContract::Versioned),
+            limits.fit(limits.max_size),self.capture_codec)?;
+        Ok((admission,output))
     }
     pub(crate) fn set_source(&mut self,source:Box<dyn ScreenSource>) {self.interrupt();self.input_sink=source.input_sink();self.pending.source=Some(source);self.poll();}
     pub(crate) fn set_mode(&mut self,kind:StreamKind,size:Option<FrameSize>,fps:Option<u16>,sharpness:bool,lossless:bool) {

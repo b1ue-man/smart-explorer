@@ -34,7 +34,7 @@ const ENCODING_LZ4: u8 = 2;
 /// Alpha bytes of two little-endian BGRA pixels in one `u64`.
 const ALPHA_MASK: u64 = 0xFF00_0000_FF00_0000;
 
-fn tile_rect(column: u32, row: u32, size: FrameSize) -> Rect {
+pub(super) fn tile_rect(column: u32, row: u32, size: FrameSize) -> Rect {
     let (x, y) = (column * TILE_SIDE, row * TILE_SIDE);
     Rect {
         x,
@@ -47,7 +47,7 @@ fn tile_rect(column: u32, row: u32, size: FrameSize) -> Rect {
 /// Hash of the colour bytes of one tile. Every step is a bijection of the
 /// state for a fixed input word, so two tiles that differ in exactly one
 /// 8-byte word never share a hash.
-fn tile_hash(frame: &BgraView, rect: Rect) -> u64 {
+pub(super) fn tile_hash(frame: &BgraView, rect: Rect) -> u64 {
     let mut state = 0x243F_6A88_85A3_08D3u64;
     let (start, end) = (rect.x as usize * 4, (rect.x + rect.width) as usize * 4);
     for y in rect.y..rect.y + rect.height {
@@ -83,7 +83,7 @@ fn gather(frame: &BgraView, rect: Rect, out: &mut Vec<u8>) {
     }
 }
 
-fn solid_colour(tile: &[u8]) -> Option<[u8; 4]> {
+pub(super) fn solid_colour(tile: &[u8]) -> Option<[u8; 4]> {
     let first: [u8; 4] = tile.get(..4)?.try_into().ok()?;
     tile.chunks_exact(4)
         .all(|pixel| pixel == first)

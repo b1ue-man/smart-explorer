@@ -54,7 +54,7 @@ impl Pipeline {
         let active_budget = stale.saturating_add(Duration::from_micros(serialization_us));
         let writing=crate::screen::core::gop_stream::write_with_route(
             connection, active_budget,
-            gop.write_frame(frame_id, capture_ts_us, frame.keyframe, frame.records),
+            gop.write_frame_admitted(frame_id, capture_ts_us, frame.keyframe, frame.records),
         );
         let written=tokio::select! {biased;
             _=work.cancelled(work_epoch)=>Err(io::Error::from(io::ErrorKind::Interrupted)),

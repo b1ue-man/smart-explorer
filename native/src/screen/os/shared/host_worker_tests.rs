@@ -40,28 +40,20 @@ fn tiles() -> CodecChoice {
 fn screen_task_host_worker_exits_on_update_stop() {
     // The host process reads its stop marker from its own app data.
     let data = tempfile::tempdir().unwrap();
-    let mut command = Command::new(worker_program());
-    command
-        .arg(SCREEN_HOST_WORKER_SWITCH)
-        .env(PARENT_ENV, std::process::id().to_string())
-        .env(
-            if cfg!(windows) {
-                "APPDATA"
-            } else {
-                "XDG_DATA_HOME"
-            },
-            data.path(),
-        )
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit());
-    super::super::worker_lifetime::prepare(&mut command);
-    let link = WorkerLink::with_command(command).unwrap();
     let size = FrameSize::new(320, 180);
-    let mut source = match WorkerSource::opened(link, &SourceId::Synthetic, Some(size), false) {
-        Ok(source) => source,
-        Err(refusal) => panic!("host process refused the test picture: {}", refusal.reason),
-    };
+    let admission = crate::screen::core::capture_test_support::session(None);
+    let data_key = if cfg!(windows) {"APPDATA"} else {"XDG_DATA_HOME"};
+    let env = vec![(data_key.to_owned(), data.path().to_string_lossy().into_owned())];
+    let prepared = prepared::PreparedWorker::new(&worker_program(), &env, "fixture",
+        admission.session(), &SourceId::Synthetic, Some(size), false, admission.clone(), None).unwrap();
+    let output = crate::screen::core::host_codec_adapters::HostOutputPlan::new(
+        crate::screen::core::host_codec_adapters::HostContract::Legacy, size,
+        crate::screen::core::host_codec_adapters::HostCodecPlan::Tiles).unwrap();
+    use crate::screen::core::host_backend::PreparedSource;
+    let plan = prepared.capture_plan(&output).unwrap().unwrap();
+    let grant = admission.authority().approve(plan).unwrap();
+    let link = prepared.shared_link();
+    let mut source = Box::new(prepared).activate(grant).unwrap();
     assert_eq!(source.size(), size);
     let request = StageRequest {
         frame_contract: None,
@@ -74,7 +66,7 @@ fn screen_task_host_worker_exits_on_update_stop() {
         encoder_epoch: 1,
         fps: 30,
     };
-    let first = source.produce(&request).unwrap();
+    let first = source.host_stage().unwrap().produce(&request).unwrap();
     assert!(matches!(first, StageFrame::Encoded { keyframe: true, .. }));
 
     // A new update-stop request, as the updater helper writes it (V8).
@@ -83,7 +75,7 @@ fn screen_task_host_worker_exits_on_update_stop() {
     std::fs::write(sync.join("daemon.stop"), "stop").unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     let status = loop {
-        if let Some(status) = source.link().child.try_wait().unwrap() {
+        if let Some(status) = link.lock().unwrap().child.as_mut().unwrap().try_wait().unwrap() {
             break status;
         }
         assert!(
@@ -100,7 +92,7 @@ fn screen_task_host_worker_exits_on_update_stop() {
         keyframe: false,
         ..request
     };
-    let failure = source.produce(&next).unwrap_err();
+    let failure = source.host_stage().unwrap().produce(&next).unwrap_err();
     assert_eq!(
         failure.code,
         ScreenErrorCode::HostShutdown,

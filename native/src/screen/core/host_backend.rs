@@ -21,11 +21,14 @@ use super::wire_hello::HostPlatform;
 use crate::share::access_approval::{ApprovalBroker, ApprovalSummary, ApprovalTicket};
 use crate::share::access_grant::Capability;
 use crate::share::relation_proof::ProvenPrincipal;
+use super::capture_image::CapturedImage;
+use super::capture_records::CapturedRecords;
+use super::capture_admission::CaptureGrant;
 pub(crate) use super::capture_source_contract::{PreparedSource, PreparedSourceInfo, HostOutputPlan};
 
 /// What one capture delivered.
 pub(crate) enum SourceFrame {
-    Frame(BgraImage),
+    Frame(CapturedImage),
     /// Nothing changed since the last picture.
     Unchanged,
     /// The source exists but shows nothing usable for now (C1).
@@ -58,6 +61,9 @@ pub(crate) trait ScreenSource: Send {
     /// None supplies no allocation permission and is only a transitional
     /// state until every productive source uses prepare/activate.
     fn capture_grant(&self) -> Option<super::capture_admission::CaptureGrant> {None}
+    /// A metadata-only wrapper may complete activation here. Some(state)
+    /// preserves its pending state and requests no picture or encoder buffer.
+    fn prepare_capture(&mut self, _request:&super::host_stage::StageRequest)->io::Result<Option<SessionState>> {Ok(None)}
     /// Runs in the original capture worker after the admitted request waited
     /// in IPC. Platform sources may additionally verify their live geometry.
     fn inject_input(&mut self,backend:&dyn ScreenHostBackend,reference_generation:u64,_presented:bool,events:&[InputEvent])
@@ -99,7 +105,7 @@ pub(crate) trait ScreenSource: Send {
             SourceFrame::Frame(image)=>{
                 let size=limits.fit(image.size());limits.check(size)?;
                 Ok(SourceFrame::Frame(if size==image.size() {image} else {
-                    super::pixel_convert::downscale_bgra_with_limits(&image.view(),size,limits)?
+                    image.downscale(size,limits,&image.grant(),super::capture_admission::CaptureOwner::ScaledPixels)?
                 }))
             }
             frame=>Ok(frame),
@@ -118,8 +124,18 @@ pub(crate) struct EncodedFrame {
     pub records: Vec<Vec<u8>>,
     pub keyframe: bool,
 }
+/// Productive host output. Unlike the codec benchmark result, every record
+/// carries the promise acquired before its own byte allocation.
+pub(crate) struct CapturedEncodedFrame {
+    pub records: CapturedRecords,
+    pub keyframe: bool,
+}
 
 pub(crate) trait ScreenEncoder: Send {
+    fn encode_captured(&mut self, _frame: &CapturedImage, _request: &super::host_stage::StageRequest)
+        -> io::Result<CapturedEncodedFrame> {
+        Err(io::Error::new(io::ErrorKind::Unsupported,"encoder_has_no_capture_admission"))
+    }
     /// Encoder name for statistics (`tiles`, an MFT, `openh264`).
     fn name(&self) -> String;
     fn size(&self) -> FrameSize;
@@ -201,6 +217,10 @@ impl SourceRefusal {
 pub(crate) trait ScreenHostBackend: Send + Sync {
     fn platform(&self) -> HostPlatform;
     fn memory_facts(&self)->Option<super::frame_memory::MemoryFacts> {None}
+    fn capacity_ceiling(&self,facts:Option<super::frame_memory::MemoryFacts>)->super::frame_memory::CapacityCeiling {
+        if facts.is_some() {super::frame_memory::CapacityCeiling::desktop(facts)}
+        else {super::frame_memory::CapacityCeiling::bounded(self.session_memory_ceiling())}
+    }
     /// Android's separately observed Java heap bound remains a session ceiling.
     fn session_memory_ceiling(&self)->u64 {super::frame_budget::MAX_SESSION_WORKING_BYTES}
     fn icon(&self, _entry: super::app_icon::AuthorizedIconEntry<'_>) -> io::Result<Option<super::app_icon::IconReply>> {Ok(None)}
@@ -265,6 +285,10 @@ pub(crate) trait ScreenHostBackend: Send + Sync {
     fn open_encoder_for_stage(&self, request: &super::host_stage::StageRequest) -> io::Result<Box<dyn ScreenEncoder>> {
         self.open_encoder(&request.choice, request.size)
     }
+    fn open_encoder_for_stage_admitted(&self, _request: &super::host_stage::StageRequest,
+        _grant: CaptureGrant) -> io::Result<Box<dyn ScreenEncoder>> {
+        Err(io::Error::new(io::ErrorKind::Unsupported,"encoder_has_no_capture_admission"))
+    }
     /// Injects the input of the controlling viewer.
     fn inject(&self, events: &[InputEvent]) -> Result<(), ControlBlock>;
     /// Family coordinates are relative to the exact admitted capture geometry.
@@ -310,87 +334,6 @@ impl ConsentBroker for ApprovalBroker {
     }
 }
 
-/// The lossless tile codec as a `ScreenEncoder`.
-pub(crate) struct TilesScreenEncoder {
-    encoder: TileEncoder,
-}
-
-impl TilesScreenEncoder {
-    pub(crate) fn new(size: FrameSize) -> io::Result<Self> {
-        Ok(Self {
-            encoder: TileEncoder::new(size)?,
-        })
-    }
-}
-
-impl TilesScreenEncoder {
-    pub(crate) fn new_with_limits(size: FrameSize, limits: super::frame_budget::FrameLimits) -> io::Result<Self> {
-        Ok(Self { encoder: TileEncoder::new_with_limits(size, limits)? })
-    }
-}
-
-impl ScreenEncoder for TilesScreenEncoder {
-    fn name(&self) -> String {
-        "tiles".into()
-    }
-
-    fn size(&self) -> FrameSize {
-        self.encoder.size()
-    }
-    fn encode_frame(&mut self,frame:&BgraImage,request:&super::host_stage::StageRequest) -> io::Result<EncodedFrame> {
-        let records=self.encoder.encode_visible(&frame.view(),request.keyframe,MAX_TILES_RECORD_BYTES,request.visible_rects.as_deref())?;
-        Ok(EncodedFrame {records,keyframe:request.keyframe})
-    }
-
-    fn encode(
-        &mut self,
-        frame: &BgraImage,
-        keyframe: bool,
-        _target_bps: u64,
-    ) -> io::Result<EncodedFrame> {
-        let records = self
-            .encoder
-            .encode(&frame.view(), keyframe, MAX_TILES_RECORD_BYTES)?;
-        Ok(EncodedFrame { records, keyframe })
-    }
-}
-
-/// The lossless tile codec as a `ScreenDecoder`.
-pub(crate) struct TilesScreenDecoder {
-    decoder: TileDecoder,
-    decoded: Option<super::decoded_frame::DecodedFrame>,
-}
-
-impl TilesScreenDecoder {
-    pub(crate) fn new(size: FrameSize) -> io::Result<Self> {
-        Ok(Self {
-            decoder: TileDecoder::new(size)?,
-            decoded: None,
-        })
-    }
-}
-
-impl TilesScreenDecoder {
-    pub(crate) fn new_with_limits(size: FrameSize, limits: super::frame_budget::FrameLimits) -> io::Result<Self> {
-        Ok(Self { decoder: TileDecoder::new_with_limits(size, limits)?, decoded: None })
-    }
-}
-
-impl ScreenDecoder for TilesScreenDecoder {
-    fn name(&self) -> String {
-        "tiles".into()
-    }
-
-    fn decode(&mut self, record: &FrameRecord) -> io::Result<bool> {
-        self.decoded = None;
-        let complete = self.decoder.apply_frame_record(record)?;
-        if complete { self.decoded = Some(super::decoded_frame::DecodedFrame::from_record(record)); }
-        Ok(complete)
-    }
-
-    fn decoded_frame(&self) -> Option<super::decoded_frame::DecodedFrame> { self.decoded }
-
-    fn picture(&self) -> &BgraImage {
-        self.decoder.image()
-    }
-}
+#[path = "host_backend_codecs.rs"]
+mod tile_adapters;
+pub(crate) use tile_adapters::{TilesScreenDecoder, TilesScreenEncoder};

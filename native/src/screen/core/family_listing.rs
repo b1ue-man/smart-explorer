@@ -30,3 +30,12 @@ pub(crate) fn open(context: &HostContext, principal: &ProvenPrincipal,
     context.backend.open_session_source(&owner(principal).map_err(refusal)?,
         &super::family_protocol::token().map_err(refusal)?,source,wanted,control)
 }
+pub(crate) fn prepare(context:&HostContext,principal:&ProvenPrincipal,source:&super::window_list::SourceId,
+    wanted:Option<super::pixel_convert::FrameSize>,control:bool,
+    admission:std::sync::Arc<super::capture_admission::SessionAdmission>)
+    ->Result<Box<dyn super::capture_source_contract::PreparedSource>,super::host_backend::SourceRefusal> {
+    let refusal=|error:io::Error|super::host_backend::SourceRefusal::new(&error.to_string());
+    if !admitted(context,principal,control) {return Err(super::host_backend::SourceRefusal::new("source_permission_revoked"));}
+    let prepared=context.backend.prepare_session_source(&owner(principal).map_err(refusal)?,admission.session(),source,wanted,control,admission.clone())?;
+    super::host_admission::registered(prepared, admission).map_err(refusal)
+}

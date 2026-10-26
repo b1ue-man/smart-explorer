@@ -127,6 +127,30 @@ impl GopWriter {
         }
         Ok(bytes)
     }
+    pub(crate) async fn write_frame_admitted(&mut self, frame_id: u64, capture_ts_us: u64,
+        keyframe: bool, mut records: super::capture_records::CapturedRecords) -> io::Result<u64> {
+        let budget = super::frame_size_caps::PacketBudget::for_contract(self.header.frame_contract)?;
+        let total = records.iter().try_fold(0usize, |n,r| n.checked_add(r.len()).and_then(|n|n.checked_add(RECORD_HEADER_BYTES)));
+        if records.len() > budget.records || total.is_none_or(|n| n > budget.encoded_bytes)
+            || records.iter().any(|record| record.len() > self.header.record_limit()) {
+            return Err(super::wire::invalid("admitted records exceed GOP contract"));
+        }
+        let count = records.len();
+        records.reverse();
+        let mut written = 0u64;
+        for index in 0..count {
+            let bytes = records.pop()?.ok_or_else(|| super::wire::invalid("admitted record disappeared"))?;
+            let (payload, lease) = bytes.into_parts();
+            let mut flags = if keyframe {FLAG_KEYFRAME} else {0};
+            if index + 1 < count {flags |= FLAG_MORE;}
+            written += (payload.len() + RECORD_HEADER_BYTES) as u64;
+            let record = FrameRecord {frame_id,capture_ts_us,flags,payload};
+            write_frame_record(&mut self.send,&self.header,&record).await?;
+            drop(record);
+            drop(lease);
+        }
+        Ok(written)
+    }
 
     /// Gives the stream up: the viewer drops what it has of it.
     pub(crate) fn reset(mut self) {

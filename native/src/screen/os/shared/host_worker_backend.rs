@@ -105,13 +105,13 @@ impl WorkerProgram {
 
 /// The share host's backend: host processes around the platform backend.
 pub(crate) struct WorkerBackend {
-    inner: Arc<dyn ScreenHostBackend>,
-    program: WorkerProgram,
+    pub(super) inner: Arc<dyn ScreenHostBackend>,
+    pub(super) program: WorkerProgram,
     /// OpenH264 store of the codecs; `None` is this user's.
     openh264_dir: Option<PathBuf>,
     /// The host processes of sessions that may control, newest last.
-    controls: Mutex<Vec<Weak<Mutex<super::WorkerLink>>>>,
-    families: Mutex<super::family_backend::FamilyPins>,
+    pub(super) controls: Mutex<Vec<Weak<Mutex<super::WorkerLink>>>>,
+    pub(super) families: Mutex<super::family_backend::FamilyPins>,
 }
 
 impl WorkerBackend {
@@ -139,7 +139,19 @@ impl WorkerBackend {
 }
 
 impl ScreenHostBackend for WorkerBackend {
+    fn prepare_session_source(&self,owner:&str,session:&str,source:&SourceId,wanted:Option<FrameSize>,control:bool,
+        admission:Arc<crate::screen::core::capture_admission::SessionAdmission>)
+        ->Result<Box<dyn crate::screen::core::capture_source_contract::PreparedSource>,SourceRefusal> {
+        self.prepare_worker(owner,session,source,wanted,control,admission)
+    }
+    fn open_encoder_for_stage_admitted(&self,request:&crate::screen::core::host_stage::StageRequest,
+        grant:crate::screen::core::capture_admission::CaptureGrant)->io::Result<Box<dyn ScreenEncoder>> {
+        Ok(self.codecs().open_encoder_for_stage_admitted(request,&[],grant)?.encoder)
+    }
     fn memory_facts(&self)->Option<crate::screen::core::frame_memory::MemoryFacts> {self.inner.memory_facts()}
+    fn capacity_ceiling(&self,facts:Option<crate::screen::core::frame_memory::MemoryFacts>)->crate::screen::core::frame_memory::CapacityCeiling {
+        self.inner.capacity_ceiling(facts)
+    }
     fn session_memory_ceiling(&self)->u64 {self.inner.session_memory_ceiling()}
     fn platform(&self) -> HostPlatform {
         self.inner.platform()

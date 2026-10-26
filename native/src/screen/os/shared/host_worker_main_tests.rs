@@ -83,8 +83,7 @@ impl ScreenHostBackend for FailingBackend {
 
 fn worker(kind: io::ErrorKind) -> Worker {
     Worker {
-        admitted:Some(None),memory:Some(Arc::new(crate::screen::core::frame_memory::MemoryPool::default())
-            .reserve(None,crate::screen::core::frame_budget::MAX_WORKING_BYTES).unwrap()),
+        admitted: Some(None),
         backend: Arc::new(FailingBackend(kind)),
         source: None,
         encoder: None,
@@ -95,6 +94,11 @@ fn worker(kind: io::ErrorKind) -> Worker {
         capture_active: true,
         reference_generation: 0,
         family: None,
+        prepared: None,
+        planned: None,
+        capture_session: Some(crate::screen::core::capture_test_support::session(None)),
+        remote: dispatch::RemoteAuthority::new(Arc::new(std::sync::Mutex::new(Box::new(Vec::<u8>::new())))),
+        release_sink: None,
     }
 }
 
@@ -128,12 +132,11 @@ fn code_of(reply: WorkerReply) -> ScreenErrorCode {
 }
 
 fn open(worker: &mut Worker) {
-    let opened = worker.handle(WorkerRequest::Open(OpenRequest {
-        source: SourceId::Monitor("portal".into()),
-        wanted: None,
-        control: false,
-    }));
-    assert!(matches!(opened, WorkerReply::Opened { .. }));
+    worker.source = Some(Box::new(FailingSource(match worker.backend.open_source(
+        &SourceId::Monitor("portal".into()), None).unwrap().capture(1,true) {
+        Err(error) => error.kind(),
+        _ => panic!("failing fixture unexpectedly captured"),
+    })));
 }
 
 #[test]
@@ -172,12 +175,8 @@ fn screen_task_worker_input_needs_control_session() {
         }
     );
     let mut controlling = worker(io::ErrorKind::BrokenPipe);
-    let opened = controlling.handle(Request::Open(OpenRequest {
-        source: SourceId::Monitor("portal".into()),
-        wanted: None,
-        control: true,
-    }));
-    assert!(matches!(opened, Reply::Opened { .. }));
+    open(&mut controlling);
+    controlling.control = true;
     // The test backend refuses input: its reason travels back.
     assert_eq!(
         controlling.handle(Request::Input(input.clone())),
@@ -201,39 +200,82 @@ fn screen_task_worker_input_needs_control_session() {
     assert_eq!(Reply::decode(tag, &payload).unwrap(), done);
 }
 
-struct SnapshotSource;
+struct SnapshotSource(crate::screen::core::capture_admission::CaptureGrant);
 impl ScreenSource for SnapshotSource {
     fn size(&self)->FrameSize {FrameSize::new(640,360)}
+    fn capture_grant(&self)->Option<crate::screen::core::capture_admission::CaptureGrant> {Some(self.0.clone())}
     fn capture(&mut self,_id:u64,_key:bool)->io::Result<SourceFrame> {
-        let mut image=crate::screen::core::pixel_convert::BgraImage::new(self.size())?;
-        for pixel in image.data_mut().chunks_exact_mut(4) {pixel.copy_from_slice(&[1,2,3,255]);}
-        Ok(SourceFrame::Frame(image))
+        let mut image = crate::screen::core::capture_image::CaptureImageBuilder::new(
+            self.size(), FrameLimits::LEGACY, &self.0,
+            crate::screen::core::capture_admission::CaptureOwner::SourcePixels)?;
+        for pixel in image.pixels_mut().chunks_exact_mut(4) {pixel.copy_from_slice(&[1,2,3,255]);}
+        Ok(SourceFrame::Frame(image.freeze()))
     }
 }
 #[test]
-fn batches_task_b6_first_worker_snapshot_admits_contract_and_prevents_later_growth() {
+fn batches_task_b6_worker_snapshot_requires_final_binding_and_prevents_later_growth() {
     use crate::screen::core::frame_budget::{FrameCapabilities,FrameContract};
-    let mut worker=worker(io::ErrorKind::BrokenPipe);worker.admitted=None;worker.memory=None;
-    worker.source=Some(Box::new(SnapshotSource));
-    let mut caps=FrameCapabilities::admitted(FrameSize::new(640,360),4*1024*1024).unwrap();caps.hybrid_regions=false;
-    let contract=FrameContract::negotiate(Some(caps),Some(caps)).unwrap();
-    let capture=WorkerRequest::Capture {frame_id:1,frame_contract:contract};
-    let (tag,payload)=capture.encode().unwrap();
-    let raw=worker.handle(WorkerRequest::decode(tag,&payload).unwrap());
-    let WorkerReply::Raw(image)=raw else {panic!("first snapshot must capture after admission");};
-    let limits=contract.unwrap().limits;
+    let mut worker = worker(io::ErrorKind::BrokenPipe);
+    worker.admitted = None;
+    worker.capture_session = None;
+    let mut caps = FrameCapabilities::admitted(FrameSize::new(640,360),4*1024*1024).unwrap();
+    caps.hybrid_regions = false;
+    let contract = FrameContract::negotiate(Some(caps),Some(caps)).unwrap();
+    worker.source = Some(Box::new(SnapshotSource(
+        crate::screen::core::capture_test_support::grant(FrameSize::new(640,360),contract))));
+    assert!(matches!(worker.handle(WorkerRequest::Capture {frame_id:1,frame_contract:contract}),WorkerReply::Failed {..}));
+    worker.admitted = Some(contract);
+    worker.capture_session = Some(crate::screen::core::capture_test_support::session(contract));
+    let capture = WorkerRequest::Capture {frame_id:2,frame_contract:contract};
+    let (tag,payload) = capture.encode().unwrap();
+    let raw = worker.handle(WorkerRequest::decode(tag,&payload).unwrap());
+    let WorkerReply::Raw(image) = raw else {panic!("bound snapshot must capture");};
+    let limits = contract.unwrap().limits;
     assert_eq!(image.size(),limits.fit(FrameSize::new(640,360)));
-    assert_eq!(worker.memory.as_ref().unwrap().bytes(),limits.working_bytes);
-    let mut next=request(image.size());next.frame_contract=contract;next.frame_id=2;
+    assert_eq!(worker.capture_session.as_ref().unwrap().working_bytes(),limits.working_bytes);
+    let image_size = image.size();
+    drop(image);
+    let mut next = request(image_size);next.frame_contract=contract;next.frame_id=3;
     assert!(matches!(worker.handle(WorkerRequest::Produce(next.clone())),WorkerReply::Frame(StageFrame::Encoded {..})));
-    let bigger=FrameCapabilities::admitted(FrameSize::new(640,360),8*1024*1024).unwrap();
-    let bigger=FrameContract::negotiate(Some(bigger),Some(bigger)).unwrap();
-    assert!(matches!(worker.handle(WorkerRequest::Capture {frame_id:3,frame_contract:bigger}),WorkerReply::Failed {..}));
+    let bigger = FrameCapabilities::admitted(FrameSize::new(640,360),8*1024*1024).unwrap();
+    let bigger = FrameContract::negotiate(Some(bigger),Some(bigger)).unwrap();
+    assert!(matches!(worker.handle(WorkerRequest::Capture {frame_id:4,frame_contract:bigger}),WorkerReply::Failed {..}));
     next.frame_contract=bigger;
     assert!(matches!(worker.handle(WorkerRequest::Produce(next)),WorkerReply::Failed {..}));
-    assert_eq!(worker.memory.as_ref().unwrap().bytes(),limits.working_bytes);
-    // Missing optional field keeps the original legacy request semantics.
-    let legacy=WorkerRequest::decode(tag,br#"{"frame_id":4}"#).unwrap();
+    let legacy = WorkerRequest::decode(tag,br#"{"frame_id":5}"#).unwrap();
     assert!(matches!(&legacy,WorkerRequest::Capture {frame_contract:None,..}));
     assert!(matches!(worker.handle(legacy),WorkerReply::Failed {..}));
+}
+
+#[test]
+fn batches_task_capture_worker_grantless_open_is_refused() {
+    let mut worker = worker(io::ErrorKind::BrokenPipe);
+    assert!(matches!(worker.handle(WorkerRequest::Open(OpenRequest {
+        source:SourceId::Synthetic,wanted:None,control:false,
+    })),WorkerReply::Failed {..}));
+    assert!(worker.source.is_none());
+}
+
+#[test]
+fn batches_task_capture_worker_cancel_wakes_an_inflight_resource_request() {
+    use crate::screen::core::capture_admission::CaptureAuthority;
+    struct Signal(std::sync::mpsc::SyncSender<()>);
+    impl io::Write for Signal {
+        fn write(&mut self, bytes:&[u8])->io::Result<usize> {
+            let _ = self.0.try_send(());
+            Ok(bytes.len())
+        }
+        fn flush(&mut self)->io::Result<()> {Ok(())}
+    }
+    let (sent,observed) = std::sync::mpsc::sync_channel(1);
+    let remote = dispatch::RemoteAuthority::new(Arc::new(std::sync::Mutex::new(Box::new(Signal(sent)))));
+    remote.bind_session("capture-fixture").unwrap();
+    let source = crate::screen::core::capture_admission::SourceKey::new("capture-fixture","pixels").unwrap();
+    let registering = source.clone();
+    let waiting = remote.clone();
+    let request = std::thread::spawn(move || waiting.register_prepared_source(registering));
+    observed.recv_timeout(Duration::from_secs(1)).unwrap();
+    remote.cancel_pending(&source);
+    let error = request.join().unwrap().err().unwrap();
+    assert_eq!(error.kind(),io::ErrorKind::Interrupted);
 }

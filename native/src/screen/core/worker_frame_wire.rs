@@ -34,7 +34,7 @@ pub(super) fn read_reference_payload(reader:&mut impl Read,len:usize,expected:Op
         match tag {ENCODED=>budget.encoded_bytes,RAW=>budget.raw_bytes,
             _=>tag_limit(tag).ok_or_else(||invalid("unknown referenced worker reply"))?}
     };
-    if tag==REFERENCE || len-42>bound {return Err(invalid("referenced worker reply exceeds its working memory"));}
+    if matches!(tag, REFERENCE | RAW | ENCODED) || len-42>bound {return Err(invalid("referenced worker reply exceeds its working memory"));}
     let mut payload=vec![0;len];payload[..42].copy_from_slice(&prefix);
     reader.read_exact(&mut payload[42..])?;Ok(payload)
 }
@@ -42,40 +42,7 @@ pub(super) fn read_reference_payload(reader:&mut impl Read,len:usize,expected:Op
 pub(super) fn encode_frame(frame: &StageFrame) -> io::Result<(u8, Vec<u8>)> {
     let budget = packet_budget()?;
     match frame {
-        StageFrame::Encoded {
-            records,
-            keyframe,
-            capture_ts_us,
-            encoder,
-            source_size,
-        } => {
-            let name = encoder.name.as_bytes();
-            if name.len() > MAX_NAME_BYTES || records.is_empty() || records.len() > budget.records {
-                return Err(invalid("encoded picture does not fit a host process frame"));
-            }
-            let total=records.iter().try_fold(0usize,|total,record| {
-                if record.len()>MAX_RECORD_BYTES {return Err(invalid("encoded record exceeds its limit"));}
-                total.checked_add(4).and_then(|n|n.checked_add(record.len())).ok_or_else(||invalid("encoded frame size overflow"))
-            })?;
-            let capacity=total.checked_add(name.len()).and_then(|n|n.checked_add(24)).ok_or_else(||invalid("encoded frame size overflow"))?;
-            if capacity>budget.encoded_bytes {return Err(invalid("encoded frame exceeds worker packet budget"));}
-            let mut out = Vec::with_capacity(capacity);
-            out.extend_from_slice(&capture_ts_us.to_be_bytes());
-            out.push(u8::from(*keyframe));
-            out.push(u8::from(encoder.hardware));
-            push_size(&mut out, *source_size);
-            out.extend_from_slice(&(name.len() as u16).to_be_bytes());
-            out.extend_from_slice(name);
-            out.extend_from_slice(&(records.len() as u32).to_be_bytes());
-            for record in records {
-                if record.len() > MAX_RECORD_BYTES {
-                    return Err(invalid("encoded record exceeds its limit"));
-                }
-                out.extend_from_slice(&(record.len() as u32).to_be_bytes());
-                out.extend_from_slice(record);
-            }
-            Ok((ENCODED, out))
-        }
+        StageFrame::Encoded {..} => Err(invalid("worker records require owned capture transport")),
         StageFrame::Unchanged { source_size } => {
             let mut out = Vec::with_capacity(8);
             push_size(&mut out, *source_size);
@@ -85,41 +52,8 @@ pub(super) fn encode_frame(frame: &StageFrame) -> io::Result<(u8, Vec<u8>)> {
     }
 }
 
-pub(super) fn decode_encoded(payload: &[u8]) -> io::Result<StageFrame> {
-    let budget = packet_budget()?;
-    if payload.len() > budget.encoded_bytes { return Err(invalid("encoded frame exceeds worker packet budget")); }
-    let mut reader = BeReader::new(payload);
-    let capture_ts_us = reader.u64()?;
-    let keyframe = reader.u8()? != 0;
-    let hardware = reader.u8()? != 0;
-    let source_size = read_size(&mut reader)?;
-    let name_len = usize::from(reader.u16()?);
-    if name_len > MAX_NAME_BYTES {
-        return Err(invalid("encoder name exceeds its limit"));
-    }
-    let name = String::from_utf8(reader.bytes(name_len)?.to_vec())
-        .map_err(|_| invalid("encoder name is not UTF-8"))?;
-    let count = reader.u32()? as usize;
-    if count == 0 || count > budget.records {
-        return Err(invalid("encoded picture has no or too many records"));
-    }
-    // Every record needs at least its length field.
-    let mut records = Vec::with_capacity(count.min(reader.remaining() / 4));
-    for _ in 0..count {
-        let len = reader.u32()? as usize;
-        if len > MAX_RECORD_BYTES {
-            return Err(invalid("encoded record exceeds its limit"));
-        }
-        records.push(reader.bytes(len)?.to_vec());
-    }
-    reader.finish()?;
-    Ok(StageFrame::Encoded {
-        records,
-        keyframe,
-        capture_ts_us,
-        encoder: StageEncoder { name, hardware },
-        source_size,
-    })
+pub(super) fn decode_encoded(_payload: &[u8]) -> io::Result<StageFrame> {
+    Err(invalid("worker records require a prior capture ticket"))
 }
 
 pub(super) fn encode_reference(generation:u64,regions:bool,limits:FrameLimits,family_layout_revision:Option<u64>,reply:&WorkerReply) -> io::Result<(u8,Vec<u8>)> {
@@ -133,7 +67,7 @@ pub(super) fn encode_reference(generation:u64,regions:bool,limits:FrameLimits,fa
         }
     }
     if let WorkerReply::Raw(image)=reply {
-        if image.data().len().saturating_add(8)>budget.raw_bytes {return Err(invalid("raw worker reference exceeds source pixel budget"));}
+        if image.image().data().len().saturating_add(8)>budget.raw_bytes {return Err(invalid("raw worker reference exceeds source pixel budget"));}
     }
     let (tag,payload)=reply.encode()?;
     let limit=tag_limit(tag).ok_or_else(||invalid("unknown referenced worker reply"))?;

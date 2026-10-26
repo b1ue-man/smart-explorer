@@ -3,13 +3,14 @@ use super::*;
 use std::sync::{Arc,Mutex};
 use crate::screen::core::{frame_budget::{FrameCapabilities,contract_matches,MAX_WORKING_BYTES},
     frame_memory::MemoryPool,host_backend::{ScreenDecoder,TilesScreenDecoder},
-    pixel_convert::BgraImage,wire_binary::{FrameRecord,FLAG_KEYFRAME,FLAG_MORE}};
+    pixel_convert::{BgraImage,downscale_bgra_with_limits},wire_binary::{FrameRecord,FLAG_KEYFRAME,FLAG_MORE}};
 
-struct Source {size:FrameSize,family:Option<u64>}
+struct Source {size:FrameSize,family:Option<u64>,grant:crate::screen::core::capture_admission::CaptureGrant}
 impl ScreenSource for Source {
     fn size(&self)->FrameSize {self.size}
+    fn capture_grant(&self)->Option<crate::screen::core::capture_admission::CaptureGrant> {Some(self.grant.clone())}
     fn family_layout_revision(&self)->Option<u64> {self.family}
-    fn capture(&mut self,_id:u64,_key:bool)->io::Result<SourceFrame> {Ok(SourceFrame::Frame(pixels(self.size)))}
+    fn capture(&mut self,_id:u64,_key:bool)->io::Result<SourceFrame> {Ok(SourceFrame::Frame(crate::screen::core::capture_test_support::image(&pixels(self.size),&self.grant)))}
 }
 fn pixels(size:FrameSize)->BgraImage {
     let mut image=BgraImage::new(size).unwrap();
@@ -24,7 +25,7 @@ fn batches_task_b6_snapshot_preserves_accepted_limits_family_and_legacy_pixels()
     let caps=FrameCapabilities::admitted(FrameSize::new(1024,1024),32*1024*1024).unwrap();
     let modern=FrameContract::negotiate(Some(caps),Some(caps)).unwrap();
     for accepted in [modern,None] {
-        let mut stage=Stage {source:Box::new(Source {size:source_size,family:accepted.map(|_|7)}),encoder:None,memory:None};
+        let mut stage=Stage {source:Box::new(Source {size:source_size,family:accepted.map(|_|7),grant:crate::screen::core::capture_test_support::grant(source_size,accepted)}),encoder:None,encoder_book:None,memory:None};
         let shot=still_tiles(&mut stage,4,FrameSize::MAX,accepted).unwrap();
         let header=shot.header(9);header.encode().unwrap();
         assert_eq!(header.family_layout_revision,accepted.map(|_|7));
@@ -38,11 +39,17 @@ fn batches_task_b6_snapshot_preserves_accepted_limits_family_and_legacy_pixels()
         let expected=downscale_bgra_with_limits(&pixels(source_size).view(),shot.size,limits).unwrap();
         let mut decoder=TilesScreenDecoder::new_with_limits(shot.size,limits).unwrap();
         let count=shot.records.len();
-        for (index,payload) in shot.records.into_iter().enumerate() {
-            let last=index+1==count;
-            let record=FrameRecord {frame_id:4,capture_ts_us:shot.capture_ts_us,
-                flags:FLAG_KEYFRAME|if last {0} else {FLAG_MORE},payload};
+        let mut records = shot.records;
+        records.reverse();
+        for index in 0..count {
+            let last = index + 1 == count;
+            let payload = records.pop().unwrap().unwrap();
+            let (data, lease) = payload.into_parts();
+            let record = FrameRecord {frame_id:4,capture_ts_us:shot.capture_ts_us,
+                flags:FLAG_KEYFRAME | if last {0} else {FLAG_MORE},payload:data};
             assert_eq!(decoder.decode(&record).unwrap(),last);
+            drop(record);
+            drop(lease);
         }
         assert_eq!(decoder.picture().data(),expected.data());
     }
@@ -71,7 +78,7 @@ impl Drop for SourceOwner {
 fn batches_task_b6_abandoned_capture_output_retires_records_before_lease() {
     let pool=Arc::new(MemoryPool::default());let order=Arc::new(Mutex::new(Vec::new()));
     let memory=Arc::new(pool.reserve(None,MAX_WORKING_BYTES).unwrap());
-    let stage=Stage {source:Box::new(SourceOwner {pool:pool.clone(),order:order.clone()}),encoder:None,memory:Some(memory)};
+    let stage=Stage {source:Box::new(SourceOwner {pool:pool.clone(),order:order.clone()}),encoder:None,encoder_book:None,memory:Some(memory)};
     let result=ResultOwner {records:vec![vec![0;64]],pool:pool.clone(),order:order.clone()};
     // Exactly the output container dropped when a blocking JoinHandle is abandoned.
     drop(StageOutput {result,stage});

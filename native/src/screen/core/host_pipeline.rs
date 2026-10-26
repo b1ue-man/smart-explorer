@@ -22,7 +22,7 @@ use std::time::Duration;
 use iroh::endpoint::Connection;
 
 use super::gop_stream::{now_us, path_of, GopWriter};
-use super::host_backend::{EncodedFrame, ScreenHostBackend, ScreenSource};
+use super::host_backend::{CapturedEncodedFrame as EncodedFrame, ScreenHostBackend, ScreenSource};
 use super::host_stage::{StageEncoder, StageError, StageRequest};
 use super::negotiate::{CodecChoice, CodecKind};
 use super::pacing::{FrameClock, PaceDecision, Pacer, SentFrame, STALE_STREAM_US};
@@ -163,81 +163,10 @@ pub(crate) struct Pipeline {
     /// The running encoder and its picture size.
     running: Option<(StageEncoder, FrameSize)>,
     memory:super::frame_memory::MemoryHold,
+    admission:Option<Arc<super::capture_admission::SessionAdmission>>,
 }
 
 impl Pipeline {
-    pub(crate) fn new(
-        backend: Arc<dyn ScreenHostBackend>,
-        source: Box<dyn ScreenSource>,
-        choice: CodecChoice,
-        connection: &Connection,
-        max_fps: u32,
-        display: Option<FrameSize>,
-        inject_resets: Arc<AtomicU32>,
-    ) -> Self {
-        let source_size=source.size();
-        let source_generation=source.reference_generation();
-        let quality_policy = QualityPolicy::new(choice, max_fps);
-        let max_fps = quality_policy.max_fps();
-        let (path, _) = path_of(connection);
-        let display = display.unwrap_or(FrameSize::MAX);
-        let mut pipeline = Self {
-            work:Arc::new(work_control::WorkControl::default()),
-            backend,
-            frame_contract: None,
-            negotiated_contract: None, memory:None,
-            sender: super::sender_budget::SenderBudget::for_peer(connection.remote_id().to_string()),
-            route_epoch: None,
-            source_size,source_generation,presentation:ReferencePresentation::new(),
-            capture_active: true, capture_applied:Some(true), capture_requested:true,capture_ready:None,capture_transition:None,visible_rects: None,
-            stage: Some(Stage {
-                memory:None,
-                source,
-                encoder: None,
-            }),
-            choice,
-            quality_policy,
-            fallback_notice: None,
-            tile_limit: (choice.codec==CodecKind::Tiles).then_some(choice.max_size),
-            kind: StreamKind::Video,
-            gop: None,
-            next_gop_id: 1,
-            next_frame_id: 1,
-            pacer: Pacer::default(),
-            rate: RateController::new(path, now_us()),
-            clock: FrameClock::new(max_fps),codec_fps:0,
-            quality: Quality {
-                fps: max_fps,
-                size: FrameSize::MAX,
-            },
-            max_fps,
-            display,
-            bounds: display,
-            preview_interval_us: PREVIEW_INTERVAL_US,
-            preview_in_flight: None,
-            preview_sent_us: 0,
-            totals: Totals::default(),
-            second_bytes: 0,
-            second_frames: 0,
-            inject_resets,
-            encoder_epoch: 0,
-            running: None,
-        };
-        pipeline.quality.size = pipeline.fitted_size();
-        pipeline.resize();
-        pipeline
-    }
-
-    pub(crate) fn hold_memory(&mut self,memory:std::sync::Arc<super::frame_memory::MemoryLease>) {
-        if let Some(stage)=&mut self.stage {stage.memory=Some(memory.clone());}
-        self.memory=Some(memory);
-    }
-    pub(crate) fn set_frame_contract(&mut self, contract: Option<super::frame_budget::FrameContract>) -> io::Result<()> {
-        if let Some(contract) = contract { contract.validate()?; self.bounds = contract.limits.max_size; self.display = self.bounds; }
-        self.negotiated_contract = contract;
-        self.frame_contract = contract.map(|mut c| {c.hybrid_regions &= self.stage.as_ref().is_some_and(|stage|stage.source.supports_frame_regions());c}); self.quality.size = self.fitted_size(); self.invalidate_reference(); Ok(())
-    }
-
     pub(crate) fn next_frame_id(&self) -> u64 { self.next_frame_id }
     pub(crate) fn set_visible_rects(&mut self, rects: Option<Vec<super::visibility::VisibleRect>>) {
         self.visible_rects=rects.filter(|rects|rects.len()<=super::visibility::MAX_VISIBLE_RECTS && rects.iter().all(|r|
@@ -353,115 +282,10 @@ impl Pipeline {
         self.drop_encoder();
     }
 
-    /// One capture tick.
-    pub(crate) async fn tick(
-        &mut self,
-        connection: &Connection,
-    ) -> Result<Produced, PipelineError> {
-        self.tick_epoch(connection,self.work.epoch()).await
-    }
-    pub(super) async fn tick_epoch(&mut self,connection:&Connection,work_epoch:u64)->Result<Produced,PipelineError> {
-        if !self.work.current(work_epoch) {self.reset_stream();return Ok(Produced::Reset);}
-        if !self.capture_active || self.capture_transition.is_some() { return Ok(Produced::Idle); }
-        if let Some(route) = crate::share::route_monitor::snapshot(connection) {
-            let epoch = (route.generation,route.pause_epoch,route.class);
-            if self.route_epoch != Some(epoch) { self.invalidate_reference(); self.route_epoch = Some(epoch); }
-            if !route.application_allowed { return Ok(Produced::Idle); }
-        }
-        self.sync_source_reference();
-        let fitted=self.fitted_size();
-        let size=self.target_size();
-        if self.choice.codec==CodecKind::H264 && (fitted.width<2 || fitted.height<2) {
-            self.fall_back_to_tiles();return Ok(Produced::Reset);
-        }
-        let rate=if self.choice.codec==CodecKind::H264 {self.choice.max_macroblocks_per_second} else {None};
-        let Some(fps)=self.clock.set_codec_fps(self.quality.fps,size,rate) else {
-            self.fall_back_to_tiles();return Ok(Produced::Reset);
-        };
-        let changed=self.codec_fps!=fps;self.codec_fps=fps;
-        if changed && self.running.is_some() {self.drop_encoder();return Ok(Produced::Reset);}
-        let now = now_us();
-        if !self.clock.take(now) {
-            return Ok(Produced::Idle);
-        }
-        if self.kind == StreamKind::Preview
-            && (self.preview_in_flight.is_some()
-                || now.saturating_sub(self.preview_sent_us) < self.preview_interval_us)
-        {
-            return Ok(Produced::Idle);
-        }
-        let (path, rtt_us) = path_of(connection);
-        self.rate.set_path(path);
-        self.rate.set_timing(rtt_us,self.clock.interval_us());
-        let target = self.rate.target_bps();
-        let keyframe = loop {
-            match self.pacer.decide(now, target, path, rtt_us) {
-                PaceDecision::Encode { keyframe } => break keyframe,
-                PaceDecision::DropBeforeEncode => return Ok(Produced::Dropped),
-                PaceDecision::ResetStream => self.reset_stream(),
-            }
-        };
-        if self.gop.is_none() && !keyframe {
-            self.pacer.request_keyframe();
-            return Ok(Produced::Idle);
-        }
-        let Some(permit) = self.sender.admit(target,path,rtt_us,now,keyframe) else { self.pacer.on_budget_drop(); return Ok(Produced::Dropped); };
-        let size = self.target_size();
-        let mut stage = self
-            .stage
-            .take()
-            .ok_or_else(|| PipelineError::capture(io::Error::other("no screen source")))?;
-        let request = StageRequest {
-            frame_id: self.next_frame_id,
-            frame_contract: self.frame_contract,
-            visible_rects: self.visible_for_size(size),
-            keyframe,
-            target_bps: target,
-            size,
-            choice: self.choice,
-            encoder_epoch: self.encoder_epoch,
-            fps,
-        };
-        let backend = self.backend.clone();
-        let encoding_started = std::time::Instant::now();
-        let joined = tokio::task::spawn_blocking(move || {
-            let produced = produce(&mut stage, backend.as_ref(), &request);
-            StageOutput {result:(produced,request),stage}
-        })
-        .await;
-        let StageOutput {stage,result:(produced,request)} =
-            joined.map_err(|error| PipelineError::capture(io::Error::other(error)))?;
-        self.stage = Some(stage);
-        if !self.work.current(work_epoch) {self.reset_stream();return Ok(Produced::Reset);}
-        if self.sync_source_reference() {
-            return match produced {Ok(Captured::Paused(state))=>Ok(Produced::Paused(state)),Err(error)=>Err(error),_=>Ok(Produced::Reset)};
-        }
-        match produced {
-            Ok(Captured::Unchanged) => Ok(Produced::Idle),
-            Ok(Captured::Paused(state)) => Ok(Produced::Paused(state)),
-            Ok(Captured::Encoded {
-                frame,
-                capture_ts_us,
-                encoder,
-            }) => {
-                let encoded_bytes = frame.records.iter().map(|r|r.len() as u64).sum();
-                self.rate.on_encode(encoded_bytes, encoding_started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64);
-                self.running = Some((encoder, size));
-                let frame_id = request.frame_id;
-                self.send(connection, frame, frame_id, capture_ts_us, size, permit,work_epoch)
-                    .await
-            }
-            Err(failure)
-                if failure.code == ScreenErrorCode::EncoderFailed
-                    && self.choice.codec != CodecKind::Tiles =>
-            {
-                self.quality_policy.encoder_failed = true;
-                self.fallback_notice = Some(format!("encoder_fallback_to_tiles: {}", failure.error));
-                self.fall_back_to_tiles();
-                Ok(Produced::Reset)
-            }
-            Err(failure) => Err(failure),
-        }
-    }
 
 }
+
+#[path="host_pipeline_init.rs"]
+mod initialization;
+#[path="host_pipeline_produce.rs"]
+mod producing;
