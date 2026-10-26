@@ -273,3 +273,32 @@ Nach Abschluss dieses Plans dürfen Fixautoren arbeiten. Das ist keine Aussage,
 dass der gesamte CI-Lauf bereits abgeschlossen oder erfolgreich wäre. Der
 nächste Statusabruf bleibt frühestens 23:10:17 UTC; kein zusätzlicher Lauf,
 kein Abbruch und kein Release werden dadurch ausgelöst.
+
+
+## Aktivierung und erste Integration
+
+Nach abgeschlossener Planung hat die Arbeitsweise für alle M01–M14
+`gpt-6.1-sol` gewählt. Die Einstufungen liegen bei 6–8; der Selektor schlug
+je nach Grenze low, medium oder high vor. Die ausdrückliche Nutzervorgabe
+für den vollständigen eigenen Fixzyklus setzt den tatsächlich konfigurierten
+Effort auf `max`. Ausführungsweg ist das vorhandene Codex-Agentenwerkzeug
+mit Credits. Die Startparameter sind belegt; Antwortmodellmetadaten und
+gemessener Creditsverbrauch sind vom Host nicht verfügbar.
+
+M14 ist durch denselben Autor analysiert, geplant, korrigiert und anschließend
+statisch gegen Quellen geprüft. Main hat den vollständigen begrenzten Diff
+und die Einbindung kontrolliert. Die drei Fixturekorrekturen erhalten ihre
+Prüfkörper und Fallnamen; keine neue Registrierung ist nötig. Der
+[Autorenbericht](fix-f-android-ui-fixtures.md) benennt alle gelesenen/geänderten
+Dateien und die ausstehende Remote-Bestätigung. Kein Laufzeitpass behauptet.
+
+Aktiv sind danach M01, M02, M03, M05, M06, M07 und M13; M04 sowie M08–M12
+bleiben eingeplant. Der Scope wurde jeweils nur für konkret gemeldete
+Aufrufer erweitert. M02 umfasst nun die falschen relativen Joins in
+Ordnerreservierung und Ordner-Move. M06 umfasst den tatsächlichen
+Worker-/Dispatcherleser vor unbesessenem Payload. M13 umfasst die synchrone
+Entziehung alter Freigaben vor Rebind, ohne die bestehende erfolgreiche
+Annahme einer neuen Generation im Routemonitor zu verlieren. M03 untersucht
+den gebundenen Linux-Selbstübergang vor dem Inaktivitätsbeweis der eigenen
+Deinstallation. Jeder dieser Autoren aktualisiert seinen eigenen endgültigen
+Plan und Quellenabgleich vor der betroffenen Änderung.

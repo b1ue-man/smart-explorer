@@ -16,8 +16,8 @@ class BatchesMediaStateTest {
             assertEquals(focus.x, restored.x, 0.0001f)
             assertEquals(focus.y, restored.y, 0.0001f)
         }
-        assertEquals(Offset.Zero, portrait.offset(1f, focus))
-        assertEquals(Offset.Zero, landscape.offset(1f, focus))
+        assertOffsetEquals(Offset.Zero, portrait.offset(1f, focus))
+        assertOffsetEquals(Offset.Zero, landscape.offset(1f, focus))
     }
 
     @Test
@@ -25,7 +25,13 @@ class BatchesMediaStateTest {
         val fitted = MediaGeometry.fit(1600, 400, 400f, 800f)
         assertEquals(400f, fitted.width, 0f)
         assertEquals(100f, fitted.height, 0f)
-        assertEquals(Offset(200f, 0f), fitted.clamp(Offset(10000f, 10000f), 2f))
-        assertEquals(Offset(-200f, 0f), fitted.clamp(Offset(-10000f, -10000f), 2f))
+        assertOffsetEquals(Offset(200f, 0f), fitted.clamp(Offset(10000f, 10000f), 2f))
+        assertOffsetEquals(Offset(-200f, 0f), fitted.clamp(Offset(-10000f, -10000f), 2f))
+    }
+
+    private fun assertOffsetEquals(expected: Offset, actual: Offset) {
+        // Geometry treats positive and negative zero as the same coordinate.
+        assertEquals("x", expected.x, actual.x, 0f)
+        assertEquals("y", expected.y, actual.y, 0f)
     }
 }

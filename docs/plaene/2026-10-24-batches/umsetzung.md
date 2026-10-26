@@ -1265,3 +1265,13 @@ Alle Build-/Teststufen sind beendet. Ohne Handoffprovenienz kann kein Gerätejob
 mehr starten. Der Plan präzisiert deshalb die Startgrenze auf das tatsächliche
 Ende dieser Arbeitsstufen; bloße Cache-Nachbereitung ist kein zusätzlicher
 Haltepunkt. Modellwahl und getrennte Fixaufträge folgen jetzt, ohne neue Suite.
+
+
+M14/A01–A03 ist quellseitig samt vollständigem eigenem Fixzyklus abgeschlossen:
+Compose-Memberimport korrigiert, isolierte Loginbitmap-Application und exakte
+geometrische x/y-Vergleiche mit Delta null. Main bestätigt den begrenzten Diff,
+statische Syntax und unveränderte bestehende Auswahl. Keine Produktionsdatei
+oder Rotationspolitik ist verändert, kein Laufzeitergebnis vorweggenommen.
+Die nächste aktive Grenze ist M07; gleichzeitig bleiben M01/M02/M03/M05/M06/M13
+in ihrem jeweiligen eigenen Fixzyklus. Alle Fixautoren sind ausdrücklich mit
+Sol 6.1/max über Codex konfiguriert; Antwortmodellmetadaten fehlen im Host.
