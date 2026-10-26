@@ -19,6 +19,9 @@ pub(crate) struct ScreenTarget {
     pub(crate) source: Option<String>,
     /// `true` for "Bildschirm steuern", `false` for "Bildschirm ansehen".
     pub(crate) control: bool,
+    /// Authenticated node pin for app receipts; ordinary screen routes omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) expected_node: Option<String>,
 }
 
 impl ScreenTarget {

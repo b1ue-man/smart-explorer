@@ -171,7 +171,7 @@ pub(in super::super) fn device_rights(args: &Value) -> Result<Value, ApiError> {
                 str_arg(args, "publicKey")?.to_string(),
             )
         };
-    let view = crate::daemon::access_ipc::device_access_rights(&device_id, &public_key)
+    let view = crate::daemon::device_access_rights(&device_id, &public_key)
         .map_err(|error| ApiError::internal(format!("Rechtequellen nicht lesbar: {error}")))?;
     let mut rights =
         serde_json::to_value(&view).map_err(|error| ApiError::internal(error.to_string()))?;

@@ -193,6 +193,8 @@ fn host_frames() -> Vec<HostFrame> {
                 id: "0x2a".into(),
                 title: "Editor".into(),
                 app: "gedit".into(),
+                app_id: None,
+                icon: None,
                 pid: Some(42),
                 monitor: Some("0".into()),
                 minimized: false,
@@ -230,6 +232,7 @@ fn app_entry() -> AppEntry {
     AppEntry {
         app_id: "org.gnome.gedit".into(),
         name: "Text Editor".into(),
+        icon: None,
         pid: Some(42),
     }
 }
@@ -429,6 +432,8 @@ fn screen_task_frame_limits_reject_oversize() {
             id: "w".into(),
             title: "\u{1}".repeat(300),
             app: "a".repeat(100),
+            app_id: None,
+            icon: None,
             pid: Some(u32::MAX),
             monitor: Some("m".repeat(100)),
             minimized: true,

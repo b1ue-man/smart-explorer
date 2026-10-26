@@ -8,6 +8,7 @@ fn app(index: usize) -> AppEntry {
     AppEntry {
         app_id: format!("org.example.app{index}"),
         name: format!("App {index}"),
+        icon: None,
         pid: Some(1000),
     }
 }
@@ -17,6 +18,8 @@ fn window(index: usize) -> WindowEntry {
         id: format!("{index:x}"),
         title: format!("Fenster {index}"),
         app: "editor".into(),
+        app_id: None,
+        icon: None,
         pid: Some(7),
         monitor: Some("1".into()),
         minimized: false,
@@ -76,6 +79,7 @@ fn screen_task_window_list_keeps_whole_texts_and_all_limit_notes() {
     let long_app = AppEntry {
         app_id: format!("org.example.{}", "x".repeat(300)),
         name: "Ä".repeat(300),
+        icon: None,
         pid: None,
     };
     let limits: Vec<String> = (0..40)

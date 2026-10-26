@@ -158,7 +158,7 @@ impl ShareIrohNode {
             .alpns(vec![
                 ALPN.to_vec(),
                 EXEC_ALPN.to_vec(),
-                super::tcp_wire::TCP_ALPN.to_vec(),
+                super::tcp_forward::TCP_ALPN.to_vec(),
                 super::apps_wire::APPS_ALPN.to_vec(),
                 super::lan_link_wire::LAN_LINK_ALPN.to_vec(),
                 crate::screen::core::wire::SCREEN_ALPN.to_vec(),

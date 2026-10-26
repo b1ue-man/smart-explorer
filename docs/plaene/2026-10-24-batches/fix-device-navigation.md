@@ -668,3 +668,291 @@ Geräte- und UIausführung bleiben hier ungeprüft. Dieser Autor hat weder
 lokal formatiert, kompiliert, gebaut oder getestet noch Hosts aufgerufen,
 Unteragenten gestartet, Gitmutationen, Graphupdates oder Releaseaktionen
 ausgeführt. Die Fortsetzung behauptet keinen erfolgreichen Remote-Suitelauf.
+
+## Fortsetzung: Compilerdiagnosen von Lauf 40354605251
+
+### Erstplan und vollständiger übernommener Befund
+
+Stand dieser Fortsetzung ist `d95dc404e834edfe7be0e1c96be162b36865efa9`.
+Die vollständige zugewiesene native und Android-Diagnoseliste aus
+`/tmp/smartexplorer-rv1-40354605251/device-navigation-errors.json` wurde
+gelesen; der Remoteversuch ist laut Auftrag vollständig beendet. Die neue
+Scope-Datei ersetzt die vorige Strukturfläche. Main besitzt insbesondere
+den gemeinsamen Remoteeinstieg, Graph, Git und Integration. Dieser Autor
+ändert nur die erneut ausdrücklich zugewiesenen Dateien.
+
+Beauftragtes Ergebnis: GUI, CLI und Android lesen Geräterechte über dieselbe
+vorhandene reale IPCgrenze; Appstart und TCP erhalten Autorisierung,
+Widerruf, Deadline und echte Besitzer. Desktopziele, App-/Fensterfelder und
+alle sieben Capabilities bleiben im Produkt und in bestehenden Fixtures
+vollständig erhalten. Keine Prüfung oder vorhandene Fixtureerwartung darf
+entfallen. Geplant sind zunächst kanonische Definitionen und Verbraucher,
+danach ein konkreter Plan und die minimalen verbundenen Korrekturen mit
+eigener anschließender statischer Anti-Regressionsreview.
+
+| Zugewiesene Diagnosen | Fehlerhafte Funktion und notwendige Grenze |
+| --- | --- |
+| C13, C14, C15, A11 | GUI-/CLI-/Android-Geräterechte rufen die private Implementierung `daemon::access_ipc` direkt auf. Ein schmaler bestehender Funktionszugang muss an der Daemonfassade sichtbar sein; keine Modulfreigabe oder lokale Ersatzberechnung. |
+| C22, A12 | Der TCP-Antwortfuture leiht ein temporäres `Opened`-Objekt über dessen Lebensdauer hinaus. Antwortbesitz muss über dieselbe widerrufs- und timeoutgebundene Sendefolge erhalten bleiben. |
+| C23, A13 | Die App-Receiptprüfung übergibt einen fehlerhaft typisierten temporären Authmutexguard. Die tatsächliche gelockte Autorität muss bis zur abschließenden Principalprüfung bestehen bleiben. |
+| C33 | Die Completionfixture initialisiert `AccessGrantChange` ohne das vorhandene Constraintsfeld. Ihre bisherigen Werte und Assertions bleiben erhalten. |
+| C37, C38, C39, C44, C47, C48, C49, C50, C51, C52 | Bestehende CLI-/Daemon-/Windowlist-/Wirefixtures fehlen die hinzugekommenen App-ID-/Iconfelder. Die bisherigen Namen, Geometrien, escaping-/Bytebudget- und Auswahlbelege bleiben erhalten; fehlende Metadaten werden ausdrücklich repräsentiert. |
+| C45 | Der Desktop-ScreenTarget-Konstruktor nennt `expected_node`, der Typ enthält dieses Feld aber nicht. Desktop- und Appziel müssen den vorgesehenen optionalen Pinvertrag vollständig erhalten. |
+| C53, C56 | Persistenzfixture und Completionhilfe behandeln noch vier statt sieben Capabilities. Der vollständige kanonische Capabilityumfang und die alten Grantbedeutungen bleiben erhalten; die Auswahl wird nicht auf alte Capabilities begrenzt. |
+| A08, A09, A10 | Android-Node und -Dispatcher beziehen die TCP-ALPN über einen Pfad, der die Konstante nicht exportiert. Beide müssen denselben vorhandenen kanonischen Protokollbezeichner verwenden. |
+
+Noch aus dem Bestand zu klären sind die genaue Fassadensichtbarkeit,
+Future-/Guardgrenzen, optionalen Metadaten-/Pinattribute und Legacy-
+Capabilityerwartungen. Eine nur vom Nutzer zu liefernde Angabe ist nicht
+erkennbar. Lokale Compiler, Builds, Formatter, Tests, Server, Installationen,
+Gitmutationen, Graphupdates und Unteragenten bleiben ausdrücklich verboten.
+
+### Zweitplan: belegter Bestand und Verknüpfungen
+
+Die Planungstiefe ist 2: gekoppelte Reparaturen innerhalb vorhandener
+Verträge. Die Ursachen sind durch die Remote-Diagnosen und die folgenden
+Definitionen belegt; neue Funktionen, Bibliotheken oder Bedienwege sind
+nicht erforderlich.
+
+| Einstieg und direkt betroffene Funktion | Direkte und indirekte bestehende Kette; zu erhaltende Grenze |
+| --- | --- |
+| `device_rights_ui::ui` | Geräte-/Schlüsselgebundener GUI-Snapshot → eigener Hintergrundthread → `daemon`-Fassade → vorhandenes `access_ipc::device_access_rights` → `AccessIpcRequest::DeviceRights` in authentifiziertem `IpcRequest::Access` → laufender Daemon → `service.device_access_view` → typisierter `DeviceAccessView` → derselbe Snapshot mit Aktualisierungs-/Fehleranzeige. |
+| `grants_device_view::show` | Profilselektion nach gepinnter Geräteidentität → genau ein `(device_id, public_key)` → bestehendes `ensure_worker_ready` → dieselbe Daemon-Fassade/IPCgrenze → unveränderte JSON- und Beziehungszeilen. |
+| mobiles `share_access` | Gespeicherter Kontakt mit bestätigter Geräte-ID und öffentlichem Schlüssel oder explizite Geräte-/Schlüsselargumente → dieselbe Daemon-Fassade/IPCgrenze → bisherige Fehlerübersetzung und Zuordnung jeder Beziehung zu ihrem konkreten Quellenschlüssel. |
+| `ShareIrohNode::start_with_power`, `spawn_accept_loop` und `dispatch_connection` | Kanonische `tcp_forward::TCP_ALPN`-Bytes → Endpointanzeige → bisherige Known-/Unknown-Handshakeslots und Authstrafen → Dispatcher → `handle_tcp_connection`. Der falsche Konstantenpfad wird ersetzt; kein Protokollwert und kein Zulassungsschritt ändert sich. |
+| `handle_tcp_connection` / `serve_tcp` | Transport-Closeguard, Incomingtracking und Tunnelslot → aktive Freigabe und Pfadpolicy → gemeinsame aktive Handshakefrist → Relationproof mit gelockter Autorität → gebundener Principal → Zielzulassung → `registration`, `access`, Zieladresse und erster autorisierter Socket → `Opened`-Antwort unter Widerruf und 20-Sekunden-Frist → unveränderte streamweise Tunnel-ID-Prüfung, TTL, Cancel, Socketbesitz und abschließende Registrierung-/Zugriffsfreigabe. |
+| `apps_execute` / `Receipt` | Aktive Freigabe → konfigurierter Host → `bind_peer_request` mit konkretem `owner_key` und unverändertem Request → Fensterprobe im Blockingjob → erneute gelockte `principal_grant`-Prüfung → derselbe Receipt. `owner_key` umfasst Beziehungstyp, Beziehungs-ID, Geräte-ID, öffentlichen Schlüssel, Fingerprint und Node-ID. Kein Guard überquert eine Awaitgrenze. |
+| `apps_execute` / `Launch`, `run_app` | Frischer Katalog und Sitzung → `access_request` → bestehende Bestätigung → konkrete Request-/Ownerbindung → cancelgebundener Blockingjob → Accessregistry oder ursprüngliche noch gültige Consentzulassung → Authorityguard samt Deadline → Hostlaunch/Consentfortsetzung → Fensterprobe/-wache. Dieser Pfad bleibt bei der Receiptkorrektur unverändert. |
+| Desktop-`ScreenTarget::new`, `for_tile`, `to_arg` | `open_target::device_screen` verweigert Identitätskonflikte → konkreter Directkontakt oder Raum mit bekannter Geräte-ID → bisherige Quell-/Controlwerte → `StartRequest::ScreenView` mit Ziel-JSON → Prozessparameter nach `--screen-view` → App-`ScreenTarget::parse`. Der Appzieltyp besitzt bereits `expected_node: Option<String>` mit Default und Auslassung bei `None`. Derselbe optionale Pin gehört auch zum Desktoptyp; gewöhnliche Desktopziele behalten `None` und ihre bisherigen JSONfelder. |
+| `WindowEntry` / `AppEntry` und Fixturehelfer | Produktdefinitionen besitzen optionale `app_id`-/`icon`-Metadaten mit Default und Auslassung bei `None` → Listenbegrenzung und Validierung → Wireframes/CLI-/Daemon-Stillansicht. `IconRef` bindet App-ID, SHA-256 und Maße; seine eigene Validierung und aktuelle autorisierte Listenzuordnung bleiben unberührt. Die älteren Fixtures repräsentieren ausdrücklich fehlende Metadaten und behalten deshalb ihre bisherigen serialisierten Größen und JSONschlüssel. |
+| `decisions`, Legacy-/Unknown-Wirefixtures | Vollständige kanonische Reihenfolge `ExecCommands`, `ExecTerminal`, `ScreenView`, `ScreenControl`, `AppLaunch`, `LoginAccess`, `TcpForward` → sieben Entscheidungen. Die ersten vier Erwartungen bleiben erhalten, die drei Kontextcapabilities bleiben bei alten Grants `Off`. Unbekannte Wireobjekte bleiben vollständig erhalten und schalten alle sieben Capabilities aus. |
+| `capability_name`, `access_state_label`, `approval_candidates_from` | Exhaustive Benennung derselben sieben Capabilities → bestehende Zustandslabels und Approvalcompletion. Bestehende englische Namen bleiben erhalten; Appstart, Loginzugriff und TCP erhalten explizite Namen. Es entsteht weder ein Wildcardfall noch ein kleinerer Capabilityumfang. |
+
+Die bestehende IPCfunktion lädt weiterhin Token und Adresse des laufenden
+Daemons, verwendet dessen vorhandene Verbindungs-/Antwortfristen und
+akzeptiert ausschließlich die passende typisierte Antwort. GUI und Android
+erhalten keinen neuen Workerstart; die CLI behält ihren vorhandenen Start.
+Das Implementierungsmodul `access_ipc` bleibt privat.
+
+Zusätzlicher belegter Fixturefehler: `access_grant_wire::ACCESS_VERSION`
+ist inzwischen 2, `parse` unterstützt ausdrücklich 1 und 2. Der bisherige
+Unbekannt-Versionsfall verwendet aber ebenfalls 2. Er muss eine tatsächlich
+unbekannte Version verwenden; sämtliche Ablehnungs-, Speicher- und
+Wiederaktivierungsassertions bleiben bestehen. Die separate unlesbare
+Version-1-Fixture und die unbekannten Schlüssel/Felder bleiben erhalten.
+
+Für die abschließende Detailkarte wurden die direkt referenzierten
+Definitionen `access_authorize.rs` und `node_tcp_target.rs` als konkrete
+zusätzliche Lesefläche bei Main angefordert und nach dessen Freigabe
+vollständig gelesen. Die zusätzliche Desktopkette wurde nach expliziter
+Freigabe in `open_target.rs`, `protocol_tests.rs` und
+`screen_viewer_misc_tests.rs` nachgelesen. Änderungen benötigen diese
+Definitionen und Fixtures nicht. `tiles_tests.rs` wurde ebenfalls gelesen;
+die zunächst vermutete ScreenTarget-Fixture befindet sich dort nicht.
+
+### Entscheidungsrecherche und endgültiger Arbeitsplan
+
+Primärquellen, am 2026-10-26 gelesen: Die Rust-Referenz beschreibt den
+gezielten Reexport durch ein privates Implementierungsmodul
+([Visibility and privacy](https://doc.rust-lang.org/reference/visibility-and-privacy.html#re-exporting-and-visibility)).
+Der offizielle Fehlerindex empfiehlt bei E0716 einen benannten lokalen Wert
+mit Lebensdauer bis zum Blockende
+([E0716](https://doc.rust-lang.org/error_codes/E0716.html)). `MutexGuard`
+hält den Mutex bis zum Verlassen seines Scopes und stellt den geschützten
+Wert über `Deref` bereit
+([MutexGuard](https://doc.rust-lang.org/std/sync/struct.MutexGuard.html)).
+Das Projekt verwendet Edition 2021; diese Reparaturen benötigen keine neue
+Rust-, Tokio- oder Serde-API. Die genaue Rustversion des kommenden
+Remotelaufs ist hier nicht bekannt.
+
+Gewählt sind ein zusätzlicher `pub(crate)`-Funktionsreexport, ein lokal
+besessenes `Opened`-Objekt und ein ausdrücklich begrenzter Authguardblock.
+Eine Freigabe des ganzen IPCmoduls würde die Implementierungsfläche
+unnötig erweitern. Eine lokale Rechteberechnung würde den laufenden
+Authoritybesitz umgehen. Ein Authzustandsklon würde die erneute Prüfung
+vom tatsächlichen Mutexbesitz lösen. Ein Entfernen des Widerrufsbranches,
+Timeouts oder der Principalprüfung ist mit dem Auftrag unvereinbar.
+
+| Punkt | Dateien und konkrete Änderung | Abhängigkeit und prüfbares Ergebnis |
+| --- | --- | --- |
+| D1 | `daemon/mod.rs`: bestehenden Funktionsreexport ergänzen; `device_rights_ui.rs`, `grants_device_view.rs`, `share_access.rs`: ausschließlich den Aufrufpfad auf die Fassade umstellen. | Vorhandene IPCfunktion und ihre Consumer sind gelesen. Alle drei Pfade erreichen dieselbe reale Requestfunktion; keine neue Berechnung, Startlogik oder Autorität. |
+| D2 | `node_tcp.rs`: `TcpHelloReply::Opened` vor dem Sendefuture lokal binden. `node_apps_host.rs`: Guard innerhalb eines Blocks erwerben, `principal_grant` prüfen, nur das boolesche Ergebnis nach außen geben. `node.rs`, `node_accept.rs`: dieselbe `tcp_forward::TCP_ALPN` an allen drei Fehlerstellen verwenden. | D1 ist unabhängig. Widerruf, Fristen, Resourceguards, Ownerbindung und Dispatchgrenzen bleiben textlich bzw. strukturell unverändert. |
+| D3 | `desktop/core/screen_target.rs`: optionalen Pin mit denselben Serdeattributen wie im Appziel ergänzen. `completions_access.rs`: alle drei fehlenden Capabilityfälle explizit benennen. | Kanonische Typen sind gelesen. Bisherige Desktop-JSONform bei `None` bleibt; sieben Enumfälle bleiben unterstützt. |
+| D4 | `completions_access_tests.rs`: `constraints: None`. CLI-/Daemon-Still-, Windowlist- und Wirefixtures: fehlende optionale Felder ausdrücklich `None`. `access_grant_wire_tests.rs`: vollständige Arraylänge, drei zusätzliche `Off`-Erwartungen pro bisherigem Array, tatsächlich unbekannte Formatversion. | D3 liefert die vollständige Metadatengrenze. Alle bisherigen Fallnamen, Assertions, Namen, Geometrien, Escape-/Budgetfälle und Legacybytes bleiben erhalten. |
+| D5 | Gesamter zugewiesener Diff und eigener Bericht: statische Syntax-/Textprüfung, vollständige Fallnamen-/Assertionserhaltung, Größenprüfung und eigene Anti-Regressionsreview der gesamten Karte. | Alle Produktänderungen sind fertig. Keine lokale Produkt- oder Testausführung. Main bestätigt die Korrektur ausschließlich durch denselben gemeinsamen Remote-Suiteeinstieg. |
+
+Die zweite Lückenprüfung bestätigt für D1 bis D4 die vorhandenen
+Funktionssignaturen, Serdeattribute, sieben Enumvarianten und die
+Wireversionsgrenze. Neue Testnamen, Persistenzformate oder Protokollbytes
+sind nicht erforderlich. Der bestehende Funktionsname erhält den nötigen
+Fassadenreexport. Die angeforderten Autorisierungs-/Zielzulassungsdefinitionen
+und Desktopanschlüsse sind für D5 inzwischen ausdrücklich lesbar und
+geprüft; es bleibt keine konkrete Quellenlücke offen.
+
+### Umsetzung und eigene anschließende Anti-Regressionsreview
+
+D1 bis D4 sind umgesetzt. Der gesamte eigene Diff wurde anschließend
+gegen `d95dc404` geprüft. Die unabhängige anschließende Autorprüfung
+verfolgte jede Tabellenkette erneut mit vier Fragen: Bleiben die reale
+Autorität und konkrete Identität erhalten? Bleiben Deadline, Widerruf,
+Abbruch und Resourcebesitz erhalten? Bleiben Wire-/Persistenzbedeutungen
+und sichtbare Ergebnisse erhalten? Bleiben sämtliche bisherigen
+Fixturebelege bestehen? D5 ist damit als statische Autorarbeit erledigt;
+die Remoteausführung bleibt bei Main.
+
+| Prüfkette | Eigener Befund nach der Umsetzung |
+| --- | --- |
+| Geräte-IPC auf GUI, CLI und Android | Genau der bisherige typisierte Aufruf wird über `daemon::device_access_rights` reexportiert. Token, Adresse, 2-Sekunden-Verbindungsfrist, 20-Sekunden-Streamfrist, reale Daemon-Serviceabfrage und Fehlerpfade sind unverändert. Die GUI behält ihren Geräte-/Schlüsselsnapshot und ihre Thread-/Repaintzustände; die CLI behält ihre eindeutige Identitätsselektion und ihren Workerstart; Android behält Kontaktprüfung, bestätigte Geräte-/Schlüsselwerte, Quellenschlüssel und Fehlerübersetzung. |
+| Authentifizierter TCP-Einstieg | Alle drei fehlerhaften Verweise verwenden die vorhandene Konstante aus `tcp_forward`, deren Bytes unverändert `smart-explorer/share-tcp/1` sind. Endpoint-ALPN, Strafenzuordnung und Dispatcher stimmen dadurch überein. Known-/Unknown-Admission, Permitabgabe und gemeinsame Route-/Handshakegrenzen bleiben unverändert. |
+| TCP-Ziel und Antwortbesitz | `admit_tcp_target` friert hostaufgelöste Kandidaten ein. Jeder konkrete Ziel-IP-/Port-/Richtungsrequest prüft dieselbe bewiesene Beziehung, erhält seine eigene Bestätigung und Livelease, öffnet den gebundenen Socket und registriert den Tunnel unter erneuter Leaseprüfung. `serve_tcp` übernimmt dieselben vier Besitzer. Nur die `Opened`-Antwort erhält einen benannten lokalen Wert; der Sendefuture bleibt im unveränderten priorisierten Widerrufs-/20-Sekunden-`select!`. TTL, Cancel, Stream-ID, autorisierte Folgesockets, Kindtaskabschluss und Reihenfolge Socket → Registrierung → Access bleiben unverändert. |
+| App-Receipt und Appstart | Die Receiptabfrage prüft nach der Fensterprobe unter dem tatsächlichen Mutexguard weiterhin `principal_grant`. Diese Funktion verlangt genaue Geräte-ID, öffentlichen Schlüssel, Fingerprint und Node-ID sowie eine aktive akzeptierte Directbeziehung mit passender Lookup-ID oder einen beigetretenen Raum mit zugelassenem Mitglied. Der Guard endet vor der Rückgabe und überquert keine Awaitgrenze. `bind_peer_request`, Ownerhash, Launchbestätigung, ursprünglicher Consent-/Accessbesitz, cancelgebundener Job, Deadline und Fensterwache sind unverändert. |
+| Desktop-ScreenTarget | `expected_node` ist optional und hat dieselben Default-/Auslassungsattribute wie der Viewer. Der vorhandene Konstruktorwert `None` bleibt erhalten. `desktop_task_screen_target_json` verlangt unveränderte Direct-/Room-Bytes und Tileverhalten; `screen_task_viewer_target_parse` liest genau diese Desktopausgabe. In den freigegebenen Verbrauchern gibt es keinen zusätzlich anzupassenden vollständigen Structinitialisierer. Identitätskonflikte und unbekannte Geräte bleiben vor dem Viewerstart abgefangen. |
+| App-/Fenstermetadaten | Die Produktfelder, IconRefprüfung, App-/Hashbindung und Budgets sind unverändert. CLI-`list`, Daemon-`listed`, Windowlist-`app`/`window`/`long_app`, Wire-`host_frames`/`app_entry` und die Escape-Fixture ergänzen ausschließlich die bislang fehlenden `None`-Felder. Dadurch fehlen Metadaten ausdrücklich; vorhandene Titel, Appnamen, PIDs, Monitore, Fokus-/Minimizedwerte, vollständige Texte, Limits und JSONschlüssel bleiben erhalten. |
+| Sieben Capabilities und persistierte Grants | `decisions` verwendet `Capability::ALL` ohne Filter und leitet die Arraylänge daraus ab. Jede bisherige Viererwartung ist unverändert das Präfix der neuen Siebenerwartung; AppLaunch, LoginAccess und TcpForward sind bei alten Grants jeweils ausdrücklich `Off`. Alle alten Bytevergleiche, Konten, Programmrestriktionen, Revisionen, Ablaufwerte, alten Leser und Roundtrips bleiben erhalten. `capability_name` benennt alle sieben Varianten ohne Wildcard. |
+| Unbekannte Formatversion | Das ursprüngliche Testobjekt verwendete eine inzwischen unterstützte Version und konnte den beabsichtigten Ablehnungsnachweis deshalb nicht mehr erbringen. Es verwendet nun `ACCESS_VERSION + 1`, derzeit 3. Alle bisherigen Aus-/Speicher-/Wiederaktivierungsassertions sowie unlesbare Version 1 und unbekannte Schlüssel/Felder bleiben erhalten. Die Testkorrektur ändert weder Parser noch Produktionsformat. |
+
+Die statische Parserprüfung mit dem bereits installierten Tree-sitter-
+Rustparser liest ausschließlich die zugewiesenen Quelldateien und deren
+gleichen Pfade aus `d95dc404`. Sie meldet für alle bearbeiteten Rustdateien
+eine vollständige Syntaxstruktur ohne Fehlerknoten. Ein zusätzlicher
+Quellvergleich bestätigt identische Funktionsnamen und ausschließlich die
+in D1 bis D4 benannten Reparaturen. Für sämtliche Fixturedateien ergibt das
+Entfernen genau der hinzugefügten optionalen Felder wieder den ursprünglichen
+Quelltext. Bei den Access-Wirefixtures sind ausschließlich Arraylänge,
+die drei ergänzten `Off`-Werte und die tatsächlich unbekannte Version
+verschieden; jede bisherige Assertion bleibt bestehen. Diese Prüfung
+führt weder Rustcode noch Tests, einen Compiler oder einen Formatter aus.
+
+Ein weiterer Produktfehler wurde bei dieser eigenen Review nicht belegt.
+Laufzeitverhalten und vollständige Typprüfung sind dadurch nicht bestätigt.
+Die ursprünglichen G7/G8/G9-Dateien und ihre Android-/P4-Navigationszustände
+erhalten durch diese Fortsetzung keine Änderung.
+
+### Geänderte Dateien und Größen
+
+Es wurden keine Dateien neu angelegt. Geändert wurden der bestehende
+Bericht und genau die folgenden zugewiesenen Rustdateien. Die Größen sind
+der statische aktuelle Quellstand mit normaler Zeilenaufteilung; die
+Remoteformatierung ist hier nicht ausgeführt worden.
+
+| Datei unter `native/src/` | Zeilen | Bytes |
+| --- | ---: | ---: |
+| `app/core/device_rights_ui.rs` | 285 | 10891 |
+| `cli/completions_access.rs` | 232 | 8773 |
+| `cli/completions_access_tests.rs` | 225 | 8051 |
+| `cli/screen/still_tests.rs` | 201 | 6779 |
+| `cli/share/grants_device_view.rs` | 69 | 2590 |
+| `daemon/mod.rs` | 408 | 14565 |
+| `daemon/os/shared/screen_ipc_still_tests.rs` | 281 | 9257 |
+| `desktop/core/screen_target.rs` | 54 | 2185 |
+| `mobile/os/shared/domains/share_access.rs` | 487 | 20129 |
+| `screen/core/window_list_tests.rs` | 127 | 4568 |
+| `screen/core/wire_tests.rs` | 497 | 17863 |
+| `share/core/access_grant_wire_tests.rs` | 345 | 12698 |
+| `share/core/node.rs` | 471 | 18006 |
+| `share/core/node_accept.rs` | 186 | 9220 |
+| `share/core/node_apps_host.rs` | 414 | 17229 |
+| `share/core/node_tcp.rs` | 349 | 13486 |
+
+Alle geänderten Rustdateien liegen unter 500 Zeilen und unter 50 KiB.
+`wire_tests.rs` erhält die fünf notwendigen Metadatenfeldzeilen und bleibt
+bei 497 Zeilen; keine Zeilenverdichtung und keine Gateausnahme wurden
+eingeführt. `app/mod.rs`, `app/screen_modules.rs`, das gemeinsame Manifest,
+fremde Berichte und sämtliche nicht zugewiesenen Produktdateien wurden von
+diesem Autor nicht geändert.
+
+### Erhaltene Fälle und erforderliche Registrierung bei Main
+
+Es gibt keine neuen Testfunktionen oder umbenannten Fälle. Für die direkte
+Bestätigung der aktuellen Reparaturen sollen im bestehenden einen
+Remoteeinstieg folgende vorhandene Fälle ausgewählt bleiben beziehungsweise
+von Main ergänzt werden:
+
+- `perm_task_completions_access`
+- `screen_task_cli_windows_json_shape`
+- `screen_task_ipc_still_client_lists_windows_and_ends_the_session`
+- `screen_task_window_list_keeps_more_than_4096_entries`
+- `screen_task_window_list_frame_bytes_bound_the_list`
+- `screen_task_window_list_keeps_whole_texts_and_all_limit_notes`
+- `screen_task_window_list_drops_oversized_entry_and_refuses_bad_ids`
+- `screen_task_wire_roundtrip_all_tags`
+- `screen_task_frame_limits_reject_oversize`
+- `perm_task_port_full_shell_0_5_180`
+- `perm_task_port_program_list_0_5_182`
+- `perm_task_port_run_as_root_worker`
+- `perm_task_port_disabled_keeps_settings`
+- `perm_task_write_legacy_form_bytes_unchanged`
+- `perm_task_old_reader_sees_new_grant_off`
+- `perm_task_unknown_access_version_fail_closed`
+- `desktop_task_screen_target_json`
+- `screen_task_viewer_target_parse`
+
+Die zwei genannten Wirefälle sind bereits in `native.integrations` des
+gelesenen gemeinsamen Manifests registriert. Die übrigen konkreten Namen
+wurden Main zur Ergänzung desselben Remoteeinstiegs gemeldet. Der bestehende
+G7/G8/G9-Eintrag `R12-G7-G8-G9-Geraetenavigation`, seine drei nativen Fälle,
+zwei JVM-Methoden und fünf Instrumentierungsmethoden bleiben erhalten.
+
+Die folgenden ebenfalls in den bearbeiteten Fixturedateien vorhandenen
+Fälle bleiben unverändert erhalten; ihre bloße Dateinachbarschaft ist kein
+zusätzlicher Ausführungsauftrag:
+
+- `completions_access_as_reads_the_worker_accounts`
+- `screen_task_cli_snapshot_refuses_existing_file`
+- `screen_task_cli_snapshot_output_shapes`
+- `screen_task_cli_windows_and_snapshot_parse`
+- `screen_task_ipc_still_client_names_refusals_by_code`
+- `screen_task_ipc_still_client_gives_up_waiting_for_the_user`
+- `screen_task_ipc_still_client_ends_a_silent_host_after_the_read_limit`
+- `screen_task_ipc_still_client_assembles_the_snapshot_stream`
+- `screen_task_ipc_still_client_reports_a_paused_source`
+
+### Gelesene Dateien, Entscheidungen und verbleibende Grenzen
+
+Neben allen Dateien der Änderungstabelle und diesem Bericht wurden für
+diese Fortsetzung die vollständige zugewiesene Remote-Diagnosedatei und
+die laufend ausdrücklich ergänzte Scope-Datei gelesen. Die wörtlichen
+Nutzeranforderungen, Projektanweisungen und die vorhandenen Architektur-
+und Oberflächenbefunde dieses eigenen Fixzyklus bleiben Grundlage.
+
+Zusätzlich wurden folgende konkrete Quellen vollständig oder an den
+genannten Definitionen, Aufrufern und Registrierungen gelesen:
+
+- `native/Cargo.toml`: Edition und vorhandene Tokio-/Serdeabhängigkeiten.
+- `native/review-task-manifest.json`: native Auswahl und bestehender R12-Eintrag.
+- `native/src/app/core/screen_target.rs`: Viewerziel, optionaler Pin, Parser, Geräteprüfung.
+- `native/src/app/core/screen_viewer_misc_tests.rs`: `screen_task_viewer_target_parse` und Gerätewechselprüfung.
+- `native/src/app/desktop_modules.rs`, `native/src/app/mod.rs`, `native/src/app/screen_modules.rs`: vorhandene Modul-/Screenzielregistrierung.
+- `native/src/daemon/os/shared/access_ipc.rs`: vorhandener Clientaufruf, reale DeviceRights-Abfrage, Token-/Frist-/Antwortgrenze.
+- `native/src/desktop/core/mod.rs`, `native/src/desktop/mod.rs`: bestehende Modul-/Testregistrierungen.
+- `native/src/desktop/core/protocol_tests.rs`: exakte Direct-/Room-JSONbytes und Tile-/Viewerzielvertrag.
+- `native/src/desktop/core/tiles_tests.rs`: vorhandene Tileprojektion; keine ScreenTarget-Fixture.
+- `native/src/desktop/os/shared/open_target.rs`: konkreter Geräte-/Prozesseinstieg und Identitätskonfliktablehnung.
+- `native/src/screen/core/app_icon.rs`, `native/src/screen/core/window_list.rs`: vollständige Felddefinitionen, optionale Serialisierung und vorhandene Validierung.
+- `native/src/share/access_modules.rs`, `native/src/share/mod.rs`: bestehende Modulgrenzen und kanonische TCP-Modulpfade.
+- `native/src/share/core/access_authorize.rs`: vollständige konkrete Principal-, Capability- und Kontextrequestprüfung.
+- `native/src/share/core/access_grant.rs`, `native/src/share/core/access_grant_wire.rs`: kanonische sieben Capabilities, Constraintsfeld und Legacy-/Versionsgrenze.
+- `native/src/share/core/node_apps.rs`: Hostkonfiguration, vorhandene Host-Untermodulgrenze und vollständiger Ownerhash.
+- `native/src/share/core/node_tcp_target.rs`: vollständige Zielauflösung, Bestätigung, Zulassung und reale Besitzer.
+- `native/src/share/core/route_protocol.rs`: aktive Timeoutgrenze des bestehenden Sendefutures.
+- `native/src/share/core/tcp_forward.rs`, `native/src/share/core/tcp_wire.rs`: kanonische ALPN, vorhandene Grenzen, Antworttyp und geliehener Sendefuture.
+- `docs/ARCHITEKTUR.md`, `docs/oberflaechen/bildschirm.md`, `docs/oberflaechen/desktop-launcher.md`: gezielte Anschluss-/Begriffssuche auf Grundlage der früheren eigenen Lektüre.
+
+Die Entscheidungen sind gezielter Funktionsreexport, echte gelockte
+Autorisierung, besessene TCP-Antwort, optionaler kompatibler Desktop-Pin,
+vollständige Metadateninitialisierer und sieben explizite Capabilities.
+Es bleibt keine konkret fehlende Scopeabhängigkeit oder erforderliche
+Produktänderung außerhalb dieser Schreibfläche offen. Die eigene
+Auflistung, direkte/indirekte Karte, Planung, Umsetzung und anschließende
+Anti-Regressionsreview wurden durch denselben Autor abgeschlossen.
+
+Offen bleiben die von Main zu übernehmende Registrierung der konkret
+genannten vorhandenen Fälle und deren Bestätigung über denselben
+gemeinsamen Remote-Suiteeinstieg. Vollständige Typprüfung, Android-
+Kompilierung, Remoteformatierung und reale Geräte-/Netzwerk-/Consent- und
+Desktopausführung sind in dieser statischen Autorarbeit nicht geprüft.
+Main besitzt weiterhin Integration, Graphrefresh, Commit/Push und den
+terminalen gemeinsamen Release. Dieser Autor hat keine lokalen Builds,
+Compiler, Formatter, Tests, Server, Installationen, Hostaufrufe,
+Gitmutationen, Graphupdates oder Unteragenten ausgeführt und behauptet
+keinen bestandenen Remotelauf.

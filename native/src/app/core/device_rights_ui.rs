@@ -42,7 +42,7 @@ pub(super) fn ui(app: &mut App, ui: &mut egui::Ui, device_id: &str, public_key: 
         let start = std::thread::Builder::new()
             .name("device-rights".into())
             .spawn(move || {
-                let result = crate::daemon::access_ipc::device_access_rights(&device, &key);
+                let result = crate::daemon::device_access_rights(&device, &key);
                 let mut state = slot.lock().unwrap_or_else(|poison| poison.into_inner());
                 match result {
                     Ok(view) => {

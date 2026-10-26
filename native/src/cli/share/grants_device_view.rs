@@ -50,7 +50,7 @@ pub(super) fn show(
         .next()
         .ok_or("device selection is empty")?;
     crate::daemon::ensure_worker_ready()?;
-    let rights = crate::daemon::access_ipc::device_access_rights(device, key)?;
+    let rights = crate::daemon::device_access_rights(device, key)?;
     let value = serde_json::json!({ "device_id": device, "device_name": target.device_name, "fingerprint": target.fingerprint, "device_access": rights });
     let mut lines = vec![format!(
         "device_access\t{}\t{}",
