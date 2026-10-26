@@ -1,6 +1,6 @@
 //! B5 owner fixtures: real control sockets and the real ShareExecInput watch.
 use super::*;
-use std::sync::mpsc;
+use std::{io::Write, sync::mpsc};
 
 const WAIT: Duration = Duration::from_secs(10);
 
@@ -168,6 +168,118 @@ fn batches_task_b5_terminal_registration_closes_control_without_cancelling_finis
         owner.claim(&server).unwrap_err().kind(),
         io::ErrorKind::PermissionDenied
     );
+}
+
+#[test]
+fn batches_task_b5_finished_owner_releases_control_reader_without_socket_shutdown() {
+    let fixture = crate::share::ShareExecInput::batches_fixture();
+    let owner = Arc::new(ExecLifetime::new(id("55"), fixture.input.clone()).unwrap());
+    let registry = Arc::new(ExecState::new());
+    registry.register_owner(owner.clone()).unwrap();
+    let registration = Registration {
+        owner: owner.clone(),
+        registry: registry.clone(),
+    };
+    let (mut client, completed, worker) = control(&owner, registry.clone());
+    // Keep both endpoints live, but deny finish its socket shutdown handle.
+    // The real reader must observe the owner predicate and its notification.
+    let shutdown_handle = owner.state.lock().unwrap().control.take().unwrap();
+    drop(registration);
+    let result = completed.recv_timeout(WAIT);
+    if result.is_err() {
+        let _ = client.shutdown(Shutdown::Both);
+    }
+    result
+        .expect("finished owner releases the reader without a socket shutdown")
+        .unwrap();
+    worker.join().unwrap();
+    let state = owner.state.lock().unwrap();
+    assert!(state.finished && !state.cancelled);
+    drop(state);
+    assert!(!*fixture.cancel.borrow());
+    assert!(registry.owner(owner.exec_id(), owner.token()).is_none());
+    drop(shutdown_handle);
+    assert_eq!(client.read(&mut [0]).unwrap(), 0);
+}
+
+#[test]
+fn batches_task_b5_idle_control_owner_stays_live_until_peer_cancels() {
+    let fixture = crate::share::ShareExecInput::batches_fixture();
+    let owner = Arc::new(ExecLifetime::new(id("56"), fixture.input.clone()).unwrap());
+    let registry = Arc::new(ExecState::new());
+    registry.register_owner(owner.clone()).unwrap();
+    let registration = Registration {
+        owner: owner.clone(),
+        registry: registry.clone(),
+    };
+    let (client, completed, worker) = control(&owner, registry.clone());
+    assert!(matches!(
+        completed.recv_timeout(OWNER_POLL_INTERVAL * 4),
+        Err(mpsc::RecvTimeoutError::Timeout)
+    ));
+    assert!(!*fixture.cancel.borrow(), "idle control is not cancellation");
+    assert!(registry.owner(owner.exec_id(), owner.token()).is_some());
+    drop(client);
+    completed
+        .recv_timeout(WAIT)
+        .expect("peer EOF still ends its live owner")
+        .unwrap();
+    worker.join().unwrap();
+    assert!(*fixture.cancel.borrow());
+    drop(registration);
+    assert!(registry.owner(owner.exec_id(), owner.token()).is_none());
+}
+
+#[test]
+fn batches_task_b5_finished_control_cannot_cancel_same_id_live_owner() {
+    let finished_fixture = crate::share::ShareExecInput::batches_fixture();
+    let live_fixture = crate::share::ShareExecInput::batches_fixture();
+    let finished = Arc::new(ExecLifetime::new(id("57"), finished_fixture.input.clone()).unwrap());
+    let live = Arc::new(ExecLifetime::new(id("57"), live_fixture.input.clone()).unwrap());
+    assert_ne!(finished.token(), live.token());
+    let registry = Arc::new(ExecState::new());
+    registry.register_owner(finished.clone()).unwrap();
+    registry.register_owner(live.clone()).unwrap();
+    let finished_registration = Registration {
+        owner: finished.clone(),
+        registry: registry.clone(),
+    };
+    let live_registration = Registration {
+        owner: live.clone(),
+        registry: registry.clone(),
+    };
+    let (mut finished_client, finished_rx, finished_worker) = control(&finished, registry.clone());
+    let (mut live_client, live_rx, live_worker) = control(&live, registry.clone());
+    drop(finished_registration);
+    finished_rx.recv_timeout(WAIT).unwrap().unwrap();
+    finished_worker.join().unwrap();
+    assert_eq!(finished_client.read(&mut [0]).unwrap(), 0);
+    assert!(registry.owner(finished.exec_id(), finished.token()).is_none());
+    assert!(registry.owner(live.exec_id(), live.token()).is_some());
+    assert!(matches!(
+        live_rx.recv_timeout(OWNER_POLL_INTERVAL * 4),
+        Err(mpsc::RecvTimeoutError::Timeout)
+    ));
+    assert!(!*finished_fixture.cancel.borrow());
+    assert!(!*live_fixture.cancel.borrow());
+    let (_old_client, old_server) = sockets();
+    assert_eq!(
+        serve_control(old_server, &registry, finished.exec_id(), finished.token())
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::PermissionDenied
+    );
+    assert!(!*live_fixture.cancel.borrow());
+    live_client.write_all(&[0x7f]).unwrap();
+    live_rx
+        .recv_timeout(WAIT)
+        .expect("unexpected control data still cancels the bound live owner")
+        .unwrap();
+    live_worker.join().unwrap();
+    assert!(*live_fixture.cancel.borrow());
+    assert!(!*finished_fixture.cancel.borrow());
+    drop(live_registration);
+    assert!(registry.owner(live.exec_id(), live.token()).is_none());
 }
 
 #[test]
