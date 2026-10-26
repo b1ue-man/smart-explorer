@@ -131,7 +131,7 @@ genau einer Ausgabe ab dem ersten Input und leerem Restpuffer ist als gepaarter
 Vorhervergleich zulässig. Sonst schlägt die Zuordnung fehl. Sämtliche
 Laufzeitbelege bleiben bis Mains Remoteausführung offen.
 
-## Umsetzungsergebnis
+## Umsetzungsergebnis der G6-Abnahmefixtures vor der Modulgrößenfortsetzung
 
 Q1–Q4 sind in der freigegebenen Fix-Arbeitskopie quellseitig umgesetzt. Der
 Vorherarm enthält originale Konvertierungs-, Encoder- und Decoderblöcke aus der
@@ -165,7 +165,7 @@ Pixel müssen dann gleich dem Original sein. Der vorhandene 4K-Fall zählt jetzt
 zusätzlich Begin, Commit und Recordheader für seinen ausdrücklich modellierten
 Bytes-/Raten-Untergrenzwert; gemessene Pipelinezeit bleibt `null`.
 
-## Eigene anschließende Anti-Regressionsreview
+## Eigene anschließende Anti-Regressionsreview der G6-Abnahmefixtures
 
 Gegenstand waren die vollständig oben ermittelten G6-Aufrufer, Datenübergänge,
 Identitäten, Ressourcenbesitzer, Referenzzustände, Qualitätswerte und die konkrete
@@ -237,7 +237,7 @@ Main hat die Bindung als `R11-G6-Bildqualitaet` registriert und liest die
 vorhandenen Artefakte mit `native/review_task_quality.py`; dieser Fixautor hat
 weder Manifest noch Orchestrierung bearbeitet.
 
-## Dateien, Entscheidungen und verbleibende Grenzen
+## Dateien, Entscheidungen und Grenzen der G6-Abnahmefixtures
 
 Erstellt:
 
@@ -313,3 +313,217 @@ Geräteinventur unbekannt. Die kontrollierten Abbrüche belegen keine reale
 Paketverlustzeit, und ein 4K-Bytes-/Ratenmodell belegt keine gemessene Pipelinezeit.
 Fehlende physische Codecs sind kein Pass und kein eigenständig erfundener
 Releaseblocker.
+
+## Fortsetzung: fachliche Modulgrößenkorrektur nach Remoteformatierung
+
+### A — Erhaltener Auftrag und Erstplan
+
+Quelle: Mains Folgeauftrag vom 2026-10-26 und aktualisierte eigene Scope-JSON.
+Remotevorbereitung `40332971455` hat vor jeder Kompilierung am Kandidaten
+`34f3361de13104e386eba26bf16d6a0160475481` diese formatierten Größen gemeldet:
+`codec_registry.rs` 507 Zeilen, `frame_size_caps.rs` 632 Zeilen und
+`wire_control.rs` 523 Zeilen. Der eingesehene kandidatengebundene
+`format.json` bestätigt die Angaben. Die Formatpatches wurden laut Auftrag
+mit `10988167` übernommen; Main hat danach weitere getrennte Strukturarbeit
+integriert. Dieser Autor bearbeitet ausschließlich seine freigegebene Fläche.
+
+Beauftragtes Ergebnis: Die fachlichen Verantwortungen dieser drei Module und
+ihrer notwendigen Auszüge liegen bei üblicher Rustformatierung unter 500 Zeilen
+und 50 KiB. Codecwahl, Fallbackreihenfolge, Bild-/Paket-/AVC-Grenzen,
+Control-Wirebytes, Rechte, bestehende Namen und G6-Qualitätsreferenz bleiben
+erhalten. Keine Zeilenverdichtung, Gateausnahme oder Änderung eingefrorener
+Releaseblöcke ist autorisiert. Git, Graph, Manifest und dieselbe spätere
+Remote-Suite bleiben bei Main; lokaler Compiler, Formatter, Tests, Server und
+Unteragenten bleiben verboten.
+
+Promptwissen und Beleg werden getrennt gehalten: Die drei konkreten Größen
+sind aus dem Remoteformatartefakt nachgelesen. Welche Funktionen gemeinsam
+auszuziehen sind und welche Modulpfade die unveränderte Aufruferfläche bewahren,
+wird als nächster Schritt aus dem aktuellen Quelltext ermittelt. Es fehlt
+keine zwingende Nutzerangabe. Planungstiefe 2 bleibt passend, weil bestehende
+Codec-, Geometrie-, Paket- und Controlverträge zusammenhängen, ohne dass eine
+neue Produktfunktion entsteht.
+
+### B — Bestandsaufnahme und Funktionsverknüpfungen
+
+Die konkret beanstandete Funktion ist die fachliche Quellorganisation der drei
+bereits formatierten Dateien. Ein falsches Codec-, Bild- oder Protokollergebnis
+wird aus dem Größenbefund nicht abgeleitet. Alle folgenden Funktionen sind im
+aktuellen Quellstand gelesen und werden im selben Autorzyklus erhalten:
+
+| Verantwortung und eigene Funktionsauflistung | Direkte und indirekte Verknüpfungen bis zur betroffenen Grenze |
+|---|---|
+| `CodecRegistry` hält Fabriken, erzeugt Angebote und Reports; seine sieben Öffnungsmethoden verbinden Stage-/Admissionprüfung, Auswahl, Fallback und Decoderreferenz. | OS-`codec_inventory` → `CodecRegistry::new`/Angebote → `negotiate` → Hostpipeline/Worker und G6-Fixture → `open_encoder_for_stage` bzw. `open_encoder_for_stage_admitted` → geprüfte Fabrik, Tiles als Rückfall, `host_hybrid::{wrap,wrap_captured}`; `open_decoder` → `open_decoder_raw` → `HybridDecoder` und `ReferenceDecoder`. Hardwarepräferenz, verweigerte Fabriknamen, Reihenfolge, Größen-/Vertragsprüfung, Grantklone und Fehlertexte bleiben identisch. Der Bestand und `CodecReport` bleiben im bisherigen Modul. |
+| `FrameSize`/`Rect` halten Geometrie; `PacketBudget` samt `RECORD_BUFFER_OVERHEAD` und `validate_encoded_budget` begrenzt Paket- und Pufferbesitz. | `frame_budget`/`session_admission` → Budgetberechnung → `capture_transport`, `host_codec_phase_plan`, `host_capture`, `host_hybrid`/`captured_hybrid`, `wire_binary`, `gop_stream`, `worker_wire`/`worker_frame_wire` sowie OpenH264-/MF-Captureausgabe und Android-Pullpfad. V1-Ganzbildrecords, lokale V1-Empfangsgrenze und V2-20-Bild-/32-Recordbilanz behalten ihre Formeln; die Produzentenprüfung bleibt vor der Veröffentlichung erreichbar. |
+| `AvcLimits`, `avc_limits`, `macroblocks`, `fit_macroblocks`, `check_avc_dimensions` und der private `AvcBits` prüfen Codecgröße und SPS. | `negotiate`/Viewer-/Hostgrößenwahl → Makroblockgrenze; OpenH264-Decoder und MF-Encoder/-Decoder/-Captureausgabe → SPS-Prüfung vor nativer Bildallokation → unveränderte Profil-, Level-, 8-Bit-4:2:0-, Interlace-, Crop-, Padding-, Referenz- und Exp-Golomb-Grenzen. `FrameSize` bleibt der gemeinsame Typ; sein ursprünglicher Importpfad bleibt erhalten. |
+| `ViewerFrame`/`HostFrame`, ihre Domainmodelle und `FrameAck` halten die Nachrichtensemantik; vier Encoder-/Decoderfunktionen ordnen Tags und Bytes zu. | Desktop-/Android-/mobile Sitzung → `viewer_client` bzw. `host_session`/`icon_host` → unveränderte Send-/Empfangswrapper → vier Codec-Funktionen → `wire`/Eingabecodec/Familien-/Icon-/Sichtbarkeitsmodelle. Die Rückrichtung führt durch dieselben Decoder und bisherigen Kontroll-/Präsentationszustände. Taglimit, Richtungstrennung, 24-Byte-ACK, 16-Byte-Ping, 32-Byte-Pong, Big Endian, JSON-Felder, Familienvalidierung und neutraler Iconfehler bleiben erhalten. |
+| Bestehende Abnahme und unveränderte G6-Referenz | `batches_frame_budget_task_tests`, `wire_tests`, `negotiate_tests`, `wire_binary_tests`, die zugelassenen OpenH264-/MF-Fixtures und die eigenen G6-Fälle benutzen die bisherigen Namen. `review-task-manifest.json` wählt bereits `batches_` und die benannten Wire-/Negotiationfälle. Main bestätigt zusätzlich die unveränderten eingefrorenen Releaseblöcke nach `10988167`; diese liegen außerhalb der aktuellen Schreibfläche. |
+
+Der Rootgraph wurde nur zur Navigation abgefragt. Die Symbol-/Dateibeziehungen
+oben sind gegen aktuellen Quelltext verfolgt. Der bereits dokumentierte
+Graphify-Skill-/Paketunterschied liefert keinen neuen Laufzeitbeleg. Die
+gleichzeitige Strukturarbeit an Hostsession, Androidadaptern und Desktopdecode
+bleibt außerhalb dieser Schreibfläche; sie ruft die unveränderten bisherigen
+Namen weiterhin auf.
+
+### C — Strukturentscheidung und zweite Lückenrecherche
+
+Gewählt sind private Kindmodule mit expliziten Imports und gezielten
+`pub(crate)`-Reexports am bisherigen API-Ort. Dadurch bleibt `CodecRegistry`
+einschließlich seiner privaten Fabrikfelder am selben Ort; seine Methoden
+werden als unveränderte inhärente Implementierung ausgelagert. Für Paketbudget
+und AVC bleiben die bisherigen `frame_size_caps`-Namen als Reexports bestehen.
+Beim Controlprotokoll bleiben sämtliche Datentypen, Serdeattribute,
+`FrameAck`-Methoden, Integerhelfer und die async Send-/Empfangswrapper am
+bisherigen Ort. Nur die vier vollständigen Tagged-Codec-Funktionen werden
+ausgelagert. Damit wird auch keine bislang private Hilfsmethode enger sichtbar.
+
+Verworfen: bloßes Verdichten verletzt den ausdrücklichen Auftrag; `include!`
+würde die tatsächliche Modulverantwortung verbergen; ein Verschieben sämtlicher
+öffentlichen Nachrichtentypen würde unnötig mehr Typ- und Importgrenzen ändern.
+Eine neue Abhängigkeit, ein neues Protokoll oder ein zusätzlicher Testlauf ist
+für diesen reinen Strukturschnitt nicht erforderlich.
+
+Erste Recherche, geprüft 2026-10-26: Die Rust Reference dokumentiert
+[Zugriff aus Kindmodulen](https://doc.rust-lang.org/reference/visibility-and-privacy.html),
+[relative `#[path]`-Moduldateien](https://doc.rust-lang.org/reference/items/modules.html)
+und [gezielte Reexports](https://doc.rust-lang.org/reference/items/use-declarations.html).
+Diese Mechanismen erlauben den fachlichen Schnitt ohne öffentliche Kindmodule
+oder zusätzliche Feldsichtbarkeit. Es handelt sich um Grundmechanismen der im
+Projekt vorhandenen Rustmodule; es wird keine neue Bibliotheks-API eingeführt.
+
+Zweite Lückenrecherche vor der Produktionsänderung: `super::` verweist nach
+Auszug in ein Kindmodul auf einen zusätzlichen Vorfahren. Alle betroffenen
+Verweise auf Screenkernmodule müssen deshalb ausschließlich um diese eine
+Ebene korrigiert werden. Die privaten Fabrikfelder und `offers_stream` bleiben
+für das Kind erreichbar. `open_decoder_raw` wird zusammen mit seinem Aufrufer
+verschoben. `FrameAck::{encode,decode}`, `SetMode::validate` und die Integerhelfer
+bleiben bewusst im Elternmodul und sind aus dem Codec-Kind zugänglich. Alle
+Dateipfade werden als direkt aus der jeweiligen Elternquelldatei relative
+`#[path]`-Attribute registriert; `core/mod.rs` braucht keine neue Freigabe.
+
+Der geplante unveränderte Körper aller verschobenen Funktionen, Konstanten und
+Typdefinitionen lässt sich anschließend gegen `10988167` als Text vergleichen,
+wobei nur die notwendige zusätzliche `super::`-Ebene rücknormalisiert wird.
+Das ist ein statischer Erhaltungsbeleg und ersetzt keine Typ-/Compilerprüfung.
+
+### D — Umsetzung und eigene anschließende Anti-Regressionsreview
+
+| Meilenstein | Konkrete Dateien und Abhängigkeit | Erwarteter Erhaltungsbeleg vor Mains Remoteausführung |
+|---|---|---|
+| S1 Codecöffnung trennen | `codec_registry.rs` → `codec_registry_open.rs`; private Kindimplementierung | Alle sieben Öffnungsmethoden besitzen dieselben Signaturen, Prüfungen, Fabrikreihenfolgen, Fallbacks, Wrapper und Fehlertexte; Konstruktion, Angebote und Report bleiben erreichbar. Beide Dateien bleiben normal formatiert unter der Größenregel. |
+| S2 Paketbudget und AVC trennen | `frame_size_caps.rs` → `frame_size_packet.rs`, `frame_size_avc.rs`; gezielte Reexports | Die bisherigen öffentlichen Namen und Geometrie bleiben erreichbar; Formeln, Tabellen, SPS-Parser, Rejectionpfade und Konstanten sind abgesehen von Modulpfaden unverändert. |
+| S3 Controlcodec trennen | `wire_control.rs` → `wire_control_codec.rs`; vier Funktionen reexportieren | Domainmodelle, private ACK-/Integerhelfer und async Wrapper bleiben identisch; jeder Matcharm, Tag, feste Bytefolge und JSON-/Validierungspfad bleibt identisch. |
+| S4 Eigene Schlussreview und Übergabe | Gesamte oben aufgeführte Funktionskette und dieser Bericht | Statischer Funktionskörper-/Deklarationsvergleich, Import-/Sichtbarkeitslektüre, Syntaxparse, Diff-/Größenprüfung und unveränderte vorhandene Fallnamen; keine lokale Test- oder Formatierausführung. Main nutzt dieselbe Remote-Suite, ohne neuen Build-/Releasezyklus. |
+
+Die Grundlagen und der konkrete Strukturplan standen vor der Produktionsänderung.
+S1–S3 sind umgesetzt. Die sieben beteiligten Dateien behalten lesbare bisherige
+Funktionsblöcke und besitzen nach den notwendigen expliziten Zeilenumbrüchen
+keine Zeile mit mehr als 100 Zeichen:
+
+| Datei unter `native/src/screen/core/` | Zeilen | Bytes | Verantwortung |
+|---|---:|---:|---|
+| `codec_registry.rs` | 224 | 7.587 | Fabriktraits, Bestand, Angebote, Diagnosebericht |
+| `codec_registry_open.rs` | 298 | 11.591 | Sieben Öffnungsmethoden, Auswahl, Fallback, Admission und Referenzwrapper |
+| `frame_size_caps.rs` | 127 | 4.428 | Geometrie und unveränderte öffentliche Namen über gezielte Reexports |
+| `frame_size_packet.rs` | 244 | 10.533 | V1-/V2-Paketbudget, Produktpufferbilanz und Produzentenprüfung |
+| `frame_size_avc.rs` | 284 | 9.622 | Makroblock-/Levelgrenzen und bounded SPS-Parser |
+| `wire_control.rs` | 330 | 9.885 | Domainmodelle, private ACK-/Integerhelfer und async IO |
+| `wire_control_codec.rs` | 218 | 9.010 | Vier Tagged-Encoder/-Decoderfunktionen |
+
+Es wurde kein Formatter aufgerufen. Die ursprünglichen formatierten Blöcke
+wurden übernommen; ausschließlich längere durch Modulpfade entstandene Zeilen
+wurden explizit lesbar umgebrochen. Die tatsächliche Remoteformatbestätigung
+bleibt Bestandteil derselben von Main verwalteten Vorbereitung.
+
+#### Eigene anschließende Anti-Regressionsreview der Strukturkorrektur
+
+Nach Abschluss der Auslagerungen wurden alle früheren Funktionen, Typen,
+Traits und Konstanten der drei Originaldateien gegen `10988167` verglichen.
+Der lesende Tree-sitter-Abgleich erfasst dabei die vollständigen Deklarationen
+und Funktionskörper mit ihren Literalinhalten. Nach Rücknormalisierung genau
+der durch den Kindmodulpfad zusätzlich erforderlichen `super::`-Ebene sind alle
+Quelltokens identisch; lediglich Layoutwhitespace wird dabei ignoriert. Kein
+bisheriges Item fehlt und kein bisheriges Item ist doppelt vorhanden. Der
+zusätzliche Syntaxparse der tatsächlichen sieben Dateien meldet keine ERROR-
+oder missing-Knoten. Das ist kein Compiler- oder Typprüfungsbeleg.
+
+| Betroffene Kette | Eigener statischer Anti-Regressionsbefund |
+|---|---|
+| Bestand → Auswahl → Fabrik → Hybrid-/Referenzwrapper | `CodecRegistry`, Fabrikfelder, Fabriktraits und Report bleiben im Elternmodul. Das private Kind darf nach Rustprivacy auf diese Felder und `offers_stream` zugreifen. Alle Methodensichtbarkeiten und Signaturen bleiben erhalten. Prüfung vor Allokation, Hardwarepriorität, verweigerte Fabriken, Fehlerreihenfolge, Tilespfad, Grantweitergabe und Reihenfolge raw → hybrid → reference sind tokenidentisch. `open_decoder_raw` bleibt mit seinem einzigen Öffnungsaufrufer im selben privaten Kind. |
+| Geometrie → V1/V2-Admission → Record-/Worker-/Pullgrenze | `FrameSize` und `Rect` bleiben am ursprünglichen Ort. `PacketBudget`, sein Overhead und `validate_encoded_budget` werden dort mit identischer `pub(crate)`-Reichweite reexportiert. Bild-/Recordanzahl, checked/saturating Arithmetic, V1-Ganzbildrecord, lokale Legacygrenze, V2-Bilanz sowie Produzenten-Rejection besitzen dieselben Tokens und Fehlertexte. Kein Budget wird neu berechnet, angehoben oder fallengelassen. |
+| Codecangebot → Makroblockfit → SPS vor Allokation | Die bisherige Außenfläche `AvcLimits`, `avc_limits`, `macroblocks`, `fit_macroblocks`, `check_avc_dimensions` bleibt unverändert reexportiert. Tabellen, progressive 8-Bit-4:2:0-Grenze, Profil-/Level-/Crop-/Paddingprüfung und bounded Exp-Golomb-Lesen sind unverändert. Der private `AvcBits` bleibt ausschließlich innerhalb seines mitverschobenen Parsers erforderlich. |
+| Controlmodell → Tags/Bytes → Async IO → Host/Viewer | Sämtliche Nachrichtentypen, Serdeattribute, ACK-/Ping-/Pongfelder, privaten `FrameAck`-Methoden, Integerhelfer und async Wrapper bleiben im bisherigen Elternmodul. Die vier reexportierten Codec-Funktionen dürfen auf die privaten Elternhelfer zugreifen. Ihre Matcharme, Tags, Literale, Big-Endian-Reihenfolge, Tag-/Richtungsgrenzen, Familien-/Iconvalidierung und Fehlerpfade sind tokenidentisch. Berechtigungs- und Präsentationszustände erhalten dieselben Nachrichten. |
+| Bisherige Fallnamen und G6-Referenz | Es wurde kein Test oder Testmodul verschoben oder umbenannt. Die bestehenden Importpfade bleiben durch inhärente Methoden beziehungsweise gezielte Reexports bestehen. Die eigenen initialen Qualitätsquellen, eingefrorenen Releaseblöcke und beide Cargo-Dateien besitzen durch diesen Folgeauftrag keinen Worktree-Diff. Mains zusätzlicher Byte-/Paketversionsbeleg wird dadurch nicht verändert. |
+| Integrationsgrenze | Alle neuen Module bleiben privat und plattformneutral; es gibt keine neue OS-Abhängigkeit, keine öffentliche Fabrikfeldfreigabe, kein `cfg`-Gate, keine neue Ausnahme und keine neue Laufzeitaktion. Die funktionale Bestätigung erfolgt ausschließlich durch Mains dieselbe Remote-Suite. |
+
+Zusätzlich wurde `git diff --check` für die geänderten vorhandenen Dateien und
+den Bericht ohne Befund ausgeführt. Die Prüfung des nachfolgenden neuen
+Dateiinhalts erfolgte ebenfalls als statische Syntax-/Quelllektüre. Keine
+Build-, Test-, Formatter-, Server-, Commit-, Push- oder Graphaktion wurde von
+diesem Autor ausgeführt. Der ursprüngliche Vorbereitungsfehlschlag fand laut
+Remoteauftrag vor jeder Kompilierung statt; weder dieser Befund noch der
+statische Abgleich wird als erfolgreicher Remote-Test ausgegeben.
+
+#### Dateien und bestehende Suiteanbindung dieser Fortsetzung
+
+Neu erstellt:
+
+- `native/src/screen/core/codec_registry_open.rs`
+- `native/src/screen/core/frame_size_packet.rs`
+- `native/src/screen/core/frame_size_avc.rs`
+- `native/src/screen/core/wire_control_codec.rs`
+
+Geändert:
+
+- `native/src/screen/core/codec_registry.rs`
+- `native/src/screen/core/frame_size_caps.rs`
+- `native/src/screen/core/wire_control.rs`
+- `docs/plaene/2026-10-24-batches/fix-quality-acceptance.md`
+
+Für diese Fortsetzung gezielt gelesen: die aktualisierte eigene Scope-JSON,
+der eigene bisherige Bericht, `/tmp/smartexplorer-rv1-40332971455/format.json`
+und die Struktur von `/tmp/smartexplorer-rv1-size-inventory.json`; aktuelle
+`codec_registry.rs`, `frame_size_caps.rs`, `wire_control.rs`, `screen/mod.rs`
+und ihre originalen Fassungen aus `10988167`; die neuen vier Auszüge;
+`core/mod.rs`, `negotiate.rs`, `frame_budget.rs`, `wire_binary.rs`,
+`gop_stream.rs`, `worker_wire.rs`, `worker_capture_wire.rs`,
+`host_stage.rs`, `host_pipeline_init.rs`, `host_capture.rs` und die bereits
+bekannten OpenH264-/Qualitätsquellen; die konkreten Aufrufstellen in
+`session_admission.rs`, `capture_transport.rs`, `worker_frame_wire.rs`,
+`host_codec_phase_plan.rs`, `host_hybrid.rs`, `captured_hybrid.rs`,
+`viewer_client.rs`, `host_session.rs`, `icon_host.rs`,
+`batches_rate_reference_transport.rs`, den OS-Codec-/Capture-/Viewerschnittstellen
+und den freigegebenen mobilen/JNI-Grenzen; `wire_tests.rs`, `negotiate_tests.rs`,
+`wire_binary_tests.rs`, `batches_frame_budget_task_tests.rs`,
+`batches_session_budget_compatibility_task_tests.rs`,
+`window_list_tests.rs` und `native/review-task-manifest.json`.
+Die Recherche blieb bei den zugewiesenen Modulen und ihren konkreten
+Aufruf-/API-Grenzen; ein Suchtreffer allein wurde nicht als Laufzeitbeleg benutzt.
+
+Es werden keine neuen Fälle oder neuen Artefaktlabels benötigt. Die bisherige
+gemeinsame Suite enthält bereits die unmittelbar betroffenen Fälle:
+
+- `screen_task_negotiate_matrix`
+- `screen_task_wire_roundtrip_all_tags`
+- `screen_task_wire_picture_stream_roundtrip`
+- `screen_task_frame_limits_reject_oversize`
+- `batches_task_b6_producer_rejects_record_count_and_payload_over_budget`
+- `batches_task_b6_record_reader_limits_whole_transaction`
+- `batches_task_b6_worker_rejects_negotiated_packet_before_payload_read`
+- die im vorigen Abschnitt vollständig aufgelisteten sechs G6-Qualitätsfälle.
+
+Main muss für diesen Strukturschnitt keinen zusätzlichen Testlauf, Build,
+Testnamen oder Releasezyklus registrieren. Main übernimmt die freigegebenen
+Dateien in den Kandidaten, aktualisiert den Rootgraphen und führt die bestehende
+Remotevorbereitung/-Suite fort. Innerhalb dieser Schreibfläche bleibt keine
+bekannte offene Strukturabhängigkeit. Die finale Format-, Typ- und
+Laufzeitbestätigung bleibt ausschließlich remote offen; dieser Autor stoppt
+nach seinem vollständigen Quellergebnis und eigenen Review.
+
+Nach Mains Stagingkontrolle wurde am 2026-10-26 ausschließlich je eine
+zusätzliche EOF-Leerzeile in `frame_size_packet.rs` und `wire_control_codec.rs`
+entfernt. Der direkte Bytevergleich bestätigt unveränderten Inhalt vor diesem
+jeweils letzten LF-Byte; Funktions- und Referenzcode bleibt unverändert. Die
+Größentabelle ist auf 244/218 Zeilen und 10.533/9.010 Bytes angepasst. Das erneute
+Staging und dessen Indexprüfung bleiben bei Main.
