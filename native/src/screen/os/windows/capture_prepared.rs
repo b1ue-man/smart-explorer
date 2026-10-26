@@ -17,6 +17,9 @@ use super::capture_source::{self,WindowsSource};
 use super::capture_wgc::{self,PreparedWgc,Target,WgcCapture};
 use super::{monitors,secure_desktop};
 
+#[path="capture_recovery.rs"]
+pub(super) mod recovery;
+
 enum PreparedCapture {Wgc(PreparedWgc),Dxgi(PreparedDxgi)}
 impl PreparedCapture {
     fn geometry(&self)->io::Result<Option<CaptureGeometry>> {

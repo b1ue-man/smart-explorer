@@ -18,6 +18,7 @@ use crate::screen::core::pixel_convert::{BgraRotation,FrameSize,Rect};
 use crate::screen::core::session_state::SessionState;
 use super::capture_slots::{CaptureBudget,CaptureGeometry,CaptureKind};
 use super::capture_source::{Grabber,FIRST_FRAME_WAIT};
+use super::capture_prepared::recovery::CaptureRecovery;
 use super::d3d_device::{self,DeviceSet,Readback};
 
 fn find_output(device:&str)->io::Result<(IDXGIAdapter,IDXGIOutput1)> {
@@ -115,12 +116,13 @@ pub(super) struct DxgiCapture {
     last:Option<CapturedImage>,
     size:FrameSize,
     budget:CaptureBudget,
+    recovery:CaptureRecovery,
 }
 impl DxgiCapture {
     pub(super) fn open(prepared:PreparedDxgi,budget:CaptureBudget)->io::Result<Self> {
         let live=duplicate(&prepared,&budget)?;
         let size=budget.geometry().displayed();
-        Ok(Self {live:Some(live),prepared,readback:Readback::default(),last:None,size,budget})
+        Ok(Self {live:Some(live),prepared,readback:Readback::default(),last:None,size,budget,recovery:CaptureRecovery::active()})
     }
     fn live_duplication(&self)->io::Result<&IDXGIOutputDuplication> {
         self.live.as_ref().map(|live|&live.duplication).ok_or_else(||io::Error::other("DXGI duplication unavailable"))
@@ -185,7 +187,8 @@ impl Grabber for DxgiCapture {
     fn frame_limits(&self)->crate::screen::core::frame_budget::FrameLimits {self.budget.geometry().limits}
     fn size(&self)->FrameSize {self.size}
     fn capture(&mut self,keyframe:bool)->io::Result<SourceFrame> {
-        if self.live.is_none() {return Ok(SourceFrame::Unchanged);}
+        let recovery=self.recovery;
+        if !recovery.ensure_live(self.live.is_some(),||self.reopen())? {return Ok(SourceFrame::Unchanged);}
         let wait=if self.last.is_none() {FIRST_FRAME_WAIT} else {Duration::ZERO};
         let mut info=DXGI_OUTDUPL_FRAME_INFO::default();let mut resource=None;
         let acquired=unsafe {self.live_duplication()?.AcquireNextFrame(wait.as_millis() as u32,&mut info,&mut resource)};
@@ -227,6 +230,7 @@ impl Grabber for DxgiCapture {
         }
     }
     fn reopen(&mut self)->io::Result<()> {
+        self.recovery.request(true);
         self.stop();
         let geometry=self.prepared.geometry()?;
         self.budget.replace(geometry)?;
@@ -234,7 +238,8 @@ impl Grabber for DxgiCapture {
         self.size=geometry.displayed();Ok(())
     }
     fn set_capture_active(&mut self,active:bool)->io::Result<()> {
-        if !active {self.stop();} else if self.live.is_none() {self.reopen()?;}
+        self.recovery.request(active);
+        if !active {self.stop();} else {self.recovery.activate(self.live.is_some(),||self.reopen())?;}
         Ok(())
     }
 }

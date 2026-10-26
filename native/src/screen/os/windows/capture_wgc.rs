@@ -20,6 +20,7 @@ use crate::screen::core::session_state::SessionState;
 use super::capture_slots::{CaptureBudget,CaptureGeometry,CaptureKind};
 use super::capture_source::{Grabber,FIRST_FRAME_WAIT};
 use super::capture_retirement::CaptureResources;
+use super::capture_prepared::recovery::CaptureRecovery;
 use super::d3d_device::{self,DeviceSet,Readback};
 use super::monitors;
 const POLL:Duration=Duration::from_millis(5);
@@ -102,12 +103,13 @@ pub(super) struct WgcCapture {
     last:Option<CapturedImage>,
     size:FrameSize,
     budget:CaptureBudget,
+    recovery:CaptureRecovery,
 }
 impl WgcCapture {
     pub(super) fn open(target:PreparedWgc,budget:CaptureBudget)->io::Result<Self> {
         let live=create(&target,&budget)?;
         let size=budget.geometry().displayed();
-        Ok(Self {live:Some(live),target,readback:Readback::default(),last:None,size,budget})
+        Ok(Self {live:Some(live),target,readback:Readback::default(),last:None,size,budget,recovery:CaptureRecovery::active()})
     }
     fn newest(&self)->io::Result<Option<Direct3D11CaptureFrame>> {
         let mut newest:Option<Direct3D11CaptureFrame>=None;
@@ -121,6 +123,9 @@ impl WgcCapture {
         }
     }
     fn restart(&mut self)->io::Result<()> {
+        // WindowsSource can resume through reopen after a hidden secure-
+        // desktop pause without a preceding backend activity notification.
+        self.recovery.request(true);
         self.stop()?;
         let geometry=self.target.geometry()?.ok_or_else(||io::Error::other("WGC native metadata pending"))?;
         self.budget.replace(geometry)?;
@@ -153,7 +158,8 @@ impl Grabber for WgcCapture {
     fn size(&self)->FrameSize {self.size}
     fn capture(&mut self,keyframe:bool)->io::Result<SourceFrame> {
         if !self.source_available() {return Err(io::Error::new(io::ErrorKind::NotFound,"WGC source closed"));}
-        if self.live.is_none() {return Ok(SourceFrame::Unchanged);}
+        let recovery=self.recovery;
+        if !recovery.ensure_live(self.live.is_some(),||self.restart())? {return Ok(SourceFrame::Unchanged);}
         let deadline=Instant::now()+FIRST_FRAME_WAIT;
         loop {
             if let Some(frame)=self.newest()? {
@@ -176,7 +182,8 @@ impl Grabber for WgcCapture {
     }
     fn set_capture_active(&mut self,active:bool)->io::Result<()> {
         if !self.source_available() {return Err(io::Error::new(io::ErrorKind::NotFound,"original WGC source closed"));}
-        if !active {self.stop()?;} else if self.live.is_none() {self.restart()?;}
+        self.recovery.request(active);
+        if !active {self.stop()?;} else {self.recovery.activate(self.live.is_some(),||self.restart())?;}
         Ok(())
     }
     fn reopen(&mut self)->io::Result<()> {self.restart()}

@@ -65,12 +65,18 @@ impl super::X11Source {
             super::Target::Window(window) if self.compositor => self.pixmap_geometry(window)?.2,
             _ => 0,
         };
-        if self.geometry == Some(area) && self.pixmap_bytes == pixmap {
+        let changed = self.geometry != Some(area) || self.pixmap_bytes != pixmap;
+        if !changed && self.grant.is_some() {
             return Ok(());
         }
         let size = FrameSize::new(area.width as u32, area.height as u32);
         crate::screen::core::frame_budget::FrameLimits::RESOURCE.check(size)?;
-        let generation = self.generation.next()?;
+        // A refused plan remains pending in this same generation. Publish the
+        // reference loss before asking for memory held by the old encoder.
+        let generation = if changed {self.generation.next()?} else {self.generation};
+        let reference = if changed {self.reference_generation.checked_add(1)
+            .ok_or_else(|| super::failed("x11_capture_reference_exhausted"))?}
+            else {self.reference_generation};
         let next = plan(&self.source_key, generation, size, self.shm, pixmap, self.output.as_ref())?;
         if let Some(segment) = self.segment.take() {
             segment.release(&self.conn);
@@ -82,10 +88,14 @@ impl super::X11Source {
                 grant.retire()?;
             }
         }
-        let grant = self.admission.authority().approve(next)?;
-        self.grant = Some(grant);
+        self.grant = None;
         self.generation = generation;
         self.pixmap_bytes = pixmap;
-        self.note_geometry(area)
+        self.note_geometry(area)?;
+        // Pixmap border/storage changes also retire encoder references even
+        // when the input rectangle is unchanged.
+        self.reference_generation = reference;
+        self.grant = Some(self.admission.authority().approve(next)?);
+        Ok(())
     }
 }

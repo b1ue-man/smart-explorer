@@ -10,6 +10,7 @@ use crate::screen::core::capture_image::CaptureImageBuilder;
 use crate::screen::core::capture_plan::CapturePhases;
 use crate::screen::core::frame_budget::{FrameLimits,MAX_WORKING_BYTES};
 use crate::screen::core::frame_memory::{MemoryPool,CapacityCeiling};
+use crate::screen::os::capture_prepared::recovery::CaptureRecovery;
 
 /// Answers of the queries, and the order they were asked in.
 #[derive(Default)]
@@ -142,6 +143,8 @@ struct Counting {
     reopened: Arc<AtomicUsize>,
     captured: Arc<Mutex<Vec<bool>>>,
     grant: CaptureGrant,
+    recovery: CaptureRecovery,
+    live: bool,
 }
 
 impl Grabber for Counting {
@@ -150,19 +153,24 @@ impl Grabber for Counting {
     }
 
     fn capture(&mut self, keyframe: bool) -> io::Result<SourceFrame> {
+        if !self.recovery.ensure_live(self.live, || self.reopen())? {return Ok(SourceFrame::Unchanged);}
         self.captured.lock().unwrap().push(keyframe);
         Ok(SourceFrame::Frame(CaptureImageBuilder::new(FrameSize::new(64,64),FrameLimits::LEGACY,
             &self.grant,CaptureOwner::SourcePixels)?.freeze()))
     }
 
     fn reopen(&mut self) -> io::Result<()> {
+        self.recovery.request(true);
+        self.live=true;
         self.reopened.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
+    fn set_capture_active(&mut self,active:bool)->io::Result<()> {
+        self.recovery.request(active);self.live=active;Ok(())
+    }
 }
 
-#[test]
-fn windows_capture_starts_anew_after_the_secure_desktop() {
+fn counting_source()->(WindowsSource,Switches,Arc<AtomicUsize>,Arc<Mutex<Vec<bool>>>) {
     let reopened = Arc::new(AtomicUsize::new(0));
     let captured = Arc::new(Mutex::new(Vec::new()));
     let switches = Switches::default();
@@ -175,8 +183,15 @@ fn windows_capture_starts_anew_after_the_secure_desktop() {
         grant:admission.authority().approve(plan).unwrap(),
         reopened: reopened.clone(),
         captured: captured.clone(),
+        recovery: CaptureRecovery::active(),
+        live: true,
     };
-    let mut source = WindowsSource::with(Box::new(grabber), switches.clone(), false);
+    (WindowsSource::with(Box::new(grabber), switches.clone(), false),switches,reopened,captured)
+}
+
+#[test]
+fn windows_capture_starts_anew_after_the_secure_desktop() {
+    let (mut source,switches,reopened,captured)=counting_source();
     assert!(matches!(
         source.capture(1, false).unwrap(),
         SourceFrame::Frame(_)
@@ -211,4 +226,22 @@ fn windows_capture_starts_anew_after_the_secure_desktop() {
     ));
     assert_eq!(reopened.load(Ordering::SeqCst), 2);
     assert_eq!(*captured.lock().unwrap(), [false, true, false]);
+}
+
+#[test]
+fn batches_task_b6_windows_hidden_resume_across_secure_desktop() {
+    let (mut source,switches,reopened,captured)=counting_source();
+    source.set_capture_active(false).unwrap();
+    assert!(matches!(source.capture(1,false).unwrap(),SourceFrame::Unchanged));
+    switches.secure.store(true,Ordering::SeqCst);
+    source.set_capture_active(true).unwrap();
+    assert!(matches!(source.capture(2,false).unwrap(),SourceFrame::Paused(SessionState::SecureDesktop)));
+    assert_eq!(reopened.load(Ordering::SeqCst),0);
+    switches.secure.store(false,Ordering::SeqCst);
+    assert!(matches!(source.capture(3,true).unwrap(),SourceFrame::Frame(_)));
+    assert_eq!(reopened.load(Ordering::SeqCst),1);
+    assert_eq!(*captured.lock().unwrap(),[true]);
+    source.set_capture_active(false).unwrap();
+    assert!(matches!(source.capture(4,false).unwrap(),SourceFrame::Unchanged));
+    assert_eq!(reopened.load(Ordering::SeqCst),1);
 }
