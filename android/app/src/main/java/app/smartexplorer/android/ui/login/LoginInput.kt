@@ -85,7 +85,7 @@ class LoginCanvas(context: Context, private val owner: LoginSession) : FrameLayo
         getLocalVisibleRect(visible) && visible.left <= rect.left && visible.top <= rect.top && visible.right >= rect.right && visible.bottom >= rect.bottom
     private fun confirm(image: LoginPicture, stamp: LoginPresentationStamp, expectedGeneration: Long) {
         if (generation != expectedGeneration || picture?.identity != image.identity || stamp != owner.presentationStamp()) return
-        if (!fullyVisible()) { if (drawn != null) release(); return }
+        if (!fullyVisible() || !hasWindowFocus()) { if (drawn != null) release(); return }
         drawn = image.token; owner.presented(image.token, stamp)
     }
     private fun submitHardware() {

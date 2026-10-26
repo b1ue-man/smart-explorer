@@ -101,7 +101,7 @@ class LoginSession(private val target: LoginTarget, private val user: String, pr
     }
     internal fun presentationStamp() = LoginPresentationStamp(epoch.get(), current.value.presentation_epoch)
     internal fun presented(token: LoginToken, stamp: LoginPresentationStamp) {
-        if (ended.get() || stamp.localEpoch != epoch.get() || stamp.presentationEpoch != current.value.presentation_epoch) return
+        if (ended.get() || !focused || stamp.localEpoch != epoch.get() || stamp.presentationEpoch != current.value.presentation_epoch) return
         drawn = token
         val key = "${stamp.localEpoch}:${stamp.presentationEpoch}:${token.digest}"
         if (proof == key && current.value.input_ready) return
