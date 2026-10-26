@@ -1282,6 +1282,10 @@ Die Registrykorrektur vermeidet ein künstliches Nullfeld, die P27-Fixture
 ersetzt nur ihre eigene Profilwurzel, und relative Ordneraliase behalten ihre
 gültige Bedeutung. Vorhandene Quittungs-, Konflikt- und Schreibschutzgrenzen
 bleiben erhalten. Die Laufzeitbestätigung erfolgt gemeinsam nach sämtlichen
-M01–M14-Korrekturen. M01/M03/M06/M08/M11/M12/M13 arbeiten; M04/M09/M10 sind
-noch eingeplant. Der finale Abruf des bisherigen Laufs um 23:10:44 UTC
+M01–M14-Korrekturen. Anschließend wurden M03 (`252f3fe8`), M06 (`a6a54ae3`),
+M08 (`c7c49f12`), M12 (`9dde70f1`) und M11 (`625df513`) mit vollständigen
+Autorenberichten und statischer Integrationsprüfung gepusht. M01, M04, M09,
+M10 und M13 arbeiten; kein Paket wartet mehr auf seinen Start. Die gemeinsame
+Manifestintegration und der vollständige Rootgraph folgen nach diesen Fixes.
+Der finale Abruf des bisherigen Laufs um 23:10:44 UTC
 bestätigt dessen Ende und den übersprungenen Gerätejob.

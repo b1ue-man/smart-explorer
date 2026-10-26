@@ -305,18 +305,26 @@ absolute Backendpfade und strenge Quittungsprüfungen bleiben erhalten.
 Die erforderlichen Fallregistrierungen werden für dieselbe gemeinsame Suite
 gesammelt; es wurde kein lokaler Funktionslauf gestartet.
 
-Aktiv sind M01, M03, M06, M08, M11, M12 und M13; M04, M09 und M10 bleiben
-eingeplant. Der Scope wurde jeweils nur für konkret gemeldete
-Aufrufer erweitert. M02 umfasst nun die falschen relativen Joins in
-Ordnerreservierung und Ordner-Move. M06 umfasst den tatsächlichen
-Worker-/Dispatcherleser vor unbesessenem Payload. M13 umfasst die synchrone
-Entziehung alter Freigaben vor Rebind, ohne die bestehende erfolgreiche
-Annahme einer neuen Generation im Routemonitor zu verlieren. M03 untersucht
-den gebundenen Linux-Selbstübergang vor dem Inaktivitätsbeweis der eigenen
-Deinstallation. Jeder dieser Autoren aktualisiert seinen eigenen endgültigen
-Plan und Quellenabgleich vor der betroffenen Änderung. Bei M13 umfasst das
-auch einen sichtbaren Wartezustand während des Netzumbaus und eine frische
-Auswahlfrist nach dessen Ende, ohne absolute Operationdeadlines zu verlängern.
-Bei M01 wird die geänderte Namespacebestätigung durch sämtliche direkt
-angeschlossenen Sync-, Backup- und Recoveryverbraucher verfolgt; ein ehrliches
-unbestätigtes Ergebnis darf nicht still unterstützte Dateisysteme aussperren.
+Zusätzlich sind M03 (`252f3fe8`), M06 (`a6a54ae3`), M08 (`c7c49f12`), M12
+(`9dde70f1`) und M11 (`625df513`) nach demselben vollständigen Autorenzyklus
+integriert und auf beiden Branches gepusht. M03 erhält Linux-Selbstdeinstallation
+mit gebundenem Prozessübergang, eine konservative Dateibereinigung und fremde
+Codex-Konfiguration. M06 prüft das Payloadbudget bereits im tatsächlichen
+Worker-/Dispatcherleser. M08 korrigiert optische Index- und Rootfixtures bei
+unveränderten Produktfiltern. M12 erhält den X11-Server zwischen Capturefällen.
+M11 normalisiert ausschließlich CRLF der eingebetteten Vergleichstexte; die
+rohen Releasehashes und Qualitätsanforderungen bleiben unverändert.
+
+Aktiv sind M01, M04, M09, M10 und M13. Der Scope wird ausschließlich um
+konkret benötigte Aufrufer erweitert. M01 erhält die bisherige
+VFS-Operationsqualifikation für Sync, Backup und Mounts getrennt vom neuen
+strikten Transfer-Replaybeweis. Eine allgemeine fehlende Stromausfallgarantie
+ist kein Beleg eines zusätzlichen bestehenden VFS-Funktionsfehlers. M04 erhält
+private Journalrechte und trennt Icon-Datenversion von CLI-Programmversion.
+M09 korrigiert den Abschluss des Exec-Kontrolllesers. Bei M10 ist die fehlende
+Root-Abfrage der HTTP-Fixture belegt; ein Produktpagerfehler ist nicht belegt.
+M13 entzieht alte Freigaben vor Rebind und erhält einen Wartezustand während
+der Netzwerkvorbereitung; nach deren Ende beginnt eine frische Auswahlfrist,
+ohne absolute Operationdeadlines zu verlängern. Ein veralteter Offline-Status
+darf den neuen Netzwechsel nicht abbrechen. Die abschließende eigene
+Anti-Regressionsreview jedes dieser Autoren steht noch vor der Integration.
