@@ -58,6 +58,7 @@ object NativeBridge {
     external fun loginImageOwnerCreate(heapOffer: Long): Long
     external fun loginImageOwnerClose(owner: Long)
     external fun loginBitmapTake(session: Long, owner: Long): String?
+    external fun loginBitmapDiscard(owner: Long, descriptor: String)
     external fun loginBitmapBorrow(owner: Long, picture: Long, generation: Long): Bitmap?
     external fun loginBitmapEndBorrow(owner: Long, picture: Long, generation: Long)
     external fun loginBitmapRetire(owner: Long, picture: Long, generation: Long)

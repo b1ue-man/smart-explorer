@@ -58,9 +58,17 @@ class LoginImagePane internal constructor(internal val calls: LoginBitmapCalls =
     internal fun take(session: Long): LoginPicture? {
         val raw = NativeBridge.loginBitmapTake(session, handle) ?: error("Native Loginbildübernahme fehlgeschlagen.")
         if (raw.isEmpty()) return null
-        val descriptor = Core.json.decodeFromString<LoginPictureDescriptor>(raw)
-        require(descriptor.owner == handle && descriptor.picture > 0 && descriptor.generation > 0)
-        return LoginPicture(LoginBitmapOwner(descriptor))
+        try {
+            val descriptor = Core.json.decodeFromString<LoginPictureDescriptor>(raw)
+            require(descriptor.owner == handle && descriptor.picture > 0 && descriptor.generation > 0)
+            return LoginPicture(LoginBitmapOwner(descriptor))
+        } catch (failure: Throwable) {
+            // Native publication precedes parsing and construction on this side.
+            // The unchanged descriptor identifies exactly that unpublished owner.
+            try { NativeBridge.loginBitmapDiscard(handle, raw) }
+            catch (cleanup: Throwable) { failure.addSuppressed(cleanup) }
+            throw failure
+        }
     }
 }
 
@@ -68,7 +76,11 @@ class LoginImagePane internal constructor(internal val calls: LoginBitmapCalls =
 class LoginPicture internal constructor(private val owner: LoginBitmapOwner) {
     val token: LoginToken get() = owner.descriptor.token
     internal val identity: LoginPictureDescriptor get() = owner.descriptor
-    internal fun retain(): LoginPicture? = if (owner.retain()) LoginPicture(owner) else null
+    internal fun retain(): LoginPicture? {
+        if (!owner.retain()) return null
+        try { return LoginPicture(owner) }
+        catch (failure: Throwable) { owner.release(); throw failure }
+    }
     internal fun borrow(): LoginDrawBorrow? = owner.borrow()
     private val closed = AtomicBoolean(false)
     internal fun close() { if (closed.compareAndSet(false, true)) owner.release() }
@@ -89,7 +101,8 @@ internal class LoginBitmapOwner(val descriptor: LoginPictureDescriptor, private 
     @Synchronized fun borrow(): LoginDrawBorrow? {
         if (references == 0) return null
         val bitmap = calls.borrow(descriptor) ?: return null
-        return LoginDrawBorrow(bitmap, descriptor, calls)
+        try { return LoginDrawBorrow(bitmap, descriptor, calls) }
+        catch (failure: Throwable) { calls.endBorrow(descriptor); throw failure }
     }
 }
 
