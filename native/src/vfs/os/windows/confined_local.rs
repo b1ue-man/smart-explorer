@@ -93,8 +93,8 @@ pub(super) fn sync_filesystem(directory: &ConfinedDirectory) -> io::Result<bool>
     Ok(true)
 }
 pub(super) fn confirm_namespace(directory: &ConfinedDirectory) -> io::Result<bool> {
-    // Microsoft documents WRITE_THROUGH as flushing metadata changes including
-    // renames. create/remove/rename all use that flag on their actual NT handle.
+    // Qualify the existing per-file/write-through contract on the held
+    // authority. This is not a directory flush or a lost-publication proof.
     let _ = volume_info::facts(directory.file())?;
     Ok(true)
 }

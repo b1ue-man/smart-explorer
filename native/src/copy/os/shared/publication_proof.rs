@@ -18,6 +18,45 @@ pub(crate) fn confirm_transfer_publication(
     expected_sha256: &str,
     cancel: &AtomicBool,
 ) -> io::Result<()> {
+    confirm_saved_publication(
+        target,
+        expected_identity,
+        expected_sha256,
+        cancel,
+        SavedPublication::Unconfirmed,
+    )
+}
+
+/// A durably acknowledged publication already records its successful platform
+/// operation. Revalidate that same object and content before retained-source
+/// cleanup; do not turn the receipt into a general directory-flush capability.
+pub(crate) fn confirm_acknowledged_transfer_publication(
+    target: &Path,
+    expected_identity: &str,
+    expected_sha256: &str,
+    cancel: &AtomicBool,
+) -> io::Result<()> {
+    confirm_saved_publication(
+        target,
+        expected_identity,
+        expected_sha256,
+        cancel,
+        SavedPublication::Acknowledged,
+    )
+}
+
+enum SavedPublication {
+    Unconfirmed,
+    Acknowledged,
+}
+
+fn confirm_saved_publication(
+    target: &Path,
+    expected_identity: &str,
+    expected_sha256: &str,
+    cancel: &AtomicBool,
+    basis: SavedPublication,
+) -> io::Result<()> {
     if expected_identity.is_empty()
         || expected_sha256.len() != 64
         || !expected_sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
@@ -34,7 +73,14 @@ pub(crate) fn confirm_transfer_publication(
     active(cancel)?;
     held.file.sync_all()?;
     active(cancel)?;
-    super::platform::confirm_publication_namespace(&held.parent)?;
+    match basis {
+        SavedPublication::Acknowledged => {
+            super::platform::confirm_live_publication_namespace(&held.parent, target)?;
+        }
+        SavedPublication::Unconfirmed => {
+            super::platform::confirm_publication_namespace(&held.parent)?;
+        }
+    }
     // Re-read the same handle after flushing. This also detects changed bytes
     // during the first read/flush instead of accepting an earlier cached hash.
     held.require_digest(expected_sha256, cancel)?;
@@ -50,6 +96,7 @@ pub(crate) fn confirm_transfer_publication(
 /// The normal publication path retains its own flush-capable stage handle.
 /// Hashing uses a readable handle bound to that same still-live object, so a
 /// write-only stage and a final readonly attribute both remain supported.
+/// The caller has received success from the platform's publication primitive.
 pub(crate) fn confirm_transfer_publication_handle(
     target: &Path,
     file: &File,
@@ -73,7 +120,10 @@ pub(crate) fn confirm_transfer_publication_handle(
     active(cancel)?;
     file.sync_all()?;
     active(cancel)?;
-    super::platform::confirm_publication_namespace(&held.parent)?;
+    // Windows has already returned from this exact WRITE_THROUGH move; a
+    // general directory flush is neither its proof nor a new prerequisite.
+    // Platforms needing a parent fsync retain their actual held-parent proof.
+    super::platform::confirm_live_publication_namespace(&held.parent, target)?;
     held.require_digest(expected_sha256, cancel)?;
     held.require_identity(expected_identity)?;
     held.verify_binding()?;
@@ -214,6 +264,7 @@ pub(super) fn preflight_no_replace(target: &Path) -> io::Result<()> {
 /// An immediately published stage keeps its real live file handle. It can
 /// prove and flush that object without requiring any persisted-ID capability
 /// or reopening a read-only destination for newly requested write access.
+/// This follows a successfully acknowledged platform publication operation.
 pub(super) fn confirm_handle_publication(
     target: &Path,
     file: &File,
@@ -235,7 +286,7 @@ pub(super) fn confirm_handle_publication(
     }
     file.sync_all()?;
     active(cancel)?;
-    super::platform::confirm_publication_namespace(&parent)?;
+    super::platform::confirm_live_publication_namespace(&parent, target)?;
     let current = ConfinedDirectory::open_root(parent_path)?;
     let reached = parent.entry(name)?;
     let class = crate::local_access::classify_open_file(&reached)?;

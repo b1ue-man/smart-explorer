@@ -132,8 +132,9 @@ pub(crate) fn flush_filesystem(_path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Successful local publications already use write-through renames after
-/// their file flush. Preserve that contract without a privileged volume flush.
+/// Qualify the existing per-file/write-through publication contract without
+/// a privileged volume flush. This does not flush an arbitrary directory or
+/// resolve a lost publication reply; that requires an independent proof.
 pub(crate) fn confirm_namespace(path: &Path) -> std::io::Result<bool> {
     if !std::fs::metadata(path)?.is_dir() {
         return Err(std::io::Error::new(
