@@ -397,3 +397,7 @@ pub(crate) fn adjust_quality(
 #[cfg(test)]
 #[path = "rate_control_tests.rs"]
 mod tests;
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "batches_rate_reference_task_tests.rs"]
+mod p27_acceptance;
