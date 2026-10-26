@@ -166,14 +166,17 @@ sind in den konkreten Agentenaufträgen festgehalten. Gemeinsame Registrierungen
 Abhängigkeiten, Suite, CI, Commits, Pushes und Releaseintegration liegen beim
 Hauptagenten. Beim Start meldete die GitHub-API keine laufende/wartende Pipeline.
 
-Für den nach vollständiger Integration vorgeschriebenen frischen Gesamtreview
-hat Auswahl 82 am 2026-10-26 `claude-opus-5-5` mit `xhigh` bestimmt
-(Repositoryprofil, Einstufung 10, großer zusammenhängender Umfang). Der lokale
-Claude-Client 2.1.293 ist verfügbar; ein tatsächliches Antwortmodell ist erst
-nach seinem Start belegt. Dieser reine Review schreibt keinen Produktcode.
-Sein vorbereiteter Starter beschränkt lokale Zugriffe auf eine isolierte
-Quellkopie und bricht bei abweichendem Antwortmodell ab. Die Umsetzung bleibt
-vollständig bei Codex. Der Gesamtreview ist noch nicht gestartet.
+Die ausdrücklich präzisierte Nutzervorgabe vom 2026-10-26 verlangt sämtliche
+weitere Umsetzung und Reviews über Codex. Der normale frische Gesamtreview vor
+der Remote-Suite wird deshalb mit GPT-6-Astra/xhigh durchgeführt. Die frühere
+Auswahl eines externen Opus-Ausführungswegs ist ersetzt und keine Voraussetzung
+mehr. Der bei der ursprünglichen Planung tatsächlich ausgeführte Opus-Review
+bleibt als historischer Nachweis in `kritik.md` erhalten.
+
+Zusätzlich folgen zwei unabhängige Regressionsreviews mit GPT-6-Astra/max und
+GPT-6.1-Sol/max. Ihr eigener vollständiger Auftrag, die belegte Releasebasis und
+der verbindliche Fixvertrag stehen in `regressionsreview.md`. Kein Reviewstart
+oder Reviewabschluss wird aus dieser Planung abgeleitet.
 
 ## Bestandsentscheidungen während der Umsetzung
 
@@ -624,7 +627,7 @@ Lückenrecherche stehen in `review-b6.md`, Abschnitt B6-R9.
    alte-Hello-Gegenstelle, kleine Ressourcen, gemeinsame Sitzungsbelegung und
    Preview→Full als zusammenhängende Fälle. Keine lokale Ausführung und keine
    zusätzliche Prüfpipeline. Der Astra-Nachreview bewertet den konkreten
-   Anschluss; der frische Opus-Gesamtreview folgt auf dem integrierten Stand.
+   Anschluss; der frische Astra/xhigh-Gesamtreview folgt auf dem integrierten Stand.
 
 Quellen erneut abgerufen am 2026-10-26: Microsoft MEMORYSTATUSEX
 (<https://learn.microsoft.com/en-us/windows/win32/api/sysinfoapi/ns-sysinfoapi-memorystatusex>),
@@ -657,10 +660,12 @@ Benutzerbytes bleiben erhalten. Auch Skillfehler sammeln beide Rollbackfehler,
 statt sie zu verwerfen. `d3c6a994` ist auf `main` gepusht; Rust-AST und
 Whitespace wurden statisch geprüft, keine Kompilierung oder Laufzeitprüfung.
 
-Der vorgeschriebene frische Opus-Gesamtreview hat noch keine Codeprüfung geliefert.
-Sein Start scheiterte am Modellzugang. Die Zugangsvoraussetzung beziehungsweise
-die angefragte ausdrückliche Effortausnahme ist offen; die unabhängige R9-Korrektur
-und Suiteintegration laufen weiter. Kein Test- oder Releaseerfolg wird behauptet.
+Der damals versuchte externe Opus-Gesamtreview lieferte keine Codeprüfung.
+Dieser Ausführungsweg ist durch die spätere ausdrückliche Codex-Vorgabe ersetzt.
+Der normale frische Astra/xhigh-Gesamtreview und die zwei zusätzlichen
+Regressionsreviews beginnen nach vollständiger Integration. Ein fehlender
+Zugang im Root-Benutzerkontext war kein Beleg für serverweit fehlenden Zugang.
+Kein Test- oder Releaseerfolg wird behauptet.
 
 
 ### B6-R10: Preview nach erneutem Sichtbarwerden
@@ -945,7 +950,7 @@ L2–L4 und L5–L6 verwenden jetzt produktive CapturedImage-Claims an PNG-Empfa
 
 L7–L8 ist als eigener zusammenhängender Android-JNI-/Rendererauftrag gestartet. Seine Modellwahl ergibt 21 Punkte/Grad 9 und `gpt-6.1-sol`/`xhigh`. NativeBridge gehört diesem Autor; Rustmodulregistrierungen bleiben bei Main. Startparameter sind belegt, Antwortmodellmetadaten und gemessener Creditsverbrauch sind nicht zugänglich. Die Ausrichtungsvorgabe P32 bleibt ausschließlich an Android-Systemeinstellungen gebunden.
 
-Kein lokaler Build, Compiler, Formatter oder Testlauf wurde gestartet. Der unbeabsichtigte abgebrochene Remote-Pushlauf bleibt separat dokumentiert und zählt nicht als Abnahme. Frischer Opus-Gesamtreview, eine ausgewertete Remote-Task-Suite und der terminale Remote-Release stehen aus.
+Kein lokaler Build, Compiler, Formatter oder Testlauf wurde gestartet. Der unbeabsichtigte abgebrochene Remote-Pushlauf bleibt separat dokumentiert und zählt nicht als Abnahme. Frischer Astra/xhigh-Gesamtreview, zusätzliche Astra/max- und Sol-6.1/max-Regressionsreviews, eine ausgewertete Remote-Task-Suite und der terminale Remote-Release stehen aus.
 
 
 ### R9-Zwischenstand: durchgängiger Loginbildbesitz und native Encoder
@@ -987,3 +992,27 @@ die Startparameter; Antwortmodellmetadaten und tatsächlicher Creditsverbrauch
 werden vom vorhandenen Kollaborationswerkzeug nicht bereitgestellt.
 Core-/Workerintegration, Linux-Imports, Android-Fixtureanschluss, gemeinsame
 Remote-Suite und terminaler Remote-Release bleiben noch offen.
+
+
+### Präzisierung der Reviews und Android-Fixtureplanung, 2026-10-26
+
+Der Login-Batchreview liegt in `review-login-bildspeicher.md`. F1 (Rollback nach
+nativer Androidbildübernahme) und F2 (frische Präsentationsbelege nach
+Fensterfokusverlust) sind im Arbeitsbaum korrigiert und vom Reviewer statisch
+nachgelesen. F3 (fehlende GL-Uploadfehlerweitergabe) ist noch offen. Die Korrektur
+benötigt einen tatsächlichen Fehlerpfad bis zur Residentübernahme und
+Präsentationsbestätigung; ein GL-Fence allein belegt keinen gültigen Bildinhalt.
+
+Der von Astra/max ausgearbeitete konkrete Android-Capture-/JNI-Fixtureplan ist
+vollständig nach `android-bildfixtures.md` übernommen. Seine Umsetzung und der
+Anschluss an die eine Remote-Suite stehen aus. Der produktive
+`loginBitmapDiscard`-Rollback liegt inzwischen vor. Die gezielte Suite umfasst
+die direkt betroffenen Capturemethoden und Loginbildmethoden; eine vollständige
+unbeteiligte Gesten-/Texttestsammlung wird dadurch nicht zusätzlich ausgelöst.
+
+Der Fokusfix ist als `851c694d` committed: Android und Desktop verweigern frische
+Präsentationsbelege nach Fensterfokusverlust; Desktop trennt dafür Fenster- und
+Bildwidgetfokus, damit der SAS-Button weiterhin bedienbar bleibt. Die
+Quellenfixture enthält die tatsächliche kontrollierte Retirement-/Uploadfolge
+beim Refokus. Rust-AST und Whitespace sind statisch geprüft; keine Fixture wurde
+ausgeführt. Der Commit ist ein Entwicklungscheckpoint, kein Release.

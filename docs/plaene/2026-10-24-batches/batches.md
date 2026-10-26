@@ -4,6 +4,9 @@
 Umsetzung sämtlicher acht Pakete autorisiert. [Ausführung und Belege](umsetzung.md)
 halten diesen Auftrag fest. Die folgenden Aussagen zum Planungsstopp sind
 historischer Kontext; die fachlichen Verträge bleiben maßgeblich.
+Die ergänzten Verträge vom 2026-10-26 stehen in
+[Regressionsreview](regressionsreview.md), [Androidbild-Fixtures](android-bildfixtures.md)
+und [Loginbild-Batchreview](review-login-bildspeicher.md).
 
 Stand: 2026-10-25. Planungsbasis: Commit `aec62a40`; `native/Cargo.toml` und `release-native/update-feed/version.txt` nennen `0.5.184`. Diese Versionsangabe ist kein neuer Veröffentlichungsnachweis. Es wird keine nächste Versionsnummer reserviert.
 
@@ -429,9 +432,9 @@ flowchart LR
 
 Der konkrete Umfang eines späteren Umsetzungsauftrags bestimmt die notwendige Agentenzahl. Die Planung verlangt **keinen Agenten je Paket**. Ein ausführender Agent kann mehrere aufeinanderfolgende klar begrenzte Meilensteine desselben Pakets übernehmen; ein zusätzlicher Agent braucht eine konkrete Kontext-/Dateigrenze oder belegte unabhängige Parallelität. Kein Agent wird während Suite, Build, Packaging oder Release gestartet; höchstens acht Threads einschließlich Hauptagent, kein rekursives Delegieren.
 
-V8 hält die aktuelle Modellvorgabe und die Rücknahme der voreiligen Codex-Einschränkung fest: Planung GPT-6-Astra/max, Plankritik Opus 5.5/xhigh; Umsetzungsmodelle erst zum vorgesehenen Zeitpunkt nach Abschluss der Planung. Startkonfiguration und Antwortmetadaten sind in kritik.md getrennt belegt. Die ältere Nutzervorgabe vom 2026-10-19 lautet: „sonnet für implementierungen die keine interpretation mehr zulassen, opus nut für sicherheitsrelevantes einer und design n anderer, gebatched die beiden also. der rest wenn möglich via sonnet.“ Die Vorgabe vom 2026-10-24 verlangt nach einer Umsetzung durch ein Nicht-Opus-Modell genau eine frische hochkritische Opus-Gesamtreview **nach Integration und vor dem ersten Test**. Sicherheitsfläche für eine gebündelte Umsetzung ist C mit P21/P22/P13/P28/P1/P4/P5; Gestaltungsfläche ist D4 plus die Bedienwege von D6/D8. Das sind Ergebnisflächen, keine jetzt gestarteten Rollen.
+Historischer Planstand V8: Planung GPT-6-Astra/max und Plankritik Opus 5.5/xhigh wurden vor der Umsetzung getrennt vorgesehen; Startkonfiguration und Antwortmetadaten stehen in `kritik.md`. Die Nutzervorgabe vom 2026-10-26 ersetzt den Ausführungsweg für sämtliche weitere Umsetzung und Reviews ausdrücklich durch Codex. Der normale frische Gesamtreview nach Integration und vor dem ersten Suite-Lauf erfolgt mit Astra/xhigh. Zusätzlich prüfen Astra/max und Sol 6.1/max unabhängig den vollständigen Änderungsumfang seit dem letzten veröffentlichten Release auf funktionelle Regressionen; der vollständige Vertrag steht in `regressionsreview.md`.
 
-Modell und nativer Effort werden erst nach diesem abgeschlossenen Plan anhand des tatsächlichen Hosts, der verfügbaren Modelle, der sechs Kriterien von `modellwahl`, des Benchmarkprofils und der realen Kontingente gewählt. Ein fehlendes Opus-Ausführungsmodell darf nicht als vorhanden behauptet oder still durch einen Codexnamen ersetzt werden. Startparameter und tatsächlich sichtbare Antwortmodell-Metadaten sind getrennte Nachweise. Die Paketplanung enthält keine private Kontoinformation und reserviert keine Agentenprozesse.
+Modell und nativer Effort werden erst nach diesem abgeschlossenen Plan anhand des tatsächlichen Hosts, der verfügbaren Modelle, der sechs Kriterien von `modellwahl`, des Benchmarkprofils und der realen Kontingente gewählt. Die aktuelle ausdrückliche Codex-Vorgabe hat Vorrang vor der historischen Opus-Auswahl; es besteht keine externe Authentifizierungsvoraussetzung für die ausstehenden Reviews. Startparameter und tatsächlich sichtbare Antwortmodell-Metadaten sind getrennte Nachweise. Die Paketplanung enthält keine private Kontoinformation und reserviert keine Agentenprozesse.
 
 Der frühere vermeintlich offene Konflikt ist geklärt: Für Subagentenbriefe gilt die ausdrückliche Projekt-/Hostanforderung nach zulässiger Lesefläche, Schreibfläche, Verboten, Lieferergebnis, Abnahmezeichen und Ergebnisbericht. Die nachrangige allgemeine Formregel der Arbeitsweise hebt diese Projektanforderung nicht auf. Dafür ist keine Nutzerfreigabe erforderlich.
 
