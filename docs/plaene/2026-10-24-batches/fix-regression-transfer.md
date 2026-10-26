@@ -914,3 +914,170 @@ und die Wiederholung desselben Remote-Suiteeinstiegs. Dieser Autor hat keinen
 Formatter, Compiler, Build, Test, Server oder Release ausgeführt und keinen
 Commit oder Push erstellt. Nach dieser vollständigen eigenen Nachreview stoppt
 dieser Strukturzyklus.
+
+## L — Konkrete Schnittstellenfehler aus Remotelauf 40354605251
+
+**A — Auftrag und Grundlage:** Derselbe Fixautor setzt den Zyklus auf
+`d95dc404e834edfe7be0e1c96be162b36865efa9` fort. Maßgeblich sind die vollständigen
+Diagnosen in `/tmp/smartexplorer-rv1-40354605251/transfer-compat-errors.json` und
+die erneut ersetzte exklusive Scope-Datei. Der Remotelauf ist laut Main beendet.
+Beauftragt sind die konkret belegten Schnittstellenfehler mit ihrem Daten-,
+Fehler-, Abschluss- und Schutzvertrag; keine breite Bereinigung, entfernte
+Prüfung oder umgangene Schutzgrenze. Lokale Nativeausführung bleibt verboten.
+
+**B — fehlerhafte Funktionen und vollständige betroffene Karte:**
+
+| IDs | Fehlerfunktion | Direkte und indirekte Kette und zu erhaltender Vertrag |
+|---|---|---|
+| C18/C20/C21 | Windows-Adapter exportiert `require_local_publication_observation` weiter, obwohl die private Helper-Sichtbarkeit nur bis zum Adapter reicht. | `copy::publication_proof::confirm_unpublished` prüft Stage- und Zielparent über `copy::platform`; Windows delegiert an `publication_failure`, Linux hat dieselbe Adapterfunktion. Der Fehler ist kein Nichtpublikationsbeweis. Datei-/Parentidentität, lokales Dateisystem, echte NT-Abschlüsse, unvermutete Statuswerte und zurückgehaltene unsichere Handles bleiben geprüft. |
+| C40 | `SourceSpool::collect_inner` gibt `io::Error` an `TreeObserver::explain(String)` weiter. | CLI/MCP-Treeplanung → privater verschlüsselter Quellspool → begrenzter `ObservedRead` → `EncryptingWriter` → genauer Längencheck und `finish`/`sync_all` → erneute Quellen-/Baumprüfung → Zielpublikation. `se mv` darf seine Quelle erst nach bestätigter Publikation und erforderlicher erneuter Inhaltsprüfung entfernen. Cancel behält seinen stabilen Fehlertext. |
+| A02 | `local_file_identity` referenziert das nicht registrierte VFS-Wurzelmodul `local_optical`. | `vfs/mod.rs` registriert Dateiidentität und lokalen Backend; dessen optische Hilfe liegt tatsächlich unter `local::optical`. Die Funktion muss denselben `source_media::acquire_current(..., Foreground)`-Guard vor dem autorisierten Parent-/Dateizugriff halten. `ConfinedDirectory::selected_entry`, Klassifikation regulärer Dateien und Unsupported→None bleiben erhalten. Keine Android-Sonderausnahme darf den Guard überspringen. |
+| C54/A18 | `propfind_properties` verspricht `String`, während der begrenzte Reader einen reservierungsgebundenen `listing_body::Body` liefert. | Metadatentransport → erfolgreicher 207-Status → begrenztes UTF-8-Lesen mit RAM-Reservierung → `folder_reservation::identity/parse_identity` beziehungsweise `capacity::query_inner` → XML-Prüfung. Main hat genau diese zwei Aufrufer repoübergreifend lokalisiert; beide sind vom selben Autor nachgelesen. Depth-1-Listing und Depth-0-Stat verwenden den Body bereits. Resource-ID-/Href-/Quota- und Fehlerprüfungen bleiben erhalten. |
+| C57 | Der bestehende GDrive-Scanfall behandelt das neue `ScanMessage::DeniedRoots` nicht. | GDrive-Pagination und leere Kinder → `rscan::start_scan_backend` → Scanereignisse → vorhandener GUI-Taskfall. `DeniedRoots` ist ein verlustfreier, gegebenenfalls gespoolter Fehler-/Retrybeleg mit Speicherwarnung und fehlbarem Lesen. Ein Root oder eine Warnung darf nicht als vollständiger erfolgreicher Scan verschwinden. Der vorhandene Fallname und sämtliche bisherigen Aussagen bleiben bestehen. |
+
+**C — Entscheidung und zweite Lückenprüfung:**
+Ein öffentlicher Export der privaten Windows-Hilfe wird verworfen; der Adapter
+erhält eine schmale direkte Weitergabefunktion mit dem bisherigen Namen.
+Die CLI konvertiert den zurückgegebenen I/O-Fehler vor `explain` explizit in
+seinen Text; die eigentliche Kopie und ihre Abschlüsse ändern sich nicht.
+Die Android-Dateiidentität ruft denselben vorhandenen optischen Guard direkt
+auf; ein bedingtes Weglassen oder eine zweite Modulregistrierung wird verworfen.
+WebDAV reicht den vorhandenen `Body` wie `propfind` weiter: eine Stringkopie
+würde den Speicherbeleg zu früh abgeben. Beide echten XML-Konsumenten borgen
+den Body nur und halten ihn bis nach der Verarbeitung. Der GDrive-Fall behält
+DeniedRoots-Handles bis zum Done-Ereignis und prüft anschließend deren vollständige
+Roots und Speicherwarnungen. Die konkrete Backendscan-Erzeugerstelle wird vor
+Abschluss dieses letzten Punkts zusätzlich im freigegebenen Bereich abgeglichen.
+
+**D — konkreter Erhaltungsplan vor Umsetzung:**
+
+1. Windows: direkten Adapterwrapper einsetzen; beide Parentprüfungen und die
+   unveränderte strikte Helperfunktion erneut lesen. Erwartung: derselbe private
+   Schutzvertrag ist auf Windows aufrufbar, ohne eine neue öffentliche API.
+2. CLI: ausschließlich die fehlerhafte Error→String-Grenze korrigieren.
+   Erwartung: I/O-Fehler bleiben Fehler, Cancel bleibt stabil, Verschlüsselung,
+   genaue Länge, Writerabschluss und Quellbehalt bleiben unverändert.
+3. Android: den vorhandenen optischen Lease-Aufruf an der richtigen
+   Definition benutzen. Erwartung: weiterhin echte Autorität und reguläre
+   Dateiidentität, keine erfundene ID und kein fehlender Guard.
+4. WebDAV: Rückgabetyp der Eigenschaftsabfrage an `Body` angleichen.
+   Erwartung: kein Kopieren oder vorzeitiges Abgeben der Speicherreservierung;
+   beide XML-Konsumenten behalten ihre Prüfungen und Fehler.
+5. GDrive: den bestehenden Scanfall erschöpfend ergänzen; DeniedRoots nach
+   Done auf lesbare, warnungsfreie Leerheit prüfen. errors==0 bleibt bestehen;
+   verweigerte Zugriffe und Budgetabbruch dürfen keinen Erfolg vortäuschen.
+6. Eigene Nachreview: gesamte Karte erneut gegen die Änderungen lesen,
+   AST-/Dateigrenzen-/Whitespaceprüfung, vorhandene Fallnamen erhalten und
+   konkreten Registrierungsbedarf an Main melden. Keine lokale Ausführung.
+
+Fortschritt: Diagnosen, Funktionskarte, Entscheidungsbegründung und konkreter
+Erhaltungsplan wurden vor der Umsetzung gesichert. Umsetzung und eigene
+anschließende Anti-Regressionsreview sind abgeschlossen.
+
+
+**Implementierungsergebnis:**
+
+- Windows behält den privaten Helper unverändert. Der bisherige Adaptername
+  ist eine direkte `pub(super)`-Weitergabe mit identischer Signatur und
+  identischem Ergebnis; die Helper-Sichtbarkeit wird nicht öffentlich erweitert.
+  `confirm_unpublished` verlangt weiterhin beide echten Parentprüfungen.
+- Der CLI-Spool konvertiert ausschließlich den zurückgegebenen I/O-Fehler mit
+  `to_string()` für `TreeObserver::explain`. `io::copy`, Größenbegrenzung,
+  Zähler, verschlüsselter Writer, `finish`, `sync_all` und nachfolgende
+  Quellvalidierung bleiben unverändert.
+- Die Dateiidentität verwendet direkt denselben gelesenen Aufruf aus
+  `local::optical::guard`: `source_media::acquire_current` mit Foreground-Priorität.
+  Der `_permit` bleibt bis nach Parent-/Dateihandle- und Klassifikationsprüfung
+  im Scope. Weder `cfg`-Weglassen noch eine zweite Moduldefinition wird ergänzt.
+- `propfind_properties` gibt den vorhandenen `listing_body::Body` zurück.
+  Beide tatsächlichen Aufrufer halten ihn lokal und borgen ihn per `&str` für
+  die XML-Verarbeitung. Es gibt keine Stringkopie und keine frühere Freigabe
+  der Budgetreservierung. Die offizielle
+  [Deref-Dokumentation](https://doc.rust-lang.org/std/ops/trait.Deref.html#deref-coercion),
+  geprüft 2026-10-26, belegt diese geliehene Typanpassung; die vorhandene
+  `Body`-Implementierung liefert dafür unverändert `&self.text`.
+- Der bestehende GDrive-Fall sammelt `DeniedRoots` bis zum Abschluss. Danach
+  sind eine Speicherwarnung, ein Lesefehler oder eine nichtleere Rootliste
+  jeweils ein Testfehler. Bisherige Fehler-, Ergebnis- und Paginationaussagen
+  bleiben bestehen; Permission-Denied-Zähler und Truncation müssen ebenfalls
+  leer beziehungsweise false sein. Kein Wildcardarm versteckt weitere Varianten.
+
+**Eigene anschließende Anti-Regressionsreview:**
+
+| Grenze | Selbst nachgelesener und abgeglichener Erhalt |
+|---|---|
+| Windows-Publikation | `copy/mod.rs` wählt den echten OS-Adapter. Der Wrapper ruft genau den bisherigen privaten NT-/Volumenschutz auf. Die NT-Status-/Completion-/Geräte-/Dateisystemprüfungen und der konservative Umgang mit laufenden I/O-Puffern bleiben identisch; Fehler werden weder ignoriert noch in Erfolg oder sichere Nichtpublikation umgedeutet. |
+| Fehler oder Abbruch im Quellspool | `ObservedRead` stoppt Cancel mit `Other`, damit `io::copy` keine Interrupted-Schleife bildet. Die Umwandlung erfolgt erst nach dem zurückgegebenen Kopierfehler und erhält den vorgesehenen Canceltext. Ein Fehler beendet die private Spoolphase vor `apply_transfer`; Writerabschluss und erfolgreiche Quellbestätigung werden nicht vorweggenommen. |
+| Move, Backup und Quellbehalt | `tree_ops::copy_entry_with` erstellt den Receipt erst nach Spooling und erfolgreichem Apply. Die nachfolgende Movebereinigung behält ihre bisherigen Ziel-, Quellen- und Inhaltsprüfungen. Die Änderungen greifen weder in Quarantäne- noch Ersetzungs-/Backupoperationen ein. |
+| Android-Dateiidentität | Die tatsächliche Modulregistrierung erklärt den Fehler: optische Arbitration ist unter `local::optical`, nicht an der VFS-Wurzel definiert. Der direkte identische Aufruf erhält Priorität, Lease-Lebensdauer und Fehlerweitergabe. Nur reguläre, nicht umleitende Dateien erhalten weiterhin eine echte Handleidentität; Unsupported bleibt unbekannt. |
+| WebDAV-Speicher und Fehler | Die Bodyklasse hält ihre Reservierungen durch UTF-8-Decodierung und XML-Parsing. Die unveränderten zwei Konsumenten prüfen weiter Status, eindeutige Resourceantwort, Href-/Collectionbindung, Resource-ID beziehungsweise Quota-Propstats und Zahlen. Allgemeines Listing, Namespaceidentität, gewöhnliches MOVE und striktes REBIND bekommen keine neue Voraussetzung. |
+| GDrive-Scanabschluss | Die von Main ergänzten tatsächlichen Quellen `rscan::start_scan_backend` und `walk_state::finish` sind selbst gelesen. Dieser Erzeuger sendet ausstehende Einträge, gegebenenfalls `FailedPaths`, dann `Done`; derzeit sendet er keine `DeniedRoots`. Der gemeinsame Ereignistyp wird trotzdem erschöpfend behandelt. Erhaltene DeniedRoots-Handles werden nach Done verlustfrei geprüft, sodass ein späterer solcher Erzeugerpfad keine stillen Auslassungen erlaubt. Der aktuelle Fall injiziert keine verweigerte Wurzel; eine tatsächlich ausgeführte DeniedRoots-Fehlerreproduktion wird hier nicht behauptet. |
+
+Der endgültige Diff enthält ausschließlich diese vier produktiven
+Schnittstellenkorrekturen, die Erweiterung des bestehenden GDrive-Falls und
+diesen Bericht. Die fünf betroffenen Rustdateien sind statisch parsebar,
+unter 500 Zeilen/50 KiB und ohne Whitespacebefund. Die Funktionsnamen sind
+gegen `d95dc404` erhalten; der GDrive-Fall wird nicht umbenannt. Das ersetzt
+keine erfolgreiche Rust-Typprüfung und keine Remoteausführung.
+
+**Registrierungsbedarf:** Main ist über den exakten vorhandenen Fall
+`gui_design_task_drive_empty_intermediate_pages_continue_and_empty_children_scan`
+informiert. Er steht im gelesenen Manifest noch nicht als Fall beziehungsweise
+`gui_design_task_`-Präfix; Main hat seine konkrete Registrierung in derselben
+abschließenden Remote-Suite vorgemerkt. Es werden keine weiteren Fälle oder
+Präfixe durch diesen Autor angelegt. Die bisherigen Transferfälle aus G bleiben
+in derselben Suite erhalten; deren Registrierung wird hier nicht geändert.
+
+**Gelesene Dateien dieses ergänzten Zyklus:** Gezielte Textlektüre der
+entscheidungsrelevanten Definitionen und Aufrufer, einschließlich der unten
+geänderten Dateien; keine behauptete zeilenweise Komplettlektüre aller
+unveränderten Dateiteile:
+
+- `native/src/cli/tree_observer.rs`
+- `native/src/cli/tree_ops.rs`
+- `native/src/cli/tree_spool.rs`
+- `native/src/copy/mod.rs`
+- `native/src/copy/os/linux_os.rs`
+- `native/src/copy/os/shared/publication_proof.rs`
+- `native/src/copy/os/windows.rs`
+- `native/src/copy/os/windows_publication_failure.rs`
+- `native/src/gdrive/core/gui_task_tests.rs`
+- `native/src/scanner/mod.rs`
+- `native/src/scanner/os/shared.rs`
+- `native/src/scanner/os/denied_roots.rs`
+- `native/src/rscan/os/shared/rscan.rs`
+- `native/src/rscan/os/shared/walk_state.rs`
+- `native/src/vfs/mod.rs`
+- `native/src/vfs/os/shared/local.rs`
+- `native/src/vfs/os/shared/local_file_identity.rs`
+- `native/src/vfs/os/shared/local_optical.rs`
+- `native/src/webdav/mod.rs`
+- `native/src/webdav/core/webdav.rs`
+- `native/src/webdav/core/listing_body.rs`
+- `native/src/webdav/core/capacity.rs`
+- `native/src/webdav/core/folder_reservation.rs`
+- `native/review-task-manifest.json`
+- `docs/plaene/2026-10-24-batches/fix-regression-transfer.md`
+
+Zusätzlich gelesen: die vollständige bereitgestellte Diagnosedatei
+`/tmp/smartexplorer-rv1-40354605251/transfer-compat-errors.json`, die aktualisierte
+`/tmp/smartexplorer-fix-transfer-compat-scope.json` und die oben verlinkte
+Rust-Primärquelle. Der wörtliche Nutzervertrag und die zuvor geladenen
+Projektgrenzen gelten in diesem fortgesetzten Autorzyklus weiter.
+
+**Geänderte Dateien:**
+
+- `docs/plaene/2026-10-24-batches/fix-regression-transfer.md`
+- `native/src/cli/tree_spool.rs` — 227 Zeilen, 8332 Bytes.
+- `native/src/copy/os/windows.rs` — 467 Zeilen, 17063 Bytes.
+- `native/src/gdrive/core/gui_task_tests.rs` — 488 Zeilen, 17095 Bytes.
+- `native/src/vfs/os/shared/local_file_identity.rs` — 32 Zeilen, 1213 Bytes.
+- `native/src/webdav/core/webdav.rs` — 470 Zeilen, 16834 Bytes.
+
+Keine neue Datei wurde angelegt. Alle erforderlichen Definitionen und
+Verbraucher sind im zuletzt freigegebenen Bereich geklärt; es bleibt kein
+ungelöster Quell-Scopebedarf. Offen sind ausschließlich Integration und
+Bestätigung im selben Remote-Suiteeinstieg durch Main. Dieser Autor hat keinen
+Build, Compiler, Test, Formatter, Server, Paketinstaller, Gitmutation,
+Graphrefresh oder Unteragenten ausgeführt. Nach dieser eigenen abschließenden
+Review stoppt dieser ergänzte Fixzyklus.

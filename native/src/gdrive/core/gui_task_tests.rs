@@ -422,6 +422,7 @@ fn gui_design_task_drive_empty_intermediate_pages_continue_and_empty_children_sc
         tx,
     );
     let mut found = false;
+    let mut denied = Vec::new();
     loop {
         use crate::scanner::ScanMessage;
         match rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap() {
@@ -431,9 +432,11 @@ fn gui_design_task_drive_empty_intermediate_pages_continue_and_empty_children_sc
                     .any(|entry| entry.id.as_deref() == Some("empty-id"))
             }
             ScanMessage::FailedPaths(paths) => assert!(paths.is_empty(), "{paths:?}"),
+            ScanMessage::DeniedRoots(roots) => denied.push(roots),
             ScanMessage::Error(error) => panic!("{error}"),
             ScanMessage::Done(progress) => {
                 assert_eq!(progress.errors, 0);
+                assert_eq!(progress.permission_denied, 0);
                 break;
             }
             ScanMessage::Progress(_) => {}
@@ -442,6 +445,13 @@ fn gui_design_task_drive_empty_intermediate_pages_continue_and_empty_children_sc
     handle
         .cancel
         .store(true, std::sync::atomic::Ordering::Relaxed);
+    assert!(!handle.truncated.load(std::sync::atomic::Ordering::Relaxed));
+    for roots in denied {
+        let warning = roots.storage_warning();
+        assert!(warning.is_none(), "denied-root ledger failed: {warning:?}");
+        let paths = roots.roots().expect("read lossless denied-root ledger");
+        assert!(paths.is_empty(), "scan omitted roots: {paths:?}");
+    }
     assert!(found);
     let requests = fixture.finish();
     assert!(requests[1].target.contains("pageToken=second"));

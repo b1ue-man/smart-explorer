@@ -19,7 +19,9 @@ mod windows_recovery;
 pub(super) use windows_recovery::{recover_transfer_child, recover_transfer_child_live};
 #[path = "windows_publication_failure.rs"]
 mod publication_failure;
-pub(super) use publication_failure::require_local_publication_observation;
+pub(super) fn require_local_publication_observation(parent: &File) -> io::Result<()> {
+    publication_failure::require_local_publication_observation(parent)
+}
 
 pub(super) fn open_publication_file(
     parent: &crate::local_access::ConfinedDirectory,
