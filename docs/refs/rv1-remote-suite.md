@@ -448,3 +448,22 @@ Der nächste Kandidat verwendet unverändert `native/test-review-task.sh` im
 Workflow `review-task.yml`. Es gibt keinen zusätzlichen Suiteeinstieg und keine
 lokale Kompilierung oder Testausführung. Die vollständige funktionale Auswertung
 und der eine terminale Release stehen weiterhin aus.
+
+## Lauf 40366764400: abschließende Formatierung der Compilerkorrekturen
+
+Der [Lauf](https://github.com/b1ue-man/smart-explorer/actions/runs/40366764400)
+verwendete `531230bc5344494ec01b307f3424e3120ad0c29c`. Die Vorbereitung
+meldet ausschließlich drei Formatänderungen. `format.json` enthält keine
+Größen- oder Parserprobleme. Die Lockdatei bleibt bei SHA256
+`72c269cf0cda3db0b072dcec437d30e2cc5fa342ca6fc47abe6c7c318f5081a4`;
+`dependencies.patch` ist leer. Alle nachfolgenden Stufen wurden übersprungen.
+
+Main hat Archiv-SHA256
+`5ed2dc46ec098c313728edc8ba4977987542a0c8c1fbfa031f57757d5cd32eb9`
+und Formatpatch-SHA256
+`7bdcc835b14bd982d8ca69d655778ecda42e38ad5ead3e4bf7d02fe53501f626`
+gegen die GitHub-Metadaten beziehungsweise `format.json` geprüft. Der Patch
+ist unverändert übernommen. Die syntaktischen Blatttoken bleiben bis auf
+ein abschließendes Argumentkomma gleich; Syntax, Aussagen und Modulgrößen
+bleiben erhalten. Kein lokaler Formatter oder Compiler wurde aufgerufen.
+Dieser Vorbereitungsbefund ist noch keine funktionale Abnahme.

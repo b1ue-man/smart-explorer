@@ -23,13 +23,16 @@ unabhängigen Release-Regressionsreviews sind abgeschlossen. Die belegten
 Fehler sind in [vollständigen Fixzyklen desselben jeweiligen Autors](plaene/2026-10-24-batches/regressionsreview.md)
 quellseitig behoben. Die erste Remote-Vorbereitung hat Lock-/Formatkorrekturen
 geliefert; die belegten Modulgrößenverletzungen sind durch die bisherigen
-Autoren fachlich aufgeteilt und selbst nachgeprüft. Die Vorbereitung besteht
-inzwischen. Der bestätigte Vendor-Konstruktorfehler ist korrigiert; Lauf
+Autoren fachlich aufgeteilt und selbst nachgeprüft. Der bestätigte
+Vendor-Konstruktorfehler ist korrigiert; Lauf
 `40354605251` erreicht die Produktquellen und belegt weitere native Compilerfehler.
 Die sechs [begrenzten Korrekturgruppen](plaene/2026-10-24-batches/rv1-compilerplan.md)
 sind durch die zuständigen Autoren mit eigener Nachreview abgeschlossen und
 separat committed. Ihre Compiler- und Funktionsbestätigung steht im selben
 Remote-Suiteeinstieg aus.
+Lauf `40366764400` hat ausschließlich Formatänderungen in drei Quellen
+geliefert; dieser gebundene Patch ist übernommen. Lockdatei und Modulgrößen
+sind in Ordnung; die Compilerstufen dieses Versuchs wurden übersprungen.
 Die vollständige funktionale Suiteauswertung und Veröffentlichung stehen aus.
 
 This table is the live list of remaining work, roughly by value. The lower
