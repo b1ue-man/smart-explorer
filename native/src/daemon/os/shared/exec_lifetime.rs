@@ -14,6 +14,8 @@ use crate::daemon::{
 
 // The existing local Exec frame deadline also bounds the control attachment.
 const ATTACH_TIMEOUT: Duration = super::LOCAL_EVENT_WRITE_TIMEOUT;
+// Reuse the setup guard's cadence for peer EOF; owner completion notifies directly.
+const OWNER_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 #[cfg(test)]
 #[path = "batches_exec_lifetime_task_tests.rs"]
@@ -109,7 +111,7 @@ impl ExecLifetime {
                 })?;
             let (_state, _wait) = self
                 .changed
-                .wait_timeout(state, remaining.min(Duration::from_millis(25)))
+                .wait_timeout(state, remaining.min(OWNER_POLL_INTERVAL))
                 .map_err(|_| io::Error::other("Exec-Kontrollbindung gesperrt"))?;
         }
     }
@@ -146,6 +148,38 @@ impl ExecLifetime {
         drop(state);
         self.changed.notify_all();
         Ok(())
+    }
+
+    fn wait_control(&self, stream: &mut TcpStream) -> io::Result<()> {
+        let mut byte = [0u8; 1];
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("Exec-Kontrollbindung gesperrt"))?;
+        loop {
+            if state.finished {
+                return Ok(());
+            }
+            // serve_control made this socket nonblocking after the ACK. Keep
+            // the predicate and read under one lock; waiting releases the lock
+            // so finish can publish completion without relying on socket shutdown.
+            match stream.read(&mut byte) {
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                    ) =>
+                {
+                    state = self
+                        .changed
+                        .wait_timeout(state, OWNER_POLL_INTERVAL)
+                        .map_err(|_| io::Error::other("Exec-Kontrollbindung gesperrt"))?
+                        .0;
+                }
+                Err(error) => return Err(error),
+                Ok(_) => return Ok(()),
+            }
+        }
     }
 }
 
@@ -210,17 +244,11 @@ pub(in crate::daemon) fn serve_control(
         write_response(&mut stream, &IpcResponse::ExecControlReady)?;
         stream.set_read_timeout(None)?;
         stream.set_write_timeout(None)?;
+        stream.set_nonblocking(true)?;
         owner.ready()?;
         // No stdin frames or application queues are consumed on this socket.
         // EOF, reset, or an unexpected control byte ends its concrete owner.
-        let mut byte = [0u8; 1];
-        loop {
-            match stream.read(&mut byte) {
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                Err(error) => return Err(error),
-                Ok(_) => return Ok(()),
-            }
-        }
+        owner.wait_control(&mut stream)
     })();
     owner.cancel();
     result
