@@ -41,7 +41,7 @@ impl MountManager {
         // that failed to load is never written over.
         #[cfg(any(windows, target_os = "linux"))]
         self.ensure_registry_ready()?;
-        self.start_locked_retained(config, host, false, lease)
+        self.start_locked_retained(config, host, false, lease, start_cache::StartEntry::New)
     }
 
     pub(super) fn retry(&self, id: &MountId, host: &ShareHost) -> Result<MountSnapshot, String> {
@@ -51,6 +51,18 @@ impl MountManager {
     pub(super) fn retry_retained(
         &self, id:&MountId, host:&ShareHost, lease:Option<Arc<dyn Send+Sync>>,
     )->Result<MountSnapshot,String> {
+        self.retry_with(id, |manager, config, registry_recorded| {
+            manager.start_locked_retained(
+                config, host, registry_recorded, lease, start_cache::StartEntry::Retry,
+            )
+        })
+    }
+
+    fn retry_with(
+        &self,
+        id: &MountId,
+        start: impl FnOnce(&Self, MountConfig, bool) -> Result<MountSnapshot, String>,
+    ) -> Result<MountSnapshot, String> {
         let _lifecycle = self.lifecycle_guard()?;
         let config = {
             let state = self.state_guard()?;
@@ -61,21 +73,29 @@ impl MountManager {
         };
         let _ = self.stop_locked(id)?;
         let registry_recorded = {
-            let mut state = self.state_guard()?;
+            let state = self.state_guard()?;
             let entry = state
                 .get(id.as_str())
                 .ok_or_else(|| "Das Laufwerk wird nicht verwaltet".to_string())?;
-            if entry.child.is_some() || entry.backend_stream_active {
-                return Err(
-                    "Die vorherige Laufwerk-Generation beendet noch einen Remote-Aufruf; Retry ist erst danach sicher"
-                        .into(),
-                );
-            }
-            let registry_recorded = entry.registry_recorded;
-            state.remove(id.as_str());
-            registry_recorded
+            start_cache::ensure_retryable(entry)?;
+            entry.registry_recorded
         };
-        self.start_locked_retained(config, host, registry_recorded, lease)
+        let result = start(self, config, registry_recorded);
+        if let Err(detail) = &result {
+            let mut state = self.state_guard()?;
+            if let Some(entry) = state.get_mut(id.as_str()) {
+                // A clean Stop may have set Unmounted before a preflight
+                // failed. Keep its Retry action; richer failures (including
+                // vault_locked) and their recovery evidence remain intact.
+                if entry.child.is_none()
+                    && !entry.backend_stream_active
+                    && matches!(entry.status, MountStatus::Unmounted)
+                {
+                    entry.status = MountStatus::Failed { detail: detail.clone() };
+                }
+            }
+        }
+        result
     }
 
     /// Starts a drive; the caller holds the lifecycle lock.
@@ -87,12 +107,13 @@ impl MountManager {
         host: &ShareHost,
         registry_recorded: bool,
     ) -> Result<MountSnapshot, String> {
-        self.start_locked_retained(config,host,registry_recorded,None)
+        self.start_locked_retained(config,host,registry_recorded,None,start_cache::StartEntry::New)
     }
 
     fn start_locked_retained(
         &self, mut config:MountConfig, host:&ShareHost, registry_recorded:bool,
         lease:Option<Arc<dyn Send+Sync>>,
+        admission: start_cache::StartEntry,
     )->Result<MountSnapshot,String> {
         if super::super::mount_registry::inactive::is_inactive(&config.id)
             .map_err(|error| format!("Laufwerk-Recovery-Eigentümer lesen: {error}"))? {
@@ -106,8 +127,15 @@ impl MountManager {
             if policy.trusted { config.root_security = crate::mount::MountRootSecurity::Trusted; }
         }
         let key = config.id.as_str().to_string();
+        match admission {
+            start_cache::StartEntry::New => {
+                start_cache::insert(self, &key, config.clone(), registry_recorded, lease)
+            }
+            start_cache::StartEntry::Retry => {
+                start_cache::restart(self, &key, config.clone(), registry_recorded, lease)
+            }
+        }?;
         self.forget_update_stop(&config.id);
-        start_cache::insert(self, &key, config.clone(), registry_recorded, lease)?;
         let _start_end=StartEnd {manager:self,key:&key};
         let vault_site = super::termination::vault_site(&config).map(str::to_string);
         if vault_site.is_some() {
@@ -379,3 +407,7 @@ impl StartupLease {
         self.retained.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
     }
 }
+
+#[cfg(test)]
+#[path = "batches_mount_retry_regression_task_tests.rs"]
+mod batches_mount_retry_regression_task_tests;
