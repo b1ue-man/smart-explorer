@@ -378,8 +378,27 @@ Main hat Kandidat, Hashes und Anwendbarkeit geprüft und die gelieferten Patches
 übernommen. Die eingefrorenen Releaseblöcke des Bildqualitätsvergleichs bleiben
 bytegleich. Weder Cargoauflösung noch Rustformatierung liefen lokal.
 
-Die im Artefakt `format.json` benannten Verantwortlichkeiten werden vor der
+Die im Artefakt `format.json` benannten Verantwortlichkeiten wurden vor der
 Wiederholung desselben Suiteeinstiegs in passende Module unter der Projektgrenze
 aufgeteilt. Bestehende Funktionsnamen, Zugriffsgrenzen, Drahtformate und
 Meilensteinauswahl bleiben erhalten. Aus diesem Lauf wird kein bestandener
 Verhaltensfall abgeleitet.
+
+## Lauf 40342520266: Größen bestätigt, verbleibendes Layout übernommen
+
+Der [erneute Versuch](https://github.com/b1ue-man/smart-explorer/actions/runs/40342520266)
+verwendete `e127c588b5896a7a6d05861dc6667b6e885eea43`. Seine Vorbereitung
+meldet keine Größen- oder Parserprobleme. Die Lockdatei blieb bei SHA256
+`72c269cf0cda3db0b072dcec437d30e2cc5fa342ca6fc47abe6c7c318f5081a4`
+unverändert; `dependencies.patch` ist leer. Verbleibende Rustformatierung
+führte erneut zum vorgesehenen Stopp vor allen Compiler- und Gerätejobs.
+
+Main hat das Artefakt mit ZIP-SHA256
+`cd857f2690ba505803108aa10c1ea485fe3cc9c453fd2576c3bef8ba17b12faa`
+und den an diesen Kandidaten gebundenen Formatpatch mit SHA256
+`6543a7ca3711f5ad7f1a66a2b77834b6c65b2c46808dc88182701210e7395a8c`
+geprüft und unverändert übernommen. Die betroffenen Quellen parsen statisch
+und bleiben unter den Modulgrenzen. Die ursprünglichen Qualitätsfixtures samt
+eingefrorenen Releaseblöcken sind bytegleich; weder Paketauflösung noch Formatter
+liefen lokal. Die Wiederholung bleibt derselbe Suiteeinstieg. Dieser Versuch
+belegt Quellvorbereitung, noch keine Kompilierung oder funktionale Abnahme.

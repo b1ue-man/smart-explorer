@@ -93,7 +93,11 @@ impl<P: HostPlatform> AppHost<P> {
             .lock()
             .is_ok_and(|windows| windows.has_process(request))
     }
-    pub(super) fn window_pending(&self, request: &LaunchRequest, reason: &str) -> io::Result<LaunchReceipt> {
+    pub(super) fn window_pending(
+        &self,
+        request: &LaunchRequest,
+        reason: &str,
+    ) -> io::Result<LaunchReceipt> {
         let _serial = self
             .serial
             .lock()

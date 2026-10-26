@@ -59,7 +59,8 @@ fn capture_restart() -> (
     (capture, admission, grant, peak)
 }
 
-pub(super) fn batches_task_b6_session_budget_android_resume_reuses_capacity_after_actual_owner_end() {
+pub(super) fn batches_task_b6_session_budget_android_resume_reuses_capacity_after_actual_owner_end()
+{
     use crate::screen::{
         core::capture_admission::CaptureOwner, os::android_capture_admission as android,
     };
@@ -85,7 +86,8 @@ pub(super) fn batches_task_b6_session_budget_android_resume_reuses_capacity_afte
     );
 }
 
-pub(super) fn batches_task_b6_session_budget_android_resume_keeps_live_owner_and_retries_same_generation() {
+pub(super) fn batches_task_b6_session_budget_android_resume_keeps_live_owner_and_retries_same_generation(
+) {
     use crate::screen::{
         core::capture_admission::CaptureOwner, os::android_capture_admission as android,
     };
@@ -126,7 +128,8 @@ pub(super) fn batches_task_b6_session_budget_android_resume_keeps_live_owner_and
     );
 }
 
-pub(super) fn batches_task_b6_session_budget_android_snapshot_replaces_only_retired_or_native_authority() {
+pub(super) fn batches_task_b6_session_budget_android_snapshot_replaces_only_retired_or_native_authority(
+) {
     use crate::screen::{
         core::{
             capture_admission::{CaptureGeneration, CaptureOwner, SourceKey},
@@ -240,7 +243,8 @@ pub(super) fn batches_task_b6_session_budget_android_snapshot_replaces_only_reti
     assert_eq!(old.live_bytes().unwrap(), 0);
 }
 
-pub(super) fn batches_task_b6_session_budget_android_epoch_drops_old_queue_but_keeps_external_owner() {
+pub(super) fn batches_task_b6_session_budget_android_epoch_drops_old_queue_but_keeps_external_owner(
+) {
     use crate::screen::{
         core::{
             capture_admission::{CaptureOwner, SourceKey},

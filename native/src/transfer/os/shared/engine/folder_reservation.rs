@@ -1,8 +1,8 @@
 //! Exclusive selected-root reservation with a durable pre-publication receipt.
-use crate::transfer::folder_alias::{FolderAlias, FolderAliasScope};
 use super::super::engine_names::{join_rel, parent_rel};
 use super::folder_alias_store::AliasStore;
 use super::view::Side;
+use crate::transfer::folder_alias::{FolderAlias, FolderAliasScope};
 use crate::vfs::{Backend, LocalBackend};
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};

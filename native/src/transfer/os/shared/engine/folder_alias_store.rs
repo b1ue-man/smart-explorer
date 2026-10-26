@@ -1,6 +1,6 @@
 //! One private durable alias journal per transfer. Its lock spans the run.
-use crate::transfer::folder_alias::{FolderAliasScope, FolderAliases};
 use super::record_io::{read_record, record_context, write_record, RecordContext, RecordKind};
+use crate::transfer::folder_alias::{FolderAliasScope, FolderAliases};
 use std::fs::File;
 use std::io;
 use std::path::PathBuf;

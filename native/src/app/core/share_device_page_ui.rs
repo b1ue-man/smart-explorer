@@ -273,7 +273,6 @@ fn contact_page(app: &mut App, ui: &mut egui::Ui, contact_id: &str) {
     }
 }
 
-
 fn grant_page(app: &mut App, ui: &mut egui::Ui, device_id: &str) {
     let Some(grant) = app
         .share_profiles

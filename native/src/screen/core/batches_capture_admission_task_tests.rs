@@ -1,7 +1,5 @@
 //! Source fixtures for the one final remote task suite; never a local entrypoint.
-use super::capture_admission::{
-    CaptureGeneration, CaptureOwner, CapturePlan, SourceKey,
-};
+use super::capture_admission::{CaptureGeneration, CaptureOwner, CapturePlan, SourceKey};
 use super::capture_plan::{CapturePhases, HostPhase};
 use super::frame_budget::MAX_WORKING_BYTES;
 use super::frame_memory::{CapacityCeiling, MemoryPool};

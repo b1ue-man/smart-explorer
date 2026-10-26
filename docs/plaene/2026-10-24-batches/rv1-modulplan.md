@@ -57,8 +57,8 @@ Altbestand-Ausnahme bestehen: Sie war bereits an der Batchbasis übergroß;
 der Batch ergänzt dort Modulanschlüsse und Reexports, keine Funktionskörper.
 Der bestehende Remotegrößenwächter wird dafür nicht geändert. Alle 46
 beanstandeten Verantwortlichkeiten und ihre neuen Fachmodule bleiben vom
-uneingeschränkten Größenvertrag erfasst; die erneute Remoteformatbestätigung
-steht noch aus.
+uneingeschränkten Größenvertrag erfasst; Versuch `40342520266` bestätigt ihre
+Größen nach erneuter Remoteformatierung.
 
 ## Bestätigte Importkorrektur in der Transferkette
 
@@ -97,5 +97,7 @@ R19 ergänzt ausschließlich die bereits vorhandenen reinen Vertragsfälle der
 verschobenen Mount-Runtimetypen. Die bisherige Fallauswahl bleibt erhalten;
 die vier verschobenen Admission-Lebensdauerfälle werden weiterhin über ihre
 exakten bestehenden Suffixe aufgelöst. Keine lokale Formatierung, Kompilierung
-oder Testausführung fand statt. Erneute Remoteformatierung, Typprüfung und
-Laufzeitbestätigung sind weiterhin ausstehend.
+oder Testausführung fand statt. Versuch `40342520266` hat die Modulgrößen
+remote bestätigt und den verbleibenden Layoutpatch geliefert; Main hat ihn
+kandidatengebunden übernommen. Typprüfung und Laufzeitbestätigung stehen
+weiterhin aus. Die genaue Artefaktbindung steht im [RV1-Beleg](../../refs/rv1-remote-suite.md).

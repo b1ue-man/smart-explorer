@@ -18,23 +18,23 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 #[path = "missing_retry.rs"]
 pub(super) mod missing_retry;
+#[path = "file_recovery_observer.rs"]
+mod observer;
 #[path = "file_recovery_receipts.rs"]
 mod receipts;
 #[path = "file_recovery_verify.rs"]
 mod verification;
-#[path = "file_recovery_observer.rs"]
-mod observer;
 
 pub(super) use observer::LocalObserver;
 pub(super) use receipts::initialize;
-pub(super) use verification::verify_saved;
 use receipts::{
-    destination_parts, read_index, receipt_path, repair_new_entry, visit_saved,
-    PreviousTarget, Receipt,
+    destination_parts, read_index, receipt_path, repair_new_entry, visit_saved, PreviousTarget,
+    Receipt,
 };
-use verification::{previous_target, verify_source};
 #[cfg(test)]
 use verification::publication_state;
+pub(super) use verification::verify_saved;
+use verification::{previous_target, verify_source};
 
 fn failure(message: impl Into<String>) -> io::Error {
     io::Error::other(message.into())

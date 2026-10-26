@@ -1,9 +1,9 @@
 //! Durable unconfirmed jobs. Handles/credentials are rebound explicitly.
-use crate::transfer::job_record::{JobRecord, SourceGuard, StoredEndpoint, StoredFilter};
 use super::record_io::{
     self, read_record, record_context, write_record, RecordContext, RecordKind,
 };
 use super::view::{JobView, Side};
+use crate::transfer::job_record::{JobRecord, SourceGuard, StoredEndpoint, StoredFilter};
 use crate::transfer::{Endpoint, JobItems, TransferJob};
 use crate::types::{Conflict, CopyMode};
 use crate::vfs::{Backend, LocalBackend};
@@ -11,14 +11,14 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-#[path = "job_store_validation.rs"]
-mod validation;
 #[path = "job_store_catalog.rs"]
 mod catalog;
+#[path = "job_store_validation.rs"]
+mod validation;
 
+pub(crate) use catalog::{reopen_job, unconfirmed_jobs, CatalogState, RecoveryCatalog};
 pub(super) use validation::{endpoint, snapshot, with_backend};
 use validation::{source_paths, verify_sources, verify_target};
-pub(crate) use catalog::{unconfirmed_jobs, reopen_job, CatalogState, RecoveryCatalog};
 
 pub(super) struct JobRun {
     pub(super) path: PathBuf,

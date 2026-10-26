@@ -12,11 +12,11 @@ use std::{
 
 #[path = "session_owners.rs"]
 mod ownership;
-use ownership::{owners, PendingStart};
 pub(crate) use ownership::{
     adopt_owned, begin_owned_shutdown, close_owned_session, close_transport, owned_sessions,
     resume_owned_sessions, shutdown_owned_sessions, start_owned,
 };
+use ownership::{owners, PendingStart};
 
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct SessionView {

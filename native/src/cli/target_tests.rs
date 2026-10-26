@@ -39,8 +39,8 @@ fn namespace_roots_are_identified_without_matching_children() {
 fn duplicate_saved_labels_fail_with_candidates() {
     let a = conn("prod", "alice", "/srv/a");
     let b = conn("prod", "bob", "/srv/b");
-    let err = saved_shorthand_from("prod:/logs", "@prod:/logs", vec![a.clone(), b.clone()])
-        .unwrap_err();
+    let err =
+        saved_shorthand_from("prod:/logs", "@prod:/logs", vec![a.clone(), b.clone()]).unwrap_err();
     assert!(err.contains("ambiguous"));
     assert!(err.contains(&a.account()));
     assert!(err.contains(&b.account()));

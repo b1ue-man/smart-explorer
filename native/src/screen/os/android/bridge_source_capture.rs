@@ -22,7 +22,9 @@ impl BridgeSource {
             self.epoch = Some(request.encoder_epoch);
         }
         // Accessibility remains the preview/snapshot fallback when projection is absent.
-        if !projected && !self.synthetic() && !super::super::bridge_channels::prereqs().accessibility_on()
+        if !projected
+            && !self.synthetic()
+            && !super::super::bridge_channels::prereqs().accessibility_on()
         {
             return Ok(StageFrame::Paused(SessionState::NoDisplay));
         }

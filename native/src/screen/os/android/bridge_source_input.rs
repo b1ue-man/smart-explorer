@@ -3,7 +3,11 @@ use super::*;
 
 impl BridgeSource {
     /// The still that answers `frame_id`, as BGRA.
-    pub(super) fn still(&mut self, frame_id: u64, limits: FrameLimits) -> io::Result<CapturedImage> {
+    pub(super) fn still(
+        &mut self,
+        frame_id: u64,
+        limits: FrameLimits,
+    ) -> io::Result<CapturedImage> {
         if self.synthetic() {
             let grant = self.channel.capture.synthetic_snapshot(self.size)?;
             let mut image = CaptureImageBuilder::new(
@@ -53,7 +57,6 @@ impl BridgeSource {
             image.downscale(target, limits, &grant, CaptureOwner::ScaledPixels)
         }
     }
-
 }
 
 /// A still of the app: width and height (u32 little endian), RGBA rows.

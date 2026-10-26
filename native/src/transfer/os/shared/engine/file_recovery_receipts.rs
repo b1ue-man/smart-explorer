@@ -5,8 +5,8 @@ use ring::digest::SHA256;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    failure, read_record, write_record, FileWork, JobRecord, JobRun, Path, PathBuf,
-    Proof, RecordContext, RecordKind, SourceGuard, StoredEndpoint,
+    failure, read_record, write_record, FileWork, JobRecord, JobRun, Path, PathBuf, Proof,
+    RecordContext, RecordKind, SourceGuard, StoredEndpoint,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -207,7 +207,10 @@ pub(super) fn repair_new_entry(
     )
 }
 
-pub(super) fn destination_parts(record: &JobRecord, destination: &str) -> io::Result<(String, String)> {
+pub(super) fn destination_parts(
+    record: &JobRecord,
+    destination: &str,
+) -> io::Result<(String, String)> {
     let display = |path: &str| {
         if record.target.local {
             crate::copy::native_path_text(&crate::transfer::walk_listers::native(path))
@@ -236,7 +239,8 @@ pub(super) fn validate(receipt: &Receipt, record: &JobRecord) -> io::Result<()> 
             "Dateibeleg gehört zu einer abweichenden Verbindung oder einem abweichenden Auftrag",
         ));
     }
-    let allow_backslash = record.target.local && crate::transfer::platform::backslash_is_name_char();
+    let allow_backslash =
+        record.target.local && crate::transfer::platform::backslash_is_name_char();
     if receipt.relative.is_empty() || receipt.relative.starts_with('/') || receipt.relative.split('/').any(|part| crate::transfer::engine_names::name_problem(part, allow_backslash).is_some()) || crate::transfer::engine_names::join_rel(&record.target_dir, &receipt.relative) != receipt.destination || receipt.proof.as_ref().is_some_and(|proof| proof.path != receipt.destination) || receipt.previous.as_ref().is_some_and(|previous| matches!(previous, PreviousTarget::File(proof) if proof.path != receipt.destination)) {
         return Err(failure("Dateibeleg enthält einen ungültigen Zielpfad"));
     }
@@ -297,7 +301,11 @@ impl JobRun {
         let data = super::super::lock(&self.data);
         self.read_file_unlocked(file, &data)
     }
-    pub(super) fn read_file_unlocked(&self, file: &FileWork, data: &JobRecord) -> io::Result<Option<Receipt>> {
+    pub(super) fn read_file_unlocked(
+        &self,
+        file: &FileWork,
+        data: &JobRecord,
+    ) -> io::Result<Option<Receipt>> {
         let path = receipt_path(&self.path, &key(file));
         match read_record::<Receipt>(
             &path,

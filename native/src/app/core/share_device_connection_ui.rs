@@ -1,7 +1,11 @@
 //! Connection/trust and ordinary screen actions of a selected contact.
 use super::*;
 
-pub(super) fn connection_section(app: &mut App, ui: &mut egui::Ui, contact: &crate::share::DirectContact) {
+pub(super) fn connection_section(
+    app: &mut App,
+    ui: &mut egui::Ui,
+    contact: &crate::share::DirectContact,
+) {
     pages_ui::heading(ui, "VERBINDUNG");
     ui.label(format!(
         "Status: {} · Zugriff: {}",
@@ -106,7 +110,11 @@ pub(super) fn connection_section(app: &mut App, ui: &mut egui::Ui, contact: &cra
 }
 
 /// „Bildschirm öffnen“ and „Bildschirm steuern“ (SCR-M7): the viewer window.
-pub(super) fn screen_section(app: &mut App, ui: &mut egui::Ui, contact: &crate::share::DirectContact) {
+pub(super) fn screen_section(
+    app: &mut App,
+    ui: &mut egui::Ui,
+    contact: &crate::share::DirectContact,
+) {
     pages_ui::heading(ui, "BILDSCHIRM");
     let accepted = contact.access_state == crate::share::DirectAccessState::Accepted;
     let device_id = contact.remote_device_id.as_deref();

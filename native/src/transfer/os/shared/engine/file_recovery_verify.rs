@@ -2,12 +2,16 @@
 use std::io;
 
 use super::{
-    endpoint, failure, missing_retry, observe, observe_source, receipt_path, verify,
-    visit_saved, with_backend, write_record, AtomicBool, FileRoots, JobRecord,
-    JobView, Ordering, Path, PreviousTarget, Receipt, RecordContext, RecordKind, Side,
+    endpoint, failure, missing_retry, observe, observe_source, receipt_path, verify, visit_saved,
+    with_backend, write_record, AtomicBool, FileRoots, JobRecord, JobView, Ordering, Path,
+    PreviousTarget, Receipt, RecordContext, RecordKind, Side,
 };
 
-pub(super) fn previous_target(side: Side<'_>, path: &str, cancel: &AtomicBool) -> io::Result<PreviousTarget> {
+pub(super) fn previous_target(
+    side: Side<'_>,
+    path: &str,
+    cancel: &AtomicBool,
+) -> io::Result<PreviousTarget> {
     match with_backend(side, |backend| backend.stat(path)) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(PreviousTarget::Absent),
         Err(error)
@@ -37,7 +41,11 @@ pub(super) fn previous_target(side: Side<'_>, path: &str, cancel: &AtomicBool) -
     }
 }
 
-pub(super) fn previous_matches(receipt: &Receipt, side: Side<'_>, cancel: &AtomicBool) -> io::Result<bool> {
+pub(super) fn previous_matches(
+    receipt: &Receipt,
+    side: Side<'_>,
+    cancel: &AtomicBool,
+) -> io::Result<bool> {
     match &receipt.previous {
         Some(PreviousTarget::Absent) => {
             match with_backend(side, |backend| backend.stat(&receipt.destination)) {
@@ -55,7 +63,11 @@ pub(super) fn previous_matches(receipt: &Receipt, side: Side<'_>, cancel: &Atomi
     }
 }
 
-pub(super) fn publication_state(receipt: &Receipt, side: Side<'_>, cancel: &AtomicBool) -> io::Result<bool> {
+pub(super) fn publication_state(
+    receipt: &Receipt,
+    side: Side<'_>,
+    cancel: &AtomicBool,
+) -> io::Result<bool> {
     // A pending new-key intent, failed preparation, or live-proven failed
     // publication can write this durable negative acknowledgement.
     if !receipt.publication_authorized {
@@ -293,7 +305,11 @@ pub(in crate::transfer::engine) fn verify_saved(
     Ok(roots)
 }
 
-pub(super) fn verify_source(receipt: &Receipt, side: Side<'_>, cancel: &AtomicBool) -> io::Result<()> {
+pub(super) fn verify_source(
+    receipt: &Receipt,
+    side: Side<'_>,
+    cancel: &AtomicBool,
+) -> io::Result<()> {
     let after = observe_source(
         side,
         &receipt.source.path,

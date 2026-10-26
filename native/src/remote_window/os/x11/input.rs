@@ -138,7 +138,11 @@ impl X11Adapter {
         )
     }
 
-    pub(super) fn request_inner(&mut self, binding: &WindowBinding, operation: WindowOperation) -> io::Result<()> {
+    pub(super) fn request_inner(
+        &mut self,
+        binding: &WindowBinding,
+        operation: WindowOperation,
+    ) -> io::Result<()> {
         self.conn
             .grab_server()
             .map_err(failed)?

@@ -18,7 +18,8 @@ impl ShareIrohNode {
         self.require_sharing_active()?;
         super::super::node_tcp::require_policy(&connection)?;
         self.await_route(&connection, None, None).await?;
-        super::super::route_protocol::scope(connection.clone(), self.serve_apps(connection, permit)).await
+        super::super::route_protocol::scope(connection.clone(), self.serve_apps(connection, permit))
+            .await
     }
     pub(super) async fn serve_apps(
         self: &Arc<Self>,

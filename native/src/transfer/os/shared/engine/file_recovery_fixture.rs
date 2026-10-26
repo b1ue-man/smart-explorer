@@ -68,7 +68,11 @@ pub(super) fn file(path: &Path, rel: &str) -> FileWork {
 }
 
 pub(super) fn apply(engine: &Engine<'_>, file: FileWork) {
-    crate::transfer::engine::worker::run_file(engine, file, &mut [0; crate::transfer::engine::ops::COPY_BUFFER]);
+    crate::transfer::engine::worker::run_file(
+        engine,
+        file,
+        &mut [0; crate::transfer::engine::ops::COPY_BUFFER],
+    );
 }
 
 pub(super) fn names(path: &Path) -> Vec<String> {

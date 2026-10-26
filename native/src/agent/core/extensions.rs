@@ -13,8 +13,8 @@ use super::agent_error::agent_error;
 use super::backend::AgentBackend;
 use super::ext_stream::{is_unsupported_error, stream, unexpected, CANCEL_POLL};
 use super::ext_wire::{
-    algorithm_to_wire, apply_progress, durability_to_wire, group_from_wire,
-    is_unsupported, limits_from_wire, omission_from_wire, report_from_wire, unsupported,
+    algorithm_to_wire, apply_progress, durability_to_wire, group_from_wire, is_unsupported,
+    limits_from_wire, omission_from_wire, report_from_wire, unsupported,
 };
 use super::metadata::wire_to_vfs;
 use crate::agent_proto::{query, Frame};

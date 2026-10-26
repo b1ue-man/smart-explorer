@@ -13,11 +13,10 @@ pub(crate) struct PacketBudget {
     pub pull_bytes: usize,
 }
 /// Relay GOP + record + maximum contract extension, plus JNI head/identity.
-pub(crate) const RECORD_BUFFER_OVERHEAD: usize =
-    super::super::wire_binary::GOP_HEADER_BYTES
-        + super::super::wire_binary::RECORD_HEADER_BYTES
-        + 1026
-        + 32;
+pub(crate) const RECORD_BUFFER_OVERHEAD: usize = super::super::wire_binary::GOP_HEADER_BYTES
+    + super::super::wire_binary::RECORD_HEADER_BYTES
+    + 1026
+    + 32;
 impl PacketBudget {
     /// Private receiving bounds do not turn a v1 stream into a v2 contract.
     pub(crate) fn for_receive(
@@ -94,13 +93,15 @@ impl PacketBudget {
         contract: Option<super::super::frame_budget::FrameContract>,
     ) -> io::Result<Self> {
         Self::for_limits_mode(
-            contract.map_or(super::super::frame_budget::FrameLimits::LEGACY, |c| c.limits),
+            contract.map_or(super::super::frame_budget::FrameLimits::LEGACY, |c| {
+                c.limits
+            }),
             contract.is_none(),
         )
     }
     fn for_limits_mode(
         limits: super::super::frame_budget::FrameLimits,
-        legacy: bool
+        legacy: bool,
     ) -> io::Result<Self> {
         limits.validate()?;
         let images = if legacy {

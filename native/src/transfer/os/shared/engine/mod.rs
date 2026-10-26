@@ -41,9 +41,9 @@ mod legacy;
 mod local;
 #[path = "ops.rs"]
 mod ops;
+mod prepare;
 #[path = "publish.rs"]
 mod publish;
-mod prepare;
 use prepare::prepare;
 #[path = "queue.rs"]
 mod queue;
