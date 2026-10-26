@@ -1,9 +1,11 @@
-//! Shared desktop/Android owner. One latest BGRA slot; no image or input retry.
+//! Shared desktop/Android owner. One latest candidate, two real raw owners.
 use std::{io, sync::{Arc, Condvar, Mutex, atomic::{AtomicBool, Ordering}, mpsc::{self, SyncSender}}, time::{Duration, Instant}};
 use serde::Serialize;
 use crate::{daemon::{LoginClose, LoginCommand, LoginSessionView, LoginViewer}, login::{GatewayTarget, FrameToken},
     screen::core::input_model::{InputEvent, PressedInputs, TouchPhase, encode_batch}};
 use crate::login::core::viewer_guard::ViewerGuard;
+use crate::screen::core::{capture_image::CapturedImage,image_admission::ImageAdmission};
+use super::viewer_images;
 #[derive(Clone, Serialize)]
 pub(crate) struct ViewerSnapshot {
     pub state: String, pub reason: Option<String>, pub view: Option<LoginSessionView>,
@@ -12,23 +14,33 @@ pub(crate) struct ViewerSnapshot {
     pub presentation_epoch: u64,
     pub notice: Option<String>,
 }
-pub(crate) struct ViewerFrame { pub token: FrameToken, pub pixels: Vec<u8> }
+pub(crate) struct ViewerFrame { pub token: FrameToken, pub image: CapturedImage }
 struct State { snapshot: ViewerSnapshot, guard: ViewerGuard, frame: Option<ViewerFrame>, close: Option<LoginClose>, visible: Instant, pressed: PressedInputs }
-struct Shared { state: Mutex<State>, changed: Condvar, stopped: AtomicBool, release: AtomicBool, operating: AtomicBool, input_flight: AtomicBool }
+struct Shared { images: Arc<ImageAdmission>, state: Mutex<State>, changed: Condvar, stopped: AtomicBool, release: AtomicBool, operating: AtomicBool, input_flight: AtomicBool }
 enum Command { Input(FrameToken, u64, Vec<InputEvent>), Sas(FrameToken, u64) }
 pub(crate) struct ViewerSession { shared: Arc<Shared>, commands: SyncSender<Command> }
 fn invalid(reason: impl ToString) -> String { reason.to_string() }
 impl ViewerSession {
     pub fn start(target: GatewayTarget, user: String, pin_acknowledged: bool) -> io::Result<Arc<Self>> {
+        let images = viewer_images::admission()?;
+        Self::start_with_images(target,user,pin_acknowledged,images)
+    }
+    pub(crate) fn start_with_images(target: GatewayTarget,user: String,pin_acknowledged: bool,
+        images: Arc<ImageAdmission>) -> io::Result<Arc<Self>> {
         target.validate()?;
         if !pin_acknowledged { return Err(io::Error::new(io::ErrorKind::PermissionDenied, "explicit administrative machine pin acknowledgement is required")); }
-        let shared = Arc::new(Shared { state: Mutex::new(State { snapshot: ViewerSnapshot { state: "connecting".into(), reason: None,
+        Self::spawn(images,move |shared| LoginViewer::open_owned_with_images(target,user,true,shared.images.clone(),|close| {
+            if let Ok(mut state) = shared.state.lock() {if shared.stopped.load(Ordering::SeqCst) {close.close();} state.close=Some(close);}
+        }))
+    }
+    fn spawn(images: Arc<ImageAdmission>,open: impl FnOnce(&Shared)->Result<LoginViewer,String> + Send + 'static) -> io::Result<Arc<Self>> {
+        let shared = Arc::new(Shared { images, state: Mutex::new(State { snapshot: ViewerSnapshot { state: "connecting".into(), reason: None,
             view: None, frame: None, input_ready: false, control: false, focused: false, presented_frame: None, presentation_epoch: 0, notice: None }, guard: ViewerGuard::default(), frame: None, close: None, visible: Instant::now(), pressed: PressedInputs::default() }),
             changed: Condvar::new(), stopped: AtomicBool::new(false), release: AtomicBool::new(false), operating: AtomicBool::new(false), input_flight: AtomicBool::new(false) });
         let (commands, input) = mpsc::sync_channel(8);
         let session = Arc::new(Self { shared: shared.clone(), commands });
         std::thread::Builder::new().name("login-viewer-owner".into()).spawn(move || {
-            let result = run(&shared, target, user, input);
+            let result = open(&shared).and_then(|viewer|run(&shared,viewer,input));
             if let Ok(mut state) = shared.state.lock() {
                 state.guard.close(); state.frame = None; state.close.take(); state.snapshot.frame = None;
                 state.snapshot.input_ready = false; state.snapshot.state = "ended".into();
@@ -44,11 +56,35 @@ impl ViewerSession {
         })?;
         Ok(session)
     }
+    #[cfg(test)]
+    pub(crate) fn from_fixture_viewer(viewer: LoginViewer,images: Arc<ImageAdmission>) -> io::Result<Arc<Self>> {
+        Self::spawn(images,move |shared| {
+            if let Ok(mut state)=shared.state.lock() {state.close=Some(viewer.control());}
+            Ok(viewer)
+        })
+    }
+    #[cfg(test)]
+    pub(crate) fn wait_fixture_frame(&self,wait: Duration) -> Option<ViewerFrame> {
+        let state=self.shared.state.lock().ok()?;
+        let (mut state,_)=self.shared.changed.wait_timeout_while(state,wait,|state|
+            state.frame.is_none()&&!self.shared.stopped.load(Ordering::SeqCst)).ok()?;
+        state.frame.take()
+    }
+    #[cfg(test)]
+    pub(crate) fn wait_fixture_ready(&self,wait: Duration) -> bool {
+        let Ok(state)=self.shared.state.lock() else {return false;};
+        self.shared.changed.wait_timeout_while(state,wait,|state|
+            state.frame.is_none()&&!self.shared.stopped.load(Ordering::SeqCst)).is_ok_and(|(state,_)|state.frame.is_some())
+    }
     pub fn snapshot(&self) -> ViewerSnapshot {
         self.shared.state.lock().map(|state| state.snapshot.clone()).unwrap_or_else(|_| ViewerSnapshot { state: "ended".into(),
             reason: Some("login viewer state is unavailable".into()), view: None, frame: None, input_ready: false, control: false, focused: false, presented_frame: None, presentation_epoch: u64::MAX, notice: None })
     }
-    pub fn take_frame(&self) -> Option<ViewerFrame> { self.shared.state.lock().ok()?.frame.take() }
+    pub fn take_frame(&self) -> Option<ViewerFrame> {
+        let mut state = self.shared.state.lock().ok()?;
+        if self.shared.stopped.load(Ordering::SeqCst) {state.frame = None; return None;}
+        state.frame.take()
+    }
     pub fn visible(&self) { if let Ok(mut state) = self.shared.state.lock() { state.visible = Instant::now(); } }
     pub fn presented(&self, token: &FrameToken, epoch: u64) -> bool {
         let Ok(mut state) = self.shared.state.lock() else { return false; };
@@ -104,22 +140,13 @@ impl ViewerSession {
         if let Ok(mut state) = self.shared.state.lock() { state.guard.close(); state.frame = None; state.snapshot.state = "stopping".into(); refresh(&mut state); if let Some(close) = &state.close { close.close(); } }
         self.shared.changed.notify_all();
     }
-    /// Fixed LE header: LGB1, width, height, BGRA bytes, frame_id, ASCII SHA256.
-    /// Then tight BGRA8. -1 no frame; -2 ended; -3 buffer too small (header written).
-    pub fn pull(&self, dst: &mut [u8], wait: Duration) -> i32 {
-        let Ok(mut state) = self.shared.state.lock() else { return -2; };
-        if self.shared.stopped.load(Ordering::SeqCst) { state.frame = None; return -2; }
-        if state.frame.is_none() && !self.shared.stopped.load(Ordering::SeqCst) {
-            match self.shared.changed.wait_timeout(state, wait.min(Duration::from_secs(1))) { Ok((next, _)) => state = next, Err(_) => return -2 }
-        }
-        let Some(frame) = state.frame.as_ref() else { return if self.shared.stopped.load(Ordering::SeqCst) { -2 } else { -1 }; };
-        if dst.len() < 88 { return -3; }
-        dst[..4].copy_from_slice(b"LGB1"); dst[4..8].copy_from_slice(&frame.token.width.to_le_bytes()); dst[8..12].copy_from_slice(&frame.token.height.to_le_bytes());
-        dst[12..16].copy_from_slice(&(frame.pixels.len() as u32).to_le_bytes()); dst[16..24].copy_from_slice(&frame.token.frame_id.to_le_bytes());
-        dst[24..88].copy_from_slice(frame.token.digest.as_bytes());
-        let total = 88 + frame.pixels.len(); if dst.len() < total { return -3; }
-        dst[88..total].copy_from_slice(&frame.pixels); state.frame.take(); total as i32
+    /// Legacy JNI copying has no admitted destination owner. L7 replaces
+    /// this entrypoint with the bitmap-ticket transfer of a whole ViewerFrame.
+    /// No raw copy may escape through the old DirectBuffer/IntArray path.
+    pub fn pull(&self, _dst: &mut [u8], _wait: Duration) -> i32 {
+        if self.shared.stopped.load(Ordering::SeqCst) {-2} else {-4}
     }
+
 }
 impl Drop for ViewerSession { fn drop(&mut self) { self.close(); } }
 fn refresh(state: &mut State) {
@@ -131,6 +158,7 @@ fn refresh(state: &mut State) {
 }
 fn adopt(shared: &Shared, viewer: &LoginViewer) -> Result<(), String> {
     let mut state = shared.state.lock().map_err(|_| "login viewer state is unavailable")?;
+    if shared.stopped.load(Ordering::SeqCst) {state.guard.close();state.frame=None;refresh(&mut state);return Ok(());}
     let view = viewer.view();
     if let Some(challenge) = &view.challenge {
         let access = view.access.as_ref().ok_or_else(|| "login frame has no authenticated administrative access report".to_string())?;
@@ -138,10 +166,7 @@ fn adopt(shared: &Shared, viewer: &LoginViewer) -> Result<(), String> {
     } else { state.guard.close(); }
     state.snapshot.view = Some(view.clone()); state.snapshot.state = view.state.clone(); refresh(&mut state); Ok(())
 }
-fn run(shared: &Shared, target: GatewayTarget, user: String, input: mpsc::Receiver<Command>) -> Result<(), String> {
-    let mut viewer = LoginViewer::open_owned(target, user, true, |close| {
-        if let Ok(mut state) = shared.state.lock() { if shared.stopped.load(Ordering::SeqCst) { close.close(); } state.close = Some(close); }
-    })?;
+fn run(shared: &Shared, mut viewer: LoginViewer, input: mpsc::Receiver<Command>) -> Result<(), String> {
     if shared.stopped.load(Ordering::SeqCst) { viewer.close(); return Ok(()); }
     if shared.state.lock().map_err(|_| "login viewer state is unavailable")?.visible.elapsed() > Duration::from_secs(2) {
         viewer.close(); return Err("login viewer owner disappeared during connection setup".into());
@@ -196,12 +221,19 @@ fn run(shared: &Shared, target: GatewayTarget, user: String, input: mpsc::Receiv
         }
         if shared.release.load(Ordering::SeqCst) { continue; }
         if captured.elapsed() >= Duration::from_millis(100) {
+            if !viewer_images::can_capture(&shared.images).map_err(invalid)? {
+                // Latest has not left this owner and may be superseded. Images
+                // already transferred to UI/JNI continue consuming their slots.
+                if let Ok(mut state) = shared.state.lock() {state.frame.take();}
+                if !viewer_images::can_capture(&shared.images).map_err(invalid)? {continue;}
+            }
             let frame = exchange(shared, &mut viewer, LoginCommand::Capture { frame_id })?; adopt(shared, &viewer)?;
-            if !frame.pixels.is_empty() {
+            if let Some(image) = frame.image {
                 let packet = frame.reply.packet.as_ref().ok_or_else(|| "login capture has no bounded metadata".to_string())?;
                 let mut state = shared.state.lock().map_err(|_| "login viewer state is unavailable")?;
+                if shared.stopped.load(Ordering::SeqCst) {state.guard.close();state.frame=None;return Ok(());}
                 let token = state.guard.frame(frame_id, packet.reply.width, packet.reply.height).map_err(invalid)?;
-                state.frame = Some(ViewerFrame { token, pixels: frame.pixels }); refresh(&mut state); shared.changed.notify_all();
+                state.frame = Some(ViewerFrame { token, image }); refresh(&mut state); shared.changed.notify_all();
             } else if !matches!(frame.reply.view.state.as_str(), "unchanged" | "ready" | "pixels") {
                 return Err(frame.reply.packet.as_ref().and_then(|packet| packet.reply.reason.clone()).unwrap_or_else(|| format!("login capture ended: {}", frame.reply.view.state)));
             }

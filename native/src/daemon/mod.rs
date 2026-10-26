@@ -238,6 +238,8 @@ mod login_ipc_client;
 #[path = "os/shared/login_shutdown.rs"]
 mod login_shutdown;
 pub(crate) use login_ipc::shutdown_login_viewers;
+#[cfg(test)]
+pub(crate) use login_ipc::{login_image_fixture, LoginImageFixture};
 pub(crate) use login_ipc_client::{LoginViewer, LoginClose, login_status, login_sessions, login_session, login_stop};
 pub(crate) use ipc_protocol::login::{LoginCommand, LoginEnd, LoginFrame, LoginIpcRequest, LoginIpcReply, LoginSessionView, LoginRelayReply};
 #[path = "os/shared/apps_host.rs"]

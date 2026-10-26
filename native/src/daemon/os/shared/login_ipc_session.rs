@@ -1,12 +1,12 @@
 //! One owning local socket, one existing Share endpoint and one signed sequence.
-use std::{io, net::{Shutdown, TcpStream}, sync::{Arc, atomic::{AtomicBool, Ordering}}, time::{Duration, Instant}};
-use tokio::sync::mpsc;
+use std::{io::{self,Write}, net::{Shutdown, TcpStream}, sync::Arc, time::{Duration, Instant}};
+use tokio::sync::{mpsc,oneshot};
 use crate::{login::{GatewayTarget, LoginCancellation, RemoteLoginClient}, share::login_transport::LoginClientContext};
 use crate::daemon::ipc_protocol::{write_response, IpcResponse, login::{self as wire, LoginEnd, LoginFrame,
     LoginIpcReply, LoginRelayCommand, LoginRelayReply, LoginSessionView}};
-use super::registry::{self, Entry};
+use super::registry::{self, Entry, Owner};
 const IDLE: Duration = Duration::from_secs(5);
-enum Out { Hello(LoginSessionView), Reply(LoginFrame), End(LoginEnd) }
+enum Out { Hello(LoginSessionView), Reply {frame: LoginFrame, complete: oneshot::Sender<io::Result<()>>}, End(LoginEnd) }
 pub(super) fn serve(mut socket: TcpStream, context: LoginClientContext, target: GatewayTarget, user: String) -> io::Result<()> {
     let runtime = context.runtime.clone();
     let cancel = Arc::new(LoginCancellation::default());
@@ -17,17 +17,16 @@ pub(super) fn serve(mut socket: TcpStream, context: LoginClientContext, target: 
     socket.set_read_timeout(None)?; socket.set_write_timeout(Some(IDLE))?;
     let (commands, input) = mpsc::channel(1);
     let (output, mut frames) = mpsc::channel(1);
-    let busy = Arc::new(AtomicBool::new(false));
     let mut reader_socket = socket.try_clone()?;
-    let read_cancel = cancel.clone(); let read_busy = busy.clone();
+    let read_cancel = cancel.clone();
     let reader = std::thread::Builder::new().name("login-viewer-input".into()).spawn(move || {
-        read_commands(&mut reader_socket, commands, read_cancel, read_busy);
+        read_commands(&mut reader_socket, commands, read_cancel);
     })?;
     let task_cancel = cancel.clone();
     let (finished, finish) = std::sync::mpsc::sync_channel(1);
     let task_owner = owner.clone();
     runtime.spawn(async move {
-        let result = run(&task_owner.entry, context, target, user, input, &output, &busy).await;
+        let result = run(&task_owner, context, target, user, input, &output).await;
         if let Err(error) = result { let _ = output.try_send(Out::End(LoginEnd { code: "login_ended".into(), detail: Some(error.to_string()) })); }
         drop(output); drop(task_owner); let _ = finished.send(());
     });
@@ -35,7 +34,9 @@ pub(super) fn serve(mut socket: TcpStream, context: LoginClientContext, target: 
         while let Some(frame) = frames.blocking_recv() {
             match frame {
                 Out::Hello(view) => wire::write_json(&mut socket, wire::HELLO, &view)?,
-                Out::Reply(frame) => wire::write_reply(&mut socket, &frame)?,
+                Out::Reply {frame,complete} => {
+                    write_owned(&mut socket,frame,complete)?;
+                },
                 Out::End(end) => wire::write_json(&mut socket, wire::END, &end)?,
             }
         }
@@ -47,27 +48,51 @@ pub(super) fn serve(mut socket: TcpStream, context: LoginClientContext, target: 
     finish.recv_timeout(Duration::from_secs(35)).map_err(io::Error::other)?;
     result
 }
-fn read_commands(socket: &mut TcpStream, commands: mpsc::Sender<LoginRelayCommand>, cancel: Arc<LoginCancellation>, busy: Arc<AtomicBool>) {
+pub(super) fn write_owned(writer: &mut impl Write,frame: LoginFrame,complete: oneshot::Sender<io::Result<()>>) -> io::Result<()> {
+    let written = wire::write_reply(writer,&frame);
+    // A next producer sees completion only after the actual image borrow and
+    // its final writer owner have ended, including a failed partial write.
+    drop(frame);
+    let result = written.as_ref().map(|_|()).map_err(|e|io::Error::new(e.kind(),e.to_string()));
+    let _ = complete.send(result);
+    written
+}
+fn read_commands(socket: &mut TcpStream, commands: mpsc::Sender<LoginRelayCommand>, cancel: Arc<LoginCancellation>) {
+    // One bounded queued command avoids a race between the client reading the
+    // final response byte and the writer recording completion. The async owner
+    // never starts it before that completion. CLOSE still bypasses this queue;
+    // a full queue cancels/shuts down rather than blocking input release.
     while let Ok((tag, bytes)) = wire::read_frame(socket, wire::MAX_CONTROL) {
         if tag == wire::CLOSE && bytes.is_empty() { break; }
-        if tag != wire::COMMAND || busy.swap(true, Ordering::SeqCst) { break; }
+        if tag != wire::COMMAND { break; }
         let command: LoginRelayCommand = match serde_json::from_slice(&bytes) { Ok(command) => command, Err(_) => break };
         if command.command.validate().is_err() || commands.try_send(command).is_err() { break; }
     }
-    cancel.cancel();
+    cancel.cancel(); let _ = socket.shutdown(Shutdown::Both);
 }
 async fn deliver(output: &mpsc::Sender<Out>, frame: Out) -> io::Result<()> {
     tokio::time::timeout(IDLE, output.send(frame)).await.map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "login local viewer stopped receiving"))?
         .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "login local viewer closed"))
+}
+async fn deliver_reply(entry: &Entry,output: &mpsc::Sender<Out>,frame: LoginFrame) -> io::Result<()> {
+    let (complete,written) = oneshot::channel();
+    deliver(output,Out::Reply {frame,complete}).await?;
+    tokio::select! {
+        biased;
+        () = entry.cancel.cancelled() => Err(io::Error::new(io::ErrorKind::Interrupted,"login local write cancelled")),
+        result = written => result.map_err(|_|io::Error::new(io::ErrorKind::BrokenPipe,"login writer ended without completion"))?,
+    }
 }
 fn update(entry: &Entry, client: &RemoteLoginClient, state: &str) -> io::Result<LoginSessionView> {
     let mut view = entry.view.lock().map_err(|_| io::Error::other("login session state is unavailable"))?;
     view.state = state.into(); view.challenge = client.challenge().ok().cloned();
     view.access = Some(client.access().clone()); view.route = client.route_status(); Ok(view.clone())
 }
-async fn run(entry: &Entry, context: LoginClientContext, target: GatewayTarget, user: String,
-    mut input: mpsc::Receiver<LoginRelayCommand>, output: &mpsc::Sender<Out>, busy: &AtomicBool) -> io::Result<()> {
-    let mut client = RemoteLoginClient::connect_async(context, target, user, entry.cancel.clone()).await?;
+async fn run(owner: &Owner, context: LoginClientContext, target: GatewayTarget, user: String,
+    mut input: mpsc::Receiver<LoginRelayCommand>, output: &mpsc::Sender<Out>) -> io::Result<()> {
+    let entry = &owner.entry;
+    let lifetime: Arc<dyn crate::screen::core::capture_grant::CaptureCreditLifetime> = Arc::new(owner.clone());
+    let mut client = RemoteLoginClient::connect_async_owned(context,target,user,entry.cancel.clone(),Some(lifetime)).await?;
     deliver(output, Out::Hello(update(entry, &client, "challenge")?)).await?;
     let mut sequence = 1u64; let mut lease = Instant::now() + IDLE;
     loop {
@@ -83,19 +108,17 @@ async fn run(entry: &Entry, context: LoginClientContext, target: GatewayTarget, 
         sequence = sequence.checked_add(1).ok_or_else(|| wire::invalid("login local sequence exhausted"))?;
         let packet = if let Some(operation) = command.command.operation() {
             let request = client.signed_request(operation)?;
-            let (packet, pixels) = client.signed_operation_async(request).await?;
+            let (packet, image) = client.signed_operation_async(request).await?;
             // Only the completion of an explicitly requested signed operation
             // begins another local wait. Status/challenge cannot keep it alive.
             lease = Instant::now() + IDLE;
             let terminal = packet.reply.challenge.is_none();
             let view = update(entry, &client, &packet.reply.state)?;
-            deliver(output, Out::Reply(LoginFrame { reply: LoginRelayReply { sequence: command.sequence, view, packet: Some(packet) }, pixels })).await?;
-            busy.store(false, Ordering::SeqCst);
+            deliver_reply(entry,output,LoginFrame {reply: LoginRelayReply {sequence: command.sequence,view,packet: Some(packet)},image}).await?;
             if terminal { return Ok(()); }
             continue;
         } else { None };
         let view = update(entry, &client, "challenge")?;
-        deliver(output, Out::Reply(LoginFrame { reply: LoginRelayReply { sequence: command.sequence, view, packet }, pixels: Vec::new() })).await?;
-        busy.store(false, Ordering::SeqCst);
+        deliver_reply(entry,output,LoginFrame {reply: LoginRelayReply {sequence: command.sequence,view,packet},image: None}).await?;
     }
 }

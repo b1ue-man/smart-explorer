@@ -5,6 +5,11 @@ use super::{ipc_host::ShareHost, ipc_protocol::{write_response, IpcResponse, log
 mod registry;
 #[path = "login_ipc_session.rs"]
 mod session;
+#[cfg(test)]
+#[path = "batches_login_image_task_tests.rs"]
+mod batches_login_image_task_tests;
+#[cfg(test)]
+pub(crate) use batches_login_image_task_tests::{login_image_fixture,LoginImageFixture};
 impl ShareHost {
     pub(in crate::daemon) fn serve_login(&self, mut stream: TcpStream, request: LoginIpcRequest) -> io::Result<()> {
         let result = match request {

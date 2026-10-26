@@ -1,6 +1,7 @@
 //! The same owning login socket is used by desktop, Android, CLI and MCP.
 use std::{io, net::{Shutdown, TcpStream}, sync::Arc, time::Duration};
 use crate::login::{GatewayTarget, InstallationStatus};
+use crate::screen::core::{capture_admission::SourceKey,image_admission::ImageAdmission};
 use super::ipc_protocol::{read_response, set_stream_timeout, write_request, IpcRequest, IpcResponse,
     login::{self as wire, LoginCommand, LoginEnd, LoginFrame, LoginIpcReply, LoginIpcRequest, LoginRelayCommand,
         LoginRelayReply, LoginSessionView}};
@@ -40,6 +41,8 @@ pub(crate) struct LoginViewer {
     view: LoginSessionView,
     sequence: u64,
     closed: bool,
+    images: Arc<ImageAdmission>,
+    source: SourceKey,
 }
 #[derive(Clone)]
 pub(crate) struct LoginClose { socket: Arc<TcpStream> }
@@ -55,9 +58,18 @@ impl LoginViewer {
     /// The owner receives an interrupt handle before network admission waits.
     pub(crate) fn open_owned(target: GatewayTarget, target_user: String, acknowledge_machine_pin: bool,
         owner: impl FnOnce(LoginClose)) -> Result<Self, String> {
+        let images = crate::login::os::shared::viewer_images::admission().map_err(|error| error.to_string())?;
+        Self::open_owned_with_images(target,target_user,acknowledge_machine_pin,images,owner)
+    }
+    pub(crate) fn open_owned_with_images(target: GatewayTarget,target_user: String,acknowledge_machine_pin: bool,
+        images: Arc<ImageAdmission>,owner: impl FnOnce(LoginClose)) -> Result<Self,String> {
         target.validate().map_err(|error| error.to_string())?;
         if !acknowledge_machine_pin { return Err("explicit acknowledgement of the administrative machine pin is required".into()); }
-        let mut socket = open(LoginIpcRequest::Stream { target: target.clone(), target_user: target_user.clone(), acknowledge_machine_pin })?;
+        let socket = open(LoginIpcRequest::Stream { target: target.clone(), target_user: target_user.clone(), acknowledge_machine_pin })?;
+        Self::from_socket(socket,target,target_user,images,owner)
+    }
+    fn from_socket(mut socket: TcpStream,target: GatewayTarget,target_user: String,images: Arc<ImageAdmission>,
+        owner: impl FnOnce(LoginClose)) -> Result<Self,String> {
         let close = LoginClose { socket: Arc::new(socket.try_clone().map_err(|error| error.to_string())?) };
         owner(close.clone());
         let session = match response(&mut socket)? { LoginIpcReply::StreamOpened { session } => session, _ => return Err("login stream was not opened".into()) };
@@ -69,7 +81,12 @@ impl LoginViewer {
         if view.session != session || view.target != target || view.target_user != target_user { return Err("login stream differs from its pinned request".into()); }
         target.check_challenge(view.challenge.as_ref().ok_or_else(|| "login stream has no broker challenge".to_string())?, &target_user)
             .map_err(|error| error.to_string())?;
-        Ok(Self { socket, close, view, sequence: 1, closed: false })
+        let source = SourceKey::new(&session,"login:ipc").map_err(|error|error.to_string())?;
+        Ok(Self { socket, close, view, sequence: 1, closed: false, images, source })
+    }
+    #[cfg(test)]
+    pub(crate) fn from_fixture_stream(socket: TcpStream,target: GatewayTarget,user: String,images: Arc<ImageAdmission>) -> Result<Self,String> {
+        Self::from_socket(socket,target,user,images,|_|{})
     }
     pub(crate) fn view(&self) -> &LoginSessionView { &self.view }
     pub(crate) fn control(&self) -> LoginClose { self.close.clone() }
@@ -98,6 +115,9 @@ impl LoginViewer {
     pub(crate) fn command(&mut self, command: LoginCommand) -> Result<LoginFrame, String> {
         if self.closed { return Err("login viewer is closed".into()); }
         command.validate().map_err(|error| error.to_string())?;
+        if matches!(command,LoginCommand::Capture {..}) && !crate::login::os::shared::viewer_images::can_capture(&self.images).map_err(|e|e.to_string())? {
+            return Err("login raw image slots are still owned; capture was not sent".into());
+        }
         let result = (|| -> io::Result<LoginFrame> {
             wire::write_json(&mut self.socket, wire::COMMAND, &LoginRelayCommand { sequence: self.sequence, command })?;
             let (tag, bytes) = wire::read_frame(&mut self.socket, wire::MAX_CONTROL)?;
@@ -107,8 +127,8 @@ impl LoginViewer {
             if reply.sequence != self.sequence || reply.view.session != self.view.session || reply.view.target != self.view.target
                 || reply.view.target_user != self.view.target_user { return Err(wire::invalid("login relay reply changed sequence or pinned session")); }
             if let Some(challenge) = &reply.view.challenge { self.view.target.check_challenge(challenge, &self.view.target_user)?; }
-            let pixels = wire::read_pixels(&mut self.socket, &reply)?;
-            Ok(LoginFrame { reply, pixels })
+            let image = wire::read_pixels(&mut self.socket, &reply, &self.images, &self.source)?;
+            Ok(LoginFrame { reply, image })
         })();
         match result {
             Ok(frame) => {

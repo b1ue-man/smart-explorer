@@ -4,6 +4,7 @@ use iroh::endpoint::{RecvStream, SendStream};
 use crate::{login::core::{gateway_types::{ClientHello, GatewayAccess, GatewayReply, GatewayTarget, ServerHello}, gateway_wire as wire,
     model::{Challenge, Operation, SignedRequest, VERSION}}, share::login_transport::{self as transport, LoginClientContext, RouteCancellation, RouteStatus}};
 use super::{denied, now};
+use crate::{login::core::image_receive::ImageReceiver, screen::core::{capture_admission::SourceKey, capture_grant::CaptureCreditLifetime, capture_image::CapturedImage}};
 const SETUP: Duration = Duration::from_secs(30);
 const OPERATION: Duration = Duration::from_secs(30);
 
@@ -18,6 +19,7 @@ pub(crate) struct RemoteLoginClient {
     access: GatewayAccess,
     cancel: Arc<RouteCancellation>,
     closed: bool,
+    images: ImageReceiver,
 }
 impl RemoteLoginClient {
     /// Blocking daemon/UI worker entrypoint; async owners use connect_async.
@@ -27,6 +29,14 @@ impl RemoteLoginClient {
     }
     pub(crate) async fn connect_async(context: LoginClientContext, target: GatewayTarget, target_user: String,
         cancel: Arc<RouteCancellation>) -> io::Result<Self> {
+        Self::connect_async_owned(context, target, target_user, cancel, None).await
+    }
+    pub(crate) async fn connect_async_owned(context: LoginClientContext, target: GatewayTarget, target_user: String,
+        cancel: Arc<RouteCancellation>, lifetime: Option<Arc<dyn CaptureCreditLifetime>>) -> io::Result<Self> {
+        let admission = crate::screen::os::image_memory::admit_images(ImageReceiver::limits()?)?;
+        let receive_cancel = cancel.clone();
+        let images = ImageReceiver {admission, source: SourceKey::new(&super::nonce()?, "login:network")?,
+            cancelled: Arc::new(move || receive_cancel.check().is_err()), lifetime};
         target.validate()?;
         if target_user.is_empty() || target_user.len() > 256 { return Err(denied("login target user is empty or exceeds limit")); }
         let deadline = Instant::now() + SETUP;
@@ -44,8 +54,8 @@ impl RemoteLoginClient {
         transport::authenticated(connection);
         let hello = ClientHello { format: VERSION, peer_id: context.peer_id.clone(), target_user: target_user.clone(), route_policy: VERSION };
         cancelled_route(connection, &cancel, deadline, wire::send(&mut send, &hello)).await?;
-        let (initial, pixels) = cancelled_route(connection, &cancel, deadline, wire::receive_reply(&mut recv)).await?;
-        if initial.request_sequence != 0 || !pixels.is_empty() { return Err(denied("unexpected login startup response")); }
+        let (initial, pixels) = cancelled_route(connection, &cancel, deadline, wire::receive_reply(&mut recv, &images)).await?;
+        if initial.request_sequence != 0 || pixels.is_some() { return Err(denied("unexpected login startup response")); }
         let challenge = initial.reply.challenge.ok_or_else(|| denied(format!("{}: {}", initial.reply.state, initial.reply.reason.unwrap_or_else(|| "login broker is unavailable".into()))))?;
         target.check_challenge(&challenge, &target_user)?;
         if now()? > challenge.expires_at { return Err(denied("login startup challenge expired")); }
@@ -55,7 +65,7 @@ impl RemoteLoginClient {
             || access.not_before > now()? || access.expires_at <= now()? || !access.rights.login || !access.rights.screen_view {
             return Err(denied("login access report differs from the authenticated peer, user, policy or lifetime"));
         }
-        Ok(Self { connection: close, send, recv, context, target, user: target_user, challenge: Some(challenge), access, cancel, closed: false })
+        Ok(Self { connection: close, send, recv, context, target, user: target_user, challenge: Some(challenge), access, cancel, closed: false, images })
     }
     pub(crate) fn challenge(&self) -> io::Result<&Challenge> {
         self.challenge.as_ref().filter(|_| !self.closed).ok_or_else(|| denied("remote login session has no live challenge"))
@@ -68,10 +78,10 @@ impl RemoteLoginClient {
             target_user: self.user.clone(), operation, signature: String::new() };
         request.sign(&self.context.key)?; Ok(request)
     }
-    pub(crate) fn signed_operation(&mut self, request: SignedRequest) -> io::Result<(GatewayReply, Vec<u8>)> {
+    pub(crate) fn signed_operation(&mut self, request: SignedRequest) -> io::Result<(GatewayReply, Option<CapturedImage>)> {
         let runtime = self.context.runtime.clone(); runtime.block_on(self.signed_operation_async(request))
     }
-    pub(crate) async fn signed_operation_async(&mut self, request: SignedRequest) -> io::Result<(GatewayReply, Vec<u8>)> {
+    pub(crate) async fn signed_operation_async(&mut self, request: SignedRequest) -> io::Result<(GatewayReply, Option<CapturedImage>)> {
         if self.closed { return Err(denied("remote login session is closed")); }
         let current = self.challenge()?.clone();
         let hello = ClientHello { format: VERSION, peer_id: self.context.peer_id.clone(), target_user: self.user.clone(), route_policy: VERSION };
@@ -85,7 +95,7 @@ impl RemoteLoginClient {
             cancelled_route(&self.connection.0, &self.cancel, deadline, wire::send(&mut self.send, &request)).await?;
             // Construct once. A route pause retains this exact signed request;
             // no retry can replay an already consumed sequence or input bundle.
-            let (packet, pixels) = cancelled_route(&self.connection.0, &self.cancel, deadline, wire::receive_reply(&mut self.recv)).await?;
+            let (packet, pixels) = cancelled_route(&self.connection.0, &self.cancel, deadline, wire::receive_reply(&mut self.recv, &self.images)).await?;
             if packet.request_sequence != sequence { return Err(denied("login response sequence does not match the signed request")); }
             if let Some(next) = &packet.reply.challenge {
                 self.target.check_challenge(next, &self.user)?;
@@ -96,7 +106,7 @@ impl RemoteLoginClient {
             }
             // Pixels captured before an interrupted path are discarded. Effect
             // completion is never inferred from this display-generation check.
-            if !pixels.is_empty() && transport::status(&self.connection.0).map(|status| status.pause_epoch) != route_epoch {
+            if pixels.is_some() && transport::status(&self.connection.0).map(|status| status.pause_epoch) != route_epoch {
                 return Err(denied("login route generation changed while an image frame was in flight; reconnect"));
             }
             Ok((packet, pixels))
@@ -110,7 +120,7 @@ impl RemoteLoginClient {
             Err(error) => { self.close(); Err(error) }
         }
     }
-    pub(crate) fn operation(&mut self, operation: Operation) -> io::Result<(GatewayReply, Vec<u8>)> {
+    pub(crate) fn operation(&mut self, operation: Operation) -> io::Result<(GatewayReply, Option<CapturedImage>)> {
         let request = self.signed_request(operation)?; self.signed_operation(request)
     }
     pub(crate) fn route_status(&self) -> Option<RouteStatus> { transport::status(&self.connection.0) }

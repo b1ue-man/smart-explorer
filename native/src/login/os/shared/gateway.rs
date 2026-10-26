@@ -162,7 +162,7 @@ async fn handle(connection: Connection, local: String, mut epochs: watch::Receiv
             let packet = GatewayReply { request_sequence: sequence, reply, access: None };
             // PNG encoding runs only in this unprivileged gateway, with one
             // bounded independent frame; no baseline survives a context change.
-            let encoded = guarded(&connection, &mut epochs, BROKER_IDLE, response_deadline, wire::prepare_reply(packet, pixels)).await?;
+            let encoded = guarded(&connection, &mut epochs, BROKER_IDLE, response_deadline, wire::prepare_reply(packet, pixels, worker.images()?)).await?;
             guarded(&connection, &mut epochs, BROKER_IDLE, response_deadline, wire::send_prepared(&mut send, &encoded)).await?;
             if stop || encoded.packet.reply.challenge.is_none() {
                 let _ = tokio::time::timeout(BROKER_IDLE, connection.closed()).await;
@@ -173,15 +173,15 @@ async fn handle(connection: Connection, local: String, mut epochs: watch::Receiv
     }).await;
     transport::close(&connection); worker.finish().await; result
 }
-struct Work { request: SignedRequest, answer: oneshot::Sender<io::Result<(Reply, Vec<u8>)>> }
-struct BrokerWorker { commands: Option<mpsc::Sender<Work>>, ready: Option<oneshot::Receiver<io::Result<Challenge>>>, worker: Option<JoinHandle<()>> }
+struct Work { request: SignedRequest, answer: oneshot::Sender<io::Result<(Reply, Option<crate::screen::core::capture_image::CapturedImage>)>> }
+struct BrokerWorker { commands: Option<mpsc::Sender<Work>>, ready: Option<oneshot::Receiver<io::Result<(Challenge, Arc<crate::screen::core::image_admission::ImageAdmission>)>>>, worker: Option<JoinHandle<()>>, images: Option<Arc<crate::screen::core::image_admission::ImageAdmission>> }
 impl BrokerWorker {
     fn start(peer: String, user: String) -> Self {
         let (commands, mut input) = mpsc::channel::<Work>(1);
         let (ready, initial) = oneshot::channel();
         let worker = tokio::task::spawn_blocking(move || {
             let mut client = match GatewayClient::connect(&peer, &user) { Ok(client) => client, Err(error) => { let _ = ready.send(Err(error)); return; } };
-            if ready.send(Ok(client.challenge().clone())).is_err() { return; }
+            if ready.send(Ok((client.challenge().clone(), client.images()))).is_err() { return; }
             while let Some(work) = input.blocking_recv() {
                 // Abandoned queued work must not become a new privileged IPC
                 // request. An operation already handed to the broker is in flight.
@@ -191,16 +191,18 @@ impl BrokerWorker {
             }
             // Dropping the only IPC client ends capture/input at the independent broker.
         });
-        Self { commands: Some(commands), ready: Some(initial), worker: Some(worker) }
+        Self { commands: Some(commands), ready: Some(initial), worker: Some(worker), images: None }
     }
     async fn ready(&mut self) -> io::Result<Challenge> {
-        self.ready.take().ok_or_else(|| denied("broker startup challenge was already consumed"))?.await.map_err(io::Error::other)?
+        let (challenge, images) = self.ready.take().ok_or_else(|| denied("broker startup challenge was already consumed"))?.await.map_err(io::Error::other)??;
+        self.images = Some(images); Ok(challenge)
     }
-    async fn ask(&mut self, request: SignedRequest) -> io::Result<(Reply, Vec<u8>)> {
+    async fn ask(&mut self, request: SignedRequest) -> io::Result<(Reply, Option<crate::screen::core::capture_image::CapturedImage>)> {
         let (answer, received) = oneshot::channel();
         self.commands.as_ref().ok_or_else(|| denied("local broker bridge is closed"))?.send(Work { request, answer }).await.map_err(|_| io::Error::other("local broker bridge stopped"))?;
         received.await.map_err(io::Error::other)?
     }
+    fn images(&self) -> io::Result<Arc<crate::screen::core::image_admission::ImageAdmission>> {self.images.clone().ok_or_else(|| denied("broker image admission is unavailable"))}
     async fn finish(mut self) { self.commands.take(); if let Some(worker) = self.worker.take() { let _ = worker.await; } }
 }
 impl Drop for BrokerWorker { fn drop(&mut self) { self.commands.take(); } }

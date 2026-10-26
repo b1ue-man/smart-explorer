@@ -1,8 +1,9 @@
 //! Token-authenticated login control, followed by bounded binary BGRA chunks.
-use std::io::{self, Read, Write};
+use std::{io::{self, Read, Write}, sync::Arc};
 use serde::{Deserialize, Serialize};
 use crate::login::{Challenge, GatewayAccess, GatewayReply, GatewayTarget, InstallationStatus, Operation};
-use crate::screen::core::{input_model::InputEvent, pixel_convert::FrameSize};
+use crate::screen::core::{input_model::InputEvent, pixel_convert::FrameSize, capture_admission::{SourceKey,CaptureGeneration},
+    capture_image::{CapturedImage,CaptureImageBuilder}, frame_budget::FrameLimits, image_admission::{ImageAdmission,ImageRole}};
 use crate::share::login_transport::RouteStatus;
 pub(crate) const MAX_CONTROL: usize = crate::login::core::model::MAX_CONTROL;
 pub(crate) const MAX_CHUNK: usize = 1024 * 1024;
@@ -75,7 +76,7 @@ pub(crate) struct LoginRelayReply {
     pub packet: Option<GatewayReply>,
 }
 /// Pixel bytes deliberately have no Serialize implementation.
-pub(crate) struct LoginFrame { pub reply: LoginRelayReply, pub pixels: Vec<u8> }
+pub(crate) struct LoginFrame { pub reply: LoginRelayReply, pub image: Option<CapturedImage> }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LoginEnd { pub code: String, pub detail: Option<String> }
@@ -87,30 +88,43 @@ pub(crate) fn write_frame(writer: &mut impl Write, tag: u8, bytes: &[u8]) -> io:
     writer.write_all(bytes)?; writer.flush()
 }
 pub(crate) fn read_frame(reader: &mut impl Read, limit: usize) -> io::Result<(u8, Vec<u8>)> {
+    let (tag, len) = read_header(reader, limit)?;
+    let mut bytes = Vec::new(); bytes.try_reserve_exact(len).map_err(invalid)?;
+    bytes.resize(len, 0); reader.read_exact(&mut bytes)?; Ok((tag, bytes))
+}
+pub(crate) fn read_header(reader: &mut impl Read, limit: usize) -> io::Result<(u8,usize)> {
     let mut head = [0u8; 5]; reader.read_exact(&mut head)?;
     let len = u32::from_be_bytes([head[1], head[2], head[3], head[4]]) as usize;
-    if len > limit { return Err(invalid("login IPC frame exceeds its byte limit")); }
-    let mut bytes = vec![0u8; len]; reader.read_exact(&mut bytes)?; Ok((head[0], bytes))
+    if len > limit {return Err(invalid("login IPC frame exceeds its byte limit"));}
+    Ok((head[0],len))
 }
 pub(crate) fn write_json(writer: &mut impl Write, tag: u8, value: &impl Serialize) -> io::Result<()> {
     write_frame(writer, tag, &serde_json::to_vec(value).map_err(invalid)?)
 }
 pub(crate) fn write_reply(writer: &mut impl Write, frame: &LoginFrame) -> io::Result<()> {
-    validate_reply(&frame.reply, frame.pixels.len())?;
+    let pixels = frame.image.as_ref().map_or(&[][..], |image| image.image().data());
+    validate_reply(&frame.reply, pixels.len())?;
     write_json(writer, REPLY, &frame.reply)?;
-    for chunk in frame.pixels.chunks(MAX_CHUNK) { write_frame(writer, BGRA, chunk)?; }
+    for chunk in pixels.chunks(MAX_CHUNK) {write_frame(writer, BGRA, chunk)?;}
     Ok(())
 }
-pub(crate) fn read_pixels(reader: &mut impl Read, reply: &LoginRelayReply) -> io::Result<Vec<u8>> {
+pub(crate) fn read_pixels(reader: &mut impl Read, reply: &LoginRelayReply,
+    images: &Arc<ImageAdmission>, source: &SourceKey) -> io::Result<Option<CapturedImage>> {
     let bytes = reply.packet.as_ref().map_or(0, |packet| packet.reply.pixel_bytes);
     validate_reply(reply, bytes)?;
-    let mut pixels = Vec::with_capacity(bytes);
-    while pixels.len() < bytes {
-        let (tag, chunk) = read_frame(reader, MAX_CHUNK.min(bytes - pixels.len()))?;
-        if tag != BGRA || chunk.is_empty() { return Err(invalid("unexpected or empty login BGRA chunk")); }
-        pixels.extend_from_slice(&chunk);
+    if bytes == 0 {return Ok(None);}
+    let packet = reply.packet.as_ref().ok_or_else(|| invalid("login pixels have no reply"))?;
+    let size = FrameSize::new(packet.reply.width,packet.reply.height);
+    let mut image = CaptureImageBuilder::new_local(size,FrameLimits::LEGACY,images,ImageRole::ViewerInput,
+        source.clone(),CaptureGeneration::new(reply.sequence))?;
+    let mut offset = 0usize;
+    while offset < bytes {
+        let (tag,len) = read_header(reader,MAX_CHUNK.min(bytes-offset))?;
+        if tag != BGRA || len == 0 {return Err(invalid("unexpected or empty login BGRA chunk"));}
+        reader.read_exact(&mut image.pixels_mut()[offset..offset+len])?;
+        offset += len;
     }
-    Ok(pixels)
+    Ok(Some(image.freeze()))
 }
 pub(crate) fn validate_reply(reply: &LoginRelayReply, bytes: usize) -> io::Result<()> {
     if let Some(packet) = &reply.packet {
