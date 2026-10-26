@@ -2,6 +2,9 @@
 use std::path::{Component, Path, PathBuf};
 use std::os::unix::fs::MetadataExt;
 use crate::screen::core::frame_memory::MemoryFacts;
+pub(super) fn preview_admission()->crate::screen::core::frame_budget::PreviewAdmission {
+    crate::screen::core::frame_budget::PreviewAdmission::FullContract
+}
 pub(super) fn ceiling(facts: Option<MemoryFacts>) -> crate::screen::core::frame_memory::CapacityCeiling {
     crate::screen::core::frame_memory::CapacityCeiling::desktop(facts)
 }

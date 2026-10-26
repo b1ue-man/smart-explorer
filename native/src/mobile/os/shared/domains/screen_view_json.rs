@@ -68,16 +68,23 @@ pub(super) fn event_value(session: u64, kind: &str, fields: Value) -> Value {
 
 /// The fields of the `accepted` event.
 pub(super) fn accepted_fields(hello: &ScreenHelloOk, path: &str) -> Value {
+    accepted_fields_with_limits(hello,path,None)
+}
+pub(super) fn accepted_fields_with_limits(hello:&ScreenHelloOk,path:&str,
+    local:Option<crate::screen::core::frame_budget::FrameLimits>)->Value {
     let mut fields = camel(serde_json::to_value(hello).unwrap_or(Value::Null));
     if let Some(map) = fields.as_object_mut() {
         map.insert("path".into(), json!(path));
-        let limits=hello.frame_contract.map_or(crate::screen::core::frame_budget::FrameLimits::LEGACY,|c|c.limits);
-        if let Ok(budget)=crate::screen::core::frame_size_caps::PacketBudget::for_contract(hello.frame_contract) {
+        let limits=hello.frame_contract.map(|contract|contract.limits).or(local)
+            .unwrap_or(crate::screen::core::frame_budget::FrameLimits::LEGACY);
+        if let Ok(budget)=crate::screen::core::frame_size_caps::PacketBudget::for_receive(hello.frame_contract,local) {
             map.insert("bufferBudget".into(),json!({"workingBytes":limits.working_bytes,
                 "imageBytes":budget.raw_bytes-8,"recordBytes":budget.record_bytes,
                 "packetBytes":budget.encoded_bytes,"pullBytes":budget.pull_bytes,
                 "recordOverheadBytes":crate::screen::core::frame_size_caps::RECORD_BUFFER_OVERHEAD,
-                "legacy":hello.frame_contract.is_none()}));
+                "legacy":hello.frame_contract.is_none(),
+                "boundedLegacy":hello.frame_contract.is_none() && local.is_some_and(|limits|
+                    limits.working_bytes<crate::screen::core::frame_budget::MAX_WORKING_BYTES)}));
         }
     }
     fields

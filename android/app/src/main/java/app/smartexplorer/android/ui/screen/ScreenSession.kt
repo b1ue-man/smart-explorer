@@ -89,7 +89,8 @@ data class ScreenSessionState(
             frameContract = ((event.body["frameContract"] ?: event.body["frame_contract"]) as? JsonObject)?.get("version")?.jsonPrimitive?.intOrNull == 2,
             bufferBudget = event.body["bufferBudget"]?.let {
                 runCatching {screenJson.decodeFromJsonElement<ScreenBufferBudget>(it)}.getOrNull()
-            } ?: if((event.body["frameContract"] ?: event.body["frame_contract"]) !is JsonObject) ScreenBufferBudget.LEGACY else null,
+            } ?: if(event.body["bufferBudget"]==null &&
+                (event.body["frameContract"] ?: event.body["frame_contract"]) !is JsonObject) ScreenBufferBudget.LEGACY else null,
             pending = null,
             path = event.path,
             platform = event.platform,

@@ -170,6 +170,9 @@ pub(crate) enum RelayHello {
         hello: crate::screen::core::wire_hello::ScreenHelloOk,
         /// `direct` or `relay`.
         path: String,
+        /// Private daemon allocation evidence; absent from the peer HELLO_OK.
+        #[serde(default,skip_serializing_if="Option::is_none")]
+        local_limits:Option<crate::screen::core::frame_budget::FrameLimits>,
     },
 }
 
@@ -318,6 +321,23 @@ pub(crate) fn read_relay_budgeted(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn batches_task_b6_session_budget_private_relay_keeps_v1_and_rejects_oversize_before_read() {
+        use crate::screen::core::{frame_budget::legacy_limits,frame_size_caps::PacketBudget};
+        let local=legacy_limits(24*1024*1024,None).unwrap();
+        let hello=serde_json::from_value(serde_json::json!({"authorization":{"view":"allow","control":"allow"},
+            "platform":"windows","approval":"not_required"})).unwrap();
+        let accepted=RelayHello::Accepted {hello,path:"direct".into(),local_limits:Some(local)};
+        let bytes=serde_json::to_vec(&accepted).unwrap();let accepted:RelayHello=serde_json::from_slice(&bytes).unwrap();
+        let RelayHello::Accepted {hello,local_limits,..}=accepted else {panic!("not Accepted")};
+        assert!(hello.frame_contract.is_none());assert_eq!(local_limits,Some(local));
+        let packet=PacketBudget::for_receive(hello.frame_contract,local_limits).unwrap();
+        let bound=packet.record_bytes+GOP_HEADER_BYTES+RECORD_HEADER_BYTES;
+        let mut bytes=vec![RELAY_RECORD];bytes.extend_from_slice(&((bound+1) as u32).to_be_bytes());
+        let error=read_relay_budgeted(&mut bytes.as_slice(),usize::MAX,bound).unwrap_err();
+        assert_eq!(error.kind(),std::io::ErrorKind::InvalidData,"no payload was supplied");
+    }
 
     #[test]
     fn batches_task_b6_extended_4k_ipc_contract_is_complete() {

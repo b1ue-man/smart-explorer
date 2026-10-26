@@ -163,7 +163,7 @@ Stand SCR-M7 (U25), Desktop (Windows und Linux). Der Betrachter ist ein eigener 
 - Kacheln: Der Kern setzt die Kachelbilder zu einem fertigen Bild in der Bytefolge R, G, B, A zusammen (`viewer_sink.rs:3-4`, `:310`, `bgra_to_rgba` in `:341`). Die App zeichnet sie als Bitmap (`ScreenDecoder.kt:33-34`).
 - Stau: Ist das älteste Bild der Warteschlange älter als `STALL_US`, leert der Kern die Warteschlange und fordert ein Schlüsselbild an (`viewer_sink.rs:6-9`).
 - Eingabe (`A/ui/screen/ScreenInputMapper.kt:14-22`): Am Desktop-Host gilt: Tippen ist ein Linksklick, Halten ohne Bewegung ein Rechtsklick, Ziehen mit einem Finger zieht mit der linken Taste, zwei Finger bewegt als Rad (nach oben scrollt nach unten), Kneifen zoomt ohne Eingabe. Am Android-Host ist jeder Finger (höchstens 10, `ScreenInputMapper.kt:271`) ein Berührungsereignis. Tastenereignisse an Android-Hosts gibt es nicht (Abschnitt 7).
-- Gruppenansicht: `A/ui/screen/ScreenTilesScreen.kt` mit den Vorschaukacheln `ScreenPreviewTile.kt`.
+- Gruppenansicht: `A/ui/screen/ScreenTilesScreen.kt` mit den Vorschaukacheln `ScreenPreviewTile.kt`. Jede Vorschau reserviert ihren geometriebezogenen Bild-/Paketbedarf innerhalb des gemeinsamen Prozessbudgets. Das Antippen öffnet eine eigene Vollansichtssitzung mit deren tatsächlichem Budget; die kleine unveränderliche Vorschauvereinbarung begrenzt dadurch nicht die Vollansicht. Schließen führt zur bestehenden Gruppenkachel zurück.
 
 ## 9. Android als Host
 
@@ -202,15 +202,27 @@ Stand SCR-M8 (U27). Der Host läuft im Dienst `A/screen/ScreenHostService.kt`. D
 | Qualitätswechsel | `N/screen/core/host_quality.rs` hält Vollbild- und Vorschaugrößen/-raten getrennt. Fehlende optionale Größen-/FPS-Felder behalten die Wahl des adressierten Modus. `lossless` wählt Tiles; `sharpness` begrenzt die Rate. Ein tatsächlicher Codecfehler bleibt als sichtbarer verlustfreier Rückfall bestehen. |
 | Hybridregionen und Ausgabeidentität | `frame_protocol.rs`, `frame_reference.rs`, `viewer_reconstruct.rs`: Begin/Video/Moves/Dirty/Commit beziehen sich auf denselben Captureframe. MFT-/OpenH264-Ausgaben tragen ihre tatsächliche Eingabeidentität. Androids Encoder und Hybriddecoder bestätigen reale Einzelinputausgabe; ein ungeeigneter Codec führt zum expliziten verlustfreien Rückfall. |
 | Darstellungsbeleg | Desktop `screen_presented.rs` und Android `ScreenPresentedFrame` bestätigen die tatsächlich konsumierte GOP-/Frame-/Epochenidentität. Empfang allein schaltet Eingabe nicht frei. Familienansichten binden zusätzlich die Layoutrevision. |
-| Größen- und Speicherangebot | `frame_budget.rs` und `ScreenFrameLimits.kt` binden v2-Grenzen vor Paket-, Queue-, Pull- und Decoderallokationen. Full und Preview teilen einen sitzungseigenen Skalierungsbesitzer; Zwischenpuffer und gehaltene Ausgaben werden vor der Allokation gegen das angenommene Budget zugelassen. Die statische Bilanz gilt für lebende Produktpuffer; Prozess-RSS, Codec-/Treiberpuffer und GC sind kein Bestandteil dieser Zusage. Speicher- und Geräteverhalten wurden noch nicht ausgeführt. |
+| Größen- und Speicherangebot | `frame_budget.rs`, `session_admission.rs` und `ScreenFrameLimits.kt` binden tatsächliche Sessionbudgets vor Paket-, Queue-, Pull- und Decoderallokationen. Android-Vorschauen erhalten einen geometriebezogenen Teilbetrag der gemeinsamen Prozessgrenze. Explizite kleinere Legacybudgets behalten v1 auf dem Netzwerk und begrenzen lokale Bild-, Record-, JNI- und Skalierungsbesitzer. Full und Preview teilen innerhalb einer Sitzung ihren Skalierungsbesitzer; Zwischenpuffer und gehaltene Ausgaben werden vor der Allokation gegen das angenommene Budget zugelassen. Die statische Bilanz gilt für lebende Produktpuffer; Prozess-RSS, Codec-/Treiberpuffer und GC sind kein Bestandteil dieser Zusage. Speicher- und Geräteverhalten wurden noch nicht ausgeführt. |
 
 Die v2-Klasse erlaubt im aktuellen Quellstand bis zu 864 MiB bei unveränderter
 Reserve von 24 Bildäquivalenten. Windows und Linux begrenzen neue Zusagen durch
 physische, Commit- und Adressraumfakten sowie die bereits gezählten Sitzungen.
 Das ermöglicht ein natives 3840×2160-Angebot bei ausreichenden Ressourcen;
 fehlende Fakten, alte Gegenstellen und kleinere Android-Angebote erlauben keine
-pauschale Erweiterung. Legacy-/RAW-Grenzen bleiben bei 512 MiB. Eine Zusage ist
+pauschale Erweiterung. Die Legacy-/RAW-Allokationsklasse bleibt auf 512 MiB
+begrenzt; eine Legacyverbindung verlangt diesen Betrag nicht pauschal. Kleinere
+Leases begrenzen die tatsächlich darstellbare Geometrie und ihre Paketbesitzer.
+Eine Zusage ist
 interne Ressourcenrechnung, keine physische Reservierung gegen fremde Prozesse.
+
+Beim Android-Captureneustart endet die alte Allokationsbefugnis vor der neuen
+Zulassung. Tatsächlich noch lebende Slices bleiben dabei gebucht. Ein
+Konfigurationswechsel beendet die alten Java-Producer; ein ausstehender
+synthetischer Abschluss setzt die aktuelle Konfiguration erst nach dem echten
+Retirementcallback fort. Der eigene statische Fixzyklus und die vorbereiteten
+Remote-Fälle stehen in
+[`fix-regression-screenbudget.md`](../plaene/2026-10-24-batches/fix-regression-screenbudget.md).
+Diese Quelländerung ist noch kein ausgeführter Pause-/Resume- oder Gerätenachweis.
 
 Die aktuelle Renderergrenze verwendet konkrete `RendererOwner`-/`RenderSlot`-
 Besitzer für CPU-/YUV-Uploads, Renderflächen und ausstehendes Retirement. Der

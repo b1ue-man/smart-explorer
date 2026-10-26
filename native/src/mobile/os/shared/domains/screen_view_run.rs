@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use super::json_shapes::{accepted_fields, camel, event_value, split_refusal, stats_fields};
+use super::json_shapes::{accepted_fields_with_limits, camel, event_value, split_refusal, stats_fields};
 use crate::daemon::{StreamEvent, StreamRequest};
 use crate::mobile::{ApiError, Runtime};
 use crate::screen::core::gop_stream::now_us;
@@ -56,6 +56,7 @@ pub(super) struct ViewSession {
     pub family: Mutex<Option<crate::screen::core::family_viewer::FamilyViewer>>,
     pub family_presented: AtomicBool,
     family_picture: Mutex<Option<(u64,u64)>>,
+    local_limits:Mutex<Option<crate::screen::core::frame_budget::FrameLimits>>,
 }
 
 impl ViewSession {
@@ -140,7 +141,7 @@ fn new_session(mode: SessionMode) -> Arc<ViewSession> {
         icons_supported:AtomicBool::new(false),
         presented_supported: AtomicBool::new(false),
         latest_gop: AtomicU64::new(0),
-        family:Mutex::new(None),family_presented:AtomicBool::new(false),family_picture:Mutex::new(None),
+        family:Mutex::new(None),family_presented:AtomicBool::new(false),family_picture:Mutex::new(None),local_limits:Mutex::new(None),
     });
     lock(&SESSIONS).insert(id, session.clone());
     session
@@ -216,7 +217,13 @@ fn run(session: &Arc<ViewSession>, peer: PeerOpenTarget, request: StreamRequest,
     let (code, detail) = loop {
         match stream.next_event() {
             Ok(StreamEvent::End(end)) => break (end.code, end.detail),
-            Ok(event) => on_event(session, &mut sink, &mut encoder, own, event),
+            Ok(event) => {
+                if matches!(&event,StreamEvent::Accepted {..}) {
+                    let local=stream.local_frame_limits();
+                    *lock(&session.local_limits)=local;sink.bind_local_limits(local);
+                }
+                on_event(session,&mut sink,&mut encoder,own,event);
+            },
             Err(_) => break ("connection_lost".to_string(), None),
         }
     };
@@ -251,7 +258,7 @@ fn on_event(
             let allowed = session.mode == SessionMode::Control
                 && hello.authorization.control != CapabilityDecision::Off;
             session.control_allowed.store(allowed, Ordering::SeqCst);
-            emit(id, "accepted", accepted_fields(&hello, &path));
+            emit(id, "accepted", accepted_fields_with_limits(&hello,&path,*lock(&session.local_limits)));
         }
         StreamEvent::Host(frame) => on_host_frame(session, encoder, own, frame),
         StreamEvent::Record { header, record } => {

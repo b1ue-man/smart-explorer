@@ -53,14 +53,14 @@ impl CaptureSession {
         if state.current.is_none() {return Err(io::Error::new(io::ErrorKind::WouldBlock, "Android capture awaits host grant"));}
         let previous = state.output.as_ref().ok_or_else(|| io::Error::other("Android capture output is pending"))?;
         let codec = if kind <= PROJECTION_TILES || kind==SYNTHETIC_PIXELS {HostCodecPlan::Tiles} else {HostCodecPlan::OpenH264};
-        let limits = previous.contract().frame_contract().map_or(
-            crate::screen::core::frame_budget::FrameLimits::LEGACY, |contract| contract.limits);
-        let output_size = if kind == ACCESSIBILITY {limits.fit(previous.size())} else {size};
-        let output = HostOutputPlan::new(previous.contract(), output_size, codec)?;
+        let limits=previous.limits();
+        let raw=matches!(kind,ACCESSIBILITY|PROJECTION_TILES|SYNTHETIC_PIXELS);
+        let output_size=if raw {limits.fit(previous.size())} else {size};
+        let output=previous.reconfigure(output_size,codec)?;
         if !state.begun {
             let candidate=plan(&state.source,state.generation,size,kind,&output)?;
             if let Some(current)=state.current.as_ref() {
-                if candidate.peak_bytes()<=current.plan().peak_bytes()
+                if !current.is_retired()? && candidate.peak_bytes()<=current.plan().peak_bytes()
                     && candidate.owner_limits().iter().zip(current.plan().owner_limits()).all(|(wanted,held)|*wanted<=held) {
                     state.begun=true;state.output=Some(output);
                     return Ok(state.generation.value());
@@ -69,10 +69,16 @@ impl CaptureSession {
         }
         let generation = state.generation.next()?;
         let plan = plan(&state.source, generation, size, kind, &output)?;
+        // End the previous allocation authority before funding Q. Retirement
+        // releases only unused plan capacity: every live Kotlin/native slice
+        // keeps its exact bytes until that resource actually finishes. Keeping
+        // current on failure also keeps the same next generation retryable.
+        if let Some(current)=state.current.as_ref() {
+            if !current.is_member() {current.retire()?;}
+        }
         let grant = state.admission.authority().approve(plan)?;
-        // A rejected candidate preserves the previous generation. After the
-        // successful handover, its held resources remain charged individually.
-        retire_grant(state.current.take());
+        // A rejected candidate preserves the generation; real old owners stay
+        // funded independently after a successful replacement as well.
         state.generation = generation;
         state.output = Some(output);
         state.current = Some(grant);
@@ -89,29 +95,51 @@ impl CaptureSession {
     pub(crate) fn current(&self) -> Option<CaptureGrant> {
         self.state.lock().ok()?.as_ref()?.current.clone()
     }
+    /// Activity is control metadata. A retired image authority cannot create
+    /// a new slice; its exact nine-byte reply remains fundable in the same W/X
+    /// bank while real old image owners are still completing.
+    pub(crate) fn activity_ack(&self,data:&[u8])->io::Result<crate::screen::core::capture_bytes::AdmittedBytes> {
+        if data.len()!=9 {return Err(io::Error::new(io::ErrorKind::InvalidInput,"invalid activity acknowledgement"));}
+        let state=self.state.lock().map_err(|_|io::Error::other("Android capture state poisoned"))?;
+        let state=state.as_ref().ok_or_else(||io::Error::other("Android capture has no session authority"))?;
+        let image=state.current.as_ref().ok_or_else(||io::Error::other("Android capture awaits host grant"))?;
+        if !image.is_retired()? {
+            return crate::screen::core::capture_bytes::AdmittedBytes::copy(image,CaptureOwner::Transport,data);
+        }
+        let mut plan=CapturePlan::new(state.source.clone(),state.generation);
+        plan.add_bytes(CaptureOwner::Transport,9,1,CapturePhases::ALL)?;
+        let control=state.admission.authority().approve(plan)?;
+        crate::screen::core::capture_bytes::AdmittedBytes::copy(&control,CaptureOwner::Transport,data)
+    }
     pub(crate) fn synthetic_snapshot(&self,size:FrameSize)->io::Result<CaptureGrant> {
         let mut guard=self.state.lock().map_err(|_|io::Error::other("Android capture state poisoned"))?;
         let state=guard.as_mut().ok_or_else(||io::Error::other("Android capture has no authority"))?;
         let current=state.output.as_ref().ok_or_else(||io::Error::other("Android capture output is pending"))?;
-        let limits=current.contract().frame_contract().map_or(
-            crate::screen::core::frame_budget::FrameLimits::LEGACY, |contract|contract.limits);
-        let output=HostOutputPlan::new(current.contract(),limits.fit(current.size()),HostCodecPlan::Tiles)?;
+        let limits=current.limits();
+        let output=current.reconfigure(limits.fit(current.size()),HostCodecPlan::Tiles)?;
         let candidate=plan(&state.source,state.generation,size,SYNTHETIC_PIXELS,&output)?;
         if let Some(current)=state.current.as_ref() {
-            if candidate.peak_bytes()<=current.plan().peak_bytes()
+            if !current.is_retired()? && candidate.peak_bytes()<=current.plan().peak_bytes()
                 && candidate.owner_limits().iter().zip(current.plan().owner_limits()).all(|(wanted,held)|*wanted<=held) {
                 return Ok(current.clone());
             }
         }
         let generation=state.generation.next()?;
+        let replace=match state.current.as_ref() {
+            Some(current)=>current.is_retired()? || current.plan().owner_limits()[CaptureOwner::NativeSurface as usize]==0,
+            None=>false,
+        };
+        if replace {
+            if let Some(current)=state.current.as_ref() {
+                if !current.is_member() {current.retire()?;}
+            }
+        }
         let grant=state.admission.authority().approve(plan(&state.source,generation,size,SYNTHETIC_PIXELS,&output)?)?;
         state.generation=generation;
         // A native synthetic tiles source has no Kotlin resource generation.
-        // Cache its complete plan, but leave an active surface encoder's grant
-        // untouched while a separate RAW snapshot is consumed.
-        if state.current.as_ref().is_some_and(|current|
-            current.plan().owner_limits()[CaptureOwner::NativeSurface as usize]==0) {
-            retire_grant(state.current.take());
+        // Cache its complete plan; a retired surface authority is replaceable
+        // as well. An active surface grant stays intact for parallel snapshots.
+        if replace {
             state.current=Some(grant.clone());state.output=Some(output);
         }
         Ok(grant)

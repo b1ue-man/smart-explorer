@@ -18,7 +18,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use super::gop_stream::{
-    accept_picture_streams_with_memory, now_us, picture_channel, PictureEvent, VIEWER_UNI_STREAMS,
+    accept_picture_streams_admitted, now_us, picture_channel, PictureEvent, VIEWER_UNI_STREAMS,
 };
 use super::negotiate::CodecOffer;
 use super::pixel_convert::FrameSize;
@@ -131,6 +131,8 @@ pub(crate) struct ViewerSession {
     pub pictures: mpsc::Receiver<PictureEvent>,
     tasks: Vec<JoinHandle<()>>,
     pub(crate) memory: super::frame_memory::MemoryHold,
+    /// Local allocation evidence; never serialized as a remote frame contract.
+    pub(crate) local_limits: Option<super::frame_budget::FrameLimits>,
 }
 
 impl ViewerSession {
@@ -189,7 +191,7 @@ async fn handshake_for(
         connection.close(VIEWER_CLOSE, b"screen protocol version");
         return Err(ViewerError::Unsupported);
     }
-    let (mut hello,memory) = build(&server)?;
+    let (mut hello,mut memory) = build(&server)?;
     hello.frame_capabilities=hello.frame_capabilities.map(|caps|caps.for_server(server.frame_memory_class)).transpose()?;
     hello.family_version = server.family_version.filter(|version|*version==super::family_protocol::FAMILY_PROTOCOL);
     if hello.source.as_ref().is_some_and(|source|super::family_protocol::selector(source).is_some()) && hello.family_version.is_none() {
@@ -202,7 +204,22 @@ async fn handshake_for(
         hello.source = Some(SourceId::Synthetic);
         hello.frame_capabilities = None;
     }
-    connection.set_max_concurrent_uni_streams(VarInt::from_u32(VIEWER_UNI_STREAMS));
+    if !metadata && server.frame_memory_class.is_none() {
+        if let Some(lease)=&memory {
+            let limits=super::frame_budget::legacy_limits(lease.bytes(),hello.frame_capabilities.map(|caps|caps.texture_size))?;
+            // Existing v1 hosts honor display_size but cannot interpret v2's
+            // memory offer. Ask them for pixels the actual local lease can hold.
+            let mut wanted=limits.fit(hello.display_size.unwrap_or(FrameSize::MAX));
+            if limits.max_pixels<256 || limits.max_size.width<16 || limits.max_size.height<16 {
+                hello.decoders.retain(|offer|offer.codec!=super::negotiate::CodecKind::H264);
+            } else if hello.decoders.iter().any(|offer|offer.codec==super::negotiate::CodecKind::H264) {
+                wanted=super::frame_size_caps::fit_macroblocks(wanted,limits.max_pixels/256);
+            }
+            hello.display_size=Some(wanted);
+        }
+    }
+    let probe=hello.mode==SessionMode::Probe;
+    connection.set_max_concurrent_uni_streams(VarInt::from_u32(if probe {0} else {VIEWER_UNI_STREAMS}));
     send_client_hello(&mut send, &hello).await?;
     let accepted = loop {
         match recv_hello_reply(&mut recv).await? {
@@ -214,9 +231,6 @@ async fn handshake_for(
             }
         }
     };
-    if !metadata && accepted.frame_contract.is_none() && memory.as_ref().is_some_and(|lease|lease.bytes()<super::frame_budget::MAX_WORKING_BYTES) {
-        return Err(ViewerError::Io(io::Error::other("legacy host requires the complete legacy memory budget")));
-    }
     if accepted.icon_version.is_some() && accepted.icon_version!=hello.icon_version {
         return Err(ViewerError::Io(io::Error::other("host enabled an unoffered icon contract")));
     }
@@ -232,10 +246,17 @@ async fn handshake_for(
         if contract.version != offered.version || (contract.hybrid_regions && !offered.hybrid_regions)
             || contract.limits.max_size.width > offered.frames.max_size.width.min(offered.texture_size.width)
             || contract.limits.max_size.height > offered.frames.max_size.height.min(offered.texture_size.height)
-            || contract.limits.max_pixels > offered.frames.max_pixels || contract.limits.working_bytes > offered.frames.working_bytes {
+            || contract.limits.max_pixels > offered.frames.max_pixels || contract.limits.working_bytes > offered.frames.working_bytes
+            || memory.as_ref().is_some_and(|lease|contract.limits.working_bytes>lease.bytes()) {
             return Err(ViewerError::Io(io::Error::other("host frame contract exceeds viewer's capability evidence")));
         }
+        if let Some(lease)=memory.as_mut().and_then(std::sync::Arc::get_mut) {
+            lease.release_to(contract.limits.working_bytes);
+        }
     }
+    let local_limits=if metadata {None} else if let Some(contract)=accepted.frame_contract {Some(contract.limits)}
+        else {memory.as_ref().map(|lease|super::frame_budget::legacy_limits(lease.bytes(),
+            hello.frame_capabilities.map(|caps|caps.texture_size))).transpose()?};
     let (control, mut outgoing) = mpsc::channel::<ViewerFrame>(CONTROL_QUEUE);
     let (host_tx, host) = mpsc::channel(CONTROL_QUEUE);
     let (pictures_tx, pictures) = picture_channel();
@@ -274,12 +295,10 @@ async fn handshake_for(
             }
         }
     });
-    let streams = tokio::spawn(accept_picture_streams_with_memory(
-        connection.clone(),
-        pictures_tx,
-        control.clone(),
-        accepted.frame_contract, memory.clone(),
-    ));
+    let streams=if probe {drop(pictures_tx);tokio::spawn(async {})} else {
+        tokio::spawn(accept_picture_streams_admitted(connection.clone(),pictures_tx,control.clone(),
+            accepted.frame_contract,memory.clone(),local_limits))
+    };
     let pings = control.clone();
     let clock = tokio::spawn(async move {
         let mut interval = tokio::time::interval(PING_INTERVAL);
@@ -304,6 +323,7 @@ async fn handshake_for(
         pictures,
         tasks: vec![writer, reader, streams, clock],
         memory,
+        local_limits,
     })
 }
 

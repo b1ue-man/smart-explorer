@@ -8,6 +8,10 @@ use serde::{Deserialize, Serialize};
 use super::pixel_convert::FrameSize;
 use super::wire::invalid;
 
+#[path="session_admission.rs"]
+mod session_admission;
+pub(crate) use session_admission::{legacy_limits,preview_capabilities,requested_bytes,PreviewAdmission};
+
 pub(crate) const FRAME_PROTOCOL: u8 = 2;
 /// Wire coordinates are u16; the implementation admits only measured texture offers.
 pub(crate) const MAX_RESOURCE_SIDE: u32 = 16_384;

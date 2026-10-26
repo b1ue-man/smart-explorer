@@ -209,6 +209,13 @@ impl Pipeline {
     }
 
     /// The source within the bounds of the mode and of the codec.
+    fn output_limits(&self)->io::Result<super::frame_budget::FrameLimits> {
+        match self.frame_contract {
+            Some(contract)=>Ok(contract.limits),
+            None=>self.admission.as_ref().map(|admission|
+                super::frame_budget::legacy_limits(admission.working_bytes(),None)).unwrap_or(Ok(super::frame_budget::FrameLimits::LEGACY)),
+        }
+    }
     fn fitted_size(&self) -> FrameSize {
         let Some(stage) = &self.stage else {
             return self.quality.size;
@@ -219,8 +226,8 @@ impl Pipeline {
             self.bounds.height.min(max.height),
         );
         let size = stage.source.size().fit_within(limit);
-        let mut limits = self.frame_contract.map_or(super::frame_budget::FrameLimits::LEGACY, |c| c.limits)
-            .intersect(stage.source.frame_limits_for_contract(self.frame_contract));
+        let Ok(limits)=self.output_limits() else {return FrameSize::new(0,0);};
+        let mut limits=limits.intersect(stage.source.frame_limits_for_contract(self.frame_contract));
         if self.frame_contract.is_some() {
             limits.max_pixels=limits.max_pixels.min(limits.working_bytes/super::frame_budget::VERSIONED_WORKING_IMAGES/4);
         }

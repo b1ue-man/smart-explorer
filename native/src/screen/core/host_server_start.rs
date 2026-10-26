@@ -21,12 +21,9 @@ pub(super) async fn prepare(context:&HostContext,principal:&ProvenPrincipal,hell
     let session=super::super::family_protocol::token().map_err(Failure::Capture)?;
     let facts=backend.memory_facts();
     let ceiling=backend.capacity_ceiling(facts);
-    let requested=backend.session_memory_ceiling().min(hello.frame_capabilities
+    let offered=backend.session_memory_ceiling().min(hello.frame_capabilities
         .map_or(super::super::frame_budget::MAX_WORKING_BYTES,|caps|caps.frames.working_bytes));
-    let admission=super::super::frame_memory::admit_session(facts,ceiling,requested,&session).map_err(Failure::Capture)?;
-    if hello.frame_capabilities.is_none() && admission.working_bytes()!=super::super::frame_budget::MAX_WORKING_BYTES {
-        return Err(Failure::Capture(io::Error::other("insufficient memory for legacy screen session")));
-    }
+    let admission=super::super::frame_memory::admit_session(facts,ceiling,offered,&session).map_err(Failure::Capture)?;
     let mut stop=handle.stop_signal();
     if stop.borrow().is_some() {return Err(Failure::Cancelled);}
     let prepared={
@@ -55,7 +52,8 @@ pub(super) async fn prepare(context:&HostContext,principal:&ProvenPrincipal,hell
     }
     let choice=choices.first().copied().ok_or(Failure::Encoder)?;
     admission.bind_contract(contract).map_err(Failure::Capture)?;
-    let limits=contract.map_or(super::super::frame_budget::FrameLimits::LEGACY,|contract|contract.limits);
+    let limits=match contract {Some(contract)=>contract.limits,None=>
+        super::super::frame_budget::legacy_limits(admission.working_bytes(),None).map_err(Failure::Capture)?};
     // This is the encoder envelope, not a fabricated native source size.
     let size=limits.fit(limits.max_size);
     let codec=if choice.codec==super::super::negotiate::CodecKind::Tiles {HostCodecPlan::Tiles}
@@ -63,6 +61,7 @@ pub(super) async fn prepare(context:&HostContext,principal:&ProvenPrincipal,hell
             HostCodecPlan::MediaFoundation{output_buffer_bytes:64*1024*1024}
         } else {HostCodecPlan::OpenH264};
     let output=HostOutputPlan::new(contract.map_or(HostContract::Legacy,HostContract::Versioned),size,codec).map_err(Failure::Capture)?;
+    let output=if contract.is_none() {output.with_legacy_limits(limits).map_err(Failure::Capture)?} else {output};
     let allowed={let context=context.clone();let principal=principal.clone();let control=hello.mode==SessionMode::Control;
         Arc::new(move||super::super::family_listing::admitted(&context,&principal,control))};
     let source=super::super::host_admission::pending(prepared,admission.clone(),output,allowed);

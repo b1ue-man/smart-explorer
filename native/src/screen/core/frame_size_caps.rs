@@ -123,6 +123,41 @@ pub(crate) struct PacketBudget {
 pub(crate) const RECORD_BUFFER_OVERHEAD:usize=
     super::wire_binary::GOP_HEADER_BYTES+super::wire_binary::RECORD_HEADER_BYTES+1026+32;
 impl PacketBudget {
+    /// Private receiving bounds do not turn a v1 stream into a v2 contract.
+    pub(crate) fn for_receive(contract:Option<super::frame_budget::FrameContract>,
+        local:Option<super::frame_budget::FrameLimits>)->io::Result<Self> {
+        match (contract,local) {
+            (Some(contract),_)=>Self::for_contract(Some(contract)),
+            (None,Some(limits)) if limits.working_bytes<super::frame_budget::MAX_WORKING_BYTES=>{
+                let (budget,peak)=Self::legacy_memory(limits)?;
+                if peak>limits.working_bytes {return Err(invalid("legacy product buffers exceed admitted working memory"));}
+                Ok(budget)
+            },
+            (None,Some(limits))=>Self::for_limits_mode(limits,true),
+            (None,None)=>Self::for_contract(None),
+        }
+    }
+    /// v1 cannot negotiate repacking. Its old sender may put the entire tile
+    /// picture in one record. Charge that record at every existing queue slot.
+    pub(crate) fn legacy_memory(limits:super::frame_budget::FrameLimits)->io::Result<(Self,u64)> {
+        limits.validate()?;
+        let pixels=limits.max_pixels.min(limits.max_size.pixels());
+        let image=pixels.checked_mul(4).ok_or_else(||invalid("legacy image size overflow"))?;
+        let columns=u64::from(limits.max_size.width.div_ceil(64));
+        let rows=u64::from(limits.max_size.height.div_ceil(64));
+        let tiles=(pixels.div_ceil(4096)+columns+rows+1).min(columns*rows).min(pixels);
+        let tiles_bytes=image.checked_add(tiles*13+2).ok_or_else(||invalid("legacy tile packet overflow"))?;
+        let record=tiles_bytes.max(super::tiles_codec::MIN_RECORD_LIMIT as u64)
+            .min(super::wire_binary::MAX_RECORD_BYTES as u64);
+        let encoded=tiles_bytes.max(record).checked_add((tiles+4)*super::wire_binary::RECORD_HEADER_BYTES as u64+1024)
+            .ok_or_else(||invalid("legacy frame packet overflow"))?;
+        // Same product owners as the modern receiver; v1 keeps its larger R.
+        let peak=image.checked_mul(20).and_then(|n|n.checked_add((record+RECORD_BUFFER_OVERHEAD as u64)*32))
+            .and_then(|n|n.checked_add(encoded-image)).ok_or_else(||invalid("legacy working memory overflow"))?;
+        let n=|bytes:u64|usize::try_from(bytes).map_err(|_|invalid("legacy packet exceeds address space"));
+        Ok((Self {raw_bytes:n(image+8)?,records:n(tiles+4)?,encoded_bytes:n(encoded)?,
+            record_bytes:n(record)?,pull_bytes:n(image.max(record)+32)?},peak.max(image*24)))
+    }
     pub(crate) fn for_limits(limits:super::frame_budget::FrameLimits)->io::Result<Self> {
         // Bare limits describe source/private legacy buffers, not a v2 grant.
         Self::for_limits_mode(limits,true)

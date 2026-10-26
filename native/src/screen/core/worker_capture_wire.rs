@@ -21,17 +21,21 @@ pub(crate) const OWNED_REFERENCE: u8=45;
 pub(crate) const REDUCED: u8=46;
 
 #[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]
-pub(crate) struct OutputWire {pub contract:Option<FrameContract>,pub size:FrameSize,pub codec:u8,pub mf_buffer:u64}
+pub(crate) struct OutputWire {pub contract:Option<FrameContract>,pub size:FrameSize,pub codec:u8,pub mf_buffer:u64,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    pub local_limits:Option<FrameLimits>,
+}
 impl OutputWire {
     pub(crate) fn from_plan(plan:&HostOutputPlan)->Self {
         let (codec,mf_buffer)=match plan.codec(){HostCodecPlan::Tiles=>(0,0),HostCodecPlan::OpenH264=>(1,0),
             HostCodecPlan::MediaFoundation{output_buffer_bytes}=>(2,output_buffer_bytes)};
-        Self{contract:plan.contract().frame_contract(),size:plan.size(),codec,mf_buffer}
+        Self{contract:plan.contract().frame_contract(),size:plan.size(),codec,mf_buffer,local_limits:plan.legacy_limits()}
     }
     pub(crate) fn plan(&self)->io::Result<HostOutputPlan> {
         let codec=match self.codec {0 if self.mf_buffer==0=>HostCodecPlan::Tiles,1 if self.mf_buffer==0=>HostCodecPlan::OpenH264,
             2=>HostCodecPlan::MediaFoundation{output_buffer_bytes:self.mf_buffer},_=>return Err(invalid("unknown worker codec allocation plan"))};
-        HostOutputPlan::new(self.contract.map_or(HostContract::Legacy,HostContract::Versioned),self.size,codec)
+        let plan=HostOutputPlan::new(self.contract.map_or(HostContract::Legacy,HostContract::Versioned),self.size,codec)?;
+        match self.local_limits {Some(limits)=>plan.with_legacy_limits(limits),None=>Ok(plan)}
     }
 }
 #[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]

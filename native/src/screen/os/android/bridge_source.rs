@@ -115,11 +115,14 @@ impl BridgeSource {
 
     fn tiles_frame(&mut self, request: &StageRequest) -> Result<StageFrame, StageError> {
         let projected = matches!(self.channel.phase(),Phase::Ready { projection:true,.. });
-        if projected && self.epoch != Some(request.encoder_epoch) {
-            self.channel.clear_pictures();
-            self.channel.send(json!({"op":"configure","codec":"tiles","hybrid":true,
-                "epoch":request.encoder_epoch & 0xFFFF,"width":request.size.width,"height":request.size.height,
-                "fps":request.fps,"bitrate":request.target_bps,"profile":"high"}));
+        if self.epoch != Some(request.encoder_epoch) {
+            self.hybrid=None;self.tiles=None;
+            if projected {
+                self.channel.clear_pictures();
+                self.channel.send(json!({"op":"configure","codec":"tiles","hybrid":true,
+                    "epoch":request.encoder_epoch & 0xFFFF,"width":request.size.width,"height":request.size.height,
+                    "fps":request.fps,"bitrate":request.target_bps,"profile":"high"}));
+            }
             self.epoch=Some(request.encoder_epoch);
         }
         // Accessibility remains the preview/snapshot fallback when projection is absent.
@@ -180,6 +183,7 @@ impl BridgeSource {
         let hybrid = request.frame_contract.is_some_and(|c|c.hybrid_regions) && !self.synthetic();
         let fresh = self.epoch != Some(request.encoder_epoch);
         if fresh {
+            self.hybrid=None;self.tiles=None;
             self.channel.clear_pictures();
             self.channel.send(json!({
                 "op": "configure",

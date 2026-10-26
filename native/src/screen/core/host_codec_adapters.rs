@@ -32,6 +32,7 @@ pub(crate) struct HostOutputPlan {
     include_output: bool,
     side: HostOutputSide,
     raw_bound: Option<u64>,
+    legacy_limits: Option<FrameLimits>,
 }
 impl HostOutputPlan {
     /// Native metadata preparation does not validate against a legacy encoder
@@ -43,7 +44,7 @@ impl HostOutputPlan {
         capture_limits.validate_capture()?;
         bgra_bytes(native_size)?;
         capture_limits.check(capture_limits.fit(native_size))?;
-        Ok(Self {contract,size:native_size,codec:HostCodecPlan::Tiles,include_output:false,side:HostOutputSide::InProcess,raw_bound:None})
+        Ok(Self {contract,size:native_size,codec:HostCodecPlan::Tiles,include_output:false,side:HostOutputSide::InProcess,raw_bound:None,legacy_limits:None})
     }
     pub(crate) fn new(contract: HostContract, size: FrameSize, codec: HostCodecPlan) -> io::Result<Self> {
         if let HostContract::Versioned(contract) = contract {contract.validate()?;}
@@ -53,7 +54,20 @@ impl HostOutputPlan {
                 return Err(invalid("MF output allocation exceeds existing 64 MiB bound"));
             }
         }
-        Ok(Self {contract, size, codec, include_output: true, side: HostOutputSide::InProcess,raw_bound:None})
+        Ok(Self {contract, size, codec, include_output: true, side: HostOutputSide::InProcess,raw_bound:None,legacy_limits:None})
+    }
+    /// Private host output geometry, independent of v1's unchanged wire format.
+    pub(crate) fn with_legacy_limits(mut self,limits:FrameLimits)->io::Result<Self> {
+        if self.contract!=HostContract::Legacy || limits.intersect(FrameLimits::LEGACY)!=limits {
+            return Err(invalid("local legacy output exceeds its protocol class"));
+        }
+        limits.check(self.size)?;
+        PacketBudget::for_receive(None,Some(limits))?;
+        self.legacy_limits=Some(limits);Ok(self)
+    }
+    pub(crate) fn legacy_limits(&self)->Option<FrameLimits> {self.legacy_limits}
+    pub(crate) fn limits(&self)->FrameLimits {
+        self.contract.frame_contract().map(|contract|contract.limits).or(self.legacy_limits).unwrap_or(FrameLimits::LEGACY)
     }
     pub(crate) fn contract(&self) -> HostContract {self.contract}
     pub(crate) fn size(&self) -> FrameSize {self.size}
@@ -63,6 +77,10 @@ impl HostOutputPlan {
     pub(crate) fn for_parent(&self) -> Self {Self {side: HostOutputSide::Parent, ..self.clone()}}
     pub(crate) fn for_parent_of(&self, source:&CapturePlan) -> Self {
         Self {side:HostOutputSide::Parent,raw_bound:source.source_image_bytes(),..self.clone()}
+    }
+    pub(crate) fn reconfigure(&self,size:FrameSize,codec:HostCodecPlan)->io::Result<Self> {
+        let output=Self::new(self.contract,size,codec)?;
+        match self.legacy_limits {Some(limits)=>output.with_legacy_limits(limits),None=>Ok(output)}
     }
 
     /// Adds local host owners only. A local viewer keeps its independent W.

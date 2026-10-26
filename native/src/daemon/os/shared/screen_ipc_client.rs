@@ -18,7 +18,7 @@ use super::ipc_protocol::{
     read_response, set_stream_timeout, write_request, IpcRequest, IpcResponse,
 };
 use crate::screen::core::bench::{BenchOptions, BenchReport};
-use crate::screen::core::frame_budget::FrameContract;
+use crate::screen::core::frame_budget::{FrameContract,FrameLimits};
 use crate::screen::core::frame_size_caps::PacketBudget;
 use crate::screen::core::registry::SessionView;
 use crate::screen::core::wire::from_json;
@@ -199,6 +199,7 @@ pub(crate) struct ScreenStream {
     input: Arc<Mutex<TcpStream>>,
     /// None until Accepted; Some(None) is an explicitly legacy session.
     frame_contract: Option<Option<FrameContract>>,
+    local_limits:Option<FrameLimits>,
 }
 
 /// Opens a relayed viewer session with `target`.
@@ -248,6 +249,7 @@ fn open_stream(request: ScreenIpcRequest) -> Result<ScreenStream,String> {
         events: stream,
         input: Arc::new(Mutex::new(input)),
         frame_contract: None,
+        local_limits:None,
     })
 }
 
@@ -256,8 +258,8 @@ impl ScreenStream {
     /// The next event; blocks until one arrives.
     pub(crate) fn next_event(&mut self) -> io::Result<StreamEvent> {
         let record_limit = match self.frame_contract {
-            Some(contract) => PacketBudget::for_contract(contract)?.record_bytes
-                + GOP_HEADER_BYTES + RECORD_HEADER_BYTES + 1026,
+            Some(contract) => PacketBudget::for_receive(contract,self.local_limits)?.record_bytes
+                + GOP_HEADER_BYTES + RECORD_HEADER_BYTES + if contract.is_some() {1026} else {0},
             None => 0,
         };
         let (tag, payload) = read_relay_budgeted(&mut self.events, MAX_RELAY_BYTES, record_limit)?;
@@ -268,6 +270,19 @@ impl ScreenStream {
                     return Err(io::Error::new(io::ErrorKind::InvalidData, "duplicate screen relay acceptance"));
                 }
                 if let Some(contract) = hello.frame_contract { contract.validate()?; }
+                let local=match from_json::<RelayHello>(&payload)? {
+                    RelayHello::Accepted {local_limits,..}=>local_limits,
+                    RelayHello::Pending {..}=>None,
+                };
+                if let Some(limits)=local {
+                    limits.validate()?;
+                    if hello.frame_contract.is_some_and(|contract|contract.limits!=limits)
+                        || (hello.frame_contract.is_none() && limits.intersect(FrameLimits::LEGACY)!=limits) {
+                        return Err(io::Error::new(io::ErrorKind::InvalidData,"screen relay local limits differ from admission"));
+                    }
+                    PacketBudget::for_receive(hello.frame_contract,Some(limits))?;
+                }
+                self.local_limits=local.or(hello.frame_contract.map(|contract|contract.limits));
                 self.frame_contract = Some(hello.frame_contract);
             }
             StreamEvent::Record { header, .. } => {
@@ -281,11 +296,15 @@ impl ScreenStream {
                 if !matches {
                     return Err(io::Error::new(io::ErrorKind::InvalidData, "screen relay frame contract changed"));
                 }
+                if self.local_limits.is_some_and(|limits|limits.check(header.size).is_err()) {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData,"screen relay geometry exceeds local admission"));
+                }
             }
             _ => {}
         }
         Ok(event)
     }
+    pub(crate) fn local_frame_limits(&self)->Option<FrameLimits> {self.local_limits}
 
     /// Sends a control frame to the host (`SET_MODE`, `INPUT`, …).
     pub(crate) fn send(&self, frame: &ViewerFrame) -> io::Result<()> {
@@ -334,7 +353,7 @@ fn decode_event(tag: u8, payload: &[u8]) -> io::Result<StreamEvent> {
     match tag {
         RELAY_HELLO => Ok(match from_json::<RelayHello>(payload)? {
             RelayHello::Pending { capability } => StreamEvent::Pending(capability),
-            RelayHello::Accepted { hello, path } => StreamEvent::Accepted { hello, path },
+            RelayHello::Accepted { hello, path, .. } => StreamEvent::Accepted { hello, path },
         }),
         RELAY_HOST => {
             let (wire_tag, body) = payload

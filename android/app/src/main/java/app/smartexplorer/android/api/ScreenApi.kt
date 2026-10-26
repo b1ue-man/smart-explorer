@@ -34,13 +34,16 @@ data class ScreenBufferBudget(
     val workingBytes:Long, val imageBytes:Int, val recordBytes:Int,
     val packetBytes:Int, val pullBytes:Int, val legacy:Boolean = false,
     val recordOverheadBytes:Int=1099,
+    val boundedLegacy:Boolean=false,
 ) {
+    private fun boundedOwners()= !legacy || boundedLegacy || workingBytes<512L*1024*1024
     init {
         require(workingBytes in 32..512L*1024*1024 && imageBytes in 1..64*1024*1024)
-        require(imageBytes.toLong()*(if(legacy)8 else 24)<=workingBytes && recordBytes in 1..16*1024*1024)
+        require(!boundedLegacy || legacy)
+        require(imageBytes.toLong()*(if(boundedOwners())24 else 8)<=workingBytes && recordBytes in 1..16*1024*1024)
         require(packetBytes>=imageBytes && pullBytes.toLong()==maxOf(imageBytes,recordBytes).toLong()+32)
         require(recordOverheadBytes>=1099)
-        if(!legacy) require(imageBytes.toLong()*20+(recordBytes.toLong()+recordOverheadBytes)*32+(packetBytes-imageBytes)<=workingBytes)
+        if(boundedOwners()) require(imageBytes.toLong()*20+(recordBytes.toLong()+recordOverheadBytes)*32+(packetBytes-imageBytes)<=workingBytes)
     }
     fun checkedBytes(width:Int,height:Int):Int =
         app.smartexplorer.android.screen.ScreenFrameLimits.checkedBytes(width,height).also {require(it<=imageBytes)}
@@ -48,8 +51,8 @@ data class ScreenBufferBudget(
      * tiles/queue (4), pull (1), decoder (3), Full/Preview snapshots (2), one
      * posted snapshot (1), and running/next ScaleRequest sources (2).
      * Result bitmaps, source/target arrays and filter rows lease this remainder.
-     * Legacy retains its absolute geometry rather than claiming a v2 total. */
-    fun scalingBytes():Long = if(legacy) 512L*1024*1024 else workingBytes-
+     * An explicitly admitted v1 receiver uses the same bounded owner ledger. */
+    fun scalingBytes():Long = if(!boundedOwners()) 512L*1024*1024 else workingBytes-
         imageBytes.toLong()*13-(recordBytes.toLong()+recordOverheadBytes)*32-(packetBytes-imageBytes)
     companion object {
         val LEGACY=ScreenBufferBudget(512L*1024*1024,4096*2304*4,16*1024*1024,

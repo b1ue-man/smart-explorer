@@ -14,7 +14,7 @@ use tokio::sync::mpsc;
 
 use super::rate_control::PathKind;
 use super::wire_binary::{
-    read_frame_record_budgeted, read_gop_header, write_frame_record, write_gop_header, FrameRecord,
+    read_gop_header, write_frame_record, write_gop_header, FrameRecord,
     GopHeader, RecordSequence, StreamKind, FLAG_KEYFRAME, FLAG_MORE, RECORD_HEADER_BYTES,
 };
 use super::wire_control::{FrameAck, ViewerFrame};
@@ -201,6 +201,19 @@ pub(crate) async fn accept_picture_streams_with_memory(
     connection:Connection,events:mpsc::Sender<PictureEvent>,acks:mpsc::Sender<ViewerFrame>,
     contract:Option<super::frame_budget::FrameContract>,memory:super::frame_memory::MemoryHold,
 ) {
+    let local=match contract {
+        Some(contract)=>Some(contract.limits),
+        None=>match memory.as_ref().map(|lease|super::frame_budget::legacy_limits(lease.bytes(),None)).transpose() {
+            Ok(limits)=>limits,Err(_)=>return,
+        },
+    };
+    accept_picture_streams_admitted(connection,events,acks,contract,memory,local).await;
+}
+pub(crate) async fn accept_picture_streams_admitted(
+    connection:Connection,events:mpsc::Sender<PictureEvent>,acks:mpsc::Sender<ViewerFrame>,
+    contract:Option<super::frame_budget::FrameContract>,memory:super::frame_memory::MemoryHold,
+    local:Option<super::frame_budget::FrameLimits>,
+) {
     let readers=std::sync::Arc::new(tokio::sync::Semaphore::new(VIEWER_UNI_STREAMS as usize));
     while let Ok(recv) = connection.accept_uni().await {
         let Ok(permit)=readers.clone().acquire_owned().await else {return;};
@@ -208,7 +221,7 @@ pub(crate) async fn accept_picture_streams_with_memory(
         tokio::spawn(async move {
             let _permit=permit;
             let bytes=memory.as_ref().map(|lease|lease.bytes());let _memory=memory;
-            read_picture_stream(recv,events,acks,contract,bytes).await;
+            read_picture_stream(recv,events,acks,contract,bytes,local).await;
         });
     }
 }
@@ -219,6 +232,7 @@ async fn read_picture_stream(
     acks: mpsc::Sender<ViewerFrame>,
     contract: Option<super::frame_budget::FrameContract>,
     memory_bytes:Option<u64>,
+    local:Option<super::frame_budget::FrameLimits>,
 ) {
     let header = match read_gop_header(&mut recv).await {
         Ok(header) => header,
@@ -232,17 +246,17 @@ async fn read_picture_stream(
         let owners=if header.frame_contract.is_some() {super::frame_budget::VERSIONED_WORKING_IMAGES} else {super::frame_budget::WORKING_IMAGES};
         header.size.pixels().saturating_mul(4*owners)>bytes
     });
-    if !contract_matches || exceeds {
+    if !contract_matches || exceeds || local.is_some_and(|limits|limits.check(header.size).is_err()) {
         let _ = recv.stop(STREAM_RESET_CODE); return;
     }
-    let Ok(budget)=super::frame_size_caps::PacketBudget::for_contract(header.frame_contract) else {
+    let Ok(budget)=super::frame_size_caps::PacketBudget::for_receive(header.frame_contract,local) else {
         let _=recv.stop(STREAM_RESET_CODE);return;
     };
     let mut sequence = RecordSequence::default();
     let mut allocation_budget=super::wire_binary::FrameReadBudget::default();
     let mut current=0;let mut records=0usize;let mut bytes=0usize;
     loop {
-        let record = match read_frame_record_budgeted(&mut recv, &header,&mut allocation_budget).await {
+        let record = match super::wire_binary::read_frame_record_admitted(&mut recv,&header,&mut allocation_budget,budget).await {
             Ok(Some(record)) => record,
             Ok(None) if !sequence.is_open() => return,
             Ok(None) | Err(_) => break,

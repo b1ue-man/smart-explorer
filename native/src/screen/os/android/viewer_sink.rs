@@ -90,13 +90,14 @@ pub(crate) struct PullQueue {
 }
 
 impl PullQueue {
-    fn set_frame_limits(&self,limits:crate::screen::core::frame_budget::FrameLimits,size:FrameSize,contract:Option<crate::screen::core::frame_budget::FrameContract>)->std::io::Result<()> {
+    fn set_frame_limits(&self,limits:crate::screen::core::frame_budget::FrameLimits,size:FrameSize,contract:Option<crate::screen::core::frame_budget::FrameContract>,admitted:bool)->std::io::Result<()> {
         limits.check(size)?;
-        let budget=crate::screen::core::frame_size_caps::PacketBudget::for_contract(contract)?;
+        let admitted=admitted && (contract.is_some() || limits.working_bytes<crate::screen::core::frame_budget::MAX_WORKING_BYTES);
+        let budget=crate::screen::core::frame_size_caps::PacketBudget::for_receive(contract,admitted.then_some(limits))?;
         let bound=budget.encoded_bytes;
-        let bound=if contract.is_none() {bound.max(64*1024*1024)} else {bound};
+        let bound=if contract.is_none() && !admitted {bound.max(64*1024*1024)} else {bound};
         self.frame_bytes.store(bound,std::sync::atomic::Ordering::Release);
-        self.frame_items.store(if contract.is_some() {budget.records} else {0},std::sync::atomic::Ordering::Release);
+        self.frame_items.store(if contract.is_some() || admitted {budget.records} else {0},std::sync::atomic::Ordering::Release);
         Ok(())
     }
     /// Queues a picture; `now_us` is the clock of the stall rule.
@@ -269,6 +270,7 @@ pub(crate) struct ViewerSink {
     broken_frame: Option<u64>,
     /// The next queued picture starts a group for the app.
     new_stream: bool,
+    local_limits:Option<crate::screen::core::frame_budget::FrameLimits>,
 }
 
 impl ViewerSink {
@@ -281,8 +283,10 @@ impl ViewerSink {
             broken: None,
             broken_frame: None,
             new_stream: false,
+            local_limits:None,
         }
     }
+    pub(crate) fn bind_local_limits(&mut self,limits:Option<crate::screen::core::frame_budget::FrameLimits>) {self.local_limits=limits;}
 
     /// At most one key frame request is open (`KEYFRAME_RETRY_US`).
     fn request(&self, reason: KeyframeReason, gop_id: u64, now_us: u64) -> Option<SinkOutput> {
@@ -314,7 +318,9 @@ impl ViewerSink {
         if header.gop_id < self.latest_gop {
             return out;
         }
-        if record.payload.len()>header.record_limit() {
+        let admitted=crate::screen::core::frame_size_caps::PacketBudget::for_receive(header.frame_contract,self.local_limits)
+            .map_or(0,|budget|budget.record_bytes);
+        if record.payload.len()>header.record_limit().min(admitted) {
             self.broken=Some(header.gop_id);self.broken_frame=Some(record.frame_id);
             out.extend(self.request(KeyframeReason::DecodeError,header.gop_id,now_us));return out;
         }
@@ -330,9 +336,10 @@ impl ViewerSink {
         if self.gop.as_ref().is_none_or(|gop| gop.id != header.gop_id) {
             if !record.is_keyframe() { self.broken=Some(header.gop_id); self.broken_frame=Some(record.frame_id);
                 out.extend(self.request(KeyframeReason::Reset,header.gop_id,now_us)); return out; }
-            let limits=header.frame_contract.map_or(crate::screen::core::frame_budget::FrameLimits::LEGACY,|c|c.limits);
+            let limits=header.frame_contract.map(|contract|contract.limits).or(self.local_limits)
+                .unwrap_or(crate::screen::core::frame_budget::FrameLimits::LEGACY);
             if header.frame_contract.is_some_and(|c|c.validate().is_err()) || limits.check(header.size).is_err()
-                || self.queue.set_frame_limits(limits,header.size,header.frame_contract).is_err() {
+                || self.queue.set_frame_limits(limits,header.size,header.frame_contract,self.local_limits.is_some()).is_err() {
                 self.broken=Some(header.gop_id);self.broken_frame=Some(record.frame_id);
                 out.extend(self.request(KeyframeReason::DecodeError,header.gop_id,now_us));return out;
             }
