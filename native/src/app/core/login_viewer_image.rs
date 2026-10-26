@@ -67,12 +67,16 @@ impl LoginImage {
     }
 }
 fn stamp(session:&Arc<ViewerSession>,token:&FrameToken,identity:SessionToken,epoch:u64)->PresentedFrame {
-    let weak=Arc::downgrade(session);
-    let validity=super::super::screen_render_upload::Generation::guarded(Arc::new(move||weak.upgrade().is_some_and(|owner| {
+    let weak=Arc::downgrade(session);let failed=weak.clone();
+    let validity=super::super::screen_render_upload::Generation::revocable(Arc::new(move||weak.upgrade().is_some_and(|owner| {
         let state=owner.snapshot();state.presentation_epoch==epoch&&!matches!(state.state.as_str(),"ended"|"stopping")
-    })));
+    })),Arc::new(move||{if let Some(owner)=failed.upgrade() {owner.renderer_failed(epoch);}}));
     PresentedFrame {session:identity,validity,login:Some(Arc::new(token.clone())),epoch,gop_id:1,frame_id:token.frame_id}
 }
+
+#[cfg(test)]
+#[path="batches_renderer_failure_task_tests.rs"]
+mod renderer_failure_tests;
 
 #[cfg(test)]
 mod tests {

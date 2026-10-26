@@ -91,9 +91,15 @@ impl ViewerSession {
         let accepted = state.guard.presented(token, epoch); refresh(&mut state); accepted
     }
     pub fn invalidate_presentation(&self) {
+        self.invalidate_presentation_at(None);
+    }
+    /// A late renderer failure may revoke only the epoch that owned its pixels.
+    pub(crate) fn renderer_failed(&self, epoch: u64) {self.invalidate_presentation_at(Some(epoch));}
+    fn invalidate_presentation_at(&self, epoch: Option<u64>) {
+        let mut state=match self.shared.state.lock() {Ok(state)=>state,Err(error)=>{drop(error);self.close();return;}};
+        if epoch.is_some_and(|epoch|epoch!=state.guard.epoch) {return;}
         self.shared.release.store(true, Ordering::SeqCst);
-        let mut interrupt = false;
-        if let Ok(mut state) = self.shared.state.lock() { state.guard.invalidate(); interrupt = must_interrupt(&self.shared, &state); refresh(&mut state); }
+        state.guard.invalidate();let interrupt = must_interrupt(&self.shared, &state);refresh(&mut state);drop(state);
         if interrupt { self.close(); }
     }
     pub fn focus(&self, focused: bool, control: bool) {
@@ -188,11 +194,7 @@ fn run(shared: &Shared, mut viewer: LoginViewer, input: mpsc::Receiver<Command>)
         match input.recv_timeout(Duration::from_millis(10)) {
             Ok(command) => {
                 let state = shared.state.lock().map_err(|_| "login viewer state is unavailable")?;
-                let rights = state.snapshot.view.as_ref().and_then(|view| view.access.as_ref()).map(|access| &access.rights);
-                let allowed = match &command {
-                    Command::Input(token, epoch, _) => state.guard.epoch == *epoch && state.guard.input_ready(token) && rights.is_some_and(|rights| rights.screen_control && rights.screen_view && rights.login),
-                    Command::Sas(token, epoch) => state.guard.epoch == *epoch && state.guard.action_ready(token) && rights.is_some_and(|rights| rights.sas && rights.screen_control && rights.login),
-                };
+                let allowed = command_allowed(&state, &command);
                 drop(state);
                 if !allowed {
                     if let Ok(mut state) = shared.state.lock() { state.snapshot.notice = Some("Eingabe wegen geänderter Bild-, Fokus- oder Rechtebindung verworfen; keine automatische Wiederholung.".into()); }
@@ -245,11 +247,23 @@ fn run(shared: &Shared, mut viewer: LoginViewer, input: mpsc::Receiver<Command>)
 fn must_interrupt(shared: &Shared, state: &State) -> bool {
     shared.input_flight.load(Ordering::SeqCst) || (shared.operating.load(Ordering::SeqCst) && !state.pressed.is_empty())
 }
+fn command_allowed(state: &State, command: &Command) -> bool {
+    let rights = state.snapshot.view.as_ref().and_then(|view|view.access.as_ref()).map(|access|&access.rights);
+    match command {
+        Command::Input(token,epoch,_) => state.guard.epoch==*epoch && state.guard.input_ready(token)
+            && rights.is_some_and(|rights|rights.screen_control && rights.screen_view && rights.login),
+        Command::Sas(token,epoch) => state.guard.epoch==*epoch && state.guard.action_ready(token)
+            && rights.is_some_and(|rights|rights.sas && rights.screen_control && rights.login),
+    }
+}
+fn begin_exchange(shared: &Shared, command: &LoginCommand) {
+    shared.operating.store(true, Ordering::SeqCst);
+    shared.input_flight.store(matches!(command, LoginCommand::Input { .. } | LoginCommand::SecureAttention), Ordering::SeqCst);
+}
 fn exchange(shared: &Shared, viewer: &mut LoginViewer, command: LoginCommand) -> Result<crate::daemon::LoginFrame, String> {
     struct InFlight<'a>(&'a Shared);
     impl Drop for InFlight<'_> { fn drop(&mut self) { self.0.operating.store(false, Ordering::SeqCst); self.0.input_flight.store(false, Ordering::SeqCst); } }
-    shared.operating.store(true, Ordering::SeqCst);
-    shared.input_flight.store(matches!(command, LoginCommand::Input { .. }), Ordering::SeqCst);
+    begin_exchange(shared, &command);
     let _flight = InFlight(shared);
     if shared.stopped.load(Ordering::SeqCst) { viewer.close(); return Err("login viewer owner already ended".into()); }
     let has_pressed = !shared.state.lock().map_err(|_| "login viewer state is unavailable")?.pressed.is_empty();
@@ -263,4 +277,44 @@ fn require_state(frame: &crate::daemon::LoginFrame, expected: &str) -> Result<()
     let reply = frame.reply.packet.as_ref().ok_or_else(|| "login operation has no broker reply".to_string())?;
     if reply.reply.state != expected { return Err(format!("{}: {}", reply.reply.state, reply.reply.reason.as_deref().unwrap_or("login operation was not admitted"))); }
     Ok(())
+}
+
+/// Controlled renderer events use the real guard, queue check and exchange flags.
+/// No IPC command, privileged input or SAS is executed by this fixture.
+#[cfg(test)]
+pub(crate) struct RendererFixture {pub session: Arc<ViewerSession>, commands: mpsc::Receiver<Command>}
+#[cfg(test)]
+impl RendererFixture {
+    pub fn new(view: LoginSessionView, images: Arc<ImageAdmission>) -> Self {
+        let mut guard=ViewerGuard::default();guard.adopt(view.challenge.as_ref().unwrap(),view.access.as_ref().unwrap()).unwrap();
+        let shared=Arc::new(Shared {images,state:Mutex::new(State {
+            snapshot:ViewerSnapshot {state:"ready".into(),reason:None,view:Some(view),frame:None,input_ready:false,
+                control:false,focused:false,presented_frame:None,presentation_epoch:0,notice:None},
+            guard,frame:None,close:None,visible:Instant::now(),pressed:PressedInputs::default(),
+        }),changed:Condvar::new(),stopped:AtomicBool::new(false),release:AtomicBool::new(false),
+            operating:AtomicBool::new(false),input_flight:AtomicBool::new(false)});
+        let (commands,pending)=mpsc::sync_channel(8);
+        Self {session:Arc::new(ViewerSession {shared,commands}),commands:pending}
+    }
+    pub fn frame(&self,id:u64,width:u32,height:u32)->FrameToken {
+        let mut state=self.session.shared.state.lock().unwrap();let token=state.guard.frame(id,width,height).unwrap();refresh(&mut state);token
+    }
+    pub fn queue_image(&self,id:u64,image:CapturedImage)->FrameToken {
+        let size=image.size();let token=self.frame(id,size.width,size.height);
+        self.session.shared.state.lock().unwrap().frame=Some(ViewerFrame {token:token.clone(),image});token
+    }
+    pub fn queued_allowed(&self)->Option<bool> {
+        let command=self.commands.try_recv().ok()?;Some(command_allowed(&self.session.shared.state.lock().unwrap(),&command))
+    }
+    pub fn release_pending(&self)->bool {self.session.shared.release.load(Ordering::SeqCst)}
+    /// Explicit event standing for completed release handling by the owner.
+    pub fn complete_release(&self) {
+        self.session.shared.state.lock().unwrap().pressed.release_all();self.session.shared.release.store(false,Ordering::SeqCst);
+    }
+    pub fn begin_queued_exchange(&self)->bool {
+        let Ok(command)=self.commands.try_recv() else{return false;};
+        if !command_allowed(&self.session.shared.state.lock().unwrap(),&command) {return false;}
+        let command=match command {Command::Input(_,_,events)=>LoginCommand::Input {events},Command::Sas(_,_)=>LoginCommand::SecureAttention};
+        begin_exchange(&self.session.shared,&command);true
+    }
 }

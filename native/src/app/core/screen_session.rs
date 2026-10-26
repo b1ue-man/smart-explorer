@@ -377,7 +377,9 @@ impl ViewerSession {
         })
     }
 
-    pub(crate) fn input_ready(&self) -> bool { lock(&self.shared.resume).ready() }
+    pub(crate) fn input_ready(&self) -> bool {
+        lock(&self.shared.presentation).validity.active() && lock(&self.shared.resume).ready()
+    }
 
     pub(crate) fn set_prefer_yuv(&self, on: bool) {
         self.shared.prefer_yuv.store(on, Ordering::Relaxed);

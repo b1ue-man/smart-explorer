@@ -50,6 +50,12 @@ impl RendererOwner {
                 ||s.admission.as_ref().is_some_and(|w|w.strong_count()>0)})
     }
     pub(crate) fn closed(&self)->bool {self.closed.load(std::sync::atomic::Ordering::Acquire)}
+    /// GL quarantine invalidates every presentation backed by that native context.
+    /// Call outside a slot lock; login invalidation never acquires renderer locks.
+    pub(super) fn quarantine_slots(&self) {
+        for slot in lock(&self.slots).iter() {lock(&slot.state).quarantine();}
+        notify_all();
+    }
     /// Called on the GUI thread before inner update. No render pass is outstanding here.
     pub(crate) fn service(&self,ctx:&egui::Context) {self.service_mode(ctx,true);}
     pub(crate) fn after_update(&self,ctx:&egui::Context) {self.service_mode(ctx,false);}
@@ -57,10 +63,15 @@ impl RendererOwner {
         let mut backend=lock(&self.backend);if let Backend::Glow(gl)=&mut *backend {gl.service();}
         let mut slots=lock(&self.slots);
         let quarantined=matches!(&*backend,Backend::Glow(gl) if !gl.available());
+        if quarantined {for slot in slots.iter() {lock(&slot.state).quarantine();}}
         for slot in slots.iter() {
             let mut state=lock(&slot.state);
-            if quarantined {state.generation.revoke();state.candidate=None;state.next_upload=None;}
             Self::step(&mut backend,&mut state,upload&&!self.closed()&&!quarantined);
+            if !quarantined&&matches!(&*backend,Backend::Glow(gl) if !gl.available()) {break;}
+        }
+        // Retirement can itself discover a broken context after the initial service.
+        if !quarantined&&matches!(&*backend,Backend::Glow(gl) if !gl.available()) {
+            for slot in slots.iter() {lock(&slot.state).quarantine();}
         }
         slots.retain(|slot| {let s=lock(&slot.state);!s.closed||s.resident.is_some()||s.retiring.is_some()
             ||s.admission.as_ref().is_some_and(|w|w.strong_count()>0)});
