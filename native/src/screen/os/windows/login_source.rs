@@ -26,11 +26,15 @@ fn desktop()->Area {
     unsafe {Area {left:GetSystemMetrics(SM_XVIRTUALSCREEN),top:GetSystemMetrics(SM_YVIRTUALSCREEN),
         width:GetSystemMetrics(SM_CXVIRTUALSCREEN),height:GetSystemMetrics(SM_CYVIRTUALSCREEN)}}
 }
-struct Context {
-    capture:DxgiCapture,output:OutputBinding,desk:Area,
+trait LoginCapture:Grabber {fn output_binding(&self)->io::Result<OutputBinding>;}
+impl LoginCapture for DxgiCapture {
+    fn output_binding(&self)->io::Result<OutputBinding> {DxgiCapture::output_binding(self)}
+}
+struct Context<C=DxgiCapture> {
+    capture:C,output:OutputBinding,desk:Area,
     valid:bool,published:bool,pending:Option<CapturedImage>,sas:SasGuard,
 }
-impl Context {
+impl<C:LoginCapture> Context<C> {
     fn matches(&self)->bool {
         if !self.valid||self.capture.output_binding().ok().as_ref()!=Some(&self.output)||desktop()!=self.desk {return false;}
         super::monitors::find(&super::monitors::id_of_device(&self.output.device)).is_some_and(|monitor|
@@ -40,17 +44,30 @@ impl Context {
             &&i32::try_from(monitor.info.height).ok()==Some(self.output.area.height))
     }
     fn probe(&mut self)->io::Result<()> {
-        if !self.matches(){self.valid=false;return Err(expired());}
+        self.probe_with(Self::matches)
+    }
+    fn probe_with(&mut self,matches:impl Fn(&Self)->bool)->io::Result<()> {
+        if !matches(self){self.valid=false;self.pending=None;return Err(expired());}
         // Detect a lost/recreated duplication even when name, bounds and size
-        // were reused. Keep the latest sampled pixels for the next Capture.
-        self.pending=None;
-        let frame=match self.capture.capture(false) {Ok(frame)=>frame,Err(error)=>{self.valid=false;return Err(error);}};
-        if !self.matches(){self.valid=false;self.pending=None;return Err(expired());}
+        // were reused. Unchanged/Paused cannot erase an unsent valid sample.
+        let frame=match self.capture.capture(false) {Ok(frame)=>frame,Err(error)=>{self.valid=false;self.pending=None;return Err(error);}};
+        if !matches(self){self.valid=false;self.pending=None;return Err(expired());}
         if let SourceFrame::Frame(image)=frame {
-            if image.size()!=self.output.size {self.valid=false;return Err(expired());}
+            if image.size()!=self.output.size {self.valid=false;self.pending=None;return Err(expired());}
             self.pending=Some(image);
         }
         Ok(())
+    }
+    fn capture_with(&mut self,keyframe:bool,matches:impl Fn(&Self)->bool)->io::Result<SourceFrame> {
+        self.probe_with(&matches)?;
+        if let Some(image)=self.pending.take(){self.published=true;return Ok(SourceFrame::Frame(image));}
+        let frame=self.capture.capture(keyframe)?;
+        if !matches(self){self.valid=false;self.pending=None;return Err(expired());}
+        if let SourceFrame::Frame(image)=&frame {
+            if image.size()!=self.output.size {self.valid=false;self.pending=None;return Err(expired());}
+            self.published=true;
+        }
+        Ok(frame)
     }
 }
 struct LoginSource {context:Arc<Mutex<Context>>,active:bool,size:FrameSize}
@@ -63,12 +80,7 @@ impl ScreenSource for LoginSource {
     fn capture(&mut self,_frame:u64,keyframe:bool)->io::Result<SourceFrame> {
         if !self.active{return Ok(SourceFrame::Unchanged);}
         let mut context=self.context.lock().map_err(|_|expired())?;
-        context.probe()?;
-        if let Some(image)=context.pending.take(){context.published=true;return Ok(SourceFrame::Frame(image));}
-        let frame=context.capture.capture(keyframe)?;
-        if !context.matches(){context.valid=false;return Err(expired());}
-        if matches!(frame,SourceFrame::Frame(_)){context.published=true;}
-        Ok(frame)
+        context.capture_with(keyframe,Context::matches)
     }
 }
 impl Drop for LoginSource {fn drop(&mut self){if let Ok(mut context)=self.context.lock(){context.valid=false;}}}
@@ -183,3 +195,7 @@ pub(crate) fn inject_login_input(events:&[InputEvent])->io::Result<()> {
     if sent as usize!=records.len(){return Err(io::Error::new(io::ErrorKind::PermissionDenied,"login input rejected by Windows"));}
     Ok(())
 }
+
+#[cfg(test)]
+#[path="batches_capture_recovery_task_tests.rs"]
+mod recovery_tests;

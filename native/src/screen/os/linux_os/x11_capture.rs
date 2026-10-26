@@ -469,3 +469,7 @@ impl Drop for X11Source {
 #[cfg(test)]
 #[path = "x11_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "batches_capture_recovery_task_tests.rs"]
+mod recovery_tests;
