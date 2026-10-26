@@ -5,6 +5,12 @@ use std::path::Path;
 use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Security::Authorization::*;
 use windows_sys::Win32::Security::*;
+use windows_sys::Win32::Storage::FileSystem::{
+    FILE_ALL_ACCESS, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
+};
+#[cfg(test)]
+#[path = "security_tests.rs"]
+mod security_tests;
 // Documented ACE_HEADER byte values; independent of binding alias widths.
 const ALLOW_ACE: u8 = 0;
 const DENY_ACE: u8 = 1;
@@ -94,9 +100,8 @@ pub(super) fn check(path: &Path, expected_owner: &[u8]) -> Result<(), String> {
         return Err("runtime_acl_unreadable".into());
     }
     // FILE_WRITE_DATA/APPEND/EA/ATTRIBUTES, DELETE_CHILD, DELETE, WRITE_DAC,
-    // WRITE_OWNER, GENERIC_WRITE/ALL. Read/execute/synchronize grants are fine.
-    const MUTATING: u32 =
-        0x0000_0156 | 0x0001_0000 | 0x0004_0000 | 0x0008_0000 | 0x4000_0000 | 0x1000_0000;
+    // WRITE_OWNER. Generic rights are expanded before testing this mask.
+    const MUTATING: u32 = 0x0000_0156 | 0x0001_0000 | 0x0004_0000 | 0x0008_0000;
     for index in 0..info.AceCount {
         let mut raw = std::ptr::null_mut();
         if unsafe { GetAce(acl, index, &mut raw) } == 0 {
@@ -109,7 +114,7 @@ pub(super) fn check(path: &Path, expected_owner: &[u8]) -> Result<(), String> {
         }
         if header.AceType == ALLOW_ACE {
             let ace = unsafe { &*(raw as *const ACCESS_ALLOWED_ACE) };
-            if ace.Mask & MUTATING != 0 {
+            if file_rights(ace.Mask) & MUTATING != 0 {
                 let sid = &ace.SidStart as *const u32 as PSID;
                 let trusted = unsafe {
                     EqualSid(sid, owner) != 0
@@ -186,7 +191,10 @@ pub(super) fn check_ancestor(path: &Path) -> Result<(), String> {
     if owner.is_null() || acl.is_null() {
         return Err("runtime_ancestor_acl_missing".into());
     }
-    let owner_trusted = trusted_owner(owner)?;
+    // An object's owner can change its DACL even without an explicit allow ACE.
+    if !trusted_owner(owner)? {
+        return Err(format!("runtime_ancestor_owner_untrusted: {}", path.display()));
+    }
     let mut info: ACL_SIZE_INFORMATION = unsafe { std::mem::zeroed() };
     if unsafe {
         GetAclInformation(
@@ -201,8 +209,9 @@ pub(super) fn check_ancestor(path: &Path) -> Result<(), String> {
     }
     // Creation of a fresh sibling is harmless; replacement/deletion and ACL
     // ownership changes of this existing path would break the root binding.
-    const REPLACING: u32 =
-        0x0000_0040 | 0x0001_0000 | 0x0004_0000 | 0x0008_0000 | 0x4000_0000 | 0x1000_0000;
+    // Every real ancestor contains the protected root, so it cannot be turned
+    // into a new reparse point without first deleting that protected child.
+    const REPLACING: u32 = 0x0000_0040 | 0x0001_0000 | 0x0004_0000 | 0x0008_0000;
     for index in 0..info.AceCount {
         let mut raw = std::ptr::null_mut();
         if unsafe { GetAce(acl, index, &mut raw) } == 0 {
@@ -214,19 +223,18 @@ pub(super) fn check_ancestor(path: &Path) -> Result<(), String> {
         }
         if header.AceType == ALLOW_ACE {
             let ace = unsafe { &*(raw as *const ACCESS_ALLOWED_ACE) };
-            if ace.Mask & REPLACING == 0 {
+            let rights = file_rights(ace.Mask);
+            if rights & REPLACING == 0 {
                 continue;
             }
             let sid = &ace.SidStart as *const u32 as PSID;
-            let trusted = unsafe {
-                IsWellKnownSid(sid, WinLocalSystemSid) != 0
-                    || IsWellKnownSid(sid, WinBuiltinAdministratorsSid) != 0
-                    || (owner_trusted && EqualSid(sid, owner) != 0)
-            };
-            if !trusted {
+            // A standard user's private Temp may be administratively owned
+            // while granting that current user full access. Trust the actual
+            // token user, never every trustee merely because the owner is trusted.
+            if !trusted_owner(sid)? {
                 return Err(format!(
-                    "runtime_ancestor_replace_grant: {}",
-                    path.display()
+                    "runtime_ancestor_replace_grant: {} (mask={:#010x}, mapped={rights:#010x}, trustee={})",
+                    path.display(), ace.Mask, sid_text(sid)
                 ));
             }
         } else if header.AceType != DENY_ACE && header.AceType != AUDIT_ACE {
@@ -237,6 +245,31 @@ pub(super) fn check_ancestor(path: &Path) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn file_rights(mut mask: u32) -> u32 {
+    let mapping = GENERIC_MAPPING {
+        GenericRead: FILE_GENERIC_READ,
+        GenericWrite: FILE_GENERIC_WRITE,
+        GenericExecute: FILE_GENERIC_EXECUTE,
+        GenericAll: FILE_ALL_ACCESS,
+    };
+    unsafe { MapGenericMask(&mut mask, &mapping) };
+    mask
+}
+
+fn sid_text(sid: PSID) -> String {
+    let mut raw = std::ptr::null_mut();
+    if unsafe { ConvertSidToStringSidW(sid, &mut raw) } == 0 {
+        return "unavailable".into();
+    }
+    let mut length = 0;
+    while length < 256 && unsafe { *raw.add(length) } != 0 {
+        length += 1;
+    }
+    let text = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(raw, length) });
+    unsafe { LocalFree(raw as _) };
+    text
 }
 
 fn trusted_installer(owner: PSID) -> bool {

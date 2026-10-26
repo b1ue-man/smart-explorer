@@ -3,13 +3,13 @@ use super::*;
 use crate::mcp_launcher::core::manifest::{IPC_CONTRACT, STATE_CONTRACT};
 use crate::mcp_launcher::RuntimeIdentity;
 
-struct Fixture {
+pub(super) struct Fixture {
     _directory: tempfile::TempDir,
-    installation: Installation,
+    pub(super) installation: Installation,
 }
 
 impl Fixture {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let directory = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(directory.path()).unwrap();
         os::protect(&root, false).unwrap();

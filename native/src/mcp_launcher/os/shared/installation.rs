@@ -19,6 +19,10 @@ pub struct RuntimeIdentity {
     pub contract: RuntimeContract,
     pub executable: PathBuf,
 }
+pub(crate) struct RetirementRoot {
+    pub(crate) root: PathBuf,
+    pub(crate) snapshot_sha256: String,
+}
 impl Installation {
     pub fn load(root: &Path) -> Result<Self, String> {
         let root = std::fs::canonicalize(root).map_err(|e| format!("installation_root: {e}"))?;
@@ -308,6 +312,12 @@ pub(crate) fn hash_bytes(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 pub(crate) fn verify_handle(file: &mut File, expected: &str) -> Result<(), String> {
+    if handle_sha256(file)? != expected {
+        return Err("runtime_sha256_mismatch".into());
+    }
+    Ok(())
+}
+pub(crate) fn handle_sha256(file: &mut File) -> Result<String, String> {
     file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
     let mut digest = Sha256::new();
     let mut buffer = [0; 65536];
@@ -318,11 +328,9 @@ pub(crate) fn verify_handle(file: &mut File, expected: &str) -> Result<(), Strin
         }
         digest.update(&buffer[..n]);
     }
-    if format!("{:x}", digest.finalize()) != expected {
-        return Err("runtime_sha256_mismatch".into());
-    }
+    let hash = format!("{:x}", digest.finalize());
     file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
-    Ok(())
+    Ok(hash)
 }
 pub(crate) fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
     let file = File::open(path).map_err(|e| e.to_string())?;

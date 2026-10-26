@@ -48,7 +48,16 @@ pub(in crate::mcp_launcher) fn process_matches(_identity: &ProcessIdentity) -> b
 pub(in crate::mcp_launcher) fn processes_for(_path: &Path) -> Result<Vec<ProcessIdentity>, String> {
     unsupported()
 }
-pub(in crate::mcp_launcher) fn uninstall_programs_idle(_root: &Path) -> Result<(), String> {
+pub(in crate::mcp_launcher) fn uninstall_programs_idle(_root: &Path) -> Result<Vec<File>, String> {
+    unsupported()
+}
+pub(in crate::mcp_launcher) fn retirement_root() -> Result<Option<crate::mcp_launcher::installation::RetirementRoot>, String> {
+    unsupported()
+}
+pub(in crate::mcp_launcher) fn retirement_handoff(_root: &Path, _hash: &str, _snapshot: &str) -> Result<(), String> {
+    unsupported()
+}
+pub(in crate::mcp_launcher) fn removal_image_guard(_path: &Path) -> Result<Option<File>, String> {
     unsupported()
 }
 pub(in crate::mcp_launcher) fn stop_identity(_path: &Path) -> Result<StopIdentity, String> {

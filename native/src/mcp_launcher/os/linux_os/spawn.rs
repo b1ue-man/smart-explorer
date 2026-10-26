@@ -225,6 +225,44 @@ impl FrozenExec {
         libc::fexecve(self.fd, self.argv.as_ptr(), self.env.as_ptr());
     }
 }
+
+/// Exact internal retirement transition. No arguments or environment root can
+/// select an installation: the next image must corroborate its actual stage.
+pub(super) fn replace_for_retirement(
+    path: &std::path::Path,
+    mut image: File,
+    root: File,
+    expected_sha256: &str,
+    snapshot_sha256: &str,
+) -> Result<(), String> {
+    let root_fd = root.as_raw_fd();
+    let argv = [path.as_os_str().as_encoded_bytes(), b"plugin", b"retire-installation"]
+        .into_iter().map(CString::new).collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    let mut environment = std::env::vars_os().collect::<std::collections::BTreeMap<_, _>>();
+    for key in ["COMPLETE", "SE_MCP_ADMISSION_CHANNEL", "SE_MCP_LIFECYCLE",
+        "SE_MCP_LIFECYCLE_HANDLE", "SE_MCP_MAINTENANCE", "SE_MCP_MIGRATION_ENTRY"] {
+        environment.remove(std::ffi::OsStr::new(key));
+    }
+    environment.insert(super::retirement::ROOT_FD_ENV.into(), root_fd.to_string().into());
+    environment.insert(super::retirement::SNAPSHOT_ENV.into(), snapshot_sha256.into());
+    let environment = environment.into_iter().map(|(key, value)| {
+        let mut bytes = key.as_encoded_bytes().to_vec();
+        bytes.push(b'='); bytes.extend_from_slice(value.as_encoded_bytes());
+        CString::new(bytes).map_err(|e| e.to_string())
+    }).collect::<Result<Vec<_>, _>>()?;
+    let exec = FrozenExec::new(image.as_raw_fd(), argv, environment);
+    // Revalidate immediately before executing this exact read-only descriptor.
+    crate::mcp_launcher::installation::verify_handle(&mut image, expected_sha256)?;
+    let flags = unsafe { libc::fcntl(root_fd, libc::F_GETFD) };
+    if flags == -1 || unsafe { libc::fcntl(root_fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) } == -1 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    unsafe { exec.execute(); }
+    let error = std::io::Error::last_os_error();
+    unsafe { libc::fcntl(root_fd, libc::F_SETFD, flags); }
+    Err(format!("uninstall_handoff_fexecve_failed: {error}"))
+}
 pub(in crate::mcp_launcher) fn spawn_current_daemon(
     command: Command,
     image: File,

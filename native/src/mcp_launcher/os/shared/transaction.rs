@@ -2,6 +2,9 @@
 #[cfg(all(test, any(windows, target_os = "linux")))]
 #[path = "batches_lifecycle_task_tests.rs"]
 mod batches_lifecycle_task_tests;
+#[path = "garbage_collection.rs"]
+mod garbage_collection;
+pub use garbage_collection::garbage_collect;
 use crate::mcp_launcher::core::lifecycle::{InstallationTarget, Phase, UpdateState};
 use crate::mcp_launcher::installation::{atomic_bytes, atomic_json, hash_bytes};
 use crate::mcp_launcher::{os, Installation, Manifest};
@@ -355,54 +358,6 @@ pub fn stop_marker_is_owned(root: &Path, marker: &Path) -> Result<bool, String> 
     }))
 }
 
-pub fn garbage_collect(root: &Path) -> Result<Vec<String>, String> {
-    let installation = Installation::load(root)?;
-    let _owner = installation.lock("update-owner.lock", true)?;
-    let _control = installation.lock("control.lock", true)?;
-    let state = installation.state()?;
-    if state.as_ref().is_some_and(|s| s.blocks_work()) {
-        return Err("update_recovery_required".into());
-    }
-    let mut removed = Vec::new();
-    for entry in std::fs::read_dir(root.join("mcp/runtimes")).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let Some(hash) = entry.file_name().to_str().map(str::to_owned) else {
-            continue;
-        };
-        if !crate::mcp_launcher::core::manifest::is_sha256(&hash)
-            || hash == installation.manifest.runtime_sha256
-            || state
-                .as_ref()
-                .is_some_and(|s| s.previous.runtime_sha256 == hash)
-        {
-            continue;
-        }
-        let path = entry.path();
-        os::validate_tree(root, &path)?;
-        let Ok(_lifetime) = os::lock(&path.join("lifetime.lock"), true) else {
-            continue;
-        };
-        match os::processes_for(&path.join(os::CLI_NAME)) {
-            Ok(processes) if processes.is_empty() => {}
-            _ => continue,
-        }
-        // Quarantine by atomic rename while holding the exclusive lifetime
-        // and control locks. A new opener can no longer resolve this hashpath.
-        let retired = root.join("mcp/runtimes").join(format!(
-            ".retired-{hash}-{}",
-            crate::mcp_launcher::provision::unique_id()?
-        ));
-        // Windows read-only lock handles intentionally disallow deletion; a
-        // failed quarantine preserves the generation for the next attempt.
-        if os::rename_durable(&path, &retired).is_err() {
-            continue;
-        }
-        drop(_lifetime);
-        std::fs::remove_dir_all(&retired).map_err(|e| e.to_string())?;
-        removed.push(hash);
-    }
-    Ok(removed)
-}
 
 pub fn stop_marker_identity(
     marker: &Path,
