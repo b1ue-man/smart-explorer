@@ -102,7 +102,19 @@ finally:
     rate=$2
     (( port > 0 && port <= 65535 ))
     if [[ $mode == profile ]]; then
-      tc qdisc replace dev lo root handle 1: prio bands 3 priomap 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2
+      # Same-kind root replace changes in place and retains children/filters.
+      # Retire only this fixture's old root before installing a fresh profile.
+      python3 - <<'PY'
+import json
+import subprocess
+
+roots = json.loads(subprocess.check_output(
+    ["tc", "-j", "qdisc", "show", "dev", "lo", "root"], text=True, timeout=20))
+if any(row.get("handle") == "1:" and row.get("kind") == "prio" for row in roots):
+    subprocess.run(["tc", "qdisc", "del", "dev", "lo", "root", "handle", "1:"],
+                   check=True, timeout=20)
+PY
+      tc qdisc add dev lo root handle 1: prio bands 3 priomap 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2
       # Shape only traffic entering the relay. Shaping the forwarded copy too
       # would turn a 10-Mbit/s profile into a 5-Mbit/s payload path.
       tc qdisc add dev lo parent 1:1 handle 10: netem delay 5ms rate "${rate}bit" limit 700
