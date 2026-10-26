@@ -21,28 +21,17 @@ See [evidence and scope](WINDOWS_REMOTE_REGRESSION.md).
 Gesamtbatch B1–B8/P31/P32, Stand 2026-10-26: Die normale Gesamtreview und beide
 unabhängigen Release-Regressionsreviews sind abgeschlossen. Die belegten
 Fehler sind in [vollständigen Fixzyklen desselben jeweiligen Autors](plaene/2026-10-24-batches/regressionsreview.md)
-quellseitig behoben. Die erste Remote-Vorbereitung hat Lock-/Formatkorrekturen
-geliefert; die belegten Modulgrößenverletzungen sind durch die bisherigen
-Autoren fachlich aufgeteilt und selbst nachgeprüft. Der bestätigte
-Vendor-Konstruktorfehler ist korrigiert; Lauf
-`40354605251` erreicht die Produktquellen und belegt weitere native Compilerfehler.
-Die sechs [begrenzten Korrekturgruppen](plaene/2026-10-24-batches/rv1-compilerplan.md)
-sind durch die zuständigen Autoren mit eigener Nachreview abgeschlossen und
-separat committed. Ihre Compiler- und Funktionsbestätigung steht im selben
-Remote-Suiteeinstieg aus.
-Der gebundene Formatpatch aus Lauf `40366764400` ist übernommen. Die
-Vorbereitung des folgenden Laufs `40368746815` ist erfolgreich. Windows und
-Linux melden verbleibende Modul-/Typfehler; Android erreicht die JNI-Brücke
-und scheitert dort an zwei Booleanübergaben. Alle fünf begrenzten
-Korrekturgruppen sind durch ihre bisherigen Autoren samt eigener Nachreview
-abgeschlossen und separat committed; dazu gehört die vollständige
-Android-Textzuordnung für `viewer_hidden`. Die bestehenden verbundenen Fälle
-sind im gemeinsamen Manifest registriert. Ihre Remote-Bestätigung steht aus.
-Lauf `40379623936` hat ausschließlich einen Formatpatch für die JNI-
-Capturefunktion geliefert. Dieser Patch ist unverändert übernommen; sämtliche
-syntaktischen Bestandteile bleiben gleich. Lockdatei und Modulgrößen sind in
-Ordnung; Compiler- und Funktionsstufen dieses Versuchs wurden übersprungen.
-Die vollständige funktionale Suiteauswertung und Veröffentlichung stehen aus.
+quellseitig behoben. Die daraus entstandenen Struktur-, Compiler- und
+JNI-Korrekturen sind integriert. Lauf `40381452096` für `0425aa46` bestätigt
+die Kompilierung der Windows-/Linux-Prüfbinärdatei und CLI sowie der
+Android-Rustbibliothek einschließlich JNI. Alle Jobs dieses Versuchs sind beendet.
+Offen sind die [begrenzten Kotlin-Konsum- und Capturekorrekturen sowie der
+Messabschlussfehler L02](plaene/2026-10-24-batches/rv1-compilerplan.md).
+Drei Autoren verantworten jeweils ihren vollständigen Fixzyklus. Main korrigiert
+anschließend die belegten veralteten beziehungsweise plattformfremden
+Pflichtauswahlen im selben Manifest. Die vollständige Funktionsabnahme und
+der eine terminale Remote-Release stehen aus; ein Compilererfolg ist kein
+Funktions- oder Leistungsnachweis.
 
 This table is the live list of remaining work, roughly by value. The lower
 sections preserve shipped/history context and explicitly label anything that is

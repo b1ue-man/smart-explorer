@@ -513,3 +513,38 @@ zusammen. Er ist unverändert übernommen; statisch bleiben sämtliche
 syntaktischen Blatttoken identisch. Lockauflösung unverändert, keine
 Größenprobleme. Windows-, Linux-, Android-Build- und Gerätestufen wurden
 übersprungen. Kein lokaler Formatter oder Compiler wurde ausgeführt.
+
+## Lauf 40381452096: native Kompilierung und erste Ausführungsbefunde
+
+Der [Lauf](https://github.com/b1ue-man/smart-explorer/actions/runs/40381452096)
+für `0425aa4608d7e27eb95ee0a37e3bc13dca2ce8bf` ist vollständig beendet.
+Die Vorbereitung ist erfolgreich. Windows und Linux liefern erfolgreich
+kompilierte Produktbibliotheks-Prüfbinärdateien, `se` und die betroffene
+`egui_glow`-Prüfbinärdatei. Android liefert die native Bibliothek samt JNI und
+bestätigt die verlangte LOAD-Ausrichtung, scheitert dann bei Kotlin. Die
+Android-Gerätestufe ist übersprungen.
+
+Main hat Kandidatbindung, Archivhash, sämtliche Fehlerdiagnosen und die
+betroffenen Quellstellen geprüft:
+
+| Stufe | Artefakt | Archiv-SHA256 |
+|---|---|---|
+| Vorbereitung | `12679017738` | `e8037c1bda41fa8ef2d2080fd191d31e88a3ed7fde35bf18e37f71e7647e36be` |
+| Android-Build | `12678538449` | `115e29d16f796903e46e4d51a7be74c1381dd157b64b46f318f10e4b8bca6408` |
+| Linux | `12681652291` | `b3aa1cea1d362661b9914726cb6f7a2962f0ab52212ada59b2812bd2daf08c61` |
+| Windows | `12682562310` | `96f22a7e5ab866782c9b72f591c862c106833ab042bfef05c53e94cfd8a337d7` |
+
+K01–K11 betreffen Android-Iconkonsum, Displaynullbarkeit und Budgetaufrufe.
+L01/W01 sind Main zugeordnete Auswahlfehler: ein ersetzter Snapshotname und
+mobile, nur in Unix-Prüfläufen vorhandene Fälle. Der vollständige statische
+Abgleich gegen beide echten Binärlisten ist Grundlage ihrer Zuordnung.
+Die kontrollierte GL-Fehlerledgerprüfung liefert ihren vorgesehenen Beleg;
+ein physischer Grafiktreiber wurde damit nicht abgenommen.
+
+L02 scheitert am Join der Messaufgaben mit `wire ACK stream closed`.
+Die erste encoderfreie Relayreferenz bleibt als Rohdaten erhalten; weder
+Bildszenenabschluss noch P27-Leistungsabnahme sind belegt. Die mögliche
+Abbruchreihenfolge ist ausdrücklich eine noch zu prüfende Ursache. Der
+[Korrekturplan](../plaene/2026-10-24-batches/rv1-compilerplan.md) erhält
+sämtliche Profile und Leistungsorakel. Kein lokaler Build-/Testlauf und
+kein zusätzlicher Suiteeinstieg werden eingeführt.
