@@ -341,4 +341,254 @@ sind noch nicht durch diesen Autor erfolgt und verbleiben bei Main. Main hat
 die Fallregistrierung und den Dokumentationsanschluss in `fernzugriff.md`
 übernommen. Innerhalb der freigegebenen Codefläche bleibt keine offene
 Umsetzungsabhängigkeit; es wird kein laufender oder erfolgreicher Remotelauf
-behauptet. Der eigene vollständige Fixzyklus endet mit dieser Berichtsfassung.
+behauptet. Der anschließende Remote-Größenbefund wird unten im selben
+Autorzyklus weitergeführt.
+
+## Fortsetzung: Modulgrößen nach tatsächlicher Remoteformatierung
+
+Nachrichtenquelle: erneuter eigener Autorauftrag vom 2026-10-26;
+unveränderter Nutzervertrag und aktualisierte Scope-JSON. Remote-Vorbereitung
+`40332971455` beanstandete vor jeder Kompilierung die tatsächlichen formatierten
+Modulgrößen. Die vom Main übernommenen gebundenen Patches stehen auf
+`10988167`. Laut Scope sind sämtliche Remotejobs beendet; diese Fortsetzung
+startet keinen Build, Test, Formatter oder Hostprozess.
+
+### A: Ergänzter Erstplan
+
+Ergebnis: Die fünf zugewiesenen Verantwortlichkeiten und jede neue
+Extraktionsdatei bleiben in normaler Rustformatierung unter 500 Zeilen und
+50 KiB. Öffentliche Einstiege, Host-/Viewer-Familienlogik, Fokus- und
+Geometriebindung, Memberidentität, Input-/Pausenpfade und alle bestehenden
+Fallnamen bleiben erhalten. Keine künstliche Verdichtung und keine
+Gateausnahme. Gitmutation, Manifest, Rootgraph und derselbe Remote-Suite-
+Fixloop verbleiben bei Main.
+
+Promptwissen: Bereits formatierte Kandidatenbasis, fünf explizite Zielmodule,
+genehmigte Extraktionspfade. Durch Bestandslektüre zu klären: genaue
+zusammenhängende Methodenverantwortungen, Sichtbarkeit über Teilmodule,
+Aufruferpfade und nötige Modulregistrierung. Kein nur vom Nutzer lieferbarer
+Wert fehlt. Vorläufige Tiefe 2: fachliche Extraktion bestehender
+Verantwortlichkeiten ohne neuen Funktions-/Wire-/Persistenzvertrag.
+
+Vorgesehener Ablauf: Remotegrößen und aktuelle Quellen lesen; Verantwortung
+und vorhandene Verbraucher abgleichen; Sichtbarkeits-/Dateipfade gegen die
+Rustreferenz klären; konkrete fachliche Teilung und Erhaltungsorakel sichern;
+unveränderte Funktionskörper verschieben; anschließend eigene statische
+Anti-Regressionsreview der vollständigen bestehenden Kette und neuen
+Modulgrenzen dokumentieren.
+
+### B: Erster Bestandsbefund
+
+Dokumentationskontext vor dieser Ergänzung: `git status --short` für die
+zugewiesenen Dateien ohne Ausgabe; `git log -1 --oneline` ergibt
+`10988167 chore: apply candidate-bound remote dependency and format corrections [task candidate]`.
+Gezielte Symbollektüre und `wc -l -c` bestätigen:
+
+| Datei | Formatierte Zeilen | Bytes |
+|---|---:|---:|
+| `app/core/family_viewer.rs` | 563 | 22021 |
+| `remote_window/core/host.rs` | 641 | 23517 |
+| `remote_window/os/x11.rs` | 750 | 27758 |
+| `remote_window/os/x11/batches_popup_focus_task_tests.rs` | 734 | 23789 |
+| `screen/os/linux_os/host_backend.rs` | 553 | 20839 |
+
+Die frühere Zeilenbilanz dieses Berichts beschrieb die damalige kompakte
+Quellfassung; sie ist kein Größenbeleg nach der tatsächlichen
+Remoteformatierung. Sie wird für diesen Fortsetzungsstand durch die Tabelle
+oben und die spätere Abschlussbilanz ersetzt. Der Remotejob lieferte keinen
+Compiler- oder Laufzeitbefund.
+
+### C: Strukturentscheidung und zweite Lückenklärung
+
+Alle fünf Zieldateien wurden vollständig im formatierten Stand gelesen.
+Die Architektur und der vorhandene Graph bestätigen dieselben externen
+Einstiege; die erneute Graphabfrage nach `FamilyViewerApp HostSession X11Adapter
+LinuxBackend` liefert 325 Knoten. Der Graph wurde nicht verändert. Die
+Quelllektüre entscheidet über die tatsächlichen neuen Teilgrenzen.
+
+Gewählt werden direkte interne Teilmodule mit unveränderten Funktionskörpern.
+Der Zustand bleibt jeweils beim bisherigen `FamilyViewerApp`, `HostSession`,
+`X11Adapter` beziehungsweise `LinuxBackend`. Die bestehenden Traitimpls und
+Re-Exports bleiben die Verbrauchergrenze. Bei X11 delegieren vier
+Traitmethoden in enge Inherent-Methoden; der Trait wird nicht mehrfach für
+denselben Typ implementiert.
+
+Verworfen sind Verdichten von Zeilen, Ausnehmen des Größenwächters, Einbetten
+von Source über `include!`, neue globale Besitzer, neue DTOs und Umbenennen
+von Fällen. Diese Wege würden den beanstandeten Verantwortungsschnitt
+verbergen oder vorhandene Verträge unnötig ändern.
+
+Primärquellen erneut geprüft am 2026-10-26:
+[Rustreferenz: Sichtbarkeit](https://doc.rust-lang.org/reference/visibility-and-privacy.html)
+belegt Zugriff von Kindmodulen auf private Elterninhalte sowie die begrenzte
+Freigabe mit `pub(super)`.
+[Rustreferenz: Moduldateien](https://doc.rust-lang.org/reference/items/modules.html)
+belegt `#[path = "..."] mod name;` relativ zum Verzeichnis der deklarierenden
+Source. Folgerung: bestehende Datentypen und Felder benötigen keine neue
+crateweite Veröffentlichung; nur vom Elternmodul verwendete neue
+Hilfsmethoden erhalten `pub(super)`.
+
+Zweite Lückenklärung vor der Änderung: Nach Verschieben der UI-Methoden
+bedeutet `super` das Familienviewermodul. Referenzen auf bisherige
+App-Geschwister müssen deshalb explizit über `super::super` beziehungsweise
+einen gleichbedeutenden `app`-Alias laufen. X11-Fokus-/Familienhelfer dürfen
+private Adapterfelder über ihr Elternmodul verwenden. Der Popupfixture-
+Hilfsadapter erhält ausschließlich Sichtbarkeit zum privaten Testelternmodul;
+die bestehenden Testfunktionen bleiben in ihrem bisherigen Modul. Das
+Linux-Geometriefixture behält beim Auslagern seinen bisherigen logischen
+Modulnamen, damit seine vollqualifizierten Fallnamen gleich bleiben.
+
+### D: Endgültiger fachlicher Extraktionsplan und Karte
+
+| Bestehende Verantwortung | Neues Teilmodul und konkrete Inhalte | Direkte und indirekte Verbindung / Erhaltungsorakel |
+|---|---|---|
+| Desktopfamilienfenster | `app/core/family_viewer_ui.rs`: `can_control`, `metadata`, `menu`, `resize` als weiterer impl des vorhandenen `FamilyViewerApp` | `run → new/open → eframe::App::update → UI-Methoden → family_viewer_session` bleibt erhalten. Renderer, Eingabefreigabe, lokale Menüsperre, Titel/Icon, reguläres Close, Resizeverzögerung und Disconnect behalten dieselben Ausdrücke und dieselbe Reihenfolge. Initialisierung, Update, Statefelder und Dropbesitz bleiben im Stamm. |
+| Familienbestand und Capturegrenze | `remote_window/core/host_family.rs`: `HostSession::{refresh,boundary,boundary_current,set_icon}` | Bestehende `open/snapshot/operate/with_input` rufen denselben `refresh`; Viewersnapshots, Capture und Iconupdate bleiben an dieselbe Member-/Owner-/Prozess-/Rechte-/Layout-/Generationprüfung gebunden. |
+| Bestätigte Hosteingabe | `remote_window/core/host_input.rs`: `HostSession::{operate,with_input}` | Der bestehende Worker ruft dieselben öffentlichen Methodennamen auf. Rechteprüfung, Fokusaktivierung/-bestätigung, Inputarming, aktuelle Revision, echte Memberidentität und Fehlerrückgabe bleiben im gleichen Hostobjekt. Stammmodul behält Traits, Box-Delegation, Konstruktion, `admitted`, `target`, `snapshot`, Epoche und Disconnect. |
+| X11-Familienbeobachtung | `remote_window/os/x11/family.rs`: `app_identity`, `candidates`, `candidate_windows_inner`, `observe_inner` | Unveränderte `WindowAdapter::{candidate_windows,observe}` delegieren an diese interne Verantwortung. Aufnahme, sichtbare Flächen, rekursive Ownerfamilie, Prozess-/Markerbindung, Iconcache und Z-Reihenfolge bleiben in der oben dokumentierten Capture-/Viewer-/Inputkette. |
+| X11-Fokus und Fensteranforderungen | `remote_window/os/x11/input.rs`: `root_message`, `focused_inner`, `focus_node`, `activate_if_inner`, `request_inner` | Bestehende Traitmethoden `activate/activate_if/focused/request` bleiben erhalten; Ownerfokus, Grab-/Ungrab-Abschluss, geordnete OS-Abfragen, admission, graceful Close und Resizegrenzen werden lediglich weitergeleitet. Verbindung, Markerbesitz, Bind/Adopt/Validierung, Inspect, Pintransfer und Disconnect bleiben im Stamm. |
+| Kontrollierte Popupfixturefakten | `remote_window/os/x11/batches_popup_focus_fixtures.rs`: Rights/Facts/Adapter, H/M/S/ROOT, Window-/Host-/Viewerfabrik, Request-/Ack-/Inputhelfer | Die vorhandenen acht Popup-Fallfunktionen bleiben in `batches_popup_focus_task_tests`; sie verwenden unveränderte Eingaben und Orakel über privat importierte Hilfen. Kein Fallname und kein produktiver Fokusentscheider wird ersetzt. |
+| Linux-Geometriefixture | `screen/os/linux_os/host_backend_family_task_tests.rs`: bisheriges Inline-Fixture unverändert | Stamm behält `LinuxBackend` und `inject_x11_family`; `[path] mod batches_family_geometry_task_tests` erhält den bisherigen Modulnamen. Source-ID, geprüfte Area, Eventphasen, Blockrückgabe und die zwei vorhandenen Fallnamen bleiben unverändert. X11-/Waylandinput und Capture-/Pauseadapter werden nicht bewegt. |
+
+Jede Teilung ist ein eigener zusammenhängender Edit, kein eigener
+Build-/Test-/Releasezyklus. Vor jeder Änderung wird der gelesene Symbolblock
+erneut mit diesem Schnitt abgeglichen. Danach werden die verschobenen
+Funktionskörper als statischer Text gegen `10988167` verglichen;
+zulässige Unterschiede sind ausschließlich begrenzte Sichtbarkeit,
+Modulpfadauflösung und die dokumentierten vier X11-Delegationen. Die
+abschließende eigene Review verfolgt dieselbe vollständige Funktionskarte
+einschließlich Memberidentität, Fokus, Geometrie, Eingabeablehnung,
+Pausen/Ressourcenbesitz und unveränderten Testregistrierungen erneut.
+Zeilen-/Bytebilanz und Diffkontrolle sind lokales statisches Feedback;
+Rustformatierung, Typprüfung und Laufzeitnachweis erfolgen ausschließlich
+über Mains denselben Remote-Suiteeinstieg. Kein neuer Test wird für diese
+Extraktion erfunden, kein bisheriger Fall umbenannt.
+
+### E: Umsetzung der fachlichen Teilung
+
+Die sieben geplanten Extraktionen sind umgesetzt. Alle Funktionskörper wurden
+aus dem gebundenen formatierten Stand übernommen. Beim Desktop-UI-impl ersetzt
+ein Alias `use super::super as app` ausschließlich die früheren
+`super::family_viewer_session`-Pfadbezüge; Titel, Icon, lokale Menüsperre,
+Steuerrechte, Resizeberechnung und Zeitbedingungen sind unverändert. Der
+Stamm lädt `family_viewer_ui.rs` als privates Teilmodul. Die vier vom Stamm
+aufgerufenen Methoden sind nur bis zu diesem Elternmodul sichtbar.
+
+`HostSession` behält seinen vollständigen Zustand und seine Typ-/Traitgrenze
+in `host.rs`; die beiden neuen impl-Dateien werden von dort mit explizitem
+`#[path]` geladen. Damit sind `HostSession::refresh`, `operate`, `with_input`,
+`boundary`, `boundary_current` und `set_icon` weiter unter ihren bisherigen
+Typ- und Re-Exportpfaden erreichbar. Die Source enthält keine neue Kopie des
+Hosts und keine neue Mutex-/Lease-/Arc-Schicht.
+
+Der X11-Stamm behält Verbindung, Namespace, Marker, Appcache, Validierung und
+Disconnect. Seine vier Traitdelegationen sind genau:
+
+| Bisherige Traitmethode | Neue interne Weiterleitung |
+|---|---|
+| `candidate_windows()` | `candidate_windows_inner()` in `family.rs` |
+| `observe(root)` | `observe_inner(root)` in `family.rs` |
+| `activate_if(binding, admitted)` | `activate_if_inner(binding, admitted)` in `input.rs` |
+| `request(binding, operation)` | `request_inner(binding, operation)` in `input.rs` |
+
+`activate` ruft weiterhin `activate_if` auf; `focused` verwendet unverändert
+`focused_inner`. Die benötigten X11-Erweiterungstraits werden in den neuen
+Dateien ausdrücklich importiert. Ergänzende Primärquellen vom 2026-10-26:
+[Rustreferenz: Imports](https://doc.rust-lang.org/reference/items/use-declarations.html)
+und [mehrere Inherent-Implementierungen](https://doc.rust-lang.org/reference/items/implementations.html).
+Sie belegen die Namensauflösung und die fortgesetzte Erreichbarkeit der
+Methoden über den bestehenden Typ, obwohl ihre impls in Teilmodulen stehen.
+
+Die Popupfälle bleiben im bisherigen Modul
+`remote_window::os::x11::batches_popup_focus_task_tests`. Sein neues privates
+`fixtures`-Teilmodul liefert denselben Facts-/Rights-/Adapterbestand und
+dieselben Request-/Ack-/Inputhelfer. Deren begrenzte Sichtbarkeit ist keine
+Produkt-API. Die Linuxfälle behalten trotz externer Source den logischen
+Modulnamen `batches_family_geometry_task_tests`. Das vorhandene allgemeine
+`tests`-Modul des Linux-Backends bleibt zusätzlich unverändert registriert.
+
+### F: Eigene anschließende Anti-Regressionsreview der Teilung
+
+Prüfgegenstand war der fertige Extraktionsdiff gegen `10988167` und die
+vollständige oben fortgeschriebene Funktionskarte. Kriterien waren
+Verhaltensgleichheit, stabile externe Einstiege, derselbe Zustands-/
+Ressourcenbesitzer, unveränderte Rechte-/Fokus-/Member-/Geometriegrenzen,
+identische Pausen-/Abbruchpfade und tatsächlich erhaltene Fallregistrierung.
+Die Review ist eine eigene statische Quellenprüfung; sie wird nicht als
+Compiler-, Plattform- oder Laufzeitpass bezeichnet.
+
+| Grenze | Eigener konkreter Abschlussbefund |
+|---|---|
+| Unveränderte Funktionskörper | Der statische Vergleich aller Funktionsdefinitionen der fünf Ausgangsdateien gegen ihre jeweiligen Stamm-/Extraktionsdateien stimmt überein. Ausnahmen sind ausschließlich die vier geprüften X11-Trampolinen, eingeschränkte Methodensichtbarkeit und der gleichbedeutende UI-Pfadalias. Keine Abfrage, Bedingung, Ereignisphase, Rückgabe oder Fehlerbehandlung wurde entfernt oder umgeordnet. |
+| Zustandsbesitz | Die vollständigen Deklarationen `FamilyViewerApp`, `HostSession`, `X11Adapter` und `LinuxBackend` sind gegenüber `10988167` textgleich. Member-/Generationstabellen, Fokusarming/-epoche, Verbindung, Marker-/Iconcache und Quellenzustand werden nicht neu angelegt, kopiert oder zwischen Besitzern verschoben. |
+| Viewer und Eingabe | `eframe::App::update` bleibt im Stamm; es ruft dieselben UI-Methoden auf. Der gemeinsame Desktop-/Android-`FamilyViewer` wird in dieser Fortsetzung nicht verändert. Korrelation, tatsächliche Bild-/Layoutbestätigung und Zielmitglied bleiben identisch. |
+| Host und Capture | Die bestehenden Worker-/FamilySource-/PreparedFamily-Aufrufer verwenden weiterhin dieselben `HostSession`-Methoden. `refresh` prüft Rechte, Scope, Prozess, Owner, Generation, Sichtbarkeit und Layout in derselben Reihenfolge. `boundary_current` und `with_input` erreichen dieselben Fakten desselben Hosts. |
+| X11-Fokus und Modalität | Neue `input.rs`-Methoden enthalten exakt die bisherigen Aktivierungs-/Owner-/Lifetime-/Sichtbarkeitsprüfungen. `focus::confirmed` und seine Prozess-/Ankerregeln werden nicht verändert. Die GrabServer/UngrabServer-Reihenfolge und das Fehlerweiterreichen sind textgleich; ein regulärer Dialog bleibt ein eigener Fokusanker. |
+| Fensteroperationen und Abschluss | Graceful Close, Resizegrenzen, admission, Pintransfer und Disconnect bleiben unverändert. Der ursprüngliche Drop besitzt weiterhin die Verbindung und entfernt ausschließlich eigene Marker. Keine neue Appbeendigung und kein Killpfad. |
+| Linux-Geometrie und Pausen | Ausschließlich das Geometriefixture wurde aus dem Backend verschoben. `prepare_session_source`, `prepare_family_member`, `inject`, `inject_family`, `inject_x11_family` und `release_input` sind textgleich. Vorhandene X11-/Wayland-/None-, Capture-/Readmission-/Pausen- und Releasepfade erhalten keine neue Verzweigung oder Initialisierung. |
+| Sichtbarkeit und Dateipfade | Implteile sind private Kindmodule; Elternfelder bleiben privat. `pub(super)` öffnet nur die notwendigen Helperzugriffe. Core-Dateien enthalten keine neuen OS-Imports. Explizite `[path]`-Ziele liegen an den genehmigten Dateipfaden; X11-Teilmodule bleiben unter dem bestehenden Linux-`cfg`. Kein äußerer Re-Export oder App-Rootanschluss wurde geändert. |
+| Fallnamen und Orakel | Die vorhandenen `#[test]`-Attribute und die vollständigen bestehenden Fallnamen sind im statischen Vergleich gleich. Die Fallkörper sowie Facts-/Adapter-/Ackhelfer sind unverändert. Es ist keine zusätzliche Manifestregistrierung oder Umbenennung erforderlich; dieselben bereits registrierten Linuxfälle bleiben maßgeblich. |
+
+Die zusätzlichen Import-/Sichtbarkeitsstellen und die X11-Trampolinen wurden
+nach dem Quellenvergleich einzeln gelesen. Der Diff-/Whitespacecheck ist ohne
+Befund. Es gibt keinen offenen Kettenanschluss innerhalb der freigegebenen
+Fläche und keine nicht genehmigte Sourceänderung. Die zuvor dokumentierte
+fehlende Appisolation von sessionweitem XTest bleibt unverändert als Grenze
+benannt.
+
+### G: Größenbilanz, Dateien und verbleibender Remotenachweis
+
+Gemessen am bearbeiteten Stand nach Übernahme der tatsächlich formatierten
+Funktionskörper; kein lokaler Formatter wurde gestartet:
+
+| Datei | Zeilen | Bytes |
+|---|---:|---:|
+| `app/core/family_viewer.rs` | 318 | 12145 |
+| `app/core/family_viewer_ui.rs` | 257 | 10101 |
+| `remote_window/core/host.rs` | 281 | 9988 |
+| `remote_window/core/host_family.rs` | 260 | 9913 |
+| `remote_window/core/host_input.rs` | 113 | 3953 |
+| `remote_window/os/x11.rs` | 322 | 11315 |
+| `remote_window/os/x11/family.rs` | 244 | 9465 |
+| `remote_window/os/x11/input.rs` | 218 | 8017 |
+| `remote_window/os/x11/batches_popup_focus_task_tests.rs` | 433 | 14807 |
+| `remote_window/os/x11/batches_popup_focus_fixtures.rs` | 308 | 9447 |
+| `screen/os/linux_os/host_backend.rs` | 476 | 18299 |
+| `screen/os/linux_os/host_backend_family_task_tests.rs` | 78 | 2365 |
+
+Jede Datei bleibt deutlich unter 50 KiB; die größte Verantwortung liegt in
+normal übernommener Formatierung bei 476 Zeilen. Die nächste tatsächliche
+Remoteformatierung und der Modulgrößenwächter müssen diesen Extraktionsstand
+im selben Suiteeinstieg bestätigen. Der abgebrochene Vorbereitungsjob
+`40332971455` ist hierfür kein Pass; er hat keine Kompilierung oder
+Plattform-/Funktionsprüfung ausgeführt.
+
+Zusätzlich für diese Fortsetzung gelesen: der aktualisierte eigene Scope und
+Bericht, `format.json` und Größeninventar ausschließlich für die fünf
+Zielpfade; alle fünf vollständigen formatierten Ausgangsdateien; die neuen
+sieben Teilmodule; `app/mod.rs` (Familienregistrierung),
+`remote_window/{mod.rs,core/mod.rs,os/mod.rs}` (Typ-/Adaptergrenzen);
+`screen/os/shared/family_backend.rs`,
+`remote_window/os/shared/{family_source.rs,family_capture_plan.rs}` und die
+Desktop-/Mobile-Familienadapter für die bestehenden konkreten Aufrufer.
+Der Graph wurde gezielt gelesen, nicht neu gebaut. Die vier genannten
+Rustreferenzseiten wurden für Modulpfad, Sichtbarkeit, Imports und impl-
+Erreichbarkeit gelesen; keine externe Produkt-API wurde geändert.
+
+Geändert in dieser Fortsetzung: die fünf in der Ausgangstabelle genannten
+Rustdateien und dieser eigene Bericht. Neu sind die sieben in der
+Extraktionstabelle genannten Dateien; der genehmigte Pfad
+`batches_popup_input_task_tests.rs` wurde nicht benötigt und nicht angelegt.
+Manifest, Graph, Versionszahlen, Wire-/Persistenzformate und Abhängigkeiten
+blieben durch diesen Autor unverändert. Der Autor führte keine Gitoperation
+mit Schreibwirkung aus. Es liefen keine lokalen Builds,
+Compiler, Formatter, Tests, Server, Installationen, Unteragenten oder
+Hostprozesse.
+
+Main besitzt den kohärenten Commit/Push, den Rootgraph und den unveränderten
+Remote-Suite-Fixloop einschließlich tatsächlicher Format-/Größenbestätigung,
+Typprüfung und Laufzeitnachweis sowie den terminalen Release. Es bleibt kein
+zusätzlicher Scopebedarf. Diese eigene Fortsetzung wird mit Strukturplan,
+Kartenfortschreibung, Umsetzung und anschließender eigener statischer
+Anti-Regressionsreview übergeben; ein erfolgreicher Remotelauf wird nicht
+behauptet.
