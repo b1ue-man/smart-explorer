@@ -30,10 +30,10 @@ Bibliothek und App gebaut, Instrumentation-Import sowie Login-/Medienfixtures
 fehlgeschlagen (A01–A03). Die Geräteprüfung konnte ohne Instrumentation-APK
 nicht starten. Der finale API-Abruf um 23:10:44 UTC bestätigt den vollständig
 fehlgeschlagenen Lauf und den übersprungenen Gerätejob. Der vollständige
-Korrekturplan umfasst M01–M14. M14, M05, M07 und M02 sind quellseitig samt
-eigener Autorenreview integriert und bis `4d931637` gepusht; die gemeinsame
-Laufzeitbestätigung steht aus. M01, M03, M06, M08, M11, M12 und M13 sind in
-Bearbeitung. M04, M09 und M10 folgen innerhalb derselben Korrekturrunde.
+Korrekturplan umfasst M01–M14. M14, M05, M07, M02, M03, M06, M08, M12 und
+M11 sind quellseitig samt eigener Autorenreview integriert und bis `625df513`
+gepusht; die gemeinsame Laufzeitbestätigung steht aus. M01, M04, M09, M10
+und M13 sind in Bearbeitung. Kein Korrekturpaket wartet mehr auf seinen Start.
 Autorenkorrekturen, erfolgreiche Auswertung über denselben Remote-Einstieg
 und der eine terminale Remote-Release stehen aus.
 Compilererfolg ist kein Funktions- oder Leistungsnachweis.
