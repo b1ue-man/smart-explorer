@@ -773,3 +773,215 @@ neuen Dateien auf nachgestellten Whitespace und zusätzliche Leerzeilen am
 Dateiende melden keinen Befund. Die normalen Dateigrößen der zugewiesenen
 Verantwortlichkeiten liegen abschließend zwischen 84 und 401 Zeilen und
 zwischen 3 133 und 15 326 Bytes. Keine Gateausnahme wurde eingeführt.
+
+## Fortsetzung nach Remote-Lauf 40354605251: Retry, ViewerHidden und Snapshotgrant
+
+Ausgang: `d95dc404e834edfe7be0e1c96be162b36865efa9`. Die vollständigen Diagnosen
+`/tmp/smartexplorer-rv1-40354605251/screen-budget-errors.json` wurden vor der
+Ursachenentscheidung gelesen. Sie belegen C27 (lokaler Retry-Namenskonflikt),
+C46 (fehlender Grant im Snapshotquellinitialisierer), C55 (fehlender Statustext)
+und C58/A19 (derselbe fehlende ViewerHidden-Übergangsarm unter Windows/Android).
+Alle Jobs dieses Laufs sind laut delegiertem Auftrag beendet. Dieser Autor
+startet keine lokale Kompilierung und keinen lokalen Testlauf.
+
+### Erstplan, Fehlerfunktionen und vollständige betroffene Ketten
+
+Ergebnisauftrag dieser Fortsetzung: Die vorhandene Wiederholung bleibt per
+Kachelklick bedienbar. Eine nicht sichtbare Ansicht behält ihren eigenen
+Pausenzustand, gültige Eintritts-/Wiederaufnahmeübergänge und einen verständlichen
+Status. Die vorhandene Snapshotfixture erhält eine echte Capture-Zulassung;
+ihre Budget-, Bildidentitäts- und Besitzerlebensaussagen bleiben vollständig
+erhalten. Varianten, Ressourcenprüfungen und Fixtureaussagen werden nicht entfernt.
+
+| Fehlerfunktion | Vollständige tatsächlich betroffene Kette und Erhalt |
+|---|---|
+| `screen_tile_face::draw_tile` | `ScreenTileGrid::show`/`step` → `draw_tile` → bestehendes `retry(Tile)` → Probe `Idle`, Beenden der bisherigen Sitzung, Bild-/Texturabbau und Sichtbarkeitsinvalidation → nächster Probe-/Previewstart. Eine lokale Boolbindung `retry` verdeckt den Funktionsnamen. Cursor, Klickbedingung und Wiederholungsretirement bleiben gleich. |
+| `SessionState::can_move_to`/`is_paused` | `ViewerVisibility::hidden` → Host-Visibilitygeneration und Capture-Aktivitätswechsel → echte Aktivitätsquittung → `Session::produce` meldet `ViewerHidden` → gemeinsame Wire-/IPC-/CLI-Zustandsform und `SessionTracker`. Wiederanzeigen führt weiter zu Starting/Streaming beziehungsweise einer vorhandenen Hostpause. Rechte, Verbindung, Eingabereferenzboden und tatsächlicher Captureabschluss bleiben eigenständige vorhandene Grenzen. |
+| `screen_texts::state_text` | Host-State → Desktop-`Shared`/`Info` → Statuszeile und `Tile::face` → vorhandene Darstellung. Nur der neue bereits bestehende Zustand hat keinen Matcharm. `Streaming` behält als einziger Zustand seinen leeren Text; vorhandene Fehler- und Beendigungsursachen bleiben erhalten. |
+| Snapshotfixture `batches_task_b6_snapshot_returns_to_new_live_keyframe_without_stale_presentation` | `capture_test_support::session` → isolierter echter MemoryPool/SessionAdmission → vertragsgebundener CapturePlan → `CaptureAuthority::approve` → `Source.grant`/`capture_grant` → `CaptureImageBuilder`/CapturedImage → Pipeline, eigener Snapshotstrom und neues Live-Schlüsselbild. Der zweite `Source`-Initialisierer lässt das bereits erforderliche Feld aus. Der vorhandene Quellhelfer erzeugt echte Claims statt einer weiteren Dummy-/Bypassbefugnis. |
+
+Die Quellenaufnahme bestätigt: Der Host begrenzt die Hidden-Meldung nicht auf
+Streaming. Eine angenommene Sitzung kann auch während Start, erneuter Rückfrage,
+Portalauswahl, nativer Pause oder NoDisplay unsichtbar werden. Die Pause betrifft
+die Bildaufnahme dieser Ansicht; die Steuersitzung bleibt bestehen. Connecting
+ist noch keine angenommene laufende Sitzung und bekommt dadurch keinen direkten
+Hidden-Einstieg. Ended bleibt endgültig, Unknown bleibt der vorhandene
+Vorwärtskompatibilitätsfall.
+
+### Recherche, Entscheidungen und konkreter Fixplan vor der Umsetzung
+
+Die [Rust-Referenz zu lokalen Namensbindungen](https://doc.rust-lang.org/reference/names/scopes.html),
+abgerufen am 2026-10-26, bestätigt die Reichweite und das Verdecken eines
+Funktionsnamens durch eine lokale Bindung. Für C27 genügt deshalb ein eindeutiger
+Boolname; ein Umbau der Wiederholungsfunktion ist nicht erforderlich.
+
+Die Zustandsentscheidung folgt der gelesenen Hostemission und der vorhandenen
+Tabelle. ViewerHidden wird eine echte Pause; die bisherigen Quellenpausen bleiben
+erhalten. Ein eigener expliziter Eintrittsarm erlaubt die vorhandenen angenommenen
+Lauf-/Wartezustände und NoDisplay. Eine Catch-all-Freigabe, Löschen der Variante
+oder Umdeuten zu Streaming würden den Vertrag verletzen und werden verworfen.
+Die zweite Lückenrecherche hat zudem zwei bestehende Vollständigkeitsfälle
+gefunden, deren Listen noch zwölf Zustände enthalten; diese werden unter
+Erhalt ihrer Namen und bisherigen Aussagen ergänzt.
+
+Der Snapshotquellhelfer verwendet bereits einen isolierten MemoryPool, den
+gebundenen Framevertrag, SourceKey/Generation und den gemeinsamen
+CaptureAuthority-Pfad. Dessen synthetische Kapazitätsfakten sind Fixturebedingungen,
+kein behaupteter physischer Speicherbeleg. Der fehlende Initialisierer soll
+denselben vorhandenen Helfer mit derselben Bildgröße und demselben Vertrag nutzen.
+Ein optionaler Grant oder das Entfernen der Snapshot-/Präsentationsaussagen ist
+keine zulässige Alternative.
+
+| Fixpunkt | Konkrete Änderung | Erwarteter Nachweis |
+|---|---|---|
+| F1 C27 | Lokale Bedingung in `screen_tile_face.rs` wird `can_retry`; der tatsächliche Aufruf `retry(tile)` bleibt erhalten. | Derselbe Klick und dieselben drei Fehlergesichter erreichen dieselbe Retirementfunktion ohne Namensverdeckung. |
+| F2 C58/A19 | `ViewerHidden` in `is_paused`; eigener Eintrittsarm in `can_move_to` für angenommene Lauf-/Wartezustände und NoDisplay. | Bestehende Übergänge zwischen bisherigen Zuständen bleiben unverändert. Hidden kann wieder anlaufen, in eine Hostpause wechseln und enden; Connecting und Ended erhalten keinen neuen Ausweg. |
+| F3 C55 | Eigener verständlicher Statustext in `screen_texts.rs`; keine Wildcard und keine verkürzte Zustandsliste. | Vollständigkeitsfall enthält alle dreizehn vorhandenen Varianten, eindeutigen Hidden-Text und weiterhin ausschließlich leeres Streaming. |
+| F4 C46 | Der zweite Snapshot-`Source` erhält `capture_test_support::grant(size, contract)`. | Derselbe reale Plan finanziert Source-/Ausgabebesitzer; Snapshot bleibt auf eigener GOP und die Rückkehr erfordert ein neues Live-Schlüsselbild mit gültiger Präsentation. |
+| F5 Eigene Nachreview | Zustands-/Text-Vollständigkeitsfälle ergänzen und die gesamte obige Kette selbst statisch prüfen. | Bestehende Fallnamen und Aussagen bleiben erhalten; AST, normale Datei-/Bytegrößen und Whitespace ohne Befund. Praktische Bestätigung ausschließlich in Mains derselben Remote-Suite. |
+
+Vor Produktedits ist die Funktionskarte damit aus dem aktuellen Bestand
+abgeleitet. Für die beiden zusätzlichen bestehenden Vollständigkeitsdateien
+wurde Main eine konkrete Schreibfreigabe gemeldet; bis dahin werden sie nicht
+verändert. `app/screen_modules.rs` bleibt ausschließlich lesbar und beim
+Captureautor. Keine Anpassung seiner Registrierungen ist für F1–F4 erforderlich.
+
+Erweiterung der F5-Karte vor der zugehörigen Fallergänzung: Mains gezielte
+Symbolsuche nennt zusätzlich zu Tabelle und Zustandsfall genau einen produktiven
+`is_paused`-Aufrufer, `screen_indicator_ui::watching`. Dieser Autor hat die
+inzwischen freigegebene Datei vollständig gelesen: Pausensitzungen müssen im
+Freigabeindikator bleiben. Andernfalls würde er bei ausschließlich versteckten
+Viewern nach seiner Leerfrist selbst schließen, obwohl die Steuersitzung noch
+besteht. Die ViewerHidden-Pausenklassifikation erhält diesen C7-Vertrag. Der
+bestehende Fall `screen_task_gui_indicator_lines` erhält eine zusätzliche
+Erhaltungsassertion; Produktionslogik und bisherige Indikatoraussagen bleiben
+unverändert. Main hat die genaue Datei vor dieser Änderung schreibbar freigegeben.
+
+### Umsetzung und eigene anschließende Anti-Regressionsreview zu C27/C46/C55/C58/A19
+
+F1–F5 sind umgesetzt; derselbe Autor hat danach die gesamte ermittelte Kette
+selbst nachgeprüft. Die zusätzlichen Schreibfreigaben für beide vorhandenen
+Vollständigkeitsfälle und die Indikatorassertion wurden jeweils vor deren
+Änderung von Main erteilt und in die exakte Scope-Datei aufgenommen.
+
+- C27: Nur die lokale Boolbindung und ihre zwei Verwendungen heißen jetzt
+  `can_retry`. Der Quellvergleich mit `d95dc404` bestätigt, dass der gesamte
+  übrige Kachelcode unverändert ist. Cursor, Klick, die drei wiederholbaren
+  Fehlergesichter und der tatsächliche Aufruf `retry(tile)` bleiben erhalten.
+  `retry` besitzt weiterhin seinen ursprünglichen Körper. `tile.session = None`
+  führt über den vorhandenen `ViewerSession::drop`-/`close`-Weg; gemeinsame
+  Decoder-/Bildbesitzer und ihre Leases werden dadurch nicht vorzeitig beendet.
+- C58/A19: `ViewerHidden` ist jetzt eine Pause. Der explizite Eintrittsarm
+  berücksichtigt die vorhandenen Lauf- und Wartezustände sowie NoDisplay.
+  Alle Übergänge zwischen bisherigen Zuständen bleiben unverändert: Ihre
+  Pausenklassifikation und bisherigen Matcharme wurden nicht verändert.
+  Hidden kann zu Starting/Streaming, vorhandenen Hostpausen, Rückfrage/Portal
+  und NoDisplay wechseln. Der Ended-Schutz, das Verbot des direkten
+  Connecting→Hidden-Wechsels, wiederholte Zustände und Unknown bleiben erhalten.
+  Der bestehende Zustandsfall enthält alle dreizehn Varianten und die zusätzlichen
+  Hidden-Schritte. Sein bisheriger Pfad bleibt als Reihenfolge erhalten; die
+  Endzeitmarke wurde entsprechend den zusätzlichen Schritten fortgeschrieben.
+  Bestehende End-, NoDisplay-, Unknown-, Serialisierungs- und Schlüsselbildregeln
+  sind weiter Bestandteil desselben Falls.
+- C55: `state_text` besitzt einen eigenen Hidden-Arm mit dem Text „Diese Ansicht
+  ist nicht sichtbar; die Bildübertragung pausiert“. Er erklärt die angehaltene
+  Bildübertragung ohne einen Verbindungsabbruch zu behaupten. Der vorhandene
+  Vollständigkeitsfall prüft durch die erweiterte Zustandsliste weiterhin
+  eindeutige Texte und ausschließlich leeres Streaming. Kein Fehlertext oder
+  Beendigungsgrund wurde ersetzt oder entfernt.
+- Indirekter Indikatorvertrag: `screen_indicator_ui::watching` behält eine
+  versteckte Pausensitzung nun wie die vorhandenen Quellenpausen im aktiven
+  Freigabeindikator. Sichtbarkeit, Beenden einer Sitzung und Alle-beenden bleiben
+  verfügbar; der Indikator schließt bei einer solchen offenen Sitzung nicht
+  aufgrund seiner Leerfrist. Der bestehende Fall enthält die neue Erhaltungs-
+  assertion. Der Quellvergleich bestätigt unveränderte Produktionslogik und
+  unveränderte bisherige Indikatoraussagen.
+- C46: Der zweite Snapshotquellinitialisierer verwendet jetzt den bestehenden
+  echten `grant(size, contract)`-Helfer. Dessen Session, SourceKey, Generation,
+  Planbindung, SourcePixels-Slots und Ausgabeplan werden vor dem ersten Bild
+  durch dieselbe CaptureAuthority genehmigt. Der Quellbesitzer hält den Grant;
+  erzeugte CapturedImages und Records behalten ihre eigenen tatsächlichen
+  Slice-/Grantlebensdauern. Es wird keine zusätzliche Kasse eingeführt. Der
+  Quellvergleich bestätigt, dass der gesamte übrige Snapshotfixturecode samt
+  jeder bisherigen Aussage unverändert ist: Größen-/Familienvertrag, gesonderte
+  Snapshot-GOP, Ablehnung alter Präsentationen, erforderliches neues Live-
+  Schlüsselbild und anschließende neue Präsentationsfreigabe bleiben erhalten.
+
+Eine Pause ist weiterhin kein Ressourcenabschluss und keine neue Eingabefreigabe.
+Host-Visibilitygeneration, echte Capture-Aktivitätsquittung, Referenzboden und
+Draw-/Präsentationsbeleg bleiben vor der Eingabe wirksam. Die Zustandskorrektur
+verändert keine Quelle, Relation, Geräteidentität, Berechtigung oder bestehende
+Screen-/Login-Allokationsgrenze. Insbesondere wird der vorhandene Wirezustand
+`viewer_hidden` nicht umbenannt und keine Protokollvariante hinzugefügt.
+
+### Genaue Fälle für denselben Remote-Suiteeinstieg
+
+Kein Fall wurde lokal ausgeführt. Main hat die Aufnahme der drei vorhandenen
+Fälle `screen_task_session_state_moves_and_keyframe_requests`,
+`screen_task_viewer_state_texts_complete` und `screen_task_gui_indicator_lines`
+in denselben Suiteeintrag vorgemerkt; dieser Autor bearbeitet das Manifest nicht.
+Die vorhandene Snapshotgruppe ist bereits über `batches_task_b6_` ausgewählt.
+
+| Bestehender unveränderter Fallname | Konkreter erwarteter Erhalt |
+|---|---|
+| `screen_task_session_state_moves_and_keyframe_requests` | Hidden-Eintritt und Wiederaufnahme bei angenommenen Lauf-/Warte-/NoDisplay-Sitzungen, vorhandene Quellenpausen, terminales Ended, Connecting-/Unknown-Grenzen und bestehende Schlüsselbildregel. |
+| `screen_task_viewer_state_texts_complete` | Alle dreizehn Zustände haben ihre beabsichtigte Darstellung; nur Streaming bleibt leer. Bestehende Fehler-, End- und Eingabeblocktexte bleiben abgedeckt. |
+| `screen_task_gui_indicator_lines` | Eine offene versteckte Freigabe bleibt im Indikator sichtbar und beendbar; alle bisherigen Modus-/Quell-/Raum- und Pauseaussagen bleiben erhalten. |
+| `batches_task_b6_snapshot_returns_to_new_live_keyframe_without_stale_presentation` | Reale Capture-Zulassung des vorhandenen Quellplans, eigene Snapshot-GOP und neue Live-Präsentation nach echtem Schlüsselbild. |
+| `batches_task_b6_snapshot_preserves_accepted_limits_family_and_legacy_pixels` | Unveränderter Begleitfall: angenommene Bildgrenzen, Familie, Legacy-Pixel und tatsächliche Recordbesitzer. |
+| `batches_task_b6_abandoned_capture_output_retires_records_before_lease` | Unveränderter Begleitfall: aufgegebene Ausgabe beendet Records und Quelle vor Freigabe ihres Leases. |
+
+Für die reine lokale Namenskorrektur wurde keine neue Implementierungs-Spiegel-
+fixture angelegt. Sie führt denselben vorhandenen Klickpfad und dieselbe bereits
+vorhandene Wiederholungsfunktion wieder zusammen. Kein Fallname wurde geändert,
+keine Assertion entfernt und kein Erwartungswert zur Umgehung eines Befunds
+abgeschwächt.
+
+### Dateiübersicht, tatsächlicher Nachweis und offene Grenzen dieser Fortsetzung
+
+Geändert und selbst gelesen wurden ausschließlich die folgenden Dateien:
+
+| Datei | Zeilen | Bytes |
+|---|---:|---:|
+| `native/src/app/core/screen_tile_face.rs` | 308 | 10 768 |
+| `native/src/app/core/screen_texts.rs` | 144 | 7 132 |
+| `native/src/app/core/screen_texts_tests.rs` | 128 | 4 323 |
+| `native/src/app/core/screen_indicator_ui.rs` | 288 | 9 963 |
+| `native/src/screen/core/session_state.rs` | 216 | 7 610 |
+| `native/src/screen/core/session_state_tests.rs` | 119 | 3 961 |
+| `native/src/screen/core/batches_snapshot_task_tests.rs` | 281 | 10 825 |
+| `docs/plaene/2026-10-24-batches/fix-regression-screenbudget.md` | Bericht | Bericht |
+
+Es wurde keine neue Datei erstellt. Die zusätzliche gezielte Lektüre umfasst:
+
+- `/tmp/smartexplorer-rv1-40354605251/screen-budget-errors.json` vollständig;
+- `/tmp/smartexplorer-fix-screen-budget-scope.json` einschließlich seiner konkret
+  von Main erteilten Erweiterungen;
+- `native/src/app/core/screen_tile_grid.rs` und `screen_session.rs` für Probe,
+  Preview, Wiederholungsretirement und gemeinsame Viewerbesitzer;
+- `native/src/app/screen_modules.rs` für die unveränderten Registrierungsnamen;
+- `native/src/screen/core/visibility.rs`, `host_visibility.rs` und `host_session.rs`
+  für Hidden-Meldung, echte Capturequittung, Referenzboden und Wiederaufnahme;
+- `native/src/screen/core/capture_test_support.rs`, `host_backend.rs`,
+  `host_capture.rs` sowie die gezielt untersuchten kanonischen Zulassungs- und
+  Pipelinegrenzen `capture_admission.rs`, `capture_grant.rs`, `host_pipeline.rs`;
+- `native/review-task-manifest.json`, `docs/oberflaechen/bildschirm.md` und
+  `docs/plaene/2026-10-24-batches/rv1-modulplan.md` gezielt zum betroffenen
+  Suite-/Status-/Snapshotanschluss.
+
+Die eigene anschließende AST-Prüfung der geänderten Rustquellen meldet keinen
+Syntaxfehler. Normale Zeilen-/Bytegrößen bleiben unter 500 Zeilen und 50 KiB.
+`git diff --check` und die Whitespaceprüfung melden keinen Befund. Die statische
+Fallnamensprüfung bestätigt unveränderte Namen und Reihenfolge; die zusätzlichen
+Quellvergleiche bestätigen die oben genannten unveränderten Retry-, Indikator-
+und Snapshotanteile. Die Prüfung verwendet ausschließlich die bereits installierte
+Tree-sitter-Grammatik und führt keinen Produkt- oder Fixturecode aus.
+
+Compiler-/Typbestätigung, UI-Klicklauf, physischer Speicherpeak, Geräteabschluss
+und praktische Hidden-/Resume-/Snapshotbestätigung bleiben nach diesen Änderungen
+unbekannt. Sie gehören ausschließlich in Mains dieselbe Remote-Suite. Es fand
+kein lokaler Build-, Compiler-, Formatter-, Test-, Server-, Installations-,
+App-/Host- oder Geräteaufruf statt. Main behält Git, Manifest, Rootgraph und
+Suite-/Releaseorchestrierung. Es bleibt keine bekannte ungeklärte Quellabhängigkeit
+der hier zugewiesenen fünf Diagnose-IDs; die vorgemerkte Fallregistrierung und
+die praktische Bestätigung sind noch offene Integrationsschritte von Main.

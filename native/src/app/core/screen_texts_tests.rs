@@ -4,7 +4,7 @@
 use super::*;
 use crate::screen::core::session_state::EndReason;
 
-const STATES: [SessionState; 12] = [
+const STATES: [SessionState; 13] = [
     SessionState::Connecting,
     SessionState::WaitingForApproval,
     SessionState::WaitingForPortal,
@@ -12,6 +12,7 @@ const STATES: [SessionState; 12] = [
     SessionState::Streaming,
     SessionState::SecureDesktop,
     SessionState::WindowMinimized,
+    SessionState::ViewerHidden,
     SessionState::HostLocked,
     SessionState::SessionInactive,
     SessionState::NoDisplay,

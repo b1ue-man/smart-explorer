@@ -215,14 +215,14 @@ pub(crate) fn draw_tile(
         }
     }
     let openable = matches!(face, Face::Picture | Face::Ask);
-    let retry = matches!(face, Face::ProbeFailed(_) | Face::Failed(_) | Face::Limit);
-    if openable || retry {
+    let can_retry = matches!(face, Face::ProbeFailed(_) | Face::Failed(_) | Face::Limit);
+    if openable || can_retry {
         response.clone().on_hover_cursor(CursorIcon::PointingHand);
     }
     if !response.clicked() {
         return None;
     }
-    if retry {
+    if can_retry {
         retry(tile);
         return None;
     }
