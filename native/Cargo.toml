@@ -21,6 +21,9 @@ exclude = ["explorer-command"]
 iroh = { path = "../vendor/iroh-1.3.0" }
 noq = { path = "../vendor/noq-1.3.0" }
 noq-proto = { path = "../vendor/noq-proto-1.3.0" }
+# Preserve consumed GL errors until the owned renderer can reject false receipts.
+# Pinned upstream and removal condition: vendor/SMART_EXPLORER_GL_ERRORS.md.
+egui_glow = { path = "../vendor/egui_glow-0.29.1" }
 
 [[bin]]
 name = "se-mcp-launcher"

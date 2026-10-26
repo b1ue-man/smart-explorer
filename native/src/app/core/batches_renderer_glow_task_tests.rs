@@ -1,5 +1,100 @@
 //! Controlled output, UI and worker fixtures. These cases do not claim a live GL context.
 use super::*;
+use super::super::super::{screen_render_cpu::{finish_glow_upload,finish_glow_draw},
+    screen_render_glow::{GlowImage,GlowUpload,native_texture},
+    screen_image_memory::{CpuPixels,ImageAccess,owner_limits}};
+use crate::screen::core::{image_admission::{ImageAdmission,ImageRole,LocalImagePolicy},frame_memory::CapacityCeiling};
+use eframe::egui_glow::{GlOperationError,glow};
+
+fn local_owner()->Arc<ImageAdmission> {
+    ImageAdmission::in_test_pool(Arc::new(MemoryPool::default()),LocalImagePolicy {
+        facts:None,ceiling:CapacityCeiling::bounded(MAX_WORKING_BYTES),
+    },owner_limits().unwrap())
+}
+fn packet(slot:&RenderSlot,owner:&Arc<ImageAdmission>,frame:PresentedFrame,seq:u64)->Package {
+    Package::Cpu(super::super::super::screen_render_upload::PreparedImage {
+        image:CpuPixels::convert(&image(),ImageAccess::Local(owner.clone())).unwrap(),memory:None,
+        frame:Some(frame),generation:slot.generation(),seq,
+    })
+}
+fn successful_upload(slot:&RenderSlot,package:Package) {
+    let mut s=lock(&slot.state);let claims=s.claim_upload(&package).unwrap();let previous=s.resident.take();
+    assert!(finish_glow_upload(&mut s,package,claims,previous,GlowUpload {
+        image:GlowImage {id:egui::TextureId::Managed(1),size:[2,2]},result:Ok(()),drain:Drain::default(),
+    },Drain::default()));
+}
+
+#[test]
+fn batches_task_b6_glow_zero_texture_name_returns_error_without_a_panic_hook() {
+    unsafe extern "system" fn zero(_:i32,out:*mut u32) {unsafe {*out=0;}}
+    unsafe extern "system" fn created(_:i32,out:*mut u32) {unsafe {*out=7;}}
+    assert!(native_texture(zero).is_err());assert_eq!(native_texture(created).unwrap().0.get(),7);
+}
+
+#[test]
+fn batches_task_b6_glow_failed_overwrite_has_no_resident_and_keeps_both_sources_until_drain() {
+    let ctx=egui::Context::default();let driver=ControlledDriver::install(&ctx);let owner=local_owner();
+    let slot=Arc::new(RenderSlot::default());driver.owner.attach(&slot);let first=stamp(1);
+    successful_upload(&slot,packet(&slot,&owner,first.clone(),1));driver.complete_upload(&slot);
+    let old=match &lock(&slot.state).resident.as_ref().unwrap().package {Package::Cpu(p)=>Arc::downgrade(&p.image),_=>unreachable!()};
+    let mut second=first;second.frame_id=2;let package=packet(&slot,&owner,second.clone(),2);
+    let mut s=lock(&slot.state);let claims=s.claim_upload(&package).unwrap();let previous=s.resident.take();
+    assert!(!finish_glow_upload(&mut s,package,claims,previous,GlowUpload {
+        image:GlowImage {id:egui::TextureId::Managed(1),size:[2,2]},
+        result:Err(GlOperationError::from_gl_code(glow::INVALID_OPERATION)),drain:Drain::default(),
+    },Drain::default()));
+    assert!(s.resident.is_none());assert!(s.retiring.as_ref().unwrap().superseded.is_some());drop(s);
+    assert_eq!(owner.live_count(ImageRole::ColorSource).unwrap(),2);
+    assert_eq!(owner.live_count(ImageRole::RenderSurface).unwrap(),1);
+    assert_eq!(owner.live_count(ImageRole::UploadStaging).unwrap(),1);
+    assert!(!driver.draw(&slot,second,Arc::new(||panic!("failed upload must not produce a receipt"))));
+    driver.complete_retirement(&slot);assert!(old.upgrade().is_some());
+    driver.complete_upload(&slot);assert!(old.upgrade().is_none());
+    assert_eq!(owner.live_count(ImageRole::RenderSurface).unwrap(),0);
+    assert_eq!(owner.live_count(ImageRole::UploadStaging).unwrap(),0);
+    assert_eq!(owner.live_count(ImageRole::ColorSource).unwrap(),1,"only the retry candidate remains");
+    driver.owner.returned();assert_eq!(owner.live_bytes().unwrap(),0);
+}
+
+#[test]
+fn batches_task_b6_glow_successful_upload_followed_by_failed_draw_never_quittiert_new_stamp() {
+    let ctx=egui::Context::default();let driver=ControlledDriver::install(&ctx);let owner=local_owner();
+    let slot=Arc::new(RenderSlot::default());driver.owner.attach(&slot);let first=stamp(1);
+    successful_upload(&slot,packet(&slot,&owner,first.clone(),1));driver.complete_upload(&slot);
+    let calls=Arc::new(AtomicUsize::new(0));let count=calls.clone();
+    let receipt:super::super::super::screen_presented::Presented=Arc::new(move||{count.fetch_add(1,Ordering::SeqCst);});
+    assert!(driver.draw(&slot,first.clone(),receipt.clone()));
+    let mut second=first;second.frame_id=2;
+    successful_upload(&slot,packet(&slot,&owner,second.clone(),2));
+    let result=finish_glow_draw(&mut lock(&slot.state),Err(GlOperationError::from_gl_code(glow::INVALID_FRAMEBUFFER_OPERATION)),|id| {
+        assert_eq!(id,egui::TextureId::Managed(1));Drain::default()
+    });
+    assert!(!result);assert!(!driver.draw(&slot,second,receipt));assert_eq!(calls.load(Ordering::SeqCst),1);
+    assert!(slot.frame().is_none());assert!(slot.id().is_none());
+    assert_eq!(owner.live_count(ImageRole::RenderSurface).unwrap(),1);
+    driver.complete_retirement(&slot);assert_eq!(owner.live_count(ImageRole::RenderSurface).unwrap(),1);
+    driver.complete_upload(&slot);assert_eq!(owner.live_count(ImageRole::RenderSurface).unwrap(),0);
+    driver.owner.returned();assert_eq!(owner.live_bytes().unwrap(),0);
+}
+
+#[test]
+fn batches_task_b6_glow_oom_attempt_keeps_real_claims_until_native_instance_return() {
+    let ctx=egui::Context::default();let driver=ControlledDriver::install(&ctx);let owner=local_owner();
+    let slot=Arc::new(RenderSlot::default());driver.owner.attach(&slot);let frame=stamp(1);
+    let package=packet(&slot,&owner,frame.clone(),1);let mut s=lock(&slot.state);
+    let claims=s.claim_upload(&package).unwrap();let error=GlOperationError::from_gl_code(glow::OUT_OF_MEMORY);
+    assert!(error.state_unreliable());
+    assert!(!finish_glow_upload(&mut s,package,claims,None,GlowUpload {
+        image:GlowImage {id:egui::TextureId::Managed(1),size:[2,2]},result:Err(error),drain:Drain::default(),
+    },Drain::default()));drop(s);
+    assert!(!driver.draw(&slot,frame,Arc::new(||panic!("OOM is not a successful presentation"))));
+    driver.owner.shutdown(&ctx,None);
+    assert_eq!(owner.live_count(ImageRole::RenderSurface).unwrap(),1);
+    assert_eq!(owner.live_count(ImageRole::UploadStaging).unwrap(),1);
+    assert_eq!(owner.live_count(ImageRole::ColorSource).unwrap(),1);
+    // Concrete return is the explicit event used for an unreliable GL instance.
+    driver.owner.returned();assert_eq!(owner.live_bytes().unwrap(),0);
+}
 #[test]
 fn batches_task_b6_renderer_discarded_output_does_not_free_a_resident_glow_role() {
     let ctx=egui::Context::default();let driver=ControlledDriver::install(&ctx);let pool=Arc::new(MemoryPool::default());
