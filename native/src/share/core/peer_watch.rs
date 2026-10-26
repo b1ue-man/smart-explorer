@@ -43,7 +43,7 @@ pub(super) fn subscribe(
             let run = (|| {
                 let endpoint = source.current()?;
                 let mut opened = node.open_stream(&endpoint, &identity)?;
-                let result = node.block_on(async {
+                let result = node.block_on_route(opened.generation, async {
                     io_deadline::run(
                         "Share watch request",
                         framing::send_ctrl(

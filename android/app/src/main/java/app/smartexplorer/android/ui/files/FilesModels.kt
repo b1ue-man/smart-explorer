@@ -84,7 +84,7 @@ internal sealed interface FilesDialog {
     /** The place has no trash (`unsupported`): ask for permanent deletion. */
     data class DeletePermanently(val tabId: Long, val locations: List<String>) : FilesDialog
 
-    data class Conflict(val request: TransferRequest, val names: List<String>, val choosable: Boolean) : FilesDialog
+    data class Conflict(val request: TransferRequest, val names: List<String>, val choosable: Boolean, val folders: List<app.smartexplorer.android.api.FolderCollision> = emptyList()) : FilesDialog
 
     data class Extract(val tabId: Long, val entry: Entry) : FilesDialog
 

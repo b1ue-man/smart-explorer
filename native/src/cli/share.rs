@@ -4,6 +4,12 @@ use std::path::{Path, PathBuf};
 
 #[path = "share/devices.rs"]
 mod devices;
+#[path = "share/discover.rs"]
+mod discover;
+#[path = "share/discover_input.rs"]
+mod discover_input;
+#[path = "share/discover_output.rs"]
+mod discover_output;
 #[path = "share/discoverable.rs"]
 mod discoverable;
 #[path = "share/discoverable_input.rs"]
@@ -88,6 +94,8 @@ enum Command {
     Device(devices::DeviceArgs),
     #[command(about = "Make this device or a room discoverable by name and PIN for a few minutes")]
     Discoverable(discoverable::DiscoverableArgs),
+    #[command(about = "Find discoverable devices or rooms and pair using a PIN")]
+    Discover(discover::DiscoverArgs),
     #[command(about = "Refresh or stop the headless Share worker")]
     Worker(WorkerArgs),
     #[command(about = "Local-network presence of paired devices and automatic internet sharing")]
@@ -160,6 +168,7 @@ pub(super) fn run(args: ShareArgs) -> Result<i32, String> {
         Some(Command::Device(args)) => devices::run(args)?,
         Some(Command::Trash(args)) => host_trash::run(args)?,
         Some(Command::Discoverable(args)) => discoverable::run(args)?,
+        Some(Command::Discover(args)) => return discover::run(args),
         Some(Command::Worker(args)) => worker(args.command)?,
         Some(Command::Lan(args)) => lan::run(args)?,
     }

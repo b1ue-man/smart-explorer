@@ -40,6 +40,21 @@ impl PickerPurpose {
             PickerPurpose::DownloadTo { .. } => "📂 Speichern unter…",
         }
     }
+    /// Stable geometry keys are independent of labels, paths and endpoints.
+    pub(in crate::app) fn geometry_key(&self) -> &'static str {
+        match self {
+            Self::SyncSource => "picker.source",
+            Self::SyncTarget => "picker.target",
+            Self::ScanFolder => "picker.open",
+            Self::AnalyticsFolder => "picker.analytics",
+            Self::ReclaimFolder => "picker.reclaim",
+            Self::MirrorDest => "picker.mirror",
+            Self::BisyncDest => "picker.bisync",
+            Self::CopyDest => "picker.copy",
+            Self::DownloadTo { .. } => "picker.save",
+        }
+    }
+
     /// Sync, storage-analysis and "Herunterladen nach…" targets support
     /// remote connections.
     pub(in crate::app) fn local_only(&self) -> bool {

@@ -4,6 +4,10 @@ use super::*;
 
 impl App {
     pub fn new(just_updated: bool, initial_path: Option<PathBuf>) -> Self {
+        static WINDOW_OPENER: std::sync::Once = std::sync::Once::new();
+        WINDOW_OPENER.call_once(|| {
+            if let Err(error) = super::share_apps_ui::install_window_opener(super::family_picker::open_confirmed) { eprintln!("{error}"); }
+        });
         // DSK-M2: baseline first, so only later update requests close it.
         super::update_stop_ui::arm_window();
         Self::new_inner(just_updated, initial_path, true)
@@ -103,8 +107,9 @@ impl App {
                 String::new()
             }
         };
-        let drives = list_drives();
-        let drive_info = drive_info_list(&drives);
+        // Device enumeration/capacity reads start on the inventory worker.
+        let drives = Vec::new();
+        let drive_info = Vec::new();
         let recent: Vec<String> = std::fs::read_to_string(settings_path())
             .ok()
             .map(|s| s.lines().map(|l| l.to_string()).collect())
@@ -272,6 +277,8 @@ impl App {
             btime_min_date: None,
             btime_max_date: None,
 
+            drive_binding: None,
+            drive_state: super::drive_snapshot::DriveState::new(background),
             drives,
             drive_info,
             home,
@@ -473,6 +480,7 @@ impl App {
             share_lan_notice: None,
             share_status: String::new(),
             share_worker_running: false,
+            share_routes: None,
             share_worker_relay_url: String::new(),
             share_worker_candidates: Vec::new(),
             share_discovery: super::share_discovery_state::DiscoveryUiState::default(),

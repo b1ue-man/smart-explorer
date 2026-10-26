@@ -188,6 +188,7 @@ fn publish(
     };
     let observer = TreeObserver::default();
     let request = TreeRequest {
+        resume: false,
         recursive: false,
         force: true,
         expected_root: None,

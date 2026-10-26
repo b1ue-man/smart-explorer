@@ -180,6 +180,9 @@ fn run_scan(rt: &Runtime, ctx: &TaskCtx, session: &ScanSession) -> Result<Value,
                 data.revision += 1;
             }
             ScanMessage::Progress(progress) => data.scanned = progress.scanned,
+            // Android reports the existing bounded issue list. The retained
+            // local retry roots belong to the desktop partial-scan action.
+            ScanMessage::DeniedRoots(_) => {}
             ScanMessage::Error(detail) => push_issue(&mut data, String::new(), detail),
             ScanMessage::FailedPaths(paths) => {
                 for (path, detail) in paths {

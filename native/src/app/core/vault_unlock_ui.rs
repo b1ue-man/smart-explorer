@@ -160,10 +160,10 @@ fn show_keep(ctx: &egui::Context, state: &mut State, effects: &mut Vec<Effect>) 
     };
     let (site, label) = (keep.site.clone(), keep.label.clone());
     let mut choice: Option<bool> = None;
-    egui::Window::new("Tresor sperren?")
+    crate::app::dialog_geometry::window(ctx, "vault_unlock_ui.0", "Tresor sperren?")
         .id(egui::Id::new("vault_lock_keep"))
         .collapsible(false)
-        .resizable(false)
+        .resizable(true)
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
         .show(ctx, |ui| {
             ui.label(egui::RichText::new(&label).strong());
@@ -258,10 +258,10 @@ fn show_unlock(ctx: &egui::Context, state: &mut State, effects: &mut Vec<Effect>
     let mut submit = false;
     let mut use_saved = false;
     let mut cancel = false;
-    egui::Window::new("Tresor entsperren")
+    crate::app::dialog_geometry::window(ctx, "vault_unlock_ui.1", "Tresor entsperren")
         .id(egui::Id::new("vault_unlock"))
         .collapsible(false)
-        .resizable(false)
+        .resizable(true)
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
         .show(ctx, |ui| {
             ui.label(egui::RichText::new(&dialog.label).strong());

@@ -99,7 +99,7 @@ pub(in crate::app) fn show(ctx: &egui::Context) {
     refresh(&mut view);
     let mut open = true;
     let title = format!("Sync-Protokoll – {}", view.name);
-    egui::Window::new(title)
+    super::dialog_geometry::window(ctx, "sync_job_log_ui.0", title)
         .id(egui::Id::new("sync-job-log-window"))
         .open(&mut open)
         .default_size([900.0, 520.0])
@@ -164,7 +164,7 @@ pub(in crate::app) fn show(ctx: &egui::Context) {
                     .collect()
             };
             let height = ui.text_style_height(&egui::TextStyle::Monospace);
-            egui::ScrollArea::both()
+            egui::ScrollArea::both().min_scrolled_height(0.0)
                 .auto_shrink([false, false])
                 .stick_to_bottom(view.follow)
                 .show_rows(ui, height, rows.len(), |ui, range| {

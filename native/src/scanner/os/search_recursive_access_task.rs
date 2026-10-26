@@ -16,6 +16,7 @@ fn search_recursive_access_task_local_budget_keeps_buffered_results() {
         bytes: Arc::new(AtomicU64::new(0)),
         errors: Arc::new(AtomicU64::new(0)),
         permission_denied: AtomicU64::new(0),
+        denied_roots: crate::scanner::DeniedRoots::default(),
         start: Instant::now(),
         sample_path: Arc::new(Mutex::new(String::new())),
         failed_paths: Arc::new(Mutex::new(Vec::new())),
@@ -23,6 +24,8 @@ fn search_recursive_access_task_local_budget_keeps_buffered_results() {
         budget_exhausted: AtomicBool::new(false),
         truncated: truncated.clone(),
         visited_directories: Mutex::new(HashSet::new()),
+        confined: None,
+        optical: None,
     });
     walk_parallel(
         &scanner,

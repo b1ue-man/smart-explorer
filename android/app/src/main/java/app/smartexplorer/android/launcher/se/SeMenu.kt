@@ -26,6 +26,7 @@ fun seMenuRows(item: HomeItem, context: MenuContext): List<MenuRow> {
                 rows += MenuRow("Bildschirm steuern") { open(SeActions.openScreen(screen, control = true)) }
             }
             rows += MenuRow("Geräteseite") { open(SeActions.SHARE_TAB) }
+            device?.let { rows += MenuRow("Programme auf diesem Gerät …") { open(SeActions.openApps(it.location)) } }
             OpenInFiles.intentFor(context.activity, ui.data?.devicesFolder, device?.key)?.let { intent ->
                 rows += MenuRow("In Dateien öffnen") { se.start(context.activity, intent) }
             }

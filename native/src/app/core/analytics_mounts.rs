@@ -157,6 +157,7 @@ mod tests {
         )
         .expect("config");
         MountSnapshot {
+            capacity: None,
             config,
             status: MountStatus::Mounted {
                 drive: DriveLetter::parse(letter).expect("letter"),

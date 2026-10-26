@@ -80,6 +80,8 @@ pub(super) struct ShareHostState {
     pub(super) lan_status: crate::share::LanStatus,
     /// This device's own discovery offers, folded from worker events.
     pub(super) discovery_offers: crate::share::DiscoveryOfferBook,
+    /// Live CLI pairing observers; independent of the consumable GUI queue.
+    pub(super) discovery_pairing: super::discovery_pairing_ipc::DiscoveryObservers,
     /// When the embedded worker's periodic reload may be skipped.
     reload_gate: service_lifecycle::ReloadGate,
     /// A configuration a repair kept back; delivered on the next tick (S66).
@@ -109,6 +111,7 @@ impl ShareHostState {
             pending_lan_events: Vec::new(),
             lan_status: crate::share::LanStatus::default(),
             discovery_offers: crate::share::DiscoveryOfferBook::default(),
+            discovery_pairing: super::discovery_pairing_ipc::DiscoveryObservers::default(),
             reload_gate: service_lifecycle::ReloadGate::default(),
             configure_deferred: false,
         }

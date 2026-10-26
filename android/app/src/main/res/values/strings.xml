@@ -56,6 +56,7 @@
     <string name="screen_reason_monitor_not_found">Bildschirm nicht gefunden</string>
     <string name="screen_reason_window_not_found">Fenster nicht gefunden</string>
     <string name="screen_reason_portal_selects_source">die Quelle wählt der Nutzer am Gerät</string>
+    <string name="screen_reason_source_identity_unavailable">Android bestätigt keine Paketidentität. Android-Systemauswahl öffnen und die Quelle am Gerät auswählen.</string>
     <string name="screen_reason_no_display">keine Anzeige</string>
 
     <string name="screen_error_permission_denied">Das Gerät erlaubt diesen Zugriff nicht</string>

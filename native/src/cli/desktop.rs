@@ -7,7 +7,7 @@
 use clap::{Args, Subcommand, ValueEnum};
 
 use crate::desktop::core::config::{
-    Background, ConfigChange, ConfigContext, ForeignDesktopIcons, OpenDevicesWith,
+    Background, ConfigChange, ConfigContext, ForeignDesktopIcons, OpenDevicesWith, OpenFoldersWith,
 };
 use crate::desktop::core::state::Part;
 use crate::desktop::os::control::{Control, ControlError, Outcome};
@@ -168,6 +168,12 @@ struct ConfigArgs {
     #[arg(
         long,
         value_enum,
+        help = "Open desktop folders in Smart Explorer (default) or the system file manager"
+    )]
+    open_folders_with: Option<OpenWith>,
+    #[arg(
+        long,
+        value_enum,
         help = "GNOME desktop icons: keep or take over (Linux)"
     )]
     foreign_desktop_icons: Option<ForeignIcons>,
@@ -190,6 +196,10 @@ impl ConfigArgs {
             open_devices_with: self.open_devices_with.map(|open| match open {
                 OpenWith::App => OpenDevicesWith::App,
                 OpenWith::FileManager => OpenDevicesWith::FileManager,
+            }),
+            open_folders_with: self.open_folders_with.map(|open| match open {
+                OpenWith::App => OpenFoldersWith::App,
+                OpenWith::FileManager => OpenFoldersWith::FileManager,
             }),
             foreign_desktop_icons: self.foreign_desktop_icons.map(|icons| match icons {
                 ForeignIcons::Keep => ForeignDesktopIcons::Keep,

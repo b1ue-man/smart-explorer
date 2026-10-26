@@ -17,7 +17,7 @@ internal object CoreEvents {
     private const val TAG = "SmartExplorerCore"
 
     /** Events of one poll, or `null` when the envelope is an error or unreadable. */
-    fun parse(json: Json, raw: String): List<CoreEvent>? {
+    fun parse(json: Json, raw: String, localHost: ((JsonObject) -> Boolean)? = null): List<CoreEvent>? {
         val envelope = try {
             json.parseToJsonElement(raw) as? JsonObject
         } catch (e: SerializationException) {
@@ -29,7 +29,9 @@ internal object CoreEvents {
             Log.w(TAG, "event poll failed: ${envelope["err"]}")
             return null
         }
-        return events.mapNotNull { decode(json, it) }
+        return events.mapNotNull {
+            if (it is JsonObject && localHost?.invoke(it) == true) null else decode(json, it)
+        }
     }
 
     private fun decode(json: Json, element: JsonElement): CoreEvent? {
@@ -102,10 +104,17 @@ internal object CoreEvents {
                 gop = (event["gop"] as? JsonPrimitive)?.longOrNull ?: 0L,
                 encoder = event.text("encoder").orEmpty(),
                 hardware = (event["hardware"] as? JsonPrimitive)?.booleanOrNull ?: false,
+                familyLayoutRevision = (event["familyLayoutRevision"] as? JsonPrimitive)?.longOrNull,
             )
             "stats" -> ScreenViewEvent.Stats(session, event)
             "controlState" -> ScreenViewEvent.ControlState(session, event.text("holder"), event.text("blocked"))
+            "visibilityAck" -> ScreenViewEvent.VisibilityAck(
+                session,
+                (event["geometryGeneration"] as? JsonPrimitive)?.longOrNull ?: return null,
+                (event["minFrameId"] as? JsonPrimitive)?.longOrNull ?: return null,
+            )
             "windows" -> ScreenViewEvent.Windows(session, event)
+            "family" -> ScreenViewEvent.Family(session, event)
             "error" -> ScreenViewEvent.Error(session, event.text("code").orEmpty(), event.text("detail"))
             "ended" -> ScreenViewEvent.Ended(session, event.text("code").orEmpty(), event.text("detail"))
             else -> null
@@ -179,6 +188,7 @@ sealed interface ScreenViewEvent : CoreEvent {
         val gop: Long,
         val encoder: String,
         val hardware: Boolean,
+        val familyLayoutRevision: Long? = null,
     ) : ScreenViewEvent
 
     data class Stats(override val session: Long, val body: JsonObject) : ScreenViewEvent
@@ -187,6 +197,8 @@ sealed interface ScreenViewEvent : CoreEvent {
     data class ControlState(override val session: Long, val holder: String?, val blocked: String?) : ScreenViewEvent
 
     data class Windows(override val session: Long, val body: JsonObject) : ScreenViewEvent
+    data class Family(override val session: Long, val body: JsonObject) : ScreenViewEvent
+    data class VisibilityAck(override val session: Long, val geometryGeneration: Long, val minFrameId: Long) : ScreenViewEvent
 
     data class Error(override val session: Long, val code: String, val detail: String?) : ScreenViewEvent
 

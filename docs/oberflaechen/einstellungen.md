@@ -200,3 +200,28 @@ Die Tresor-Einstellungen gehören zu jedem Tresor. Vollständige Matrix und Bele
 
 - Sync-Aktionen in der CLI (siehe Tabelle Sync-Setups, letzte Zeile).
 - Die Desktop-GUI liest Sync-Setups, die `se sync` ändert, beim nächsten Neuladen der Liste (Öffnen des Fensters „Sync-Setups“, Speichern im Editor); eine offene Liste zeigt bis dahin den alten Stand. Gleiches galt schon für Android-Änderungen.
+
+## Laufender Gesamtkandidat: Darstellung und verwaltete Einbindung
+
+Quellstand 2026-10-26; gemeinsame Remote-Suite und Veröffentlichung stehen aus.
+
+- Desktop-Einstellungen verwenden die gemeinsamen Gruppen und Formularspalten
+  der Geräte-/Freigabeseiten. Android verwendet passende schmale Gruppen in
+  `DeviceSettingsPage.kt`. Lade-, Speicher- und Fehlerzustände bleiben am
+  betroffenen Gegenstand; CLI-/JSON-Diagnosefelder bleiben erhalten.
+- Eingebaute Desktoppicker und Dialoge speichern nur ihre typgebundene
+  Geometrie. Ein externer System-/Portalpicker wird dadurch nicht umkonfiguriert.
+  Quellen: `N/app/core/dialog_geometry.rs`, `picker_impl.rs`, `picker_types.rs`.
+- Erfolgreicher Desktop-/CLI-Updateabschluss aktualisiert ausschließlich
+  verwaltete Plugin-/MCP-Einträge. Der stabile Launcher startet private,
+  hashgebundene Generationen; kompatible laufende Server bleiben an ihrer
+  bisherigen Generation. Fremde Agentkonfiguration bleibt erhalten.
+  Quellen: `N/mcp_launcher/os/shared/{generator,transaction,compatibility}.rs`
+  und `N/cli/plugin/{codex,claude,managed}.rs`.
+- Google-Drive-Refresh und Persistenz bleiben an den bestätigten Account
+  gebunden (`N/gdrive/core/auth.rs`). Ein Kontowechsel wird nicht als
+  erfolgreicher Refresh des vorherigen Accounts gespeichert.
+
+Für Medienorientierung gelten ausschließlich die Android-Systemeinstellungen;
+Smart Explorer bietet dafür keine konkurrierende Apppräferenz. Der vollständige
+Vorschauvertrag steht in [medien.md](medien.md).

@@ -85,6 +85,20 @@ pub(super) fn apply_exact(
     expected_principal: ExecPrincipal,
     policy: ExecGrant,
 ) -> io::Result<ExecGrantMutation> {
+    apply_exact_with_access(auth, registry, None, target, expected_principal, policy)
+}
+
+/// Persisted grants share the auth mutex with AccessV2 admission. Recheck
+/// the exact candidate before publishing it, including contextual constraints
+/// that do not affect the existing Exec registry.
+pub(super) fn apply_exact_with_access(
+    auth: &Arc<Mutex<ShareAuthState>>,
+    registry: &ExecRegistry,
+    access: Option<&super::access_revocation::AccessLeaseRegistry>,
+    target: ExecGrantTarget,
+    expected_principal: ExecPrincipal,
+    policy: ExecGrant,
+) -> io::Result<ExecGrantMutation> {
     let mut state = auth
         .lock()
         .map_err(|_| eio("Share Exec authorization state is locked"))?;
@@ -92,9 +106,10 @@ pub(super) fn apply_exact(
         .authorization_epoch
         .checked_add(1)
         .ok_or_else(|| eio("Share authorization epoch exhausted"))?;
-    let relation_id = state.identity.direct_lookup_id.clone();
+    let mut candidate = state.clone();
+    let relation_id = candidate.identity.direct_lookup_id.clone();
     let (principal, current) =
-        resolve_exact_policy(&mut state, &target, &relation_id, policy.grants_any())?;
+        resolve_exact_policy(&mut candidate, &target, &relation_id, policy.grants_any())?;
     if principal != expected_principal || policy.policy_revision < current.policy_revision {
         return Err(denied(
             "persisted Exec grant no longer matches the exact identity",
@@ -102,13 +117,12 @@ pub(super) fn apply_exact(
     }
     install(registry, &principal, current, &policy, next_epoch)?;
     *current = policy.clone();
-    state.authorization_epoch = next_epoch;
-    Ok(ExecGrantMutation {
-        target,
-        principal,
-        policy,
-        authorization_epoch: next_epoch,
-    })
+    candidate.authorization_epoch = next_epoch;
+    if let Some(access) = access {
+        access.recheck(&candidate, super::core::now_secs());
+    }
+    *state = candidate;
+    Ok(ExecGrantMutation { target, principal, policy, authorization_epoch: next_epoch })
 }
 
 /// Installs the next policy of one grant: a grant whose Exec capabilities

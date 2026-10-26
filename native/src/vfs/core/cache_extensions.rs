@@ -14,6 +14,27 @@ use super::super::{
 use super::CachingBackend;
 
 impl BackendExtensions for CachingBackend {
+    fn directory_reservation_supported(&self, root: &str) -> bool {
+        crate::vfs::directory_reservation_supported(&*self.inner, root)
+    }
+
+    fn create_dir_exclusive(&self, path: &str) -> VfsResult<()> {
+        let result = crate::vfs::create_dir_exclusive(&*self.inner, path);
+        // A lost reply can still have created the directory.
+        self.invalidate(path);
+        result
+    }
+    fn directory_identity(&self, path: &str) -> VfsResult<Option<String>> {
+        crate::vfs::directory_identity(&*self.inner, path)
+    }
+    fn file_identity(&self, path: &str) -> VfsResult<Option<String>> {
+        crate::vfs::file_identity(&*self.inner, path)
+    }
+
+    fn capacity(&self, root: &str) -> VfsResult<crate::vfs::CapacitySnapshot> {
+        crate::vfs::capacity(&*self.inner, root)
+    }
+
     fn version_archive_policy(&self) -> crate::vfs::VersionArchivePolicy {
         calls::version_archive_policy(&*self.inner)
     }

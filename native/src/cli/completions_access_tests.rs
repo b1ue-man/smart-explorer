@@ -168,6 +168,7 @@ fn perm_task_completions_access() {
         device_id: "laptop".into(),
         fingerprint: "fp-laptop".into(),
         relation: "direct".into(),
+        relation_id: "direct-test".into(),
         room: None,
         capability: Capability::ExecTerminal,
         account_label: Some("alice".into()),
@@ -175,6 +176,7 @@ fn perm_task_completions_access() {
         requested_at: NOW,
         surface: Some("window".into()),
         older_client_terminal: false,
+        request: None,
     };
     let ids = approval_candidates_from(&[request]);
     assert_eq!(values(&ids), ["ab".repeat(16)]);

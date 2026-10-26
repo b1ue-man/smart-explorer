@@ -145,7 +145,7 @@ impl App {
             if let Some((c, path)) = crate::connect::saved_and_path(loc) {
                 self.connect_saved_at(&c, &path);
             } else if loc.starts_with("gdrive://") {
-                self.open_gdrive_browse(); // best-effort: Drive root
+                self.open_gdrive_location(loc);
             } else {
                 self.error_msg = Some(
                     "Verbindung für diesen Favoriten nicht gefunden — zuerst verbinden".into(),
@@ -168,6 +168,7 @@ impl App {
     pub(in crate::app) fn swap_with_tab(&mut self, i: usize) {
         let mut t = std::mem::take(&mut self.tabs[i]);
         std::mem::swap(&mut t.root_path, &mut self.root_path);
+        std::mem::swap(&mut t.drive_binding, &mut self.drive_binding);
         std::mem::swap(&mut t.recursive, &mut self.recursive);
         std::mem::swap(&mut t.entries, &mut self.entries);
         std::mem::swap(&mut t.view, &mut self.view);

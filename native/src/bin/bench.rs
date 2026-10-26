@@ -43,7 +43,7 @@ fn main() {
                 }
                 entry_count += c.len() as u64;
             }
-            ScanMessage::Progress(_) => {}
+            ScanMessage::Progress(_) | ScanMessage::DeniedRoots(_) => {}
             ScanMessage::Error(e) => eprintln!("error: {}", e),
             ScanMessage::FailedPaths(paths) => {
                 eprintln!("  ({} failed paths reported)", paths.len());

@@ -16,6 +16,8 @@ use std::time::{Duration, Instant};
 /// Time a child gets after the stop request before it is terminated.
 const STOP_GRACE: Duration = Duration::from_secs(10);
 const POLL: Duration = Duration::from_millis(50);
+type InputWriter = std::thread::JoinHandle<Result<(), String>>;
+type Captured = (Vec<std::thread::JoinHandle<()>>, Option<InputWriter>);
 
 /// The worker polls the job's cancel flag and stops the child itself.
 struct CliControl;
@@ -39,6 +41,20 @@ pub(super) fn start(session: &Session, args: &Args<'_>) -> Result<Arc<Job>, Stri
         return Err(refusal);
     }
     let stdin = args.opt_string("stdin")?;
+    let pairing=arguments.get(0).is_some_and(|v|v=="share")
+        && arguments.get(1).is_some_and(|v|v=="discover")
+        && arguments.get(2).is_some_and(|v|v=="pair");
+    if pairing {
+        if arguments.iter().any(|v|v=="--pin"||v.starts_with("--pin=")) {
+            return Err("pairing PINs must use --pin-stdin and the separate stdin field".into());
+        }
+        if arguments.iter().any(|v|v=="--pin-prompt") {
+            return Err("interactive PIN prompts are unavailable in MCP; use --pin-stdin and stdin".into());
+        }
+        if !arguments.iter().any(|v|v=="--pin-stdin") || stdin.as_ref().is_none_or(String::is_empty) {
+            return Err("MCP pairing requires --pin-stdin and nonempty stdin; no pairing was started".into());
+        }
+    }
     let mut command = Command::new(&session.executable);
     command
         .args(&arguments)
@@ -65,14 +81,16 @@ pub(super) fn start(session: &Session, args: &Args<'_>) -> Result<Arc<Job>, Stri
         });
         error
     };
-    let mut child = command.spawn().map_err(|error| {
+    let maintenance = crate::mcp_launcher::is_maintenance(&arguments);
+    let mut child = crate::mcp_launcher::spawn_generation_child(command, stdin.is_some()).map_err(|error| {
         not_started(format!(
             "cannot start {}: {error}",
             session.executable.display()
         ))
     })?;
-    let readers = match capture(&job, &mut child, stdin) {
-        Ok(readers) => readers,
+    if maintenance { job.release_operation_after_handoff(); }
+    let (readers, input_writer) = match capture(&job, &mut child, stdin) {
+        Ok(result) => result,
         Err(error) => {
             let _ = child.kill();
             let _ = child.wait();
@@ -84,7 +102,7 @@ pub(super) fn start(session: &Session, args: &Args<'_>) -> Result<Arc<Job>, Stri
         let mut stop_deadline = None;
         let status = loop {
             if job.cancel_requested() && stop_deadline.is_none() {
-                let graceful = super::os::request_child_stop(&child);
+                let graceful = child.request_stop();
                 stop_deadline =
                     Some(Instant::now() + if graceful { STOP_GRACE } else { Duration::ZERO });
             }
@@ -100,6 +118,12 @@ pub(super) fn start(session: &Session, args: &Args<'_>) -> Result<Arc<Job>, Stri
         for reader in readers {
             let _ = reader.join();
         }
+        let input_error = input_writer.and_then(|writer| match writer.join() {
+            Ok(Ok(())) => None,
+            Ok(Err(error)) => Some(error),
+            Err(_) => Some("standard input writer failed".to_string()),
+        });
+        if let Some(error) = input_error { return JobEnd { status: JobStatus::Failed, result: json!({}), error: Some(error) }; }
         match status {
             Ok(status) => JobEnd {
                 status: if job.cancel_requested() {
@@ -123,17 +147,21 @@ pub(super) fn start(session: &Session, args: &Args<'_>) -> Result<Arc<Job>, Stri
 /// Feeds the optional standard input and starts the output readers.
 fn capture(
     job: &Arc<Job>,
-    child: &mut std::process::Child,
+    child: &mut crate::mcp_launcher::GenerationChild,
     stdin: Option<String>,
-) -> Result<Vec<std::thread::JoinHandle<()>>, String> {
-    if let (Some(text), Some(mut pipe)) = (stdin, child.stdin.take()) {
-        std::thread::Builder::new()
+    ) -> Result<Captured, String> {
+    let input_writer = match (stdin, child.stdin.take()) {
+        (Some(text), Some(mut pipe)) => {
+        Some(std::thread::Builder::new()
             .name(format!("se-mcp-{}-stdin", job.id))
             .spawn(move || {
-                let _ = pipe.write_all(text.as_bytes());
+                pipe.write_all(text.as_bytes()).map_err(|_| "cannot complete standard input".to_string())
             })
-            .map_err(|error| format!("cannot feed standard input: {error}"))?;
-    }
+            .map_err(|error| format!("cannot feed standard input: {error}"))?)
+        }
+        (Some(_), None) => return Err("cannot feed standard input: the requested pipe is missing".into()),
+        (None, _) => None,
+    };
     let mut readers = Vec::new();
     if let Some(pipe) = child.stdout.take() {
         readers.push(copy_stream(job, "stdout", pipe)?);
@@ -141,7 +169,7 @@ fn capture(
     if let Some(pipe) = child.stderr.take() {
         readers.push(copy_stream(job, "stderr", pipe)?);
     }
-    Ok(readers)
+    Ok((readers, input_writer))
 }
 
 fn copy_stream(

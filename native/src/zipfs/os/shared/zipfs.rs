@@ -164,7 +164,16 @@ impl ZipBackend {
     }
 }
 
+impl crate::vfs::BackendExtensions for ZipBackend {
+    fn capacity(&self, root: &str) -> VfsResult<crate::vfs::CapacitySnapshot> {
+        let mut snapshot = crate::vfs::CapacitySnapshot::unknown(self.state_identity(), root);
+        snapshot.source = crate::vfs::CapacitySource::Archive;
+        snapshot.read_only = true;
+        Ok(snapshot)
+    }
+}
 impl Backend for ZipBackend {
+    fn extensions(&self) -> Option<&dyn crate::vfs::BackendExtensions> { Some(self) }
     fn scheme(&self) -> Scheme {
         Scheme::Local
     }

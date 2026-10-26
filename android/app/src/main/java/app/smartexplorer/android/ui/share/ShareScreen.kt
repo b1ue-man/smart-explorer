@@ -48,6 +48,9 @@ import app.smartexplorer.android.ui.connections.RemovalReportDialog
 import app.smartexplorer.android.ui.more.HintLine
 import app.smartexplorer.android.ui.more.SubPageScaffold
 import app.smartexplorer.android.ui.more.TextActions
+import app.smartexplorer.android.ui.settings.SettingsArea
+import app.smartexplorer.android.ui.settings.SettingsAreaSelector
+import app.smartexplorer.android.ui.settings.ShareServerSettings
 import app.smartexplorer.android.ui.common.Snackbars
 import app.smartexplorer.android.ui.screen.ScreenHostSection
 import app.smartexplorer.android.ui.screen.ScreenTarget
@@ -72,7 +75,11 @@ private enum class ShareBlock { Problems, Device, Policy, Pairings, Devices, Roo
  * requests.
  */
 @Composable
-fun ShareScreen() {
+fun ShareScreen(
+    settingsArea: SettingsArea? = null,
+    onSettingsAreaChange: ((SettingsArea) -> Unit)? = null,
+    onBack: (() -> Unit)? = null,
+) {
     val vm = viewModel { ShareViewModel() }
     val listState = rememberLazyListState()
     var dialog by remember { mutableStateOf<ShareDialog?>(null) }
@@ -124,6 +131,10 @@ fun ShareScreen() {
     }
     LaunchedEffect(pending, screenDevices) {
         when (val request = pending) {
+            is NavRequest.OpenApps -> {
+                dialog = ShareDialog.Apps("Gerät", endpoint = request.endpoint)
+                AppNav.consume(request)
+            }
             is NavRequest.OpenScreen -> {
                 ScreenTargetJson.parse(request.target)
                     .onSuccess { target ->
@@ -146,10 +157,22 @@ fun ShareScreen() {
         openRoom = { room -> screenGrid = ScreenGridRequest(room) },
     )
 
-    val blocks = status?.let(::blocksOf) ?: listOf(ShareBlock.Problems)
-    LaunchedEffect(pending, status != null) {
+    val allBlocks = status?.let(::blocksOf) ?: listOf(ShareBlock.Problems)
+    val blocks = allBlocks.filter { block ->
+        settingsArea == null || block == ShareBlock.Problems || when (settingsArea) {
+            SettingsArea.ThisDevice -> block in listOf(ShareBlock.Device, ShareBlock.Policy, ShareBlock.Exports)
+            SettingsArea.Devices -> block in listOf(ShareBlock.Pairings, ShareBlock.Devices, ShareBlock.Buttons, ShareBlock.Requests, ShareBlock.ExecHost, ShareBlock.ScreenHost, ShareBlock.Removed, ShareBlock.DirectCode)
+            SettingsArea.Rooms -> block in listOf(ShareBlock.Rooms, ShareBlock.Buttons)
+            else -> false
+        }
+    }
+    LaunchedEffect(pending, status != null, settingsArea) {
         val request = pending
         if (request != NavRequest.ShowShareRequests || status == null) return@LaunchedEffect
+        if (settingsArea != null && settingsArea != SettingsArea.Devices) {
+            onSettingsAreaChange?.invoke(SettingsArea.Devices)
+            return@LaunchedEffect
+        }
         val index = blocks.indexOf(ShareBlock.Requests)
         try {
             if (index >= 0) listState.animateScrollToItem(index)
@@ -162,18 +185,26 @@ fun ShareScreen() {
     }
 
     SubPageScaffold(
-        title = "Teilen",
-        onBack = null,
+        title = if (settingsArea == null) "Teilen" else "Einstellungen",
+        onBack = onBack,
         actions = {
             IconButton(onClick = { vm.reload() }) { SeIcon(R.drawable.ic_refresh, contentDescription = "Aktualisieren") }
         },
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
             // Reloads follow every share event; only the first load and actions show the bar.
+            if (settingsArea != null && onSettingsAreaChange != null) SettingsAreaSelector(settingsArea, onSettingsAreaChange)
+            val incomingCount = status?.incoming.orEmpty().count { it.canAccept || it.canReject }
+            if (settingsArea != null && settingsArea != SettingsArea.Devices && incomingCount > 0) {
+                TextButton(onClick = { AppNav.send(NavRequest.ShowShareRequests) }, modifier = Modifier.padding(horizontal = 8.dp)) { Text("$incomingCount offene Anfragen beantworten …") }
+            }
             LoadingBar(vm.busy || (vm.loading && status == null))
             LazyColumn(Modifier.fillMaxSize().testTag("share-list"), state = listState) {
                 items(blocks, key = { it.name }) { block ->
-                    Column { ShareBlockContent(block, vm, status, nowMs, screenLinks, open = { dialog = it }) }
+                    Column {
+                        ShareBlockContent(block, vm, status, nowMs, screenLinks, open = { dialog = it })
+                        if (block == ShareBlock.Device && settingsArea == SettingsArea.ThisDevice) ShareServerSettings()
+                    }
                 }
             }
         }
@@ -281,7 +312,10 @@ private fun ShareBlockContent(block: ShareBlock, vm: ShareViewModel, status: Sha
             }
         }
         ShareBlock.Pairings -> UnconfirmedPairingsSection(vm.unconfirmed, open)
-        ShareBlock.Devices -> DevicesSection(status?.devices.orEmpty(), peerActions(vm, screens, open))
+        ShareBlock.Devices -> {
+            DevicesSection(status?.devices.orEmpty(), peerActions(vm, screens, open))
+            DeviceRightsIndex(status, open)
+        }
         ShareBlock.Rooms -> RoomsSection(status?.rooms.orEmpty(), peerActions(vm, screens, open))
         // Wraps instead of scrolling sideways, so no button hides behind the screen edge.
         ShareBlock.Buttons -> FlowRow(
@@ -292,6 +326,7 @@ private fun ShareBlockContent(block: ShareBlock, vm: ShareViewModel, status: Sha
             FilledTonalButton(onClick = { open(ShareDialog.Connect) }) { Text("Gerät verbinden") }
             FilledTonalButton(onClick = { open(ShareDialog.CreateRoom) }) { Text("Raum erstellen") }
             FilledTonalButton(onClick = { open(ShareDialog.JoinRoom) }) { Text("Raum beitreten") }
+            FilledTonalButton(onClick = { open(ShareDialog.LoginSetup) }) { Text("Maschinenanmeldung") }
         }
         ShareBlock.Requests -> if (status != null) {
             RequestsSection(
@@ -328,6 +363,12 @@ private fun ShareBlockContent(block: ShareBlock, vm: ShareViewModel, status: Sha
                     stop = { job -> vm.stopExec(job) },
                     programs = { target -> open(ShareDialog.ExecPrograms(target)) },
                     log = { open(ShareDialog.ExecLog) },
+                    settings = { target ->
+                        val grant = status.writeGrants?.firstOrNull { it.deviceId == target.deviceId && target.relation == "direct" }
+                        val member = status.rooms.flatMap { it.members }.firstOrNull { it.deviceId == target.deviceId && it.fingerprint == target.fingerprint }
+                        val key = grant?.publicKey ?: member?.publicKey
+                        if (key != null) open(ShareDialog.DeviceSettings(grant?.name ?: member?.name.orEmpty(), deviceId = target.deviceId, publicKey = key))
+                    },
                 ),
             )
         }
@@ -353,8 +394,11 @@ private fun peerActions(vm: ShareViewModel, screens: ScreenLinks, open: (ShareDi
     removeRoom = { room -> open(ShareDialog.RemoveRoom(room.profileId, room.name)) },
     shareBack = { device -> open(ShareDialog.ShareBack(device)) },
     roomPolicy = { room -> open(ShareDialog.RoomPolicy(room)) },
-    roomMember = { room, member, action -> open(ShareDialog.RoomMember(room, member, action)) },
-    connection = { device -> open(ShareDialog.DeviceConnection(device)) },
+    roomMember = { room, member, action ->
+        if (action == "settings") open(ShareDialog.DeviceSettings(member.name, deviceId = member.deviceId, publicKey = member.publicKey))
+        else open(ShareDialog.RoomMember(room, member, action))
+    },
+    connection = { device -> open(ShareDialog.DeviceSettings(device.name, contactId = device.contactId)) },
     renameRoom = { room -> open(ShareDialog.RenameRoom(room)) },
     rejoinRoom = { room -> vm.act("Nicht beigetreten", "Raum „${room.name}“ wird wieder beigetreten") { ShareSettingsApi.rejoinRoom(room.profileId) } },
     resetMemberTrust = { room, member -> open(ShareDialog.ResetMemberTrust(room, member)) },

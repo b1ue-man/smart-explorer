@@ -157,7 +157,7 @@ impl PeerSegmentedStage {
         )?;
         let reply = self
             .node
-            .block_on(io_deadline::run("peer stage request", async {
+            .block_on_route(opened.generation, io_deadline::run("peer stage request", async {
                 send_ctrl(
                     &mut opened.send,
                     &Ctrl::Fs {
@@ -208,7 +208,7 @@ impl SegmentedStage for PeerSegmentedStage {
         let lease = self.lease.clone();
         let answered = self
             .node
-            .block_on(io_deadline::run("peer stage range open", async {
+            .block_on_route(opened.generation, io_deadline::run("peer stage range open", async {
                 send_ctrl(
                     &mut opened.send,
                     &Ctrl::Fs {
@@ -327,7 +327,7 @@ impl RangeWriter {
         };
         let result = self
             .node
-            .block_on(io_deadline::run("peer stage range end", async {
+            .block_on_route(opened.generation, io_deadline::run("peer stage range end", async {
                 opened.send.finish().map_err(eio)?;
                 recv_resp_wire(&mut opened.recv).await
             }));
@@ -376,7 +376,7 @@ impl Write for RangeWriter {
             let Some(opened) = self.opened.as_mut() else {
                 return Err(eio("Bereichsstrom geschlossen"));
             };
-            let result = self.node.block_on(io_deadline::run(
+            let result = self.node.block_on_route(opened.generation, io_deadline::run(
                 "peer stage range data",
                 send_tagged(&mut opened.send, tag, &bytes),
             ));

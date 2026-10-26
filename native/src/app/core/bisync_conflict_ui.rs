@@ -28,7 +28,7 @@ impl App {
         let choices_disabled = worker_active || merge_active || bulk_active;
         let conflict_count = self.bisync_conflicts.len();
 
-        egui::Window::new(format!("⚠ Sync-Konflikte ({conflict_count})"))
+        super::dialog_geometry::window(ctx, "bisync_conflict_ui.0", format!("⚠ Sync-Konflikte ({conflict_count})"))
             .collapsible(false)
             .resizable(true)
             .default_size([700.0, 460.0])
@@ -63,8 +63,9 @@ impl App {
                 });
                 self.ui_conflict_progress(ui, &mut stop_or_cancel);
                 ui.separator();
-                egui::ScrollArea::vertical()
+                egui::ScrollArea::vertical().min_scrolled_height(0.0)
                     .auto_shrink([false, false])
+                    .max_height(super::dialog_geometry::remaining_height(ui, 1.0))
                     .show_rows(
                         ui,
                         CONFLICT_ROW_HEIGHT,

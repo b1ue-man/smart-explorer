@@ -62,7 +62,18 @@ internal sealed interface ShareDialog {
     data class Readmit(val device: RemovedDevice) : ShareDialog
     data class PairingDecision(val pairing: UnconfirmedPairing, val revoke: Boolean) : ShareDialog
     data class RequestPolicy(val policy: ShareRequestPolicy) : ShareDialog
+    data class DeviceSettings(val name: String, val contactId: String? = null, val deviceId: String? = null, val publicKey: String? = null) : ShareDialog
+    data class AccessSource(val targetKey: String) : ShareDialog
     data class DeviceConnection(val device: ShareDevice) : ShareDialog
+    data class Tcp(val name: String, val contactId: String? = null, val deviceId: String? = null, val publicKey: String? = null) : ShareDialog
+    data class Rdp(val name: String, val contactId: String? = null, val deviceId: String? = null, val publicKey: String? = null) : ShareDialog
+    data class Apps(val name: String, val contactId: String? = null, val deviceId: String? = null, val publicKey: String? = null, val endpoint: String? = null) : ShareDialog
+    data class Families(val name: String, val contactId: String?, val deviceId: String?, val publicKey: String?) : ShareDialog
+    data class FamilyView(val target: app.smartexplorer.android.ui.screen.ScreenTarget, val entry: app.smartexplorer.android.api.FamilyListEntry, val name: String) : ShareDialog
+    data class AppWindow(val confirmed: app.smartexplorer.android.api.ConfirmedRemoteAppWindow) : ShareDialog
+    data object LoginSetup : ShareDialog
+    data class LoginView(val target: app.smartexplorer.android.api.LoginTarget, val user: String) : ShareDialog
+    data class AppGrant(val name: String, val deviceId: String, val publicKey: String, val source: kotlinx.serialization.json.JsonObject? = null) : ShareDialog
     data class ResetTrust(val device: ShareDevice) : ShareDialog
     data class RenameRoom(val room: ShareRoom) : ShareDialog
     data class ResetMemberTrust(val room: ShareRoom, val member: ShareMember) : ShareDialog
@@ -85,6 +96,28 @@ internal fun ShareDialogHost(
 ) {
     val action = rememberShareAction()
     when (dialog) {
+        is ShareDialog.Tcp -> TcpDialog(dialog, onDismiss)
+        is ShareDialog.Rdp -> RdpDialog(dialog, onDismiss)
+        is ShareDialog.Apps -> AppsDialog(dialog, onDismiss, onOpenWindow = { onReplace(ShareDialog.AppWindow(it)) })
+        is ShareDialog.Families -> FamilyTargetsDialog(dialog, onDismiss, onReplace)
+        is ShareDialog.FamilyView -> app.smartexplorer.android.ui.screen.FamilyScreen(dialog.target, dialog.entry, dialog.name, onDismiss) { family, close ->
+            app.smartexplorer.android.ui.screen.ScreenViewScreen(family.target, family.title, close, family = family)
+        }
+        is ShareDialog.AppWindow -> ConfirmedAppWindowDialog(dialog.confirmed, onDismiss, onReplace)
+        ShareDialog.LoginSetup -> app.smartexplorer.android.ui.login.LoginTargetDialog(onDismiss) { target, user -> onReplace(ShareDialog.LoginView(target, user)) }
+        is ShareDialog.LoginView -> app.smartexplorer.android.ui.login.LoginViewScreen(dialog.target, dialog.user, onDismiss)
+        is ShareDialog.AppGrant -> AppGrantDialog(dialog, onDismiss)
+        is ShareDialog.DeviceSettings -> DeviceSettingsPage(dialog, vm, onDismiss)
+        is ShareDialog.AccessSource -> {
+            val target = vm.status?.execTargets?.firstOrNull { it.targetKey == dialog.targetKey }
+            if (target == null) {
+                ShareActionDialog("Quelle nicht mehr vorhanden", action, onDismiss, enabled = false, onConfirm = {}) {
+                    androidx.compose.material3.Text("Die Geräteidentität oder Beziehung wurde geändert. Schließen und neu laden.")
+                }
+            } else AccessDialog(target, vm.access?.accessOf(target.targetKey), vm.access?.execProvider,
+                onConfirm = { change -> action.submit(vm, "Rechte nicht gespeichert", onDismiss) { app.smartexplorer.android.api.ShareAccessApi.setAccess(target.targetKey, change) } },
+                onDismiss = onDismiss, action = action)
+        }
         is ShareDialog.Rename -> TextInputDialog(
             title = "Gerätename",
             label = "Name",

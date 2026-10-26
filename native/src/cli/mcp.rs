@@ -33,6 +33,20 @@ mod os;
 mod response;
 #[path = "mcp/screen_tool.rs"]
 mod screen_tool;
+#[path = "mcp/screen_window_tool.rs"]
+mod screen_window_tool;
+#[path = "mcp/tcp_tool.rs"]
+mod tcp_tool;
+#[path = "mcp/apps_tool.rs"]
+mod apps_tool;
+#[path = "mcp/rdp_tool.rs"]
+mod rdp_tool;
+#[path = "mcp/rdp_shutdown.rs"]
+mod rdp_shutdown;
+#[path = "mcp/login_tool.rs"]
+mod login_tool;
+#[path = "mcp/login_shutdown.rs"]
+mod login_shutdown;
 #[path = "mcp/search_tool.rs"]
 mod search_tool;
 #[path = "mcp/server.rs"]
@@ -80,5 +94,6 @@ own sessions end with it.";
 pub(super) struct McpArgs {}
 
 pub(super) fn run(_args: McpArgs) -> Result<i32, String> {
+    if let Some(code) = crate::mcp_launcher::launch_from_installed()? { return Ok(code); }
     server::serve()
 }

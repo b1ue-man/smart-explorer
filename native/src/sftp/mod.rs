@@ -158,3 +158,9 @@ pub use terminal::{SshTerminalError, SshTerminalRequest};
 pub use url::backend_from_url;
 
 pub(crate) use errors::io_err;
+
+#[path = "core/capacity.rs"]
+mod capacity;
+
+#[path = "core/folder_reservation.rs"]
+mod folder_reservation;

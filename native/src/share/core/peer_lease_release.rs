@@ -62,9 +62,9 @@ fn schedule_release(
                     return;
                 }
             };
-            let result = node.block_on(io_deadline::run_for(
+            let result = node.block_on_route(opened.generation, io_deadline::run_for_until(
                 "peer mount lease release",
-                timeout,
+                timeout, Some(deadline),
                 async {
                     send_ctrl(
                         &mut opened.send,

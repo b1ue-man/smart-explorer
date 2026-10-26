@@ -113,9 +113,38 @@ impl App {
         self.watcher_rx = Some(rx);
     }
 
-    pub(in crate::app) fn drain_watcher(&mut self) {
-        use notify::event::{CreateKind, EventKind, ModifyKind, RemoveKind, RenameMode};
+    /// Apply only topology changes; unaffected watches keep their native state.
+    pub(in crate::app) fn update_drive_watches(&mut self, removed: &[String], added: &[String]) {
+        use notify::{RecursiveMode, Watcher};
+        let Some(watcher) = self.watcher.as_mut() else { return; };
+        let mut errors = Vec::new();
+        for root in removed {
+            // Device removal can already have invalidated the native watch.
+            let _ = watcher.unwatch(Path::new(root));
+        }
+        // Reject queued events only for removed/replaced roots. Events of
+        // unaffected roots must still update their existing index generation.
+        let mut retained = Vec::new();
+        if let Some(rx) = &self.watcher_rx {
+            while let Ok(message) = rx.try_recv() {
+                match message {
+                    Ok(event) if !event.paths.iter().any(|path| removed.iter().any(|root|
+                        crate::app::drive_snapshot::contains(root, &path.to_string_lossy()))) => retained.push(event),
+                    Err(error) => errors.push(error.to_string()),
+                    _ => {}
+                }
+            }
+        }
+        for root in added {
+            if let Err(error) = watcher.watch(Path::new(root), RecursiveMode::Recursive) {
+                errors.push(format!("{root}: {error}"));
+            }
+        }
+        for error in errors { self.push_app_error("Ordnerindex-Watcher", error); }
+        self.apply_drive_watcher_events(retained);
+    }
 
+    pub(in crate::app) fn drain_watcher(&mut self) {
         let mut events: Vec<notify::Event> = Vec::new();
         let mut watcher_error = None;
         let mut disconnected = false;
@@ -147,6 +176,31 @@ impl App {
             return;
         }
 
+        self.apply_drive_watcher_events(events);
+    }
+
+    fn apply_drive_watcher_events(&mut self, events: Vec<notify::Event>) {
+        for event in &events {
+            if matches!(event.kind, notify::EventKind::Access(_)) { continue; }
+            for path in &event.paths {
+                let path = path.to_string_lossy();
+                if self.remote.is_none() && crate::scanner::retry_contains(&self.root_path, &path) {
+                    self.read_access.invalidate_partial();
+                }
+                for tab in &mut self.tabs {
+                    if tab.remote.is_none() && crate::scanner::retry_contains(&tab.root_path, &path) {
+                        tab.read_access.invalidate_partial();
+                    }
+                }
+                if self.analytics_source.as_ref().is_some_and(|source| !source.is_remote()
+                    && crate::scanner::retry_contains(source.root(), &path)) {
+                    if self.analytics_access.invalidate_partial() {
+                        self.analytics_state = StorageRunState::Partial;
+                    }
+                }
+            }
+        }
+        use notify::event::{CreateKind, EventKind, ModifyKind, RemoveKind, RenameMode};
         let normalize = |p: &std::path::Path| -> String { p.to_string_lossy().replace('\\', "/") };
         let allowed = |path: &std::path::Path| -> bool {
             let name = path

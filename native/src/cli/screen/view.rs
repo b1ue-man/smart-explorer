@@ -104,6 +104,18 @@ fn report(json: bool, pid: u32) {
     });
 }
 
+/// Open an exact generation-bearing selector; the host rechecks its lifetime
+/// and the viewer's rights when the native window connects.
+pub(crate) fn open_family(device: &str, source: &str, control: bool) -> Result<u32, String> {
+    let parsed = SourceId::parse(source).map_err(|error|error.to_string())?;
+    if crate::screen::core::family_protocol::selector(&parsed).is_none() {
+        return Err("source must be the exact window:@family selector from screen families".into());
+    }
+    let choice = super::select_device(device)?;
+    let target = target_json(&choice, Some(source), control, false)?;
+    launch(&StartRequest::ScreenView { target_json:target.to_string() })
+}
+
 pub(super) fn run_view(args: ViewArgs) -> Result<i32, String> {
     let choice = super::select_device(&args.device)?;
     let target = target_json(

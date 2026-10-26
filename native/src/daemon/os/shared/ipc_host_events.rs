@@ -49,6 +49,9 @@ impl ShareHost {
         let now = crate::share::core_now_secs();
         for event in events {
             use crate::share::ShareEvent as Event;
+            if let Event::Discovery(discovery) = &event {
+                state.discovery_pairing.observe(discovery);
+            }
             let mut ui_event = Some(event.clone());
             match relation_events::apply(
                 &mut state.profiles,

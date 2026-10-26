@@ -76,6 +76,7 @@ fn tree_snapshot(status: MountStatus) -> MountSnapshot {
     .with_location_directory(Some(tree_location()))
     .unwrap();
     MountSnapshot {
+        capacity: None,
         config,
         status,
         recovery: MountRecovery::Clean,

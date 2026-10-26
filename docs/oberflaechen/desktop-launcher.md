@@ -162,3 +162,19 @@ se Desktop startet den Hintergrunddienst nie selbst. Der Wächter liest den Shar
 - X11: ändert sich die Monitorliste, startet der Wächter alle Flächen neu (Prüfung jede Sekunde); die RandR-Ereignisse der Fläche melden nur die Arbeitsfläche neu zu lesen, eine Nachricht `monitors_changed` an den Wächter gibt es von der X11-Fläche nicht.
 - Layer-Backend: `DESKTOP-LAYER-SOFTWARE` (kein CPU-Rasterisierer), `DESKTOP-LAYER-IME`, `DESKTOP-WAYLAND-DND` (siehe Abschnitt 7); der Systemhintergrund (`platform::system_wallpaper`, KDE, GNOME und die anderen Desktops) und der Wechsel des Hintergrunds (Abfrage der Quelle alle fünf Sekunden) gelten auch dort; die Zwischenablage schreibt und liest über den Sitz der letzten Eingabe auf der Fläche (sonst über den ersten Sitz); ohne bisherige Eingabe auf der Fläche (keine Serie) gibt es kein Kopieren.
 - Annahme A41 (die Desktop-Ansicht `ShareSnapshotPeek` startet im Startgrund `drive-restore` keinen Share-Host; Statusbefehle mit `ShareSnapshot` heben die Einschränkung auf) prüfen `desktop_task_peek_does_not_start_share_host` und `drive_task_status_command_promotes_restricted_daemon`.
+
+## Laufender Gesamtkandidat: Öffnen und Widgetziehen
+
+Quellstand 2026-10-26; gemeinsame Remote-Suite und Veröffentlichung stehen aus.
+
+Desktopordner verwenden den vorhandenen Ein-Klick-/Doppelklickvertrag;
+`N/app/core/desktop_surface_app.rs` und `desktop_surface_menu_ui.rs` verbinden
+Öffnen und Kontextaktionen mit derselben Auswahl. Android bewahrt während des
+Widgetziehens den Inhalt des tatsächlichen Widgets über `A/launcher/widgets/
+WidgetPreview.kt` und `WidgetView.kt`; der Draglayer verwendet diese Darstellung
+in `A/launcher/ui/DragLayer.kt`. Diese Änderung beweist noch keine Gerätegeste.
+
+Geräteaktionen führen zu derselben zentralen Geräteseite und ihren
+Fenster-/Programm-/TCP-/RDP-Anschlüssen; deren Grenzen stehen in
+[fernzugriff.md](fernzugriff.md). Die eigene Android-Dateivorschau ist getrennt
+in [medien.md](medien.md) dokumentiert.

@@ -25,6 +25,7 @@ pub(super) struct Port {
     /// Remote identity of an own session, to refuse a different `target`.
     target_key: Option<String>,
     log: Arc<Mutex<ActivityLog>>,
+    _operation: Arc<Mutex<Option<crate::mcp_launcher::OperationGuard>>>,
 }
 
 #[derive(Default)]
@@ -78,7 +79,7 @@ impl ShellRegistry {
                 env: BTreeMap::new(),
             },
         )?;
-        let port = Arc::new(Port::new(client, true, Some(spec.key())));
+        let port = Arc::new(Port::new(client, true, Some(spec.key()))?);
         *current = Some(port.clone());
         Ok(port)
     }
@@ -102,7 +103,7 @@ impl ShellRegistry {
             ));
         }
         let client = SessionClient::attach(&entry, &owner_label())?;
-        let port = Arc::new(Port::new(client, false, None));
+        let port = Arc::new(Port::new(client, false, None)?);
         *current = Some(port.clone());
         Ok(port)
     }
@@ -227,25 +228,32 @@ impl ShellRegistry {
 }
 
 impl Port {
-    fn new(client: SessionClient, owned: bool, target_key: Option<String>) -> Self {
+    fn new(client: SessionClient, owned: bool, target_key: Option<String>) -> Result<Self,String> {
+        let operation=Arc::new(Mutex::new(crate::mcp_launcher::continuation_operation()?));
+        let active=operation.clone();
         let log = Arc::new(Mutex::new(ActivityLog::default()));
         let events = client.activity();
         let writer = log.clone();
-        let _ = std::thread::Builder::new()
+        let logging = std::thread::Builder::new()
             .name("se-mcp-shell-log".into())
             .spawn(move || {
                 for event in events {
+                    let ended=matches!(event,Activity::Ended {..});
                     if let Ok(mut log) = writer.lock() {
                         log.push(&event);
                     }
+                    if ended {if let Ok(mut guard)=active.lock() {guard.take();}}
                 }
+                if let Ok(mut guard)=active.lock() {guard.take();}
             });
-        Self {
+        if let Err(error)=logging {client.leave(); return Err(format!("cannot watch persistent shell lifetime: {error}"));}
+        Ok(Self {
+            _operation:operation,
             client,
             owned,
             target_key,
             log,
-        }
+        })
     }
 }
 

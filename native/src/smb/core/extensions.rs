@@ -10,6 +10,22 @@ use std::io;
 use std::sync::atomic::AtomicBool;
 
 impl BackendExtensions for SmbBackend {
+    fn directory_reservation_supported(&self, root: &str) -> bool {
+        // New directories are entries inside a share, never new SMB shares.
+        split_path(root).is_ok_and(|path| path.is_some())
+    }
+
+    fn create_dir_exclusive(&self, path: &str) -> VfsResult<()> {
+        super::folder_reservation::create(self, path)
+    }
+
+    fn directory_identity(&self, path: &str) -> VfsResult<Option<String>> {
+        super::folder_reservation::identity(self, path)
+    }
+
+    fn capacity(&self, root: &str) -> VfsResult<crate::vfs::CapacitySnapshot> {
+        super::capacity::query(self, root)
+    }
     fn target_limits(&self, _root: &str) -> TargetLimits {
         // SMB's FILETIME wire precision is 100 ns, but the server may host
         // FAT or another coarse filesystem. No volume type was negotiated.

@@ -1,6 +1,6 @@
 # Smart Explorer – Architektur
 
-Stand: 2026-10-21 (Lauf U42, v0.5.183). Kurzüberblick als erster Einstieg; Details liefert der Code-Graph
+Stand: 2026-10-26, Quellkandidat des laufenden Gesamtbatches; keine neue Releaseaussage. Kurzüberblick als erster Einstieg; Details liefert der Code-Graph
 (`graphify query "…"`, siehe AGENTS.md) und die Lesungen unter `docs/lesungen/`.
 Welche Oberflächen es gibt (CLI, Desktop, Android, Bridge, IPC, MCP, Netz, Doku) und
 welche Fähigkeit wo erreichbar ist: [`docs/oberflaechen/INDEX.md`](oberflaechen/INDEX.md).
@@ -79,6 +79,24 @@ Speicheranalyse – als Desktop-App (Windows, Linux; Rust + egui) und als Androi
 | Release | `native/publish-release-local.ps1` (einziger Einstieg), `docs/RELEASING.md` |
 
 ## Module und Ordner
+
+Die zusätzlichen Grenzen des laufenden Gesamtkandidaten sind:
+
+| Verantwortungsbereich | Einstieg und Vertrag |
+|---|---|
+| Dauerhafte Übertragungsentscheidung | `transfer/` hält Ordneraliase und Wiederanlaufbelege; `cli/folder_conflict.rs`, `cli/transfer_recovery.rs` und `app/core/transfer_recovery_ui.rs` verwenden dieselben Quellen-/Zielidentitäten. Physische optische Quellen laufen über `source_media/`. |
+| Inaktive Laufwerkswiederherstellung | `mount/` und `daemon/os/shared/mount_recovery_identity.rs`; `cli/drive_recovery.rs` reaktiviert zunächst gestoppt, ohne automatisches Einbinden. Providerkapazität bleibt von Cachebelegung getrennt. |
+| Nutzdaten erst nach Pfadfreigabe | `share/core/{route_state,route_policy,node_routes}.rs` und `share/os/shared/route_adapter.rs`; gepinnte Iroh-/Noq-Pakete unter dem Root-`vendor/` setzen die Freigabe vor Serialisierung durch. Diagnose und Datentransport verwenden denselben Routenstand. |
+| Maschinenanmeldung | `login/core/` hält Policy, Challenge und Bildbeleg; `login/os/` besitzt Broker, Gateway und gebundene OS-Helfer. `login_entry.rs` verarbeitet Dienst-/Installationsvalidator-Einstiege vor GUI-Nebeneffekten. |
+| TCP und RDP | `share/core/node_tcp.rs` bindet konkrete Ziel-IP und Lease; `rdp/` verbindet authentifizierten Hostbestand mit einem vorhandenen nativen Client. App-/MCP-Abschluss hält den Besitzer bis zur Bereinigung. |
+| Programme und Fensterfamilien | `apps/` hält Katalog und Startbeleg; `remote_window/` hält Familien-/Mitgliedsidentitäten und OS-Operationen. `screen/core/host_family.rs` verbindet ihre Layoutrevision mit Capture und Eingabe. |
+| Bildreferenz und Codecgrenze | `screen/core/{frame_budget,frame_reference,frame_protocol,viewer_reconstruct}.rs`; tatsächliche Decoder-Ausgabeidentität in `decoded_frame.rs`, Präsentation in `app/core/screen_presented.rs` und Android `ScreenSession.kt`. Ein Codec-Fallback bleibt sichtbar. |
+| Android-Medienrotation | `ui/viewer/{MediaViewer,MediaGeometry,MediaPlaybackState,ImagePage,PlayerPage}.kt`; Android-Systemrotation bestimmt die Ausrichtung, pfadgebundener Medienzustand überlebt die Neuanordnung. |
+
+Oberflächen und Plattformausnahmen des Fernzugriffs:
+[`fernzugriff.md`](oberflaechen/fernzugriff.md). Der Quellkandidat ist noch nicht
+durch die gemeinsame Remote-Suite oder einen terminalen Release bestätigt.
+
 - `native/src/*/core/` plattformneutrale Logik; `*/os/{windows,linux_os,android,shared}` Adapter,
   per `#[cfg]`/`#[path]` in `mod.rs` gewählt (Android hat eigene Arme; `target_os = "android"` ist nicht `linux`).
 - `native/src/app/` nur Desktop (egui); egui-freie Logik liegt in Kernmodulen, `app/` hält Re-Export-Schalen.

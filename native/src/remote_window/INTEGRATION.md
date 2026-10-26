@@ -1,5 +1,11 @@
 # P4a/c/d: Hostvertrag und Integrationsnachweis
 
+Historische Übergabe der abgegrenzten Agentenaufträge. Die Aussagen zu noch
+fehlenden Main-Anschlüssen und nicht ausgeführten Commits beziehen sich auf
+deren jeweilige Abgabe. Aktueller Integrationsstand:
+`docs/plaene/2026-10-24-batches/umsetzung.md`; die später korrigierte
+X11-Pixmapgrenze ist in `review-b8.md`, Befund B8-R6, dokumentiert.
+
 Stand: 2026-10-25. Dies ist ein Quelltextkandidat. Es wurden keine Builds,
 Compiler, Formatter, Tests, Server, Commits, Pushes oder Graphneubauten ausgeführt.
 Eine erfolgreiche Laufzeit oder vollständige Produktintegration ist nicht belegt.

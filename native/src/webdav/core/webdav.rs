@@ -119,6 +119,16 @@ impl WebdavBackend {
         self.url.clone()
     }
 
+    /// Explicit Depth-0 properties through the verified metadata transport.
+    pub(super) fn propfind_properties(&self, path: &str, body: &str) -> VfsResult<String> {
+        let response = metadata_request::send(self, path, "0", body).map_err(request_err)?;
+        if response.status() != 207 {
+            return Err(io::Error::new(io::ErrorKind::InvalidData,
+                "WebDAV property query did not return multistatus"));
+        }
+        super::listing_body::read(response)
+    }
+
     pub(super) fn url_for(&self, path: &str) -> String {
         format!("{}{}", self.base, encode_path(path))
     }
@@ -361,6 +371,9 @@ impl Backend for WebdavBackend {
     }
 
     fn rename_no_replace(&self, src: &str, dst: &str) -> VfsResult<()> {
+        if self.stat(src)?.is_dir {
+            return super::folder_reservation::rename(self, src, dst);
+        }
         self.move_stage_time(src, dst, false)
     }
 

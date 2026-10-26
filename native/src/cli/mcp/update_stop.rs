@@ -1,12 +1,8 @@
-//! Desktop updates replace `se` only after every process running it has
-//! exited: the updater helper writes `daemon.stop` = `stop` and waits at most
-//! 30 seconds (`bin/smart_explorer_updater/process.rs`). A server held open by
-//! an agent session must therefore end on that request. A request already
-//! present at start is ignored (a crashed update can leave it behind); a new
-//! or rewritten one ends the server. Version handoffs of `se update` are not
-//! affected: they never stop other `se` processes. The rule and the poll
-//! interval come from the shared helper `daemon::update_stop` (V8), which
-//! every other long-running process of the GUI and CLI images uses as well.
+//! Legacy and incompatible sessions close on a new stop marker. Managed
+//! sessions retain stdio only for a matching identity-bound transaction and
+//! an explicitly admitted hash/semantic contract. A completed matching marker
+//! is consumed once; a fresh plain stop and orphaned prepared owner never
+//! inherit that exception. The shared poll and close grace remain unchanged.
 use crate::daemon::{UpdateStopBaseline, UPDATE_STOP_POLL};
 
 #[cfg(test)]
@@ -14,24 +10,45 @@ use crate::daemon::is_new_request;
 
 pub(super) struct UpdateStop {
     baseline: UpdateStopBaseline,
+    marker: Option<crate::mcp_launcher::core::lifecycle::StopIdentity>,
 }
 
 impl UpdateStop {
     pub(super) fn arm() -> Self {
         Self {
             baseline: UpdateStopBaseline::arm(),
+            marker: crate::mcp_launcher::stop_marker_identity(&crate::support_dirs::sync_data_dir().join("daemon.stop")),
         }
     }
 
     pub(super) fn requested(&self) -> bool {
-        self.baseline.requested()
+        let current = crate::mcp_launcher::stop_marker_identity(&crate::support_dirs::sync_data_dir().join("daemon.stop"));
+        self.baseline.requested() || (current.is_some() && current != self.marker)
     }
 
     /// Resolves once an update asks every `se` process to exit.
-    pub(super) async fn wait(self) {
+    pub(super) async fn wait(mut self, session: std::sync::Arc<super::session::Session>, lifecycle: crate::mcp_launcher::LifecycleWatch) {
         loop {
             tokio::time::sleep(UPDATE_STOP_POLL).await;
+            if lifecycle.parent_ended() { return; }
             if self.requested() {
+                let negotiated = session.hello.lock().map(|h| h.as_ref().is_some_and(|r| r.accepted)).unwrap_or(false);
+                let local_marker = crate::support_dirs::sync_data_dir().join("daemon.stop");
+                let current=crate::mcp_launcher::stop_marker_identity(&local_marker);
+                let marker = if current.is_some() && current != self.marker { local_marker.clone() }
+                    else { crate::mcp_launcher::installation_stop_marker().unwrap_or(local_marker.clone()) };
+                let transaction=match crate::mcp_launcher::retained_update_transaction(&marker) {
+                    Ok(transaction)=>transaction,
+                    Err(error) if error.starts_with("lock_busy:")=>continue,
+                    Err(error)=>{eprintln!("se mcp: cannot validate update stop: {error}");None},
+                };
+                if negotiated && transaction.is_some() {
+                    let record=serde_json::json!({"transaction_id":transaction,"runtime":crate::mcp_launcher::current_runtime().map(|r|r.contract.runtime_sha256)});
+                    if let Err(error)=std::fs::write(session.directory.join("update-retained.v1.json"),record.to_string()) {eprintln!("se mcp: cannot acknowledge retained transaction: {error}");return;}
+                    self.baseline = UpdateStopBaseline::arm();
+                    self.marker = crate::mcp_launcher::stop_marker_identity(&local_marker);
+                    continue;
+                }
                 return;
             }
         }

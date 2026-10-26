@@ -228,10 +228,10 @@ fn show_wizard(
     }
     let busy = wizard.check_rx.is_some() || wizard.create_rx.is_some();
     let (mut next, mut back, mut create, mut cancel) = (false, false, false, false);
-    egui::Window::new("Neuer Tresor")
+    crate::app::dialog_geometry::window(ctx, "vault_create_ui.0", "Neuer Tresor")
         .id(egui::Id::new("vault_create_wizard"))
         .collapsible(false)
-        .resizable(false)
+        .resizable(true)
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
         .show(ctx, |ui| {
             ui.label(format!("Schritt {} von 3", wizard.step));

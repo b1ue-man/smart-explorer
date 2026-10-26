@@ -128,6 +128,14 @@ fn mounts_directory() -> PathBuf {
 /// What the user decided; `None` while nothing was decided or the file does
 /// not read (then the default may apply).
 pub(super) fn read_choice_in(directory: &Path) -> Option<Choice> {
+    let id = MountId::parse(DEVICES_MOUNT_ID).ok()?;
+    // The registry's one atomic ownership commit is also the effective
+    // switch-off decision. An old devices.json:On must never auto-enable
+    // an archived tree; a registry read error cannot authorize auto-enable.
+    match super::super::mount_registry::inactive::is_inactive_in(directory, &id) {
+        Ok(false) => {},
+        Ok(true) | Err(_) => return Some(Choice::Off),
+    }
     let body = std::fs::read(directory.join(CHOICE_FILE)).ok()?;
     serde_json::from_slice::<ChoiceFile>(&body)
         .ok()

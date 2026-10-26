@@ -26,3 +26,10 @@ pub(crate) mod exec_client_messages;
 pub(crate) mod exec_helper_protocol;
 #[path = "core/relation_proof.rs"]
 pub(crate) mod relation_proof;
+
+#[path = "core/access_constraints.rs"]
+pub(crate) mod access_constraints;
+#[path = "core/access_relation_view.rs"]
+pub(crate) mod access_relation_view;
+#[path = "core/access_revocation.rs"]
+pub(crate) mod access_revocation;

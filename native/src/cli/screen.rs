@@ -27,6 +27,8 @@ mod still_tests;
 mod tests;
 mod view;
 mod windows;
+mod families;
+pub(crate) use view::open_family;
 
 /// `se screen windows DEVICE --json` (MCP tool `screen`).
 pub(crate) use self::windows::windows_value;
@@ -93,6 +95,8 @@ enum ScreenCommand {
     },
     #[command(about = "List the windows of a device that can be shown as a source")]
     Windows(windows::WindowsArgs),
+    #[command(about = "List confirmed window-family selectors for separate native viewers")]
+    Families(families::FamiliesArgs),
     #[command(about = "Save a lossless still picture of a device's screen or window as a PNG")]
     Snapshot(snapshot::SnapshotArgs),
     #[command(about = "Click, move, scroll, type or press a key on a device's screen")]
@@ -135,6 +139,7 @@ pub(super) fn run(args: ScreenArgs) -> Result<i32, String> {
             Ok(0)
         }
         ScreenCommand::Windows(args) => windows::run(args),
+        ScreenCommand::Families(args) => families::run(args),
         ScreenCommand::Snapshot(args) => snapshot::run(args),
         ScreenCommand::Input(args) => input::run(args),
         ScreenCommand::View(args) => view::run_view(args),

@@ -3,6 +3,8 @@
 use crate::cli::tree_observer::{TreeObserver, TreeProgress};
 use crate::format::format_bytes;
 use std::io::{self, Write};
+#[path = "optical_status.rs"]
+mod optical_status;
 
 /// Bytes per second over the whole run; 0 without a measured time.
 pub(in crate::cli) fn average_rate(bytes: u64, elapsed_ms: u64) -> u64 {
@@ -41,7 +43,7 @@ pub(in crate::cli) fn stats_line(progress: &TreeProgress, wall_ms: u64) -> Strin
     };
     let seconds = format!("{:.1}", elapsed_ms as f64 / 1000.0);
     let rate = format_bytes(average_rate(bytes, elapsed_ms));
-    if progress.engine {
+    let mut line = if progress.engine {
         format!(
             "transferred {} files, {} in {seconds} s ({rate}/s); limited by: {}",
             progress.files_written,
@@ -53,7 +55,9 @@ pub(in crate::cli) fn stats_line(progress: &TreeProgress, wall_ms: u64) -> Strin
             "transferred {} in {seconds} s ({rate}/s); limited by: unknown (legacy path)",
             format_bytes(bytes)
         )
-    }
+    };
+    if let Some(optical) = optical_status::text(&progress.optical_readers) { line.push_str("; "); line.push_str(&optical); }
+    line
 }
 
 /// Writes the `--stats` line to stderr.

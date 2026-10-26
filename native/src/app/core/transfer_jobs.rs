@@ -15,9 +15,24 @@ impl App {
 
     pub(in crate::app) fn submit_job_for(
         &mut self,
-        job: TransferJob,
+        mut job: TransferJob,
         purpose: TransferPurpose,
     ) -> bool {
+        if matches!(purpose, TransferPurpose::Provide { .. }) { job.recoverable = false; }
+        if super::folder_conflict_ui::requires_preview(&job) {
+            return match super::folder_conflict_ui::enqueue(job, purpose) {
+                Ok(()) => true,
+                Err(error) => { self.error_msg = Some(error); false }
+            };
+        }
+        self.submit_approved_job_for(job, purpose)
+    }
+
+    pub(in crate::app) fn submit_approved_job_for(&mut self, job: TransferJob, purpose: TransferPurpose) -> bool {
+        let consume_cut = job.mode == CopyMode::Move && self.clip.as_ref().is_some_and(|clip| {
+            clip.cut && clip.selection.items == job.items && clip.selection.filter == job.filter
+                && clip.selection.source.endpoint.same_namespace(&job.source)
+        });
         let announcement = format!(
             "⇄ Übertragung gestartet: {} Element(e) → {}",
             job.items.len(),
@@ -28,6 +43,7 @@ impl App {
             .submit(job, purpose, &mut launch_transfer)
         {
             Ok(_) => {
+                if consume_cut { self.clip = None; }
                 self.notice = Some((announcement, Instant::now()));
                 true
             }

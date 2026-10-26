@@ -80,6 +80,7 @@ pub(crate) use config::HostSettings;
 /// `screenControl` and `screenPull` of the JNI bridge.
 pub use domains::{doc_fsync, doc_open, doc_read, doc_release, doc_size, doc_write};
 pub use domains::{screen_control, screen_pull, screen_push};
+pub use domains::{login_pull, login_close, login_release};
 pub(crate) use error::ApiError;
 pub(crate) use runtime::{Runtime, TaskCtx};
 

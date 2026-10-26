@@ -183,6 +183,7 @@ pub(crate) fn site_value(record: &SiteRecord, context: &Context) -> Value {
         "lock_on_screen_lock": record.lock.lock_on_screen_lock,
         "lock_on_background_min": record.lock.lock_on_background_min,
         "sync_jobs": jobs,
+        "open_policy": crate::vault::stored_policy(record).ok(),
     })
 }
 

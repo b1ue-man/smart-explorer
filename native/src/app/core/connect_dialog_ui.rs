@@ -51,10 +51,10 @@ impl App {
         } else {
             "Neue Verbindung"
         };
-        egui::Window::new(title)
+        super::dialog_geometry::window(ctx, "connect_dialog_ui.0", title)
             .open(&mut open)
             .collapsible(false)
-            .resizable(false)
+            .resizable(true)
             .default_size([520.0, 480.0])
             .max_size(theme::window_content_limit(ctx))
             .constrain_to(ctx.screen_rect().shrink(16.0))

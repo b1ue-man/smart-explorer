@@ -35,13 +35,25 @@ object NativeBridge {
      * This phone as screen viewer (SCR-M9): the next picture of [session] into the direct buffer
      * [dst] (the decoder's input buffer), little endian: bytes 0–7 capture time in µs, 8–11 flags
      * (bit 0 key frame, bit 1 finished tile picture R,G,B,A, bit 2 first picture of a new group,
-     * bit 3 complete; bits 16–31 the low 16 bits of the group number), 12–15 payload length, then
-     * the payload from byte 16. Returns the bytes written, −1 when none came within [timeoutMs]
+     * bit 3 complete; bits 16–31 retain a low-16 group hint), 12–15 payload length, then the
+     * payload from byte 16. Flag 0x100 prefixes the payload with the full little-endian GOP ID
+     * (8 bytes), followed by the frame ID (8 bytes, flag 0x80), then the codec/Hybrid bytes.
+     * Every native viewer output includes both IDs, also for v1 streams. The low-16 hint cannot
+     * identify a stream or authorize presentation. Returns the bytes written, −1 when none came within [timeoutMs]
      * (at most 1000), −2 when the session ended, −3 when [dst] is too small (bytes 12–15 then name
      * the payload length, nothing else is written and the picture stays queued) and −4 when the
      * buffer is not direct.
      */
     external fun screenPull(session: Long, dst: ByteBuffer, timeoutMs: Int): Int
+
+    /** Bounded binary image transfer of an explicitly authenticated login session. */
+    external fun loginPull(session: Long, dst: ByteBuffer, timeoutMs: Int): Int
+
+    /** Ends this owned login session and releases its input state. */
+    external fun loginClose(session: Long)
+
+    /** Invalidates presentation/focus ownership before queued input can run. */
+    external fun loginRelease(session: Long)
 
     /*
      * Documents provider (DRV-M8): the proxy descriptors other apps hold. Each call returns a

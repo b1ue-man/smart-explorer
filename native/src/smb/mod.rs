@@ -86,3 +86,9 @@ pub use backend::SmbBackend;
 pub use errors::names_missing_share;
 pub use session::SmbConfig;
 pub use url::{backend_from_url, root_has_share, root_with_share};
+
+#[path = "core/capacity.rs"]
+mod capacity;
+
+#[path = "core/folder_reservation.rs"]
+mod folder_reservation;

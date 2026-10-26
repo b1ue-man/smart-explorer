@@ -20,6 +20,11 @@ impl App {
     }
 
     pub(in crate::app) fn start_reclaim_source(&mut self, source: StorageScanSource) {
+        if !self.drive_consumer_available(super::drive_snapshot::DriveConsumer::Reclaim, source.root(), source.is_remote()) {
+            self.reclaim_state = StorageRunState::Failed;
+            self.reclaim_issues.push("Datenträger nicht verbunden".into());
+            return;
+        }
         self.cancel_reclaim_worker();
         if source.root().is_empty() {
             let detail = "Leeres Reclaim-Ziel".to_string();

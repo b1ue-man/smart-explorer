@@ -156,6 +156,7 @@ impl AnalysisReport {
             issues: self.issues,
             suppressed_issues: self.suppressed_issues,
             permission_denied: self.permission_denied,
+            denied_roots: Default::default(),
             notes: self.notes,
             aggregated_files: self.aggregated_files,
             // Hosts before RV1 send protected omissions only as a note.

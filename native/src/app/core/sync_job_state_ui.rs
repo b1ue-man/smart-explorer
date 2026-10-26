@@ -273,7 +273,8 @@ pub(in crate::app) fn confirmation(
     let review = ctx.data(|data| data.get_temp::<BlockReview>(key))?;
     let mut open = true;
     let mut approved = false;
-    egui::Window::new("Sicherheitsstopp bestätigen").open(&mut open).collapsible(false).show(ctx, |ui| {
+    super::dialog_geometry::window(ctx, "sync_job_state_ui.0", "Sicherheitsstopp bestätigen")
+            .id(egui::Id::new("Sicherheitsstopp bestätigen")).open(&mut open).collapsible(false).show(ctx, |ui| {
         ui.label(format!("Quelle: {}\nZiel: {}",review.source,review.target));
         ui.label(&review.detail);
         ui.label("Bitte Quelle, Ziel und Laufwerk prüfen. Die Bestätigung gilt einmal für genau diesen Stopp; neue oder größere Änderungen bleiben geschützt.");

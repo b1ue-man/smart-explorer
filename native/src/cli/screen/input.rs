@@ -241,6 +241,8 @@ pub(crate) fn deliver(
     mut notice: impl FnMut(Capability),
 ) -> Result<Delivered, String> {
     let request = StreamRequest {
+            expected_node: None,
+        frame_capabilities: None,
         mode: SessionMode::Control,
         source: source.clone(),
         decoders: vec![CodecOffer::tiles()],

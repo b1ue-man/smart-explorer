@@ -9,6 +9,19 @@ use std::sync::atomic::AtomicBool;
 use suppaftp::Status;
 
 impl BackendExtensions for FtpBackend {
+    fn directory_reservation_supported(&self, _root: &str) -> bool {
+        // One MKD; the unsupported persistent ID/rename contract stays separate.
+        true
+    }
+
+    fn create_dir_exclusive(&self, path: &str) -> VfsResult<()> {
+        super::folder_reservation::create(self, path)
+    }
+
+    fn directory_identity(&self, path: &str) -> VfsResult<Option<String>> {
+        super::folder_reservation::identity(self, path)
+    }
+
     fn replace_staged_reversible(
         &self,
         _staged: &str,

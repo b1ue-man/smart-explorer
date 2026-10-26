@@ -9,10 +9,10 @@ impl App {
         let mut focus = self.rename_focus;
         if let Some((path, draft)) = self.rename_open.as_mut() {
             let title = path.rsplit('/').next().unwrap_or("").to_string();
-            egui::Window::new(format!("Umbenennen: {}", title))
+            super::dialog_geometry::window(ctx, "dialogs.0", format!("Umbenennen: {}", title))
                 .default_size([440.0, 140.0])
                 .collapsible(false)
-                .resizable(false)
+                .resizable(true)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
                     let resp =
@@ -58,9 +58,10 @@ impl App {
         let mut restart = false;
         let mut later = false;
         let mut discard = false;
-        egui::Window::new("Update bereit")
+        super::dialog_geometry::window(ctx, "dialogs.1", "Update bereit")
+            .id(egui::Id::new("Update bereit"))
             .collapsible(false)
-            .resizable(false)
+            .resizable(true)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 let message = match &ready {
@@ -143,15 +144,16 @@ impl App {
                     .rect_filled(r, 0.0, Color32::from_black_alpha(200));
             });
         let mut accept = false;
-        egui::Window::new("Hinweis & Haftungsausschluss")
+        super::dialog_geometry::window(ctx, "dialogs.2", "Hinweis & Haftungsausschluss")
+            .id(egui::Id::new("Hinweis & Haftungsausschluss"))
             .order(egui::Order::Foreground)
             .collapsible(false)
-            .resizable(false)
-            .fixed_size([560.0, 0.0])
+            .resizable(true)
+            .default_size([560.0, 480.0])
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
-                egui::ScrollArea::vertical()
-                    .max_height(420.0)
+                egui::ScrollArea::vertical().min_scrolled_height(0.0)
+                    .max_height(super::dialog_geometry::remaining_height(ui, 2.0))
                     .show(ui, |ui| {
                         ui.label(DISCLAIMER_TEXT);
                     });
@@ -182,14 +184,16 @@ impl App {
 
     pub(in crate::app) fn ui_help_dialog(&mut self, ctx: &egui::Context) {
         let mut open = self.show_help;
-        egui::Window::new("Tastenkürzel")
+        super::dialog_geometry::window(ctx, "dialogs.3", "Tastenkürzel")
+            .id(egui::Id::new("Tastenkürzel"))
             .open(&mut open)
             .resizable(true)
             .default_size([600.0, 520.0])
             .max_size(theme::window_content_limit(ctx))
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
-                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                egui::ScrollArea::vertical().min_scrolled_height(0.0).auto_shrink([false, false]).max_height(super::dialog_geometry::remaining_height(ui, 1.0))
+                    .show(ui, |ui| {
                     let groups: &[(&str, &[(&str, &str)])] = &[
                         (
                             "Navigation",

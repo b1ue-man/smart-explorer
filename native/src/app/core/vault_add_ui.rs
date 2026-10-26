@@ -99,10 +99,10 @@ fn show_add(
         _ => None,
     };
     let (mut check, mut enter, mut cancel) = (add.auto_check && !busy, false, false);
-    egui::Window::new("Tresor hinzufügen")
+    crate::app::dialog_geometry::window(ctx, "vault_add_ui.0", "Tresor hinzufügen")
         .id(egui::Id::new("vault_add_window"))
         .collapsible(false)
-        .resizable(false)
+        .resizable(true)
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
         .show(ctx, |ui| {
             ui.label("Wo liegt der Tresor?");

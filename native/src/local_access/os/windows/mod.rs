@@ -1,4 +1,6 @@
 mod broker;
+mod confined;
+pub(crate) use confined::ConfinedDirectory;
 mod directory;
 mod directory_handle;
 mod directory_records;

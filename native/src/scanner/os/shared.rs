@@ -17,6 +17,7 @@ pub enum ScanMessage {
     Error(String),
     /// One or more paths that could not be read. Sent as a batch.
     FailedPaths(Vec<(String, String)>),
+    DeniedRoots(super::DeniedRoots),
     Done(ScanProgress),
 }
 
@@ -58,6 +59,17 @@ impl ScanOpts {
 }
 
 pub fn start_scan(root: PathBuf, opts: ScanOpts, tx: Sender<ScanMessage>) -> ScanHandle {
+    start_scan_inner(root, opts, tx, None)
+}
+
+pub(crate) fn start_scan_confined(root: PathBuf, mut opts: ScanOpts, tx: Sender<ScanMessage>,
+    handle: crate::local_access::DirectoryHandle) -> ScanHandle {
+    opts.follow_symlinks = false;
+    start_scan_inner(root, opts, tx, Some(handle))
+}
+
+fn start_scan_inner(root: PathBuf, opts: ScanOpts, tx: Sender<ScanMessage>,
+    provided: Option<crate::local_access::DirectoryHandle>) -> ScanHandle {
     let cancel = Arc::new(AtomicBool::new(false));
     let truncated = Arc::new(AtomicBool::new(false));
     let cancel_clone = cancel.clone();
@@ -67,7 +79,7 @@ pub fn start_scan(root: PathBuf, opts: ScanOpts, tx: Sender<ScanMessage>) -> Sca
     if let Err(error) = std::thread::Builder::new()
         .name("scan-driver".into())
         .spawn(move || {
-            run_scan(root, opts, tx, cancel_clone, truncated_clone);
+            run_scan(root, opts, tx, cancel_clone, truncated_clone, provided);
         })
     {
         cancel.store(true, Ordering::Relaxed);
@@ -94,6 +106,7 @@ pub(super) struct Scanner {
     pub(super) bytes: Arc<AtomicU64>,
     pub(super) errors: Arc<AtomicU64>,
     pub(super) permission_denied: AtomicU64,
+    pub(super) denied_roots: super::DeniedRoots,
     pub(super) start: Instant,
     pub(super) sample_path: Arc<Mutex<String>>,
     /// Capped list of (path, error message) for surfacing in the UI.
@@ -102,6 +115,8 @@ pub(super) struct Scanner {
     pub(super) budget_exhausted: AtomicBool,
     pub(super) truncated: Arc<AtomicBool>,
     pub(super) visited_directories: Mutex<HashSet<String>>,
+    pub(super) confined: Option<(PathBuf, crate::local_access::DirectoryHandle)>,
+    pub(super) optical: Option<(PathBuf, crate::source_media::Source)>,
 }
 
 impl Scanner {
@@ -133,11 +148,26 @@ impl Scanner {
         }
     }
 
+    pub(super) fn media_current(&self) -> bool {
+        if let Some((root, expected)) = &self.optical {
+            let unchanged = crate::source_media::probe(root).is_ok_and(|source| source.as_ref() == Some(expected));
+            if !unchanged {
+                self.errors.fetch_add(1, Ordering::Relaxed);
+                record_failure(&self.failed_paths, &root.to_string_lossy(), "optical medium changed during scan".into());
+                self.cancel.store(true, Ordering::Release);
+                return false;
+            }
+        }
+        true
+    }
+
     pub(super) fn enter_directory(&self, directory: &PathBuf) -> bool {
+        if !self.media_current() { return false; }
         if !self.opts.follow_symlinks {
             return true;
         }
-        let canonical = match std::fs::canonicalize(directory) {
+        let canonical = match crate::source_media::acquire(directory, crate::source_media::Priority::Foreground, &self.cancel)
+            .and_then(|_guard| std::fs::canonicalize(directory)) {
             Ok(path) => path,
             Err(error) => {
                 self.errors.fetch_add(1, Ordering::Relaxed);
@@ -203,6 +233,7 @@ fn run_scan(
     tx: Sender<ScanMessage>,
     cancel: Arc<AtomicBool>,
     truncated: Arc<AtomicBool>,
+    provided: Option<crate::local_access::DirectoryHandle>,
 ) {
     let root = crate::local_access::normalize_scan_root(&root);
     let start = Instant::now();
@@ -260,7 +291,13 @@ fn run_scan(
 
     // Emit root entry — always, regardless of hidden/system. The view filter
     // is responsible for hiding entries the user doesn't want to see.
-    let _root_link_like = match crate::local_access::symlink_metadata(&root) {
+    let mut optical = None;
+    let metadata = crate::source_media::acquire(&root, crate::source_media::Priority::Foreground, &cancel)
+        .and_then(|guard| {
+            optical = guard.as_ref().map(|guard| (root.clone(), guard.source().clone()));
+            provided.as_ref().map_or_else(|| crate::local_access::symlink_metadata(&root), |handle| handle.metadata())
+        });
+    let _root_link_like = match metadata {
         Ok(meta) => {
             let root_link_like = is_link_like(&meta);
             let (hidden, system) = get_attrs(&meta);
@@ -287,6 +324,12 @@ fn run_scan(
         }
         Err(e) => {
             record_failure(&failed_paths, &root.to_string_lossy(), e.to_string());
+            if e.kind() == std::io::ErrorKind::PermissionDenied {
+                let denied = super::DeniedRoots::default();
+                denied.record(root_text.clone());
+                denied.record_visits(root_text.clone(), super::ScanVisits::default());
+                let _ = tx.send(ScanMessage::DeniedRoots(denied));
+            }
             let _ = tx.send(ScanMessage::Error(format!(
                 "Wurzel kann nicht gelesen werden: {} ({})",
                 root.display(),
@@ -316,6 +359,7 @@ fn run_scan(
         bytes,
         errors,
         permission_denied: AtomicU64::new(0),
+        denied_roots: super::DeniedRoots::default(),
         start,
         sample_path: sample_path.clone(),
         failed_paths: failed_paths.clone(),
@@ -323,6 +367,8 @@ fn run_scan(
         budget_exhausted: AtomicBool::new(false),
         truncated,
         visited_directories: Mutex::new(HashSet::new()),
+        confined: provided.map(|handle| (root.clone(), handle)),
+        optical,
     });
 
     // Periodic progress emitter
@@ -371,9 +417,13 @@ fn run_scan(
             Err(error) => {
                 scanner.errors.fetch_add(1, Ordering::Relaxed);
                 record_failure(&failed_paths, &root_text, format!("Scan-Threads: {error}"));
+                None
             }
         }
     }));
+    if let Ok(Some(visits)) = &walk {
+        scanner.denied_roots.record_scan_visits(root_text.clone(), *visits);
+    }
     if walk.is_err() {
         scanner.errors.fetch_add(1, Ordering::Relaxed);
         record_failure(
@@ -404,5 +454,6 @@ fn run_scan(
         elapsed_ms: scanner.start.elapsed().as_millis() as u64,
         current_path: String::new(),
     };
+    let _ = tx.send(ScanMessage::DeniedRoots(scanner.denied_roots.clone()));
     let _ = tx.send(ScanMessage::Done(final_progress));
 }

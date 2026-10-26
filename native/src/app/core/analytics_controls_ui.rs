@@ -11,6 +11,7 @@ pub(in crate::app) struct AnalyticsControls {
     pub(in crate::app) go_up: bool,
     pub(in crate::app) rescan_source: Option<StorageScanSource>,
     pub(in crate::app) pick_folder: bool,
+    pub(in crate::app) accept_drive_identity: bool,
     pub(in crate::app) cancel: bool,
 }
 
@@ -23,6 +24,7 @@ impl AnalyticsControls {
             go_up: false,
             rescan_source: None,
             pick_folder: false,
+            accept_drive_identity: false,
             cancel: false,
         }
     }
@@ -88,6 +90,7 @@ impl App {
                     root.clone()
                 };
                 if ui.button(label).clicked() {
+                    controls.accept_drive_identity = true;
                     controls.rescan_source = Some(StorageScanSource::local(root.clone()));
                 }
             }

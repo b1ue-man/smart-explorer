@@ -4,7 +4,7 @@
 use serde_json::{json, Value};
 
 use crate::desktop::core::config::{
-    BackgroundKind, DesktopConfig, ForeignDesktopIcons, OpenDevicesWith,
+    BackgroundKind, DesktopConfig, ForeignDesktopIcons, OpenDevicesWith, OpenFoldersWith,
 };
 use crate::desktop::core::mechanism::Mechanism;
 use crate::desktop::os::control::RestartOutcome;
@@ -122,6 +122,13 @@ pub(super) fn config_text(config: Option<&DesktopConfig>) -> String {
             match config.open_devices_with {
                 OpenDevicesWith::App => "app",
                 OpenDevicesWith::FileManager => "file-manager",
+            }
+        ),
+        format!(
+            "open_folders_with\t{}",
+            match config.open_folders_with {
+                OpenFoldersWith::App => "app",
+                OpenFoldersWith::FileManager => "file-manager",
             }
         ),
         format!(

@@ -26,8 +26,8 @@ fn host_figures_ui(
                 ),
                 |ui| {
                     if let Some(apps) = node_view(tree, &[row.name], &approx, 256) {
-                        egui::ScrollArea::vertical()
-                            .max_height(160.0)
+                        egui::ScrollArea::vertical().min_scrolled_height(0.0)
+                            .max_height(super::dialog_geometry::remaining_height(ui, 2.0))
                             .show(ui, |ui| {
                                 for app in apps.children {
                                     let response = ui.label(format!(
@@ -100,15 +100,16 @@ impl App {
         let mut recomputed: Option<(Vec<TmCell>, egui::Rect)> = None;
 
         {
-            egui::Window::new("📊 Speicher-Analyse")
+            super::dialog_geometry::window(ctx, "analytics_ui.0", "📊 Speicher-Analyse")
                 .id(egui::Id::new("analyse_treemap_v2"))
                 .open(&mut open)
                 .collapsible(false)
                 .resizable(true)
+                .vscroll(true)
                 .default_size([880.0, 600.0])
                 .max_size(theme::window_content_limit(ctx))
                 .constrain_to(ctx.screen_rect().shrink(16.0))
-                .min_width(440.0)
+                .min_width(440.0_f32.min(theme::window_content_limit(ctx).x))
                 .constrain(true)
                 .show(ctx, |ui| {
                     self.ui_analytics_controls(ui, &mut controls);
@@ -147,7 +148,7 @@ impl App {
 
                     // ── Nested treemap ──
                     let tm_w = ui.available_width();
-                    let tm_h = ui.available_height().max(200.0);
+                    let tm_h = super::dialog_geometry::remaining_height(ui, 0.0);
                     let (tm_rect, tm_resp) =
                         ui.allocate_exact_size(egui::vec2(tm_w, tm_h), egui::Sense::click());
 
@@ -228,6 +229,9 @@ impl App {
             self.cancel_analytics_scan();
         }
         if let Some(scan_source) = controls.rescan_source {
+            if controls.accept_drive_identity && !scan_source.is_remote() {
+                self.accept_drive_consumer(super::drive_snapshot::DriveConsumer::Analytics, scan_source.root());
+            }
             self.start_analytics_source(scan_source);
         } else if controls.pick_folder {
             let init = root_path.clone();

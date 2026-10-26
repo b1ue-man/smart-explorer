@@ -351,6 +351,8 @@ pub(crate) enum Ctrl {
         hello: PeerHello,
     },
     PeerHelloOk,
+    /// Sent only to clients requesting route_policy_v1; legacy HelloOk is unchanged.
+    PeerHelloOkRoute,
     /// Unit-only selector for the bounded binary reciprocal Direct stream.
     /// Relation material is never serialized into this JSON control frame.
     DirectReciprocal,

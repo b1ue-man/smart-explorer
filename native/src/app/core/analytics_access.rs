@@ -9,10 +9,28 @@ pub(super) struct AnalyticsAccess {
     pub offer: bool,
     pub pending: Option<crossbeam_channel::Receiver<(String, Result<bool, String>)>>,
     pub message: Option<String>,
+    pub(super) denied: crate::scanner::DeniedRoots,
+    generation: u64,
+    consent_generation: u64,
+    partial: Option<super::partial_scan::PartialWorker<crate::analytics::ScanOutcome>>,
+    prior_incomplete: bool,
+
 }
 
 impl AnalyticsAccess {
+    pub(super) fn invalidate_partial(&mut self) -> bool {
+        self.generation = self.generation.wrapping_add(1);
+        let running = self.partial.take().is_some();
+        if running {
+            self.message = Some("Teilscans wegen Abbruch oder geänderter Dateisystemgeneration beendet; verbleibende Sperren bleiben anforderbar.".into());
+        }
+        running
+    }
+
     pub(super) fn reset_scan(&mut self) {
+        self.invalidate_partial();
+        self.denied = Default::default();
+        self.prior_incomplete = false;
         self.permission_denied = 0;
         self.offer = false;
         self.message = None;
@@ -72,9 +90,9 @@ pub(super) fn issues_ui(
             if ui.button("Bericht kopieren").clicked() {
                 ui.ctx().copy_text(issue_report(issues, suppressed, denied));
             }
-            egui::ScrollArea::vertical()
+            egui::ScrollArea::vertical().min_scrolled_height(0.0)
                 .id_salt("analytics_read_issues_scroll")
-                .max_height(180.0)
+                .max_height(super::dialog_geometry::remaining_height(ui, 2.0))
                 .show(ui, |ui| {
                     for issue in issues {
                         ui.label(egui::RichText::new(&issue.path).strong());
@@ -91,6 +109,29 @@ pub(super) fn issues_ui(
 }
 
 impl App {
+    pub(super) fn log_analytics_outcome(&mut self) {
+        if !should_log_failure(self.analytics_state, self.analytics_access.offer)
+        {
+            return;
+        }
+        let first = self
+            .analytics_issues
+            .first()
+            .map(|issue| format!("{}: {}", issue.path, issue.detail))
+            .unwrap_or_else(|| "Unbekannter Scan-Fehler".to_string());
+        let count = self.analytics_issues.len() as u64 + self.analytics_suppressed_issues;
+        self.push_app_error(
+            "Speicher-Analyse",
+            format!("{count} Leseproblem(e); erstes Problem: {first}"),
+        );
+    }
+
+    pub(super) fn install_analytics_retry_index(&mut self, outcome: &crate::analytics::ScanOutcome) {
+        self.analytics_access.denied = outcome.denied_roots.clone();
+        self.analytics_access.prior_incomplete = (outcome.issues.len() as u64)
+            .saturating_add(outcome.suppressed_issues) > outcome.permission_denied;
+    }
+
     pub(super) fn update_analytics_access(&mut self, denied: u64) {
         self.analytics_access.permission_denied = denied;
         self.analytics_access.offer = access_offer(
@@ -101,12 +142,14 @@ impl App {
     }
 
     pub(super) fn request_analytics_access(&mut self) {
-        if !self.analytics_access.offer || self.analytics_access.pending.is_some() {
+        if !self.analytics_access.offer || self.analytics_access.pending.is_some()
+            || self.analytics_access.partial.is_some() || self.analytics_scan.is_some() {
             return;
         }
         let Some(StorageScanSource::Local { root }) = &self.analytics_source else {
             return;
         };
+        self.analytics_access.consent_generation = self.analytics_access.generation;
         let root = root.clone();
         let (tx, rx) = crossbeam_channel::bounded(1);
         match std::thread::Builder::new()
@@ -126,7 +169,140 @@ impl App {
         }
     }
 
+    fn poll_partial_analytics(&mut self) {
+        let Some(worker) = &self.analytics_access.partial else { return; };
+        if worker.generation != self.analytics_access.generation || self.analytics_scan.is_some()
+            || !matches!(&self.analytics_source, Some(StorageScanSource::Local { root }) if root == &worker.root) {
+            self.analytics_access.partial = None;
+            return;
+        }
+        if worker.cancel.load(std::sync::atomic::Ordering::Acquire) {
+            self.analytics_access.partial = None;
+            self.analytics_state = StorageRunState::Canceled;
+            return;
+        }
+        let message = worker.rx.try_recv();
+        match message {
+            Ok((path, mut outcome)) => {
+                let base = self.analytics_root().to_string();
+                let previous = match self.analytics_access.denied.roots_with_sizes() {
+                    Ok(roots) => roots,
+                    Err(error) => {
+                        self.analytics_issues.push(ScanIssue { path, detail: error.to_string() });
+                        self.analytics_access.invalidate_partial();
+                        self.analytics_state = StorageRunState::Partial;
+                        return;
+                    }
+                };
+                let previous_size = previous.iter().find(|(root, _)| root == &path).map(|(_, size)| *size).unwrap_or(0);
+                let measurements = match self.analytics_access.denied.measurements() {
+                    Ok(measurements) => measurements,
+                    Err(error) => {
+                        self.analytics_issues.push(ScanIssue { path, detail: error.to_string() });
+                        self.analytics_access.invalidate_partial();
+                        self.analytics_state = StorageRunState::Partial;
+                        return;
+                    }
+                };
+                let complete = outcome.status == crate::analytics::ScanStatus::Complete;
+                // A newly readable formerly empty subtree may still contain
+                // independent locked children. Their roots replace its retry
+                // root while the readable data can already be shown safely.
+                let mergeable = complete || (outcome.status == crate::analytics::ScanStatus::Partial
+                    && (previous_size == 0 || self.analytics_tree.as_ref().is_some_and(|previous|
+                        super::partial_scan::prepare_partial_analytics(previous, &base, &path, &mut outcome))));
+                let replacement_size = outcome.tree.as_ref().map_or(previous_size, |tree| tree.size);
+
+                let merged = if mergeable {
+                    let depth = super::partial_scan::relative_depth(&base, &path);
+                    let parts: Vec<_> = path.split(['/', '\\']).filter(|s| !s.is_empty()).collect();
+                    match (depth, self.analytics_tree.as_mut(), outcome.tree.take()) {
+                        (Some(depth), Some(tree), Some(replacement)) => {
+                            let start = parts.len().saturating_sub(depth as usize);
+                            let mut ancestor = base.trim_end_matches('/').to_string();
+                            let sizes: Option<Vec<u64>> = parts[start..].iter().map(|segment| {
+                                ancestor.push('/'); ancestor.push_str(segment);
+                                measurements.iter().find(|(path, _)| crate::scanner::retry_contains(path, &ancestor)
+                                    && crate::scanner::retry_contains(&ancestor, path)).map(|(_, size)| *size)
+                            }).collect();
+                            sizes.is_some_and(|sizes| crate::analytics::merge_retry_tree(tree, &parts[start..], replacement, &sizes))
+                        }
+                        (Some(0), None, Some(replacement)) => { self.analytics_tree = Some(replacement); true }
+                        _ => false,
+                    }
+                } else { false };
+                let next = crate::scanner::DeniedRoots::default();
+                for (root, size) in previous {
+                    if root != path || !merged {
+                        next.record(root.clone()); next.record_size(root, size);
+                    }
+                }
+                match outcome.denied_roots.roots_with_sizes() {
+                    Ok(roots) => for (root, size) in roots {
+                        if merged { next.record(root.clone()); next.record_size(root, size); }
+                    },
+                    Err(error) => {
+                        next.record(path.clone()); next.record_size(path.clone(), previous_size);
+                        self.analytics_issues.push(ScanIssue { path: path.clone(), detail: error.to_string() });
+                    }
+                }
+                for (measured, size) in measurements {
+                    let size = if merged && crate::scanner::retry_contains(&measured, &path) {
+                        size.saturating_sub(previous_size).saturating_add(replacement_size)
+                    } else { size };
+                    next.record_size(measured, size);
+                }
+                if merged {
+                    if let Err(error) = outcome.denied_roots.copy_sizes_to(&next) {
+                        self.analytics_issues.push(ScanIssue { path: path.clone(), detail: error.to_string() });
+                    }
+                }
+                self.analytics_access.denied = next;
+                if merged {
+                    self.analytics_issues.retain(|issue| !crate::scanner::retry_contains(&path, &issue.path));
+                }
+                self.analytics_access.prior_incomplete |= outcome.suppressed_issues.saturating_add(outcome.issues.len() as u64) > outcome.permission_denied;
+                for issue in outcome.issues {
+                    if self.analytics_issues.len() < 64 { self.analytics_issues.push(issue); }
+                    else { self.analytics_suppressed_issues = self.analytics_suppressed_issues.saturating_add(1); }
+                }
+                let remaining_notes = 16usize.saturating_sub(self.analytics_notes.len());
+                self.analytics_notes.extend(outcome.notes.into_iter().take(remaining_notes));
+                self.analytics_suppressed_issues = self.analytics_suppressed_issues.saturating_add(outcome.suppressed_issues);
+                // Preserve exact completeness conservatively when old UI
+                // diagnostics were suppressed; no partial walk seeds an index.
+                self.analytics_access.permission_denied = self.analytics_access.denied.roots()
+                    .map(|roots| roots.len() as u64).unwrap_or(1);
+                if merged {
+                    if let Some(tree) = &mut self.analytics_tree {
+                        let progress = crate::analytics::Progress::default();
+                        if let Err(error) = crate::analytics::fit_tree(tree, progress.node_budget(), &progress) {
+                            self.analytics_access.prior_incomplete = true;
+                            self.analytics_issues.push(ScanIssue { path, detail: error.to_string() });
+                        }
+                    }
+                }
+                self.analytics_totals = None;
+                self.analytics_invalidate();
+            }
+            Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                self.analytics_access.partial = None;
+                let denied = self.analytics_access.permission_denied;
+                self.analytics_state = if denied > 0 || self.analytics_access.prior_incomplete {
+                    StorageRunState::Partial
+                } else { StorageRunState::Complete };
+                if denied == 0 && !self.analytics_access.prior_incomplete {
+                    self.analytics_issues.clear();
+                    self.analytics_suppressed_issues = 0;
+                }
+                self.update_analytics_access(denied);
+            }
+            Err(crossbeam_channel::TryRecvError::Empty) => {},
+        }
+    }
+
     pub(super) fn poll_analytics_access(&mut self) {
+        self.poll_partial_analytics();
         let result = self
             .analytics_access
             .pending
@@ -137,13 +313,24 @@ impl App {
                 self.analytics_access.pending = None;
                 self.analytics_access.message = Some(match result {
                     Ok(true) => {
-                        if matches!(&self.analytics_source, Some(StorageScanSource::Local { root: current }) if current == &root)
-                        {
-                            let previous = self.analytics_tree.take();
-                            self.start_analytics_scan(root.clone());
-                            self.analytics_tree = previous;
+                        if self.analytics_access.generation == self.analytics_access.consent_generation
+                            && self.analytics_scan.is_none()
+                            && matches!(&self.analytics_source, Some(StorageScanSource::Local { root: current }) if current == &root)
+                            && self.drive_consumer_available(super::drive_snapshot::DriveConsumer::Analytics, &root, false) {
+                            match self.analytics_access.denied.roots().map_err(|error| error.to_string())
+                                .and_then(|roots| super::partial_scan::analytics(root.clone(), self.analytics_access.generation, roots)) {
+                                Ok(worker) => {
+                                    self.analytics_access.partial = Some(worker);
+                                    self.analytics_state = StorageRunState::Running;
+                                }
+                                Err(error) => self.analytics_issues.push(ScanIssue { path: root.clone(), detail: error }),
+                            }
                         }
-                        format!("Leserechte für {root} verfügbar. Die Analyse wird in dieser Ansicht aktualisiert.")
+                        if self.analytics_access.partial.is_some() {
+                            format!("Leserechte für {root} verfügbar. Gesperrte Teilbäume werden aktualisiert.")
+                        } else {
+                            "Leserechte verfügbar. Die Analyse wurde inzwischen geändert oder die Teilscans konnten nicht starten; bisherige Ergebnisse bleiben erhalten.".into()
+                        }
                     }
                     Ok(false) => {
                         "Rechteanfrage abgebrochen. Das bisherige Ergebnis bleibt erhalten.".into()
@@ -171,7 +358,7 @@ pub(super) fn access_ui(ui: &mut egui::Ui, state: &AnalyticsAccess) -> bool {
             ui.label("Mit Ihrer Zustimmung: geschützte Dateien in dieser Analyse erneut lesen. Die Ordnerrechte bleiben unverändert.");
             request = ui
                 .add_enabled(
-                    state.pending.is_none(),
+                    state.pending.is_none() && state.partial.is_none(),
                     egui::Button::new("Leserechte anfordern …"),
                 )
                 .clicked();
@@ -179,9 +366,15 @@ pub(super) fn access_ui(ui: &mut egui::Ui, state: &AnalyticsAccess) -> bool {
             ui.label("Verbleibende Sperren benötigen ggf. Rechte beim Dateisystem oder Anbieter; lokale Administratorrechte lösen nicht jede Sperre.");
         }
     }
-    if state.pending.is_some() {
+    if state.pending.is_some() || state.partial.is_some() {
         ui.spinner();
-        ui.label("Windows-Rechteanfrage läuft …");
+        ui.label(if state.partial.is_some() { "Gesperrte Teilbäume werden erneut gelesen …" }
+            else { "Windows-Rechteanfrage läuft …" });
+        if let Some(worker) = &state.partial {
+            if ui.button("Teilscans abbrechen").clicked() {
+                worker.cancel.store(true, std::sync::atomic::Ordering::Release);
+            }
+        }
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(150));
     }
@@ -234,6 +427,7 @@ mod tests {
             offer: true,
             pending: Some(rx),
             message: Some("previous".into()),
+            ..Default::default()
         };
         state.reset_scan();
         assert_eq!(state.permission_denied, 0);

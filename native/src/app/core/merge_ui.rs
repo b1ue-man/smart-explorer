@@ -11,7 +11,7 @@ impl App {
         let mut open = true;
         let mut decision = None;
         let mut retry = false;
-        egui::Window::new(format!("Zeilenvergleich: {}", m.rel)).open(&mut open)
+        super::dialog_geometry::window(ctx, "merge_ui.0", format!("Zeilenvergleich: {}", m.rel)).open(&mut open)
             .collapsible(false).resizable(true).default_size([900.0, 600.0])
             .max_size(theme::window_content_limit(ctx)).constrain_to(ctx.screen_rect().shrink(16.0))
             .show(ctx, |ui| {
@@ -41,7 +41,7 @@ impl App {
                         }
                     });
                     let width = (ui.available_width() / 2.0 - 8.0).max(80.0);
-                    egui::ScrollArea::vertical().max_height(420.0).show_rows(ui, 24.0, m.rows.len(), |ui, visible| {
+                    egui::ScrollArea::vertical().min_scrolled_height(0.0).max_height(super::dialog_geometry::remaining_height(ui, 3.0)).show_rows(ui, 24.0, m.rows.len(), |ui, visible| {
                         for index in visible {
                             let row = &mut m.rows[index];
                             let conflict = !row.equal && row.left.is_some() && row.right.is_some();

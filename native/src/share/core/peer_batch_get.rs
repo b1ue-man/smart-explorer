@@ -96,12 +96,12 @@ impl PeerBackend {
         sink: &mut dyn BatchSink,
     ) -> Result<(), GetFailure> {
         self.node
-            .block_on(io_deadline::run(
+            .block_on_route(opened.generation, io_deadline::run(
                 "peer batch request",
                 send_ctrl(&mut opened.send, header),
             ))
             .map_err(GetFailure::Transport)?;
-        match self.next_response(&mut opened.recv)? {
+        match self.next_response(&mut opened.recv, opened.generation)? {
             FsResponse::Ready => {}
             FsResponse::Err { kind, msg } => return Err(GetFailure::Refused(into_io(kind, msg))),
             _ => {
@@ -111,14 +111,14 @@ impl PeerBackend {
             }
         }
         for index in range {
-            self.receive_item(&mut opened.recv, index, sink)?;
+            self.receive_item(&mut opened.recv, opened.generation, index, sink)?;
         }
         Ok(())
     }
 
-    fn next_response(&self, recv: &mut RecvStream) -> Result<FsResponse, GetFailure> {
+    fn next_response(&self, recv: &mut RecvStream, generation: usize) -> Result<FsResponse, GetFailure> {
         self.node
-            .block_on(io_deadline::run("peer batch reply", recv_resp_wire(recv)))
+            .block_on_route(generation, io_deadline::run("peer batch reply", recv_resp_wire(recv)))
             .map_err(GetFailure::Transport)
     }
 
@@ -126,10 +126,11 @@ impl PeerBackend {
     fn receive_item(
         &self,
         recv: &mut RecvStream,
+        generation: usize,
         index: usize,
         sink: &mut dyn BatchSink,
     ) -> Result<(), GetFailure> {
-        let size = match self.next_response(recv)? {
+        let size = match self.next_response(recv, generation)? {
             FsResponse::Data { size } => size,
             FsResponse::Err { kind, msg } => {
                 return sink
@@ -143,7 +144,7 @@ impl PeerBackend {
         while remaining > 0 {
             let (tag, payload) = self
                 .node
-                .block_on(io_deadline::run("peer batch data", recv_data_frame(recv)))
+                .block_on_route(generation, io_deadline::run("peer batch data", recv_data_frame(recv)))
                 .map_err(GetFailure::Transport)?;
             if tag != TAG_DATA {
                 // The host ends an item early only with its failure.
@@ -159,7 +160,7 @@ impl PeerBackend {
             remaining -= length;
             sink.data(index, &payload).map_err(GetFailure::Local)?;
         }
-        let result = match self.next_response(recv)? {
+        let result = match self.next_response(recv, generation)? {
             FsResponse::Ok => Ok(()),
             FsResponse::Err { kind, msg } => Err(into_io(kind, msg)),
             _ => {

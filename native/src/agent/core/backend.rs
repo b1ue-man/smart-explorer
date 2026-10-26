@@ -358,14 +358,16 @@ impl Backend for AgentBackend {
     }
 
     fn rename_no_replace(&self, src: &str, dst: &str) -> VfsResult<()> {
+        let request = if self.features().folder_reservation && self.stat(src)?.is_dir {
+            Frame::RenameDirectoryNoReplace { src: src.into(), dst: dst.into() }
+        } else {
+            Frame::RenameNoReplace { src: src.into(), dst: dst.into() }
+        };
         let lease = self.pool.lease();
-        let (mux, reply) = lease.mutation_call(Frame::RenameNoReplace {
-            src: src.to_string(),
-            dst: dst.to_string(),
-        })?;
+        let (mux, reply) = lease.mutation_call(request)?;
         match reply {
             Frame::Ok => Ok(()),
-            Frame::Err(error) => Err(agent_error(error)),
+            Frame::Err(error) => Err(Frame::folder_error(&error).unwrap_or_else(|| agent_error(error))),
             other => {
                 lease.invalidate(&mux);
                 Err(unexpected("no-replace", &other))

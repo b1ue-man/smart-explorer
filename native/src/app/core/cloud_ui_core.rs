@@ -27,18 +27,26 @@ impl App {
     }
 
     pub(in crate::app) fn open_gdrive_browse(&mut self) {
-        if !crate::cloud::is_connected(crate::cloud::Provider::GDrive) {
-            self.error_msg = Some("Google Drive ist nicht verbunden.".to_string());
+        self.open_gdrive_location("gdrive:///");
+    }
+
+    /// Reopen a Drive locator through the shared endpoint resolver. Preserve
+    /// literal subpaths, including percent signs and Unicode names.
+    pub(in crate::app) fn open_gdrive_location(&mut self, locator: &str) {
+        let auth = crate::cloud::auth_status(crate::cloud::Provider::GDrive);
+        if !auth.signed_in {
+            self.error_msg = Some(auth.message);
             return;
         }
         if self.connecting || self.connect_rx.is_some() {
             return;
         }
         let (tx, rx) = unbounded();
+        let locator = locator.to_string();
         let spawn = std::thread::Builder::new()
             .name("gdrive-open".into())
             .spawn(move || {
-                let _ = tx.send(open_gdrive_result());
+                let _ = tx.send(open_gdrive_location_result(&locator));
             });
         match spawn {
             Ok(_) => {
@@ -102,8 +110,12 @@ impl App {
 }
 
 fn open_gdrive_result() -> crate::connect::ConnectResult {
+    open_gdrive_location_result("gdrive:///")
+}
+
+fn open_gdrive_location_result(locator: &str) -> crate::connect::ConnectResult {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        crate::connect::open_gdrive("/")
+        crate::connect::resolve_endpoint(locator)
     })) {
         Ok(Ok((backend, root))) => crate::connect::ConnectResult::Ok(crate::connect::Connected {
             remote: Some(crate::connect::RemoteState {

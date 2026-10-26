@@ -56,6 +56,7 @@ fn audit_of(device_id: &str) -> Vec<Value> {
 
 fn request(mode: SessionMode, source: SourceId, size: FrameSize, fps: u16) -> ViewerRequest {
     ViewerRequest {
+        frame_capabilities: None,
         mode,
         source: Some(source),
         decoders: vec![CodecOffer::tiles()],

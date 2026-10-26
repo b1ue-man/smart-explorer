@@ -51,6 +51,8 @@ mod vault_models_tests;
 pub(crate) mod vault_settings_pages_ui;
 #[path = "core/vault_settings_ui.rs"]
 pub(crate) mod vault_settings_ui;
+#[path = "core/vault_open_policy_ui.rs"]
+pub(crate) mod vault_open_policy_ui;
 #[path = "core/vault_sidebar_ui.rs"]
 pub(crate) mod vault_sidebar_ui;
 #[path = "core/vault_sync_editor_ui.rs"]

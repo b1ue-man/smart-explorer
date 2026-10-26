@@ -31,12 +31,19 @@ struct SeServer {
 
 impl ServerHandler for SeServer {
     fn get_info(&self) -> ServerConfig {
+        let instructions = match crate::mcp_launcher::current_runtime() {
+            Some(runtime) => format!("{}\nThis process uses immutable runtime {} of installation {} (generation {}). Its tool catalog stays fixed until this MCP process ends. New capabilities require the host to start a new MCP process.", catalog::INSTRUCTIONS, runtime.contract.runtime_sha256, runtime.installation.manifest.installation_id, runtime.installation.manifest.generation),
+            None => catalog::INSTRUCTIONS.to_string(),
+        };
+        let instructions=if crate::mcp_launcher::migration_entry() {
+            format!("{instructions}\nThis one-time migration was started through installed se. It uses the normal update-stop contract and will close for an update. Reconnect through the registered launcher after the profile refresh; this connection has no update retention exception.")
+        }else{instructions};
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(
                 Implementation::new("smart-explorer", env!("CARGO_PKG_VERSION"))
                     .with_title("Smart Explorer"),
             )
-            .with_instructions(catalog::INSTRUCTIONS)
+            .with_instructions(instructions)
     }
 
     async fn list_tools(
@@ -71,11 +78,20 @@ async fn dispatch(
     request: &CallToolRequestParams,
     context: &RequestContext<RoleServer>,
 ) -> Result<CallToolResult, String> {
+    let observation = matches!(request.name.as_ref(), "job_status" | "job_cancel" | "status")
+        || (request.name == "sessions" && request.arguments.as_ref().and_then(|a| a.get("action")).and_then(|a| a.as_str()) == Some("close"));
+    let mut operation = if observation { None } else {
+        let guard = crate::mcp_launcher::operation()?;
+        let negotiation=session.clone();
+        tokio::task::spawn_blocking(move ||negotiation.negotiate_runtime()).await
+            .map_err(|error|format!("runtime negotiation worker failed: {error}"))??;
+        guard
+    };
     let args = Args::new(request.arguments.as_ref());
     let owned = request.arguments.clone();
     let session_for_work = session.clone();
     match request.name.as_ref() {
-        "status" => blocking(move || status_tools::status(&session_for_work)).await,
+        "status" => blocking_observe(move || status_tools::status(&session_for_work)).await,
         "connections" => blocking(status_tools::connections).await,
         "list" => {
             blocking(move || file_tools::list(&session_for_work, &Args::new(owned.as_ref()))).await
@@ -109,35 +125,44 @@ async fn dispatch(
                 transfer_tools::start(&session_for_work, kind, &Args::new(owned.as_ref()))
             })
             .await?;
+            operation.take();
             job_view::started_job_answer(&job, &args, context).await
         }
         "search" => {
             let job =
                 start(move || search_tool::start(&session_for_work, &Args::new(owned.as_ref())))
                     .await?;
+            operation.take();
             job_view::started_job_answer(&job, &args, context).await
         }
         "exec" => {
             let job =
                 start(move || exec_tool::start(&session_for_work, &Args::new(owned.as_ref())))
                     .await?;
+            operation.take();
             job_view::started_job_answer(&job, &args, context).await
         }
         "screen" => blocking(move || screen_tool::screen(&Args::new(owned.as_ref()))).await,
+        "screen_window" => blocking(move || super::screen_window_tool::open(&Args::new(owned.as_ref()))).await,
+        "tcp_forward" => blocking(move || super::tcp_tool::tcp_forward(&Args::new(owned.as_ref()))).await,
+        "apps" => blocking(move || super::apps_tool::apps(&Args::new(owned.as_ref()))).await,
+        "login" => blocking(move || super::login_tool::login(&Args::new(owned.as_ref()))).await,
+        "rdp" => blocking(move || super::rdp_tool::rdp(&Args::new(owned.as_ref()), |target| crate::daemon::apps_rdp_probe(target, Some(std::time::Duration::from_secs(30)), || {}))).await,
         "screen_input" => {
             blocking(move || screen_tool::screen_input(&Args::new(owned.as_ref()))).await
         }
         "se" => {
             let job = start(move || cli_tool::start(&session_for_work, &Args::new(owned.as_ref())))
                 .await?;
+            operation.take();
             job_view::started_job_answer(&job, &args, context).await
         }
         "job_status" => job_view::status_tool(session, &args, context).await,
         "job_input" => job_view::input_tool(session, &args),
         "job_cancel" => job_view::cancel_tool(session, &args, context).await,
         "sessions" => {
-            blocking(move || sessions_tool::sessions(&session_for_work, &Args::new(owned.as_ref())))
-                .await
+            if observation { blocking_observe(move || sessions_tool::sessions(&session_for_work, &Args::new(owned.as_ref()))).await }
+            else { blocking(move || sessions_tool::sessions(&session_for_work, &Args::new(owned.as_ref()))).await }
         }
         other => Err(format!("unknown tool `{other}`")),
     }
@@ -146,15 +171,27 @@ async fn dispatch(
 async fn blocking(
     work: impl FnOnce() -> Result<CallToolResult, String> + Send + 'static,
 ) -> Result<CallToolResult, String> {
-    tokio::task::spawn_blocking(work)
+    tokio::task::spawn_blocking(move || {
+        let _operation = crate::mcp_launcher::operation()?;
+        work()
+    })
         .await
         .map_err(|error| format!("tool worker failed: {error}"))?
+}
+
+async fn blocking_observe(
+    work: impl FnOnce() -> Result<CallToolResult, String> + Send + 'static,
+) -> Result<CallToolResult, String> {
+    tokio::task::spawn_blocking(work).await.map_err(|error|format!("status worker failed: {error}"))?
 }
 
 async fn start(
     work: impl FnOnce() -> Result<Arc<Job>, String> + Send + 'static,
 ) -> Result<Arc<Job>, String> {
-    tokio::task::spawn_blocking(work)
+    tokio::task::spawn_blocking(move || {
+        let _operation = crate::mcp_launcher::operation()?;
+        work()
+    })
         .await
         .map_err(|error| format!("job start failed: {error}"))?
 }
@@ -169,6 +206,7 @@ pub(super) fn serve() -> Result<i32, String> {
         // Suite probe: this line must reach standard error, not the protocol.
         println!("se mcp test: stray standard output");
     }
+    let lifecycle = crate::mcp_launcher::LifecycleWatch::arm()?;
     let stop = UpdateStop::arm();
     let session = Arc::new(Session::open()?);
     crate::cli::plugin::refresh_generated_files();
@@ -181,17 +219,22 @@ pub(super) fn serve() -> Result<i32, String> {
         session: session.clone(),
         tools: Arc::new(catalog::tools()),
     };
+    let watch_session = session.clone();
     let outcome = runtime.block_on(async move {
         let writer = tokio::fs::File::from_std(protocol);
         let running = server
             .serve((tokio::io::stdin(), writer))
             .await
             .map_err(|error| format!("MCP session did not start: {error}"))?;
+        let negotiate_idle=watch_session.clone();
+        tokio::task::spawn_blocking(move || {
+            if let Err(error)=negotiate_idle.negotiate_runtime() {eprintln!("se mcp: {error}");}
+        });
         tokio::select! {
             ended = running.waiting() => ended
                 .map(|_| ())
                 .map_err(|error| format!("MCP session failed: {error}")),
-            () = stop.wait() => {
+            () = stop.wait(watch_session, lifecycle) => {
                 eprintln!(
                     "se mcp: Smart Explorer is being updated; this session ends now. Reconnect the MCP server after the update."
                 );
@@ -200,6 +243,8 @@ pub(super) fn serve() -> Result<i32, String> {
         }
     });
     session.close(CLOSE_GRACE);
+    super::rdp_shutdown::drain();
+    super::login_shutdown::drain();
     runtime.shutdown_timeout(Duration::from_secs(1));
     outcome.map(|()| 0)
 }

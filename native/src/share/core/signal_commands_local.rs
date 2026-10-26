@@ -37,8 +37,9 @@ pub(super) fn apply_persisted_exec_grant(
     principal: ExecPrincipal,
     policy: ExecGrant,
 ) -> io::Result<ExecGrantMutation> {
-    let mutation =
-        exec_grant_runtime::apply_exact(auth, iroh.exec_registry(), target, principal, policy)?;
+    let mutation = exec_grant_runtime::apply_exact_with_access(
+        auth, iroh.exec_registry(), Some(iroh.access_registry()), target, principal, policy,
+    )?;
     schedule_current(auth, iroh)?;
     Ok(mutation)
 }
@@ -85,6 +86,7 @@ pub(super) fn set_direct_online(
                 next_epoch,
                 iroh.exec_registry(),
             )?;
+            iroh.access_registry().recheck(&candidate, now_secs());
             *state = candidate;
         }
         (

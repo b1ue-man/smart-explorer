@@ -29,11 +29,15 @@ mod screen_host;
 // SCR-M9 (U28): this phone as screen viewer.
 #[path = "screen_view.rs"]
 mod screen_view;
+#[path = "login_view.rs"]
+mod login_view;
 // DRV-M8: the documents provider (`docs.*`) and its proxy descriptors.
 #[path = "docs.rs"]
 mod docs;
 #[path = "docs_engines.rs"]
 mod docs_engines;
+#[path = "docs_access.rs"]
+mod docs_access;
 #[path = "docs_ids.rs"]
 mod docs_ids;
 #[path = "docs_io.rs"]
@@ -67,6 +71,16 @@ mod share_settings;
 mod share_state;
 #[path = "share_status.rs"]
 mod share_status;
+#[path = "route_status.rs"]
+mod route_status;
+#[path = "tcp.rs"]
+mod tcp;
+#[path = "apps.rs"]
+mod apps;
+#[path = "app_launch.rs"]
+mod app_launch;
+#[path = "rdp.rs"]
+mod rdp;
 #[path = "sync_conflicts.rs"]
 mod sync_conflicts;
 #[path = "sync_jobs.rs"]
@@ -93,11 +107,14 @@ mod vault_compare;
 mod vault_keys;
 #[path = "vaults.rs"]
 mod vaults;
+#[path = "vault_open_policy.rs"]
+mod vault_open_policy;
 
 // SCR-M8: the binary calls of the JNI bridge (`screen_jni.rs`).
 pub use docs_io::{doc_fsync, doc_open, doc_read, doc_release, doc_size, doc_write};
 pub use screen_host::{screen_control, screen_push};
 pub use screen_view::screen_pull;
+pub use login_view::{login_pull, login_close, login_release};
 // U31 S2: the label of a vault for task titles outside this module.
 pub(crate) use vaults::label_of as vault_label;
 
@@ -113,6 +130,10 @@ pub(crate) fn dispatch(
         "bg" => background_method(rt, method, args),
         "conn" | "gdrive" => connection_method(rt, method, args),
         "share" => share_method(rt, method, args),
+        "tcp" => tcp::handle(method, args),
+        "login" => login_view::handle(method, args),
+        "apps" => app_launch::handle(method, args).or_else(|| apps::handle(method, args)),
+        "rdp" => rdp::handle(method, args, |target| crate::daemon::apps_rdp_probe(target, Some(std::time::Duration::from_secs(30)), || {})),
         "analyze" | "reclaim" => analysis_method(rt, method, args),
         "update" => update_method(rt, method),
         "app" => app_licenses::handle(method),
@@ -206,6 +227,7 @@ fn connection_method(rt: &Runtime, method: &str, args: &Value) -> Option<Result<
 fn share_method(rt: &Runtime, method: &str, args: &Value) -> Option<Result<Value, ApiError>> {
     Some(match method {
         "share.status" => share_state::status(),
+        "share.routeStatus" => route_status::status(args),
         "share.wake" => share_power::wake(args),
         "share.watch" => share_settings::watch(args),
         "share.setServer" => share_settings::set_server(rt, args),
@@ -251,6 +273,7 @@ fn share_method(rt: &Runtime, method: &str, args: &Value) -> Option<Result<Value
         "share.cancelExecJob" => share_exec::cancel_exec_job(args),
         "share.execLog" => share_exec::exec_log(args),
         "share.setAccess" => share_exec::access::set_access(args),
+        "share.deviceRights" => share_exec::access::device_rights(args),
         "share.accessApprovals" => share_exec::access::approvals(),
         "share.decideAccessApproval" => share_exec::access::decide(args),
         "share.reportApprovalUndeliverable" => share_exec::access::report_undeliverable(args),

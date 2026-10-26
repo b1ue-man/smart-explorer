@@ -8,6 +8,8 @@ mod desktop;
 mod doctor;
 mod drive;
 mod engine_copy;
+mod folder_conflict;
+pub(crate) use folder_conflict::{RecoveredCommandTask, SavedCommandsCatalog};
 #[cfg(test)]
 mod engine_copy_tests;
 mod entry_kind;
@@ -33,6 +35,10 @@ mod os;
 mod plugin;
 mod private_file;
 mod screen;
+mod tcp;
+mod apps;
+mod rdp;
+mod login;
 mod search;
 mod setup;
 mod share;
@@ -133,6 +139,14 @@ enum Command {
     Desktop(desktop::DesktopArgs),
     #[command(about = "Screen of paired devices: devices, probe, measurement, sessions")]
     Screen(screen::ScreenArgs),
+    #[command(about = "Authorized TCP tunnels to paired device services")]
+    Tcp(tcp::TcpArgs),
+    #[command(about = "Catalog-bound GUI application launch on paired devices")]
+    Apps(apps::AppsArgs),
+    #[command(about = "Authenticated RDP inventory and installed native clients")]
+    Rdp(rdp::RdpArgs),
+    #[command(about = "Explicit administrative machine login access")]
+    Login(login::LoginArgs),
     #[command(about = "Cryptomator vaults: list, unlock, lock, create, sync, compare")]
     Vault(vault::VaultArgs),
     #[command(about = "Generate live shell completion setup")]
@@ -204,6 +218,10 @@ struct CopyArgs {
     force: bool,
     #[arg(long, help = "Print rate and limiting resource to stderr when done")]
     stats: bool,
+    #[arg(long, value_enum, help = "Selected folder collision: merge (default), keep-both, or fail (independent of --force)")]
+    folder_conflict: Option<folder_conflict::FolderPolicy>,
+    #[arg(long, help = "Resume this saved CLI job ID with its exact source, target, and decisions")]
+    resume_job: Option<String>,
 }
 
 #[derive(Args)]
@@ -216,6 +234,10 @@ struct MoveArgs {
     recursive: bool,
     #[arg(short, long, help = "Allow overwriting an existing destination")]
     force: bool,
+    #[arg(long, value_enum, help = "Selected folder collision: merge (default), keep-both, or fail (independent of --force)")]
+    folder_conflict: Option<folder_conflict::FolderPolicy>,
+    #[arg(long, help = "Resume this saved CLI job ID with its exact source, target, and decisions")]
+    resume_job: Option<String>,
 }
 
 #[derive(Args)]
@@ -287,6 +309,10 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
         Command::Integration(args) => integration::run(args),
         Command::Desktop(args) => desktop::run(args),
         Command::Screen(args) => screen::run(args),
+        Command::Tcp(args) => tcp::run(args),
+        Command::Apps(args) => apps::run(args),
+        Command::Rdp(args) => rdp::run(args, |target| crate::daemon::apps_rdp_probe(target, Some(std::time::Duration::from_secs(30)), || {})),
+        Command::Login(args) => login::run(args),
         Command::Vault(args) => vault::run(args),
         Command::Completions(args) => completions::run(args),
         Command::Update(args) => update::run(args),
@@ -311,13 +337,13 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
         Command::Get(args) | Command::Put(args) | Command::Cp(args) => {
             let src = target::resolve(&args.src)?;
             let dst = target::resolve(&args.dst)?;
-            ops::copy_with_stats(&src, &dst, args.recursive, args.force, args.stats)?;
+            ops::copy_with_folder_stats(&src, &dst, args.recursive, args.force, args.stats, args.folder_conflict.map(Into::into), args.resume_job.as_deref())?;
             Ok(0)
         }
         Command::Mv(args) => {
             let src = target::resolve(&args.src)?;
             let dst = target::resolve(&args.dst)?;
-            ops::move_path(&src, &dst, args.recursive, args.force)?;
+            ops::move_with_folders(&src, &dst, args.recursive, args.force, args.folder_conflict.map(Into::into), args.resume_job.as_deref())?;
             Ok(0)
         }
         Command::Rm(args) => {

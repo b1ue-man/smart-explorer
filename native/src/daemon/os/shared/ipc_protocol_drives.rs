@@ -28,6 +28,11 @@ const RESTORE_REPLY: Duration = Duration::from_secs(5);
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub(crate) enum DriveIpcRequest {
+    /// P22: identical offline transaction for desktop, CLI/JSON and MCP.
+    RecoverySaveRemove { id: MountId, destination: std::path::PathBuf },
+    RecoveryList,
+    RecoveryImport { package: std::path::PathBuf },
+    RecoveryReactivate { id: String },
     /// `se drive set`, the drive window: the options of a managed drive.
     SetOptions {
         id: MountId,
@@ -70,6 +75,9 @@ impl DriveIpcRequest {
         matches!(
             self,
             Self::SetOptions { .. }
+                | Self::RecoverySaveRemove { .. }
+                | Self::RecoveryImport { .. }
+                | Self::RecoveryReactivate { .. }
                 | Self::MountPathFor { .. }
                 | Self::DevicesEnable { .. }
                 | Self::DevicesDisable
@@ -84,6 +92,18 @@ pub(crate) fn serve(
     req: DriveIpcRequest,
 ) -> io::Result<()> {
     let response = match req {
+        DriveIpcRequest::RecoverySaveRemove { id, destination } => recovery_answer(
+            host.mounts.save_remove(&id, &destination)),
+        DriveIpcRequest::RecoveryList => match host.mounts.recovery_list() {
+            Ok(recoveries) => IpcResponse::MountRecoveries { recoveries },
+            Err(msg) => IpcResponse::Err { msg, code: None },
+        },
+        DriveIpcRequest::RecoveryImport { package } => recovery_answer(
+            host.mounts.recovery_import(&package)),
+        DriveIpcRequest::RecoveryReactivate { id } => match host.mounts.recovery_reactivate(&id) {
+            Ok(mount) => IpcResponse::Mount { mount },
+            Err(msg) => IpcResponse::Err { msg, code: None },
+        },
         DriveIpcRequest::SetOptions { id, auto_remount } => {
             match host.mounts.set_options(&id, auto_remount) {
                 Ok(mount) => IpcResponse::Mount { mount },
@@ -118,6 +138,13 @@ pub(crate) fn serve(
         DriveIpcRequest::DevicesDisable => devices_answer(super::devices_mount::disable(host)),
     };
     write_response(stream, &response)
+}
+
+fn recovery_answer(result: Result<crate::mount::InactiveMountRecovery, String>) -> IpcResponse {
+    match result {
+        Ok(recovery) => IpcResponse::MountRecovery { recovery },
+        Err(msg) => IpcResponse::Err { msg, code: None },
+    }
 }
 
 fn devices_answer(result: Result<super::devices_ipc::DevicesStatus, String>) -> IpcResponse {

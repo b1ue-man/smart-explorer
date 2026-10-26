@@ -16,6 +16,8 @@ pub(crate) mod crash_rule;
 pub(crate) mod desktop_ops;
 #[path = "shared/feed_sources.rs"]
 pub(crate) mod feed_sources;
+#[path = "shared/folder_open.rs"]
+pub(crate) mod folder_open;
 #[path = "shared/launch.rs"]
 pub(crate) mod launch;
 #[path = "shared/layout_store.rs"]

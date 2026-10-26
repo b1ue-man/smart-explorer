@@ -28,6 +28,7 @@ impl ScreenTarget {
             PeerOpenTarget::RoomDevice { room_id, .. } => ("room", room_id.clone()),
         };
         ScreenTarget {
+            expected_node: None,
             relation: relation.into(),
             relation_id,
             device_id: device_id.into(),

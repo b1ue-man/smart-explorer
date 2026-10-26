@@ -10,11 +10,15 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import app.smartexplorer.android.core.Core
 import app.smartexplorer.android.core.CoreEvent
+import app.smartexplorer.android.screen.AppHostRuntime
+import app.smartexplorer.android.screen.AppLaunch
 import app.smartexplorer.android.service.BackgroundController
 import app.smartexplorer.android.system.OpenWithIntent
 import app.smartexplorer.android.system.ShareIntentHandler
@@ -46,7 +50,12 @@ class MainActivity : ComponentActivity() {
                 }
             }
             SmartExplorerTheme(darkTheme = dark) {
-                Surface(Modifier.fillMaxSize()) { AppRoot() }
+                Surface(Modifier.fillMaxSize()) {
+                    Box(Modifier.fillMaxSize()) {
+                        AppRoot()
+                        AppHostRuntime.PendingRequests(this@MainActivity, Modifier.align(Alignment.BottomCenter))
+                    }
+                }
             }
         }
         if (savedInstanceState == null) {
@@ -63,6 +72,16 @@ class MainActivity : ComponentActivity() {
         BackgroundController.onUiVisible(applicationContext, true)
     }
 
+    override fun onResume() {
+        super.onResume()
+        AppHostRuntime.onVisible(this)
+    }
+
+    override fun onPause() {
+        AppHostRuntime.onHidden(this)
+        super.onPause()
+    }
+
     override fun onStop() {
         // Another instance (a share opened in the sending app's task) may still be visible: its
         // onStart runs before this onStop. A rotation recreates the activity; it is not "leaving
@@ -74,6 +93,7 @@ class MainActivity : ComponentActivity() {
 
     private fun handleIntent(intent: Intent?) {
         if (intent == null) return
+        if (AppLaunch.showConsentForIntent(this, intent)) return
         val request = AppNav.fromIntent(this, intent)
         if (request != null) {
             AppNav.send(request)

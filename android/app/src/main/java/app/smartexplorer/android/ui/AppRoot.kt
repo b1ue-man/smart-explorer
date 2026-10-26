@@ -55,7 +55,9 @@ import app.smartexplorer.android.ui.more.MoreScreen
 import app.smartexplorer.android.ui.onboarding.OnboardingScreen
 import app.smartexplorer.android.ui.onboarding.StartupErrorScreen
 import app.smartexplorer.android.ui.onboarding.StartupScreen
-import app.smartexplorer.android.ui.share.ShareScreen
+import app.smartexplorer.android.ui.settings.SettingsScreen
+import app.smartexplorer.android.ui.settings.ErrorLogScreen
+import app.smartexplorer.android.ui.settings.AboutScreen
 import app.smartexplorer.android.ui.sync.SyncScreen
 import kotlinx.coroutines.flow.onSubscription
 
@@ -92,7 +94,7 @@ private data class TabItem(val tab: MainTab, val label: String, @DrawableRes val
 private val TABS = listOf(
     TabItem(MainTab.Files, "Dateien", R.drawable.ic_folder),
     TabItem(MainTab.Sync, "Sync", R.drawable.ic_sync),
-    TabItem(MainTab.Share, "Teilen", R.drawable.ic_share),
+    TabItem(MainTab.Share, "Einstellungen", R.drawable.ic_share),
     TabItem(MainTab.More, "Mehr", R.drawable.ic_more_vert),
 )
 
@@ -167,7 +169,7 @@ private fun MainShell(snackbarHostState: SnackbarHostState) {
                 when (tab) {
                     MainTab.Files -> FilesScreen()
                     MainTab.Sync -> SyncScreen()
-                    MainTab.Share -> ShareScreen()
+                    MainTab.Share -> DeviceSettingsRoot { tab = MainTab.Files }
                     MainTab.More -> MoreScreen()
                 }
             }
@@ -185,5 +187,15 @@ private fun TabIcon(item: TabItem, shareRequests: Int) {
         }) { SeIcon(item.icon, contentDescription = null) }
     } else {
         SeIcon(item.icon, contentDescription = null)
+    }
+}
+
+@Composable
+private fun DeviceSettingsRoot(onBack: () -> Unit) {
+    var detail by rememberSaveable { mutableStateOf<String?>(null) }
+    when (detail) {
+        "log" -> ErrorLogScreen(onBack = { detail = null })
+        "about" -> AboutScreen(onBack = { detail = null })
+        else -> SettingsScreen(null, {}, onBack, { detail = "log" }, { detail = "about" })
     }
 }

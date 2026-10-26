@@ -17,6 +17,7 @@ object SeActions {
     const val SELECT_TAB = "selectTab"
     const val OPEN_SCREEN = "openScreen"
     const val SHOW_SCREEN_GRID = "showScreenGrid"
+    const val OPEN_APPS = "openApps"
 
     /** The tab of the page „Teilen“ (`MainTab.Share`): Android has no page per device, so the device page is this tab. */
     val SHARE_TAB = NavTarget(SELECT_TAB, "Share")
@@ -37,6 +38,9 @@ object SeActions {
     fun screenGrid(profileId: String? = null): NavTarget = NavTarget(SHOW_SCREEN_GRID, profileId ?: "")
 
     fun openScreen(screen: ScreenRef, control: Boolean): NavTarget = NavTarget(OPEN_SCREEN, screenJson(screen, control))
+
+    /** App selection opens in the token-authenticated main process, never Core in :launcher. */
+    fun openApps(location: String): NavTarget = NavTarget(OPEN_APPS, location.trimEnd('/'))
 
     /** `location` and exactly one trailing slash (`share://direct/<id>/`). */
     fun folder(location: String): String = location.trimEnd('/') + "/"

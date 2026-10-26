@@ -18,11 +18,15 @@ pub(in crate::app) fn confirm_yes_no(title: &str, msg: &str) -> bool {
 }
 
 pub(in crate::app) fn list_drives() -> Vec<String> {
-    vec!["/".to_string()]
+    read_drive_inventory().map(|entries| entries.into_iter().map(|entry| entry.root).collect())
+        .unwrap_or_else(|_| vec!["/".to_string()])
 }
 
-pub(in crate::app) fn drive_info_list(_drives: &[String]) -> Vec<(String, u64, u64)> {
-    Vec::new()
+pub(in crate::app) fn drive_info_list(drives: &[String]) -> Vec<(String, u64, u64)> {
+    drives.iter().map(|root| {
+        let (free, total) = drive_inventory::read_drive_capacity(root);
+        (root.clone(), free, total)
+    }).collect()
 }
 
 pub(in crate::app) fn reveal_path_in_file_manager(path: &str) {
@@ -217,6 +221,8 @@ impl App {
 
     pub(in crate::app) fn drain_watcher(&mut self) {}
 
+    pub(in crate::app) fn update_drive_watches(&mut self, _removed: &[String], _added: &[String]) {}
+
     pub(in crate::app) fn initial_context_menu_enabled() -> bool {
         false
     }
@@ -228,4 +234,15 @@ impl App {
     pub(in crate::app) fn should_start_clip_key_poller(&self) -> bool {
         false
     }
+}
+
+#[path = "linux_os/drive_events.rs"]
+mod drive_events;
+#[path = "linux_os/drive_inventory.rs"]
+mod drive_inventory;
+pub(crate) use drive_events::start_drive_events;
+pub(crate) use drive_inventory::{read_drive_inventory, read_drive_capacity};
+
+pub(in crate::app) fn local_path_text(path: &std::path::Path) -> String {
+    path.to_string_lossy().into_owned()
 }

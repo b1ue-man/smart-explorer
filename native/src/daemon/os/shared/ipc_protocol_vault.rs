@@ -58,6 +58,8 @@ impl<'de> Deserialize<'de> for SecretText {
 pub(crate) enum SealPurposeWire {
     LocalStore,
     LogFields,
+    TransferJob,
+    TransferAlias,
 }
 
 impl From<SealPurposeWire> for crate::vault::SealPurpose {
@@ -65,6 +67,8 @@ impl From<SealPurposeWire> for crate::vault::SealPurpose {
         match purpose {
             SealPurposeWire::LocalStore => Self::LocalStore,
             SealPurposeWire::LogFields => Self::LogFields,
+            SealPurposeWire::TransferJob => Self::TransferJob,
+            SealPurposeWire::TransferAlias => Self::TransferAlias,
         }
     }
 }
@@ -76,6 +80,9 @@ pub(crate) enum VaultIpcRequest {
     /// Every entered site with its state and the newest events (C7.1 T1;
     /// se Desktop polls it, S5 H5).
     Status,
+    MountPolicy { site: String },
+    SetRootTrust { site: String, trusted: bool },
+    SetCleartextCopyPolicy { site: String, always: bool },
     /// Unlock with a password (T6); `remember` stores or forgets it (T11).
     Unlock {
         site: String,
@@ -158,7 +165,7 @@ impl VaultIpcRequest {
     /// drive restore (S2 K7): the read-only status of se Desktop does not,
     /// nor does the key request of a drive host the worker started itself.
     pub(crate) fn promotes_daemon(&self) -> bool {
-        !matches!(self, Self::Status | Self::SpoolKey { .. })
+        !matches!(self, Self::Status | Self::MountPolicy { .. } | Self::SpoolKey { .. })
     }
 }
 
@@ -167,6 +174,8 @@ impl VaultIpcRequest {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum VaultIpcReply {
     Status(VaultStatusView),
+    MountPolicy(crate::vault::MountPolicy),
+    PolicySaved { site: String },
     Unlocked {
         site: String,
         epoch: u64,

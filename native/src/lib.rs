@@ -6,6 +6,7 @@
 pub mod agent;
 pub mod agent_proto;
 pub mod analytics;
+pub(crate) mod apps;
 #[cfg(unix)]
 pub(crate) mod android_fs;
 #[cfg(not(target_os = "android"))]
@@ -36,12 +37,19 @@ pub mod keep_awake;
 mod licenses;
 pub mod linemerge;
 mod local_access;
+pub(crate) mod login;
+#[cfg(not(target_os = "android"))]
+mod login_entry;
+#[cfg(not(target_os = "android"))]
+pub use login_entry::run_login_service_if_requested;
 pub mod mcp_launcher;
 #[cfg(any(target_os = "android", all(unix, test)))]
 pub mod mobile;
 pub mod mount;
 pub mod net;
 pub mod quickshare;
+pub(crate) mod rdp;
+pub(crate) mod remote_window;
 pub mod rscan;
 pub mod scanner;
 mod screen;
@@ -55,6 +63,7 @@ pub mod shell_menu;
 #[cfg(windows)]
 pub mod shell_register;
 pub mod smb;
+pub mod source_media;
 pub mod support_dirs;
 pub mod sync;
 pub mod syncjobs;
@@ -72,6 +81,10 @@ pub mod zipfs;
 #[cfg(not(target_os = "android"))]
 pub fn run_gui() -> eframe::Result<()> {
     let raw_args: Vec<_> = std::env::args_os().skip(1).collect();
+    if let Some(result) = run_login_service_if_requested(&raw_args) {
+        if let Err(error) = result { eprintln!("Login service: {error}"); std::process::exit(1); }
+        return Ok(());
+    }
     install_panic_logger();
     // The headless read helper must precede ordinary GUI/daemon side effects.
     if let Some(result) = local_access::run_helper_if_requested(&raw_args) {
@@ -188,6 +201,7 @@ pub fn run_gui() -> eframe::Result<()> {
         "Smart Explorer",
         options,
         Box::new(|cc| {
+            cc.egui_ctx.data_mut(|data| data.insert_temp(eframe::egui::Id::new("screen_renderer_wgpu"), cc.wgpu_render_state.is_some()));
             let app = match start {
                 StartRequest::Gui { start_path } => app::App::new(just_updated, start_path),
                 request => app::App::new_with_start(just_updated, request),

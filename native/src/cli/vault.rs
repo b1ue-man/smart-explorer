@@ -15,6 +15,8 @@ mod compare;
 mod complete;
 #[path = "vault/manage.rs"]
 mod manage;
+#[path = "vault/open_policy.rs"]
+mod open_policy;
 #[path = "vault/output.rs"]
 pub(crate) mod output;
 #[path = "vault/sync.rs"]
@@ -75,6 +77,8 @@ enum VaultCommand {
     ForgetPassword(manage::SiteArg),
     #[command(about = "Change the name and the lock settings of a vault")]
     Settings(manage::SettingsArgs),
+    #[command(about = "Read, set or revoke identity-bound mount trust and separate cleartext-copy consent")]
+    OpenPolicy(open_policy::PolicyArgs),
     #[command(about = "Check the structure of an unlocked vault")]
     Check(compare::CheckArgs),
     #[command(about = "Vault sync jobs: create and run")]
@@ -98,6 +102,7 @@ pub(super) fn run(args: VaultArgs) -> Result<i32, String> {
         VaultCommand::Password(args) => manage::password(args),
         VaultCommand::ForgetPassword(args) => manage::forget_password(args),
         VaultCommand::Settings(args) => manage::settings(args),
+        VaultCommand::OpenPolicy(args) => open_policy::run(args),
         VaultCommand::Check(args) => compare::check(args),
         VaultCommand::Sync(args) => sync::run(args),
         VaultCommand::Compare(args) => compare::compare(args),

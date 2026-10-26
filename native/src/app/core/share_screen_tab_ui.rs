@@ -54,16 +54,12 @@ pub(crate) fn session_row(session: &SessionView) -> String {
         crate::screen::core::wire_hello::SessionMode::Preview => "Vorschau",
         _ => "sieht zu",
     };
-    let codec = session.codec.as_deref().unwrap_or("–");
-    format!(
-        "{} · {mode} · {} · {} · {codec} · {} · {} Bilder/s · {} kbit/s",
-        session.device_name,
-        session.source,
-        session.state.key(),
-        session.path,
-        session.fps,
-        session.bitrate_kbps
-    )
+    let name = if session.device_name.trim().is_empty() { "Gerät ohne Namen" } else { &session.device_name };
+    let state = match session.state.key() {
+        "streaming" => "verbunden", "starting" => "wird gestartet", "paused" => "pausiert",
+        "ended" => "beendet", "failed" => "fehlgeschlagen", _ => "Sitzungszustand nicht bekannt",
+    };
+    format!("{name} · {mode} · {state}")
 }
 
 /// Draws the tab (called from `share_window_ui.rs` for `TAB_SCREEN`).
@@ -143,6 +139,10 @@ pub(crate) fn ui(ui: &mut egui::Ui) {
             if ui.button("Beenden").clicked() {
                 stop(Some(session.id.clone()));
             }
+        });
+        egui::CollapsingHeader::new("Statistik und Diagnose").id_salt(("screen_statistics", &session.id)).show(ui, |ui| {
+            ui.label(format!("{} Bilder/s · {} kbit/s", session.fps, session.bitrate_kbps));
+            ui.monospace(format!("Quelle: {}\nZustand: {}\nKodierung: {}\nVerbindung: {}", session.source, session.state.key(), session.codec.as_deref().unwrap_or("unbekannt"), session.path));
         });
     }
     if sessions.len() > 1 && ui.button("Alle beenden").clicked() {
@@ -242,7 +242,7 @@ mod tests {
         };
         assert_eq!(
             session_row(&session),
-            "Laptop · steuert · synthetic · streaming · tiles · relay · 30 Bilder/s · 1200 kbit/s"
+            "Laptop · steuert · verbunden"
         );
         let request: ApprovalView = serde_json::from_value(serde_json::json!({
             "id": "ab".repeat(16),

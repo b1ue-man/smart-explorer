@@ -58,24 +58,32 @@ pub fn is_new_request(baseline: Option<SystemTime>, current: Option<SystemTime>)
 pub struct UpdateStopBaseline {
     baseline: Option<SystemTime>,
     source: UpdateStopSource,
+    installation_stop: Option<(std::path::PathBuf, Option<crate::mcp_launcher::core::lifecycle::StopIdentity>)>,
 }
 
 impl UpdateStopBaseline {
     /// Records the current `daemon.stop` request as baseline. Call it as
     /// early as possible: a request written before this call is ignored.
     pub fn arm() -> Self {
-        Self::with_source(Arc::new(super::handoff::update_stop_marker))
+        let mut baseline=Self::with_source(Arc::new(super::handoff::update_stop_marker));
+        baseline.installation_stop=crate::mcp_launcher::installation_stop_marker().map(|path| {
+            let identity=crate::mcp_launcher::stop_marker_identity(&path); (path,identity)
+        });
+        baseline
     }
 
     /// The same rule against another marker source.
     pub fn with_source(source: UpdateStopSource) -> Self {
         let baseline = source();
-        Self { baseline, source }
+        Self { baseline, source, installation_stop:None }
     }
 
     /// Whether a new update-stop request exists since the baseline.
     pub fn requested(&self) -> bool {
-        is_new_request(self.baseline, (self.source)())
+        is_new_request(self.baseline, (self.source)()) || self.installation_stop.as_ref().is_some_and(|(path,before)| {
+            let current=crate::mcp_launcher::stop_marker_identity(path);
+            current.is_some() && current!=*before
+        })
     }
 
     /// Reads the marker every `poll` (at least 10 ms) in a background thread

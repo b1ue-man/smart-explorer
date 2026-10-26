@@ -62,7 +62,7 @@ impl PeerBackend {
         } else {
             io_deadline::PEER_OP_TIMEOUT
         };
-        self.request_with_lease_until(req, lease, Instant::now() + budget)
+        self.request_with_lease_until(req, lease, Instant::now() + budget, false)
     }
 
     pub(super) fn request_unleased_until(
@@ -70,7 +70,7 @@ impl PeerBackend {
         req: FsRequest,
         deadline: Instant,
     ) -> io::Result<FsResponse> {
-        self.request_with_lease_until(req, None, deadline)
+        self.request_with_lease_until(req, None, deadline, true)
     }
 
     fn request_with_lease_until(
@@ -78,6 +78,7 @@ impl PeerBackend {
         req: FsRequest,
         lease: Option<String>,
         deadline: Instant,
+        absolute: bool,
     ) -> io::Result<FsResponse> {
         let retryable = is_retryable_read(&req);
         let mut attempts = Attempts::new(if retryable { 2 } else { 1 });
@@ -102,10 +103,12 @@ impl PeerBackend {
             let connection = opened.connection.clone();
             let response_deadline = if retryable {
                 connect_deadline
+            } else if absolute {
+                deadline
             } else {
                 Instant::now() + io_deadline::PEER_OP_TIMEOUT
             };
-            match self.request_once(opened, req.clone(), lease.clone(), response_deadline) {
+            match self.request_once_with_route(opened, req.clone(), lease.clone(), response_deadline, absolute || retryable) {
                 Ok(response) => {
                     let response = decode_resp(response)?;
                     super::peer_telemetry::report_fs_success(
@@ -126,11 +129,18 @@ impl PeerBackend {
     }
 
     pub(super) fn request_once(
+        &self, opened: OpenedPeerStream, req: FsRequest, lease: Option<String>, deadline: Instant,
+    ) -> io::Result<FsResponse> {
+        self.request_once_with_route(opened, req, lease, deadline, true)
+    }
+
+    fn request_once_with_route(
         &self,
         mut opened: OpenedPeerStream,
         req: FsRequest,
         lease: Option<String>,
         deadline: Instant,
+        absolute: bool,
     ) -> io::Result<FsResponse> {
         let expected = req.clone();
         let timeout = match io_deadline::remaining(deadline, "peer filesystem request") {
@@ -143,9 +153,9 @@ impl PeerBackend {
                 return Err(error);
             }
         };
-        let result = self.node.block_on(io_deadline::run_for(
+        let result = self.node.block_on_route(opened.generation, io_deadline::run_for_until(
             "peer filesystem request",
-            timeout,
+            timeout, absolute.then_some(deadline),
             async {
                 send_ctrl(&mut opened.send, &Ctrl::Fs { req, lease }).await?;
                 recv_resp_wire(&mut opened.recv).await
@@ -255,7 +265,7 @@ impl PeerBackend {
             let connection = opened.connection.clone();
             let result = self
                 .node
-                .block_on(io_deadline::run_for(operation, timeout, async {
+                .block_on_route(opened.generation, io_deadline::run_for_until(operation, timeout, Some(attempt_deadline), async {
                     send_ctrl(
                         &mut opened.send,
                         &Ctrl::Fs {
@@ -331,7 +341,7 @@ impl PeerBackend {
             };
             let result = self
                 .node
-                .block_on(io_deadline::run_for(operation, timeout, async {
+                .block_on_route(opened.generation, io_deadline::run_for_until(operation, timeout, Some(response_deadline), async {
                     send_ctrl(
                         &mut opened.send,
                         &Ctrl::Fs {

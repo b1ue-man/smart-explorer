@@ -89,6 +89,8 @@ impl DesktopConsent {
 }
 
 impl ConsentNotifier for DesktopConsent {
+    fn supports_contextual(&self) -> bool { true }
+
     fn show(&self, request: &ApprovalView) -> Option<ApprovalSurface> {
         if !self.facts.graphical {
             return Some(ApprovalSurface::CliOnly);
@@ -117,6 +119,9 @@ pub(crate) fn request_line(request: &ApprovalView) -> String {
         Capability::ExecTerminal => "ein Terminal öffnen",
         Capability::ScreenView => "den Bildschirm ansehen",
         Capability::ScreenControl => "den Bildschirm steuern",
+        Capability::AppLaunch => "eine App starten",
+        Capability::LoginAccess => "auf eine Anmeldung oder Sitzung zugreifen",
+        Capability::TcpForward => "einen TCP-Dienst weiterleiten",
     };
     format!("{} möchte {wish}", request.device_name)
 }
@@ -128,7 +133,84 @@ pub(crate) fn capability_label(capability: Capability) -> &'static str {
         Capability::ExecTerminal => "Terminal",
         Capability::ScreenView => "Bildschirm ansehen",
         Capability::ScreenControl => "Bildschirm steuern",
+        Capability::AppLaunch => "App starten",
+        Capability::LoginAccess => "Anmeldung und Sitzung",
+        Capability::TcpForward => "TCP-Weiterleitung",
     }
+}
+
+/// A contextual Allow is unavailable when an older reader lost the target
+/// or exact relation. Legacy Exec/terminal/screen questions retain their UI.
+pub(crate) fn approval_context_complete(view: &ApprovalView) -> bool {
+    match &view.request {
+        Some(request) => !view.relation_id.is_empty() && request.capability() == view.capability,
+        None => !view.capability.requires_context(),
+    }
+}
+
+/// Full, shared target text for desktop, Android and CLI. Identifiers are
+/// intentionally not shortened: a different session, user or host is a
+/// different approval. The typed requests reject control/bidi identities.
+pub(crate) fn approval_context(view: &ApprovalView) -> Vec<String> {
+    use crate::share::access_constraints::{AccessRequest, LoginOperation, TcpDirection, TcpHost};
+    let mut lines = Vec::new();
+    if !view.relation_id.is_empty() {
+        lines.push(format!("Quelle der Freigabe: {} / {}", view.relation, shown_relation(&view.relation_id)));
+    }
+    match &view.request {
+        Some(AccessRequest::AppLaunch(request)) => {
+            lines.push("Zielgerät: dieses Gerät".into());
+            lines.push(format!("App-ID: {}", request.app_id.as_str()));
+            lines.push(format!("Sitzung: {}", request.session.as_str()));
+            lines.push(format!("Benutzer: {}", request.user.as_str()));
+        }
+        Some(AccessRequest::LoginAccess(request)) => {
+            let operation = match request.operation {
+                LoginOperation::Login => "Anmelden",
+                LoginOperation::Unlock => "Entsperren",
+                LoginOperation::SecureDesktop => "Geschützter Desktop",
+                LoginOperation::UserSession => "Benutzersitzung",
+            };
+            lines.push("Zielgerät: dieses Gerät".into());
+            lines.push(format!("Vorgang: {operation}"));
+            lines.push(format!("Sitzung: {}", request.session.as_str()));
+            lines.push(format!("Benutzer: {}", request.user.as_str()));
+        }
+        Some(AccessRequest::TcpForward(request)) => {
+            lines.push(format!("Initiatorgerät: {}", request.initiator.as_str()));
+            lines.push(format!("Zielgerät: {}", request.target.as_str()));
+            lines.push(format!("Richtung: {}", match request.direction {
+                TcpDirection::PeerToHost => "Anfragendes Gerät → dieser Host",
+                TcpDirection::HostToPeer => "Dieser Host → anfragendes Gerät",
+            }));
+            match &request.host {
+                TcpHost::Loopback => lines.push("Zielhost: Loopback des Zielgeräts".into()),
+                TcpHost::Ip { address } => lines.push(format!("Zielhost: {address}")),
+                TcpHost::Dns { name, addresses } => {
+                    lines.push(format!("Zielhost: {name}"));
+                    if !addresses.is_empty() {
+                        lines.push(format!("Mitgeteilte DNS-Adressen: {}",
+                            addresses.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")));
+                    }
+                }
+            }
+            lines.push(format!("Frisch aufgelöste Ziel-IP: {}", request.resolved_ip));
+            lines.push(format!("Zielport: {}", request.port.get()));
+        }
+        None => {},
+    }
+    if !approval_context_complete(view) {
+        lines.push("Der vollständige Zielauftrag oder seine Beziehung fehlt; Erlauben ist gesperrt.".into());
+    }
+    lines
+}
+fn shown_relation(value: &str) -> String {
+    value.chars().map(|character| {
+        if character.is_control() || matches!(character, '\u{200e}' | '\u{200f}' | '\u{2028}' | '\u{2029}'
+            | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}') {
+            format!("\\u{{{:x}}}", u32::from(character))
+        } else { character.to_string() }
+    }).collect()
 }
 
 /// Starts the window of `id` with the desktop program of this installation.

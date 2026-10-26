@@ -1,6 +1,6 @@
 # Smart Explorer für KI-Agenten (`se mcp`, `se plugin`)
 
-Quellstand: 2026-10-25; die neue Generationsverwaltung wartet noch auf die
+Quellstand: 2026-10-26; die neue Generationsverwaltung wartet noch auf die
 gemeinsame Remote-Abnahme und den terminalen Release. Aktueller Vertrag:
 [`P13/P29`](plaene/2026-10-24-batches/agentenvertrag.md).
 Historische Planung und Entscheidungen:
@@ -110,7 +110,19 @@ einen bereits initialisierten Hostprozess.
 | `exec` | Befehl auf gespeichertem SFTP-Remote (SSH) oder Share-Peer, als Job; mit `session` in einer dauerhaften Shell | zerstörend |
 | `sessions` | dauerhafte Shell-Sitzungen auflisten (mit `kind` `commands` oder `terminal`), einer mit `se shell -T --attachable` geöffneten Befehlssitzung beitreten (`attach`; Terminalsitzungen werden abgelehnt), Aktivität der anderen lesen (`activity`), schließen bzw. lösen (`close`) | ändernd |
 | `job_status`, `job_input`, `job_cancel` | Jobs verfolgen (Ausgabe ab Offset), stdin senden, abbrechen | lesend / ändernd |
+| `screen` | Geräte, Bildschirmfähigkeit, Quellen und begrenzte Standbilder | nur lesend |
+| `screen_input` | Eingabe über den autorisierten Bildschirmvertrag | ändernd |
+| `screen_window` | Nativen Fensterbetrachter mit gebundener Quelle öffnen | ändernd |
+| `tcp_forward` | Autorisierten TCP-Tunnel starten, anzeigen und schließen | ändernd |
+| `apps` | Installierten Hostkatalog lesen und eine ausdrücklich freigegebene Kataloganwendung starten | lesend / ändernd |
+| `rdp` | Authentifizierten Dienstbestand und vorhandene Clients verwenden; Client und Lease gemeinsam besitzen | lesend / ändernd |
+| `login` | Explizites gepinntes Maschinenziel und autorisierte Login-Sitzung; keine Loginpixel in JSON | lesend / ändernd |
 | `se` | jeder weitere `se`-Befehl als Kindprozess (Share-Verwaltung, Verbindungen anlegen, Laufwerke, Update, Diagnose) | zerstörend |
+
+Die neuen Fernzugriffsanschlüsse sind im laufenden Kandidaten registriert
+(`native/src/cli/mcp/catalog.rs`, `server.rs`); die Tabelle ist kein
+Releasebeleg. Rechte, Besitz und Plattformausnahmen stehen in
+[`oberflaechen/fernzugriff.md`](oberflaechen/fernzugriff.md).
 
 **Ziele** folgen der `se`-Grammatik: `@label:/pfad`, gespeicherte `sftp://`/`ftp://`/`ftps://`/
 `webdav://`-Endpunkte, `share://direct/<id>/pfad`, `share://room/<raum>/<gerät>/pfad`,

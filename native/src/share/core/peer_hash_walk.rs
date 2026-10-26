@@ -37,7 +37,7 @@ pub(super) fn walk(
             HashAlgorithm::Sha256 => FsHashAlgo::Sha256,
         }),
     });
-    let result = backend.node.block_on(async {
+    let result = backend.node.block_on_route(opened.generation, async {
         io_deadline::run(
             "Share hash walk request",
             framing::send_ctrl(&mut opened.send, &Ctrl::Fs { req, lease }),
