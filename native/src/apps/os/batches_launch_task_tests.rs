@@ -132,9 +132,20 @@ fn request(host: &AppHost<FakePlatform>, id: &str) -> LaunchRequest {
     }
 }
 
+fn private_ledger() -> tempfile::TempDir {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix("se-app-launch-");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        builder.permissions(std::fs::Permissions::from_mode(0o700));
+    }
+    builder.tempdir().unwrap()
+}
+
 #[test]
 fn batches_app_durable_claim_precedes_dispatch_and_survives_host_reconstruction() {
-    let root = tempfile::tempdir().unwrap();
+    let root = private_ledger();
     let platform = FakePlatform::new(root.path());
     let first = host(&platform);
     let request = request(&first, "repeat-after-restart");
@@ -155,7 +166,7 @@ fn batches_app_durable_claim_precedes_dispatch_and_survives_host_reconstruction(
 
 #[test]
 fn batches_app_ambiguous_dispatch_remains_unknown_until_matching_completion() {
-    let root = tempfile::tempdir().unwrap();
+    let root = private_ledger();
     let platform = FakePlatform::new(root.path());
     platform.results.lock().unwrap().push_back(None);
     let first = host(&platform);
@@ -199,7 +210,7 @@ fn batches_app_ambiguous_dispatch_remains_unknown_until_matching_completion() {
 
 #[test]
 fn batches_app_peer_owner_and_complete_body_survive_reconstruction_without_rebinding() {
-    let root = tempfile::tempdir().unwrap();
+    let root = private_ledger();
     let platform = FakePlatform::new(root.path());
     let first = host(&platform);
     let request = request(&first, "owned-request");
@@ -243,7 +254,7 @@ fn batches_app_peer_owner_and_complete_body_survive_reconstruction_without_rebin
 #[test]
 fn batches_app_catalog_logon_revocation_and_expiry_prevent_dispatch() {
     for case in 0..5 {
-        let root = tempfile::tempdir().unwrap();
+        let root = private_ledger();
         let platform = FakePlatform::new(root.path());
         let host = host(&platform);
         let request = request(&host, "admission-changed");
@@ -281,7 +292,7 @@ fn batches_app_catalog_logon_revocation_and_expiry_prevent_dispatch() {
 
 #[test]
 fn batches_app_consent_continuation_uses_new_phase_and_never_repeats_remote_dispatch() {
-    let root = tempfile::tempdir().unwrap();
+    let root = private_ledger();
     let platform = FakePlatform::new(root.path());
     platform
         .results
@@ -322,7 +333,7 @@ fn batches_app_consent_continuation_uses_new_phase_and_never_repeats_remote_disp
 
 #[test]
 fn batches_app_repeated_request_rechecks_permission_before_disclosing_receipt() {
-    let root = tempfile::tempdir().unwrap();
+    let root = private_ledger();
     let platform = FakePlatform::new(root.path());
     let host = host(&platform);
     let request = request(&host, "permission-revoked");
@@ -336,4 +347,36 @@ fn batches_app_repeated_request_rechecks_permission_before_disclosing_receipt() 
     assert_eq!(denied.reason, "grant revoked");
     assert_eq!(host.receipt(&request).unwrap(), Some(original));
     assert_eq!(platform.dispatches.load(Ordering::SeqCst), 1);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn batches_app_journal_rejects_public_and_symlinked_directories() {
+    use std::fs;
+    use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
+
+    let base = private_ledger();
+    let root = base.path().join("journal");
+    Journal::new(&root).unwrap();
+    let private = fs::symlink_metadata(&root).unwrap();
+    assert_eq!(private.uid(), unsafe { libc::geteuid() });
+    assert_eq!(private.mode() & 0o077, 0);
+
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+    let denied = Journal::new(&root)
+        .err()
+        .expect("a public journal must remain rejected");
+    assert_eq!(denied.kind(), io::ErrorKind::PermissionDenied);
+    assert_eq!(fs::symlink_metadata(&root).unwrap().mode() & 0o777, 0o755);
+
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+    let link = base.path().join("journal-link");
+    symlink(&root, &link).unwrap();
+    let denied = Journal::new(&link)
+        .err()
+        .expect("a symlink to a private journal must remain rejected");
+    assert_eq!(denied.kind(), io::ErrorKind::PermissionDenied);
+    assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+    assert_eq!(fs::symlink_metadata(&root).unwrap().mode() & 0o777, 0o700);
+    Journal::new(&root).unwrap();
 }
