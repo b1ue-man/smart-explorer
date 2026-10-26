@@ -163,9 +163,11 @@ impl PipelineActor {
     {
         use crate::screen::core::host_codec_adapters::{HostContract,HostOutputPlan};
         let admission = self.admission.clone().ok_or_else(||io::Error::other("source switch has no session admission"))?;
-        let limits = self.accepted.map_or(crate::screen::core::frame_budget::FrameLimits::LEGACY,|contract|contract.limits);
+        let limits = match self.accepted {Some(contract)=>contract.limits,None=>
+            crate::screen::core::frame_budget::legacy_limits(admission.working_bytes(),None)?};
         let output = HostOutputPlan::new(self.accepted.map_or(HostContract::Legacy,HostContract::Versioned),
             limits.fit(limits.max_size),self.capture_codec)?;
+        let output=if self.accepted.is_none() {output.with_legacy_limits(limits)?} else {output};
         Ok((admission,output))
     }
     pub(crate) fn set_source(&mut self,source:Box<dyn ScreenSource>) {self.interrupt();self.input_sink=source.input_sink();self.pending.source=Some(source);self.poll();}

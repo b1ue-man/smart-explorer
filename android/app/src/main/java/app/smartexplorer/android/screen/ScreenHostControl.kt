@@ -73,6 +73,8 @@ internal object ScreenHostControl {
         @Volatile var identity: ScreenProjectionIdentity? = null
         var display: VirtualDisplay? = null
         var synthetic: SyntheticSurfaceSource? = null
+        var encoderRetirements=0
+        var pendingConfigStart=false
         val still = ScreenStillSource(start.session,{displaySize()}) { buffer, length, generation ->
             if (hostLocked() || ended || !captureActive || projection != null) -1
             else NativeBridge.screenPushAdmitted(start.session,generation,buffer,0,length,0,FLAG_STILL)
@@ -234,6 +236,7 @@ internal object ScreenHostControl {
                     if(session.ended) return@synchronized
                     session.captureActive=active;session.still.setCaptureActive(active)
                     if(!active) {
+                        session.pendingConfigStart=false
                         session.pendingCapture=null
                         session.display?.surface=null
                         check(session.frames?.close()!=false) {"Capturethread konnte nicht pausiert werden"};session.frames=null
@@ -279,13 +282,32 @@ internal object ScreenHostControl {
     }
 
     /** (Re)starts the encoder of [session] for its configuration once its source runs. */
-    private fun applyConfig(session: HostSession) = synchronized(session.lock) {
+    private fun applyConfig(session: HostSession): Unit = synchronized(session.lock) {
         val config = session.config ?: return@synchronized
         val synthetic = session.start.source == "synthetic"
         val projection = session.projection
         val identity = session.identity
         if (session.ended || !session.captureActive || (!synthetic && projection == null)) return@synchronized
         if (!synthetic && (hostLocked() || projection == null || identity?.matches(projection) != true)) return@synchronized
+        if(session.encoderRetirements!=0) {session.pendingConfigStart=true;return@synchronized}
+        // This epoch replaces the old output. End its actual producer before
+        // asking Rust to fund the replacement; retained asynchronous owners
+        // remain charged until the existing retirement callback completes.
+        if(session.encoder!=null || session.frames!=null || session.synthetic!=null) {
+            session.encoderToken=null;session.encoderReadyToken=null;session.pendingCapture=null
+            session.display?.surface=null
+            check(session.frames?.close()!=false) {"Alter Capturethread ist noch nicht beendet"}
+            session.frames=null
+            val oldSource=session.synthetic;val oldEncoder=session.encoder
+            session.synthetic=null;session.encoder=null
+            if(oldSource!=null) {
+                session.pendingConfigStart=true
+                retireEncoder(session,oldSource,oldEncoder)
+                return@synchronized
+            }
+            oldEncoder?.release()
+        }
+        session.pendingConfigStart=false
         val epoch = config.epoch
         val budget=ScreenCaptureBudget.open(session.start.session,config.width,config.height,when {
             config.codec=="tiles" -> ScreenCaptureBudget.PROJECTION_TILES
@@ -298,10 +320,8 @@ internal object ScreenHostControl {
             val frames=ScreenProjectionFrames(config.width,config.height,budget,{ _,pixels ->
                 captureCurrent(session, identity, epoch) && pushStill(session,config,pixels)
             },{ reason -> encoderFailed(session,epoch,reason) })
-            val oldFrames=session.frames; val oldEncoder=session.encoder
             session.display=try {attachSurface(session,config,frames.surface)} catch(error: Throwable) {frames.close();throw error}
             session.frames=frames; session.encoder=null
-            oldFrames?.close(); oldEncoder?.release()
             return@synchronized
         }
         val token=Any()
@@ -319,9 +339,6 @@ internal object ScreenHostControl {
             return@synchronized
         }
         encoder.setFailureHandler {reason->if(session.encoderToken===token && captureCurrent(session,identity,epoch)) encoderFailed(session,epoch,reason)}
-        val oldSource=session.synthetic
-        val oldFrames=session.frames
-        val old = session.encoder
         var newFrames: ScreenProjectionFrames?=null
         try {if (synthetic) {
             val lease=encoder.retainSurface()
@@ -339,17 +356,26 @@ internal object ScreenHostControl {
         }} catch(error: Throwable) {newFrames?.close();encoder.release();throw error}
         session.encoder = encoder
         if(projection!=null && identity!=null) scope.launch {reportProjectionReady(session,identity,projection)}
-        oldFrames?.close()
-        retireEncoder(session,oldSource,old)
     }
 
     private fun retireEncoder(session: HostSession, source: SyntheticSurfaceSource?, encoder: ScreenEncoder?) {
         if (source == null) {encoder?.release();return}
         checkNotNull(encoder) {"Syntheticquelle ohne ihren Encoder"}
+        session.encoderRetirements++
         ScreenSyntheticRetirement.retireSynthetic(source,encoder) { result ->
-            result.exceptionOrNull()?.let { failure ->
-                Log.e(TAG,"Syntheticbesitz bleibt bis zum tatsächlichen Ende gehalten",failure)
-                encoderFailed(session,session.config?.epoch ?: 0,"Syntheticabbau: ${failure.message}")
+            synchronized(session.lock) {
+                session.encoderRetirements--
+                val failure=result.exceptionOrNull()
+                if(failure!=null) {
+                    session.pendingConfigStart=false
+                    Log.e(TAG,"Syntheticbesitz bleibt bis zum tatsächlichen Ende gehalten",failure)
+                    encoderFailed(session,session.config?.epoch ?: 0,"Syntheticabbau: ${failure.message}")
+                } else if(session.encoderRetirements==0 && session.pendingConfigStart) {
+                    session.pendingConfigStart=false
+                    if(!session.ended && session.captureActive) try {applyConfig(session)}
+                    catch(error: RuntimeException) {encoderFailed(session,session.config?.epoch ?: 0,
+                        error.message ?: "Capturekonfiguration nach Abbau abgelehnt")}
+                }
             }
         }
     }

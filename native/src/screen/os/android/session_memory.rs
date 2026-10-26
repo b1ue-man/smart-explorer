@@ -1,6 +1,9 @@
 //! The Java heap offer is already narrowed by the app. It cannot prove a
 //! larger native/GPU allocation class, so Android never supplies desktop facts.
 pub(super) fn facts()->Option<crate::screen::core::frame_memory::MemoryFacts> {None}
+pub(super) fn preview_admission()->crate::screen::core::frame_budget::PreviewAdmission {
+    crate::screen::core::frame_budget::PreviewAdmission::Geometric
+}
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use crate::screen::core::frame_memory::{CapacityCeiling, MemoryFacts};

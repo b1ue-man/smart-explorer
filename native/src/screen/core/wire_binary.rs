@@ -300,6 +300,13 @@ pub(crate) struct FrameReadBudget { frame: Option<u64>, records:usize, bytes:usi
 pub(crate) async fn read_frame_record_budgeted<R: AsyncRead + Unpin>(
     reader: &mut R, header: &GopHeader, budget: &mut FrameReadBudget,
 ) -> io::Result<Option<FrameRecord>> {
+    let bound=super::frame_size_caps::PacketBudget::for_contract(header.frame_contract)?;
+    read_frame_record_admitted(reader,header,budget,bound).await
+}
+pub(crate) async fn read_frame_record_admitted<R: AsyncRead + Unpin>(
+    reader:&mut R,header:&GopHeader,budget:&mut FrameReadBudget,
+    bound:super::frame_size_caps::PacketBudget,
+)->io::Result<Option<FrameRecord>> {
     let mut head = [0u8; RECORD_HEADER_BYTES];
     if reader.read(&mut head[..1]).await? == 0 {
         return Ok(None);
@@ -310,10 +317,9 @@ pub(crate) async fn read_frame_record_budgeted<R: AsyncRead + Unpin>(
     let frame_id = fields.u64()?;
     let capture_ts_us = fields.u64()?;
     let flags = fields.u8()?;
-    if len > header.record_limit() {
+    if len > header.record_limit().min(bound.record_bytes) {
         return Err(invalid("frame record exceeds the limit of its codec"));
     }
-    let bound=super::frame_size_caps::PacketBudget::for_contract(header.frame_contract)?;
     if budget.frame!=Some(frame_id) {budget.frame=Some(frame_id);budget.records=0;budget.bytes=0;}
     budget.records=budget.records.saturating_add(1);
     budget.bytes=budget.bytes.saturating_add(RECORD_HEADER_BYTES).saturating_add(len);

@@ -80,8 +80,8 @@ private const val FIELD_PAD = 32
 /**
  * The full view of one device (SCR-M9, U28-7): the picture in a full-screen dialog with zoom 1× to
  * 8× and panning, the bar of [ScreenTopBar], touch control while „Steuern“ is on and the screen
- * keyboard. [adopted] is the preview session of a tile of the group view: it is raised to the full
- * stream and goes back to the preview when this view closes.
+ * keyboard. [adopted] keeps the tile's small preview contract while an independently admitted
+ * full session runs; closing this view restores the tile and its selected source.
  */
 @Composable
 fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, adopted: ScreenSession? = null, family: FamilySession? = null) {
@@ -154,8 +154,10 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
         } else if (adopted == null) {
             openOwn(mode)
         } else {
-            adopted.setMode("full",settings.source,sharpness=settings.sharpness,lossless=settings.lossless)
-            if (target.control) openOwn("control")
+            // A preview owns its small immutable frame contract. Full view gets
+            // its own actual budget, as control already did, and leaves the tile
+            // available for the return path without widening that contract.
+            openOwn(if(target.control) "control" else "view")
         }
     }
 
@@ -196,7 +198,7 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
             // First what is pressed, then the sessions (the queued input goes out before a session ends).
             releaseInputs()
             owned.forEach { it.close() }
-            if (family == null) adopted?.setMode("preview")
+            if (family == null) adopted?.setMode("preview",settings.source)
         }
     }
     val view = LocalView.current
@@ -205,6 +207,11 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
         onDispose { view.keepScreenOn = false }
     }
     LaunchedEffect(session) { bitmap = null; bitmapGop = null; bitmapFrame = null; surfaceFrame = null; sourceAfterGop = null; renderReady = false }
+    LaunchedEffect(session, ui.accepted) {
+        if(ui.accepted && session!=null && owned.any {it===session}) {
+            session.setMode("full",settings.source,sharpness=settings.sharpness,lossless=settings.lossless)
+        }
+    }
     LaunchedEffect(immersive, barVisible) { if (immersive && barVisible) { delay(3000); barVisible = false } }
     LaunchedEffect(nativePixels, ui.stream?.width, ui.stream?.height) {
         transform.nativePixels(if (nativePixels) ui.stream?.width else null, if (nativePixels) ui.stream?.height else null)

@@ -75,9 +75,10 @@ impl Pipeline {
         let frame_id = self.next_frame_id;
         self.next_frame_id += 1;
         let contract=self.frame_contract;
-        let limit = max.unwrap_or_else(||contract.map_or(FrameSize::MAX,|c|c.limits.max_size));
+        let local=self.output_limits().map_err(PipelineError::capture)?;
+        let limit = max.unwrap_or(local.max_size);
         let joined = tokio::task::spawn_blocking(move || {
-            let result = still_tiles(&mut stage, frame_id, limit, contract);
+            let result = still_tiles_admitted(&mut stage, frame_id, limit, contract,local);
             StageOutput {result,stage}
         })
         .await;
@@ -111,15 +112,22 @@ impl Pipeline {
 }
 
 /// One still picture of the stage's source as tile records within `limit`.
+#[cfg(test)]
 fn still_tiles(
     stage: &mut Stage,
     frame_id: u64,
     limit: FrameSize,
     contract:Option<FrameContract>,
+)->Result<Snapshot,PipelineError> {
+    still_tiles_admitted(stage,frame_id,limit,contract,contract.map_or(FrameLimits::LEGACY,|c|c.limits))
+}
+fn still_tiles_admitted(
+    stage:&mut Stage,frame_id:u64,limit:FrameSize,contract:Option<FrameContract>,
+    local:FrameLimits,
 ) -> Result<Snapshot, PipelineError> {
     let contract=contract.map(|mut contract| {contract.hybrid_regions=false;contract});
     if let Some(contract)=contract {contract.validate().map_err(PipelineError::capture)?;}
-    let limits=contract.map_or(FrameLimits::LEGACY,|c|c.limits)
+    let limits=contract.map_or(local,|c|c.limits)
         .intersect(stage.source.frame_limits_for_contract(contract));
     let capture_ts_us = now_us();
     let image = match stage
@@ -140,7 +148,7 @@ fn still_tiles(
     } else {
         image.downscale(size,limits,&image.grant(),crate::screen::core::capture_admission::CaptureOwner::ScaledPixels).map_err(PipelineError::capture)?
     };
-    let budget=PacketBudget::for_contract(contract).map_err(PipelineError::encoder)?;
+    let budget=PacketBudget::for_receive(contract,Some(limits)).map_err(PipelineError::encoder)?;
     let mut encoder=crate::screen::core::host_codec_adapters::AdmittedTilesEncoder::new(size,limits,image.grant()).map_err(PipelineError::encoder)?;
     // The tile API's minimum is one full tile; a smaller image still emits
     // only its actual pixels. Validate actual records against the contract.

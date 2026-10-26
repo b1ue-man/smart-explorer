@@ -131,6 +131,9 @@ impl Channel {
     pub(crate) fn send(&self, message: Value) {
         let mut state = lock(&self.state);
         if message.get("op").and_then(Value::as_str)==Some("configure") {
+            // Retire old queued storage atomically with its epoch. A producer
+            // cannot enqueue an old-epoch owner between clear and rebinding.
+            state.1.pictures.clear();
             state.1.active_epoch=message.get("epoch").and_then(Value::as_u64).and_then(|epoch|u32::try_from(epoch).ok());
             state.1.encoder_failure=None;
         }
@@ -213,7 +216,7 @@ impl Channel {
         if flags & 0x20 !=0 {
             if data.len()!=9 || data[0]>1 {return PUSH_INVALID;}
             state.1.pictures.clear();state.1.encoder_failure=None;state.1.waiting_keyframe=true;
-            let Ok(data)=AdmittedBytes::copy(&grant,CaptureOwner::Transport,data) else {return PUSH_INVALID;};
+            let Ok(data)=self.capture.activity_ack(data) else {return PUSH_INVALID;};
             let picture=Picture {data,flags};
             state.1.pictures.push_back(picture);self.changed.notify_all();return PUSH_OK;
         }

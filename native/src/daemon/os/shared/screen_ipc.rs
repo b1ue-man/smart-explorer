@@ -386,6 +386,7 @@ async fn relay_session(
     let accepted = RelayHello::Accepted {
         hello: session.hello.clone(),
         path,
+        local_limits:session.local_limits,
     };
     if let Ok(json) = wire::to_json(&accepted) {
         if out.send((RELAY_HELLO, json)).await.is_err() {

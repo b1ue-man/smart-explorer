@@ -6,7 +6,7 @@ impl HostOutputPlan {
         use HostPhase as P;
         let worker = self.side != HostOutputSide::Parent;
         let parent = self.side != HostOutputSide::Worker;
-        let packet = PacketBudget::for_contract(self.contract.frame_contract())?;
+        let packet = PacketBudget::for_receive(self.contract.frame_contract(),self.legacy_limits)?;
         // Grants cover every later Preview/Full/quality size allowed by the
         // immutable contract, including source growth after a small first frame.
         let image = (packet.raw_bytes as u64).checked_sub(8).ok_or_else(||invalid("raw packet bound lacks geometry head"))?;
@@ -69,7 +69,7 @@ impl HostOutputPlan {
                 add(mul(std::mem::size_of::<super::super::frame_regions::MoveRect>() as u64, 2)?, 2)?)?;
             put(O::Metadata, mul(tiles, per_tile)?, 1, &[P::LiveEncode, P::SnapshotEncode, P::EncodedTransfer])?;
         }
-        let limits=self.contract.frame_contract().map_or(FrameLimits::LEGACY,|contract|contract.limits);
+        let limits=self.limits();
         let pixels=image/4;let mut yuv=0;
         for width in 1..=u64::from(limits.max_size.width).min(pixels) {
             let height=u64::from(limits.max_size.height).min(pixels/width);

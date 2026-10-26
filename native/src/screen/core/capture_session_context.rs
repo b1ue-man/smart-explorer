@@ -116,8 +116,10 @@ fn check_contract(contract: Option<FrameContract>, working: u64) -> io::Result<(
         if contract.limits.working_bytes > working {
             return Err(invalid("capture contract exceeds admitted working memory"));
         }
-    } else if working != MAX_WORKING_BYTES {
-        return Err(io::Error::other("insufficient memory for legacy screen session"));
+    } else if working>MAX_WORKING_BYTES {
+        return Err(invalid("legacy capture exceeds its allocation class"));
+    } else {
+        super::super::frame_budget::legacy_limits(working,None)?;
     }
     Ok(())
 }
