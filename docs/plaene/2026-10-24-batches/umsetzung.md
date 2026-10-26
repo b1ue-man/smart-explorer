@@ -1207,3 +1207,19 @@ in der JNI-Capturefunktion gemeldet. Der kandidatengebundene Patch ist ohne
 inhaltliche Änderung übernommen; alle syntaktischen Blatttoken bleiben exakt
 gleich. Die Lockdatei ist unverändert, die Größenprüfung ohne Befund.
 Compiler- und Funktionsstufen dieses Versuchs wurden übersprungen.
+
+### Erfolgreiche native Kompilierung, verbleibende Kotlin-/Suitegrenzen
+
+Lauf `40381452096` für `0425aa46` ist vollständig beendet. Windows und Linux
+kompilieren Produktbibliotheks-Prüfbinärdatei und `se`; Android kompiliert die
+native Bibliothek samt JNI. Die Funktionsabnahme ist noch nicht vollständig
+gelaufen: Android scheitert danach an K01–K11, die Desktop-Hauptauswahl an
+belegten veralteten beziehungsweise plattformfremden Pflichtnamen. Linux
+erreicht außerdem die reale P27-Netzwerkmessung, deren Abschluss mit
+`wire ACK stream closed` scheitert. Das ist noch kein Produktleistungsurteil.
+
+Die [begrenzte Fortsetzung](rv1-compilerplan.md) umfasst drei vollständige
+Autorenzyklen: Iconkonsum, Android-Capture/Puffer und Messlebensdauer. Main
+besitzt die anschließende gemeinsame Manifestkorrektur. Sämtliche bisherigen
+Funktionsverträge und V7-Orakel bleiben erhalten. Es folgt ausschließlich
+derselbe Remote-Suiteeinstieg; kein Release wurde gestartet.

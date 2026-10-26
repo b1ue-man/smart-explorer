@@ -204,3 +204,191 @@ statische Tree-sitter-Vergleich erhält jedes syntaktische Blatttoken exakt;
 die Datei ist syntaktisch gültig und hat 143 Zeilen. Lockdatei und Modulgrößen
 melden keinen Befund. Keine Compiler- oder Funktionsstufe dieses Versuchs
 wurde ausgeführt. Es folgt weiterhin ausschließlich derselbe Remote-Einstieg.
+
+## Android-Kotlinkorrekturen des Kandidaten 0425aa46
+
+Stand 2026-10-26, Remote-Lauf
+[`40381452096`](https://github.com/b1ue-man/smart-explorer/actions/runs/40381452096).
+Die Vorbereitung ist erfolgreich. Android hat die native Bibliothek einschließlich
+JNI-Brücke erfolgreich kompiliert; ihre LOAD-Segmente erfüllen die im Einstieg
+verlangte 16-KiB-Ausrichtung. Danach scheitert `:app:compileDebugKotlin`.
+Windows und Linux laufen beim Festhalten dieses Befunds noch. Es gibt damit
+keinen vollständigen Compiler-, Funktions- oder Veröffentlichungsnachweis.
+
+### Bestandsbefund und erster Korrekturplan
+
+Das kandidatgeprüfte Android-Artefakt `12678538449` hat den SHA-256
+`115e29d16f796903e46e4d51a7be74c1381dd157b64b46f318f10e4b8bca6408`.
+Main hat alle elf Kotlin-Diagnosen K01–K11 und ihre konkreten Quellstellen
+ausgewertet. Sie betreffen vier Grenzen:
+
+- K01 und K03–K07: `ScreenApi.hostPrereqs` und `FamilyWindowMenu` greifen
+  auf Serialisierungsnamen statt der tatsächlichen Kotlin-Eigenschaften von
+  `ScreenIconReply` beziehungsweise `ScreenIconRef` zu. Die gemeinsamen Typen
+  heißen im Code `pngBase64` und `appId`; `@SerialName` erhält die Drahtnamen
+  `png_base64` und `app_id`. K07 ist nach den identischen importierten Typen
+  voraussichtlich ein Folgefehler; diese Einordnung bleibt bis zum Compilerlauf
+  eine ausdrücklich gekennzeichnete Annahme.
+- K08/K09: `ScreenAppIcon` importiert ein im eingebundenen
+  `material-icons-core` nicht vorhandenes `Icons.Outlined.Apps`.
+  `ui/common/Icons.kt` und die vorhandenen VectorDrawable-Ressourcen belegen
+  den bestehenden lokalen Symbolweg.
+- K02: `ScreenHostControl.attachSurface` verspricht `VirtualDisplay`, während
+  `MediaProjection.createVirtualDisplay` auch `null` liefern darf. Die beiden
+  Capture-Aufrufer besitzen bereits Abschlusswege für temporäre Frames und
+  Encoder. Der erste Projektionsstart und die spätere Konfiguration müssen
+  beide einen Erzeugungsfehler korrekt melden.
+- K10/K11: `ScreenSession` übergibt das Budget als nachgestelltes Lambda,
+  obwohl der letzte Konstruktorparameter von `ScreenPullBuffers` inzwischen
+  der optionale feste `ByteBuffer` ist. Die direkte Konsumentensuche zeigt
+  denselben Fehler in zwei Aufrufen von `BatchesScreenBudgetTest`; diese
+  zusätzlichen Quellbefunde sind noch keine ausgeführten JVM-Diagnosen.
+
+Der Korrekturplan erhält die gemeinsamen Modelle, Drahtnamen, realen
+Iconquellen, Identitäts- und Hashprüfung, Capturezulassung, Projektionsidentität
+und Pufferbesitzer. Er ändert weder Protokollversion noch Bibliotheksversion.
+
+### Primärquellen und geschlossene Planlücken
+
+Quellenabruf am 2026-10-26:
+
+- [kotlinx.serialization 1.11.0, `SerialName`](https://github.com/Kotlin/kotlinx.serialization/blob/v1.11.0/core/commonMain/src/kotlinx/serialization/Annotations.kt):
+  Die Annotation bestimmt den serialisierten Namen. Der Zugriff im Kotlin-Code
+  verwendet weiterhin die deklarierte Eigenschaft. Der Projektpin ist 1.11.0;
+  die aktuelle API-Webseite zeigt bereits 1.12.0 und ersetzt diesen Versionsbeleg
+  deshalb nicht.
+- [Kotlin, nachgestellte Lambdas](https://kotlinlang.org/docs/lambdas.html#passing-trailing-lambdas):
+  Ein Lambda außerhalb der Argumentklammern setzt einen Funktionsparameter an
+  letzter Stelle voraus. Die explizite Zuordnung zu `offered` erhält den festen
+  Pufferzugang der JNI-Gerätefixture.
+- [Android, `MediaProjection.createVirtualDisplay`](https://developer.android.com/reference/android/media/projection/MediaProjection#createVirtualDisplay(java.lang.String,int,int,int,int,android.view.Surface,android.hardware.display.VirtualDisplay.Callback,android.os.Handler)):
+  Eine fehlgeschlagene Erzeugung kann `null` zurückgeben. Registrierung,
+  Lebensdauer und Wiederverwendung einer vorhandenen Anzeige bleiben an
+  dieselbe Projektion gebunden. Ein fehlendes Display ist kein erfolgreicher
+  Capturestart.
+- [Android, Compose-Symbole](https://developer.android.com/develop/ui/compose/graphics/images/material)
+  und [Google, vorhandenes Apps-Vektorsymbol](https://github.com/google/material-design-icons/blob/master/src/navigation/apps/materialiconsoutlined/24px.svg):
+  Der vorhandene lokale VectorDrawable-/`SeIcon`-Weg kann den neutralen
+  Ersatz bewahren, ohne eine zusätzliche umfangreiche Iconabhängigkeit
+  einzuführen. Das originale 24-px-SVG wurde tatsächlich abgerufen.
+
+Die zweite Lückenprüfung verfolgt alle `ScreenPullBuffers`-Aufrufe einschließlich
+`ScreenDecoder` und `ScreenCaptureFixture`, beide `ScreenAppIcon`-Aufrufer,
+die gemeinsamen Iconmodelle und den nativen `iconPngBase64`-Empfänger.
+`FamilyWindow.app_id` ist eine eigenständige gültige Eigenschaft und gehört
+nicht zu einer globalen Umbenennung. Die lokalen Symbolnamen enthalten bisher
+kein Apps-Symbol; der neutrale Ersatz darf als kleine eigene Vektorressource
+denselben vorhandenen Darstellungsweg nutzen.
+
+### Detaillierte Integrationsmeilensteine
+
+| Begrenztes Ergebnis | Betroffene Schreibfläche | Erhaltener Vertrag und erwartetes Signal |
+|---|---|---|
+| Gemeinsame Android-Iconmodelle korrekt konsumieren und neutralen Ersatz erhalten | `api/ScreenApi.kt`, `ui/screen/FamilyScreen.kt`, `ui/screen/ScreenIcons.kt`, gegebenenfalls `res/drawable/ic_apps.xml` | Hostvoraussetzungen liefern weiterhin `iconPngBase64`; serialisierte Referenzen behalten `app_id` und `png_base64`. Familienmenü und Fensterauswahl behalten aktuelle Peer-/Appidentität, Rechte, Abbruch, Hash-/Größenprüfung und den zugänglichen neutralen Ersatz. Kotlin- und Ressourcenstufe desselben Remote-Einstiegs bestätigen die tatsächlichen Typen. |
+| Capturestart und Viewerbudget an ihre vorhandenen API-Typen binden | `screen/ScreenHostControl.kt`, `ui/screen/ScreenSession.kt`, `ui/screen/BatchesScreenBudgetTest.kt` unter `src/test` | Kein erfolgreicher Start ohne Display; ein Fehler erreicht den vorhandenen Fehler- und Abschlussweg ohne Verlust von Pause, Fortsetzung oder Wiederverwendung. Budgetannahme und dieselbe Allocation über Decoderwechsel bleiben erhalten; feste JNI-Puffer bleiben unterstützt. Vorhandene Budget-, Ownership- und Gerätecapturefälle bleiben im selben Einstieg ausgewählt. |
+
+Diese Tabelle ist Mains Integrationszuschnitt. Der jeweils beauftragte bestehende
+Fixautor verantwortet weiterhin selbst Funktionsauflistung, vollständige direkte
+und indirekte Verknüpfungskarte, konkreten Fixplan, Änderung und anschließende
+Anti-Regressionsreview. Die endgültige Zuweisung berücksichtigt zusätzlich die
+noch ausstehenden Windows-/Linuxbefunde. Während deren Builds läuft kein
+Fixagent an. Nach vollständiger Korrektur folgt ausschließlich derselbe
+Remote-Suiteeinstieg und danach der eine terminale vollständige Remote-Release.
+
+## Linux-Auswertung desselben Laufs: L01 und L02
+
+Beim Abruf um 19:54 UTC ist Linux beendet; Windows läuft weiterhin. Das
+kandidatgeprüfte Linux-Artefakt `12681652291` hat den SHA-256
+`b3aa1cea1d362661b9914726cb6f7a2962f0ab52212ada59b2812bd2daf08c61`.
+Bibliotheks-Prüfbinärdatei, `se` und die betroffene `egui_glow`-Prüfbinärdatei
+sind erfolgreich kompiliert. Der vorhandene GL-Fehlerledgerfall liefert seinen
+vorgesehenen kontrollierten Nachweis; ein physischer Grafiktreiber ist damit
+nicht geprüft. Die Hauptauswahl wird vor der Funktionsausführung abgebrochen.
+
+### L01: veraltete Pflichtauswahl
+
+Der Runner verlangt noch `batches_task_b6_first_worker_snapshot_`.
+Commit `4e9f4202` hat den zugehörigen Fall beim Umbau auf vorab gebundene
+Capturebesitzer durch
+`batches_task_b6_worker_snapshot_requires_final_binding_and_prevents_later_growth`
+ersetzt. Der aktuelle Fall steht in
+`native/src/screen/os/shared/host_worker_main_tests.rs` und in der tatsächlichen
+Linux-Binärliste. Er erhält Snapshot, anschließende Liveproduktion, feste
+Bild-/Speichergrenzen, Ablehnung späterer Vergrößerung und Ablehnung eines
+ungebundenen Legacyrequests; zusätzlich lehnt er Capture vor finaler Bindung ab.
+
+Mains Korrekturmeilenstein betrifft allein `native/review-task-manifest.json`
+und dessen Dokumentation: Die Pflichtauswahl wird auf den tatsächlich
+vorhandenen Nachfolger gebunden. Der allgemeine B6-Auswahlbereich enthält ihn
+bereits. Keine Assertion und kein Produktverhalten werden zur Beseitigung des
+Auswahlfehlers entfernt. Der statische Abgleich aller Linux-Pflichtpräfixe mit
+der echten Binärliste findet ausschließlich diese veraltete Kennung.
+
+### L02: Fehler beim Abschluss der realen P27-Messung
+
+Die encoderfreie 10-Mbit/s-Referenz wurde mit echten Relaybeobachtungen
+gespeichert. Die anschließende Bildpipelineszene beendet den Lauf in
+`Tasks::finish` mit `wire ACK stream closed`; es fehlen ihr Rohdatenartefakt
+und der abschließende Leistungsbeleg. Daraus folgt kein Leistungsurteil über
+P27 und noch kein nachgewiesener Produktfehler.
+
+Die konkrete Grenze liegt in `batches_rate_reference_transport.rs::Tasks`
+und `batches_rate_reference_task_tests.rs::screen`: Der Abschluss bricht
+miteinander verbundene Tokio-Aufgaben nacheinander ab und akzeptiert beim
+Join ausschließlich `JoinError::is_cancelled`. Ein so geschlossener
+ACK-Sender kann jedoch den noch laufenden Empfänger wecken. Dass genau diese
+Abbruchreihenfolge den beobachteten Fehler ausgelöst hat, ist bis zur
+Autorenanalyse eine Annahme; ein bereits während der Messung entstandener
+Fehler darf keinesfalls pauschal verschwiegen werden.
+
+Primärquellen, abgerufen am 2026-10-26:
+[Tokio 1.52.3, JoinHandle](https://github.com/tokio-rs/tokio/blob/tokio-1.52.3/tokio/src/runtime/task/join.rs)
+und [Tokio 1.52.3, select](https://github.com/tokio-rs/tokio/blob/tokio-1.52.3/tokio/src/macros/select.rs).
+Die lokale Registryquelle stimmt mit dem Lockpin überein. `abort` verlangt
+keinen einheitlichen Cancelled-Rückgabewert, wenn die Aufgabe bereits fertig
+ist. Ein gedroppter JoinHandle wartet nicht auf seine Aufgabe. Die
+zweite Lückenprüfung muss deshalb tatsächliches Messversagen und ausdrücklich
+eingeleiteten Abschluss unterscheiden und alle eigenen Aufgaben beenden.
+
+Der begrenzte Autorenmeilenstein erhält alle drei Netzprofile, reale
+Pipeline-/Wire-/ACK-Pfade, Zeitfenster, Rohdaten und unveränderte V7-Orakel.
+Seine Schreibfläche umfasst die beiden genannten Fixturedateien und den
+eigenen Bericht `fix-review-p27-abnahme.md`; nötige kleine Lebensdauerhilfen
+bleiben im selben Fixturemodul. Erwartetes Signal ist ein sauber beendeter
+Messlauf, der frühe Transport-/Pipelinefehler weiterhin als Fehler meldet
+und das echte Leistungsergebnis ausgibt. Keine großzügigere Leistungsschwelle,
+kein Ersatz durch simulierte Werte und kein zusätzlicher Suiteeinstieg.
+Die endgültige Autorzuweisung erfolgt nach Ende der verbleibenden Builds.
+
+## Abschließende Windows-Auswertung und verbindlicher Zuschnitt
+
+Beim Abruf um 20:24 UTC sind sämtliche Jobs von `40381452096` beendet.
+Windows hat Bibliotheks-Prüfbinärdatei, `se` und die betroffene
+`egui_glow`-Prüfbinärdatei ebenfalls erfolgreich kompiliert. Das Windows-Artefakt
+`12682562310` ist an Kandidat und SHA-256
+`96f22a7e5ab866782c9b72f591c862c106833ab042bfef05c53e94cfd8a337d7`
+gebunden geprüft.
+
+W01 ist eine falsche Plattformzuordnung im gemeinsamen Manifest:
+`screen_task_android_screen_keys_file_current` und
+`screen_task_android_strings_match_desktop_sources` liegen unter `mobile`.
+`native/src/lib.rs` kompiliert dieses Modul für Android sowie Unix-Prüfläufe,
+nicht für Windows. Beide Fälle sind in der tatsächlichen Linux-Binärliste
+vorhanden. Der vollständige Abgleich der Windows-Pflichtauswahl findet außerdem
+den ebenfalls mobilen Marker `batches_login_image_task_tests::android_`.
+Der bereits belegte veraltete Snapshotmarker L01 betrifft beide Plattformen.
+
+Mains Manifestkorrektur verlegt die beiden Textintegrationen und den mobilen
+Marker in die vorhandenen Linux-Auswahlen. Der Android-Textnachweis erhält
+einen ausdrücklich Linux-/JVM-bezogenen R20-Abschnitt; die gemeinsamen
+R20-Grenzen bleiben für Windows und Linux verpflichtend. Es entfällt kein
+Nachweis und keine Assertion. Die bestätigten Binärlisten liefern den statischen
+Auswahlbeleg; die Funktionsausführung bleibt im selben Remote-Einstieg offen.
+
+Verbindlicher Zuschnitt nach vollständiger Fehlersicht: Die Android-Icon-
+Konsumgrenze K01/K03–K09 und die Capture-/Puffergrenze K02/K10/K11 einschließlich
+der zwei verbundenen JVM-Aufrufe bleiben zwei überschneidungsfreie Ergebnisse.
+L02 bleibt ein eigenes zusammenhängendes Messlebensdauer-Ergebnis. Für jedes
+Ergebnis ist ein einzelner Autor für Fehlerfunktion, vollständige Verknüpfungskarte,
+konkreten Plan, Fix und anschließende Anti-Regressionsreview verantwortlich.
+Mains gemeinsames Manifest folgt erst nach den vollständigen Quellkorrekturen.
