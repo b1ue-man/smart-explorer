@@ -43,6 +43,21 @@ fn fits_wire(text: &str) -> bool {
 pub fn screen_push(session: u64, data: &[u8], _pts_us: u64, flags: u32) -> i32 {
     channels::push(session, data, flags)
 }
+pub fn screen_push_admitted(session:u64,generation:u64,data:&[u8],_pts_us:u64,flags:u32)->i32 {
+    channels::push_admitted(session,generation,data,flags)
+}
+pub fn screen_capture_begin(session:u64,width:u32,height:u32,kind:u32)->u64 {
+    channels::channel(session).and_then(|channel|channel.begin_capture(
+        crate::screen::core::pixel_convert::FrameSize::new(width,height),kind).ok()).unwrap_or(0)
+}
+pub fn screen_capture_claim(session:u64,generation:u64,owner:u32,bytes:u64,buffer:bool)->u64 {
+    channels::channel(session).and_then(|channel|channel.capture.grant(generation).ok())
+        .and_then(|grant|crate::screen::os::android_capture_arena::claim(&grant,owner,bytes,buffer).ok()).unwrap_or(0)
+}
+pub fn screen_capture_address(token:u64)->Option<(usize,usize)> {
+    crate::screen::os::android_capture_arena::address(token)
+}
+pub fn screen_capture_release(token:u64) {crate::screen::os::android_capture_arena::release(token);}
 
 /// `screenControl` of the JNI bridge: the next message for `session`
 /// (0: input of the controlling viewer), or `None` after `timeout`.
@@ -151,6 +166,11 @@ fn prereqs(args: &Value) -> Result<Value, ApiError> {
             Some(crate::screen::core::app_icon::IconReply {icon,png_base64:png_base64.into()})
         }).collect();
         let _=crate::screen::os::android_app_icons::replace_registered(icons);
+    }
+    if let Some(bytes) = working_bytes {
+        crate::screen::os::image_memory::observe_capacity_ceiling(
+            crate::screen::core::frame_memory::CapacityCeiling::bounded(bytes))
+            .map_err(|error| invalid(error.to_string()))?;
     }
     channels::set_event_sink(emit);
     let stored = channels::set_prereqs(|stored| {

@@ -73,9 +73,9 @@ internal object ScreenHostControl {
         @Volatile var identity: ScreenProjectionIdentity? = null
         var display: VirtualDisplay? = null
         var synthetic: SyntheticSurfaceSource? = null
-        val still = ScreenStillSource { buffer, length ->
+        val still = ScreenStillSource(start.session,{displaySize()}) { buffer, length, generation ->
             if (hostLocked() || ended || !captureActive || projection != null) -1
-            else NativeBridge.screenPush(start.session, buffer, 0, length, 0, FLAG_STILL)
+            else NativeBridge.screenPushAdmitted(start.session,generation,buffer,0,length,0,FLAG_STILL)
         }
     }
 
@@ -215,7 +215,7 @@ internal object ScreenHostControl {
                 null
             } ?: continue
             when (message.text("op")) {
-                "configure" -> synchronized(session.lock) {
+                "configure" -> try {synchronized(session.lock) {
                     session.pendingCapture=null
                     session.config = EncoderConfig(
                         epoch = message.int("epoch"),
@@ -228,7 +228,7 @@ internal object ScreenHostControl {
                         codec = message.text("codec") ?: "h264",
                     )
                     applyConfig(session)
-                }
+                }} catch(error: RuntimeException) {encoderFailed(session,session.config?.epoch ?: 0,error.message ?: "Capturekonfiguration abgelehnt")}
                 "capture_active" -> try { synchronized(session.lock) {
                     val active=message["active"]==JsonPrimitive(true)
                     if(session.ended) return@synchronized
@@ -284,13 +284,19 @@ internal object ScreenHostControl {
         if (session.ended || !session.captureActive || (!synthetic && projection == null)) return@synchronized
         if (!synthetic && (hostLocked() || projection == null || identity?.matches(projection) != true)) return@synchronized
         val epoch = config.epoch
+        val budget=ScreenCaptureBudget.open(session.start.session,config.width,config.height,when {
+            config.codec=="tiles" -> ScreenCaptureBudget.PROJECTION_TILES
+            synthetic -> ScreenCaptureBudget.SYNTHETIC_SURFACE
+            config.hybrid -> ScreenCaptureBudget.PROJECTION_HYBRID
+            else -> ScreenCaptureBudget.PROJECTION_SURFACE
+        })
         if(config.codec=="tiles" && projection!=null) {
             session.encoderToken=null;session.encoderReadyToken=null
-            val frames=ScreenProjectionFrames(config.width,config.height,{ _,pixels ->
+            val frames=ScreenProjectionFrames(config.width,config.height,budget,{ _,pixels ->
                 captureCurrent(session, identity, epoch) && pushStill(session,config,pixels)
             },{ reason -> encoderFailed(session,epoch,reason) })
             val oldFrames=session.frames; val oldEncoder=session.encoder
-            session.display=attachSurface(session,config,frames.surface)
+            session.display=try {attachSurface(session,config,frames.surface)} catch(error: Throwable) {frames.close();throw error}
             session.frames=frames; session.encoder=null
             oldFrames?.close(); oldEncoder?.release()
             return@synchronized
@@ -298,11 +304,11 @@ internal object ScreenHostControl {
         val token=Any()
         session.encoderToken=token;session.encoderReadyToken=null
         val encoder = try {
-            ScreenEncoder(config) { buffer, offset, length, pts, key ->
+            ScreenEncoder(config,budget) { buffer, offset, length, pts, key ->
                 if (!captureCurrent(session,identity,epoch) || session.encoderToken!==token ||
                     (config.hybrid && session.encoderReadyToken!==token)) return@ScreenEncoder -1
                 val flags = epochFlags(epoch) or (if (key) FLAG_KEYFRAME else 0) or (if(config.hybrid) 0x4 or (if(length==20) 0x10 else 0) else 0)
-                NativeBridge.screenPush(session.start.session, buffer, offset, length, pts, flags)
+                NativeBridge.screenPushAdmitted(session.start.session,budget.generation,buffer,offset,length,pts,flags)
             }
         } catch (e: RuntimeException) {
             Log.w(TAG, "Kodierer nicht gestartet: ${e.message}")
@@ -313,17 +319,19 @@ internal object ScreenHostControl {
         session.synthetic?.stop()
         val oldFrames=session.frames
         val old = session.encoder
-        if (synthetic) {
-            session.synthetic = SyntheticSurfaceSource(encoder.surface, config.width, config.height, config.fps)
+        var newFrames: ScreenProjectionFrames?=null
+        try {if (synthetic) {
+            session.synthetic = SyntheticSurfaceSource(encoder.surface,config.width,config.height,config.fps,encoder.retainSurface())
         } else if (projection != null) {
-            val frames=if(config.hybrid) ScreenProjectionFrames(config.width,config.height,{ frame,pixels ->
+            val frames=if(config.hybrid) ScreenProjectionFrames(config.width,config.height,budget,{ frame,pixels ->
                 captureCurrent(session,identity,epoch) && session.encoderToken===token &&
                     session.encoderReadyToken===token && encoder.queueRgba(pixels,frame)
             },{ reason -> if(session.encoderToken===token && captureCurrent(session,identity,epoch)) encoderFailed(session,epoch,reason) }) else null
-            session.frames=frames
+            newFrames=frames
             val output=frames?.surface ?: encoder.surface
             session.display=attachSurface(session,config,output)
-        }
+            session.frames=frames
+        }} catch(error: Throwable) {newFrames?.close();encoder.release();throw error}
         session.encoder = encoder
         if(projection!=null && identity!=null) scope.launch {reportProjectionReady(session,identity,projection)}
         oldFrames?.close()
@@ -346,11 +354,13 @@ internal object ScreenHostControl {
             config.width,config.height,dpi,DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,surface,null,null)
     }
 
-    private fun pushStill(session: HostSession, config: EncoderConfig, pixels: ByteArray): Boolean {
+    private fun pushStill(session: HostSession, config: EncoderConfig, pixels: ScreenCaptureBuffer): Boolean {
         if (!captureCurrent(session,session.identity,config.epoch)) return false
-        val packet=java.nio.ByteBuffer.allocateDirect(Math.addExact(pixels.size,8)).order(java.nio.ByteOrder.LITTLE_ENDIAN)
-        packet.putInt(config.width); packet.putInt(config.height); packet.put(pixels)
-        return NativeBridge.screenPush(session.start.session,packet,0,packet.capacity(),0,epochFlags(config.epoch) or FLAG_STILL)>=0
+        val total=Math.addExact(pixels.capacity,8)
+        return pixels.budget.buffer(ScreenCaptureBudget.TRANSPORT,total).use {packet -> packet.access {target ->
+            target.putInt(config.width);target.putInt(config.height);pixels.access {target.put(it)}
+            NativeBridge.screenPushAdmitted(session.start.session,pixels.budget.generation,target,0,total,0,epochFlags(config.epoch) or FLAG_STILL)>=0
+        }}
     }
 
     private fun encoderFailed(session: HostSession, epoch: Int, reason: String) {
@@ -491,6 +501,7 @@ internal object ScreenHostControl {
         synchronized(session.lock) {
             if (session.ended) return
             session.ended = true
+            session.still.close()
             session.identity?.invalidate()
             session.synthetic?.stop()
             session.display?.release()

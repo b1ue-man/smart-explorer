@@ -19,6 +19,8 @@ use serde_json::{json, Value};
 
 use crate::screen::core::registry::ScreenRegistry;
 use crate::screen::core::wire_binary::MAX_RECORD_BYTES;
+use crate::screen::core::capture_bytes::AdmittedBytes;
+use crate::screen::core::capture_admission::CaptureOwner;
 
 pub(crate) const FLAG_KEYFRAME: u32 = 0x1;
 pub(crate) const FLAG_STILL: u32 = 0x2;
@@ -50,9 +52,8 @@ pub(crate) struct HostStart {
 }
 
 /// One picture of the app.
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Picture {
-    pub data: Vec<u8>,
+    pub data: AdmittedBytes,
     pub flags: u32,
 }
 
@@ -104,6 +105,7 @@ pub(crate) struct Channel {
     pub(crate) start: HostStart,
     state: Mutex<(Phase, Queues)>,
     changed: Condvar,
+    pub(crate) capture: super::android_capture_admission::CaptureSession,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -117,6 +119,7 @@ impl Channel {
             start,
             state: Mutex::new((Phase::Consent, Queues::default())),
             changed: Condvar::new(),
+            capture: super::android_capture_admission::CaptureSession::default(),
         }
     }
 
@@ -187,36 +190,59 @@ impl Channel {
     fn set_phase(&self,phase:Phase)->bool {
         let mut state=lock(&self.state);
         if matches!(state.0,Phase::Ended(_)) {return false;}
+        if matches!(phase,Phase::Ended(_)) {state.1.pictures.clear();self.capture.retire();}
         state.0=phase;
         drop(state);self.changed.notify_all();true
     }
 
-    fn push(&self, picture: Picture) -> i32 {
+    fn push(&self, generation: u64, data: &[u8], flags: u32) -> i32 {
         let mut state = lock(&self.state);
         if matches!(state.0, Phase::Ended(_)) {
             return PUSH_UNKNOWN;
         }
-        if picture.still() && picture.epoch()!=0 && state.1.active_epoch.is_some_and(|epoch|epoch!=picture.epoch()) {return PUSH_OK;}
-        if picture.flags & 0x20 !=0 {
-            if picture.data.len()!=9 || picture.data[0]>1 {return PUSH_INVALID;}
+        let Ok(grant) = self.capture.grant(generation) else {return PUSH_INVALID;};
+        let epoch=flags>>EPOCH_SHIFT;
+        if flags & (FLAG_STILL|FLAG_CAPTURED_VIDEO|FLAG_KEYFRAME)!=0 && epoch!=0
+            && state.1.active_epoch.is_some_and(|active|active!=epoch) {return PUSH_OK;}
+        if flags & 0x8 !=0 {
+            if data.len()>4096 {return PUSH_INVALID;}
+            if state.1.active_epoch.is_some_and(|active|active!=epoch) {return PUSH_OK;}
+            state.1.encoder_failure=Some(String::from_utf8_lossy(data).into_owned());
+            state.1.pictures.clear();self.changed.notify_all();return PUSH_OK;
+        }
+        if flags & 0x20 !=0 {
+            if data.len()!=9 || data[0]>1 {return PUSH_INVALID;}
             state.1.pictures.clear();state.1.encoder_failure=None;state.1.waiting_keyframe=true;
+            let Ok(data)=AdmittedBytes::copy(&grant,CaptureOwner::Transport,data) else {return PUSH_INVALID;};
+            let picture=Picture {data,flags};
             state.1.pictures.push_back(picture);self.changed.notify_all();return PUSH_OK;
         }
         let queued_bytes: usize = state.1.pictures.iter().map(|p|p.data.len()).sum();
-        let raw=picture.flags & (FLAG_STILL|FLAG_CAPTURED_VIDEO)!=0;
-        let overflow=if raw {!state.1.pictures.is_empty()} else {queued_bytes.saturating_add(picture.data.len())>64*1024*1024};
+        let raw=flags & (FLAG_STILL|FLAG_CAPTURED_VIDEO)!=0;
+        let overflow=if raw {!state.1.pictures.is_empty()} else {queued_bytes.saturating_add(data.len())>16*1024*1024};
         if state.1.pictures.len() >= MAX_QUEUED || overflow {
             state.1.pictures.clear();
             state.1.waiting_keyframe = true;
             if state.1.control.len() < MAX_CONTROL { state.1.control.push_back(json!({"op":"keyframe"}).to_string()); }
         }
-        if !picture.still() {
-            if picture.keyframe() { state.1.waiting_keyframe = false; }
+        if flags & FLAG_STILL == 0 {
+            if flags & FLAG_KEYFRAME != 0 { state.1.waiting_keyframe = false; }
             else if state.1.waiting_keyframe { return PUSH_OK; }
         }
+        // Queue eviction and grant validation happen under this lock, BEFORE
+        // the replacement copy. Producer + queued + consumer remain three J.
+        let Ok(data)=AdmittedBytes::copy(&grant,CaptureOwner::Transport,data) else {return PUSH_INVALID;};
+        let picture=Picture {data,flags};
         state.1.pictures.push_back(picture);
         self.changed.notify_all();
         PUSH_OK
+    }
+
+    pub(crate) fn begin_capture(&self, size: crate::screen::core::pixel_convert::FrameSize, kind: u32)
+        -> std::io::Result<u64> {
+        let state=lock(&self.state);
+        if matches!(state.0,Phase::Ended(_)) {return Err(std::io::Error::other("Android capture session ended"));}
+        self.capture.begin(size,kind)
     }
 
     fn take_control(&self, timeout: Duration) -> Option<String> {
@@ -360,6 +386,14 @@ pub(crate) fn channels() -> Vec<Arc<Channel>> {
 /// `screenPush`: one picture of session `id`. The app's presentation time
 /// paces only its own encoder; the stream takes the time of arrival.
 pub(crate) fn push(id: u64, data: &[u8], flags: u32) -> i32 {
+    // Legacy entrypoint carries only bounded lifecycle messages. Product
+    // pixels/access units must identify their granted generation explicitly.
+    if flags & (0x8|0x20)==0 {return PUSH_INVALID;}
+    let Some(channel)=channel(id) else {return PUSH_UNKNOWN;};
+    let Some(grant)=channel.capture.current() else {return PUSH_INVALID;};
+    push_admitted(id,grant.generation().value(),data,flags)
+}
+pub(crate) fn push_admitted(id:u64,generation:u64,data:&[u8],flags:u32)->i32 {
     let raw = flags & (FLAG_STILL | FLAG_CAPTURED_VIDEO) != 0;
     let limit=if raw {64*1024*1024+MAX_RECORD_BYTES+20} else {MAX_RECORD_BYTES};
     if data.is_empty() || data.len() > limit {
@@ -382,17 +416,7 @@ pub(crate) fn push(id: u64, data: &[u8], flags: u32) -> i32 {
         }
     }
     let Some(channel) = channel(id) else { return PUSH_UNKNOWN; };
-    if flags & 0x8 != 0 {
-        if data.len() > 4096 { return PUSH_INVALID; }
-        let mut state = lock(&channel.state);
-        if state.1.active_epoch.is_some_and(|epoch|epoch!=flags>>EPOCH_SHIFT) {return PUSH_OK;}
-        state.1.encoder_failure = Some(String::from_utf8_lossy(data).into_owned());
-        state.1.pictures.clear(); channel.changed.notify_all(); return PUSH_OK;
-    }
-    channel.push(Picture {
-        data: data.to_vec(),
-        flags,
-    })
+    channel.push(generation,data,flags)
 }
 
 /// `screenControl`: the next message for session `id` (channel 0: input),

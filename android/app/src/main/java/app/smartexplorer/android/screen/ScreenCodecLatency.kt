@@ -34,15 +34,22 @@ internal object ScreenCodecLatency {
     fun checkDecoderHint(format: MediaFormat, requested: Boolean): Boolean = requested &&
         format.containsKey(MediaFormat.KEY_LOW_LATENCY) && format.getInteger(MediaFormat.KEY_LOW_LATENCY)==1
 
-    data class AccessUnit(val buffer: ByteBuffer, val info: MediaCodec.BufferInfo)
+    data class AccessUnit(val buffer: ByteBuffer, val info: MediaCodec.BufferInfo, val owner: AutoCloseable?=null)
     /** Partial outputs still belong to one input; only a complete AU proves progress. */
-    class AccessUnits(private val name: String, private val maxBytes: Int) {
+    class AccessUnits(private val name: String, private val maxBytes: Int,
+        private val allocate: ((Int) -> ScreenCaptureBuffer)?=null) {
         private var partial: ByteBuffer?=null
+        private var partialOwner: ScreenCaptureBuffer?=null
         private var pts=0L
         private var flags=0
         fun complete(buffer: ByteBuffer, info: MediaCodec.BufferInfo): AccessUnit? {
             if(partial==null && info.flags and MediaCodec.BUFFER_FLAG_PARTIAL_FRAME==0) return AccessUnit(buffer,info)
-            val target=partial ?: ByteBuffer.allocateDirect(maxBytes).also {partial=it;pts=info.presentationTimeUs;flags=0}
+            val target=partial ?: run {
+                val owner=allocate?.invoke(maxBytes)
+                val storage=owner?.access {it} ?: ByteBuffer.allocateDirect(maxBytes)
+                partialOwner=owner;partial=storage;pts=info.presentationTimeUs;flags=0
+                storage
+            }
             if(info.presentationTimeUs!=pts || info.size>target.remaining()) throw Unavailable(name,"fragmentierte AU widerspricht FrameStamp oder Größenbudget")
             val source=buffer.duplicate().apply {position(info.offset);limit(info.offset+info.size)}
             target.put(source)
@@ -52,10 +59,10 @@ internal object ScreenCodecLatency {
                 return null
             }
             val full=MediaCodec.BufferInfo().apply {set(0,target.position(),pts,flags and MediaCodec.BUFFER_FLAG_PARTIAL_FRAME.inv())}
-            partial=null;target.flip()
-            return AccessUnit(target,full)
+            val owner=partialOwner;partialOwner=null;partial=null;target.flip()
+            return AccessUnit(target,full,owner)
         }
-        fun clear() {partial=null}
+        fun clear() {partial=null;partialOwner?.close();partialOwner=null}
     }
 
     /** Only one real capture may wait for its exact AU. The raw pixels stay in the owner. */
