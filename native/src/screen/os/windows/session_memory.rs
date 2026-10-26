@@ -1,5 +1,9 @@
 //! All three MEMORYSTATUSEX headroom constraints are required for admission.
 use crate::screen::core::frame_memory::MemoryFacts;
+pub(super) fn ceiling(facts: Option<MemoryFacts>) -> crate::screen::core::frame_memory::CapacityCeiling {
+    crate::screen::core::frame_memory::CapacityCeiling::desktop(facts)
+}
+pub(super) fn observe_ceiling(_ceiling: crate::screen::core::frame_memory::CapacityCeiling) {}
 pub(super) fn facts()->Option<MemoryFacts> {
     use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx,MEMORYSTATUSEX};
     // SAFETY: plain output structure with its mandatory size initialized.

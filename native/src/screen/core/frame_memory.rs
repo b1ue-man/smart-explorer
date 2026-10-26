@@ -19,7 +19,7 @@ impl MemoryFacts {
     }
 }
 #[derive(Default)]
-struct State {capacity:u64,committed:u64,owners:usize}
+struct State {capacity:u64,committed:u64,owners:usize,observed_ceiling:Option<u64>}
 #[derive(Default)]
 pub(crate) struct MemoryPool {state:Mutex<State>}
 pub(crate) struct MemoryLease {pool:Arc<MemoryPool>,bytes:u64}
@@ -40,7 +40,8 @@ impl MemoryPool {
         let mut state=self.state.lock().map_err(|_|io::Error::other("screen memory accounting poisoned"))?;
         // A smaller existing heap offer also bounds aggregate unknown-platform
         // admission; it must never be multiplied by the number of sessions.
-        let observed=facts.map_or(MAX_WORKING_BYTES.min(requested),MemoryFacts::screen_capacity);
+        let observed=facts.map_or(MAX_WORKING_BYTES.min(requested),MemoryFacts::screen_capacity)
+            .min(state.observed_ceiling.unwrap_or(u64::MAX));
         // Freeze the aggregate envelope for an active cohort. Existing images
         // never shrink their own promises; new sessions also respect fresh facts.
         if state.owners==0 {state.capacity=observed;}
@@ -50,6 +51,41 @@ impl MemoryPool {
         let owners = state.owners.checked_add(1).ok_or_else(|| io::Error::other("screen memory owner count overflow"))?;
         state.committed+=bytes;state.owners=owners;
         Ok(MemoryLease {pool:self.clone(),bytes})
+    }
+
+    /// A process observation narrows every existing access path. An active
+    /// cohort may never grow; a fresh observation can reset an empty cohort.
+    pub(crate) fn observe_capacity_ceiling(&self, ceiling: CapacityCeiling) -> io::Result<()> {
+        let mut state = self.state.lock().map_err(|_| io::Error::other("screen memory accounting poisoned"))?;
+        let bytes = if state.owners == 0 {ceiling.0}
+            else {ceiling.0.min(state.observed_ceiling.unwrap_or(u64::MAX))};
+        state.observed_ceiling = Some(bytes);
+        if state.owners != 0 {state.capacity = state.capacity.min(bytes);}
+        Ok(())
+    }
+
+    /// Exact local claims share W/X's root; no session minimum or partial grant.
+    pub(super) fn reserve_exact(self: &Arc<Self>, facts: Option<MemoryFacts>,
+        ceiling: CapacityCeiling, bytes: u64) -> io::Result<MemoryLease> {
+        let maximum = facts.map_or(MAX_WORKING_BYTES, MemoryFacts::screen_capacity).min(ceiling.0);
+        if bytes == 0 || bytes > maximum {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "image claim exceeds its platform policy"));
+        }
+        let mut state = self.state.lock().map_err(|_| io::Error::other("screen memory accounting poisoned"))?;
+        let observed = maximum.min(state.observed_ceiling.unwrap_or(u64::MAX));
+        let capacity = if state.owners == 0 {observed} else {state.capacity.min(observed)};
+        if bytes > capacity.saturating_sub(state.committed) {
+            return Err(io::Error::new(io::ErrorKind::WouldBlock, "image claim exceeds available process memory"));
+        }
+        let owners = state.owners.checked_add(1).ok_or_else(|| io::Error::other("screen memory owner count overflow"))?;
+        if state.owners == 0 {state.capacity = capacity;}
+        state.committed += bytes;
+        state.owners = owners;
+        Ok(MemoryLease {pool: self.clone(), bytes})
+    }
+    #[cfg(test)]
+    pub(super) fn committed_bytes(&self) -> u64 {
+        self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).committed
     }
 
     pub(crate) fn admit_session(self: &Arc<Self>, facts: Option<MemoryFacts>,
@@ -65,7 +101,8 @@ impl MemoryPool {
     pub(crate) fn reserve_with_ceiling(self: &Arc<Self>, facts: Option<MemoryFacts>,
         ceiling: CapacityCeiling, requested: u64) -> io::Result<MemoryLease> {
         let mut state = self.state.lock().map_err(|_| io::Error::other("screen memory accounting poisoned"))?;
-        let observed = facts.map_or(MAX_WORKING_BYTES, MemoryFacts::screen_capacity).min(ceiling.0);
+        let observed = facts.map_or(MAX_WORKING_BYTES, MemoryFacts::screen_capacity).min(ceiling.0)
+            .min(state.observed_ceiling.unwrap_or(u64::MAX));
         let session_limit = if facts.is_some() {MAX_SESSION_WORKING_BYTES} else {MAX_WORKING_BYTES};
         let capacity = if state.owners == 0 {observed} else {state.capacity};
         let bytes = requested.min(session_limit).min(observed.saturating_sub(state.committed))
@@ -89,7 +126,8 @@ impl MemoryLease {
         let mut state = self.pool.state.lock().map_err(|_| io::Error::other("screen memory accounting poisoned"))?;
         if bytes > self.bytes {
             let increase = bytes - self.bytes;
-            if increase > state.capacity.saturating_sub(state.committed) {
+            let capacity = state.capacity.min(state.observed_ceiling.unwrap_or(u64::MAX));
+            if increase > capacity.saturating_sub(state.committed) {
                 return Err(io::Error::other("insufficient exact capture memory"));
             }
             let owners = if self.bytes == 0 {
@@ -122,7 +160,11 @@ impl Drop for MemoryLease {
 pub(crate) fn reserve(facts:Option<MemoryFacts>,requested:u64)->io::Result<MemoryLease> {
     pool().reserve(facts,requested)
 }
-fn pool() -> &'static Arc<MemoryPool> {
+pub(crate) fn reserve_with_ceiling(facts: Option<MemoryFacts>, ceiling: CapacityCeiling,
+    requested: u64) -> io::Result<MemoryLease> {
+    pool().reserve_with_ceiling(facts, ceiling, requested)
+}
+pub(super) fn pool() -> &'static Arc<MemoryPool> {
     static POOL: OnceLock<Arc<MemoryPool>> = OnceLock::new();
     POOL.get_or_init(|| Arc::new(MemoryPool::default()))
 }
@@ -133,3 +175,8 @@ pub(crate) fn admit_session(facts: Option<MemoryFacts>, ceiling: CapacityCeiling
 #[cfg(test)]
 #[path="frame_memory_tests.rs"]
 mod tests;
+
+/// Install a Java/native process envelope before opening any local image path.
+pub(crate) fn observe_capacity_ceiling(ceiling: CapacityCeiling) -> io::Result<()> {
+    pool().observe_capacity_ceiling(ceiling)
+}

@@ -2,6 +2,10 @@
 use std::path::{Component, Path, PathBuf};
 use std::os::unix::fs::MetadataExt;
 use crate::screen::core::frame_memory::MemoryFacts;
+pub(super) fn ceiling(facts: Option<MemoryFacts>) -> crate::screen::core::frame_memory::CapacityCeiling {
+    crate::screen::core::frame_memory::CapacityCeiling::desktop(facts)
+}
+pub(super) fn observe_ceiling(_ceiling: crate::screen::core::frame_memory::CapacityCeiling) {}
 use crate::screen::core::frame_budget::MAX_WORKING_BYTES;
 
 pub(super) fn facts()->Option<MemoryFacts> {
