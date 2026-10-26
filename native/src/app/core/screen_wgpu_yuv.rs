@@ -10,7 +10,7 @@
 //! cubic convolution when enlarging, and exact luma texels at native size.
 //! `install` puts the resources into the renderer; without them (no wgpu
 //! surface, a shader the device refuses) the viewer draws BGRA on the CPU.
-use super::screen_render_owner::{lock, Backend, RenderSlot};
+use super::screen_render_owner::{lock, Backend, Native, RenderSlot};
 use super::screen_render_upload::{Generation, UploadTicket};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;

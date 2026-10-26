@@ -56,7 +56,7 @@ pub extern "system" fn Java_app_smartexplorer_android_core_AndroidImageFixtureBr
                     side(output_height)?,
                     side(kind)?,
                     positive(heap)?,
-                    decoder != 0,
+                    decoder,
                 )
             })();
             let text = checked(env, "captureOpen", result)?;
