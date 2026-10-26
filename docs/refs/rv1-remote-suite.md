@@ -28,6 +28,49 @@ Live-Anbieter, physische Medien, reale sichere Desktops, öffentliche
 Netzpfade, OEM-Codecs und vollständige visuelle Abnahme. Ein Fixtureerfolg
 bestätigt nur die aufgeführten ausgeführten Fälle.
 
+Der P27-Leistungsnachweis verwendet zusätzlich genau den ignorierten Fall
+`screen::core::rate_control::p27_acceptance::p27_network_reference_acceptance`
+aus demselben Library-Testhost. Er ist ausdrücklich aus der allgemeinen Auswahl
+ausgeschlossen. Der Linuxteil desselben Suiteeinstiegs startet ihn über
+`native/review-task-network.sh` in einem eigenen Netzwerk-Namespace. Nur dessen
+Loopback wird geformt; der private gepinnte Iroh-Relay erhält synthetische Frames
+durch den produktiven Screen-Sendepfad. Die drei Profile sind 10 Mbit/s mit einem
+Fenster, 1 Mbit/s mit einem Fenster und 10 Mbit/s mit vier Fenstern. Referenz,
+Rampenfrist, Nutzdurchsatz, Steuerlatenz und Queuealter werden nach V7 ausgewertet.
+`p27-network/acceptance.json` enthält die Messwerte und Profilbelege; sechs
+Rohdateien halten Referenz und Screenmessung getrennt. Der gemeinsame Runner
+prüft Kandidat, genaue Profile und erfolgreichen Ergebnisstatus und schreibt
+`p27-acceptance.json`. Das ist kein physischer Encoder-, Display- oder
+öffentlicher Relaynachweis. Es liegen noch keine ausgeführten Messwerte vor.
+
+Die für diesen privaten Relay erforderlichen Iroh-Devfeatures können den
+Lockbestand erweitern. Deshalb beginnt derselbe Remote-Suiteeinstieg mit einer
+Abhängigkeitsphase ohne Kompilierung. `cargo metadata --format-version=1` löst
+den vorhandenen Manifest-/Lockbestand auf. Veränderte Lockbytes werden als
+kandidatengebundene `dependencies.patch` und `Cargo.lock.resolved` ausgegeben;
+die Buildjobs starten in diesem Fall noch nicht. Main übernimmt die geprüfte
+Auflösung in einen Commit und wiederholt denselben Suiteeinstieg. Alle Builds
+verwenden danach weiterhin `--locked`. Diese Phase läuft ausschließlich remote;
+sie erzeugt weder einen zweiten Suiteweg noch einen Releasebau.
+Die bereits bestehende Format-/Größenauswertung läuft ebenfalls in dieser
+Vorbereitungsphase. Dadurch stehen nötige Lock- und Formatkorrekturen gemeinsam
+vor dem ersten Build zur Verfügung; der native Ausführungsteil wiederholt die
+Formatierung nicht.
+Der Cargo-Vertrag wurde am 2026-10-26 gegen
+[Cargo metadata](https://doc.rust-lang.org/cargo/commands/cargo-metadata.html)
+geprüft. Eine vollständige Neuauflösung aller Pins über `generate-lockfile`
+gehört nicht zu diesem Weg.
+
+Die abgeschlossenen Reviewfixes sind in R10 bis R18 mit ihren exakten
+Fallnamen registriert: Android-Medienbesitz, Bildqualität, Gerätenavigation,
+Windows-/X11-Aufnahmewiederanlauf, X11-Familienfokus, Screen-Sitzungsbudget,
+Transferkompatibilität, Vault-Retry und MCP-Lebenszyklus. Die MCP-Fälle trennen
+die gemeinsame Auswahl von Linux- und Windows-Dateisperrverträgen. Die
+beauftragten Fixautoren haben ihre jeweiligen Kettenkarten und anschließenden
+statischen Anti-Regressionsreviews selbst abgeschlossen; diese Registrierung
+behauptet noch keine ausgeführte Funktion. Belege stehen in
+`docs/plaene/2026-10-24-batches/regressionsreview.md`.
+
 Die Ressourcenabschnitte C1–C11, L1–L8, Android-F2–F6, Android-M1–M3/M5–M8, Glow-F3
 und Capture-R2–R5/Linux verwenden
 zusätzlich explizite Falllisten in `resource_milestones`. Der Runner löst diese
@@ -290,3 +333,24 @@ einen präzisen Patch liefern, einschließlich additiver Modulregistrierungen.
 Geprüft am 2026-10-03 gegen [exfat-fuse 1.3.0 node.c](https://raw.githubusercontent.com/relan/exfat/v1.3.0/libexfat/node.c) und [exfat.h](https://raw.githubusercontent.com/relan/exfat/v1.3.0/libexfat/exfat.h): `exfat_utimes` übernimmt `tv[1].tv_sec` in `node->mtime`; das Feld ist `time_t`. Subsekunden werden nicht gespeichert. Folgerung: reale FUSE-exFAT-Blockvolumes melden Sekundenauflösung, ohne Kernel-exFAT von 10 ms herabzusetzen oder FUSE einen volumenweiten Flush zuzusichern.
 
 [inotify(7)](https://man7.org/linux/man-pages/man7/inotify.7.html) beschreibt `/proc/sys/fs/inotify/max_user_watches` als echtes Limit pro UID. Die vorhandene Fixture erzeugt 129 Verzeichnisse; das normale Runnerlimit kann deshalb keinen WatchLimit belegen. Die Suite entdeckt ihren vollständigen Namen im vorhandenen Listing und startet genau diesen Fall innerhalb derselben Runtime separat mit einem echten Limit von 16. [sysctl(8)](https://man7.org/linux/man-pages/man8/sysctl.8.html) belegt `-n` und `-w`; `sysctl -n fs.inotify.max_user_watches` liest den ursprünglichen Wert; `sudo -n sysctl -w fs.inotify.max_user_watches=N` setzt und restauriert ihn. Alle anderen Fälle behalten das normale Limit, der eine gemeinsame Log enthält beide Ergebnisse, und EXIT/TERM/INT-Cleanup stellt das ursprüngliche Limit wieder her. Kein Fixturefall wird entfernt oder abgeschwächt.
+# Ergänzte Reviewgrenzen vom 2026-10-26
+
+G6 bindet die Qualitätsbelege im selben nativen Durchgang über
+`native/review_task_quality.py` an Kandidat, Release-SHA, Codecprofile und
+gespeicherte BGRA-Dateien. Der Bericht `quality-acceptance.json` unterscheidet
+die tatsächlich ausgeführte OpenH264-Gegenüberstellung, kontrollierten
+Referenzverlust und verlustfreie Rekonstruktion. Fehlende Codecbedingungen
+bleiben `not_executed`; MF-, Android-Codec- und reale Rendererbelege werden
+daraus nicht abgeleitet.
+
+Für RSOL-11 läuft der bestehende Linux-Bibliotheksdurchgang unter einem
+eigenen Xvfb mit 1280×720×24 und abgeschaltetem TCP-Listener. Die beiden
+explizit registrierten X11-Resizefälle verlangen diesen isolierten Display,
+MIT-SHM und `SE_SCREEN_TASK_X11=1`; sie erhalten keine stillschweigende
+Erfolgsrückgabe bei fehlender Umgebung. Das vorhandene Auswahlverfahren
+nimmt ihre ignorierten Fälle innerhalb desselben Durchgangs auf.
+`xvfb-run` besitzt Server und temporäre Autorisierungsdatei und reicht den
+Exitcode des Bibliotheksdurchgangs weiter. Quelle, geprüft am 2026-10-26:
+[Debian xvfb-run](https://manpages.debian.org/testing/xvfb/xvfb-run.1.en.html).
+Das belegt nach erfolgreichem Remote-Lauf die isolierte X11-Schnittstelle,
+keine physische Desktop- oder Compositorsitzung.

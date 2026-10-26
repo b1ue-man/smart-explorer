@@ -1086,7 +1086,23 @@ Batchfixes sind damit historisch. Die gemeinsame Suiteauswahl enthält ihre
 konkreten vorbereiteten Verhaltensfälle. Die lokale AST-/Textprüfung liefert
 keinen Typ-, Compiler-, Geräte- oder Laufzeitnachweis.
 
-Die normale frische Gesamtreview und die beiden zusätzlichen unabhängigen
-Regressionsreviews gegen den tatsächlich letzten veröffentlichten Release
-stehen noch aus. Erst danach folgen die eine Remote-Task-Suite einschließlich
-notwendiger Fixwiederholungen und der eine terminale vollständige Remote-Release.
+Die normale Astra/xhigh-Gesamtreview sowie die zusätzlichen Astra/max- und
+Sol-6.1/max-Regressionsreviews sind am festen Kandidaten `ee75e91b` abgeschlossen.
+Die Vergleichsbasis ist der tatsächlich veröffentlichte Release `v0.5.184`.
+Befunde, Zuständigkeit und Stand der vollständigen Fixzyklen stehen in
+[regressionsreview.md](regressionsreview.md). G5 ist nach Gegenbeleg zurückgenommen;
+alle belegten Fehler haben einen zuständigen Sol-6.1/max-Fixautor.
+Die gemeinsame Remote-Task-Suite und der terminale vollständige Remote-Release
+stehen weiterhin aus. Kein Quellfix gilt dadurch als praktisch bestätigt.
+
+### Integrierte Gesamtreviewfixes, 2026-10-26
+
+Alle zehn Fixgruppen der normalen Gesamtreview und beider Release-Regressionsreviews
+sind mit ihrem vollständigen eigenen Sol-6.1/max-Autorzyklus abgeschlossen.
+Die Commit-/Berichtstabelle steht in [regressionsreview.md](regressionsreview.md).
+Der gemeinsame Suiteeinstieg enthält die exakten zusätzlichen Verhaltensfälle,
+die P27-Netzreferenz, den versionsgebundenen Bildqualitätsvergleich und den
+isolierten X11-Anschluss. Die Vorbereitung führt Abhängigkeitsauflösung und
+Formatprüfung ausschließlich remote aus; notwendige Kandidatenkorrekturen
+bleiben im selben Suite-Fixloop. Rootgraphrefresh, Remoteauswertung und der
+terminale vollständige Remote-Release sind die nächsten Schritte.

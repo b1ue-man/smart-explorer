@@ -6,7 +6,7 @@ set -Eeuo pipefail
   exit 2
 }
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-[[ $# -ge 2 && $1 == --stage ]] || { echo 'Usage: native/test-review-task.sh --stage native|android-build|device [arguments]' >&2; exit 2; }
+[[ $# -ge 2 && $1 == --stage ]] || { echo 'Usage: native/test-review-task.sh --stage dependencies|native|android-build|device [arguments]' >&2; exit 2; }
 stage=$2
 shift 2
 [[ "${CANDIDATE_SHA:-}" =~ ^[0-9a-f]{40}$ && "$(git -C "$root" rev-parse HEAD)" == "$CANDIDATE_SHA" && "${GITHUB_SHA:-$CANDIDATE_SHA}" == "$CANDIDATE_SHA" ]] || {
@@ -18,6 +18,7 @@ mkdir -p "$SMART_EXPLORER_TASK_LOG_ROOT"
 printf '%s\n' "$CANDIDATE_SHA" >"$SMART_EXPLORER_TASK_LOG_ROOT/candidate.txt"
 export CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=1 CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_TERM_COLOR=never
 case "$stage" in
+  dependencies) exec python3 "$root/native/review-task-native.py" --dependencies "$@" ;;
   native) exec python3 "$root/native/review-task-native.py" "$@" ;;
   android-build) exec python3 "$root/native/review-task-native.py" --android-build "$@" ;;
   device) exec python3 "$root/native/review-task-device.py" "$@" ;;
