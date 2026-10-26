@@ -5,8 +5,8 @@ use ring::digest::SHA256;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    failure, read_record, write_record, FileWork, JobRecord, JobRun, Path, PathBuf, Proof,
-    RecordContext, RecordKind, SourceGuard, StoredEndpoint,
+    destination_parts, failure, read_record, write_record, FileWork, JobRecord, JobRun, Path,
+    PathBuf, Proof, RecordContext, RecordKind, SourceGuard, StoredEndpoint,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -207,27 +207,6 @@ pub(super) fn repair_new_entry(
     )
 }
 
-pub(super) fn destination_parts(
-    record: &JobRecord,
-    destination: &str,
-) -> io::Result<(String, String)> {
-    let display = |path: &str| {
-        if record.target.local {
-            crate::copy::native_path_text(&crate::transfer::walk_listers::native(path))
-        } else {
-            Ok(path.to_string())
-        }
-    };
-    let root = display(&record.target_dir)?;
-    let path = display(destination)?;
-    let relative = path
-        .strip_prefix(&format!("{}/", root.trim_end_matches('/')))
-        .ok_or_else(|| failure("Dateibeleg liegt außerhalb des Zielroots"))?
-        .to_string();
-    let destination = crate::transfer::engine_names::join_rel(&record.target_dir, &relative);
-    Ok((relative, destination))
-}
-
 pub(super) fn validate(receipt: &Receipt, record: &JobRecord) -> io::Result<()> {
     if receipt.version != 1
         || receipt.job != record.id
@@ -239,12 +218,7 @@ pub(super) fn validate(receipt: &Receipt, record: &JobRecord) -> io::Result<()> 
             "Dateibeleg gehört zu einer abweichenden Verbindung oder einem abweichenden Auftrag",
         ));
     }
-    let allow_backslash =
-        record.target.local && crate::transfer::platform::backslash_is_name_char();
-    if receipt.relative.is_empty() || receipt.relative.starts_with('/') || receipt.relative.split('/').any(|part| crate::transfer::engine_names::name_problem(part, allow_backslash).is_some()) || crate::transfer::engine_names::join_rel(&record.target_dir, &receipt.relative) != receipt.destination || receipt.proof.as_ref().is_some_and(|proof| proof.path != receipt.destination) || receipt.previous.as_ref().is_some_and(|previous| matches!(previous, PreviousTarget::File(proof) if proof.path != receipt.destination)) {
-        return Err(failure("Dateibeleg enthält einen ungültigen Zielpfad"));
-    }
-    Ok(())
+    super::paths::validate(receipt, record)
 }
 
 pub(super) fn visit_saved(

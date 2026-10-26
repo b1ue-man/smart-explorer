@@ -20,16 +20,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub(super) mod missing_retry;
 #[path = "file_recovery_observer.rs"]
 mod observer;
+#[path = "file_recovery_paths.rs"]
+mod paths;
 #[path = "file_recovery_receipts.rs"]
 mod receipts;
 #[path = "file_recovery_verify.rs"]
 mod verification;
 
 pub(super) use observer::LocalObserver;
+use paths::destination_parts;
 pub(super) use receipts::initialize;
 use receipts::{
-    destination_parts, read_index, receipt_path, repair_new_entry, visit_saved, PreviousTarget,
-    Receipt,
+    read_index, receipt_path, repair_new_entry, visit_saved, PreviousTarget, Receipt,
 };
 #[cfg(test)]
 use verification::publication_state;
