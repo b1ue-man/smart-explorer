@@ -402,3 +402,339 @@ der anschließende gesamte Releaseweg bleiben dessen Zuständigkeit.
 Der eigene Fünfteilzyklus aus Funktionsauflistung, Kettenkarte, Plan,
 Implementierung und anschließender statischer Anti-Regressionsreview ist
 abgeschlossen. Der Fixautor stoppt nach dieser Übergabe.
+
+## L02: Neuer eigener Fixzyklus für den Messabschluss
+
+Stand 2026-10-26. Dieser Abschnitt gehört ausschließlich zum neuen Fixautor
+`fix_p27_shutdown`. Der frühere G3-Autor ist nicht mehr im verfügbaren
+Agentbaum; dessen vorstehender Bericht wird dadurch nicht als neue eigene
+Prüfung ausgegeben. Seine Aussagen zu damals noch ausstehenden Compilerläufen
+sind historisch; den aktuellen Compilerstand führt `rv1-compilerplan.md`.
+Ausgang der Fehlerbelege ist Kandidat
+`0425aa4608d7e27eb95ee0a37e3bc13dca2ce8bf`, Remote-Lauf `40381452096`.
+Arbeitskopie: `/tmp/smartexplorer-review-fixes-ee75e91b`. Mains anschließender
+Dokumentationscommit ist beim Beginn der Bearbeitung `2f67ee8d`.
+
+### A: Erstplan aus dem delegierten Auftrag
+
+Quelle: vollständiger L02-Auftrag an diesen Autor, unveränderte Nutzervorgaben
+in `/tmp/smartexplorer-final-review-user-contract.txt`, genaue Freigabe in
+`/tmp/smartexplorer-fix-p27-shutdown-scope.json` und L02 in
+`rv1-compilerplan.md`. Ziel ist ein zuverlässiger Abschluss derselben realen
+P27-Messung bei weiterhin vollständiger Meldung früher Aufgabenfehler.
+Beauftragt sind die eigene Fehlerfunktionsliste, direkte und indirekte
+Verknüpfungskarte, konkreter Fixplan, Umsetzung und nachfolgende eigene
+Anti-Regressionsprüfung. Die drei Netzprofile, tatsächliche Pipeline-/Wire-/
+ACK-Wege, Zeitfenster, Rohdaten und sämtliche V7-Leistungsorakel bleiben
+erhalten. Ein Produktleistungsfehler ist durch den bisherigen Abbruch nicht
+belegt.
+
+Nur die drei freigegebenen Fixture-Rustdateien und dieser Berichtsabschnitt
+sind schreibbar. Main besitzt Manifest, Suiteeinstieg, Graphrefresh, Commits,
+Pushes und Release. Kein lokaler Build, Compiler, Formatter, Test, Server,
+Installation, langer Prozess oder Unteragent ist erlaubt. Die eigene
+Bestätigung bleibt statisch; die Funktionsbestätigung gehört in dieselbe
+Remote-Suite. Aus dem Prompt bekannt sind die vorhandene 10-Mbit/s-Referenz
+und der Fehler beim Join. Unbekannt sind zunächst dessen genaue Entstehung
+und die zuverlässige Abschlussabgrenzung. Diese Angaben sind durch die
+zugewiesenen Quellen klärbar; eine zusätzliche Nutzerangabe ist nicht nötig.
+Die Planungstiefe ist zwei: gekoppelte bestehende Aufgaben- und
+Kanalbesitzverträge ohne neue Produktfähigkeit.
+
+### B: Bestand, fehlerhafte Funktionen und Stufe-eins-Plan
+
+`Tasks::finish` fordert nacheinander den Abbruch aller gespeicherten
+JoinHandles an und akzeptiert danach ausschließlich `JoinError::is_cancelled`.
+Die Spawnfolge des ersten Screenflows lautet Host-Control-Leser,
+Viewer-Control-Schreiber, Viewer-Control-Leser, Bildstreamakzeptor,
+Bildkonsument, Pipelineakteur. Der Host-Control-Leser besitzt `ack_tx`;
+der Aktor besitzt dessen Empfänger. Wird der Leser zuerst abgebrochen, kann
+der noch laufende Aktor `recv(None)` beobachten und selbst
+`wire ACK stream closed` zurückgeben. Der anschließende `abort` muss dessen
+bereits fertiges Ergebnis nicht in `Cancelled` ändern. Ein bloßes Ignorieren
+von `Ok(Err(...))` würde dagegen echte frühe Fehler verbergen.
+
+Fehlerhafte Funktionen in dieser Grenze sind `Tasks::finish` und die
+fehlende gemeinsame Abschlusskoordination von `Tasks::spawn`. Die direkt
+betroffenen Integrationen sind `screen`, `consume_picture`,
+`transport::control_link` sowie `transport::reference`; ihre Mess- und
+Fehlerlogik selbst wird erhalten. `Tasks::drop` muss den Besitz aller noch
+nicht gejointen Handles auch bei abgebrochenem Abschluss behalten.
+
+Beobachtung aus `linux/p27-network.log`: `finish` erhält
+`Ok(Err(..."wire ACK stream closed"...))`; der 10-Mbit/s-Referenzdatensatz
+enthält fünf Sekunden Warm-up, zwölf Sekunden stationäres Fenster und
+20.764 µs unbelastete RTT. Im Log fehlt ein Zeitpunkt des ursprünglichen
+ACK-Fehlers. Daher bleibt ausdrücklich unbekannt, ob genau dieser Remote-
+Fehler erst durch den Abschluss entstand oder vorher vorlag. Belegt ist die
+oben beschriebene fehlerhafte Abschlussmöglichkeit, kein Produktleistungsfehler.
+
+Stufe-eins-Plan: den vorhandenen Aufgabenbesitzer auf einen ausdrücklich
+eingeleiteten gemeinsamen Abschluss umstellen und sämtliche tatsächlichen
+Rückgaben und Panics vollständig sammeln. Referenz und Bildszene verwenden
+denselben Besitzer; alle Messwerte und Leistungsentscheidungen bleiben an
+ihren vorhandenen Quellen.
+
+### Vollständige direkte und indirekte Verknüpfungskarte dieses L02-Fixes
+
+1. `rate_control.rs` bindet die gesamte Fixture nur unter
+   `cfg(all(test, target_os = "linux"))` ein. Die neue Aufgabenhilfe liegt
+   innerhalb dieser Grenze. Produktregler, Desktop-, Android-, CLI-, IPC-
+   und MCP-Zugänge bekommen dadurch keine neue Laufzeitlogik.
+2. `p27_network_reference_acceptance` erstellt je Profil den privaten Relay,
+   formt den dynamischen Port über `review-task-network.sh` und ruft zuerst
+   `transport::reference`, danach `screen` auf. Beider `Pair::new` erzeugt
+   dieselben privaten Endpointidentitäten mit getrennten Fensterverbindungen;
+   `Pair::close` bleibt nach dem Aufgabenabschluss zuständig für Verbindung
+   und Endpoints.
+3. `control_link` eröffnet den bidirektionalen Kontrollstream und erzeugt
+   ACK- und Viewerframekanal. Sein Host-Leser ruft `recv_viewer_frame` auf:
+   echte Frame-/Preview-ACKs gehen über `ack_tx` zum Aktor; Pings gehen über
+   `control_sender::send(Pong)` durch die vorhandene Peersteuerreserve zurück.
+   Sein Viewer-Schreiber multiplexiert echte Pings und tatsächliche
+   Viewerframes in `send_viewer_frame`. Sein Viewer-Leser protokolliert
+   `recv_host_frame(Pong)`. Die Kodierung bleibt in `wire_control_codec.rs`.
+4. `reference` hält die Kontrolllinks, startet echten QUIC-Writer und
+   Byteprüfer/-zähler, wartet bis `end_us + 2_000_000`, beendet seine Aufgaben,
+   übernimmt die Beobachtungen und schließt danach `Pair`. Kein Encoder und
+   keine fiktiven Empfangsdaten treten in diesen Pfad ein.
+5. `screen` bindet `contract` und `source`: `FrameCapabilities`/
+   `FrameContract` → `CapturePlan`/`SessionAdmission` → `CaptureGrant` →
+   `SaturatingSource::produce` → `CapturedRecords::from_allocator`. Claims
+   bestehen vor der Byteallokation; die Quelle protokolliert reale
+   StageRequest-Ziele und Vorbereitungszeiten.
+6. `PipelineActor::begin_tick` → `start` → `Pipeline::tick_epoch` in
+   `host_pipeline_produce.rs` → FrameClock, Pacer, RateController und
+   gemeinsames Senderbudget → bestehender HostStage-Producer →
+   `host_frame_send::send` → `GopWriter::open/write_frame_admitted` → Relay.
+   Der Aktor behält seine echte Hintergrundoperation, Fehlerausgabe,
+   Fallbackprüfung, Sekundenstatistik und `on_ack`-Behandlung.
+7. `accept_picture_streams_with_contract` →
+   `accept_picture_streams_with_memory` → `accept_picture_streams_admitted`
+   → produktive Readeraufgaben → `read_picture_stream`: Contract-/Budget- und
+   Sequenzprüfung, echte FrameAck-/PreviewAck-Erzeugung und `PictureEvent`.
+   `consume_picture` prüft Recordidentität, Nutzbytes und Capturezeit und
+   protokolliert echte Broken-Ereignisse. ACKs laufen durch Punkt 3 zurück
+   in `PipelineActor::on_ack`, dessen bestehende Pipeline-/Pacer-/Rate-/
+   Budgetverträge erhalten bleiben. Die selbst gelesene Definition
+   `host_mode.rs::Pipeline::on_ack` gibt zunächst ausschließlich die eigene
+   Senderdebt frei, reicht eine bekannte Pacerprobe mit echtem
+   `received_us` an `RateController::on_frame_acked` weiter und erhält
+   Previewfreigabe sowie die Ablehnung vergessener Pacerproben.
+8. Jeder in Punkten 3, 4, 6 und 7 ausdrücklich von der Fixture gestartete
+   Future gehört zu `Tasks`. Der neue Abschluss hält diese Futures zunächst
+   alle an, bevor deren Capturebesitzer, QUIC-Streams, ACK-Sender,
+   Bildereignissender oder Aktoren freigegeben werden. Nach der Freigabe
+   werden alle eigenen JoinHandles abgewartet; Fehler werden erst danach
+   gemeinsam zurückgegeben. Produktintern erzeugte GOP-Reader und
+   Pipelinejobs behalten ihren vorhandenen Verbindungs-/Interrupt-/Dispose-
+   Lebensweg; L02 verändert deren Implementierung nicht.
+9. `span`, `calibrate`, `until` und `Observed` liefern unverändert die realen
+   Zeit-/Byte-/Angebots-/Kontrollbeobachtungen an
+   `batches_rate_reference_metrics.rs::evaluate`. Fünf Sekunden Warm-up,
+   zwölf Sekunden stationäre Beobachtung und zwei Sekunden Antwortnachlauf,
+   alle drei Profile sowie jedes V7-Orakel bleiben erhalten.
+10. `.github/workflows/review-task.yml` → `native/test-review-task.sh` →
+    `review-task-native.py::p27_network_tests` → vorhandene exakte ignorierte
+    Fixture → kandidatengebundene sechs Rohdateien und `acceptance.json` →
+    vorhandener verpflichtender Leistungsbeleg. Main registriert die neuen
+    kleinen Abschlussfälle in der allgemeinen Auswahl desselben Einstiegs;
+    der echte Netzfall bekommt keinen zusätzlichen Aufruf.
+
+### C: Recherche und Entscheidung
+
+Geprüft am 2026-10-26 gegen den Lockpin Tokio 1.52.3: lokale Herstellerquelle
+`src/runtime/task/join.rs` (`abort`, Cancel-Sicherheit und Handle-Drop),
+`src/macros/select.rs` (`biased`, gepinnte Referenzen und Cancel-Sicherheit),
+`src/sync/watch.rs` (`Sender::subscribe/send_replace`,
+`Receiver::changed`) sowie `src/sync/oneshot.rs` (Bereitschaftssignal und
+Sender-Drop). Die beiden Syncquellen wurden erst nach Mains ausdrücklicher
+Erweiterung der Lesefläche gelesen. Versionsgebundene Webeinstiege:
+[JoinHandle](https://github.com/tokio-rs/tokio/blob/tokio-1.52.3/tokio/src/runtime/task/join.rs),
+[select](https://github.com/tokio-rs/tokio/blob/tokio-1.52.3/tokio/src/macros/select.rs),
+[watch](https://github.com/tokio-rs/tokio/blob/tokio-1.52.3/tokio/src/sync/watch.rs),
+[oneshot](https://github.com/tokio-rs/tokio/blob/tokio-1.52.3/tokio/src/sync/oneshot.rs).
+Diese URLs benennen die lokal gelesene Herstellerrevision; der neue Autor
+hat keinen zusätzlichen Netzabruf durchgeführt.
+
+Gewählt ist ein zweiphasiger Abschluss mit vorhandenen Tokio-Primitiven:
+ein Watchsignal fordert das Anhalten an, pro Aufgabe bestätigt ein Oneshot
+das Verlassen ihres Messfutures, ein zweites Watchsignal erlaubt erst nach
+sämtlichen Bestätigungen dessen Drop. Der gepinnte Future bleibt zwischen
+Bestätigung und Freigabe ausdrücklich erhalten. `select!` prüft sein Ergebnis
+vor dem Stoppsignal; ein bereits bereitliegender echter Fehler bleibt so
+sichtbar. Der Messfuture kann höchstens einmal `Ready` liefern; andernfalls
+liefert er `Pending` und der Stopzweig wird im selben Poll geprüft. Es ist
+kein ständig bereiter einzelner Streamzweig vor dem Stoppsignal.
+
+Verworfen sind pauschales Ignorieren von Kanal-/Transportfehlern (verliert
+echte Fehler), unmittelbarer Stop mit sofortigem Future-Drop (erhält das
+Kanalrennen), umgekehrte Abbruchreihenfolge (löst nur eine konkrete Kante),
+ein Mutex um sämtliche Future-Polls (serialisiert die Messarbeit) sowie
+Änderungen an Produktregler, Netzprofil, Leistungsschwellen oder Zeitfenstern
+(durch diesen Befund nicht gerechtfertigt).
+
+### D: Finaler Detailplan vor dem Rustedit und zweite Lückenprüfung
+
+| Meilenstein | Dateien und Abhängigkeit | Erwartetes, später remote prüfbares Ergebnis |
+|---|---|---|
+| L02-M1: Gemeinsamer Aufgabenabschluss | Neue `batches_rate_reference_tasks.rs`; bestehende Tokio-Sync-/Joinverträge | Noch laufende Messfutures verlassen erst gemeinsam die Verarbeitung und werden danach gedroppt; kein dadurch erzeugter ACK-/Bildkanalfehler. |
+| L02-M2: Ehrliche Fehler und vollständiger Besitz | Dieselbe Aufgabenhilfe; alle eigenen Handles bleiben bis zum Join im Besitzer | Bereitliegende Fehler, mehrere frühe Fehler, frühes `Ok(())`, Panics und ein abgebrochener Finishfuture bleiben erkennbar beziehungsweise hinterlassen keine eigene abgetrennte Aufgabe. Fehlerausgabe erst nach sämtlichen Joins. |
+| L02-M3: Integration beider realer Messungen | `batches_rate_reference_transport.rs`, `batches_rate_reference_task_tests.rs` | Referenz und Screen verwenden dieselbe Hilfe; unveränderte reale Pipeline/Wire/ACK-Pfade und V7-Ergebnisdateien. |
+| L02-M4: Eigene Anti-Regressionsprüfung und Übergabe | Dieser Abschnitt, drei Rustdateien; Main besitzt Auswahl und Remoteausführung | Eigener vollständiger Diff-/Kettenabgleich erhält Profile, Zeitfenster, Rohdaten, Nutzbyteprüfung und sämtliche Orakel. Main erhält exakte Abschlussfallnamen ohne neuen Suiteeinstieg. |
+
+Die zweite Lückenprüfung klärt vor dem Edit: Watch-Subscriber werden vor
+dem Spawn erstellt, damit kein Stop verloren geht; `send_replace` erhöht
+auch für `()` die Version. Ein zu früh beendeter Future behält sein Ergebnis
+bis zum Join; ein Panic schließt das Oneshot, sodass die Abschlussbarriere
+weiterlaufen und anschließend den echten Joinfehler sammeln kann. Jeder
+noch gejointe Handle bleibt per veränderlicher Referenz im Besitzer, sodass
+ein Drop des Finishfutures alle verbleibenden Aufgaben abbrechen kann.
+Der normale Messabschluss benutzt keine `abort`-Reihenfolge. Die neue Datei
+bleibt unter 500 Zeilen und 50 KiB. Alle vorbereiteten Abschlussfälle laufen
+ausschließlich durch Main innerhalb der vorhandenen Remote-Suite.
+
+Eigene spätere Reviewfragen sind vorab festgelegt: keine Freigabe eines
+Kanalbesitzers vor vollständiger Barriere; Fehlerpriorität bei gleichzeitig
+bereitem Stop; vollständiger Join auch nach erstem Fehler; Drop bei
+abgebrochenem Abschluss; echte Mess- und Orakelpfade unverändert; keine
+lokale Ausführung und keine Änderung außerhalb der freigegebenen Fläche.
+
+### Umsetzung und eigene anschließende Anti-Regressionsreview
+
+L02-M1 bis L02-M4 sind innerhalb der ausdrücklich freigegebenen Schreibfläche
+vorbereitet. Die eigene Review nach dem Rustedit hat derselbe Autor an der
+gesamten oben beschriebenen Kette durchgeführt. `Tasks` liegt jetzt in der
+eigenen kleinen Aufgabenhilfe; `transport` exportiert denselben Namen an
+seine bisherigen Konsumenten. `finish` liefert nach allen Joins ein
+`io::Result<()>`; `reference` und `screen` verlangen dessen Erfolg mit
+eigenem Kontext. Kein zurückgegebenes Fehlerkind und kein Fehlertext wird
+als harmloser Abschluss ausgefiltert. Nur der ausdrücklich gewählte
+Stopzweig zählt als regulärer Abschluss; selbst ein unerwartetes `Ok(())`
+des Messfutures bleibt ein Fehler.
+
+| Geprüfte Grenze | Eigener anschließender Befund | Beleg und praktische Grenze |
+|---|---|---|
+| Kanalbesitz beim regulären Abschluss | Gepinnte Messfutures bleiben bis nach jeder Bereitschaftsbestätigung erhalten. Erst die zweite Watchversion erlaubt ihren Drop. Kein eigener ACK-/Bildkanalbesitzer wird durch diesen Abschluss vor einem noch verarbeitenden direkten Messfuture freigegeben. | Vollständige eigene Aufgabenhilfe und alle acht Spawnstellen beider Messpfade gelesen; Laufzeitbestätigung bleibt remote. |
+| Frühe Fehler und echter ACK-Verlust | Die Ergebnisalternative steht vor dem Stopzweig. Mehrere echte Rückgaben werden vollständig gesammelt; derselbe Text `wire ACK stream closed` bleibt bei einem vorher geschlossenen Kanal ein Fehler. Ein Panic schließt seine Bereitschaftsseite und erreicht anschließend den Joinfehler. | Eigene Quellprüfung gegen Tokio 1.52.3 und vorbereitete gezielte Abschlussfälle. Keine pauschale Behandlung von `BrokenPipe`, `Cancelled` oder Kanaltexten als Erfolg. |
+| Vollständiger Join und Abbruchbesitz | Jeder Handle bleibt während des gesamten Await im Besitzer. Ein erster Fehler beendet den Joinloop nicht. Drop des Besitzers oder eines noch wartenden Finishfutures fordert den Abbruch aller verbliebenen Handles an. | Eigene Quellprüfung und Drop-Wächterfälle; ein erfolgter `abort` allein wird nicht als bereits gejoint behauptet. |
+| Pipelinearbeit und Admission | `host_pipeline_init` bindet Peerbudget, Quelle und Contract; `host_capture::produce` verwendet den bestehenden HostStage-Zweig. `WorkControl` erhält seine Epoch-/Interruptsignale; `PipelineActor::drop` behält den vorhandenen Job-/Disposeweg. | Die explizit nachfreigegebenen Definitionsdateien wurden vollständig selbst gelesen. L02 ergänzt keine neue Produktionssperre, keinen Mutex um Messpolls und keinen produktiven Cancelpfad. |
+| ACK, Rate, Pacing und Steuerreserve | `host_mode::on_ack/second`, `SenderBudget::{admit,ack,reset}` und die Permit-Drops, `Pacer::on_ack`, Ratecontroller und `control_sender` bleiben bytegleich. Derselbe echte ACK-Zeitstempel erreicht denselben Regler; Geschwisterdebt und peergeteilte Steuerreserve bleiben erhalten. | Statischer Byteabgleich mit Kandidat `0425aa46`; bestehende Senderbudgetfälle bleiben unverändert in Mains Auswahl. Ein neuer Leistungs- oder Fairnesspass wird nicht behauptet. |
+| Reale Pfade und Zeitfenster | Der vollständige Screenfixturekörper entspricht dem Kandidaten nach Abzug von Modulanschluss und Finish-Ergebniskontext. Sämtliche Transportfunktionen ab `network` entsprechen ihm nach Abzug desselben Ergebniskontexts. | Statischer Textabgleich: beide Gleichheitsprüfungen wahr. Die drei Profile, Kalibrierung, fünf/zwölf/zwei Sekunden, echte Wire-/Payloadprüfungen und Beobachtungsquellen sind damit erhalten. |
+| Leistungsorakel und Rohdaten | `batches_rate_reference_metrics.rs` ist bytegleich mit dem Kandidaten. Rohdateinamen, Berichtsstruktur, Auswertungsaufruf und Netzfixturekennung sind unverändert. | Statischer Byte-/Textabgleich. Das tatsächliche P27-Leistungsergebnis bleibt bis zum Remote-Lauf unbekannt. |
+| Oberflächen und Veröffentlichung | Die Aufgabenhilfe wird ausschließlich über den vorhandenen Linux-Testanschluss eingebunden. Keine produktive Desktop-, Android-, CLI-, IPC-, MCP-, Netz-, Rechte-, Retry-, Backup- oder Konfliktfunktion wurde geändert. Main behält die Veröffentlichung des vollständigen Gesamtbatches. | Vollständiger eigener Diff und unveränderte gelesene Produktquellen. Keine Behauptung einer neuen Benutzerfunktion oder einer abgeschlossenen Veröffentlichung. |
+| Dokumentation und Schreibfläche | Der frühere G3-Bericht bleibt als unveränderter Dateipräfix erhalten; nur dieser klar bezeichnete L02-Abschnitt wird ergänzt. | Statischer Präfixvergleich wahr; eigener Rustcode bleibt in genau drei freigegebenen Pfaden. |
+
+Die eigene Review hat den Fehlerkontext auf die genaue Aussage
+`measurement task … returned` begrenzt: Ein im letzten Poll vor der
+Bereitschaft beobachtetes Ergebnis bekommt keinen erfundenen Zeitstempel
+„vor dem Stoppsignal“. Mains Zwischenhinweis zur üblichen Formatierung des
+kompakten `failures.push(format!(...))` wurde manuell übernommen; kein
+Formatter wurde gestartet. Die Review fand danach keinen weiteren belegten
+Fehler in der zugewiesenen Änderung.
+
+Zulässige statische Nachweise dieses Autors: vollständiger eigener Diff,
+gezielte Quelllektüre, Byte-/Textabgleiche mit dem Fehlerkandidaten,
+Whitespaceprüfung einschließlich der neuen Datei, Dokumentationskontextgate
+und `git diff --check`. Die drei Rustdateien haben 261/352/342 Zeilen und
+9.032/15.206/12.529 Bytes in der Reihenfolge Aufgabenhilfe/Screenfixture/
+Transport. Damit bleiben alle unter 500 Zeilen und 50 KiB. Es gab keinen
+lokalen Compiler-, Formatter-, Build-, Test-, Server-, Installations- oder
+Netzprofillauf, keinen Commit/Push und keinen Graphrefresh dieses Autors.
+
+### Exakte vorbereitete Fallnamen und Registrierung durch Main
+
+Voller gemeinsamer Namenspräfix der neuen nicht ignorierten Linux-Fälle:
+`screen::core::rate_control::p27_acceptance::tasks::tests::`.
+
+1. `p27_task_shutdown_preserves_ack_and_picture_dependencies_until_quiesced`:
+   verbundene Sender und Empfänger schließen ohne selbst erzeugten
+   ACK-/Bildkanalfehler; sämtliche eigenen Kinder geben ihren Besitz frei.
+2. `p27_task_shutdown_preserves_ready_transport_and_pipeline_failures`:
+   beide bereits bereiten echten Fehler bleiben bei gleichzeitigem
+   Stoppsignal erhalten; verbliebene Kinder sind vor Rückgabe gejoint.
+3. `p27_task_shutdown_reports_ack_loss_before_explicit_stop`:
+   ein tatsächlich vorher geschlossener ACK-Kanal bleibt trotz identischer
+   Fehlerzeichenfolge ein Fehler.
+4. `p27_task_shutdown_rejects_early_success`:
+   ein vorzeitig beendeter Messfuture mit `Ok(())` wird nicht als
+   regulärer angeforderter Abschluss ausgegeben.
+5. `p27_task_shutdown_preserves_panic_and_joins_remaining_children`:
+   eine tatsächliche Panic bleibt sichtbar, und die übrigen eigenen
+   Kinder sind vor der Fehlerrückgabe gejoint.
+6. `p27_task_shutdown_drop_aborts_owned_children`:
+   Drop des Aufgabenbesitzers bricht seine noch gehaltenen Kinder ab.
+7. `p27_task_shutdown_cancelled_finish_keeps_child_ownership`:
+   Drop des bereits angefangenen, noch wartenden Finishfutures trennt
+   dessen Kindbesitz nicht vom Aufgabenbesitzer ab.
+
+Main registriert diese sieben Suffixe ausschließlich über die vorhandenen
+Linuxintegrationen der gemeinsamen Task-Suite. Die allgemeine Präfixauswahl
+enthält sie bisher nicht. Es gibt keinen zusätzlichen Suiteeinstieg und
+keinen zusätzlichen Aufruf des weiterhin exakt gleich benannten ignorierten
+Netzfalls
+`screen::core::rate_control::p27_acceptance::p27_network_reference_acceptance`.
+Die Windowsauswahl erhält keine Linux-Testnamen. Alle vorbereiteten Fälle
+und das tatsächliche Leistungsresultat sind bislang nicht ausgeführt.
+
+### Tatsächlich gelesene und bearbeitete Dateien dieses Autors
+
+Die Liste nennt eigene vollständige Lektüre oder gezielte Quellen-/
+Signaturauszüge; sie übernimmt keine Lesebehauptung des G3-Autors.
+
+- Regeln/Auftrag: `/root/.codex/AGENTS.md`,
+  `/root/.codex/skills/arbeitsweise/SKILL.md`,
+  `/root/.agents/skills/arbeitsweise/SKILL.md`, die vollständig über MCP
+  gelieferte Arbeitsweise, `/tmp/smartexplorer-final-review-user-contract.txt`
+  und `/tmp/smartexplorer-fix-p27-shutdown-scope.json`. Die geltenden
+  Repositoryanweisungen lagen außerdem vollständig in der Nutzernachricht vor.
+- Dokumentation: `docs/ARCHITEKTUR.md`,
+  `docs/oberflaechen/bildschirm.md`, dieser Bericht,
+  `docs/plaene/2026-10-24-batches/rv1-compilerplan.md` und
+  `docs/plaene/2026-10-24-batches/vertraege.md`.
+- Konfiguration/Suite: `native/Cargo.toml`, `native/Cargo.lock`,
+  `native/review-task-manifest.json`, `native/review-task-native.py`,
+  `native/review-task-network.sh`, `native/test-review-task.sh` und
+  `.github/workflows/review-task.yml`.
+- Unter `native/src/screen/core/`: `batches_rate_reference_task_tests.rs`,
+  `batches_rate_reference_transport.rs`, eigene neue
+  `batches_rate_reference_tasks.rs`, `batches_rate_reference_metrics.rs`,
+  `batches_sender_task_tests.rs`, `capture_admission.rs`, `capture_plan.rs`,
+  `capture_records.rs`, `control_sender.rs`, `frame_budget.rs`,
+  `gop_stream.rs`, `host_backend.rs`, `host_frame_send.rs`,
+  `host_pipeline.rs`, `host_pipeline_actor.rs`, `host_pipeline_produce.rs`,
+  `host_stage.rs`, `rate_control.rs`, `wire_control.rs` und
+  `wire_control_codec.rs`; nach expliziter zusätzlicher Lesefreigabe
+  `host_pipeline_init.rs`, `host_work_control.rs`, `host_capture.rs`,
+  `sender_budget.rs`, `pacing.rs`, `host_quality.rs`, `host_reference.rs`
+  und `host_mode.rs`.
+- Unter der freigegebenen lokalen Tokio-1.52.3-Registryquelle:
+  `src/macros/select.rs`, `src/runtime/task/join.rs`,
+  `src/sync/watch.rs` und `src/sync/oneshot.rs`.
+- Remote-Evidenz unter `/tmp/smartexplorer-rv1-40381452096/`:
+  `linux/p27-network.log`, `linux/summary.json` und
+  `linux/p27-network/10mbit-one-window-reference.json`.
+
+Erstellt wurde ausschließlich
+`native/src/screen/core/batches_rate_reference_tasks.rs`.
+Geändert wurden ausschließlich
+`native/src/screen/core/batches_rate_reference_task_tests.rs`,
+`native/src/screen/core/batches_rate_reference_transport.rs` und der eigene
+L02-Abschnitt in
+`docs/plaene/2026-10-24-batches/fix-review-p27-abnahme.md`.
+Keine Schreibfläche der parallelen Android-Autoren wurde berührt.
+
+### Entscheidungen und verbleibende Grenzen
+
+Der neue eigene Fünfteilzyklus ist als Quelländerung und statische eigene
+Anti-Regressionsreview vorbereitet. Der genaue Entstehungszeitpunkt des
+alten ACK-Fehlers bleibt im vorhandenen Log unbekannt; der neue Abschluss
+beseitigt das belegte eigene Abbruchrennen und verschweigt keinen echten
+Messfuturerücklauf. Die fehlende Laufzeitbestätigung ist keine bestandene
+Prüfung. Main übernimmt dieselbe Remote-Suite, die Auswertung ihrer
+unveränderten V7-Orakel, Graphrefresh, Commit/Push und den einen terminalen
+vollständigen Remote-Release des Gesamtbatches. Produktinterne asynchrone
+GOP-Reader und Pipeline-Disposejobs behalten ihren bisherigen Lebensweg;
+die neue Gruppe joint ausschließlich die von ihr selbst gestarteten
+Messaufgaben. Außerhalb der Fläche ist kein zusätzlicher belegter
+Reparaturbedarf offen. Dieser Autor stoppt nach der Übergabe.
