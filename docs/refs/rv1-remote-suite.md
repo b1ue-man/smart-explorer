@@ -424,3 +424,27 @@ Die Korrektur bleibt im selben Fixloop. Ihr eigener Bericht
 bindet den legalen Konstruktor an erhaltene Anfangswerte, RNG-Reihenfolge,
 Opt-in-Semantik und Pfadfreigaben. Der folgende Kandidat wird ausschließlich
 über denselben Remote-Suiteeinstieg bewertet. Kein Release ist gestartet.
+
+## Lauf 40354605251: native Integrationsgrenzen
+
+Der [Lauf](https://github.com/b1ue-man/smart-explorer/actions/runs/40354605251)
+prüfte `d95dc404e834edfe7be0e1c96be162b36865efa9`. Die Vorbereitung war
+erfolgreich. Der Vendor-Konstruktorfehler ist beseitigt: Linux und Windows
+melden ein kompiliertes Noq-proto-Artefakt, Android erreicht ebenfalls die
+Smart-Explorer-Quellen. Alle drei Compilerstufen scheitern anschließend an
+nativen Integrationsfehlern; die Android-Gerätestufe ist übersprungen.
+
+Main hat die vollständigen Desktopdiagnosen und das Androidlog ausgewertet.
+Die Diagnosekennungen C01–C58 und A01–A19 sind keine Zahl voneinander unabhängiger
+Funktionsfehler. Die Artefaktarchive wurden gegen Kandidat und GitHub-SHA256
+geprüft. Die [sechs begrenzten Korrekturgruppen](../plaene/2026-10-24-batches/rv1-compilerplan.md)
+sind durch ihre bisherigen Autoren einschließlich eigener Nachreview umgesetzt.
+Die gemeinsame Manifestergänzung `R20-Compiler-Integrationen` wählt ausschließlich
+direkt betroffene bestehende Fälle aus; vorhandene Auswahl und Aussagen bleiben
+erhalten. Die getrennt erfolgreichen Glow-Fälle belegen weiterhin weder die
+gesamte Produktbibliothek noch eine erfolgreiche Gesamtabnahme.
+
+Der nächste Kandidat verwendet unverändert `native/test-review-task.sh` im
+Workflow `review-task.yml`. Es gibt keinen zusätzlichen Suiteeinstieg und keine
+lokale Kompilierung oder Testausführung. Die vollständige funktionale Auswertung
+und der eine terminale Release stehen weiterhin aus.
