@@ -67,6 +67,10 @@ fn batches_task_recovery_owner_document_commit_keeps_registry_readers_consistent
     let directory = fixture.root.path();
     write_document(directory, FILES[0], &fixture.active_document()).unwrap();
     assert_eq!(
+        read_document(directory, FILES[0]).unwrap(),
+        fixture.active_document()
+    );
+    assert_eq!(
         super::super::load_in(directory).unwrap(),
         [fixture.record.config.clone()]
     );
