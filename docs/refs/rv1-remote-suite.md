@@ -575,3 +575,35 @@ Kandidat und beide Hashes sind geprüft. Der Patch bricht nur die Aufrufkette
 Lockauflösung unverändert, keine Größenprobleme. Windows-, Linux-, Android-
 Build- und Gerätestufen wurden übersprungen. Kein neuer Funktionsnachweis,
 kein lokaler Formatter oder Compiler und kein zusätzlicher Suiteeinstieg.
+
+## Lauf 40406246032: Desktop-Funktionsbefunde
+
+[Pipeline](https://github.com/b1ue-man/smart-explorer/actions/runs/40406246032)
+für `1ffbf4b0bc90b2479947680abcd0a5941cce00f8`, Statusabruf 2026-10-26
+22:10:07 UTC: Vorbereitung erfolgreich; Windows und Linux vollständig beendet,
+Funktionsstufen fehlgeschlagen; Android-Checkout noch laufend. Keine Aussage
+über einen späteren Androidstatus. Kein Release gestartet.
+
+| Artefakt | ID | SHA256 |
+|---|---|---|
+| dependencies | 12691462686 | `c43447f59826e1f99bc7d76977f69c357a8144746cf86aa23172b2bf6ae6512a` |
+| windows | 12691722778 | `e728f642ab76ba166052db306f3aed4b818dbe56e8db0b17042c01acd7aacf59` |
+| linux | 12692376036 | `eea4716b376627e6741333e185e097a17f83acb31a5d2cd4c9ccbbee6f9bf8fc` |
+
+Kandidatenbindung, Archivhash und sichere Archivpfade sind geprüft. Beide
+Desktopartefakte bestätigen erfolgreiche Kompilierung der Bibliotheks-
+Prüfbinärdatei, `se` und `egui_glow`, ohne Compilerfehler. Die tatsächlichen
+fehlgeschlagenen Fallnamen stehen in
+[rv1-funktionsbefunde.json](../plaene/2026-10-24-batches/rv1-funktionsbefunde.json),
+ihr begrenzter Korrekturplan in
+[rv1-funktionsplan.md](../plaene/2026-10-24-batches/rv1-funktionsplan.md).
+Die Extraktion verwendet ausschließlich `FAILED`-Identitäten und deren
+zugehörige Fehlerabschnitte. Erwartete Panics erfolgreicher Fälle und
+`unverified`-Hardwaremeldungen sind keine Fehleridentitäten.
+
+P27 enthält für `10mbit-one-window` sowohl Referenz- als auch Screen-Rohdaten.
+Der nächste Profilaufbau scheitert an `tc` mit
+`Exclusivity flag on, cannot modify.`. Damit ist der erste Messabschluss
+vorhanden; die vollständige Leistungsabnahme ist noch nicht erreicht.
+Keine Grenzwerte werden deshalb geändert. Die bereits fertigen Desktoplogs
+werden ausgewertet, ohne während des übrigen CI-Laufs Agenten zu aktivieren.

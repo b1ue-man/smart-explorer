@@ -1,0 +1,422 @@
+{
+  "candidate": "1ffbf4b0bc90b2479947680abcd0a5941cce00f8",
+  "run_id": 40406246032,
+  "scope": "Actual FAILED identities from completed Linux and Windows native-suite logs; Android result pending. Full diagnostics remain in candidate-bound CI artifacts.",
+  "cases": [
+    {
+      "id": "F01",
+      "test": "app::drive_modules::optical_index::tests::batches_task_optical_index_requires_proof_reuses_and_invalidates",
+      "platforms": [
+        "linux",
+        "windows"
+      ]
+    },
+    {
+      "id": "F02",
+      "test": "apps::os::host::batches_launch_task_tests::batches_app_ambiguous_dispatch_remains_unknown_until_matching_completion",
+      "platforms": [
+        "linux"
+      ]
+    },
+    {
+      "id": "F03",
+      "test": "apps::os::host::batches_launch_task_tests::batches_app_catalog_logon_revocation_and_expiry_prevent_dispatch",
+      "platforms": [
+        "linux"
+      ]
+    },
+    {
+      "id": "F04",
+      "test": "apps::os::host::batches_launch_task_tests::batches_app_consent_continuation_uses_new_phase_and_never_repeats_remote_dispatch",
+      "platforms": [
+        "linux"
+      ]
+    },
+    {
+      "id": "F05",
+      "test": "apps::os::host::batches_launch_task_tests::batches_app_durable_claim_precedes_dispatch_and_survives_host_reconstruction",
+      "platforms": [
+        "linux"
+      ]
+    },
+    {
+      "id": "F06",
+      "test": "apps::os::host::batches_launch_task_tests::batches_app_peer_owner_and_complete_body_survive_reconstruction_without_rebinding",
+      "platforms": [
+        "linux"
+      ]
+    },
+    {
+      "id": "F07",
+      "test": "apps::os::host::batches_launch_task_tests::batches_app_repeated_request_rechecks_permission_before_disclosing_receipt",
+      "platforms": [
+        "linux"
+      ]
+    },
+    {
+      "id": "F08",
+      "test": "cli::completions_access::tests::perm_task_completions_access",
+      "platforms": [
+        "linux",
+        "windows"
+      ]
+    },
+    {
+      "id": "F09",
+      "test": "cli::plugin::codex::batches_codex_task_tests::batches_p13_legacy_codex_environment_is_owned_before_and_after_migration",
+      "platforms": [
+        "linux"
+      ]
+    },
+    {
+      "id": "F10",
+      "test": "copy::imp::safe_file::direct_move::compatibility_tests::batches_task_transfer_compat_move_without_hardlinks_does_not_copy_bytes",
+      "platforms": [
+        "windows"
+      ]
+    },
+    {
+      "id": "F11",
+      "test": "copy::imp::safe_file::direct_move::compatibility_tests::batches_task_transfer_compat_move_without_hardlinks_preserves_conflicts",
+      "platforms": [
+        "windows"
+      ]
+    },
+    {
+      "id": "F12",
+      "test": "copy::imp::safe_file::direct_move::compatibility_tests::batches_task_transfer_compat_move_without_hardlinks_retains_committed_target_on_receipt_failure",
+      "platforms": [
+        "windows"
+      ]
+    },
+    {
+      "id": "F13",
+      "test": "daemon::exec_ipc::lifetime::batches_exec_lifetime_task_tests::batches_task_b5_terminal_registration_closes_control_without_cancelling_finished_owner",
+      "platforms": [
+        "windows"
+      ]
+    },
+    {
+      "id": "F14",
+      "test": "daemon::mount_registry::inactive::batches_recovery_owner_task_tests::batches_task_recovery_owner_document_commit_keeps_registry_readers_consistent",
+      "platforms": [
+        "linux",
+        "windows"
+      ]
+    },
+    {
+      "id": "F15",
+      "test": "daemon::mount_registry::inactive::batches_recovery_owner_task_tests::batches_task_recovery_owner_injected_commit_failures_restore_active_or_inactive_origin",
+      "platforms": [
+        "linux",
+        "windows"
+      ]
+    },
+    {
+      "id": "F16",
+      "test": "desktop::os::desktop_ops::tests::desktop_task_desktop_ops_rename_trash_copy",
+      "platforms": [
+        "linux",
+        "windows"
+      ]
+    },
+    {
+      "id": "F17",
+      "test": "gdrive::gui_task_tests::gui_design_task_drive_empty_intermediate_pages_continue_and_empty_children_scan",
+      "platforms": [
+        "linux",
+        "windows"
+      ]
+    },
+    {
+      "id": "F18",
+      "test": "mcp_launcher::installer_cli::batches_uninstall_task_tests::batches_p13_uninstall_does_not_follow_foreign_child_links",
+      "platforms": [
+        "linux"
+      ]
+    },
+    {
+      "id": "F19",
+      "test": "mcp_launcher::installer_cli::batches_uninstall_task_tests::batches_p13_uninstall_missing_lock_never_releases_remaining_program_files",
+      "platforms": [
+        "windows"
+      ]
+    },
+    {
+      "id": "F20",
+      "test": "mcp_launcher::installer_cli::batches_uninstall_task_tests::batches_p13_uninstall_oversized_inventory_is_rejected_before_publication",
+      "platforms": [
+        "windows"
+      ]
+    },
+    {
+      "id": "F21",
+      "test": "mcp_launcher::installer_cli::batches_uninstall_task_tests::batches_p13_uninstall_preserves_foreign_files_and_is_repeatable",
+      "platforms": [
+        "linux",
+        "windows"
+      ]
+    },
+    {
+      "id": "F22",
+      "test": "mcp_launcher::installer_cli::batches_uninstall_task_tests::batches_p13_uninstall_preserves_open_update_recovery_and_blocks_new_admission",
+      "platforms": [
+        "windows"
+      ]
+    },
+    {
+      "id": "F23",
+      "test": "mcp_launcher::installer_cli::batches_uninstall_task_tests::batches_p13_uninstall_record_never_authorizes_path_traversal",
+      "platforms": [
+        "windows"
+      ]
+    },
+    {
+      "id": "F24",
+      "test": "mcp_launcher::installer_cli::batches_uninstall_task_tests::batches_p13_uninstall_rejects_changed_program_metadata_and_owner_before_deletion",
+      "platforms": [
+        "windows"
+      ]
+    },
+    {
+      "id": "F25",
+      "test": "mcp_launcher::installer_cli::batches_uninstall_task_tests::batches_p13_uninstall_removes_all_owned_mcp_programs_and_manifest",
+      "platforms": [
+        "linux",
+        "windows"
+      ]
+    },
+    {
+      "id": "F26",
+      "test": "mcp_launcher::installer_cli::batches_uninstall_task_tests::batches_p13_uninstall_respects_independent_owner_operation_and_lifetime_locks",
+      "platforms": [
+        "linux",
+        "windows"
+      ]
+    },
+    {
+      "id": "F27",
+      "test": "mcp_launcher::installer_cli::batches_uninstall_task_tests::batches_p13_uninstall_resumes_exact_record_after_partial_deletion_and_keeps_new_bytes",
+      "platforms": [
+        "linux",
+        "windows"
+      ]
+    },
+    {
+      "id": "F28",
+      "test": "mcp_launcher::transaction::batches_lifecycle_task_tests::batches_p13_busy_drain_rolls_back_without_stopping_active_work",
+      "platforms": [
+        "windows"
+      ]
+    },
+    {
+      "id": "F29",
+      "test": "mcp_launcher::transaction::batches_lifecycle_task_tests::batches_p13_independent_lifetime_leases_survive_first_owner_drop",
+      "platforms": [
+        "windows"
+      ]
+    },
+    {
+      "id": "F30",
+      "test": "mcp_launcher::transaction::batches_lifecycle_task_tests::batches_p13_launcher_path_and_bytes_remain_bound_to_registered_installation",
+      "platforms": [
+        "windows"
+      ]
+    },
+    {
+      "id": "F31",
+      "test": "mcp_launcher::transaction::batches_lifecycle_task_tests::batches_p13_owner_requires_lock_and_exact_process_identity",
+      "platforms": [
+        "windows"
+      ]
+    },
+    {
+      "id": "F32",
+      "test": "mcp_launcher::transaction::batches_lifecycle_task_tests::batches_p13_retention_requires_stopping_same_installation_and_supported_contract",
+      "platforms": [
+        "windows"
+      ]
+    },
+    {
+      "id": "F33",
+      "test": "mcp_launcher::transaction::batches_lifecycle_task_tests::batches_p13_rollback_rejects_changed_regular_target_and_keeps_recovery_state",
+      "platforms": [
+        "windows"
+      ]
+    },
+    {
+      "id": "F34",
+      "test": "mcp_launcher::transaction::batches_lifecycle_task_tests::batches_p13_state_hash_and_installation_identity_cannot_be_substituted",
+      "platforms": [
+        "windows"
+      ]
+    },
+    {
+      "id": "F35",
+      "test": "mcp_launcher::transaction::batches_lifecycle_task_tests::batches_p13_stop_is_drain_gated_and_bound_to_exact_marker",
+      "platforms": [
+        "windows"
+      ]
+    },
+    {
+      "id": "F36",
+      "test": "screen::core::frame_budget::batches_task_tests::batches_task_b6_worker_rejects_negotiated_packet_before_payload_read",
+      "platforms": [
+        "linux",
+        "windows"
+      ]
+    },
+    {
+      "id": "F37",
+      "test": "screen::os::capture_slots::batches_capture_task_tests::batches_capture_windows_resize_rejects_before_native_allocation_with_old_owner",
+      "platforms": [
+        "windows"
+      ]
+    },
+    {
+      "id": "F38",
+      "test": "screen::os::openh264_codec::quality_acceptance_tests::batches_task_b6_quality_openh264_baseline_transport_and_still",
+      "platforms": [
+        "windows"
+      ]
+    },
+    {
+      "id": "F39",
+      "test": "screen::os::x11_capture::recovery_tests::batches_task_b6_x11_hybrid_resize_releases_old_reference_before_retry",
+      "platforms": [
+        "linux"
+      ]
+    },
+    {
+      "id": "F40",
+      "test": "screen::os::x11_capture::recovery_tests::batches_task_b6_x11_tiles_resize_releases_old_reference_before_retry",
+      "platforms": [
+        "linux"
+      ]
+    },
+    {
+      "id": "F41",
+      "test": "share::fs_guard_backend::extensions::reservation_compatibility_tests::batches_task_transfer_compat_share_guard_preserves_strict_dispatch_and_read_only_denial",
+      "platforms": [
+        "linux",
+        "windows"
+      ]
+    },
+    {
+      "id": "F42",
+      "test": "share::route_policy::batches_route_task_tests::batches_task_b5_actual_stream_and_datagram_gate_survives_network_epoch",
+      "platforms": [
+        "linux",
+        "windows"
+      ]
+    },
+    {
+      "id": "F43",
+      "test": "source_media::tests::batches_task_optical_confined_reader_uses_held_root_and_cancel",
+      "platforms": [
+        "windows"
+      ]
+    },
+    {
+      "id": "F44",
+      "test": "source_media::tests::batches_task_optical_two_copy_jobs_and_scan_share_device",
+      "platforms": [
+        "windows"
+      ]
+    },
+    {
+      "id": "F45",
+      "test": "transfer::engine::batches_backend_compatibility_task_tests::batches_task_transfer_compat_folder_identity_does_not_require_binding_rename_for_first_copy",
+      "platforms": [
+        "linux",
+        "windows"
+      ]
+    },
+    {
+      "id": "F46",
+      "test": "transfer::engine::batches_backend_compatibility_task_tests::batches_task_transfer_compat_folder_without_identity_copies_and_numbers",
+      "platforms": [
+        "linux",
+        "windows"
+      ]
+    },
+    {
+      "id": "F47",
+      "test": "transfer::engine::batches_backend_compatibility_task_tests::batches_task_transfer_compat_missing_only_preserves_resolved_folder_and_skip_contract",
+      "platforms": [
+        "linux",
+        "windows"
+      ]
+    },
+    {
+      "id": "F48",
+      "test": "transfer::engine::file_recovery::missing_retry::tests::batches_task_transfer_compat_missing_only_local_move_keeps_completed_pairs_and_conflicts",
+      "platforms": [
+        "windows"
+      ]
+    },
+    {
+      "id": "F49",
+      "test": "transfer::engine::file_recovery::missing_retry::tests::batches_task_transfer_compat_missing_only_retries_before_journal_for_copy_and_move",
+      "platforms": [
+        "windows"
+      ]
+    },
+    {
+      "id": "F50",
+      "test": "transfer::engine::file_recovery::missing_retry::tests::batches_task_transfer_compat_missing_only_retries_empty_roots_after_no_id_listing_failure",
+      "platforms": [
+        "linux",
+        "windows"
+      ]
+    },
+    {
+      "id": "F51",
+      "test": "transfer::engine::job_store::file_recovery_tests::batches_task_p14_crash_after_staged_move_publication_keeps_target_and_cleans_only_own_source",
+      "platforms": [
+        "windows"
+      ]
+    },
+    {
+      "id": "F52",
+      "test": "transfer::engine::job_store::file_recovery_tests::batches_task_p14_crash_before_publication_restores_the_bound_move_quarantine",
+      "platforms": [
+        "windows"
+      ]
+    },
+    {
+      "id": "F53",
+      "test": "transfer::engine::job_store::file_recovery_tests::batches_task_p14_explicit_pair_move_retains_completed_results_during_reopen",
+      "platforms": [
+        "windows"
+      ]
+    },
+    {
+      "id": "F54",
+      "test": "transfer::engine::job_store::file_recovery_tests::batches_task_p14_partial_file_move_reopens_after_the_source_was_removed",
+      "platforms": [
+        "windows"
+      ]
+    },
+    {
+      "id": "F55",
+      "test": "transfer::engine::job_store::file_recovery_tests::corrections::batches_task_p14_failed_prepare_acknowledgement_recovers_after_stage_discard",
+      "platforms": [
+        "windows"
+      ]
+    },
+    {
+      "id": "F56",
+      "test": "transfer::engine::job_store::file_recovery_tests::corrections::batches_task_p14_prepublication_old_target_is_not_a_foreign_postpublication_replacement",
+      "platforms": [
+        "windows"
+      ]
+    }
+  ],
+  "separate_failure": {
+    "id": "F57",
+    "stage": "linux p27-network",
+    "diagnostic": "Exclusivity flag on, cannot modify.",
+    "boundary": "Next network profile setup after retained first reference and screen artifacts."
+  }
+}

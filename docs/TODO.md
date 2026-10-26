@@ -20,27 +20,17 @@ See [evidence and scope](WINDOWS_REMOTE_REGRESSION.md).
 
 Gesamtbatch B1–B8/P31/P32, Stand 2026-10-26: Die normale Gesamtreview und beide
 unabhängigen Release-Regressionsreviews sind abgeschlossen. Die belegten
-Fehler sind in [vollständigen Fixzyklen desselben jeweiligen Autors](plaene/2026-10-24-batches/regressionsreview.md)
-quellseitig behoben. Die daraus entstandenen Struktur-, Compiler- und
-JNI-Korrekturen sind integriert. Lauf `40381452096` für `0425aa46` bestätigt
-die Kompilierung der Windows-/Linux-Prüfbinärdatei und CLI sowie der
-Android-Rustbibliothek einschließlich JNI. Alle Jobs dieses Versuchs sind beendet.
-Die [begrenzten Kotlin-Konsum- und Capturekorrekturen sowie der
-Messabschluss L02](plaene/2026-10-24-batches/rv1-compilerplan.md) sind mit
-jeweils eigener vollständiger Autorenreview in `00c97f88`, `69f86c46` und
-`578357a8` integriert. Die belegten veralteten beziehungsweise plattformfremden
-Pflichtauswahlen sind im selben Manifest korrigiert; alle bestehenden
-Ressourcenfälle bleiben erhalten. Der statische Abgleich mit den gespeicherten
-Binärlisten und ausdrücklich getrennten neuen Quellfällen meldet keine offene
-Zuordnung. Die vollständige Funktionsabnahme über denselben Remote-Einstieg und
-der eine terminale Remote-Release stehen aus; ein Compilererfolg ist kein
-Funktions- oder Leistungsnachweis.
-
-Der anschließende Lauf `40400605922` für `4a42b936` hat ausschließlich einen
-Formatpatch für den P27-Abschlussaufruf geliefert. Der gebundene Patch ist
-unverändert übernommen; sämtliche syntaktischen Blatttoken bleiben gleich.
-Lockdatei und Modulgrößen sind ohne Änderungsbedarf. Die Compiler- und
-Funktionsstufen dieses Versuchs wurden übersprungen; es folgt derselbe Einstieg.
+Reviewfehler sowie anschließenden Struktur-, Compiler-, Kotlin- und
+Messabschlusskorrekturen sind integriert. Lauf `40406246032` für `1ffbf4b0`
+bestätigt die Vorbereitung und erfolgreiche Windows-/Linux-Kompilierung.
+Die Desktop-Funktionsstufen scheitern an konkreten
+[Funktions- und Fixturebefunden F01–F57](plaene/2026-10-24-batches/rv1-funktionsplan.md).
+Android war beim Abruf 22:10:07 UTC noch im Checkout; sein Ergebnis fehlt.
+Main grenzt die Ursachen anhand der gebundenen Artefakte, Quellketten und
+Primärquellen ein. Noch kein Fixagent für diesen Durchgang aktiv, da die
+Pipeline läuft. Die Autorenkorrekturen, erfolgreiche vollständige Auswertung
+über denselben Remote-Einstieg und der eine terminale Remote-Release stehen aus.
+Compilererfolg ist kein Funktions- oder Leistungsnachweis.
 
 This table is the live list of remaining work, roughly by value. The lower
 sections preserve shipped/history context and explicitly label anything that is
