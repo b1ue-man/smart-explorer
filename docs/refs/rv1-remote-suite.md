@@ -560,3 +560,18 @@ bestehenden Zuordnungen; neue Abschlussfälle sind dabei ausdrücklich nur durch
 ihre Quelldefinitionen belegt. Keine lokale Funktionsausführung und kein
 Leistungsnachweis folgen aus diesem Vergleich. P27-Netzprofile, Orakel,
 Qualitätsprofile und GL-Ledger bleiben unverändert.
+
+## Lauf 40400605922: Format des P27-Abschlussaufrufs
+
+Der [Lauf](https://github.com/b1ue-man/smart-explorer/actions/runs/40400605922)
+für `4a42b936a6be21cf04ee11e786e081282a45949e` ist vollständig beendet.
+Ausschließlich die Formatvorbereitung scheitert. Artefakt `12689406223`
+hat SHA256 `7c02ee9f95d6bbdafb840f68aca8ab0cd5f653a04ccb024419703fcbd6c2ec79`;
+der Formatpatch hat SHA256
+`35f142c406b448ef08575485d38bdd879ce2afeb8560681acb1d7cd1c1f6e079`.
+Kandidat und beide Hashes sind geprüft. Der Patch bricht nur die Aufrufkette
+`finish().await.expect(...)` in der Screenmessfixture um und ist unverändert
+übernommen. Der statische AST-Vergleich bestätigt identische Blatttoken.
+Lockauflösung unverändert, keine Größenprobleme. Windows-, Linux-, Android-
+Build- und Gerätestufen wurden übersprungen. Kein neuer Funktionsnachweis,
+kein lokaler Formatter oder Compiler und kein zusätzlicher Suiteeinstieg.

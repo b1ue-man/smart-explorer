@@ -36,6 +36,12 @@ Zuordnung. Die vollständige Funktionsabnahme über denselben Remote-Einstieg un
 der eine terminale Remote-Release stehen aus; ein Compilererfolg ist kein
 Funktions- oder Leistungsnachweis.
 
+Der anschließende Lauf `40400605922` für `4a42b936` hat ausschließlich einen
+Formatpatch für den P27-Abschlussaufruf geliefert. Der gebundene Patch ist
+unverändert übernommen; sämtliche syntaktischen Blatttoken bleiben gleich.
+Lockdatei und Modulgrößen sind ohne Änderungsbedarf. Die Compiler- und
+Funktionsstufen dieses Versuchs wurden übersprungen; es folgt derselbe Einstieg.
+
 This table is the live list of remaining work, roughly by value. The lower
 sections preserve shipped/history context and explicitly label anything that is
 later, superseded, or currently regressed.

@@ -439,3 +439,15 @@ Es wurde keine Binärdatei und kein Fall lokal ausgeführt. Typ-, Funktions-
 und Leistungsbestätigung bleiben bis zur Auswertung desselben Remote-Einstiegs
 offen. Main aktualisiert vorher den vollständigen Rootgraph und pusht den
 gemeinsamen Kandidaten; die Veröffentlichung bleibt der eine terminale Schritt.
+
+### Formatvorbereitung des K/L02-Kandidaten
+
+Lauf `40400605922` für `4a42b936a6be21cf04ee11e786e081282a45949e`
+ist ausschließlich an der Formatierung des `finish().await.expect(...)`-
+Aufrufs in der Screenmessfixture gestoppt. Der kandidaten- und hashgebundene
+Remote-Patch wird unverändert übernommen. Sämtliche syntaktischen Blatttoken
+sind identisch; die Datei bleibt mit 355 Zeilen und 15.233 Bytes innerhalb
+der Modulgrenzen. Abhängigkeiten unverändert, keine Größenverletzung.
+Compiler- und Funktionsstufen sind übersprungen. Kein lokaler Formatter,
+Compiler oder Fall wurde ausgeführt; der nächste Kandidat verwendet denselben
+Remote-Suiteeinstieg nach Graphrefresh und Push.
