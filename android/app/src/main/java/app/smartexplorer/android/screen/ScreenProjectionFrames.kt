@@ -16,25 +16,41 @@ internal class ScreenProjectionFrames(
     private val failed: (String) -> Unit,
 ) {
     private val bytes=ScreenFrameLimits.checkedBytes(width,height)
-    private val readerLease=budget.claim(ScreenCaptureBudget.NATIVE_SURFACE,Math.multiplyExact(bytes.toLong(),3))
-    private val reader=try {ImageReader.newInstance(width,height,PixelFormat.RGBA_8888,3)}
-        catch(error: Throwable) {readerLease.close();throw error}
-    private val thread=HandlerThread("screen-projection-pixels").also {it.start()}
-    private val handler=Handler(thread.looper)
+    private val construction=ScreenCaptureConstruction<HandlerThread,ImageReader>(::retireProjectionThread,{it.close()})
+    private val readerLease:ScreenCaptureLease
+    private val reader:ImageReader
+    private val thread:HandlerThread
+    private val handler:Handler
     private var latest: ScreenCaptureBuffer?=null
     private var latestImage: Image?=null
     private var requested: Long?=null
     private var still: ((ScreenCaptureBuffer) -> Boolean)?=null
     @Volatile private var closed=false
-    val surface: Surface get()=reader.surface
+    @Volatile private var resourcesReleased=false
+    val surface: Surface get() {check(!closed) {"Projectionquelle ist bereits beendet"};return reader.surface}
     init {
-        reader.setOnImageAvailableListener({source ->
-            if(!closed) try {
-                source.acquireLatestImage()?.let {image ->
-                    latestImage?.close();latestImage=image;sendRequested()
+        try {
+            readerLease=budget.claim(ScreenCaptureBudget.NATIVE_SURFACE,Math.multiplyExact(bytes.toLong(),3))
+            construction.ownClaim(readerLease)
+            reader=checkNotNull(construction.ownSurface(ImageReader.newInstance(width,height,PixelFormat.RGBA_8888,3)))
+            thread=construction.ownProducer(object : HandlerThread("screen-projection-pixels") {
+                override fun run() {
+                    try {super.run()} finally {
+                        if(construction.producerEnded()) {closed=true;finishResources()}
+                    }
                 }
-            } catch(error: RuntimeException) {if(!closed) failed("RGBA-Capture: ${error.javaClass.simpleName}")}
-        },handler)
+            })
+            thread.start()
+            handler=Handler(thread.looper)
+            reader.setOnImageAvailableListener({source ->
+                if(!closed) try {
+                    source.acquireLatestImage()?.let {image ->
+                        latestImage?.close();latestImage=image;sendRequested()
+                    }
+                } catch(error: RuntimeException) {if(!closed) failed("RGBA-Capture: ${error.javaClass.simpleName}")}
+            },handler)
+            check(construction.enterRuntime()) {"Projectionthread endete während seiner Konstruktion"}
+        } catch(failure:Throwable) {closed=true;construction.abort(failure)}
     }
     fun capture(frame: Long) {
         if(closed || frame<=0) return
@@ -89,17 +105,33 @@ internal class ScreenProjectionFrames(
         }
     }
     fun close(): Boolean {
-        if(closed) return !thread.isAlive
         closed=true
-        reader.setOnImageAvailableListener(null,null)
-        handler.removeCallbacksAndMessages(null)
-        // Running callbacks finish before this cleanup. A timed-out join does
-        // not release their reader, pixels or native admission.
-        handler.post {
-            try {latestImage?.close();latestImage=null;latest?.close();latest=null;requested=null;still=null;reader.close()}
-            finally {readerLease.close();thread.quitSafely()}
-        }
+        try {handler.removeCallbacksAndMessages(null)} finally {thread.quitSafely()}
         if(Thread.currentThread()!==thread) thread.join(2_000)
-        return !thread.isAlive
+        // The worker's finally owns cleanup even after spontaneous failure or
+        // a timed-out close. A dead worker also permits a failed cleanup retry.
+        if(!thread.isAlive) finishResources()
+        return !thread.isAlive && resourcesReleased
     }
+    @Synchronized private fun finishResources() {
+        if(resourcesReleased) return
+        try {latestImage?.close();latestImage=null} finally {
+            try {latest?.close();latest=null} finally {
+                requested=null;still=null
+                reader.close()
+                readerLease.close()
+                resourcesReleased=true
+            }
+        }
+    }
+}
+
+/** A failed constructor has no caller that could stop its already started handler. */
+private fun retireProjectionThread(worker: HandlerThread) {
+    worker.quitSafely()
+    var interrupted=false
+    while(worker.isAlive) {
+        try {worker.join()} catch(_:InterruptedException) {interrupted=true}
+    }
+    if(interrupted) Thread.currentThread().interrupt()
 }

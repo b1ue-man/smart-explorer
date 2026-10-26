@@ -1,6 +1,7 @@
 package app.smartexplorer.android.screen
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
 import org.junit.Test
 
@@ -28,5 +29,27 @@ class ScreenCaptureBudgetTest {
         assertEquals(emptyList<Long>(),released)
         callback.close()
         assertEquals(listOf(9L),released)
+    }
+    @Test fun failedTokenAdoptionReturnsTheRegisteredNativeTokenExactlyOnce() {
+        val released=mutableListOf<Long>()
+        val failure=OutOfMemoryError("owner wrapper fixture")
+        val observed=assertThrows(OutOfMemoryError::class.java) {
+            adoptCaptureOwner(41L,{released+=it}) {throw failure}
+        }
+        assertSame(failure,observed)
+        assertEquals(listOf(41L),released)
+    }
+    @Test fun failedAliasFactoryLeavesOnlyTheTwoActualOwners() {
+        val released=mutableListOf<Long>()
+        val references=ScreenCaptureReferences(42L) {released+=it}
+        references.retain {Any()}
+        val failure=OutOfMemoryError("alias wrapper fixture")
+        assertSame(failure,assertThrows(OutOfMemoryError::class.java) {
+            references.retain<Any> {throw failure}
+        })
+        references.close()
+        assertEquals(emptyList<Long>(),released)
+        references.close()
+        assertEquals(listOf(42L),released)
     }
 }

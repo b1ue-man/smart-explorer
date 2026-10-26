@@ -38,12 +38,10 @@ internal data class EncoderConfig(
  * (`requestKeyFrame`) and at most every [KEYFRAME_INTERVAL_S]. Nothing of a picture is logged.
  */
 internal class ScreenEncoder(private val config: EncoderConfig, private val budget: ScreenCaptureBudget, private val sink: PictureSink) {
-    private val surfaceLease=if(!config.hybrid) budget.claim(ScreenCaptureBudget.NATIVE_SURFACE,
-        ScreenFrameLimits.checkedBytes(config.width,config.height).toLong()) else null
-    private val surfaceOwners=java.lang.Object()
-    private var surfaceUsers=0
-    private val surfaceClosers=ArrayList<Thread>()
-    private var finishing=false
+    // All allocating bookkeeping precedes the first platform/native resource.
+    private val construction=ScreenCaptureConstruction<MediaCodec,Surface>({it.release()},{it.release()})
+    private val surfaceOwners=ScreenSurfaceOwners()
+    private val surfaceLease: ScreenCaptureLease?
     private val codec: MediaCodec
     private val inputSurface: Surface?
     val surface: Surface get() = inputSurface ?: error("RGBA encoder has no input surface")
@@ -55,7 +53,7 @@ internal class ScreenEncoder(private val config: EncoderConfig, private val budg
     @Volatile private var failureHandler: ((String) -> Unit)? = null
     @Volatile private var lastFailure: String? = null
     fun setFailureHandler(handler: (String) -> Unit) { failureHandler=handler; lastFailure?.let(handler) }
-    private val pending = java.util.concurrent.ConcurrentHashMap<Long, Pair<Long, ScreenCaptureBuffer>>()
+    private val pending = ScreenCaptureInputs<ScreenCaptureBuffer>()
     @Volatile private var forceKeyframe = true
     private var lastPixels: ScreenCaptureBuffer? = null
     private var lastCapturePts=0L
@@ -69,43 +67,36 @@ internal class ScreenEncoder(private val config: EncoderConfig, private val budg
     private val accessUnits:ScreenCodecLatency.AccessUnits
 
     init {
-        val opened = try {open(config)} catch(error: Throwable) {surfaceLease?.close();throw error}
-        codec = opened.first
-        bitrateRange = opened.third
-        val info = opened.second
-        name = info.name
-        admission=ScreenCodecLatency.EncoderAdmission(name)
-        accessUnits=ScreenCodecLatency.AccessUnits(name,MAX_ACCESS_UNIT) {size -> budget.buffer(ScreenCaptureBudget.CODEC_OUTPUT,size)}
-        hardware = info.isHardwareAccelerated
-        inputSurface = try { if (config.hybrid) null else codec.createInputSurface() } catch(e: RuntimeException) {codec.release();surfaceLease?.close();throw e}
-        try { codec.start() } catch(e: RuntimeException) {inputSurface?.release();codec.release();surfaceLease?.close();throw e}
-        drain = thread(name = "screen-encoder", isDaemon = true) {
-            try { drainLoop() } catch(e: RuntimeException) {
-                running=false
-                val reason=if(e is ScreenCodecLatency.Unavailable) e.message.orEmpty() else "MediaCodec-Ausgabe ($name): ${e.message ?: e.javaClass.simpleName}"
-                lastFailure=reason; failureHandler?.invoke(reason); Log.w(TAG,reason)
-            } finally {finishResources()}
+        try {
+            surfaceLease=construction.ownClaim(if(!config.hybrid) budget.claim(ScreenCaptureBudget.NATIVE_SURFACE,
+                ScreenFrameLimits.checkedBytes(config.width,config.height).toLong()) else null)
+            val opened = open(config,construction)
+            codec = opened.first
+            bitrateRange = opened.third
+            val info = opened.second
+            name = info.name
+            admission=ScreenCodecLatency.EncoderAdmission(name)
+            accessUnits=ScreenCodecLatency.AccessUnits(name,MAX_ACCESS_UNIT) {size -> budget.buffer(ScreenCaptureBudget.CODEC_OUTPUT,size)}
+            hardware = info.isHardwareAccelerated
+            inputSurface = construction.ownSurface(if (config.hybrid) null else codec.createInputSurface())
+            codec.start()
+            drain = thread(start = false, name = "screen-encoder", isDaemon = true) {
+                if(construction.enterRuntime()) {
+                    try { drainLoop() } catch(e: RuntimeException) {
+                        running=false
+                        val reason=if(e is ScreenCodecLatency.Unavailable) e.message.orEmpty() else "MediaCodec-Ausgabe ($name): ${e.message ?: e.javaClass.simpleName}"
+                        lastFailure=reason; failureHandler?.invoke(reason); Log.w(TAG,reason)
+                    } finally {finishResources()}
+                }
+            }
+            drain.start()
+        } catch(failure: Throwable) {
+            running=false
+            construction.abort(failure)
         }
     }
     /** Register before starting a Canvas producer, including spontaneous drain failure. */
-    fun retainSurface(): ScreenCaptureLease = synchronized(surfaceOwners) {
-        check(!finishing && running) {"Encoder nimmt keinen neuen Surfaceproduzenten an"}
-        val count=Math.addExact(surfaceUsers,1)
-        val retained=checkNotNull(surfaceLease).retain()
-        val creator=Thread.currentThread()
-        surfaceUsers=count
-        try {
-            ScreenCaptureLease(0L) {
-                try {retained.close()} finally {synchronized(surfaceOwners) {
-                    val endedOn=Thread.currentThread()
-                    if(endedOn!==creator) surfaceClosers.add(endedOn)
-                    surfaceUsers--;surfaceOwners.notifyAll()
-                }}
-            }
-        } catch(failure:Throwable) {
-            retained.close();surfaceUsers--;surfaceOwners.notifyAll();throw failure
-        }
-    }
+    fun retainSurface(): ScreenCaptureLease = surfaceOwners.retain(checkNotNull(surfaceLease)) {running}
 
     fun requestKeyFrame() { forceKeyframe=true; parameters { putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0) } }
 
@@ -120,10 +111,7 @@ internal class ScreenEncoder(private val config: EncoderConfig, private val budg
     }
 
     fun release() {
-        synchronized(surfaceOwners) {
-            check(surfaceUsers==0 && surfaceClosers.none {it.isAlive}) {"Surfaceproduzent lebt noch; Encoder und Claims bleiben gehalten"}
-            finishing=true
-        }
+        surfaceOwners.beginRelease()
         running = false
         try {
             codec.signalEndOfInputStream()
@@ -143,26 +131,10 @@ internal class ScreenEncoder(private val config: EncoderConfig, private val budg
     @Synchronized private fun finishResources() {
         // A Codec error can finish this drain before the source is stopped.
         // Keep every platform resource and its claim until its real worker ends.
-        var interrupted=false
-        val endedProducers=synchronized(surfaceOwners) {
-            finishing=true
-            while(surfaceUsers!=0) {
-                try {surfaceOwners.wait()} catch(_:InterruptedException) {interrupted=true}
-            }
-            surfaceClosers.toList()
-        }
-        // The alias closes in worker finally; join also proves the thread has
-        // returned from that finally before touching codec or Surface lifetime.
-        endedProducers.forEach {producer ->
-            check(producer!==Thread.currentThread())
-            while(producer.isAlive) {
-                try {producer.join()} catch(_:InterruptedException) {interrupted=true}
-            }
-        }
-        if(interrupted) Thread.currentThread().interrupt()
+        surfaceOwners.awaitEnded()
         try {codec.release()} finally {
             inputSurface?.release()
-            pending.values.forEach {it.second.close()};pending.clear()
+            pending.clear()
             lastPixels?.close();lastPixels=null
             codecConfig?.close();codecConfig=null;joined?.close();joined=null
             accessUnits.clear();surfaceLease?.close()
@@ -221,8 +193,8 @@ internal class ScreenEncoder(private val config: EncoderConfig, private val budg
             require(nal(unit,5)!=null) { "Schlüsselbild enthält kein IDR" }
             if(codecConfig==null) validateHeaders(unit)
         }
-        if(config.hybrid) admission.output(info.presentationTimeUs,pending[info.presentationTimeUs]?.first)
-        if (waitingKeyframe && !key) {pending.remove(info.presentationTimeUs)?.second?.close();throw IllegalStateException("MediaCodec lieferte kein IDR für die erste Capturereferenz")}
+        if(config.hybrid) admission.output(info.presentationTimeUs,pending.peek(info.presentationTimeUs)?.frameId)
+        if (waitingKeyframe && !key) {pending.take(info.presentationTimeUs)?.close();throw IllegalStateException("MediaCodec lieferte kein IDR für die erste Capturereferenz")}
         if (key) { waitingKeyframe = false; forceKeyframe=false }
         val config = codecConfig
         if (!key || config == null) {
@@ -273,7 +245,7 @@ internal class ScreenEncoder(private val config: EncoderConfig, private val budg
 
     /** One request, one encoder input and the exact RGBA reference of that input. */
     @Synchronized fun queueRgba(rgba: ScreenCaptureBuffer, frameId: Long): Boolean {
-        if (!config.hybrid || !running || pending.isNotEmpty()) return false
+        if (!config.hybrid || !running || pending.isPending()) return false
         require(rgba.capacity.toLong()==config.width.toLong()*config.height*4 && rgba.budget===budget)
         if(!forceKeyframe && lastPixels?.samePixels(rgba)==true) {
             val pts=nextCapturePts()
@@ -312,26 +284,39 @@ internal class ScreenEncoder(private val config: EncoderConfig, private val budg
         }
         }
         val pts=nextCapturePts()
-        pending[pts]=frameId to rgba.retain()
-        admission.expect(pts,frameId)
-        val previous=lastPixels;lastPixels=rgba.retain();previous?.close()
-        try { codec.queueInputBuffer(index,0,config.width*config.height*3/2,pts,0) }
-        catch(e: RuntimeException) {pending.remove(pts)?.second?.close();admission.cancel(pts);throw e}
+        val capture=ScreenCaptureInput(pts,frameId) {rgba.retain()}
+        var nextPixels:ScreenCaptureBuffer?=null
+        var published=false
+        try {
+            pending.expect(capture)
+            published=true
+            admission.expect(pts,frameId)
+            nextPixels=rgba.retain()
+            codec.queueInputBuffer(index,0,config.width*config.height*3/2,pts,0)
+        } catch(failure: Throwable) {
+            val rollbackInput=!published || pending.cancel(capture)
+            admission.cancel(pts)
+            // A taken input belongs to push() until its own finally, even if
+            // MediaCodec reports a queue failure after starting that output.
+            try {nextPixels?.close()} finally {if(rollbackInput) capture.close()}
+            throw failure
+        }
+        val previous=lastPixels;lastPixels=nextPixels;previous?.close()
         return true
     }
 
     private fun push(data: ByteBuffer, offset: Int, length: Int, pts: Long, key: Boolean) {
         if (!this.config.hybrid) { sink.push(data,offset,length,pts,key); return }
-        val capture=pending.remove(pts) ?: error("Videoframe ohne passende Capturereferenz")
+        val capture=pending.take(pts) ?: error("Videoframe ohne passende Capturereferenz")
         try {
-            val total=Math.addExact(Math.addExact(20,capture.second.capacity),length)
+            val total=Math.addExact(Math.addExact(20,capture.pixels.capacity),length)
             budget.buffer(ScreenCaptureBudget.TRANSPORT,total).use {packet -> packet.access {target ->
-                target.putInt(this.config.width);target.putInt(this.config.height);target.putLong(capture.first);target.putInt(length)
-                capture.second.access {target.put(it)}
+                target.putInt(this.config.width);target.putInt(this.config.height);target.putLong(capture.frameId);target.putInt(length)
+                capture.pixels.access {target.put(it)}
                 val video=data.duplicate();video.position(offset);video.limit(Math.addExact(offset,length));target.put(video)
                 check(sink.push(target,0,total,pts,key)>=0) {"Capturereferenz vom Core abgelehnt"}
             }}
-        } finally {capture.second.close()}
+        } finally {capture.close()}
     }
 
     companion object {
@@ -365,7 +350,7 @@ internal class ScreenEncoder(private val config: EncoderConfig, private val budg
         private fun pick(profile: String): MediaCodecInfo? = encoders().firstOrNull { supports(it, profile) }
 
         /** Each configuration is checked against the actual profile/level and size/rate pair. */
-        private fun open(config: EncoderConfig): Triple<MediaCodec, MediaCodecInfo, android.util.Range<Int>> {
+        private fun open(config: EncoderConfig, construction: ScreenCaptureConstruction<MediaCodec,Surface>): Triple<MediaCodec, MediaCodecInfo, android.util.Range<Int>> {
             ScreenFrameLimits.checkedBytes(config.width,config.height)
             require(config.fps in 1..240)
             val refusals = mutableListOf<String>()
@@ -411,9 +396,8 @@ internal class ScreenEncoder(private val config: EncoderConfig, private val budg
                         if(!config.hybrid) setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, REPEAT_AFTER_US)
                     }
                     if (!caps.isFormatSupported(format)) { refusals += "${info.name}: Format abgelehnt (Echtzeit=$realtime)"; continue }
-                    var candidate: MediaCodec? = null
                     try {
-                        candidate = MediaCodec.createByCodecName(info.name)
+                        val candidate = construction.ownProducer(MediaCodec.createByCodecName(info.name))
                         candidate.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
                         if(config.hybrid) ScreenCodecLatency.encoderFormat(info.name,candidate.outputFormat)
                         if(realtime) {
@@ -423,8 +407,12 @@ internal class ScreenEncoder(private val config: EncoderConfig, private val budg
                         }
                         Log.i(TAG, "Kodierer ${info.name}: ${config.width}x${config.height}@${config.fps}, Profil=$profile Level=$level Modus=$mode Echtzeit=$realtime")
                         return Triple(candidate,info,acceptedBitrate)
-                    } catch (e: RuntimeException) {
-                        try {candidate?.release()} catch (_: RuntimeException) {Unit}
+                    } catch (e: Throwable) {
+                        try {construction.discardProducer()} catch(cleanup:Throwable) {
+                            if(cleanup!==e) try {e.addSuppressed(cleanup)} catch(_:Throwable) {Unit}
+                            throw e
+                        }
+                        if(e !is RuntimeException) throw e
                         refusals += "${info.name}: ${(e.message ?: e.javaClass.simpleName).take(512)} (Echtzeit=$realtime)"
                     }
                 }
