@@ -12,6 +12,7 @@ use crate::remote_window::core::host::WindowAdapter;
 use crate::remote_window::core::model::*;
 
 mod properties;
+mod focus;
 use properties::{Atoms, ProcessFacts};
 
 pub(crate) struct X11Adapter {
@@ -125,6 +126,10 @@ impl X11Adapter {
     }
 
     fn validate_inner(&self, binding: &WindowBinding) -> io::Result<()> {
+        self.validated_process(binding).map(|_| ())
+    }
+
+    fn validated_process(&self, binding: &WindowBinding) -> io::Result<ProcessFacts> {
         let window = xid(binding.native)?;
         let process = self.process(window)?;
         let marker = self.property_bytes(window, self.property, AtomEnum::STRING.into())?;
@@ -132,7 +137,7 @@ impl X11Adapter {
             || binding.birth.get(16..) != Some(process.signature().as_slice()) {
             return Err(gone());
         }
-        Ok(())
+        Ok(process)
     }
 
     fn root_message(&self, window: Window, atom: Atom, words: [u32; 5]) -> io::Result<()> {
@@ -143,29 +148,38 @@ impl X11Adapter {
     }
 
     fn focused_inner(&self, binding: &WindowBinding) -> io::Result<bool> {
-        self.validate_inner(binding)?;
-        let target = xid(binding.native)?;
-        let active = self.words(self.root, self.atoms.active, AtomEnum::WINDOW.into())?
-            .first().copied().unwrap_or(0);
-        let mut focus = self.conn.get_input_focus().map_err(failed)?.reply().map_err(failed)?.focus;
-        let kind = properties::kind(&self.conn, &self.atoms, target)?;
-        let mut active_target = target;
-        if kind == WindowKind::Menu {
-            let owner = self.words(target, AtomEnum::WM_TRANSIENT_FOR.into(), AtomEnum::WINDOW.into())?
-                .first().copied().ok_or_else(gone)?;
-            let Some(owner_binding) = self.markers.get(&NativeWindowId(u64::from(owner))) else {
-                return Ok(false);
-            };
-            self.validate_inner(owner_binding)?;
-            active_target = owner;
-        }
-        if active != active_target { return Ok(false); }
-        let mut visited = HashSet::new();
-        while focus != 0 && focus != self.root && visited.insert(focus) {
-            if focus == target || (kind == WindowKind::Menu && focus == active_target) { return Ok(true); }
-            focus = self.conn.query_tree(focus).map_err(failed)?.reply().map_err(failed)?.parent;
-        }
-        Ok(false)
+        // Read owners, lifetime markers, WM activation and actual input focus
+        // in one short server transaction. XTest remains session-wide input.
+        self.conn.grab_server().map_err(failed)?.check().map_err(failed)?;
+        let result = (|| {
+            self.validate_inner(binding)?;
+            let active = self.words(self.root, self.atoms.active, AtomEnum::WINDOW.into())?
+                .first().copied().unwrap_or(0);
+            let input = self.conn.get_input_focus().map_err(failed)?.reply().map_err(failed)?.focus;
+            focus::confirmed(binding, active, input, self.root,
+                |window| self.focus_node(window),
+                |window| Ok(self.conn.query_tree(window).map_err(failed)?.reply().map_err(failed)?.parent))
+        })();
+        let ungrab = self.conn.ungrab_server().map_err(failed)
+            .and_then(|cookie| cookie.check().map_err(failed));
+        let confirmed = result?;
+        ungrab?;
+        Ok(confirmed)
+    }
+
+    fn focus_node(&self, window: Window) -> io::Result<Option<focus::Node>> {
+        // Focus traversal must never bind a new XID or trust a PID/type alone.
+        let Some(binding) = self.markers.get(&NativeWindowId(u64::from(window))) else { return Ok(None); };
+        let process = self.validated_process(binding)?;
+        let attributes = self.conn.get_window_attributes(window).map_err(failed)?.reply().map_err(failed)?;
+        let kind = properties::kind(&self.conn, &self.atoms, window)?;
+        let states = self.words(window, self.atoms.state, AtomEnum::ATOM.into())?;
+        let owner = self.words(window, AtomEnum::WM_TRANSIENT_FOR.into(), AtomEnum::WINDOW.into())?
+            .first().copied().filter(|owner| *owner > 1 && *owner != self.root);
+        Ok(Some(focus::Node { binding: binding.clone(), process: process.signature(), owner,
+            owner_focus: focus::owner_focus(kind, attributes.override_redirect),
+            eligible: kind != WindowKind::Tooltip && attributes.map_state == MapState::VIEWABLE
+                && !states.contains(&self.atoms.hidden) }))
     }
 }
 
@@ -284,7 +298,7 @@ impl WindowAdapter for X11Adapter {
             let protocols = self.words(window, self.atoms.protocols, AtomEnum::ATOM.into())?;
             let allowed = self.words(window, self.atoms.allowed_actions, AtomEnum::ATOM.into())?;
             let states = self.words(window, self.atoms.state, AtomEnum::ATOM.into())?;
-            let interactive = !matches!(kind, WindowKind::Tooltip | WindowKind::Menu);
+            let interactive = focus::can_activate(kind, override_redirect);
             windows.push(ObservedWindow { binding, owner: owner.map(|id| NativeWindowId(u64::from(id))),
                 process: root_process.key(), app_id: root_app_id.clone(),
                 app: properties::app(&self.conn, window)?, title: properties::title(&self.conn, &self.atoms, window)?,
@@ -312,7 +326,11 @@ impl WindowAdapter for X11Adapter {
         }
         let active = self.words(self.root, self.atoms.active, AtomEnum::WINDOW.into())?
             .first().copied().unwrap_or(0);
+        // An explicit confirmation may retain a live popup's input focus. Do
+        // not ask the WM to reactivate an already confirmed regular owner.
+        let already_focused = active == xid(binding.native)? && self.focused_inner(binding)?;
         if !admitted() {return Err(io::Error::new(io::ErrorKind::PermissionDenied,"app_activation_admission_ended"));}
+        if already_focused { return Ok(()); }
         self.root_message(xid(binding.native)?, self.atoms.active, [2, x11rb::CURRENT_TIME, active, 0, 0])
     }
 
@@ -371,3 +389,6 @@ impl WindowAdapter for X11Adapter {
 }
 
 impl Drop for X11Adapter { fn drop(&mut self) { self.disconnect(); } }
+
+#[cfg(test)]
+mod batches_popup_focus_task_tests;
