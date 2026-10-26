@@ -7,6 +7,22 @@ use crate::mount::{MountConfig, MountRecovery, MountStatus};
 
 use super::{MountEntry, MountManager};
 
+#[derive(Clone, Copy)]
+pub(super) enum StartEntry {
+    New,
+    Retry,
+}
+
+pub(super) fn ensure_retryable(entry: &MountEntry) -> Result<(), String> {
+    if entry.child.is_some() || entry.backend_stream_active {
+        return Err(
+            "Die vorherige Laufwerk-Generation beendet noch einen Remote-Aufruf; Retry ist erst danach sicher"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
 pub(super) fn audit_registered(configs: &[MountConfig]) -> Vec<MountRecovery> {
     #[cfg(any(windows, target_os = "linux"))]
     {
@@ -51,10 +67,42 @@ pub(super) fn insert(
     registry_recorded: bool,
     startup_lease: Option<std::sync::Arc<dyn Send+Sync>>,
 ) -> Result<(), String> {
+    insert_generation(manager, key, config, registry_recorded, startup_lease, StartEntry::New)
+}
+
+pub(super) fn restart(
+    manager: &MountManager,
+    key: &str,
+    config: MountConfig,
+    registry_recorded: bool,
+    startup_lease: Option<std::sync::Arc<dyn Send+Sync>>,
+) -> Result<(), String> {
+    insert_generation(manager, key, config, registry_recorded, startup_lease, StartEntry::Retry)
+}
+
+fn insert_generation(
+    manager: &MountManager,
+    key: &str,
+    config: MountConfig,
+    registry_recorded: bool,
+    startup_lease: Option<std::sync::Arc<dyn Send+Sync>>,
+    admission: StartEntry,
+) -> Result<(), String> {
     let mut state = manager.state_guard()?;
-    if state.contains_key(key) {
-        return Err("Diese Laufwerk-ID wird bereits verwaltet".into());
-    }
+    // A retry keeps its previous entry visible through every fallible start
+    // gate. Only this locked commit may replace that idle generation. Recheck
+    // stream ownership here because host IPC does not take the lifecycle lock.
+    let recovery = match (admission, state.get(key)) {
+        (StartEntry::New, None) => MountRecovery::Unknown,
+        (StartEntry::New, Some(_)) => {
+            return Err("Diese Laufwerk-ID wird bereits verwaltet".into());
+        }
+        (StartEntry::Retry, None) => return Err("Das Laufwerk wird nicht verwaltet".into()),
+        (StartEntry::Retry, Some(entry)) => {
+            ensure_retryable(entry)?;
+            entry.recovery
+        }
+    };
     state.insert(
         key.to_string(),
         MountEntry {
@@ -73,7 +121,7 @@ pub(super) fn insert(
             pending_host_failure: None,
             host_terminal_failure: false,
             registry_recorded,
-            recovery: MountRecovery::Unknown,
+            recovery,
             lock_end: false,
             lock_pending: None,
             stop_requested: false,
