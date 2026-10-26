@@ -250,7 +250,7 @@ class ScreenSession(private val target: ScreenTarget, private val backend: Scree
     private var forceLossless=false
     private var bitmapPending=false
     /** Survives Surface disposal until this viewer session itself is released. */
-    internal val decoderBuffers=ScreenPullBuffers {mutable.value.bufferBudget}
+    internal val decoderBuffers = ScreenPullBuffers(offered = { mutable.value.bufferBudget })
     internal val scaleWorker=ScreenScaleWorker {mutable.value.bufferBudget}
     private var wantedMode=ScreenModeRequest()
     private val commands=object:ScreenBackend by backend {

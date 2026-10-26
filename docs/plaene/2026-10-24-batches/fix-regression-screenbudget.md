@@ -1145,3 +1145,329 @@ und praktische Bestätigung der genannten Fälle sind nach dieser Änderung noch
 unbekannt und gehören ausschließlich in Mains denselben Remote-Einstieg.
 Es bleibt keine bekannte ungeklärte Quellabhängigkeit von D17. Die vorgemerkte
 gemeinsame Fallregistrierung und die Remote-Bestätigung bleiben bei Main.
+
+## K02/K10/K11: Capturestart und Budgetfunktionsbindung nach 40381452096
+
+### Auftrag und Erstplan vor der Produktänderung
+
+Der fortgesetzte Auftrag dieses selben Autors bezieht sich auf den vollständig
+beendeten Remote-Lauf `40381452096`, Kandidat
+`0425aa4608d7e27eb95ee0a37e3bc13dca2ce8bf`. Die vollständige Diagnose liegt in
+`/tmp/smartexplorer-rv1-40381452096/kotlin-errors.json`. Zugewiesen sind K02,
+K10 und K11 sowie die beiden konkret verbundenen Konstruktoraufrufe in
+`BatchesScreenBudgetTest`. K01 und K03 bis K09 gehören dem Geräteautor.
+Die aktuelle Scope-Datei ersetzt die vorherige Schreibfläche: Dieser Zyklus
+ändert ausschließlich `ScreenHostControl.kt`, `ScreenSession.kt`,
+`BatchesScreenBudgetTest.kt` und diesen bestehenden Bericht. Main besitzt
+Manifest, Graph, Git, Remote-Suite und Release.
+
+Der Erstplan aus dem Ergebnisauftrag ist: einen fehlgeschlagenen ersten
+Displaystart und eine fehlgeschlagene Rekonfiguration in den vorhandenen
+Capture-Fehlerkanal führen, bereits erworbene temporäre Besitzer tatsächlich
+abschließen lassen und alle drei fehlerhaften Budgetaufrufe an die bestehende
+Budgetfunktion binden. Zu erhalten sind Pause und Fortsetzung, dieselbe
+Projektionsidentität, Wiederverwendung eines vorhandenen Displays, konkrete
+Epochzuordnung, echte Ressourcenbesitzer, Annahme des Viewerbudgets erst nach
+`Accepted`, Allocationübernahme bei Decoderwechsel und feste JNI-Puffer.
+Vor der Bestandslektüre waren die genauen Fehleraufrufer, deren Abschlusswege
+und die Kotlin-Konstruktorbindung zu klären; ein zusätzlicher Benutzerentscheid
+war für dieses ausdrücklich beauftragte Ergebnis nicht erforderlich.
+
+### Bestandsbefund und Fehlerfunktionsliste
+
+1. `ScreenHostControl.attachSurface`: Der Rückgabetyp ist `VirtualDisplay`,
+   `MediaProjection.createVirtualDisplay` liefert dagegen `VirtualDisplay?`.
+   K02 belegt den Typfehler. Ein Nullresultat darf keine erfolgreich installierte
+   Capturequelle darstellen. Der vorhandene Zweig `display.resize` und
+   `display.surface = surface` gehört zur Wiederverwendung und bleibt erhalten.
+2. `ScreenHostControl.applyConfig`: Tiles besitzt temporäre
+   `ScreenProjectionFrames`; H.264 besitzt einen temporären `ScreenEncoder`
+   und bei Hybrid zusätzlich temporäre Frames. Beide Attach-Fehlerpfade müssen
+   diese Besitzer abschließen lassen. Im vorhandenen H.264-Catch verhindert eine
+   Ausnahme von `newFrames.close()` den folgenden `encoder.release()` und
+   verdeckt die ursprüngliche Attach-Ursache. Das ist ein direkt verbundener
+   Abschlussfehler, den dieser Auftrag mitbehebt.
+3. `ScreenHostControl.attachProjection`: Der erste direkte `applyConfig(host)`
+   steht nach Registrierung des Projektionscallbacks ohne Fehlerbehandlung.
+   `ScreenHostService.start` fängt diesen Aufruf nicht ab. Eine spätere
+   Konfiguration besitzt bereits den `encoderFailed`-Meldeweg; der Erststart
+   benötigt denselben Weg. Die vorhandene Metadatenmeldung
+   `reportProjectionReady` ersetzt keinen tatsächlich installierten Encoder.
+4. Verbundene Meldestelle: Der `configure`-Zweig von
+   `ScreenHostControl.controlLoop` fängt den Fehler außerhalb des Sessionlocks.
+   Er serialisiert seine eigenen Konfigurationsnachrichten bereits. Die neue
+   Erststartbehandlung benötigt dagegen den Lock auch während der Meldung,
+   weil ihr parallel der Kontrollthread eine neue Konfiguration setzen kann.
+   Beide Meldestellen werden deshalb unter denselben Lock wie ihr Antrag
+   gebunden; ein bereits nachgewiesener fremder Epochenwert im bisherigen
+   `configure`-Catch wird hier nicht behauptet.
+5. `ScreenSession.decoderBuffers`: K10 meldet den fehlenden Parameter `offered`,
+   K11 die Zuordnung des nachgestellten Lambdas zum letzten Parameter
+   `fixedBuffer: ByteBuffer?`. Die vorhandene Budgetfunktion muss weiterhin
+   beim tatsächlichen `prepare()` den aktuellen Sessionzustand lesen.
+6. `BatchesScreenBudgetTest.batches_android_pull_waits_for_acceptance_and_transfers_the_same_allocation`:
+   Sowohl `previous` als auch `next` verwenden dasselbe fehlerhafte nachgestellte
+   Lambda. Diese beiden Quellbefunde sind statisch belegt; der Remotebericht
+   enthält für sie noch keine ausgeführte JVM-Diagnose.
+
+### Direkte und indirekte Verknüpfungskarte dieses Zyklus
+
+| Grenze | Tatsächliche Aufruf-/Besitzkette und erhaltener Vertrag |
+|---|---|
+| Erster Capturestart | Zustimmung → `ScreenHostService.start` → `ScreenHostControl.attachProjection` → an genau diese `MediaProjection` gebundene `ScreenProjectionIdentity` und registrierter Callback → `reportProjectionReady` für Quellmetadaten und `applyConfig` für den tatsächlich zugelassenen Producer. Ein schon beendeter Host, gesperrter Host, unbewiesener Paketbezug oder doppelter Projektionsgrant behält seine vorhandene Ablehnung. |
+| Spätere Konfiguration | Native `screenControl`-Nachricht → `controlLoop`/`EncoderConfig` → Sessionlock → `applyConfig` → Abbau der tatsächlichen alten Frames/Encoder → `ScreenCaptureBudget.open` → neue Frames/Encoder → `attachSurface`. Eine ausstehende synthetische Retirement hält den Ersatz bis zu ihrem echten Callback zurück. |
+| Display und Pause | `attachSurface` verwendet ein vorhandenes Display durch `resize` und `surface` erneut. `capture_active=false` trennt seine Surface, beendet Frames und Encoder beziehungsweise startet das vorhandene synthetische Retirement. Die 9-Byte-Quittung, `pendingConfigStart`, `pendingCapture` und der spätere Konfigurationsweg bleiben erhalten. |
+| Tiles-Besitz | `ScreenCaptureBudget.open(PROJECTION_TILES)` → `ScreenProjectionFrames` → Native-Surface-Claim, `ImageReader`, tatsächlicher Handlerthread → temporäre Surface → Displayattach → erst danach `session.frames`. Bei Fehler muss `close()` den realen Thread beenden; sein `finally`/`finishResources` hält Reader und Claim bis zum tatsächlichen Ende. |
+| H.264-/Hybridbesitz | Budget für `PROJECTION_SURFACE`, `PROJECTION_HYBRID` oder `SYNTHETIC_SURFACE` → `ScreenEncoder`/Konstruktionsbesitz/Drain → bei Hybrid zusätzliche `ScreenProjectionFrames`; bei Synthetic `retainSurface` und `SyntheticSurfaceSource` mit tatsächlichem Retirement. `ScreenEncoder.release` und `finishResources` warten auf Producer-/Drainende. Ein Attachfehler muss beide temporären Abschlussversuche erreichen, ohne native Claims vorzeitig zurückzugeben. |
+| Epoch- und Eingabebindung | `captureCurrent` prüft Ende, Pause, konfigurierte Epoche, Sperrzustand und dieselbe Projektionsidentität. Encoder-Token und `encoderReadyToken` verhindern, dass eine neue Instanz die Freigabe ihrer Vorgängerin erbt. `reportProjectionReady` publiziert einen tatsächlichen Encoder nur bei unveränderter Identitäts-/Tokenbindung. Kein Input-, Quellen- oder Berechtigungsvertrag wird geändert. |
+| Capturefehler | `encoderFailed` → höchstens 4096 UTF-8-Bytes, Epochflags und Flag `0x8` → `NativeBridge.screenPush` → JNI `screen_jni.rs` → `mobile::screen_push` → Android-Bridgekanal. Die gelesenen Reexports in `mobile/mod.rs` und `mobile/os/shared/domains/mod.rs` führen zur Definition in `domains/screen_host.rs`: Diese ruft direkt `channels::push` auf; `channels` ist der Alias von `crate::screen::os::bridge_channels`, dessen Androidregistrierung in `screen/os/mod.rs` gelesen wurde. `bridge_channels::push` lässt diesen begrenzten Lifecyclekanal mit aktuellem Capturegrant zu; `bridge_channel_state::push` verwirft fremde Generation/Epoche und setzt `encoder_failure`. `next_picture` liefert `encoder_failed: …`; `BridgeSource`/`bridge_source_capture` bilden dies auf `ScreenErrorCode::EncoderFailed` ab. |
+| Viewerbudget | `ScreenSessionState.apply(Accepted)` → validiertes `ScreenBufferBudget` beziehungsweise bestehender Legacyvertrag → verzögertes `decoderBuffers.offered` → `ScreenPullBuffers.prepare` → passende direkte Little-Endian-Allocation. Ein fehlendes Budget lässt den 32-Byte-Anfangspuffer stehen; ein veränderter installierter Vertrag wird weiterhin abgewiesen. `ScreenScaleWorker` besitzt seinen eigenen gültigen Funktionsparameter. |
+| Vollansicht und Decoderwechsel | `ScreenViewScreen` → `ScreenDecoder(..., pullBuffers = active.decoderBuffers)` → Ersatzdecoder wartet auf das Ende des Vorgängers → `ScreenPullBuffers.takeFrom` → dieselbe Allocation. Stop, Surfaceabbau, Sessionzustand, Stream-/Eingabereferenz und Snapshotpfad werden durch die Parameterkorrektur nicht verändert. |
+| Fester JNI-Puffer | `ScreenCaptureFixture.pulls` übergibt Budgetfunktion und `Bridge.captureViewerPullBuffer(session)` bereits korrekt als zwei Argumente. `ScreenTaskTest.screen_task_android_viewer_decodes_barcode` verwendet diesen Puffer; erst nach Decoder- und Readerende folgen `relinquishFixedBuffer` und `releaseViewer`. Dieser zweite Konstruktorparameter bleibt vollständig erhalten. `ScreenDecoder` besitzt außerdem den gültigen einargumentigen Aufruf `ScreenPullBuffers(bufferBudget)`. |
+| Vorhandene Budgetfixture | `BatchesScreenBudgetTest` → null vor `Accepted`, direkte Allocation im vereinbarten Limit, Payloadgrenzen, tatsächliche Übernahme und Ablehnung eines Vertragswechsels. Der zweite bestehende Budgetfall prüft weiterhin die finanzierten Imagebesitzer und Recordslots. Kein Fall und keine Aussage wird gestrichen. |
+
+### Primärverträge, Entscheidungsplan und zweite Lückenprüfung
+
+Am 2026-10-26 tatsächlich abgerufen wurden
+[Android `MediaProjection.createVirtualDisplay`](https://developer.android.com/reference/android/media/projection/MediaProjection),
+[Kotlin zu nachgestellten Lambdas](https://kotlinlang.org/docs/lambdas.html#passing-trailing-lambdas)
+und [Kotlin zu benannten Argumenten](https://kotlinlang.org/docs/functions.html#named-arguments).
+Die Androidreferenz erlaubt ein Nullresultat bei fehlgeschlagener
+Displayerzeugung und verlangt bei den neueren Projektionsregeln den registrierten
+Callback sowie Beachtung der Projektionslebensdauer. Deshalb bleibt die
+vorhandene Displaywiederverwendung erhalten. Kotlin bindet ein nachgestelltes
+Lambda an einen letzten Funktionsparameter; hier ist der letzte Parameter ein
+optionaler `ByteBuffer`. Ein benanntes `offered = { … }` erhält beide Zugänge.
+
+Gewählt wird `checkNotNull(createVirtualDisplay(...))` mit der konkreten Meldung
+„Virtuelle Anzeige für die Bildschirmaufnahme konnte nicht erstellt werden“.
+Ein weiterhin nichtnuller Rückgabevertrag erlaubt die vorhandene Installation
+erst nach Erfolg. Eine nullable Rückgabe würde einen fehlgeschlagenen Start als
+installierbaren Zustand weiterreichen; `!!` böte keinen verständlichen Grund.
+Ein neues Display bei jeder Konfiguration würde die vorhandene Wiederverwendung
+und Projektionslebensdauer ändern. Diese drei Alternativen werden verworfen.
+
+Ein privater Abschlusshelfer versucht Framesabschluss und Encoderfreigabe
+unabhängig. Er hängt Abschlussausnahmen an den ursprünglichen Fehler an und
+wirft diesen erneut; die Besitzerklassen behalten ihre realen Claims bis zum
+eigenen Abschluss. Eine manuelle Tokenfreigabe, ein Ersatzgrant oder bloßes
+Verwerfen der temporären Objekte würde diesen Besitzvertrag nicht erfüllen.
+Beim Fangen einer `InterruptedException` aus den tatsächlichen Threadjoins
+muss der Helfer nach beiden Abschlussversuchen das Interruptflag wieder setzen;
+die ursprüngliche Ursache und ein noch lebender Producer bleiben erhalten.
+Die beiden Runtimefehlerfänger für Konfiguration und Erststart laufen jeweils
+unter dem vorhandenen Sessionlock, damit Fehler und Epoche zusammengehören.
+Die Metadatenmeldung bleibt erhalten: Ihre Maße werden vor dem tatsächlichen
+Captureantrag benötigt; sie darf nicht auf einen noch nicht finanzierten
+Encoder warten. Der vorhandene Tokenvergleich schützt seine spätere Freigabe.
+
+Die zweite Lückenprüfung hat neben dem gemeldeten Produktionsaufruf die beiden
+Budgetfixture-Aufrufe, den gültigen Decoder-Fallbackkonstruktor und den gültigen
+zweiparametrigen JNI-Fixturezugang gelesen. Für Capture wurden beide
+`attachSurface`-Aufrufer, alle drei `applyConfig`-Einstiege, tatsächliche
+Frames-/Drainabschlüsse, Erststartservice, Callbackidentität, Pause, Synthetic-
+Retirement und der native Fehlerempfänger verfolgt. Es entstehen keine neuen
+Bedienhandlungen, Ansichten, Berechtigungen, Protokollfelder oder Abhängigkeiten.
+Der Benutzer behält dieselben Start-, Pause-, Fortsetzungs- und Stopwege; der
+fehlgeschlagene Start erhält eine konkrete Ursache im vorhandenen Fehlerweg.
+
+### Konkreter Fixplan und vorgesehene eigene Nachreview
+
+| Schritt | Änderung und Abhängigkeit | Vorher festgelegtes prüfbares Ergebnis |
+|---|---|---|
+| 1 | In `ScreenHostControl` Nullresultat von `createVirtualDisplay` zurückweisen; Wiederverwendungszweig erhalten. | Ein fehlgeschlagener neuer Displaystart erreicht den bestehenden Ausnahmeweg; nur ein tatsächlich vorhandenes Display wird installiert. |
+| 2 | Temporäre Frames und Encoder über einen privaten Abschlusshelfer unabhängig schließen; beide Konfigurationsfehlerfänger innerhalb des jeweiligen Sessionlocks führen. | Der Erststart und die spätere Konfiguration melden denselben ursprünglichen Fehler für ihre Epoche. Eine Abschlussausnahme überspringt den zweiten Besitzer nicht und bewirkt keine vorzeitige Claimfreigabe. |
+| 3 | In `ScreenSession` und den beiden vorhandenen Fixtureaufrufen die Lambdaausdrücke ausdrücklich an `offered` binden. | Die Budgetfunktion bleibt verzögert; Annahme, Bounds, echte Allocationübernahme, Vertragswechselablehnung und fester JNI-Puffer bleiben erhalten. |
+| 4 | Eigene Nachreview der vollständigen obigen Kette nach Umsetzung, Vergleich aller bestehenden Fixtureaussagen und Fallnamen sowie statische Kotlin-Syntax-/Whitespaceprüfung. | Nur die geplanten Funktionskörper ändern sich. Die bestehenden Capture-, Budget-, Ownership- und Gerätefälle werden mit ihrem genauen Namen für denselben Remote-Einstieg gemeldet; keine lokale Laufzeit- oder Compilerbestätigung wird behauptet. |
+
+Dieser Plan wurde vor der ersten Änderung der drei Kotlinquellen festgehalten.
+Die spätere Typ-, JVM- und Gerätebestätigung gehört ausschließlich zu Mains
+demselben Remote-Suiteeinstieg. Die vorhandenen Ownershipfälle prüfen die
+verwendeten Besitzautomaten; sie sind keine bereits ausgeführte Injektion eines
+`null` liefernden Android-Displayaufrufs.
+
+### Umsetzung und eigene anschließende Anti-Regressionsreview
+
+Die vier geplanten Schritte sind im eigenen zugewiesenen Umfang umgesetzt und
+anschließend durch denselben Autor statisch geprüft. `attachSurface` weist ein
+Nullresultat mit der geplanten konkreten Ursache zurück. `session.display`,
+`session.frames` und `session.encoder` übernehmen weiterhin erst nach den
+jeweiligen erfolgreichen Konstruktionen und dem Attach. Ein schon vorhandenes
+Display wird unverändert mit `resize` und `surface` weiterverwendet.
+
+Der neue private `closeFailedCapture` erhält den ursprünglichen Fehler,
+versucht Framesabschluss und Encoderfreigabe unabhängig und hängt aufgetretene
+Abschlussausnahmen als unterdrückte Ursachen an. Selbst eine fehlschlagende
+Suppression verhindert den zweiten Abschlussversuch nicht. Der Autor hat beim
+Nachreview die `join`-Unterbrechung als konkrete Folge des neuen Catchs geprüft
+und das Wiederherstellen des Interruptflags nach beiden Versuchen ergänzt.
+Ein fehlgeschlagener oder noch unvollständiger Abschluss wird dadurch nicht als
+beendeter Producer oder freier Nativeclaim ausgegeben.
+
+Die statische Nachreview hat folgende vollständige Fehler-/Erhaltsfälle der
+geänderten Grenze gegen die gelesenen tatsächlichen Besitzer verfolgt:
+
+- **Neues Tiles-Display liefert null:** `checkNotNull` wirft eine
+  `IllegalStateException`; `applyConfig` fordert den tatsächlichen Abschluss der
+  temporären Frames an und wirft dieselbe Ursache. Weder Display noch Frames
+  werden in die Session übernommen. Erststart und Konfigurationsnachricht melden
+  die Ursache anschließend unter ihrem Sessionlock über `encoderFailed`.
+- **Neues H.264-Display liefert null:** Der temporäre Encoder wird über seinen
+  bestehenden Release-/Drainweg abgeschlossen. Bei Hybrid wird davor zusätzlich
+  der Framesabschluss versucht. Ein Framesfehler überspringt den Encoder nicht;
+  beide temporären Besitzer bleiben bis zu ihrem jeweils realen Ende bilanziert.
+- **Displayresize oder Surfacezuweisung schlägt fehl:** Derselbe neue
+  Abschlusshelfer gilt auch für diesen bestehenden Ausnahmeweg. Das bisherige
+  Display und seine Projektionsidentität werden nicht durch eine neue Projektion
+  ersetzt; der vorhandene native Rekonfigurations-/Fallbackweg bleibt erreichbar.
+- **Abschluss wirft oder läuft nach dem Joinlimit weiter:**
+  `ScreenProjectionFrames.close` hält über Handler-`finally`, Reader und
+  `readerLease` den noch lebenden Besitzer. `ScreenEncoder.release` lässt den
+  tatsächlichen Drain mit `finishResources` und `ScreenSurfaceOwners.awaitEnded`
+  seine Ressourcen freigeben. Der neue Helfer ruft weder JNI-Claimrelease noch
+  Grantretirement direkt auf und behauptet bei `close()==false` kein Threadende.
+  Eine `InterruptedException` wird als zusätzliche Ursache behalten und das
+  Interruptflag vor dem erneuten Werfen wiederhergestellt.
+- **Konfigurationswechsel während der Fehlerbehandlung:** Antrag und Meldung
+  bleiben für Erststart und `configure` unter demselben vorhandenen Sessionlock.
+  Ein konkurrierender Konfigurationsantrag kann die Epoche nicht zwischen dem
+  Attachfehler im Erststart und dessen Meldung austauschen. Der vorhandene Retirementcallback
+  arbeitet bereits unter diesem Lock und behält seine eigene Fehlerbehandlung.
+- **Ready-Metadaten und echter Encoder:** Der vorlaufende Metadatenweg bleibt
+  für Quellmaße und Capturefinanzierung erhalten. Er kann einen fehlenden Encoder
+  nicht über `encoderReadyToken` freigeben, weil hierfür die tatsächliche gleiche
+  Instanz erforderlich ist. Im gelesenen nativen Kanal löscht ein späteres
+  `set_phase(Ready)` den gesetzten `encoder_failure` nicht; ein neuer
+  `configure`-Auftrag bindet dagegen wie bisher eine neue Epoche.
+- **Pause, Fortsetzung, Stop und konkrete Quelle:** Die bestehenden Körper von
+  `retireEncoder`, `captureCurrent`, `reportProjectionReady` und `teardown`
+  sind unverändert. Der `capture_active`-Zweig mit Surfaceablösung, tatsächlichem
+  Framesabbau, Syntheticretirement, Quittung und späterem Ersatzantrag bleibt
+  unverändert. Projektionscallback, Sperrprüfung, Paketnachweisgrenze,
+  Encoder-Tokenbindung und Endbereinigung wurden nicht entfernt oder erweitert.
+- **Accepted-Budget und Allocation:** In `ScreenSession` ändert sich exakt die
+  Bindung des vorhandenen Lambdas an `offered`. Weder `Accepted`-Parsing noch
+  Legacyzuordnung, Skalierungsbudget, Zustand, Sichtbarkeit, Modus, Input oder
+  Backend ändern sich. Das Lambda liest weiterhin bei `prepare()` den aktuellen
+  Zustand. In `BatchesScreenBudgetTest` ändern sich exakt die beiden Bindungen;
+  sämtliche bisherigen Assertions und beide Fallnamen sind erhalten.
+- **Decoderwechsel und fester JNI-Puffer:** Der Ersatzdecoder wartet weiterhin
+  auf seinen Vorgänger, bevor er dessen echte Allocation übernimmt. Der gültige
+  `ScreenPullBuffers(bufferBudget)`-Aufruf bleibt erhalten. Der zweiparametrige
+  `ScreenCaptureFixture`-Aufruf behält seinen echten direkten Nativepuffer und
+  dessen Freigabe erst nach tatsächlichem Decoder-/Readerende.
+
+Ein Vergleich der Kotlin-Funktionsknoten gegen den unveränderten eigenen
+Dateiausgang in Git belegt: Bei `ScreenHostControl` ändern sich ausschließlich
+`controlLoop`, `applyConfig`, `attachSurface` und `attachProjection`; hinzu
+kommen der private Abschlusshelfer und seine lokale Suppressionsfunktion.
+Kein bestehender Funktionsknoten entfällt. Für `ScreenSession` sowie die
+Budgetfixture wurde zusätzlich der gesamte Dateitext gegen ausschließlich die
+drei geplanten `offered`-Substitutionen verglichen. Die Kotlin-Grammatikprüfung
+mit vorhandenem Tree-sitter wurde ohne Compiler, Produktcode oder Fixturelauf
+durchgeführt. Sie bestätigt Syntax, keine Kotlin-Typauflösung.
+Nach der endgültigen Interruptkorrektur wurden diese statischen Vergleiche
+erneut durchgeführt; es bestehen keine Kotlin-Syntax- oder Whitespacebefunde.
+`git diff --check` ist ohne Befund. Die drei geänderten Kotlinquellen haben
+676 Zeilen/32 842 Bytes, 471 Zeilen/23 299 Bytes und 54 Zeilen/2 547 Bytes in der
+oben genannten Dateireihenfolge. In diesem Zyklus wurde keine Rustquelle
+geändert oder erstellt.
+
+### Vorhandene genaue Fälle für Mains denselben Remote-Einstieg
+
+Die folgenden bereits existierenden Fälle bleiben für diese verbundenen
+Verträge maßgeblich. Der Klassenbestand beziehungsweise die konkreten
+Gerätefälle sind im gelesenen `native/review-task-manifest.json` bereits
+ausgewählt. Main kontrolliert die Zuordnung zu K02/K10/K11; dieser Autor ändert
+das Manifest nicht und erzeugt keine weitere Suite oder Fallquelle.
+
+| Vollständige Klasse | Genaue bestehende Fallnamen und Beleggrenze |
+|---|---|
+| `app.smartexplorer.android.ui.screen.BatchesScreenBudgetTest` | `batches_android_budget_finances_twenty_image_owners_and_record_slots`; `batches_android_pull_waits_for_acceptance_and_transfers_the_same_allocation`: konkrete Budgets, spätes Accepted, Payloadbounds und dieselbe Allocation. |
+| `app.smartexplorer.android.screen.ScreenSessionBudgetRegressionTest` | `batches_android_session_budget_small_legacy_receiver_keeps_its_scaler_bound`; `batches_android_session_budget_invalid_explicit_legacy_offer_has_no_512_mib_fallback`; `batches_android_session_budget_old_acceptance_without_budget_keeps_legacy_contract`: bestehende Session-/Legacyannahmen. |
+| `app.smartexplorer.android.screen.ScreenCaptureBudgetTest` | `callbackAndWorkerRetainTheSamePromiseUntilBothEnd`; `aClosedHolderCannotCreateAReplacementOwner`; `failedTokenAdoptionReturnsTheRegisteredNativeTokenExactlyOnce`; `failedAliasFactoryLeavesOnlyTheTwoActualOwners`: konkrete Claims und Referenzenden. |
+| `app.smartexplorer.android.screen.ScreenEncoderOwnershipTest` | `failedConstructionReturnsEveryAcquiredResourceInOrder`; `failedPlatformDestructionKeepsTheClaimAndTheOriginalFailure`; `enteredDrainKeepsItsResourcesUntilItsActualEnd`; `completedLeaseStillWaitsForTheClosingWorkerToReturn`; `interruptedDrainStillWaitsForTheProducerAndRestoresItsFlag`; `projectionRollbackEndsItsStartedWorkerBeforeTheReaderAndClaim`; `rejectedCodecCanBeReplacedWithoutReleasingTheSurfaceClaim`: die verwendeten produktiven Besitzautomaten mit Ersatzressourcen, keine Injektion in `attachProjection`. |
+| `app.smartexplorer.android.task.ScreenTaskTest` | `screen_task_android_host_snapshot_nonblack`; `screen_task_android_viewer_decodes_barcode`; `screen_task_android_grid_switch`; `screen_task_android_host_bench_synthetic`: vorhandener Gerätecapture, echter JNI-Viewerpuffer, Wechsel und synthetischer Producer. Der Snapshotfall besitzt je nach verfügbarer Capturequelle einen Accessibility- oder Projektionsweg. |
+| `app.smartexplorer.android.task.BatchesCaptureTaskTest` | `unknownSessionCannotObtainPixelsOrExternalResourceCredit`: unbekannte Session erhält weder Pixel noch externes Ressourcenbudget. |
+
+Eine erfolgreiche Ausführung dieser vorhandenen Fälle ist kein Beleg dafür,
+dass ein Android-Displayaufruf tatsächlich `null` zurückgegeben hat. Die genaue
+Fehlerinjektion im ersten Projektionsstart, ein reales Displayresize-Versagen,
+ein Handler-closetimeout und das Verhalten physischer OEMcodecs bleiben ohne
+solchen Lauf praktisch unbestätigt. Ihre behandelten Quellpfade und tatsächlichen
+Besitzer sind oben statisch belegt; es wird keine Gerätefreigabe behauptet.
+
+### Dateiübersicht, Entscheidungen und offene Grenzen zu K02/K10/K11
+
+Geändert und selbst gelesen wurden ausschließlich:
+
+- `android/app/src/main/java/app/smartexplorer/android/screen/ScreenHostControl.kt`
+- `android/app/src/main/java/app/smartexplorer/android/ui/screen/ScreenSession.kt`
+- `android/app/src/test/java/app/smartexplorer/android/ui/screen/BatchesScreenBudgetTest.kt`
+- `docs/plaene/2026-10-24-batches/fix-regression-screenbudget.md`
+
+Es wurde keine Datei erstellt. Zusätzlich wurden in diesem Zyklus innerhalb
+der jeweils ausdrücklich freigegebenen Lesefläche folgende Dateien gezielt
+gelesen; jeder Pfad ist relativ zur isolierten Arbeitskopie angegeben:
+
+- `AGENTS.md`
+- `docs/ARCHITEKTUR.md`
+- `docs/oberflaechen/bildschirm.md`
+- `docs/plaene/2026-10-24-batches/rv1-compilerplan.md`
+- `native/Cargo.toml`
+- `native/Cargo.lock`
+- `native/review-task-manifest.json`
+- `android/app/src/main/java/app/smartexplorer/android/api/ScreenApi.kt`
+- `android/app/src/main/java/app/smartexplorer/android/core/CoreEvents.kt`
+- `android/app/src/main/java/app/smartexplorer/android/core/NativeBridge.kt`
+- `android/app/src/main/java/app/smartexplorer/android/screen/ScreenCaptureBudget.kt`
+- `android/app/src/main/java/app/smartexplorer/android/screen/ScreenCaptureBuffer.kt`
+- `android/app/src/main/java/app/smartexplorer/android/screen/ScreenCaptureOwnership.kt`
+- `android/app/src/main/java/app/smartexplorer/android/screen/ScreenEncoder.kt`
+- `android/app/src/main/java/app/smartexplorer/android/screen/ScreenHostService.kt`
+- `android/app/src/main/java/app/smartexplorer/android/screen/ScreenProjectionFrames.kt`
+- `android/app/src/main/java/app/smartexplorer/android/screen/ScreenProjectionIdentity.kt`
+- `android/app/src/main/java/app/smartexplorer/android/screen/ScreenSyntheticRetirement.kt`
+- `android/app/src/main/java/app/smartexplorer/android/screen/SyntheticSurfaceSource.kt`
+- `android/app/src/main/java/app/smartexplorer/android/ui/screen/ScreenDecoder.kt`
+- `android/app/src/main/java/app/smartexplorer/android/ui/screen/ScreenPullBuffers.kt`
+- `android/app/src/main/java/app/smartexplorer/android/ui/screen/ScreenScaleWorker.kt`
+- `android/app/src/main/java/app/smartexplorer/android/ui/screen/ScreenViewScreen.kt`
+- `android/app/src/test/java/app/smartexplorer/android/screen/ScreenCaptureBudgetTest.kt`
+- `android/app/src/test/java/app/smartexplorer/android/screen/ScreenEncoderOwnershipTest.kt`
+- `android/app/src/test/java/app/smartexplorer/android/screen/ScreenSessionBudgetRegressionTest.kt`
+- `android/app/src/androidTest/java/app/smartexplorer/android/task/BatchesCaptureTaskTest.kt`
+- `android/app/src/androidTest/java/app/smartexplorer/android/task/ScreenCaptureFixture.kt`
+- `android/app/src/androidTest/java/app/smartexplorer/android/task/ScreenTaskTest.kt`
+- `native/android-bridge/src/screen_jni.rs`
+- `native/src/mobile/mod.rs`
+- `native/src/mobile/os/shared/domains/mod.rs`
+- `native/src/mobile/os/shared/domains/screen_host.rs`
+- `native/src/screen/core/frame_budget.rs`
+- `native/src/screen/os/mod.rs`
+- `native/src/screen/os/android/bridge_channels.rs`
+- `native/src/screen/os/android/bridge_channel_state.rs`
+- `native/src/screen/os/android/bridge_source.rs`
+- `native/src/screen/os/android/bridge_source_capture.rs`
+- `native/src/screen/os/android/capture_admission.rs`
+- `native/src/screen/os/android/viewer_sink.rs`
+
+Außerhalb der Arbeitskopie wurden die aktuelle
+`/tmp/smartexplorer-fix-screen-budget-scope.json`, die vollständige
+`/tmp/smartexplorer-final-review-user-contract.txt`, die vollständige Diagnose
+`/tmp/smartexplorer-rv1-40381452096/kotlin-errors.json` und die geltenden
+`/root/.codex/AGENTS.md` gelesen. Die Android-/Kotlin-Primärquellen und ihre
+Entscheidungsfolgen stehen im vorherigen Abschnitt. Vor der Berichtänderung
+wurden der eigene Dateistatus, der jüngste Commit und die zugehörigen aktuellen
+Code-/Themenstellen geprüft. Der jüngste gelesene Integrationscommit war
+`00c97f88`; die fremden Iconänderungen wurden nicht bearbeitet.
+
+Die Entscheidungen sind der nichtnullen Displayinstallation, den echten
+Abschlussbesitzern, dem bestehenden Fehlerkanal, derselben Epoche und der
+expliziten Budgetfunktion verpflichtet. Es verbleibt keine bekannte fehlende
+Quellfreigabe dieses Zyklus. Noch erforderlich ist ausschließlich Mains
+Bestätigung über denselben Remote-Suiteeinstieg und seine Integrations-/Release-
+verantwortung. Keine lokale Kompilierung, JVM-/Geräte-/Rust-Testausführung,
+Formatierung, Serverausführung, Installation, Gitmutation oder Graphänderung
+wurde durchgeführt; es wurden keine Unteragenten gestartet. Der Main-
+Reviewkandidat blieb durch diesen Autor unverändert.

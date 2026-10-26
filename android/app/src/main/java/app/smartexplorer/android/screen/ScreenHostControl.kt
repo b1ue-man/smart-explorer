@@ -217,20 +217,27 @@ internal object ScreenHostControl {
                 null
             } ?: continue
             when (message.text("op")) {
-                "configure" -> try {synchronized(session.lock) {
-                    session.pendingCapture=null
-                    session.config = EncoderConfig(
-                        epoch = message.int("epoch"),
-                        width = message.int("width"),
-                        height = message.int("height"),
-                        fps = message.int("fps").coerceAtLeast(1),
-                        bitrate = message.long("bitrate").coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
-                        profile = message.text("profile") ?: "high",
-                        hybrid = message["hybrid"] == JsonPrimitive(true),
-                        codec = message.text("codec") ?: "h264",
-                    )
-                    applyConfig(session)
-                }} catch(error: RuntimeException) {encoderFailed(session,session.config?.epoch ?: 0,error.message ?: "Capturekonfiguration abgelehnt")}
+                "configure" -> synchronized(session.lock) {
+                    try {
+                        session.pendingCapture = null
+                        session.config = EncoderConfig(
+                            epoch = message.int("epoch"),
+                            width = message.int("width"),
+                            height = message.int("height"),
+                            fps = message.int("fps").coerceAtLeast(1),
+                            bitrate = message.long("bitrate").coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
+                            profile = message.text("profile") ?: "high",
+                            hybrid = message["hybrid"] == JsonPrimitive(true),
+                            codec = message.text("codec") ?: "h264",
+                        )
+                        applyConfig(session)
+                    } catch (error: RuntimeException) {
+                        encoderFailed(
+                            session, session.config?.epoch ?: 0,
+                            error.message ?: "Capturekonfiguration abgelehnt",
+                        )
+                    }
+                }
                 "capture_active" -> try { synchronized(session.lock) {
                     val active=message["active"]==JsonPrimitive(true)
                     if(session.ended) return@synchronized
@@ -320,7 +327,11 @@ internal object ScreenHostControl {
             val frames=ScreenProjectionFrames(config.width,config.height,budget,{ _,pixels ->
                 captureCurrent(session, identity, epoch) && pushStill(session,config,pixels)
             },{ reason -> encoderFailed(session,epoch,reason) })
-            session.display=try {attachSurface(session,config,frames.surface)} catch(error: Throwable) {frames.close();throw error}
+            session.display = try {
+                attachSurface(session, config, frames.surface)
+            } catch (error: Throwable) {
+                closeFailedCapture(error, frames)
+            }
             session.frames=frames; session.encoder=null
             return@synchronized
         }
@@ -353,9 +364,41 @@ internal object ScreenHostControl {
             val output=frames?.surface ?: encoder.surface
             session.display=attachSurface(session,config,output)
             session.frames=frames
-        }} catch(error: Throwable) {newFrames?.close();encoder.release();throw error}
+        }} catch (error: Throwable) {
+            closeFailedCapture(error, newFrames, encoder)
+        }
         session.encoder = encoder
         if(projection!=null && identity!=null) scope.launch {reportProjectionReady(session,identity,projection)}
+    }
+
+    private fun closeFailedCapture(
+        failure: Throwable,
+        frames: ScreenProjectionFrames?,
+        encoder: ScreenEncoder? = null,
+    ): Nothing {
+        var interrupted = failure is InterruptedException
+        fun retainCleanupFailure(cleanup: Throwable) {
+            if (cleanup is InterruptedException) interrupted = true
+            if (cleanup !== failure) {
+                try {
+                    failure.addSuppressed(cleanup)
+                } catch (_: Throwable) {
+                    Unit
+                }
+            }
+        }
+        try {
+            frames?.close()
+        } catch (cleanup: Throwable) {
+            retainCleanupFailure(cleanup)
+        }
+        try {
+            encoder?.release()
+        } catch (cleanup: Throwable) {
+            retainCleanupFailure(cleanup)
+        }
+        if (interrupted) Thread.currentThread().interrupt()
+        throw failure
     }
 
     private fun retireEncoder(session: HostSession, source: SyntheticSurfaceSource?, encoder: ScreenEncoder?) {
@@ -392,8 +435,13 @@ internal object ScreenHostControl {
         val dpi=app.resources.displayMetrics.densityDpi
         val display=session.display
         if(display!=null) { display.resize(config.width,config.height,dpi); display.surface=surface; return display }
-        return requireNotNull(session.projection).createVirtualDisplay("se-screen-${session.start.session}",
-            config.width,config.height,dpi,DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,surface,null,null)
+        return checkNotNull(requireNotNull(session.projection).createVirtualDisplay(
+            "se-screen-${session.start.session}",
+            config.width, config.height, dpi,
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, surface, null, null,
+        )) {
+            "Virtuelle Anzeige für die Bildschirmaufnahme konnte nicht erstellt werden"
+        }
     }
 
     private fun pushStill(session: HostSession, config: EncoderConfig, pixels: ScreenCaptureBuffer): Boolean {
@@ -477,7 +525,16 @@ internal object ScreenHostControl {
         }
         pendingConsent.remove(session)
         scope.launch { reportProjectionReady(host,identity,projection) }
-        applyConfig(host)
+        synchronized(host.lock) {
+            try {
+                applyConfig(host)
+            } catch (error: RuntimeException) {
+                encoderFailed(
+                    host, host.config?.epoch ?: 0,
+                    error.message ?: "Capturekonfiguration abgelehnt",
+                )
+            }
+        }
         refreshNotification()
     }
 

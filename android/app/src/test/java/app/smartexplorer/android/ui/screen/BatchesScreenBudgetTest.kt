@@ -29,7 +29,7 @@ class BatchesScreenBudgetTest {
     @Test
     fun batches_android_pull_waits_for_acceptance_and_transfers_the_same_allocation() {
         var accepted: ScreenBufferBudget? = null
-        val previous = ScreenPullBuffers { accepted }
+        val previous = ScreenPullBuffers(offered = { accepted })
         assertFalse(previous.prepare())
         assertEquals(32, previous.buffer.capacity())
         accepted = budget()
@@ -42,7 +42,7 @@ class BatchesScreenBudgetTest {
         assertNull(previous.forPayload(accepted!!.imageBytes + 17))
         assertFalse(previous.acceptsPayload(accepted!!.recordBytes + 1, false))
         assertTrue(previous.acceptsPayload(accepted!!.imageBytes, true))
-        val next = ScreenPullBuffers { accepted }
+        val next = ScreenPullBuffers(offered = { accepted })
         next.takeFrom(previous)
         assertSame(owned, next.buffer)
         assertEquals(32, previous.buffer.capacity())
