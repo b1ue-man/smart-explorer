@@ -13,6 +13,7 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * The se accessibility service (plan 2026-10-17, SCR-M8, C1 Android L2, C3): the only way input of
@@ -24,6 +25,9 @@ import java.util.concurrent.Executors
  */
 class ScreenControlService : AccessibilityService() {
     private val shots = Executors.newSingleThreadExecutor()
+    private val shotLock=Any()
+    private var shotRequests=0
+    private var stoppingShots=false
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -39,7 +43,7 @@ class ScreenControlService : AccessibilityService() {
 
     override fun onDestroy() {
         if (instance === this) instance = null
-        shots.shutdown()
+        synchronized(shotLock) {stoppingShots=true;if(shotRequests==0) shots.shutdown()}
         super.onDestroy()
     }
 
@@ -101,21 +105,62 @@ class ScreenControlService : AccessibilityService() {
      * One still of the whole display as ARGB_8888 (secure windows show black there, A12), or `null`
      * when Android refused it (more than one per 333 ms, no display).
      */
-    fun still(done: (Bitmap?) -> Unit) {
-        takeScreenshot(
+    internal fun still(budget: ScreenCaptureBudget, expectedWidth: Int, expectedHeight: Int,
+        done: (ScreenCaptureBitmap?) -> Unit) {
+        val expected=ScreenFrameLimits.checkedBytes(expectedWidth,expectedHeight).toLong()
+        synchronized(shotLock) {
+            if(stoppingShots) {done(null);return}
+            shotRequests=Math.addExact(shotRequests,1)
+        }
+        val finished=AtomicBoolean(false)
+        fun finish() {
+            if(!finished.compareAndSet(false,true)) return
+            synchronized(shotLock) {shotRequests--;if(stoppingShots && shotRequests==0) shots.shutdown()}
+        }
+        val hardware=try {budget.claim(ScreenCaptureBudget.NATIVE_SURFACE,expected)}
+            catch(error: Throwable) {finish();throw error}
+        val software=try {budget.claim(ScreenCaptureBudget.READBACK,expected)}
+            catch(error: Throwable) {hardware.close();finish();throw error}
+        try {takeScreenshot(
             Display.DEFAULT_DISPLAY,
             shots,
             object : TakeScreenshotCallback {
                 override fun onSuccess(screenshot: ScreenshotResult) {
                     val buffer = screenshot.hardwareBuffer
-                    val bitmap = Bitmap.wrapHardwareBuffer(buffer, screenshot.colorSpace)?.copy(Bitmap.Config.ARGB_8888, false)
-                    buffer.close()
-                    done(bitmap)
+                    var wrapper: Bitmap?=null
+                    var bitmap: Bitmap?=null
+                    var delivered=false
+                    var notified=false
+                    fun deliver(value: ScreenCaptureBitmap?) {notified=true;done(value)}
+                    try {
+                        // A rotated result may use the same pixel count. A
+                        // larger result is closed before any product copy.
+                        val actual=ScreenFrameLimits.checkedBytes(buffer.width,buffer.height).toLong()
+                        if(actual>expected) {deliver(null);return}
+                        wrapper=Bitmap.wrapHardwareBuffer(buffer,screenshot.colorSpace)
+                        val source=wrapper ?: run {deliver(null);return}
+                        if(source.byteCount.toLong()>expected) {deliver(null);return}
+                        bitmap=source.copy(Bitmap.Config.ARGB_8888,false)
+                        val result=bitmap ?: run {deliver(null);return}
+                        if(result.allocationByteCount.toLong()>expected) {deliver(null);return}
+                        bitmap=null;delivered=true
+                        deliver(ScreenCaptureBitmap(result,software))
+                    } catch(error: RuntimeException) {
+                        if(!notified) deliver(null)
+                    } finally {
+                        bitmap?.recycle()
+                        // wrapHardwareBuffer owns a distinct hardware reference.
+                        wrapper?.recycle();buffer.close();hardware.close()
+                        if(!delivered) software.close()
+                        finish()
+                    }
                 }
 
-                override fun onFailure(errorCode: Int) = done(null)
+                override fun onFailure(errorCode: Int) {
+                    try {done(null)} finally {software.close();hardware.close();finish()}
+                }
             },
-        )
+        )} catch(error: Throwable) {software.close();hardware.close();finish();throw error}
     }
 
     /** The apps with a window on screen (package, label), the focused one first. */

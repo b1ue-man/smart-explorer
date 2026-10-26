@@ -19,7 +19,6 @@ use std::sync::Arc;
 use serde_json::json;
 
 use super::bridge_channels::{self as channels, HostStart};
-use super::bridge_source::BridgeSource;
 use crate::screen::core::host_backend::{
     ScreenEncoder, ScreenHostBackend, ScreenSource, SessionIndicator, SourceRefusal,
     TilesScreenEncoder,
@@ -56,6 +55,10 @@ pub(crate) struct BridgeBackend;
 
 
 impl ScreenHostBackend for BridgeBackend {
+    fn session_memory_ceiling(&self)->u64 {
+        channels::prereqs().working_bytes.unwrap_or(crate::screen::core::frame_budget::MAX_WORKING_BYTES)
+            .min(crate::screen::core::frame_budget::MAX_WORKING_BYTES)
+    }
     fn platform(&self) -> HostPlatform {
         HostPlatform::Android
     }
@@ -140,11 +143,10 @@ impl ScreenHostBackend for BridgeBackend {
         super::android_app_icons::load(entry)
     }
 
-    fn open_source(
-        &self,
-        source: &SourceId,
-        wanted: Option<FrameSize>,
-    ) -> Result<Box<dyn ScreenSource>, SourceRefusal> {
+    fn prepare_session_source(&self, _owner:&str, session:&str, source:&SourceId,
+        wanted:Option<FrameSize>, _control:bool,
+        admission:Arc<crate::screen::core::capture_admission::SessionAdmission>)
+        ->Result<Box<dyn crate::screen::core::host_backend::PreparedSource>,SourceRefusal> {
         let prereqs = channels::prereqs();
         if !prereqs.registered {
             return Err(SourceRefusal::new(HOST_APP_NOT_RUNNING));
@@ -159,10 +161,17 @@ impl ScreenHostBackend for BridgeBackend {
             _ => {}
         }
         let display = prereqs.display.map(|(w, h)| FrameSize::new(w, h));
-        let max = wanted.or(display).unwrap_or(FrameSize::new(1280, 720));
+        let max = wanted.or(display).unwrap_or(FrameSize::new(0, 0));
         let start = start_for(source, max);
-        let size = display.unwrap_or(max);
-        Ok(Box::new(BridgeSource::new(channels::open(start), size)))
+        let key=crate::screen::core::capture_admission::SourceKey::new(session,&source.to_string())
+            .map_err(|e|SourceRefusal::new(&e.to_string()))?;
+        let channel=channels::open(start);
+        channel.capture.attach(admission,key.clone()).map_err(|e|SourceRefusal::new(&e.to_string()))?;
+        let limits=crate::screen::core::frame_budget::FrameLimits::RESOURCE;
+        Ok(Box::new(super::android_capture_prepared::AndroidPrepared::new(channel,key,limits)))
+    }
+    fn open_source(&self,_source:&SourceId,_wanted:Option<FrameSize>)->Result<Box<dyn ScreenSource>,SourceRefusal> {
+        Err(SourceRefusal::new(if channels::prereqs().registered {"capture_grant_required"} else {HOST_APP_NOT_RUNNING}))
     }
 
     fn open_encoder(
@@ -177,6 +186,15 @@ impl ScreenHostBackend for BridgeBackend {
                 "H.264 runs in the app's MediaCodec encoder",
             )),
         }
+    }
+
+    fn open_encoder_for_stage_admitted(&self,request:&crate::screen::core::host_stage::StageRequest,
+        grant:crate::screen::core::capture_admission::CaptureGrant)->io::Result<Box<dyn ScreenEncoder>> {
+        if request.choice.codec != CodecKind::Tiles {return Err(io::Error::new(io::ErrorKind::Unsupported,
+            "H.264 runs in the app's admitted MediaCodec encoder"));}
+        let limits=request.frame_contract.map_or(crate::screen::core::frame_budget::FrameLimits::LEGACY,|c|c.limits);
+        let encoder=Box::new(crate::screen::core::host_codec_adapters::AdmittedTilesEncoder::new(request.size,limits,grant.clone())?);
+        crate::screen::core::host_hybrid::wrap_captured(encoder,request,grant)
     }
 
     fn inject(&self, events: &[InputEvent]) -> Result<(), ControlBlock> {

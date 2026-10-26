@@ -37,7 +37,9 @@ internal data class EncoderConfig(
  * SPS and PPS in front, so each picture group starts decodable; key frames come when the core asks
  * (`requestKeyFrame`) and at most every [KEYFRAME_INTERVAL_S]. Nothing of a picture is logged.
  */
-internal class ScreenEncoder(private val config: EncoderConfig, private val sink: PictureSink) {
+internal class ScreenEncoder(private val config: EncoderConfig, private val budget: ScreenCaptureBudget, private val sink: PictureSink) {
+    private val surfaceLease=if(!config.hybrid) budget.claim(ScreenCaptureBudget.NATIVE_SURFACE,
+        ScreenFrameLimits.checkedBytes(config.width,config.height).toLong()) else null
     private val codec: MediaCodec
     private val inputSurface: Surface?
     val surface: Surface get() = inputSurface ?: error("RGBA encoder has no input surface")
@@ -49,38 +51,39 @@ internal class ScreenEncoder(private val config: EncoderConfig, private val sink
     @Volatile private var failureHandler: ((String) -> Unit)? = null
     @Volatile private var lastFailure: String? = null
     fun setFailureHandler(handler: (String) -> Unit) { failureHandler=handler; lastFailure?.let(handler) }
-    private val pending = java.util.concurrent.ConcurrentHashMap<Long, Pair<Long, ByteArray>>()
+    private val pending = java.util.concurrent.ConcurrentHashMap<Long, Pair<Long, ScreenCaptureBuffer>>()
     @Volatile private var forceKeyframe = true
-    private var lastPixels: ByteArray? = null
+    private var lastPixels: ScreenCaptureBuffer? = null
     private var lastCapturePts=0L
     private fun nextCapturePts(): Long = maxOf(System.nanoTime()/1000,Math.addExact(lastCapturePts,1)).also {lastCapturePts=it}
     private var waitingKeyframe = true
     private lateinit var bitrateRange: android.util.Range<Int>
-    private var codecConfig: ByteArray? = null
-    private var joined: ByteBuffer = ByteBuffer.allocateDirect(0)
+    private var codecConfig: ScreenCaptureBuffer? = null
+    private var joined: ScreenCaptureBuffer? = null
     private val drain: Thread
     private val admission:ScreenCodecLatency.EncoderAdmission
     private val accessUnits:ScreenCodecLatency.AccessUnits
 
     init {
-        val opened = open(config)
+        val opened = try {open(config)} catch(error: Throwable) {surfaceLease?.close();throw error}
         codec = opened.first
         bitrateRange = opened.third
         val info = opened.second
         name = info.name
         admission=ScreenCodecLatency.EncoderAdmission(name)
-        accessUnits=ScreenCodecLatency.AccessUnits(name,MAX_ACCESS_UNIT)
+        accessUnits=ScreenCodecLatency.AccessUnits(name,MAX_ACCESS_UNIT) {size -> budget.buffer(ScreenCaptureBudget.CODEC_OUTPUT,size)}
         hardware = info.isHardwareAccelerated
-        inputSurface = try { if (config.hybrid) null else codec.createInputSurface() } catch(e: RuntimeException) { codec.release(); throw e }
-        try { codec.start() } catch(e: RuntimeException) { inputSurface?.release(); codec.release(); throw e }
+        inputSurface = try { if (config.hybrid) null else codec.createInputSurface() } catch(e: RuntimeException) {codec.release();surfaceLease?.close();throw e}
+        try { codec.start() } catch(e: RuntimeException) {inputSurface?.release();codec.release();surfaceLease?.close();throw e}
         drain = thread(name = "screen-encoder", isDaemon = true) {
             try { drainLoop() } catch(e: RuntimeException) {
                 running=false
                 val reason=if(e is ScreenCodecLatency.Unavailable) e.message.orEmpty() else "MediaCodec-Ausgabe ($name): ${e.message ?: e.javaClass.simpleName}"
                 lastFailure=reason; failureHandler?.invoke(reason); Log.w(TAG,reason)
-            }
+            } finally {finishResources()}
         }
     }
+    fun retainSurface(): ScreenCaptureLease = checkNotNull(surfaceLease).retain()
 
     fun requestKeyFrame() { forceKeyframe=true; parameters { putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0) } }
 
@@ -101,16 +104,24 @@ internal class ScreenEncoder(private val config: EncoderConfig, private val sink
         } catch (e: IllegalStateException) {
             // Already stopped.
         }
-        drain.join(DRAIN_JOIN_MS)
+        if(Thread.currentThread()!==drain) drain.join(DRAIN_JOIN_MS)
         try {
             codec.stop()
         } catch (e: IllegalStateException) {
             // Already stopped.
         }
         if(Thread.currentThread()!==drain) drain.join(DRAIN_JOIN_MS)
-        val stopped=!drain.isAlive
-        try {codec.release()} finally {inputSurface?.release();pending.clear();lastPixels=null;accessUnits.clear()}
-        check(stopped) {"MediaCodec-Ausgabethread hat nicht angehalten"}
+        check(!drain.isAlive) {"MediaCodec-Ausgabethread hat nicht angehalten; Bildbesitz bleibt bis Threadende bestehen"}
+    }
+
+    @Synchronized private fun finishResources() {
+        try {codec.release()} finally {
+            inputSurface?.release()
+            pending.values.forEach {it.second.close()};pending.clear()
+            lastPixels?.close();lastPixels=null
+            codecConfig?.close();codecConfig=null;joined?.close();joined=null
+            accessUnits.clear();surfaceLease?.close()
+        }
     }
 
     private fun drainLoop() {
@@ -131,10 +142,7 @@ internal class ScreenEncoder(private val config: EncoderConfig, private val sink
                     val a=sps.duplicate(); val b=pps?.duplicate()
                     val configBytes=Math.addExact(a.remaining(),b?.remaining() ?: 0)
                     require(configBytes<=MAX_ACCESS_UNIT) {"MediaCodec-Parameter überschreiten das AU-Budget"}
-                    codecConfig=ByteArray(configBytes).also { bytes ->
-                        val offset=a.remaining(); a.get(bytes,0,offset); b?.get(bytes,offset,b.remaining())
-                    }
-                    codecConfig?.let(::validateHeaders)
+                    replaceHeaders(configBytes) {target -> target.put(a);if(b!=null) target.put(b)}
                 }
             }
             if (index < 0) continue
@@ -155,71 +163,79 @@ internal class ScreenEncoder(private val config: EncoderConfig, private val sink
         if (info.size <= 0) return
         require(info.offset >= 0 && info.size <= MAX_ACCESS_UNIT && info.offset.toLong() + info.size <= buffer.capacity()) { "Ungültiger MediaCodec-Ausgabebereich" }
         if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
-            codecConfig = ByteArray(info.size).also {
-                buffer.position(info.offset)
-                buffer.get(it)
-                validateHeaders(it)
-            }
+            replaceHeaders(info.size) {target -> target.put(buffer.duplicate().apply {position(info.offset);limit(info.offset+info.size)})}
             return
         }
         val complete=accessUnits.complete(buffer,info) ?: return
-        deliverComplete(complete.buffer,complete.info)
+        try {deliverComplete(complete.buffer,complete.info)} finally {complete.owner?.close()}
     }
     private fun deliverComplete(buffer: ByteBuffer, info: MediaCodec.BufferInfo) {
         val key = info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0
         if(key) {
-            val unit=ByteArray(info.size); val copy=buffer.duplicate(); copy.position(info.offset); copy.get(unit)
-            require(nals(unit).any { at -> unit[at].toInt() and 31 == 5 }) { "Schlüsselbild enthält kein IDR" }
+            val unit=buffer.duplicate().apply {position(info.offset);limit(info.offset+info.size)}.slice()
+            require(nal(unit,5)!=null) { "Schlüsselbild enthält kein IDR" }
             if(codecConfig==null) validateHeaders(unit)
         }
         if(config.hybrid) admission.output(info.presentationTimeUs,pending[info.presentationTimeUs]?.first)
-        if (waitingKeyframe && !key) {pending.remove(info.presentationTimeUs);throw IllegalStateException("MediaCodec lieferte kein IDR für die erste Capturereferenz")}
+        if (waitingKeyframe && !key) {pending.remove(info.presentationTimeUs)?.second?.close();throw IllegalStateException("MediaCodec lieferte kein IDR für die erste Capturereferenz")}
         if (key) { waitingKeyframe = false; forceKeyframe=false }
         val config = codecConfig
         if (!key || config == null) {
             push(buffer, info.offset, info.size, info.presentationTimeUs, key)
             return
         }
-        val total = Math.addExact(config.size, info.size)
+        val total = Math.addExact(config.capacity, info.size)
         require(total <= MAX_ACCESS_UNIT) { "H.264-Referenz größer als 16 MiB" }
-        if (joined.capacity() < total) joined = ByteBuffer.allocateDirect(total)
-        joined.clear()
-        joined.put(config)
-        buffer.limit(info.offset + info.size)
-        buffer.position(info.offset)
-        joined.put(buffer)
-        push(joined, 0, total, info.presentationTimeUs, true)
+        val output=joined?.takeIf {it.capacity>=total} ?: budget.buffer(ScreenCaptureBudget.CODEC_OUTPUT,total).also {
+            joined?.close();joined=it
+        }
+        output.access {target ->
+            config.access {target.put(it)}
+            target.put(buffer.duplicate().apply {limit(info.offset+info.size);position(info.offset)})
+            push(target,0,total,info.presentationTimeUs,true)
+        }
     }
 
-    private fun nals(bytes: ByteArray): List<Int> {
-        val result=mutableListOf<Int>(); var at=0
-        while(at+3<bytes.size) {
-            if(bytes[at]==0.toByte() && bytes[at+1]==0.toByte() && bytes[at+2]==1.toByte()) { result+=at+3; at+=3 }
-            else if(at+4<bytes.size && bytes[at]==0.toByte() && bytes[at+1]==0.toByte() && bytes[at+2]==0.toByte() && bytes[at+3]==1.toByte()) { result+=at+4; at+=4 }
-            else at++
-        }
-        return result
+    private fun replaceHeaders(length: Int, fill:(ByteBuffer)->Unit) {
+        val next=budget.buffer(ScreenCaptureBudget.CODEC_OUTPUT,length)
+        try {next.access {target -> fill(target);target.flip();validateHeaders(target)}}
+        catch(error: Throwable) {next.close();throw error}
+        val previous=codecConfig;codecConfig=next;previous?.close()
     }
-    private fun validateHeaders(bytes: ByteArray) {
+
+    private fun nal(bytes: ByteBuffer, kind: Int): Int? {
+        var at=0
+        while(at+3<bytes.limit()) {
+            if(bytes.get(at)==0.toByte() && bytes.get(at+1)==0.toByte() && bytes.get(at+2)==1.toByte()
+                && bytes.get(at+3).toInt() and 31==kind) return at+3
+            at++
+        }
+        return null
+    }
+
+    private fun validateHeaders(bytes: ByteBuffer) {
         // This is the local capture encoder; accepted viewer limits are checked by the native producer.
-        ScreenFrameLimits.checkAvc(bytes,config.width,config.height,null)
-        val sps=nals(bytes).firstOrNull { at -> bytes[at].toInt() and 31 == 7 } ?: error("H.264 ohne Annex-B-SPS")
-        require(sps+3<bytes.size)
-        val profile=bytes[sps+1].toInt() and 255; val constraints=bytes[sps+2].toInt() and 255
+        budget.claim(ScreenCaptureBudget.METADATA,131_080).use {
+            ScreenFrameLimits.checkAvc(bytes,0,bytes.limit(),config.width,config.height,null)
+        }
+        val sps=nal(bytes,7) ?: error("H.264 ohne Annex-B-SPS")
+        require(sps+3<bytes.limit())
+        val profile=bytes.get(sps+1).toInt() and 255; val constraints=bytes.get(sps+2).toInt() and 255
         val cb=profile==66 && constraints and 0x40 != 0
         require(if(config.profile=="cb") cb else profile==100 || cb) { "MediaCodec lieferte ein nicht ausgehandeltes H.264-Profil" }
-        Log.i(TAG,"Tatsächliches H.264-Profil=$profile Einschränkungen=$constraints Level=${bytes[sps+3].toInt() and 255}")
+        Log.i(TAG,"Tatsächliches H.264-Profil=$profile Einschränkungen=$constraints Level=${bytes.get(sps+3).toInt() and 255}")
     }
 
     /** One request, one encoder input and the exact RGBA reference of that input. */
-    @Synchronized fun queueRgba(rgba: ByteArray, frameId: Long): Boolean {
+    @Synchronized fun queueRgba(rgba: ScreenCaptureBuffer, frameId: Long): Boolean {
         if (!config.hybrid || !running || pending.isNotEmpty()) return false
-        require(rgba.size.toLong()==config.width.toLong()*config.height*4)
-        if(!forceKeyframe && (lastPixels===rgba || lastPixels?.contentEquals(rgba)==true)) {
+        require(rgba.capacity.toLong()==config.width.toLong()*config.height*4 && rgba.budget===budget)
+        if(!forceKeyframe && lastPixels?.samePixels(rgba)==true) {
             val pts=nextCapturePts()
-            val packet=ByteBuffer.allocateDirect(20).order(java.nio.ByteOrder.LITTLE_ENDIAN)
-            packet.putInt(config.width); packet.putInt(config.height); packet.putLong(frameId); packet.putInt(0)
-            check(sink.push(packet,0,20,pts,false)>=0)
+            budget.buffer(ScreenCaptureBudget.TRANSPORT,20).use {packet -> packet.access {target ->
+                target.putInt(config.width);target.putInt(config.height);target.putLong(frameId);target.putInt(0)
+                check(sink.push(target,0,20,pts,false)>=0)
+            }}
             return true
         }
         var index=-1
@@ -234,38 +250,43 @@ internal class ScreenEncoder(private val config: EncoderConfig, private val sink
             require(at>=0 && at<p.buffer.limit())
             p.buffer.put(at.toInt(),value.coerceIn(0,255).toByte())
         }
+        rgba.access {pixels ->
         for(y in 0 until config.height) for(x in 0 until config.width) {
             val at=(y*config.width+x)*4
-            val r=rgba[at].toInt() and 255; val g=rgba[at+1].toInt() and 255; val b=rgba[at+2].toInt() and 255
+            val r=pixels.get(at).toInt() and 255; val g=pixels.get(at+1).toInt() and 255; val b=pixels.get(at+2).toInt() and 255
             sample(0,x+crop.left,y+crop.top,((47*r+157*g+16*b+128) shr 8)+16)
         }
         for(y in 0 until config.height step 2) for(x in 0 until config.width step 2) {
             var r=0; var g=0; var b=0
             for(dy in 0..1) for(dx in 0..1) {
                 val at=(minOf(y+dy,config.height-1)*config.width+minOf(x+dx,config.width-1))*4
-                r+=rgba[at].toInt() and 255; g+=rgba[at+1].toInt() and 255; b+=rgba[at+2].toInt() and 255
+                r+=pixels.get(at).toInt() and 255; g+=pixels.get(at+1).toInt() and 255; b+=pixels.get(at+2).toInt() and 255
             }
             sample(1,(x+crop.left)/2,(y+crop.top)/2,((-26*r-86*g+112*b+512) shr 10)+128)
             sample(2,(x+crop.left)/2,(y+crop.top)/2,((112*r-102*g-10*b+512) shr 10)+128)
         }
+        }
         val pts=nextCapturePts()
-        pending[pts]=frameId to rgba
+        pending[pts]=frameId to rgba.retain()
         admission.expect(pts,frameId)
-        lastPixels=rgba
+        val previous=lastPixels;lastPixels=rgba.retain();previous?.close()
         try { codec.queueInputBuffer(index,0,config.width*config.height*3/2,pts,0) }
-        catch(e: RuntimeException) {pending.remove(pts);admission.cancel(pts);throw e}
+        catch(e: RuntimeException) {pending.remove(pts)?.second?.close();admission.cancel(pts);throw e}
         return true
     }
 
     private fun push(data: ByteBuffer, offset: Int, length: Int, pts: Long, key: Boolean) {
         if (!this.config.hybrid) { sink.push(data,offset,length,pts,key); return }
         val capture=pending.remove(pts) ?: error("Videoframe ohne passende Capturereferenz")
-        val total=Math.addExact(Math.addExact(20,capture.second.size),length)
-        val packet=ByteBuffer.allocateDirect(total).order(java.nio.ByteOrder.LITTLE_ENDIAN)
-        packet.putInt(this.config.width); packet.putInt(this.config.height); packet.putLong(capture.first); packet.putInt(length)
-        packet.put(capture.second)
-        val video=data.duplicate(); video.position(offset); video.limit(Math.addExact(offset,length)); packet.put(video)
-        check(sink.push(packet,0,total,pts,key)>=0) { "Capturereferenz vom Core abgelehnt" }
+        try {
+            val total=Math.addExact(Math.addExact(20,capture.second.capacity),length)
+            budget.buffer(ScreenCaptureBudget.TRANSPORT,total).use {packet -> packet.access {target ->
+                target.putInt(this.config.width);target.putInt(this.config.height);target.putLong(capture.first);target.putInt(length)
+                capture.second.access {target.put(it)}
+                val video=data.duplicate();video.position(offset);video.limit(Math.addExact(offset,length));target.put(video)
+                check(sink.push(target,0,total,pts,key)>=0) {"Capturereferenz vom Core abgelehnt"}
+            }}
+        } finally {capture.second.close()}
     }
 
     companion object {

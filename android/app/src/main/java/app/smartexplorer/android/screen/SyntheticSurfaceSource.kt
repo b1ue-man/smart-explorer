@@ -17,6 +17,7 @@ internal class SyntheticSurfaceSource(
     private val width: Int,
     private val height: Int,
     private val fps: Int,
+    private val surfaceLease: ScreenCaptureLease,
 ) {
     @Volatile
     private var running = true
@@ -26,11 +27,13 @@ internal class SyntheticSurfaceSource(
     var frames: Long = 0
         private set
 
-    private val worker = thread(name = "screen-synthetic", isDaemon = true) { loop() }
+    private val worker = thread(name = "screen-synthetic", isDaemon = true) {
+        try {loop()} finally {surfaceLease.close()}
+    }
 
     fun stop() {
         running = false
-        worker.join(STOP_JOIN_MS)
+        if(Thread.currentThread()!==worker) worker.join(STOP_JOIN_MS)
     }
 
     private fun loop() {

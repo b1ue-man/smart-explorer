@@ -17,7 +17,7 @@ const PULL_BRIDGE_ERROR: jint = -4;
 
 /// Runs `read` on the bytes `offset..offset + length` of the direct buffer
 /// `src`; `None` when the buffer is not direct or the range does not fit.
-fn with_direct_bytes<R>(
+pub(super) fn with_direct_bytes<R>(
     env: &jni::Env<'_>,
     src: &JByteBuffer<'_>,
     offset: jint,

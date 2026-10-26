@@ -8,7 +8,6 @@ use serde_json::{json, Value};
 
 use super::{handle, screen_control, screen_push};
 use crate::screen::core::host_backend::ScreenHostBackend;
-use crate::screen::core::window_list::SourceId;
 use crate::screen::core::wire::MAX_CONTROL_BYTES;
 use crate::screen::os::bridge_backend::BridgeBackend;
 use crate::screen::os::bridge_channels::{self as channels, FLAG_KEYFRAME};
@@ -62,14 +61,13 @@ fn screen_task_android_bridge_shapes() {
     );
     assert_eq!(
         channels::prereqs().encoders,
-        vec![("high".to_string(), true)]
+        vec![crate::screen::core::negotiate::CodecOffer::h264(crate::screen::core::negotiate::H264Profile::High,true)]
     );
     assert_eq!(BridgeBackend.windows().unwrap().apps[0].name, "Notizen");
 
     channels::set_event_sink(collect);
-    let _source = BridgeBackend
-        .open_source(&SourceId::Monitor("0".into()), None)
-        .unwrap();
+    let _channel=channels::open(channels::HostStart {source:"monitor:0".into(),still:false,
+        viewer_device_id:String::new(),viewer_name:String::new(),max_width:1080,max_height:2400});
     let id = channels::channels()[0].id;
     let events = EVENTS
         .lock()
@@ -89,7 +87,7 @@ fn screen_task_android_bridge_shapes() {
 
     let ready = json!({"session": id, "width": 1080, "height": 2400,
         "encoder": "c2.qti.avc.encoder", "hardware": true, "projection": true});
-    assert_eq!(call("screen.hostReady", ready), Ok(json!({})));
+    assert_eq!(call("screen.hostReady", ready), Ok(json!({"source":"system-selected"})));
     assert_eq!(
         call("screen.hostReady", json!({"session": id})),
         Err("invalid".into())
@@ -105,14 +103,14 @@ fn screen_task_android_bridge_shapes() {
     assert_eq!(
         sessions,
         json!({"sessions": [{
-            "session": id, "source": "monitor:0", "still": false, "viewerName": "",
+            "session": id, "source": "system-selected", "requestedSource":"monitor:0", "still": false, "viewerName": "",
             "viewerDeviceId": "", "state": "streaming", "width": 1080, "height": 2400,
             "encoder": "c2.qti.avc.encoder", "projection": true,
         }]})
     );
 
     // The JNI calls: a picture in, the next control message out.
-    assert_eq!(screen_push(id, b"\0\0\0\x01", 0, FLAG_KEYFRAME), 0);
+    assert_eq!(screen_push(id, b"\0\0\0\x01", 0, FLAG_KEYFRAME), channels::PUSH_INVALID);
     assert_eq!(screen_control(id, Duration::from_millis(1)), None);
     assert_eq!(
         call(
@@ -185,9 +183,8 @@ fn screen_task_android_encoder_and_reason_bound_only_by_control_frame() {
         .unwrap_or_else(PoisonError::into_inner);
     channels::reset_for_tests();
     call("screen.hostPrereqs", json!({})).unwrap();
-    let _source = BridgeBackend
-        .open_source(&SourceId::Monitor("0".into()), None)
-        .unwrap();
+    let _channel=channels::open(channels::HostStart {source:"monitor:0".into(),still:false,
+        viewer_device_id:String::new(),viewer_name:String::new(),max_width:1080,max_height:2400});
     let id = channels::channels()[0].id;
     let encoder = format!("c2.vendor.{}.avc.encoder", "x".repeat(200));
     assert_eq!(
@@ -195,7 +192,7 @@ fn screen_task_android_encoder_and_reason_bound_only_by_control_frame() {
             "screen.hostReady",
             json!({"session": id, "width": 8, "height": 8, "encoder": encoder})
         ),
-        Ok(json!({}))
+        Ok(json!({"source":"requested-source"}))
     );
     let sessions = call("screen.hostSessions", json!({})).unwrap();
     assert_eq!(sessions["sessions"][0]["encoder"], json!(encoder));

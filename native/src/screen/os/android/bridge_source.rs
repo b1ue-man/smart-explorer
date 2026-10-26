@@ -15,13 +15,17 @@ use serde_json::json;
 use super::bridge_channels::{Channel, Phase, Picture};
 use crate::screen::core::gop_stream::now_us;
 use crate::screen::core::host_backend::{
-    ScreenEncoder, ScreenSource, SourceFrame, TilesScreenEncoder,
+    ScreenEncoder, ScreenSource, SourceFrame,
 };
 use crate::screen::core::host_stage::{
     HostStage, StageEncoder, StageError, StageFrame, StageRequest,
 };
 use crate::screen::core::negotiate::CodecKind;
-use crate::screen::core::pixel_convert::{downscale_bgra_with_limits,BgraImage,FrameSize};
+use crate::screen::core::pixel_convert::FrameSize;
+use crate::screen::core::capture_admission::{CaptureGrant,CaptureOwner};
+use crate::screen::core::capture_image::{CapturedImage,CaptureImageBuilder};
+use crate::screen::core::capture_bytes::AdmittedBytes;
+use crate::screen::core::capture_records::CapturedRecords;
 use crate::screen::core::frame_budget::FrameLimits;
 use crate::screen::core::session_state::SessionState;
 use crate::screen::core::wire_hello::ScreenErrorCode;
@@ -50,8 +54,8 @@ pub(crate) struct BridgeSource {
     /// The display size the app reported last (`screen.hostReady`).
     reported: Option<FrameSize>,
     last_still: Option<Instant>,
-    tiles: Option<(u64, Box<dyn ScreenEncoder>)>,
-    hybrid: Option<(u64, crate::screen::core::host_hybrid::HybridEncoder)>,
+    tiles: Option<(u64,u64,Box<dyn ScreenEncoder>)>,
+    hybrid: Option<(u64,u64,crate::screen::core::host_hybrid::CapturedExternalHybrid)>,
     capture_active: bool,
     activity_request: u64,
     limits:FrameLimits,
@@ -59,10 +63,9 @@ pub(crate) struct BridgeSource {
 
 impl BridgeSource {
     pub(crate) fn new(channel: Arc<Channel>, size: FrameSize) -> Self {
-        // Snapshot the admission offer once: held frame buffers must not feed back
-        // into their own running session's already negotiated allocation budget.
-        let limits=super::bridge_channels::prereqs().working_bytes.map_or(FrameLimits::LEGACY,|bytes|
-            FrameLimits::RESOURCE.with_working_budget(bytes).unwrap_or(FrameLimits {max_pixels:0,working_bytes:0,..FrameLimits::LEGACY}));
+        // Raw capture is not an encoder input. The shared SessionAdmission
+        // retains the observed Java heap ceiling without dividing N by W/24.
+        let limits=FrameLimits::RESOURCE;
         Self {
             channel,
             size,
@@ -82,7 +85,14 @@ impl BridgeSource {
     }
 
     /// The still that answers `frame_id`, as BGRA.
-    fn still(&mut self, frame_id: u64,limits:FrameLimits) -> io::Result<BgraImage> {
+    fn still(&mut self, frame_id: u64,limits:FrameLimits) -> io::Result<CapturedImage> {
+        if self.synthetic() {
+            let grant=self.channel.capture.synthetic_snapshot(self.size)?;
+            let mut image=CaptureImageBuilder::new(self.size,FrameLimits::RESOURCE,&grant,CaptureOwner::SourcePixels)?;
+            crate::screen::core::synthetic::render(frame_id,&mut image)?;
+            let image=image.freeze();let target=limits.fit(image.size());
+            return image.downscale(target,limits,&grant,CaptureOwner::ScaledPixels);
+        }
         if let Some(last) = self.last_still {
             let left = STILL_INTERVAL.saturating_sub(last.elapsed());
             std::thread::sleep(left);
@@ -95,10 +105,12 @@ impl BridgeSource {
             .next_picture(STILL_TIMEOUT, Picture::still)
             .map_err(io::Error::other)?
             .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "no still from the app"))?;
-        let image=decode_still(&picture.data)?;
+        let grant=picture.data.grant()?;
+        let image=decode_still(picture.data.as_slice(),&grant,
+            if matches!(self.channel.phase(),Phase::Ready {projection:true,..}) {CaptureOwner::Readback} else {CaptureOwner::SourcePixels})?;
         let target=limits.fit(image.size());
         if target==image.size() {limits.check(target)?;Ok(image)}
-        else {downscale_bgra_with_limits(&image.view(),target,limits)}
+        else {image.downscale(target,limits,&grant,CaptureOwner::ScaledPixels)}
     }
 
     fn tiles_frame(&mut self, request: &StageRequest) -> Result<StageFrame, StageError> {
@@ -111,12 +123,14 @@ impl BridgeSource {
             self.epoch=Some(request.encoder_epoch);
         }
         // Accessibility remains the preview/snapshot fallback when projection is absent.
-        if !projected && !super::bridge_channels::prereqs().accessibility_on() {
+        if !projected && !self.synthetic() && !super::bridge_channels::prereqs().accessibility_on() {
             return Ok(StageFrame::Paused(SessionState::NoDisplay));
         }
         let failed = |error| StageError::new(ScreenErrorCode::CaptureFailed, error);
-        let limits=self.frame_limits_for_contract(request.frame_contract);
-        let image=self.still(request.frame_id,limits).map_err(failed)?;
+        // Read native geometry before the single output downscale. Treating a
+        // legacy-sized intermediate as source geometry would repeatedly report
+        // a resize against the app's unchanged native display dimensions.
+        let image=self.still(request.frame_id,FrameLimits::RESOURCE).map_err(failed)?;
         let source_size = if projected {self.size} else {image.size()};
         if !projected && source_size != self.size {
             // Rotated or resized: the pipeline starts a new picture group.
@@ -127,18 +141,20 @@ impl BridgeSource {
         let image = if image.size() == size {
             image
         } else {
-            downscale_bgra_with_limits(&image.view(),size,request.frame_contract.map_or(FrameLimits::LEGACY,|c|c.limits)).map_err(failed)?
+            image.downscale(size,request.frame_contract.map_or(FrameLimits::LEGACY,|c|c.limits),&image.grant(),CaptureOwner::ScaledPixels).map_err(failed)?
         };
         let encoder_failed = |error| StageError::new(ScreenErrorCode::EncoderFailed, error);
+        let generation=image.generation().value();
         let mut tiles = match self.tiles.take() {
-            Some((epoch, encoder)) if epoch == request.encoder_epoch => encoder,
+            Some((epoch, previous, encoder)) if epoch == request.encoder_epoch && previous==generation => encoder,
             _ => {
-                let encoder: Box<dyn ScreenEncoder> = Box::new(TilesScreenEncoder::new_with_limits(size,request.frame_contract.map_or(FrameLimits::LEGACY,|c|c.limits)).map_err(encoder_failed)?);
-                crate::screen::core::host_hybrid::wrap(encoder,request).map_err(encoder_failed)?
+                let grant=image.grant();
+                let encoder: Box<dyn ScreenEncoder> = Box::new(crate::screen::core::host_codec_adapters::AdmittedTilesEncoder::new(size,request.frame_contract.map_or(FrameLimits::LEGACY,|c|c.limits),grant.clone()).map_err(encoder_failed)?);
+                crate::screen::core::host_hybrid::wrap_captured(encoder,request,grant).map_err(encoder_failed)?
             },
         };
-        let frame = tiles.encode_frame(&image, request);
-        self.tiles = Some((request.encoder_epoch, tiles));
+        let frame = tiles.encode_captured(&image, request);
+        self.tiles = Some((request.encoder_epoch,generation,tiles));
         let frame = frame.map_err(encoder_failed)?;
         if frame.records.is_empty() {
             return Ok(StageFrame::Unchanged { source_size });
@@ -199,7 +215,7 @@ impl BridgeSource {
         };
         let accept = |picture: &Picture| {
             !picture.still() && picture.epoch() == epoch && (!want_key || picture.keyframe())
-                && (!hybrid || (picture.captured_video() && picture.data.get(8..16).is_some_and(|bytes|
+                && (!hybrid || (picture.captured_video() && picture.data.as_slice().get(8..16).is_some_and(|bytes|
                     u64::from_le_bytes(bytes.try_into().unwrap_or([0;8])) == request.frame_id)))
         };
         let picture = self
@@ -223,13 +239,14 @@ impl BridgeSource {
             Some(picture) if hybrid && picture.flags & 0x10 != 0 => {
                 let fail=|error| StageError::new(ScreenErrorCode::EncoderFailed,error);
                 let state=self.hybrid.as_mut().ok_or_else(||fail(io::Error::other("unchanged Android capture without base")))?;
-                let frame=state.1.repeat_external(request).map_err(fail)?;
+                let frame=state.2.repeat_external(request).map_err(fail)?;
                 if frame.records.is_empty() { Ok(StageFrame::Unchanged {source_size}) }
                 else { Ok(StageFrame::Encoded {records:frame.records,keyframe:frame.keyframe,capture_ts_us:now_us(),encoder,source_size}) }
             }
             Some(picture) if hybrid => {
                 let fail = |error| StageError::new(ScreenErrorCode::EncoderFailed,error);
-                let data = &picture.data;
+                let data = picture.data.as_slice();
+                let grant=picture.data.grant().map_err(fail)?;
                 let size = request.size;
                 let limits=request.frame_contract.map_or(FrameLimits::LEGACY,|c|c.limits);
                 let raw_len=limits.check(size).map_err(fail)?;
@@ -240,26 +257,30 @@ impl BridgeSource {
                 let video_len = u32::from_le_bytes(head[16..20].try_into().map_err(|_|fail(io::Error::other("Android frame video length")))?) as usize;
                 if FrameSize::new(width,height) != size || video_len > crate::screen::core::wire_binary::MAX_RECORD_BYTES
                     || end.checked_add(video_len) != Some(data.len()) { return Err(fail(io::Error::other("Android raw/video pair size mismatch"))); }
-                let mut rgba = data[20..end].to_vec();
-                for pixel in rgba.chunks_exact_mut(4) { pixel.swap(0,2); pixel[3]=255; }
-                let image = BgraImage::from_vec_with_limits(size,rgba,limits).map_err(fail)?;
-                let fresh = self.hybrid.as_ref().is_none_or(|(epoch,_)|*epoch != request.encoder_epoch);
-                if fresh { self.hybrid = Some((request.encoder_epoch,crate::screen::core::host_hybrid::HybridEncoder::for_external(request).map_err(fail)?)); }
+                let mut pixels=AdmittedBytes::copy(&grant,CaptureOwner::Readback,&data[20..end]).map_err(fail)?;
+                for pixel in pixels.as_mut_slice().chunks_exact_mut(4) { pixel.swap(0,2); pixel[3]=255; }
+                let image=CaptureImageBuilder::from_bytes(size,limits,&grant,pixels).map_err(fail)?.freeze();
+                let generation=grant.generation().value();
+                let fresh = self.hybrid.as_ref().is_none_or(|(epoch,previous,_)|*epoch != request.encoder_epoch || *previous!=generation);
+                if fresh { self.hybrid = Some((request.encoder_epoch,generation,crate::screen::core::host_hybrid::CapturedExternalHybrid::new(request,grant.clone()).map_err(fail)?)); }
                 let mut stamped = request.clone(); stamped.keyframe |= picture.keyframe();
                 let state = self.hybrid.as_mut().ok_or_else(||fail(io::Error::other("missing Android hybrid encoder")))?;
-                let frame = state.1.encode_external(&image,&stamped,crate::screen::core::host_backend::EncodedFrame {
-                    records:if video_len==0 { Vec::new() } else {vec![data[end..].to_vec()]},keyframe:picture.keyframe(),
+                let records=if video_len==0 {CapturedRecords::empty(&grant)} else {
+                    AdmittedBytes::copy(&grant,CaptureOwner::CodecOutput,&data[end..]).and_then(CapturedRecords::one)
+                }.map_err(fail)?;
+                let frame = state.2.encode_external(&image,&stamped,crate::screen::core::host_backend::CapturedEncodedFrame {
+                    records,keyframe:picture.keyframe(),
                 }).map_err(fail)?;
                 if frame.records.is_empty() { return Ok(StageFrame::Unchanged {source_size}); }
                 Ok(StageFrame::Encoded { records:frame.records,keyframe:frame.keyframe,capture_ts_us:now_us(),encoder,source_size })
             }
-            Some(picture) => Ok(StageFrame::Encoded {
-                keyframe: picture.keyframe(),
-                records: vec![picture.data],
+            Some(picture) => {let keyframe=picture.keyframe();Ok(StageFrame::Encoded {
+                keyframe,
+                records: CapturedRecords::one(picture.data).map_err(|e|StageError::new(ScreenErrorCode::EncoderFailed,e))?,
                 capture_ts_us: now_us(),
                 encoder,
                 source_size,
-            }),
+            })},
             None if want_key => Err(StageError::new(
                 ScreenErrorCode::EncoderFailed,
                 io::Error::new(io::ErrorKind::TimedOut, "no key frame from MediaCodec"),
@@ -285,7 +306,7 @@ fn ended_error(reason: String) -> StageError {
 }
 
 /// A still of the app: width and height (u32 little endian), RGBA rows.
-pub(crate) fn decode_still(data: &[u8]) -> io::Result<BgraImage> {
+pub(crate) fn decode_still(data: &[u8],grant:&CaptureGrant,owner:CaptureOwner) -> io::Result<CapturedImage> {
     let invalid = |text: &str| io::Error::new(io::ErrorKind::InvalidData, text.to_string());
     let header = data
         .get(..STILL_HEADER)
@@ -299,15 +320,16 @@ pub(crate) fn decode_still(data: &[u8]) -> io::Result<BgraImage> {
     if pixels.len() != len {
         return Err(invalid("still size does not match its pixels"));
     }
-    let mut bgra = pixels.to_vec();
-    for pixel in bgra.chunks_exact_mut(4) {
+    let mut bgra = AdmittedBytes::copy(grant,owner,pixels)?;
+    for pixel in bgra.as_mut_slice().chunks_exact_mut(4) {
         pixel.swap(0, 2);
         pixel[3] = 0xFF;
     }
-    BgraImage::from_vec_with_limits(size,bgra,FrameLimits::RESOURCE)
+    Ok(CaptureImageBuilder::from_bytes(size,FrameLimits::RESOURCE,grant,bgra)?.freeze())
 }
 
 impl ScreenSource for BridgeSource {
+    fn capture_grant(&self)->Option<CaptureGrant> {self.channel.capture.current()}
     fn frame_limits(&self)->FrameLimits {self.limits}
     fn frame_limits_for_contract(&self,contract:Option<crate::screen::core::frame_budget::FrameContract>)->FrameLimits {
         if contract.is_some() {self.limits} else {FrameLimits::LEGACY}
@@ -319,7 +341,7 @@ impl ScreenSource for BridgeSource {
         let request=self.activity_request;
         self.channel.send(json!({"op":"capture_active","active":active,"request":request}));
         let reply=self.channel.next_picture(Duration::from_secs(10),|picture| picture.flags & 0x20 !=0 && picture.data.len()==9
-            && picture.data[0]==u8::from(active) && picture.data.get(1..9).is_some_and(|bytes|u64::from_le_bytes(bytes.try_into().unwrap_or([0;8]))==request))
+            && picture.data.as_slice()[0]==u8::from(active) && picture.data.as_slice().get(1..9).is_some_and(|bytes|u64::from_le_bytes(bytes.try_into().unwrap_or([0;8]))==request))
             .map_err(io::Error::other)?;
         if reply.is_none() {return Err(io::Error::new(io::ErrorKind::TimedOut,"Android capture pause/resume was not acknowledged"));}
         self.capture_active=active; Ok(())
