@@ -119,6 +119,24 @@ Fernfenster, Programmstart und RDP besitzen abgegrenzte Umsetzungsaufträge.
 | B6 Nachreview des vollständigen Paket-/IPC-/Decoderbudgets (83) | `review_b6_final` (Folgeauftrag) | Nutzervorgabe `gpt-6-astra`, `xhigh` | 9 |
 | B6 Android-Skalierung und vollständige Bildbesitzerbilanz (84) | `decoder_identity` (Folgeauftrag) | `gpt-6.1-sol`, `xhigh` | 9 |
 
+
+| B1 Recovery-/Root-/Drive-/OAuth-Fixtures | `storage_fixtures` | `gpt-6-astra`, `medium` | 8 |
+| B3 Runtime-/Profil-Fixtures | `launcher_fixtures` | `gpt-6-astra`, `medium` | 8 |
+| B7/B8 Login-/RDP-/Familien-/Start-Fixtures | `session_fixtures` | `gpt-6-astra`, `high` | 9 |
+| B5/B7 Route-/TCP-/Exec-Fixtures | `transport_fixtures` | `gpt-6-astra`, `high` | 9 |
+| B6/P32 Android-Präsentations-/Medien-Fixtures | `android_fixtures` | `gpt-6-astra`, `medium` | 8 |
+| B4 und Partial-Scan-/Ordner-Fixtures | `ui_fixtures` | `gpt-6-astra`, `medium` | 8 |
+| B1 tatsächliche Recovery-Ownership-/Rootregistry-Anschlüsse | `storage_fixtures` (Folgeauftrag) | `gpt-6-astra`, `medium` | 8 |
+| B6 Rekonstruktion, Parserbudget und Referenz-Fixtures | `screen_fixtures` | `gpt-6-astra`, `high` | 9 |
+| B6 Icon-/Sendebudget-/Sichtbarkeits-/Exit-Fixtures | `ui_fixtures` (Folgeauftrag) | `gpt-6-astra`, `medium` | 8 |
+| B6-R9 kritischer 4K-Vertragsabgleich | `review_b6_final` (Folgeauftrag) | Nutzervorgabe `gpt-6-astra`, `xhigh` | 9 |
+| B6-R9 durchgängige größere v2-Ressourcenklasse | `screen_4k_admission` | `gpt-6-astra`, `high` | 9 |
+| B6-R9/R10 Rendererbesitz und Sitzungswechsel, Detailplan | `renderer_retirement_plan` | Nutzervorgabe `gpt-6-astra`, `max` | 9 |
+| B6-R9 cgroup-Wurzel, Abbruchbesitz und Snapshotbindung | `screen_4k_admission` (Folgeauftrag) | `gpt-6-astra`, `high` | 9 |
+| B6-R9 native Capture-Zulassung, Detailplan | `capture_admission_plan` | Nutzervorgabe `gpt-6-astra`, `max` | 9 |
+| B6-R9/R10 Rendererbesitz und Sitzungswechsel, Umsetzung | `renderer_retirement` | `gpt-6.1-sol`, `xhigh` | 9 |
+| B6-R9 portabler Capture-Besitzerkern und Host-Trait | `capture_core` | `gpt-6.1-sol`, `xhigh` | 9 |
+
 Belegt sind die expliziten Modell-/Effortparameter der genannten Hostaufrufe.
 Antwortmodell-Metadaten sind über das verwendete Collaboration-Werkzeug nicht
 verfügbar. Gewählt wurde ausschließlich unter Codex-Kandidaten auf dem
@@ -550,8 +568,257 @@ noch aus; dafür wurde kein lokaler Build oder Test gestartet.
   extrahiert und geclustert; die vier Dokumente unter `native/src` bleiben
   durch `--code-only` außerhalb dieses AST-Graphen.
 
-- B6-Auflösungsgrenze des aktuellen Kandidaten: `MAX_WORKING_BYTES=512 MiB`
+- B6-Auflösungsgrenze vor der R9-Korrektur: `MAX_WORKING_BYTES=512 MiB`
   und `I≤W/24` begrenzen v2 auf 5.592.405 Pixel. 3840×2160 wird dadurch
   verkleinert; die getrennten Legacy-/RAW-Verträge werden nicht auf diese
-  Reserve umgestellt. Die Wirkung auf P30/P31 ist ausdrücklich im
-  Gesamtreview zu beurteilen, statt Auflösungsparität zu behaupten.
+  Reserve umgestellt. Astra bestätigt diesen Widerspruch zu V7/P30 als offenen
+  Produktfehler B6-R9. Eine Beschreibung der Grenze erfüllt den Auftrag nicht;
+  die folgende Korrektur ist vor Gesamtreview und Remote-Suite erforderlich.
+
+
+### B6-R9: finaler Korrekturplan vom 2026-10-26
+
+Ziel ist native 3840×2160-Rekonstruktion bei 2 Mbit/s nach vollständiger
+verlustfreier Korrektur, wenn Capture, Codec, Textur und Sitzungsressourcen
+sie tragen. Die bestehende Bilanz `I≤W/24` und
+`20I+32(R+1099)+(E−I)≤W` bleibt verbindlich. Der Befund und die zweite
+Lückenrecherche stehen in `review-b6.md`, Abschnitt B6-R9.
+
+1. Eine getrennte erweiterte v2-Klasse erlaubt höchstens 864 MiB
+   (`24×4×4096×2304`); das ist eine Implementierungsgrenze, kein Gerätefakt.
+   Die 512-MiB-RAW-/Legacygrenze bleibt erhalten. Typisierte Plattformfakten
+   begrenzen die Freigabe, ein gemeinsam gezählter Besitzer bindet zugesagte
+   Sitzungsbudgets bis zum Ende der Sitzung. Fehlende Ressourcenfakten
+   begründen keine Erweiterung. Erwartung: genügend Ressourcen erlauben
+   4K, kleinere Angebote und parallele Zusagen überschreiten das Budget nicht.
+2. Windows berücksichtigt freien physischen Speicher, möglichen Prozess-Commit
+   und verfügbaren virtuellen Adressraum. Linux berücksichtigt MemAvailable,
+   die zugehörige cgroup-Hierarchie und wirksame Prozessgrenzen. Die Auswahl
+   eines konservativen Anteils ist eine Ressourcenpolitik, kein Beweis gegen
+   spätere globale Speicherkonkurrenz; die Sitzung behält ihre Zusage, statt
+   durch ihre eigenen bereits angelegten Bilder nachträglich kleiner zu werden.
+   Der vorhandene Transferhelper liefert lediglich AvailPhys beziehungsweise
+   MemAvailable und reicht allein für eine Erweiterung nicht aus.
+3. ServerHello signalisiert die größere Klasse vor ClientHello. Fehlt das
+   Signal, bleibt das Clientangebot im alten 512-MiB-Rahmen. Der angenommene
+   Vertrag ist stets die Schnittmenge. Erwartung: alte Hosts erhalten kein
+   unverständliches Angebot, alte Viewer werden nicht über ihr Angebot hinaus
+   zugelassen. Das vorhandene HMAC bindet Relationsdaten; eine zusätzliche
+   kryptografische Bindung des Fähigkeitsmarkers wird nicht behauptet.
+4. Capture-Einzelbildgrenzen bleiben von der sitzungsweiten 24-Besitzerbilanz
+   getrennt. Worker, PRODUCE und Hostpipeline behalten Seiten-, Pixel- und
+   individuelle Capturegrenzen; Android behält sein tatsächliches Heapangebot.
+   Erwartung: ein zulässiges Desktop-4K-Capture wird nicht erneut durch ein
+   fälschlich als Sitzungsbudget gelesenes RAW-Budget verkleinert.
+5. GOP-Kopfstruktur wird vor der Vertragserweiterung ohne erfundene
+   512-MiB-Sitzungsfreigabe gelesen; erst der vollständige, gegen Accepted
+   gebundene Vertrag erlaubt Records und Allokationen. Renderer sowie
+   Preview→Full halten dieselbe einmal zugelassene Klasse. Erwartung:
+   größere gültige GOPs bleiben lesbar, gemischte Legacy/v2- oder überhöhte
+   Verträge bleiben abgewiesen, SET_MODE erweitert kein Budget.
+6. Die eine Remote-Task-Suite erhält native 4K-Zulassung, Lossless-Pixelvergleich,
+   alte-Hello-Gegenstelle, kleine Ressourcen, gemeinsame Sitzungsbelegung und
+   Preview→Full als zusammenhängende Fälle. Keine lokale Ausführung und keine
+   zusätzliche Prüfpipeline. Der Astra-Nachreview bewertet den konkreten
+   Anschluss; der frische Opus-Gesamtreview folgt auf dem integrierten Stand.
+
+Quellen erneut abgerufen am 2026-10-26: Microsoft MEMORYSTATUSEX
+(<https://learn.microsoft.com/en-us/windows/win32/api/sysinfoapi/ns-sysinfoapi-memorystatusex>),
+Linux cgroup v2 (<https://docs.kernel.org/admin-guide/cgroup-v2.html>),
+Serde unbekannte JSON-Felder (<https://serde.rs/container-attrs.html#deny_unknown_fields>).
+Die Plattformabfragen liefern Momentaufnahmen, keine physische Reservierung.
+Auswahl für die zusammenhängende R9-Produktkorrektur: coding, Grad 9, großer
+Umfang; lokaler Codex-Client 0.164.0 nachgewiesen, GPT-6-Astra/high gewählt.
+Codex-Credits sind der autorisierte Ausführungsweg; numerischer Kontingentverbrauch
+ist nicht gemessen. Der Startparameter belegt die konfigurierte Modellwahl,
+kein davon unabhängiger Nachweis jeder tatsächlich verarbeiteten Modellantwort.
+
+
+### Integration der gemeinsamen Prüfquellen
+
+Die Quellenfixtures der Speicher-, Launcher-, Sitzungs-, Transport-, Desktop-
+und Androidpakete sind integriert, aber nicht kompiliert oder ausgeführt.
+Die eine Suite verwendet das kandidatengebundene Manifest; ihr Gerätepfad
+benötigt ausschließlich die zugehörigen APKs. Der Auswerter verlangt tatsächliche
+Fallnamen und erfolgreiche Abschlüsse, statt einen fehlenden Medienpfad oder eine
+fehlende Fixture als Erfolg zu behandeln. Erfasst sind auch die direkt betroffenen
+Sync-/Backup-/Omissionverträge K1–K6. Die genaue Auswahl und die Grenzen stehen im
+Manifest und in `docs/refs/rv1-remote-suite.md`.
+
+Bei der Integration entdeckte Main einen B3-Produktfehler: Scheiterte nach einer
+Codex-Erstregistrierung der Ownershipmarker, blieb die gerade neu erzeugte
+Konfigurationsdatei zurück. `codex::restore_owned` stellt jetzt Abwesenheit oder
+den vorherigen eigenen Inhalt wieder her; abweichende inzwischen gelesene
+Benutzerbytes bleiben erhalten. Auch Skillfehler sammeln beide Rollbackfehler,
+statt sie zu verwerfen. `d3c6a994` ist auf `main` gepusht; Rust-AST und
+Whitespace wurden statisch geprüft, keine Kompilierung oder Laufzeitprüfung.
+
+Der vorgeschriebene frische Opus-Gesamtreview hat noch keine Codeprüfung geliefert.
+Sein Start scheiterte am Modellzugang. Die Zugangsvoraussetzung beziehungsweise
+die angefragte ausdrückliche Effortausnahme ist offen; die unabhängige R9-Korrektur
+und Suiteintegration laufen weiter. Kein Test- oder Releaseerfolg wird behauptet.
+
+
+### B6-R10: Preview nach erneutem Sichtbarwerden
+
+Main hat am 2026-10-26 während der R9-Integration einen konkreten
+Kompatibilitätsfehler im bereits berührten Previewpfad festgestellt:
+`screen_tile_face` setzt beim Verbergen `wait_frame` und entfernt die Textur.
+`screen_tile_grid` verlangt danach `session.input_ready()`, bevor es ein neues
+Bild übernimmt. `ResumeGate::complete` kann jedoch erst durch die tatsächliche
+Präsentation freigeben; die Kachel registrierte keinen solchen Callback und
+verwarf mit `CpuTexture::update` die vorhandene `PresentedFrame`-Identität.
+
+Der aktive Korrekturauftrag erhält deshalb den Ablauf „aktuelles zulässiges
+Bild übernehmen → exakt dieses Bild darstellen → bestehenden Präsentationsbeleg
+senden“. Der Eintritt in die Darstellung verwendet `can_present`, nicht die
+bereits abgeschlossene Eingabefreigabe. `update_frame` erhält die Identität bis
+zur fertigen Skalierung und zur Textur. Alte GOPs, alte Sichtbarkeitsepochen und
+unsichtbare Bilder bleiben gesperrt. Das Abnahmesignal ist Hidden→Visible mit
+passendem Ack und frischem Bild, ohne vorzeitige Inputfreigabe. Die neue
+Previewfixture gehört zur selben gemeinsamen Suite; der B6-Nachreview prüft
+R9 und diesen Anschluss zusammen. Das ist eine Behebung im betroffenen
+Preview-/Full-Kompatibilitätsweg, kein eigener Releasebatch.
+
+### B6-R9/R10: Integrationsstand und Renderer-Nachbefund
+
+Am 2026-10-26 ist die größere Klasse mit OS-Zulassung, Hello-/Acceptedbindung,
+getrennter Capturegrenze, GOP-/IPC-Validierung und Preview-Darstellungsbeleg als
+Quelle integriert. Die geänderten Rust-/Kotlinquellen lassen sich statisch als
+Syntaxbaum lesen; das ist kein Compiler- oder Laufzeitnachweis. Die gemeinsame
+Suite verlangt die neuen 4K-, Hello-, Speicherbesitzer- und Previewfixtures
+ausdrücklich; Linux verlangt zusätzlich die cgroup-Ancestorfixture.
+
+Der erneut konfigurierte Astra/xhigh-Nachreview hat konkrete offene
+Renderergrenzen gefunden: egui 0.29.1 hält `ColorImage` in `TexturesDelta.set`
+über den `TextureHandle`-Drop hinaus; `YuvResources` hält seinen letzten
+Sitzungslease bis zu einem späteren Upload und kann damit dessen Zulassung
+verhindern. Ein Verschieben einer Zuweisung hinter `TextureHandle::set` behebt
+den ausstehenden Upload nicht. Korrekturziel ist die Bindung bis zum tatsächlichen
+Rendererverbrauch bei gleichzeitigem Abfluss nach Sitzungsende und CPU-Wechsel.
+Die detaillierte Quellenprüfung und die konkrete Anschlussfläche werden im
+laufenden B6-Review festgehalten. Vor dessen Abschluss wird R9 nicht geschlossen.
+
+Die erneute Modellselektion für diesen Nachreview (coding, Grad 10) lieferte
+`no_feasible_model`: Astra/xhigh liegt mit 57,99 knapp unter der konfigurierten
+58er-Schwelle. Die ausdrückliche Nutzervorgabe Astra/xhigh gilt weiter; eine
+stillschweigende Herabstufung der Aufgabe oder des Efforts findet nicht statt.
+
+### R9-Nachkorrektur: Plattformwurzel, Abbruch und Snapshot
+
+Bestandsbefund des Nachreviews: `mountinfo.root == "/"` beweist in einer
+cgroup-Namespace nicht die vollständige Hierarchie. `DecodeState` gibt seinen
+`Shared`-Besitzer vor dem noch gehaltenen GOP frei. Die Capture-Tasktupel geben
+bei tatsächlichem Taskabbruch die Stage vor dem Ergebnis frei. Der normale
+Actor-Drop wartet dagegen auf seinen Job; er ist nicht allein der Auslöser.
+Schließlich sendet `snapshot_epoch` auch nach v2-Accepted weiterhin einen
+vertragslosen Legacykopf und begrenzt das Standbild nicht durch Accepted.
+
+Der abgegrenzte Korrekturplan ist vor der Änderung festgelegt:
+
+1. Linux-v2-Ressourcen dürfen die größere Klasse nur bei belegter vollständiger
+   Hierarchiesicht anbieten. Die Kernelmerkmale `cgroup.events` und `cgroup.type`
+   existieren ausschließlich auf echten Nichtwurzel-cgroups, auch wenn eine
+   Namespace sie als `/` zeigt. Nur ihr belegtes Fehlen an einer stabilen,
+   lesbaren cgroup2-Wurzel ist ein positiver Wurzelbeleg. Sichtbare Dateien,
+   Lesefehler, wechselnde Mounts und nicht aufgelöste v1-Vorfahren erlauben
+   keine Erweiterung; bekannte engere Nachfahrenlimits bleiben wirksam.
+   Erwartung: normaler belegter v2-Root bleibt 4K-fähig, ein verborgener
+   limitierender Vorfahr wird nicht durch globales MemAvailable übergangen.
+2. Decoder-/Captureergebnisse halten ihre Speicherzusage bis nach dem letzten
+   eigenen Bild-/Recordfeld. `End` und Verbindungsverlust verwerfen den GOP;
+   Struct-/Tuple-Reihenfolgen sichern auch den Abbruchfall. Erwartung:
+   eine neue Zulassung darf den belegten Raum erst nach dem letzten Bilddrop
+   wieder verwenden. Bestehender kontrollierter Actor-Abfluss bleibt erhalten.
+3. Snapshot verwendet denselben Accepted-Geometrie-/Speichervertrag; der
+   Tiles-Standbildstrom darf dessen Hybridfähigkeit einschränken, aber kein
+   v2/Legacy-Mischpaar erzeugen. Capture, Downscale, Encoder und GOP-Kopf
+   verwenden dieselben Grenzen. Erwartung: ein Standbild innerhalb einer
+   kleinen v2-Sitzung ist durch den bestehenden Reader akzeptierbar und
+   überschreitet dessen Budget nicht; Legacy-Snapshots bleiben unterstützt.
+   Das gilt auch vor dem ersten PRODUCE im Capture-Worker: dessen CAPTURE-
+   Nachricht muss den optionalen Vertrag bis zur Workerzulassung tragen.
+   Fehlende optionale Angaben behalten die bisherige Legacybedeutung;
+   ein neuer Vertrag darf eine bestehende Zulassung nicht stillschweigend
+   erweitern. Die dafür notwendige direkte Fläche umfasst `worker_wire.rs`,
+   `host_worker_client.rs` und `host_worker_main.rs`.
+   Ein Familienstandbild behält die tatsächlich aufgenommene Layoutrevision.
+   Nach dem höher nummerierten Snapshot-GOP beginnt Liveübertragung mit einem
+   neuen vollständigen GOP: andernfalls verwirft der bestehende Viewer die
+   fortgesetzten Bilder des alten, kleineren GOP. Alte Präsentationsbelege
+   dürfen den neuen Livebezug nicht freigeben.
+
+Quellenabgleich vom 2026-10-26: Rust Reference, Destructors
+(<https://doc.rust-lang.org/reference/destructors.html>); Kernel cgroup v2
+(<https://docs.kernel.org/admin-guide/cgroup-v2.html>), Kernelimplementierung
+`cgroup_base_files` und `cgroup_addrm_files`
+(<https://raw.githubusercontent.com/torvalds/linux/master/kernel/cgroup/cgroup.c>).
+Der verbleibende Rendererplan wird unabhängig auf der gebundenen eframe-/epaint-
+Version 0.29.1 ausgearbeitet. Die Quellenfixtures bleiben Teil derselben einen
+Remote-Suite. Es gibt keinen Zwischenbuild und keinen Zwischenrelease.
+
+### R9-Erstplan: native Aufnahme vor der Verkleinerung
+
+Am 2026-10-26 bestätigt die Anschlussprüfung eine weitere Zulassungsgrenze:
+`Worker::admit` hält nur die Bytes des Accepted-Vertrags. `Stage::memory`
+klont die Sitzungszusage. `ScreenSource::capture_snapshot` erzeugt dagegen
+zuerst das native Bild und verkleinert es danach. Bei einem kleinen Vertrag
+können dieses Bild und die gespeicherte Quellkopie zusammen bereits dessen
+gesamtes Budget überschreiten. Die konstante RAW-Grenze von 512 MiB ist ein
+Allokationslimit und kein zusätzlich gehaltener Budgetbesitzer.
+
+Ziel der Nachplanung ist eine gemeinsam gezählte Zusage vor der ersten
+nativen Bildallokation, einschließlich Quellöffnung, Hintergrundproduktion,
+Größenwechsel und letzter gespeicherter Quellkopie. Die unveränderliche
+Accepted-Zusage und die 24 Bildbesitzer des v2-Vertrags bleiben erhalten.
+Offen ist die genaue, aus den Quellen abzuleitende Pufferzahl für X11,
+PipeWire, DXGI, WGC, Android-Projektion, synthetische Quellen und die
+Komposition einer Fensterfamilie. Der Detailplan muss auch die Grenze
+zwischen Daemon und getrenntem Capture-Worker ausdrücklich benennen.
+
+Erwartetes Ergebnis: Eine kleine Anzeige darf eine größere native Quelle
+weiter verkleinern, wenn deren Aufnahme zusätzlich zugelassen ist; bei
+fehlendem Budget erfolgt die Ablehnung vor der betreffenden Allokation.
+Ein Wechsel oder Abbruch gibt die Zusage erst nach ihren letzten Bilddaten
+frei. 4K, Legacy, Preview/Full, Snapshot und Fensterfamilien bleiben als
+Kompatibilitätsfälle im selben Auftrag. Diese Planung ergänzt die bereits
+beauftragte R9-Korrektur und ist kein neuer Funktionsauftrag.
+
+Die Modellauswahl für die abgegrenzte Detailplanung (planning, Grad 9)
+lieferte `no_feasible_model`; die ausdrückliche Vorgabe Astra/max für Planung
+wird im Agentenaufruf verwendet. Ein unabhängiger Beleg des tatsächlich
+antwortenden Modells liegt für den Collaboration-Host nicht vor.
+
+### R9/R10: abgeschlossener Rendererplan
+
+Der [Renderer-Detailplan](renderer-speicher.md) ist am 2026-10-26 einschließlich
+der zweiten API-Lückenprüfung abgeschlossen. Eigener Ressourcenbesitz,
+begrenzte Uploadtickets, der Abfluss nach dem letzten Renderpass und eindeutige
+Sitzungsinstanzen schließen die konkret geplanten CPU-/WGPU-/Glow-Übergänge.
+Die Umsetzung wird gemäß Modellselektion mit Sol 6.1/xhigh konfiguriert.
+Der tatsächliche Collaboration-Host ist im Selektor als verfügbarer und
+verifizierter Codex-Client eingetragen; fremde lokale CLI-Abos sperren ihn
+nicht. Die Antwortmodellmetadaten selbst sind weiterhin nicht einsehbar.
+
+Die Aufnahmezulassung steht im ergänzten [Detailplan](aufnahme-speicher.md). Beide Änderungen
+gehören zum selben B6-Batch und erhalten danach denselben Astra/xhigh-Nachreview.
+Es gibt weiterhin keinen Build-, Test- oder Releasestart.
+
+### R9: abgeschlossener Aufnahmeplan
+
+Der [Aufnahme-Detailplan](aufnahme-speicher.md) ist einschließlich zweiter
+Lückenrecherche und Main-Integrationsprüfung abgeschlossen. Er bindet native
+Quellpuffer vor Allokation, verteilt eine gemeinsame Parentzusage auf
+Capturehelfer und bewahrt Bildbesitz bis zum tatsächlichen Ergebnis-, Callback-
+oder Prozessende. Die Legacy-/v2-Verträge bleiben erhalten. Erstes
+Umsetzungsergebnis ist der plattformfreie Besitzerkern; die produktiven
+Plattform- und Prozessadapter folgen auf dessen festen API-Vertrag.
+
+Die Modellselektion für den abgegrenzten Capture-Kern wurde erst nach Abschluss
+dieses Plans ausgeführt: coding, Grad 9, große zusammenhängende Änderung,
+Codex-Collaboration als belegter Ausführungshost. Ergebnis und Startkonfiguration
+sind `gpt-6.1-sol`/`xhigh`. Tatsächliche Antwort-Modellmetadaten sind im
+Collaboration-Werkzeug nicht zugänglich; der Startparameter ist daher der
+verfügbare Modellbeleg. Kontingentrest und tatsächlicher Creditsverbrauch sind
+nicht gemessen. Die Lese-/Schreibfläche ist auf Pool, Capturetypen, Bildbesitz,
+Host-Trait und deren Quellenfixtures begrenzt.
