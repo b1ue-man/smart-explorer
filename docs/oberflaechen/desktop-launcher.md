@@ -178,3 +178,10 @@ Geräteaktionen führen zu derselben zentralen Geräteseite und ihren
 Fenster-/Programm-/TCP-/RDP-Anschlüssen; deren Grenzen stehen in
 [fernzugriff.md](fernzugriff.md). Die eigene Android-Dateivorschau ist getrennt
 in [medien.md](medien.md) dokumentiert.
+
+Der eigene Desktopflächenprozess registriert den Öffner für Fensterfamilien
+vor der Auswahl seines eframe- oder Wayland-Layer-Backends. Beide Backends
+zeichnen Programmauswahl und Familienöffnungsfehler innerhalb der gemeinsamen
+`show_surface`-Ansicht. Direct-/Roomziele und der jeweilige Ausgabekontext
+bleiben getrennt (`N/app/core/desktop_surface_app.rs`,
+`desktop_surface_grid_ui.rs`, `share_apps_ui.rs`).

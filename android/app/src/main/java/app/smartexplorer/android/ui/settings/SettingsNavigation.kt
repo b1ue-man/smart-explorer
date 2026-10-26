@@ -16,6 +16,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import app.smartexplorer.android.ui.NavRequest
 
 /** Same object ownership as desktop E12. No ordinal is persisted or used as a legacy route. */
 enum class SettingsArea(val label: String) {
@@ -23,6 +24,13 @@ enum class SettingsArea(val label: String) {
     Sync("Sync"), Vaults("Tresore"), Drives("Laufwerke"), Integration("Integration"),
     Appearance("Darstellung"), Updates("Updates"), Background("Hintergrund"), Diagnostics("Diagnose und Protokolle");
     val isShare: Boolean get() = this == ThisDevice || this == Devices || this == Rooms
+}
+
+/** Both settings ancestors must expose ShareScreen before it can consume this request. */
+internal fun deviceSettingsAreaFor(request: NavRequest?): SettingsArea? = when (request) {
+    is NavRequest.OpenApps, is NavRequest.OpenScreen, is NavRequest.ShowScreenGrid,
+    NavRequest.ShowShareRequests -> SettingsArea.Devices
+    else -> null
 }
 
 @Composable

@@ -26,8 +26,9 @@ pub(crate) struct ConfirmedAppWindow {
 }
 type WindowOpener=fn(&egui::Context,ConfirmedAppWindow)->Result<(),String>;
 static OPENER:OnceLock<WindowOpener>=OnceLock::new();
-pub(crate) fn install_window_opener(opener:WindowOpener)->Result<(),String> {
-    OPENER.set(opener).map_err(|_|"Appfenster-Öffner wurde bereits installiert.".into())
+/// Every GUI process installs the same P4 resolver, including standalone surfaces.
+pub(crate) fn install_window_opener() {
+    OPENER.get_or_init(||super::family_picker::open_confirmed);
 }
 pub(crate) fn device(ui:&mut egui::Ui,profiles:&ShareProfiles,device:&str,key:&str) {
     ui.separator();ui.heading("Programme auf diesem Gerät");
@@ -159,3 +160,7 @@ fn confirmed(target:&PeerOpenTarget,state:&State)->Option<ConfirmedAppWindow> {
         ||window.window_id.is_empty()||window.generation==0 {return None;}
     Some(ConfirmedAppWindow {target:target.clone(),node_id:state.node.clone()?,request:receipt.request.clone(),window:window.clone()})
 }
+
+#[cfg(test)]
+#[path = "batches_device_navigation_task_tests.rs"]
+mod device_navigation_task_tests;

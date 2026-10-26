@@ -80,9 +80,11 @@ fun SettingsScreen(
     var area by rememberSaveable { mutableStateOf(SettingsArea.ThisDevice) }
     val pending by AppNav.pending.collectAsStateWithLifecycle()
     LaunchedEffect(pending) {
-        when (pending) {
-            is NavRequest.OpenScreen, is NavRequest.ShowScreenGrid, NavRequest.ShowShareRequests -> area = SettingsArea.Devices
-            else -> Unit
+        deviceSettingsAreaFor(pending)?.let { area = it }
+    }
+    LaunchedEffect(Unit) {
+        AppNav.requests.collect { request ->
+            if (request == AppNav.pending.value) deviceSettingsAreaFor(request)?.let { area = it }
         }
     }
     LaunchedEffect(focus) {

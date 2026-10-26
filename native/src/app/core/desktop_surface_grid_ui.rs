@@ -23,6 +23,9 @@ use crate::desktop::core::layout::{Cell, ItemId, LayoutOp};
 use crate::desktop::os::open_target;
 use crate::desktop::os::store::unix_now;
 
+#[path = "desktop_surface_windows.rs"]
+mod windows;
+
 /// Space between the work area's edge and the first cell.
 const MARGIN: f32 = 12.0;
 /// How long a message of a finished handling stays.
@@ -102,6 +105,7 @@ pub(crate) fn show_surface(
             grid(ui, area, &mut cx);
             status_panel(ui.ctx(), area, &mut cx);
         });
+    windows::show(ctx);
 }
 
 /// The work area in points of the window (the whole window while unknown).

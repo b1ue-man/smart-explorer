@@ -23,6 +23,17 @@ Bridge verwendet denselben Kern und dieselben typisierten Rechtegrenzen.
 Registrierungen: `N/daemon/mod.rs`, `N/cli/mcp/server.rs:146` und
 `N/mobile/os/shared/domains/mod.rs:133`.
 
+Android führt `OpenApps`, `OpenScreen`, `ShowScreenGrid` und
+`ShowShareRequests` auch aus den Einstellungsbereichen Darstellung,
+Fehlerprotokoll und Info zur Geräteansicht. Die Einstellungsnavigation erhält
+die Anfrage bis zur Bearbeitung durch `ShareScreen`; Geräteidentität und
+Programmziel bleiben erhalten (`A/ui/settings/SettingsNavigation.kt`,
+`SettingsScreen.kt`, `A/ui/AppRoot.kt`). Der getrennte Desktopflächenprozess
+registriert den Familienbetrachter selbst. Die eframe-Fläche und die
+Wayland-Layer-Fläche zeichnen Programmauswahl und Fehler beim Öffnen einer
+Fensterfamilie über dieselbe Funktion `show_surface`
+(`N/app/core/desktop_surface_app.rs`, `desktop_surface_grid_ui.rs`).
+
 ## Besitz, Darstellung und Beendigung
 
 Loginbilder laufen binär zum Renderer. CLI/MCP erhalten Status und Bildmetadaten;

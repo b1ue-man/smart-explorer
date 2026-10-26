@@ -4,10 +4,7 @@ use super::*;
 
 impl App {
     pub fn new(just_updated: bool, initial_path: Option<PathBuf>) -> Self {
-        static WINDOW_OPENER: std::sync::Once = std::sync::Once::new();
-        WINDOW_OPENER.call_once(|| {
-            if let Err(error) = super::share_apps_ui::install_window_opener(super::family_picker::open_confirmed) { eprintln!("{error}"); }
-        });
+        super::share_apps_ui::install_window_opener();
         // DSK-M2: baseline first, so only later update requests close it.
         super::update_stop_ui::arm_window();
         Self::new_inner(just_updated, initial_path, true)
