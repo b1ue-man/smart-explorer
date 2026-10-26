@@ -1240,3 +1240,10 @@ gegen beide vorhandenen Binärlisten trennt die neuen, noch nicht kompilierten
 Abschlussfälle ausdrücklich vom vorhandenen Bestand. Kein bestehender
 Ressourcenfall entfällt. Nach Rootgraphrefresh und gemeinsamem Push folgt
 ausschließlich derselbe Remote-Fixloop.
+
+Kandidat `4a42b936` ist auf Main und Fixbranch gepusht. Sein Lauf
+`40400605922` meldet ausschließlich eine Formatabweichung am P27-
+Abschlussaufruf. Der gebundene Patch ist unverändert übernommen; sämtliche
+syntaktischen Blatttoken bleiben gleich. Die Lockdatei bleibt unverändert,
+Größenprüfung ohne Befund. Compiler- und Funktionsstufen dieses Versuchs
+sind übersprungen; der nächste Kandidat bleibt im selben Remote-Fixloop.

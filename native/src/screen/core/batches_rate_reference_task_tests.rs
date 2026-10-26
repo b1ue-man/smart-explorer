@@ -285,7 +285,10 @@ async fn screen(map: &iroh::RelayMap, profile: Profile) -> Measurement {
         });
     }
     transport::until(measured.end_us + 2_000_000).await;
-    tasks.finish().await.expect("screen measurement tasks finish");
+    tasks
+        .finish()
+        .await
+        .expect("screen measurement tasks finish");
     measured.observed = observed.lock().unwrap().clone();
     pair.close().await;
     measured
