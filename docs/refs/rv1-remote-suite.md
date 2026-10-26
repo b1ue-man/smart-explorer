@@ -607,3 +607,17 @@ Der nächste Profilaufbau scheitert an `tc` mit
 vorhanden; die vollständige Leistungsabnahme ist noch nicht erreicht.
 Keine Grenzwerte werden deshalb geändert. Die bereits fertigen Desktoplogs
 werden ausgewertet, ohne während des übrigen CI-Laufs Agenten zu aktivieren.
+
+
+### Android-Ergebnis desselben Kandidaten, Abruf 22:40:17 UTC
+
+Artefakt `12694710785`, SHA-256
+`5b6dc23ec8bb1538b05da4346ed48e504a3254664b6f804734f919aa48963acc`:
+Kandidatenbindung, Archivhash und sichere Archivpfade geprüft. Native Rust-/JNI-
+Bibliothek und App-APK wurden gebaut. Instrumentation-Kompilierung scheitert am
+ungültigen Compose-Import; Loginbesitzerfälle scheitern am Applicationstart,
+Mediengeometriefälle am Offsetvergleich. A01–A03 im Funktionsplan enthalten
+Quellbeleg, Erhaltungsvertrag und versionsgebundene Primärquellen.
+Instrumentation-APK und Handoffprovenienz fehlen; die Geräteprüfung startet
+nach der Workflowbedingung deshalb nicht. Der Job war nur noch in der
+Cache-Nachbereitung. Das vollständige Workflowende war noch nicht abgerufen.

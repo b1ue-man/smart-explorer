@@ -25,11 +25,13 @@ Messabschlusskorrekturen sind integriert. Lauf `40406246032` für `1ffbf4b0`
 bestätigt die Vorbereitung und erfolgreiche Windows-/Linux-Kompilierung.
 Die Desktop-Funktionsstufen scheitern an konkreten
 [Funktions- und Fixturebefunden F01–F57](plaene/2026-10-24-batches/rv1-funktionsplan.md).
-Android war beim Abruf 22:10:07 UTC noch im Checkout; sein Ergebnis fehlt.
-Main grenzt die Ursachen anhand der gebundenen Artefakte, Quellketten und
-Primärquellen ein. Noch kein Fixagent für diesen Durchgang aktiv, da die
-Pipeline läuft. Die Autorenkorrekturen, erfolgreiche vollständige Auswertung
-über denselben Remote-Einstieg und der eine terminale Remote-Release stehen aus.
+Android hat beim Abruf 22:40:17 UTC seine Build-/JVM-Stufe beendet: native
+Bibliothek und App gebaut, Instrumentation-Import sowie Login-/Medienfixtures
+fehlgeschlagen (A01–A03). Die Geräteprüfung konnte ohne Instrumentation-APK
+nicht starten. Der vollständige Korrekturplan umfasst M01–M14; die Modellwahl
+folgt jetzt. Cache-Nachbereitung allein verhindert keine Quellenkorrekturen.
+Autorenkorrekturen, erfolgreiche Auswertung über denselben Remote-Einstieg
+und der eine terminale Remote-Release stehen aus.
 Compilererfolg ist kein Funktions- oder Leistungsnachweis.
 
 This table is the live list of remaining work, roughly by value. The lower

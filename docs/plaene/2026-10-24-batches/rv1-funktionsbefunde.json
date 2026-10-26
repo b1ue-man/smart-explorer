@@ -418,5 +418,23 @@
     "stage": "linux p27-network",
     "diagnostic": "Exclusivity flag on, cannot modify.",
     "boundary": "Next network profile setup after retained first reference and screen artifacts."
+  },
+  "android": {
+    "A01": {
+      "file": "android/app/src/androidTest/java/app/smartexplorer/android/task/BatchesDeviceNavigationTaskTest.kt",
+      "diagnostic": "Unresolved reference assertDoesNotExist at import line 5"
+    },
+    "A02": {
+      "class": "app.smartexplorer.android.ui.login.LoginBitmapOwnerTest",
+      "failure": "WorkManager initialization during SmartExplorerApp.onCreate before case body"
+    },
+    "A03": {
+      "class": "app.smartexplorer.android.ui.viewer.BatchesMediaStateTest",
+      "cases": [
+        "batches_android_rotation_keeps_image_focus_in_image_coordinates",
+        "batches_android_letterbox_pan_is_clamped_to_the_fitted_image"
+      ],
+      "failure": "Bitwise Offset equality differs for identically displayed zero coordinate"
+    }
   }
 }
