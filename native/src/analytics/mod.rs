@@ -57,3 +57,7 @@ pub use storage_view::{
     is_aggregate_name, node_view, Approximations, ChildView, NodeKind, NodeView, PlatformTotals,
     VolumeRoot, OTHER_APP_DATA_NAME, UNCAPTURED_NAME,
 };
+
+#[path = "core/partial_merge.rs"]
+mod partial_merge;
+pub(crate) use partial_merge::{merge_retry_tree, preserve_retry_omissions, retry_node, RetryOmission};

@@ -36,6 +36,7 @@ impl App {
         let mut panel = self.analytics_panel;
         let mut open = true;
         let mut rescan: Option<StorageScanSource> = None;
+        let mut accept_drive_identity = false;
         let mut pick_folder = false;
         let mut cancel = false;
         let mut reveal: Option<String> = None;
@@ -63,15 +64,16 @@ impl App {
             String::new()
         };
 
-        egui::Window::new("📊 Speicher-Analyse")
+        super::dialog_geometry::window(ctx, "reclaim_ui.0", "📊 Speicher-Analyse")
             .id(egui::Id::new("analyse_reclaim"))
             .open(&mut open)
             .collapsible(false)
             .resizable(true)
+                .vscroll(true)
             .default_size([920.0, 640.0])
             .max_size(theme::window_content_limit(ctx))
             .constrain_to(ctx.screen_rect().shrink(16.0))
-            .min_width(500.0)
+            .min_width(500.0_f32.min(theme::window_content_limit(ctx).x))
             .constrain(true)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -89,6 +91,7 @@ impl App {
                     for (root, _free, _total) in &drives {
                         if ui.button(root.as_str()).clicked() {
                             rescan = Some(StorageScanSource::local(root.clone()));
+                            accept_drive_identity = true;
                         }
                     }
                     if ui.button("Ordner...").clicked() {
@@ -255,10 +258,11 @@ impl App {
                         );
                     }
                     ui.separator();
-                    egui::ScrollArea::vertical()
+                    egui::ScrollArea::vertical().min_scrolled_height(0.0)
                         .id_salt("reclaim_results")
                         .auto_shrink([false, false])
-                        .show(ui, |ui| {
+                        .max_height(super::dialog_geometry::remaining_height(ui, 1.0))
+                    .show(ui, |ui| {
                             let duplicate_title = result_count_label(
                                 "Duplikate",
                                 r.duplicate_groups.len(),
@@ -401,6 +405,9 @@ impl App {
                 .unwrap_or_else(|| self.analytics_default_root());
             self.open_picker(PickerPurpose::ReclaimFolder, &init);
         } else if let Some(scan_source) = rescan {
+            if accept_drive_identity && !scan_source.is_remote() {
+                self.accept_drive_consumer(super::drive_snapshot::DriveConsumer::Reclaim, scan_source.root());
+            }
             self.start_reclaim_source(scan_source);
         }
         if let (Some(path), Some(scan_source)) = (reveal, source.as_ref()) {

@@ -13,7 +13,7 @@ impl App {
             + usize::from(self.error_msg.as_ref().is_some_and(|current| {
                 !self.app_errors.iter().any(|entry| entry.detail == *current)
             }));
-        egui::Window::new(format!("Fehler-Protokoll ({})", scan_errors + app_errors))
+        super::dialog_geometry::window(ctx, "error_log_ui.0", format!("Fehler-Protokoll ({})", scan_errors + app_errors))
             .id(egui::Id::new("error_log_window"))
             .open(&mut open)
             .collapsible(false)
@@ -37,10 +37,11 @@ impl App {
                 if report.is_empty() {
                     ui.colored_label(theme::muted(ui), "Keine Fehler protokolliert.");
                 } else {
-                    egui::ScrollArea::vertical()
+                    egui::ScrollArea::vertical().min_scrolled_height(0.0)
                         .id_salt("error_report_text")
                         .auto_shrink([false, false])
-                        .show(ui, |ui| {
+                        .max_height(super::dialog_geometry::remaining_height(ui, 1.0))
+                    .show(ui, |ui| {
                             let mut text = report.as_str();
                             ui.add(egui::TextEdit::multiline(&mut text)
                                 .font(egui::TextStyle::Monospace)

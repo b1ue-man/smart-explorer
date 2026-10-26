@@ -317,7 +317,7 @@ fn scan_dir_with(
             ),
         }
     });
-    match std::panic::catch_unwind(visit) {
+    let node = match std::panic::catch_unwind(visit) {
         Ok(node) => node,
         Err(payload) => {
             traversal.diagnostics.record(
@@ -327,7 +327,9 @@ fn scan_dir_with(
             );
             empty_dir(fallback_name)
         }
-    }
+    };
+    traversal.diagnostics.finish_directory(dir, node.size);
+    node
 }
 
 /// Convert a tree computed server-side by the SSH agent (`agent_proto::WireNode`)

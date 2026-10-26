@@ -29,7 +29,7 @@ const DEFAULT_MAX_EDGE: u64 = 1568;
 /// Seconds to wait for the device's user unless the call says otherwise.
 const DEFAULT_WAIT_SECS: u64 = 30;
 
-pub(super) const DESCRIPTION: &str = "Looks at the screen of a paired device: `devices` lists the devices and their screen rights, `probe` shows platform, monitors, codecs and limits, `windows` lists the windows that run there, `snapshot` returns one still picture (PNG image, long edge at most 1568 px unless `max_edge` says otherwise). The other device must have granted „screen view“; if it asks its user, the call waits up to `wait` seconds (default 30) and then fails with `approval_pending`. There is no live video and no way to answer a confirmation through this tool; input goes through the tool `screen_input`.";
+pub(super) const DESCRIPTION: &str = "Looks at the screen of a paired device: `devices` lists the devices and their screen rights, `probe` shows platform, monitors, codecs and limits, `windows` lists the windows that run there, `families` returns confirmed versioned window-family selectors, `snapshot` returns one still picture (PNG image, long edge at most 1568 px unless `max_edge` says otherwise). The other device must have granted „screen view“; if it asks its user, the call waits up to `wait` seconds (default 30) and then fails with `approval_pending`. There is no live video and no way to answer a confirmation through this tool; input goes through the tool `screen_input`.";
 
 const DEVICE: &str = "Device: a `share://direct/<id>` or `share://room/<room>/<device>` endpoint, a name, an id or a fingerprint prefix; `devices` lists them.";
 
@@ -37,8 +37,8 @@ pub(super) fn properties() -> Value {
     json!({
         "action": {
             "type": "string",
-            "enum": ["devices", "probe", "windows", "snapshot"],
-            "description": "devices, probe, windows or snapshot."
+            "enum": ["devices", "probe", "windows", "families", "snapshot"],
+            "description": "devices, probe, windows, confirmed families or snapshot."
         },
         "device": {"type": "string", "description": DEVICE},
         "source": {
@@ -204,8 +204,13 @@ pub(super) fn screen(args: &Args) -> Result<CallToolResult, String> {
             Ok(response::ok(crate::cli::screen::windows_value(&list)))
         }
         "snapshot" => snapshot(args),
+        "families" => {
+            let (target, _) = crate::cli::screen::device_target(&args.string("device")?)?;
+            let list = crate::daemon::screen_families(target, Some(wait(args)?), |_| {})?;
+            Ok(response::ok(serde_json::to_value(list).map_err(|error|error.to_string())?))
+        }
         other => Err(format!(
-            "unknown action `{other}`: use devices, probe, windows or snapshot"
+            "unknown action `{other}`: use devices, probe, windows, families or snapshot"
         )),
     }
 }

@@ -70,6 +70,19 @@ mod ipc;
 mod ipc_analysis;
 #[path = "os/shared/ipc_backend_extensions.rs"]
 mod ipc_backend_extensions;
+#[path = "os/shared/runtime_hello.rs"]
+mod runtime_hello;
+pub use runtime_hello::client as runtime_hello;
+#[path = "os/shared/discovery_pairing_protocol.rs"]
+mod discovery_pairing_protocol;
+#[path = "os/shared/discovery_pairing_ipc.rs"]
+mod discovery_pairing_ipc;
+#[path = "os/shared/discovery_pairing_client.rs"]
+mod discovery_pairing_client;
+pub(crate) use discovery_pairing_protocol::{
+    DiscoveryPairingError, DiscoveryPairingReply, DiscoveryPairingStatus,
+};
+pub(crate) use discovery_pairing_client::{list_discoveries, start_discovery_pairing};
 #[path = "os/shared/ipc_client.rs"]
 mod ipc_client;
 #[path = "os/shared/ipc_host.rs"]
@@ -149,6 +162,8 @@ mod mount_registry;
 mod mount_request_gate;
 #[path = "os/shared/mount_source.rs"]
 mod mount_source;
+#[path = "os/shared/mount_recovery_identity.rs"]
+mod mount_recovery_identity;
 #[cfg(windows)]
 #[path = "os/windows/platform.rs"]
 mod platform;
@@ -206,6 +221,27 @@ mod screen_ipc;
 mod screen_ipc_client;
 #[path = "os/shared/screen_ipc_still.rs"]
 mod screen_ipc_still;
+#[path = "os/shared/tcp_ipc.rs"]
+mod tcp_ipc;
+#[path = "os/shared/tcp_ipc_client.rs"]
+mod tcp_ipc_client;
+pub(crate) use tcp_ipc_client::{tcp_start, tcp_start_within, tcp_list, tcp_status, tcp_close};
+#[path = "os/shared/apps_ipc.rs"]
+mod apps_ipc;
+#[path = "os/shared/apps_ipc_client.rs"]
+mod apps_ipc_client;
+pub(crate) use apps_ipc_client::{apps_command, apps_catalog, apps_icon, apps_launch, apps_receipt, apps_rdp_probe, apps_local_grants, apps_set_local_grant};
+#[path = "os/shared/login_ipc.rs"]
+mod login_ipc;
+#[path = "os/shared/login_ipc_client.rs"]
+mod login_ipc_client;
+#[path = "os/shared/login_shutdown.rs"]
+mod login_shutdown;
+pub(crate) use login_ipc::shutdown_login_viewers;
+pub(crate) use login_ipc_client::{LoginViewer, LoginClose, login_status, login_sessions, login_session, login_stop};
+pub(crate) use ipc_protocol::login::{LoginCommand, LoginEnd, LoginFrame, LoginIpcRequest, LoginIpcReply, LoginSessionView, LoginRelayReply};
+#[path = "os/shared/apps_host.rs"]
+mod apps_host;
 #[path = "os/shared/state.rs"]
 mod state;
 #[path = "os/shared/update_stop.rs"]
@@ -273,6 +309,7 @@ pub use live::{
     last_catch_up_ms, request_catch_up,
 };
 pub use mount_client::{
+    save_remove_mount, list_mount_recoveries, import_mount_recovery, reactivate_mount_recovery,
     connect_mount_host, list_mounts, retry_mount, start_mount, stop_mount, MountHostConfig,
     MountHostSession,
 };
@@ -283,11 +320,11 @@ pub use platform::DriveInfo;
 pub use problem_notify::set_problem_notifier;
 pub use schedule::{next_scheduled_run, run_daemon};
 pub(crate) use screen_ipc_client::{
-    screen_bench, screen_probe, screen_sessions, screen_stop, screen_stream, screen_watch,
+    screen_bench, screen_probe, screen_sessions, screen_stop, screen_stream, screen_watch, screen_metadata_stream,
     ScreenProbeReport, StreamEvent,
 };
 pub(crate) use screen_ipc_still::{
-    screen_snapshot, screen_snapshot_within, screen_windows, screen_windows_within, StillImage,
+    screen_snapshot, screen_snapshot_within, screen_windows, screen_windows_within, screen_icon, screen_families, screen_families_for_node, StillImage,
 };
 #[allow(unused_imports)]
 pub use state::{

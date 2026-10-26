@@ -180,10 +180,10 @@ pub(crate) fn page(ui: &mut egui::Ui, site: &str, unlocked: bool) -> Vec<Effect>
     }
     let mut answer: Option<bool> = None;
     if let Some((_, button)) = &check.asking {
-        egui::Window::new(button.title)
-            .id(egui::Id::new(("vault_check_ask", site)))
+        crate::app::dialog_geometry::window(&ctx, "vault_check_ui.0", button.title)
+            .id(egui::Id::new("vault_check_ask"))
             .collapsible(false)
-            .resizable(false)
+            .resizable(true)
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .show(&ctx, |ui| {
                 ui.label(button.question.as_deref().unwrap_or_default());

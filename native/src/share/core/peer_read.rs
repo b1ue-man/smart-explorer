@@ -66,7 +66,7 @@ impl Read for PeerReader {
         while self.pos >= self.buf.len() {
             // Waiting for the next frame is waiting for the network.
             let waiting = stats::Timer::start();
-            let frame = self.node.block_on(io_deadline::run(
+            let frame = self.node.block_on_route(self.generation, io_deadline::run(
                 "peer read data",
                 recv_content_frame(&mut self.recv, self.lz4),
             ));

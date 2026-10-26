@@ -131,10 +131,9 @@ impl App {
             .map(|clip| (clip.selection.clone(), clip.cut));
         if let Some((selection, cut)) = own {
             let mode = if cut { CopyMode::Move } else { CopyMode::Copy };
-            // Moved sources are gone; the entry cannot be pasted again.
-            if self.submit_paste(&selection, &target, &target_dir, mode) && cut {
-                self.clip = None;
-            }
+            // Admission may still show the folder dialog. The confirmed
+            // transfer start consumes this exact cut selection.
+            self.submit_paste(&selection, &target, &target_dir, mode);
             return;
         }
         let replaced = self.clip.take().is_some();

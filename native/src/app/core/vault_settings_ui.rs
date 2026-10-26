@@ -26,17 +26,19 @@ enum Page {
     Recovery,
     Sync,
     Drive,
+    Opening,
     Check,
 }
 
 impl Page {
-    const ALL: [Page; 7] = [
+    const ALL: [Page; 8] = [
         Page::General,
         Page::Locks,
         Page::Password,
         Page::Recovery,
         Page::Sync,
         Page::Drive,
+        Page::Opening,
         Page::Check,
     ];
 
@@ -48,6 +50,7 @@ impl Page {
             Page::Recovery => "Wiederherstellung",
             Page::Sync => "Sync",
             Page::Drive => "Laufwerk",
+            Page::Opening => "Öffnungsfreigaben",
             Page::Check => "Prüfung",
         }
     }
@@ -75,6 +78,7 @@ struct Window {
     password: PasswordDraft,
     sync: SyncInfo,
     drive: DriveInfo,
+    opening: super::vault_open_policy_ui::OpenPolicyInfo,
 }
 
 fn state() -> &'static Mutex<Option<Window>> {
@@ -95,6 +99,7 @@ pub(crate) fn open(site: &str) {
         password: PasswordDraft::default(),
         sync: SyncInfo::default(),
         drive: DriveInfo::default(),
+        opening: super::vault_open_policy_ui::OpenPolicyInfo::default(),
     });
 }
 
@@ -137,7 +142,7 @@ pub(crate) fn show(ctx: &egui::Context) -> Vec<Effect> {
     let mut effects = Vec::new();
     refresh(window, &row);
     let mut open = true;
-    egui::Window::new(format!("Tresor-Eigenschaften – {}", row.label))
+    crate::app::dialog_geometry::window(ctx, "vault_settings_ui.0", format!("Tresor-Eigenschaften – {}", row.label))
         .id(egui::Id::new("vault_settings"))
         .open(&mut open)
         .collapsible(false)
@@ -216,6 +221,11 @@ fn page_ui(
             window
                 .drive
                 .show(ui, &window.site, &row.label, unlocked, running, effects);
+        }
+        Page::Opening => {
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                window.opening.show(ui, &window.site);
+            });
         }
         Page::Check => effects.extend(vault_check_ui::page(ui, &window.site, unlocked)),
     }

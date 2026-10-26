@@ -136,6 +136,7 @@ pub(super) fn copy_remote_link(
         &*dst.backend,
         dst_path,
         &TreeRequest {
+            resume: false,
             recursive: false,
             force,
             expected_root: None,

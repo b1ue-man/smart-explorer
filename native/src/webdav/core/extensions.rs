@@ -14,6 +14,23 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 impl BackendExtensions for WebdavBackend {
+    fn directory_reservation_supported(&self, _root: &str) -> bool {
+        // MKCOL creates the collection exclusively; REBIND/ID support is separate.
+        true
+    }
+
+    fn create_dir_exclusive(&self, path: &str) -> VfsResult<()> {
+        super::folder_reservation::create(self, path)
+    }
+
+    fn directory_identity(&self, path: &str) -> VfsResult<Option<String>> {
+        super::folder_reservation::identity(self, path)
+    }
+
+    fn capacity(&self, root: &str) -> VfsResult<crate::vfs::CapacitySnapshot> {
+        super::capacity::query(self, root)
+    }
+
     fn list_dir_tolerant(&self, path: &str) -> VfsResult<VfsListing> {
         let listing = parse_multistatus_tolerant(&self.propfind(path, "1")?, path)?;
         if listing

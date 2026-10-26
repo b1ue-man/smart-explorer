@@ -66,7 +66,6 @@ impl App {
                 .collect(),
         }
     }
-
     /// The tree node at the current drill focus.
     pub(in crate::app) fn analytics_focus_node(&self) -> Option<&crate::analytics::SizeNode> {
         let mut node = self.analytics_tree.as_ref()?;
@@ -150,6 +149,13 @@ impl App {
     }
 
     pub(in crate::app) fn start_analytics_source(&mut self, source: StorageScanSource) {
+        if !self.drive_consumer_available(super::drive_snapshot::DriveConsumer::Analytics, source.root(), source.is_remote()) {
+            self.analytics_state = StorageRunState::Failed;
+            self.analytics_issues.push(crate::analytics::ScanIssue {
+                path: source.root().into(), detail: "Datenträger nicht verbunden".into(),
+            });
+            return;
+        }
         self.cancel_analytics_worker();
         self.analytics_totals = None;
         self.analytics_access.reset_scan();
@@ -246,6 +252,7 @@ impl App {
         let message = self.analytics_scan.as_ref().map(|scan| scan.rx.try_recv());
         match message {
             Some(Ok(mut outcome)) => {
+                self.install_analytics_retry_index(&outcome);
                 self.update_analytics_access(outcome.permission_denied);
                 if let Some(StorageScanSource::Remote {
                     host_volume,
@@ -307,6 +314,7 @@ impl App {
     }
 
     pub(in crate::app) fn cancel_analytics_scan(&mut self) {
+        if self.analytics_access.invalidate_partial() { self.analytics_state = StorageRunState::Canceled; }
         if let Some(scan) = &self.analytics_scan {
             // Keep the receiver and live evidence until the worker actually
             // answers. Requesting cancellation is not a terminal result.
@@ -325,23 +333,6 @@ impl App {
         } else {
             false
         }
-    }
-
-    fn log_analytics_outcome(&mut self) {
-        if !analytics_access::should_log_failure(self.analytics_state, self.analytics_access.offer)
-        {
-            return;
-        }
-        let first = self
-            .analytics_issues
-            .first()
-            .map(|issue| format!("{}: {}", issue.path, issue.detail))
-            .unwrap_or_else(|| "Unbekannter Scan-Fehler".to_string());
-        let count = self.analytics_issues.len() as u64 + self.analytics_suppressed_issues;
-        self.push_app_error(
-            "Speicher-Analyse",
-            format!("{count} Leseproblem(e); erstes Problem: {first}"),
-        );
     }
 
     pub(in crate::app) fn navigate_storage_source(

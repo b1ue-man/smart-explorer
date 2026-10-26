@@ -1,10 +1,13 @@
-//! Keep the window and update handoff alive until actual sync workers end.
+//! Keep the window and update handoff alive until sync and RDP owners end.
 use std::time::{Duration, Instant};
 
 use super::prelude::*;
 use super::*;
 
 const SYNC_EXIT_WAIT: Duration = Duration::from_secs(10);
+
+#[path = "rdp_exit_gate.rs"]
+mod rdp_exit_gate;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(in crate::app) enum ExitIntent {
@@ -16,38 +19,88 @@ pub(in crate::app) enum ExitIntent {
 pub(in crate::app) struct SyncExitGate {
     intent: Option<ExitIntent>,
     started: Option<Instant>,
+    update: Option<ReadyUpdate>,
+    update_verified: bool,
+    rdp: rdp_exit_gate::RdpExitGate,
+}
+
+impl SyncExitGate {
+    fn clear_request(&mut self) {
+        self.intent = None;
+        self.started = None;
+        self.update = None;
+        self.update_verified = false;
+    }
+
+    pub(in crate::app) fn finish_rdp(&mut self) {
+        self.rdp.finish();
+    }
 }
 
 impl App {
     pub(in crate::app) fn request_sync_exit(&mut self, intent: ExitIntent) {
-        self.sync_exit_gate.intent = Some(intent);
+        // One close/update request survives every drain frame. Repeated OS
+        // close events must not replace an already accepted update request.
+        if self.sync_exit_gate.intent.is_none() {
+            self.sync_exit_gate.intent = Some(intent);
+            self.sync_exit_gate.update = match intent {
+                ExitIntent::Update => self.update_ready.clone(),
+                ExitIntent::Close => None,
+            };
+        }
     }
 
     /// Called after ordinary result drains, before admitting new UI work.
     pub(in crate::app) fn sync_exit_gate_frame(&mut self, ctx: &egui::Context) -> bool {
         self.drain_desktop_sync_workers();
         let active = self.desktop_sync_active();
-        if active && ctx.input(|input| input.viewport().close_requested()) {
+        if ctx.input(|input| input.viewport().close_requested()) {
             self.request_sync_exit(ExitIntent::Close);
         }
         let Some(intent) = self.sync_exit_gate.intent else {
+            // A user can keep the window open while a newly appeared sync
+            // worker is still active. Retain any drain already begun, and
+            // reopen RDP admission only after that drain has actually ended.
+            if let Err(error) = self.sync_exit_gate.rdp.resume(ctx) {
+                self.error_msg = Some(error);
+            }
             return false;
         };
         ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         if !active {
-            self.sync_exit_gate = SyncExitGate::default();
-            match intent {
-                ExitIntent::Close => match self.prepare_for_exit(false) {
-                    Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-                    Err(error) => self.error_msg = Some(error),
+            // Invalid staging must not close otherwise usable RDP sessions.
+            if intent == ExitIntent::Update && !self.sync_exit_gate.update_verified {
+                let preflight = self.sync_exit_gate.update.as_ref()
+                    .ok_or_else(|| "Das Update ist nicht mehr bereit. Bitte erneut prüfen.".to_string())
+                    .and_then(verify_ready_update);
+                if let Err(error) = preflight {
+                    self.error_msg = Some(error);
+                    self.sync_exit_gate.clear_request();
+                    return true;
+                }
+                self.sync_exit_gate.update_verified = true;
+            }
+            if !self.sync_exit_gate.rdp.poll(ctx) {
+                self.ui_rdp_exit_wait(ctx);
+                return true;
+            }
+            let result = match intent {
+                ExitIntent::Close => self.prepare_for_exit(false).map(|()| {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }),
+                ExitIntent::Update => match self.sync_exit_gate.update.clone() {
+                    Some(ready) => self.finish_ready_update(ctx, ready),
+                    None => Err("Das Update ist nicht mehr bereit. Bitte erneut prüfen.".into()),
                 },
-                ExitIntent::Update => {
-                    if let Some(ready) = self.update_ready.clone() {
-                        self.apply_ready_update(ctx, ready);
-                    } else {
-                        self.error_msg =
-                            Some("Das Update ist nicht mehr bereit. Bitte erneut prüfen.".into());
-                    }
+            };
+            // Preparation and update launch each run only after a completed
+            // RDP drain. Genuine preflight/recovery/launch errors stop retrying;
+            // pending RDP never reaches this branch and keeps its intent.
+            self.sync_exit_gate.clear_request();
+            if let Err(error) = result {
+                self.error_msg = Some(error);
+                if let Err(error) = self.sync_exit_gate.rdp.resume(ctx) {
+                    self.error_msg = Some(error);
                 }
             }
             return true;
@@ -61,9 +114,10 @@ impl App {
         let mut cancel = false;
         let mut keep_open = false;
         let mut wait_again = false;
-        egui::Window::new("Synchronisierung abschließen")
+        crate::app::dialog_geometry::window(ctx, "sync_exit_gate.0", "Synchronisierung abschließen")
+            .id(egui::Id::new("Synchronisierung abschließen"))
             .collapsible(false)
-            .resizable(false)
+            .resizable(true)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 if overdue {
@@ -90,7 +144,7 @@ impl App {
                 }
             });
         if keep_open {
-            self.sync_exit_gate = SyncExitGate::default();
+            self.sync_exit_gate.clear_request();
         } else if cancel {
             self.cancel_desktop_sync();
             self.sync_exit_gate.started = Some(Instant::now());
@@ -101,37 +155,65 @@ impl App {
         true
     }
 
-    /// Runs only after the sync gate or an idle explicit restart request.
+    fn ui_rdp_exit_wait(&self, ctx: &egui::Context) {
+        crate::app::dialog_geometry::window(ctx, "sync_exit_gate.rdp", "RDP-Sitzungen schließen")
+            .collapsible(false)
+            .resizable(true)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.label("Smart Explorer wartet, bis laufende RDP-Starts, Clientprozesse, TCP-Leases und Sitzungsmonitore beendet sind.");
+                ui.label("Der Schließ- oder Neustartwunsch bleibt gespeichert. Der Abschluss wird automatisch erneut geprüft.");
+                ui.spinner();
+                if let Some(error) = self.sync_exit_gate.rdp.error() {
+                    ui.label(error);
+                }
+            });
+        ctx.request_repaint_after(Duration::from_millis(100));
+    }
+
+    /// Idle restart requests use exactly the same retained intent as requests
+    /// made while sync is active. No helper may launch before RDP has drained.
     pub(in crate::app) fn apply_ready_update(&mut self, ctx: &egui::Context, ready: ReadyUpdate) {
-        let preflight = match &ready {
-            ReadyUpdate::Staged(bundle) => crate::updater::verify_staged_update(bundle),
-            ReadyUpdate::InstalledRollback { .. } => Ok(()),
-        };
-        if let Err(error) = preflight {
-            self.error_msg = Some(format!("Update-Staging ist nicht mehr gültig: {error}"));
-            return;
+        self.request_sync_exit(ExitIntent::Update);
+        if self.sync_exit_gate.intent == Some(ExitIntent::Update) {
+            self.sync_exit_gate.update = Some(ready);
+            self.sync_exit_gate.update_verified = false;
         }
-        if let Err(error) = self.prepare_for_update_apply() {
-            self.error_msg = Some(format!(
+        ctx.request_repaint();
+    }
+
+    fn finish_ready_update(&mut self, ctx: &egui::Context, ready: ReadyUpdate) -> Result<(), String> {
+        // The drain may have waited for a peer approval. Revalidate bytes now,
+        // immediately before shutdown preparation and the existing apply API.
+        verify_ready_update(&ready)?;
+        self.prepare_for_update_apply().map_err(|error| format!(
                 "Neustart wurde nicht begonnen; laufende Arbeit konnte nicht sicher bewahrt werden: {error}"
-            ));
-            return;
-        }
+            ))?;
         let launch = match &ready {
             ReadyUpdate::Staged(bundle) => crate::updater::apply_staged_update(bundle),
             ReadyUpdate::InstalledRollback { executable, .. } => spawn_updated_app(executable)
                 .map_err(|error| format!("Rollback-Version starten: {error}")),
         };
         match launch {
-            Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            Ok(()) => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                Ok(())
+            }
             Err(error) => {
                 self.shutdown_prepared = false;
-                self.error_msg = Some(format!(
+                Err(format!(
                     "Neustart-Helfer konnte nicht gestartet werden; das gestagte Update bleibt erhalten: {error}"
-                ));
+                ))
             }
         }
     }
+}
+
+fn verify_ready_update(ready: &ReadyUpdate) -> Result<(), String> {
+    match ready {
+        ReadyUpdate::Staged(bundle) => crate::updater::verify_staged_update(bundle),
+        ReadyUpdate::InstalledRollback { .. } => Ok(()),
+    }.map_err(|error| format!("Update-Staging ist nicht mehr gültig: {error}"))
 }
 
 #[cfg(test)]

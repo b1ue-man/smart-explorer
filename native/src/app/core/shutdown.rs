@@ -1,6 +1,26 @@
 use super::*;
 
 impl App {
+    /// eframe's final callback cannot veto shutdown. The regular frame gate
+    /// keeps the window responsive; this fallback still retains every owner if
+    /// a platform close bypasses that gate. Never discard a pending drain.
+    pub(in crate::app) fn finish_exit(&mut self) {
+        self.sync_exit_gate.finish_rdp();
+        let mut last_error = None;
+        loop {
+            match self.prepare_for_exit(false) {
+                Ok(()) => return,
+                Err(error) => {
+                    if last_error.as_ref() != Some(&error) {
+                        eprintln!("Smart Explorer: Beenden wartet auf laufende Arbeit: {error}");
+                        last_error = Some(error);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+            }
+        }
+    }
+
     pub(in crate::app) fn prepare_for_update_apply(&mut self) -> Result<(), String> {
         self.prepare_for_exit(true)
     }
@@ -22,6 +42,7 @@ impl App {
         }
 
         let transfer_worker_active = self.transfer_center.lane.workers_unfinished();
+        crate::rdp::shutdown_owned_sessions()?;
         let must_keep_session_temp = transfer_worker_active
             || !self.transfer_center.is_idle()
             || !self.file_open_rx.is_empty()

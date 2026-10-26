@@ -59,7 +59,7 @@ internal fun TextInputDialog(
         onDismissRequest = { if (action?.saving != true) onDismiss() },
         title = { Text(title) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 hint?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
                 OutlinedTextField(
                     value = value,
@@ -100,7 +100,7 @@ internal fun CodeDialog(
         onDismissRequest = { if (action?.saving != true) onDismiss() },
         title = { Text(title) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = code,
                     onValueChange = { code = it },
@@ -244,7 +244,7 @@ internal fun RoomCodeDialog(view: RoomCodeView, onDismiss: () -> Unit) {
         onDismissRequest = onDismiss,
         title = { Text("Raum-Code: ${view.roomName}") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (code == null) {
                     Text("Für diesen Raum ist kein Code verfügbar.")
                 } else {
@@ -257,7 +257,7 @@ internal fun RoomCodeDialog(view: RoomCodeView, onDismiss: () -> Unit) {
         },
         confirmButton = {
             if (code != null) {
-                Row {
+                Column {
                     TextButton(onClick = { TextActions.copy(context, "Raum-Code", code) }) { Text("Kopieren") }
                     TextButton(onClick = { TextActions.share(context, "Smart Explorer – Raum-Code", code) }) { Text("Teilen") }
                 }

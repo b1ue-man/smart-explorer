@@ -63,3 +63,6 @@ mod sync_reliability_task_provider_metadata_tests;
 #[cfg(all(test, target_os = "linux"))]
 #[path = "core/sync_reliability_task_provider_ftps_tests.rs"]
 mod sync_reliability_task_provider_ftps_tests;
+
+#[path = "core/folder_reservation.rs"]
+mod folder_reservation;

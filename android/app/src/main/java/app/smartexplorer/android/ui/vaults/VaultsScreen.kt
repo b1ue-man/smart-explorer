@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
@@ -286,7 +288,7 @@ private fun EnterDialog(location: String, detection: VaultDetection, onDismiss: 
         onDismissRequest = onDismiss,
         title = { Text(if (problem == null) "Tresor gefunden: ${detection.name}" else VaultTexts.ADD_EXISTING) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (problem != null) {
                     Text(problem)
                 } else {
@@ -331,7 +333,7 @@ internal fun RemoveDialog(site: VaultSite, onDone: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDone,
         title = { Text(VaultTexts.REMOVE_TITLE) },
-        text = { Text(VaultTexts.REMOVE_TEXT) },
+        text = { Text(VaultTexts.REMOVE_TEXT, Modifier.verticalScroll(rememberScrollState())) },
         confirmButton = {
             TextButton(onClick = {
                 scope.launch {
@@ -359,7 +361,7 @@ internal fun UnsavedDialog(site: String, onDone: () -> Unit, onCancel: () -> Uni
         onDismissRequest = onCancel,
         title = { Text(VaultTexts.UNSAVED_TITLE) },
         confirmButton = {
-            Column(horizontalAlignment = Alignment.End) {
+            Column(Modifier.verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.End) {
                 TextButton(onClick = { scope.launch { runCatchingCore { VaultApi.lock(site, keepUnsaved = false) }; onDone() } }) {
                     Text(VaultTexts.UNSAVED_SAVE)
                 }

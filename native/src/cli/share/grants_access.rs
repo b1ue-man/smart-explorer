@@ -7,26 +7,23 @@
 //! refused instead of overwritten. The device selection is the one of `se
 //! share grants exec` (`grants_exec.rs`).
 use std::collections::BTreeMap;
-
 use clap::{ArgMatches, Args, Command, FromArgMatches};
 use clap_complete::ArgValueCandidates;
-
 use crate::cli::completions_access as completions;
-
 use crate::share::access_catalog::{capability_catalog, HelperState, HelperStatus, HostFacts};
 use crate::share::access_grant::{
     AccessGrant, AccessGrantChange, AccessPreset, AccountProfile, Capability, CapabilityDecision,
     Expiry,
 };
 use crate::share::ExecGrant;
-
 use super::grants_access_output::{self as output, RoomFacts};
 use super::grants_exec::{room_targets, select_one, targets, AccessTarget};
+#[path = "grants_device_view.rs"]
+mod device_view;
 
 const ACCESS_HELP: &str = "\
 Show or change what one device may do on this host, or what every admitted
 member of a room may do. Without a change option the rights are shown.
-
 Commands (programs and shell commands) and the terminal are each off, ask
 (every start waits for a confirmation on this device) or allow. They run as
 your own account (--as own), the restricted account se-remote (--as remote)
@@ -36,19 +33,20 @@ device gets commands and a terminal as your own account. --room ROOM
 --all-members writes the change for every admitted member now; members
 admitted later get nothing. A change that narrows a right ends the running
 commands it no longer allows.
-
 Examples:
   se share grants access Laptop --yes
   se share grants access Laptop --as remote --commands allow --terminal ask
   se share grants access --room Ops --all-members --ask --for 8h --yes
   se share grants access Laptop --off";
-
 #[derive(Args)]
 #[command(long_about = ACCESS_HELP)]
 pub(super) struct AccessArgs {
     /// Device name, id or fingerprint prefix, or exec:// target; omit when only one device exists
     #[arg(conflicts_with = "room", add = ArgValueCandidates::new(completions::access_target_candidates))]
     pub(super) selector: Option<String>,
+    /// Include every exact Direct/room source and its conditional reachable access (read only)
+    #[arg(long, conflicts_with = "room")]
+    pub(super) device_view: bool,
     /// Room profile id, room id or name: change every admitted member
     #[arg(long, value_name = "ROOM", requires = "all_members", add = ArgValueCandidates::new(completions::room_candidates))]
     pub(super) room: Option<String>,
@@ -85,12 +83,10 @@ pub(super) struct AccessArgs {
     #[arg(long)]
     pub(super) yes: bool,
 }
-
 /// One option per row of the capability catalog (`--commands`, `--terminal`;
 /// the screen strand adds its rows there and gets its options with them).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct CapabilityOptions(pub(super) BTreeMap<Capability, CapabilityDecision>);
-
 /// The rows this host offers: the screen rows (`--screen-view`,
 /// `--screen-control`) only in a graphical session (C7).
 fn offered() -> Vec<crate::share::access_catalog::CapabilityEntry> {
@@ -104,16 +100,17 @@ fn offered() -> Vec<crate::share::access_catalog::CapabilityEntry> {
         account_helper,
     })
 }
-
 fn capability_help(capability: Capability) -> &'static str {
     match capability {
         Capability::ExecCommands => "Programs and shell commands: off, ask or allow",
         Capability::ExecTerminal => "A terminal with the login shell: off, ask or allow",
         Capability::ScreenView => "Watching the screen: off, ask or allow",
         Capability::ScreenControl => "Controlling the screen: off, ask or allow",
+        Capability::AppLaunch => "Bounded host apps: off, ask or allow",
+        Capability::LoginAccess => "Machine-owned login access; ordinary user IPC cannot enable it",
+        Capability::TcpForward => "Bounded TCP destinations: off, ask or allow",
     }
 }
-
 impl FromArgMatches for CapabilityOptions {
     fn from_arg_matches(matches: &ArgMatches) -> Result<Self, clap::Error> {
         let mut chosen = BTreeMap::new();
@@ -129,13 +126,11 @@ impl FromArgMatches for CapabilityOptions {
         }
         Ok(Self(chosen))
     }
-
     fn update_from_arg_matches(&mut self, matches: &ArgMatches) -> Result<(), clap::Error> {
         *self = Self::from_arg_matches(matches)?;
         Ok(())
     }
 }
-
 impl Args for CapabilityOptions {
     fn augment_args(command: Command) -> Command {
         offered().into_iter().fold(command, |command, entry| {
@@ -148,12 +143,10 @@ impl Args for CapabilityOptions {
             )
         })
     }
-
     fn augment_args_for_update(command: Command) -> Command {
         Self::augment_args(command)
     }
 }
-
 /// What the options ask for, before it is set against one grant.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct Request {
@@ -166,7 +159,6 @@ pub(super) struct Request {
     /// Only `--yes`: commands and terminal as the own account (D.3 T1).
     pub(super) full_own: bool,
 }
-
 /// The request of `args`; `None` shows the rights.
 pub(super) fn request(args: &AccessArgs, now: i64) -> Result<Option<Request>, String> {
     if args.off && (args.ask || !args.capabilities.0.is_empty()) {
@@ -207,7 +199,6 @@ pub(super) fn request(args: &AccessArgs, now: i64) -> Result<Option<Request>, St
     };
     Ok(args.yes.then_some(full_own))
 }
-
 impl Request {
     /// The change for one grant: a new program list allows commands that
     /// were off; `--ask` turns every capability the result allows into `ask`.
@@ -220,6 +211,7 @@ impl Request {
             capabilities: self.decisions.clone(),
             programs: self.programs.clone(),
             expiry: self.expiry,
+            constraints: None,
         };
         let access = current.access_grant();
         if self.off {
@@ -249,7 +241,6 @@ impl Request {
         change
     }
 }
-
 /// The grant `change` makes of `current`, checked as the worker checks it.
 pub(super) fn preview(
     current: &ExecGrant,
@@ -260,7 +251,6 @@ pub(super) fn preview(
     grant.apply(change, &mut programs)?;
     Ok((grant, programs))
 }
-
 /// Whether going from `old` to `new` gives the device anything it did not
 /// have: a higher decision, another account while commands or terminal are
 /// on, the full shell or new programs, or a later or no end.
@@ -281,7 +271,6 @@ pub(super) fn widens(old: (&AccessGrant, &[String]), new: (&AccessGrant, &[Strin
         };
     raised || account || programs || later
 }
-
 fn parse_account(text: &str) -> Result<AccountProfile, String> {
     let account = match (text, text.strip_prefix("account:")) {
         ("own", _) => AccountProfile::Own,
@@ -291,7 +280,6 @@ fn parse_account(text: &str) -> Result<AccountProfile, String> {
     };
     account.validate().map(|()| account)
 }
-
 pub(super) fn run(args: AccessArgs, json: bool) -> Result<(), String> {
     let profiles = super::super::checked_profiles()?;
     let now = crate::share::core_now_secs();
@@ -303,6 +291,10 @@ pub(super) fn run(args: AccessArgs, json: bool) -> Result<(), String> {
             None => show(&members, json, now),
             Some(request) => change_room(&room, &members, &request, args.yes, json),
         };
+    }
+    if args.device_view {
+        if request.is_some() { return Err("--device-view is read-only; set one exact relationship without this option".into()); }
+        return device_view::show(&profiles, args.selector.as_deref(), json);
     }
     let all = targets(&profiles);
     let Some(request) = request else {
@@ -320,7 +312,6 @@ pub(super) fn run(args: AccessArgs, json: bool) -> Result<(), String> {
         .then_some(())
         .ok_or_else(|| incomplete(&target.label))
 }
-
 /// The rights of every listed device: a JSON array, one line each.
 fn show(targets: &[AccessTarget], json: bool, now: i64) -> Result<(), String> {
     let own = output::own_label();
@@ -334,7 +325,6 @@ fn show(targets: &[AccessTarget], json: bool, now: i64) -> Result<(), String> {
     };
     print(json, &serde_json::Value::Array(values.collect()), &lines)
 }
-
 /// The rights of the device a selector named: a JSON object, one line.
 fn show_one(target: &AccessTarget, json: bool, now: i64) -> Result<(), String> {
     let own = output::own_label();

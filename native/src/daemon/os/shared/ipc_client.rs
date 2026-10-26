@@ -115,6 +115,9 @@ fn share_snapshot_once(drain: bool) -> Result<ShareWorkerSnapshot, String> {
 }
 
 pub fn ensure_worker_ready() -> Result<(), String> {
+    if let Some(runtime) = crate::mcp_launcher::current_runtime() {
+        return super::runtime_hello::client(&runtime).map(|_| ());
+    }
     if crate::autostart::DAEMON_IN_PROCESS {
         return super::embedded::ensure_for_client(WORKER_READY_TIMEOUT);
     }

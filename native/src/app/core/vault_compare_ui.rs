@@ -334,7 +334,7 @@ pub(crate) fn show(ctx: &egui::Context) -> Vec<Effect> {
     window.refresh_rows();
     let mut effects = Vec::new();
     let mut open = true;
-    egui::Window::new(format!("Tresor vergleichen – {}", window.name))
+    crate::app::dialog_geometry::window(ctx, "vault_compare_ui.0", format!("Tresor vergleichen – {}", window.name))
         .id(egui::Id::new("vault_compare"))
         .open(&mut open)
         .collapsible(false)
@@ -362,10 +362,10 @@ fn show_question(ctx: &egui::Context, window: &mut Window) {
         Ask::Bulk { text, .. } => ("Alle Konflikte auflösen?", text.clone()),
     };
     let mut answer: Option<bool> = None;
-    egui::Window::new(title)
+    crate::app::dialog_geometry::window(ctx, "vault_compare_ui.1", title)
         .id(egui::Id::new("vault_compare_ask"))
         .collapsible(false)
-        .resizable(false)
+        .resizable(true)
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
         .show(ctx, |ui| {
             ui.label(&text);

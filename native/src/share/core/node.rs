@@ -3,7 +3,7 @@ use std::io;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
-use iroh::endpoint::{presets, Connection, VarInt};
+use iroh::endpoint::{presets, Connection};
 use iroh::{Endpoint, RelayMode};
 use tokio::sync::Semaphore;
 
@@ -17,9 +17,8 @@ use super::exec_registry::{ExecCancelReason, ExecRegistry, ExecRegistryLimits};
 use super::handshake_limits::HandshakeAdmission;
 use super::identity::ShareIdentity;
 use super::io_deadline;
-use super::keepalive::iroh_transport_config;
+use super::keepalive::iroh_transport_config_for_routes;
 use super::power::PowerHub;
-use super::session::endpoint_addr;
 use super::types::{PeerEndpoint, ShareAuthState, ShareEvent};
 use super::wire::FsTransferCapabilities;
 
@@ -29,7 +28,7 @@ mod restrictions;
 #[path = "node_idle.rs"]
 mod idle;
 #[path = "pq_kx.rs"]
-mod pq_kx;
+pub(super) mod pq_kx;
 #[path = "node_wake.rs"]
 mod wake;
 
@@ -60,6 +59,9 @@ pub(crate) struct ShareIrohNode {
     exec_registry: Arc<ExecRegistry>,
     /// Screen sessions of this host (S4, `node_screen.rs`).
     pub(super) screen: super::node_screen::NodeScreen,
+    pub(super) tcp: super::node_tcp::NodeTcp,
+    pub(super) apps: Arc<super::node_apps::NodeApps>,
+    pub(super) access: super::node_access::NodeAccess,
     pub(super) handshake_slots: Arc<Semaphore>,
     auth_penalties: super::auth_penalty::AuthPenalties,
     pub(super) direct_repair_slots: Arc<Semaphore>,
@@ -156,11 +158,14 @@ impl ShareIrohNode {
             .alpns(vec![
                 ALPN.to_vec(),
                 EXEC_ALPN.to_vec(),
+                super::tcp_wire::TCP_ALPN.to_vec(),
+                super::apps_wire::APPS_ALPN.to_vec(),
                 super::lan_link_wire::LAN_LINK_ALPN.to_vec(),
                 crate::screen::core::wire::SCREEN_ALPN.to_vec(),
             ])
             .relay_mode(relay_mode)
-            .transport_config(iroh_transport_config());
+            .path_selector(Arc::new(super::route_adapter::RouteSelector::default()))
+            .transport_config(iroh_transport_config_for_routes(true));
         let dns_resolver = {
             let _runtime = rt.enter();
             super::transport_options::dns_resolver()
@@ -198,6 +203,9 @@ impl ShareIrohNode {
             connection_events: ConnectionEventReporter::default(),
             exec_registry,
             screen,
+            tcp: super::node_tcp::NodeTcp::new(),
+            apps: Arc::new(super::node_apps::NodeApps::new()),
+            access: super::node_access::NodeAccess::new(),
             handshake_slots: Arc::new(Semaphore::new(MAX_PENDING_APPLICATION_HANDSHAKES)),
             auth_penalties: super::auth_penalty::AuthPenalties::default(),
             direct_repair_slots: Arc::new(Semaphore::new(MAX_CONCURRENT_DIRECT_REPAIRS)),
@@ -215,6 +223,7 @@ impl ShareIrohNode {
             #[cfg(test)]
             transfer_stall_millis: AtomicU64::new(0),
         });
+        node.start_access_expiry();
         node.spawn_accept_loop();
         Ok(node)
     }
@@ -356,6 +365,9 @@ impl ShareIrohNode {
             .as_ref()
             .cancel_all(ExecCancelReason::WorkerStopping);
         super::node_screen::stop_all(&self.screen);
+        super::node_tcp::stop_all(&self.tcp);
+        super::node_apps::stop_all(&self.apps);
+        self.access.stop();
         self.lan_links.disable();
         let invalidation = self.invalidate_sessions().map(|_| ());
         self.block_on(self.endpoint.close());
@@ -363,31 +375,7 @@ impl ShareIrohNode {
     }
 
     pub(super) fn connect_exec(&self, endpoint: &PeerEndpoint) -> io::Result<Connection> {
-        self.require_sharing_active()?;
-        if let Some(expected) = endpoint.expected_node_id.as_deref() {
-            if !expected.trim().is_empty() && expected != endpoint.presence.node_id {
-                return Err(eio("Iroh NodeId passt nicht zur gepinnten Identitaet"));
-            }
-        }
-        let local_addr = self.routes.current(&self.endpoint);
-        let addr = endpoint_addr(&endpoint.presence, &local_addr, &self.transport_options)?;
-        let generation = self
-            .policy
-            .snapshot(super::session::PeerPrincipal::from_endpoint(endpoint))?;
-        let connection = self.block_on(io_deadline::run("peer exec connection", async {
-            self.endpoint
-                .connect(addr, EXEC_ALPN)
-                .await
-                .map_err(io_deadline::disconnected)
-        }))?;
-        if let Err(error) = self.policy.bind(&connection, generation) {
-            connection.close(
-                VarInt::from_u32(0x5345),
-                b"authorization changed during handshake",
-            );
-            return Err(error);
-        }
-        Ok(connection)
+        self.connect_exec_cancellable(endpoint, None, None)
     }
 
     pub(super) fn start_exec(
@@ -396,13 +384,14 @@ impl ShareIrohNode {
         identity: ShareIdentity,
         start: super::exec_types::ExecStart,
     ) -> io::Result<super::exec_session::ShareExecSession> {
-        let connection = self.connect_exec(&endpoint)?;
-        let _runtime = self.rt.enter();
-        let client = super::exec_client::spawn_connected(connection, endpoint, identity, start);
-        Ok(super::exec_session::ShareExecSession::new(
-            self.clone(),
-            client,
-        ))
+        self.start_exec_retained(endpoint,identity,start,None)
+    }
+
+    pub(super) fn start_exec_retained(
+        self:&Arc<Self>, endpoint:PeerEndpoint, identity:ShareIdentity,
+        start:super::exec_types::ExecStart, retainer:Option<Arc<dyn Send+Sync>>,
+    )->io::Result<super::exec_session::ShareExecSession> {
+        self.start_exec_cancellable(endpoint, identity, start, retainer, None, None)
     }
 
     pub(super) fn emit_connection_error(&self, kind: ConnectionErrorKind, message: String) {

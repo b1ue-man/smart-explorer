@@ -20,6 +20,7 @@ pub(super) struct Session {
     pub(super) shells: Arc<ShellRegistry>,
     /// The installed `se` that serves this session; the `se` tool runs it.
     pub(super) executable: PathBuf,
+    pub(super) hello: std::sync::Mutex<Option<crate::mcp_launcher::RuntimeHelloReply>>,
     lock: std::sync::Mutex<Option<File>>,
 }
 
@@ -43,6 +44,13 @@ impl Session {
         // Already absolute; on Linux it is the resolved /proc/self/exe target.
         let executable = std::env::current_exe()
             .map_err(|error| format!("cannot determine the se executable: {error}"))?;
+        let active_runtime = crate::mcp_launcher::current_runtime();
+        let executable = active_runtime.as_ref().map(|r| r.executable.clone()).unwrap_or(executable);
+        let record = match active_runtime {
+            Some(runtime) => serde_json::json!({"installation_id":runtime.installation.manifest.installation_id,"runtime_sha256":runtime.contract.runtime_sha256,"ipc_contract_id":runtime.contract.ipc_contract_id,"shared_state_contract_id":runtime.contract.shared_state_contract_id,"generation":runtime.installation.manifest.generation,"product_version":env!("CARGO_PKG_VERSION"),"executable":executable,"pid":std::process::id(),"entrypoint":if crate::mcp_launcher::migration_entry() {"installed_cli_migration"}else{"managed_launcher"},"update_retention_eligible":!crate::mcp_launcher::migration_entry()}),
+            None => serde_json::json!({"state":"legacy","executable":executable,"pid":std::process::id()}),
+        };
+        std::fs::write(directory.join("runtime.v1.json"),record.to_string()).map_err(|e|format!("cannot record the MCP runtime identity: {e}"))?;
         Ok(Self {
             jobs: JobRegistry::new(&directory),
             targets: Arc::default(),
@@ -50,7 +58,16 @@ impl Session {
             directory,
             executable,
             lock: std::sync::Mutex::new(Some(lock)),
+            hello: std::sync::Mutex::new(None),
         })
+    }
+
+    pub(super) fn negotiate_runtime(&self) -> Result<(), String> {
+        if let Some(runtime) = crate::mcp_launcher::current_runtime() {
+            let hello = crate::daemon::runtime_hello(&runtime)?;
+            *self.hello.lock().map_err(|_| "runtime_hello_poisoned")? = Some(hello);
+        }
+        Ok(())
     }
 
     /// Cancels running jobs, waits up to `grace` for them to stop, ends own

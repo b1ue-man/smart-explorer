@@ -5,6 +5,7 @@ use super::platform::{get_attrs, path_text};
 use super::retention::Lineage;
 use crate::local_access::EntryKind;
 use crate::types::FileEntry;
+use super::ScanVisits;
 use rayon::prelude::*;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
@@ -24,47 +25,60 @@ pub(super) struct PendingDir {
 
 /// Walk directories in parallel while enforcing one shared memory/depth budget
 /// and a visited-target set when following link-like directories.
-pub(super) fn walk_parallel(scanner: &Arc<Scanner>, dirs: Vec<PendingDir>, depth: u32) {
+pub(super) fn walk_parallel(scanner: &Arc<Scanner>, dirs: Vec<PendingDir>, depth: u32)
+    -> Option<ScanVisits> {
     if dirs.is_empty() || scanner.cancel.load(Ordering::Relaxed) {
-        return;
+        return Some(ScanVisits::default());
     }
     if depth > MAX_SCAN_DEPTH {
         let _ = scanner.claim_entry(0, depth, "scan depth");
-        return;
+        return Some(ScanVisits::default());
     }
-
-    dirs.into_par_iter().for_each(|dir| {
+    dirs.into_par_iter().map(|dir| {
         if scanner.cancel.load(Ordering::Relaxed) || !scanner.enter_directory(&dir.path) {
-            return;
+            return Some(ScanVisits::default());
         }
         let path = dir.path.clone();
+        let mut visits = Some(ScanVisits::default());
         let subdirs = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            list_directory(scanner, dir, depth)
+            list_directory(scanner, dir, depth, &mut visits)
         })) {
             Ok(subdirs) => subdirs,
             Err(_) => {
-                fail(
-                    scanner,
-                    &path.to_string_lossy(),
-                    "Interner Lesefehler in diesem Ordner; andere Ordner werden weiter gelesen"
-                        .into(),
-                );
-                return;
+                fail(scanner, &path.to_string_lossy(),
+                    "Interner Lesefehler in diesem Ordner; andere Ordner werden weiter gelesen".into());
+                return None;
             }
         };
         if !subdirs.is_empty() {
-            walk_parallel(scanner, subdirs, depth.saturating_add(1));
+            visits = add_visits(visits, walk_parallel(scanner, subdirs, depth.saturating_add(1)));
         }
-    });
+        if let Some(visits) = visits {
+            scanner.denied_roots.record_visits(path.to_string_lossy(), visits);
+        }
+        visits
+    }).reduce(|| Some(ScanVisits::default()), add_visits)
+}
+
+fn add_visits(a: Option<ScanVisits>, b: Option<ScanVisits>) -> Option<ScanVisits> {
+    a?.checked_add(b?)
 }
 
 /// List one directory, emit what the retention policy keeps and return the
 /// subdirectories to descend into.
-fn list_directory(scanner: &Arc<Scanner>, dir: PendingDir, depth: u32) -> Vec<PendingDir> {
-    let read = match crate::local_access::read_directory(&dir.path) {
+fn list_directory(scanner: &Arc<Scanner>, dir: PendingDir, depth: u32, visits: &mut Option<ScanVisits>) -> Vec<PendingDir> {
+    let listing = crate::source_media::GuardedIterator::new(&dir.path,
+        crate::source_media::Priority::Foreground, &scanner.cancel, || -> std::io::Result<Box<dyn Iterator<Item = std::io::Result<crate::local_access::LocalEntry>>>> {
+        match &scanner.confined {
+            Some((base, handle)) => super::retry::read_confined(base, handle, &dir.path),
+            None => crate::local_access::read_directory(&dir.path).map(|entries|
+                Box::new(entries) as Box<dyn Iterator<Item = std::io::Result<crate::local_access::LocalEntry>>>),
+        }
+    });
+    let read = match listing {
         Ok(read) => read,
         Err(error) => {
-            record_denial(scanner, &error);
+            record_denial(scanner, &dir.path.to_string_lossy(), &error);
             fail(
                 scanner,
                 &dir.path.to_string_lossy(),
@@ -97,7 +111,7 @@ fn list_directory(scanner: &Arc<Scanner>, dir: PendingDir, depth: u32) -> Vec<Pe
         let entry = match entry {
             Ok(entry) => entry,
             Err(error) => {
-                record_denial(scanner, &error);
+                record_denial(scanner, &dir.path.to_string_lossy(), &error);
                 fail(
                     scanner,
                     &dir.path.to_string_lossy(),
@@ -126,10 +140,11 @@ fn list_directory(scanner: &Arc<Scanner>, dir: PendingDir, depth: u32) -> Vec<Pe
         let is_symlink = entry.is_link_like || entry.kind == EntryKind::Link;
         let (is_dir, hidden, system, size, mtime_ms, btime_ms) =
             if is_symlink && scanner.opts.follow_symlinks {
-                let metadata = match std::fs::metadata(&path) {
+                let metadata = match crate::source_media::acquire(&path, crate::source_media::Priority::Foreground, &scanner.cancel)
+                    .and_then(|_guard| std::fs::metadata(&path)) {
                     Ok(metadata) => metadata,
                     Err(error) => {
-                        record_denial(scanner, &error);
+                        record_denial(scanner, &path.to_string_lossy(), &error);
                         fail(
                             scanner,
                             &path.to_string_lossy(),
@@ -194,6 +209,8 @@ fn list_directory(scanner: &Arc<Scanner>, dir: PendingDir, depth: u32) -> Vec<Pe
             depth,
             id: None,
         };
+        *visits = add_visits(*visits, Some(ScanVisits { scanned: 1,
+            bytes: if is_dir { 0 } else { size } }));
         scanner.scanned.fetch_add(1, Ordering::Relaxed);
         if !is_dir {
             scanner.bytes.fetch_add(size, Ordering::Relaxed);
@@ -245,13 +262,11 @@ fn list_directory(scanner: &Arc<Scanner>, dir: PendingDir, depth: u32) -> Vec<Pe
             if !sink.flush() {
                 break;
             }
-            walk_parallel(
-                scanner,
-                std::mem::take(&mut subdirs),
-                depth.saturating_add(1),
-            );
+            *visits = add_visits(*visits, walk_parallel(
+                scanner, std::mem::take(&mut subdirs), depth.saturating_add(1)));
         }
     }
+    scanner.media_current();
     sink.flush();
     if scanner.cancel.load(Ordering::Relaxed) {
         return Vec::new();
@@ -259,9 +274,10 @@ fn list_directory(scanner: &Arc<Scanner>, dir: PendingDir, depth: u32) -> Vec<Pe
     subdirs
 }
 
-fn record_denial(scanner: &Scanner, error: &std::io::Error) {
+fn record_denial(scanner: &Scanner, path: &str, error: &std::io::Error) {
     if error.kind() == std::io::ErrorKind::PermissionDenied {
         scanner.permission_denied.fetch_add(1, Ordering::Relaxed);
+        scanner.denied_roots.record(path);
     }
 }
 

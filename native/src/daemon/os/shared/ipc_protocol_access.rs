@@ -30,6 +30,8 @@ pub(crate) enum AccessIpcRequest {
         #[serde(default)]
         expected_revision: Option<u64>,
     },
+    /// Rights and remaining routes for one exact pinned device.
+    DeviceRights { device_id: String, public_key: String },
     /// The open confirmations of this host.
     Approvals,
     /// The answer of the host user to exactly one request.
@@ -55,6 +57,7 @@ pub(crate) enum AccessIpcReply {
         result: ExecGrantPersistResult,
         grant: Option<AccessGrantView>,
     },
+    DeviceRights { view: crate::share::access_relation_view::DeviceAccessView },
     ApprovalList {
         pending: Vec<ApprovalView>,
     },

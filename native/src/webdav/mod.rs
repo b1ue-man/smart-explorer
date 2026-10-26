@@ -38,3 +38,9 @@ mod sync_reliability_task_provider_redirect_tests;
 mod sync_reliability_task_provider_collections_tests;
 
 pub use core_impl::{WebdavBackend, WebdavConfig};
+
+#[path = "core/capacity.rs"]
+mod capacity;
+
+#[path = "core/folder_reservation.rs"]
+mod folder_reservation;

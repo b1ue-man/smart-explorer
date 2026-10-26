@@ -384,6 +384,7 @@ impl eframe::App for SurfaceApp {
             &self.host,
             &mut self.actions,
         );
+        crate::app::share_apps_ui::surface_windows(ctx);
         ctx.request_repaint_after(ALIVE_EVERY);
         self.view.heartbeat();
     }

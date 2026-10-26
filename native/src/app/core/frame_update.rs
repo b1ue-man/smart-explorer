@@ -3,17 +3,19 @@ use super::*;
 
 impl eframe::App for App {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        let _ = self.prepare_for_exit(false);
+        self.finish_exit();
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        super::share_login_ui::tick(ctx);
+        super::family_picker::notifications(ctx);
         if self.shutdown_prepared {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             return;
         }
         // DSK-M2: a new update-stop request closes like the user would.
         if super::update_stop_ui::close_requested(ctx) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            self.request_sync_exit(super::sync_exit_gate::ExitIntent::Close);
         }
         self.update_background(ctx);
         if self.sync_exit_gate_frame(ctx) {
@@ -22,6 +24,7 @@ impl eframe::App for App {
         }
         self.update_keyboard(ctx);
         self.update_layout(ctx);
+        self.ui_folder_conflicts(ctx);
         // A copy made by a key or a menu in this frame leaves its marker text
         // on the system clipboard at once, before any later paste reads it.
         self.flush_clip_marker(ctx);
@@ -61,6 +64,8 @@ impl eframe::App for App {
 
 impl App {
     pub(in crate::app) fn update_background(&mut self, ctx: &egui::Context) {
+        // Reconcile removals before consuming results from their old readers.
+        self.update_drives(ctx);
         // Pump background channels
         self.drain_scan();
 

@@ -5,6 +5,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+pub(crate) use super::folder_open::OpenFoldersWith;
 use super::state::Platform;
 
 pub(crate) const CONFIG_SCHEMA: u32 = 1;
@@ -144,6 +145,8 @@ pub(crate) struct DesktopConfig {
     pub(crate) groups: Groups,
     pub(crate) system_items: SystemItems,
     pub(crate) open_devices_with: OpenDevicesWith,
+    #[serde(default)]
+    pub(crate) open_folders_with: OpenFoldersWith,
     pub(crate) foreign_desktop_icons: ForeignDesktopIcons,
 }
 
@@ -162,6 +165,7 @@ impl DesktopConfig {
             },
             system_items,
             open_devices_with: OpenDevicesWith::App,
+            open_folders_with: OpenFoldersWith::App,
             foreign_desktop_icons: ForeignDesktopIcons::Keep,
         }
     }
@@ -212,6 +216,7 @@ pub(crate) struct ConfigChange {
     pub(crate) recycle_bin: Option<bool>,
     pub(crate) this_pc: Option<bool>,
     pub(crate) open_devices_with: Option<OpenDevicesWith>,
+    pub(crate) open_folders_with: Option<OpenFoldersWith>,
     pub(crate) foreign_desktop_icons: Option<ForeignDesktopIcons>,
 }
 
@@ -315,6 +320,9 @@ pub(crate) fn apply_change(
     }
     if let Some(open_with) = change.open_devices_with {
         next.open_devices_with = open_with;
+    }
+    if let Some(open_with) = change.open_folders_with {
+        next.open_folders_with = open_with;
     }
     if let Some(icons) = change.foreign_desktop_icons {
         next.foreign_desktop_icons = icons;

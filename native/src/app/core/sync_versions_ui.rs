@@ -126,7 +126,7 @@ impl App {
             .map(|job| job.name.as_str())
             .filter(|name| !name.is_empty())
             .unwrap_or("Sync-Setup");
-        egui::Window::new(format!("Versionen · {name}")).open(&mut open).collapsible(false)
+        super::dialog_geometry::window(ctx, "sync_versions_ui.0", format!("Versionen · {name}")).open(&mut open).collapsible(false)
             .resizable(true).default_size([780.0,500.0]).max_size(theme::window_content_limit(ctx))
             .show(ctx, |ui| {
                 ui.label("Wiederherstellen betrifft die gewählte Seite. Die aktuelle Datei wird vorher als Version erhalten; der nächste Sync gleicht die andere Seite ab.");
@@ -139,7 +139,7 @@ impl App {
                 }
                 if ui.button("Neu laden").clicked() { reload = true; }
                 if view.entries.is_empty() { ui.label("Keine erhaltenen Versionen für dieses Setup gefunden."); }
-                egui::ScrollArea::vertical().max_height(310.0).show_rows(ui,52.0,view.entries.len(),|ui, visible| {
+                egui::ScrollArea::vertical().min_scrolled_height(0.0).max_height(super::dialog_geometry::remaining_height(ui, 1.0)).show_rows(ui,52.0,view.entries.len(),|ui, visible| {
                     for index in visible {
                         let entry = &view.entries[index];
                         ui.push_id(index, |ui| {

@@ -9,7 +9,8 @@ impl App {
     /// Read-only viewer for the background daemon's run log (Group J).
     pub(in crate::app) fn ui_daemon_log(&mut self, ctx: &egui::Context) {
         let mut open = self.show_daemon_log;
-        egui::Window::new("📜 Sync-Protokoll")
+        super::dialog_geometry::window(ctx, "menus_sync_jobs.0", "📜 Sync-Protokoll")
+            .id(egui::Id::new("📜 Sync-Protokoll"))
             .open(&mut open)
             .collapsible(false)
             .resizable(true)
@@ -24,9 +25,10 @@ impl App {
                 });
                 ui.separator();
                 let log = crate::daemon::read_log_tail(300);
-                egui::ScrollArea::vertical()
+                egui::ScrollArea::vertical().min_scrolled_height(0.0)
                     .stick_to_bottom(true)
                     .auto_shrink([false, false])
+                    .max_height(super::dialog_geometry::remaining_height(ui, 1.0))
                     .show(ui, |ui| {
                         ui.add(
                             egui::TextEdit::multiline(&mut log.as_str())
@@ -56,7 +58,8 @@ impl App {
             .map(|job| job.id.clone())
             .collect();
         let states = super::sync_job_state_ui::states(ctx, &jobs);
-        egui::Window::new("⚙ Sync-Setups")
+        super::dialog_geometry::window(ctx, "menus_sync_jobs.1", "⚙ Sync-Setups")
+            .id(egui::Id::new("⚙ Sync-Setups"))
             .open(&mut open)
             .collapsible(false)
             .resizable(true)
@@ -86,7 +89,8 @@ impl App {
                     }
                     return;
                 }
-                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                egui::ScrollArea::vertical().min_scrolled_height(0.0).auto_shrink([false, false]).max_height(super::dialog_geometry::remaining_height(ui, 1.0))
+                    .show(ui, |ui| {
                     for j in &jobs {
                         // Vault jobs (U29-9): „(Tresor)“, their own runner and comparison.
                         let vault_row = super::vault_modules::vault_models_sync::job_row(j);

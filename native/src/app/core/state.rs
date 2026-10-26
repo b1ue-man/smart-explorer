@@ -148,6 +148,8 @@ pub struct App {
     pub(in crate::app) btime_min_date: Option<chrono::NaiveDate>,
     pub(in crate::app) btime_max_date: Option<chrono::NaiveDate>,
 
+    pub(in crate::app) drive_binding: Option<super::drive_snapshot::DriveBinding>,
+    pub(in crate::app) drive_state: super::drive_snapshot::DriveState,
     pub(in crate::app) drives: Vec<String>,
     pub(in crate::app) drive_info: Vec<(String, u64, u64)>, // (root, free, total)
     pub(in crate::app) home: PathBuf,
@@ -480,6 +482,7 @@ pub struct App {
     pub(in crate::app) share_lan_notice: Option<String>,
     pub(in crate::app) share_status: String,
     pub(in crate::app) share_worker_running: bool,
+    pub(in crate::app) share_routes: Option<crate::share::ShareRouteSnapshot>,
     pub(in crate::app) share_worker_relay_url: String,
     pub(in crate::app) share_worker_candidates: Vec<String>,
     pub(in crate::app) share_discovery: super::share_discovery_state::DiscoveryUiState,

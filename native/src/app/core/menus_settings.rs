@@ -15,12 +15,13 @@ impl App {
         let mut allow_plaintext = ui
             .data_mut(|data| data.get_temp::<bool>(allow_id))
             .unwrap_or_else(|| stored_plaintext(&self.share_server));
-        ui.label("Share-Server");
+        let mut form = crate::app::settings_form::Form::new(ui, "share_connection_form", &["Share-Server", "Gerätename"]);
+        form.row_labelled(ui, "Share-Server", |ui, field_label| {
         ui.add(
             egui::TextEdit::singleline(&mut self.share_server_draft)
                 .hint_text("wss://server[:port]/pfad oder server[:port] (verschlüsselt)")
                 .desired_width(f32::INFINITY),
-        )
+        ).labelled_by(field_label)
         .on_hover_text(
             "Adresse deines eigenen Routing-Servers (se-share-server). Er vermittelt \
              nur die Verbindung — die Dateien gehen direkt zwischen den Geräten, \
@@ -28,6 +29,7 @@ impl App {
              selbst signierten Server mit #sha256=<Fingerabdruck> anheften. Mehrere \
              Adressen mit Komma trennen.",
         );
+        });
         if ui
             .checkbox(&mut allow_plaintext, "Unverschlüsselt erlauben (unsicher)")
             .on_hover_text(
@@ -44,12 +46,13 @@ impl App {
             self.share_server_draft = encrypted;
             ui.data_mut(|data| data.insert_temp(allow_id, false));
         }
-        ui.label("Gerätename");
+        form.row_labelled(ui, "Gerätename", |ui, field_label| {
         ui.add(
             egui::TextEdit::singleline(&mut self.share_device_draft)
                 .hint_text("Gerätename")
                 .desired_width(f32::INFINITY),
-        );
+        ).labelled_by(field_label);
+        });
         if ui.button("Verbindungseinstellungen speichern").clicked() {
             let server = match canonical_server_input(&self.share_server_draft, allow_plaintext) {
                 Ok(server) => server,
@@ -211,11 +214,13 @@ fn server_security_line(ui: &mut egui::Ui, draft: &str, allow_plaintext: bool) -
             let encrypted = config.encrypted_alternative()?;
             ui.small(
                 "Verschlüsselt verbinden: Der Server braucht ein TLS-Zertifikat für den \
-                 eingetragenen Namen (se-share-server mit --tls-cert/--tls-key bzw. \
-                 SE_SHARE_TLS_CERT/SE_SHARE_TLS_KEY). Ein selbst signiertes Zertifikat \
+                 eingetragenen Namen. Ein selbst signiertes Zertifikat \
                  wird mit #sha256=<Fingerabdruck> angeheftet. Ein TLS-Fehler fällt nie \
                  auf Klartext zurück.",
             );
+            egui::CollapsingHeader::new("Servereinrichtung und Diagnose").id_salt("share_server_setup_diagnostics").show(ui, |ui| {
+                ui.monospace("se-share-server --tls-cert/--tls-key; SE_SHARE_TLS_CERT und SE_SHARE_TLS_KEY");
+            });
             if config.names_ip_address() {
                 ui.colored_label(
                     theme::warning(ui),

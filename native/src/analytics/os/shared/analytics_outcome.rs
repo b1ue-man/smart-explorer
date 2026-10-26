@@ -78,6 +78,7 @@ pub struct ScanOutcome {
     pub issues: Vec<ScanIssue>,
     pub suppressed_issues: u64,
     pub permission_denied: u64,
+    pub denied_roots: crate::scanner::DeniedRoots,
     /// Informational remarks that do not make the result partial (for
     /// example that a huge directory's files were folded into one node).
     pub notes: Vec<String>,
@@ -101,6 +102,7 @@ impl ScanOutcome {
             issues: Vec::new(),
             suppressed_issues: 0,
             permission_denied: 0,
+            denied_roots: Default::default(),
             notes: Vec::new(),
             aggregated_files: 0,
             protected: Vec::new(),
@@ -119,6 +121,7 @@ impl ScanOutcome {
             }],
             suppressed_issues: 0,
             permission_denied: 0,
+            denied_roots: Default::default(),
             notes: Vec::new(),
             aggregated_files: 0,
             protected: Vec::new(),
@@ -134,6 +137,7 @@ impl ScanOutcome {
             issues: Vec::new(),
             suppressed_issues: 0,
             permission_denied: 0,
+            denied_roots: Default::default(),
             notes: Vec::new(),
             aggregated_files: 0,
             protected: Vec::new(),
@@ -167,6 +171,7 @@ pub(super) struct Diagnostics {
     suppressed: AtomicU64,
     root_failed: AtomicBool,
     permission_denied: AtomicU64,
+    denied_roots: crate::scanner::DeniedRoots,
     notes: Mutex<Vec<String>>,
     aggregated_files: AtomicU64,
     protected: ProtectedTally,
@@ -239,10 +244,16 @@ impl Diagnostics {
     }
 
     pub(super) fn record_io(&self, path: impl Into<String>, error: &io::Error, is_root: bool) {
+        let path = path.into();
         if error.kind() == io::ErrorKind::PermissionDenied {
+            self.denied_roots.record(path.clone());
             self.permission_denied.fetch_add(1, Ordering::Relaxed);
         }
         self.record(path, error.to_string(), is_root);
+    }
+
+    pub(super) fn finish_directory(&self, path: &Path, size: u64) {
+        self.denied_roots.record_size(display_path(path), size);
     }
 
     pub(super) fn record(&self, path: impl Into<String>, detail: impl Into<String>, is_root: bool) {
@@ -265,6 +276,9 @@ impl Diagnostics {
         if canceled {
             return ScanOutcome::canceled();
         }
+        if let Some(warning) = self.denied_roots.storage_warning() {
+            self.note(format!("Wiederleseindex bleibt im Speicher: {warning}"));
+        }
         let root_failed = self.root_failed.load(Ordering::Relaxed);
         let issues = self.issues.into_inner().unwrap_or_else(|p| p.into_inner());
         let suppressed_issues = self.suppressed.load(Ordering::Relaxed);
@@ -281,6 +295,7 @@ impl Diagnostics {
             issues,
             suppressed_issues,
             permission_denied: self.permission_denied.load(Ordering::Relaxed),
+            denied_roots: self.denied_roots,
             notes: self.notes.into_inner().unwrap_or_else(|p| p.into_inner()),
             aggregated_files: self.aggregated_files.load(Ordering::Relaxed),
             protected: self.protected.finish(),

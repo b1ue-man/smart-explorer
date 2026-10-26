@@ -14,7 +14,7 @@ use eframe::egui::{self, RichText};
 use crate::app::theme;
 use crate::desktop::core::config::{
     Background, BackgroundKind, ConfigChange, ConfigContext, DesktopConfig, ForeignDesktopIcons,
-    OpenDevicesWith,
+    OpenDevicesWith, OpenFoldersWith,
 };
 use crate::desktop::core::state::Platform;
 use crate::desktop::os::launch::with_control;
@@ -410,6 +410,15 @@ fn open_with_ui(
     facts: &Facts,
     change: &mut ConfigChange,
 ) {
+    let mut folders = config.open_folders_with;
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Ordner öffnen mit:");
+        ui.radio_value(&mut folders, OpenFoldersWith::App, "Smart Explorer");
+        ui.radio_value(&mut folders, OpenFoldersWith::FileManager, "Dateimanager");
+    });
+    if folders != config.open_folders_with {
+        change.open_folders_with = Some(folders);
+    }
     let mounted = facts.device_tree_mounted;
     let mut chosen = config.open_devices_with;
     ui.horizontal_wrapped(|ui| {

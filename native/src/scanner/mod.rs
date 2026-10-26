@@ -21,3 +21,11 @@ mod walk;
 pub use collect::*;
 pub use os::*;
 pub use retention::*;
+
+#[path = "os/denied_roots.rs"]
+mod denied_roots;
+pub use denied_roots::{DeniedRoots, ScanVisits, retry_contains};
+
+#[path = "os/retry.rs"]
+mod retry;
+pub(crate) use retry::open_retry_root;

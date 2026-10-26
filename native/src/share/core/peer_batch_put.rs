@@ -160,7 +160,7 @@ impl PeerBackend {
             req: FsRequest::WriteDone,
             lease: lease.clone(),
         };
-        let sent = self.node.block_on(io_deadline::run(
+        let sent = self.node.block_on_route(opened.generation, io_deadline::run(
             "peer batch commit",
             send_ctrl(&mut opened.send, &commit),
         ));
@@ -170,7 +170,7 @@ impl PeerBackend {
             // A host that stopped the stream has sent its reason already.
             Err(_) => REFUSAL_WAIT,
         };
-        let reply = self.node.block_on(io_deadline::run_for(
+        let reply = self.node.block_on_route(opened.generation, io_deadline::run_for(
             "peer batch reply",
             budget,
             read_reply(&mut opened.recv),
@@ -201,7 +201,7 @@ impl PeerBackend {
         total: u64,
     ) -> Result<(), BodyError> {
         self.node
-            .block_on(io_deadline::run(
+            .block_on_route(opened.generation, io_deadline::run(
                 "peer batch header",
                 send_ctrl(&mut opened.send, header),
             ))
@@ -221,7 +221,7 @@ impl PeerBackend {
                 )));
             }
             self.node
-                .block_on(io_deadline::run(
+                .block_on_route(opened.generation, io_deadline::run(
                     "peer batch data",
                     send_tagged(&mut opened.send, TAG_DATA, chunk),
                 ))
@@ -237,7 +237,7 @@ impl PeerBackend {
         let error = match failure {
             BodyError::Source(error) => error,
             BodyError::Transport(error) => {
-                let reason = self.node.block_on(io_deadline::run_for(
+                let reason = self.node.block_on_route(opened.generation, io_deadline::run_for(
                     "peer batch refusal",
                     REFUSAL_WAIT,
                     recv_resp_wire(&mut opened.recv),

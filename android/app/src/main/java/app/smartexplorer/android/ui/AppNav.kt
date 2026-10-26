@@ -31,6 +31,9 @@ sealed interface NavRequest {
     /** Opens the screen of a device (SCR-M9); [target] is the target JSON of contract V5. */
     data class OpenScreen(val target: String) : NavRequest
 
+    /** Saved Direct/room endpoint; the receiving picker resolves current pins. */
+    data class OpenApps(val endpoint: String) : NavRequest
+
     /** Opens the group view of the screens (SCR-M9) of a room, or of all devices with `null`. */
     data class ShowScreenGrid(val roomId: String?) : NavRequest
 
@@ -136,6 +139,7 @@ object AppNav {
         "showUpdate" -> NavRequest.ShowUpdate
         "showBackgroundSettings" -> NavRequest.ShowBackgroundSettings
         "openScreen" -> value?.takeIf { it.isNotBlank() }?.let { NavRequest.OpenScreen(it) }
+        "openApps" -> value?.takeIf(::validAppsEndpoint)?.let { NavRequest.OpenApps(it.trimEnd('/')) }
         "showScreenGrid" -> NavRequest.ShowScreenGrid(value?.takeIf { it.isNotBlank() })
         "openVaultCompare" -> value?.takeIf { it.isNotBlank() }?.let { NavRequest.OpenVaultCompare(it) }
         "showLauncherSettings" -> NavRequest.ShowLauncherSettings
@@ -147,7 +151,7 @@ object AppNav {
         is NavRequest.OpenLocation, NavRequest.ShowTransfers -> MainTab.Files
         is NavRequest.SelectTab -> request.tab
         is NavRequest.OpenJobConflicts -> MainTab.Sync
-        NavRequest.ShowShareRequests, is NavRequest.OpenScreen, is NavRequest.ShowScreenGrid -> MainTab.Share
+        NavRequest.ShowShareRequests, is NavRequest.OpenScreen, is NavRequest.OpenApps, is NavRequest.ShowScreenGrid -> MainTab.Share
         NavRequest.ShowUpdate, NavRequest.ShowBackgroundSettings, is NavRequest.OpenVaultCompare,
         NavRequest.ShowLauncherSettings -> MainTab.More
     }
@@ -161,6 +165,7 @@ object AppNav {
         NavRequest.ShowUpdate -> "showUpdate" to null
         NavRequest.ShowBackgroundSettings -> "showBackgroundSettings" to null
         is NavRequest.OpenScreen -> "openScreen" to request.target
+        is NavRequest.OpenApps -> "openApps" to request.endpoint
         is NavRequest.ShowScreenGrid -> "showScreenGrid" to (request.roomId ?: "")
         is NavRequest.OpenVaultCompare -> "openVaultCompare" to request.jobId
         NavRequest.ShowLauncherSettings -> "showLauncherSettings" to null
@@ -171,6 +176,16 @@ object AppNav {
      * U40-12). Main process only: the process `:launcher` never calls it (U35-16); it gets the token from the `DEVICES` message.
      */
     internal fun tokenFor(context: Context): String = token(context)
+
+    private fun validAppsEndpoint(value: String): Boolean {
+        if (value.length > 4096 || value.any { it.isISOControl() }) return false
+        val endpoint = value.trimEnd('/')
+        val direct = endpoint.removePrefix("share://direct/")
+        if (endpoint.startsWith("share://direct/")) return direct.isNotBlank() && !direct.contains('/')
+        if (!endpoint.startsWith("share://room/")) return false
+        val parts = endpoint.removePrefix("share://room/").split('/')
+        return parts.size == 2 && parts.all { it.isNotBlank() }
+    }
 
     /** Random per-installation secret in app-private preferences. */
     private fun token(context: Context): String = synchronized(lock) {

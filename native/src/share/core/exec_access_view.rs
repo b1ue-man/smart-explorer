@@ -160,3 +160,26 @@ impl ExecApprovalPending {
 #[cfg(test)]
 #[path = "exec_access_tests.rs"]
 mod tests;
+
+/// Contextual operations need an explicit V2 offer from the real protocol
+/// handler. Legacy Exec/screen feature lists never imply these operations.
+pub(crate) const ACCESS_CONSTRAINTS_V2_FEATURE: &str = "access_constraints_v2";
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct AccessProtocolSupport {
+    #[serde(default)]
+    pub access_versions: Vec<u64>,
+    #[serde(default)]
+    pub contextual_capabilities: Vec<Capability>,
+}
+impl AccessProtocolSupport {
+    pub(crate) fn host(available: &[Capability]) -> Self {
+        Self {
+            access_versions: vec![1, 2],
+            contextual_capabilities: available.iter().copied()
+                .filter(|capability| capability.requires_context()).collect(),
+        }
+    }
+    pub(crate) fn supports(&self, request: &crate::share::access_constraints::AccessRequest) -> bool {
+        self.access_versions.contains(&2) && self.contextual_capabilities.contains(&request.capability())
+    }
+}

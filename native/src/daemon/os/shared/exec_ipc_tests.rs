@@ -72,8 +72,10 @@ fn trickle_progress_cannot_extend_the_absolute_local_write_deadline() {
 #[test]
 fn terminal_task_resize_frame_becomes_a_client_resize_input() {
     let (client, mut server) = pair();
+    let (control, _control_peer) = pair();
     let input = ExecIpcInput {
         stream: Arc::new(Mutex::new(client)),
+        control: Arc::new(control),
     };
     let size = ExecTerminalSize {
         cols: 132,
@@ -93,8 +95,10 @@ fn terminal_task_resize_frame_becomes_a_client_resize_input() {
 #[test]
 fn terminal_task_unusable_or_malformed_resize_frames_are_refused() {
     let (client, mut server) = pair();
+    let (control, _control_peer) = pair();
     let input = ExecIpcInput {
         stream: Arc::new(Mutex::new(client)),
+        control: Arc::new(control),
     };
     let error = input
         .resize(ExecTerminalSize { cols: 0, rows: 24 })

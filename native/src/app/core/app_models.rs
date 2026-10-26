@@ -25,6 +25,7 @@ pub(in crate::app) mod menu_ids {
 /// in the `App` fields (so the rest of the code stays unchanged); inactive
 /// tabs park their state here. Switching tabs swaps the field sets.
 pub(in crate::app) struct TabState {
+    pub(in crate::app) drive_binding: Option<super::drive_snapshot::DriveBinding>,
     pub(in crate::app) root_path: String,
     pub(in crate::app) recursive: bool,
     pub(in crate::app) entries: Vec<FileEntry>,
@@ -81,6 +82,7 @@ pub(in crate::app) fn empty_progress() -> ScanProgress {
 impl Default for TabState {
     fn default() -> Self {
         Self {
+            drive_binding: None,
             root_path: String::new(),
             recursive: false,
             entries: Vec::new(),
@@ -264,7 +266,7 @@ impl StorageScanSource {
 }
 
 fn normalize_storage_root(root: String) -> String {
-    let normalized = root.replace('\\', "/");
+    let normalized = super::local_path_text(std::path::Path::new(&root));
     if normalized.trim().is_empty() {
         return String::new();
     }

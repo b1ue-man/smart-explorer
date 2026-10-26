@@ -28,7 +28,8 @@ pub(super) fn handle(rt: &Runtime, method: &str, args: &Value) -> Option<Result<
         "vault.setSettings" => set_settings(args),
         "vault.forgetPassword" => forget_password(args),
         _ => {
-            return super::vault_keys::handle(rt, method, args)
+            return super::vault_open_policy::handle(rt, method, args)
+                .or_else(|| super::vault_keys::handle(rt, method, args))
                 .or_else(|| super::vault_compare::handle(rt, method, args))
         }
     })

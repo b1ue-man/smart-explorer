@@ -99,7 +99,8 @@ pub(crate) fn ui(ui: &mut egui::Ui) {
     });
     let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
     if session_detect::is_wlroots_desktop(&desktop) {
-        ui.label(RichText::new(WLROOTS_HINT).small().color(theme::muted(ui)));
+        ui.small("Die dauerhafte Bildschirmfreigabe wird vom Portal-Dienst dieses Desktops gesteuert.");
+        egui::CollapsingHeader::new("Einrichtungsdiagnose").id_salt("wayland_portal_diagnostics").show(ui, |ui| { ui.label(RichText::new(WLROOTS_HINT).small().color(theme::muted(ui))); });
     }
     // The notice and the file are checked again soon.
     ui.ctx().request_repaint_after(REREAD);

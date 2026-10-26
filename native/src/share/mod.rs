@@ -11,6 +11,8 @@ mod authorization_policy;
 mod backend;
 #[path = "core/backend_capabilities.rs"]
 mod backend_capabilities;
+#[path = "core/capacity.rs"]
+mod capacity;
 #[path = "core/blocking.rs"]
 mod blocking;
 #[path = "core/configuration_runtime.rs"]
@@ -19,6 +21,7 @@ mod configuration_runtime;
 mod connection_events;
 #[path = "core/crypto.rs"]
 mod core;
+pub(crate) use core::{iroh_signature, verify_iroh_signature};
 #[path = "core/device_view.rs"]
 pub(crate) mod device_view;
 #[path = "os/shared/direct_actions.rs"]
@@ -80,6 +83,38 @@ mod discovery_domain;
 pub(crate) mod discovery_events;
 #[path = "core/discovery_exchange.rs"]
 mod discovery_exchange;
+#[path = "core/discovery_exchange_owner.rs"]
+mod discovery_exchange_owner;
+pub(crate) use discovery_exchange_owner::{DiscoveryExchangeCancellation, DiscoveryExchangeOwner};
+#[path = "core/route_state.rs"]
+pub(crate) mod route_state;
+#[path = "core/route_diagnostics.rs"]
+pub(crate) mod route_diagnostics;
+#[path = "core/route_policy.rs"]
+mod route_policy;
+#[path = "core/route_protocol.rs"]
+pub(crate) mod route_protocol;
+#[path = "core/route_cancellation.rs"]
+pub(crate) mod route_cancellation;
+#[path = "core/node_routes.rs"]
+mod node_routes;
+#[path = "core/node_access.rs"]
+pub(crate) mod node_access;
+#[path = "os/shared/route_adapter.rs"]
+mod route_adapter;
+#[path = "os/shared/route_monitor.rs"]
+pub(crate) mod route_monitor;
+#[path = "os/shared/route_history.rs"]
+mod route_history;
+#[cfg(windows)]
+#[path = "os/windows/route_interfaces.rs"]
+mod route_interfaces;
+#[cfg(target_os = "linux")]
+#[path = "os/linux_os/route_interfaces.rs"]
+mod route_interfaces;
+#[cfg(target_os = "android")]
+#[path = "os/android/route_interfaces.rs"]
+mod route_interfaces;
 #[path = "core/discovery_exchange_port_impl.rs"]
 mod discovery_exchange_port_impl;
 #[path = "core/discovery_offer_book.rs"]
@@ -294,6 +329,22 @@ mod node;
 mod node_accept;
 #[path = "core/node_screen.rs"]
 pub(crate) mod node_screen;
+#[path = "core/node_tcp.rs"]
+pub(crate) mod node_tcp;
+#[path = "core/login_transport.rs"]
+pub(crate) mod login_transport;
+#[path = "core/node_tcp_link.rs"]
+mod node_tcp_link;
+#[path = "core/tcp_forward.rs"]
+pub(crate) mod tcp_forward;
+#[path = "core/tcp_wire.rs"]
+pub(crate) mod tcp_wire;
+#[path = "core/tcp_registry.rs"]
+pub(crate) mod tcp_registry;
+#[path = "os/shared/tcp_sockets.rs"]
+pub(crate) mod tcp_sockets;
+#[path = "os/shared/tcp_pump.rs"]
+pub(crate) mod tcp_pump;
 #[path = "core/node_sessions.rs"]
 mod node_sessions;
 #[path = "core/peer_endpoint_source.rs"]
@@ -504,3 +555,15 @@ mod quic_stats_proc;
 mod quic_stats_tests;
 #[path = "core/transfer_meter.rs"]
 mod transfer_meter;
+#[path = "core/apps_wire.rs"]
+pub(crate) mod apps_wire;
+#[path = "core/node_apps.rs"]
+mod node_apps;
+#[path = "core/node_apps_link.rs"]
+mod node_apps_link;
+#[path = "core/service_routes.rs"]
+mod service_routes;
+pub use service_routes::{
+    ShareRouteSnapshot, DeviceRouteDiagnostics, ConnectionRouteDiagnostics,
+    RouteBudgetView, RouteMeasurementView, ROUTE_PAYLOAD_MEASUREMENT_NOTE,
+};

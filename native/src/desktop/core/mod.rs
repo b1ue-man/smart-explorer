@@ -2,6 +2,7 @@
 //! crates, no FFI: the os layer passes every fact in as a typed value and
 //! performs every effect (files, registry, windows, processes) itself.
 pub(crate) mod config;
+pub(crate) mod folder_open;
 pub(crate) mod items;
 pub(crate) mod layout;
 pub(crate) mod ledger;

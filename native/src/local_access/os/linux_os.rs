@@ -4,6 +4,9 @@ use std::{io, path::Path};
 #[path = "linux/directory_handle.rs"]
 mod directory_handle;
 pub(crate) use directory_handle::{DirectoryHandle, QuarantinedChild};
+#[path = "linux/confined.rs"]
+mod confined;
+pub(crate) use confined::ConfinedDirectory;
 
 pub(crate) fn parallel_scan_allowed() -> bool {
     true

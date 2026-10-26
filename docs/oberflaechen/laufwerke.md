@@ -156,3 +156,21 @@ Stand U23 (DRV-M8); im Quelltext committet (`94240017`, Registrierung `c9b0bed8`
 - Handtests (U43): Dolphin zeigt den KDE-Ort mit Symbol (Annahme zu `ID` und `folder-remote`) und nicht doppelt (Annahme A8); Nautilus, Nemo und Thunar zeigen das Lesezeichen außerhalb von Home; der Gerätebaum unter Windows mit mehreren Geräten und einem Raum.
 - Linux zeigt die virtuellen Ordner des Gerätebaums mit den Rechten der FUSE-Attributabbildung (`fuse_ops_attr.rs`); der Plan nennt `0555`. Schreiben bleibt in jedem Fall mit `PermissionDenied` verweigert.
 - Dokany: Wiedervorlage `WINFSP-AB` und `DOKANY-WATCH` stehen in `docs/TODO.md` (außerhalb dieses Dokuments; Abschnitt „Dokany bleibt“ in `README.md`).
+
+## Laufender Gesamtkandidat: Recovery, Kapazität und Rootfreigabe
+
+Quellstand 2026-10-26; gemeinsame Remote-Suite und Veröffentlichung stehen aus.
+
+| Fähigkeit | Sichtbare Oberfläche | Gemeinsame Grenze |
+|---|---|---|
+| Cache sichern und Laufwerk entfernen | Desktop `N/app/core/mount_recovery_ui.rs`; `se drive save-remove` und `se drive recovery list/import/reactivate` (`N/cli/drive_recovery.rs:23`); MCP über `se` | Der Daemon besitzt die Offline-Transaktion. Reaktivierung ergibt zunächst ein gestopptes Laufwerk mit ausgeschaltetem Auto-Remount; `retry` bleibt ausdrücklich nötig. |
+| Providerkapazität und Cachebelegung unterscheiden | Desktop `N/app/core/mount_capacity_ui.rs`; CLI `N/cli/drive_capacity.rs:14`, JSON im Mountsnapshot und Daemon-IPC | `N/mount/core/capacity.rs` und `os/shared/capacity_refresh.rs` trennen belegte Providerkapazität, unbekannte Werte, veraltete Werte und lokale Cachebelegung. Unbekannt ist nicht null. |
+| Tresorroot ausdrücklich freigeben | Desktop `vault_settings_ui.rs`; CLI `vault/open_policy.rs:18`; Android `VaultOpenPolicy.kt` über `vault.openPolicy/confirmRootTrust/revokeRootTrust/providerRelease` (`N/mobile/os/shared/domains/vault_open_policy.rs:6`) | Rootvertrauen ist an Tresor, Backend, Account und Root gebunden. Klartextkopie und Android-Providerfreigabe bleiben eigene Entscheidungen. Widerruf betrifft auch bereits laufende Providerzugriffe. |
+
+Die native Mount-Recoveryaktion betrifft Windows-/Linux-Mounts. Android bleibt
+Dokumentanbieter; aus dessen Existenz wird keine zusätzliche native Mountaktion
+abgeleitet. Recoverypakete halten historische Identität und unbestätigte Lücken;
+frische Profildaten dürfen einen alten Bestand nicht still neu legitimieren.
+Belege: `N/daemon/os/shared/mount_recovery_identity.rs`,
+`N/mount/core/recovery_identity.rs` und
+[Review B1](../plaene/2026-10-24-batches/review-b1.md).

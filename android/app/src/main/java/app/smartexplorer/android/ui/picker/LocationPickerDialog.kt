@@ -3,7 +3,10 @@ package app.smartexplorer.android.ui.picker
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -24,9 +27,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -64,7 +67,7 @@ private val APP_INTERNAL_BACKENDS = setOf("zip", "trash")
  * by the core. App-internal places (ZIP contents, trash) are refused unless [allowAppInternal].
  * Back goes to the previously shown folder, then closes via [onDismiss].
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun LocationPickerDialog(
     title: String,
@@ -77,9 +80,9 @@ fun LocationPickerDialog(
     val scope = rememberCoroutineScope()
     val showHidden by AppPrefs.showHidden.collectAsStateWithLifecycle()
     val dirsFirst by AppPrefs.dirsFirst.collectAsStateWithLifecycle()
-    var location by remember { mutableStateOf(initialLocation) }
-    val history = remember { mutableStateListOf<String>() }
-    var showPlaces by remember { mutableStateOf(initialLocation == null) }
+    var location by rememberSaveable { mutableStateOf(initialLocation) }
+    var history by rememberSaveable { mutableStateOf(emptyList<String>()) }
+    var showPlaces by rememberSaveable { mutableStateOf(initialLocation == null) }
     var roots by remember { mutableStateOf<Roots?>(null) }
     var listing by remember { mutableStateOf<Listing?>(null) }
     var loading by remember { mutableStateOf(false) }
@@ -116,7 +119,7 @@ fun LocationPickerDialog(
 
     fun go(next: String) {
         val current = listing?.location ?: location
-        if (current != null && current != next) history.add(current)
+        if (current != null && current != next) history = history + current
         location = next
         showPlaces = false
     }
@@ -124,7 +127,10 @@ fun LocationPickerDialog(
     fun back() {
         when {
             showPlaces && location != null -> showPlaces = false
-            history.isNotEmpty() -> location = history.removeAt(history.lastIndex)
+            history.isNotEmpty() -> {
+                location = history.last()
+                history = history.dropLast(1)
+            }
             else -> onDismiss()
         }
     }
@@ -139,7 +145,7 @@ fun LocationPickerDialog(
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
-            Column(Modifier.fillMaxSize()) {
+            Column(Modifier.fillMaxSize().imePadding()) {
                 TopAppBar(
                     title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     navigationIcon = {
@@ -178,20 +184,22 @@ fun LocationPickerDialog(
                     )
                 }
                 HorizontalDivider()
-                Row(
+                FlowRow(
                     modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(16.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    maxItemsInEachRow = 2,
                 ) {
                     OutlinedButton(
                         onClick = { creating = true },
                         enabled = canConfirm && current?.readOnly == false,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.widthIn(min = 160.dp).weight(1f),
                     ) { Text("Neuer Ordner") }
                     Button(
                         onClick = { current?.let { onPick(it.location) } },
                         enabled = canConfirm,
-                        modifier = Modifier.weight(1f),
-                    ) { Text(confirmLabel, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                        modifier = Modifier.widthIn(min = 160.dp).weight(1f),
+                    ) { Text(confirmLabel) }
                 }
             }
         }

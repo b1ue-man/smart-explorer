@@ -22,7 +22,7 @@ fn status_code(status: Node<'_, '_>) -> Option<u16> {
         .ok()
 }
 
-fn dav_status_error(code: u16) -> io::Error {
+pub(super) fn dav_status_error(code: u16) -> io::Error {
     let kind = match code {
         404 => io::ErrorKind::NotFound,
         401 | 403 => io::ErrorKind::PermissionDenied,

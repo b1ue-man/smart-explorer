@@ -68,7 +68,19 @@ pub(crate) fn activate(item: &ItemId, cx: &mut Cx<'_>) {
         }
         Some(ItemRef::Vault(vault)) => open_target::open_vault(vault),
         Some(ItemRef::File(file)) => match cx.view.folder(file.public) {
-            Some(folder) => open_target::desktop_file(folder, &file.name, false),
+            Some(folder) => match open_target::desktop_entry(
+                folder,
+                &file.name,
+                file.is_dir,
+                false,
+                cx.view.config().open_folders_with,
+            ) {
+                Ok(request) => request,
+                Err(error) => {
+                    cx.state.notice(error);
+                    return;
+                }
+            },
             None => return,
         },
         Some(ItemRef::System(system)) => open_target::system_item(system),
@@ -129,6 +141,10 @@ fn device_menu(ui: &mut egui::Ui, tile: &DeviceTile, cx: &mut Cx<'_>) {
     if ui.button("Geräteseite").clicked() {
         chosen = Some(open_target::device_page(tile));
     }
+    if ui.button("Programme auf diesem Gerät …").clicked() {
+        super::share_apps_ui::open_surface(ui.ctx(), tile.target.clone(), tile.name.clone());
+        ui.close_menu();
+    }
     if let Some(request) = chosen {
         cx.actions.open(request);
         ui.close_menu();
@@ -164,10 +180,22 @@ fn file_menu(ui: &mut egui::Ui, item: &ItemId, file: &DesktopFile, cx: &mut Cx<'
     }
     for (label, choose) in [("Öffnen", false), ("Öffnen mit …", true)] {
         if ui.button(label).clicked() {
-            cx.actions
-                .open(open_target::desktop_file(&folder, &file.name, choose));
+            match open_target::desktop_entry(
+                &folder,
+                &file.name,
+                file.is_dir,
+                choose,
+                cx.view.config().open_folders_with,
+            ) {
+                Ok(request) => cx.actions.open(request),
+                Err(error) => cx.state.notice(error),
+            }
             ui.close_menu();
         }
+    }
+    if file.is_dir && ui.button(file_manager_label()).clicked() {
+        cx.actions.open(OpenRequest::Folder(folder.join(&file.name)));
+        ui.close_menu();
     }
     if ui.button("Umbenennen").clicked() {
         start_rename(item, cx);

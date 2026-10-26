@@ -173,8 +173,10 @@ impl ExecGrant {
     /// The capabilities that `self` narrows against `old` (C5); empty for a
     /// pure widening or no change.
     pub(crate) fn narrowed_against(&self, old: &ExecGrant) -> Vec<Capability> {
+        let programs_narrowed =
+            super::access_revocation::program_list_narrows(&old.programs, &self.programs);
         self.access_grant()
-            .narrowing_against(&old.access_grant(), self.programs != old.programs)
+            .narrowing_against(&old.access_grant(), programs_narrowed)
     }
 
     /// Applies `change` in the next revision; a refused change leaves the

@@ -8,7 +8,8 @@ impl App {
         let mut open = self.show_preview;
         // Set when the user clicks a row's "▶" to sync just that one file.
         let mut sync_one: Option<crate::bisync::Action> = None;
-        egui::Window::new("🔍 Vergleich (Vorschau)")
+        super::dialog_geometry::window(ctx, "bisync_ui.0", "🔍 Vergleich (Vorschau)")
+            .id(egui::Id::new("🔍 Vergleich (Vorschau)"))
             .open(&mut open)
             .collapsible(false)
             .resizable(true)
@@ -80,7 +81,7 @@ impl App {
                 if let Some(summary) = p.omissions.summary() {
                     ui.colored_label(theme::warning(ui), format!("⚠ {summary}"));
                     ui.collapsing("Ausgelassene Verknüpfungen (bis zu 100 Pfade)", |ui| {
-                        egui::ScrollArea::vertical().max_height(140.0).show(ui, |ui| {
+                        egui::ScrollArea::vertical().min_scrolled_height(0.0).max_height(super::dialog_geometry::remaining_height(ui, 3.0)).show(ui, |ui| {
                             for path in p.omissions.reported_paths().take(100) {
                                 ui.label(path);
                             }
@@ -111,8 +112,9 @@ impl App {
                 let busy = self.apply_one_rx.is_some() || p.blocked.is_some();
                 let conflict_rows = p.conflicts.len();
                 let total_rows = conflict_rows.saturating_add(p.actions.len());
-                egui::ScrollArea::vertical()
+                egui::ScrollArea::vertical().min_scrolled_height(0.0)
                     .auto_shrink([false, false])
+                    .max_height(super::dialog_geometry::remaining_height(ui, 1.0))
                     .show_rows(ui, 24.0, total_rows, |ui, visible_rows| {
                         for row in visible_rows {
                             if row < conflict_rows {

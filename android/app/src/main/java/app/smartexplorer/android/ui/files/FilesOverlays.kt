@@ -75,11 +75,13 @@ private fun Dialogs(vm: FilesViewModel) {
             onDismiss = close,
         )
         is FilesDialog.Conflict -> ConflictDialog(
+            request = dialog.request,
             names = dialog.names,
             choosable = dialog.choosable,
-            onChoice = { conflict ->
+            folders = dialog.folders,
+            onChoice = { conflict, folders ->
                 close()
-                vm.runTransfer(dialog.request, conflict)
+                vm.runTransfer(dialog.request, conflict, folders)
             },
             onDismiss = close,
         )

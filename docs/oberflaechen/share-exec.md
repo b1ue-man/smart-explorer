@@ -212,3 +212,20 @@ Die Abweichungen stammen aus `docs/lesungen/2026-10-17-exec-rechte-oberflaechen.
 - Raum-Sammelaktion auf Android: nicht belegt.
 - A9: Gleichheit der Protokollausgabe von CLI, Desktop und Android ist nicht belegt.
 - Die Stapel-Suite für PRM-M1 bis PRM-M11 ist für diesen Stand nicht ausgeführt; Verhalten auf Windows-Konten, Fedora-SELinux und Windows 11 Home ist nicht geprüft (Annahmen A5 bis A7 in `docs/plaene/2026-10-17-rechte-desktop-tresore/strang-rechte.md`).
+
+## Laufender Gesamtkandidat: Geräteseite, Einschränkungen und Direktpfad
+
+Quellstand 2026-10-26; gemeinsame Remote-Suite und Veröffentlichung stehen aus.
+
+| Gegenstand | Oberflächen und Quellanschluss | Erhaltene Grenze |
+|---|---|---|
+| Rechte eines Geräts | Desktop `N/app/core/share_device_page_ui.rs`; Android `A/ui/share/DeviceSettingsPage.kt` über `share.deviceRights`; CLI Text/JSON `N/cli/share/grants_device_view.rs`, MCP über `se` | Kontakt, direkter Grant und Raumrolle bleiben getrennte Rechtequellen. Die Oberfläche zeigt aktuelle Herkunft und Einschränkung; ein fehlender Eintrag erweitert keinen Grant. |
+| Ziel-/Programm-/Zeitgrenzen | `N/share/core/access_constraints.rs`, `access_authorize.rs` und `access_revocation.rs`; bestehende Genehmigungsoberflächen bleiben angeschlossen | Laufende Ressourcen werden bei Entzug/Verengung geschlossen. Neue TCP- oder Apprechte entstehen nicht aus einem alten unbeschränkten Grant. |
+| Terminalkopplung | `se share discover` (`N/cli/share/discover.rs:44`) mit PIN über Terminalprompt oder stdin; Daemon `discovery_pairing_ipc.rs` | Der tatsächliche Austauschbesitzer hält Abbruch und Ergebnis. Ein verschwundenes Angebot wird nicht durch eine gleich benannte Gegenstelle ersetzt. |
+| Route anzeigen | Desktop `share_routes_ui.rs`, Android `RouteDetails.kt` und `share.routeStatus`, CLI `share/status.rs:256`; gemeinsame `service_routes.rs`-Snapshots | LAN-/Direktprüfung, laufende Ermittlung, Pfadpause und sichtbarer Relayrückfall stammen aus demselben Zustand wie die Nutzdatenfreigabe. Reine Adresskenntnis ist kein Direktnachweis. |
+| Laufende Execs abbrechen | Bestehende GUI-/CLI-/MCP-Besitzer und lokales Exec-IPC | Unabhängiger Controlpfad bindet Abbruch an die konkrete Besitzercapability; eine blockierte Nutzdatenroute hält Abbruch nicht fest. |
+
+Maschinenanmeldung, TCP, RDP, Appkatalog und Fensterfamilien stehen mit ihren
+getrennten Autorisierungen in [fernzugriff.md](fernzugriff.md).
+Statische Befunde und Grenzen: [B4](../plaene/2026-10-24-batches/review-b4.md)
+und [B5](../plaene/2026-10-24-batches/review-b5.md).

@@ -473,6 +473,7 @@ fn stop_daemon(supervisor: &mut JobSupervisor, share_host: &ShareHost, listener:
     log("daemon stopping (stop requested or unreadable stop control)");
     // No new IPC client is admitted while the worker winds down.
     listener.shutdown();
+    super::login_shutdown::drain();
     share_host.shutdown_lan();
     // Each step is logged, so a stop that hangs shows where in the worker log.
     log("daemon stop: IPC listener closed, LAN presence withdrawn");

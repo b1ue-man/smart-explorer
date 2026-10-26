@@ -1,5 +1,5 @@
 //! `se update`: check the configured update feed and install a newer version.
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -204,9 +204,8 @@ fn install_terminal_only(cli: &Path, version: &str) -> Result<Installed, String>
     };
     let target = replaced.target().to_path_buf();
     let sha256 = replaced.sha256().to_string();
-    if let Err(error) = replaced.commit() {
-        let _ = writeln!(std::io::stderr(), "se: warning: {error}");
-    }
+    replaced.commit()?;
+    crate::cli::plugin::refresh_generated_files();
     Ok(Installed {
         target,
         sha256,

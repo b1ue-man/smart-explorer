@@ -152,7 +152,7 @@ impl PeerWriter {
         };
         let result = self
             .node
-            .block_on(super::io_deadline::run("peer write finish", async {
+            .block_on_route(self.generation, super::io_deadline::run("peer write finish", async {
                 send_ctrl(
                     &mut send,
                     &Ctrl::Fs {
@@ -234,7 +234,7 @@ impl Write for PeerWriter {
                 let Some(send) = self.send.as_mut() else {
                     return Err(eio("Peer-Schreibkanal geschlossen"));
                 };
-                self.node.block_on(super::io_deadline::run(
+                self.node.block_on_route(self.generation, super::io_deadline::run(
                     "peer write data chunk",
                     send_tagged(send, tag, &bytes),
                 ))

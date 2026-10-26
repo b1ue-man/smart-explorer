@@ -124,10 +124,10 @@ pub(crate) fn show(ctx: &egui::Context) -> Vec<Effect> {
     };
     let busy = dialog.rx.is_some();
     let (mut create_now, mut cancel) = (false, false);
-    egui::Window::new(format!("Synchronisieren – {}", origin.label))
+    crate::app::dialog_geometry::window(ctx, "vault_sync_editor_ui.0", format!("Synchronisieren – {}", origin.label))
         .id(egui::Id::new("vault_sync_create"))
         .collapsible(false)
-        .resizable(false)
+        .resizable(true)
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
         .show(ctx, |ui| {
             create_form(ui, dialog, &origin, &rows, busy, &mut effects);

@@ -5,17 +5,19 @@ impl App {
     // ─── Channel drains ─────────────────────────────────────────────────
 
     pub(in crate::app) fn drain_scan(&mut self) {
+        self.drain_watcher();
         self.poll_read_access();
         let rx = match self.scan_rx.take() {
             Some(r) => r,
             None => return,
         };
-        let (got_entries, got_done) = drain_scan_channel(
+        let (got_entries, got_done) = super::platform_helpers::drain_scan_channel_with_denied(
             &rx,
             &mut self.entries,
             &mut self.progress,
             &mut self.failed_paths,
             &mut self.error_msg,
+            &mut self.read_access.denied,
         );
         if got_done {
             let truncated = self
@@ -43,12 +45,13 @@ impl App {
             }
             if let Some(rx) = t.scan_rx.take() {
                 let mut err = None;
-                let (got_entries, got_done) = drain_scan_channel(
+                let (got_entries, got_done) = super::platform_helpers::drain_scan_channel_with_denied(
                     &rx,
                     &mut t.entries,
                     &mut t.progress,
                     &mut t.failed_paths,
                     &mut err,
+                    &mut t.read_access.denied,
                 );
                 if got_done {
                     t.scan_truncated = t.scan_handle.take().is_some_and(|handle| {

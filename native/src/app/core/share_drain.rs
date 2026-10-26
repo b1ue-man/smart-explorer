@@ -162,6 +162,7 @@ impl App {
                 SHARE_IDLE_POLL
             };
         self.share_worker_running = snapshot.running;
+        self.share_routes = snapshot.routes;
         self.share_worker_relay_url = snapshot.relay_url;
         self.share_worker_candidates = snapshot.candidates;
         self.share_lan_status = snapshot.lan;

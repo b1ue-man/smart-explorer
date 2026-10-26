@@ -5,6 +5,7 @@ import android.os.SystemClock
 import android.util.Log
 import app.smartexplorer.android.system.Storage
 import app.smartexplorer.android.system.WakeKeeper
+import app.smartexplorer.android.screen.AppHostRuntime
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 import kotlinx.coroutines.CoroutineScope
@@ -156,6 +157,7 @@ object Core {
             return
         }
         readyState.value = CoreState.Ready
+        AppHostRuntime.attach(app, scope)
         if (pumpStarted.compareAndSet(false, true)) {
             thread(name = "core-events", isDaemon = true) { pumpEvents() }
         }
@@ -184,7 +186,7 @@ object Core {
                 Log.e(TAG, "event pump stopped: native pollEvents missing", e)
                 return
             }
-            val batch = CoreEvents.parse(json, raw)
+            val batch = CoreEvents.parse(json, raw, AppHostRuntime::acceptEvent)
             batch?.forEach { event ->
                 when (event) {
                     is CoreEvent.Task -> taskStore.upsert(event.task)

@@ -1,6 +1,6 @@
 # Oberflächen von Smart Explorer
 
-Stand: 2026-10-25; Medienvorschau um den laufenden P32-Vertrag ergänzt. Die Einträge beschreiben die jeweilige Oberfläche; veröffentlichte Versionen werden in den verlinkten Dokumenten getrennt belegt.
+Stand: 2026-10-26; laufende Medien- und Fernzugriffsverträge ergänzt. Die Einträge beschreiben die jeweilige Oberfläche; veröffentlichte Versionen werden in den verlinkten Dokumenten getrennt belegt.
 
 Zweck: Dieses Verzeichnis hält fest, welche Oberflächen das Projekt hat und über welche Oberfläche jede Fähigkeit und jede Einstellung erreichbar ist. Eine Fähigkeit ist erst fertig, wenn jede Oberfläche, die ihren Gegenstand zeigt oder steuert, sie gleichwertig zeigt und steuert. Ausnahmen (zum Beispiel die Terminal-Verbindung selbst, eine Plattform ohne die nötige Betriebssystemfunktion) stehen mit Grund im Teildokument.
 
@@ -24,8 +24,10 @@ Zweck: Dieses Verzeichnis hält fest, welche Oberflächen das Projekt hat und ü
 | Share (Geräte, Anfragen, Räume, Freigaben, Auffindbarkeit, Netzwerk) und Exec (Grants, Konto, Programmliste, Jobs, Protokoll) | [share-exec.md](share-exec.md) |
 | Alle übrigen Einstellungen der App | [einstellungen.md](einstellungen.md) |
 | Laufwerke (Einhängen unter Windows und Linux, Optionen, Gerätebaum „Verbundene Geräte als Ordner“, Tresor-Laufwerke, Android-Dokumentanbieter, Laufzeit) | [laufwerke.md](laufwerke.md) |
+| Übertragungsentscheidungen, Wiederanlauf, optische Quellen und gezielter Teilscan | [uebertragungen.md](uebertragungen.md) |
 | Tresore (Cryptomator-Tresore, Sperren, Tresor-Sync, Tresor-Laufwerke) | [tresore.md](tresore.md) |
 | Bildschirm (Geräte, Sitzungen, Kodierung, Eingabe, Betrachter) | [bildschirm.md](bildschirm.md) |
+| Maschinenanmeldung, TCP, RDP, Programmstart und Fensterfamilien | [fernzugriff.md](fernzugriff.md) |
 | se Desktop und se Launcher | [desktop-launcher.md](desktop-launcher.md) |
 | Eigene Android-Medienvorschau (Bilder, Video, Audio) | [medien.md](medien.md) |
 

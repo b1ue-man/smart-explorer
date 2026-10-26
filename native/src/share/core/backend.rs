@@ -359,12 +359,11 @@ impl Backend for PeerBackend {
 
     fn rename_no_replace(&self, src: &str, dst: &str) -> VfsResult<()> {
         let ticket = self.begin_tracked_mutation(src)?;
-        match self.tracked_request(
+        match self.stage_request_once(
             FsRequest::RenameNoReplace {
                 src: src.to_string(),
                 dst: dst.to_string(),
             },
-            ticket.as_ref(),
             "rename_no_replace",
         )? {
             FsResponse::Ok => {

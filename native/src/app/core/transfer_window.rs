@@ -13,6 +13,9 @@ use super::*;
 use crate::app::theme;
 use crate::transfer::{ActiveTransfer, TransferProgress};
 
+#[path = "optical_status.rs"]
+mod optical_status;
+
 const EMPTY_HINT: &str =
     "Keine Übertragungen. Strg+C merkt sich die Auswahl, Strg+V startet die Übertragung sofort.";
 const CANCEL_HINT: &str = "Diese Übertragung zügig beenden; fertige Dateien bleiben";
@@ -64,8 +67,17 @@ impl App {
         }
         let mut open = true;
         let mut actions = Vec::new();
+        let mut places = vec![("Lokales Dateisystem".to_string(), crate::transfer::Endpoint::Local)];
+        for index in 0..self.tabs.len() {
+            if let Some((place, _)) = self.tab_place(index) {
+                if !place.is_local() { places.push((format!("Tab {}: {}", index + 1, place.label), place.endpoint)); }
+            }
+        }
+        let known: std::collections::HashSet<String> = self.transfer_center.lane.active.iter().filter_map(|active| active.job.as_ref().map(|job| job.id.clone()))
+            .chain(self.transfer_center.finished.iter().filter_map(|entry| entry.job.as_ref().map(|job| job.id.clone()))).collect();
+        let mut recovery = None;
         let center = &self.transfer_center;
-        egui::Window::new("⇅ Übertragungen")
+        super::dialog_geometry::window(ctx, "transfer_window.0", "⇅ Übertragungen")
             .id(egui::Id::new("transfer_window"))
             .open(&mut open)
             .collapsible(false)
@@ -73,10 +85,19 @@ impl App {
             .default_size([640.0, 440.0])
             .max_size(theme::window_content_limit(ctx))
             .constrain_to(ctx.screen_rect().shrink(16.0))
-            .show(ctx, |ui| window_body(ui, ctx, center, &mut actions));
+            .show(ctx, |ui| {
+                window_body(ui, ctx, center, &mut actions);
+                recovery = super::transfer_recovery_ui::render(ui, ctx, &places, &known);
+            });
         self.transfer_center.window_open = open;
         for action in actions {
             self.apply_row_action(action);
+        }
+        if let Some(recovery) = recovery {
+            match recovery {
+                Ok(job) => { self.submit_approved_job_for(job, super::transfer_center::TransferPurpose::Copy); }
+                Err(error) => self.error_msg = Some(error),
+            }
         }
     }
 
@@ -128,14 +149,16 @@ fn window_body(
         }
     });
     ui.separator();
+    optical_status::render(ui);
     if center.total_count() == 0 {
         ui.colored_label(theme::muted(ui), EMPTY_HINT);
         return;
     }
-    egui::ScrollArea::vertical()
+    egui::ScrollArea::vertical().min_scrolled_height(0.0)
         .id_salt("transfer_rows")
         .auto_shrink([false, false])
-        .show(ui, |ui| {
+        .max_height(super::dialog_geometry::remaining_height(ui, 1.0))
+                    .show(ui, |ui| {
             for target in center.connecting.iter().rev() {
                 ui.push_id(("connect", target.id), |ui| {
                     connecting_row(ui, target, actions)
@@ -310,9 +333,9 @@ fn issue_list(
             }
         }
     });
-    egui::ScrollArea::vertical()
+    egui::ScrollArea::vertical().min_scrolled_height(0.0)
         .id_salt("issues")
-        .max_height(160.0)
+        .max_height(super::dialog_geometry::remaining_height(ui, 2.0))
         .show(ui, |ui| {
             let mut shown = text.as_str();
             ui.add(

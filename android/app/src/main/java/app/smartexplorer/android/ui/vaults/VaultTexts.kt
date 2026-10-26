@@ -6,6 +6,14 @@ package app.smartexplorer.android.ui.vaults
  * file inside a vault (S2): they use only the label of the vault.
  */
 object VaultTexts {
+    const val PROVIDER_POLICY = "Speichervertrauen und Apps"
+    const val ROOT_ENFORCED = "Technische Rootbegrenzung ist belegt."
+    const val ROOT_UNPROVEN = "Technische Rootbegrenzung ist nicht belegt."
+    const val TRUST_ROOT = "Diesem Tresorspeicher vertrauen…"
+    const val REVOKE_ROOT = "Speichervertrauen widerrufen…"
+    const val TRUST_BOUNDARY = "Die technische Rootbegrenzung ist nicht belegt. Das Vertrauen gilt nur für diese Vault-, Backend-, Konto-/Peer- und Rootidentität. Es ist widerrufbar und erlaubt keine Klartextkopie. Die Freigabe für Apps bleibt eine getrennte Entscheidung."
+    const val PROVIDER_BOUNDARY = "Apps greifen über den Dokumentanbieter auf ausdrücklich freigegebene entsperrte Tresore zu. Änderungen liegen in einem versiegelten Spool. Sperren oder Widerruf der Appfreigabe entzieht offene Deskriptoren; bereits von Apps gelesene Daten können diese behalten. Hier wird keine Klartextdatei auf Platte angelegt."
+
     const val MENU_TITLE = "Tresore"
     const val MENU_SUBTITLE = "Cryptomator-Tresore entsperren und verwalten"
     const val ADD = "Hinzufügen"
@@ -178,6 +186,7 @@ object VaultTexts {
     fun errorText(code: String, message: String, label: String = ""): String = when (code) {
         "vault_locked" -> (if (label.isBlank()) "Tresor" else "Tresor $label") + " ist gesperrt. Entsperre ihn unter Mehr → Tresore."
         "vault_use_provider" -> "Dieser Tresor wird über die Dateien-App geöffnet."
+        "vault_root_trust_required" -> "Für diesen Tresorspeicher fehlt der Rootbeweis. Bestätige das konkrete Speichervertrauen in den Tresoreigenschaften oder unter Ordner für Apps bereitstellen."
         "vault_wrong_password" -> WRONG_PASSWORD
         "vault_hub" -> "Cryptomator-Hub-Tresore werden nicht unterstützt"
         // The core's texts are those of C3.1: „Tresorformat <n> nicht unterstützt“,

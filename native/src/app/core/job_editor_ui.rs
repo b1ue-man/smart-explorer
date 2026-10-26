@@ -36,7 +36,7 @@ impl App {
         let mut page = ctx
             .data_mut(|data| data.get_temp::<JobEditorPage>(page_id))
             .unwrap_or_default();
-        egui::Window::new(title)
+        super::dialog_geometry::window(ctx, "job_editor_ui.0", title)
             .open(&mut open)
             .collapsible(false)
             .resizable(true)
@@ -50,7 +50,7 @@ impl App {
                     }
                 });
                 ui.separator();
-                egui::ScrollArea::vertical()
+                egui::ScrollArea::vertical().min_scrolled_height(0.0)
                     .id_salt(("job_editor_scroll", page as u8))
                     .max_height((ctx.screen_rect().height() - 200.0).max(180.0))
                     .show(ui, |ui| render_job_editor_page(ui, page, &mut ed, &mut pick));

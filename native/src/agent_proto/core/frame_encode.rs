@@ -10,6 +10,10 @@ use super::{bad, validate_frame_len, META_LINK, META_SPECIAL, MIN_WIRE_META_BYTE
 
 #[path = "frame_ext.rs"]
 pub(super) mod frame_ext;
+#[path = "folder_frames.rs"]
+pub(super) mod folder_frames;
+#[path = "capacity_frames.rs"]
+pub(super) mod capacity_frames;
 #[path = "frame_ops.rs"]
 pub(super) mod frame_ops;
 #[path = "lz4_frames.rs"]
@@ -209,6 +213,8 @@ pub(super) fn encode(frame: &Frame, req_id: u64, with_length: bool) -> io::Resul
         other => {
             if !frame_ext::encode(other, &mut b)
                 && !frame_ops::encode(other, &mut b)
+                && !capacity_frames::encode(other, &mut b)
+                && !folder_frames::encode(other, &mut b)
                 && !range_frames::encode(other, &mut b)
                 && !lz4_frames::encode(other, &mut b)
             {
@@ -366,6 +372,8 @@ fn encoded_len(frame: &Frame) -> io::Result<usize> {
         Frame::Ok | Frame::End | Frame::Cancel => {}
         other => match frame_ext::payload_len(other)
             .or_else(|| frame_ops::payload_len(other))
+            .or_else(|| capacity_frames::payload_len(other))
+            .or_else(|| folder_frames::payload_len(other))
             .or_else(|| range_frames::payload_len(other))
             .or_else(|| lz4_frames::payload_len(other))
         {

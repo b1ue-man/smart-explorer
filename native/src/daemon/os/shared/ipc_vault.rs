@@ -65,6 +65,12 @@ pub(in crate::daemon) fn serve(
         }
         VaultIpcRequest::Check { site } => return compare::serve_check(stream, &site),
         VaultIpcRequest::Status => status(),
+        VaultIpcRequest::MountPolicy { site } => match crate::vault::mount_policy(&site) {
+            Ok(policy) => IpcResponse::Vault(VaultIpcReply::MountPolicy(policy)),
+            Err(error) => failure(error, None),
+        },
+        VaultIpcRequest::SetRootTrust { site, trusted } => policy_saved(&site, crate::vault::set_root_trust(&site, trusted)),
+        VaultIpcRequest::SetCleartextCopyPolicy { site, always } => policy_saved(&site, crate::vault::set_cleartext_copy_policy(&site, always)),
         VaultIpcRequest::Unlock {
             site,
             password,
@@ -86,6 +92,13 @@ pub(in crate::daemon) fn serve(
         VaultIpcRequest::SpoolKey { mount_id } => host.mounts.spool_key_reply(&mount_id),
     };
     write_response(&mut stream, &response)
+}
+
+fn policy_saved(site: &str, result: Result<(), String>) -> IpcResponse {
+    match result {
+        Ok(()) => IpcResponse::Vault(VaultIpcReply::PolicySaved { site: site.into() }),
+        Err(error) => failure(error, None),
+    }
 }
 
 fn failure(msg: impl Into<String>, code: Option<&str>) -> IpcResponse {

@@ -341,7 +341,7 @@ impl App {
     }
 
     pub(in crate::app) fn should_start_watcher(&self) -> bool {
-        self.watcher.is_none() && !self.folder_index.is_empty()
+        self.watcher.is_none() && !self.folder_index.is_empty() && !self.drives.is_empty()
     }
 
     pub(in crate::app) fn should_start_clip_key_poller(&self) -> bool {

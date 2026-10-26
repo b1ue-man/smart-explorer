@@ -19,6 +19,8 @@ use crate::desktop::core::tiles::{
 };
 use crate::share::PeerOpenTarget;
 
+pub(crate) use super::folder_open::desktop_entry;
+
 /// What one handling of the surface starts.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum OpenRequest {

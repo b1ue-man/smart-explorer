@@ -84,6 +84,7 @@ pub(super) struct Job {
     started_ms: i64,
     end: Mutex<Option<JobEnd>>,
     control: Mutex<Option<Arc<dyn JobControl>>>,
+    operation: Mutex<Option<crate::mcp_launcher::OperationGuard>>,
     cancel_requested: AtomicBool,
     /// Bumped on every new output, progress step and on the end.
     version: watch::Sender<u64>,
@@ -145,7 +146,12 @@ impl Job {
             .send_modify(|version| *version = version.wrapping_add(1));
     }
 
+    pub(super) fn release_operation_after_handoff(&self) {
+        if let Ok(mut guard) = self.operation.lock() { guard.take(); }
+    }
+
     pub(super) fn finish(&self, end: JobEnd) {
+        self.release_operation_after_handoff();
         if let Ok(mut slot) = self.end.lock() {
             if slot.is_none() {
                 *slot = Some(end);
@@ -238,6 +244,7 @@ impl JobRegistry {
             started_ms: now_ms(),
             end: Mutex::new(None),
             control: Mutex::new(None),
+            operation: Mutex::new(crate::mcp_launcher::continuation_operation()?),
             cancel_requested: AtomicBool::new(false),
             version,
             streams,

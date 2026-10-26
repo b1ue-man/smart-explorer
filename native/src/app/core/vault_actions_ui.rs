@@ -153,10 +153,10 @@ pub(crate) fn show(ctx: &egui::Context) -> Vec<Effect> {
         let busy = ask.rx.is_some();
         let mut yes = false;
         let mut no = false;
-        egui::Window::new("Tresor austragen?")
+        crate::app::dialog_geometry::window(ctx, "vault_actions_ui.0", "Tresor austragen?")
             .id(egui::Id::new("vault_remove_ask"))
             .collapsible(false)
-            .resizable(false)
+            .resizable(true)
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .show(ctx, |ui| {
                 ui.label(format!(

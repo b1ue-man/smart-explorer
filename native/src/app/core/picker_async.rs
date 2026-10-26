@@ -5,13 +5,23 @@ impl App {
     /// List the current picker folder off the UI thread; remote latency must
     /// never freeze pointer, keyboard, or cancellation handling.
     pub(in crate::app) fn picker_list(&mut self) {
-        let (backend, cwd) = match &self.picker {
+        let (backend, cwd, remote) = match &self.picker {
             Some(picker) => match &picker.backend {
-                Some(backend) => (backend.clone(), picker.cwd.clone()),
+                Some(backend) => (backend.clone(), picker.cwd.clone(), picker.is_remote),
                 None => return,
             },
             None => return,
         };
+        if !self.drive_consumer_available(super::drive_snapshot::DriveConsumer::Picker, &cwd, remote) {
+            if let Some(picker) = self.picker.as_mut() {
+                picker.list_rx = None;
+                picker.listing = false;
+                picker.entries.clear();
+                picker.selected = None;
+                picker.error = Some("Datenträger nicht verbunden".into());
+            }
+            return;
+        }
         let (tx, rx) = unbounded();
         let spawn = std::thread::Builder::new()
             .name("picker-list".into())

@@ -195,7 +195,12 @@ pub(super) fn tools() -> Vec<Tool> {
                 "session": {"type": "string", "description": "Session name or id; needed for attach, activity and close."}
             }), &[], changes(false, true)),
         tool("screen", "Screen of paired devices", screen_tool::DESCRIPTION, screen_tool::properties(), &["action"], read_only(true)),
+        tool("screen_window", "Open a native remote window viewer", super::screen_window_tool::DESCRIPTION, super::screen_window_tool::properties(), &["device", "source"], changes(true, false)),
         tool("screen_input", "Input on the screen of a paired device", screen_tool::INPUT_DESCRIPTION, screen_tool::input_properties(), &["device"], changes(true, false)),
+        tool("tcp_forward", "TCP tunnel to a paired device", super::tcp_tool::DESCRIPTION, super::tcp_tool::properties(), &["action"], changes(true, false)),
+        tool("apps", "Installed application catalog and launch", super::apps_tool::DESCRIPTION, super::apps_tool::properties(), &["action"], changes(true, false)),
+        tool("rdp", "Authenticated RDP and RemoteApp", super::rdp_tool::DESCRIPTION, super::rdp_tool::properties(), &["action"], changes(true, false)),
+        tool("login", "Explicit machine login viewer", super::login_tool::DESCRIPTION, super::login_tool::properties(), &["action"], changes(true, false)),
     ];
     tools.into_iter().map(upfront).collect()
 }
@@ -217,6 +222,7 @@ fn transfer_tool(name: &'static str, title: &str, description: &'static str) -> 
         json!({
             "source": {"type": "string", "description": TARGET},
             "destination": {"type": "string", "description": TARGET},
+            "folder_conflict": {"type":"string","enum":["merge","keep-both","fail"],"default":"merge","description":"Existing directory conflicts: merge contents, create a distinct destination name, or fail. Separate from overwrite, which controls existing files. The job result reports the actual destination alias."},
             "recursive": {"type": "boolean", "description": "Required for directories."},
             "overwrite": {"type": "boolean", "description": "Replace existing destination files (default false)."},
             "wait_seconds": {"type": "integer", "minimum": 0, "description": WAIT}
