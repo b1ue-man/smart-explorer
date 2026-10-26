@@ -77,7 +77,10 @@ Lokal gesicherte API-/Lib-Syntax (Abrufdatum im Kopf jeder Datei).
 - [Iroh authenticated LAN paths](iroh-authenticated-lan-paths.md): S09 pinned status channel and actual selected local interface; Iroh 1.0.0 APIs checked 2026-10-03.
 
 - [egui/eframe 0.29.1 Close-Lifecycle](egui-close-lifecycle.md) – Y156: CancelClose im Frame, terminales Worker-Drain vor Close/Update; geprüft 2026-10-03.
-| [rv1-remote-suite.md](rv1-remote-suite.md) | Cargo/libtest, Python subprocess, bestehende Android-/OS-Runnerverträge | 2026-10-03 | Schmaler inkrementeller Testhost, kurze Windows-Filter, Prozessbesitz und tatsächliche Runnerfakten für die eine RV1-Abnahme |
+- [Gemeinsame Remote-Task-Suite](rv1-remote-suite.md): Cargo/libtest, Python subprocess, Android Instrumentation und FFmpeg; geprüft 2026-10-26. Aktiver B1–B8/P31/P32-Gesamtbatch mit Manifestbindung, inkrementellen nativen Ausgaben und expliziten Grenzen ohne Hardware-/Livekonto-Nachweis. Die historischen RV1-OS-Belege sind getrennt gekennzeichnet.
+
+- [Bildschirm-Aufnahme: Zulassung und Besitzer](../plaene/2026-10-24-batches/aufnahme-speicher.md): WGC/DXGI, X11/x11rb 0.13.2, PipeWire API 0.3.65, Android ImageReader/JNI und Loginhelper; Primärquellen geprüft 2026-10-26. Detailplan einschließlich Legacy-/v2-Phasenrechnung und Parent-/Kindbuchung; noch kein Laufzeitbeleg.
+- [Bildschirm-Renderer: Besitzer und Freigabe](../plaene/2026-10-24-batches/renderer-speicher.md): eframe/egui/epaint 0.29.1, wgpu 22.1.0 und OpenGL-Synchronisation; geprüft 2026-10-26. Detailplan für CPU-/YUV-Uploadbesitz, Sitzungsidentität, verworfene Ausgaben und letzten Queue-Abfluss; noch kein Laufzeitbeleg.
 
 - [Private Datei-Zugriffscapabilities](private-file-access.md): Linux/Android O_PATH-Vorfahren und lesbarer privater Leaf; Windows-Journal RW/Seek statt append-only und Versionsbackup-Flush am verifizierten RW-Handle; tatsächliche Rust-/Win32-Aufrufrechte, zuletzt geprüft 2026-10-04.
 
