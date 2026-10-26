@@ -40,6 +40,10 @@ internal data class EncoderConfig(
 internal class ScreenEncoder(private val config: EncoderConfig, private val budget: ScreenCaptureBudget, private val sink: PictureSink) {
     private val surfaceLease=if(!config.hybrid) budget.claim(ScreenCaptureBudget.NATIVE_SURFACE,
         ScreenFrameLimits.checkedBytes(config.width,config.height).toLong()) else null
+    private val surfaceOwners=java.lang.Object()
+    private var surfaceUsers=0
+    private val surfaceClosers=ArrayList<Thread>()
+    private var finishing=false
     private val codec: MediaCodec
     private val inputSurface: Surface?
     val surface: Surface get() = inputSurface ?: error("RGBA encoder has no input surface")
@@ -83,7 +87,25 @@ internal class ScreenEncoder(private val config: EncoderConfig, private val budg
             } finally {finishResources()}
         }
     }
-    fun retainSurface(): ScreenCaptureLease = checkNotNull(surfaceLease).retain()
+    /** Register before starting a Canvas producer, including spontaneous drain failure. */
+    fun retainSurface(): ScreenCaptureLease = synchronized(surfaceOwners) {
+        check(!finishing && running) {"Encoder nimmt keinen neuen Surfaceproduzenten an"}
+        val count=Math.addExact(surfaceUsers,1)
+        val retained=checkNotNull(surfaceLease).retain()
+        val creator=Thread.currentThread()
+        surfaceUsers=count
+        try {
+            ScreenCaptureLease(0L) {
+                try {retained.close()} finally {synchronized(surfaceOwners) {
+                    val endedOn=Thread.currentThread()
+                    if(endedOn!==creator) surfaceClosers.add(endedOn)
+                    surfaceUsers--;surfaceOwners.notifyAll()
+                }}
+            }
+        } catch(failure:Throwable) {
+            retained.close();surfaceUsers--;surfaceOwners.notifyAll();throw failure
+        }
+    }
 
     fun requestKeyFrame() { forceKeyframe=true; parameters { putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0) } }
 
@@ -98,6 +120,10 @@ internal class ScreenEncoder(private val config: EncoderConfig, private val budg
     }
 
     fun release() {
+        synchronized(surfaceOwners) {
+            check(surfaceUsers==0 && surfaceClosers.none {it.isAlive}) {"Surfaceproduzent lebt noch; Encoder und Claims bleiben gehalten"}
+            finishing=true
+        }
         running = false
         try {
             codec.signalEndOfInputStream()
@@ -115,6 +141,25 @@ internal class ScreenEncoder(private val config: EncoderConfig, private val budg
     }
 
     @Synchronized private fun finishResources() {
+        // A Codec error can finish this drain before the source is stopped.
+        // Keep every platform resource and its claim until its real worker ends.
+        var interrupted=false
+        val endedProducers=synchronized(surfaceOwners) {
+            finishing=true
+            while(surfaceUsers!=0) {
+                try {surfaceOwners.wait()} catch(_:InterruptedException) {interrupted=true}
+            }
+            surfaceClosers.toList()
+        }
+        // The alias closes in worker finally; join also proves the thread has
+        // returned from that finally before touching codec or Surface lifetime.
+        endedProducers.forEach {producer ->
+            check(producer!==Thread.currentThread())
+            while(producer.isAlive) {
+                try {producer.join()} catch(_:InterruptedException) {interrupted=true}
+            }
+        }
+        if(interrupted) Thread.currentThread().interrupt()
         try {codec.release()} finally {
             inputSurface?.release()
             pending.values.forEach {it.second.close()};pending.clear()

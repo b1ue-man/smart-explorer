@@ -43,6 +43,25 @@ fn batches_capture_task_android_pending_metadata_cannot_allocate() {
     assert_eq!(BridgeBackend.open_source(&SourceId::Monitor("0".into()),None).err().unwrap().reason,"capture_grant_required");
 }
 #[test]
+fn batches_capture_task_android_synthetic_without_display_keeps_defined_default() {
+    let _lock = channels::TEST_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+    channels::reset_for_tests();
+    channels::set_prereqs(|p| p.registered = true);
+    let pool = Arc::new(MemoryPool::default());
+    let admission = pool.admit_session(None, CapacityCeiling::bounded(MAX_WORKING_BYTES),
+        MAX_WORKING_BYTES, "synthetic-default").unwrap();
+    admission.bind_contract(None).unwrap();
+    let prepared = BridgeBackend.prepare_session_source("owner", "synthetic-default",
+        &SourceId::Synthetic, None, false, admission).unwrap();
+    let channel = channels::channels().pop().unwrap();
+    assert_eq!((channel.start.max_width, channel.start.max_height), (1280, 720));
+    assert!(prepared.description().native_size.is_none());
+    assert!(prepared.capture_plan(&output()).unwrap().is_none());
+    assert!(channel.capture.grant(1).is_err());
+    drop(prepared);
+    assert!(channels::channels().is_empty());
+}
+#[test]
 fn batches_capture_task_android_three_rgba_slots_are_preallocated_credits() {
     let _lock=channels::TEST_LOCK.lock().unwrap_or_else(PoisonError::into_inner);channels::reset_for_tests();
     let (channel,_a,grant)=session();let n=64*32*4;

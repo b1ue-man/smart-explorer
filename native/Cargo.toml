@@ -26,6 +26,11 @@ noq-proto = { path = "../vendor/noq-proto-1.3.0" }
 name = "se-mcp-launcher"
 path = "src/bin/se_mcp_launcher.rs"
 
+# Only the remote debug instrumentation APK enables these isolated JNI fixtures.
+[features]
+default = []
+android-instrumentation-fixtures = []
+
 [dependencies]
 rayon = "1.10"
 # Screen still pictures (SCR-M4): PNG encoder and decoder of `screen::core::snapshot`.

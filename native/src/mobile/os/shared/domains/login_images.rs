@@ -168,3 +168,19 @@ pub fn login_render_target_claim(owner: u64, width: u32, height: u32) -> Option<
 #[cfg(test)]
 #[path = "batches_login_image_task_tests.rs"]
 mod batches_login_image_task_tests;
+
+/// Read-only fixture diagnostics retain no bitmap or slice aliases.
+#[cfg(all(target_os = "android", feature = "android-instrumentation-fixtures"))]
+pub(super) fn fixture_state(owner: u64) -> io::Result<serde_json::Value> {
+    fixture_pane_state(owner, &pane(owner)?)
+}
+#[cfg(all(target_os = "android", feature = "android-instrumentation-fixtures"))]
+pub(super) fn fixture_pane(owner: u64) -> io::Result<Arc<Pane>> {pane(owner)}
+#[cfg(all(target_os = "android", feature = "android-instrumentation-fixtures"))]
+pub(super) fn fixture_pane_state(owner: u64, pane: &Arc<Pane>) -> io::Result<serde_json::Value> {
+    let state = pane.binding.lock().map_err(|_| io::Error::other("login pane binding unavailable"))?;
+    Ok(serde_json::json!({"owner":owner,"session":state.session,"generation":state.generation,"closed":state.closed,
+        "live_bytes":pane.images.live_bytes()?,"raw_count":pane.images.live_count(ImageRole::ViewerInput)?,
+        "bitmap_count":pane.images.live_count(ImageRole::AndroidBitmap)?,"target_count":pane.images.live_count(ImageRole::RenderSurface)?,
+        "metadata_count":pane.images.live_count(ImageRole::ImageMetadata)?}))
+}

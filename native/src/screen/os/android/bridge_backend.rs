@@ -55,6 +55,10 @@ pub(crate) struct BridgeBackend;
 
 
 impl ScreenHostBackend for BridgeBackend {
+    fn capacity_ceiling(&self, facts: Option<crate::screen::core::frame_memory::MemoryFacts>)
+        -> crate::screen::core::frame_memory::CapacityCeiling {
+        crate::screen::os::session_memory::capacity_ceiling(facts)
+    }
     fn session_memory_ceiling(&self)->u64 {
         channels::prereqs().working_bytes.unwrap_or(crate::screen::core::frame_budget::MAX_WORKING_BYTES)
             .min(crate::screen::core::frame_budget::MAX_WORKING_BYTES)
@@ -161,7 +165,13 @@ impl ScreenHostBackend for BridgeBackend {
             _ => {}
         }
         let display = prereqs.display.map(|(w, h)| FrameSize::new(w, h));
-        let max = wanted.or(display).unwrap_or(FrameSize::new(0, 0));
+        let max = wanted.or(display).unwrap_or_else(|| {
+            if matches!(source, SourceId::Synthetic) {
+                super::synthetic_backend::DEFAULT_SYNTHETIC_SIZE
+            } else {
+                FrameSize::new(0, 0)
+            }
+        });
         let start = start_for(source, max);
         let key=crate::screen::core::capture_admission::SourceKey::new(session,&source.to_string())
             .map_err(|e|SourceRefusal::new(&e.to_string()))?;

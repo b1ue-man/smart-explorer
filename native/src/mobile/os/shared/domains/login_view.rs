@@ -4,6 +4,12 @@ use serde_json::{json, Value};
 use crate::{login::{FrameToken, GatewayTarget, ViewerSession}, mobile::ApiError, screen::core::input_model::{InputEvent, key_usage, MAX_INPUT_EVENTS}};
 static SESSIONS: Mutex<BTreeMap<u64, Arc<ViewerSession>>> = Mutex::new(BTreeMap::new());
 static NEXT: AtomicU64 = AtomicU64::new(1);
+#[cfg(all(target_os = "android", feature = "android-instrumentation-fixtures"))]
+pub(super) fn fixture_session_id() -> Result<u64, String> {
+    NEXT.fetch_update(Ordering::SeqCst, Ordering::SeqCst,
+        |id| id.checked_add(1).filter(|next| *next <= i64::MAX as u64))
+        .map_err(|_| "login viewer IDs exhausted".into())
+}
 fn invalid(reason: impl ToString) -> ApiError { ApiError::new("invalid", reason.to_string()) }
 fn session(args: &Value) -> Result<Arc<ViewerSession>, ApiError> {
     let id = args.get("session").and_then(Value::as_u64).filter(|id| *id != 0).ok_or_else(|| invalid("login session is required"))?;
@@ -61,10 +67,14 @@ pub(super) fn handle(method: &str, args: &Value) -> Option<Result<Value, ApiErro
 }
 /// Whole immutable frame transfer; callers must pre-admit the bitmap destination.
 pub(super) fn take_image_frame(id: u64) -> Option<crate::login::ViewerFrame> {
+    #[cfg(all(target_os = "android", feature = "android-instrumentation-fixtures"))]
+    if let Some(frame) = super::login_image_fixture::take(id) {return frame;}
     let session = SESSIONS.lock().ok()?.get(&id).cloned()?;
     session.take_frame()
 }
 pub fn login_close(id: u64) {
+    #[cfg(all(target_os = "android", feature = "android-instrumentation-fixtures"))]
+    super::login_image_fixture::close(id);
     super::login_images::unbind(id);
     if let Some(session) = SESSIONS.lock().ok().and_then(|mut sessions| sessions.remove(&id)) { session.close(); }
 }

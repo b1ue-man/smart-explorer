@@ -236,9 +236,12 @@ internal object ScreenHostControl {
                     if(!active) {
                         session.pendingCapture=null
                         session.display?.surface=null
-                        session.synthetic?.stop();session.synthetic=null
                         check(session.frames?.close()!=false) {"Capturethread konnte nicht pausiert werden"};session.frames=null
-                        session.encoder?.release();session.encoder=null
+                        val source=session.synthetic;val encoder=session.encoder
+                        if(source!=null) {
+                            session.synthetic=null;session.encoder=null
+                            retireEncoder(session,source,encoder)
+                        } else {encoder?.release();session.encoder=null}
                     }
                     val packet=java.nio.ByteBuffer.allocateDirect(9).order(java.nio.ByteOrder.LITTLE_ENDIAN)
                     packet.put(if(active) 1.toByte() else 0.toByte());packet.putLong(message.long("request"))
@@ -316,12 +319,14 @@ internal object ScreenHostControl {
             return@synchronized
         }
         encoder.setFailureHandler {reason->if(session.encoderToken===token && captureCurrent(session,identity,epoch)) encoderFailed(session,epoch,reason)}
-        session.synthetic?.stop()
+        val oldSource=session.synthetic
         val oldFrames=session.frames
         val old = session.encoder
         var newFrames: ScreenProjectionFrames?=null
         try {if (synthetic) {
-            session.synthetic = SyntheticSurfaceSource(encoder.surface,config.width,config.height,config.fps,encoder.retainSurface())
+            val lease=encoder.retainSurface()
+            session.synthetic = try {SyntheticSurfaceSource(encoder.surface,config.width,config.height,config.fps,lease)}
+                catch (failure: Throwable) {lease.close();throw failure}
         } else if (projection != null) {
             val frames=if(config.hybrid) ScreenProjectionFrames(config.width,config.height,budget,{ frame,pixels ->
                 captureCurrent(session,identity,epoch) && session.encoderToken===token &&
@@ -335,7 +340,18 @@ internal object ScreenHostControl {
         session.encoder = encoder
         if(projection!=null && identity!=null) scope.launch {reportProjectionReady(session,identity,projection)}
         oldFrames?.close()
-        old?.release()
+        retireEncoder(session,oldSource,old)
+    }
+
+    private fun retireEncoder(session: HostSession, source: SyntheticSurfaceSource?, encoder: ScreenEncoder?) {
+        if (source == null) {encoder?.release();return}
+        checkNotNull(encoder) {"Syntheticquelle ohne ihren Encoder"}
+        ScreenSyntheticRetirement.retireSynthetic(source,encoder) { result ->
+            result.exceptionOrNull()?.let { failure ->
+                Log.e(TAG,"Syntheticbesitz bleibt bis zum tatsächlichen Ende gehalten",failure)
+                encoderFailed(session,session.config?.epoch ?: 0,"Syntheticabbau: ${failure.message}")
+            }
+        }
     }
 
     private fun captureCurrent(session: HostSession, identity: ScreenProjectionIdentity?, epoch: Int): Boolean {
@@ -503,10 +519,13 @@ internal object ScreenHostControl {
             session.ended = true
             session.still.close()
             session.identity?.invalidate()
-            session.synthetic?.stop()
+            val source=session.synthetic;val encoder=session.encoder
             session.display?.release()
             session.frames?.close()
-            session.encoder?.release()
+            if(source!=null) {
+                session.synthetic=null;session.encoder=null
+                retireEncoder(session,source,encoder)
+            } else {encoder?.release();session.encoder=null}
             session.projection?.stop()
             session.synthetic = null
             session.display = null

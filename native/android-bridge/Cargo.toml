@@ -8,6 +8,10 @@ publish = false
 [lib]
 crate-type = ["cdylib"]
 
+[features]
+default = []
+android-instrumentation-fixtures = ["smart_explorer/android-instrumentation-fixtures"]
+
 [dependencies]
 smart_explorer = { path = ".." }
 

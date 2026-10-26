@@ -31,9 +31,17 @@ internal class SyntheticSurfaceSource(
         try {loop()} finally {surfaceLease.close()}
     }
 
-    fun stop() {
+    fun stop(): Boolean {
         running = false
-        if(Thread.currentThread()!==worker) worker.join(STOP_JOIN_MS)
+        return awaitStopped(STOP_JOIN_MS)
+    }
+
+    /** Zero means a complete join, exclusively for the retirement worker. */
+    fun awaitStopped(timeoutMs: Long): Boolean {
+        require(timeoutMs >= 0)
+        if (Thread.currentThread() === worker) return false
+        worker.join(timeoutMs)
+        return !worker.isAlive
     }
 
     private fun loop() {

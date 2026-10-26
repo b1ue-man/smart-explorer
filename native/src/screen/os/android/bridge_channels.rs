@@ -344,12 +344,7 @@ pub(crate) fn set_prereqs(change: impl FnOnce(&mut Prereqs)) -> Prereqs {
 
 /// Opens the channel of a new host session and tells the app.
 pub(crate) fn open(start: HostStart) -> Arc<Channel> {
-    let channel = with(|register| {
-        register.next_id += 1;
-        let channel = Arc::new(Channel::new(register.next_id, start));
-        register.channels.insert(channel.id, channel.clone());
-        channel
-    });
+    let channel = register_channel(start);
     let start = &channel.start;
     emit(json!({
         "type": "screenHostStart",
@@ -363,6 +358,25 @@ pub(crate) fn open(start: HostStart) -> Arc<Channel> {
     }));
     session_event(channel.id, "consent", None);
     channel
+}
+
+fn register_channel(start: HostStart) -> Arc<Channel> {
+    with(|register| {
+        register.next_id += 1;
+        let channel = Arc::new(Channel::new(register.next_id, start));
+        register.channels.insert(channel.id, channel.clone());
+        channel
+    })
+}
+
+/// Instrumentation owns its producer; never emit a product controller start/stop.
+#[cfg(all(target_os = "android", feature = "android-instrumentation-fixtures"))]
+pub(crate) fn open_fixture(start: HostStart) -> Arc<Channel> {register_channel(start)}
+#[cfg(all(target_os = "android", feature = "android-instrumentation-fixtures"))]
+pub(crate) fn close_fixture(id: u64) {
+    if let Some(channel) = with(|register| register.channels.remove(&id)) {
+        channel.set_phase(Phase::Ended("fixture_retired".into()));
+    }
 }
 
 /// The source ended on the host side: the app stops on its next poll.
