@@ -236,7 +236,7 @@ impl WindowAdapter for X11Adapter {
             .map_err(failed)?
             .check()
             .map_err(failed)?;
-        let result = (|| {
+        let result: io::Result<WindowBinding> = (|| {
             let process = self.process(window)?;
             let mut birth = vec![0u8; 16];
             getrandom::getrandom(&mut birth)

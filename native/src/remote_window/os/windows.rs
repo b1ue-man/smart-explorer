@@ -9,6 +9,7 @@ use windows_sys::Win32::System::RemoteDesktop::ProcessIdToSessionId;
 use windows_sys::Win32::System::Threading::{
     GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
 };
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 mod facts;

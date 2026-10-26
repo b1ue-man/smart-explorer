@@ -80,7 +80,8 @@ fn property(conn: &RustConnection, window: u32, atom: u32, ty: AtomEnum) -> Opti
     if reply.bytes_after != 0 {
         return None;
     }
-    Some(reply.value32()?.collect())
+    let values: Vec<u32> = reply.value32()?.collect();
+    Some(values)
 }
 fn bounds(conn: &RustConnection, root: u32, window: u32) -> Option<Rect> {
     let geometry = conn.get_geometry(window).ok()?.reply().ok()?;

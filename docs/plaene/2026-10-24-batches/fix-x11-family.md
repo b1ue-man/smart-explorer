@@ -887,3 +887,359 @@ der registrierten Fälle und der terminale Release; diese Schritte besitzt Main.
 Keine lokalen Builds, Compiler, Tests, Formatter, Server, Installationen,
 Gitmutationen, Graphupdates oder Unteragenten. Der eigene statische Fixzyklus
 ist mit dieser Übergabe beendet.
+
+## Fortsetzung: D13/D18/D19/D20 aus Remote-Lauf 40368746815
+
+### A: Erstplan, Ergebnis und Grenzen
+
+Quelle ist Mains Fortsetzungsauftrag zum vollständig beendeten Lauf
+`40368746815`, Kandidat `b233e5336a0ee177e19382a7adf592d297dcf202`.
+Beauftragtes Ergebnis: native Fensteridentität, tatsächliche Enabled- und
+Fokusprüfung, X11-Serverfreigabe und konservative Sichtbarkeit bleiben nach
+der Korrektur von D13/D18/D19/D20 wirksam. Derselbe Autor liefert selbst
+Fehlerfunktionsliste, vollständige verbundene Karte, vorherigen Erhaltungsplan,
+Umsetzung und anschließende eigene Anti-Regressionsreview. Der unveränderte
+Nutzervertrag in `/tmp/smartexplorer-final-review-user-contract.txt` gilt.
+
+Die aktuelle Scope-JSON ersetzt frühere Schreibflächen. Ausschließlich dieser
+Bericht, `native/src/app/os/linux_os/screen_visibility.rs`,
+`native/src/remote_window/os/windows.rs`, dessen `windows/facts.rs` und
+`native/src/remote_window/os/x11.rs` sind schreibbar. Cargo.toml gehört dem
+Geräteautor. Keine lokalen Builds, Compiler, Formatter, Tests, Server,
+Installationen, Gitmutationen, Graphupdates, Releases oder Unteragenten.
+Main hat den Dokumentationskontextgate und die auftragsbezogene Graphabfrage
+laut Auftrag bereits erledigt; diese Delegation führt keinen neuen Lauf aus.
+
+Promptwissen: Main hat `IsWindowEnabled` in windows-sys 0.59 im Namespace
+KeyboardAndMouse nachgewiesen; das passende Feature ist bereits aktiviert.
+Die eigene Primärquellenprüfung steht als nächster Schritt an. Die zwei
+X11-Grenzen müssen ihre bisherigen Fehler- und Antwortlebensdauern behalten.
+Die genauen fehlerhaften Ausdrücke, ihre Aufrufer und vorhandenen Fallnamen
+sind noch durch die ausdrücklich freigegebenen Quellen und Fehlertexte zu
+klären. Eine fehlende Nutzerentscheidung ist bisher nicht erkennbar.
+
+Vorläufige Planungstiefe: A bis D für die gekoppelte Windows-/X11-
+Fensteridentitäts- und Sichtbarkeitsgrenze. Zuerst vollständige vier Befunde
+und betroffene Quellen lesen; anschließend Definitions-/Aufruf-/Fixturekette
+und versionierte Primärverträge prüfen. Daraus den konkreten Erhaltungsplan
+festhalten, schmale Korrekturen umsetzen und danach dieselbe Kette selbst
+statisch prüfen. Bestätigung nur durch Main im selben Remote-Einstieg.
+
+### B: Belegter Bestand, Fehlerfunktionen und Verknüpfungskarte
+
+Die vollständigen vier Compilertexte in
+`/tmp/smartexplorer-rv1-40368746815/x11-family-errors.json` wurden gelesen.
+D13 und D20 stammen aus beiden Linux-Compilerartefakten, D18 und D19 aus
+beiden Windows-Compilerartefakten; der Export enthält keine Androidfehler.
+Die vier Fehler sind kein Funktionspass. Der Code verwendet Rust-Edition
+2021, windows-sys 0.59 und x11rb 0.13; die vorher belegte Lockversion von
+x11rb ist 0.13.2.
+
+| Befund | Tatsächliche fehlerhafte Funktion und Folge |
+|---|---|
+| D13 / E0597 | `app/os/linux_os/screen_visibility::property`: Der Tail-Ausdruck `Some(reply.value32()?.collect())` enthält einen von `reply` geliehenen Iterator und dessen `?`-Temporärwert. Die Rust-2021-Abschlussreihenfolge verhindert die Kompilierung. Erfolgreiche Ergebnisse müssen weiterhin ein eigenes `Vec<u32>` sein; unvollständige oder falsch formatierte Properties bleiben unbekannt. |
+| D18 / E0425 | `WindowsAdapter::focused`: `IsWindowEnabled` fehlt im Importbereich, obwohl die korrekte API aktiviert ist. Der unveränderte Ausdruck verlangt gleichzeitig Vordergrundfenster, Enabled und nicht minimiert. Die ähnlich benannte Compilerhilfe `IsWindowArranged` erfüllt diesen Vertrag nicht. |
+| D19 / E0425 | `windows::facts::WindowFacts::read`: Derselbe fehlende Elternimport erreicht das Kindmodul über dessen `use super::*` nicht. Die tatsächliche Enabled-Eigenschaft muss weiterhin Größenänderung, Aktivierung, Schließen und reguläre Eingabe begrenzen. Die vorhandenen separaten Menüregeln bleiben bestehen. |
+| D20 / E0282 | `X11Adapter::bind`: Die unter Servergrab ausgeführte Closure liefert `Ok(WindowBinding)`, während `?`-Konvertierungen den Fehlertyp nicht eindeutig bestimmen. Genau `io::Result<WindowBinding>` muss den bestehenden Bindetransaktionswert typisieren; keine Änderung von Grab, Marker, Prozessprüfung, UnGrab oder Fehlerpriorität. |
+
+Die vollständige direkt und indirekt berührte Karte an diesen Grenzen:
+
+1. `remote_window::os::{adapter,adopt}` wählt denselben Windows- oder
+   X11-Adapter. `WindowAdapter` und dessen Box-Weiterleitungen erhalten ihre
+   bestehenden Signaturen. `WindowBinding` bleibt native Kennung plus
+   Lebensdauermarker; `WindowPin` bindet Plattform, Namespace und genau diese
+   Bindung. Wire-Mitglieder verwenden weiterhin `WindowIdentity`, keine
+   ungeprüfte rohe HWND/XID als entfernte Identität.
+2. `FamilyPins::list → adapter.bind → inspect → validate` hält einen
+   gemeinsamen Adapter für die Liste und erzeugt den bisherigen Selektor mit
+   Lebensdauerkennung. `take` bleibt an Besitzer und Selektor gebunden;
+   `register/receipt → os::adopt → inspect` behält den Startbeleg und prüft
+   wiederholte Pins. `PinnedFamily::{prepare,open} → export_pin →
+   PreparedWorker::new/WorkerSource::open_family → transfer_pin` übergibt die
+   Aufräumverantwortung erst nach bestätigtem Öffnen. Diese vorhandene typisierte
+   Workerübergabe und die früher im Bericht kartierte Familienkette bleiben
+   die anschließenden Integrationsgrenzen; kein Worker wird hier geändert.
+3. Windows `new/adopt → process → facts::process` hält Session, PID, Thread
+   und Prozesserstellungszeit. `bind → SetPropW → validate` verbindet den
+   zufälligen Marker mit der Prozesssignatur; `validate` prüft HWND, passende
+   Property und Signatur. `process_user_matches → facts::user_matches`
+   vergleicht tatsächliche Anmeldung und SID vor erneuter Validierung.
+4. Windows `candidate_windows/inspect/observe → WindowFacts::read` verwendet
+   physische DWM-Geometrie, tatsächliche Owner, Fensterklasse, Stile,
+   Sichtbarkeit, Minimizierung und die echte Enabled-Abfrage. `observe` nimmt
+   nur denselben Prozessstart und rekursiv zugeordnete Owner auf; Systemmenüs
+   benötigen den tatsächlichen `GetGUIThreadInfo`-Menüowner. Die bisherigen
+   Menu-/Tooltip-Regeln sowie Session-/Desktopblockierung bleiben unverändert.
+5. Windows `activate/activate_if → control_ready → validate →
+   ShowWindowAsync/SetForegroundWindow → validate` bewahrt frische Zulassung
+   vor OS-Eingriffen. `focused` verlangt für reguläre Fenster Vordergrund,
+   `IsWindowEnabled` und nicht minimiert; beim Menü verlangt es den separat
+   validierten gebundenen Menüowner als Vordergrundfenster. `request` behält
+   Close/Resize/Focus; `disconnect/drop` entfernt ausschließlich passende
+   eigene Marker und beendet kein Programm.
+6. X11 `connect/adopt → XRes-/Namespaceprüfung → validated_process` hält
+   tatsächlichen XRes-Clientprozess, UID, Session und Prozessstart. Wayland
+   bleibt am Portalweg. `bind` verwendet die vorhandene Bindung nur nach
+   frischer Prüfung; sonst folgen geprüfter Grab, Prozessprüfung, zufälliger
+   Lebensdauermarker, Propertyinstallation und erneute Validierung, danach
+   geprüfter UnGrab und erst bei Gesamterfolg Speicherung in `markers`.
+7. X11 `candidate_windows_inner/observe_inner → candidates/properties → bind`
+   nimmt Root und rekursiv bewiesene Transient-Nachfahren desselben Prozesses
+   auf. `properties::{process,bytes,words,geometry,title,app,kind}` behalten
+   XRes-/UID-/Startbeweis, begrenzte vollständige Properties, Geometrie und
+   atomgebundene Typen. Combo-Popups bleiben Popup; zugehörige Menüs dürfen
+   Eingabe behalten, Tooltips keine Eingabe, fremde Oberflächen keine Bindung.
+8. X11 `activate_if_inner/focused_inner/request_inner` verwendet dieselben
+   Marker und kurzlebigen Servertransaktionen. `focus_node →
+   focus::{owner_focus,can_activate,confirmed,anchor}` verfolgt ausschließlich
+   bereits gebundene und frisch validierte Owner-/Prozessketten. Reguläre
+   Dialoge bleiben eigene Aktivierungsgrenzen; Zyklen, fremde Prozesse,
+   recycelte XIDs, verborgene Owner und ungebundene Oberflächen bestätigen
+   keinen Fokus. Close bleibt das beworbene graceful Protokoll, Resize bleibt
+   durch WM-Fähigkeit und erlaubte Aktion begrenzt.
+9. `HostSession::{open,open_bound,open_bound_as} → bind/validate → refresh`
+   bindet Sessionfreigabe, Root, Mitglieder und Generationen. `refresh` prüft
+   Sicht-/Steuerrechte und Listenscope, übernimmt nur rekursive Owner desselben
+   Prozesses, invalidiert Eingabefreigabe bei Fokus-/Rechtewechsel und hält
+   Layoutrevision getrennt von Metadaten. `boundary/boundary_current/set_icon`
+   behalten validierte Capturemitglieder, Geometrie, Revision und Iconbezug.
+10. `HostSession::operate → validate/activate/refresh/focused/validate` liefert
+    weiterhin nur bei bestätigtem Fokus `FocusConfirmed`. `with_input` prüft
+    Rechte, aktuelle Snapshotrevision, vorherige Fokusbestätigung, Mitgliedsfähigkeit,
+    Bindung und Fokus erneut; der Injektor erhält dieselbe konkrete
+    `CaptureMember`-Geometrie. Fehlender Fokus und Injektorfehler entwaffnen.
+11. `app::screen_modules` registriert den portablen Sichtbarkeitstyp und
+    `os/shared/screen_visibility`; dessen Linux-Adapter ist der Fehlerort D13.
+    `FamilyViewerApp::update → sample → sample_x11 → property` liest tatsächliche
+    Xlib-/Xcb-Kennung, Stack, opaque Region und Opazität. Formate, Restbytes,
+    Shape, Bounds, Wiederholungsabfrage und Kartenstatus bleiben unverändert.
+    Nur bewiesene opaque Shape-Schnittmengen werden über `subtract` entfernt;
+    Unsicherheit und Rennen geben den bisherigen konservativen Wert zurück.
+12. `sample → WindowVisibility → egui("screen_window_visibility") →
+    ViewWidget::show → VisibilityTracker::report → session.set_visibility`
+    verwendet dieselbe TypeId und projiziert belegte Rechtecke auf die
+    tatsächliche Bildgeometrie. `shown=None` bleibt Unknown, nicht Hidden;
+    bestätigte Minimizierung und nicht VIEWABLE bleiben Hidden. Widget und
+    `ResumeGate::{report,acknowledge,can_present,complete,ready}` behalten
+    Bildboden, Geometriegeneration und tatsächliche Präsentation als
+    Voraussetzung der Eingabefreigabe. `reserve_pause/pause` und die
+    Strg+Alt+Pause-Ausleitung aus Vollbild bleiben unverändert.
+
+### C: Primärverträge und Entscheidung
+
+Geprüft am 2026-10-26: die bereitgestellte
+`primary/windows-sys-0.59-keyboard.rs:22` und die
+[versionierte Microsoftquelle](https://raw.githubusercontent.com/microsoft/windows-rs/0.59.0/crates/libs/sys/src/Windows/Win32/UI/Input/KeyboardAndMouse/mod.rs)
+deklarieren `IsWindowEnabled(HWND) -> BOOL` im Namespace
+`UI::Input::KeyboardAndMouse`. Microsoft beschreibt den
+[Enabled-Vertrag](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-iswindowenabled)
+als Abfrage der Maus-/Tastatureingabefähigkeit mit nicht null bei Enabled.
+`Cargo.toml:251` aktiviert bereits das passende windows-sys-Feature.
+Gewählt ist ein einziger privater Elternimport; `facts` übernimmt ihn durch
+seinen bestehenden Globimport. Keine ähnlich benannte API und keine
+Feature-/Manifeständerung.
+
+Der [x11rb-0.13.2-Vertrag von value32](https://docs.rs/x11rb-protocol/0.13.2/x11rb_protocol/protocol/xproto/struct.GetPropertyReply.html#method.value32)
+liefert einen an `&self` geliehenen Iterator oder `None` bei falschem Format.
+Der [Rust Edition Guide zur Tail-Lebensdauer](https://doc.rust-lang.org/edition-guide/rust-2024/temporary-tail-expr-scope.html)
+belegt die für Edition 2021 relevante temporäre Abschlussreihenfolge.
+Gewählt ist daher das Sammeln in einem eigenen lokalen `Vec<u32>` vor dem
+abschließenden `Some(values)`. Kein Reply-Leak, kein Clone, kein Standardwert
+bei fehlender Property und kein Editionwechsel.
+
+Die [Rustreferenz zu E0282](https://doc.rust-lang.org/error_codes/E0282.html)
+belegt die fehlende eindeutige Typinferenz und explizite Typisierung als
+Korrektur. Gewählt ist `let result: io::Result<WindowBinding> = (|| { ... })();`
+am bestehenden Ort. Ein Herausziehen von `?` aus der Closure oder ein Umbau
+der Servertransaktion würde deren Abschluss-/Fehlerreihenfolge berühren und
+ist für die belegte Typkorrektur unnötig.
+
+### D: Konkreter vorheriger Fix- und Erhaltungsplan
+
+1. In Linux `property` nur den eigenen `Vec<u32>` als lokale Variable
+   sammeln und danach `Some(values)` zurückgeben. Erwartetes Ergebnis:
+   Iteratorabschluss vor Replyabschluss, identischer Propertywert und
+   identische `None`-Pfade bei Restbytes, falschem Format oder Abfragefehler.
+2. In Windows `windows.rs` den privaten Import von
+   `UI::Input::KeyboardAndMouse::IsWindowEnabled` ergänzen. Erwartetes Ergebnis:
+   `focused` und `WindowFacts::read` rufen genau dieselbe ursprüngliche API
+   auf; beide Funktionskörper sowie `facts.rs` bleiben textgleich.
+3. In X11 `bind` ausschließlich den lokalen Transaktionswert als
+   `io::Result<WindowBinding>` annotieren. Erwartetes Ergebnis: gleiche
+   Marker-/Prozessbindung, nach Erfolg oder Fehler derselbe geprüfte UnGrab-
+   Versuch vor Fehlerweitergabe; Bindefehler behalten Vorrang, Marker werden
+   erst nach erfolgreicher Bindung und Freigabe gespeichert.
+4. Anschließend eigene Anti-Regressionsreview gegen `b233e533` anhand der
+   obigen vollständigen Karte: unveränderte Plattform-/Host-/Fokus-/Fixture-
+   Funktionskörper und Zustandsbesitzer, einzige beabsichtigte Property-
+   Lebensdauerkorrektur, alle bestehenden Fallnamen/Assertions erhalten,
+   Quellgrößen unter 500 Zeilen/50 KiB und keine Scopeverletzung. Nur statische
+   Text-/Parsingrückmeldung; Bestätigung ausschließlich durch Main im selben
+   Remote-Einstieg. Genaue Sichtbarkeitsfälle werden nach der angefragten
+   konkreten Lesefreigabe ergänzt; daraus entsteht kein eigener Testlauf.
+
+### E: Umsetzung
+
+Der Produktdiff enthält exakt drei schmale Korrekturen:
+
+- Linux `property`: `let values: Vec<u32> = reply.value32()?.collect();`
+  gefolgt von `Some(values)`. Abfrage, Restbyteprüfung, Formatprüfung und
+  Rückgabetyp bleiben erhalten. Es wird weiterhin genau ein Ergebnisvektor
+  gesammelt; Iterator und `?`-Temporärwert enden jetzt am Let-Statement.
+- Windows `windows.rs`: privater Import
+  `windows_sys::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled`.
+  Der bestehende Elternimport des Kindmoduls versorgt damit beide
+  Fehlerstellen. `focused`, `WindowFacts::read` und die vollständige Datei
+  `windows/facts.rs` bleiben textgleich. Keine Manifeständerung.
+- X11 `bind`: genau `let result: io::Result<WindowBinding> = (|| { ... })();`.
+  Die Closure, der komplette Grab-/UnGrab-Code und die Markerübernahme sind
+  unverändert. Es entsteht kein zusätzlicher Plattformaufruf und kein neuer
+  Fehlerpfad.
+
+### F: Eigene anschließende Anti-Regressionsreview
+
+Nach der Umsetzung hat derselbe Autor den vollständigen Produktdiff und die
+gesamte oben ermittelte Plattform-/Host-/Pin-/Sichtbarkeits-/Fixturekette
+gegen `b233e5336a0ee177e19382a7adf592d297dcf202` geprüft. Der statische
+Bytevergleich bestätigt für die drei bearbeiteten Quellen exakt den jeweiligen
+Basisinhalt mit ausschließlich der in E genannten Ersetzung. `windows/facts.rs`,
+die vier X11-Unteradapter, beide Popupfocus-Fixturedateien, die drei Hostdateien,
+das Domainmodell, beide Remote-Window-Modulregistrierungen, der portable
+Sichtbarkeitstyp, der gemeinsame Sichtbarkeitsadapter, Familienviewer,
+ViewWidget und FamilyPins sind vollständig bytegleich zur Basis.
+
+Eigene Erhaltungsbefunde:
+
+1. D13 liefert weiterhin `None` bei Request-/Replyfehler, verbleibenden
+   Propertybytes und unpassendem 32-Bit-Format. Ein erfolgreiches Ergebnis
+   besitzt weiterhin dieselben in derselben Reihenfolge gesammelten Werte.
+   Der geliehene Iterator lebt innerhalb des Replybesitzes; der zurückgegebene
+   Vektor ist davon unabhängig. Kein `unwrap_or_default`, kein Leak und keine
+   neue verdeckte Fehlerbehandlung.
+2. D18/D19 verwenden weiterhin `IsWindowEnabled(HWND) -> BOOL` aus der
+   gepinnten API. Reguläre Fokusbestätigung verlangt gleichzeitig Vordergrund,
+   Enabled und nicht minimiert. Die Enabled-Fähigkeiten aus `WindowFacts`,
+   die vorhandenen Menüregeln, die reale DWM-Geometrie, Prozess-/Anmeldeprüfung,
+   Marker und Modalitätsgrenzen bleiben unverändert. Es wurde weder
+   `IsWindowArranged` noch ein konstantes Erfolgsflag eingesetzt.
+3. D20 typisiert ausschließlich den bereits vollständigen Transaktionswert.
+   Nach Abschluss der Closure wird derselbe `ungrab_server`-Request samt
+   `check()` ausgeführt, bevor `result?` einen Bindefehler weitergibt.
+   Scheitern Bindung und Freigabe beide, behält der Bindefehler seinen bisherigen
+   Vorrang. Bei erfolgreicher Bindung scheitert ein fehlerhafter UnGrab weiterhin
+   vor `markers.insert`; ein Servergrab wird nicht durch einen neuen frühen
+   Rücksprung verlassen.
+4. Eigentümerketten, echte Fenster-/Prozesslebensdauer, Modalität,
+   FocusConfirmed-Korrelation, Session-/Listenscope-/Steuerrechte und
+   Entwaffnung bleiben in denselben unveränderten Objekten. Close/Resize,
+   reguläre Fenster, Combo-Popups, verschachtelte Menüs, Tooltips, Maus und
+   Touch behalten die bestehenden Wege und Fallaussagen aus G1/G2.
+5. Unbekannte Sichtbarkeit bleibt Unknown beziehungsweise konservativ sichtbar.
+   Es wird weder aus Fokusverlust Hidden abgeleitet noch ein unvollständiges
+   Property als vollständige Verdeckung gewertet. Opaque-/Shape-Schnittmengen,
+   Begrenzung von `subtract`, erneute Raceprüfung, konkrete X11-Kennung,
+   Hidden-/Minimized-Behandlung und Waylandunsicherheit sind textgleich.
+6. Die bestehende `WindowVisibility`-TypeId, Bild-/Geometriegeneration,
+   tatsächliche Präsentation, Resume-Bildboden und Eingabelösung bei Hidden
+   bleiben erhalten. Der Import- und Typschlussfix erzeugt weder eine zweite
+   Session noch einen Ersatzrenderer oder neue Sichtbarkeitswahrheit.
+7. Die beiden gelesenen Popupfocus-Fixturedateien bleiben vollständig bytegleich,
+   also einschließlich aller Fallnamen, Testattribute, Assertions und
+   kontrollierten Adapterfakten. Kein Fall wurde gestrichen, abgeschwächt,
+   umbenannt oder lokal ausgeführt.
+
+Statischer Diff-/Whitespacecheck ohne Befund. Die geänderten normalen
+Rustdateien haben 308 Zeilen / 10.114 Bytes (Linuxsichtbarkeit),
+444 / 16.993 (Windowsadapter) und 321 / 11.341 (X11-Adapter).
+`windows/facts.rs` bleibt mit 292 / 10.539 unverändert. Keine Extraktion,
+künstliche Verdichtung oder Größenausnahme ist nötig. Alle diese Dateien
+liegen unter 500 Zeilen und 50 KiB. Keine lokalen Compiler, Tests oder
+Formatter; Kompilierbarkeit und Funktionsverhalten sind dadurch noch nicht
+ausgeführt bestätigt.
+
+### G: Vorhandene Fälle, Dateien und Ergebnisgrenze
+
+Die angefragte Datei `native/src/app/core/batches_visibility_task_tests.rs`
+ist von Main ausschließlich lesend ergänzt, vollständig gelesen und statisch
+als bytegleich zu `b233e533` bestätigt. Sie erhält die genaue physische
+Rechteckprojektion, Unknown, Hidden, passenden Resume-ACK und frischen
+Bildboden. Zusammen mit den vollständig gelesenen Popupfocus-Fixtures sind
+für Main diese vorhandenen Fälle konkret belegt:
+
+- `batches_task_b6_visibility_projects_physical_rects_and_preserves_unknown`
+- `batches_task_b6_resume_gate_requires_matching_generation_and_fresh_frame`
+- `batches_family_x11_combo_popup_keeps_identity_after_owner_focus_ack`
+- `batches_family_x11_nested_menus_use_recursive_owner_focus`
+- `batches_family_x11_modal_dialog_is_the_nearest_activation_boundary`
+- `batches_family_x11_focus_rejects_foreign_unbound_recycled_owners_and_cycles`
+- `batches_family_x11_host_preserves_disarming_permissions_and_lifetimes`
+- `batches_family_x11_viewer_discards_uncorrelated_stale_layout_and_disarmed_input`
+- `batches_family_x11_regular_windows_menus_tooltips_close_resize_and_disconnect_survive`
+- `batches_family_x11_combo_atom_and_activation_capabilities_are_explicit`
+
+Das gelesene gemeinsame Manifest führt für P6 die bestehenden Marker
+`visibility_` und `resume_gate_`; die acht genannten Familienfälle stehen
+zusätzlich wörtlich im Manifest. Keine neue Fixture und keine neue
+Fallregistrierung durch diesen Autor. Main übernimmt die Ausführung und
+Auswertung im selben Remote-Einstieg. Die kontrollierten Focusfixtures
+belegen statisch ihre Erwartungen, keinen bereits ausgeführten nativen
+Windows- oder X11-Servernachweis.
+
+Gelesene Projektquellen und konkreter Umfang in dieser Fortsetzung:
+
+- `AGENTS.md` (einschlägiger Auszug und die bereits mitgegebenen Projektregeln),
+  `/root/.codex/AGENTS.md` (vollständig).
+- `docs/ARCHITEKTUR.md` (Programme/Fensterfamilien, Bildreferenz),
+  `docs/oberflaechen/bildschirm.md` (Betrachtereingabe und Sichtbarkeit),
+  `docs/plaene/2026-10-24-batches/rv1-compilerplan.md` (zugewiesene
+  Compilergrenze und zugehörige Primärquelle), dieser Bericht.
+- `native/Cargo.toml` (Edition, Windows-Feature, Plattformabhängigkeiten),
+  `native/Cargo.lock` (windows-sys 0.59.0 und x11rb 0.13.2),
+  `native/review-task-manifest.json` (P6 und vorhandene Familienfälle).
+- `native/src/app/core/family_viewer.rs` (`update`, Sichtbarkeit, Ende),
+  `native/src/app/core/screen_view_widget.rs` (`show`, Sichtbarkeitsreport,
+  Eingabefreigabe und Freigabe gehaltener Eingaben),
+  `native/src/app/screen_modules.rs` (Sichtbarkeitsregistrierung).
+- `native/src/app/core/screen_visibility.rs`,
+  `native/src/app/os/linux_os/screen_visibility.rs`,
+  `native/src/app/os/shared/screen_visibility.rs` und
+  `native/src/app/core/batches_visibility_task_tests.rs` (vollständig).
+- `native/src/remote_window/core/host.rs`,
+  `native/src/remote_window/core/host_family.rs`,
+  `native/src/remote_window/core/host_input.rs`,
+  `native/src/remote_window/core/model.rs`,
+  `native/src/remote_window/mod.rs`,
+  `native/src/remote_window/os/mod.rs` (vollständig).
+- `native/src/remote_window/os/windows.rs`,
+  `native/src/remote_window/os/windows/facts.rs`,
+  `native/src/remote_window/os/x11.rs`,
+  `native/src/remote_window/os/x11/family.rs`,
+  `native/src/remote_window/os/x11/focus.rs`,
+  `native/src/remote_window/os/x11/input.rs`,
+  `native/src/remote_window/os/x11/properties.rs`,
+  `native/src/remote_window/os/x11/batches_popup_focus_task_tests.rs`,
+  `native/src/remote_window/os/x11/batches_popup_focus_fixtures.rs` und
+  `native/src/screen/os/shared/family_pins.rs` (vollständig).
+- `/tmp/smartexplorer-final-review-user-contract.txt`,
+  `/tmp/smartexplorer-fix-x11-family-scope.json`,
+  `/tmp/smartexplorer-rv1-40368746815/x11-family-errors.json` (vollständig),
+  `/tmp/smartexplorer-rv1-40368746815/primary/windows-sys-0.59-keyboard.rs`
+  (`IsWindowEnabled`-Deklaration); die externen Primärabschnitte aus C.
+
+Geändert in dieser Fortsetzung: ausschließlich
+`native/src/app/os/linux_os/screen_visibility.rs`,
+`native/src/remote_window/os/windows.rs`,
+`native/src/remote_window/os/x11.rs` und dieser Bericht. Keine neue Datei;
+`windows/facts.rs` benötigt durch den bestehenden Elternimport keinen Edit.
+
+Entscheidungen: tatsächliche Enabled-API privat importieren, Besitz des
+Property-Ergebnisvektors vor Replyabschluss klären und genau den lokalen
+X11-Transaktionswert typisieren. Keine gelockerte Fensterbindung, keine
+gelockerte konservative Sichtbarkeit, keine geänderte Serverfreigabe und keine
+Manifest-/Rechte-/Rendereränderung. Die angefragten Leselücken sind geschlossen;
+keine konkrete ungelöste Quellabhängigkeit bleibt in dieser eigenen Fläche.
+Noch unbestätigt sind der nächste erfolgreiche Remote-Compilerlauf und das
+funktionale Ergebnis der vorhandenen Fälle. Suite, Graph, Commit/Push und
+terminaler Release bleiben bei Main. Kein lokaler Build, Compiler, Formatter,
+Test, Server, Installations-, Gitmutations-, Graph-, Release- oder
+Unteragentenaufruf. Dieser eigene statische Fixzyklus endet mit der Übergabe.
