@@ -5,7 +5,11 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use super::*;
-use crate::screen::core::pixel_convert::BgraImage;
+use crate::screen::core::capture_admission::{CaptureGeneration,CaptureOwner,CapturePlan,SourceKey};
+use crate::screen::core::capture_image::CaptureImageBuilder;
+use crate::screen::core::capture_plan::CapturePhases;
+use crate::screen::core::frame_budget::{FrameLimits,MAX_WORKING_BYTES};
+use crate::screen::core::frame_memory::{MemoryPool,CapacityCeiling};
 
 /// Answers of the queries, and the order they were asked in.
 #[derive(Default)]
@@ -137,6 +141,7 @@ impl StateProbe for Switches {
 struct Counting {
     reopened: Arc<AtomicUsize>,
     captured: Arc<Mutex<Vec<bool>>>,
+    grant: CaptureGrant,
 }
 
 impl Grabber for Counting {
@@ -146,7 +151,8 @@ impl Grabber for Counting {
 
     fn capture(&mut self, keyframe: bool) -> io::Result<SourceFrame> {
         self.captured.lock().unwrap().push(keyframe);
-        Ok(SourceFrame::Frame(BgraImage::new(FrameSize::new(64, 64))?))
+        Ok(SourceFrame::Frame(CaptureImageBuilder::new(FrameSize::new(64,64),FrameLimits::LEGACY,
+            &self.grant,CaptureOwner::SourcePixels)?.freeze()))
     }
 
     fn reopen(&mut self) -> io::Result<()> {
@@ -160,7 +166,13 @@ fn windows_capture_starts_anew_after_the_secure_desktop() {
     let reopened = Arc::new(AtomicUsize::new(0));
     let captured = Arc::new(Mutex::new(Vec::new()));
     let switches = Switches::default();
+    let pool=Arc::new(MemoryPool::default());
+    let admission=pool.admit_session(None,CapacityCeiling::bounded(MAX_WORKING_BYTES),MAX_WORKING_BYTES,"windows-state").unwrap();
+    admission.bind_contract(None).unwrap();
+    let mut plan=CapturePlan::new(SourceKey::new("windows-state","state-fixture").unwrap(),CaptureGeneration::new(1));
+    plan.add_bgra(CaptureOwner::SourcePixels,FrameSize::new(64,64),2,CapturePhases::ALL).unwrap();
     let grabber = Counting {
+        grant:admission.authority().approve(plan).unwrap(),
         reopened: reopened.clone(),
         captured: captured.clone(),
     };

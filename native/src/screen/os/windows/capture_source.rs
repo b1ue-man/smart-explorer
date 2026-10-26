@@ -11,13 +11,11 @@ use std::time::Duration;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{IsIconic, IsWindow};
 
-use super::capture_dxgi::DxgiCapture;
-use super::capture_wgc::{self, Target, WgcCapture};
-use super::{d3d_device, monitors, secure_desktop};
-use crate::screen::core::host_backend::{ScreenSource, SourceFrame, SourceRefusal};
+use super::secure_desktop;
+use crate::screen::core::host_backend::{ScreenSource, SourceFrame};
 use crate::screen::core::pixel_convert::FrameSize;
 use crate::screen::core::session_state::SessionState;
-use crate::screen::core::window_list::SourceId;
+use crate::screen::core::capture_admission::CaptureGrant;
 
 /// How long the first picture of a capture may take: Graphics Capture
 /// delivers it within one display refresh, a few multiples of that are
@@ -35,6 +33,7 @@ pub(super) const WINDOW_CAPTURE_UNSUPPORTED: &str = "window_capture_unsupported"
 pub(super) trait Grabber: Send {
     /// Size of the pictures `capture` delivers.
     fn size(&self) -> FrameSize;
+    fn capture_grant(&self) -> Option<CaptureGrant> {None}
     fn frame_limits(&self)->crate::screen::core::frame_budget::FrameLimits {crate::screen::core::frame_budget::FrameLimits::LEGACY}
     fn reference_generation(&self)->u64 {0}
     /// The newest picture; `Unchanged` when none arrived and the caller
@@ -125,59 +124,9 @@ pub(super) struct WindowsSource {
     capture_active: bool,
 }
 
-fn refusal(reason: &str) -> SourceRefusal {
-    SourceRefusal::new(reason)
-}
-
 impl WindowsSource {
-    /// Opens `source` (a monitor or a window; the test picture is not
-    /// handled here). Graphics Capture is used when the system has it; a
-    /// monitor falls back to the DXGI duplication once, a window has no
-    /// fallback.
-    pub(super) fn open(source: &SourceId) -> Result<Self, SourceRefusal> {
-        monitors::ensure_dpi_aware();
-        super::mf_common::ensure_com();
-        if !secure_desktop::session_active() {
-            return Err(refusal(SESSION_INACTIVE));
-        }
-        match source {
-            SourceId::Monitor(id) => Self::open_monitor(id),
-            SourceId::Window(text) => Self::open_window(text),
-            SourceId::Synthetic => Err(refusal(CAPTURE_UNAVAILABLE)),
-        }
-    }
-
-    fn open_monitor(id: &str) -> Result<Self, SourceRefusal> {
-        let entry = monitors::find(id).ok_or_else(|| refusal(MONITOR_NOT_FOUND))?;
-        let wgc = capture_wgc::available()
-            .then(|| {
-                d3d_device::create()
-                    .and_then(|devices| WgcCapture::open(devices, Target::Monitor(id.to_string())))
-                    .ok()
-            })
-            .flatten();
-        let grabber: Box<dyn Grabber> = match wgc {
-            Some(wgc) => Box::new(wgc),
-            None => Box::new(
-                DxgiCapture::open(&entry.device).map_err(|_| refusal(CAPTURE_UNAVAILABLE))?,
-            ),
-        };
-        Ok(Self::with(grabber, SystemProbe { window: 0 }, false))
-    }
-
-    fn open_window(text: &str) -> Result<Self, SourceRefusal> {
-        let handle: usize = text.parse().map_err(|_| refusal(WINDOW_NOT_FOUND))?;
-        let mut probe = SystemProbe { window: handle };
-        if !probe.window_exists() {
-            return Err(refusal(WINDOW_NOT_FOUND));
-        }
-        if !capture_wgc::available() {
-            return Err(refusal(WINDOW_CAPTURE_UNSUPPORTED));
-        }
-        let devices = d3d_device::create().map_err(|_| refusal(CAPTURE_UNAVAILABLE))?;
-        let wgc = WgcCapture::open(devices, Target::Window(handle))
-            .map_err(|_| refusal(CAPTURE_UNAVAILABLE))?;
-        Ok(Self::with(Box::new(wgc), probe, true))
+    pub(super) fn activated(grabber: Box<dyn Grabber>, window: Option<usize>) -> Self {
+        Self::with(grabber, SystemProbe {window:window.unwrap_or(0)}, window.is_some())
     }
 
     fn with(
@@ -196,6 +145,7 @@ impl WindowsSource {
 }
 
 impl ScreenSource for WindowsSource {
+    fn capture_grant(&self)->Option<CaptureGrant> {self.grabber.capture_grant()}
     fn reference_generation(&self)->u64 {self.grabber.reference_generation()}
     fn frame_limits(&self)->crate::screen::core::frame_budget::FrameLimits {self.grabber.frame_limits()}
     fn set_capture_active(&mut self,active:bool) -> io::Result<()> {
