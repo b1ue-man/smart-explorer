@@ -1,7 +1,9 @@
 # RA-07: wiederholbarer Vault-Laufwerkstart
 
 Stand: 2026-10-26. Der statische RA-07-Fixautorzyklus einschließlich der unten
-dokumentierten Modultrennung und der zugewiesenen Compilerkorrekturen ist abgeschlossen.
+dokumentierten Modultrennung und der ersten Compilerkorrekturen ist abgeschlossen.
+Der ergänzende statische D04/D05-Autorzyklus zu Remote-Lauf `40368746815` ist
+ebenfalls abgeschlossen und im letzten Abschnitt belegt.
 Gemeinsamer Remote-Lauf und Release sind hiermit nicht bestätigt. Arbeitsbaum
 `/tmp/smartexplorer-review-fixes-ee75e91b`, Branch `codex/review-fixes-ee75e91b`.
 Auftragsvergleich: Releasebasis `a814f263096fe69d3746e840b5f3fad3fd7e88a0`
@@ -786,3 +788,258 @@ Produktabhängigkeit oder ungeklärte notwendige Nutzerangabe ist in der eigenen
 Fläche belegt. Die drei zusätzlich angefragten Recoveryquellen und der Rootgraph
 wurden von Main konkret lesend freigegeben; die Schreibfläche wurde nicht
 eigenmächtig erweitert.
+
+## D04/D05 nach Remote-Lauf 40368746815: Kapazitäts- und Leserstatusanzeige
+
+### Auftrag, Fehlerfunktionen und abgegrenzter Erstplan
+
+Quelle dieses ergänzenden Ergebnisauftrags ist die Fortsetzung von Main vom
+2026-10-26 auf Kandidat `b233e5336a0ee177e19382a7adf592d297dcf202`.
+Der unveränderte Nutzervertrag verlangt Fehlerauflistung, vollständige direkte
+und indirekte Verknüpfungskarte, konkreten Erhaltungsplan, Fix und anschließende
+eigene Anti-Regressionsreview durch denselben Autor. Dieser Abschnitt setzt
+diesen Zyklus für genau D04 und D05 fort; frühere Abschnitte dokumentieren die
+vorangegangenen Kandidaten und deren damalige Grenzen.
+
+Promptwissen: Beide Anzeigen sollen über dieselbe bestehende egui-Instanz
+nutzbar bleiben. Kapazitätswerte, Unbekanntzustände, Leser-/Wartemodi und
+Auftragszahlen müssen erhalten bleiben; eine neue GUI-Abhängigkeit ist
+ausgeschlossen. Schreibbar sind ausschließlich `mount_capacity_ui.rs`,
+`optical_status.rs` unter `native/src/app/core/` und dieser Bericht. Main hat
+den Dokumentationskontextgate erledigt und besitzt Manifest, Git, Rootgraph,
+gemeinsame Remote-Suite und Release. Die Architektur- und Quellenlektüre
+klärt die konkreten Module, Datenquellen, Anzeigezweige und vorhandenen Fälle;
+eine notwendige nur vom Nutzer lieferbare Angabe ist nicht benannt.
+
+Die gelieferte Diagnosequelle
+`/tmp/smartexplorer-rv1-40368746815/vault-retry-errors.json` wurde vollständig
+gelesen. Sie enthält genau zwei E0433-Diagnosen, jeweils aus Windows- und
+Linux-Produkt-/Testkompilierung von `smart_explorer`; `android_errors` ist leer.
+Diese leere Liste ist kein Android-Funktionsnachweis.
+
+| Diagnose | Fehlerhafte Funktion im Kandidaten | Konkreter Befund und notwendiger Erhalt |
+|---|---|---|
+| D04 | `app::mount_ui::capacity_ui::show` in `mount_capacity_ui.rs:2` | `egui::Ui` ohne egui-Import; Kapazitätsdetails des vorhandenen Laufwerksdialogs müssen ihren Report und die beiden Kein-Hostbericht-Zeilen behalten. |
+| D05 | `app::transfer_window::optical_status::render` in `optical_status.rs:2` | `egui::Ui` ohne egui-Import; das vorhandene Übertragungsfenster muss Prozessleser, Wartemodi, optionale Blockgröße und beide Wartezähler behalten. |
+
+### Belegter Bestand und vollständige betroffene Verknüpfungskarte
+
+Die Karte verfolgt die beiden geänderten Modul-/Typgrenzen über ihre konkreten
+Aufrufer bis zu ihren Datenmodellen und Statusproduzenten. Providerzugriff,
+Daemon-IPCtransport und OS-Gerätesperren sind benannte unveränderte Grenzen;
+ihre vollständigen Implementierungen werden durch diesen Importfix weder
+verändert noch als neu praktisch geprüft behauptet.
+
+| Direkte oder indirekte Kante | Konkrete Quellen/Funktionen | Zu erhaltender Vertrag |
+|---|---|---|
+| Ein bestehender GUItyp | `app/mod.rs` registriert `prelude`; `app/core/prelude.rs` reexportiert `eframe::egui::{self, Color32, RichText}` mit `pub(in crate::app)`; `mount_ui.rs` und `transfer_window.rs` verwenden dieses Prelude | Beide Kindmodule müssen genau denselben `egui::Ui`-Typ wie ihre Eltern verwenden; der Reexport ist für Nachfahren von `crate::app` zugänglich. |
+| Laufwerkdialog und Kindregistrierung | `app/mod.rs → mount_ui`; `mount_ui.rs → capacity_ui` über `#[path = "mount_capacity_ui.rs"]`; `App::ui_mount_windows → ui_mount_manager → capacity_ui::show` | Bestehendes Fenster „Smart-Explorer-Laufwerke“, gruppierte Laufwerkdetails und IDbezogene Aufklappzustände bleiben; der geborgte `Ui` wird weitergereicht. |
+| Eingang der Kapazität | `App::drain_mount_ui` übernimmt `MountUiResult::{Snapshot,List,Options}` in `mount_ui.mounts`; `mount/core/recovery_state.rs::MountSnapshot.capacity` ist `Option<MountCapacityReport>` mit serde-Default | Ein fehlender Hostbericht bleibt fehlend. Deserialisierung, Recoverystatus, Mount-ID, Listenaustausch und Aktionen werden nicht verändert. |
+| Anzeige eines Reports | `capacity_ui::show → MountCapacityReport::display_lines → with_freshness` in `mount/core/capacity.rs` | Sämtliche erzeugten Zeilen werden angezeigt: Remoteverfügbarkeit, Cacheverfügbarkeit, konservativ nutzbares Budget, Quellen-/Erhebungsangaben und OS-Anzeige; zusätzliche Nur-Lesen-, Providerfehler- und Cachefehlerzeilen bleiben erhalten. |
+| Kapazitätsprojektion und Unbekanntzustände | `MountCapacityReport::{from_observation,validate}`, `MountCapacity::from_budget` und die referenzierten `vfs::{CapacitySnapshot,CapacitySource,CapacityState,CapacityFailure}` | Bekannte Quote, Accountquote, Unbounded, Unknown, Unavailable und CacheCompatibility bleiben verschieden. Cachebudget ersetzt keine Remotequote; ein Speicherfehler erfindet kein Budget. Reine Anzeige trifft keine Schreibzulassungsentscheidung. |
+| Fehlender Report | `capacity_ui::show`, `mount.capacity == None` | Beide Texte „Remote verfügbar: unbekannt (kein Hostbericht)“ und „Lokaler Zwischenspeicher verfügbar: unbekannt (kein Hostbericht)“ bleiben. |
+| Übertragungsfenster und Kindregistrierung | `app/mod.rs → transfer_window`; `transfer_window.rs → optical_status` über `#[path = "optical_status.rs"]`; `ui_transfers_button → ui_transfer_window → window_body → optical_status::render` | Das Fenster bleibt ausdrücklich geöffnet. Die Leseranzeige steht weiterhin vor dem Leerzustand bei `total_count() == 0`; aktive Prozessleser verschwinden dadurch nicht bei leerer Übertragungsliste. |
+| Prozessbezogene Lesersicht | `optical_status::render → source_media::snapshots`, reexportiert aus `source_media/status.rs`; `snapshots → registry` | Ein kurzer Mutexzugriff liefert geklonte `Status`-Werte. Keine Speicher-/Netzwerk-/Geräteprobe wird durch das Rendering gestartet; keine Sperre bleibt während egui-Aufrufen gehalten. |
+| Statusmodell und sichtbare Werte | `source_media::Status`, `ReadMode`, `Source` aus `source_media/{status,mod}.rs` | Gerätebezeichnung; inaktiver Leser als „wartet auf Laufwerk“; aktive Modi Waiting, Exclusive, Sequential, MetadataFallback; optionale `block_bytes`; getrennte `foreground_waiters` und `background_waiters`; Hinweis auf fehlende Zuordnung zu einem einzelnen Kopierauftrag. |
+| Besitzer und Warteschlange | `source_media/permit.rs::{acquire,acquire_current,acquire_source,acquire_file,acquire_file_current} → acquire_checked`; `Waiting::drop`, `Guard::{set_mode,drop}`; `source_media::mark_mode → status::update` | Zähler werden bei Anmeldung erhöht und bei Ende der Wartephase abgesenkt; Gerätebesitz aktiviert Exclusive, Moduswechsel erhalten die bestehende Blockgrößenlogik, Guardende setzt Waiting und löscht die Blockgröße. `update` entfernt nur inaktive Einträge ohne wartende Aufträge. |
+| Medienidentität, Abbruch und OSgrenze | `Source::{device,generation,read_only}`, `Guard::{validate,validate_file}`, `with_cancellation`, `context_canceled`, `source_media/mod.rs::platform`-Registrierungen | Geräte-/Medienidentität, Priorität, Abbruch und tatsächliche OSsperren bleiben bei ihren vorhandenen Produzenten. Die Anzeige nimmt keinen Besitz und ändert keine Freigabe. |
+| Desktop-/Androidgrenze | `native/Cargo.toml` führt eframe unter `cfg(not(target_os = "android"))`; Architektur ordnet `app/` dem Desktop und `mobile/` der Kotlinbrücke zu; `app/drive_modules.rs` registriert vorhandenen optischen Index | Kein egui-Import wird in `source_media/`, `mount/`, `vfs/` oder die mobile Brücke verschoben. Android erhält keine neue GUIabhängigkeit. CLI-/MCP-Datenverträge bleiben unverändert. |
+
+Die gezielte lesende Rootgraphabfrage lautete
+`graphify query 'mount_capacity_ui show MountCapacityReport display_lines optical_status render source_media snapshots prelude egui' --budget 1000`.
+Sie bestätigte die relevanten Datei-/Typknoten, lieferte wegen der allgemeinen
+Methodennamen auch sachfremde Knoten und wurde am Ausgabelimit gekürzt.
+Die vorstehende vollständige betroffene Aufrufkarte stammt deshalb aus den
+konkreten registrierten Quellen; der Graph ersetzt keinen Aufruf- oder Typbeleg.
+Die CLI meldete erneut Skill 0.9.11 gegenüber Paket 0.9.17. Der Aufruf ist
+beendet; kein Graphneubau und keine Installation wurden ausgeführt.
+
+### Entscheidungsrecherche und konkreter Fixplan vor dem Quellfix
+
+Bestand: Cargo.toml nennt eframe 0.29, Cargo.lock löst eframe und egui jeweils
+auf 0.29.1 auf. Das App-Prelude bindet bereits genau diesen egui-Reexport ein.
+Beide Kinddateien haben bisher überhaupt keinen Import. Ein im Elternmodul
+vorhandener Kurzname ist kein ausdrücklich eingebundener Kurzname dieser
+Kinddateien; genau dort belegt der Compiler E0433.
+
+Die offizielle [Rust-Erklärung zu E0433](https://doc.rust-lang.org/error_codes/E0433.html)
+und die [Referenz zu lokalen `use`-Bindungen und Reexporten](https://doc.rust-lang.org/reference/items/use-declarations.html)
+belegen die zulässige Importkorrektur. Die tatsächlich gelockte
+[eframe-0.29.1-Quelle](https://raw.githubusercontent.com/emilk/egui/0.29.1/crates/eframe/src/lib.rs)
+reexportiert egui ausdrücklich und verwendet denselben Pfad in ihrem Beispiel.
+Abrufstand: 2026-10-26. Die entsprechende docs.rs-Indexseite war über das
+Webwerkzeug nicht erreichbar; die offizielle versionierte Quelle schließt
+diese Vertragslücke. Es wird keine neue API verwendet.
+
+Entscheidung: Beide Kinddateien erhalten ausschließlich
+`use crate::app::prelude::egui;` zwischen ihrer bisherigen Modulbeschreibung
+und Funktion, mit normaler Leerzeilentrennung. Damit verwenden sie denselben
+App-internen Typzugang wie die vorhandenen Aufrufer. Ein direkter
+`use eframe::egui` wäre ebenfalls dieselbe Bibliotheksinstanz, würde aber den
+bereits vorhandenen Appzugang umgehen. Ein Eltern-Globimport würde unnötige
+Namen einführen. Eine zusätzliche direkte Cargo-Abhängigkeit ist für einen
+vorhandenen Reexport nicht erforderlich und vom Ergebnisauftrag ausgeschlossen.
+Entfernen oder Ausblenden der Anzeigen würde ihre Endnutzerfunktion verlieren
+und ist kein zulässiger Lösungsweg.
+
+| Arbeitspunkt vor Umsetzung | Schreibfläche und Abhängigkeit | Konkretes erwartetes Ergebnis und Erhalt |
+|---|---|---|
+| D04import | `native/src/app/core/mount_capacity_ui.rs`; vorhandenes App-Prelude | `show` bindet denselben GUItyp wie `ui_mount_manager`. Nach Entfernen ausschließlich der neuen Importzeile samt Leerzeile ist der gesamte Dateiinhalt identisch zu `b233e533`; Report- und Kein-Report-Zweige bleiben vollständig erhalten. |
+| D05import | `native/src/app/core/optical_status.rs`; dasselbe Prelude | `render` bindet denselben GUItyp wie `window_body`. Derselbe statische Inhaltsvergleich erhält sämtliche sichtbaren Texte, Moduszweige, Wartezähler, Blockgröße und das Leerlaufreturn. |
+| Eigene anschließende Anti-Regressionsreview | Beide vollständigen fertigen Helfer; oben benannte Aufrufer, Modelle und Registrierung; dieser Bericht | Nach dem Quellfix Typ-/Modulweg und beide Körper erneut lesen, reine Importdifferenz zum Kandidaten sowie Whitespace/Dateigröße statisch kontrollieren. Keine lokale Compiler-/Formatter-/Testausführung. |
+| Vorhandene Fallauswahl und Übergabe | Nur lesendes `native/review-task-manifest.json`; vorhandene Kapazitäts- und optische Fälle | Bestehende `batches_task_capacity_`- und `batches_task_optical_`-Auswahl erhalten; keine neuen Tests für zwei reversible Importbindungen. Exakte gelesene Namen und verbleibender Remotenachweis folgen nach der eigenen Review. |
+
+Zweite Lückenprüfung vor der Änderung: Die tatsächlich gelockte Reexportversion,
+App-interne Sichtbarkeit, beide Kindregistrierungen und die eigentlichen
+Darstellungszweige sind belegt. Es gibt keine notwendige zusätzliche API,
+keine Persistenzmigration und keine Sicherheits-/Besitzänderung. Die angefragte
+ergänzende Laufwerk-Oberflächenquelle und optische Fallquelle betreffen die
+vollständige Berichts-/Registrierungszuordnung; die Importentscheidung hängt
+nicht von einem unbekannten Wert aus diesen Dateien ab.
+
+### Umsetzung sowie gelesene und geänderte Dateien
+
+Beide geplanten Importkorrekturen sind umgesetzt. Jeder Helfer bindet einmal
+`crate::app::prelude::egui` ein. Signaturen, `pub(super)`-Sichtbarkeit und
+sämtliche bisherigen Dateiinhalte bleiben erhalten. Die normale Leerzeile
+trennt Import und Funktion; es wurde keine Zeile künstlich verdichtet.
+
+| In diesem ergänzenden Zyklus geänderte Datei | Exakte Änderung | Aktuelle Größe |
+|---|---|---|
+| `native/src/app/core/mount_capacity_ui.rs` | Ein Import und eine Leerzeile nach dem bestehenden Modulkommentar | 13 Zeilen / 498 Byte |
+| `native/src/app/core/optical_status.rs` | Derselbe Import und dieselbe Leerzeile | 34 Zeilen / 1.437 Byte |
+| `docs/plaene/2026-10-24-batches/fix-vault-retry.md` | Dieser eigene Fehler-/Karten-/Plan-/Umsetzungs-/Reviewabschnitt und präzisierter Status am Anfang | Dokument, keine native Größenregel |
+
+Es wurde keine Datei angelegt. Der Importfix berührt ausschließlich diese
+drei aktuell schreibbaren Dateien. Die früheren eigenen Änderungen in diesem
+Bericht bleiben ihrem jeweiligen abgeschlossenen Zyklus zugeordnet.
+
+In diesem Zyklus tatsächlich gelesen:
+
+- Vollständig: die aktuelle Scope-Datei, der Nutzervertrag und die oben
+  genannte D04/D05-Diagnosequelle; die beiden geänderten Anzeigehelfer;
+  `app/core/prelude.rs`, `app/drive_modules.rs`, `mount/core/capacity.rs`,
+  `mount/core/recovery_state.rs`,
+  `source_media/{mod,status,permit,tests}.rs` unter `native/src/`.
+- Gezielte Registrierungs-/Verbraucherabschnitte unter `native/src/`:
+  `app/mod.rs` (Prelude, Drive-, Mount- und Transfermodule),
+  `app/core/mount_ui.rs` (State, Ergebnisübernahme, Polling und Laufwerkdialog),
+  `app/core/transfer_window.rs` (Öffnen, `ui_transfer_window`,
+  `apply_row_action`, vollständiger `window_body` und Statusaufruf).
+- Dokumentationsabschnitte: `docs/ARCHITEKTUR.md` (Einstiege,
+  Kapazitäts-/Recoverygrenze und Desktop-/Androidtrennung),
+  `docs/oberflaechen/INDEX.md` (Oberflächen und Themenverweise),
+  `docs/oberflaechen/uebertragungen.md` (optische Quellen),
+  `docs/oberflaechen/laufwerke.md` (Oberflächen und aktueller
+  Kapazitäts-/Recoveryabschnitt), `rv1-compilerplan.md` im selben Planordner
+  (D04/D05-Zuordnung) sowie Anfang, bisheriger Abschluss und eigener neuer
+  Abschnitt dieses Berichts. Die historischen Laufwerkzeilennummern werden
+  nicht als aktueller Codebeleg übernommen; die Anzeigezuordnung wurde an
+  den vorstehend genannten aktuellen Quellen nachgelesen.
+- Abhängigkeits-/Auswahlabschnitte: `native/Cargo.toml` (vorhandene
+  GUIabhängigkeiten und Desktopziel), `native/Cargo.lock` (eframe/egui 0.29.1),
+  `native/review-task-manifest.json` (Präfixe, Helperausschluss und
+  Meilensteinmarker P11/P23), lesende Rootgraphabfrage wie oben angegeben.
+- Offizielle Webquellen: die drei oben verlinkten Rust-/eframequellen mit
+  Abrufstand 2026-10-26. Die fehlgeschlagene docs.rs-Abfrage ist als solche
+  dokumentiert und wird nicht als gelesener Versionsbeleg verwendet.
+
+Main hat die konkret fehlenden Lesepfade `graphify-out/graph.json`,
+`docs/oberflaechen/laufwerke.md` und `native/src/source_media/tests.rs`
+ausdrücklich ergänzt. Es erfolgte keine eigenmächtige Scopeerweiterung.
+
+### Eigene anschließende Anti-Regressionsreview
+
+Die folgende Review wurde durch denselben Fixautor nach der Umsetzung
+durchgeführt. Beide vollständigen fertigen Helfer und ihr fertiger Diff
+wurden erneut gelesen; die Review verwendet die konkrete oben dokumentierte
+Aufruf- und Datenkette.
+
+1. **Modul- und Typidentität:** Beide Kindmodule bleiben nur an ihrem
+   bisherigen Elternmodul registriert. Der absolute Import erreicht den
+   vorhandenen, für `crate::app` freigegebenen eframe-Reexport. Deshalb
+   bezeichnet `egui::Ui` in Helfern und Aufrufern dieselbe vorhandene
+   Bibliothek. Kein zweiter Context, Frame oder UIbesitzer wird erzeugt.
+   Funktionen bleiben `pub(super)`; die Sichtbarkeit des Preludes und der
+   Modelle wurde nicht verbreitert.
+2. **Kapazitätswerte und Unbekannt:** Der `Some`-Zweig zeigt weiterhin jede
+   unveränderte `display_lines`-Zeile. Accountquote, unbekannt, unbegrenzt,
+   nicht erreichbar, Cachekompatibilität, read-only, Provider-/Cachefehler und
+   getrennte Aktualitätsmarkierungen bleiben über denselben Report erhalten.
+   Der `None`-Zweig behält seine beiden Kein-Hostbericht-Zeilen. Es wird weder
+   null als unbekannt ausgegeben noch eine Berechtigung aus einer Kapazität
+   abgeleitet. `from_observation`, Budgetprojektion und Validierung sind
+   unverändert.
+3. **Leser- und Wartezustände:** Der bisherige Leerzustand ohne registrierte
+   Leser kehrt weiterhin sofort zurück. Jeder registrierte inaktive Leser
+   erscheint wartend; alle vier aktiven `ReadMode`-Varianten bleiben explizit
+   abgedeckt. Gerätebezeichnung, optionale Blockgröße, ausdrückliche und
+   Hintergrundaufträge sowie der Hinweis auf Prozessumfang sind unverändert.
+   Der UIhelfer liest nur den geklonten Snapshot und verändert keinen
+   Registryeintrag, Medienbeleg oder Guard.
+4. **Angeschlossene Bedienwege und Besitz:** Die Laufwerkdetails behalten
+   Mount-ID, Recoverywarnung und sämtliche Laufwerksaktionen. Die optische
+   Anzeige bleibt im Übertragungsfenster vor dessen Leerzustand erreichbar.
+   Laufende/fertige Übertragungszahlen, Abbruch, Wiederaufnahme und Aktionen
+   in `transfer_window.rs` bleiben unverändert. Die Registry hält dieselbe
+   Geräte-/Generationsidentität, Vordergrundpriorität, Wartezähler,
+   Abbruchbehandlung und Freigabe beim Guardende; der Importpfad greift in
+   keine dieser Entscheidungen ein.
+5. **Statischer Inhaltsbeleg:** Gegen Kandidat `b233e533…` wurde bei jedem
+   Helfer ausschließlich die neue Importzeile samt Leerzeile aus dem
+   Vergleichstext entfernt. Der verbleibende gesamte Dateiinhalt stimmt
+   jeweils exakt überein. Zusätzlich sind die vollständigen Dateien
+   `prelude.rs`, `mount_ui.rs`, `transfer_window.rs`, `app/drive_modules.rs`,
+   `mount/core/{capacity,recovery_state}.rs`,
+   `source_media/{mod,status,permit,tests}.rs`, `native/Cargo.lock` und
+   `native/review-task-manifest.json` statisch identisch zum Kandidaten.
+   Das ist ein Quellvergleich, kein ausgeführter Funktionstest.
+6. **Architektur und Prüfgrenzen:** Beide Rustdateien liegen weit unter
+   500 Zeilen und 50 KiB in normalem Layout. Die auf die drei eigenen
+   Schreibpfade begrenzte Whitespacekontrolle meldete keinen Befund. Es
+   wurde keine Abhängigkeit hinzugefügt, kein Shared-/Androidmodell an egui
+   gekoppelt, keine Assertion entfernt und keine Auswahl abgeschwächt.
+
+Die eigene statische Review findet in diesem abgegrenzten Importfix keinen
+verbleibenden belegten Verhaltensverlust. Sie bestätigt keine Kompilierung
+und keine praktisch betrachtete Oberfläche. Dieser Autor führte keine
+lokalen Builds, Compiler, Formatter, Tests, Server, Installationen,
+Hostprozesse, Gitmutationen, Graphupdates oder Unteragenten aus.
+
+### Bestehende Fallnamen, Entscheidungen und offene Grenzen
+
+Es wurde kein neuer Test und keine neue Fixture geschrieben. Die bestehende
+gemeinsame Auswahl verlangt bereits `batches_task_capacity_` für P23 und
+`batches_task_optical_` für P11. Die tatsächlich vollständig gelesenen
+Kapazitätsfälle heißen:
+
+- `batches_task_capacity_status_preserves_quota_and_engine_budget`
+- `batches_task_capacity_status_never_promotes_compatibility_to_remote_quota`
+- `batches_task_capacity_status_unknown_unbounded_and_read_only_remain_distinct`
+- `batches_task_capacity_status_marks_expiry_and_preserves_provider_failure`
+
+Die tatsächlich vollständig gelesenen optischen Hauptfälle heißen:
+
+- `batches_task_optical_two_copy_jobs_and_scan_share_device`
+- `batches_task_optical_wait_cancel_foreground_priority_and_independent_drive`
+- `batches_task_optical_media_change_rejects_open_reader_and_queued_index`
+- `batches_task_optical_process_lock_excludes_second_process`
+- `batches_task_optical_confined_reader_uses_held_root_and_cancel`
+
+Der ebenfalls gelesene `batches_task_optical_process_child` bleibt absichtlich
+aus der direkten Suiteauswahl ausgeschlossen: Der Prozesssperren-Hauptfall
+ruft ihn selbst als gebundenen Kindprozess auf. Dieser Ausschluss und die
+bestehenden Assertions bleiben erhalten. Die Kapazitätsfälle prüfen den
+Reportvertrag; die optischen Fälle prüfen Leserbesitz, Warteschlange und
+Quellenschutz. Ihre vorhandenen Namen sind kein Nachweis, dass die Oberfläche
+praktisch gerendert wurde.
+
+Main benötigt für diesen Importfix keine zusätzliche Fallregistrierung.
+Die erneute Kompilierung der bestehenden Windows-/Linux-Produkt- und
+Testziele muss im selben Remote-Suiteeinstieg bestätigen, dass D04/D05
+verschwunden sind. Die gemeinsame Funktionsbestätigung bleibt ebenfalls bei
+Main; es wird kein Einzeltestlauf oder zusätzlicher Suiteeinstieg vorbereitet.
+Der eigene statische Autorzyklus ist abgeschlossen. Gitintegration,
+gegebenenfalls erforderlicher Rootgraphrefresh, Remotenachweis und der
+gemeinsame terminale Release gehören Main. Eine notwendige zusätzliche
+Quelldatei, Schreibfreigabe oder Nutzerentscheidung ist nicht offen.
