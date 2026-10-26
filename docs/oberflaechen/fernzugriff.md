@@ -34,6 +34,15 @@ Wayland-Layer-Fläche zeichnen Programmauswahl und Fehler beim Öffnen einer
 Fensterfamilie über dieselbe Funktion `show_surface`
 (`N/app/core/desktop_surface_app.rs`, `desktop_surface_grid_ui.rs`).
 
+Zugeordnete X11-Combo-Popups und verschachtelte Menüs bestätigen den Fokus
+ihres nächsten regulären Eigentümerfensters. Eingabeziel bleibt das tatsächlich
+dargestellte Familienmitglied mit seiner unveränderten Identität und geprüften
+Geometrie. Ein modaler Dialog bildet eine eigene Fokusgrenze; fremde,
+abgelaufene oder nicht zugeordnete Fenster bestätigen den Fokus nicht.
+Der letzte X11-Eingabeanschluss prüft die gebundene Geometrie erneut
+(`N/remote_window/os/x11/focus.rs`, `N/screen/core/family_viewer.rs`,
+`N/screen/os/linux_os/host_backend.rs`).
+
 ## Besitz, Darstellung und Beendigung
 
 Loginbilder laufen binär zum Renderer. CLI/MCP erhalten Status und Bildmetadaten;

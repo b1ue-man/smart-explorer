@@ -12,6 +12,7 @@ pub(super) struct Atoms {
     pub protocols: Atom, pub delete_window: Atom, pub state: Atom, pub hidden: Atom,
     pub allowed_actions: Atom, pub action_resize: Atom, pub window_type: Atom,
     pub dialog: Atom, pub menu: Atom, pub dropdown: Atom, pub popup: Atom, pub tooltip: Atom, pub normal: Atom,
+    pub combo: Atom,
 }
 impl Atoms {
     pub(super) fn new(conn: &RustConnection) -> io::Result<Self> {
@@ -20,7 +21,7 @@ impl Atoms {
             "WM_PROTOCOLS", "WM_DELETE_WINDOW", "_NET_WM_STATE", "_NET_WM_STATE_HIDDEN",
             "_NET_WM_ALLOWED_ACTIONS", "_NET_WM_ACTION_RESIZE", "_NET_WM_WINDOW_TYPE", "_NET_WM_WINDOW_TYPE_DIALOG",
             "_NET_WM_WINDOW_TYPE_MENU", "_NET_WM_WINDOW_TYPE_DROPDOWN_MENU", "_NET_WM_WINDOW_TYPE_POPUP_MENU",
-            "_NET_WM_WINDOW_TYPE_TOOLTIP", "_NET_WM_WINDOW_TYPE_NORMAL"];
+            "_NET_WM_WINDOW_TYPE_TOOLTIP", "_NET_WM_WINDOW_TYPE_NORMAL", "_NET_WM_WINDOW_TYPE_COMBO"];
         let mut values = Vec::new();
         for name in names { values.push(conn.intern_atom(false, name.as_bytes()).map_err(failed)?
             .reply().map_err(failed)?.atom); }
@@ -28,7 +29,8 @@ impl Atoms {
             moveresize: values[4], name: values[5], utf8: values[6], pid: values[7],
             protocols: values[9], delete_window: values[10], state: values[11], hidden: values[12],
             allowed_actions: values[13], action_resize: values[14], window_type: values[15], dialog: values[16],
-            menu: values[17], dropdown: values[18], popup: values[19], tooltip: values[20], normal: values[21] })
+            menu: values[17], dropdown: values[18], popup: values[19], tooltip: values[20], normal: values[21],
+            combo: values[22] })
     }
 }
 
@@ -108,9 +110,13 @@ pub(super) fn app(conn: &RustConnection, window: Window) -> io::Result<String> {
 }
 pub(super) fn kind(conn: &RustConnection, atoms: &Atoms, window: Window) -> io::Result<WindowKind> {
     let types = words(conn, window, atoms.window_type, AtomEnum::ATOM.into())?;
-    Ok(if types.contains(&atoms.tooltip) { WindowKind::Tooltip }
+    Ok(kind_from_types(atoms, &types))
+}
+pub(super) fn kind_from_types(atoms: &Atoms, types: &[Atom]) -> WindowKind {
+    if types.contains(&atoms.tooltip) { WindowKind::Tooltip }
         else if types.iter().any(|v| [atoms.menu, atoms.dropdown, atoms.popup].contains(v)) { WindowKind::Menu }
+        else if types.contains(&atoms.combo) { WindowKind::Popup }
         else if types.contains(&atoms.dialog) { WindowKind::Dialog }
         else if types.is_empty() || types.contains(&atoms.normal) { WindowKind::Main }
-        else { WindowKind::Popup })
+        else { WindowKind::Popup }
 }

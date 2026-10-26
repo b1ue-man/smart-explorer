@@ -156,13 +156,15 @@ impl FamilyViewer {
         Ok(output)
     }
     fn focus_identity(snapshot:&FamilySnapshot,target:&WindowIdentity)->Option<WindowIdentity> {
-        let member=snapshot.members.iter().find(|m|&m.identity==target&&m.operations.input)?;
-        if member.kind!=WindowKind::Menu {return member.operations.focus.then(||member.identity.clone());}
-        let mut owner=member.owner.as_ref();
+        let mut member=snapshot.members.iter().find(|m|&m.identity==target)?;
         for _ in 0..snapshot.members.len() {
-            let parent=snapshot.members.iter().find(|m|Some(&m.identity)==owner)?;
-            if parent.operations.focus&&parent.visible&&!parent.minimized {return Some(parent.identity.clone());}
-            owner=parent.owner.as_ref();
+            if !member.operations.input||!member.visible||member.minimized {return None;}
+            if member.kind!=WindowKind::Menu&&member.operations.focus {return Some(member.identity.clone());}
+            // Menus and nonactivating popups keep their own input identity,
+            // but confirm their regular owner. A disabled dialog is a boundary.
+            if !matches!(member.kind,WindowKind::Menu|WindowKind::Popup) {return None;}
+            let owner=member.owner.as_ref()?;
+            member=snapshot.members.iter().find(|m|&m.identity==owner)?;
         }
         None
     }
