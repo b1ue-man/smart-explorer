@@ -1106,3 +1106,25 @@ isolierten X11-Anschluss. Die Vorbereitung führt Abhängigkeitsauflösung und
 Formatprüfung ausschließlich remote aus; notwendige Kandidatenkorrekturen
 bleiben im selben Suite-Fixloop. Rootgraphrefresh, Remoteauswertung und der
 terminale vollständige Remote-Release sind die nächsten Schritte.
+
+### Erste Remote-Vorbereitung, 2026-10-26
+
+Lauf `40332971455` ist nach Abhängigkeits-/Formatprüfung beendet. Compiler- und
+Gerätejobs blieben übersprungen; ein funktionaler Laufzeitnachweis liegt dadurch
+noch nicht vor. Die gebundenen Remote-Patches sind `10988167`. Die bei der
+Formatierung belegten Modulgrößen werden durch die bisherigen Autoren mit
+fachlicher Aufteilung korrigiert. Derselbe Autor bleibt für Plan, Änderung und
+Nachreview seiner Kette zuständig; Main integriert und wiederholt nur RV1.
+Der terminale Release bleibt ausstehend.
+
+### Strukturkorrektur integriert, 2026-10-26
+
+Alle acht bisherigen Fixautoren haben ihre Modulaufteilung, Kartenfortschreibung
+und eigene anschließende Anti-Regressionsreview beendet. Die getrennten Commits
+stehen im [RV1-Modulplan](rv1-modulplan.md). Main hat die übergebenen Schreibflächen,
+Syntax, normalen Quellgrößen und erhaltenen Fallnamen statisch abgeglichen.
+Fünf bestätigte falsche Transfer-Typbezüge sind im selben Transferautorzyklus
+korrigiert. R19 bindet die bereits bestehenden reinen Mount-Runtimevertragsfälle
+an dieselbe Suite. Rootgraphrefresh und der neue Kandidat führen ausschließlich
+zur Wiederholung dieses einen Remoteeinstiegs; Typ- und Laufzeitnachweis bleiben
+bis zu dessen tatsächlicher Auswertung offen. Die Version wurde nicht geändert.

@@ -139,6 +139,30 @@ Plattform, genaue Methoden, erwartete Wirkung und verbleibende Grenzen.
 Die funktionalen Ergebnisse sind noch nicht remote ausgeführt. Kein Bericht
 wird als pauschale Regressionsfreiheit oder ausgeführter Plattformnachweis gewertet.
 
+## Folgekorrektur aus der Remote-Vorbereitung
+
+Der erste gemeinsame Lauf `40332971455` wurde am 2026-10-26 ausschließlich in
+der Abhängigkeits-/Formatvorbereitung ausgeführt. Die funktionalen Jobs wurden
+nicht gestartet. Die gebundenen Patches sind als `10988167` übernommen; alle
+bisherigen Paketversionen und Checksummen sowie die eingefrorenen Vergleichsblöcke
+blieben erhalten. Details stehen in [RV1](../../refs/rv1-remote-suite.md).
+
+Die tatsächliche Formatierung hat Größenverletzungen in 46 berührten
+Verantwortlichkeiten sichtbar gemacht. Die vollständige Zuordnung und der
+Ergebnisvertrag stehen im [RV1-Modulplan](rv1-modulplan.md). Die bestehenden Fixautoren teilen ihre
+zugeordneten Verantwortlichkeiten im jeweils eigenen Zyklus fachlich auf.
+Diese Folgearbeit ändert kein gewünschtes Produktverhalten. Öffentliche Namen,
+Draht-/Persistenzverträge, Berechtigungen, Ressourcenbesitz und vorhandene
+Fallnamen bleiben verbindlich. Die Autoren ergänzen ihre jeweiligen Berichte
+um Strukturplan, betroffene Verknüpfungen und eigene Anti-Regressionsreview.
+Main hält die Schreibflächen disjunkt und das Limit von sieben aktiven
+Kindagenten ein. Die acht fortgesetzten Autorenzyklen sind inzwischen abgeschlossen
+und als getrennte Strukturcommits integriert; der RV1-Modulplan nennt jeden Commit.
+Die Wiederholung benutzt anschließend denselben Remoteeinstieg. Dessen R19-Eintrag
+ergänzt die zwei bereits vorhandenen reinen Mount-Runtimevertragsfälle für die
+direkt verschobene Typgrenze. Er behauptet weder eine ausgeführte MSI-Installation
+noch einen Kernelmount.
+
 ## Erwartetes Ergebnis und Grenzen
 
 Beide Berichte liegen getrennt vor; jeder Befund erhält seinen tatsächlichen

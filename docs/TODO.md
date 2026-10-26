@@ -21,7 +21,10 @@ See [evidence and scope](WINDOWS_REMOTE_REGRESSION.md).
 Gesamtbatch B1–B8/P31/P32, Stand 2026-10-26: Die normale Gesamtreview und beide
 unabhängigen Release-Regressionsreviews sind abgeschlossen. Die belegten
 Fehler sind in [vollständigen Fixzyklen desselben jeweiligen Autors](plaene/2026-10-24-batches/regressionsreview.md)
-quellseitig behoben; die gemeinsame Remote-Suite und Veröffentlichung stehen aus.
+quellseitig behoben. Die erste Remote-Vorbereitung hat Lock-/Formatkorrekturen
+geliefert; die belegten Modulgrößenverletzungen sind durch die bisherigen
+Autoren fachlich aufgeteilt und selbst nachgeprüft.
+Funktionale Suiteauswertung und Veröffentlichung stehen aus.
 
 This table is the live list of remaining work, roughly by value. The lower
 sections preserve shipped/history context and explicitly label anything that is

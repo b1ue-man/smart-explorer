@@ -95,7 +95,9 @@
     ],
     "linux_integrations": [
       "batches_task_b6_linux_cgroup_ancestors_constrain_session_headroom",
-      "batches_task_b6_cgroup_namespace_root_needs_kernel_root_evidence"
+      "batches_task_b6_cgroup_namespace_root_needs_kernel_root_evidence",
+      "remote_drive_task_dokany_msi_outcomes_preserve_actionable_exit_codes",
+      "remote_drive_task_dokany_library_and_driver_versions_use_separate_domains"
     ],
     "environment_dependent": [
       "batches_task_b6_renderer_wgpu_upload_without_surface_and_retire_after_later_draw",
@@ -1685,6 +1687,22 @@
       "native_cases": [
         "batches_p13_legacy_windows_codex_does_not_adopt_user_unix_environment",
         "batches_p13_legacy_windows_profile_pins_cli_without_sidecar"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R19-Runtime-Vertraege",
+      "milestones": [
+        "P19"
+      ],
+      "expected": "Der ausgelagerte reine Runtimevertrag erhält handlungsbezogene MSI-Ergebnisse und trennt unverändert Dokany-Library-API von Treiberprotokollversion.",
+      "scope": "Bestehende reine Vertragsfälle des direkt verschobenen Moduls; kein MSI-Start oder Kernel-/FUSEmount.",
+      "native_platforms": [
+        "linux"
+      ],
+      "native_cases": [
+        "remote_drive_task_dokany_msi_outcomes_preserve_actionable_exit_codes",
+        "remote_drive_task_dokany_library_and_driver_versions_use_separate_domains"
       ],
       "device_cases": []
     }
