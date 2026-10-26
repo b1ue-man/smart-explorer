@@ -8,7 +8,8 @@
       "p18d_"
     ],
     "exclude": [
-      "batches_task_optical_process_child"
+      "batches_task_optical_process_child",
+      "p27_network_reference_acceptance"
     ],
     "required_prefixes": [
       "batches_task_drive_",
@@ -54,7 +55,12 @@
       "batches_task_login_image_",
       "batches_task_b6_login_image_",
       "batches_capture_task_android_",
-      "batches_login_image_task_tests::android_"
+      "batches_login_image_task_tests::android_",
+      "batches_task_b6_quality_",
+      "batches_task_device_navigation_",
+      "batches_task_transfer_compat_",
+      "batches_task_b6_session_budget_",
+      "batches_task_vault_retry_"
     ],
     "integrations": [
       "pair_identity_includes_each_backend_endpoint",
@@ -82,7 +88,10 @@
       "screen_task_rate_control_backs_off_on_delay_gradient",
       "screen_task_rate_control_loss_rules",
       "screen_task_rate_control_quality_ladder",
-      "screen_task_registry_session_view_json_shape"
+      "screen_task_registry_session_view_json_shape",
+      "drive_task_restore_runs_after_recovery_audit",
+      "drive_task_vault_locked_start_fails_vault_locked",
+      "drive_task_update_stop_exit_clean_journal_counts_as_unmount"
     ],
     "linux_integrations": [
       "batches_task_b6_linux_cgroup_ancestors_constrain_session_headroom",
@@ -93,15 +102,20 @@
       "batches_task_b6_renderer_wgpu_yuv_planes_leave_slot_on_cpu_fallback",
       "batches_task_capture_openh264_au_keeps_credit_and_decoder_contract",
       "batches_task_capture_mf_sync_admitted_roundtrip",
-      "batches_task_capture_mf_async_admitted_roundtrip"
+      "batches_task_capture_mf_async_admitted_roundtrip",
+      "batches_task_b6_quality_openh264_baseline_transport_and_still"
     ],
     "linux_required_prefixes": [
       "batches_task_capture_linux_x11_",
-      "batches_task_capture_linux_pipewire_"
+      "batches_task_capture_linux_pipewire_",
+      "batches_task_b6_x11_",
+      "batches_family_x11_"
     ],
     "windows_required_prefixes": [
       "batches_capture_windows_",
-      "batches_task_capture_mf_"
+      "batches_task_capture_mf_",
+      "batches_task_b7_login_unsent_",
+      "batches_task_b6_windows_rebuild_"
     ],
     "glow_scope": {
       "prefix": "batches_task_b6_glow_scope_",
@@ -112,6 +126,86 @@
         "batches_task_b6_glow_scope_retains_lost_and_repeated_error_states_without_a_timeout",
         "batches_task_b6_glow_scope_drop_and_success_leave_no_stale_ledger"
       ]
+    },
+    "p27_network": {
+      "fixture": "screen::core::rate_control::p27_acceptance::p27_network_reference_acceptance",
+      "profiles": [
+        {
+          "label": "10mbit-one-window",
+          "bps": 10000000,
+          "windows": 1
+        },
+        {
+          "label": "1mbit-one-window",
+          "bps": 1000000,
+          "windows": 1
+        },
+        {
+          "label": "10mbit-four-windows",
+          "bps": 10000000,
+          "windows": 4
+        }
+      ],
+      "evidence": "p27-network/acceptance.json",
+      "scope": "Isolated private relay and production screen transport, separate from physical encoder and display execution."
+    },
+    "quality": {
+      "release_baseline": "a814f263096fe69d3746e840b5f3fad3fd7e88a0",
+      "artifacts": [
+        {
+          "label": "analytic-metrics",
+          "case": "batches_task_b6_quality_metrics_match_independent_analytic_oracles"
+        },
+        {
+          "label": "deterministic-lossless-still",
+          "case": "batches_task_b6_lossless_correction_matches_every_source_pixel"
+        },
+        {
+          "label": "deterministic-reference-recovery",
+          "case": "batches_task_b6_quality_reference_loss_recovers_only_with_complete_keyframe"
+        },
+        {
+          "label": "4k-lossless-still",
+          "case": "batches_task_b6_4k_lossless_correction_retains_every_source_pixel"
+        },
+        {
+          "label": "openh264-baseline-transport-still",
+          "case": "batches_task_b6_quality_openh264_baseline_transport_and_still"
+        }
+      ],
+      "profiles": [
+        {
+          "width": 320,
+          "height": 192,
+          "bps": 150000
+        },
+        {
+          "width": 320,
+          "height": 192,
+          "bps": 2000000
+        },
+        {
+          "width": 192,
+          "height": 320,
+          "bps": 150000
+        },
+        {
+          "width": 192,
+          "height": 320,
+          "bps": 2000000
+        },
+        {
+          "width": 640,
+          "height": 360,
+          "bps": 150000
+        },
+        {
+          "width": 640,
+          "height": 360,
+          "bps": 2000000
+        }
+      ],
+      "scope": "Candidate-bound RGB PSNR/luma SSIM, immutable release OpenH264 comparison, controlled decoder reference loss and exact lossless reconstruction. Physical MF/Android codecs, packet-loss timing and renderer latency remain separately unverified."
     }
   },
   "android": {
@@ -124,7 +218,9 @@
       "app.smartexplorer.android.ui.share.WeakPinTest",
       "app.smartexplorer.android.screen.ScreenCaptureBudgetTest",
       "app.smartexplorer.android.ui.login.LoginBitmapOwnerTest",
-      "app.smartexplorer.android.screen.ScreenEncoderOwnershipTest"
+      "app.smartexplorer.android.screen.ScreenEncoderOwnershipTest",
+      "app.smartexplorer.android.ui.settings.DeviceNavigationRegressionTest",
+      "app.smartexplorer.android.screen.ScreenSessionBudgetRegressionTest"
     ],
     "device_classes": [
       "app.smartexplorer.android.task.BatchesPresentationTaskTest",
@@ -135,7 +231,9 @@
       "app.smartexplorer.android.task.LoginImageTaskTest",
       "app.smartexplorer.android.task.ScreenTaskTest#screen_task_android_still_interval_respected",
       "app.smartexplorer.android.task.ScreenTaskTest#screen_task_android_still_secure_window_black",
-      "app.smartexplorer.android.task.ScreenTaskTest#screen_task_android_host_snapshot_nonblack"
+      "app.smartexplorer.android.task.ScreenTaskTest#screen_task_android_host_snapshot_nonblack",
+      "app.smartexplorer.android.task.BatchesMediaWakeTaskTest",
+      "app.smartexplorer.android.task.BatchesDeviceNavigationTaskTest"
     ],
     "video_argument": "batchesVideoPath",
     "video_duration_seconds": 12
@@ -254,7 +352,8 @@
       ],
       "android_device": [
         "app.smartexplorer.android.task.ScreenTaskTest#screen_task_android_viewer_decodes_barcode"
-      ]
+      ],
+      "quality_evidence": "quality-acceptance.json"
     },
     {
       "point": "P9",
@@ -478,7 +577,7 @@
         "P27a",
         "P27b"
       ],
-      "expected": "Peerbezogenes Senderbudget hält Geschwisterschulden, begrenzte Steuerreserve, Fairness und rückstaubedingte Ratenreaktion.",
+      "expected": "Budget-/Ratenlogik und tatsächliche isolierte Relayreferenz: V7-Rampenfrist, mindestens 90 % Referenznutzdurchsatz, P95-Steuerlatenz höchstens zwei Frameintervalle zusätzlich, stabiles stationäres Queuealter; 10 Mbit/s, Niedrigrate und gemeinsame Mehrfensterteilung.",
       "native_markers": [
         "sender_",
         "rate_path_change_",
@@ -487,7 +586,8 @@
       "android_units": [],
       "android_device": [
         "app.smartexplorer.android.task.ScreenTaskTest#screen_task_android_host_bench_synthetic"
-      ]
+      ],
+      "network_evidence": "p27-acceptance.json"
     },
     {
       "point": "P28",
@@ -541,7 +641,8 @@
         "app.smartexplorer.android.task.BatchesPresentationTaskTest#batches_android_scaler_preserves_identity_and_bounds_pending_outputs",
         "app.smartexplorer.android.task.BatchesPresentationTaskTest#batches_android_native_pixel_crop_and_resample_obey_budget_geometry",
         "app.smartexplorer.android.task.ScreenTaskTest#screen_task_android_grid_switch"
-      ]
+      ],
+      "quality_evidence": "quality-acceptance.json"
     },
     {
       "point": "P31",
@@ -561,7 +662,8 @@
       "android_device": [
         "app.smartexplorer.android.task.BatchesPresentationTaskTest#batches_android_bitmap_reports_the_identity_from_its_actual_draw",
         "app.smartexplorer.android.task.ScreenTaskTest#screen_task_android_viewer_decodes_barcode"
-      ]
+      ],
+      "quality_evidence": "quality-acceptance.json"
     },
     {
       "point": "P32",
@@ -570,7 +672,7 @@
         "P32b",
         "P32c"
       ],
-      "expected": "Android-Systemlayoutwechsel erhält Bildzoom, Video-/Audiopause und Wiedergabeposition.",
+      "expected": "Android-Systemlayoutwechsel erhält Bildzoom, Video-/Audiopause und Wiedergabeposition. Sichtbare laufende Videos verhindern den Bildschirmtimeout; Pause, Hintergrund, Ende, Medienwechsel und abgelöste Surfaces behalten keine veraltete Wachhalteanforderung.",
       "native_markers": [],
       "android_units": [
         "app.smartexplorer.android.ui.viewer.BatchesMediaStateTest",
@@ -579,7 +681,11 @@
       "android_device": [
         "app.smartexplorer.android.task.BatchesPresentationTaskTest#batches_android_image_zoom_survives_system_layout_change",
         "app.smartexplorer.android.task.BatchesPresentationTaskTest#batches_android_audio_pause_seek_and_resume_survive_system_layout_change",
-        "app.smartexplorer.android.task.BatchesPresentationTaskTest#batches_android_video_pause_seek_and_resume_survive_system_layout_change"
+        "app.smartexplorer.android.task.BatchesPresentationTaskTest#batches_android_video_pause_seek_and_resume_survive_system_layout_change",
+        "app.smartexplorer.android.task.BatchesMediaWakeTaskTest#batches_android_video_wake_follows_play_pause_completion_and_close",
+        "app.smartexplorer.android.task.BatchesMediaWakeTaskTest#batches_android_video_wake_preserves_system_rotation_and_explicit_background_resume",
+        "app.smartexplorer.android.task.BatchesMediaWakeTaskTest#batches_android_media_switch_to_image_audio_or_error_releases_video_wake",
+        "app.smartexplorer.android.task.BatchesMediaWakeTaskTest#batches_android_surface_wake_moves_without_reset_and_ignores_stale_detach"
       ]
     }
   ],
@@ -1169,6 +1275,416 @@
       "native_cases": [
         "batches_task_capture_linux_x11_supplement_grants_raw_and_argb_without_retiring_image",
         "batches_task_capture_linux_pipewire_retries_the_same_format_after_live_credit_pressure"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R10-RA01-Android-Medien",
+      "milestones": [
+        "P32a",
+        "P32b",
+        "P32c",
+        "RA-01"
+      ],
+      "expected": "Android-Systemlayoutwechsel erhält Bildzoom, Video-/Audiopause und Wiedergabeposition. Sichtbare laufende Videos verhindern den Bildschirmtimeout; Pause, Hintergrund, Ende, Medienwechsel und abgelöste Surfaces behalten keine veraltete Wachhalteanforderung.",
+      "scope": "Echte SurfaceView.keepScreenOn-Zustände im Android-Vorschaudialog mit erzeugtem MP4, WAV und PNG. Keine Behauptung eines durchlaufenen OEM-Bildschirmtimeouts oder physischen Rotationssensors.",
+      "native_cases": [],
+      "device_cases": [
+        "app.smartexplorer.android.task.BatchesMediaWakeTaskTest#batches_android_video_wake_follows_play_pause_completion_and_close",
+        "app.smartexplorer.android.task.BatchesMediaWakeTaskTest#batches_android_video_wake_preserves_system_rotation_and_explicit_background_resume",
+        "app.smartexplorer.android.task.BatchesMediaWakeTaskTest#batches_android_media_switch_to_image_audio_or_error_releases_video_wake",
+        "app.smartexplorer.android.task.BatchesMediaWakeTaskTest#batches_android_surface_wake_moves_without_reset_and_ignores_stale_detach"
+      ]
+    },
+    {
+      "id": "R11-G6-Bildqualitaet",
+      "milestones": [
+        "P7a",
+        "P7b",
+        "P30a",
+        "P30b",
+        "P30c",
+        "P31a",
+        "P31b",
+        "G6"
+      ],
+      "expected": "Gleiche Capturebytes liefern mit dem aktuellen OpenH264-Pfad keine schlechtere RGB-PSNR/Luma-SSIM als der eingefrorene Releasepfad. Referenzverlust hält abhängige Ausgaben zurück; vollständiger Keyframe und verlustfreie Korrektur stellen das erwartete Bild wieder her.",
+      "scope": "Candidate-bound RGB PSNR/luma SSIM, immutable release OpenH264 comparison, controlled decoder reference loss and exact lossless reconstruction. Physical MF/Android codecs, packet-loss timing and renderer latency remain separately unverified.",
+      "native_platforms": [
+        "linux",
+        "windows"
+      ],
+      "native_cases": [
+        "batches_task_b6_quality_metrics_match_independent_analytic_oracles",
+        "batches_task_b6_lossless_correction_matches_every_source_pixel",
+        "batches_task_b6_quality_reference_loss_recovers_only_with_complete_keyframe",
+        "batches_task_b6_4k_lossless_correction_retains_every_source_pixel",
+        "batches_task_b6_quality_openh264_baseline_transport_and_still",
+        "batches_task_b6_quality_binding_rejects_foreign_capture_and_missing_geometry"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R12-G7-G8-G9-Geraetenavigation",
+      "milestones": [
+        "P4a",
+        "P4b",
+        "P5a",
+        "P5b",
+        "G7",
+        "G8",
+        "G9"
+      ],
+      "expected": "Android führt die vier bestehenden Geräteanfragen aus Darstellungs-, Fehlerprotokoll- und Infoseiten bis zum jeweiligen Empfänger weiter. Beide Desktopflächen zeigen Programmauswahl und P4-Fehler; der eigenständige Flächenprozess hat einen registrierten Familienöffner.",
+      "scope": "Produktive egui-Flächenfunktion mit kontrolliertem Kontext, Android-UI mit geprüften Navigationsanfragen sowie JVM-Routing. Keine echte entfernte Anwendung oder Windowmanager-Sitzung.",
+      "native_platforms": [
+        "linux",
+        "windows"
+      ],
+      "native_cases": [
+        "batches_task_device_navigation_surface_draws_picker_and_p4_errors",
+        "batches_task_device_navigation_surface_keeps_direct_room_and_output_contexts_separate",
+        "batches_task_device_navigation_confirmed_receipt_keeps_identity_and_rejects_invalid_bindings"
+      ],
+      "unit_cases": [
+        "app.smartexplorer.android.ui.settings.DeviceNavigationRegressionTest#batches_android_device_requests_share_the_same_settings_destination",
+        "app.smartexplorer.android.ui.settings.DeviceNavigationRegressionTest#batches_android_non_device_requests_do_not_override_settings_navigation"
+      ],
+      "device_cases": [
+        "app.smartexplorer.android.task.BatchesDeviceNavigationTaskTest#batches_android_apps_request_from_existing_appearance_opens_once",
+        "app.smartexplorer.android.task.BatchesDeviceNavigationTaskTest#batches_android_apps_request_leaves_log_and_about_details",
+        "app.smartexplorer.android.task.BatchesDeviceNavigationTaskTest#batches_android_untrusted_device_intent_preserves_the_existing_detail",
+        "app.smartexplorer.android.task.BatchesDeviceNavigationTaskTest#batches_android_screen_and_grid_requests_leave_log_and_about_details",
+        "app.smartexplorer.android.task.BatchesDeviceNavigationTaskTest#batches_android_share_requests_leave_details_and_unrelated_requests_keep_them"
+      ]
+    },
+    {
+      "id": "R13-G4-RSOL09-Windows-Capture",
+      "milestones": [
+        "P1a",
+        "P1b",
+        "P30b",
+        "G4",
+        "RSOL-09"
+      ],
+      "expected": "Die Login-Geometrieprobe verliert das erste ungesendete Bild nicht. WGC/DXGI-Aufnahme versucht nach vorübergehendem Ressourcendruck erneut zu öffnen; ausdrückliche Pause und harte Fehler bleiben wirksam.",
+      "scope": "Produktive Pending-/Lifecyclegrenzen mit kontrolliertem Capturebesitz; keine echte Winlogon-, WGC- oder DXGI-Sitzung.",
+      "native_platforms": [
+        "windows"
+      ],
+      "native_cases": [
+        "batches_task_b7_login_unsent_stills_survive_geometry_probes",
+        "batches_task_b7_login_new_sample_replaces_unsent_sample_without_allocating_aliases",
+        "batches_task_b7_login_probe_rejects_binding_size_and_capture_failure",
+        "batches_task_b6_windows_rebuild_retries_after_real_owner_release",
+        "batches_task_b6_windows_pending_resume_can_be_paused_and_preserves_hard_errors",
+        "batches_task_b6_windows_hidden_resume_across_secure_desktop"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R13-RSOL11-X11-Capture",
+      "milestones": [
+        "P30b",
+        "P31a",
+        "RSOL-11"
+      ],
+      "expected": "Nach X11-Geometriewechsel wird die alte Bildreferenz vor erneutem Speicherantrag ungültig; nach wirklicher Freigabe des bisherigen Tile-/Hybridencoders gelingt der neue Plan bei identischem Poollimit.",
+      "scope": "Isolierter Xvfb, echte MIT-SHM-/GetImage-Grenzen und produktive Tile-/Hybridencoder; keine physische Display- oder Compositorsitzung.",
+      "native_platforms": [
+        "linux"
+      ],
+      "native_cases": [
+        "batches_task_b6_x11_tiles_resize_releases_old_reference_before_retry",
+        "batches_task_b6_x11_hybrid_resize_releases_old_reference_before_retry"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R14-G1-G2-X11-Familien",
+      "milestones": [
+        "P4a",
+        "P4b",
+        "P4c",
+        "P4d",
+        "P4e",
+        "G1",
+        "G2"
+      ],
+      "expected": "X11-Combo-Popups und verschachtelte Menüs verwenden bestätigten nächsten regulären Ownerfokus bei unveränderter Memberidentität. Modalität, Fokusverlust, Marker-/Prozesslebensdauer, Rechte, Layoutrevision und gebundene Geometrie bleiben Eingabegrenzen.",
+      "scope": "Produktive gemeinsame Viewer-/Hostgates, reine X11-Fokusentscheidung mit kontrollierten OS-Fakten und Linux-Injektionsadapter; keine echte XRes-/XTest-/GTK-/Qt-/Windowmanagerabnahme.",
+      "native_platforms": [
+        "linux"
+      ],
+      "native_cases": [
+        "batches_family_x11_combo_popup_keeps_identity_after_owner_focus_ack",
+        "batches_family_x11_nested_menus_use_recursive_owner_focus",
+        "batches_family_x11_modal_dialog_is_the_nearest_activation_boundary",
+        "batches_family_x11_focus_rejects_foreign_unbound_recycled_owners_and_cycles",
+        "batches_family_x11_host_preserves_disarming_permissions_and_lifetimes",
+        "batches_family_x11_viewer_discards_uncorrelated_stale_layout_and_disarmed_input",
+        "batches_family_x11_regular_windows_menus_tooltips_close_resize_and_disconnect_survive",
+        "batches_family_x11_combo_atom_and_activation_capabilities_are_explicit",
+        "batches_family_x11_input_retains_admitted_member_geometry_until_inject_bound",
+        "batches_family_x11_invalid_member_geometry_never_reaches_the_injector"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R16-Transfer-M1",
+      "milestones": [
+        "RA-03",
+        "RSOL-01"
+      ],
+      "expected": "Erstkopie und exklusive nummerierte Ordneranlage funktionieren ohne stabile Provider-ID; verlorene Anlageantworten bleiben gesperrt.",
+      "scope": "Produktive Transfer-/VFS-/Copy-/Guard-/Daemonpfade mit kontrollierten Backends und eigenem Loopback-WebDAV. Kein echter Provideraccount, FAT-/exFAT-Datentraeger, vollstaendiger Share-/Agent-Netzlauf oder Android-UI-Nachweis.",
+      "native_platforms": [
+        "linux",
+        "windows"
+      ],
+      "native_cases": [
+        "batches_task_transfer_compat_folder_without_identity_copies_and_numbers",
+        "batches_task_transfer_compat_folder_lost_response_is_not_recovered_without_identity"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R16-Transfer-M2",
+      "milestones": [
+        "RA-02"
+      ],
+      "expected": "Gewoehnliches WebDAV-MOVE braucht kein REBIND. Die gesonderte reservierte Operation behaelt ihren strikten Vertrag ueber VFS, Cache, Share, Agent und Daemon.",
+      "scope": "Produktive Transfer-/VFS-/Copy-/Guard-/Daemonpfade mit kontrollierten Backends und eigenem Loopback-WebDAV. Kein echter Provideraccount, FAT-/exFAT-Datentraeger, vollstaendiger Share-/Agent-Netzlauf oder Android-UI-Nachweis.",
+      "native_platforms": [
+        "linux",
+        "windows"
+      ],
+      "native_cases": [
+        "batches_task_transfer_compat_folder_identity_does_not_require_binding_rename_for_first_copy",
+        "batches_task_transfer_compat_webdav_ordinary_folder_move_needs_no_binding_extension",
+        "batches_task_transfer_compat_webdav_reserved_move_keeps_strict_rebind_boundary_through_cache",
+        "batches_task_transfer_compat_reserved_share_rename_is_a_single_write_with_distinct_wire_operation",
+        "batches_task_transfer_compat_reserved_share_rename_accepts_only_unit_reply_and_never_read_retries",
+        "batches_task_transfer_compat_share_guard_preserves_strict_dispatch_and_read_only_denial",
+        "batches_task_transfer_compat_daemon_reserved_frame_keeps_strict_provider_boundary"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R16-Transfer-M3",
+      "milestones": [
+        "RA-04"
+      ],
+      "expected": "Der sichtbare Missing-only-Weg erhaelt Copy, lokale Moves, leere Roots, Endpunkte, Aliasnamen und dieselbe Journal-ID. Unbekannte Publikationen, Journalverlust und Movequarantaene bleiben geschuetzt.",
+      "scope": "Produktive Transfer-/VFS-/Copy-/Guard-/Daemonpfade mit kontrollierten Backends und eigenem Loopback-WebDAV. Kein echter Provideraccount, FAT-/exFAT-Datentraeger, vollstaendiger Share-/Agent-Netzlauf oder Android-UI-Nachweis.",
+      "native_platforms": [
+        "linux",
+        "windows"
+      ],
+      "native_cases": [
+        "batches_task_transfer_compat_missing_button_keeps_copy_move_and_empty_root_contract",
+        "batches_task_transfer_compat_missing_only_preserves_resolved_folder_and_skip_contract",
+        "batches_task_transfer_compat_missing_only_preserves_skipped_selected_folder",
+        "batches_task_transfer_compat_missing_only_remote_pairs_keep_literal_names_and_endpoints",
+        "batches_task_transfer_compat_missing_only_retries_before_journal_for_copy_and_move",
+        "batches_task_transfer_compat_missing_only_retries_empty_roots_after_no_id_listing_failure",
+        "batches_task_transfer_compat_missing_only_local_move_keeps_completed_pairs_and_conflicts",
+        "batches_task_transfer_compat_missing_only_lost_directory_reply_stays_protected_with_empty_roots",
+        "batches_task_transfer_compat_missing_only_lost_file_reply_survives_successive_clicks",
+        "batches_task_transfer_compat_missing_only_acknowledged_upload_needs_no_read_or_object_id",
+        "batches_task_transfer_compat_missing_only_keeps_stored_recovery_and_journal_loss_strict",
+        "batches_task_transfer_compat_missing_only_never_discards_unknown_move_quarantine"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R16-Transfer-M4",
+      "milestones": [
+        "RA-09",
+        "RSOL-02"
+      ],
+      "expected": "Erlaubte Uploads funktionieren ohne RETR, ohne dauerhaftes Eigentum zu behaupten. Fehlende, ersetzte oder veraenderte Stages und echte IOfehler bleiben Fehler.",
+      "scope": "Produktive Transfer-/VFS-/Copy-/Guard-/Daemonpfade mit kontrollierten Backends und eigenem Loopback-WebDAV. Kein echter Provideraccount, FAT-/exFAT-Datentraeger, vollstaendiger Share-/Agent-Netzlauf oder Android-UI-Nachweis.",
+      "native_platforms": [
+        "linux",
+        "windows"
+      ],
+      "native_cases": [
+        "batches_task_transfer_compat_upload_only_target_completes_without_claiming_recovery",
+        "batches_task_transfer_compat_upload_only_lost_answer_never_republishes_or_removes_source",
+        "batches_task_transfer_compat_refused_readback_does_not_publish_missing_directory_or_resized_stage",
+        "batches_task_transfer_compat_readback_io_failure_is_not_permission_fallback",
+        "batches_task_transfer_compat_optional_remote_readback_never_hides_local_permission_error"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R16-Transfer-M5",
+      "milestones": [
+        "RSOL-05"
+      ],
+      "expected": "Gleichvolumige Dateimoves brauchen ohne Hardlinks keine zusaetzliche Inhaltskopie. Konflikte, Abbruch, verlorene Antworten und Quellbesitz bleiben geschuetzt.",
+      "scope": "Produktive Transfer-/VFS-/Copy-/Guard-/Daemonpfade mit kontrollierten Backends und eigenem Loopback-WebDAV. Kein echter Provideraccount, FAT-/exFAT-Datentraeger, vollstaendiger Share-/Agent-Netzlauf oder Android-UI-Nachweis.",
+      "native_platforms": [
+        "linux",
+        "windows"
+      ],
+      "native_cases": [
+        "batches_task_transfer_compat_move_without_hardlinks_does_not_copy_bytes",
+        "batches_task_transfer_compat_move_without_hardlinks_retains_committed_target_on_receipt_failure",
+        "batches_task_transfer_compat_move_without_hardlinks_keeps_unknown_committed_result",
+        "batches_task_transfer_compat_move_without_hardlinks_restores_failed_preparation_and_cancel",
+        "batches_task_transfer_compat_move_without_hardlinks_preserves_conflicts"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R15-Screen-Sitzungsbudget",
+      "milestones": [
+        "RA-05",
+        "RSOL-03",
+        "RSOL-04",
+        "RSOL-10",
+        "P30a",
+        "P30b",
+        "P30c"
+      ],
+      "expected": "Legacy-Frames werden durch die tatsächliche lokale Zusage begrenzt. Androidvorschauen teilen die globale Kapazität und die Vollansicht erhält eine eigene Zulassung; Desktop-Promotion behält den vollständigen Vertrag. Android-Neupläne geben ausschließlich tatsächlich unbenutzte Vorgängerlast frei, erhalten lebende Besitzer und bleiben nach Freigabe wiederholbar.",
+      "scope": "Produktive Speicher-/Host-/Worker-/IPC-/Android-Besitzgrenzen mit kontrollierten Ressourcen und isolierten v1-QUIC-Endpunkten sowie Kotlinbudgetauswertung. Kein vollständiger v0.5.184-Gegenprozess, physischer Androidabschluss oder RSS-/GPU-Peaknachweis.",
+      "native_platforms": [
+        "linux",
+        "windows"
+      ],
+      "native_cases": [
+        "batches_task_b6_session_budget_two_android_previews_share_the_real_process_ceiling",
+        "batches_task_b6_session_budget_preview_contract_is_small_and_full_request_is_independent",
+        "batches_task_b6_session_budget_legacy_host_plan_worker_resize_and_image_retirement_stay_bound",
+        "batches_task_b6_session_budget_login_image_claims_compete_with_preview_leases",
+        "batches_task_b6_session_budget_legacy_record_length_is_rejected_before_payload_read",
+        "batches_task_b6_session_budget_v184_whole_tile_records_fit_the_small_legacy_receiver",
+        "batches_task_b6_session_budget_android_policy_shares_previews_desktop_keeps_full_contract",
+        "batches_task_b6_session_budget_v184_hello_and_picture_work_below_512_mib",
+        "batches_task_b6_session_budget_android_resume_reuses_capacity_after_actual_owner_end",
+        "batches_task_b6_session_budget_android_resume_keeps_live_owner_and_retries_same_generation",
+        "batches_task_b6_session_budget_android_snapshot_replaces_only_retired_or_native_authority",
+        "batches_task_b6_session_budget_android_epoch_drops_old_queue_but_keeps_external_owner",
+        "batches_task_b6_session_budget_private_relay_keeps_v1_and_rejects_oversize_before_read"
+      ],
+      "unit_cases": [
+        "app.smartexplorer.android.screen.ScreenSessionBudgetRegressionTest#batches_android_session_budget_small_legacy_receiver_keeps_its_scaler_bound",
+        "app.smartexplorer.android.screen.ScreenSessionBudgetRegressionTest#batches_android_session_budget_invalid_explicit_legacy_offer_has_no_512_mib_fallback",
+        "app.smartexplorer.android.screen.ScreenSessionBudgetRegressionTest#batches_android_session_budget_old_acceptance_without_budget_keeps_legacy_contract"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R17-RA07-Vault-Retry",
+      "milestones": [
+        "RA-07",
+        "P21",
+        "P22"
+      ],
+      "expected": "Fehlgeschlagener manueller Vault-Laufwerkretry behält Eintrag, Recoverywarnung, Identität und wiederholbaren Bedienweg bis zum atomaren Startcommit. Tatsächliche Child-/Streambesitzer, Unlockcode, Token und Lease bleiben erhalten.",
+      "scope": "Produktive MountManager-/Start-/Retentionsgrenzen mit isoliertem Zustand und kontrollierten Backendfehlern; kein real eingehängtes Vaultlaufwerk oder Providerkonto.",
+      "native_platforms": [
+        "linux",
+        "windows"
+      ],
+      "native_cases": [
+        "batches_task_vault_retry_preflight_failure_keeps_list_warning_and_same_id",
+        "batches_task_vault_retry_failure_preserves_unlock_code_tokens_and_lease",
+        "batches_task_vault_retry_existing_and_late_backend_stream_keep_owner",
+        "batches_task_vault_retry_new_start_cannot_replace_and_missing_retry_cannot_create",
+        "batches_task_vault_retry_clean_preflight_error_retains_failed_action",
+        "batches_task_vault_retry_shared_sources_keep_endpoint_identity",
+        "drive_task_restore_runs_after_recovery_audit",
+        "drive_task_vault_locked_start_fails_vault_locked",
+        "drive_task_update_stop_exit_clean_journal_counts_as_unmount"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R18-MCP-Lifecycle-Gemeinsam",
+      "milestones": [
+        "RA-06",
+        "RA-08",
+        "RSOL-06",
+        "RSOL-07",
+        "RSOL-08",
+        "P13"
+      ],
+      "expected": "Historische Pluginprofile bleiben migrierbar und selektiv entfernbar; die nur lesbare CLI erlaubt lokale Profilgenerierung ohne Installationsdateischreibzugriff. Historischer Offline-Terminalweg und gegenläufiger Updater behalten ihre Eigentumsgrenzen. MCP-Deinstallation entfernt ausschließlich verifizierte eigene Programme und bleibt nach Teilentfernung wiederholbar.",
+      "scope": "Produktive Profil-, Imagelease-, Update- und Entfernungsketten mit isolierten temporären Dateien und tatsächlichen OS-Dateisperren; kein echter Host-CLI-, NSIS-, ACL-Deny-, Netzlaufwerk- oder fremder-UID-Lauf.",
+      "native_platforms": [
+        "linux",
+        "windows"
+      ],
+      "native_cases": [
+        "batches_p13_legacy_release_profiles_uninstall_directly_and_keep_unowned_files",
+        "batches_p13_legacy_uninstall_preserves_modified_skill_and_shared_mcp_fields",
+        "batches_p13_legacy_marker_cannot_add_deletion_paths",
+        "batches_p13_codex_uninstall_retains_user_env_filters_and_changed_owned_values",
+        "batches_p13_missing_codex_host_keeps_legacy_registration_evidence",
+        "batches_p13_historical_terminal_entry_works_offline_and_rejects_stale_image",
+        "batches_p13_historical_terminal_entry_does_not_downgrade_existing_managed_state",
+        "batches_p13_historical_generic_config_uses_only_the_local_cli",
+        "batches_p13_legacy_profiles_need_no_installation_writes",
+        "batches_p13_legacy_profiles_read_historical_update_state_without_mutation",
+        "batches_p13_uninstall_removes_all_owned_mcp_programs_and_manifest",
+        "batches_p13_uninstall_preserves_foreign_files_and_is_repeatable",
+        "batches_p13_uninstall_respects_independent_owner_operation_and_lifetime_locks",
+        "batches_p13_uninstall_rejects_changed_program_metadata_and_owner_before_deletion",
+        "batches_p13_uninstall_preserves_open_update_recovery_and_blocks_new_admission",
+        "batches_p13_uninstall_resumes_exact_record_after_partial_deletion_and_keeps_new_bytes",
+        "batches_p13_uninstall_record_never_authorizes_path_traversal",
+        "batches_p13_uninstall_missing_lock_never_releases_remaining_program_files",
+        "batches_p13_uninstall_oversized_inventory_is_rejected_before_publication"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R18-MCP-Lifecycle-Linux",
+      "milestones": [
+        "RA-06",
+        "RA-08",
+        "RSOL-06",
+        "RSOL-07",
+        "RSOL-08",
+        "P13"
+      ],
+      "expected": "Historische Pluginprofile bleiben migrierbar und selektiv entfernbar; die nur lesbare CLI erlaubt lokale Profilgenerierung ohne Installationsdateischreibzugriff. Historischer Offline-Terminalweg und gegenläufiger Updater behalten ihre Eigentumsgrenzen. MCP-Deinstallation entfernt ausschließlich verifizierte eigene Programme und bleibt nach Teilentfernung wiederholbar.",
+      "scope": "Produktive Profil-, Imagelease-, Update- und Entfernungsketten mit isolierten temporären Dateien und tatsächlichen OS-Dateisperren; kein echter Host-CLI-, NSIS-, ACL-Deny-, Netzlaufwerk- oder fremder-UID-Lauf.",
+      "native_platforms": [
+        "linux"
+      ],
+      "native_cases": [
+        "batches_p13_legacy_codex_environment_is_owned_before_and_after_migration",
+        "batches_p13_legacy_profile_generation_serializes_with_terminal_updates",
+        "batches_p13_legacy_profiles_preserve_stale_update_lock_in_readonly_installation",
+        "batches_p13_legacy_profiles_reject_same_byte_image_replacement",
+        "batches_p13_profile_image_lease_preserves_cli_swap_commit_and_rollback",
+        "batches_p13_uninstall_does_not_follow_foreign_child_links"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R18-MCP-Lifecycle-Windows",
+      "milestones": [
+        "RA-06",
+        "RA-08",
+        "RSOL-06",
+        "RSOL-07",
+        "RSOL-08",
+        "P13"
+      ],
+      "expected": "Historische Pluginprofile bleiben migrierbar und selektiv entfernbar; die nur lesbare CLI erlaubt lokale Profilgenerierung ohne Installationsdateischreibzugriff. Historischer Offline-Terminalweg und gegenläufiger Updater behalten ihre Eigentumsgrenzen. MCP-Deinstallation entfernt ausschließlich verifizierte eigene Programme und bleibt nach Teilentfernung wiederholbar.",
+      "scope": "Produktive Profil-, Imagelease-, Update- und Entfernungsketten mit isolierten temporären Dateien und tatsächlichen OS-Dateisperren; kein echter Host-CLI-, NSIS-, ACL-Deny-, Netzlaufwerk- oder fremder-UID-Lauf.",
+      "native_platforms": [
+        "windows"
+      ],
+      "native_cases": [
+        "batches_p13_legacy_windows_codex_does_not_adopt_user_unix_environment",
+        "batches_p13_legacy_windows_profile_pins_cli_without_sidecar"
       ],
       "device_cases": []
     }

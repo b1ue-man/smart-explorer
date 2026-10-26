@@ -16,6 +16,7 @@ import tempfile
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
+from review_task_quality import quality_evidence
 
 ROOT = Path(__file__).resolve().parent.parent
 BASE = "bea312ea79731d913a7dd3e79de2f5404401208a"
@@ -293,7 +294,15 @@ def native_tests(binary, logs, env):
     for suffix in plan["exclude"]:
         args += ["--skip", suffix]
     log = logs / "native-suite.log"
-    run(args, log, env, seconds=7200)
+    fixture_env = env.copy()
+    if os.name != "nt":
+        # One isolated display for the existing single library invocation.
+        # xvfb-run owns its authority file/server and returns the binary's status.
+        fixture_env.pop("WAYLAND_DISPLAY", None)
+        fixture_env.update(SE_SCREEN_TASK_X11="1", XDG_SESSION_TYPE="x11")
+        args = ["xvfb-run", "--auto-servernum", "--error-file=" + str(logs / "xvfb.log"),
+            "--server-args=-screen 0 1280x720x24 -nolisten tcp", *args]
+    run(args, log, fixture_env, seconds=7200)
     result = log.read_text(errors="replace")
     for name in selected:
         if f"test {name} ... ok" not in result:
@@ -313,6 +322,8 @@ def native_tests(binary, logs, env):
     not_executed = {row["fixture"] for row in unavailable}
     completed = [name for name in selected if name not in not_executed]
     evidence = milestone_evidence("native", completed, unavailable, platform)
+    quality_evidence(logs, env["CANDIDATE_SHA"], completed, unavailable,
+        plan["quality"], sha(MANIFEST), sha(binary))
     (logs / "native-acceptance.json").write_text(json.dumps({"candidate": env["CANDIDATE_SHA"],
         "manifest_sha256": sha(MANIFEST), "binary_sha256": sha(binary), "platform": platform,
         "selected": selected, "passed_fixtures": completed, "not_executed": unavailable,
@@ -346,11 +357,72 @@ def glow_scope_tests(binary, logs, env):
         "scope": "Real vendor error ledger with controlled GL error reads; no physical GL context or driver failure."}, indent=2))
 
 
+def p27_network_tests(binary, logs, env):
+    """One isolated transport measurement using the existing library binary."""
+    if os.name == "nt":
+        return
+    plan = manifest()["native"]["p27_network"]
+    listing = logs / "native-available.txt"
+    if not listing.is_file():
+        run([binary, "--list", "--format", "terse"], listing, env, seconds=120)
+    available = listing.read_text().splitlines()
+    if available.count(plan["fixture"] + ": test") != 1:
+        raise RuntimeError("Missing or ambiguous P27 network fixture.")
+    run(["bash", ROOT / "native/review-task-network.sh", "exec", binary.resolve(),
+        "--exact", plan["fixture"], "--ignored", "--nocapture", "--test-threads=1"],
+        logs / "p27-network.log", env, seconds=1800)
+    evidence_path = logs / "p27-network/acceptance.json"
+    evidence = json.loads(evidence_path.read_text())
+    if (evidence.get("schema") != 1 or evidence.get("candidate") != env["CANDIDATE_SHA"]
+            or evidence.get("fixture") != plan["fixture"].rsplit("::", 1)[-1]
+            or evidence.get("result") != "passed"):
+        raise RuntimeError("P27 evidence is unsuccessful or belongs to a different candidate.")
+    profiles = evidence.get("profiles", [])
+    observed = [row.get("acceptance", {}).get("profile") for row in profiles]
+    if observed != plan["profiles"]:
+        raise RuntimeError("P27 evidence omits or changes a required network profile.")
+    for row, profile in zip(profiles, plan["profiles"]):
+        if (row["acceptance"].get("result") != "passed" or row["acceptance"].get("failures")
+                or row.get("configured_profile", {}).get("rate_bps") != profile["bps"]):
+            raise RuntimeError("P27 network profile did not satisfy its acceptance contract.")
+        for kind in ["reference", "screen"]:
+            raw = logs / "p27-network" / (profile["label"] + "-" + kind + ".json")
+            if not raw.is_file() or not raw.stat().st_size:
+                raise RuntimeError("Missing P27 raw observations: " + str(raw))
+    (logs / "p27-acceptance.json").write_text(json.dumps({
+        "candidate": env["CANDIDATE_SHA"], "manifest_sha256": sha(MANIFEST),
+        "binary_sha256": sha(binary), "evidence_sha256": sha(evidence_path),
+        "point": "P27", "milestones": ["P27a", "P27b"], "result": "passed",
+        "fixture": plan["fixture"], "profiles": observed, "scope": evidence["scope"]}, indent=2))
+
+
+def dependencies(logs, env, candidate):
+    """Resolve missing dev features remotely; never build uncommitted lock bytes."""
+    lock = ROOT / "native/Cargo.lock"
+    original = lock.read_text()
+    try:
+        run(["cargo", "metadata", "--format-version=1"], logs / "dependencies-metadata.json",
+            env, seconds=3600, cwd=ROOT / "native", stderr=logs / "dependencies.log")
+    finally:
+        resolved = lock.read_text()
+        patch = "".join(difflib.unified_diff(original.splitlines(keepends=True),
+            resolved.splitlines(keepends=True), fromfile="a/native/Cargo.lock", tofile="b/native/Cargo.lock"))
+        (logs / "dependencies.patch").write_text(patch)
+        (logs / "dependencies.json").write_text(json.dumps({"candidate": candidate,
+            "original_sha256": hashlib.sha256(original.encode()).hexdigest(),
+            "resolved_sha256": sha(lock), "changed": bool(patch)}, indent=2))
+        if patch:
+            shutil.copy2(lock, logs / "Cargo.lock.resolved")
+    if patch:
+        raise RuntimeError("Dependency resolution produced dependencies.patch; commit it and rerun this same suite before compiling the candidate.")
+
+
 def main():
     if os.environ.get("GITHUB_ACTIONS") != "true" and os.environ.get("SMART_EXPLORER_REMOTE_RUNNER") != "1":
         raise RuntimeError("Remote runner only.")
     parser = argparse.ArgumentParser()
     parser.add_argument("--binary-cache", type=Path)
+    parser.add_argument("--dependencies", action="store_true")
     parser.add_argument("--android-build", action="store_true")
     parser.add_argument("--out", type=Path)
     args = parser.parse_args()
@@ -363,6 +435,19 @@ def main():
     env = dict(os.environ, RUST_BACKTRACE="1", SMART_EXPLORER_ANALYTICS_TASK="1",
         SMART_EXPLORER_COPY_PASTE_TASK="1", TOKIO_WORKER_THREADS="2")
     manifest()
+    if args.dependencies:
+        preparation_failures = []
+        for name, operation in [("dependencies", lambda: dependencies(logs, env, candidate)),
+                ("format", lambda: format_patch(logs, env, candidate))]:
+            try:
+                operation()
+            except Exception as error:
+                preparation_failures.append(name + ": " + str(error))
+        (logs / "preparation-summary.json").write_text(json.dumps({
+            "candidate": candidate, "failures": preparation_failures}, indent=2))
+        if preparation_failures:
+            raise SystemExit("\n".join(preparation_failures))
+        return
     if args.android_build:
         if args.out is None:
             raise RuntimeError("Android handoff needs --out.")
@@ -382,7 +467,6 @@ def main():
             failures.append(name + ": " + str(error))
             print("FAILED:", failures[-1], flush=True)
             return None
-    stage("format", lambda: format_patch(logs, env, candidate))
     with tempfile.TemporaryDirectory(prefix="batches-native-") as profile:
         for name, child in {"APPDATA": "roaming", "LOCALAPPDATA": "local", "XDG_CONFIG_HOME": "config",
             "XDG_DATA_HOME": "data", "XDG_CACHE_HOME": "cache", "XDG_RUNTIME_DIR": "runtime"}.items():
@@ -395,6 +479,8 @@ def main():
         if fixture and cli:
             env["SE_SCREEN_TASK_WORKER"] = str(cli.resolve())
             stage("native-behavior", lambda: native_tests(fixture, logs, env))
+        if fixture:
+            stage("p27-network-behavior", lambda: p27_network_tests(fixture, logs, env))
         glow = stage("glow-scope-build", lambda: artifact("native", "egui_glow", "test", args.binary_cache, logs, env, package="egui_glow"))
         if glow:
             stage("glow-scope-behavior", lambda: glow_scope_tests(glow, logs, env))
