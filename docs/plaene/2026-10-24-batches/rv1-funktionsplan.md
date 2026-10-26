@@ -1,0 +1,210 @@
+# RV1: Funktionsbefunde aus Lauf 40406246032
+
+Stand: 2026-10-26. Kandidat `1ffbf4b0bc90b2479947680abcd0a5941cce00f8`.
+Dies ist die Fortsetzung des beauftragten Gesamtbatches B1–B8/P31/P32,
+kein zusätzlicher Funktionsauftrag und keine neue Testkampagne.
+
+## Erster Plan aus dem beobachteten Ergebnis
+
+Windows und Linux kompilieren die Bibliotheks-Prüfbinärdatei, `se` und
+`egui_glow` erfolgreich. Ihre Funktionsstufen sind fehlgeschlagen. Die
+Vorbereitung ist erfolgreich. Android war beim Statusabruf 22:10:07 UTC
+noch im Checkout; sein Ergebnis ist unbekannt. Während der Pipeline
+werden keine Umsetzungsagenten aktiviert und keine Quellkorrekturen begonnen.
+
+Ziel dieses Fixdurchgangs: die tatsächlich fehlgeschlagenen Funktionen
+und fehlerhaften Prüfvoraussetzungen korrigieren, ohne Bestandsschutz,
+Rechteprüfung, Wiederaufnahme, Datenhaltbarkeit oder Leistungsanforderungen
+zu schwächen. Jeder Fixautor liefert selbst Funktionsliste,
+direkte/indirekte Verknüpfungskarte, konkreten Erhaltungsplan, Umsetzung
+und anschließende eigene Anti-Regressionsreview. Die bereits abgeschlossenen
+unabhängigen Reviews werden nicht zu Fixautoren umfunktioniert.
+
+Der vollständige Desktopbefund umfasst F01–F56 sowie den gesonderten
+P27-Profilwechselfehler F57. Mehrere fehlgeschlagene Fälle können dieselbe
+Ursache haben. Die Kennungen bezeichnen Beobachtungen, keine bereits
+bewiesenen eigenständigen Produktfehler. Compilerwarnungen, erfolgreiche
+Prüffälle mit erwarteter Panic und ausdrücklich unverifizierte Hardwarepfade
+werden nicht als neue Fehler ausgegeben.
+
+## Bestand und notwendige begrenzte Ergebnisse
+
+| Kennung | Beobachteter Fehler und Quellgrenze | Erforderliches Ergebnis / Erhaltungsvertrag |
+|---|---|---|
+| F01 | Optischer Index: vorhandener nichtoptischer Eintrag fehlt nach Laden; `app/os/shared/optical_index.rs`, `folder_index` | Optische Beweiswiederverwendung erhält den vollständigen zulässigen Index; bestehende Filter und Tresorausschluss bleiben wirksam. Ursache im Schreiben/Laden/Fixture noch offen. |
+| F02–F07 | Linux-Appstart-Fixture scheitert am privaten Journalverzeichnis; `apps/os/linux_os/mod.rs`, `apps/os/batches_launch_task_tests.rs` | Appstarts bleiben dauerhaft und idempotent, Journal tatsächlich privat; eine ungeeignete Fixture darf keine Aufweichung der Eigentums-/Modusprüfung bewirken. |
+| F08 | `se apps icon` kollidiert mit automatisch propagierter `version`; `cli/apps.rs`, `cli/mod.rs`, `cli/completions_access.rs` | CLI-Baum und Vervollständigung sind gültig; Icon-Datenversion und Programmversionsausgabe bleiben eindeutig erreichbar. |
+| F09 | Codex-Entfernung verliert eine Kopfkommentarzeile; `cli/plugin/batches_codex_task_tests.rs`, `cli/plugin/codex.rs` | Migration und Deinstallation erhalten nicht verwaltete Konfiguration und Kommentare; verwaltete Umgebungswerte bleiben korrekt zugeordnet. |
+| F10–F12, F16-Windows, F44, F48–F49, F51–F56 | Windows-Kopieren/Verschieben/Wiederaufnahme scheitert mit Zugriff verweigert bei Haltbarkeitsbestätigung; `local_access/os/windows/publication.rs`, `copy`, `vfs/os/windows`, `transfer` | Erfolgreiche lokale Veröffentlichung bleibt als solche nachweisbar, Recovery bleibt wiederholbar; keine Erfolgsquittung ohne ausreichenden Beleg und kein Löschen unbestätigter Quell-/Quarantänebestände. Gemeinsame Ursache wird je Aufrufpfad belegt. |
+| F13 | Windows-Exec: abgeschlossene Registrierung schließt Client, Kontrollleser endet nicht rechtzeitig; `daemon/os/shared/batches_exec_lifetime_task_tests.rs`, Exec-Lebensdauer | Terminaler Abschluss beendet Kontrollbesitz und lässt erfolgreich beendete Befehle ohne neuen Cancel. |
+| F14–F15 | Recovery-Registry liest `null` als Sequenz; `daemon/os/shared/mount_inactive_recovery.rs`, Registry-Leser und Eigentümerfixture | Aktive/inaktive Eigentumsübergänge sowie Rücknahme nach Fehler erhalten kompatible lesbare Registry und genau einen Cachebesitzer. |
+| F17 | Drive-Seitenfixture erhält HTTP 400; `gdrive/core/gui_task_tests.rs`, Scan-/Listenpfad | Leere Zwischenseiten werden bis zum Ende verfolgt; leere Kindordner bleiben fehlerfrei; Providerfehler werden weiter ehrlich gemeldet. |
+| F18–F35 | MCP-Lebensdauer/Deinstallation: Windows-Vorfahren-ACL und Linux nicht lesbare fremde Prozesse; `mcp_launcher/os/windows/security.rs`, `mcp_launcher/os/linux_os/mod.rs`, Lebensdauer-/Deinstallationsfixtures | Eigene Installation bleibt bedienbar und entfernbar, fremde Dateien/Prozesse bleiben unberührt; unbekannter eigener Prozesszustand bleibt sicher behandelt. ACL-/Prozessursache vor jeder Lockerung belegen. |
+| F36–F37 | Worker-Budgetdiagnose und Windows-Capture-Resize-Erwartung stimmen nicht; `screen/core/batches_frame_budget_task_tests.rs`, `screen/os/windows/batches_capture_task_tests.rs` | Tatsächliche Grenzen greifen vor Payloadlesen beziehungsweise nativer Allokation; alte Besitzer und neue Generationen sind vollständig bilanziert. Keine bloße Änderung einer erwarteten Zeichenfolge ohne Vertragsnachweis. |
+| F38 | Windows-Qualitätsprovenienz findet Frozen-Marker nicht; `screen/os/native_ffi/quality_acceptance_provenance.rs` | Unveränderliche Releasequelle und eingefrorener Vergleich bleiben inhaltlich identisch und auf Windows/Linux auswertbar; keine Hash-/Vergleichsumgehung. Zeilenenden sind eine zu prüfende Hypothese. |
+| F39–F40 | X11-Capture-Fixture verliert Verbindung beim Aufbau; `screen/os/linux_os/batches_capture_recovery_task_tests.rs`, `native/review-task-native.py` | Isolierter X-Server bleibt während der gemeinsamen Auswahl verfügbar; Resize-/Captureprüfung bleibt unverändert aussagekräftig. Reset zwischen letzten Clients ist eine Hypothese, kein bewiesener Produktdefekt. |
+| F41 | Schreibschutz wird als `ReadOnlyFilesystem` statt `PermissionDenied` gemeldet; `share/core/fs_guard_extensions.rs` | Schreibzugriff bleibt verweigert; Fehlerklassifikation entspricht Backend-/OS-Vertrag ohne falsche Pfadfehlermeldung. |
+| F42 | Netzwechsel erreicht den Noq-Epochzähler nicht; `share/core/batches_route_task_tests.rs`, vendorte Iroh-/Noq-Netzwechselgrenze | Reale Netzänderung sperrt alte Grants vor neuem Nutzverkehr; keine synthetische Erfolgsumgehung im Prüffall. |
+| F43 | Gehaltene Windows-Root verhindert die in der Fixture versuchte Umbenennung; `source_media/tests.rs`, `local_access/os/windows` | Effektiver physischer Root und optische Abbruch-/Prioritätszuordnung bleiben gebunden; Plattformvertrag entscheidet, ob Umbenennung verhindert oder korrekt verfolgt wird. |
+| F16-Linux, F45–F47, F50 | Veröffentlichungsquittung verweigert Zielpfad in Ordner-/Missing-only-Transfers; `transfer/os/shared/engine/file_recovery_receipts.rs`, `file_recovery.rs` | Wörtliche Backendpfade, Remoteidentität, zulässige Ordnerreservierung und fehlende Restarbeit bleiben kompatibel; Quittungen bleiben gegen fremde Ziele und manipulierte Pfade gebunden. |
+| F57 | P27 nächstes Netzprofil scheitert an `tc`: `Exclusivity flag on, cannot modify.`; `native/review-task-network.sh` | Alle geplanten Profile laufen nacheinander in derselben isolierten Umgebung; vorhandene Rate-/Latenz-/Queue-Orakel bleiben unverändert. Erster Referenz-/Screenabschluss ist vorhanden, Gesamtabnahme fehlt. |
+
+## Recherchefragen vor dem endgültigen Zuschnitt
+
+1. Windows-Veröffentlichung: erforderliche Zugriffs- und Sharingrechte der
+   gehaltenen Datei-/Verzeichnisobjekte, tatsächliche Flushgarantie und
+   Unterschied zwischen Quittungsdatei und Nutzdatei.
+2. Pfadquittungen: normalisierte Zielidentität, wörtliche Backendnamen und
+   Beweisbindung in Erstveröffentlichung und Wiederaufnahme.
+3. Eigentum: Linux-Modus der Fixture, Windows-ACL-Vererbung, Bedeutung
+   unbekannter fremder `/proc`-Einträge und erhaltene fremde TOML-Kommentare.
+4. Capture/Transport: aktuelle Budgetrechnung, Zeilenenden des Checkouts,
+   X-Server-Lebensdauer sowie tatsächlicher Iroh-Netzwechselpfad.
+5. Persistenz: Indexfilter gegenüber Fixturepfad und fehlende Registryfelder
+   gegenüber vorhandener `null`-Repräsentation.
+6. P27: Austausch bestehender Qdiscs und Portfilter ohne Zustand des
+   vorherigen Profils, ausschließlich im eigenen Netzwerk-Namespace.
+
+Die maßgeblichen Artefakte und Hashes stehen in
+[rv1-remote-suite.md](../../refs/rv1-remote-suite.md).
+Die vollständigen Fallnamen werden aus den tatsächlichen fehlgeschlagenen
+Binärfällen übernommen; erfolgreicher Stdout ist keine Fehlerquelle.
+
+## Reihenfolge und Abschlussgrenze
+
+Nach vollständigem Pipelineende wird Android ergänzt. Erst dann werden
+Detailmeilensteine, zweite Lückenrecherche und Agentenzuschnitt abgeschlossen.
+Jeder Quellfix erhält seine Autorenreview. Main integriert Schnittstellen,
+registriert nötige Fälle im bestehenden Manifest und aktualisiert den Rootgraph.
+Nach Commit und Push läuft ausschließlich derselbe Remote-Einstieg erneut.
+Kein lokaler Build oder Test, kein zusätzlicher Testeinstieg, keine vorgezogene
+Version und kein Zwischenrelease. Nach erfolgreicher Auswertung folgt der eine
+beauftragte vollständige Remote-Release.
+
+## Erster Recherchepass und abgeglichene Verträge
+
+Abgerufen beziehungsweise am Kandidaten gelesen am 2026-10-26:
+
+- Windows [`ReOpenFile`](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-reopenfile)
+  bindet an das bestehende Objekt; verlangte Zugriffs-/Sharingrechte dürfen
+  offenen Handles nicht widersprechen. [`NtFlushBuffersFileEx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ntflushbuffersfileex)
+  dokumentiert Daten-/Metadatensynchronisierung und fehlende Schreibrechte als
+  Fehler. Ein generelles Ignorieren von Zugriff verweigert ist damit kein Fix.
+- Die lokal vorhandene, durch `Cargo.lock` gepinnte Primärquelle
+  `clap_builder 4.6.0`, `src/builder/command.rs:1493/1527`, bestätigt
+  `disable_version_flag` und die vererbte `propagate_version`-Semantik;
+  `debug_asserts.rs:100` bestätigt die Eindeutigkeit von Argumentnamen.
+  Die versionsspezifische Webseite war nicht abrufbar; die lokale
+  Paketquelle ist der Versionsbeleg, nicht eine behauptete Webprüfung.
+- [`tempfile 3.27.0`](https://docs.rs/tempfile/3.27.0/tempfile/struct.Builder.html#method.permissions)
+  dokumentiert Verzeichnisrechte `0777` vor Anwendung der Umask. Der Appfall
+  übergibt genau dieses bereits bestehende Tempverzeichnis an die
+  Journalprüfung. Der Schutz des privaten Journals bleibt bestehen.
+- [`/proc/pid/exe`](https://man7.org/linux/man-pages/man5/proc_pid_exe.5.html)
+  unterliegt einer Ptrace-Zugriffsprüfung. Nicht lesbare Prozessbilder
+  belegen daher nicht, dass eine eigene Generation benutzt wird; sie dürfen
+  zugleich nicht pauschal als unbenutzt umgedeutet werden. Die relevante
+  eigene Besitz-/Zugriffsgrenze muss der Fixautor vollständig herleiten.
+- [`toml_edit 0.25.11+spec-1.1.0`](https://docs.rs/toml_edit/0.25.11+spec-1.1.0/toml_edit/struct.Table.html)
+  wurde zusätzlich aus der gepinnten lokalen Paketquelle gelesen:
+  `Table::remove` entfernt das gesamte Item samt dessen Dekoration.
+  Die Kommentare einer entfernten eigenen Tabelle müssen von fremden
+  Dokumentkommentaren unterschieden werden.
+- [Git-Zeilenenden](https://git-scm.com/docs/gitattributes) sind im Checkout
+  konfigurationsabhängig, solange kein `eol` gesetzt ist. Die aktuelle
+  `.gitattributes` setzt kein allgemeines Rust-LF. Die Windows-Provenienz
+  scheitert beim LF-abhängigen Frozen-Marker, Linux besteht denselben
+  Vergleich. Die Fixgrenze muss Rohhash und Inhaltsgleichheit erhalten.
+- Das [X.Org-Serverhandbuch](https://www.x.org/archive/current/doc/man/man1/Xserver.1.xhtml)
+  dokumentiert `-noreset` gegen den Reset nach Schließen des letzten Clients.
+  Die Primärseite wurde nach einem XHTML-Abruffehler direkt gelesen.
+  Die aktuelle Suite startet Xvfb ohne dieses Argument. Die Logs belegen
+  Verbindungsreset beim Aufbau, jedoch keinen behaupteten Xvfb-Absturz.
+- Die [Drive-API](https://developers.google.com/workspace/drive/api/reference/rest/v3/files/list)
+  verlangt das Folgen von `nextPageToken` bis zum Ende. Die Fixture stellt
+  eine feste Requestfolge bereit und antwortet bei abweichender Folge mit
+  HTTP 400. Der konkrete fehlende oder falsche Aufruf ist noch zu belegen.
+- Der lokale Iroh-1.3.0-Vertrag `Endpoint::network_change` meldet eine
+  *potenzielle* Änderung an den Monitor. `socket.rs` unterscheidet diese
+  Nachricht vom tatsächlich erkannten Wechsel und dessen Übergabe an Noq.
+  Ein Aufruf ohne Netzänderung beweist daher allein keinen Epochwechsel.
+- [Winsock-Abschluss](https://learn.microsoft.com/en-us/windows/win32/winsock/graceful-shutdown-linger-options-and-socket-closure-2)
+  unterscheidet Protokoll-Shutdown und Freigabe des Sockets. Der konkrete
+  Kontrollleser muss aus seinem blockierten Read freikommen, ohne den
+  abgeschlossenen Exec erneut abzubrechen.
+- Der [Linux-Qdisc-Code](https://github.com/torvalds/linux/blob/v6.17/net/sched/sch_api.c#L1501-L1624)
+  zeigt bei identischem Handle den Änderungsweg; exklusives erneutes Add
+  meldet genau den beobachteten Fehler. Das
+  [`tc`-Handbuch](https://man7.org/linux/man-pages/man8/tc.8.html)
+  beschreibt das Löschen einschließlich Kind-Qdiscs und Filter. Der eigene
+  Namespace muss vor jedem frischen Profil vollständig passend sein.
+
+## Zweiter Lückenabgleich vor Bearbeitung
+
+Der Quellabgleich präzisiert die Erhaltungsgrenzen:
+
+- F14/F15: `write_document` verwendet mutable JSON-Indizierung auf einem
+  optionalen Feld. Dadurch entsteht bei einem Dokument ohne Recoveryfeld
+  ein neues Objekt mit `records: null`; `book` verlangt eine Sequenz.
+  Ein unverändertes aktives Dokument darf dieses Feld nicht erhalten.
+- F01: `FolderIndex::load` filtert ausdrücklich versteckte Pfadsegmente
+  und Windows-`AppData`. Der voreingestellte Temppräfix ist `.tmp`.
+  Die Fixture muss ein zulässiges Indexobjekt nachweisen; die etablierten
+  Filter dürfen wegen ihres Speicherorts nicht aufgehoben werden.
+- F43: Windows hält den Root ohne `FILE_SHARE_DELETE` offen.
+  Die Fixture verlangt dennoch erfolgreiches Umbenennen dieses Roots.
+  Der Erhaltungsvertrag ist der physisch gebundene Reader einschließlich
+  Abbruch; er verlangt keine Aufhebung des Windows-Pins.
+- F36: `read_message_with_limits` lehnt unbesessene RAW-/ENCODED-Pakete
+  inzwischen bereits vor der alten Budgetdiagnose ab. Der Schutzfall
+  muss die tatsächliche Ticket-/Payloadgrenze ausüben, nicht nur einen
+  neuen erwarteten Meldungstext erhalten.
+- F37: Die Fixture hält genau einen Bytebesitz und nimmt an, dass damit
+  der gesamte alte Plan reserviert bleibt. Ob dieser Annahme der aktuelle
+  Retirementvertrag entspricht, ist vom Fixautor mit der tatsächlichen
+  Livebilanz zu klären. Ein funktionierender Resize darf nicht künstlich
+  verboten werden; reale Überbelegung bleibt verboten.
+- F16/F45–F50: `start_file` bindet Beweispfade an das normalisierte Ziel;
+  `finish` setzt später einen neu beobachteten Beweis. Jeder neue und
+  wiederaufgenommene Pfad muss dieselbe Namens-/Identitätsdarstellung
+  verwenden. Die direkte Pfadursache bleibt bis zur Autorenanalyse offen.
+- F38: Ein möglicher LF/CRLF-Unterschied darf ausschließlich an der
+  Darstellung des eingebetteten Vergleichsblocks behandelt werden;
+  der Hash der unveränderlichen Gitquelle darf nicht ersetzt werden.
+- F57: Ein bloßes Ersetzen der beiden Netem-Kinder reicht als Plan nicht,
+  solange Portfilter des vorherigen Relays verbleiben könnten. Ein Profil
+  muss Rate, Verzögerung und Filter gemeinsam frisch binden.
+
+Damit sind die begrenzten Desktop-Ergebnisse und ihre kritischen APIfragen
+für den Zuschnitt geklärt. Nicht belegte Detailursachen werden ausdrücklich
+vom zuständigen Fixautor innerhalb seiner zugewiesenen Kette geklärt.
+Androidbefunde können den Zuschnitt nach vollständigem Pipelineende ergänzen.
+
+## Detaillierte Desktopmeilensteine
+
+Alle Meilensteine umfassen den vollständigen eigenen Fixzyklus. Die oben
+aufgeführten Erhaltungsverträge sind ihre erwarteten Ergebnisse. Die vorhandenen
+Fälle bleiben in derselben Suite; notwendige Ergänzungen werden ausschließlich
+in deren Manifest registriert. Dateilisten werden vor Aktivierung vollständig
+im jeweiligen begrenzten Scope festgehalten.
+
+| Meilenstein | Befunde | Konkrete Änderungsgrenze | Abhängigkeit und Abnahmesignal |
+|---|---|---|---|
+| M01 Windows-Veröffentlichung | F10–F12, F16-Windows, F44, F48–F49, F51–F56 | Windows-Publikationsadapter, Kopierbeweis und deren gezielte Fälle | Unabhängig editierbar; lokale Kopie/Move/Recovery bestätigt Ziel und erhält Daten nach injiziertem Fehler. Integration mit M02. |
+| M02 Transferquittungen | F16-Linux, F41, F45–F47, F50 | Recoveryquittung, Missing-only und Share-Schreibschutzklassifikation | Unabhängige Schreibdateien zu M01; Remoteordner, leere Wurzeln und Konflikte bleiben wiederaufnehmbar. |
+| M03 MCP-Lebensdauer | F09, F18–F35 | Installationsbesitz, ACL-/Prozessprüfung und Codex-Dokumentgrenze | Keine Schreibüberschneidung; Lifecycle/Entfernung erhält fremde Bestände und echte Aktivitätsgrenzen. |
+| M04 Appstart/CLI | F02–F08 | Journalfixture und Icon-CLI | Unabhängig; dauerhafte Idempotenz und kompletter CLI-Baum einschließlich Versionsoptionen gültig. |
+| M05 Registry | F14–F15 | Optionales Eigentumsfeld und bestehende Rollbackfälle | Unabhängig; unveränderte aktive Dokumente sowie inaktive Übergänge bleiben lesbar und atomar. |
+| M06 Capturebudgets | F36–F37 | Worker-Besitzweg und Windows-Resizebilanz | Unabhängig; Payload/Nativallokation bleibt unter tatsächlich reserviertem Limit. |
+| M07 Netzprofile | F57 | P27-Netzwerkhelper | Unabhängig; jede geplante Profilfolge besitzt passende frische Qdiscs und Filter bei unveränderten Messkriterien. |
+| M08 Optischer Bestand | F01, F43 | Indexfixture und physisch gebundener optischer Reader | Keine Windows-Adapteränderung neben M01; vollständiger zulässiger Index, Priorität und Abbruch bleiben nachgewiesen. |
+| M09 Exec-Kontrollabschluss | F13 | Exec-Lebensdauer und Kontrollsocketfixture | Unabhängig; abgeschlossener Besitzer gibt Kontrollleser frei, ohne neuen Cancel. |
+| M10 Drive-Seitenfolge | F17 | Drive-Scan-/Listenintegration und HTTP-Fixture | Unabhängig; Tokenfortsetzung und leere Kinder ohne falschen Fehler. |
+| M11 Qualitätsprovenienz | F38 | Frozen-Blockextraktion beziehungsweise eng begrenzte Attribute | Unabhängig; Windows/Linux belegen dieselbe unveränderliche Quelle und denselben Codec. |
+| M12 X11-Fixture | F39–F40 | Ausschließlich Xvfb-Lebensdauer im gemeinsamen Runner und zugehörige Capturefixture | Main behält Suiteausführung; Capture-/Resizeorakel bleiben erhalten. |
+| M13 Netzwechselepoche | F42 | Iroh-/Noq-Grenze und tatsächlicher Netzwechselfall | Unabhängig; alte Tokens verlieren ihre Freigabe vor Nutzverkehr der nächsten Generation. |
+
+M01–M13 erhalten getrennte Schreibflächen; Main integriert die gemeinsamen
+Verhaltensgrenzen. Höchstens sieben Fixautoren gleichzeitig zusätzlich zu Main.
+Noch keine Modellwahl oder Aktivierung erfolgt: Voraussetzung ist das Ende des
+laufenden CI-Jobs und der Abgleich des dann vollständigen Androidbefunds.

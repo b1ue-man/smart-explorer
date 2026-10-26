@@ -1247,3 +1247,13 @@ Abschlussaufruf. Der gebundene Patch ist unverändert übernommen; sämtliche
 syntaktischen Blatttoken bleiben gleich. Die Lockdatei bleibt unverändert,
 Größenprüfung ohne Befund. Compiler- und Funktionsstufen dieses Versuchs
 sind übersprungen; der nächste Kandidat bleibt im selben Remote-Fixloop.
+
+Lauf `40406246032` für `1ffbf4b0` bestätigt Vorbereitung und beide
+Desktopkompilierungen. Die Funktionsstufen liefern F01–F56; P27 scheitert
+nach vorhandenen ersten Referenz-/Screenrohdateien beim nächsten
+Netzprofilaufbau (F57). Der [Funktionsplan](rv1-funktionsplan.md) enthält
+vollständigen Befundumfang, zwei Recherchepässe, Erhaltungsverträge und
+M01–M13. Main hat disjunkte Schreibflächen vorbereitet. Android war beim
+Abruf 22:10:07 UTC noch im Checkout. Kein Fixagent dieses Durchgangs wird
+während der Pipeline aktiviert; weder Quelle noch Leistungsgrenzwert wurden
+aufgrund der fehlgeschlagenen Fälle verändert.
