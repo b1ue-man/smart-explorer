@@ -307,7 +307,7 @@ fn batches_task_capture_integration_worker_prepared_picture_keeps_its_captured_r
                 .unwrap();
             received = Some(capture_transport::decode_owned(&payload, &grant, None).unwrap());
         } else {
-            capture_transport::read_control(&mut input, length).unwrap();
+            capture_transport::read_control(&mut input, tag, length, None).unwrap();
         }
     }
     assert!(

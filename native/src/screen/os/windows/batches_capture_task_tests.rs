@@ -201,32 +201,122 @@ fn batches_capture_windows_exhausted_slots_do_not_call_allocator() {
 }
 #[test]
 fn batches_capture_windows_resize_rejects_before_native_allocation_with_old_owner() {
-    let (_, admission) = session("resize");
-    let size = FrameSize::new(3840, 2160);
-    let mut budget = activate(
-        admission.clone(),
-        SourceKey::new("resize", "monitor:DISPLAY1").unwrap(),
-        geometry(size, CaptureKind::Wgc),
-    );
-    // A one-byte storage fixture keeps the complete old plan alive without
-    // allocating a large real native surface in the deterministic task case.
-    let old = budget.grant().unwrap().claim(O::SourcePixels, 1).unwrap();
-    budget.suspend();
-    assert!(budget.replace(geometry(size, CaptureKind::Wgc)).is_err());
-    assert!(budget.grant().is_err());
-    let mut allocated = false;
-    let refused = budget.claim_native().and_then(|slice| {
-        slice.allocate(|| {
-            allocated = true;
-            Ok(())
-        })
-    });
-    assert!(refused.is_err());
-    assert!(!allocated);
-    drop(old);
-    budget.replace(geometry(size, CaptureKind::Wgc)).unwrap();
-    assert!(budget.grant().is_ok());
-    assert!(budget.generation() > 1);
+    let size = FrameSize::new(64, 64);
+    let previous = geometry(size, CaptureKind::Wgc);
+    let replacement = geometry(FrameSize::new(128, 64), CaptureKind::Wgc);
+    let key = SourceKey::new("resize", "monitor:DISPLAY1").unwrap();
+    let selected = output(size);
+    let old_plan = previous
+        .plan(key.clone(), CaptureGeneration::new(1), &selected)
+        .unwrap();
+    let new_plan = replacement
+        .plan(key.clone(), CaptureGeneration::new(2), &selected)
+        .unwrap();
+    let image_bytes = bgra_bytes(size).unwrap();
+    let old_native_bytes = image_bytes * 2;
+    let new_native_bytes = bgra_bytes(replacement.native).unwrap() * 2;
+    for headroom in [image_bytes - 1, image_bytes] {
+        let capacity = new_plan.peak_bytes() + headroom;
+        assert!(old_plan.peak_bytes() <= capacity);
+        assert!(new_plan.peak_bytes() <= capacity);
+        assert!(old_plan.peak_bytes() + new_plan.peak_bytes() > capacity);
+        assert!(capacity <= MAX_WORKING_BYTES);
+        let pool = Arc::new(MemoryPool::default());
+        let admission = pool
+            .admit_session(None, CapacityCeiling::bounded(capacity), capacity, "resize")
+            .unwrap();
+        admission.bind_contract(None).unwrap();
+        let mut budget = activate(admission.clone(), key.clone(), previous);
+        let old_grant = budget.grant().unwrap().clone();
+        // Small real storage stands in for the native surface, with the same
+        // resource-before-credit destruction order as the platform object.
+        let old_native = budget
+            .claim_native()
+            .unwrap()
+            .allocate(|| Ok(vec![0u8; old_native_bytes as usize]))
+            .unwrap();
+        let old = CaptureImageBuilder::new(size, FrameLimits::RESOURCE, &old_grant, O::SourcePixels)
+            .unwrap()
+            .freeze();
+        let mut cached = Some(old.clone());
+        assert!(old.shares_pixels(cached.as_ref().unwrap()));
+        assert_eq!(old_grant.live_bytes().unwrap(), old_native_bytes + image_bytes);
+        budget.suspend();
+        assert!(old_grant.is_retired().unwrap());
+        assert!(old_grant.claim(O::SourcePixels, 1).is_err());
+        assert_eq!(
+            budget.replace(replacement).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+        assert!(budget.grant().is_err());
+        let denied_generation = budget.generation();
+        let mut allocated = false;
+        let refused = budget.claim_native().and_then(|slice| {
+            slice.allocate(|| {
+                allocated = true;
+                Ok(vec![0u8; new_native_bytes as usize])
+            })
+        });
+        assert!(refused.is_err());
+        assert!(!allocated);
+
+        drop(old_native);
+        assert_eq!(old_grant.live_bytes().unwrap(), image_bytes);
+        drop(old);
+        assert_eq!(old_grant.live_bytes().unwrap(), image_bytes);
+        if headroom < image_bytes {
+            assert_eq!(
+                budget.replace(replacement).unwrap_err().kind(),
+                io::ErrorKind::WouldBlock
+            );
+            assert!(budget.grant().is_err());
+            drop(cached.take());
+            assert_eq!(old_grant.live_bytes().unwrap(), 0);
+        }
+        budget.replace(replacement).unwrap();
+        let current = budget.grant().unwrap().clone();
+        current
+            .check_identity(&key, CaptureGeneration::new(budget.generation()))
+            .unwrap();
+        assert_eq!(current.plan().peak_bytes(), new_plan.peak_bytes());
+        assert!(budget.generation() > denied_generation);
+        assert_eq!(budget.geometry().native, replacement.native);
+        assert_eq!(
+            old_grant.live_bytes().unwrap(),
+            if cached.is_some() { image_bytes } else { 0 }
+        );
+        assert!(current.plan().peak_bytes() + old_grant.live_bytes().unwrap() <= capacity);
+        if let Some(image) = &cached {
+            assert_eq!(image.source(), &key);
+            assert_eq!(image.generation(), CaptureGeneration::new(1));
+            assert_eq!(image.size(), size);
+        }
+        let native = budget
+            .claim_native()
+            .unwrap()
+            .allocate(|| {
+                allocated = true;
+                Ok(vec![0u8; new_native_bytes as usize])
+            })
+            .unwrap();
+        assert!(allocated);
+        assert_eq!(current.live_bytes().unwrap(), new_native_bytes);
+        drop(cached);
+        assert_eq!(old_grant.live_bytes().unwrap(), 0);
+        drop(budget);
+        assert!(current.is_retired().unwrap());
+        assert_eq!(current.live_bytes().unwrap(), new_native_bytes);
+        drop(current);
+        drop(old_grant);
+        drop(admission);
+        assert!(pool
+            .admit_session(None, CapacityCeiling::bounded(capacity), capacity, "still-live")
+            .is_err());
+        drop(native);
+        assert!(pool
+            .admit_session(None, CapacityCeiling::bounded(capacity), capacity, "finished")
+            .is_ok());
+    }
 }
 #[test]
 fn batches_capture_windows_rotation_preserves_pixels_and_source_generation() {

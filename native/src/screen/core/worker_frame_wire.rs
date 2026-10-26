@@ -61,7 +61,11 @@ pub(super) fn read_reference_payload(
             _ => tag_limit(tag).ok_or_else(|| invalid("unknown referenced worker reply"))?,
         }
     };
-    if matches!(tag, REFERENCE | RAW | ENCODED) || len - 42 > bound {
+    if matches!(
+        tag,
+        REFERENCE | RAW | ENCODED | super::super::worker_capture_wire::OWNED_REFERENCE
+    ) || len - 42 > bound
+    {
         return Err(invalid(
             "referenced worker reply exceeds its working memory",
         ));

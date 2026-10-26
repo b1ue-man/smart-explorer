@@ -35,13 +35,16 @@ pub(crate) fn read_header(reader: &mut impl Read) -> io::Result<Option<(u8, usiz
     }
     Ok(Some((head[0], length)))
 }
-pub(crate) fn read_control(reader: &mut impl Read, length: usize) -> io::Result<Vec<u8>> {
+pub(crate) fn read_control(
+    reader: &mut impl Read,
+    tag: u8,
+    length: usize,
+    limits: Option<FrameLimits>,
+) -> io::Result<Vec<u8>> {
     if length > super::wire::MAX_WINDOWS_BYTES {
         return Err(invalid("unowned worker payload exceeds control bound"));
     }
-    let mut bytes = vec![0; length];
-    reader.read_exact(&mut bytes)?;
-    Ok(bytes)
+    worker_wire::read_payload_with_limits(reader, tag, length, limits)
 }
 fn size(reader: &mut BeReader<'_>) -> io::Result<FrameSize> {
     let size = FrameSize::new(reader.u32()?, reader.u32()?);
