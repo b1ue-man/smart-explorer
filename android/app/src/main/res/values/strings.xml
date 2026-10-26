@@ -43,6 +43,7 @@
     <string name="screen_state_streaming"></string>
     <string name="screen_state_secure_desktop">Windows zeigt den sicheren Desktop – Anzeige und Eingabe sind durch Windows gesperrt</string>
     <string name="screen_state_window_minimized">Fenster ist minimiert</string>
+    <string name="screen_state_viewer_hidden">Diese Ansicht ist nicht sichtbar; die Bildübertragung pausiert</string>
     <string name="screen_state_host_locked">Das Gerät ist gesperrt</string>
     <string name="screen_state_session_inactive">Die Benutzersitzung des Geräts ist nicht aktiv</string>
     <string name="screen_state_no_display">Das Gerät kann seinen Bildschirm nicht aufnehmen</string>

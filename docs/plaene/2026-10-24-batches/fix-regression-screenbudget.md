@@ -985,3 +985,163 @@ App-/Host- oder Geräteaufruf statt. Main behält Git, Manifest, Rootgraph und
 Suite-/Releaseorchestrierung. Es bleibt keine bekannte ungeklärte Quellabhängigkeit
 der hier zugewiesenen fünf Diagnose-IDs; die vorgemerkte Fallregistrierung und
 die praktische Bestätigung sind noch offene Integrationsschritte von Main.
+
+## Fortsetzung D17 nach Remote-Lauf 40368746815: vollständiger Android-Pausentext
+
+Ausgang: `b233e5336a0ee177e19382a7adf592d297dcf202`. Die vollständige Diagnose in
+`/tmp/smartexplorer-rv1-40368746815/screen-budget-errors.json` wurde vor der
+Ursachenentscheidung gelesen. D17 belegt den fehlenden ausdrücklichen
+ViewerHidden-Arm in der mobilen Vollständigkeitsfixture. Die eigene anschließende
+Aufnahme findet denselben fehlenden Zustand in ihrer Keydatei, der produktiven
+Kotlin-Zuordnung und der Android-Ressource. Die vorherige Desktop-/Zustandskorrektur
+hat diese verbundene mobile Textkette noch nicht vollständig nachgezogen.
+
+### Erstplan, Fehlerfunktionen und vollständige betroffene Kette
+
+Der begrenzte Ergebnisauftrag verlangt Androids Hidden-Pausentext wortgleich zum
+Desktop und ausdrückliche Vollständigkeit der vorhandenen Rust-/Kotlin-Kette.
+Alle bisherigen Zustands-, Fehler-, End-, Block- und Detailtexte sowie ihre
+Aussagen bleiben erhalten. Die Diagnoseempfehlung eines Wildcardarms wird nicht
+übernommen; der vorhandene Vollständigkeitsvertrag muss weitere Auslassungen
+weiter sichtbar machen. Geschrieben werden ausschließlich die vier freigegebenen
+Quell-/Ressourcen-/Fixturedateien und dieser bestehende Bericht. Main besitzt
+Bestätigung, Git, Manifest, Rootgraph und Release; `Cargo.toml` bleibt unangetastet.
+
+| Fehlerfunktion oder Grenze | Direkte und indirekte Kette samt Erhalt |
+|---|---|
+| Mobile `screen_view_tests::all_keys` | Bestehende `SessionState`-Variante/`key()` → ausdrückliche mobile Zustandsliste und exhaustiver Match → Zustands-, Fehler-, End- und Blockschlüssel. Liste und Match lassen ViewerHidden aus; sämtliche bestehenden Varianten und Kategorien bleiben erhalten. |
+| `screen_keys.txt` | `all_keys` → `screen_task_android_screen_keys_file_current` → dieselbe Datei als Kotlin-Testressource. Der verbindende Zustandsschlüssel `state:viewer_hidden` fehlt. Reihenfolge und vollständiger bisheriger Dateiinhalt bleiben erhalten. |
+| `ScreenTexts.stateRes`/`stateText` | Bestehender `viewer_hidden`-Wirekey → mobiler `HostFrame::State`-Handler → `emit`/`event_value` → Android-Sitzungsstatus → `stateRes` → `Context.getString`. Der bekannte Zustand fällt bislang in die vorhandene Unknown-Behandlung. Eine explizite Ressourcenreferenz behebt das; die Vorwärtskompatibilität für tatsächlich unbekannte Schlüssel bleibt erhalten. |
+| `strings.xml` | `screen_state_viewer_hidden` → generierte `R.string`-Referenz → beide Android-Statusverbraucher. Die Ressource fehlt; der Desktopliteral ist bereits eindeutig vorhanden. Es gibt laut Mains gezielter Ressourceninventur nur diese eine `main/res/values/strings.xml`, keine zusätzliche Sprachdatei. |
+| Android-Vollansicht und Gruppenkachel | Die beiden von Main konkret benannten produktiven Aufrufer `ScreenViewScreen.kt` und `ScreenPreviewTile.kt` wurden an ihren Statuspfaden selbst gelesen. Sie verwenden denselben `ScreenTexts.stateText`-Helfer. Ihre bisherigen vorrangigen End-/Fehler-/Eingabe-/Bildzustände bleiben erhalten; Aufruf, Statuswahl, Steuerfreigabe und Präsentationsgrenzen werden nicht geändert. |
+| Bestehende Vollständigkeitsprüfungen | Rust-Keydateigleichheit und Rust-Desktop-/XML-Wortgleichheit → Kotlin `ScreenTextsTest` mit exakter `R.string`-Zuordnung für jeden Schlüssel → bestehende Detail-/Unknown-Aussagen. Keine Aussage und kein Fallname wird entfernt oder ersetzt. |
+
+Der native Sender benutzt weiterhin `report.state.key()` und übergibt den
+vorhandenen Unterstrich-Schlüssel unverändert im `screenView`-Ereignis. Eine neue
+Protokollvariante oder Umbenennung ist nicht erforderlich. Die vorhandenen
+Android-Paused-/Resume-/Präsentationsregeln aus `BatchesScreenStateTest` werden
+dabei nicht geändert.
+
+### Recherche, Entscheidungen und konkreter Fixplan vor der Umsetzung
+
+Die vorhandenen Prüfungen beschreiben den gewünschten Anschluss bereits genau:
+`all_keys` und `screen_keys.txt` sind gleich; der Rust-Ressourcenfall vergleicht
+den Literaltext mit Desktop, und Kotlin prüft den Ressourcenbezug jedes Keys.
+Die [Android-Referenz für Stringressourcen](https://developer.android.com/guide/topics/resources/string-resource),
+abgerufen am 2026-10-26, bestätigt den vorhandenen Weg über den XML-Namen,
+`R.string` und `Context.getString`. Deshalb wird derselbe bestehende Ressourcenweg
+ergänzt. Ein hart codierter Kotlintext oder das Weiterreichen des bekannten
+Zustands an Unknown würde den bestehenden Vertrag nicht erfüllen.
+
+Die zweite Lückenrecherche prüft ausdrücklich die Arrayliste zusätzlich zum
+Matcharm, die Keydateireihenfolge, den tatsächlichen Desktopliteral, beide
+Statusaufrufer und die bestehenden Ressourcen-/Detailprüfungen. Alle Grundlagen
+liegen vor; zusätzliche Schreibabhängigkeiten sind nicht erforderlich.
+
+| Fixpunkt | Konkrete Änderung | Erwarteter statischer und späterer Remote-Beleg |
+|---|---|---|
+| A1 Rust-Vollständigkeit | `ViewerHidden` in Zustandsliste und ausdrücklichem `all_keys`-Match ergänzen. | Alle dreizehn vorhandenen Zustände bleiben benannt; kein neuer Wildcardarm, unveränderte Fehler-/End-/Blocklisten und Prüfungen. |
+| A2 Sprachgrenze | `state:viewer_hidden` an derselben Stelle der Keydatei ergänzen. | Vollständige Schlüsseldatei bleibt mit dem bestehenden Rusthelfer und dem Kotlin-Ressourcenfall verbunden. |
+| A3 Kotlin | Expliziter `viewer_hidden`-Zweig auf `R.string.screen_state_viewer_hidden`. | Der bekannte Zustand erhält seine eigene Ressource; alle bisherigen Zuordnungen, Detailregeln und Unknown-Fälle bleiben unverändert. |
+| A4 Androidressource | `screen_state_viewer_hidden` mit „Diese Ansicht ist nicht sichtbar; die Bildübertragung pausiert“ ergänzen. | Derselbe Literaltext wie Desktop; XML bleibt gültig, bisherige Ressourcen bleiben wortgleich. |
+| A5 Eigene Nachreview | Geänderte Quellen und beide Verbraucher selbst gegen die gesamte obige Kette prüfen. | Statischer Erhaltungs-, Syntax-/AST-, XML- und Größenbeleg; dieselben bestehenden Fälle werden ausschließlich durch Main im selben Remote-Einstieg bestätigt. |
+
+Dieser Plan wurde vor den darauf gestützten Quelländerungen durch denselben
+Fixautor festgehalten. Die bestehenden Kotlin-Testdateien werden vollständig
+erhalten und müssen für die vorhandene datengetriebene Abdeckung nicht geändert
+werden. Main hat die aktuelle Dokument- und Graphgrundlage bereits bereitgestellt;
+dieser Autor verändert weder fremde Berichte noch generierte Graphdateien.
+
+### Umsetzung und eigene anschließende Anti-Regressionsreview zu D17
+
+A1–A5 sind umgesetzt und durch denselben Autor anschließend selbst nachgeprüft.
+Die Rustliste und ihr ausdrücklich exhaustiver Match nennen jetzt dieselben
+dreizehn Varianten wie die aktuelle gemeinsame `SessionState`-Definition.
+`state:viewer_hidden` steht in der Keydatei an derselben Position. Der Kotlinzweig
+zeigt ausdrücklich auf `R.string.screen_state_viewer_hidden`; die entsprechende
+XML-Ressource enthält wortgleich den aktuellen Desktopliteral „Diese Ansicht
+ist nicht sichtbar; die Bildübertragung pausiert“.
+
+Der additive Quellvergleich mit `b233e533` bestätigt für jede der vier Dateien:
+Alle bisherigen Quellteile bleiben erhalten. Das schließt jede Rustfixture-
+aussage, ihre Fallnamen, die Zustands-/Fehler-/End-/Blocklisten, sämtliche
+vorhandenen Kotlinzuordnungen und Detail-/Unknown-Regeln sowie alle bisherigen
+XML-Ressourcen ein. Es wurde kein Wildcardarm ergänzt und kein Platzhalter
+eingesetzt. Die bereits bestehenden allgemeinen Antworten für tatsächlich
+unbekannte Schlüssel bleiben unverändert.
+
+Die beiden Androidverbraucher benutzen weiter ihren vorhandenen Statuspfad.
+Vorrangige Beendigungen, Fehler, fehlende Eingabereferenz, Decoderfehler und die
+Warteanzeige auf ein vollständiges Bild behalten ihre bisherigen Bedingungen.
+Der neue bekannte Pausenschlüssel erreicht jetzt den bestehenden Ressourcenweg.
+Keine Bild-/Codec-/Queueallokation, Visibilitygeneration, Präsentationsquittung,
+Sitzungs-/Quellenidentität, Berechtigung, Retry- oder Retirementoperation wurde
+verändert. Die bestehende Vollansicht und Gruppenkachel behalten ihre Bedienung.
+
+Statisch ausgeführt wurden Quellen- und AST-Lektüre der Rust-/Kotlinänderung,
+XML-Syntaxprüfung und Quellvergleiche. Der Ressourcenname ist einmalig vorhanden;
+sein Literal stimmt mit der aktuellen Desktopquelle überein. Keine Syntax-,
+Whitespace- oder Größenverletzung wurde festgestellt; `git diff --check` meldet
+keinen Befund. Die Rustquelle hat in normaler Formatierung 393 Zeilen und
+15 149 Bytes. Keine Fixture und kein Produktcode wurde dabei ausgeführt.
+
+### Bestehende Fälle und Registrierung für denselben Remote-Einstieg
+
+Main hat die folgenden beiden bereits vorhandenen nativen Fälle und die
+unveränderte JVM-Klasse für die abschließende gemeinsame Manifestregistrierung
+vorgemerkt. Dieser Autor verändert das Manifest nicht:
+
+- `screen_task_android_screen_keys_file_current`: Rust-Keyliste und
+  `screen_keys.txt` einschließlich `viewer_hidden` bleiben vollständig gleich.
+- `screen_task_android_strings_match_desktop_sources`: Jede vorhandene Kategorie
+  behält ihren Desktop-/Android-Wortlaut; auch Hidden erhält denselben Text und
+  ausschließlich Streaming bleibt leer.
+- `app.smartexplorer.android.ui.screen.ScreenTextsTest#screen_task_android_texts_match_desktop`:
+  Jeder Schlüssel hat seine konkrete Kotlin-/`R.string`-/XML-Zuordnung;
+  die vorhandene Aussage zu einem unbekannten Zukunftscode bleibt erhalten.
+- `app.smartexplorer.android.ui.screen.ScreenTextsTest#a_detail_follows_only_where_the_desktop_shows_one`:
+  Bestehende Detail-, Leertext- und Nullbehandlung bleiben erhalten. Die
+  Klassenregistrierung nimmt diesen vorhandenen Begleitfall mit.
+
+Die bestehende Klasse `BatchesScreenStateTest` wurde für ihre unabhängige
+Präsentations-/Eingabereferenzgrenze gelesen und nicht geändert. Ihre beiden
+bestehenden Fälle `batches_android_only_current_presented_identity_unlocks_input`
+und `batches_android_stream_cache_does_not_alias_low_gop_bits` behalten ihre
+Aussagen. Es gibt keine neue Fallquelle, keinen umbenannten Fall und keine
+zusätzliche Suite oder Pipeline.
+
+### Dateiübersicht, Entscheidungen und offene Grenzen zu D17
+
+Geändert und selbst gelesen wurden ausschließlich:
+
+| Datei | Zeilen | Bytes |
+|---|---:|---:|
+| `native/src/mobile/os/shared/domains/screen_view_tests.rs` | 393 | 15 149 |
+| `android/app/src/test/resources/screen_keys.txt` | 42 | 848 |
+| `android/app/src/main/java/app/smartexplorer/android/ui/screen/ScreenTexts.kt` | 120 | 6 224 |
+| `android/app/src/main/res/values/strings.xml` | 150 | 11 614 |
+| `docs/plaene/2026-10-24-batches/fix-regression-screenbudget.md` | Bericht | Bericht |
+
+Es wurde keine Datei erstellt. Zusätzlich gezielt gelesen wurden die aktuelle
+Scope-Datei, die vollständige D17-Diagnose,
+`native/src/screen/core/session_state.rs`,
+`native/src/app/core/screen_texts.rs` und `screen_texts_tests.rs`,
+`native/src/mobile/os/shared/domains/mod.rs`, `screen_view.rs`,
+`screen_view_json.rs` und `screen_view_run.rs`,
+`android/app/src/test/java/app/smartexplorer/android/ui/screen/ScreenTextsTest.kt`
+und `BatchesScreenStateTest.kt`, die konkret freigegebenen Statusabschnitte von
+`android/app/src/main/java/app/smartexplorer/android/ui/screen/ScreenViewScreen.kt`
+und `ScreenPreviewTile.kt` sowie gezielt zum bestehenden Anschluss
+`native/review-task-manifest.json`, `docs/oberflaechen/bildschirm.md` und
+`docs/plaene/2026-10-24-batches/rv1-compilerplan.md`. Die Daten- und Ressourcen-
+entscheidungen sind oben mit den lokalen Quellen und der Android-Primärreferenz
+belegt; eine neue Bibliothek oder Sprachdatei war nicht erforderlich.
+
+Keine lokale Kompilierung, Android-Ressourcengenerierung, JVM-/Rust-Testausführung,
+App-/Geräteausführung, Installation, Formatierung, Gitmutation oder
+Graphaktualisierung fand statt; es wurden keine Unteragenten gestartet.
+Android-`R`-Generierung, Typ-/Compilerbestätigung, tatsächliche Statusdarstellung
+und praktische Bestätigung der genannten Fälle sind nach dieser Änderung noch
+unbekannt und gehören ausschließlich in Mains denselben Remote-Einstieg.
+Es bleibt keine bekannte ungeklärte Quellabhängigkeit von D17. Die vorgemerkte
+gemeinsame Fallregistrierung und die Remote-Bestätigung bleiben bei Main.
