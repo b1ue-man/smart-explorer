@@ -1,3 +1,4 @@
+// Smart Explorer P28/F42 patch (2026-10-26); see vendor/SMART_EXPLORER_ROUTE_POLICY.md.
 //! Implements a socket that can change its communication path while in use, actively searching for the best way to communicate.
 //!
 //!
@@ -1289,12 +1290,20 @@ impl EndpointInner {
             .ok();
     }
 
+    pub(crate) async fn network_change_detected(&self, is_major: bool) {
+        let (reply, completed) = oneshot::channel();
+        if self.actor_sender
+            .send(ActorMessage::NetworkChangeDetected(is_major, reply))
+            .await
+            .is_ok()
+        {
+            completed.await.ok();
+        }
+    }
+
     #[cfg(all(test, with_crypto_provider))]
     async fn force_network_change(&self, is_major: bool) {
-        self.actor_sender
-            .send(ActorMessage::ForceNetworkChange(is_major))
-            .await
-            .ok();
+        self.network_change_detected(is_major).await;
     }
 
     /// Resolves an [`EndpointAddr`] to an [`EndpointIdMappedAddr`] to connect to via [`EndpointInner::endpoint`].
@@ -1374,6 +1383,8 @@ impl EndpointInner {
 #[allow(clippy::enum_variant_names)]
 enum ActorMessage {
     NetworkChange,
+    #[debug("NetworkChangeDetected(..)")]
+    NetworkChangeDetected(bool, oneshot::Sender<()>),
     RelayMapChange,
     #[debug("ResolveRemote(..)")]
     ResolveRemote(
@@ -1388,8 +1399,6 @@ enum ActorMessage {
     ),
     /// Re-evaluate direct addresses, e.g. after configured external addresses changed.
     DirectAddrRefresh,
-    #[cfg(all(test, with_crypto_provider))]
-    ForceNetworkChange(bool),
 }
 
 /// State for polling until a default route is available after a network change.
@@ -1657,6 +1666,10 @@ impl Actor {
     fn handle_network_change(&mut self, is_major: bool) {
         debug!(is_major, "link change detected");
 
+        // Revoke admission before transports reuse I/O, even if recovery must
+        // wait for a default route. The endpoint takes each connection's send lock.
+        self.endpoint.begin_application_network_change();
+
         if is_major {
             if let Err(err) = self.transports_network_change.rebind() {
                 warn!("failed to rebind transports: {err:?}");
@@ -1790,9 +1803,9 @@ impl Actor {
                     self.update_direct_addresses(report.as_ref());
                 }
             }
-            #[cfg(all(test, with_crypto_provider))]
-            ActorMessage::ForceNetworkChange(is_major) => {
+            ActorMessage::NetworkChangeDetected(is_major, completed) => {
                 self.handle_network_change(is_major);
+                completed.send(()).ok();
             }
         }
     }

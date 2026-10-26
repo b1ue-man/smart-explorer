@@ -1,3 +1,4 @@
+// Smart Explorer P28/F42 patch (2026-10-26); see vendor/SMART_EXPLORER_ROUTE_POLICY.md.
 use std::{
     collections::VecDeque,
     fmt,
@@ -45,7 +46,9 @@ use udp::{BATCH_SIZE, RecvMeta};
 
 use crate::{
     ConnectionEvent, EndpointConfig, IO_LOOP_BOUND, RECV_TIME_BOUND, VarInt,
-    connection::Connecting, incoming::Incoming, work_limiter::WorkLimiter,
+    connection::{Connecting, WeakConnectionHandle},
+    incoming::Incoming,
+    work_limiter::WorkLimiter,
 };
 
 /// A QUIC endpoint.
@@ -296,6 +299,26 @@ impl Endpoint {
         Ok(())
     }
 
+    /// Revoke opt-in application admission before a confirmed network change reuses I/O.
+    ///
+    /// The network actor serializes this preparation with `handle_network_change`
+    /// after transport recovery. Weak handles preserve ordinary connection lifetime.
+    /// No endpoint lock is held while acquiring a connection's send lock.
+    pub fn begin_application_network_change(&self) {
+        let policies = {
+            let mut inner = self.inner.state.lock().unwrap();
+            let connections = &mut inner.recv_state.connections;
+            connections.application_network_change_pending = true;
+            connections.application_path_policies.values().cloned().collect::<Vec<_>>()
+        };
+        for policy in policies {
+            if let Some(connection) = policy.upgrade_to_ref() {
+                let mut state = connection.lock_and_wake("begin_application_network_change");
+                state.inner.begin_application_network_change();
+            }
+        }
+    }
+
     /// Notify connections that the local network address has changed.
     ///
     /// This informs all active connections that the local address may have changed (e.g., due to a
@@ -311,13 +334,28 @@ impl Endpoint {
     /// multipath connections, unrecoverable paths will be closed and replaced with new paths to
     /// the same remote addresses.
     pub fn handle_network_change(&self, hint: Option<Arc<dyn NetworkChangeHint + Sync + Send>>) {
-        let mut inner = self.inner.state.lock().unwrap();
-        for sender in inner.recv_state.connections.senders.values() {
-            // Ignoring errors from dropped connections
-            let _ = sender.send(ConnectionEvent::LocalAddressChanged(hint.clone()));
-        }
-        if let Some(driver) = inner.driver.take() {
-            driver.wake();
+        let policies = {
+            let mut inner = self.inner.state.lock().unwrap();
+            let connections = &mut inner.recv_state.connections;
+            connections.application_network_change_pending = false;
+            for (handle, sender) in &connections.senders {
+                if !connections.application_path_policies.contains_key(handle) {
+                    // Disabled policies retain the existing event-driven behavior.
+                    let _ = sender.send(ConnectionEvent::LocalAddressChanged(hint.clone()));
+                }
+            }
+            let policies = connections.application_path_policies.values().cloned().collect::<Vec<_>>();
+            if let Some(driver) = inner.driver.take() {
+                driver.wake();
+            }
+            policies
+        };
+        for policy in policies {
+            if let Some(connection) = policy.upgrade_to_ref() {
+                let mut state = connection.lock_and_wake("complete_application_network_change");
+                let now = state.runtime.now();
+                state.inner.handle_network_change(hint.as_deref().map(|hint| hint as _), now);
+            }
         }
     }
 
@@ -651,6 +689,7 @@ impl State {
                 }
             } else if event.is_drained() {
                 self.recv_state.connections.senders.remove(&ch);
+                self.recv_state.connections.application_path_policies.remove(&ch);
                 if self.recv_state.connections.is_empty() {
                     shared.idle.notify_waiters();
                 }
@@ -742,6 +781,9 @@ fn proto_ecn(ecn: udp::EcnCodepoint) -> proto::EcnCodepoint {
 struct ConnectionSet {
     /// Senders for communicating with the endpoint's connections
     senders: FxHashMap<ConnectionHandle, mpsc::UnboundedSender<ConnectionEvent>>,
+    /// Opt-in policies only; these references never keep a connection alive.
+    application_path_policies: FxHashMap<ConnectionHandle, WeakConnectionHandle>,
+    application_network_change_pending: bool,
     /// Stored to give out clones to new ConnectionInners
     sender: mpsc::UnboundedSender<(ConnectionHandle, EndpointEvent)>,
     /// Set if the endpoint has been manually closed
@@ -763,10 +805,14 @@ impl ConnectionSet {
     fn insert(
         &mut self,
         handle: ConnectionHandle,
-        conn: proto::Connection,
+        mut conn: proto::Connection,
         sender: Pin<Box<dyn UdpSender>>,
         runtime: Arc<dyn Runtime>,
     ) -> Connecting {
+        let policy_enabled = conn.application_path_policy_enabled();
+        if policy_enabled && self.application_network_change_pending {
+            conn.begin_application_network_change();
+        }
         let (send, recv) = mpsc::unbounded_channel();
         if let Some((error_code, ref reason)) = self.close {
             send.send(ConnectionEvent::Close {
@@ -777,7 +823,11 @@ impl ConnectionSet {
         }
         self.senders.insert(handle, send);
         self.active_connections += 1;
-        Connecting::new(handle, conn, self.sender.clone(), recv, sender, runtime)
+        let connecting = Connecting::new(handle, conn, self.sender.clone(), recv, sender, runtime);
+        if policy_enabled && let Some(policy) = connecting.policy_weak_handle() {
+            self.application_path_policies.insert(handle, policy);
+        }
+        connecting
     }
 
     fn is_empty(&self) -> bool {
@@ -921,6 +971,8 @@ impl RecvState {
         Self {
             connections: ConnectionSet {
                 senders: FxHashMap::default(),
+                application_path_policies: FxHashMap::default(),
+                application_network_change_pending: false,
                 sender,
                 close: None,
                 active_connections: 0,

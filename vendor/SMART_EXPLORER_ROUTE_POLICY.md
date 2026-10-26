@@ -198,11 +198,45 @@ the largest current PTO first; relay and custom paths are retained.
 
 A Noq-observed network change immediately blocks data and sets
 `requires_new_generation=true`; `network_change_count` is diagnostic. Allow then
-returns `NetworkGenerationRequired` until BeginGeneration succeeds. Existing
+returns `NetworkGenerationRequired` until BeginGeneration succeeds and any
+prepared transport recovery has completed. Existing
 paths need a fresh on-path response before their observation becomes validated.
 A passive change between two known local IPs follows the same rule. Remote
 migration revokes the affected path and invalidates old observation tokens;
 restoring an old RFC 9000 path incarnation never restores its old grant.
+
+### F42: confirmed change before transport reuse (2026-10-26)
+
+Iroh's existing `Endpoint::network_change()` remains a potential-change hint.
+The new `Endpoint::network_change_detected(is_major: bool)` is for a change the
+local host has already confirmed. It uses the same actor path as Netwatch's
+detected events and acknowledges that actor step; readiness can still be pending.
+A fixture may inject this confirmed host event, but must not describe that as a
+physical adapter switch or directly manufacture a counter/RouteStatus success.
+
+Before a detected change rebinds transports, Iroh synchronously calls Noq's
+`Endpoint::begin_application_network_change()`. Noq holds weak handles only for
+enabled policies, releases the endpoint mutex before taking each connection's
+send mutex, and revokes admission there. Connections inserted during this
+prepared phase also start blocked. This changes the policy revision before any
+subsequent retained-transmit retry; accepted I/O remains already in flight.
+
+The existing default-route readiness/backoff and transport recovery remain.
+While waiting, BeginGeneration still succeeds but starts no new path proof;
+observation validation, Allow, payload admission and redundant path retirement
+stay blocked by a separate internal phase. Snapshots expose
+`network_change_in_progress` so app route monitors can remain explicitly paused
+without consuming their collection/direct-choice windows. The saved PTO keeps
+the pre-revocation validation reference. At recovery Noq advances revision again,
+requires a new generation after readiness, and starts fresh finite on-path
+validation, without counting the prepared change twice. The app monitor then
+resets its origin and frozen candidate set; its absolute operation deadline is
+unchanged. A current transport-epoch check also prevents an asynchronously
+delivered old Offline status from ending that new network wait. Cancelled,
+connection closure and the absolute deadline remain terminal. Passive IP-change invalidation is
+unchanged. Disabled connections retain their original queued recovery event,
+zero new payload counters and unrestricted policy gate. Weak entries are removed
+at the existing Drained boundary and never keep a connection alive on their own.
 
 Each path observation exposes token, Noq `network_path`, validated/data_allowed,
 current and previous validation-in-progress flags, application_tx_bytes/application_rx_bytes, actual validation-failure and
@@ -248,7 +282,10 @@ can reject retained Pending I/O but cannot recall accepted I/O.
 Production changes are confined to:
 
 - Iroh `src/endpoint.rs`, `src/endpoint/connection.rs`, `src/endpoint/quic.rs`:
-  typed facade and opt-in config only. Existing connect/accept/TLS paths remain.
+  typed facade, opt-in config and explicit confirmed host-event entrypoint.
+  Existing connect/accept/TLS paths remain.
+- Iroh `src/socket.rs`: revoke enabled policies before a detected event rebinds
+  transports; preserve the potential hint and existing readiness/recovery path.
 - Iroh `src/socket/remote_map/remote_state.rs`: policy-enabled connections keep
   direct candidates instead of closing every nonselected IP path, with the
   bounded capacity-recovery helper `application_path_retirement.rs`. Existing
@@ -257,6 +294,9 @@ Production changes are confined to:
 - Noq `src/lib.rs`, `src/connection.rs`: exports, serialized update methods and
   generation/path-aware invalidation of a retained encrypted transmit. Original
   blocked-writer/read wakeups, path events, stream and datagram APIs remain.
+- Noq `src/endpoint.rs`: weak opt-in policy registration, synchronous preparation
+  and completion under connection send mutexes, with the disabled event path
+  and ordinary connection lifetime retained.
 - Noq-proto `src/lib.rs`, `src/config/transport.rs`: typed exports and default-false
   config; the config Debug implementation reports the option.
 - Noq-proto `src/connection/application_path_policy.rs`: new cohesive policy
@@ -279,14 +319,22 @@ Production changes are confined to:
   candidates and new rounds release timing metadata. Supplemental responsive
   probes remain separate from the nine scheduled attempts.
 
-No Cargo manifest, lockfile, native app source, UI, Android, CLI, root graph or
-existing iroh-relay vendor source is changed by this patch surface. Existing
+No Cargo manifest, lockfile, UI, Android, CLI or existing iroh-relay vendor
+source is changed by this patch surface. F42 also updates the native shared
+route monitor, its private network-wait helper and the existing B5 fixtures;
+the parent owns the corresponding root graph refresh and remote acceptance. Existing
 upstream files exceed the project's new-native-file size threshold; no unrelated
 vendor extraction or cleanup was performed. The new policy module stays below
 500 lines. Memory added is constant policy metadata plus sets/maps bounded by
 current QUIC paths and the already negotiated current NAT candidate limit;
 observation snapshots allocate proportional to those current sets. The app must
 retain only its explicitly bounded diagnostic history.
+
+The F42 endpoint registration adds one weak handle per existing enabled
+connection and a temporary weak-handle snapshot per confirmed network event.
+It adds no persistent strong owner and is cleared at the existing Drained
+boundary. The shared monitor's small private helper owns no connection and
+adds no independent task or timer.
 
 Remote-suite source cases use prefix `route_policy_task_` in the new policy
 module and the existing NAT module. They cover payload rejection at the real

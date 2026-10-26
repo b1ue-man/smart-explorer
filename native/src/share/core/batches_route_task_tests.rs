@@ -15,7 +15,13 @@ pub(crate) fn runtime() -> tokio::runtime::Runtime {
 
 /// Both endpoints have exactly one numeric loopback transport and no discovery.
 pub(crate) async fn pair() -> (iroh::Endpoint, iroh::Endpoint, Connection, Connection) {
-    async fn endpoint() -> iroh::Endpoint {
+    pair_with_policy(true).await
+}
+
+async fn pair_with_policy(
+    enabled: bool,
+) -> (iroh::Endpoint, iroh::Endpoint, Connection, Connection) {
+    async fn endpoint(enabled: bool) -> iroh::Endpoint {
         iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
             .clear_address_lookup()
             .relay_mode(iroh::RelayMode::Disabled)
@@ -25,15 +31,15 @@ pub(crate) async fn pair() -> (iroh::Endpoint, iroh::Endpoint, Connection, Conne
             .alpns(vec![b"smart-explorer/batches-transport-fixture/1".to_vec()])
             .transport_config(
                 iroh::endpoint::QuicTransportConfig::builder()
-                    .application_path_policy(true)
+                    .application_path_policy(enabled)
                     .build(),
             )
             .bind()
             .await
             .unwrap()
     }
-    let left = endpoint().await;
-    let right = endpoint().await;
+    let left = endpoint(enabled).await;
+    let right = endpoint(enabled).await;
     let sockets = right.bound_sockets();
     assert_eq!(sockets.len(), 1);
     assert!(sockets[0].ip().is_loopback());
@@ -89,6 +95,27 @@ async fn no_payload(sender: &Connection, receiver: &Connection, tx: u64, rx: u64
     );
 }
 
+async fn allow_after_network_change(connection: &Connection) -> ApplicationPathToken {
+    tokio::time::timeout(WAIT, async {
+        loop {
+            let snapshot = connection.application_path_policy();
+            if snapshot.requires_new_generation {
+                connection
+                    .update_application_path_policy(ApplicationPathUpdate::BeginGeneration(
+                        snapshot.generation.checked_add(1).unwrap(),
+                    ))
+                    .unwrap();
+            }
+            if !snapshot.network_change_in_progress && !snapshot.requires_new_generation {
+                return allow(connection).await;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("post-readiness generation and fresh on-path admission")
+}
+
 #[test]
 fn batches_task_b5_actual_stream_and_datagram_gate_survives_network_epoch() {
     runtime().block_on(async {
@@ -127,8 +154,7 @@ fn batches_task_b5_actual_stream_and_datagram_gate_survives_network_epoch() {
             b"initial-datagram"
         );
 
-        // Noq's real network-change path revokes the old grant before the app
-        // obtains its next generation. No synthetic RouteStatus drives this test.
+        // A potential hint without a detected change must not revoke this grant.
         let old = sender.application_path_policy();
         let stale = old
             .paths
@@ -137,6 +163,17 @@ fn batches_task_b5_actual_stream_and_datagram_gate_survives_network_epoch() {
             .unwrap()
             .token;
         left.network_change().await;
+        tokio::time::sleep(QUIET).await;
+        assert_eq!(
+            sender.application_path_policy().network_change_count,
+            old.network_change_count
+        );
+        assert!(sender.application_data_allowed());
+        // Inject a confirmed host event through the same actor/rebind/Noq path
+        // as netmon. This does not claim a physical interface change in CI.
+        tokio::time::timeout(WAIT, left.network_change_detected(true))
+            .await
+            .expect("confirmed change reaches the Iroh actor and send locks");
         tokio::time::timeout(WAIT, async {
             while sender.application_path_policy().network_change_count == old.network_change_count
             {
@@ -172,7 +209,7 @@ fn batches_task_b5_actual_stream_and_datagram_gate_survives_network_epoch() {
             .update_application_path_policy(ApplicationPathUpdate::Allow(stale))
             .is_err());
         no_payload(&sender, &receiver, blocked_tx, blocked_rx).await;
-        allow(&sender).await;
+        allow_after_network_change(&sender).await;
         tokio::time::timeout(WAIT, incoming.read_exact(&mut next))
             .await
             .unwrap()
@@ -212,6 +249,78 @@ fn batches_task_b5_actual_stream_and_datagram_gate_survives_network_epoch() {
                 .unwrap()
                 .unwrap()[..],
             b"reverse"
+        );
+        sender.close(0u32.into(), b"fixture complete");
+        left.close().await;
+        right.close().await;
+    });
+}
+
+#[test]
+fn batches_task_b5_confirmed_network_change_preserves_disabled_transport() {
+    runtime().block_on(async {
+        let (left, right, sender, receiver) = pair_with_policy(false).await;
+        let original = sender.application_path_policy();
+        assert!(!original.enabled);
+        assert!(!original.network_change_in_progress);
+        assert!(sender.application_data_allowed());
+        assert!(receiver.application_data_allowed());
+        let mut outgoing = sender.open_uni().await.unwrap();
+        outgoing.write_all(b"before").await.unwrap();
+        let mut incoming = tokio::time::timeout(WAIT, receiver.accept_uni())
+            .await
+            .unwrap()
+            .unwrap();
+        let mut bytes = [0; 6];
+        tokio::time::timeout(WAIT, incoming.read_exact(&mut bytes))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(&bytes, b"before");
+
+        tokio::time::timeout(WAIT, left.network_change_detected(true))
+            .await
+            .expect("disabled transport retains confirmed-change handling");
+        outgoing.write_all(b"after!").await.unwrap();
+        tokio::time::timeout(WAIT, incoming.read_exact(&mut bytes))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(&bytes, b"after!");
+        sender
+            .send_datagram(b"ungated".to_vec().into())
+            .unwrap();
+        assert_eq!(
+            &tokio::time::timeout(WAIT, receiver.read_datagram())
+                .await
+                .unwrap()
+                .unwrap()[..],
+            b"ungated"
+        );
+        let current = sender.application_path_policy();
+        assert!(!current.enabled);
+        assert!(!current.network_change_in_progress);
+        assert_eq!(current.generation, original.generation);
+        assert_eq!(current.revision, original.revision);
+        assert_eq!(current.network_change_count, 0);
+        assert_eq!(current.application_tx_bytes, 0);
+        assert_eq!(
+            receiver.application_path_policy().application_rx_bytes,
+            0
+        );
+        assert!(!current.requires_new_generation);
+        assert!(sender.application_data_allowed());
+        assert!(matches!(
+            sender.update_application_path_policy(ApplicationPathUpdate::BeginGeneration(1)),
+            Err(iroh::endpoint::ApplicationPathPolicyError::Disabled)
+        ));
+        outgoing.finish().unwrap();
+        assert_eq!(
+            tokio::time::timeout(WAIT, incoming.read(&mut bytes))
+                .await
+                .unwrap()
+                .unwrap(),
+            None
         );
         sender.close(0u32.into(), b"fixture complete");
         left.close().await;

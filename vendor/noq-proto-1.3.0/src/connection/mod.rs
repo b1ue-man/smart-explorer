@@ -5888,7 +5888,7 @@ impl Connection {
         if self.state.is_drained() {
             return;
         }
-        self.invalidate_application_network(now);
+        self.complete_application_network_change(now);
         if self.highest_space < SpaceKind::Data {
             for path in self.paths.values_mut() {
                 // Clear the local address for it to be obtained from the socket again.

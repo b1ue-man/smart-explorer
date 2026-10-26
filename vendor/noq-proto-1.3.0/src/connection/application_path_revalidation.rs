@@ -91,6 +91,7 @@ impl Connection {
 
     pub(super) fn application_path_retirement_allowed(&self, id: PathId) -> bool {
         if !self.config.application_path_policy || !self.side().is_client()
+            || self.application_network_change_pending()
             || self.application_path_policy.requires_new_generation
             || self.abandoned_paths.contains(&id)
             || self.application_path_policy.admitted.is_some_and(|(admitted, _)| admitted == id)
