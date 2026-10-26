@@ -1,5 +1,5 @@
 //! Durable unconfirmed jobs. Handles/credentials are rebound explicitly.
-use super::super::super::job_record::{JobRecord, SourceGuard, StoredEndpoint, StoredFilter};
+use crate::transfer::job_record::{JobRecord, SourceGuard, StoredEndpoint, StoredFilter};
 use super::record_io::{
     self, read_record, record_context, write_record, RecordContext, RecordKind,
 };
@@ -10,6 +10,15 @@ use crate::vfs::{Backend, LocalBackend};
 use std::io;
 use std::path::PathBuf;
 use std::sync::Mutex;
+
+#[path = "job_store_validation.rs"]
+mod validation;
+#[path = "job_store_catalog.rs"]
+mod catalog;
+
+pub(super) use validation::{endpoint, snapshot, with_backend};
+use validation::{source_paths, verify_sources, verify_target};
+pub(crate) use catalog::{unconfirmed_jobs, reopen_job, CatalogState, RecoveryCatalog};
 
 pub(super) struct JobRun {
     pub(super) path: PathBuf,
@@ -34,62 +43,6 @@ fn path(id: &str) -> io::Result<PathBuf> {
         ));
     }
     Ok(root().join(format!("{id}.json")))
-}
-
-pub(super) fn endpoint(side: Side<'_>) -> StoredEndpoint {
-    match side {
-        Side::Local => StoredEndpoint::of(&Endpoint::Local),
-        Side::Remote(backend) => StoredEndpoint {
-            local: false,
-            namespace: backend.namespace_identity(),
-            state: backend.state_identity(),
-        },
-    }
-}
-
-pub(super) fn with_backend<T>(side: Side<'_>, operation: impl FnOnce(&dyn Backend) -> T) -> T {
-    match side {
-        Side::Local => operation(&LocalBackend::new("/")),
-        Side::Remote(backend) => operation(backend),
-    }
-}
-
-pub(super) fn snapshot(side: Side<'_>, path: &str) -> SourceGuard {
-    with_backend(side, |backend| match backend.stat(path) {
-        Ok(meta) => SourceGuard {
-            path: path.to_string(),
-            directory: meta.is_dir,
-            link: meta.is_symlink,
-            id: meta.id,
-            object: if meta.is_dir && !meta.is_symlink {
-                crate::vfs::directory_identity(backend, path).ok().flatten()
-            } else if !meta.is_symlink && !meta.special {
-                crate::vfs::file_identity(backend, path).ok().flatten()
-            } else {
-                None
-            },
-            size: meta.size,
-            mtime_ms: meta.mtime_ms,
-            verified: true,
-        },
-        Err(_) => SourceGuard {
-            path: path.to_string(),
-            directory: false,
-            link: false,
-            id: None,
-            object: None,
-            size: 0,
-            mtime_ms: 0,
-            verified: false,
-        },
-    })
-}
-
-fn source_paths(items: &JobItems) -> Vec<&str> {
-    match items {
-        JobItems::Roots { paths, .. } => paths.iter().map(String::as_str).collect(),
-        JobItems::Pairs(pairs) => pairs.iter().map(|pair| pair.source.as_str()).collect(),
-    }
 }
 
 fn contract(view: &JobView<'_>, target_root: &str, id: &str) -> io::Result<JobRecord> {
@@ -251,26 +204,6 @@ pub(super) fn begin(
     }))
 }
 
-fn verify_target(view: &JobView<'_>, record: &JobRecord) -> io::Result<()> {
-    if record.target != endpoint(view.target) {
-        return Err(io::Error::other(
-            "Zielverbindung des gespeicherten Auftrags stimmt nicht überein",
-        ));
-    }
-    if super::file_recovery::missing_retry::target(view, record)? {
-        return Ok(());
-    }
-    let actual = with_backend(view.target, |backend| {
-        crate::vfs::directory_identity(backend, &record.target_dir)
-    })?;
-    if record.target_object.is_none() || record.target_object != actual {
-        return Err(io::Error::other(
-            "Gespeicherter Zielroot ist geändert oder unbestätigt",
-        ));
-    }
-    Ok(())
-}
-
 pub(super) fn preflight(view: &JobView<'_>) -> io::Result<Option<String>> {
     if !view.recoverable {
         return Ok(None);
@@ -324,148 +257,6 @@ pub(super) fn preflight(view: &JobView<'_>) -> io::Result<Option<String>> {
     }
     verify_target(view, &record)?;
     Ok(Some(record.target_dir))
-}
-
-fn verify_sources(
-    view: &JobView<'_>,
-    record: &JobRecord,
-    files: &super::file_recovery::FileRoots,
-) -> io::Result<Vec<crate::transfer::ResolvedRoot>> {
-    let mut completed = Vec::new();
-    let paths = source_paths(view.items);
-    if record.guards.len() != paths.len()
-        || record
-            .guards
-            .iter()
-            .zip(&paths)
-            .any(|(guard, path)| guard.path != *path)
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Gespeicherte Quellbelege decken die Auswahl nicht vollständig ab",
-        ));
-    }
-    for (index, before) in record.guards.iter().enumerate() {
-        if !before.verified {
-            return Err(io::Error::other(format!(
-                "Quellbeleg von Auftrag {} ist unbestätigt",
-                record.id
-            )));
-        }
-        let after = snapshot(view.source, &before.path);
-        if record.moving && !after.verified {
-            if !before.directory {
-                let selected = match &record.items {
-                    JobItems::Pairs(pairs) => {
-                        format!("{}\0{}", pairs[index].source, pairs[index].rel)
-                    }
-                    _ => before.path.clone(),
-                };
-                if let Some((_, root)) = files.get(&selected).filter(|(guard, _)| guard == before) {
-                    completed.push(root.clone());
-                    continue;
-                }
-            }
-            if let Some(relative) = confirmed_move(view, record, before)? {
-                completed.push(crate::transfer::ResolvedRoot {
-                    source: before.path.clone(),
-                    rel: relative,
-                });
-                continue;
-            }
-        }
-        let same = after.verified
-            && before.directory == after.directory
-            && before.link == after.link
-            && before.id == after.id
-            && if before.directory {
-                before.object.is_some() && before.object == after.object
-                    || before.id.is_some() && before.id == after.id
-                    || super::file_recovery::missing_retry::live(view)
-                        && before.object.is_none()
-                        && before.id.is_none()
-            } else {
-                before.size == after.size
-                    && before.mtime_ms == after.mtime_ms
-                    && (before.object.is_none() || before.object == after.object)
-            };
-        if !same {
-            return Err(io::Error::other(format!(
-                "Quellidentität von Auftrag {} ist geändert oder unbestätigt",
-                record.id
-            )));
-        }
-    }
-    Ok(completed)
-}
-
-fn confirmed_move(
-    view: &JobView<'_>,
-    record: &JobRecord,
-    guard: &SourceGuard,
-) -> io::Result<Option<String>> {
-    let path =
-        crate::support_dirs::app_data_file("transfer-aliases").join(format!("{}.json", record.id));
-    let context = record_context(&record.vault_locations)?;
-    let aliases: super::super::super::folder_alias::FolderAliases = match read_record(
-        &path,
-        RecordKind::Alias,
-        &record.id,
-        u64::MAX,
-        context.is_some(),
-    ) {
-        Ok(aliases) => aliases,
-        Err(error)
-            if error.kind() == io::ErrorKind::NotFound
-                && record.source.local
-                && record.target.local
-                && record.filter.is_none()
-                && record.layout == crate::transfer::Layout::Tree
-                && record.folders.for_root(&guard.path)
-                    == crate::transfer::FolderConflict::Merge =>
-        {
-            let JobItems::Roots { base, .. } = &record.items else {
-                return Ok(None);
-            };
-            let relative = super::super::engine_names::root_rel(&guard.path, base.as_deref());
-            let actual = with_backend(view.target, |backend| {
-                crate::vfs::directory_identity(
-                    backend,
-                    &super::super::engine_names::join_rel(&record.target_dir, &relative),
-                )
-            })?;
-            return Ok((guard.object.is_some() && guard.object == actual).then_some(relative));
-        }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error),
-    };
-    super::folder_alias_store::validate_aliases(&aliases)?;
-    if aliases.scope.job != record.id
-        || aliases.scope.native_target != record.target.local
-        || aliases.scope.vault_locations != record.vault_locations
-        || aliases.scope.source_namespace != record.source.namespace
-        || aliases.scope.target_namespace != record.target.namespace
-        || aliases.scope.target_root != record.target_dir
-    {
-        return Ok(None);
-    }
-    let Some(alias) = aliases
-        .roots
-        .get(&guard.path)
-        .filter(|alias| alias.move_source && alias.identity.is_some())
-    else {
-        return Ok(None);
-    };
-    if guard.object != alias.identity {
-        return Ok(None);
-    }
-    with_backend(view.target, |backend| {
-        crate::vfs::directory_identity(
-            backend,
-            &super::super::engine_names::join_rel(&record.target_dir, &alias.relative),
-        )
-    })
-    .map(|identity| (identity == alias.identity).then(|| alias.relative.clone()))
 }
 
 impl JobRun {
@@ -555,170 +346,6 @@ impl JobRun {
     }
 }
 
-pub(crate) fn unconfirmed_jobs() -> io::Result<Vec<JobRecord>> {
-    let entries = match std::fs::read_dir(root()) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(error),
-    };
-    let mut records = Vec::new();
-    for entry in entries {
-        let entry = entry?;
-        let name = entry.file_name();
-        let Some(id) = name
-            .to_str()
-            .and_then(|name| name.strip_suffix(".json"))
-            .filter(|id| valid_id(id))
-        else {
-            continue;
-        };
-        let record: JobRecord = read_record(&path(id)?, RecordKind::Job, id, u64::MAX, false)?;
-        if record.version == 1 && record.id == id && !record.complete {
-            records.push(record);
-        }
-    }
-    records.sort_by(|one, two| one.id.cmp(&two.id));
-    Ok(records)
-}
-
-pub(crate) fn reopen_job(
-    id: &str,
-    source: Endpoint,
-    target: Endpoint,
-) -> Result<TransferJob, String> {
-    let record: JobRecord = read_record(
-        &path(id).map_err(|error| error.to_string())?,
-        RecordKind::Job,
-        id,
-        u64::MAX,
-        false,
-    )
-    .map_err(|error| error.to_string())?;
-    record.bind(source, target)
-}
-
-#[derive(Clone, Default)]
-pub(crate) struct CatalogState {
-    pub ready: bool,
-    pub records: Vec<JobRecord>,
-    pub error: Option<String>,
-    pub unavailable: Vec<String>,
-}
-
-fn load_catalog() -> io::Result<(CatalogState, Vec<(String, RecordContext)>)> {
-    let entries = match std::fs::read_dir(root()) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return Ok((
-                CatalogState {
-                    ready: true,
-                    ..Default::default()
-                },
-                Vec::new(),
-            ))
-        }
-        Err(error) => return Err(error),
-    };
-    let mut state = CatalogState {
-        ready: true,
-        ..Default::default()
-    };
-    let mut contexts = Vec::new();
-    for entry in entries {
-        let entry = entry?;
-        let name = entry.file_name();
-        let Some(id) = name
-            .to_str()
-            .and_then(|name| name.strip_suffix(".json"))
-            .filter(|id| valid_id(id))
-        else {
-            continue;
-        };
-        let loaded = (|| {
-            let (record, sealed): (JobRecord, bool) =
-                record_io::read_record_state(&path(id)?, RecordKind::Job, id, u64::MAX, false)?;
-            if record.version != 1 || record.id != id {
-                return Err(io::Error::other("Ungültiger Jobdatensatz"));
-            }
-            if record.complete {
-                return Ok(None);
-            }
-            let context = record_context(&record.vault_locations)?;
-            if sealed != context.is_some() {
-                return Err(io::Error::other(
-                    "Vaultbindung des Jobdatensatzes ist unbestätigt",
-                ));
-            }
-            if let Some(context) = &context {
-                crate::vault::check_transfer_blob_context_live(context)?;
-            }
-            Ok(Some((record, context)))
-        })();
-        match loaded {
-            Ok(Some((record, context))) => {
-                if let Some(context) = context {
-                    contexts.push((id.to_string(), context));
-                }
-                state.records.push(record);
-            }
-            Ok(None) => {}
-            Err(_) => state.unavailable.push(id.to_string()),
-        }
-    }
-    if !state.unavailable.is_empty() {
-        state.error = Some(format!(
-            "Gesperrte oder unbestätigte Job-IDs: {}",
-            state.unavailable.join(", ")
-        ));
-    }
-    Ok((state, contexts))
-}
-
-pub(crate) struct RecoveryCatalog(std::sync::Arc<Mutex<CatalogState>>);
-
 #[cfg(test)]
 #[path = "file_recovery_tests.rs"]
 mod file_recovery_tests;
-impl RecoveryCatalog {
-    pub fn start() -> io::Result<Self> {
-        let state = std::sync::Arc::new(Mutex::new(CatalogState::default()));
-        let background = state.clone();
-        std::thread::Builder::new()
-            .name("transfer-recovery-catalog".into())
-            .spawn(move || {
-                let (result, contexts) = match load_catalog() {
-                    Ok(loaded) => loaded,
-                    Err(error) => (
-                        CatalogState {
-                            ready: true,
-                            error: Some(error.to_string()),
-                            ..Default::default()
-                        },
-                        Vec::new(),
-                    ),
-                };
-                *background
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = result;
-                let weak = std::sync::Arc::downgrade(&background);
-                drop(background);
-                record_io::monitor_contexts(weak, contexts, |state, id| {
-                    state.records.retain(|record| record.id != id);
-                    if !state.unavailable.iter().any(|record| record == id) {
-                        state.unavailable.push(id.to_string());
-                    }
-                    state.error = Some(format!(
-                        "Gesperrte oder unbestätigte Job-IDs: {}",
-                        state.unavailable.join(", ")
-                    ));
-                });
-            })?;
-        Ok(Self(state))
-    }
-    pub fn snapshot(&self) -> CatalogState {
-        self.0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
-    }
-}

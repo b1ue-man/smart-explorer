@@ -749,3 +749,168 @@ Funktionen zeigten keine Befunde. Kompilierung und Ausführung stehen weiterhin
 bei Main aus; im fortgesetzten Autorzyklus wurde kein lokaler Build, Compiler,
 Formatter, Test oder Server gestartet.
 
+
+## K — Fachliche Modulaufteilung nach Remoteformatierung
+
+**A — fortgesetzter Auftrag und Nachweis:** Die Remote-Vorbereitung
+`40332971455` auf Kandidat `34f3361de13104e386eba26bf16d6a0160475481` hat
+nach tatsächlicher Rustformatierung Größenverletzungen gemeldet. Laut Main
+wurde dabei keine Kompilierung gestartet. Der gebundene Format-/Abhängigkeitspatch
+liegt als Commit `10988167` in derselben Arbeitskopie. Die frühere reine
+Zeilenzählung vor Rustformatierung bewies die normale Modulgröße nicht; diese
+Grenze wird hier korrigiert. Maßgeblich bleiben dieselben Transferverträge und
+die aktualisierte exklusive Scope-Datei. Lokaler Formatter, Build, Compiler,
+Test, Server, Unteragent, Gitänderung und Graphrefresh bleiben verboten.
+
+**B — belegter Bestand und vollständige Strukturgrenzen:** Die zehn Ziele
+umfassen Agent-Extensions (516 Zeilen), Picker (558), CLI-Zielauflösung (517),
+Dateistaging (508), Share-Dateiserver (502), Dateirecovery (1.025), deren
+Testfixture/-fälle (524), Jobstore (724), Engine-Einstieg (523) und
+Backend-Testdouble (501). Quelle sind der aktuelle formatierte Quellstand,
+`/tmp/smartexplorer-rv1-40332971455/format.json` und das von Main bereitgestellte
+AST-Inventar `/tmp/smartexplorer-rv1-size-inventory.json`. Es wird keine
+Größenausnahme und keine künstliche Verdichtung verwendet.
+
+**C — gewählte Aufteilung:** Unveränderte fachliche Blöcke ziehen in private
+Kindmodule. Bestehende Aufrufer behalten ihre Namen über eng begrenzte
+Weitergabe; zusätzliche Sichtbarkeit reicht nur bis zum benötigten bisherigen
+Elternmodul. Testmodule behalten ihre Modulnamen und Funktionssuffixe. Ein
+gemeinsames unspezifisches Hilfsmodul oder eine verkürzte Formatierung wird
+verworfen, weil beides die Verantwortung nicht trennt. Neue Protokolle,
+Persistenzfelder, Featuregates, Copy- oder Wiederholentscheidungen entstehen
+bei dieser Aufteilung nicht.
+
+**D — konkreter Strukturplan und erwarteter Vertragserhalt:**
+
+| Verantwortung | Aufteilung und Verknüpfung | Erforderliches Ergebnis |
+|---|---|---|
+| Agent-Änderungssignale | `extensions.rs` delegiert Watch-Modus und Abonnement an `extensions_watch.rs`; Queue-Zustellung und Drop-Guard bleiben dort zusammen. | Featurefallback, Cancel-Poll, Abschlussmeldung und Threadjoin bleiben unverändert; normale und reservierte Rename-Frames bleiben in der Extension. |
+| Picker-Navigation | `picker_impl.rs` behält die Dialogdarstellung; `picker_navigation.rs` trägt Öffnen, lokale Orte, Parent- und Wertbildung sowie den Childpfadhelper. | Lokale/Remote-Backends, Präfix, Verbindungsidentität und alle Pickerzwecke bleiben erhalten. |
+| CLI-Zielauflösung | Inline-Testmodule ziehen bei gleichem Modulnamen nach `target_tests.rs`. | Zielresolver, Vaultbindung, gespeicherte Verbindungen und literal erhaltene Pfade ändern sich nicht; Fallnamen bleiben gleich. |
+| Dateistaging | Inline-Testmodul zieht nach `staging_tests.rs`. | Quellhandle, Stagename, Löschgrenze, Datenkopie, Abbruch und Rückgabefehler bleiben im produktiven Staging unverändert. |
+| Share-Streaming | `server_fs.rs` behält Autorisierung und Requestdispatch; `server_fs_io.rs` bündelt die vorhandenen Lese-/Schreibstreams. | Mount-Lease, guarded backend, Wireantwort, Schreibmodus und I/O-Besitz bleiben unverändert. |
+| Dateirecovery | `file_recovery_receipts.rs` enthält Modelle/Index/Journalzugriff; `file_recovery_verify.rs` die gespeicherte Prüfung; `file_recovery_observer.rs` den lokalen Quarantäne-/Publishobserver. | Intent-/Acknowledged-/Confirmed-Grenzen, Pending-Reparatur, Indexvollständigkeit, Backup-/Quellbesitz und Live-Missing-Retry bleiben gleich. |
+| Recovery-Testfixture | `file_recovery_fixture.rs` enthält nur die bestehenden Fixturehelfer. | Produktive Prüfpunkte, die bisherigen Testmodule und deren genaue Fallnamen bleiben gleich. |
+| Jobvertrag | `job_store_validation.rs` bündelt Endpunkt-/Quellsnapshot und Wiederaufnahmevalidierung; `job_store_catalog.rs` Katalog und Bindung gespeicherter Jobs. | Vertragsvergleich, Vaultkontext, Lock, Mutation, live Wiederholung und strikte gespeicherte Recovery bleiben gleich. |
+| Engine-Vorbereitung | `prepare.rs` übernimmt die vorhandene Vorbereitung; `mod.rs` bleibt Einstieg und Laufzeitbesitz. | Reihenfolge von Preflight, Rootauflösung, Joblock, Aliasplanung und Quellenbestätigung bleibt gleich. |
+| Backend-Teststreams | `test_backend_streams.rs` bündelt Guard, Reader und Writer; das Testbackend behält Fähigkeiten und Backenddispatch. | Fehlerzeitpunkte, Zähler, Chunk-/Lesefehler und RA-04-/Publikationsorakel bleiben gleich. |
+
+Eigene anschließende Anti-Regressionsprüfung: Modulpfade und tatsächlich
+benötigte Sichtbarkeit nachlesen; die verschobenen Funktionskörper statisch
+gegen `10988167` vergleichen; exakte Fallnamen, sämtliche neuen/berührten
+Dateigrößen und Rust-AST-Syntax kontrollieren. Reale Rustformatierung,
+Kompilierung und Ausführung erfolgen ausschließlich später durch Main im
+selben Remote-Suiteeinstieg. Fortschritt: Strukturplan vor Umsetzung gesichert.
+
+
+**Implementierungsergebnis und eigene Nachreview:** Die zehn in D genannten
+Verantwortlichkeiten sind aufgeteilt. `picker_entries.rs` wird nicht benötigt:
+Die komplette Dialogdarstellung bleibt nach Auslagerung der Navigation ein
+zusammenhängender Dialog unterhalb der Dateigrenze. Alle verwendeten neuen
+Dateien sind über private Module eingebunden; die produktiven und die bisherigen
+Test-Einstiegspunkte bleiben über ihre bisherigen Namen erreichbar.
+`prepare` bleibt im Engine-Elternmodul auch als bisheriger Funktionsname erhalten.
+
+Die verwendeten Sprachgrenzen wurden anhand der offiziellen Rustreferenz
+geprüft (Abruf 2026-10-26):
+[Module und Pfadattribute](https://doc.rust-lang.org/reference/items/modules.html),
+[Sichtbarkeit und Privatsphäre](https://doc.rust-lang.org/reference/visibility-and-privacy.html),
+[mehrere inhärente Implementierungsblöcke](https://doc.rust-lang.org/reference/items/implementations.html).
+Die neuen Watch-Helfer sind ein inhärenter `AgentBackend`-Block; die einzige
+`BackendExtensions`-Implementierung bleibt bestehen. Die gemeinsame Belegklasse
+und ihre Felder sind ausschließlich im bisherigen File-Recovery-Bereich
+sichtbar. Dessen neue `JobRun`-Methoden erreichen denselben bisherigen Bereich;
+sie erteilen keinen Zugriff außerhalb dieser Modulkette.
+
+Der statische Körpervergleich verwendet die tatsächlichen Rust-AST-Blätter
+gegen `10988167`, erhält Operatoren und Literale und löst relative Modulpfade
+für den Vergleich auf. Sämtliche bisherigen Funktionskörper bleiben vorhanden.
+Zwei gezielte Typbezüge bilden die erklärten Ausnahmen: der Alias-Typ in
+`confirmed_move` und die `FolderAliasScope`-Konstruktion in `roots::plan_roots`.
+Alle Testfunktionssuffixe und ihre logischen Rustmodulpfade sind gegenüber
+dem gebundenen Stand unverändert. Es wurden für die Aufteilung keine neuen
+Testfälle erfunden und keine vorhandenen Fälle entfernt.
+
+**Konkret gefundene Typabhängigkeit:** `transfer/mod.rs` bindet `engine`
+unmittelbar unter `transfer` ein; dessen `job_store`, `folder_alias_store`,
+`folder_reservation` und `roots` sind unmittelbare Kinder von `engine`.
+Drei alte Typimporte zeigten mit dreifachem `super` zur Cratewurzel. Ebenso
+zeigten der Typ in `confirmed_move` und die Rootkonstruktion dorthin.
+Korrigiert sind ausschließlich diese bestätigten Bezüge auf
+`crate::transfer::job_record` beziehungsweise `crate::transfer::folder_alias`.
+Main hat dafür `folder_alias_store.rs`, `folder_reservation.rs` und `roots.rs`
+ausdrücklich nur für diese Typstellen freigegeben. Die unterschiedlichen
+Modultiefen werden nicht pauschal ersetzt; `folders_local.rs` liegt unter
+`engine::folders::local` und wird hier nicht verändert.
+
+| Erneut selbst verfolgte Kette | Eigener statischer Befund nach der Aufteilung |
+|---|---|
+| Erstkopie, Live-Missing-Retry und gespeicherte Recovery | `run_view` → gleicher Vorbereitungsaufruf → Jobpreflight/-bindung → gleich geordnete Rootplanung → Quellenbestätigung bleibt erhalten. `missing_retry` sieht dieselben bestätigten Antwort-/Eigentumsflags und dieselbe Journal-ID. |
+| Receipt, Index und Publikation | Feldnamen, Serdeattribute, Digest-/Dateischlüssel, Pending-Reparatur, Zähler und Schreibreihenfolge ziehen vollständig in `receipts`; Verifizierung und Journalzugriff bleiben vor jeder Cleanupentscheidung gebunden. Keine Wire- oder Persistenzdarstellung wird geändert. |
+| Movequarantäne, Veröffentlichung und Backup | Lokale Beobachter behalten Quellsnapshot, Vorbereitung, Widerruf, Ziel-/Handleprüfung und Callbackreihenfolge. Die gleiche gespeicherte Prüfung entscheidet über Quellen- und Stagebereinigung. Ersetzungs- und Backupprimitive werden nicht geändert. |
+| Agent und Share | Watch-Queue, Cancel-Poll und Drop-Join bleiben zusammen; gewöhnliche und reservierte Rename-Frames bleiben getrennt. Share behält Requestautorisierung und Mount-Lease im Dispatch; die Streams halten dieselben Slots und I/O-Werte. |
+| Picker und CLI-Orte | Backend-Handle, Connection-Präfix, lokale/Remote-Bedeutung, literaler Pfad, ausgewählter Zweck und Ergebniskonsument bleiben unverändert. CLI-Produktivfunktionen werden nicht verschoben; ihre Testmodule behalten ihre bisherigen logischen Orte. |
+| Testorakel | Der Fixtureaufbau behält echte Produktivprüfungen, Locks und Aufrufpunkte. Reader-/Writerfehler und ihre Guardzähler haben dieselben Körper und dieselbe Feldreihenfolge. Alle Testnamen und vollständigen logischen Testpfade bleiben erhalten. |
+
+Eigene statische Kontrolle: Tree-sitter-Rust zeigt keine Syntaxfehler in den
+berührten Dateien; `git diff --check` zeigt keinen Whitespacebefund. Die größte
+berührte Rustdatei ist `roots.rs` mit 485 Zeilen; unter den zehn aufgeteilten
+Verantwortlichkeiten ist `staging.rs` mit 473 Zeilen die größte. Die bereits
+remote formatierten Körper werden in ihrer normalen mehrzeiligen Form
+übernommen. Neue Deklarationen und Sichtbarkeiten haben ausreichend Abstand
+zur Grenze; die tatsächlich erneut durch Rustformatierung bestätigte Größe
+bleibt dennoch Mains späterem Remoteeinstieg vorbehalten. Diese Kontrolle
+beweist keine Typprüfung oder ausgeführten Testfall.
+
+**Dateiinventar dieses fortgesetzten Strukturzyklus:** Die bisherigen
+Dateilisten in H bleiben der Nachweis des vorangegangenen funktionalen Fixes.
+Hier wurden die zehn Ziele in D, ihre nachfolgend genannten Extraktionsdateien,
+`transfer/mod.rs`, die konkreten Alias-/Root-Typstellen sowie die eigenen
+betroffenen Recovery-/Retry-Testverbraucher gezielt als Text oder AST gelesen.
+Die ursprünglichen Funktionskörper wurden dabei mit `git show 10988167:<Pfad>`
+nachgelesen. Zusätzlich gelesen wurden die aktualisierte Scope-Datei,
+`/tmp/smartexplorer-rv1-40332971455/format.json` und
+`/tmp/smartexplorer-rv1-size-inventory.json` sowie die oben verlinkten
+Rust-Primärquellen. Eine AST-Lektüre ist keine Behauptung einer vollständigen
+zeilenweisen Textlektüre sämtlicher unveränderter Verbraucher.
+
+Erstellt:
+
+- `native/src/agent/core/extensions_watch.rs` — 110 Zeilen, 3807 Bytes.
+- `native/src/app/core/picker_navigation.rs` — 107 Zeilen, 3575 Bytes.
+- `native/src/cli/target_tests.rs` — 108 Zeilen, 3643 Bytes.
+- `native/src/copy/os/shared/staging_tests.rs` — 35 Zeilen, 1381 Bytes.
+- `native/src/share/core/server_fs_io.rs` — 47 Zeilen, 1454 Bytes.
+- `native/src/transfer/os/shared/engine/file_recovery_fixture.rs` — 87 Zeilen, 2843 Bytes.
+- `native/src/transfer/os/shared/engine/file_recovery_observer.rs` — 92 Zeilen, 3198 Bytes.
+- `native/src/transfer/os/shared/engine/file_recovery_receipts.rs` — 400 Zeilen, 13458 Bytes.
+- `native/src/transfer/os/shared/engine/file_recovery_verify.rs` — 322 Zeilen, 12532 Bytes.
+- `native/src/transfer/os/shared/engine/job_store_catalog.rs` — 172 Zeilen, 5792 Bytes.
+- `native/src/transfer/os/shared/engine/job_store_validation.rs` — 225 Zeilen, 8307 Bytes.
+- `native/src/transfer/os/shared/engine/prepare.rs` — 57 Zeilen, 2017 Bytes.
+- `native/src/transfer/os/shared/engine/test_backend_streams.rs` — 100 Zeilen, 3007 Bytes.
+
+Geändert:
+
+- `docs/plaene/2026-10-24-batches/fix-regression-transfer.md`
+- `native/src/agent/core/extensions.rs` — 432 Zeilen, 15336 Bytes.
+- `native/src/app/core/picker_impl.rs` — 461 Zeilen, 22366 Bytes.
+- `native/src/cli/target.rs` — 409 Zeilen, 13842 Bytes.
+- `native/src/copy/os/shared/staging.rs` — 473 Zeilen, 17329 Bytes.
+- `native/src/share/core/server_fs.rs` — 468 Zeilen, 16823 Bytes.
+- `native/src/transfer/os/shared/engine/file_recovery.rs` — 260 Zeilen, 8730 Bytes.
+- `native/src/transfer/os/shared/engine/file_recovery_tests.rs` — 446 Zeilen, 16872 Bytes.
+- `native/src/transfer/os/shared/engine/folder_alias_store.rs` — 143 Zeilen, 5305 Bytes.
+- `native/src/transfer/os/shared/engine/folder_reservation.rs` — 422 Zeilen, 17469 Bytes.
+- `native/src/transfer/os/shared/engine/job_store.rs` — 351 Zeilen, 12171 Bytes.
+- `native/src/transfer/os/shared/engine/mod.rs` — 470 Zeilen, 15202 Bytes.
+- `native/src/transfer/os/shared/engine/roots.rs` — 485 Zeilen, 18383 Bytes.
+- `native/src/transfer/os/shared/engine/test_backend.rs` — 412 Zeilen, 13397 Bytes.
+
+Keine erforderliche Quellabhängigkeit außerhalb der zuletzt freigegebenen
+Fläche bleibt offen. Die gemeinsame Fallregistrierung aus G ändert sich durch
+diese Strukturkorrektur nicht. Main übernimmt Integration, Git, Graphrefresh
+und die Wiederholung desselben Remote-Suiteeinstiegs. Dieser Autor hat keinen
+Formatter, Compiler, Build, Test, Server oder Release ausgeführt und keinen
+Commit oder Push erstellt. Nach dieser vollständigen eigenen Nachreview stoppt
+dieser Strukturzyklus.

@@ -1,5 +1,5 @@
 //! Exclusive selected-root reservation with a durable pre-publication receipt.
-use super::super::super::folder_alias::{FolderAlias, FolderAliasScope};
+use crate::transfer::folder_alias::{FolderAlias, FolderAliasScope};
 use super::super::engine_names::{join_rel, parent_rel};
 use super::folder_alias_store::AliasStore;
 use super::view::Side;

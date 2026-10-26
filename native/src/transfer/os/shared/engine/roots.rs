@@ -173,7 +173,7 @@ fn plan_roots(
         };
         Some(
             super::folder_reservation::Reservations::open(
-                super::super::super::folder_alias::FolderAliasScope {
+                crate::transfer::folder_alias::FolderAliasScope {
                     job: view
                         .id
                         .map(str::to_string)

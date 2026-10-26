@@ -18,6 +18,9 @@ use crate::share::wire::{discardable_stage, validate_get, validate_put, FsReques
 
 use super::batch_status::{self, BatchKey};
 use super::StreamContext;
+#[path = "server_fs_io.rs"]
+mod streams;
+use streams::{read, write};
 #[path = "server_fs_control.rs"]
 mod control_operations;
 use control_operations::{answer, control, reply_unit, simple};
@@ -462,41 +465,4 @@ fn discardable_stage_path(path: &str) -> bool {
         Ok(parts) => parts.last().is_some_and(|name| discardable_stage(name)),
         Err(_) => false,
     }
-}
-
-async fn read(
-    mut send: SendStream,
-    context: &StreamContext,
-    source: ReadSource,
-    access: FsAccess,
-) -> io::Result<()> {
-    let admitted = context.admit(&send).await;
-    let slot = match admitted {
-        Ok(slot) => slot,
-        Err(error) => return reply_err(&mut send, error).await,
-    };
-    crate::share::server_transfer::read_file(send, source, access, slot, context.stall()).await
-}
-
-async fn write(
-    mut send: SendStream,
-    recv: RecvStream,
-    context: &StreamContext,
-    (path, mode, lz4): (String, WriteMode, bool),
-    access: FsAccess,
-    authorization: Option<MountLeaseAuthorization>,
-) -> io::Result<()> {
-    let admitted = context.admit(&send).await;
-    let slot = match admitted {
-        Ok(slot) => slot,
-        Err(error) => return reply_err(&mut send, error).await,
-    };
-    let target = crate::share::server_transfer::WriteTarget {
-        path,
-        mode,
-        authorization,
-        lz4,
-    };
-    crate::share::server_transfer::write_file(send, recv, target, access, slot, context.stall())
-        .await
 }
