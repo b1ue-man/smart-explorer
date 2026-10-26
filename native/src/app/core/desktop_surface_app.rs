@@ -152,6 +152,8 @@ pub(crate) fn run(target: &SurfaceTarget) -> i32 {
             return 1;
         }
     };
+    // The layer and eframe branches are separate from App::new in this process.
+    crate::app::share_apps_ui::install_window_opener();
     let waker: Arc<Mutex<Option<egui::Context>>> = Arc::new(Mutex::new(None));
     let wake_slot = waker.clone();
     let layer_wake: LayerWake = Arc::new(Mutex::new(None));
@@ -384,7 +386,6 @@ impl eframe::App for SurfaceApp {
             &self.host,
             &mut self.actions,
         );
-        crate::app::share_apps_ui::surface_windows(ctx);
         ctx.request_repaint_after(ALIVE_EVERY);
         self.view.heartbeat();
     }

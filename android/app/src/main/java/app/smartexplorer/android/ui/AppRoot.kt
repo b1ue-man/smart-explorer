@@ -58,6 +58,7 @@ import app.smartexplorer.android.ui.onboarding.StartupScreen
 import app.smartexplorer.android.ui.settings.SettingsScreen
 import app.smartexplorer.android.ui.settings.ErrorLogScreen
 import app.smartexplorer.android.ui.settings.AboutScreen
+import app.smartexplorer.android.ui.settings.deviceSettingsAreaFor
 import app.smartexplorer.android.ui.sync.SyncScreen
 import kotlinx.coroutines.flow.onSubscription
 
@@ -191,8 +192,19 @@ private fun TabIcon(item: TabItem, shareRequests: Int) {
 }
 
 @Composable
-private fun DeviceSettingsRoot(onBack: () -> Unit) {
+internal fun DeviceSettingsRoot(onBack: () -> Unit) {
     var detail by rememberSaveable { mutableStateOf<String?>(null) }
+    val pending by AppNav.pending.collectAsStateWithLifecycle()
+    LaunchedEffect(pending) {
+        // The target screen owns consume; clearing this ancestor must not lose the request.
+        if (deviceSettingsAreaFor(pending) != null) detail = null
+    }
+    LaunchedEffect(Unit) {
+        AppNav.requests.collect { request ->
+            // StateFlow coalesces equal pending values; a repeated explicit request still navigates.
+            if (request == AppNav.pending.value && deviceSettingsAreaFor(request) != null) detail = null
+        }
+    }
     when (detail) {
         "log" -> ErrorLogScreen(onBack = { detail = null })
         "about" -> AboutScreen(onBack = { detail = null })
