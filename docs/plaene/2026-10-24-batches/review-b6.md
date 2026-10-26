@@ -1,8 +1,15 @@
 # B6 – statischer Code- und Primärquellenreview
 
-Stand: 2026-10-26 UTC. Vergleichsbasis `bea312ea`; gemeinsamer Arbeitsbaum, zuletzt beobachteter HEAD `1aea1216`. Dieser Bericht bewertet den gelesenen Quellstand. Er bestätigt weder Buildfähigkeit noch Laufzeitabnahme oder Veröffentlichung.
+Stand: 2026-10-26 UTC. Vergleichsbasis `bea312ea`; gemeinsamer Arbeitsbaum, zuletzt beobachteter HEAD `d3c6a994`. Dieser Bericht bewertet den gelesenen Quellstand. Er bestätigt weder Buildfähigkeit noch Laufzeitabnahme oder Veröffentlichung.
 
-Aktueller Befundstand: B6-R3 und B6-R4 sind statisch geschlossen. Das im R7-Nachreview zusätzlich belegte GOP-/Fallbackrennen in R4 wurde korrigiert und erneut gelesen. Der Nachreview hat B6-R7 zum Paket-/Queue-/Pullspeicher und B6-R8 zur gehaltenen SET_MODE-Präferenz offengelegt; R7 einschließlich CPU-Skalierung und die integrierte R8-Korrektur sind statisch geschlossen. Im abschließend freigegebenen Nachreviewstand verbleibt kein konkreter offener B6-Befund. Die Korrekturen zu B6-R1, B6-R2, B6-R5 und B6-R6 wurden im Erstreview im Quelltext nachgelesen. Die ursprünglichen Auslöser bleiben als Befundhistorie dokumentiert; die Nachträge beschreiben den jeweils zuletzt gelesenen Stand.
+Aktueller Befundstand: **B6-R9 und B6-R10 bleiben offen.** Die neue native v2-Klasse bis 864 MiB beseitigt die ursprüngliche pauschale 4K-Sperre rechnerisch. R9 verbleibt wegen fünf konkreter Lücken: Lebensdauer verzögerter CPU-Uploads, cgroup-Namespacewurzel, terminale Drop-Reihenfolge, dauerhaft gebundene YUV-Sitzungszusage und unversionierter Snapshot in einer v2-Sitzung. R10 betrifft ein altes asynchrones Skalierergebnis, das nach Sitzungsersatz die neue Sitzung bestätigen kann. B6-R3, B6-R4 und B6-R8 sind statisch geschlossen; R1, R2, R5 und R6 wurden bereits im Erstreview nachgelesen. Die R7-Schließung gilt für die dort nachverfolgten Transport-/Android-/Scalerbesitzer; sie ist kein Nachweis der jetzt unter R9 geprüften prozessweiten Desktopzulassung und verzögerten Rendererübergaben. Parallel bereits gestartete Autorenkorrekturen sind in diesem Durchgang nicht erneut abgenommen.
+
+Die folgenden R9-/R10-Befunde beziehen sich auf den oben bezeichneten historischen
+Reviewkandidaten. Die anschließende Capture-, Renderer-, Login- und Androidarbeit
+ist in `umsetzung.md` nachgeführt. Neuere konkrete Batchbefunde stehen in
+`review-capture-integration.md`, `review-login-bildspeicher.md` und
+`review-android-bildfixtures.md`; dieser Bericht behauptet keine erneute Prüfung
+des inzwischen weiterentwickelten Gesamtstands.
 
 ## Auftrag, Abgrenzung und Entscheidungsgrundlage
 
@@ -24,7 +31,112 @@ Erstplan aus dem Auftrag: Diese acht Übergänge gegen den vorhandenen Bericht u
 
 R7-Folgeauftrag: Die Speicherrechnung umfasst zusätzlich QUIC-Empfang, Daemon-Relay, Workerantworten und den Lebenszyklus der Kotlin-Pullbuffer. Erstplan ist die Zuordnung jeder gleichzeitig gehaltenen Kopie zu einem begrenzten Besitzer. Nach Lektüre der freigegebenen IPC-Verbraucher steht die Bindung vor der Allokation fest; der abschließende Planpunkt war die gemeinsame Rechnung mit Paket-/Queuegrenzen und wiederverwendeten Androidpuffern einschließlich gültiger verlustfreier Frames; die anschließende Scalerlektüre erweiterte diesen Punkt auf dessen tatsächliche Besitzer. Das frühere 8-MiB-/512×512-Angebot muss nicht weiterhin zulässig sein; rechtzeitige Ablehnung oder ein kleineres belegtes Angebot erfüllen die Grenze. Direktbuffer- und MediaCodec-Lebensdauer werden gegen die aktuelle Android-Referenz geprüft.
 
+4K-Folgeauftrag: Zusätzlich freigegeben sind genau `native/src/app/core/screen_render_caps.rs` und `native/src/app/core/screen_pool.rs`. Erstplan: V7/P30 gegen die rechnerische Zulassung, das tatsächliche Desktopangebot und den Full-/Previewübergang abgleichen. Bestandsplan: Die feste 512-MiB-Obergrenze, den Faktor 24 und die erneute Quelllimit-Schnittmenge getrennt bewerten; eine größere ressourcengebundene Angebotsklasse mit unveränderter Besitzerbilanz berechnen. Zweite Recherche: Hello-Reihenfolge und HMAC-Eingabe im Quelltext, JSON-Erweiterbarkeit bei Serde sowie dokumentierte Windows-/Linux-/Android-Speicherinformationen. Ergebnis ist B6-R9 mit konkreten Anschlussstellen und einer Korrekturoption; keine Produktänderung.
+
+R9-/R10-Nachreview: Verbindliche Grundlage sind `/tmp/smartexplorer-r9-review-brief.txt` und die exakte Vereinigung der `read`-/`write`-Pfade in `/tmp/smartexplorer-r9-scope.json`; diese Arrays erweitern ausschließlich die Lesefläche dieses Reviewers. Erstplan: größere v2-Klasse, tatsächliche Ressourcenfakten, gemeinsame Sitzungszulassung und Vorschau-Presented gegen ihre Aufrufer prüfen. Bestandsplan: Jede Zusage bis zum letzten Datenbesitzer verfolgen, einschließlich Blocking-Ergebnis, Decoderende, CPU-Uploaddelta und globaler YUV-Ressource; bei der Vorschau alte Skalierergebnisse über Sitzungsersatz betrachten. Zweite Recherche: Rust-Dropreihenfolge, Linux-cgroup-Namespace und tatsächliche Root-Dateierzeugung sowie epaint/eframe 0.29.1. Der Hauptagent hat nach Meldung der Befunde getrennte Korrekturaufträge begonnen; dieser Bericht dokumentiert den zuvor vollständig gelesenen Stand und schließt diese Änderungen nicht vorzeitig.
+
 ## Priorisierte Befunde
+
+### B6-R9 — Hoch, offen: 4K-Klasse angebunden, Zulassungs- und Besitzergrenzen noch unvollständig
+
+**Nachgelesene Korrektur:** `frame_budget.rs` trennt jetzt die 864-MiB-Sitzungsklasse von RAW/Legacy mit weiterhin 512 MiB. `FrameCapabilities::admitted/for_server`, die optionale ServerHello-Klasse und Accepted-Prüfung erhalten alte Gegenstellen. `ScreenSource::frame_limits_for_contract` trennt Quellcapturegrenzen vom Sitzungsbudget; Androids wirklich kleineres Heapangebot bleibt erhalten. `GopHeader::decode_prefix` prüft die Kopfstruktur, bevor die echte Erweiterung den vollständigen Vertrag liefert. Die produktiven Desktopöffner verwenden die gemeinsame Zulassung auch für Preview; Preview→Full erweitert den bereits angenommenen Vertrag nicht. Die nachstehende 768-MiB-Rechnung finanziert weiterhin 3840×2160, 24 Bildäquivalente und die unveränderte Record-/Scalerformel. Das ursprüngliche feste Größenhindernis ist damit statisch beseitigt.
+
+**Gemeinsame Zusage:** `frame_memory.rs` zählt `MemoryLease` pro Prozess in einem synchronisierten Pool. Ein aktiver Besitzerbestand hält seine Zulassungshülle stabil; eine neue Zulassung zieht bestehende Zusagen sowohl von der Hülle als auch von frisch beobachtetem Ressourcenangebot ab. Arc-Klone derselben Zusage werden nicht als neue Sitzung gezählt. Windows liefert physisch verfügbaren Speicher, verbleibenden Commit und virtuellen Adressraum; Linux ergänzt MemAvailable, Commit-/Adressraumgrenzen und sichtbare cgroup-Vorfahren. Android bleibt beim begrenzten Heapangebot. Die Quote `min(physisch, Commit, Adressraum)/4` ist ausdrückliche Produktpolitik. Diese interne Zusage reserviert keinen Betriebssystemspeicher gegen fremde Prozesse; sie garantiert weder Gesamt-RSS noch Codec-/Treiber-/Kernelbelegung. Die folgenden fünf Lücken verhindern den vollständigen Abschluss.
+
+#### R9-A — Hoch: CPU-Uploaddaten überleben ihre letzte Speicherzusage
+
+**Ort und Auslöser:** `native/src/app/core/screen_texture_cpu.rs:104`, besonders Zeile 108, ersetzt `uploaded_memory` vor `TextureHandle::set/load_texture`. Beim Sitzungswechsel kann dies die letzte Zusage der bisherigen Ausgabe lösen, bevor deren Bild ersetzt wurde. Zusätzlich kann nach einem Upload das `CpuTexture` bei Hidden, Sitzungsende oder Widgetabbau entfallen, während das hochgeladene `ColorImage` noch in einem ausstehenden `TexturesDelta` liegt.
+
+**Wirkung und Beleg:** epaint 0.29.1 stellt bei `alloc/set` ein `ImageDelta` in `delta.set`; `TextureHandle::drop` gibt den Handle frei, aber `TextureManager::free` entfernt dessen bereits eingereihtes Bild nicht aus `delta.set`. `take_delta` verschiebt die Daten zum nächsten Besitzer. Deshalb darf eine neue Sitzung das bereits freigegebene Poolbudget wieder belegen, während die alte Pixelallokation noch lebt. Die reine Feldreihenfolge von `CpuTexture` und ein Verschieben der Zuweisung hinter `handle.set` schließen den verzögerten Übergang nicht. [epaint 0.29.1 TextureManager](https://raw.githubusercontent.com/emilk/egui/0.29.1/crates/epaint/src/textures.rs), [TextureHandle](https://raw.githubusercontent.com/emilk/egui/0.29.1/crates/epaint/src/texture_handle.rs)
+
+**Nötige Korrektur:** Eine begrenzte Lebensdauerbindung muss die tatsächlichen ausstehenden Bilddaten bis zu deren Abfluss und die ersetzte Ausgabe bis zu ihrem festgelegten Renderer-Ende abdecken. Ein Zeitlimit oder pauschal die nächste GUI-Runde belegt diesen Abfluss nicht. Der Anschluss betrifft `CpuTexture`, Full-/Previewwidget, Logintextur, Sitzungsende und beide eframe-Renderer WGPU/Glow. Eine unbegrenzt in Rendererressourcen geparkte ganze Sitzungszusage wäre ebenfalls keine Schließung; siehe R9-D. Die konkrete Retirementimplementierung gehört dem gesonderten Autorenauftrag.
+
+#### R9-B — Hoch: sichtbares cgroup-Root `/` beweist keine vollständige Hierarchie
+
+**Ort und Auslöser:** `native/src/screen/os/linux_os/session_memory.rs:73` setzt die Grenze für unsichtbare Vorfahren auf `u64::MAX`, wenn der aus mountinfo gelesene Root `/` ist. Ein cgroup-Namespace kann aber sowohl diesen Mountroot als auch `/proc/self/cgroup` relativ zu seiner eigenen Wurzel darstellen. Eine sichtbare Gruppe mit `memory.max=max` kann unter einem unsichtbaren begrenzten Vorfahren liegen. Großes systemweites MemAvailable ist dann kein Prozessbudget. Der gelesene Pfad kann beispielsweise eine 864-MiB-Klasse anbieten, obwohl ein verborgener Vorfahr nur 512 MiB erlaubt. [Linux cgroup-Namespace](https://man7.org/linux/man-pages/man7/cgroup_namespaces.7.html), [hierarchische cgroup-v2-Grenzen](https://docs.kernel.org/admin-guide/cgroup-v2.html)
+
+**Tragfähige Korrekturoption:** Auf einem nachweislich lebenden cgroup2-Mount kann die Existenz controllerunabhängiger Dateien zwischen echter Hierarchiewurzel und sichtbar gemachter Untergruppe unterscheiden. Im Kernel tragen `cgroup.events` und `cgroup.type` `CFTYPE_NOT_ON_ROOT`; `cgroup_addrm_files` wendet das Flag anhand des tatsächlichen `cgroup_parent(cgrp)` an. Ihr Vorhandensein am sichtbaren Mountroot widerlegt daher die behauptete globale Wurzel. Ein Rootbeleg über ihr Fehlen benötigt ausdrücklich ENOENT bei stabiler, zugänglicher cgroup2-Zuordnung und lesbarem `cgroup.controllers`; Zugriff verweigert oder ein verschwundenes Verzeichnis sind kein Beleg. Diese Option gilt für v2, nicht unverändert für v1. Ein pauschaler Linux-Legacyzwang würde das native 4K-Ziel erneut verhindern. [Linux-Kernel: cgroup_base_files und cgroup_addrm_files](https://raw.githubusercontent.com/torvalds/linux/master/kernel/cgroup/cgroup.c)
+
+#### R9-C — Mittel: terminale Drop-Reihenfolge löst die Zusage vor den Restdaten
+
+**Decoder:** `native/src/app/core/screen_decode_thread.rs:150` deklariert `DecodeState.shared` vor `gop`. `StreamEvent::End` und `connection_lost` beenden die Darstellung, löschen aber den Decoder-GOP nicht. Sind die GUI-/Senderreferenzen bereits weg, kann beim abschließenden Drop die letzte `Shared`-Referenz samt Zusage vor den Decoderpuffern entfallen. Die inzwischen korrigierte Feldreihenfolge innerhalb von `Shared` reicht dafür nicht.
+
+**Blocking-Ergebnisse:** `native/src/screen/core/host_pipeline.rs:427` liefert `(stage, produced, request)`, `host_capture.rs:62` liefert `(stage, shot)`. Wird ein fertiges Blocking-Ergebnis nach tatsächlichem Abbruch seines Asyncjobs verworfen und ist die Pipelinezusage bereits weg, fällt `Stage` vor den erzeugten Frame-/Snapshotdaten. Der reguläre `PipelineActor::drop` wartet den Job hingegen ab und entsorgt die Pipeline danach; dieser zusätzliche Auslöser ist deshalb kein behaupteter Fehler bei jedem normalen Disconnect.
+
+**Korrekturziel und Beleg:** Daten müssen in allen terminalen und verworfenen Ergebnisbesitzern vor der letzten Zusage enden, etwa durch einen entsprechend angeordneten Ergebnistyp beziehungsweise explizites Abräumen. Die bereits korrekt angeordneten `Stage`, `Picture`, `Work`, `Finished`, `Planes` und Workerfelder bleiben erhalten. Rust droppt Strukturfelder in Deklarationsreihenfolge und Tuplelemente von vorn nach hinten. [Rust Reference: Destructors](https://doc.rust-lang.org/reference/destructors.html)
+
+#### R9-D — Mittel: globale YUV-Ressource hält ein beendetes Sitzungsbudget unbegrenzt
+
+**Ort und Auslöser:** `native/src/app/core/screen_wgpu_yuv.rs:79/93/253` hält `Planes.memory` in den langlebigen `YuvResources` der Callbackressourcen. `screen_viewer_app.rs::new` installiert diesen Besitzer einmal; `ViewState::end_session` räumt ihn nicht ab. Ein Wechsel auf CPU-Ausgabe, Rückkehr zur Kachelansicht oder Schließen der letzten YUV-Sitzung liefert keinen eigenen Endpfad. Die Zusage endet erst bei späterem YUV-Ersatz, ungültigem Upload oder Rendererabbau.
+
+**Wirkung:** Hat die beendete Sitzung die stabile Poolhülle ausgeschöpft, bleibt die nächste Zulassung gesperrt. Beispielsweise liefert ein ausreichend großer Anfangsfakt eine 768-MiB-Hülle, deren vollständige Zusage nach Sitzungsende allein in `Planes` hängt. Eine neue Sitzung erhält dann kein Budget und erreicht folglich auch den ersetzenden Upload nicht. Die Feldreihenfolge schützt zwar vor vorzeitiger Freigabe, erzeugt hier aber eine Wiederverbindungssperre während des weiter geöffneten Viewerfensters.
+
+**Nötige Korrektur:** Ein begrenzter Renderer-Endpfad muss die wirklich noch benötigte Ausgabe erhalten und nach deren Abfluss sowohl Planes als auch Zusage freigeben, auch ohne weiteren YUV-Upload. Er muss mit R9-A zusammenpassen. Nur die Zusage zu entfernen, während die zugehörigen Produktressourcen weiterleben, verschiebt den Defekt zur Unterzählung. Primärbeleg sind die genannten lokalen Besitzer- und Endpfade; eine tatsächliche GPU-Freigabefrist wird nicht behauptet.
+
+#### R9-E — Mittel: Snapshot einer v2-Sitzung bleibt unversioniert und ungebunden
+
+**Ort und Auslöser:** `native/src/screen/core/host_session.rs:333` nimmt `ViewerFrame::Snapshot` auch für v2 an. `host_capture.rs::snapshot_epoch` verwendet die angeforderte Größe beziehungsweise `FrameSize::MAX`, `still_tiles` und einen normalen Tilesencoder; der Snapshotkopf um Zeile 73 setzt immer `frame_contract:None`.
+
+**Wirkung:** `gop_stream::read_picture_stream` und `ScreenStream::next_event` verlangen auch für Snapshot die Paarung zum angenommenen Sitzungsvertrag. Die Antwort einer legitimen v2-Anfrage wird daher als gemischtes v1-/v2-Paar verworfen. Außerdem bindet die Snapshotproduktion ihre Größen-/Encodekopien nicht an das möglicherweise kleine angenommene W. Das ist ein konkreter vorhandener Protokollpfad; eine sichtbare Snapshot-Schaltfläche wird damit nicht behauptet.
+
+**Nötige Korrektur:** Snapshotcapture, verlustfreie Paketierung und Kopf müssen denselben angenommenen Vertrag tragen und vor ihren Allokationen begrenzt werden; echte Legacy-Snapshots bleiben erhalten. Die strikte Paarprüfung aus R1 darf nicht als Umgehung gelockert werden. Primärbeleg sind die drei genannten Produzenten-/Empfängergrenzen.
+
+#### R9-Fixnachweis und Quellenfixtures
+
+Die gelesenen Fixtures decken die allgemeine Poolarithmetik, Arc-Zusage, kleinere Angebote, Helloerweiterung und GOP-Präfixreihenfolge ab. `batches_4k_task_tests.rs` verbindet die 2-Mbit/s-Qualitätspolitik mit der unverkleinerten Quellgeometrie und rekonstruiert separat eine 4K-Referenz durch direkt an `HybridDecoder` gelieferte Lossless-Tiles bytegleich. Das ist kein ausgeführter HostPipeline-/Netzwerkdurchsatznachweis. Die cgroup-Fixtures modellieren sichtbare Vorfahren und unlesbare Daten, aber keinen realen Namespace-Rootbeleg. Das CPU-Fixture hält Quell-/Work-Arcs, nicht einen verzögerten Upload nach Handleabbau. Keine dieser Dateien wurde kompiliert oder ausgeführt. Die fünf offenen Auslöser benötigen konkrete Korrekturen und passende Grenzen in der bereits vorgesehenen gemeinsamen Suite; dieser Review startet keine Suite.
+
+#### Ursprünglicher R9-Befund und hergeleitete Korrekturoption — Historie vor dem R9-Fix
+
+Die folgenden Absätze beschreiben den vor der 864-MiB-Implementierung gelesenen Zustand. Ihre damaligen Gegenwartsformen und offenen Anschlussstellen sind keine Aussage über den oben nachgelesenen Fix; die Rechnung bleibt dessen Grundlage.
+
+**Anforderung und Fehlerstelle:** `vertraege.md:367` verlangt für P30 nach vollständiger verlustfreier Korrektur 3840×2160 bei 2 Mbit/s mit exakt passender Auflösung und pixelgleicher Schriftreferenz. `frame_budget.rs:11/14` kombiniert dagegen `MAX_WORKING_BYTES=512 MiB` mit `VERSIONED_WORKING_IMAGES=24`. Die Konstruktoren `resources` und `legacy_resources` begrenzen das Angebot auf `floor(W/24/4)`; `FrameLimits::with_working_budget` kann es nur weiter verkleinern. `FrameContract::negotiate/validate` erzwingt denselben Quotienten. Mehr tatsächlich verfügbarer Speicher kann diese feste Obergrenze nicht erweitern.
+
+**Auslöser und Wirkung:** Eine 3840×2160-Quelle, hinreichende Capture-/Codec-/Texturgrenzen und zwei v2-fähige Gegenstellen genügen. Ein BGRA-Bild benötigt 33.177.600 Byte; 24 Bildäquivalente benötigen 796.262.400 Byte = 759,375 MiB. Zulässig sind heute höchstens 5.592.405 statt 8.294.400 Pixel. Bei ansonsten unbeschränkter 4K-Quelle ergibt `FrameLimits::fit` im Tilespfad 3153×1773. `host_pipeline.rs:286` bildet die Grenze vor der Bildkodierung; auch `target_size` für Tiles verwendet das bereits verkleinerte Bild. Vollständige Lossless-Korrektur kann deshalb nur dieses verkleinerte Bild wiederherstellen. Mehr Aufbauzeit, weniger fps oder ein höheres Bitratenziel bringen die verlorenen Quellpixel nicht zurück. Das ist ein statischer Vertragswiderspruch, kein ausgeführter Qualitätsvergleich.
+
+**Tatsächlicher Desktopanschluss:** `screen_pool.rs:90` verwendet trotz des Namens `legacy_resources` einen expliziten v2-Vertrag mit dieser Grenze für Preview und Full. `screen_render_caps.rs::capabilities/check/checked_target` leitet seine Grenze ebenfalls aus dem festen Konstruktor ab. `screen_pool::to_view` übernimmt eine zulässige Previewsitzung und sendet lediglich SET_MODE; der bereits angenommene Bildvertrag wird dadurch nicht erweitert. Ein Fix nur am Full-Aufruf oder am Losslessschalter reicht deshalb nicht.
+
+**Damals vorgeschlagene Korrekturoption:** Die bestehende Besitzerrechnung erhalten und eine ausdrücklich erkennbare größere v2-Budgetklasse anbieten, soweit die konkrete Sitzung deren Speicher tragen kann. Eine aus vorhandener Bildfähigkeit abgeleitete obere Klasse wäre `24 × 4 × (4096×2304) = 905.969.664 Byte = 864 MiB`; sie finanziert das bereits bestehende Legacy-Pixelmaximum mit der neuen Besitzerbilanz. Dieser Wert ist eine Implementierungsobergrenze, kein pauschales Geräteangebot. Host und Viewer müssen ihr wirklich verfügbares Sitzungsbudget darunter begrenzen. Kleinere Android-Heaps behalten ihr kleineres Angebot; ihre Grenze darf nicht auf die Desktopklasse angehoben werden.
+
+Als rein rechnerisches Zulassungsbeispiel genügt ein durch Ressourcen belegtes `W=768 MiB`. Angenommen sind ein Seitenrahmen bis 16384, `max_pixels=floor(W/24/4)` und unveränderte R7-Besitzer. Dann ergibt die aktuelle Formel:
+
+| Größe | Wert |
+|---|---:|
+| W | 805.306.368 Byte |
+| max_pixels / I | 8.388.608 Pixel / 33.554.432 Byte |
+| N / F / H | 2.561 / 1.443.842 Byte / 1.099 Byte |
+| R / E | 4.022.385 / 39.020.659 Byte |
+| Pullbuffer | 33.554.464 Byte |
+| `20I+32(R+H)+(E−I)` | 805.306.355 Byte ≤ W |
+| Gemeinsame Skalierreserve nach 13 festen Bildplätzen | 234.881.037 Byte |
+
+4K liegt innerhalb dieses Pixelangebots. Die Recordgrenze bleibt unter 16 MiB, und die Rechnung behält die beschriebenen 32 Recordbesitzer sowie expliziten Scalerleases. Die Zahlen belegen die Verträglichkeit der größeren Klasse mit der vorhandenen Formel; sie sind weder eine Speichermessung noch ein Nachweis, dass ein konkretes Gerät 768 MiB zusätzlich tragen kann. Ein bloßes Senken von 24 auf 16 ohne veränderte und erneut belegte Besitzer wäre keine Korrektur.
+
+**Vollständige betroffene Schnittstelle der vorgeschlagenen Korrektur:**
+
+1. **Ressourcenfakt → Angebot:** Desktop-Host und Desktop-Viewer benötigen denselben typisierten Budgeteingang bei der Konstruktion von `FrameCapabilities`; Texture-Sidelimits allein belegen kein Arbeitsbudget. Der Hauptagent benennt die bestehende Funktion `crate::transfer::available_memory()` als möglichen Lieferanten. Deren Implementierung gehörte nicht zur freigegebenen Lesefläche und wurde hier nicht unabhängig bewertet. Grundlast, gleichzeitig zugesagte Sitzungsbudgets und konkrete Prozessgrenzen müssen bei der Zulassung berücksichtigt werden. Das Angebot bleibt ein festes Sitzungsbudget; es darf nicht durch bereits gehaltene eigene Bildpuffer nachträglich gegen sich selbst verkleinert werden.
+2. **ServerHello → ClientHello → Accepted:** Ein alter `ScreenClientHello::validate` lehnt `working_bytes>512 MiB` vor `FrameContract::negotiate` ab. Der Host muss daher vor dem Clientangebot ein optionales Kennzeichen für den erweiterten Budgetrahmen liefern. Fehlt dieses Kennzeichen, sendet der neue Viewer höchstens das bisherige Angebot. Ein alter Viewer ignoriert das zusätzliche JSON-Feld und bietet weiterhin seinen bisherigen Rahmen an; der neue Host darf den angenommenen Vertrag nie darüber hinaus erweitern. Dafür sind `wire_hello.rs`, die Auswahl beim Helloaufbau und `viewer_client::handshake_for` sowie beide Vertragsvalidatoren betroffen. Die vorhandene GOP-/Accepted-Bindung und Recordableitung bleiben erhalten. Ein vergrößertes unbedingtes Clientangebot ist nicht abwärtskompatibel. Serde dokumentiert das Ignorieren unbekannter JSON-Felder ohne `deny_unknown_fields`; die gelesenen Hellotypen verwenden dieses Attribut nicht. [Serde: Container attributes](https://serde.rs/container-attrs.html#deny_unknown_fields)
+3. **HMAC-Grenze:** Im aktuell gelesenen `wire_hello::screen_transcript` gehen nur `server.relation()` und `client.relation()` ein. Deren Konstruktoren enthalten weder `frame_capabilities` noch `display_size`, `max_fps`, `icon_version` oder `family_version`. Allein das Begrenzen von `frame_capabilities` ändert diese bestehende HMAC-Eingabe deshalb nicht. Die Budgetauswahl sollte dennoch vor dem Aufbau des versendeten Client-Hellos erfolgen, damit Angebot und späterer Accepted-Vergleich dieselbe Größe verwenden. Ein neuer Fähigkeitsmarker ist ohne explizite Transkriptänderung nicht zusätzlich durch dieses HMAC gebunden; eine solche Bindung darf nicht behauptet werden.
+4. **Quellcapture → Sitzungsvertrag:** `host_pipeline::fitted_size` schneidet `working_bytes` mit `ScreenSource::frame_limits_for_contract` und wendet danach erneut `/24` an. Ein auf 768 MiB vergrößerter Sitzungsvertrag würde durch einen unverändert als 512 MiB gemeldeten RAW-Quellvertrag erneut verkleinert. Die getrennte Zulassung des Einzelcaptures muss dessen Seiten-, Pixel- und Capturepuffergrenzen erhalten; die 24 sitzungsweiten Besitzer müssen das eigens zugelassene Sitzungsbudget verwenden. `ScreenSource::frame_limits_for_contract`, Worker-Quellfakten und der PRODUCE-Vertrag müssen diese Unterscheidung ausdrücklich tragen. Androids `BridgeSource` enthält hingegen ein wirklich kleineres Heapangebot und darf dieses bei der Trennung nicht verlieren.
+5. **Renderer und Sitzungswechsel:** `screen_pool::renderer_capabilities` und `screen_render_caps` müssen dieselbe angenommene Ressourcenklasse verwenden. Ein Previewvertrag muss den für spätere Fullnutzung zugesagten Rahmen bereits tragen, oder der Übergang benötigt eine explizite neue Zulassung, bevor größere Frames übertragen werden. Getrennte Full-/Previewgrößen und -raten sowie der einmalige Losslessfallback aus R4/R8 bleiben erhalten. Kein SET_MODE darf den bestehenden Speichervertrag still erweitern.
+6. **Parser, Pull und Legacy:** Die höhere unterstützte Obergrenze muss in `FrameLimits` und bei teilnehmenden Kotlin-Verbrauchern in `ScreenBufferBudget` konsistent geprüft werden; QUIC-/IPC-/Worker-/JNI-Limits werden weiterhin aus dem tatsächlich angenommenen Vertrag berechnet. Zusätzlich erzeugt `wire_binary::GopHeader::decode` heute einen vorläufigen Vertrag mit `working_bytes=MAX_WORKING_BYTES` und prüft ihn bereits, bevor `read_gop_header` beziehungsweise `ipc_protocol_screen::decode_relay_record` die echte Vertragserweiterung einsetzen. Bleibt diese Konstante für RAW bei 512 MiB, würde der Zwischenvertrag einen neuen zulässigen 4K-GOP weiterhin ablehnen. Kopfstrukturprüfung und vollständige Vertragsprüfung müssen diese Reihenfolge ausdrücklich berücksichtigen; erst die echte Erweiterung darf die Speicherfreigabe liefern, weiterhin an Accepted gebunden. RAW-/Sourcegrenzen, `FrameLimits::LEGACY`, Kotlin-LEGACY und die D3D-Capturebilanz bleiben bei ihren bisherigen Grenzen. Ein globales Ersetzen der gemeinsam verwendeten 512-MiB-Konstante würde diese Verträge mitverändern. Kleine Androidangebote bleiben mindestens durch den beim Öffnen beobachteten freien Java-Heapanteil begrenzt. Ohne unabhängigen größeren Plattformbeleg ist für Android kein größeres Angebot begründet.
+
+**Primärquellen und fehlende Plattformfakten, geprüft am 2026-10-26:** Windows bietet mit `GlobalMemoryStatusEx` momentane physische und virtuelle Speicherinformationen; `ullAvailPageFile` bezeichnet den noch möglichen Prozess-Commit. Microsoft kennzeichnet die Werte ausdrücklich als veränderlich. Eine Abfrage ist deshalb keine Reservierung. [GlobalMemoryStatusEx](https://learn.microsoft.com/en-us/windows/win32/api/sysinfoapi/nf-sysinfoapi-globalmemorystatusex), [MEMORYSTATUSEX](https://learn.microsoft.com/en-us/windows/win32/api/sysinfoapi/ns-sysinfoapi-memorystatusex). Unter Linux ist `MemAvailable` eine Schätzung des ohne Swapping verfügbaren Speichers; cgroup-v2-Grenzen können den Prozess zusätzlich beschränken und gelten hierarchisch. `memory.current` und `memory.max` müssen bei zutreffender cgroup-Zuordnung berücksichtigt werden. [Linux /proc](https://docs.kernel.org/filesystems/proc.html), [Control Group v2](https://docs.kernel.org/admin-guide/cgroup-v2.html). Androids `Runtime.maxMemory` bezeichnet das Maximum, das die VM zu verwenden versucht; `totalMemory/freeMemory` beschreiben den Javaheap. Daraus folgt kein freier Native-/GPU-Speicher. [Android Runtime](https://developer.android.com/reference/java/lang/Runtime#maxMemory())
+
+Unbekannt bleiben die tatsächlich verfügbaren Budgets der Zielgeräte, die genaue Semantik des vom Hauptagenten benannten Speicherhelpers, zusätzliche Prozess-/Containergrenzen und die erforderliche Reserve für Codec, Treiber, Grafik und Anwendungsgrundlast. Die Korrekturoption ist deshalb an einen belegten Ressourcenlieferanten und dessen gemeinsame Zulassung gebunden. Annahmen über einen pauschal ausreichenden Desktop oder Androidheap sind nicht Teil des Befunds.
+
+**Schließungssignal:** Der konkrete Code muss 3840×2160 bei ausreichendem Ressourcen-, Codec- und Texturangebot zulassen, die vollständige verlustfreie Rekonstruktion auf diesen Quellpixeln halten und die gemeinsame Pufferformel weiter erzwingen. Kleineres Ressourcenangebot, alte Gegenstellen, unversioniertes Legacy und Preview→Full benötigen weiterhin ihre ausdrücklich begrenzten Pfade. Die spätere gemeinsame Task-Suite muss das V7-Ergebnis bei 2 Mbit/s auswerten; dieser Reviewer hat weder Code repariert noch Tests ausgeführt. Bis zum nachgelesenen vollständigen Anschluss bleibt R9 offen.
+
+### B6-R10 — Hoch, offen: altes Skalierergebnis kann eine neue Previewsitzung bestätigen
+
+**Korrigierter Ausgangsfehler:** `accept_preview_picture` verwendet jetzt `can_present` statt der bereits freigegebenen Eingabe als Voraussetzung für das neue Bild; `update_frame` erhält dessen Darstellungsidentität. `draw_tile` erzeugt den Presented-Callback erst nach Vorbereitung und Einfügen der sichtbaren Textur in den Paintpfad. Innerhalb derselben Sitzung durchbrechen diese Änderungen die frühere Hidden→Visible-Abhängigkeit; Ack, Snapshotfloor, Epoche, Hidden und geschlossene Sitzung werden beim Callback erneut geprüft. Das ist ein statischer Nachweis des Aufrufpfads, kein physischer Scanoutbeleg.
+
+**Verbleibender Ort:** `native/src/app/core/screen_tile_grid.rs::step/open_preview` behält beim Ende beziehungsweise Ersatz einer Sitzung die `CpuTexture`; `screen_tile_face.rs:151` setzt im Retryzweig Session und Picture zurück, nicht den Texturworker. `screen_texture_cpu.rs:129` akzeptiert ein fertiges Skalierergebnis anhand gleicher Quell-/Zielmaße und `done.seq >= self.presented`. Eine Sitzungsidentität fehlt. `screen_presented::PresentedFrame` enthält nur Epoche, GOP-ID und Frame-ID; diese Zähler können in einer neuen Sitzung dieselben Werte erreichen. `screen_tile_face.rs:163` bindet den so erhaltenen alten Beleg an den Callback der aktuell in der Kachel gespeicherten Sitzung.
+
+**Konkreter Auslöser:** Sitzung A beendet sich mit einem noch laufenden oder fertigen CPU-Skalierauftrag. Sitzung B ersetzt A in derselben Kachel und liefert ein Bild mit gleichen Quell-/Zielmaßen. Das Ergebnis von A besitzt eine Sequenz, die noch nicht dargestellt wurde; daher passiert es den genannten Vergleich trotz des inzwischen neuen Source-Bilds. Stimmen seine lokalen Epoch-/GOP-/Framewerte mit einem zulässigen B-Beleg überein, kann `preview_presented` den A-Pixelinhalt über B bestätigen und B-Eingabe freigeben. Das ist keine notwendige Folge jeder Wiederverbindung, sondern ein belegbarer zulässiger Ablauf ohne eindeutige Sitzungskopplung.
+
+**Nötige Korrektur:** Quelle, Work, Finished, Upload und Presented müssen dieselbe eindeutige Sitzungsbesitzeridentität tragen; alternativ muss jeder Ersatz-/Retry-/Offline-/Endpfad den alten Worker samt Ergebnis sicher invalidieren. Der tatsächliche Bufferabbau muss gleichzeitig R9-A erfüllen. Ein Vergleich nur mit einer wiederverwendbaren GOP-/Frame-/Epochkombination genügt nicht. Full→Preview, Preview→Full, Legacy und die unabhängige Logintextur dürfen dabei keine fremde Bestätigung erhalten.
+
+**Fixturegrenze und Primärbeleg:** `batches_preview_task_tests.rs` prüft an einer einzelnen Shared-Sitzung fehlendes Ack, alte Epoche, nicht hochgeladenes beziehungsweise nicht gezeichnetes Bild und Hidden. Die verwendete kleine unvergrößerte Textur durchläuft keinen konkurrierenden Skaliererabschluss über einen Sitzungsersatz; genau dieser Auslöser fehlt. Primärbeleg sind die genannten lokalen Zähler-, Worker- und Callbackpfade. Keine GUI-/GPUausführung. R10 bleibt bis zur eindeutigen Sitzungsbindung offen.
 
 ### B6-R1 — Hoch, inzwischen statisch korrigiert: v1-GOP umgeht ausgehandelten v2-Speichervertrag
 
@@ -118,7 +230,7 @@ Microsoft nennt ausdrücklich die unrotierte Acquired-Surface mit darin gedrehte
 
 ### B6-R7 — Hoch, inzwischen statisch korrigiert: Arbeitsbudget über Transport, Pull und CPU-Skalierung
 
-**Abschließendes Urteil vom 2026-10-26:** Der ursprüngliche 16-MiB-Record in einer 8-MiB-v2-Sitzung passiert die Aufnahmegrenze nicht mehr. Der bisherige Vertrag 512×512 / `max_pixels=262144` / 8 MiB wird bereits als überhöht abgelehnt. Kleinere belegte Angebote sind zulässig. Record-, Frame-, Queue-, Direktbuffer- und CPU-Skalierungsbesitzer sind im freigegebenen Stand gemeinsam begrenzt. R7 ist für die konkret nachverfolgten lebenden Produktpuffer statisch geschlossen; keine Gesamt-RSS-, Grafik-/Treiber-/Kernel-, Allocator- oder GC-Garantie und keine Laufzeitabnahme.
+**Abschließendes R7-Urteil vom 2026-10-26:** Der ursprüngliche 16-MiB-Record in einer 8-MiB-v2-Sitzung passiert die Aufnahmegrenze nicht mehr. Der bisherige Vertrag 512×512 / `max_pixels=262144` / 8 MiB wird bereits als überhöht abgelehnt. Kleinere belegte Angebote sind zulässig. Record-, Frame-, Queue-, Direktbuffer- und Android-CPU-Skalierungsbesitzer sind im dort freigegebenen Stand gemeinsam begrenzt. R7 ist für diese konkret nachverfolgten lebenden Produktpuffer statisch geschlossen; keine Gesamt-RSS-, Grafik-/Treiber-/Kernel-, Allocator- oder GC-Garantie und keine Laufzeitabnahme. Die anschließend eingeführte prozessweite Desktopzulassung und deren verzögerte Rendererübergaben besitzen die unter R9 dokumentierten offenen Grenzen. Die ursprüngliche pauschale 4K-Sperre wurde durch die größere v2-Klasse beseitigt; R9 bleibt wegen seiner konkret genannten Übergänge offen.
 
 **Vertragsformen:** `FrameContract::validate` und `PacketBudget::for_contract(Some(...))` erzwingen die v2-Rechnung. Bloße Quelllimits, `RESOURCE`, ausdrücklich unversionierte Sitzungen und Workeranfragen ohne v2-Vertrag behalten ihre bisherigen acht Bildäquivalente beziehungsweise Codec-/RAW-Grenzen. Die numerische Gleichheit von Limits wird nicht als Legacykennzeichen verwendet. Der native Quellcapturevertrag bleibt vom engeren übertragenen Bildvertrag getrennt; die v2-Viewergrenze ist keine nachträgliche Verkleinerung eines separat zugelassenen RAW-Quellcaptures.
 
@@ -147,7 +259,7 @@ Das ist eine Rechnung über den Quelltext, keine Speichermessung. Dreizehn Bildp
 
 **Während dieses Nachreviews zusätzlich geschlossene Übergänge:** Die erste Transportkorrektur hatte noch drei Lücken: Die Kotlin-SPS-Prüfung kannte nur die globale 64-MiB-Grenze; der Pullbuffer wurde nach vollständig beendetem Decoder während einer Surfacepause nicht wiederverwendet; die CPU-Skalierung konnte Viewportpuffer außerhalb der Rechnung anlegen. Für den letzten Fall genügten 512×256 Quellpixel und eine normale Vergrößerung auf 1920×960: Zielarray und Zielbitmap benötigten zusammen 14.745.600 Byte. Die oben beschriebenen Budget-, Sitzungsbesitz- und Scaleränderungen schließen diese konkreten Auslöser. Das dabei separat gefundene GOP-/Fallbackrennen ist unter R4 dokumentiert und ebenfalls korrigiert.
 
-**Primärquellen und praktische Grenze:** Android dokumentiert mögliche Direktbufferbelegung außerhalb des normalen Javaheaps; Wiederverwendung ersetzt deshalb eine unbelegte Annahme sofortiger GC-Freigabe. Die MediaCodec-API verlangt explizite Ressourcenfreigabe; Bitmap-`allocationByteCount` beschreibt die tatsächliche Pixelallokation genauer als bloße aktuelle Abmessungen. Diese Grenzen wurden gegen [ByteBuffer](https://developer.android.com/reference/java/nio/ByteBuffer), [MediaCodec.release](https://developer.android.com/reference/android/media/MediaCodec#release()) und [Bitmap.getAllocationByteCount](https://developer.android.com/reference/android/graphics/Bitmap#getAllocationByteCount()) am 2026-10-26 geprüft. Nicht belegte Speicherfreigabe durch GC, Compositor oder Treiber wird nicht in die Produktpufferrechnung eingerechnet. Die Summe mehrerer gleichzeitiger Sitzungen ist kein einzelnes W-Budget. Die strengere v2-Zulassung reduziert mögliche Originalauflösungen: Bei der absoluten Grenze von 512 MiB sind höchstens 5.592.405 Pixel zulässig; 3840×2160 überschreitet diesen v2-Rahmen und muss verkleinert werden. Unversionierte Übertragung und separat zugelassener RAW-Quellcapture behalten ihre beschriebenen Grenzen. Auflösungsparität zwischen diesen Vertragsformen wird nicht behauptet.
+**Primärquellen und praktische Grenze:** Android dokumentiert mögliche Direktbufferbelegung außerhalb des normalen Javaheaps; Wiederverwendung ersetzt deshalb eine unbelegte Annahme sofortiger GC-Freigabe. Die MediaCodec-API verlangt explizite Ressourcenfreigabe; Bitmap-`allocationByteCount` beschreibt die tatsächliche Pixelallokation genauer als bloße aktuelle Abmessungen. Diese Grenzen wurden gegen [ByteBuffer](https://developer.android.com/reference/java/nio/ByteBuffer), [MediaCodec.release](https://developer.android.com/reference/android/media/MediaCodec#release()) und [Bitmap.getAllocationByteCount](https://developer.android.com/reference/android/graphics/Bitmap#getAllocationByteCount()) am 2026-10-26 geprüft. Nicht belegte Speicherfreigabe durch GC, Compositor oder Treiber wird nicht in die Produktpufferrechnung eingerechnet. Die Summe mehrerer gleichzeitiger Sitzungen ist kein einzelnes W-Budget. Ein v2-Angebot von 512 MiB trägt bei 24 Bildäquivalenten höchstens 5.592.405 Pixel; Android darf bei begrenztem Heap weiterhin ein solches oder kleineres Angebot machen. Die früher globale 512-MiB-Obergrenze verletzte dagegen V7/P30 und wurde im R9-Fix für ausreichend zugelassene native Sitzungen erweitert. Unversionierte Übertragung und separat zugelassener RAW-Quellcapture behalten ihre beschriebenen Grenzen.
 
 **Ursprünglicher Transportbefund:**
 
@@ -192,7 +304,7 @@ Diese Aussagen beschreiben gelesene Implementierungspfade, keine erfolgreiche Au
 - **Hybridreferenz:** Begin/Video/Moves/Dirty/Commit, Generation, Frame-ID und Basisframe bilden einen gemeinsamen Vertrag. Moves lesen aus der vorherigen Referenz; verlustfreie Regionen werden vor dem atomaren Commit angewandt. Fehler vergiften die Referenz und verlangen einen neuen vollständigen Schlüsselbildaufbau.
 - **Größen-/Ratenverträge:** `FrameLimits`, `PacketBudget`, SPS-Prüfungen und Workergrenzen ersetzen mehrere pauschale Annahmen durch geprüfte Werte. Encoder-/Decoder-Makroblockraten werden für dasselbe ausgewählte Codecpaar begrenzt. FrameClock und StageRequest verwenden denselben tatsächlich gewählten fps-Wert. Reine fps-Begrenzung verkleinert die Quellpixel nicht.
 - **Darstellung:** CPU-Skalierung läuft im begrenzten Worker; Pixelmaßstab umgeht Rekonstruktion. CPU/GPU verwenden Flächenintegration beim Verkleinern und kubische Rekonstruktion beim Vergrößern. Darstellungsbestätigungen kommen aus Rendercallbacks beziehungsweise Android-Frame-/Bitmapdarstellung, nicht allein aus dem Empfang. Die MFT-/OpenH264-Ausgabeidentität ist nach B6-R3 nun ebenfalls angebunden.
-- **Sichtbarkeit und Eingabe:** Fokusverlust allein wird nicht als Verdeckung ausgegeben. Wayland ohne globale Verdeckungsdaten bleibt unknown. Captureaktivität wird serialisiert; Wiedereintritt verlangt eine neue Referenz und zugehörige Bestätigung. Bestehende Eingabefreigaben nach Quellenwechsel werden nicht aus einem alten Texture-Slot übernommen.
+- **Sichtbarkeit und Eingabe:** Fokusverlust allein wird nicht als Verdeckung ausgegeben. Wayland ohne globale Verdeckungsdaten bleibt unknown. Captureaktivität wird serialisiert; Wiedereintritt verlangt eine neue Referenz und zugehörige Bestätigung. Innerhalb derselben Sitzung gelten die geprüften Epoch-/Referenzgrenzen; der Ersatz einer Previewsitzung besitzt die gesonderte Identitätslücke R10.
 - **Vollbild:** Desktop bietet den dauerhaft sichtbaren lokalen Ausstieg, F11, Strg+Alt+Pause und Strg+Alt+Umschalt+F; der Umschaltpfad löst gehaltene Remoteeingaben. Android fängt die lokalen Hardwarekombinationen vor Remoteweitergabe ab und bietet den Ausstieg über die Bildschirmleiste. Systemreservierte Tastenkombinationen und tatsächliche Gestenzustellung sind nicht praktisch bestätigt.
 - **P32:** MainActivity setzt keine `screenOrientation`; in den geprüften Medien-/Activitydateien existiert kein `requestedOrientation`-Schreibzugriff. Die Orientierung bleibt Systementscheidung. Bildzoom/Fokus sind pfadgebunden gespeichert; der Player hält Position und Wiedergabeabsicht getrennt von seiner austauschbaren Surface. Hintergrundwechsel bleibt pausiert bis zur ausdrücklichen Fortsetzung. Swipe, Tastaturnavigation, externe Appöffnung und formatbezogene Fehlermeldungen bleiben vorhanden. [Android Activity-Konfiguration](https://developer.android.com/guide/topics/manifest/activity-element#screen) beschreibt die Systementscheidung bei nicht vorgegebener Orientierung.
 
@@ -210,6 +322,8 @@ Die vermutete doppelte Hybridumhüllung wurde verworfen: Die konkret geprüften 
 | Referenz-/Epochenverlust → Darstellung → Eingabe | Desktop hält den ursprünglichen Darstellungsbeleg über Decoderlatenz. Android prüft Sitzung, GOP, Epoche, Sichtbarkeitsfloor und Familienlayout; MediaCodec-Surfacebelege kommen über PTS-gebundene Rendercallbacks, Bitmapbelege über den Darstellungsweg. Der native Host verlangt einen in der aktuellen Referenz tatsächlich gesendeten Frame. Keine Aussage über physisches Display-Scanout. |
 | Rückfallgrund → Oberfläche | Native `notice` erscheint in Viewerstatus beziehungsweise Kachelhinweis. Android `codecFallback` wird in der Bildschirmleiste dargestellt. Decoder- und Hostencoderfallback bleiben vom terminalen Fehlerzustand getrennt. |
 | v2-Arbeitsbudget → Record → Queue → Pull → CPU-Skalierung | R7 statisch geschlossen: gemeinsame Vorallokationsgrenzen, erhaltene Legacyform, einmaliger Sitzungsbuffer und geleaste Skalierausgaben. Die Aussage betrifft lebende Produktpuffer, keine Gesamt-RSS oder Geräteabnahme. |
+| Ressourcenangebot → volle 4K-Quelle → verlustfreie Korrektur | Größere v2-Klasse, getrennte Capturegrenze und alte Hello-Gegenstellen sind angebunden; 768 MiB tragen rechnerisch 4K mit unveränderter Besitzerformel. R9 bleibt wegen der fünf konkret dokumentierten Zulassungs-, Besitzer- und Snapshotlücken offen. |
+| Preview → tatsächliche Darstellung → Eingabe nach Wiederverbindung | Der zyklische Hidden→Visible-Ausgangsfehler ist innerhalb derselben Sitzung korrigiert. R10 bleibt offen, weil ein altes Skalierergebnis nach Sitzungsersatz mit wiederholten lokalen Identitätswerten bestätigt werden kann. |
 
 Der nach Freigabe erneut gelesene Windows-/Workerübergang erhält die Bildbindung: DXGI-Rotation und Reopen erhöhen die Quellgeneration; ein Generationswechsel während `capture` verwirft das erhaltene Ergebnis und den Encoder. `WorkerReply::Reference` transportiert die Generation zurück, der Client verweigert einen Rückschritt. `send_bound_input` erhält die beim Aufruf bestätigte Generation bis zur Prüfung im ursprünglichen Worker. `HostSession::produce` sendet eine Fallbackdiagnose auch dann, wenn kein neuer Streamingstatus vorliegt. Die konkrete Windows-Eingabegeometrieprüfung außerhalb des Manifests bleibt Gegenstand des gesonderten B7-Reviews.
 
@@ -221,7 +335,8 @@ Der nach Freigabe erneut gelesene Windows-/Workerübergang erhält die Bildbindu
 4. **JNI-Direktgrenze nach Freigabe geschlossen:** `native/android-bridge/src/screen_jni.rs` wurde nach ausdrücklicher Scopeergänzung gelesen. Negative Offsets/Längen werden durch geprüfte Umwandlung verworfen; Addition, DirectBufferkapazität, Nulladresse und `isize::MAX` begrenzen die Slices. Die Slicelebensdauer bleibt innerhalb des JNI-Aufrufs. Die geprüften Aufrufer halten MediaCodec-/DirectBuffer bis zur Rückkehr. `smart_explorer_android` bindet laut Cargo.lock JNI 0.22.4. Die aktuelle [Env DirectBuffer-API](https://docs.rs/jni/latest/jni/struct.Env.html#method.get_direct_buffer_address) dokumentiert Adresse und Kapazität passend zu diesen Aufrufen; der direkte Abruf der versionsgebundenen Dokumentations-URL war nicht verfügbar. Keine Geräteausführung oder allgemeine JNI-Auditaussage.
 5. **P4-Integration:** In den freigegebenen Dateien wurden Capture-Layoutrevision und Decoderlayoutgate als B6-Integrationsgrenze betrachtet. P4-OSfensteroperationen und P5-Appstart sind nicht abgenommen. Änderungen, die nach dem letzten Read im gemeinsamen Arbeitsbaum eintreffen, benötigen einen gezielten Nachtrag.
 6. **Graph:** Kein Graphinhalt gehörte zum delegierten Dateimanifest; kein Graphread oder Graphneubau wurde ausgeführt. Der Review benutzt direkte Quellpfade und Primärquellen.
-7. **Quellenstand:** Die Herstellerseiten des Erstreviews wurden am 2026-10-25 abgerufen; die Quellen zu R3, R4 und R7 wurden am 2026-10-26 erneut beziehungsweise zusätzlich gelesen. Der Arbeitsbaum bindet Windows-Rust 0.58, eframe/egui-wgpu 0.29.1, x11rb 0.13.2, OpenH264 0.9.9 und resvg 0.49.0. Die Android-Gradlekonfiguration gehört nicht zum freigegebenen Manifest; die genaue gebundene Compose-/SDKversion ist in diesem Review deshalb nicht unabhängig bestätigt. Ein Abruf der Android-Runtime-Referenz scheiterte; daraus wird kein extern bestätigter Speicherbeleg abgeleitet.
+7. **Quellenstand:** Die Herstellerseiten des Erstreviews wurden am 2026-10-25 abgerufen; die Quellen zu R3, R4, R7 und R9 wurden am 2026-10-26 erneut beziehungsweise zusätzlich gelesen. Der Arbeitsbaum bindet Windows-Rust 0.58, eframe/egui-wgpu 0.29.1, x11rb 0.13.2, OpenH264 0.9.9 und resvg 0.49.0. Die Android-Gradlekonfiguration gehört nicht zum freigegebenen Manifest; die genaue gebundene Compose-/SDKversion ist in diesem Review deshalb nicht unabhängig bestätigt. Ein erster Abruf der Android-Runtime-Referenz scheiterte; der spätere Abruf im R9-Nachtrag gelang und belegt die dort beschriebenen Javaheap-Semantiken.
+8. **Offene Anforderung V7/P30:** Die größere native Klasse lässt 4K rechnerisch zu und die Quellenfixture erhält die 4K-Geometrie bei der 2-Mbit/s-Qualitätspolitik. Noch nicht geschlossen sind die fünf R9-Übergänge und die R10-Sitzungsidentität. Reale Ressourcenfakten der Zielgeräte, Codec-/Grafikgrundlast und tatsächlicher 2-Mbit/s-Netzaufbau wurden nicht gemessen. Die 25%-Quote ist Produktpolitik, kein Plattformgesetz; vorhandene Zusagen schützen nicht vor externem Speicherdruck.
 
 ## Datei- und Aktionsnachweis
 
@@ -459,3 +574,91 @@ Für den abschließenden Scalerstand zusätzlich gelesen:
 
 - `android/app/src/main/java/app/smartexplorer/android/ui/screen/ScreenScaleWorker.kt`
 - `android/app/src/main/java/app/smartexplorer/android/ui/screen/ScreenResample.kt`
+
+Für den V7-/4K-Folgeauftrag zusätzlich beziehungsweise erneut außerhalb der vorstehenden Nachreviewlisten gelesen:
+
+- `native/src/app/core/screen_render_caps.rs` — ausdrücklich zusätzlich freigegeben.
+- `native/src/app/core/screen_pool.rs` — ausdrücklich zusätzlich freigegeben.
+- `native/src/mobile/os/shared/domains/screen_host.rs`
+- `native/src/screen/core/negotiate.rs`
+- `native/src/screen/core/wire.rs`
+- `native/src/screen/core/wire_hello.rs`
+- `native/src/screen/os/windows/d3d_device.rs`
+
+Die bereits aufgeführten Budget-, Pipeline-, Worker-, IPC-, Android- und Vertragsdateien wurden für R9 gezielt erneut gelesen. Die Rechnung zu 512/768/864 MiB wurde als reine Ganzzahl-/Geometrieauswertung nachvollzogen; kein Produktcode, Compiler oder Test wurde ausgeführt. `crate::transfer::available_memory()` ist eine Nachrichtengrundlage des Hauptagenten, kein eigener Dateiread. Änderungen dieses Folgeauftrags betreffen ausschließlich diesen Bericht.
+
+### Abschließender R9-/R10-Durchgang vom 2026-10-26
+
+**Grundlage und Änderungen:** `/tmp/smartexplorer-r9-review-brief.txt`, `/tmp/smartexplorer-r9-scope.json` und die genannten öffentlichen Primärquellen wurden gelesen. Ausschließlich `docs/plaene/2026-10-24-batches/review-b6.md` wurde durch diesen Reviewer geändert. Die zuvor nur vom Hauptagenten benannten Transfer-Speicherhelper wurden in diesem Durchgang gezielt über ihre Deklarations-/Suchtreffer betrachtet; der neue Produktpfad verwendet die eigenständigen Screen-OSadapter. Kein Produktcode, keine Fixture, kein Graph und keine Releasekonfiguration wurden geändert. Keine Build-, Compiler-, Formatter-, Test-, Server-, Installations-, Commit-, Push- oder Releaseausführung. Dokumentationskontrolle: gezielte Textsuche, `git status --short`, `git log -1 --oneline` und `git diff --check` für diesen Bericht.
+
+**Gelesene Repositorydateien in diesem Durchgang:** vollständige Dateien oder gezielte Abschnitte/Suchtreffer; keine Behauptung einer vollständigen Zeilenprüfung jeder Manifestdatei.
+
+```text
+android/app/src/main/java/app/smartexplorer/android/api/ScreenApi.kt
+android/app/src/main/java/app/smartexplorer/android/screen/ScreenFrameLimits.kt
+docs/plaene/2026-10-24-batches/review-b6.md
+docs/plaene/2026-10-24-batches/vertraege.md
+native/review-task-manifest.json
+native/src/app/core/batches_preview_task_tests.rs
+native/src/app/core/login_viewer_image.rs
+native/src/app/core/screen_decode_thread.rs
+native/src/app/core/screen_pool.rs
+native/src/app/core/screen_presented.rs
+native/src/app/core/screen_render_caps.rs
+native/src/app/core/screen_scaling.rs
+native/src/app/core/screen_session.rs
+native/src/app/core/screen_texture_cpu.rs
+native/src/app/core/screen_tile_face.rs
+native/src/app/core/screen_tile_grid.rs
+native/src/app/core/screen_view_widget.rs
+native/src/app/core/screen_viewer_app.rs
+native/src/app/core/screen_viewer_view.rs
+native/src/app/core/screen_visibility.rs
+native/src/app/core/screen_wgpu_yuv.rs
+native/src/daemon/os/shared/ipc_protocol_screen.rs
+native/src/daemon/os/shared/screen_ipc.rs
+native/src/daemon/os/shared/screen_ipc_client.rs
+native/src/screen/core/batches_4k_task_tests.rs
+native/src/screen/core/batches_frame_budget_task_tests.rs
+native/src/screen/core/frame_budget.rs
+native/src/screen/core/frame_memory.rs
+native/src/screen/core/frame_memory_tests.rs
+native/src/screen/core/frame_size_caps.rs
+native/src/screen/core/gop_stream.rs
+native/src/screen/core/host_backend.rs
+native/src/screen/core/host_capture.rs
+native/src/screen/core/host_mode.rs
+native/src/screen/core/host_pipeline.rs
+native/src/screen/core/host_pipeline_actor.rs
+native/src/screen/core/host_server.rs
+native/src/screen/core/host_session.rs
+native/src/screen/core/viewer_client.rs
+native/src/screen/core/visibility.rs
+native/src/screen/core/wire_binary.rs
+native/src/screen/core/wire_control.rs
+native/src/screen/core/wire_hello.rs
+native/src/screen/core/wire_hello_tests.rs
+native/src/screen/core/wire_tests.rs
+native/src/screen/os/android/bridge_backend.rs
+native/src/screen/os/android/bridge_source.rs
+native/src/screen/os/android/session_memory.rs
+native/src/screen/os/linux_os/host_backend.rs
+native/src/screen/os/linux_os/session_memory.rs
+native/src/screen/os/mod.rs
+native/src/screen/os/shared/batches_memory_task_tests.rs
+native/src/screen/os/shared/host_worker_backend.rs
+native/src/screen/os/shared/host_worker_client.rs
+native/src/screen/os/shared/host_worker_main.rs
+native/src/screen/os/shared/session_memory.rs
+native/src/screen/os/windows/host_backend.rs
+native/src/screen/os/windows/session_memory.rs
+native/src/share/core/node_screen_link.rs
+native/src/transfer/mod.rs
+native/src/transfer/os/shared/memory.rs
+native/src/transfer/os/unix.rs
+native/src/transfer/os/windows.rs
+```
+
+Zusätzlich wurde nach ausdrücklicher Freigabe `/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/epaint-0.29.1/src/textures.rs` an `alloc`, `set`, `free` und `take_delta` gelesen. Ergänzend wurden die öffentlichen 0.29.1-Quellen von [egui-WGPU Renderer](https://raw.githubusercontent.com/emilk/egui/0.29.1/crates/egui-wgpu/src/renderer.rs) und [egui-Glow Painter](https://raw.githubusercontent.com/emilk/egui/0.29.1/crates/egui_glow/src/painter.rs) am 2026-10-26 an ihren Texturupdate-/Freigabepfaden gelesen. Daraus wird keine feste GPU-Freigabefrist abgeleitet. Die zuletzt zusätzlich freigegebenen `family_viewer.rs`, `frame_update.rs` und `app/core/mod.rs` wurden nicht als Anlass einer zusätzlichen breiten Prüfung benutzt.
+
+**Entscheidung und offene Übergabe:** R9 bleibt mit R9-A bis R9-E offen; R10 bleibt wegen der fehlenden Sitzungsidentität offen. Der 4K-Geometrieanschluss sowie der ursprüngliche Hidden→Visible-Kreislauf innerhalb einer Sitzung sind statisch korrigiert. Die inzwischen durch den Hauptagenten begonnenen Nicht-Rendererkorrekturen und der getrennte Renderer-Retiremententwurf sind keine vorweggenommene Schließung. Unbekannt bleiben die tatsächlichen Zielgerätebudgets, reale Renderer-/Codecfreigabe und der ausgeführte Ende-zu-Ende-Nachweis bei 2 Mbit/s. Der beauftragte statische Durchgang ist mit dieser Befundübergabe abgeschlossen.

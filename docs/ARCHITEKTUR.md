@@ -151,8 +151,13 @@ Android-APIs: `docs/refs/android-apis.md`, `docs/refs/android-platform.md`; CI: 
 ## Bauen, Prüfen, Konventionen
 - Keine lokalen Builds/Tests (AGENTS.md); Prüfung ausschließlich über die eine Remote-Task-Suite je Batch
   (Android: `.github/workflows/android-task.yml` → `android/test-android-task.sh`).
-- RV1: `.github/workflows/review-task.yml` → `native/test-review-task.sh`; eine kandidatengebundene
-  Suite mit nativem Linux/Windows und Android-Build/Gerät. Vertrag: `docs/refs/rv1-remote-suite.md`.
+- Aktiver Gesamtbatch B1–B8/P31/P32: `.github/workflows/review-task.yml` →
+  `native/test-review-task.sh`; Auswahl und Meilensteinbindung in
+  `native/review-task-manifest.json`, Linux-/Windows-Entwicklungsausgaben und
+  kandidatengebundene Android-APKs. Kein lokaler Lauf; vor der ersten Ausführung
+  stehen die frische normale Gesamtreview und die zwei unabhängigen
+  Release-Regressionsreviews. Vertrag: `docs/refs/rv1-remote-suite.md`.
+  Die früheren RV1-Fälle dieses Dokuments sind historische Recherche.
 - Windows-Startregression 0.5.170: `startup-regression-task.yml` →
   `native/test-startup-regression-task.py`, reale bestehende DACLs und Worker-Handoff
   aus v0.5.169 mit den inkrementellen Development-Ausgaben derselben RV1-Caches.
