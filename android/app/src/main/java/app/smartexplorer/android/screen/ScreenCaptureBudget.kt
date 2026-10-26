@@ -8,7 +8,7 @@ internal class ScreenCaptureBudget private constructor(val session: Long, val ge
     fun claim(owner: Int, bytes: Long): ScreenCaptureLease {
         val token=NativeBridge.screenCaptureClaim(session,generation,owner,bytes,false)
         check(token>0) { "Bildspeicher nicht zugelassen ($bytes Byte, Besitzer $owner)" }
-        return ScreenCaptureLease(token)
+        return adoptCaptureOwner(token,{NativeBridge.screenCaptureRelease(it)}) {ScreenCaptureLease(token)}
     }
     fun tryBuffer(owner: Int, bytes: Int): ScreenCaptureBuffer? {
         require(bytes>0)
@@ -44,18 +44,14 @@ internal class ScreenCaptureBudget private constructor(val session: Long, val ge
 }
 
 /** Released after the external resource or native allocation has actually ended. */
-internal class ScreenCaptureLease private constructor(private val state: State) : AutoCloseable {
-    private class State(val token: Long,val release:(Long)->Unit) {var references=1}
+internal class ScreenCaptureLease private constructor(private val state: ScreenCaptureReferences) : AutoCloseable {
     private val closed=AtomicBoolean(false)
-    constructor(token: Long,release:(Long)->Unit={NativeBridge.screenCaptureRelease(it)}):this(State(token,release))
+    constructor(token: Long,release:(Long)->Unit={NativeBridge.screenCaptureRelease(it)}):this(ScreenCaptureReferences(token,release))
     fun retain(): ScreenCaptureLease = synchronized(state) {
-        check(!closed.get());state.references=Math.addExact(state.references,1);ScreenCaptureLease(state)
+        check(!closed.get());state.retain {ScreenCaptureLease(state)}
     }
     override fun close() {
         if(!closed.compareAndSet(false,true)) return
-        synchronized(state) {
-            state.references--
-            if(state.references==0) state.release(state.token)
-        }
+        state.close()
     }
 }

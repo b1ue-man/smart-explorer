@@ -108,11 +108,11 @@ class ScreenControlService : AccessibilityService() {
     internal fun still(budget: ScreenCaptureBudget, expectedWidth: Int, expectedHeight: Int,
         done: (ScreenCaptureBitmap?) -> Unit) {
         val expected=ScreenFrameLimits.checkedBytes(expectedWidth,expectedHeight).toLong()
+        val finished=AtomicBoolean(false)
         synchronized(shotLock) {
             if(stoppingShots) {done(null);return}
             shotRequests=Math.addExact(shotRequests,1)
         }
-        val finished=AtomicBoolean(false)
         fun finish() {
             if(!finished.compareAndSet(false,true)) return
             synchronized(shotLock) {shotRequests--;if(stoppingShots && shotRequests==0) shots.shutdown()}
@@ -143,8 +143,9 @@ class ScreenControlService : AccessibilityService() {
                         bitmap=source.copy(Bitmap.Config.ARGB_8888,false)
                         val result=bitmap ?: run {deliver(null);return}
                         if(result.allocationByteCount.toLong()>expected) {deliver(null);return}
+                        val owned=ScreenCaptureBitmap(result,software)
                         bitmap=null;delivered=true
-                        deliver(ScreenCaptureBitmap(result,software))
+                        deliver(owned)
                     } catch(error: RuntimeException) {
                         if(!notified) deliver(null)
                     } finally {
