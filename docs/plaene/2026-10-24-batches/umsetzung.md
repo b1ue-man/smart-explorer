@@ -900,8 +900,11 @@ der Marker stand im Betreff, danach folgte ein Committext. Der Windowsjob
 begann seinen Schritt „Native Windows library tests“. Main forderte nach
 Feststellung den Abbruch an; die API bestätigte den Auftrag mit HTTP 202.
 GitHub bestätigt den Abschluss als `completed/cancelled` am
-2026-10-26 um 05:44:04 UTC. Welche einzelnen Tests bis dahin ausgeführt wurden,
-ist nicht belegt. Der Lauf ist keine vereinbarte Task-Abnahme und liefert
+2026-10-26 um 05:44:04 UTC. Das anschließend vollständig abgerufene Protokoll
+von Windowsjob `121416138400` enthält Abhängigkeitskompilierung und am
+05:43:59 UTC den Abbruchfehler, aber keine gestartete Testfunktion oder
+Testzusammenfassung. Daraus folgt kein erfolgreicher Funktionstest.
+Der Lauf ist keine vereinbarte Task-Abnahme und liefert
 keinen bestätigten Meilenstein. Frühere Aussagen „kein Build/Test gestartet“
 bezeichnen ausschließlich den Stand vor diesem unbeabsichtigten Push-Auslöser.
 
@@ -943,3 +946,44 @@ L2–L4 und L5–L6 verwenden jetzt produktive CapturedImage-Claims an PNG-Empfa
 L7–L8 ist als eigener zusammenhängender Android-JNI-/Rendererauftrag gestartet. Seine Modellwahl ergibt 21 Punkte/Grad 9 und `gpt-6.1-sol`/`xhigh`. NativeBridge gehört diesem Autor; Rustmodulregistrierungen bleiben bei Main. Startparameter sind belegt, Antwortmodellmetadaten und gemessener Creditsverbrauch sind nicht zugänglich. Die Ausrichtungsvorgabe P32 bleibt ausschließlich an Android-Systemeinstellungen gebunden.
 
 Kein lokaler Build, Compiler, Formatter oder Testlauf wurde gestartet. Der unbeabsichtigte abgebrochene Remote-Pushlauf bleibt separat dokumentiert und zählt nicht als Abnahme. Frischer Opus-Gesamtreview, eine ausgewertete Remote-Task-Suite und der terminale Remote-Release stehen aus.
+
+
+### R9-Zwischenstand: durchgängiger Loginbildbesitz und native Encoder
+
+Die folgenden Quellmeilensteine sind am 2026-10-26 einzeln committed; sie sind
+keine Releases und noch keine Kompilierungs- oder Laufzeitabnahme:
+
+| Commit | Integrierter Quellumfang |
+|---|---|
+| `93bec3f9` | OpenH264-/Media-Foundation-Eingaben und Access-Units erhalten vor ihrer eigenen Ablage Capture-Slices; COM-Aliase halten ihre tatsächlichen Bufferanteile. |
+| `f06ff706` | WGC-/DXGI-Flächen werden vor Erzeugung zugelassen; fehlgeschlagener nativer Abschluss bleibt im Retirementbesitz. |
+| `e79c2430` | Lokale Bildrollen und Capture-Slices teilen die Prozesskapazität; Claim-, Slice- und Grantverantwortung sind in zusammenhängende Module getrennt. |
+| `adaef690` | Loginhelper, Reader und Parentantwort halten Capturebesitz bis zu ihren jeweils tatsächlichen Enden. |
+| `33e211d0` | PNG-Decode, Write-Abschluss, IPC-Empfang und zwei Viewer-Rawplätze reichen immutable, zugelassene Bilder weiter. |
+| `d5adc961` | LoginImage-Konversion, Skalierungsscratch, Upload und Renderfläche halten eigene Claims durch den vorhandenen Rendererabschluss. |
+| `ca48b3fc` | Android-Capturearena, native Direktbuffer und Java-/Kotlincallbacks teilen die zugelassene Capturegeneration. Bestehende Instrumentaufrufer benötigen noch den geplanten Fixtureanschluss. |
+| `df6de3d1` | Android-Loginbilder durchlaufen Bitmapticket, direkten NDK-Fill, GlobalRef, Drawborrow und geordneten HWUI-Abschluss. |
+
+Das tatsächlich gemeldete Android-Heapangebot wird vor Hostprereqs, Viewer-Open
+und Login-Open im gemeinsamen Pool beobachtet. Eine kleine ausgehandelte
+Bildanforderung wird dadurch nicht versehentlich zur gesamten Prozessgrenze.
+Eine kleinere neue Plattformbeobachtung darf bereits lebende Besitzer nicht
+vorzeitig freigeben. Der Legacy-Fallback bleibt nur vor einer tatsächlich
+vorliegenden Plattformangabe bestehen.
+
+Der Android-Präsentationsbeleg ist im kanonischen `login-bildspeicher.md`
+präzisiert: Producerabschluss und TextureView-Update allein genügen nicht;
+der folgende Fenstercommit und der zu genau diesem Frame gehörende geänderte
+SurfaceTexture-Zeitstempel ergänzen die vorhandenen Session-, Sichtbarkeits-
+und Fokusprüfungen. Diese Quellentscheidung behauptet keinen physischen
+GPU-Fence. Die bisherige HWUI-Instrumentfixture verwendet noch simulierte
+NativeCalls; ein echter ViewerFrame→JNI→NDK→GlobalRef-Fall ist in ergänzender
+Planung und wird nicht als vorhanden oder bestanden ausgewiesen.
+
+Der zusätzliche statische Loginreview wurde als Codex-Aufruf mit
+`gpt-6-astra`/`xhigh` gestartet. Die Modellwahl ergab Qualitätsgrad 9;
+der ausdrückliche Nutzerwunsch bestimmt hier den nativen Effort. Belegt sind
+die Startparameter; Antwortmodellmetadaten und tatsächlicher Creditsverbrauch
+werden vom vorhandenen Kollaborationswerkzeug nicht bereitgestellt.
+Core-/Workerintegration, Linux-Imports, Android-Fixtureanschluss, gemeinsame
+Remote-Suite und terminaler Remote-Release bleiben noch offen.
