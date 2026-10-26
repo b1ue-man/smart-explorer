@@ -47,6 +47,25 @@ fn batches_task_b6_renderer_wgpu_upload_without_surface_and_retire_after_later_d
     assert!(lock(&texture.slot().state).retiring.is_some());assert!(pool.reserve(None,1024*1024).is_err());
     state.device.poll(wgpu::Maintain::Wait);owner.after_update(&ctx);assert!(lock(&texture.slot().state).retiring.is_none());
     assert!(pool.reserve(None,MAX_WORKING_BYTES).is_ok());owner.shutdown(&ctx,None);owner.returned();
+    // The same real backend path now carries distinct local upload/surface claims.
+    use super::super::super::screen_image_memory::{CpuPixels,ImageAccess,owner_limits};
+    use crate::screen::core::image_admission::{ImageAdmission,ImageRole,LocalImagePolicy};
+    use crate::screen::core::frame_memory::CapacityCeiling;
+    let admission=ImageAdmission::in_test_pool(pool,LocalImagePolicy {facts:None,ceiling:CapacityCeiling::bounded(MAX_WORKING_BYTES)},owner_limits().unwrap());
+    let login_owner=self::owner(&ctx,state.clone());let slot=Arc::new(RenderSlot::default());login_owner.attach(&slot);
+    let source=CpuPixels::convert(&image(),ImageAccess::Local(admission.clone())).unwrap();
+    slot.queue(Package::Cpu(super::super::super::screen_render_upload::PreparedImage {image:source,memory:None,frame:Some(stamp(1)),generation:slot.generation(),seq:1}));
+    login_owner.service(&ctx);let id=slot.id().unwrap();
+    assert_eq!(admission.live_count(ImageRole::UploadStaging).unwrap(),1);
+    assert_eq!(admission.live_count(ImageRole::RenderSurface).unwrap(),1);
+    state.device.poll(wgpu::Maintain::Wait);login_owner.after_update(&ctx);
+    assert_eq!(admission.live_count(ImageRole::UploadStaging).unwrap(),0);
+    assert_eq!(admission.live_count(ImageRole::RenderSurface).unwrap(),1);
+    draw(&state,id);slot.reset();login_owner.after_update(&ctx);
+    assert_eq!(admission.live_count(ImageRole::RenderSurface).unwrap(),1);
+    assert!(state.renderer.read().texture(&id).is_none());
+    state.device.poll(wgpu::Maintain::Wait);login_owner.after_update(&ctx);
+    assert_eq!(admission.live_bytes().unwrap(),0);login_owner.shutdown(&ctx,None);login_owner.returned();
 }
 #[test]
 fn batches_task_b6_renderer_wgpu_yuv_planes_leave_slot_on_cpu_fallback() {

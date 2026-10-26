@@ -5,6 +5,7 @@ use super::screen_render_upload::{Drain,PreparedImage};
 // GLsync is an opaque handle. Only these GL-thread methods reconstruct it;
 // neither the poll service nor an admission thread calls a GL function.
 struct SyncPoint(usize);
+pub(super) struct GlowImage {pub id:egui::TextureId,pub size:[usize;2]}
 pub(crate) struct GlowBackend { painter:egui_glow::Painter, next:u64, fences:Vec<(SyncPoint,Drain)> }
 impl GlowBackend {
     pub(crate) fn new(gl:Arc<glow::Context>,shader:Option<egui_glow::ShaderVersion>,dithering:bool)->Result<Self,String> {
@@ -12,9 +13,9 @@ impl GlowBackend {
     }
     pub(crate) fn context_matches(&self,gl:&glow::Context)->bool {std::ptr::eq(gl,self.painter.gl().as_ref())}
     pub(crate) fn texture_limit(&self)->u32 {self.painter.max_texture_side().min(u32::MAX as usize) as u32}
-    pub(crate) fn upload(&mut self,existing:Option<egui::TextureId>,image:&PreparedImage)->egui::TextureId {
-        let id=existing.unwrap_or_else(||{let id=egui::TextureId::Managed(self.next);self.next+=1;id});
-        self.painter.set_texture(id,&egui::epaint::ImageDelta::full(image.image.clone(),egui::TextureOptions::NEAREST));id
+    pub(crate) fn upload(&mut self,existing:Option<GlowImage>,image:&PreparedImage)->GlowImage {
+        let id=existing.map(|image|image.id).unwrap_or_else(||{let id=egui::TextureId::Managed(self.next);self.next+=1;id});
+        image.image.upload_glow(&mut self.painter,id);GlowImage {id,size:image.image.size}
     }
     pub(crate) fn draw(&mut self,id:egui::TextureId,rect:egui::Rect,clip:egui::Rect,info:egui::PaintCallbackInfo) {
         let mut mesh=egui::Mesh::with_texture(id);

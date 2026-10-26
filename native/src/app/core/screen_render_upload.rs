@@ -1,6 +1,7 @@
 //! Bounded product ownership. Completion is an explicit backend event.
 use std::sync::{Arc,Weak,Mutex, atomic::{AtomicBool, Ordering}};
-use eframe::egui::ColorImage;
+use super::screen_image_memory::{CpuPixels,GpuClaims};
+use crate::screen::core::image_admission::ImageHold;
 use crate::screen::core::frame_memory::{MemoryHold,MemoryLease};
 use eframe::egui;
 use super::screen_render_owner::{lock,notify_all,Native,Resident,Retirement};
@@ -21,7 +22,7 @@ impl Generation {
 }
 #[derive(Clone)]
 pub(crate) struct PreparedImage {
-    pub image:Arc<ColorImage>, pub memory:MemoryHold,
+    pub image:Arc<CpuPixels>, pub memory:MemoryHold,
     pub frame:Option<PresentedFrame>, pub generation:Generation, pub seq:u64,
 }
 #[derive(Clone, Default)]
@@ -30,7 +31,7 @@ impl Drain {
     pub(crate) fn confirmed(&self)->bool { self.0.load(Ordering::Acquire) }
     pub(crate) fn confirm(&self) { self.0.store(true,Ordering::Release); super::screen_render_owner::notify_all(); }
 }
-pub(crate) struct UploadTicket { pub drain:Drain, pub package:Package }
+pub(crate) struct UploadTicket { pub drain:Drain, pub package:Package, pub staging:Option<ImageHold> }
 #[derive(Clone)]
 pub(crate) enum Package {
     Cpu(PreparedImage),
@@ -42,6 +43,9 @@ impl Package {
     pub(crate) fn generation(&self)->&Generation { match self { Self::Cpu(p)=>&p.generation,Self::Yuv{generation,..}=>generation } }
     pub(crate) fn frame(&self)->Option<PresentedFrame> { match self { Self::Cpu(p)=>p.frame.clone(),Self::Yuv{stamp,..}=>Some(stamp.clone()) } }
     pub(crate) fn memory(&self)->MemoryHold { match self { Self::Cpu(p)=>p.memory.clone(),Self::Yuv{frame,..}=>frame.memory.clone() } }
+    pub(super) fn upload_claims(&self,surface:Option<ImageHold>)->std::io::Result<GpuClaims> {
+        match self {Self::Cpu(image)=>image.image.upload_claims(surface),Self::Yuv{..}=>Ok(GpuClaims::default())}
+    }
     pub(crate) fn same_image(&self,rhs:&Self)->bool {
         match (self,rhs) {
             (Self::Cpu(a),Self::Cpu(b))=>a.seq==b.seq && a.image.size==b.image.size && a.frame==b.frame && a.generation.same(&b.generation),
@@ -54,21 +58,29 @@ impl Package {
 pub(crate) struct RenderSlot {pub(super) state:Mutex<SlotState>}
 pub(super) struct SlotState {
     pub(super) generation:Generation,pub(super) closed:bool,
-    pub candidate:Option<Package>,pub resident:Option<Resident>,pub(super) retiring:Option<Retirement>,
+    pub(super) next_upload:Option<GpuClaims>,pub candidate:Option<Package>,pub resident:Option<Resident>,pub(super) retiring:Option<Retirement>,
     pub(super) admission:Option<Weak<MemoryLease>>,
 }
-impl Default for RenderSlot {fn default()->Self {Self {state:Mutex::new(SlotState {generation:Generation::default(),closed:false,candidate:None,resident:None,retiring:None,admission:None})}}}
+impl SlotState {
+    pub(super) fn claim_upload(&mut self,package:&Package)->std::io::Result<GpuClaims> {
+        match self.next_upload.take() {Some(claims)=>Ok(claims),None=>package.upload_claims(self.resident.as_ref().and_then(|r|r.surface.clone()))}
+    }
+}
+impl Default for RenderSlot {fn default()->Self {Self {state:Mutex::new(SlotState {generation:Generation::default(),closed:false,next_upload:None,candidate:None,resident:None,retiring:None,admission:None})}}}
 impl RenderSlot {
     pub(crate) fn generation(&self)->Generation {lock(&self.state).generation.clone()}
-    pub(crate) fn queue(&self,package:Package) {
+    pub(crate) fn accepting(&self)->bool {let s=lock(&self.state);!s.closed&&s.next_upload.is_none()}
+    pub(crate) fn queue(&self,package:Package)->bool {
         let mut s=lock(&self.state);
-        if !s.closed && package.generation().same(&s.generation)&&package.active() {
-            s.candidate=Some(package);
-        }
+        // A resize already owns its exact future surface/upload. Keep that
+        // candidate stable until handoff; replacing it would lose its admission.
+        if !s.closed&&s.next_upload.is_none()&&package.generation().same(&s.generation)&&package.active() {
+            s.candidate=Some(package);true
+        } else {false}
     }
     pub(crate) fn watch_memory(&self,memory:&MemoryHold) {if let Some(memory)=memory {lock(&self.state).admission=Some(Arc::downgrade(memory));}}
     pub(crate) fn reset(&self) {
-        let mut s=lock(&self.state);s.generation.revoke();s.generation=Generation::default();s.candidate=None;
+        let mut s=lock(&self.state);s.generation.revoke();s.generation=Generation::default();s.candidate=None;s.next_upload=None;
         if let Some(r)=&s.resident {s.admission=r.package.memory().as_ref().map(Arc::downgrade);}
         drop(s);notify_all();
     }
@@ -78,6 +90,6 @@ impl RenderSlot {
     }
     pub(crate) fn id(&self)->Option<egui::TextureId> {
         lock(&self.state).resident.as_ref().filter(|r|r.package.active()).and_then(|r|match r.native {
-            Native::Wgpu(ref t)=>Some(t.id),Native::Glow(id)=>Some(id),#[cfg(test)] Native::Controlled(id)=>Some(id),_=>None})
+            Native::Wgpu(ref t)=>Some(t.id),Native::Glow(ref t)=>Some(t.id),#[cfg(test)] Native::Controlled(id,_)=>Some(id),_=>None})
     }
 }

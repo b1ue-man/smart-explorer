@@ -40,21 +40,22 @@ impl WgpuBackend {
         drain
     }
     pub(crate) fn upload(&self,s:&mut SlotState,package:Package) {
+            let Ok(claims)=s.claim_upload(&package) else{s.candidate=Some(package);return;};
             let native=match &package {
                 Package::Cpu(image)=>{
                     let native=match s.resident.take().map(|r|r.native) {Some(Native::Wgpu(t))=>t,_=>CpuImage::new(self,image)};
                     native.upload(self,image);Native::Wgpu(native)
                 }
                 Package::Yuv {frame,rect,screen,ppp,..}=>{
-                    let native=match s.resident.take().map(|r|r.native) {Some(Native::Yuv(t))=>t,_=>YuvImage::new(&self.state.device)};
-                    let mut native=native;
-                    {let renderer=self.state.renderer.read();let Some(resources)=renderer.callback_resources.get::<super::screen_wgpu_yuv::YuvResources>() else{return;};
-                    native.upload(resources,&self.state.device,&self.state.queue,frame);native.set_view(&self.state.queue,*rect,*ppp,*screen);}
+                    let renderer=self.state.renderer.read();
+                    let Some(resources)=renderer.callback_resources.get::<super::screen_wgpu_yuv::YuvResources>() else{s.candidate=Some(package);return;};
+                    let mut native=match s.resident.take().map(|r|r.native) {Some(Native::Yuv(t))=>t,_=>YuvImage::new(&self.state.device)};
+                    native.upload(resources,&self.state.device,&self.state.queue,frame);native.set_view(&self.state.queue,*rect,*ppp,*screen);
                     Native::Yuv(native)
                 }
             };
             let drain=self.submit();
-            set_resident(s,native,package,drain);
+            set_resident(s,native,package,drain,claims);
     }
     pub(crate) fn wait(&self) { self.state.device.poll(wgpu::Maintain::Wait); }
 }

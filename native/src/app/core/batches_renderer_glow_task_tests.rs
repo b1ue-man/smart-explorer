@@ -16,7 +16,7 @@ fn batches_task_b6_renderer_scaler_retirement_waits_for_actual_running_work_exit
     for after_resample in [false,true] {
     let ctx=egui::Context::default();let pool=Arc::new(MemoryPool::default());let memory=Arc::new(pool.reserve(None,MAX_WORKING_BYTES).unwrap());
     let generation=Generation::default();let gate=Arc::new(if after_resample {TestGate::after_resample()} else {TestGate::default()});let worker=Worker::new().unwrap();worker.set_gate(gate.clone());
-    worker.submit(Work {source:Arc::new(egui::ColorImage::new([32,32],egui::Color32::WHITE)),target:[64,64],seq:1,frame:Some(stamp(1)),ctx,memory:Some(memory.clone()),generation:generation.clone()});
+    worker.submit(Work {source:super::super::super::screen_image_memory::CpuPixels::convert(&BgraImage::new(FrameSize::new(32,32)).unwrap(),super::super::super::screen_image_memory::ImageAccess::Contract(Some(memory.clone()))).unwrap(),target:[64,64],seq:1,frame:Some(stamp(1)),ctx,memory:Some(memory.clone()),generation:generation.clone()});
     drop(memory);gate.wait_entered();assert!(worker.running());generation.revoke();worker.invalidate();
     assert!(pool.reserve(None,1024*1024).is_err());drop(worker);assert!(pool.reserve(None,1024*1024).is_err());
     gate.release();gate.wait_exited();assert!(pool.reserve(None,MAX_WORKING_BYTES).is_ok());
