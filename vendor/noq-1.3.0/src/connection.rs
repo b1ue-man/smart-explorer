@@ -46,6 +46,10 @@ pub struct Connecting {
 }
 
 impl Connecting {
+    pub(crate) fn policy_weak_handle(&self) -> Option<WeakConnectionHandle> {
+        self.conn.as_ref().map(ConnectionRef::weak_handle)
+    }
+
     pub(crate) fn new(
         handle: ConnectionHandle,
         conn: proto::Connection,

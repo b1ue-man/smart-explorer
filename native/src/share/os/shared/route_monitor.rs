@@ -12,6 +12,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
 
+#[path = "route_monitor_network_wait.rs"]
+mod network_wait;
+
 const MAX_CONNECTIONS: usize = 256;
 const TICK: Duration = Duration::from_millis(25);
 static GENERATION: AtomicU64 = AtomicU64::new(1);
@@ -223,7 +226,13 @@ pub(crate) async fn wait_application_route(
                 "Share-Verbindung geschlossen",
             ));
         }
-        if matches!(status.phase, RoutePhase::Offline | RoutePhase::Cancelled) {
+        if status.phase == RoutePhase::Cancelled
+            || (status.phase == RoutePhase::Offline
+                && !network_wait::offline_is_outdated(
+                    &status,
+                    &connection.application_path_policy(),
+                ))
+        {
             return Err(io::Error::new(io::ErrorKind::NotConnected, status.reason));
         }
         let expires = async {
@@ -244,7 +253,7 @@ pub(crate) async fn wait_application_route(
 async fn run(id: usize, entry: Arc<Entry>, hints: Vec<SocketAddr>) {
     let mut origin = Instant::now();
     let mut adapter = RouteAdapter::default();
-    let mut policy = None;
+    let mut policy: Option<RoutePolicy> = None;
     let mut previous_sample = None;
     let mut previous_path = None;
     loop {
@@ -255,6 +264,19 @@ async fn run(id: usize, entry: Arc<Entry>, hints: Vec<SocketAddr>) {
             break;
         }
         let mut snapshot = connection.application_path_policy();
+        if snapshot.network_change_in_progress {
+            if !network_wait::pause(&entry) {
+                break;
+            }
+            previous_sample = None;
+            previous_path = None;
+            drop(connection);
+            tokio::time::sleep(TICK).await;
+            continue;
+        }
+        let mut reset_policy = policy
+            .as_ref()
+            .is_some_and(|policy| policy.status().generation != snapshot.generation);
         if snapshot.requires_new_generation {
             let Ok(generation) = next_generation(snapshot.generation) else {
                 break;
@@ -266,6 +288,9 @@ async fn run(id: usize, entry: Arc<Entry>, hints: Vec<SocketAddr>) {
                 break;
             }
             snapshot = connection.application_path_policy();
+            reset_policy = true;
+        }
+        if reset_policy {
             origin = Instant::now();
             policy = None;
             adapter = RouteAdapter::default();
@@ -338,9 +363,30 @@ async fn run(id: usize, entry: Arc<Entry>, hints: Vec<SocketAddr>) {
         } else {
             old.pause_epoch
         };
+        if status.phase == RoutePhase::Offline
+            && network_wait::offline_is_outdated(
+                &status,
+                &connection.application_path_policy(),
+            )
+        {
+            drop(connection);
+            tokio::time::sleep(TICK).await;
+            continue;
+        }
         previous_path = current_path;
-        if status != old {
-            entry.status.send_replace(status.clone());
+        entry.status.send_if_modified(|current| {
+            if current.phase == RoutePhase::Cancelled {
+                return false;
+            }
+            status.remote_guarantee = current.remote_guarantee;
+            if *current == status {
+                return false;
+            }
+            *current = status.clone();
+            true
+        });
+        if entry.status.borrow().phase == RoutePhase::Cancelled {
+            break;
         }
         if let Ok(mut clock) = entry.clock.lock() {
             match (status.application_allowed, clock.1) {

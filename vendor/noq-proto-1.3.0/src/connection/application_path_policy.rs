@@ -116,6 +116,9 @@ pub struct ApplicationPathPolicySnapshot {
     pub revision: u64,
     /// A transport-observed network change requires BeginGeneration before Allow.
     pub requires_new_generation: bool,
+    /// A confirmed change is still waiting for transport readiness. Route
+    /// collection must wait; completion requires a fresh generation afterwards.
+    pub network_change_in_progress: bool,
     /// Number of transport-observed network changes in this connection.
     pub network_change_count: u64,
     /// Monotone connection-lifetime serialized payload bytes, including retransmits
@@ -160,6 +163,7 @@ pub(super) struct ApplicationPathPolicy {
     pub(super) pending_validation: BTreeSet<PathId>,
     pub(super) requires_new_generation: bool,
     network_change_count: u64,
+    pending_network_change_pto: Option<Duration>,
     application_tx_bytes: u64,
     application_rx_bytes: u64,
     pub(super) path_payload_bytes: BTreeMap<PathId, (u64, u64)>,
@@ -187,6 +191,7 @@ impl Connection {
             generation: self.application_path_policy.generation,
             revision: self.application_path_policy.revision,
             requires_new_generation: self.application_path_policy.requires_new_generation,
+            network_change_in_progress: self.application_network_change_pending(),
             network_change_count: self.application_path_policy.network_change_count,
             application_tx_bytes: self.application_path_policy.application_tx_bytes,
             application_rx_bytes: self.application_path_policy.application_rx_bytes,
@@ -202,6 +207,7 @@ impl Connection {
                     },
                     network_path: data.network_path,
                     validated: self.state.is_established() && data.validated
+                        && !self.application_network_change_pending()
                         && !self.abandoned_paths.contains(&id)
                         && !self.application_path_policy.pending_validation.contains(&id),
                     data_allowed: self.application_data_allowed_on_path(id),
@@ -248,7 +254,9 @@ impl Connection {
                 (generation, None)
             }
             ApplicationPathUpdate::Allow(token) => {
-                if policy.requires_new_generation { return Err(Error::NetworkGenerationRequired); }
+                if policy.requires_new_generation || self.application_network_change_pending() {
+                    return Err(Error::NetworkGenerationRequired);
+                }
                 self.check_application_path_token(token)?;
                 let path = &self.paths[&token.path_id];
                 if !self.state.is_established() || !path.data.validated
@@ -280,7 +288,8 @@ impl Connection {
         self.application_path_policy.generation = generation;
         self.application_path_policy.revision = revision;
         self.application_path_policy.admitted = admitted;
-        if matches!(update, ApplicationPathUpdate::BeginGeneration(_)) {
+        if matches!(update, ApplicationPathUpdate::BeginGeneration(_))
+            && !self.application_network_change_pending() {
             self.start_application_path_validation(now, validation_reference_pto);
         }
         Ok(())
@@ -323,14 +332,47 @@ impl Connection {
         self.application_path_policy.revision = self.application_path_policy.revision.saturating_add(1);
     }
 
+    /// Revoke application admission before a confirmed network change reuses I/O.
+    ///
+    /// The serialized endpoint pairs this with `handle_network_change` once the
+    /// network is usable. New generations may start while waiting, but cannot
+    /// admit data until that completion and fresh on-path validation.
+    pub fn begin_application_network_change(&mut self) {
+        if !self.config.application_path_policy || self.state.is_drained() { return; }
+        let reference_pto = self.revoke_application_network();
+        let pending = &mut self.application_path_policy.pending_network_change_pto;
+        *pending = Some(pending.map_or(reference_pto, |previous| previous.max(reference_pto)));
+    }
+
+    pub(super) fn application_network_change_pending(&self) -> bool {
+        self.application_path_policy.pending_network_change_pto.is_some()
+    }
+
+    pub(super) fn complete_application_network_change(&mut self, now: Instant) {
+        if let Some(reference_pto) = self.application_path_policy.pending_network_change_pto.take() {
+            self.application_path_policy.admitted = None;
+            self.application_path_policy.revision = self.application_path_policy.revision.saturating_add(1);
+            self.application_path_policy.requires_new_generation = true;
+            let reference_pto = reference_pto.max(self.application_validation_reference_pto());
+            self.start_application_path_validation(now, reference_pto);
+        } else {
+            self.invalidate_application_network(now);
+        }
+    }
+
     pub(super) fn invalidate_application_network(&mut self, now: Instant) {
         if !self.config.application_path_policy { return; }
+        let reference_pto = self.revoke_application_network();
+        self.start_application_path_validation(now, reference_pto);
+    }
+
+    fn revoke_application_network(&mut self) -> Duration {
         let validation_reference_pto = self.application_validation_reference_pto();
         self.application_path_policy.admitted = None;
         self.application_path_policy.revision = self.application_path_policy.revision.saturating_add(1);
         self.application_path_policy.requires_new_generation = true;
         self.application_path_policy.network_change_count = self.application_path_policy.network_change_count.saturating_add(1);
-        self.start_application_path_validation(now, validation_reference_pto);
+        validation_reference_pto
     }
 
     fn check_application_path_token(&self, token: ApplicationPathToken) -> Result<(), ApplicationPathPolicyError> {
@@ -348,6 +390,7 @@ impl Connection {
     pub(super) fn application_data_allowed_on_path(&self, id: PathId) -> bool {
         if !self.config.application_path_policy { return true; }
         self.state.is_established() && !self.abandoned_paths.contains(&id)
+            && !self.application_network_change_pending()
             && !self.application_path_policy.requires_new_generation
             && !self.application_path_policy.pending_validation.contains(&id)
             && self.remote_cids.contains_key(&id)

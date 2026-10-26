@@ -1674,6 +1674,22 @@ impl Endpoint {
         self.inner.network_change().await;
     }
 
+    /// Report a network change already confirmed by the local host.
+    ///
+    /// Use [`Self::network_change`] for a potential change that still needs
+    /// detection. This follows the monitor's real rebind and recovery path.
+    /// `is_major` requests socket rebinding and relay rechecking. Before either,
+    /// opt-in application policies are revoked under their send locks. This
+    /// returns after that actor step; network readiness may still be pending.
+    /// A closed endpoint ignores the request, as with `network_change`.
+    pub async fn network_change_detected(&self, is_major: bool) {
+        if self.is_closed() {
+            debug!("Attempting to report a confirmed change to a closed endpoint. Ignoring.");
+            return;
+        }
+        self.inner.network_change_detected(is_major).await;
+    }
+
     // # Methods to update internal state.
 
     /// Sets the initial user-defined data to be published in Address Lookups for this endpoint.
