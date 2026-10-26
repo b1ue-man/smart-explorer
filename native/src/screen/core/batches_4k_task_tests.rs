@@ -65,20 +65,38 @@ fn batches_task_b6_4k_lossless_correction_retains_every_source_pixel() {
     let record=|op|FrameRecord {frame_id:1,capture_ts_us:100,
         flags:FLAG_KEYFRAME|if matches!(&op,Operation::Commit) {0} else {FLAG_MORE},
         payload:frame_protocol::encode(stamp,op).unwrap()};
-    assert!(!decoder.decode(&record(Operation::Begin)).unwrap());
+    let begin=record(Operation::Begin);
+    let mut wire_bytes=(begin.payload.len()+wire_binary::RECORD_HEADER_BYTES) as u64;
+    assert!(!decoder.decode(&begin).unwrap());
     let mut compressed=0u64;
     for y in (0..2160).step_by(64) {for x in (0..3840).step_by(64) {
         let rect=Rect {x,y,width:64.min(3840-x),height:64.min(2160-y)};
         let correction=record(frame_protocol::lossless(&expected,rect).unwrap());
         compressed+=correction.payload.len() as u64;
+        wire_bytes+=(correction.payload.len()+wire_binary::RECORD_HEADER_BYTES) as u64;
         assert!(!decoder.decode(&correction).unwrap());
     }}
-    assert!(decoder.decode(&record(Operation::Commit)).unwrap());
+    let commit=record(Operation::Commit);
+    wire_bytes+=(commit.payload.len()+wire_binary::RECORD_HEADER_BYTES) as u64;
+    assert!(decoder.decode(&commit).unwrap());
     assert_eq!(decoder.picture().size(),source);
     assert_eq!(decoder.picture().data(),expected.data());
     // 2 Mbit/s changes delivery duration, never the negotiated source geometry.
-    let minimum_delivery_us=compressed*8*1_000_000/2_000_000;
+    let minimum_delivery_us=wire_bytes*8*1_000_000/2_000_000;
     assert!(minimum_delivery_us>0);
+    let quality=super::quality_acceptance_metrics::measure(&expected,decoder.picture()).unwrap();
+    assert_eq!(quality.different_pixels,0);
+    assert_eq!(quality.ssim_luma,1.0);
+    assert!(quality.psnr_infinite);
+    super::quality_acceptance_metrics::evidence("4k-lossless-still",serde_json::json!({
+        "capture_sha256":super::quality_acceptance_metrics::sha256(expected.data()),
+        "output_sha256":super::quality_acceptance_metrics::sha256(decoder.picture().data()),
+        "width":source.width,"height":source.height,"quality":quality,
+        "compressed_operation_bytes":compressed,"frame_record_wire_bytes":wire_bytes,
+        "rate_bps":2_000_000,"modeled_delivery_lower_bound_us":minimum_delivery_us,
+        "measured_pipeline_time_us":null,"physical_codec":false,
+        "scope":"complete lossless reconstruction; delivery bound is bytes/rate, not measured timing or a video codec comparison",
+        "result":"passed"}));
 }
 #[test]
 fn batches_task_b6_extended_gop_waits_for_real_contract() {

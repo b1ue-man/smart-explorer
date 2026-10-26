@@ -62,6 +62,12 @@ mod batches_capture_admission_task_tests;
 mod batches_capture_image_task_tests;
 #[cfg(test)]
 mod batches_4k_task_tests;
+#[cfg(test)]
+pub(crate) mod quality_acceptance_baseline;
+#[cfg(test)]
+pub(crate) mod quality_acceptance_metrics;
+#[cfg(test)]
+pub(crate) mod batches_quality_acceptance_task_tests;
 pub(crate) mod frame_size_caps;
 pub(crate) mod frame_regions;
 pub(crate) mod frame_protocol;
