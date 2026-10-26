@@ -3,13 +3,21 @@ use std::io;
 use std::sync::{Arc,Mutex,Weak};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{SendInput,INPUT};
 use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics,SM_CXVIRTUALSCREEN,SM_CYVIRTUALSCREEN,SM_XVIRTUALSCREEN,SM_YVIRTUALSCREEN};
-use super::capture_dxgi::{DxgiCapture,OutputBinding};
+use super::capture_dxgi::{DxgiCapture,OutputBinding,PreparedDxgi};
+use super::capture_slots::{CaptureBudget,CaptureGeometry};
+use crate::screen::core::capture_admission::{CaptureGeneration,CaptureGrant,SessionAdmission,SourceKey};
+use crate::screen::core::capture_source_contract::{HostOutputPlan,PreparedSource,PreparedSourceInfo};
+use crate::screen::core::capture_plan::CapturePlan;
+use crate::screen::core::capture_image::CapturedImage;
+use crate::screen::core::host_backend::SourceRefusal;
+use crate::screen::core::frame_budget::FrameLimits;
+use crate::screen::core::session_state::SessionState;
 use super::capture_source::Grabber;
 use super::input_send::Area;
 use super::input_keys::SasGuard;
 use crate::screen::core::host_backend::{ScreenSource,SourceFrame};
 use crate::screen::core::input_model::{InputEvent,PointerButton,TouchPhase};
-use crate::screen::core::pixel_convert::{FrameSize,BgraImage};
+use crate::screen::core::pixel_convert::FrameSize;
 
 static INPUT:Mutex<Option<Weak<Mutex<Context>>>>=Mutex::new(None);
 fn expired()->io::Error {io::Error::new(io::ErrorKind::PermissionDenied,"login capture geometry changed; start a new login connection")}
@@ -20,7 +28,7 @@ fn desktop()->Area {
 }
 struct Context {
     capture:DxgiCapture,output:OutputBinding,desk:Area,
-    valid:bool,published:bool,pending:Option<BgraImage>,sas:SasGuard,
+    valid:bool,published:bool,pending:Option<CapturedImage>,sas:SasGuard,
 }
 impl Context {
     fn matches(&self)->bool {
@@ -35,6 +43,7 @@ impl Context {
         if !self.matches(){self.valid=false;return Err(expired());}
         // Detect a lost/recreated duplication even when name, bounds and size
         // were reused. Keep the latest sampled pixels for the next Capture.
+        self.pending=None;
         let frame=match self.capture.capture(false) {Ok(frame)=>frame,Err(error)=>{self.valid=false;return Err(error);}};
         if !self.matches(){self.valid=false;self.pending=None;return Err(expired());}
         if let SourceFrame::Frame(image)=frame {
@@ -46,6 +55,9 @@ impl Context {
 }
 struct LoginSource {context:Arc<Mutex<Context>>,active:bool,size:FrameSize}
 impl ScreenSource for LoginSource {
+    fn capture_grant(&self)->Option<CaptureGrant> {self.context.lock().ok().and_then(|c|c.capture.capture_grant())}
+    fn frame_limits(&self)->FrameLimits {self.context.lock().map(|c|c.capture.frame_limits()).unwrap_or(FrameLimits::LEGACY)}
+    fn reference_generation(&self)->u64 {self.context.lock().map_or(0,|c|c.capture.reference_generation())}
     fn size(&self)->FrameSize {self.size}
     fn set_capture_active(&mut self,active:bool)->io::Result<()> {self.active=active;Ok(())}
     fn capture(&mut self,_frame:u64,keyframe:bool)->io::Result<SourceFrame> {
@@ -69,19 +81,81 @@ pub(crate) fn login_geometry_current()->io::Result<bool> {
     let mut context=context.lock().map_err(|_|expired())?;
     Ok(context.probe().is_ok())
 }
+/// The no-grant entrypoint is deliberately fail-closed during caller migration.
 pub(crate) fn open_login_source()->io::Result<Box<dyn ScreenSource>> {
-    super::monitors::ensure_dpi_aware();
+    Err(io::Error::new(io::ErrorKind::PermissionDenied,"login capture requires prepared parent grant"))
+}
+struct PreparedLogin {
+    capture:PreparedDxgi,
+    key:SourceKey,
+    admission:Arc<SessionAdmission>,
+    device:String,
+    monitor:usize,
+    area:Area,
+    desk:Area,
+    selected:Mutex<Option<(CaptureGeometry,HostOutputPlan)>>,
+}
+impl PreparedLogin {
+    fn matches(&self)->bool {
+        desktop()==self.desk && super::monitors::find(&super::monitors::id_of_device(&self.device)).is_some_and(|monitor|
+            monitor.device==self.device && monitor.handle.0 as usize==self.monitor && monitor.info.primary
+            && monitor.info.x==self.area.left && monitor.info.y==self.area.top
+            && i32::try_from(monitor.info.width).ok()==Some(self.area.width)
+            && i32::try_from(monitor.info.height).ok()==Some(self.area.height))
+    }
+}
+pub(crate) fn prepare_login_source(admission:Arc<SessionAdmission>)->io::Result<Box<dyn PreparedSource>> {
+    super::monitors::ensure_dpi_aware();super::mf_common::ensure_com();
     let monitor=super::monitors::enumerate().into_iter().find(|monitor|monitor.info.primary)
         .ok_or_else(||io::Error::new(io::ErrorKind::NotFound,"login monitor unavailable"))?;
-    let capture=DxgiCapture::open(&monitor.device).map_err(io::Error::other)?;
-    let output=capture.output_binding()?;let desk=desktop();
-    if !output.attached||output.device!=monitor.device||output.monitor!=monitor.handle.0 as usize
-        ||output.area.width<=0||output.area.height<=0||desk.width<=0||desk.height<=0{return Err(expired());}
-    let size=capture.size();
-    let context=Arc::new(Mutex::new(Context {capture,output,desk,valid:true,published:false,pending:None,sas:SasGuard::new()}));
-    if !context.lock().map_err(|_|expired())?.matches(){return Err(expired());}
-    *INPUT.lock().map_err(|_|expired())?=Some(Arc::downgrade(&context));
-    Ok(Box::new(LoginSource {context,active:true,size}))
+    let capture=PreparedDxgi::prepare(&monitor.device)?;
+    if capture.monitor()!=monitor.handle.0 as usize {return Err(expired());}
+    let key=SourceKey::new(admission.session(),&format!("login:monitor:{}:{}",monitor.info.id,monitor.handle.0 as usize))?;
+    let area=Area {left:monitor.info.x,top:monitor.info.y,
+        width:i32::try_from(monitor.info.width).map_err(|_|expired())?,
+        height:i32::try_from(monitor.info.height).map_err(|_|expired())?};
+    let desk=desktop();
+    if area.width<=0||area.height<=0||desk.width<=0||desk.height<=0 {return Err(expired());}
+    Ok(Box::new(PreparedLogin {capture,key,admission,device:monitor.device,monitor:monitor.handle.0 as usize,
+        area,desk,selected:Mutex::new(None)}))
+}
+impl PreparedSource for PreparedLogin {
+    fn source_key(&self)->&SourceKey {&self.key}
+    fn description(&self)->PreparedSourceInfo {
+        let geometry=self.capture.geometry().ok();
+        PreparedSourceInfo {native_size:geometry.map(|g|g.native_displayed()),capture_limits:geometry.map_or(FrameLimits::RESOURCE,|g|g.limits),
+            supports_regions:true,state:SessionState::Starting,generation:CaptureGeneration::new(1)}
+    }
+    fn capture_plan(&self,output:&HostOutputPlan)->io::Result<Option<CapturePlan>> {
+        if !self.matches() {return Err(expired());}
+        let geometry=self.capture.geometry()?;
+        let plan=geometry.plan(self.key.clone(),CaptureGeneration::new(1),output)?;
+        let mut selected=self.selected.lock().map_err(|_|expired())?;
+        if selected.as_ref().is_some_and(|(_,old)|old.contract()!=output.contract()
+            || old.size()!=output.size() || old.codec()!=output.codec()) {
+            return Err(io::Error::other("login capture output plan already selected"));
+        }
+        *selected=Some((geometry,output.clone()));Ok(Some(plan))
+    }
+    fn activate(self:Box<Self>,grant:CaptureGrant)->Result<Box<dyn ScreenSource>,SourceRefusal> {
+        let refuse=|error:io::Error|SourceRefusal::new(&error.to_string());
+        if !self.matches() {return Err(refuse(expired()));}
+        self.description().check_grant(&self.key,&grant).map_err(refuse)?;
+        let (geometry,output)=self.selected.lock().map_err(|_|refuse(expired()))?.take()
+            .ok_or_else(||SourceRefusal::new("login output plan not prepared"))?;
+        let current=self.capture.geometry().map_err(refuse)?;
+        if current.native!=geometry.native || current.kind!=geometry.kind {return Err(refuse(expired()));}
+        let Self {capture,key,admission,desk,device,monitor,area,..}=*self;
+        let budget=CaptureBudget::activate(admission,key,current,output,grant).map_err(refuse)?;
+        let capture=DxgiCapture::open(capture,budget).map_err(refuse)?;
+        let output=capture.output_binding().map_err(refuse)?;
+        if !output.attached||output.device!=device||output.monitor!=monitor||output.area!=area {return Err(refuse(expired()));}
+        let size=capture.size();
+        let context=Arc::new(Mutex::new(Context {capture,output,desk,valid:true,published:false,pending:None,sas:SasGuard::new()}));
+        if !context.lock().map_err(|_|refuse(expired()))?.matches() {return Err(refuse(expired()));}
+        *INPUT.lock().map_err(|_|refuse(expired()))?=Some(Arc::downgrade(&context));
+        Ok(Box::new(LoginSource {context,active:true,size}))
+    }
 }
 pub(crate) fn inject_login_input(events:&[InputEvent])->io::Result<()> {
     let context=context()?;let mut context=context.lock().map_err(|_|expired())?;

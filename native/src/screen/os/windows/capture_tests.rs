@@ -29,10 +29,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::host_backend::WindowsBackend;
+use super::capture_slots::batches_capture_task_tests::open_admitted;
 use super::{capture_wgc, window_list};
 use crate::screen::core::host_backend::{ScreenHostBackend, ScreenSource, SourceFrame};
 use crate::screen::core::negotiate::{CodecChoice, CodecKind};
 use crate::screen::core::pixel_convert::{BgraImage, FrameSize};
+use crate::screen::core::capture_image::CapturedImage;
 use crate::screen::core::session_state::SessionState;
 use crate::screen::core::window_list::{ListSource, SourceId};
 
@@ -244,7 +246,7 @@ fn unique_title() -> String {
 
 /// The next picture of `source`, waiting up to `limit` through pauses that
 /// say "nothing yet".
-fn next_picture(source: &mut dyn ScreenSource, limit: Duration) -> BgraImage {
+fn next_picture(source: &mut dyn ScreenSource, limit: Duration) -> CapturedImage {
     let deadline = Instant::now() + limit;
     loop {
         match source.capture(1, true).expect("capture failed") {
@@ -269,8 +271,7 @@ fn screen_task_windows_wgc_snapshot_matches() {
         return;
     }
     let window = TestWindow::open(&unique_title());
-    let mut source = WindowsBackend::new()
-        .open_source(&window.source_id(), None)
+    let mut source = open_admitted(&WindowsBackend::new(), &window.source_id(), None)
         .expect("the test window opens");
     let (width, height) = window_size();
     let (width, height) = (width as u32, height as u32);
@@ -282,15 +283,15 @@ fn screen_task_windows_wgc_snapshot_matches() {
     // window drew, and the alpha channel is opaque.
     for (x, y) in [(5, 5), (width - 5, 5), (5, height - 5)] {
         assert_eq!(
-            pixel(&image, x, y),
+            pixel(image.image(), x, y),
             BACKGROUND,
             "pixel {x},{y} of {width}x{height}, screen {:?}",
             screen_size()
         );
     }
-    assert!(image.data().chunks_exact(4).all(|pixel| pixel[3] == 255));
+    assert!(image.image().data().chunks_exact(4).all(|pixel| pixel[3] == 255));
     // The still picture of it is a PNG of the same size.
-    let png = crate::screen::core::snapshot::encode_png(&image).unwrap();
+    let png = crate::screen::core::snapshot::encode_png(image.image()).unwrap();
     assert_eq!(&png[..4], &[0x89, b'P', b'N', b'G']);
 }
 
@@ -332,7 +333,7 @@ fn screen_task_windows_minimized_state() {
     let title = unique_title();
     let window = TestWindow::open(&title);
     let backend = WindowsBackend::new();
-    let mut source = backend.open_source(&window.source_id(), None).unwrap();
+    let mut source = open_admitted(&backend, &window.source_id(), None).unwrap();
     next_picture(source.as_mut(), Duration::from_secs(5));
     window.show(SW_MINIMIZE);
     std::thread::sleep(Duration::from_millis(500));
@@ -359,7 +360,7 @@ fn screen_task_windows_bench_real_capture() {
     }
     let window = TestWindow::open(&unique_title());
     let backend = WindowsBackend::new();
-    let mut source = backend.open_source(&window.source_id(), None).unwrap();
+    let mut source = open_admitted(&backend, &window.source_id(), None).unwrap();
     let first = next_picture(source.as_mut(), Duration::from_secs(5));
     let choice = CodecChoice {
             max_macroblocks_per_second: None,
@@ -385,9 +386,9 @@ fn screen_task_windows_bench_real_capture() {
         match source.capture(frame_id, false).expect("capture failed") {
             SourceFrame::Frame(image) => {
                 let mut hasher = DefaultHasher::new();
-                image.data().hash(&mut hasher);
+                image.image().data().hash(&mut hasher);
                 distinct.insert(hasher.finish());
-                let frame = encoder.encode(&image, encoded == 0, 0).unwrap();
+                let frame = encoder.encode(image.image(), encoded == 0, 0).unwrap();
                 encoded += usize::from(!frame.records.is_empty());
             }
             SourceFrame::Unchanged | SourceFrame::Paused(SessionState::Starting) => {
@@ -416,8 +417,7 @@ fn screen_task_windows_dxgi_fallback_captures_monitor() {
         .or(monitors.first())
         .expect("the session has a monitor");
     assert!(backend.limits().contains(&"no_cursor_capture".to_string()));
-    let mut source = backend
-        .open_source(&SourceId::Monitor(primary.id.clone()), None)
+    let mut source = open_admitted(&backend, &SourceId::Monitor(primary.id.clone()), None)
         .expect("the monitor opens with the duplication");
     let image = next_picture(source.as_mut(), Duration::from_secs(5));
     capture_wgc::force_unavailable_for_tests(false);
@@ -428,8 +428,7 @@ fn screen_task_windows_dxgi_fallback_captures_monitor() {
 #[test]
 fn screen_task_windows_synthetic_source_still_works() {
     let backend = WindowsBackend::new();
-    let mut source = backend
-        .open_source(&SourceId::Synthetic, Some(FrameSize::new(640, 360)))
+    let mut source = open_admitted(&backend, &SourceId::Synthetic, Some(FrameSize::new(640, 360)))
         .expect("the test picture opens on Windows");
     assert_eq!(source.size(), FrameSize::new(640, 360));
     let SourceFrame::Frame(first) = source.capture(1, false).unwrap() else {
@@ -438,7 +437,7 @@ fn screen_task_windows_synthetic_source_still_works() {
     let SourceFrame::Frame(second) = source.capture(2, false).unwrap() else {
         panic!("the test picture gives a picture");
     };
-    assert_ne!(first, second);
+    assert_ne!(first.image().data(), second.image().data());
     assert_eq!(
         backend.platform(),
         crate::screen::core::wire_hello::HostPlatform::Windows

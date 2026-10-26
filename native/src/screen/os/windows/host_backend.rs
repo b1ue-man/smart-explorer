@@ -7,7 +7,7 @@
 //! daemon's `WorkerBackend` hands it there.
 use std::io;
 
-use super::capture_source::WindowsSource;
+use super::capture_prepared::PreparedWindows;
 use super::{capture_wgc, monitors, window_list};
 use crate::screen::core::host_backend::{
     ScreenEncoder, ScreenHostBackend, ScreenSource, SourceRefusal,
@@ -59,6 +59,7 @@ impl WindowsBackend {
 }
 
 impl ScreenHostBackend for WindowsBackend {
+    fn memory_facts(&self)->Option<crate::screen::core::frame_memory::MemoryFacts> {super::session_memory::facts()}
     fn platform(&self) -> HostPlatform {
         HostPlatform::Windows
     }
@@ -100,29 +101,35 @@ impl ScreenHostBackend for WindowsBackend {
         super::app_icons::load(entry)
     }
 
-    fn open_source(
-        &self,
-        source: &SourceId,
-        wanted: Option<FrameSize>,
-    ) -> Result<Box<dyn ScreenSource>, SourceRefusal> {
-        match source {
-            SourceId::Synthetic => SyntheticBackend.open_source(source, wanted),
-            SourceId::Monitor(_) | SourceId::Window(_) => {
-                if !self.graphical_session() {
-                    return Err(SourceRefusal::new(
-                        super::capture_source::CAPTURE_UNAVAILABLE,
-                    ));
-                }
-                WindowsSource::open(source).map(|opened| Box::new(opened) as Box<dyn ScreenSource>)
-            }
+    fn prepare_session_source(&self, owner: &str, session: &str, source: &SourceId,
+        wanted: Option<FrameSize>, control: bool,
+        admission: std::sync::Arc<crate::screen::core::capture_admission::SessionAdmission>)
+        -> Result<Box<dyn crate::screen::core::host_backend::PreparedSource>, SourceRefusal> {
+        if matches!(source, SourceId::Synthetic) {
+            return SyntheticBackend.prepare_session_source(owner, session, source, wanted, control, admission);
         }
+        if !self.graphical_session() {return Err(SourceRefusal::new(super::capture_source::CAPTURE_UNAVAILABLE));}
+        PreparedWindows::prepare(session, source, admission)
     }
 
-    fn open_family_member(&self,native:crate::remote_window::NativeWindowId)
-        ->Result<Box<dyn ScreenSource>,SourceRefusal> {
-        // WindowsSource's window branch opens WGC CreateForWindow only. Its
-        // DXGI fallback is confined to monitors; a failed window never crops one.
-        self.open_source(&SourceId::Window(native.0.to_string()),None)
+    fn prepare_family_member(&self, owner: &str, session: &str,
+        native: crate::remote_window::NativeWindowId,
+        admission: std::sync::Arc<crate::screen::core::capture_admission::SessionAdmission>)
+        -> Result<Box<dyn crate::screen::core::host_backend::PreparedSource>, SourceRefusal> {
+        let handle = usize::try_from(native.0).map_err(|_|SourceRefusal::new(super::capture_source::WINDOW_NOT_FOUND))?;
+        // This boundary can only prepare CreateForWindow. The metadata and
+        // activation branches never fall back to a monitor or a desktop crop.
+        self.prepare_session_source(owner, session, &SourceId::Window(handle.to_string()), None, false, admission)
+    }
+
+    fn open_source(&self, _source: &SourceId, _wanted: Option<FrameSize>)
+        -> Result<Box<dyn ScreenSource>, SourceRefusal> {
+        Err(SourceRefusal::new("capture_grant_required"))
+    }
+
+    fn open_family_member(&self, _native: crate::remote_window::NativeWindowId)
+        -> Result<Box<dyn ScreenSource>,SourceRefusal> {
+        Err(SourceRefusal::new("capture_grant_required"))
     }
 
     fn open_encoder(
@@ -135,6 +142,15 @@ impl ScreenHostBackend for WindowsBackend {
 
     fn open_encoder_for_stage(&self, request: &crate::screen::core::host_stage::StageRequest) -> io::Result<Box<dyn ScreenEncoder>> {
         Ok(crate::screen::os::codec_inventory::registry().open_encoder_with_contract(&request.choice, request.size, request.fps, &[], request.frame_contract)?.encoder)
+    }
+
+    fn open_encoder_for_stage_admitted(
+        &self,
+        request: &crate::screen::core::host_stage::StageRequest,
+        grant: crate::screen::core::capture_admission::CaptureGrant,
+    ) -> io::Result<Box<dyn ScreenEncoder>> {
+        Ok(crate::screen::os::codec_inventory::registry()
+            .open_encoder_for_stage_admitted(request, &[], grant)?.encoder)
     }
 
     fn inject(&self, events: &[InputEvent]) -> Result<(), ControlBlock> {
