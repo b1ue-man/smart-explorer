@@ -43,7 +43,9 @@ pub(crate) fn state_text(state: SessionState, reason: Option<&str>) -> String {
         SessionState::Starting => "Anzeige startet …".into(),
         SessionState::Streaming => String::new(),
         SessionState::SecureDesktop => {
-            "Windows zeigt den sicheren Desktop – Anzeige und Eingabe sind durch Windows gesperrt"
+            "Windows zeigt den sicheren Desktop (Sperrbildschirm, Anmeldung oder UAC); den \
+             zeigt nur die Maschinenanmeldung: Geräte → dieses Gerät → „Was ich auf diesem \
+             Gerät nutze“ → Maschinenanmeldung"
                 .into()
         }
         SessionState::WindowMinimized => "Fenster ist minimiert".into(),
