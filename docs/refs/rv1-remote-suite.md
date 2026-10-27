@@ -656,3 +656,12 @@ der Desktopwrapper verweigert den Build wegen veralteter Rust-Lizenztexte.
 Das ist keine neue Suiteausführung. [R01](../plaene/2026-10-24-batches/release-recovery.md)
 behebt ausschließlich diese verbundene Releaseeingabe; die beabsichtigte
 Version bleibt 0.5.185. Kein neuer Tag oder Release wurde dadurch veröffentlicht.
+
+Der folgende vollständige Release `40433720045` für `a94e1ac6` endete am
+2026-10-27 um 03:51:28 UTC mit Fehler. Lizenzvorbereitung, Android-APK,
+Windowsinstaller und GNU-Linux-App wurden erfolgreich gebaut. Sechs
+Compilerdiagnosen bei den statischen Linuxprogrammen betreffen genau zwei
+ABI-Grenzen: `mount/os/linux_os/recovery_storage.rs` und
+`apps/os/linux_os/window_correlation.rs`. R02 im Wiederherstellungsplan
+begrenzt den Fix auf diese Ursachen. Es gab keinen weiteren funktionalen
+Tasklauf und keinen veröffentlichten Tag. Die Version bleibt 0.5.185.

@@ -42,8 +42,14 @@ Die begrenzte [Wiederherstellung R01](plaene/2026-10-24-batches/release-recovery
 ist einschließlich eigener Autorenreview integriert: neue Builds erzeugen und
 prüfen ihre Lizenztexte; Wrapper und Veröffentlichung erlauben genau diesen
 generierten Pfad. Bestehende Kandidaten bleiben unverändert. Die beabsichtigte
-Version bleibt 0.5.185; als nächstes läuft derselbe vollständige Remote-Release.
-Noch wurde kein Release veröffentlicht.
+Version bleibt 0.5.185. Der folgende [Lauf 40433720045](https://github.com/b1ue-man/smart-explorer/actions/runs/40433720045)
+bestätigt R01 sowie den Bau von Android-APK, Windowsinstaller und GNU-Linux-App.
+Er endet bei den statischen Linuxprogrammen mit zwei musl-Portabilitätsfehlern:
+fehlende `renameat2`-Bindung und unterschiedliche Control-Längenfeldtypen bei
+der pidfd-Übergabe. R02 im selben Wiederherstellungsplan ist mit eigener
+Autorenreview integriert und korrigiert genau diese zwei Quellgrenzen.
+Noch wurde kein Release veröffentlicht; nach dem Kandidatenpush folgt
+derselbe vollständige Remote-Release ohne neuen funktionalen Tasklauf.
 
 This table is the live list of remaining work, roughly by value. The lower
 sections preserve shipped/history context and explicitly label anything that is
