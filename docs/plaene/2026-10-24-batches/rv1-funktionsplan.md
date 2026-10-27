@@ -334,7 +334,7 @@ ohne absolute Operationdeadlines zu verlängern. Ein veralteter Offline-Status
 darf den neuen Netzwechsel nicht abbrechen. Diese Autoren haben ihre eigene
 anschließende Anti-Regressionsreview abgeschlossen.
 
-Aktiv bleibt M10. Die weitere zugewiesene Quelllektüre belegt dieselbe falsche
+Historischer Zwischenstand vor Abschluss von M10: Die weitere zugewiesene Quelllektüre belegt dieselbe falsche
 Rootannahme in den vorhandenen Scan-/Stat-/Read-/Trash-, Paging-/Cache-,
 Wiederholungs-/IncompleteSearch-, Datei-/Ordneranlage-, Leerantwort-,
 Inhaltsersatz- und Rename-/Copy-Promotion-Fixtures. Der gleiche Autor erweitert
@@ -344,3 +344,25 @@ fehlende Schritte. Bestehende Namen und Schutzorakel bleiben erhalten. Main
 registriert die betroffenen vorhandenen Fälle und die beiden neuen Scanfälle
 gezielt in derselben Suite. Produktpager, Rechte und Persistenz werden nicht
 wegen einer Fixtureabweichung gelockert.
+
+
+## Abschlussentscheidung 2026-10-27
+
+M10 ist mit `5be2ba02` einschließlich der sieben verbundenen bestehenden
+Fixtures und der zwei neuen Scanorakel integriert. Damit sind M01–M14 samt
+eigener Autorenreview abgeschlossen. Die gesammelten Registrierungen erweitern
+`native/review-task-manifest.json`; bestehende Fälle bleiben erhalten.
+
+Nutzerwortlaut: „du musst jetzt langsam endlich mal n release bauen, was machst
+denn noch?“ Eigene Folgerung: den installierbaren Release jetzt ohne erneute
+Task-Suite erstellen, wie die vorrangige Releasebestimmung in `AGENTS.md`
+vorsieht. Diese Entscheidung ersetzt ausschließlich die nächste Suitewiederholung.
+Gültige Planung, Quellenbefunde und Autorenreviews werden weiterverwendet.
+
+Verbleibender Ablauf: vollständigen Rootgraph aktualisieren, Kandidat committen
+und pushen, einmal `build.yml` mit dessen exakter `complete_release_source_sha`
+starten. Der bestehende Remote-Wrapper erzeugt und veröffentlicht den kompletten
+Release einschließlich Version, Signaturen, Hashes und Sichtbarkeitsprüfung.
+Keine lokale Kompilierung, keine neue Reviewrunde und kein weiterer funktionaler
+Testlauf. Die Laufzeitbestätigung der letzten Korrekturen bleibt ungeprüft;
+der alte Lauf `40406246032` bleibt fehlgeschlagen und wird nicht umgedeutet.
