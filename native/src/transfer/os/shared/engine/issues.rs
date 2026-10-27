@@ -160,6 +160,12 @@ impl IssueLog {
         self.record(path, message, false);
     }
 
+    /// Writes one line to the job log without counting it as an issue: a
+    /// retried or delayed file, so a stall or a falling counter can be traced.
+    pub(crate) fn note(&self, path: &str, message: &str) {
+        self.write(path, &bounded(message));
+    }
+
     /// Records why the whole job ended: shown first in the terminal message,
     /// however many issues came before it.
     pub(crate) fn push_first(&self, path: &str, message: &str) {

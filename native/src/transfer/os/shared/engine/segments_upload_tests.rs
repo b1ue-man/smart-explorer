@@ -46,6 +46,8 @@ struct Stages {
     aborts: AtomicUsize,
     /// `flush` of every range fails with this kind.
     flush_fault: Option<io::ErrorKind>,
+    /// `finish` fails with this kind after every range arrived.
+    finish_fault: Option<io::ErrorKind>,
     /// Runs when the first range is opened.
     on_first: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
@@ -116,6 +118,9 @@ impl SegmentedStage for MemoryStage {
     fn finish(self: Box<Self>) -> VfsResult<()> {
         if self.covered.load(Ordering::SeqCst) != self.size {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "gaps"));
+        }
+        if let Some(kind) = self.state.finish_fault {
+            return Err(io::Error::new(kind, "fixture: the finish was refused"));
         }
         Ok(())
     }
@@ -372,6 +377,28 @@ fn speed_task_segments_upload_failure_aborts_the_stage() {
         "nothing under any name: {:?}",
         upload.names()
     );
+}
+
+/// A file whose ranges all arrived but whose stage could not be finished is
+/// not transferred: none of its bytes stays in the progress, also not the
+/// ranges helper workers wrote (a retry would count them a second time).
+#[test]
+fn screen_metadata_runtime_task_failed_finish_gives_back_helper_bytes() {
+    let upload = Upload::new();
+    let state = Stages {
+        finish_fault: Some(io::ErrorKind::InvalidData),
+        ..offering()
+    };
+    let (_fake, state, handle) = target(Fake::new("seg-finish"), state);
+    let finished = upload.run(&handle);
+    assert_eq!(finished.progress.files_done, 0);
+    assert!(!finished.issues.is_empty(), "the failure is reported");
+    assert!(lock(&state.ranges).len() >= 2, "the file went in ranges");
+    assert_eq!(
+        finished.progress.bytes_done, 0,
+        "every counted byte of the failed file is given back"
+    );
+    assert!(upload.names().is_empty(), "{:?}", upload.names());
 }
 
 #[test]
