@@ -111,7 +111,8 @@ class ShareExecApiTest {
         assertEquals("Zeitlimit erreicht", execStateLabel("timed_out"))
         assertEquals("Erlaubnis entzogen", execStateLabel("revoked"))
         assertEquals("Beendet", execStateLabel("exited"))
-        assertEquals("neu_im_kern", execStateLabel("neu_im_kern"))
+        // A state of a newer core is named, not shown as its raw code.
+        assertEquals("Zustand nicht bekannt", execStateLabel("neu_im_kern"))
     }
 
     @Test

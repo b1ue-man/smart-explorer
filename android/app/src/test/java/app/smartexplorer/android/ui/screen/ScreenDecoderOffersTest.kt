@@ -11,7 +11,8 @@ class ScreenDecoderOffersTest {
     @Test
     fun screen_task_android_decoder_offers_include_tiles() {
         // Without any decoder (and on a machine without MediaCodec) the lossless codec remains.
-        assertEquals(listOf(DecoderOffer(codec = "tiles")), ScreenDecoder.offersFor(emptyList()))
+        // `tiles` always offers CPU pixel access (frame identity, d577bab8).
+        assertEquals(listOf(DecoderOffer(codec = "tiles", pixelAccess = true)), ScreenDecoder.offersFor(emptyList()))
         assertTrue(ScreenDecoder.offers().any { it.codec == "tiles" && it.profile == null })
         // The profiles of the hardware and the software decoder are offered apart, `tiles` last.
         val offers = ScreenDecoder.offersFor(
@@ -25,7 +26,7 @@ class ScreenDecoderOffersTest {
                 DecoderOffer("h264", "high", true, 4096, 2160),
                 DecoderOffer("h264", "cb", true, 4096, 2160),
                 DecoderOffer("h264", "cb", false, 1920, 1088),
-                DecoderOffer("tiles"),
+                DecoderOffer(codec = "tiles", pixelAccess = true),
             ),
             offers,
         )
