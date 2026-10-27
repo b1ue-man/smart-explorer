@@ -14,9 +14,11 @@ impl Session<'_> {
                         "family_contract_not_negotiated",
                     ));
                 }
-                let listing =
-                    crate::screen::core::family_listing::list(self.context, self.principal)?;
-                self.frame(HostFrame::Families(listing)).await
+                self.metadata.push(
+                    self.context,
+                    self.principal,
+                    crate::screen::core::host_metadata::Request::Families,
+                )
             }
             ViewerFrame::FamilySnapshot => self.family_snapshot(true).await,
             ViewerFrame::FamilyOperation(request) => self.family_operation(request).await,
@@ -58,15 +60,11 @@ impl Session<'_> {
                 self.frame(HostFrame::Pong(pong)).await
             }
             ViewerFrame::SetMode(set) => self.set_mode(set).await,
-            ViewerFrame::ListWindows => {
-                match crate::screen::core::icon_host::list(self.context, self.principal) {
-                    Ok(list) => self.frame(HostFrame::Windows(list)).await,
-                    Err(error) => {
-                        self.error(ScreenErrorCode::CaptureFailed, error.to_string())
-                            .await
-                    }
-                }
-            }
+            ViewerFrame::ListWindows => self.metadata.push(
+                self.context,
+                self.principal,
+                crate::screen::core::host_metadata::Request::Windows,
+            ),
             ViewerFrame::IconRequest(request) => {
                 if !self.icons_supported {
                     return Err(io::Error::new(
@@ -74,17 +72,12 @@ impl Session<'_> {
                         "icon contract was not negotiated",
                     ));
                 }
-                let response =
-                    crate::screen::core::icon_host::icon(self.context, self.principal, request)?;
-                let mut stop = self.handle.stop_signal();
-                if stop.borrow().is_some() {
-                    return Ok(());
-                }
-                tokio::select! {
-                    biased;
-                    _=stop.changed()=>Ok(()),
-                    sent=self.frame(HostFrame::IconReply(response))=>sent,
-                }
+                request.validate()?;
+                self.metadata.push(
+                    self.context,
+                    self.principal,
+                    crate::screen::core::host_metadata::Request::Icon(request),
+                )
             }
             ViewerFrame::Snapshot(request) => {
                 // The source is the session's own (hello or `SET_MODE`); the

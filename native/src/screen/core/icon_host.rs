@@ -1,8 +1,10 @@
 //! P3 metadata authorization shared by active viewers and capture-free list channels.
 use super::app_icon::{IconRequest, IconResponse};
 use super::authorize::log_event;
+use super::host_metadata::Request;
 use super::host_server::HostContext;
 use super::registry::SessionHandle;
+use super::session_state::EndReason;
 use super::window_list::WindowList;
 use super::wire_control::{recv_viewer_frame, HostFrame, Pong, ViewerFrame};
 use super::wire_hello::SessionMode;
@@ -11,29 +13,15 @@ use crate::share::relation_proof::ProvenPrincipal;
 use iroh::endpoint::{Connection, RecvStream, SendStream};
 use std::io;
 use std::time::Duration;
+use tokio::sync::watch;
 
-fn denied() -> io::Error {
-    io::Error::new(
-        io::ErrorKind::PermissionDenied,
-        "screen-list permission is no longer valid",
-    )
-}
-
-/// Admission covers the fresh list and the OS lookup; permission cannot change between them.
+/// Runs in a metadata job (`host_metadata`): the OS work never holds the
+/// shared authorization lock; the rights are checked before and after it.
 pub(crate) fn list(context: &HostContext, principal: &ProvenPrincipal) -> io::Result<WindowList> {
-    let mut result = None;
-    let allowed = context.authority.admit(
-        principal,
-        &[Capability::ScreenView],
-        crate::share::core_now_secs(),
-        &mut || {
-            result = Some(context.backend.windows().map(WindowList::bounded));
-        },
-    );
-    if !allowed {
-        return Err(denied());
-    }
-    result.unwrap_or_else(|| Err(denied()))
+    super::host_metadata_jobs::check(context, principal, &[Capability::ScreenView])?;
+    let result = context.backend.windows().map(WindowList::bounded);
+    super::host_metadata_jobs::check(context, principal, &[Capability::ScreenView])?;
+    result
 }
 
 pub(crate) fn icon(
@@ -42,26 +30,32 @@ pub(crate) fn icon(
     request: IconRequest,
 ) -> io::Result<IconResponse> {
     request.validate()?;
-    let mut content = None;
-    let allowed = context.authority.admit(
-        principal,
-        &[Capability::ScreenView],
-        crate::share::core_now_secs(),
-        &mut || {
-            // A source/list/decoder failure omits this icon and never tears down capture.
-            content = (|| {
-                let list = context.backend.windows().ok()?.bounded();
-                let entry = request.authorize(&list).ok()?;
-                let reply = context.backend.icon(entry).ok().flatten()?;
-                reply.bytes_for(&request.icon).ok()?;
-                Some(reply)
-            })();
-        },
-    );
-    if !allowed {
-        return Err(denied());
-    }
+    super::host_metadata_jobs::check(context, principal, &[Capability::ScreenView])?;
+    // A source/list/decoder failure omits this icon and never tears down capture.
+    let content = (|| {
+        let list = context.backend.windows().ok()?.bounded();
+        let entry = request.authorize(&list).ok()?;
+        super::host_metadata_jobs::check(context, principal, &[Capability::ScreenView]).ok()?;
+        let reply = context.backend.icon(entry).ok().flatten()?;
+        reply.bytes_for(&request.icon).ok()?;
+        Some(reply)
+    })();
+    super::host_metadata_jobs::check(context, principal, &[Capability::ScreenView])?;
     Ok(IconResponse { request, content })
+}
+
+/// One answer from a metadata job; a stop or a leaving viewer cancels it.
+async fn answer(
+    context: &HostContext,
+    principal: &ProvenPrincipal,
+    connection: &Connection,
+    stop: &watch::Receiver<Option<EndReason>>,
+    request: Request,
+) -> io::Result<HostFrame> {
+    let fallback = request.fallback();
+    let mut job = request.start(context, principal);
+    let result = super::host_metadata::until(connection, Some(stop.clone()), job.result()).await;
+    fallback.settle(result)
 }
 
 /// Only list/icon/ping frames are accepted. No source, encoder or input path exists here.
@@ -90,12 +84,18 @@ pub(crate) async fn serve_metadata(
         }
         let response = match frame {
             ViewerFrame::ListFamilies if families_supported => {
-                super::family_listing::list(context, principal).map(HostFrame::Families)
+                answer(context, principal, connection, &stop, Request::Families).await
             }
-            ViewerFrame::ListWindows => list(context, principal).map(HostFrame::Windows),
-            ViewerFrame::IconRequest(request) => {
-                icon(context, principal, request).map(HostFrame::IconReply)
+            ViewerFrame::ListWindows => {
+                answer(context, principal, connection, &stop, Request::Windows).await
             }
+            ViewerFrame::IconRequest(request) => match request.validate() {
+                Ok(()) => {
+                    let request = Request::Icon(request);
+                    answer(context, principal, connection, &stop, request).await
+                }
+                Err(error) => Err(error),
+            },
             ViewerFrame::Ping(ping) => {
                 let now = super::gop_stream::now_us();
                 Ok(HostFrame::Pong(Pong::answer(&ping, now, now)))
@@ -105,20 +105,28 @@ pub(crate) async fn serve_metadata(
                 "capture and input are unavailable on a metadata channel",
             )),
         };
-        let response = match response {
-            Ok(response) => response,
-            Err(error) => break Err(error),
-        };
-        if stop.borrow().is_some() {
-            break Ok(());
-        }
-        let sent = tokio::select! {
-            biased;
-            _=stop.changed()=>break Ok(()),
-            sent=super::control_sender::send(connection.remote_id().to_string(),&mut send,&response)=>sent,
+        let sent = match response {
+            Ok(response) => {
+                super::host_metadata::send(
+                    context,
+                    principal,
+                    SessionMode::View,
+                    connection,
+                    &mut send,
+                    &response,
+                    stop.clone(),
+                )
+                .await
+            }
+            Err(error) => Err(error),
         };
         if let Err(error) = sent {
-            break Err(error);
+            // A stop of the session ends the channel as it always did.
+            break if stop.borrow().is_some() {
+                Ok(())
+            } else {
+                Err(error)
+            };
         }
     };
     let _ = send.finish();
