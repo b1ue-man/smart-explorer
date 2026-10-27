@@ -98,8 +98,10 @@ pub(crate) fn ui(ui: &mut egui::Ui) {
     };
     ui.label(
         RichText::new(
-            "Wer diesen Bildschirm ansehen oder steuern darf, stellst du je Gerät unter \
-             „Zugriff“ ein (Rechte „Bildschirm ansehen“ und „Bildschirm steuern“).",
+            "Wer diesen Bildschirm ansehen oder steuern darf, stellst du im Reiter \
+             „Befehle“ je Gerät unter „Bildschirm- und Befehlsrechte …“ ein (Rechte \
+             „Bildschirm ansehen“ und „Bildschirm steuern“); dieselben Rechte stehen \
+             auf der Seite des Geräts unter „Alle Rechte dieses Geräts“.",
         )
         .small()
         .color(theme::muted(ui)),

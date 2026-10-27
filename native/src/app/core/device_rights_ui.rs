@@ -90,7 +90,17 @@ pub(super) fn ui(app: &mut App, ui: &mut egui::Ui, device_id: &str, public_key: 
         ui.label("Für diese gepinnte Geräteidentität gibt es keine Freigabequelle.");
     }
     let selected_id = id.with("selected_source");
-    let mut selected = ui.data_mut(|data| data.get_temp::<String>(selected_id));
+    // The editable card stays visible: without a choice it shows the first
+    // active relation (2026-10-27: the screen and command rights were not
+    // findable behind a button at the end of the page).
+    let mut selected = ui
+        .data_mut(|data| data.get_temp::<String>(selected_id))
+        .or_else(|| {
+            let active = view.relations.iter().find(|relation| relation.active);
+            active
+                .or(view.relations.first())
+                .map(|relation| model::target_key(&relation.target))
+        });
     for relation in &view.relations {
         ui.push_id(model::target_key(&relation.target), |ui| {
             egui::Frame::group(ui.style()).show(ui, |ui| {
@@ -105,10 +115,7 @@ pub(super) fn ui(app: &mut App, ui: &mut egui::Ui, device_id: &str, public_key: 
                     ui.add(egui::Label::new(line).wrap());
                 }
                 if ui
-                    .add_enabled(
-                        error.is_none(),
-                        egui::Button::new("Diese Quelle bearbeiten …"),
-                    )
+                    .button("Bildschirm- und Befehlsrechte dieser Verbindung …")
                     .clicked()
                 {
                     selected = Some(model::target_key(&relation.target));
@@ -150,18 +157,16 @@ pub(super) fn ui(app: &mut App, ui: &mut egui::Ui, device_id: &str, public_key: 
             .iter()
             .find(|relation| model::target_key(&relation.target) == key)
         {
-            theme::section(ui, &format!("Bearbeiten: {}", model::source_name(source)));
-            if error.is_none() {
-                crate::app::share_exec_ui::ui_exec_target(app, ui, &key);
-            }
+            theme::section(
+                ui,
+                &format!("Bildschirm und Befehle über {}", model::source_name(source)),
+            );
+            crate::app::share_exec_ui::ui_exec_target(app, ui, &key);
             if source.relation_kind == "room" {
                 ui.small("Dateifreigaben und das Schreibrecht dieses Raums gelten für alle zugelassenen Mitglieder. Sie werden auf der Raumseite bearbeitet.");
                 if ui.button("Raumrichtlinie öffnen …").clicked() {
                     app.open_share_room_page(&source.relation_id);
                 }
-            }
-            if ui.button("Bearbeitung schließen").clicked() {
-                selected = None;
             }
         } else {
             selected = None;
