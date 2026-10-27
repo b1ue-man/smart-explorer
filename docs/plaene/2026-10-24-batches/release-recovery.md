@@ -136,3 +136,13 @@ zweier unsicherer OS-/FFI-Grenzen mit bestehenden Sicherheitsverträgen.
 Das Auswahlwerkzeug empfiehlt gpt-6.1-sol/medium; die ausdrückliche
 Fixautorenregel bestimmt gpt-6.1-sol/max. Ausführung über Codex-Credits;
 Antwortmodelltelemetrie und gemessener Aboverbrauch sind nicht verfügbar.
+
+R02 ist vom selben Autor umgesetzt und anschließend statisch gegen die
+verbundenen Aufrufer und libc-Zieltypen geprüft; siehe
+[vollständigen Autorenbericht](fix-release-linux-abi.md). Nur musl verwendet
+den direkten `SYS_renameat2`-Aufruf. GNU und Android behalten ihren bisherigen
+Wrapper. Die vier Control-Längenausdrücke sind zielgerecht typisiert; keine
+Nutzdaten, Flags oder Ablehnungsbedingungen wurden geändert. Main hat den
+begrenzten Diff integriert und beide Rustdateien ohne Compiler mit dem
+vorhandenen Tree-sitter-Rust-Parser gelesen. Das ist kein Kompilier- oder
+Laufzeitnachweis. Der nächste solche Build ist der vollständige Remote-Release.
