@@ -1,0 +1,62 @@
+name: lock-refresh
+run-name: Cargo.lock refresh ${{ inputs.candidate_sha }}
+
+# Resolves native/Cargo.lock on the runner after a dependency change, since
+# no cargo runs on the workstation (AGENTS.md). It only resolves (no build)
+# and uploads the lock for review and commit; it never pushes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Full pushed candidate SHA, matching the selected ref
+        required: true
+        type: string
+      update:
+        description: "Arguments for cargo update, e.g. -p mdns-sd --precise 0.21.5"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  lock:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      UPDATE_ARGS: ${{ inputs.update }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Bind workflow and checkout to the requested candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$UPDATE_ARGS" =~ ^[A-Za-z0-9_.@:=\ -]+$ ]]
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Resolve the lock and check it for every target the suites use
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cd native
+          # shellcheck disable=SC2086
+          cargo update $UPDATE_ARGS
+          for target in x86_64-unknown-linux-gnu x86_64-pc-windows-msvc \
+            aarch64-linux-android x86_64-linux-android; do
+            cargo tree --locked --workspace --target "$target" -e normal --prefix none > /dev/null
+          done
+          git diff --stat -- Cargo.lock
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cargo-lock
+          path: native/Cargo.lock
