@@ -1,9 +1,9 @@
-//! Per-file publication receipts. A private stage's object identity and
-//! content digest are recorded durably before publication; equal size never
-//! establishes ownership during recovery.
-use super::file_evidence::{
-    observe, observe_source, readback_unavailable, verify, Proof,
-};
+//! Per-file publication receipts. The live path records the source, the
+//! destination and (for a local stage) the stage's identity before
+//! publication, without reading any file back. A resumed or retried job
+//! decides ownership in doubt by content digest (`doubt`); equal size alone
+//! never establishes it. Local copies and moves keep their content proofs.
+use super::file_evidence::{verify, Proof};
 use super::job_store::{endpoint, snapshot, with_backend, JobRun};
 use super::queue::FileWork;
 use super::record_io::{read_record, write_record, RecordContext, RecordKind};
@@ -13,9 +13,14 @@ use crate::transfer::job_record::{JobRecord, SourceGuard, StoredEndpoint};
 #[cfg(test)]
 #[path = "batches_publication_compatibility_task_tests.rs"]
 mod compatibility_tests;
+#[cfg(test)]
+#[path = "file_recovery_doubt_tests.rs"]
+mod doubt_tests;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+#[path = "file_recovery_doubt.rs"]
+mod doubt;
 #[path = "missing_retry.rs"]
 pub(super) mod missing_retry;
 #[path = "file_recovery_observer.rs"]
@@ -24,19 +29,17 @@ mod observer;
 mod paths;
 #[path = "file_recovery_receipts.rs"]
 mod receipts;
+#[path = "file_recovery_state.rs"]
+mod state;
 #[path = "file_recovery_verify.rs"]
 mod verification;
 
 pub(super) use observer::LocalObserver;
 use paths::destination_parts;
 pub(super) use receipts::initialize;
-use receipts::{
-    read_index, receipt_path, repair_new_entry, visit_saved, PreviousTarget, Receipt,
-};
-#[cfg(test)]
-use verification::publication_state;
+use receipts::{read_index, receipt_path, repair_new_entry, visit_saved, PreviousTarget, Receipt};
 pub(super) use verification::verify_saved;
-use verification::{previous_target, verify_source};
+use verification::{previous_presence, verify_source};
 
 fn failure(message: impl Into<String>) -> io::Error {
     io::Error::other(message.into())
@@ -74,9 +77,10 @@ pub(super) fn before(
     // No content proof by reading the file back (user 2026-10-27: far too
     // slow, it read every file back twice): the transport delivers every byte
     // integrity-protected and acknowledges each write; size and kind of the
-    // stage are checked. A restart therefore cannot claim the target as its
-    // own and treats it as a conflict.
-    super::file_evidence::validate_copy_target(
+    // stage are checked. A resumed job decides ownership by metadata, in
+    // doubt by content digest (`doubt`); the stage is recorded by metadata
+    // so a crash removes exactly it.
+    let stage = super::file_evidence::validate_copy_target(
         engine.view.source,
         &file.source,
         source.size,
@@ -86,10 +90,10 @@ pub(super) fn before(
     record.start_file(
         file,
         source,
-        None,
+        super::file_evidence::stage_record(engine.view.target, staged, stage)?,
         destination.to_string(),
         None,
-        previous_target(engine.view.target, destination, engine.stop_flag())?,
+        previous_presence(engine.view.target, destination)?,
     )?;
     active(engine)
 }
@@ -110,8 +114,16 @@ fn after_checked(
     let mut receipt = record
         .read_file(file)?
         .ok_or_else(|| failure("Dateipublikation hat keinen vorbereiteten Beleg"))?;
-    let mut observed = true;
-    if let Some(proof) = &receipt.proof {
+    if let Some(proof) = receipt
+        .proof
+        .as_ref()
+        .filter(|proof| proof.sha256.is_empty())
+    {
+        // A local publication's evidence is its stage's object, renamed into
+        // place: compared by metadata. Copy bound it to the name (and flushed
+        // it for moves and overwrites) before this hook.
+        verify(proof, engine.view.target, engine.stop_flag(), false)?;
+    } else if let Some(proof) = &receipt.proof {
         let held = held.filter(|_| {
             engine.is_move() || engine.view.conflict == crate::types::Conflict::Overwrite
         });
@@ -124,21 +136,15 @@ fn after_checked(
                 engine.stop_flag(),
             )?;
         } else {
-            match verify(proof, engine.view.target, engine.stop_flag(), false) {
-                Ok(()) => {}
-                Err(error) if readback_unavailable(engine.view.target, &error) => {
-                    super::file_evidence::validate_target_shape(
-                        engine.view.target,
-                        destination,
-                        Some(proof.size),
-                    )?;
-                    observed = false;
-                }
-                Err(error) => return Err(error),
-            }
+            verify(proof, engine.view.target, engine.stop_flag(), false)?;
         }
+    }
+    // The target as acknowledged, by metadata only: a resumed job keeps it
+    // without hashing while it is unchanged.
+    let published = if receipt.proof.is_some() {
+        super::file_evidence::stamp(engine.view.target, destination)?
     } else {
-        super::file_evidence::validate_copy_target(
+        let meta = super::file_evidence::validate_copy_target(
             engine.view.source,
             &file.source,
             receipt.source.size,
@@ -149,34 +155,19 @@ fn after_checked(
         receipt.destination = destination;
         receipt.relative = relative;
         receipt.previous = None;
-        receipt.proof = None;
-        source_unchanged(&receipt, engine.view.source)?;
-    }
-    receipt.confirmed = observed
-        && receipt
-            .proof
-            .as_ref()
-            .is_some_and(|proof| proof.object.is_some());
+        doubt::source_unchanged(&receipt, engine.view.source)?;
+        super::file_evidence::stamp_of(engine.view.target, &receipt.destination, meta)?
+    };
+    receipt.confirmed = receipt
+        .proof
+        .as_ref()
+        .is_some_and(|proof| proof.object.is_some());
+    receipt.published = Some(Proof {
+        path: receipt.destination.clone(),
+        ..published
+    });
     receipt.acknowledged = true;
     record.write_file(&receipt)
-}
-
-/// The source still is the file that was sent: identity, size and time
-/// from its metadata, without reading its content again.
-fn source_unchanged(receipt: &Receipt, side: Side<'_>) -> io::Result<()> {
-    let now = snapshot(side, &receipt.source.path);
-    if !now.verified
-        || now.id != receipt.source.id
-        || now.object != receipt.source.object
-        || now.size != receipt.source.size
-        || now.mtime_ms != receipt.source.mtime_ms
-    {
-        return Err(failure(format!(
-            "Quelle des Dateibelegs wurde geändert: {}",
-            receipt.source.path
-        )));
-    }
-    Ok(())
 }
 
 pub(super) fn prepare_batch(engine: &Engine<'_>, file: &FileWork) -> io::Result<()> {
@@ -202,7 +193,7 @@ pub(super) fn prepare_direct(
         None,
         destination.to_string(),
         None,
-        previous_target(engine.view.target, destination, engine.stop_flag())?,
+        previous_presence(engine.view.target, destination)?,
     )?;
     active(engine)
 }

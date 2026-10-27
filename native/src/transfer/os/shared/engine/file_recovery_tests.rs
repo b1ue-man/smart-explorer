@@ -87,8 +87,22 @@ fn batches_task_p14_partial_file_move_reopens_after_the_source_was_removed() {
     assert!(!second.exists());
 }
 
+/// Gives a file a time no copy in these tests has: a rewrite never keeps
+/// the metadata identity by chance within the same millisecond.
+pub(super) fn age(path: &Path) {
+    fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000))
+        .unwrap();
+}
+
 #[test]
-fn batches_task_p14_reopen_refuses_same_sized_target_mutation_and_equal_foreign_objects() {
+fn batches_task_p14_reopen_decides_same_sized_target_mutation_and_equal_foreign_objects() {
+    // A changed target is decided by content (2026-10-27): other bytes are
+    // never this job's success and go under the job's policy; an equal
+    // replacement object holds this job's content and is kept.
     for replace_object in [false, true] {
         let root = tempfile::tempdir().unwrap();
         let source = root.path().join("a.jpg");
@@ -110,13 +124,18 @@ fn batches_task_p14_reopen_refuses_same_sized_target_mutation_and_equal_foreign_
         } else {
             write(&target.join("a.jpg"), b"other");
         }
+        age(&target.join("a.jpg"));
         job.recovery = crate::transfer::RecoveryMode::Resume;
-        let reopened = fixture(&job, root.path(), &cancel, &report);
-        assert!(
-            reopened.is_err(),
-            "foreign or modified target cannot become our success"
-        );
-        assert!(!target.join("a (2).jpg").exists());
+        let engine = fixture(&job, root.path(), &cancel, &report).unwrap();
+        apply(&engine, file(&source, "a.jpg"));
+        assert_eq!(engine.issues.total(), 0, "{:?}", engine.issues.shown().0);
+        if replace_object {
+            assert!(!target.join("a (2).jpg").exists());
+            assert_eq!(fs::read(target.join("a.jpg")).unwrap(), b"alpha");
+        } else {
+            assert_eq!(fs::read(target.join("a.jpg")).unwrap(), b"other");
+            assert_eq!(fs::read(target.join("a (2).jpg")).unwrap(), b"alpha");
+        }
         assert_eq!(fs::read(&source).unwrap(), b"alpha");
     }
 }
@@ -163,7 +182,7 @@ fn batches_task_p14_all_endpoint_pairs_share_the_same_publication_receipt() {
 }
 
 #[test]
-fn batches_task_p14_identityless_remote_receipt_does_not_adopt_equal_content() {
+fn batches_task_p14_identityless_remote_receipt_adopts_only_equal_content() {
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("a.jpg");
     let target = root.path().join("target");
@@ -181,16 +200,26 @@ fn batches_task_p14_identityless_remote_receipt_does_not_adopt_equal_content() {
     apply(&engine, file(&source, "a.jpg"));
     assert_eq!(engine.issues.total(), 0);
     let record = engine.job_record.as_ref().unwrap();
-    let error = file_recovery::verify_saved(
+    // No object identity and no stored proof: the receipt stays a candidate
+    // until its content digest decides, equal content as this job's own.
+    file_recovery::verify_saved(
         &engine.view,
         &super::super::lock(&record.data),
         &record.path,
         None,
         &cancel,
     )
-    .unwrap_err();
-    assert!(error.to_string().contains("ohne stabile Objektidentität"));
+    .unwrap();
+    let work = file(&source, "a.jpg");
+    assert_eq!(
+        file_recovery::resume(&engine, &work).unwrap(),
+        Some(super::super::ops::Outcome::Skipped)
+    );
+    write(&target.join("a.jpg"), b"omega");
+    age(&target.join("a.jpg"));
+    assert_eq!(file_recovery::resume(&engine, &work).unwrap(), None);
     assert_eq!(names(&target), ["a.jpg"]);
+    assert_eq!(fs::read(target.join("a.jpg")).unwrap(), b"omega");
 }
 
 #[test]
@@ -257,18 +286,23 @@ fn batches_task_p14_crash_after_staged_move_publication_keeps_target_and_cleans_
             // Simulate a crash before after_publish and quarantine removal.
         }
         if replace_target {
+            // Another object with other bytes: never a reason for cleanup.
             fs::rename(&destination, target.join("retained-own-target")).unwrap();
-            write(&destination, b"alpha");
+            write(&destination, b"omega");
+            age(&destination);
         }
         job.recovery = crate::transfer::RecoveryMode::Resume;
         let reopened = fixture(&job, root.path(), &cancel, &report);
         if replace_target {
-            assert!(reopened.is_err());
+            // Not this job's publication: the move is undone, nothing lost.
+            reopened.unwrap();
+            assert!(!quarantine.exists());
             assert_eq!(
-                fs::read(&quarantine).unwrap(),
+                fs::read(&source).unwrap(),
                 b"alpha",
-                "foreign replacement cannot authorize source cleanup"
+                "a foreign replacement never authorizes the source cleanup"
             );
+            assert_eq!(fs::read(&destination).unwrap(), b"omega");
         } else {
             let engine = reopened.unwrap();
             assert_eq!(
@@ -284,7 +318,7 @@ fn batches_task_p14_crash_after_staged_move_publication_keeps_target_and_cleans_
 }
 
 #[test]
-fn batches_task_p14_packet_success_is_bound_and_lost_answers_remain_unconfirmed() {
+fn batches_task_p14_packet_success_is_bound_and_lost_answers_are_decided_by_digest() {
     for lost_answer in [false, true] {
         let root = tempfile::tempdir().unwrap();
         let first = root.path().join("a.jpg");
@@ -321,16 +355,13 @@ fn batches_task_p14_packet_success_is_bound_and_lost_answers_remain_unconfirmed(
             assert_eq!(engine.issues.total() == 0, !lost_answer);
         }
         job.recovery = crate::transfer::RecoveryMode::Resume;
-        let reopened = fixture(&job, root.path(), &cancel, &report);
-        if lost_answer {
-            assert!(reopened.is_err());
-        } else {
-            let engine = reopened.unwrap();
-            for file in files {
-                apply(&engine, file);
-            }
-            assert_eq!(engine.issues.total(), 0);
+        // A lost answer leaves both files in doubt; their content digests
+        // equal the sources', so neither is sent again nor numbered.
+        let engine = fixture(&job, root.path(), &cancel, &report).unwrap();
+        for file in files {
+            apply(&engine, file);
         }
+        assert_eq!(engine.issues.total(), 0);
         assert_eq!(names(&target), ["a.jpg", "b.jpg"]);
     }
 }

@@ -150,10 +150,12 @@ fn batches_task_transfer_compat_missing_only_lost_file_reply_survives_successive
     let mut outcome = run(candidate.clone());
     assert!(!outcome.issues.is_empty());
     assert!(!outcome.roots.is_empty());
+    // The lost answer left the file in doubt: its content digest equals the
+    // source's, so every click keeps it as this job's own, without a copy.
     for _ in 0..2 {
         repeat(&mut candidate, outcome.roots);
         outcome = run(candidate.clone());
-        assert!(!outcome.issues.is_empty());
+        assert!(outcome.issues.is_empty(), "{:?}", outcome.issues);
     }
     assert_eq!(backend.promotes.load(Ordering::SeqCst), 1);
     assert_eq!(fs::read_dir(&target).unwrap().count(), 1);
@@ -226,67 +228,77 @@ fn batches_task_transfer_compat_missing_only_never_discards_unknown_move_quarant
         file_recovery::LocalObserver, job_store, queue::FileWork, roots::RootPlan, side_flow,
         Engine, FolderRegister,
     };
-    let root = tempfile::tempdir().unwrap();
-    let source = root.path().join("a.bin");
-    let target = root.path().join("target");
-    let quarantine = root
-        .path()
-        .join(".a.bin.smart-explorer-0123456789abcdef.move");
-    let stage = target.join(".a.bin.smart-explorer-0123456789abcdef.part");
-    let destination = target.join("a.bin");
-    write(&source, b"ours");
-    fs::create_dir(&target).unwrap();
-    let mut candidate = job(Endpoint::Local, Endpoint::Local, &target, &[&source]);
-    candidate.mode = CopyMode::Move;
-    let cancel = AtomicBool::new(false);
-    let report = |_| {};
-    {
-        let view = JobView::of(&candidate);
-        let folders = FolderRegister::new(
-            view.target,
-            view.target_dir,
-            side_flow(view.target, view.target_dir),
+    // The published target is replaced by another object. Equal bytes hold
+    // this job's content, so the quarantined source may go; other bytes
+    // never authorize that: the move is undone and the file stays a conflict.
+    for replacement in [&b"ours"[..], &b"foreign bytes"[..]] {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("a.bin");
+        let target = root.path().join("target");
+        let quarantine = root
+            .path()
+            .join(".a.bin.smart-explorer-0123456789abcdef.move");
+        let stage = target.join(".a.bin.smart-explorer-0123456789abcdef.part");
+        let destination = target.join("a.bin");
+        write(&source, b"ours");
+        fs::create_dir(&target).unwrap();
+        let mut candidate = job(Endpoint::Local, Endpoint::Local, &target, &[&source]);
+        candidate.mode = CopyMode::Move;
+        let cancel = AtomicBool::new(false);
+        let report = |_| {};
+        {
+            let view = JobView::of(&candidate);
+            let folders = FolderRegister::new(
+                view.target,
+                view.target_dir,
+                side_flow(view.target, view.target_dir),
+            );
+            let mut engine = Engine::new(
+                view,
+                view.kind(),
+                folders,
+                &cancel,
+                &report,
+                &RootPlan::default(),
+            );
+            engine.job_record = job_store::begin(&view, view.target_dir, &cancel).unwrap();
+            engine.job_record.as_ref().unwrap().prepare_apply().unwrap();
+            let metadata = fs::metadata(&source).unwrap();
+            let work = FileWork::new(
+                fwd(&source),
+                "a.bin".into(),
+                4,
+                crate::local_access::system_time_ms(metadata.modified().unwrap()),
+            );
+            let observer = LocalObserver::new(&engine, &work);
+            observer
+                .before_source_quarantine(&source, &quarantine)
+                .unwrap();
+            fs::rename(&source, &quarantine).unwrap();
+            fs::copy(&quarantine, &stage).unwrap();
+            observer.before_publish(&stage, &destination).unwrap();
+            fs::rename(&stage, &destination).unwrap();
+            fs::rename(&destination, target.join("saved-original")).unwrap();
+            write(&destination, replacement);
+        }
+        repeat(
+            &mut candidate,
+            vec![ResolvedRoot {
+                source: fwd(&source),
+                rel: "a.bin".into(),
+            }],
         );
-        let mut engine = Engine::new(
-            view,
-            view.kind(),
-            folders,
-            &cancel,
-            &report,
-            &RootPlan::default(),
-        );
-        engine.job_record = job_store::begin(&view, view.target_dir, &cancel).unwrap();
-        engine.job_record.as_ref().unwrap().prepare_apply().unwrap();
-        let metadata = fs::metadata(&source).unwrap();
-        let work = FileWork::new(
-            fwd(&source),
-            "a.bin".into(),
-            4,
-            crate::local_access::system_time_ms(metadata.modified().unwrap()),
-        );
-        let observer = LocalObserver::new(&engine, &work);
-        observer
-            .before_source_quarantine(&source, &quarantine)
-            .unwrap();
-        fs::rename(&source, &quarantine).unwrap();
-        fs::copy(&quarantine, &stage).unwrap();
-        observer.before_publish(&stage, &destination).unwrap();
-        fs::rename(&stage, &destination).unwrap();
-        fs::rename(&destination, target.join("saved-original")).unwrap();
-        write(&destination, b"ours");
+        let result = run(candidate);
+        assert_eq!(fs::read(&destination).unwrap(), replacement);
+        assert!(!quarantine.exists());
+        if replacement == b"ours" {
+            assert!(result.issues.is_empty(), "{:?}", result.issues);
+            assert!(!source.exists());
+        } else {
+            assert!(!result.issues.is_empty());
+            assert_eq!(fs::read(&source).unwrap(), b"ours");
+        }
     }
-    repeat(
-        &mut candidate,
-        vec![ResolvedRoot {
-            source: fwd(&source),
-            rel: "a.bin".into(),
-        }],
-    );
-    let result = run(candidate);
-    assert!(!result.issues.is_empty());
-    assert_eq!(fs::read(&quarantine).unwrap(), b"ours");
-    assert_eq!(fs::read(&destination).unwrap(), b"ours");
-    assert!(!source.exists());
 }
 
 #[test]
@@ -353,11 +365,7 @@ fn batches_task_transfer_compat_missing_only_literal_folder_aliases_survive_repe
             assert!(done.issues.is_empty(), "{:?}", done.issues);
             assert_eq!(done.roots[0].rel, fwd(expected));
             assert_eq!(backend.promotes.load(Ordering::SeqCst) - previous, 2);
-            for (file, bytes) in [
-                ("a%2Fb#.bin", b"aaa"),
-                ("b.bin", b"bbb"),
-                ("c.bin", b"ccc"),
-            ] {
+            for (file, bytes) in [("a%2Fb#.bin", b"aaa"), ("b.bin", b"bbb"), ("c.bin", b"ccc")] {
                 assert_eq!(fs::read(destination.join(file)).unwrap(), bytes);
                 assert_eq!(fs::read(source.join(file)).unwrap(), bytes);
             }

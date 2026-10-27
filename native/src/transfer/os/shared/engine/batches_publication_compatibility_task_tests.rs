@@ -1,11 +1,11 @@
 //! Upload authorization and crash ownership are separate contracts.
+use super::super::file_evidence::{observe, readback_unavailable};
 use super::super::{
     batches_backend_compatibility_task_tests::Limited,
     side_flow,
     test_backend::{fwd, job, run, write},
     Engine, FolderRegister,
 };
-use super::super::file_evidence::observe_available;
 use super::*;
 use crate::transfer::{Endpoint, RecoveryMode};
 use std::{fs, sync::Arc};
@@ -87,10 +87,15 @@ fn batches_task_transfer_compat_upload_only_target_completes_without_claiming_re
         assert!(receipt.publication_authorized);
         assert!(receipt.proof.is_none());
         assert!(!receipt.confirmed);
-        assert!(
-            publication_state(&receipt, engine.view.target, &cancel).is_err(),
-            "an acknowledged upload is not a persistent ownership proof"
-        );
+        assert!(receipt.acknowledged);
+        // The target can be neither hashed on its device nor read back: the
+        // in-doubt check names that instead of claiming the file.
+        let error = doubt::ownership(&receipt, engine.view.source, engine.view.target, &cancel)
+            .expect_err("an unreadable acknowledged upload is not an ownership proof");
+        assert!(readback_unavailable(engine.view.target, &error), "{error}");
+        assert!(error
+            .to_string()
+            .contains("weder geprüft noch zurückgelesen"));
     }
 }
 
@@ -126,6 +131,8 @@ fn batches_task_transfer_compat_upload_only_lost_answer_never_republishes_or_rem
 #[test]
 fn batches_task_transfer_compat_refused_readback_does_not_publish_missing_directory_or_resized_stage(
 ) {
+    // Without any read-back, the pre-publication check of kind and size
+    // still refuses a stage that vanished, became a folder or was resized.
     for mutation in [1, 2, 3] {
         let root = tempfile::tempdir().unwrap();
         let source = root.path().join("a.bin");
@@ -134,7 +141,7 @@ fn batches_task_transfer_compat_refused_readback_does_not_publish_missing_direct
         fs::create_dir(&target).unwrap();
         let mut limited = Limited::new("changed-upload-stage");
         limited.read_error = Some(io::ErrorKind::PermissionDenied);
-        limited.mutate_read.store(mutation, Ordering::SeqCst);
+        limited.mutate_stage.store(mutation, Ordering::SeqCst);
         let backend = Arc::new(limited);
         let result = run(job(
             Endpoint::Local,
@@ -150,10 +157,15 @@ fn batches_task_transfer_compat_refused_readback_does_not_publish_missing_direct
 
 #[test]
 fn batches_task_transfer_compat_readback_io_failure_is_not_permission_fallback() {
-    for kind in [
-        io::ErrorKind::TimedOut,
-        io::ErrorKind::InvalidData,
-        io::ErrorKind::UnexpectedEof,
+    // The live upload reads nothing back, so a failing target read cannot
+    // affect it. A retry keeps an unchanged target by metadata; once its
+    // time changed, the in-doubt read-back fallback reports a real I/O
+    // failure, and only a refused read keeps the "transfer missing" size rule.
+    for (kind, refused) in [
+        (io::ErrorKind::TimedOut, false),
+        (io::ErrorKind::InvalidData, false),
+        (io::ErrorKind::UnexpectedEof, false),
+        (io::ErrorKind::PermissionDenied, true),
     ] {
         let root = tempfile::tempdir().unwrap();
         let source = root.path().join("a.bin");
@@ -163,15 +175,35 @@ fn batches_task_transfer_compat_readback_io_failure_is_not_permission_fallback()
         let mut limited = Limited::new("readback-real-failure");
         limited.read_error = Some(kind);
         let backend = Arc::new(limited);
-        let result = run(job(
+        let mut candidate = job(
             Endpoint::Local,
             Endpoint::Remote(backend.clone()),
             &target,
             &[&source],
-        ));
-        assert!(!result.issues.is_empty());
-        assert_eq!(backend.promotes.load(Ordering::SeqCst), 0);
-        assert!(!target.join("a.bin").exists());
+        );
+        let first = run(candidate.clone());
+        assert!(first.issues.is_empty(), "{:?}", first.issues);
+        candidate.recovery = RecoveryMode::Resume;
+        candidate.resume = Some(first.roots);
+        let unchanged = run(candidate.clone());
+        assert!(unchanged.issues.is_empty(), "{:?}", unchanged.issues);
+        fs::File::options()
+            .write(true)
+            .open(target.join("a.bin"))
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000))
+            .unwrap();
+        candidate.resume = Some(unchanged.roots);
+        let retry = run(candidate);
+        assert_eq!(
+            retry.issues.is_empty(),
+            refused,
+            "{kind:?}: {:?}",
+            retry.issues
+        );
+        assert_eq!(backend.promotes.load(Ordering::SeqCst), 1);
+        assert_eq!(fs::read_dir(&target).unwrap().count(), 1);
+        assert_eq!(fs::read(target.join("a.bin")).unwrap(), b"payload");
         assert_eq!(fs::read(&source).unwrap(), b"payload");
     }
 }
@@ -185,7 +217,7 @@ fn batches_task_transfer_compat_optional_remote_readback_never_hides_local_permi
     let path = root.path().join("a.bin");
     write(&path, b"alpha");
     assert_eq!(
-        observe_available(Side::Local, &fwd(&path), &cancel)
+        observe(Side::Local, &fwd(&path), &cancel)
             .unwrap_err()
             .kind(),
         io::ErrorKind::Interrupted

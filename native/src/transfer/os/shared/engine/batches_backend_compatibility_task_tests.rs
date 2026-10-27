@@ -24,7 +24,7 @@ pub(super) struct Limited {
     pub proofs: bool,
     pub refuse_reserved: bool,
     pub reserved_renames: AtomicUsize,
-    pub mutate_read: AtomicUsize,
+    pub mutate_stage: AtomicUsize,
     pub refuse_listing: AtomicBool,
 }
 impl Limited {
@@ -40,7 +40,7 @@ impl Limited {
             proofs: false,
             refuse_reserved: false,
             reserved_renames: AtomicUsize::new(0),
-            mutate_read: AtomicUsize::new(0),
+            mutate_stage: AtomicUsize::new(0),
             refuse_listing: AtomicBool::new(false),
         }
     }
@@ -65,18 +65,17 @@ impl Backend for Limited {
         self.inner.list_dir(path)
     }
     fn stat(&self, path: &str) -> io::Result<VfsMeta> {
+        if path.contains(".se-upload-") && std::path::Path::new(path).is_file() {
+            match self.mutate_stage.swap(0, Ordering::SeqCst) {
+                1 => fs::remove_file(path)?,
+                2 => fs::remove_file(path).and_then(|()| fs::create_dir(path))?,
+                3 => fs::write(path, b"changed size after STOR")?,
+                _ => {}
+            }
+        }
         self.inner.stat(path)
     }
     fn open_read(&self, path: &str) -> io::Result<Box<dyn Read + Send>> {
-        match self.mutate_read.swap(0, Ordering::SeqCst) {
-            1 => fs::remove_file(path)?,
-            2 => {
-                fs::remove_file(path)?;
-                fs::create_dir(path)?;
-            }
-            3 => fs::write(path, b"changed size after STOR")?,
-            _ => {}
-        }
         if let Some(kind) = self.read_error {
             return Err(io::Error::new(kind, "fixture target read refused"));
         }

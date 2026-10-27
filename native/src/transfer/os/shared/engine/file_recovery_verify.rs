@@ -1,17 +1,18 @@
 //! Validate every saved publication before any source or stage recovery.
 use std::io;
 
+use super::super::file_evidence::{current_source, stamp_matches};
+use super::state::{publication_state, Evidence};
 use super::{
-    endpoint, failure, missing_retry, observe, observe_source, receipt_path, verify, visit_saved,
-    with_backend, write_record, AtomicBool, FileRoots, JobRecord, JobView, Ordering, Path,
-    PreviousTarget, Receipt, RecordContext, RecordKind, Side,
+    doubt, endpoint, failure, missing_retry, receipt_path, verify, visit_saved, with_backend,
+    write_record, AtomicBool, FileRoots, JobRecord, JobView, Ordering, Path, PreviousTarget, Proof,
+    Receipt, RecordContext, RecordKind, Side,
 };
 
-pub(super) fn previous_target(
-    side: Side<'_>,
-    path: &str,
-    cancel: &AtomicBool,
-) -> io::Result<PreviousTarget> {
+/// What was at a destination before a publication that records no content
+/// proof: presence only, never read. A resumed job decides by content
+/// (`doubt`), for which the previous file's content is not needed.
+pub(super) fn previous_presence(side: Side<'_>, path: &str) -> io::Result<PreviousTarget> {
     match with_backend(side, |backend| backend.stat(path)) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(PreviousTarget::Absent),
         Err(error)
@@ -23,100 +24,8 @@ pub(super) fn previous_target(
             Ok(PreviousTarget::Unconfirmed)
         }
         Err(error) => Err(error),
-        Ok(meta) if meta.is_dir || meta.is_symlink || meta.special => {
-            Ok(PreviousTarget::Unconfirmed)
-        }
-        Ok(_) => match observe(side, path, cancel) {
-            Ok(proof) => Ok(PreviousTarget::File(proof)),
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::PermissionDenied | io::ErrorKind::Unsupported
-                ) =>
-            {
-                Ok(PreviousTarget::Unconfirmed)
-            }
-            Err(error) => Err(error),
-        },
+        Ok(_) => Ok(PreviousTarget::Unconfirmed),
     }
-}
-
-pub(super) fn previous_matches(
-    receipt: &Receipt,
-    side: Side<'_>,
-    cancel: &AtomicBool,
-) -> io::Result<bool> {
-    match &receipt.previous {
-        Some(PreviousTarget::Absent) => {
-            match with_backend(side, |backend| backend.stat(&receipt.destination)) {
-                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(true),
-                Err(error) => Err(error),
-                Ok(_) => Ok(false),
-            }
-        }
-        Some(PreviousTarget::File(proof)) => match verify(proof, side, cancel, true) {
-            Ok(()) => Ok(true),
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => Err(error),
-            Err(_) => Ok(false),
-        },
-        _ => Ok(false),
-    }
-}
-
-pub(super) fn publication_state(
-    receipt: &Receipt,
-    side: Side<'_>,
-    cancel: &AtomicBool,
-) -> io::Result<bool> {
-    // A pending new-key intent, failed preparation, or live-proven failed
-    // publication can write this durable negative acknowledgement.
-    if !receipt.publication_authorized {
-        return Ok(false);
-    }
-    let Some(proof) = &receipt.proof else {
-        return if receipt.quarantine.is_some() {
-            Ok(false)
-        } else {
-            Err(failure(format!(
-                "Veröffentlichungsergebnis bleibt unbestätigt: {}",
-                receipt.destination
-            )))
-        };
-    };
-    if receipt.publication_authorized && proof.object.is_none() {
-        return Err(failure(format!(
-            "Dateieigentum ohne stabile Objektidentität ist unbestätigt: {}",
-            proof.path
-        )));
-    }
-    match verify(proof, side, cancel, true) {
-        Ok(()) if receipt.publication_authorized => return Ok(true),
-        Err(error) if receipt.confirmed || error.kind() == io::ErrorKind::Interrupted => {
-            return Err(error)
-        }
-        _ => {}
-    }
-    let stage = receipt
-        .staged
-        .as_ref()
-        .ok_or_else(|| failure("Vorpublikationszustand ohne eigene Stage"))?;
-    let stage_present = match with_backend(side, |backend| backend.stat(&stage.path)) {
-        Ok(_) => {
-            verify(stage, side, cancel, true)?;
-            true
-        }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
-        Err(error) => return Err(error),
-    };
-    if (!stage_present && receipt.publication_authorized)
-        || !previous_matches(receipt, side, cancel)?
-    {
-        return Err(failure(format!(
-            "Zielersatz oder unbestätigte Publikationsphase: {}",
-            receipt.destination
-        )));
-    }
-    Ok(false)
 }
 
 pub(super) fn selected_key(record: &JobRecord, receipt: &Receipt) -> String {
@@ -172,7 +81,8 @@ pub(in crate::transfer::engine) fn verify_saved(
             }
             return Ok(());
         }
-        let published = publication_state(&receipt, view.target, cancel)?;
+        let evidence = publication_state(&receipt, view, cancel)?;
+        let published = evidence.is_some();
         let quarantine_exists = match &receipt.quarantine {
             Some(quarantine) => {
                 match with_backend(view.source, |backend| backend.stat(&quarantine.path)) {
@@ -195,7 +105,7 @@ pub(in crate::transfer::engine) fn verify_saved(
             Err(error) => return Err(error),
         }
         if !published {
-            if let Some(stage) = &receipt.staged {
+            if let Some(stage) = receipt.staged.as_ref().filter(|_| view.target.is_local()) {
                 match with_backend(view.target, |backend| backend.stat(&stage.path)) {
                     Ok(_) => verify(stage, view.target, cancel, true)?,
                     Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -220,12 +130,16 @@ pub(in crate::transfer::engine) fn verify_saved(
                 return Err(failure("Mehrdeutige Dateizielbelege in der Auswahl"));
             }
         }
-        if quarantine_exists || !published {
-            recovery.push((receipt, published, quarantine_exists));
+        // A remote stage left by a crash goes in any case: published or not,
+        // the job never publishes it again.
+        let remote_stage = !view.target.is_local() && receipt.staged.is_some();
+        if quarantine_exists || !published || remote_stage {
+            recovery.push((receipt, evidence, quarantine_exists));
         }
         Ok(())
     })?;
-    for (receipt, published, quarantine_exists) in recovery {
+    for (receipt, evidence, quarantine_exists) in recovery {
+        let published = evidence.is_some();
         if cancel.load(Ordering::Acquire) {
             return Err(io::Error::new(
                 io::ErrorKind::Interrupted,
@@ -244,35 +158,8 @@ pub(in crate::transfer::engine) fn verify_saved(
                 .object
                 .as_deref()
                 .ok_or_else(|| failure("Movequarantäne ohne Objektidentität"))?;
-            if published {
-                let proof = receipt
-                    .proof
-                    .as_ref()
-                    .ok_or_else(|| failure("Publiziertes Moveziel ohne Beleg"))?;
-                if !view.target.is_local() {
-                    return Err(failure("Moveziel ist nicht lokal"));
-                }
-                // Only the durable positive receipt carries the successful
-                // concrete platform operation across a restart. An authorized
-                // but unacknowledged crash still needs a fresh parent proof.
-                let confirm = if receipt.confirmed
-                    && receipt.acknowledged
-                    && receipt.publication_authorized
-                {
-                    crate::copy::confirm_acknowledged_transfer_publication
-                } else {
-                    crate::copy::confirm_transfer_publication
-                };
-                confirm(
-                    &crate::transfer::walk_listers::native(&proof.path),
-                    proof
-                        .object
-                        .as_deref()
-                        .ok_or_else(|| failure("Moveziel ohne Objektidentität"))?,
-                    &proof.sha256,
-                    cancel,
-                )?;
-                verify(proof, view.target, cancel, true)?;
+            if let Some(evidence) = &evidence {
+                confirm_move_target(&receipt, evidence, view, cancel)?;
                 let root = with_backend(view.target, |backend| {
                     crate::vfs::directory_identity(backend, &record.target_dir)
                 })?;
@@ -289,16 +176,13 @@ pub(in crate::transfer::engine) fn verify_saved(
                 published,
             )?;
         }
+        if let Some(stage) = &receipt.staged {
+            if !published || !view.target.is_local() {
+                discard_stage(stage, view.target)?;
+            }
+        }
         if !published {
             verify_source(&receipt, view.source, cancel)?;
-            if let Some(stage) = &receipt.staged {
-                match with_backend(view.target, |backend| backend.stat(&stage.path)) {
-                    Ok(_) if view.target.is_local() => crate::copy::discard_transfer_stage(&crate::transfer::walk_listers::native(&stage.path), stage.object.as_deref().ok_or_else(|| failure("Private Stage ohne Objektidentität"))?)?,
-                    Ok(_) => return Err(failure(format!("Private Remotestage bleibt bis zur bestätigten providergebundenen Bereinigung erhalten: {}", stage.path))),
-                    Err(error) if error.kind() == io::ErrorKind::NotFound => {},
-                    Err(error) => return Err(error),
-                }
-            }
             let mut receipt = receipt;
             receipt.discarded = true;
             receipt.proof = None;
@@ -316,12 +200,88 @@ pub(in crate::transfer::engine) fn verify_saved(
     Ok(roots)
 }
 
+/// Binds a move's published target before its quarantined source goes:
+/// by its object (unchanged metadata decided), or by object and content
+/// (the digest decided, or a content proof of 0.5.185/0.5.186).
+fn confirm_move_target(
+    receipt: &Receipt,
+    evidence: &Evidence,
+    view: &JobView<'_>,
+    cancel: &AtomicBool,
+) -> io::Result<()> {
+    if !view.target.is_local() {
+        return Err(failure("Moveziel ist nicht lokal"));
+    }
+    let target = crate::transfer::walk_listers::native(&receipt.destination);
+    let identity = evidence
+        .identity
+        .as_deref()
+        .ok_or_else(|| failure("Moveziel ohne Objektidentität"))?;
+    // Only the durable positive receipt carries the successful concrete
+    // platform operation across a restart. An authorized but unacknowledged
+    // crash still needs a fresh parent proof.
+    let acknowledged = receipt.confirmed && receipt.acknowledged && receipt.publication_authorized;
+    let Some(sha256) = &evidence.sha256 else {
+        return crate::copy::confirm_transfer_publication_identity(
+            &target,
+            identity,
+            acknowledged,
+            cancel,
+        );
+    };
+    if acknowledged {
+        crate::copy::confirm_acknowledged_transfer_publication(&target, identity, sha256, cancel)
+    } else {
+        crate::copy::confirm_transfer_publication(&target, identity, sha256, cancel)
+    }
+}
+
+/// Removes a stage a crash left: a local one through its object identity, a
+/// remote one only while it still has its recorded metadata (anything else
+/// there is not provably this job's and stays).
+fn discard_stage(stage: &Proof, side: Side<'_>) -> io::Result<()> {
+    match with_backend(side, |backend| backend.stat(&stage.path)) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+        Ok(_) if side.is_local() => crate::copy::discard_transfer_stage(
+            &crate::transfer::walk_listers::native(&stage.path),
+            stage
+                .object
+                .as_deref()
+                .ok_or_else(|| failure("Private Stage ohne Objektidentität"))?,
+        ),
+        Ok(_) if !stamp_matches(stage, side)? => Ok(()),
+        Ok(_) => match with_backend(side, |backend| backend.discard_copy_stage(&stage.path)) {
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::Unsupported
+                ) =>
+            {
+                Ok(())
+            }
+            result => result,
+        },
+    }
+}
+
+/// The source is still the recorded file. Its content is compared only
+/// against a stored content proof (receipts of 0.5.185/0.5.186), hashed on
+/// its device where possible; otherwise metadata decides.
 pub(super) fn verify_source(
     receipt: &Receipt,
     side: Side<'_>,
     cancel: &AtomicBool,
 ) -> io::Result<()> {
-    let after = observe_source(
+    let Some(expected) = [receipt.proof.as_ref(), receipt.quarantine.as_ref()]
+        .into_iter()
+        .flatten()
+        .map(|proof| proof.sha256.as_str())
+        .find(|sha256| !sha256.is_empty())
+    else {
+        return doubt::source_unchanged(receipt, side);
+    };
+    let after = current_source(
         side,
         &receipt.source.path,
         receipt.source.id.as_deref(),
@@ -337,13 +297,11 @@ pub(super) fn verify_source(
             receipt.source.path
         )));
     }
-    if let Some(proof) = receipt.proof.as_ref().or(receipt.quarantine.as_ref()) {
-        if after.sha256 != proof.sha256 {
-            return Err(failure(format!(
-                "Quellinhalt des Dateibelegs wurde geändert: {}",
-                receipt.source.path
-            )));
-        }
+    if after.sha256 != expected {
+        return Err(failure(format!(
+            "Quellinhalt des Dateibelegs wurde geändert: {}",
+            receipt.source.path
+        )));
     }
     Ok(())
 }

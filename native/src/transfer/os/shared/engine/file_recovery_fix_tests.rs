@@ -183,9 +183,13 @@ fn batches_task_p14_restored_old_target_after_publication_preserves_quarantine()
         fs::rename(target.join("a.jpg"), target.join("held-new")).unwrap();
         fs::rename(target.join("held-old"), target.join("a.jpg")).unwrap();
     }
-    assert!(fixture(&job, root.path(), &cancel, &report).is_err());
-    assert_eq!(fs::read(&quarantine).unwrap(), b"new");
+    // The target holds other content than the quarantined source: not this
+    // job's publication. The move is undone (2026-10-27), nothing is lost.
+    fixture(&job, root.path(), &cancel, &report).unwrap();
+    assert!(!quarantine.exists());
+    assert_eq!(fs::read(&source).unwrap(), b"new");
     assert_eq!(fs::read(target.join("a.jpg")).unwrap(), b"old");
+    assert_eq!(fs::read(target.join("held-new")).unwrap(), b"new");
 }
 
 #[test]

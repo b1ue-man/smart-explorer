@@ -40,6 +40,10 @@ pub(super) fn validate(receipt: &Receipt, record: &JobRecord) -> io::Result<()> 
         || receipt.previous.as_ref().is_some_and(|previous| {
             matches!(previous, PreviousTarget::File(proof) if proof.path != receipt.destination)
         })
+        || receipt
+            .published
+            .as_ref()
+            .is_some_and(|stamp| stamp.path != receipt.destination)
     {
         return Err(failure("Dateibeleg enthält einen ungültigen Zielpfad"));
     }
@@ -122,6 +126,7 @@ mod tests {
             discarded: false,
             publication_authorized: true,
             previous: Some(PreviousTarget::File(proof)),
+            published: None,
         }
     }
 

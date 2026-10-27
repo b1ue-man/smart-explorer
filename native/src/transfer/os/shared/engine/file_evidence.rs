@@ -1,6 +1,7 @@
 //! Observe file content through its backend's actual read contract. The VFS
 //! reader owns optical admission; callers never wrap it in a second permit.
 use super::{job_store::with_backend, view::Side};
+use crate::vfs::VfsMeta;
 use ring::digest::{Context, SHA256};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -56,20 +57,159 @@ pub(super) fn observe(side: Side<'_>, path: &str, cancel: &AtomicBool) -> io::Re
     observe_as(side, path, None, cancel, Observation::Published)
 }
 
-/// Readback is optional for a live acknowledged remote copy. Its absence
-/// never supplies a restart ownership proof or authorizes source cleanup.
-/// The live transfer path no longer reads back (2026-10-27); tests keep it.
-#[cfg(test)]
-pub(super) fn observe_available(
+/// The current proof of a published or staged file: hashed on the device
+/// that holds it, read back only when that device has no runtime that can
+/// hash (the one case where its bytes cross the network, and only in doubt).
+pub(super) fn current(side: Side<'_>, path: &str, cancel: &AtomicBool) -> io::Result<Proof> {
+    match on_device(side, path, None, cancel)? {
+        Some(proof) => Ok(proof),
+        None => observe(side, path, cancel),
+    }
+}
+
+/// `current` for a transfer source: an exported document (no regular size,
+/// read through its selected object ID) is always read through its export.
+pub(super) fn current_source(
     side: Side<'_>,
     path: &str,
+    selected_id: Option<&str>,
+    cancel: &AtomicBool,
+) -> io::Result<Proof> {
+    let exported = with_backend(side, |backend| {
+        let meta = backend.stat(path)?;
+        backend
+            .read_size(path, meta.size)
+            .map(|size| size.is_none())
+    })?;
+    if !exported {
+        if let Some(proof) = on_device(side, path, selected_id, cancel)? {
+            return Ok(proof);
+        }
+    }
+    observe_source(side, path, selected_id, cancel)
+}
+
+/// The file's digest from the device that holds it (`vfs::content_digest`):
+/// local disk, a Share peer or room member, the SSH agent. Only the answer
+/// crosses the network. `None` when that device cannot hash.
+fn on_device(
+    side: Side<'_>,
+    path: &str,
+    selected_id: Option<&str>,
     cancel: &AtomicBool,
 ) -> io::Result<Option<Proof>> {
-    match observe(side, path, cancel) {
-        Ok(proof) => Ok(Some(proof)),
-        Err(error) if readback_unavailable(side, &error) => Ok(None),
-        Err(error) => Err(error),
+    crate::source_media::with_cancellation(cancel, || {
+        with_backend(side, |backend| {
+            let native = super::super::walk_listers::native(path);
+            let medium = if side.is_local() {
+                crate::source_media::probe(&native)?
+            } else {
+                None
+            };
+            let before = backend.stat(path)?;
+            if selected_id.is_some_and(|id| before.id.as_deref() != Some(id)) {
+                return Err(io::Error::other(
+                    "Gespeicherte Export-/Quellobjekt-ID wurde geändert",
+                ));
+            }
+            if before.is_dir || before.is_symlink || before.special {
+                return Err(io::Error::other(format!(
+                    "Dateibeleg verweigert Ordner, Link oder Spezialdatei: {path}"
+                )));
+            }
+            let object = crate::vfs::file_identity(backend, path)?;
+            let Some(digest) = crate::vfs::content_digest(backend, path, cancel)? else {
+                return Ok(None);
+            };
+            let after = backend.stat(path)?;
+            let medium_after = if side.is_local() {
+                crate::source_media::probe(&native)?
+            } else {
+                None
+            };
+            if medium != medium_after
+                || before.id != after.id
+                || before.size != after.size
+                || before.mtime_ms != after.mtime_ms
+                || digest.size != after.size
+                || crate::vfs::file_identity(backend, path)? != object
+            {
+                return Err(io::Error::other(format!(
+                    "Datei oder Medium während der Belegprüfung geändert: {path}"
+                )));
+            }
+            Ok(Some(Proof {
+                path: path.into(),
+                object,
+                id: before.id,
+                size: digest.size,
+                mtime_ms: before.mtime_ms,
+                sha256: digest.sha256.to_ascii_lowercase(),
+            }))
+        })
+    })
+}
+
+/// The metadata identity of a regular file, without reading it: object
+/// identity where the provider has one, ID, size and time. Its empty digest
+/// marks it as metadata evidence, never as a content proof.
+pub(super) fn stamp(side: Side<'_>, path: &str) -> io::Result<Proof> {
+    let meta = with_backend(side, |backend| backend.stat(path))?;
+    stamp_of(side, path, meta)
+}
+
+/// `stamp` from metadata the caller already has.
+pub(super) fn stamp_of(side: Side<'_>, path: &str, meta: VfsMeta) -> io::Result<Proof> {
+    if meta.is_dir || meta.is_symlink || meta.special {
+        return Err(io::Error::other(format!(
+            "Dateibeleg verweigert Ordner, Link oder Spezialdatei: {path}"
+        )));
     }
+    Ok(Proof {
+        path: path.into(),
+        object: with_backend(side, |backend| crate::vfs::file_identity(backend, path))?,
+        id: meta.id,
+        size: meta.size,
+        mtime_ms: meta.mtime_ms,
+        sha256: String::new(),
+    })
+}
+
+/// A private stage, recorded before publication so a crash removes exactly
+/// it: by the metadata the caller just read, never by content. A local
+/// stage is removed only through its object identity, so one without an
+/// identity is not recorded.
+pub(super) fn stage_record(side: Side<'_>, path: &str, meta: VfsMeta) -> io::Result<Option<Proof>> {
+    let stage = stamp_of(side, path, meta)?;
+    Ok((!side.is_local() || stage.object.is_some()).then_some(stage))
+}
+
+/// Whether the file still has the recorded metadata identity: the same
+/// object (where recorded), ID, size and time. A missing file does not.
+pub(super) fn stamp_matches(proof: &Proof, side: Side<'_>) -> io::Result<bool> {
+    let meta = match with_backend(side, |backend| backend.stat(&proof.path)) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    if meta.is_dir
+        || meta.is_symlink
+        || meta.special
+        || meta.id != proof.id
+        || meta.size != proof.size
+        || meta.mtime_ms != proof.mtime_ms
+    {
+        return Ok(false);
+    }
+    Ok(proof.object.is_none()
+        || with_backend(side, |backend| {
+            crate::vfs::file_identity(backend, &proof.path)
+        })? == proof.object)
+}
+
+/// Metadata evidence decides alone only when it names more than a size.
+pub(super) fn decisive(proof: &Proof) -> bool {
+    proof.object.is_some() || proof.id.is_some() || proof.mtime_ms != 0
 }
 
 pub(super) fn readback_unavailable(side: Side<'_>, error: &io::Error) -> bool {
@@ -86,18 +226,18 @@ pub(super) fn validate_copy_target(
     source_size: u64,
     target: Side<'_>,
     path: &str,
-) -> io::Result<()> {
+) -> io::Result<VfsMeta> {
     let expected = with_backend(source, |backend| {
         backend.read_size(source_path, source_size)
     })?;
     validate_target_shape(target, path, expected)
 }
 
-pub(super) fn validate_target_shape(
+fn validate_target_shape(
     side: Side<'_>,
     path: &str,
     expected_size: Option<u64>,
-) -> io::Result<()> {
+) -> io::Result<VfsMeta> {
     let meta = with_backend(side, |backend| backend.stat(path))?;
     if meta.is_dir
         || meta.is_symlink
@@ -109,7 +249,7 @@ pub(super) fn validate_target_shape(
             format!("Uploadziel ist keine reguläre Datei der übertragenen Größe: {path}"),
         ));
     }
-    Ok(())
+    Ok(meta)
 }
 pub(super) fn observe_source(
     side: Side<'_>,
@@ -253,14 +393,28 @@ pub(super) fn verify(
             proof.path
         )));
     }
-    let current = observe(side, &proof.path, cancel)?;
-    if proof.object != current.object
-        || proof.id != current.id
-        || proof.size != current.size
-        || proof.sha256 != current.sha256
+    if proof.sha256.is_empty() {
+        return same_identity(proof, side);
+    }
+    let now = current(side, &proof.path, cancel)?;
+    if proof.object != now.object
+        || proof.id != now.id
+        || proof.size != now.size
+        || proof.sha256 != now.sha256
     {
         return Err(io::Error::other(format!(
             "Veröffentlichte Datei ist geändert oder durch ein fremdes Objekt ersetzt: {}",
+            proof.path
+        )));
+    }
+    Ok(())
+}
+
+/// Metadata evidence (`stamp`): the same object, ID, size and time.
+fn same_identity(proof: &Proof, side: Side<'_>) -> io::Result<()> {
+    if proof.object.is_none() || !stamp_matches(proof, side)? {
+        return Err(io::Error::other(format!(
+            "Datei ist geändert oder durch ein fremdes Objekt ersetzt: {}",
             proof.path
         )));
     }
