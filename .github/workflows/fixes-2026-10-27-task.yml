@@ -3,8 +3,9 @@ run-name: Targeted 0.5.185 fixes ${{ inputs.candidate_sha }}
 
 # Narrow remote check for the targeted fixes of 2026-10-27 (user: "fixe
 # gezielt die fehler … aber mache keine breiten review und test suits"):
-# Linux and Windows compile library, binaries and tests with Clippy; findings
-# count only in the files this batch changed since v0.5.185.
+# Linux and Windows compile library, binaries and tests with Clippy (findings
+# count only on lines this batch changed since v0.5.185) and run the screen
+# metadata runtime cases; Android builds and runs its JVM unit tests.
 
 on:
   workflow_dispatch:
@@ -62,34 +63,56 @@ jobs:
           cache-on-failure: true
           cache-workspace-crates: true
 
-      - name: Clippy on library, binaries and tests; findings in changed files fail
+      - name: Clippy on library, binaries and tests; findings on changed lines fail
         shell: bash
         timeout-minutes: 140
         run: |
           # GitHub runs bash with -e; Clippy's own exit status must not end
           # the step before the findings are filtered.
           set +e -uo pipefail
-          git diff --name-only v0.5.185 HEAD -- native/src \
-            | sed -n 's#^native/##p' | grep '\.rs$' > "$RUNNER_TEMP/changed.txt"
-          echo "changed files: $(wc -l < "$RUNNER_TEMP/changed.txt")"
+          git diff -U0 --no-color v0.5.185 HEAD -- native/src > "$RUNNER_TEMP/diff.txt"
           cd native
           cargo clippy --lib --bins --tests --message-format short 2>&1 \
             | tr '\\' '/' | tee "$RUNNER_TEMP/clippy.txt"
           status=${PIPESTATUS[0]}
-          grep -E '^(src/[^:]+):[0-9]+:[0-9]+: (error|warning)' "$RUNNER_TEMP/clippy.txt" \
-            | grep -F -f "$RUNNER_TEMP/changed.txt" > "$RUNNER_TEMP/findings.txt" || true
-          if [[ -s "$RUNNER_TEMP/findings.txt" ]]; then
-            echo "::error::findings in changed files"
-            cat "$RUNNER_TEMP/findings.txt"
-            exit 1
-          fi
-          # A compile error anywhere fails; Clippy lints of unchanged files
-          # (pre-existing debt) do not.
+          # A compile error anywhere fails.
           if grep -E ': error\[E[0-9]+\]|^error\[E[0-9]+\]' "$RUNNER_TEMP/clippy.txt"; then
             echo "::error::compile errors (clippy status $status)"
             exit 1
           fi
-          echo "clippy clean for changed files"
+          # Lints count only on lines this batch changed; older debt in the
+          # same files does not.
+          PY=$(command -v python3 || command -v python)
+          "$PY" - "$RUNNER_TEMP/diff.txt" "$RUNNER_TEMP/clippy.txt" > "$RUNNER_TEMP/findings.txt" <<'PYEOF'
+          import re, sys
+          changed, current = {}, None
+          for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+              if line.startswith("+++ "):
+                  path = line[4:].strip()
+                  current = path[len("b/native/"):] if path.startswith("b/native/") else None
+              elif line.startswith("@@") and current:
+                  m = re.search(r"\+(\d+)(?:,(\d+))?", line)
+                  start, count = int(m.group(1)), int(m.group(2) or 1)
+                  changed.setdefault(current, set()).update(range(start, start + count))
+          for line in open(sys.argv[2], encoding="utf-8", errors="replace"):
+              m = re.match(r"^(src/[^:]+):(\d+):\d+: (error|warning)", line)
+              if m and int(m.group(2)) in changed.get(m.group(1), ()):
+                  print(line.rstrip())
+          PYEOF
+          if [[ -s "$RUNNER_TEMP/findings.txt" ]]; then
+            echo "::error::findings on changed lines"
+            sort -u "$RUNNER_TEMP/findings.txt"
+            exit 1
+          fi
+          echo "clippy clean on changed lines"
+
+      - name: Screen metadata runtime cases
+        shell: bash
+        timeout-minutes: 120
+        run: |
+          set -Eeuo pipefail
+          cd native
+          cargo test --lib screen_metadata_runtime_task_ -- --test-threads=1
 
   # The Android side of the batch (screen keyboard field, Android cfg of the
   # screen host): the existing Android build mode of the Android suite —
