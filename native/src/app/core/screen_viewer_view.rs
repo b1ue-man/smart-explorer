@@ -44,6 +44,8 @@ pub(crate) struct ViewState {
     /// The target was refused (`Das Gerät hat sich geändert …`).
     pub refused: Option<String>,
     sent_display: FrameSize,
+    /// The display of the last frame; `resized_at` is when it last changed.
+    seen_display: FrameSize,
     resized_at: Instant,
 }
 
@@ -57,6 +59,7 @@ impl ViewState {
             widget: ViewWidget::new(gpu),
             refused: None,
             sent_display: FrameSize::new(0, 0),
+            seen_display: FrameSize::new(0, 0),
             resized_at: Instant::now(),
         }
     }
@@ -177,17 +180,20 @@ impl ViewState {
         let Some(session) = &self.session else {
             return;
         };
-        let moved = |old: u32, new: u32| old.abs_diff(new) >= (old / 8).max(64);
-        let changed = moved(self.sent_display.width, display.width)
-            || moved(self.sent_display.height, display.height);
-        if !changed {
+        // The pause counts from the last change of the size, so a resize that
+        // is still being dragged sends nothing (each size costs the host a new
+        // encoder and the viewer a new reference picture).
+        if display != self.seen_display {
+            self.seen_display = display;
             self.resized_at = Instant::now();
             return;
         }
-        if self.resized_at.elapsed() >= RESIZE_PAUSE && session.info().accepted > 0 {
+        let moved = |old: u32, new: u32| old.abs_diff(new) >= (old / 8).max(64);
+        let changed = moved(self.sent_display.width, display.width)
+            || moved(self.sent_display.height, display.height);
+        if changed && self.resized_at.elapsed() >= RESIZE_PAUSE && session.info().accepted > 0 {
             session.send(ViewerFrame::SetMode(full_set_mode(None, display, prefs)));
             self.sent_display = display;
-            self.resized_at = Instant::now();
         }
     }
 
@@ -287,4 +293,37 @@ pub(crate) fn device_list(devices: &Devices) -> Vec<super::screen_devices::Devic
     state.profiles.as_ref().map_or_else(Vec::new, |profiles| {
         entries(profiles, crate::share::core_now_secs())
     })
+}
+
+#[cfg(test)]
+mod runtime_tests {
+    use super::*;
+
+    #[test]
+    fn screen_metadata_runtime_task_resize_is_sent_only_once_the_size_rests() {
+        let shared = super::super::screen_session::Shared::new(false, 0);
+        shared.update(|info| info.accepted = 1);
+        let session = ViewerSession::fixture(shared);
+        let target = ScreenTarget::direct("resize-fixture", Some("resize-fixture"));
+        let start = FrameSize::new(1000, 800);
+        let mut view = ViewState::with_session(target, session, start, false);
+        let prefs = ViewerPrefs::default();
+        let long_ago = || Instant::now().checked_sub(RESIZE_PAUSE * 2).unwrap();
+        // Still dragging: every new size restarts the pause.
+        view.follow_size(FrameSize::new(1600, 1000), &prefs);
+        view.resized_at = long_ago();
+        view.follow_size(FrameSize::new(1700, 1050), &prefs);
+        assert_eq!(view.sent_display, start);
+        view.follow_size(FrameSize::new(1700, 1050), &prefs);
+        assert_eq!(view.sent_display, start, "the pause has not passed");
+        // The size rested for the pause: it goes out once.
+        view.resized_at = long_ago();
+        view.follow_size(FrameSize::new(1700, 1050), &prefs);
+        assert_eq!(view.sent_display, FrameSize::new(1700, 1050));
+        // A small change is never sent.
+        view.follow_size(FrameSize::new(1710, 1060), &prefs);
+        view.resized_at = long_ago();
+        view.follow_size(FrameSize::new(1710, 1060), &prefs);
+        assert_eq!(view.sent_display, FrameSize::new(1700, 1050));
+    }
 }
