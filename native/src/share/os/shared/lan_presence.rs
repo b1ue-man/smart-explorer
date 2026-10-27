@@ -46,6 +46,14 @@ impl LanPresence {
     pub fn start() -> Result<Self, String> {
         let daemon = mdns_sd::ServiceDaemon::new()
             .map_err(|error| format!("mDNS-Dienst konnte nicht gestartet werden: {error}"))?;
+        // mdns-sd >= 0.17 also uses loopback interfaces by default; 0.11 did
+        // not. Keep announcing and browsing on the LAN interfaces only.
+        daemon
+            .disable_interface(vec![
+                mdns_sd::IfKind::LoopbackV4,
+                mdns_sd::IfKind::LoopbackV6,
+            ])
+            .map_err(|error| format!("mDNS-Dienst konnte nicht eingerichtet werden: {error}"))?;
         let browse = daemon
             .browse(SERVICE)
             .map_err(|error| format!("mDNS-Suche konnte nicht gestartet werden: {error}"))?;
@@ -188,7 +196,7 @@ impl Drop for LanPresence {
     }
 }
 
-fn sighting_from(info: &mdns_sd::ServiceInfo) -> Option<LanSighting> {
+fn sighting_from(info: &mdns_sd::ResolvedService) -> Option<LanSighting> {
     let id = info
         .get_property_val_str("id")
         .map(str::to_string)
@@ -207,8 +215,15 @@ fn sighting_from(info: &mdns_sd::ServiceInfo) -> Option<LanSighting> {
         return None;
     }
     let uplink = info.get_property_val_str("up") == Some("1");
-    let mut addrs: Vec<std::net::IpAddr> = info.get_addresses().iter().copied().collect();
+    // Resolved addresses are `ScopedIp` (address plus interface/scope);
+    // compare and store the plain address, deduplicated as before.
+    let mut addrs: Vec<std::net::IpAddr> = info
+        .get_addresses()
+        .iter()
+        .map(mdns_sd::ScopedIp::to_ip_addr)
+        .collect();
     addrs.sort();
+    addrs.dedup();
     addrs.truncate(MAX_ADDRESSES);
     Some(LanSighting {
         id,
@@ -220,7 +235,7 @@ fn sighting_from(info: &mdns_sd::ServiceInfo) -> Option<LanSighting> {
     })
 }
 
-fn event_from(info: &mdns_sd::ServiceInfo) -> Option<LanEvent> {
+fn event_from(info: &mdns_sd::ResolvedService) -> Option<LanEvent> {
     let mut sighting = sighting_from(info)?;
     if info.get_property_val_str("v") != Some("2") {
         return Some(LanEvent::Seen(sighting));

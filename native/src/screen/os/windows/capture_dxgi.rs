@@ -345,8 +345,10 @@ impl Grabber for DxgiCapture {
     }
     fn capture(&mut self, keyframe: bool) -> io::Result<SourceFrame> {
         let recovery = self.recovery;
-        if !recovery.ensure_live(self.live.is_some(), || self.reopen())? {
-            return Ok(SourceFrame::Unchanged);
+        match recovery.ensure_live(self.live.is_some(), || self.reopen()) {
+            Ok(true) => {}
+            Ok(false) => return Ok(SourceFrame::Unchanged),
+            Err(error) => return CaptureRecovery::paused_by_duplication(error),
         }
         let wait = if self.last.is_none() {
             FIRST_FRAME_WAIT
@@ -383,7 +385,7 @@ impl Grabber for DxgiCapture {
                     drop(picture);
                     drop(regions);
                     if error.code() == DXGI_ERROR_ACCESS_LOST {
-                        self.reopen()?;
+                        self.stop();
                         return Ok(SourceFrame::Paused(SessionState::Starting));
                     }
                     return Err(io::Error::other(error));
@@ -414,7 +416,7 @@ impl Grabber for DxgiCapture {
                         Ok(SourceFrame::Frame(image))
                     }
                     Some(Ok(None)) => {
-                        self.reopen()?;
+                        self.stop();
                         Ok(SourceFrame::Paused(SessionState::Starting))
                     }
                     Some(Err(error)) if error.kind() == io::ErrorKind::WouldBlock => {
@@ -427,7 +429,7 @@ impl Grabber for DxgiCapture {
             Err(error) if error.code() == DXGI_ERROR_WAIT_TIMEOUT => Ok(self.again(keyframe)),
             Err(error) if error.code() == DXGI_ERROR_ACCESS_LOST => {
                 drop(resource);
-                self.reopen()?;
+                self.stop();
                 Ok(SourceFrame::Paused(SessionState::Starting))
             }
             Err(error) => Err(io::Error::other(error)),
