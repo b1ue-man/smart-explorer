@@ -122,6 +122,12 @@ pub fn job(
     label: &str,
 ) -> TransferJob {
     TransferJob {
+        id: smart_explorer::transfer::new_job_id(),
+        recoverable: false,
+        recovery: smart_explorer::transfer::RecoveryMode::New,
+        folders: smart_explorer::transfer::FolderConflictPolicy::new(
+            smart_explorer::transfer::FolderConflict::Merge,
+        ),
         source,
         target,
         target_dir,
