@@ -89,10 +89,6 @@ pub(in crate::app) fn ui_exec_overview(app: &mut App, ui: &mut egui::Ui) -> Opti
 
 /// The access section of one device (device page and tab „Befehle“);
 /// `false` when the key names no current device.
-pub(in crate::app) fn ui_exec_target(app: &mut App, ui: &mut egui::Ui, target_key: &str) -> bool {
-    ui_exec_card(app, ui, target_key, false)
-}
-
 /// The access card of one target; `compact` (device page) leaves out the
 /// device name, the identity and the rights list the page already shows.
 pub(in crate::app) fn ui_exec_card(

@@ -301,18 +301,16 @@ fn icon_rgba(icon: RawHandle) -> Option<Vec<u8>> {
     let white = render_on(icon, 255)?;
     let mut rgba = Vec::with_capacity(SIDE * SIDE * 4);
     // Two backgrounds recover alpha for both legacy masks and modern alpha icons.
-    for (dark, light) in black.chunks_exact(4).zip(white.chunks_exact(4)) {
+    for (dark, light) in black.as_chunks::<4>().0.iter().zip(white.as_chunks::<4>().0) {
         let transparent = (0..3)
             .map(|channel| light[channel].saturating_sub(dark[channel]))
             .max()
             .unwrap_or(0);
         let alpha = 255u16 - u16::from(transparent);
-        let straight = |channel| {
-            if alpha == 0 {
-                0
-            } else {
-                ((u16::from(dark[channel]) * 255 + alpha / 2) / alpha).min(255) as u8
-            }
+        let straight = |channel: usize| {
+            (u16::from(dark[channel]) * 255 + alpha / 2)
+                .checked_div(alpha)
+                .map_or(0, |value| value.min(255) as u8)
         };
         rgba.extend_from_slice(&[straight(2), straight(1), straight(0), alpha as u8]);
     }
