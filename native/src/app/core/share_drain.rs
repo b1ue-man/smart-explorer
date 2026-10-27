@@ -188,6 +188,9 @@ impl App {
                             self.append_share_diag(s);
                         }
                     } else {
+                        if s.starts_with("Firewall-Regel fuer Peer-Listener nicht gesetzt") {
+                            ask_firewall_once();
+                        }
                         self.share_status = s.clone();
                         self.append_share_diag(s);
                     }
@@ -287,10 +290,20 @@ impl App {
                             });
                         }
                     }
-                    self.append_share_diag(format!(
-                        "Direct online: lookup={lookup_id}, device={}\n",
-                        presence.device_name
-                    ));
+                    // Presence refreshes repeat this event every few seconds;
+                    // the log names only the change to online.
+                    let online = self
+                        .share_diag_log
+                        .rfind(&format!("Direct online: lookup={lookup_id},"));
+                    let offline = self
+                        .share_diag_log
+                        .rfind(&format!("Direct offline: lookup={lookup_id}\n"));
+                    if online.is_none() || offline > online {
+                        self.append_share_diag(format!(
+                            "Direct online: lookup={lookup_id}, device={}\n",
+                            presence.device_name
+                        ));
+                    }
                 }
                 E::DirectOffline { lookup_id } => {
                     self.append_share_diag(format!("Direct offline: lookup={lookup_id}\n"))
@@ -369,4 +382,19 @@ impl App {
             self.open_share_target(target);
         }
     }
+}
+
+/// The peer listener's firewall rule sets itself up: without it, the
+/// administrator approval (UAC) is asked once per version, not on every
+/// start (user rule 2026-10-27: everything that can set itself up does).
+fn ask_firewall_once() {
+    if !crate::share::lan_firewall_repair_available() {
+        return;
+    }
+    let marker = crate::support_dirs::sync_data_dir()
+        .join(format!("firewall-asked-{}", env!("CARGO_PKG_VERSION")));
+    if marker.exists() || std::fs::write(&marker, b"").is_err() {
+        return;
+    }
+    let _ = crate::share::start_lan_firewall_repair();
 }

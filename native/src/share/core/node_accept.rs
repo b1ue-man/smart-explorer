@@ -122,7 +122,9 @@ impl ShareIrohNode {
                         }
                     };
                     if let Err(error) = result {
-                        node.emit_connection_error(error_kind, error.to_string());
+                        if !super::node::closed_on_purpose(&connection) {
+                            node.emit_connection_error(error_kind, error.to_string());
+                        }
                     }
                 });
             }

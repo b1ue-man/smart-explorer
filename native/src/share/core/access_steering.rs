@@ -67,7 +67,7 @@ mod tests {
     }
 
     #[test]
-    fn steering_task_control_includes_view_and_own_rdp_only() {
+    fn screen_metadata_runtime_task_steering_includes_view_and_own_rdp() {
         let mut grant = AccessGrant::default();
         assert!(!steers(&grant, 0));
         grant.set(Capability::ScreenControl, CapabilityDecision::Allow);

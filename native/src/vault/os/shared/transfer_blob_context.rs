@@ -153,10 +153,14 @@ fn local_site(path: &Path) -> io::Result<Option<String>> {
         return Ok(Some(site.clone()));
     }
     // Desktop clients need the worker's active mappings too. Do not start a
-    // worker merely to classify an ordinary local transfer.
-    if crate::daemon::vault_status()
-        .map_err(|_| invalid())?
-        .is_some()
+    // worker merely to classify an ordinary local transfer. A process that
+    // hosts the register itself (the worker, the Android app) already knows
+    // its mappings; asking a worker IPC there fails on Android (no drive
+    // mounts) and refused every local transfer target.
+    if !hosts_register()
+        && crate::daemon::vault_status()
+            .map_err(|_| invalid())?
+            .is_some()
     {
         let mounts = crate::daemon::list_mounts().map_err(|_| invalid())?;
         let mut candidates = Vec::new();

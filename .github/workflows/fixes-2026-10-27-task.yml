@@ -4,7 +4,7 @@ run-name: Targeted 0.5.185 fixes ${{ inputs.candidate_sha }}
 # Narrow remote check for the targeted fixes of 2026-10-27 (user: "fixe
 # gezielt die fehler … aber mache keine breiten review und test suits"):
 # Linux and Windows check library and binaries with Clippy (findings
-# count only on lines this batch changed since v0.5.185) and run the screen
+# count only on lines this batch changed since v0.5.186) and run the screen
 # metadata runtime cases (which compiles every unit test of the library);
 # Android builds and runs its JVM unit tests.
 
@@ -71,7 +71,7 @@ jobs:
           # GitHub runs bash with -e; Clippy's own exit status must not end
           # the step before the findings are filtered.
           set +e -uo pipefail
-          git diff -U0 --no-color v0.5.185 HEAD -- native/src > "$RUNNER_TEMP/diff.txt"
+          git diff -U0 --no-color v0.5.186 HEAD -- native/src > "$RUNNER_TEMP/diff.txt"
           cd native
           cargo clippy --lib --bins --message-format short 2>&1 \
             | tr '\\' '/' | tee "$RUNNER_TEMP/clippy.txt"

@@ -32,7 +32,9 @@ pub(super) mod pq_kx;
 #[path = "node_wake.rs"]
 mod wake;
 
-pub(crate) use self::idle::{closed_idle, IncomingActivity, IDLE_CLOSE_CODE, IDLE_CLOSE_REASON};
+pub(crate) use self::idle::{
+    closed_idle, closed_on_purpose, IncomingActivity, IDLE_CLOSE_CODE, IDLE_CLOSE_REASON,
+};
 
 pub(super) const ALPN: &[u8] = b"smart-explorer/share-fs/3";
 const MAX_PENDING_APPLICATION_HANDSHAKES: usize = 64;
