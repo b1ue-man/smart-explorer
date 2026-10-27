@@ -219,8 +219,8 @@ impl Backend for RootedBackend {
         "authorized-mount-root".into()
     }
 
-    /// Only `finish_stage` (DRV-M4); every other extension keeps its
-    /// default (`rooted_backend_extensions.rs`).
+    /// `finish_stage` (DRV-M4) and `content_digest`; every other extension
+    /// keeps its default (`rooted_backend_extensions.rs`).
     fn extensions(&self) -> Option<&dyn crate::vfs::BackendExtensions> {
         Some(self)
     }

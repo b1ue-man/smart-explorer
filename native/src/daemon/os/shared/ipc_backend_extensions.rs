@@ -46,6 +46,17 @@ impl BackendExtensions for UnavailableBackend {
         vfs::file_identity(&*self.live_backend()?, path)
     }
 
+    /// The live worker connection asks `query::FILE_DIGEST` and a one-file
+    /// SHA-256 walk (`AgentBackend::content_digest`, which never delegates
+    /// back to this stub); a worker answering 0 or "unsupported" is `None`.
+    fn content_digest(
+        &self,
+        path: &str,
+        cancel: &AtomicBool,
+    ) -> VfsResult<Option<vfs::ContentDigest>> {
+        vfs::content_digest(&*self.live_backend()?, path, cancel)
+    }
+
     fn list_dir_tolerant(&self, path: &str) -> VfsResult<VfsListing> {
         vfs::list_dir_tolerant(&*self.live_backend()?, path)
     }

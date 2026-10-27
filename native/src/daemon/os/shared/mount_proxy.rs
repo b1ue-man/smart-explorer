@@ -193,7 +193,7 @@ impl Backend for MountProxy {
         self.inner.invalidate_cache();
     }
 
-    /// Only `finish_stage` (DRV-M4, `mount_proxy_extensions.rs`).
+    /// `finish_stage` (DRV-M4) and `content_digest` (`mount_proxy_extensions.rs`).
     fn extensions(&self) -> Option<&dyn crate::vfs::BackendExtensions> {
         Some(self)
     }
