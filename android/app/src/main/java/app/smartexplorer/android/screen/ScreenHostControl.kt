@@ -45,6 +45,13 @@ import kotlinx.serialization.json.longOrNull
  * thread per session follows the core's control messages (`configure`, `keyframe`, `bitrate`,
  * `still`, `consent`, `stop`); one thread hands the controlling viewer's input to
  * [ScreenControlService]. Logs name sessions and operations only, never screen content.
+ *
+ * The keyguard does not end a session here: Android decides. On Android 15 QPR1+ the system stops
+ * a running MediaProjection when the screen locks (`onStop`, reported as `host_locked`) unless the
+ * app is exempt (AOSP `MediaProjectionStopController.isExempt`, e.g. the `PROJECT_MEDIA` app op
+ * set to allow); an exempt projection keeps capturing the lock screen, where the bouncer window is
+ * `FLAG_SECURE` and therefore black. Accessibility stills (`takeScreenshot`) and gestures
+ * (`dispatchGesture`) have no keyguard check in AOSP, so previews and input reach the lock screen.
  */
 internal object ScreenHostControl {
     private const val TAG = "SmartExplorerScreen"
@@ -76,7 +83,7 @@ internal object ScreenHostControl {
         var encoderRetirements=0
         var pendingConfigStart=false
         val still = ScreenStillSource(start.session,{displaySize()}) { buffer, length, generation ->
-            if (hostLocked() || ended || !captureActive || projection != null) -1
+            if (ended || !captureActive || projection != null) -1
             else NativeBridge.screenPushAdmitted(start.session,generation,buffer,0,length,0,FLAG_STILL)
         }
     }
@@ -143,8 +150,6 @@ internal object ScreenHostControl {
         return bounds.width() to bounds.height()
     }
 
-    private fun hostLocked(): Boolean = app.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true
-
     fun requestedSource(session: Long): String? = sessions[session]?.start?.source
 
     /** The consent activity of a question takes [session]; `false` when someone already did. */
@@ -162,7 +167,6 @@ internal object ScreenHostControl {
         try {
             when {
                 start.source == "synthetic" -> ScreenApi.ready(start.session, start.maxWidth, start.maxHeight, "synthetic", false, false)
-                hostLocked() -> { ScreenApi.ended(start.session, "host_locked"); teardown(session) }
                 ScreenProjectionIdentity.requiresPackageProof(start.source) -> requestConsent(start)
                 start.still -> {
                     if (ScreenControlService.current() == null) {
@@ -206,11 +210,6 @@ internal object ScreenHostControl {
                 Log.e(TAG, "screenControl fehlt in der nativen Bibliothek", e)
                 return
             } ?: continue
-            if (session.start.source != "synthetic" && hostLocked()) {
-                scope.launch { endQuietly(id, "host_locked") }
-                teardown(session)
-                return
-            }
             val message = try {
                 Core.json.parseToJsonElement(raw) as? JsonObject
             } catch (e: IllegalArgumentException) {
@@ -295,7 +294,7 @@ internal object ScreenHostControl {
         val projection = session.projection
         val identity = session.identity
         if (session.ended || !session.captureActive || (!synthetic && projection == null)) return@synchronized
-        if (!synthetic && (hostLocked() || projection == null || identity?.matches(projection) != true)) return@synchronized
+        if (!synthetic && (projection == null || identity?.matches(projection) != true)) return@synchronized
         if(session.encoderRetirements!=0) {session.pendingConfigStart=true;return@synchronized}
         // This epoch replaces the old output. End its actual producer before
         // asking Rust to fund the replacement; retained asynchronous owners
@@ -427,7 +426,7 @@ internal object ScreenHostControl {
         if (session.ended || !session.captureActive || session.config?.epoch != epoch) return false
         if (session.start.source == "synthetic") return true
         val projection = session.projection ?: return false
-        return !hostLocked() && session.identity === identity && identity?.matches(projection) == true
+        return session.identity === identity && identity?.matches(projection) == true
     }
 
     private fun attachSurface(session: HostSession, config: EncoderConfig, surface: android.view.Surface): VirtualDisplay {
@@ -483,9 +482,9 @@ internal object ScreenHostControl {
             gone()
             return
         }
-        if (hostLocked() || ScreenProjectionIdentity.requiresPackageProof(host.start.source)) {
+        if (ScreenProjectionIdentity.requiresPackageProof(host.start.source)) {
             projection.stop()
-            scope.launch { projectionFailed(session, if (hostLocked()) "host_locked" else ScreenProjectionIdentity.UNVERIFIED_APP) }
+            scope.launch { projectionFailed(session, ScreenProjectionIdentity.UNVERIFIED_APP) }
             gone()
             return
         }
@@ -540,11 +539,11 @@ internal object ScreenHostControl {
 
     private suspend fun reportProjectionReady(host: HostSession, identity: ScreenProjectionIdentity, projection: MediaProjection) {
         host.readyLock.withLock {
-            if (host.identity !== identity || !identity.matches(projection) || host.ended || hostLocked()) return@withLock
+            if (host.identity !== identity || !identity.matches(projection) || host.ended) return@withLock
             // Snapshot the exact configured encoder under the source lock, then release
             // that lock while the Native ready call is pending. A newer token cannot inherit it.
             val binding=synchronized(host.lock) {
-                if(host.identity !== identity || !identity.matches(projection) || host.ended || hostLocked()) null
+                if(host.identity !== identity || !identity.matches(projection) || host.ended) null
                 else Triple(identity.size() ?: displaySize(),host.encoder,host.encoderToken)
             } ?: return@withLock
             val actual=binding.second
@@ -656,7 +655,6 @@ internal object ScreenHostControl {
                     null
                 } ?: continue
                 val events = message["events"] as? JsonArray ?: continue
-                if (hostLocked()) continue
                 val service = ScreenControlService.current() ?: continue
                 for (action in mapper.map(events)) {
                     val done = CountDownLatch(1)

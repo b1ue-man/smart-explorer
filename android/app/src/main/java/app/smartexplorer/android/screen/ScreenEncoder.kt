@@ -259,30 +259,12 @@ internal class ScreenEncoder(private val config: EncoderConfig, private val budg
         repeat(100) { if(index<0 && running) index=codec.dequeueInputBuffer(10_000) }
         if(index<0) return false
         val image=codec.getInputImage(index) ?: error("Kodierer bietet kein beschreibbares YUV-Bild")
-        require(image.planes.size==3 && image.cropRect.width()==config.width && image.cropRect.height()==config.height)
+        // MediaCodec's Image.getPlanes() copies its array on every call: read it once.
+        val planes=image.planes
+        require(planes.size==3 && image.cropRect.width()==config.width && image.cropRect.height()==config.height)
         val crop=image.cropRect
-        fun sample(plane: Int,x: Int,y: Int,value: Int) {
-            val p=image.planes[plane]
-            val at=p.buffer.position().toLong()+y.toLong()*p.rowStride+x.toLong()*p.pixelStride
-            require(at>=0 && at<p.buffer.limit())
-            p.buffer.put(at.toInt(),value.coerceIn(0,255).toByte())
-        }
-        rgba.access {pixels ->
-        for(y in 0 until config.height) for(x in 0 until config.width) {
-            val at=(y*config.width+x)*4
-            val r=pixels.get(at).toInt() and 255; val g=pixels.get(at+1).toInt() and 255; val b=pixels.get(at+2).toInt() and 255
-            sample(0,x+crop.left,y+crop.top,((47*r+157*g+16*b+128) shr 8)+16)
-        }
-        for(y in 0 until config.height step 2) for(x in 0 until config.width step 2) {
-            var r=0; var g=0; var b=0
-            for(dy in 0..1) for(dx in 0..1) {
-                val at=(minOf(y+dy,config.height-1)*config.width+minOf(x+dx,config.width-1))*4
-                r+=pixels.get(at).toInt() and 255; g+=pixels.get(at+1).toInt() and 255; b+=pixels.get(at+2).toInt() and 255
-            }
-            sample(1,(x+crop.left)/2,(y+crop.top)/2,((-26*r-86*g+112*b+512) shr 10)+128)
-            sample(2,(x+crop.left)/2,(y+crop.top)/2,((112*r-102*g-10*b+512) shr 10)+128)
-        }
-        }
+        fun plane(at: Int)=ScreenPlane(planes[at].buffer,planes[at].rowStride,planes[at].pixelStride)
+        rgba.access {pixels -> ScreenRgbaPlanes.rgbaToYuv420(pixels,config.width,config.height,plane(0),plane(1),plane(2),crop.left,crop.top)}
         val pts=nextCapturePts()
         val capture=ScreenCaptureInput(pts,frameId) {rgba.retain()}
         var nextPixels:ScreenCaptureBuffer?=null

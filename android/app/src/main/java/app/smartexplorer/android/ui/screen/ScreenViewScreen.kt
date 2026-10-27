@@ -260,11 +260,16 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
                 }
                 override fun onSurfaceFrame(frame: ScreenPresentedFrame) {
                     if (!activeDecoder.get() || !active.isDisplayable(frame)) return
+                    val continues = surfaceFrameContinues(surfaceFrame, frame, bitmap != null)
                     // A Bitmap overlay belongs to the previous decoder family and must leave first.
                     bitmap = null; bitmapGop = null; bitmapFrame = null
                     sourceAfterGop = null; hiddenSinceFrame = false
                     surfaceFrame = frame
-                    renderReady = false
+                    // Only a new picture group, display epoch or decoder family waits for its first
+                    // drawn frame. Resetting on every frame turned `sending` off and on per frame:
+                    // each time all held input was released, control re-taken and the touch
+                    // handler swapped, which cut every drag and long press on the remote host.
+                    if (!continues) renderReady = false
                     failures = 0
                 }
                 override fun onPicture() = Unit
@@ -475,6 +480,14 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
         }
     }
 }
+
+/**
+ * Whether surface frame [next] continues the frames already drawn: same session, picture group and
+ * display epoch as [shown], and no bitmap of another decoder family on top. Only then does the
+ * renderer's readiness stay; the frame is still confirmed when drawn.
+ */
+internal fun surfaceFrameContinues(shown: ScreenPresentedFrame?, next: ScreenPresentedFrame, bitmapShown: Boolean): Boolean =
+    !bitmapShown && shown != null && shown.session == next.session && shown.gopId == next.gopId && shown.epoch == next.epoch
 
 /** The surface the decoder renders on; [onSurface] hears when it exists and when it is gone (`null`). */
 private fun surfaceView(context: android.content.Context, onSurface: (Surface?) -> Unit) = SurfaceView(context).apply {

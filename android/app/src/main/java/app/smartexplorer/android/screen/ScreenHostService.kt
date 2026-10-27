@@ -24,7 +24,8 @@ import kotlinx.coroutines.launch
  * the system dialog „Bildschirm teilen“ returned its token; it goes to the foreground first and
  * then takes the projection, as Android 14+ demands. Its notification („Bildschirm wird geteilt“,
  * „Beenden“) and the system's status bar chip show the host user that the screen is watched. The
- * projection ends when Android stops it (device locked: `host_locked`), with „Beenden“, or when the
+ * projection ends when Android stops it (on Android 15 QPR1+ also when the screen locks, unless the
+ * app is exempt: `host_locked`), with „Beenden“, or when the
  * viewer leaves. Also answers „Beenden“ and „Ablehnen“ of [ScreenHostNotifier] for sessions without
  * projection. Not exported.
  */
