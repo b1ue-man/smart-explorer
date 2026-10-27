@@ -72,7 +72,7 @@ pub(in crate::app) fn ui_exec_overview(app: &mut App, ui: &mut egui::Ui) -> Opti
             );
             let text = access_text(view, &provider.user_label, now);
             ui.colored_label(state_color(ui, view, now), text);
-            if ui.button("Einstellungen").clicked() {
+            if ui.button("Bildschirm- und Befehlsrechte …").clicked() {
                 open = Some(view.target_key.clone());
             }
         });
@@ -115,6 +115,8 @@ pub(in crate::app) fn ui_exec_target(app: &mut App, ui: &mut egui::Ui, target_ke
             }
         });
     for (capability, label) in [
+        (Capability::ScreenView, "Bildschirm ansehen"),
+        (Capability::ScreenControl, "Bildschirm steuern"),
         (Capability::ExecCommands, "Befehle"),
         (Capability::ExecTerminal, "Terminal"),
     ] {
@@ -142,7 +144,10 @@ pub(in crate::app) fn ui_exec_target(app: &mut App, ui: &mut egui::Ui, target_ke
     let (mut edit, mut revoke) = (false, false);
     ui.horizontal_wrapped(|ui| {
         edit = ui
-            .add_enabled(view.base_authorized, egui::Button::new("Ändern…"))
+            .add_enabled(
+                view.base_authorized,
+                egui::Button::new("Bildschirm- und Befehlsrechte ändern …"),
+            )
             .clicked();
         if view.access.grants_any() {
             revoke = ui
