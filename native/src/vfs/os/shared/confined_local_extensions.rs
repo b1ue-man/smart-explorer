@@ -77,6 +77,14 @@ impl BackendExtensions for ConfinedLocalBackend {
     fn open_read_regular(&self, path: &str, _id: Option<&str>) -> VfsResult<Box<dyn Read + Send>> {
         self.open_read(path)
     }
+    /// Hashed here, through the same held root as every read.
+    fn content_digest(
+        &self,
+        path: &str,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> VfsResult<Option<super::ContentDigest>> {
+        super::digest_by_local_read(self, path, cancel)
+    }
     fn open_write_copy_stage_timed(
         &self,
         path: &str,

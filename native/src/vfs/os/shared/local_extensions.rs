@@ -58,6 +58,15 @@ impl BackendExtensions for LocalBackend {
         self.list_tolerant(path)
     }
 
+    /// Hashed here: the file is on this device.
+    fn content_digest(
+        &self,
+        path: &str,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> VfsResult<Option<super::ContentDigest>> {
+        super::digest_by_local_read(self, path, cancel)
+    }
+
     fn open_read_regular(&self, path: &str, _id: Option<&str>) -> VfsResult<Box<dyn Read + Send>> {
         crate::source_media::guard_reader(&local_platform::to_os(path), || {
             local_access::open_regular(&local_platform::to_os(path), FinalLink::Refuse)

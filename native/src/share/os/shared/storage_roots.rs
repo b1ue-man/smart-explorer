@@ -215,6 +215,31 @@ pub(in crate::share) fn open_local(
     }
     Ok(directory)
 }
+/// The regular file `target` names, opened from held handles below the
+/// authorized export root without following links (`hash_file_v1`).
+pub(in crate::share) fn open_local_file(target: &fs::ResolvedTarget) -> io::Result<std::fs::File> {
+    let (root, relative) = local_parts(target)?;
+    let mut parts = Vec::new();
+    for part in relative.components() {
+        let std::path::Component::Normal(name) = part else {
+            return Err(io::ErrorKind::PermissionDenied.into());
+        };
+        parts.push(name);
+    }
+    let Some(name) = parts.pop() else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Die Exportwurzel ist keine Datei",
+        ));
+    };
+    let mut directory = crate::local_access::DirectoryHandle::open_root(&root)?;
+    fs::ensure_local_share_handle_allowed(&directory)?;
+    for part in parts {
+        directory = directory.open_child(part)?;
+        fs::ensure_local_share_handle_allowed(&directory)?;
+    }
+    directory.open_regular_child(name)
+}
 
 #[cfg(test)]
 mod vault_tests {

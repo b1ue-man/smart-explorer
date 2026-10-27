@@ -178,6 +178,17 @@ impl BackendExtensions for GuardedBackend {
             |output, cancelled| vfs::hash_walk(&*self.inner, root, request, output, cancelled),
         )
     }
+    fn content_digest(
+        &self,
+        path: &str,
+        cancel: &AtomicBool,
+    ) -> VfsResult<Option<vfs::ContentDigest>> {
+        self.read(path)?;
+        let digest = vfs::content_digest(&*self.inner, path, cancel)?;
+        // Access revoked while hashing: the digest is not handed out.
+        self.read(path)?;
+        Ok(digest)
+    }
     fn supports_recycle(&self, path: &str) -> VfsResult<bool> {
         self.read(path)?;
         vfs::supports_recycle(&*self.inner, path)

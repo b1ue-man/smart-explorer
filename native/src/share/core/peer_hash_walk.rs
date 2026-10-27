@@ -36,6 +36,7 @@ pub(super) fn walk(
             HashAlgorithm::Md5 => FsHashAlgo::Md5,
             HashAlgorithm::Sha256 => FsHashAlgo::Sha256,
         }),
+        single_file: false,
     });
     let result = backend.node.block_on_route(opened.generation, async {
         io_deadline::run(

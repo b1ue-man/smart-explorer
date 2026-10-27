@@ -25,6 +25,8 @@ use crate::vfs::{
     TargetLimits, VfsListing, VfsResult, VolumeIdentity,
 };
 
+#[path = "content_digest.rs"]
+mod content_digest;
 #[path = "folder_reservation.rs"]
 mod folder_reservation;
 #[path = "extensions_watch.rs"]
@@ -373,6 +375,15 @@ impl BackendExtensions for AgentBackend {
             Err(error) if items == 0 && is_unsupported_error(&error) => Ok(false),
             Err(error) => Err(error),
         }
+    }
+
+    /// Hashed by the agent next to the data; never through the SFTP fallback.
+    fn content_digest(
+        &self,
+        path: &str,
+        cancel: &AtomicBool,
+    ) -> VfsResult<Option<vfs::ContentDigest>> {
+        content_digest::file_digest(self, path, cancel)
     }
 
     fn supports_recycle(&self, path: &str) -> VfsResult<bool> {

@@ -89,6 +89,12 @@ pub(crate) struct FsHashWalk {
     pub(crate) algo: Option<FsHashAlgo>,
     #[serde(default)]
     pub(crate) min_bytes: u64,
+    /// `hash_file_v1`: `path` is one regular file; the host answers its
+    /// SHA-256 as one entry with an empty `rel`, or no entry when it can hash
+    /// it only by reading it over a network itself. Sent only to hosts that
+    /// offer `hash_file_v1`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) single_file: bool,
 }
 
 /// `list_batches_v1`: the folder `path` in name order and in bounded

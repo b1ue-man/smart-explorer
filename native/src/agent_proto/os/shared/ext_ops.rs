@@ -2,7 +2,8 @@
 //! listings that keep going past single entries, hash walks that report
 //! links, special files and unreadable entries as omissions (never a reason
 //! to fail the walk), stage finishing and the questions about what this side
-//! offers. The storing host's duplicate search, recycling, target limits and
+//! offers, and the SHA-256 of one file next to its data (`FILE_DIGEST`).
+//! The storing host's duplicate search, recycling, target limits and
 //! change subscriptions belong to the app's backends; the agent answers them
 //! with `UNSUPPORTED_EXTENSION`.
 use std::io::{self, Read};
@@ -130,11 +131,7 @@ pub(crate) fn handle_walk_hashed2(
     cancel: &AtomicBool,
 ) -> io::Result<()> {
     if algorithm == digest::SHA256 {
-        return emit(
-            sink,
-            id,
-            &Frame::Err(super::UNSUPPORTED_EXTENSION.to_string()),
-        );
+        return walk_file_sha256(sink, id, root, cancel);
     }
     if !matches!(algorithm, digest::NONE | digest::MD5) {
         return Err(io::Error::new(
@@ -283,12 +280,63 @@ fn emit_omission(
     emit(sink, id, &Frame::HashOmitted(omitted(rel, reason, detail)))
 }
 
+/// `WalkHashed2` with SHA-256 (`query::FILE_DIGEST`): a regular-file root is
+/// answered as one `HashEntry` with an empty `rel`, then `End`. A folder
+/// root stays unsupported as before; a link, special, missing or changing
+/// file fails the request instead of yielding a digest.
+fn walk_file_sha256(sink: &Sink, id: u64, root: &str, cancel: &AtomicBool) -> io::Result<()> {
+    let path = Path::new(root);
+    let metadata = std::fs::symlink_metadata(path)?;
+    let (link, special) = super::local_platform::metadata_class(path, &metadata);
+    if metadata.is_dir() && !link && !special {
+        return emit(
+            sink,
+            id,
+            &Frame::Err(super::UNSUPPORTED_EXTENSION.to_string()),
+        );
+    }
+    if link || special || !metadata.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("Wurzel ist keine reguläre Datei: {root}"),
+        ));
+    }
+    let mut context = super::sha256::Sha256::new();
+    read_regular_exact(path, metadata.len(), cancel, &mut |chunk| {
+        context.update(chunk)
+    })?;
+    let mtime_ms = metadata.modified().ok().map(systemtime_ms).unwrap_or(0);
+    let entry = entry_frame(
+        String::new(),
+        false,
+        metadata.len(),
+        mtime_ms,
+        Some(context.finish_hex()),
+    );
+    emit(sink, id, &entry)?;
+    emit(sink, id, &Frame::End)
+}
+
 /// MD5 of a regular file, checking for a cancel between chunks.
 pub(super) fn md5_file(path: &Path, expected_size: u64, cancel: &AtomicBool) -> io::Result<String> {
+    let mut context = super::hash::Md5::new();
+    read_regular_exact(path, expected_size, cancel, &mut |chunk| {
+        context.update(chunk)
+    })?;
+    Ok(context.finish_hex())
+}
+
+/// Every byte of the regular file `path` into `consume`; exactly
+/// `expected_size` bytes with unchanged size and time, or an error.
+fn read_regular_exact(
+    path: &Path,
+    expected_size: u64,
+    cancel: &AtomicBool,
+    consume: &mut dyn FnMut(&[u8]),
+) -> io::Result<()> {
     let mut file = super::local_platform::open_regular_no_follow(path, false)?;
     let before = file.metadata()?;
     let mut bytes = 0u64;
-    let mut context = super::hash::Md5::new();
     let mut buffer = vec![0u8; CHUNK];
     loop {
         if cancel.load(Ordering::Relaxed) {
@@ -301,7 +349,7 @@ pub(super) fn md5_file(path: &Path, expected_size: u64, cancel: &AtomicBool) -> 
             Err(error) => return Err(error),
         };
         bytes = bytes.saturating_add(read as u64);
-        context.update(&buffer[..read]);
+        consume(&buffer[..read]);
     }
     let after = file.metadata()?;
     if bytes != expected_size
@@ -314,7 +362,7 @@ pub(super) fn md5_file(path: &Path, expected_size: u64, cancel: &AtomicBool) -> 
             "Datei während des Hashens geändert",
         ));
     }
-    Ok(context.finish_hex())
+    Ok(())
 }
 
 /// `FinishStage`: time and mode of a complete stage (no error when the
@@ -367,7 +415,7 @@ fn set_mtime(file: &std::fs::File, ms: i64) -> io::Result<()> {
 /// `Query`: what this agent offers below `path` (`Answer`).
 pub(crate) fn answer(kind: u8, path: &str) -> io::Result<Frame> {
     let value = match kind {
-        query::HASH_WALK | query::REMOVE_TREE => 1,
+        query::HASH_WALK | query::REMOVE_TREE | query::FILE_DIGEST => 1,
         query::SYNC_FILESYSTEM => {
             u64::from(super::local_platform::sync_filesystem(Path::new(path))?)
         }
