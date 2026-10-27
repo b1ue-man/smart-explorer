@@ -295,18 +295,14 @@ async fn negotiate(
     screencast: &ashpd::desktop::screencast::Screencast,
     session: &ashpd::desktop::Session<ashpd::desktop::screencast::Screencast>,
 ) -> Result<Chosen, Refusal> {
-    use ashpd::desktop::screencast::{
-        CursorMode, OpenPipeWireRemoteOptions, SelectSourcesOptions, SourceType,
-    };
+    use ashpd::desktop::screencast::OpenPipeWireRemoteOptions;
     use ashpd::desktop::PersistMode;
     let stored = portal_tokens::load();
     let token = stored
         .get(TokenKind::ScreenCast)
         .map(|stored| stored.token.clone());
-    let select_options = SelectSourcesOptions::default()
-        .set_cursor_mode(CursorMode::Embedded)
-        .set_sources(SourceType::Monitor | SourceType::Window)
-        .set_multiple(false)
+    let select_options = source_binding::advertised_sources(screencast)
+        .await
         .set_restore_token(token.as_deref())
         .set_persist_mode(PersistMode::ExplicitlyRevoked);
     let selected = screencast

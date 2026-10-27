@@ -1,5 +1,5 @@
 //! Actual logind seat/class/type plus a usable, pinned local X11 credential.
-use super::protected::open_owned;
+use super::protected::open_greeter_owned;
 use crate::login::{
     core::model::{DesktopKind, SessionBinding},
     os::shared::{denied, installation::Installation},
@@ -124,19 +124,8 @@ pub(super) fn inspect() -> io::Result<Greeter> {
     if process_uid != uid && process_uid != 0 {
         return Err(denied("logind greeter process has an unexpected UID"));
     }
-    let mut environ = Vec::new();
-    fs::File::open(format!("/proc/{leader}/environ"))?
-        .take(1024 * 1024 + 1)
-        .read_to_end(&mut environ)?;
-    if environ.len() > 1024 * 1024 {
-        return Err(denied("greeter process environment exceeds limit"));
-    }
-    let value = |name: &[u8]| {
-        environ
-            .split(|byte| *byte == 0)
-            .find_map(|entry| entry.strip_prefix(name))
-            .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
-    };
+    let environ = greeter_environ(leader, uid, &id, &display)?;
+    let value = |name: &[u8]| env_value(&environ, name);
     if value(b"WAYLAND_DISPLAY=").is_some_and(|value| !value.is_empty()) {
         return Err(denied(
             "greeter is Wayland; XWayland does not authorize login input",
@@ -151,7 +140,7 @@ pub(super) fn inspect() -> io::Result<Greeter> {
         value(b"XAUTHORITY=")
             .ok_or_else(|| denied("X11 greeter leader exposes no XAUTHORITY binding"))?,
     );
-    let pinned = open_owned(&authority, uid, false)?;
+    let pinned = open_greeter_owned(&authority, uid, account_gid(uid)?)?;
     if pinned.file.metadata()?.len() > 64 * 1024 {
         return Err(denied("greeter Xauthority exceeds limit"));
     }
@@ -178,6 +167,94 @@ pub(super) fn inspect() -> io::Result<Greeter> {
         display,
         authority: bytes,
     })
+}
+/// The value of `name` (`"NAME="`) in a NUL-separated environment block.
+fn env_value(environ: &[u8], name: &[u8]) -> Option<String> {
+    environ
+        .split(|byte| *byte == 0)
+        .find_map(|entry| entry.strip_prefix(name))
+        .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
+}
+/// Whether a `/proc/<pid>/cgroup` text places the process in the scope of
+/// logind session `session` (systemd names it `session-<id>.scope`).
+fn in_session_scope(cgroup: &str, session: &str) -> bool {
+    let scope = format!("/session-{session}.scope");
+    cgroup.lines().any(|line| line.ends_with(&scope))
+}
+fn read_environ(pid: u32) -> io::Result<Vec<u8>> {
+    let mut environ = Vec::new();
+    fs::File::open(format!("/proc/{pid}/environ"))?
+        .take(1024 * 1024 + 1)
+        .read_to_end(&mut environ)?;
+    if environ.len() > 1024 * 1024 {
+        return Err(denied("greeter process environment exceeds limit"));
+    }
+    Ok(environ)
+}
+/// All four UIDs of `pid` are `uid` and the process lies in `session`'s scope.
+fn greeter_process(pid: u32, uid: u32, session: &str) -> bool {
+    let Ok(status) = fs::read_to_string(format!("/proc/{pid}/status")) else {
+        return false;
+    };
+    let owned = status
+        .lines()
+        .filter_map(|line| line.strip_prefix("Uid:"))
+        .any(|ids| uids_are(ids, uid));
+    let Ok(cgroup) = fs::read_to_string(format!("/proc/{pid}/cgroup")) else {
+        return false;
+    };
+    owned && in_session_scope(&cgroup, session)
+}
+/// Whether the real, effective, saved and filesystem UID in `ids` are `uid`.
+fn uids_are(ids: &str, uid: u32) -> bool {
+    let ids: Vec<&str> = ids.split_whitespace().collect();
+    ids.len() == 4 && ids.iter().all(|id| id.parse::<u32>().ok() == Some(uid))
+}
+/// The environment that names the greeter's display. A leader started as
+/// root by the display manager (LightDM `lightdm --session-child`,
+/// gdm-session-worker) passes DISPLAY/XAUTHORITY only to the greeter it
+/// forks; its own `/proc/<pid>/environ` (the environment at its exec,
+/// proc(5)) lacks them. Then the greeter UID's processes in this logind
+/// session's scope that show `display` name the credential, and they must
+/// agree on it.
+fn greeter_environ(leader: u32, uid: u32, session: &str, display: &str) -> io::Result<Vec<u8>> {
+    let own = read_environ(leader)?;
+    let own_display = env_value(&own, b"DISPLAY=").unwrap_or_default();
+    if !own_display.is_empty() {
+        return Ok(own);
+    }
+    let mut found: Option<(String, Vec<u8>)> = None;
+    for entry in fs::read_dir("/proc")?.flatten() {
+        let name = entry.file_name();
+        let Some(pid) = name.to_str().and_then(|n| n.parse::<u32>().ok()) else {
+            continue;
+        };
+        if pid == leader || !greeter_process(pid, uid, session) {
+            continue;
+        }
+        let Ok(environ) = read_environ(pid) else {
+            continue;
+        };
+        // The PID may have been reused between the checks and the read.
+        if !greeter_process(pid, uid, session)
+            || env_value(&environ, b"DISPLAY=").as_deref() != Some(display)
+        {
+            continue;
+        }
+        let Some(authority) = env_value(&environ, b"XAUTHORITY=") else {
+            continue;
+        };
+        if let Some((known, _)) = &found {
+            if *known != authority {
+                return Err(denied("greeter processes name different Xauthority files"));
+            }
+            continue;
+        }
+        found = Some((authority, environ));
+    }
+    found
+        .map(|(_, environ)| environ)
+        .ok_or_else(|| denied("logind display and actual greeter process display differ"))
 }
 fn account_gid(uid: u32) -> io::Result<u32> {
     let mut record: libc::passwd = unsafe { std::mem::zeroed() };
@@ -333,3 +410,35 @@ pub(crate) fn helper_binding_matches(expected: &SessionBinding) -> io::Result<bo
             .starts_with(&format!("{}:", actual.desktop_generation)))
 }
 pub(crate) fn finish_helper() {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// LightDM's greeter leader (root `lightdm --session-child`) lacks
+    /// DISPLAY; the greeter's processes are found by UID and session scope.
+    #[test]
+    fn screen_metadata_runtime_task_login_greeter_scope_and_environment() {
+        let block = b"PATH=/usr/bin\0DISPLAY=:0\0XAUTHORITY=/var/lib/lightdm/.Xauthority\0";
+        assert_eq!(env_value(block, b"DISPLAY=").as_deref(), Some(":0"));
+        assert_eq!(
+            env_value(block, b"XAUTHORITY=").as_deref(),
+            Some("/var/lib/lightdm/.Xauthority")
+        );
+        assert_eq!(env_value(b"LANG=C\0USER=root\0", b"DISPLAY="), None);
+        let v2 = "0::/user.slice/user-113.slice/session-c1.scope\n";
+        assert!(in_session_scope(v2, "c1"));
+        assert!(!in_session_scope(v2, "1"));
+        assert!(!in_session_scope(
+            "0::/system.slice/lightdm.service\n",
+            "c1"
+        ));
+        let v1 = "12:pids:/\n1:name=systemd:/user.slice/user-113.slice/session-c1.scope\n";
+        assert!(in_session_scope(v1, "c1"));
+        assert!(uids_are("\t113\t113\t113\t113", 113));
+        assert!(!uids_are("\t113\t0\t113\t113", 113));
+        assert!(!uids_are("\t113", 113));
+        // This test process does not run as UID u32::MAX.
+        assert!(!greeter_process(std::process::id(), u32::MAX, "c1"));
+    }
+}
