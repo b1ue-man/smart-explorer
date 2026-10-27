@@ -131,7 +131,9 @@ pub(crate) struct Pipeline {
     capture_requested: bool,
     capture_ready: Option<io::Result<()>>,
     capture_transition: Option<tokio::task::JoinHandle<(Stage, bool, io::Result<()>)>>,
-    visible_rects: Option<Vec<super::visibility::VisibleRect>>,
+    /// The viewer's visible parts, in the pixels of the picture it showed
+    /// (the encoded size at the report), with that size.
+    visible_rects: Option<(FrameSize, Vec<super::visibility::VisibleRect>)>,
     choice: CodecChoice,
     quality_policy: QualityPolicy,
     fallback_notice: Option<String>,
@@ -171,45 +173,27 @@ impl Pipeline {
         self.next_frame_id
     }
     pub(crate) fn set_visible_rects(&mut self, rects: Option<Vec<super::visibility::VisibleRect>>) {
-        self.visible_rects = rects.filter(|rects| {
-            rects.len() <= super::visibility::MAX_VISIBLE_RECTS
-                && rects.iter().all(|r| {
-                    r.width > 0
-                        && r.height > 0
-                        && r.x
-                            .checked_add(r.width)
-                            .is_some_and(|n| n <= self.source_size.width)
-                        && r.y
-                            .checked_add(r.height)
-                            .is_some_and(|n| n <= self.source_size.height)
-                })
-        });
+        // The viewer projects its visible area into the picture it decodes,
+        // i.e. the encoded size, not the native source size.
+        let basis = self
+            .running
+            .as_ref()
+            .map_or_else(|| self.target_size(), |(_, size)| *size);
+        self.visible_rects = rects
+            .filter(|rects| {
+                rects.len() <= super::visibility::MAX_VISIBLE_RECTS
+                    && rects.iter().all(|r| {
+                        r.width > 0
+                            && r.height > 0
+                            && r.x.checked_add(r.width).is_some_and(|n| n <= basis.width)
+                            && r.y.checked_add(r.height).is_some_and(|n| n <= basis.height)
+                    })
+            })
+            .map(|rects| (basis, rects));
     }
     fn visible_for_size(&self, size: FrameSize) -> Option<Vec<super::visibility::VisibleRect>> {
-        if self.source_size.width == 0 || self.source_size.height == 0 {
-            return None;
-        }
-        self.visible_rects.as_ref().map(|rects| {
-            rects
-                .iter()
-                .map(|r| {
-                    let (sw, sh) = (
-                        u64::from(self.source_size.width),
-                        u64::from(self.source_size.height),
-                    );
-                    let x = u64::from(r.x) * u64::from(size.width) / sw;
-                    let y = u64::from(r.y) * u64::from(size.height) / sh;
-                    let right = (u64::from(r.x + r.width) * u64::from(size.width)).div_ceil(sw);
-                    let bottom = (u64::from(r.y + r.height) * u64::from(size.height)).div_ceil(sh);
-                    super::visibility::VisibleRect {
-                        x: x as u32,
-                        y: y as u32,
-                        width: (right - x) as u32,
-                        height: (bottom - y) as u32,
-                    }
-                })
-                .collect()
-        })
+        let (basis, rects) = self.visible_rects.as_ref()?;
+        scale_visible(*basis, rects, size)
     }
     pub(crate) fn set_tile_limit(&mut self, size: FrameSize) {
         self.tile_limit = Some(size);
@@ -339,3 +323,65 @@ impl Pipeline {
 mod initialization;
 #[path = "host_pipeline_produce.rs"]
 mod producing;
+
+/// `rects` measured in a picture of `basis` pixels, scaled to `size`.
+fn scale_visible(
+    basis: FrameSize,
+    rects: &[super::visibility::VisibleRect],
+    size: FrameSize,
+) -> Option<Vec<super::visibility::VisibleRect>> {
+    if basis.width == 0 || basis.height == 0 {
+        return None;
+    }
+    let (sw, sh) = (u64::from(basis.width), u64::from(basis.height));
+    Some(
+        rects
+            .iter()
+            .map(|r| {
+                let x = u64::from(r.x) * u64::from(size.width) / sw;
+                let y = u64::from(r.y) * u64::from(size.height) / sh;
+                let right = (u64::from(r.x + r.width) * u64::from(size.width)).div_ceil(sw);
+                let bottom = (u64::from(r.y + r.height) * u64::from(size.height)).div_ceil(sh);
+                super::visibility::VisibleRect {
+                    x: x as u32,
+                    y: y as u32,
+                    width: (right - x) as u32,
+                    height: (bottom - y) as u32,
+                }
+            })
+            .collect(),
+    )
+}
+
+#[cfg(test)]
+mod visible_scale_tests {
+    use super::*;
+    use crate::screen::core::visibility::VisibleRect;
+
+    /// A phone at 1344x2992 streamed as 448x998: the viewer reports the whole
+    /// picture it shows; scaling it to the same picture keeps it whole
+    /// (before, it was read as native pixels and shrank to a third).
+    #[test]
+    fn screen_metadata_runtime_task_visible_rects_use_the_picture_size() {
+        let picture = FrameSize::new(448, 998);
+        let whole = [VisibleRect {
+            x: 0,
+            y: 0,
+            width: 448,
+            height: 998,
+        }];
+        let scaled = scale_visible(picture, &whole, picture).expect("scaled");
+        assert_eq!(scaled, whole.to_vec());
+        let half = scale_visible(picture, &whole, FrameSize::new(224, 499)).expect("half");
+        assert_eq!(
+            half,
+            vec![VisibleRect {
+                x: 0,
+                y: 0,
+                width: 224,
+                height: 499
+            }]
+        );
+        assert!(scale_visible(FrameSize::new(0, 0), &whole, picture).is_none());
+    }
+}

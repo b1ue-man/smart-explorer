@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::share::access_constraints::{AccessConstraints, AccessRequest};
 pub use crate::share::access_relation_view::AccessGrantView;
+use crate::share::access_steering as steering;
 use crate::share::exec_policy::{ExecGrantSettings, ExecRunAs};
 
 /// The restricted remote-access account of `AccountProfile::Remote`.
@@ -287,6 +288,8 @@ impl AccessGrant {
     pub fn decision_at(&self, capability: Capability, now: i64) -> CapabilityDecision {
         if self.expired_at(now) || capability.requires_context() {
             CapabilityDecision::Off
+        } else if steering::includes(capability) && steering::steers(self, now) {
+            CapabilityDecision::Allow
         } else {
             self.decision(capability)
         }
@@ -294,6 +297,9 @@ impl AccessGrant {
 
     /// A contextual capability never allows through `decision_at` alone.
     pub fn decision_for(&self, request: &AccessRequest, now: i64) -> CapabilityDecision {
+        if steering::steers(self, now) && steering::includes_request(request) {
+            return CapabilityDecision::Allow;
+        }
         if self.expired_at(now)
             || self.constraints.validate().is_err()
             || !self.constraints.allows(request, now)

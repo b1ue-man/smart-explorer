@@ -258,8 +258,6 @@ mod family_device_ui;
 mod family_picker;
 #[path = "core/share.rs"]
 mod share;
-#[path = "core/share_app_grant_ui.rs"]
-mod share_app_grant_ui;
 #[path = "core/share_apps_ui.rs"]
 mod share_apps_ui;
 #[path = "core/share_discovery_events.rs"]

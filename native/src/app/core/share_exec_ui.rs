@@ -452,6 +452,11 @@ fn identity_and_rights(ui: &mut egui::Ui, view: &ExecDeviceView, now: i64) {
         let decision = view.access.decision_at(capability, now);
         ui.label(format!("{label}: {}", decision_word(decision)));
     }
+    ui.small(
+        "„Bildschirm steuern: Erlauben“ schließt Ansehen, Fenster, Programme, \
+         Maschinenanmeldung und RDP zu diesem Gerät ein, ohne Nachfrage. \
+         Befehle und Terminal bleiben eigene Rechte.",
+    );
 }
 
 #[cfg(test)]

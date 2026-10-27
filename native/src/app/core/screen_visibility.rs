@@ -108,16 +108,19 @@ impl VisibilityTracker {
             state = VisibilityState::Unknown;
             rects.clear();
         }
-        let geometry_changed = self.geometry.as_ref() != geometry;
-        let changed = geometry_changed
+        // The host reads state, minimized and the rectangles (in picture
+        // pixels); a picture that only moves on screen changes none of them
+        // and must not cost a new reference picture.
+        let size_changed = self.geometry.as_ref().map(|g| g.size) != geometry.map(|g| g.size);
+        let changed = size_changed
             || self.last.as_ref().is_none_or(|last| {
                 last.state != state || last.minimized != window.minimized || last.rects != rects
             });
+        self.geometry = geometry.copied();
         if !changed {
             return None;
         }
         self.generation = self.generation.saturating_add(1);
-        self.geometry = geometry.copied();
         let report = ViewerVisibility {
             geometry_generation: self.generation,
             state,

@@ -359,7 +359,10 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
                     sending && known
                 },
         ) {
-            LaunchedEffect(sending) { if (sending) rootFocus.requestFocus() }
+            // The open soft keyboard keeps the focus: taking it back for the picture
+            // whenever input readiness returns (which the keyboard's own layout change
+            // triggers) ended the text input session and closed the keyboard at once.
+            LaunchedEffect(sending, keyboardOn) { if (sending && !keyboardOn) rootFocus.requestFocus() }
             BoxWithConstraints(Modifier.fillMaxSize()) {
                 @Suppress("UNUSED_VARIABLE") val drawnFor = transformTick // zoom or pan changed: draw again
                 val viewW = constraints.maxWidth.toFloat()

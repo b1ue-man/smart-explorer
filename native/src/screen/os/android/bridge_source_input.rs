@@ -21,9 +21,21 @@ impl BridgeSource {
             let target = limits.fit(image.size());
             return image.downscale(target, limits, &grant, CaptureOwner::ScaledPixels);
         }
-        if let Some(last) = self.last_still {
-            let left = STILL_INTERVAL.saturating_sub(last.elapsed());
-            std::thread::sleep(left);
+        let projected = matches!(
+            self.channel.phase(),
+            Phase::Ready {
+                projection: true,
+                ..
+            }
+        );
+        // 333 ms is the minimum interval of AccessibilityService.takeScreenshot
+        // (ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT); the MediaProjection
+        // ImageReader (acquireLatestImage) has none, the pipeline clock paces it.
+        if !projected {
+            if let Some(last) = self.last_still {
+                let left = STILL_INTERVAL.saturating_sub(last.elapsed());
+                std::thread::sleep(left);
+            }
         }
         self.channel
             .send(json!({"op": "still", "frameId": frame_id}));
@@ -37,13 +49,7 @@ impl BridgeSource {
         let image = decode_still(
             picture.data.as_slice(),
             &grant,
-            if matches!(
-                self.channel.phase(),
-                Phase::Ready {
-                    projection: true,
-                    ..
-                }
-            ) {
+            if projected {
                 CaptureOwner::Readback
             } else {
                 CaptureOwner::SourcePixels

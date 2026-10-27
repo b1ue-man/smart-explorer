@@ -82,6 +82,7 @@ fn batches_task_b6_renderer_full_widget_end_hidden_source_and_cpu_yuv_use_real_r
                                 dimmed: false,
                                 status: "fixture status",
                                 stats: None,
+                                hint: None,
                             },
                         );
                     });
