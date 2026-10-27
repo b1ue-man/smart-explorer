@@ -1,7 +1,9 @@
 # Terminaler Release: begrenzte Wiederherstellung
 
-Stand 2026-10-27. Nutzerauftrag bleibt der sofortige vollständige Release ohne
-neuen funktionalen Tasklauf. B1–B8/P31/P32 und M01–M14 sind integriert.
+Stand 2026-10-27: Mit v0.5.185 vollständig veröffentlicht; Abschlussbeleg am
+Dokumentende. Die folgenden R01-/R02-Abschnitte dokumentieren die behobenen
+Abbrüche vor dem Tag. Der Nutzerauftrag war der sofortige vollständige Release
+ohne neuen funktionalen Tasklauf. B1–B8/P31/P32 und M01–M14 sind integriert.
 
 ## R01: aktuelle Lizenztexte als vollständige Releaseeingabe
 
@@ -146,3 +148,20 @@ Nutzdaten, Flags oder Ablehnungsbedingungen wurden geändert. Main hat den
 begrenzten Diff integriert und beide Rustdateien ohne Compiler mit dem
 vorhandenen Tree-sitter-Rust-Parser gelesen. Das ist kein Kompilier- oder
 Laufzeitnachweis. Der nächste solche Build ist der vollständige Remote-Release.
+
+
+## Abschluss: vollständige Veröffentlichung
+
+R01 und R02 sind im tatsächlichen vollständigen Remote-Release bestätigt.
+Lauf `40450627176` für `662aa0e5` endete am 2026-10-27 um 06:54:11 UTC
+mit Erfolg. Der stabile Wrapper hat denselben vorgesehenen Versionsstand
+0.5.185 veröffentlicht; nach beiden Fehlern vor dem Tag entstand keine
+zusätzliche Patchversion. Releasecommit und unveränderter Tag:
+`278a827fdae21c25446f717972cd9adc3732c6e0` / `v0.5.185`.
+Publikationslauf `40463241931` ist erfolgreich, die
+[GitHub Release](https://github.com/b1ue-man/smart-explorer/releases/tag/v0.5.185)
+mit allen 26 erwarteten Assets sichtbar. Main hat alle veröffentlichten
+Größen und SHA-256-Werte gegen die getaggten Dateien abgeglichen sowie
+sämtliche neun Feed-Hashdateien geprüft. Es gab keinen erneuten
+funktionalen Tasklauf; diese Abnahmegrenze bleibt ausdrücklich bestehen.
+Es gibt keinen offenen Wiederherstellungsschritt dieses Releasebatches.

@@ -1,8 +1,13 @@
 # Umsetzung des freigegebenen Gesamtplans
 
-Stand: 2026-10-26. Ausgangskandidat: `bea312ea79731d913a7dd3e79de2f5404401208a`.
+Stand: 2026-10-27, abgeschlossen mit
+[v0.5.185](https://github.com/b1ue-man/smart-explorer/releases/tag/v0.5.185).
+Ausgangskandidat: `bea312ea79731d913a7dd3e79de2f5404401208a`.
 Die offene Produktarbeit bleibt ausschließlich in [TODO](../../TODO.md) geführt.
 Dieses Dokument hält Ausführungsentscheidungen und Integrationsbelege fest.
+Die folgenden Zwischenstände sind historisch; der Abschnitt „Release 0.5.185
+abgeschlossen“ enthält den Abschlussbeleg und die fehlende erneute
+Funktionsabnahme nach dem unmittelbaren Releaseauftrag.
 
 ## Autorisierung und Umfang
 
@@ -1307,3 +1312,39 @@ Nach Rootgraph und Kandidatenpush übernimmt einmal der vorhandene vollständige
 Remote-Releaseweg. Signatur-, Hash-, Versions- und Publikationsintegrität bleiben
 verbindlich. Releaseerfolg wird erst mit sichtbarer vollständiger Veröffentlichung
 behauptet.
+
+
+### Release 0.5.185 abgeschlossen, 2026-10-27
+
+Der vollständige [Remote-Release 40450627176](https://github.com/b1ue-man/smart-explorer/actions/runs/40450627176)
+auf Quellkandidat `662aa0e5aa76df64ed36412e3675915645fff1ec` ist erfolgreich.
+Er enthält den gesamten Batch B1–B8/P31/P32, M01–M14 und R01/R02.
+Android, Windows und Linux einschließlich der statischen musl-Programme
+wurden durch denselben bestehenden Releaseweg gebaut. Es wurde keine
+zusätzliche funktionale Task-Suite gestartet.
+
+Der Wrapper erzeugte Releasecommit `278a827fdae21c25446f717972cd9adc3732c6e0`
+auf `main` und den unveränderten Tag `v0.5.185`. Der zugehörige einzige
+[Publikationslauf 40463241931](https://github.com/b1ue-man/smart-explorer/actions/runs/40463241931)
+veröffentlichte die vorhandenen Artefakte ohne erneuten Build oder Tasklauf.
+Sein Job `publish-release` ist erfolgreich. Der vollständige Wrapper meldete
+am 2026-10-27 um 06:54:04 UTC die erfolgreiche vollständige Veröffentlichung.
+Die [GitHub Release](https://github.com/b1ue-man/smart-explorer/releases/tag/v0.5.185)
+ist seit 06:53:44 UTC sichtbar, kein Entwurf und keine Vorabversion.
+
+Abschlussabgleich durch Main am 2026-10-27: Tag und Release zeigen auf
+`278a827f`; `native/Cargo.toml`, `release-native/update-feed/version.txt`
+und der Installer stimmen auf 0.5.185 überein. Die exakten 26 Namen aus
+`Get-PublicationReleaseAssetMap` sind veröffentlicht. Größe und SHA-256 jedes
+GitHub-Assets stimmen mit den getaggten lokalen Bytes überein. Sämtliche
+neun `.sha256`-Dateien des Feeds stimmen mit ihren Nutzdateien überein.
+APK-Signatur und versionsgebundene Übergabe wurden im Remotejob geprüft;
+die Publikationspipeline prüfte dieselben Bytes vor Veröffentlichung erneut.
+
+Die früheren Abschnitte sind historische Zwischenstände. Der letzte
+funktionale Lauf `40406246032` blieb fehlgeschlagen; nach den integrierten
+Korrekturen wurde auf den unmittelbaren Releaseauftrag hin keine erneute
+Funktionssuite ausgeführt. Der Releaseerfolg ersetzt weder diesen fehlenden
+Laufzeitnachweis noch eine Geräte- oder Leistungsabnahme. Der beauftragte
+terminal veröffentlichte Batch ist abgeschlossen; es läuft keine weitere
+Releasepipeline und es wird keine zusätzliche Version erzeugt.
