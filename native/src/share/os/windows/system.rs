@@ -14,6 +14,11 @@ pub(crate) fn ensure_firewall_rule_for(exe: &std::path::Path) -> io::Result<Stri
     use std::os::windows::process::CommandExt;
 
     let exe = exe.to_string_lossy().to_string();
+    // Deleting and re-adding needs administrator rights; a rule that already
+    // allows this program (set once through the UAC repair) is kept as is.
+    if rule_allows(&exe) == Some(true) {
+        return Ok(format!("Firewall-Regel aktiv: {FIREWALL_RULE}"));
+    }
     let delete = std::process::Command::new("netsh")
         .args([
             "advfirewall",
@@ -55,6 +60,32 @@ pub(crate) fn ensure_firewall_rule_for(exe: &std::path::Path) -> io::Result<Stri
             },
         ))
     }
+}
+
+/// Whether the rule named `FIREWALL_RULE` allows `exe`: the `Program` of its
+/// application filter (Get-NetFirewallRule | Get-NetFirewallApplicationFilter,
+/// NetSecurity module). `None` when the query itself fails.
+fn rule_allows(exe: &str) -> Option<bool> {
+    use std::os::windows::process::CommandExt;
+
+    let engine = crate::net::system_powershell().ok()?;
+    let script = format!(
+        "(Get-NetFirewallRule -DisplayName '{FIREWALL_RULE}' -ErrorAction SilentlyContinue \
+         | Get-NetFirewallApplicationFilter).Program"
+    );
+    let output = std::process::Command::new(engine)
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .any(|line| line.trim().eq_ignore_ascii_case(exe)),
+    )
 }
 
 pub(crate) fn request_firewall_rule_elevated(exe: &str) -> io::Result<()> {

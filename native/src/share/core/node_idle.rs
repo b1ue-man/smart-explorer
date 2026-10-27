@@ -37,6 +37,18 @@ pub(crate) fn closed_idle(connection: &Connection) -> bool {
     )
 }
 
+/// Whether the peer ended `connection` on purpose: idle close (`ID`) or a
+/// deliberate end such as a route switch, a replaced session or changed
+/// authorization (`SE`). Such an end is no connection error.
+pub(crate) fn closed_on_purpose(connection: &Connection) -> bool {
+    matches!(
+        connection.close_reason(),
+        Some(ConnectionError::ApplicationClosed(close))
+            if close.error_code == VarInt::from_u32(IDLE_CLOSE_CODE)
+                || close.error_code == VarInt::from_u32(0x5345)
+    )
+}
+
 /// Stream-level frames sent and received; QUIC keepalive pings and
 /// acknowledgements leave it unchanged.
 fn stream_activity(stats: &ConnectionStats) -> u64 {
