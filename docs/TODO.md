@@ -39,8 +39,11 @@ Release wurde für `2081be2e` gestartet: [Lauf 40425126500](https://github.com/b
 Die signierte Android-APK wurde erfolgreich gebaut. Der Desktopwrapper stoppte
 vor Build und Versionswechsel wegen veralteter eingecheckter Rust-Lizenztexte.
 Die begrenzte [Wiederherstellung R01](plaene/2026-10-24-batches/release-recovery.md)
-macht diese Eingabe im vorhandenen Releaseweg vollständig. Die beabsichtigte
-Version bleibt 0.5.185; noch wurde kein Release veröffentlicht.
+ist einschließlich eigener Autorenreview integriert: neue Builds erzeugen und
+prüfen ihre Lizenztexte; Wrapper und Veröffentlichung erlauben genau diesen
+generierten Pfad. Bestehende Kandidaten bleiben unverändert. Die beabsichtigte
+Version bleibt 0.5.185; als nächstes läuft derselbe vollständige Remote-Release.
+Noch wurde kein Release veröffentlicht.
 
 This table is the live list of remaining work, roughly by value. The lower
 sections preserve shipped/history context and explicitly label anything that is

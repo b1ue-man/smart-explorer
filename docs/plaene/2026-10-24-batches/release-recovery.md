@@ -66,3 +66,11 @@ Modellwahl nach geklärtem Bestand: Workflow, begrenzte verbundene Releasekette,
 Grad 7; Werkzeug empfiehlt gpt-6.1-sol/high. Konfiguriert wird gemäß bestehendem
 Fixautorenvertrag gpt-6.1-sol/max über Codex-Credits. Kein lokaler Aboverbrauch
 wird als gemessen behauptet.
+
+R01 ist umgesetzt und vom selben Autor anschließend statisch geprüft; siehe
+[vollständigen Autorenbericht](fix-release-license-inputs.md). Main hat den
+Quell-/Dokumentationsdiff und die direkte Publikationsintegration abgeglichen.
+Der zusätzliche Workflowguard ist an dieselbe exakte Dateiliste angepasst.
+Neue native Rustdateien oder Produktänderungen sind nicht entstanden; der
+Quellgraph bleibt gültig. Nächster Schritt ist ausschließlich der bestehende
+vollständige Remote-Release für denselben beabsichtigten Versionsstand.
