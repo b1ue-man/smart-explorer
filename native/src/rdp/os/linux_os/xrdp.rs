@@ -1,4 +1,4 @@
-use super::inventory::{argument, attach_listener, certificate, ini, service, unit};
+use super::inventory::{argument, attach_listener, certificate, ini, ini_sections, service, unit};
 use crate::rdp::{
     core::{HostKind, HostProbe, SessionMode},
     os::shared::process::{capture, find_tool},
@@ -45,10 +45,28 @@ pub(super) fn probe(report: &mut HostProbe) {
                                 .join("cert.pem")
                         });
                     certificate(&mut found, &certificate_path);
-                    let selector = global("autorun").filter(|s| !s.is_empty());
+                    // With an empty `autorun` and no login domain (se sends
+                    // none) xrdp logs in with the first suitable connection
+                    // section (xrdp.ini(5)); that is the one session effect.
+                    let selector = global("autorun")
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string)
+                        .or_else(|| {
+                            let first = ini_sections(&config).ok()?.into_iter().find(|section| {
+                                values.contains_key(&(section.clone(), "lib".to_string()))
+                            })?;
+                            found.evidence.push(format!(
+                                "xrdp autorun is empty and se sends no login domain: xrdp uses the first connection section {first}"
+                            ));
+                            Some(first)
+                        });
                     let mut modes = std::collections::BTreeSet::new();
                     for ((section, key), lib) in &values {
-                        if key != "lib" || selector.is_some_and(|selected| selected != section) {
+                        if key != "lib"
+                            || selector
+                                .as_deref()
+                                .is_some_and(|selected| selected != section)
+                        {
                             continue;
                         }
                         let field = |key: &str| {
@@ -79,7 +97,10 @@ pub(super) fn probe(report: &mut HostProbe) {
                         SessionMode::Unknown
                     };
                     if found.session_mode == SessionMode::Unknown {
-                        found.unavailable_reason = Some("xrdp configuration offers multiple or redirected session backends; this adapter cannot prove a single local session effect. Select a concrete server-side autorun backend before using the adapter; no configuration is changed automatically".into());
+                        found.unavailable_reason = Some(format!(
+                            "xrdp starts the session section {} which redirects to another computer; se uses only local Xorg or Xvnc sessions",
+                            selector.as_deref().unwrap_or("-")
+                        ));
                     }
                     found.evidence.push(format!("Read existing xrdp configuration {}; NLA and TLS settings were not changed", config.display()));
                 }
