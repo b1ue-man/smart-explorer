@@ -5,6 +5,7 @@ use super::super::{
     test_backend::{fwd, job, run, write},
     Engine, FolderRegister,
 };
+use super::super::file_evidence::observe_available;
 use super::*;
 use crate::transfer::{Endpoint, RecoveryMode};
 use std::{fs, sync::Arc};
