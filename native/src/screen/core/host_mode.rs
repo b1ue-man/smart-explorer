@@ -81,6 +81,11 @@ impl Pipeline {
         self.invalidate_reference();
     }
 
+    /// The id of the newest picture group the host opened (0: none yet).
+    pub(crate) fn newest_gop(&self) -> u64 {
+        self.next_gop_id.saturating_sub(1)
+    }
+
     /// `FRAME_ACK` or `PREVIEW_ACK`.
     pub(crate) fn on_ack(&mut self, ack: FrameAck) -> bool {
         self.sender.ack(ack.gop_id, ack.frame_id);
@@ -128,5 +133,31 @@ impl Pipeline {
         self.second_bytes = 0;
         self.second_frames = 0;
         stats
+    }
+}
+
+/// A `KEYFRAME_REQUEST` for an older picture group than the newest one the
+/// host opened is answered already: every new group starts with a key
+/// frame (`Pipeline::tick` opens none without one). The viewer asks after a
+/// broken group ("nach Reset", C3 „Schlüsselbild“), usually before the
+/// next group's first record arrives; honouring it reset that next group
+/// as well, which broke it again on the viewer: a reset per round trip.
+pub(super) fn keyframe_request_stale(requested: Option<u64>, newest: u64) -> bool {
+    requested.is_some_and(|gop| gop < newest)
+}
+
+#[cfg(test)]
+mod keyframe_request_tests {
+    use super::keyframe_request_stale;
+
+    #[test]
+    fn screen_metadata_runtime_task_keyframe_request_for_a_replaced_group_is_answered() {
+        // Group 7 broke, the host already opened group 8 with a key frame.
+        assert!(keyframe_request_stale(Some(7), 8));
+        // A broken or undecodable current group still gets a new key frame.
+        assert!(!keyframe_request_stale(Some(8), 8));
+        // A joining or older viewer names no group: always honoured.
+        assert!(!keyframe_request_stale(None, 8));
+        assert!(!keyframe_request_stale(Some(0), 0));
     }
 }

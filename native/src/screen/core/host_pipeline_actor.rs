@@ -26,6 +26,8 @@ struct Pending {
 }
 struct Facts {
     next: u64,
+    /// The newest picture group opened (`Pipeline::newest_gop`).
+    gop: u64,
     floor: u64,
     reference: u64,
     source_generation: u64,
@@ -42,6 +44,8 @@ pub(crate) struct PipelineActor {
     work: Arc<work_control::WorkControl>,
     job: Option<tokio::task::JoinHandle<(Pipeline, WorkCompletion)>>,
     job_epoch: u64,
+    /// Picture operations started so far (`work_started`).
+    started: u64,
     pending: Pending,
     completion: Option<WorkCompletion>,
     capture_error: Option<io::Error>,
@@ -86,6 +90,7 @@ impl PipelineActor {
         let mode = pipeline.quality_policy.mode;
         let facts = Facts {
             next: pipeline.next_frame_id(),
+            gop: pipeline.newest_gop(),
             floor: pipeline.reference_floor(),
             reference: work.reference(),
             source_generation: pipeline.input_reference_generation(),
@@ -102,6 +107,7 @@ impl PipelineActor {
             work,
             job: None,
             job_epoch: 0,
+            started: 0,
             pending: Pending::default(),
             completion: None,
             capture_error: None,
@@ -128,6 +134,7 @@ impl PipelineActor {
         }
         if let Some(p) = self.pipeline.as_ref() {
             self.facts.next = p.next_frame_id();
+            self.facts.gop = p.newest_gop();
             self.facts.floor = p.reference_floor();
             self.facts.reference = self.work.reference();
             self.facts.source_generation = p.input_reference_generation();
@@ -169,28 +176,7 @@ impl PipelineActor {
             let mut cx = std::task::Context::from_waker(futures_util::task::noop_waker_ref());
             match std::pin::Pin::new(&mut job).poll(&mut cx) {
                 std::task::Poll::Pending => self.job = Some(job),
-                std::task::Poll::Ready(Ok((pipeline, mut completion))) => {
-                    if !self.work.current(self.job_epoch) {
-                        completion = match completion {
-                            WorkCompletion::Tick(_) => WorkCompletion::Tick(Ok(Produced::Reset)),
-                            WorkCompletion::Snapshot(_) => WorkCompletion::Snapshot(Err(
-                                PipelineError::capture(io::Error::from(io::ErrorKind::Interrupted)),
-                            )),
-                        };
-                    }
-                    self.pipeline = Some(pipeline);
-                    let cancelled = matches!(&completion,WorkCompletion::Snapshot(Err(error)) if error.error.kind()==io::ErrorKind::Interrupted);
-                    if !cancelled {
-                        self.completion = Some(completion);
-                    }
-                }
-                std::task::Poll::Ready(Err(error)) => {
-                    self.stopped = true;
-                    self.blocked = true;
-                    self.completion = Some(WorkCompletion::Tick(Err(PipelineError::capture(
-                        io::Error::other(error),
-                    ))));
-                }
+                std::task::Poll::Ready(output) => self.settle(output),
             }
         }
         self.apply();
@@ -269,6 +255,7 @@ impl PipelineActor {
         let connection = self.connection.clone();
         let epoch = self.work.epoch();
         self.job_epoch = epoch;
+        self.started = self.started.wrapping_add(1);
         self.job = Some(runtime.spawn(async move {
             let result = match snapshot {
                 Some(max) => {
@@ -392,8 +379,12 @@ impl PipelineActor {
         self.pending.invalidate = true;
         self.poll();
     }
-    pub(crate) fn request_keyframe(&mut self) {
-        if self.facts.keyframe || self.facts.reference != self.work.reference() {
+    /// `KEYFRAME_REQUEST` naming the viewer's broken group `gop`.
+    pub(crate) fn request_keyframe(&mut self, gop: Option<u64>) {
+        if self.facts.keyframe
+            || self.facts.reference != self.work.reference()
+            || super::mode::keyframe_request_stale(gop, self.facts.gop)
+        {
             return;
         }
         self.interrupt();
@@ -468,6 +459,8 @@ impl PipelineActor {
         }
     }
 }
+#[path = "host_pipeline_actor_wait.rs"]
+mod wait;
 fn dispose(pipeline: Pipeline) {
     if let Ok(runtime) = tokio::runtime::Handle::try_current() {
         let _ = runtime.spawn_blocking(move || drop(pipeline));

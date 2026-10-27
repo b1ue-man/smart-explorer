@@ -149,6 +149,11 @@ impl<'a> Session<'a> {
         capture.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut second = tokio::time::interval(Duration::from_secs(1));
         let mut heard = crate::share::route_protocol::active_now();
+        // A capture tick that found the previous picture operation still
+        // running is made up as soon as that operation ends, instead of one
+        // tick later (which halved the rate of every operation longer than
+        // one tick and added up to one tick of delay).
+        let mut missed_tick = false;
         let ending: Ending = loop {
             tokio::select! {
                 changed = stop.changed() => {
@@ -175,6 +180,15 @@ impl<'a> Session<'a> {
                     self.metadata.advance(self.context, self.principal);
                 }
                 _ = capture.tick() => {
+                    let started = self.pipeline.work_started();
+                    if let Some(ending) = self.produce().await {
+                        break ending;
+                    }
+                    let after = self.pipeline.work_started();
+                    missed_tick = tick_missed(started, after, self.pipeline.working());
+                }
+                _ = self.pipeline.finished(), if missed_tick => {
+                    missed_tick = false;
                     if let Some(ending) = self.produce().await {
                         break ending;
                     }
@@ -406,6 +420,12 @@ impl<'a> Session<'a> {
     }
 }
 
+/// Whether a capture tick was missed: it started no picture operation
+/// because the previous one still ran.
+fn tick_missed(started_before: u64, started_after: u64, working: bool) -> bool {
+    started_before == started_after && working
+}
+
 /// Why the viewer's stream failed: it closed the connection, or it was lost.
 fn closed_reason(connection: &Connection) -> EndReason {
     match connection.close_reason() {
@@ -417,3 +437,21 @@ fn closed_reason(connection: &Connection) -> EndReason {
 #[cfg(test)]
 #[path = "screen_metadata_runtime_task_tests.rs"]
 mod metadata_runtime_tests;
+
+#[cfg(test)]
+mod pacing_tests {
+    use super::tick_missed;
+
+    /// A tick that found the previous operation running is made up as soon
+    /// as it ends; a tick that started one, or found nothing to do (paused,
+    /// hidden, waiting for a visibility acknowledgement), is not.
+    #[test]
+    fn screen_metadata_runtime_task_missed_capture_tick_is_made_up_after_the_operation() {
+        assert!(tick_missed(4, 4, true), "still running: wait for its end");
+        assert!(
+            !tick_missed(4, 5, true),
+            "the tick started the next operation"
+        );
+        assert!(!tick_missed(4, 4, false), "nothing ran and nothing started");
+    }
+}

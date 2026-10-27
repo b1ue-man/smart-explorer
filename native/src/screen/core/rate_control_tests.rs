@@ -138,12 +138,52 @@ fn screen_task_rate_control_quality_ladder() {
     assert_eq!(quality_for(10_000, source, 30).fps, 1);
     let small_source = FrameSize::new(300, 200);
     assert_eq!(quality_for(10_000, small_source, 30).size, small_source);
-    // Up only with 25 % headroom, down at once.
+    // Up only with 25 % headroom and by at least 25 %, down by at least 25 %.
     let current = quality_for(2_000_000, source, 30);
     assert_eq!(adjust_quality(current, 2_200_000, source, 30), current);
-    assert_eq!(adjust_quality(current, 2_600_000, source, 30).fps, 20);
+    assert_eq!(adjust_quality(current, 2_600_000, source, 30), current);
+    assert_eq!(adjust_quality(current, 3_200_000, source, 30).fps, 24);
+    assert_eq!(adjust_quality(current, 1_800_000, source, 30), current);
     assert_eq!(adjust_quality(current, 1_500_000, source, 30).fps, 14);
     // A smaller source replaces a larger current size.
     let small = FrameSize::new(1280, 720);
     assert_eq!(adjust_quality(current, 2_000_000, small, 30).size, small);
+}
+
+/// Each cadence change restarts the encoder (key frame, new picture group,
+/// new input reference). A target that ramps up in 5 % steps from 2 to
+/// 8 Mbit/s moved 1080p through 19, 20, 21, 22, 23, 25, 26, 27, 29, 30
+/// frames/s (nine restarts); now only through 19, 25, 30. A target that
+/// swings ±8 % changes nothing, and the highest rate is still reached.
+#[test]
+fn screen_metadata_runtime_task_cadence_changes_only_in_coarse_steps() {
+    let source = FrameSize::new(1920, 1080);
+    let mut current = quality_for(2_000_000, source, 30);
+    let mut seen = vec![current.fps];
+    let mut target = 2_000_000.0_f64;
+    while target < 8_000_000.0 {
+        target *= 1.05;
+        let next = adjust_quality(current, target as u64, source, 30);
+        if next != current {
+            seen.push(next.fps);
+        }
+        current = next;
+    }
+    assert_eq!(seen, vec![19, 25, 30]);
+    let steady = quality_for(2_500_000, source, 30);
+    for swing in [0.92, 1.08, 0.92, 1.08, 0.92, 1.08] {
+        let target = (2_500_000.0 * swing) as u64;
+        assert_eq!(adjust_quality(steady, target, source, 30), steady);
+    }
+    let full = Quality {
+        fps: 30,
+        size: source,
+    };
+    assert_eq!(adjust_quality(full, 2_900_000, source, 30), full);
+    assert_eq!(adjust_quality(full, 2_400_000, source, 30).fps, 23);
+    let near = Quality {
+        fps: 27,
+        size: source,
+    };
+    assert_eq!(adjust_quality(near, 10_000_000, source, 30).fps, 30);
 }
