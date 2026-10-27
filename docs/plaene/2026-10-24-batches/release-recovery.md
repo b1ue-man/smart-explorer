@@ -74,3 +74,65 @@ Der zusätzliche Workflowguard ist an dieselbe exakte Dateiliste angepasst.
 Neue native Rustdateien oder Produktänderungen sind nicht entstanden; der
 Quellgraph bleibt gültig. Nächster Schritt ist ausschließlich der bestehende
 vollständige Remote-Release für denselben beabsichtigten Versionsstand.
+
+## R02: Linux-musl-ABI des vollständigen Releasebuilds
+
+Lauf `40433720045` auf `a94e1ac6546acbb57f37f67212ed53bda82d1e64`
+endete am 2026-10-27 um 03:51:28 UTC mit Fehler. R01 ist im echten
+Releasebuild bestätigt: Lizenzvorbereitung, Android-APK, Windowsinstaller und
+GNU-Linux-Desktopprogramm wurden erfolgreich gebaut. Erst die statischen
+Linuxprogramme für `x86_64-unknown-linux-musl` scheitern an sechs Diagnosen
+in genau zwei Quelldateien. Es wurde kein Tag veröffentlicht; die beabsichtigte
+Version bleibt 0.5.185. Die beibehaltene temporäre Releaseablage wird nicht
+manuell übernommen; nach dem Fix läuft derselbe vollständige Wrapper erneut.
+
+Erstplan aus dem konkreten Log: Die fehlende `libc::renameat2`-Bindung in
+`mount/os/linux_os/recovery_storage.rs` und die abweichenden Längenfeldtypen
+in `apps/os/linux_os/window_correlation.rs` korrigieren. Keine zusätzliche
+Funktionssuite, keine Warnungsbereinigung, kein Umbau des Releaseverfahrens.
+
+Erster Quellenpass am 2026-10-27: Die geprüften Quellen der gesperrten
+Abhängigkeit `libc 0.2.186` und die tatsächlichen musl-Compilermeldungen zeigen
+die ABI-Abweichung. Die bestehende Linux-Dateigrenze verwendet bereits
+`libc::syscall(libc::SYS_renameat2, ...)` in
+`local_access/os/linux/confined.rs` und `quarantine.rs`.
+[rename(2)](https://man7.org/linux/man-pages/man2/rename.2.html) belegt die
+Nichtüberschreib- und Parent-FD-Semantik;
+[syscall(2)](https://man7.org/linux/man-pages/man2/syscall.2.html) beschreibt
+den Aufruf ohne C-Bibliothekswrapper und die errno-Weitergabe.
+[cmsg(3)](https://man7.org/linux/man-pages/man3/cmsg.3.html) und
+[unix(7)](https://man7.org/linux/man-pages/man7/unix.7.html) beschreiben
+Control-Headerlängen, Alignment und die Übergabe von Dateideskriptoren.
+
+Zweiter Lückenpass: Recovery-Publish wird für Identitäten, Paketexport,
+Paketimport, Cachewiederherstellung und den Registry-Eigentümercommit benutzt.
+Nur die ausdrücklich erlaubte Ersetzung darf überschreiben. Ein Ersatz durch
+gewöhnliches `renameat` würde den Nichtüberschreibvertrag verlieren.
+Die Fensterzuordnung hält den echten pidfd des gestarteten Kindes, damit
+PID-Wiederverwendung keine falsche Zuordnung erzeugt. GNU und musl haben
+unterschiedliche Rust-Feldtypen für dieselben Control-Längen; die festen kleinen
+Puffer erlauben begründete zielabhängige Konversionen ohne geänderte Nutzdaten.
+
+Finaler begrenzter Plan vor Quellenänderung:
+
+1. Recovery-Publish über die vorhandene Linux-Systemaufrufkonvention verfügbar
+   machen. Parentbindung, Nichtüberschreiben, erlaubtes Ersetzen, errno und
+   anschließendes Directory-fsync bleiben erhalten. Erwartung: derselbe
+   Veröffentlichungsvorgang ist auf GNU, musl und Android darstellbar.
+2. Die vier betroffenen Control-Längenausdrücke ABI-gerecht typisieren. Fester
+   Puffer, Headerprüfung, pidfd-Besitz, Close-on-exec, Trunkierungsprüfung,
+   nichtblockierendes Verhalten und unveränderter Appstart bleiben erhalten.
+   Erwartung: GNU und musl bilden dieselbe einzelne SCM_RIGHTS-Nachricht ab.
+3. Ein Fixautor besitzt Fehlerfunktionsliste, direkte/indirekte Karte,
+   präzisierten Erhaltungsplan, Umsetzung und eigene statische Nachreview in
+   `fix-release-linux-abi.md`. Main integriert, aktualisiert den vollständigen
+   Quellgraph, committet und pusht. Abnahme der Kompilierbarkeit erfolgt im
+   ohnehin erforderlichen vollständigen Remote-Release, nicht lokal.
+4. Derselbe stabile Releaseweg veröffentlicht einmal 0.5.185. Ein erfolgreich
+   gebautes Teilprogramm ist noch kein vollständiger Release.
+
+Modellwahl nach Bestandsklärung und Plan: Coding, kleiner Umfang, Grad 7 wegen
+zweier unsicherer OS-/FFI-Grenzen mit bestehenden Sicherheitsverträgen.
+Das Auswahlwerkzeug empfiehlt gpt-6.1-sol/medium; die ausdrückliche
+Fixautorenregel bestimmt gpt-6.1-sol/max. Ausführung über Codex-Credits;
+Antwortmodelltelemetrie und gemessener Aboverbrauch sind nicht verfügbar.
