@@ -90,3 +90,57 @@ jobs:
             exit 1
           fi
           echo "clippy clean for changed files"
+
+  # The Android side of the batch (screen keyboard field, Android cfg of the
+  # screen host): the existing Android build mode of the Android suite —
+  # NDK check, x86_64 library, APKs and the JVM unit tests.
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Bind workflow and checkout to the requested candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          log_root="$RUNNER_TEMP/android-task-logs"
+          mkdir -p "$log_root"
+          printf 'SMART_EXPLORER_TASK_LOG_ROOT=%s\n' "$log_root" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+          shared-key: android-task-ndk
+          cache-on-failure: true
+
+      - name: Android build, APKs and JVM unit tests
+        shell: bash
+        timeout-minutes: 140
+        run: |
+          set -Eeuo pipefail
+          bash android/test-android-task.sh android-build --out "$RUNNER_TEMP/android-task-apk" 2>&1 | \
+            tee "$SMART_EXPLORER_TASK_LOG_ROOT/suite-android-build.log"
