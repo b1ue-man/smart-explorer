@@ -50,8 +50,8 @@ impl Session<'_> {
                 Ok(())
             }
             ViewerFrame::Visibility(report) => self.visibility(report).await,
-            ViewerFrame::KeyframeRequest(_) => {
-                self.pipeline.request_keyframe();
+            ViewerFrame::KeyframeRequest(request) => {
+                self.pipeline.request_keyframe(request.gop_id);
                 Ok(())
             }
             ViewerFrame::Ping(ping) => {
@@ -135,10 +135,13 @@ impl Session<'_> {
             let detail = "input without control".to_string();
             return self.error(ScreenErrorCode::RightNotGranted, detail).await;
         }
-        let applied = match &sink {
-            Some(sink) => sink.inject(events, reference, presented),
-            None => self.context.backend.inject(events),
-        };
+        let owned = events.to_vec();
+        let (backend, target) = (self.context.backend.clone(), sink.clone());
+        let applied = super::input_release::inject_off_runtime(move || match target {
+            Some(sink) => sink.inject(&owned, reference, presented),
+            None => backend.inject(&owned),
+        })
+        .await;
         match applied {
             Ok(()) => {
                 for event in events {

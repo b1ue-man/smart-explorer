@@ -366,7 +366,8 @@ pub(crate) const MIN_LADDER_FPS: u32 = 10;
 /// The legacy preview edge; source pixels are no longer reduced by the rate controller.
 pub(crate) const MIN_LONG_EDGE: u32 = 320;
 /// A better step is taken only when the target carries it 1.25 times, so
-/// the ladder does not flap around one target.
+/// the ladder does not flap around one target; a step is at least this
+/// factor in either direction (`adjust_quality`).
 const STEP_UP_HEADROOM: f64 = 1.25;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -392,8 +393,13 @@ pub(crate) fn quality_for(target_bps: u64, source: FrameSize, max_fps: u32) -> Q
     }
 }
 
-/// The next quality from `current`: down at once when the target no longer
-/// carries it, up only with 25 % headroom.
+/// The next quality from `current`. Every cadence change restarts the
+/// encoder (`Pipeline::second` → `drop_encoder`): a key frame, a new picture
+/// group and a new input reference; the encoders follow the target bit
+/// rate on their own in between. So the cadence moves only in steps of at
+/// least 25 %: down once the target carries at most 1/1.25 of the current
+/// load, up once the target carries a 1.25 times larger load 1.25 times
+/// (or the highest rate). A smaller source applies at once.
 pub(crate) fn adjust_quality(
     current: Quality,
     target_bps: u64,
@@ -403,13 +409,14 @@ pub(crate) fn adjust_quality(
     let fitting = quality_for(target_bps, source, max_fps);
     if current.size.width > source.width
         || current.size.height > source.height
-        || fitting.load() < current.load()
+        || fitting.load() as f64 * STEP_UP_HEADROOM <= current.load() as f64
     {
         return fitting;
     }
     let headroom = (target_bps as f64 / STEP_UP_HEADROOM) as u64;
     let better = quality_for(headroom, source, max_fps);
-    if better.load() > current.load() {
+    let step = better.load() as f64 >= current.load() as f64 * STEP_UP_HEADROOM;
+    if better.load() > current.load() && (step || better.fps == max_fps) {
         better
     } else {
         current
