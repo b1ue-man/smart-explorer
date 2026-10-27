@@ -7,6 +7,12 @@ use super::{
 use crate::vfs::{Backend, VfsMeta};
 use serde_json::{json, Value};
 use std::io::{Read, Write};
+use self::scan_task_tests::{child as drive_object, identity, listing, root, ROOT_ID};
+
+#[path = "scan_task_tests.rs"]
+mod scan_task_tests;
+#[path = "paging_boundary_task_tests.rs"]
+mod paging_boundary_task_tests;
 
 const TITLE: &str = "Entwicklung einer HMI-basierten I/O-Diagnoseoberfläche – Universelle Lösung auf Basis einer funktionalen Gruppenstruktur";
 const FILES: &str = "/drive/v3/files";
@@ -63,22 +69,29 @@ fn gui_design_task_drive_names_are_safe_reversible_and_collision_free() {
 
 #[test]
 fn gui_design_task_drive_recursive_scan_stat_read_and_trash_use_exact_ids() {
-    let child = object("Messung\\2026.txt", "item-id", false);
-    let fixture = Fixture::new(vec![
-        step(
-            "GET",
-            FILES,
-            Reply::Json(json!({"files": [object(TITLE, "folder-id", true)]})),
-        ),
-        step("GET", FILES, Reply::Json(json!({"files": [child.clone()]}))),
-        step("GET", ITEM, Reply::Json(child)),
-        step("GET", ITEM, Reply::Bytes("abc".into())),
-        step(
-            "PATCH",
-            ITEM,
-            Reply::Json(json!({"id": "item-id", "trashed": true})),
-        ),
-    ]);
+    const FOLDER: &str = "/drive/v3/files/folder-id";
+    let folder = drive_object(TITLE, "folder-id", ROOT_ID, true);
+    let child = drive_object("Messung\\2026.txt", "item-id", "folder-id", false);
+    let mut steps = vec![
+        root(),
+        listing(ROOT_ID, None, None, Reply::Json(json!({"files": [folder.clone()]}))),
+        identity(FOLDER, &folder),
+        listing("folder-id", None, None, Reply::Json(json!({"files": [child.clone()]}))),
+        identity(FOLDER, &folder),
+    ];
+    // stat resolves both path segments, then independently resolves its parent.
+    steps.extend((0..3).map(|_| identity(FOLDER, &folder)));
+    steps.push(identity(ITEM, &child));
+    // open_read retains the exact file ID and its cached binary MIME type.
+    steps.extend((0..2).map(|_| identity(FOLDER, &folder)));
+    steps.push(step("GET", ITEM, Reply::Bytes("abc".into())).query("alt", Some("media".into())));
+    // Trash freshly validates the parent and exact named object before PATCH.
+    steps.extend((0..3).map(|_| identity(FOLDER, &folder)));
+    steps.push(step("GET", ITEM, Reply::Json(child)).query("fields",
+        Some("id,name,mimeType,size,md5Checksum,modifiedTime,parents,trashed".into())));
+    steps.push(step("PATCH", ITEM, Reply::Json(json!({"id": "item-id", "trashed": true})))
+        .query("fields", Some("id,trashed".into())));
+    let fixture = Fixture::new(steps);
     let backend = fixture.backend();
     let (tx, rx) = crossbeam_channel::unbounded();
     let handle = crate::rscan::start_scan_backend(
@@ -119,19 +132,21 @@ fn gui_design_task_drive_recursive_scan_stat_read_and_trash_use_exact_ids() {
     assert_eq!(bytes, b"abc");
     backend.remove_file(&path).unwrap();
     let requests = fixture.finish();
-    assert!(requests[1]
+    assert_eq!(requests.len(), 17);
+    assert!(requests[3]
         .target
         .contains(&super::core::cloud_urlenc("'folder-id' in parents")));
     assert_eq!(
-        serde_json::from_slice::<Value>(&requests[4].body).unwrap(),
+        serde_json::from_slice::<Value>(&requests.last().unwrap().body).unwrap(),
         json!({"trashed": true})
     );
 
     // Google-native documents have the same title mapping, but use export.
-    let mut document = object(TITLE, "item-id", false);
+    let mut document = drive_object(TITLE, "item-id", ROOT_ID, false);
     document["mimeType"] = json!("application/vnd.google-apps.document");
     let fixture = Fixture::new(vec![
-        step("GET", FILES, Reply::Json(json!({"files": [document]}))),
+        root(),
+        listing(ROOT_ID, None, None, Reply::Json(json!({"files": [document]}))),
         step(
             "GET",
             "/drive/v3/files/item-id/export",
@@ -157,73 +172,37 @@ fn gui_design_task_drive_recursive_scan_stat_read_and_trash_use_exact_ids() {
         .unwrap();
     assert_eq!(bytes, b"office-data");
     let requests = fixture.finish();
-    assert!(requests[1].target.contains(
+    assert_eq!(requests.len(), 3);
+    assert!(requests[2].target.contains(
         "mimeType=application%2Fvnd.openxmlformats-officedocument.wordprocessingml.document"
     ));
 }
 
 #[test]
 fn gui_design_task_drive_uncached_paged_markers_and_reloaded_cache() {
-    let raw = "I/O\\Gerät's Daten";
-    let first = object(raw, "abcdefgh1", false);
-    let second = object(raw, "abcdefgh2", false);
-    let fixture = Fixture::new(vec![
-        step(
-            "GET",
-            FILES,
-            Reply::Json(json!({"files": [first], "nextPageToken": "next"})),
-        ),
-        step(
-            "GET",
-            FILES,
-            Reply::Json(json!({"files": [second.clone()]})),
-        ),
-        step("GET", "/drive/v3/files/abcdefgh2", Reply::Json(second)),
-        step(
-            "GET",
-            FILES,
-            Reply::Json(json!({"files": [object("literal [drive-id abc]", "literal-id", false)]})),
-        ),
-    ]);
-    let backend = fixture.backend();
-    let path = format!("{} [drive-id abcdefgh2]", names::encode(raw));
-    assert_eq!(backend.resolve(&path).unwrap(), "abcdefgh2");
-    backend.untrusted_guard().unwrap().insert(path.clone());
-    assert_eq!(backend.resolve(&path).unwrap(), "abcdefgh2");
-    assert_eq!(
-        backend
-            .resolve(&names::encode("literal [drive-id abc]"))
-            .unwrap(),
-        "literal-id"
-    );
-    assert!(backend.state_identity().starts_with("gdrive:path-v2:"));
-    let requests = fixture.finish();
-    assert_query(&requests[0], "root", raw);
-    assert!(requests[1].target.contains("pageToken=next"));
-    assert_query(&requests[3], "root", "literal [drive-id abc]");
+    paging_boundary_task_tests::uncached_paged_markers_and_reloaded_cache();
 }
 
 #[test]
 fn gui_design_task_drive_repeated_or_incomplete_pages_fail_closed() {
-    for incomplete in [false, true] {
-        let body = json!({"files": [], "nextPageToken": "repeat", "incompleteSearch": incomplete});
-        let mut steps = vec![step("GET", FILES, Reply::Json(body.clone()))];
-        if !incomplete {
-            steps.push(step("GET", FILES, Reply::Json(body)));
-        }
-        let fixture = Fixture::new(steps);
-        assert!(fixture.backend().find_child("root", "I%2FO").is_err());
-        fixture.finish();
-    }
+    paging_boundary_task_tests::repeated_or_incomplete_pages_fail_closed();
 }
 
 #[test]
 fn gui_design_task_drive_folder_and_file_creation_decode_metadata_once() {
+    let folder = drive_object("I/O", "folder-id", ROOT_ID, true);
+    let mut ids: Vec<String> = (0..8).map(|index| format!("unused-id-{index}")).collect();
+    ids.extend(["item-id".to_string(), "folder-id".to_string()]);
     let fixture = Fixture::new(vec![
-        step("GET", GENERATE, Reply::Json(json!({"ids": ["folder-id"]}))),
+        root(),
+        listing(ROOT_ID, None, Some("I/O"), Reply::Json(json!({"files": []}))),
+        step("GET", GENERATE, Reply::Json(json!({"ids": ids})))
+            .query("count", Some("10".into()))
+            .query("space", Some("drive".into()))
+            .query("type", Some("files".into())),
         step("POST", FILES, Reply::Json(json!({"id": "folder-id"}))),
-        step("GET", FILES, Reply::Json(json!({"files": []}))),
-        step("GET", GENERATE, Reply::Json(json!({"ids": ["item-id"]}))),
+        identity("/drive/v3/files/folder-id", &folder),
+        listing("folder-id", None, Some("Daten%2F.csv"), Reply::Json(json!({"files": []}))),
         step("POST", UPLOAD, Reply::Session),
         step("PUT", "/session", Reply::Json(json!({"id": "item-id"}))),
     ]);
@@ -234,19 +213,25 @@ fn gui_design_task_drive_folder_and_file_creation_decode_metadata_once() {
     writer.write_all(b"abc").unwrap();
     writer.flush().unwrap();
     let requests = fixture.finish();
+    assert_eq!(requests.len(), 8);
     assert_eq!(
-        serde_json::from_slice::<Value>(&requests[1].body).unwrap()["name"],
+        serde_json::from_slice::<Value>(&requests[3].body).unwrap()["name"],
         "I/O"
     );
-    assert_query(&requests[2], "folder-id", "Daten%2F.csv");
-    let metadata: Value = serde_json::from_slice(&requests[4].body).unwrap();
+    let folder_metadata: Value = serde_json::from_slice(&requests[3].body).unwrap();
+    assert_eq!(folder_metadata["parents"], json!([ROOT_ID]));
+    assert_eq!(folder_metadata["id"], "folder-id");
+    assert_query(&requests[5], "folder-id", "Daten%2F.csv");
+    let metadata: Value = serde_json::from_slice(&requests[6].body).unwrap();
     assert_eq!(metadata["name"], "Daten%2F.csv");
     assert_eq!(metadata["parents"], json!(["folder-id"]));
+    assert_eq!(metadata["id"], "item-id");
 }
 
 #[test]
 fn gui_design_task_drive_content_replacement_never_renames_an_alias() {
     let fixture = Fixture::new(vec![
+        root(),
         step("PATCH", "/upload/drive/v3/files/item-id", Reply::Session),
         step("PUT", "/session", Reply::Json(json!({"id": "item-id"}))),
     ]);
@@ -257,8 +242,9 @@ fn gui_design_task_drive_content_replacement_never_renames_an_alias() {
     writer.write_all(b"abc").unwrap();
     writer.flush().unwrap();
     let requests = fixture.finish();
+    assert_eq!(requests.len(), 3);
     assert_eq!(
-        serde_json::from_slice::<Value>(&requests[0].body).unwrap(),
+        serde_json::from_slice::<Value>(&requests[1].body).unwrap(),
         json!({})
     );
 }
@@ -266,54 +252,54 @@ fn gui_design_task_drive_content_replacement_never_renames_an_alias() {
 #[test]
 fn gui_design_task_drive_rename_and_copy_promotion_preserve_original_titles() {
     let fixture = Fixture::new(vec![
-        step(
-            "GET",
-            FILES,
-            Reply::Json(json!({"files": [object("I/O", "item-id", false)]})),
-        ),
-        step("GET", FILES, Reply::Json(json!({"files": []}))),
+        root(),
+        listing(ROOT_ID, None, Some("I/O"), Reply::Json(json!({
+            "files": [drive_object("I/O", "item-id", ROOT_ID, false)]
+        }))),
+        listing(ROOT_ID, None, Some("I/O neu"), Reply::Json(json!({"files": []}))),
         step("PATCH", ITEM, Reply::Json(json!({"id": "item-id"}))),
         step(
             "GET",
             ITEM,
-            Reply::Json(object("I/O neu", "item-id", false)),
+            Reply::Json(drive_object("I/O neu", "item-id", ROOT_ID, false)),
         ),
-        step(
-            "GET",
-            FILES,
-            Reply::Json(json!({"files": [object("I/O neu", "item-id", false)]})),
-        ),
+        listing(ROOT_ID, None, Some("I/O neu"), Reply::Json(json!({
+            "files": [drive_object("I/O neu", "item-id", ROOT_ID, false)]
+        }))),
     ]);
     let backend = fixture.backend();
     backend.rename("I%2FO", "I%2FO neu").unwrap();
     let requests = fixture.finish();
-    assert_query(&requests[0], "root", "I/O");
+    assert_eq!(requests.len(), 6);
+    assert_query(&requests[1], ROOT_ID, "I/O");
     assert_eq!(
-        serde_json::from_slice::<Value>(&requests[2].body).unwrap()["name"],
+        serde_json::from_slice::<Value>(&requests[3].body).unwrap()["name"],
         "I/O neu"
     );
 
-    let stage = object("I/O.stage", "item-id", false);
+    let stage = drive_object("I/O.stage", "item-id", ROOT_ID, false);
+    let mut ids: Vec<String> = (0..9).map(|index| format!("unused-id-{index}")).collect();
+    ids.push("item-id".to_string());
     let fixture = Fixture::new(vec![
-        step("GET", FILES, Reply::Json(json!({"files": []}))),
-        step("GET", GENERATE, Reply::Json(json!({"ids": ["item-id"]}))),
+        root(),
+        listing(ROOT_ID, None, Some("I/O.stage"), Reply::Json(json!({"files": []}))),
+        step("GET", GENERATE, Reply::Json(json!({"ids": ids})))
+            .query("count", Some("10".into())),
         step("POST", UPLOAD, Reply::Session),
         step("PUT", "/session", Reply::Json(json!({"id": "item-id"}))),
         step("GET", ITEM, Reply::Json(stage.clone())),
-        step("GET", FILES, Reply::Json(json!({"files": [stage.clone()]}))),
-        step("GET", FILES, Reply::Json(json!({"files": [stage]}))),
-        step("GET", FILES, Reply::Json(json!({"files": []}))),
+        listing(ROOT_ID, None, Some("I/O.stage"), Reply::Json(json!({"files": [stage.clone()]}))),
+        listing(ROOT_ID, None, Some("I/O.stage"), Reply::Json(json!({"files": [stage]}))),
+        listing(ROOT_ID, None, Some("I/O.txt"), Reply::Json(json!({"files": []}))),
         step("PATCH", ITEM, Reply::Json(json!({"id": "item-id"}))),
         step(
             "GET",
             ITEM,
-            Reply::Json(object("I/O.txt", "item-id", false)),
+            Reply::Json(drive_object("I/O.txt", "item-id", ROOT_ID, false)),
         ),
-        step(
-            "GET",
-            FILES,
-            Reply::Json(json!({"files": [object("I/O.txt", "item-id", false)]})),
-        ),
+        listing(ROOT_ID, None, Some("I/O.txt"), Reply::Json(json!({
+            "files": [drive_object("I/O.txt", "item-id", ROOT_ID, false)]
+        }))),
     ]);
     let backend = fixture.backend();
     let mut writer = backend.open_write_copy_stage("I%2FO.stage").unwrap();
@@ -323,166 +309,33 @@ fn gui_design_task_drive_rename_and_copy_promotion_preserve_original_titles() {
         .promote_copy_stage("I%2FO.stage", "I%2FO.txt")
         .unwrap();
     let requests = fixture.finish();
+    assert_eq!(requests.len(), 12);
     assert_eq!(
-        serde_json::from_slice::<Value>(&requests[2].body).unwrap()["name"],
+        serde_json::from_slice::<Value>(&requests[3].body).unwrap()["name"],
         "I/O.stage"
     );
     assert_eq!(
-        serde_json::from_slice::<Value>(&requests[8].body).unwrap()["name"],
+        serde_json::from_slice::<Value>(&requests[9].body).unwrap()["name"],
         "I/O.txt"
     );
 }
 
 #[test]
 fn gui_design_task_drive_optional_empty_pages_agree_at_read_and_mutation_boundaries() {
-    for page in [
-        json!({}),
-        json!({"files": null}),
-        json!({"files": []}),
-        json!({"files": [], "nextPageToken": null, "incompleteSearch": null}),
-    ] {
-        let fixture = Fixture::new(
-            (0..3)
-                .map(|_| step("GET", FILES, Reply::Json(page.clone())))
-                .collect(),
-        );
-        let backend = fixture.backend();
-        assert!(backend.list_dir("/").unwrap().is_empty());
-        assert_eq!(backend.find_child("root", "I%2FO").unwrap(), None);
-        assert!(backend.named_objects("root", "I/O").unwrap().is_empty());
-        fixture.finish();
-    }
-    for page in [
-        json!(null),
-        json!([]),
-        json!({"files": {}}),
-        json!({"files": ""}),
-        json!({"nextPageToken": 3}),
-        json!({"incompleteSearch": "false"}),
-        json!({"incompleteSearch": true}),
-        json!({"error": {"message": "failed"}}),
-    ] {
-        let fixture = Fixture::new(
-            (0..3)
-                .map(|_| step("GET", FILES, Reply::Json(page.clone())))
-                .collect(),
-        );
-        let backend = fixture.backend();
-        assert_eq!(
-            backend.list_dir("/").unwrap_err().kind(),
-            std::io::ErrorKind::InvalidData
-        );
-        assert_eq!(
-            backend.find_child("root", "I%2FO").unwrap_err().kind(),
-            std::io::ErrorKind::InvalidData
-        );
-        assert_eq!(
-            backend.named_objects("root", "I/O").unwrap_err().kind(),
-            std::io::ErrorKind::InvalidData
-        );
-        fixture.finish();
-    }
-    // An invalid absence response must not start a create/upload mutation.
-    let fixture = Fixture::new(vec![step(
-        "GET",
-        FILES,
-        Reply::Json(json!({"files": false})),
-    )]);
-    let mut writer = fixture.backend().open_write("I%2FO").unwrap();
-    writer.write_all(b"abc").unwrap();
-    assert_eq!(
-        writer.flush().unwrap_err().kind(),
-        std::io::ErrorKind::InvalidData
-    );
-    drop(writer);
-    assert_eq!(fixture.finish().len(), 1);
+    paging_boundary_task_tests::optional_empty_pages_agree_at_read_and_mutation_boundaries();
 }
 
 #[test]
 fn gui_design_task_drive_empty_intermediate_pages_continue_and_empty_children_scan() {
-    let fixture = Fixture::new(vec![
-        step(
-            "GET",
-            FILES,
-            Reply::Json(json!({"nextPageToken": "second"})),
-        ),
-        step(
-            "GET",
-            FILES,
-            Reply::Json(json!({"files": [object(TITLE, "empty-id", true)]})),
-        ),
-        step("GET", FILES, Reply::Json(json!({"files": null}))),
-    ]);
-    let (tx, rx) = crossbeam_channel::unbounded();
-    let handle = crate::rscan::start_scan_backend(
-        std::sync::Arc::new(fixture.backend()),
-        "/".into(),
-        None,
-        None,
-        tx,
-    );
-    let mut found = false;
-    let mut denied = Vec::new();
-    loop {
-        use crate::scanner::ScanMessage;
-        match rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap() {
-            ScanMessage::Entries(entries) => {
-                found |= entries
-                    .iter()
-                    .any(|entry| entry.id.as_deref() == Some("empty-id"))
-            }
-            ScanMessage::FailedPaths(paths) => assert!(paths.is_empty(), "{paths:?}"),
-            ScanMessage::DeniedRoots(roots) => denied.push(roots),
-            ScanMessage::Error(error) => panic!("{error}"),
-            ScanMessage::Done(progress) => {
-                assert_eq!(progress.errors, 0);
-                assert_eq!(progress.permission_denied, 0);
-                break;
-            }
-            ScanMessage::Progress(_) => {}
-        }
-    }
-    handle
-        .cancel
-        .store(true, std::sync::atomic::Ordering::Relaxed);
-    assert!(!handle.truncated.load(std::sync::atomic::Ordering::Relaxed));
-    for roots in denied {
-        let warning = roots.storage_warning();
-        assert!(warning.is_none(), "denied-root ledger failed: {warning:?}");
-        let paths = roots.roots().expect("read lossless denied-root ledger");
-        assert!(paths.is_empty(), "scan omitted roots: {paths:?}");
-    }
-    assert!(found);
-    let requests = fixture.finish();
-    assert!(requests[1].target.contains("pageToken=second"));
-    assert!(requests[2]
-        .target
-        .contains(&super::core::cloud_urlenc("'empty-id' in parents")));
-    for resolve in [false, true] {
-        let fixture = Fixture::new(vec![
-            step(
-                "GET",
-                FILES,
-                Reply::Json(json!({"files": null, "nextPageToken": "next"})),
-            ),
-            step(
-                "GET",
-                FILES,
-                Reply::Json(json!({"files": [object("I/O", "item-id", false)]})),
-            ),
-        ]);
-        let backend = fixture.backend();
-        if resolve {
-            assert_eq!(
-                backend.find_child("root", "I%2FO").unwrap().as_deref(),
-                Some("item-id")
-            );
-        } else {
-            assert_eq!(
-                backend.named_objects("root", "I/O").unwrap()[0].id,
-                "item-id"
-            );
-        }
-        assert!(fixture.finish()[1].target.contains("pageToken=next"));
-    }
+    scan_task_tests::empty_intermediate_pages_continue_and_empty_children_scan();
+}
+
+#[test]
+fn gui_design_task_drive_paginated_scan_preserves_literal_file_names_and_ids() {
+    scan_task_tests::paginated_scan_preserves_literal_file_names_and_ids();
+}
+
+#[test]
+fn gui_design_task_drive_paginated_scan_reports_provider_and_schema_failures() {
+    scan_task_tests::paginated_scan_reports_provider_and_schema_failures();
 }
