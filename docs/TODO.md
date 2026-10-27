@@ -18,28 +18,24 @@ See [evidence and scope](WINDOWS_REMOTE_REGRESSION.md).
 
 ## Still open (what's actually left)
 
-Gesamtbatch B1–B8/P31/P32, Stand 2026-10-26: Die normale Gesamtreview und beide
-unabhängigen Release-Regressionsreviews sind abgeschlossen. Die belegten
-Reviewfehler sowie anschließenden Struktur-, Compiler-, Kotlin- und
-Messabschlusskorrekturen sind integriert. Lauf `40406246032` für `1ffbf4b0`
-bestätigt die Vorbereitung und erfolgreiche Windows-/Linux-Kompilierung.
-Die Desktop-Funktionsstufen scheitern an konkreten
-[Funktions- und Fixturebefunden F01–F57](plaene/2026-10-24-batches/rv1-funktionsplan.md).
-Android hat seine Build-/JVM-Stufe beendet: native
-Bibliothek und App gebaut, Instrumentation-Import sowie Login-/Medienfixtures
-fehlgeschlagen (A01–A03). Die Geräteprüfung konnte ohne Instrumentation-APK
-nicht starten. Der finale API-Abruf um 23:10:44 UTC bestätigt den vollständig
-fehlgeschlagenen Lauf und den übersprungenen Gerätejob. Der vollständige
-Korrekturplan umfasst M01–M14. M14, M05, M07, M02, M03, M06, M08, M12,
-M11, M04, M01, M09 und M13 sind quellseitig samt eigener Autorenreview
-integriert; der jüngste Quellcommit ist `98a9ed1f`. Die gemeinsame
-Laufzeitbestätigung steht aus. M10 korrigiert die expliziten HTTP-Fixtures
-für Rootdiscovery, Parent- und Objektidentität einschließlich der direkt
-verketteten Schreib-, Rename- und Copyfälle. Kein Korrekturpaket wartet auf
-seinen Start.
-Autorenkorrekturen, erfolgreiche Auswertung über denselben Remote-Einstieg
-und der eine terminale Remote-Release stehen aus.
-Compilererfolg ist kein Funktions- oder Leistungsnachweis.
+Gesamtbatch B1–B8/P31/P32, Stand 2026-10-27: Die normale Gesamtreview,
+beide unabhängigen Release-Regressionsreviews und alle vierzehn anschließenden
+Korrekturpakete M01–M14 sind einschließlich eigener Autorenreview integriert.
+Der letzte Quellcommit ist `5be2ba02` (Drive-Root-/Parent-/ID-Fixtures).
+Die ergänzten Fälle sind dem bestehenden gemeinsamen Suiteeinstieg zugeordnet.
+Der letzte ausgeführte Lauf `40406246032` für `1ffbf4b0` blieb fehlgeschlagen;
+die danach integrierten Korrekturen sind statisch geprüft, nicht erneut
+funktional bestätigt. Android-App und native Bibliothek waren bereits gebaut,
+die Geräteprüfung blieb wegen der damaligen Instrumentationfehler aus.
+
+Der Nutzer verlangt am 2026-10-27: „du musst jetzt langsam endlich mal n release
+bauen, was machst denn noch?“ Daraus folgt für diesen Abschluss: keine weitere
+Task-Suite und keine zusätzliche Reviewrunde; unmittelbar der vollständige
+Remote-Release über den bestehenden Wrapper. Der Rootgraph wird vor dem Push
+aktualisiert. Der Releasewrapper behält seine Artefakt-, Signatur-, Hash-,
+Versions- und Publikationsprüfungen. Ein ausgelassener Lauf ist kein Erfolg;
+Compilererfolg ist kein Funktions- oder Leistungsnachweis. Offen ist jetzt die
+vollständige Veröffentlichung; noch wird kein Releaseerfolg behauptet.
 
 This table is the live list of remaining work, roughly by value. The lower
 sections preserve shipped/history context and explicitly label anything that is

@@ -114,7 +114,20 @@
       "handshake_io_enforces_one_absolute_deadline_for_a_stalled_peer",
       "perm_task_gui_accounts_page_states",
       "perm_task_gui_setup_without_pkexec_shows_sudo_command",
-      "desktop_task_desktop_ops_rename_trash_copy"
+      "desktop_task_desktop_ops_rename_trash_copy",
+      "drive_task_registry_v0_5_182_fixture_roundtrip_identical",
+      "drive_task_registry_old_parser_ignores_new_fields",
+      "drive_task_registry_ext_kinds_never_in_v1_file",
+      "vault_task_folder_index_skips_vault",
+      "gui_design_task_drive_paginated_scan_preserves_literal_file_names_and_ids",
+      "gui_design_task_drive_paginated_scan_reports_provider_and_schema_failures",
+      "gui_design_task_drive_recursive_scan_stat_read_and_trash_use_exact_ids",
+      "gui_design_task_drive_uncached_paged_markers_and_reloaded_cache",
+      "gui_design_task_drive_repeated_or_incomplete_pages_fail_closed",
+      "gui_design_task_drive_folder_and_file_creation_decode_metadata_once",
+      "gui_design_task_drive_optional_empty_pages_agree_at_read_and_mutation_boundaries",
+      "gui_design_task_drive_content_replacement_never_renames_an_alias",
+      "gui_design_task_drive_rename_and_copy_promotion_preserve_original_titles"
     ],
     "linux_integrations": [
       "batches_task_b6_linux_cgroup_ancestors_constrain_session_headroom",
@@ -1359,7 +1372,8 @@
         "batches_task_b6_quality_reference_loss_recovers_only_with_complete_keyframe",
         "batches_task_b6_4k_lossless_correction_retains_every_source_pixel",
         "batches_task_b6_quality_openh264_baseline_transport_and_still",
-        "batches_task_b6_quality_binding_rejects_foreign_capture_and_missing_geometry"
+        "batches_task_b6_quality_binding_rejects_foreign_capture_and_missing_geometry",
+        "batches_task_b6_quality_provenance_checkout_line_endings_keep_exact_content"
       ],
       "device_cases": []
     },
@@ -1532,7 +1546,14 @@
         "batches_task_transfer_compat_missing_only_lost_file_reply_survives_successive_clicks",
         "batches_task_transfer_compat_missing_only_acknowledged_upload_needs_no_read_or_object_id",
         "batches_task_transfer_compat_missing_only_keeps_stored_recovery_and_journal_loss_strict",
-        "batches_task_transfer_compat_missing_only_never_discards_unknown_move_quarantine"
+        "batches_task_transfer_compat_missing_only_never_discards_unknown_move_quarantine",
+        "batches_task_transfer_compat_receipt_paths_preserve_backend_literals",
+        "batches_task_transfer_compat_receipt_paths_reject_traversal_and_unbound_proofs",
+        "batches_task_transfer_compat_receipt_paths_bind_endpoints_and_job",
+        "batches_task_transfer_compat_receipt_paths_keep_native_backslash_boundary",
+        "batches_task_transfer_compat_named_folder_receipt_reuses_literal_destination",
+        "batches_task_transfer_compat_missing_only_literal_folder_aliases_survive_repeated_clicks",
+        "batches_task_transfer_compat_missing_only_whole_folder_move_keeps_relative_alias"
       ],
       "device_cases": []
     },
@@ -1677,7 +1698,11 @@
         "batches_p13_uninstall_resumes_exact_record_after_partial_deletion_and_keeps_new_bytes",
         "batches_p13_uninstall_record_never_authorizes_path_traversal",
         "batches_p13_uninstall_missing_lock_never_releases_remaining_program_files",
-        "batches_p13_uninstall_oversized_inventory_is_rejected_before_publication"
+        "batches_p13_uninstall_oversized_inventory_is_rejected_before_publication",
+        "batches_p13_codex_removal_preserves_owned_table_comments_without_copying_string_hashes",
+        "batches_p13_codex_inline_and_dotted_removal_keeps_user_document_parseable",
+        "batches_p13_gc_preserves_foreign_children_at_their_original_paths",
+        "batches_p13_gc_changed_images_or_locks_never_authorize_deletion"
       ],
       "device_cases": []
     },
@@ -1692,7 +1717,7 @@
         "P13"
       ],
       "expected": "Historische Pluginprofile bleiben migrierbar und selektiv entfernbar; die nur lesbare CLI erlaubt lokale Profilgenerierung ohne Installationsdateischreibzugriff. Historischer Offline-Terminalweg und gegenläufiger Updater behalten ihre Eigentumsgrenzen. MCP-Deinstallation entfernt ausschließlich verifizierte eigene Programme und bleibt nach Teilentfernung wiederholbar.",
-      "scope": "Produktive Profil-, Imagelease-, Update- und Entfernungsketten mit isolierten temporären Dateien und tatsächlichen OS-Dateisperren; kein echter Host-CLI-, NSIS-, ACL-Deny-, Netzlaufwerk- oder fremder-UID-Lauf.",
+      "scope": "Produktive Profil-, Imagelease-, Update- und Entfernungsketten mit isolierten temporären Dateien, tatsächlichen OS-Dateisperren und isolierter CLI-Selbstentfernung; kein Eingriff in die produktive Hostinstallation und kein NSIS-, Netzlaufwerk- oder fremder-UID-Lauf.",
       "native_platforms": [
         "linux"
       ],
@@ -1702,7 +1727,14 @@
         "batches_p13_legacy_profiles_preserve_stale_update_lock_in_readonly_installation",
         "batches_p13_legacy_profiles_reject_same_byte_image_replacement",
         "batches_p13_profile_image_lease_preserves_cli_swap_commit_and_rollback",
-        "batches_p13_uninstall_does_not_follow_foreign_child_links"
+        "batches_p13_uninstall_does_not_follow_foreign_child_links",
+        "batches_p13_linux_idle_image_proof_preserves_bytes_despite_unknown_processes",
+        "batches_p13_linux_running_image_and_unknown_owners_remain_blocked",
+        "batches_p13_linux_image_exclusion_never_follows_a_foreign_link",
+        "batches_p13_linux_retirement_cleanup_preserves_foreign_stage_entries",
+        "batches_p13_linux_retirement_handoff_cannot_select_a_foreign_installation",
+        "batches_p13_linux_installed_cli_retirement_reexecs_only_with_its_bound_root",
+        "batches_p13_gc_collects_only_proved_idle_images_and_retries_quarantines"
       ],
       "device_cases": []
     },
@@ -1723,7 +1755,10 @@
       ],
       "native_cases": [
         "batches_p13_legacy_windows_codex_does_not_adopt_user_unix_environment",
-        "batches_p13_legacy_windows_profile_pins_cli_without_sidecar"
+        "batches_p13_legacy_windows_profile_pins_cli_without_sidecar",
+        "batches_p13_windows_ancestor_creation_rights_do_not_authorize_owned_file_mutation",
+        "batches_p13_windows_ancestor_foreign_replacement_rights_remain_rejected",
+        "batches_p13_windows_ancestor_trust_follows_token_user_not_object_owner"
       ],
       "device_cases": []
     },
@@ -1783,7 +1818,16 @@
         "handshake_io_enforces_one_absolute_deadline_for_a_stalled_peer",
         "perm_task_gui_accounts_page_states",
         "perm_task_gui_setup_without_pkexec_shows_sudo_command",
-        "desktop_task_desktop_ops_rename_trash_copy"
+        "desktop_task_desktop_ops_rename_trash_copy",
+        "gui_design_task_drive_paginated_scan_preserves_literal_file_names_and_ids",
+        "gui_design_task_drive_paginated_scan_reports_provider_and_schema_failures",
+        "gui_design_task_drive_recursive_scan_stat_read_and_trash_use_exact_ids",
+        "gui_design_task_drive_uncached_paged_markers_and_reloaded_cache",
+        "gui_design_task_drive_repeated_or_incomplete_pages_fail_closed",
+        "gui_design_task_drive_folder_and_file_creation_decode_metadata_once",
+        "gui_design_task_drive_optional_empty_pages_agree_at_read_and_mutation_boundaries",
+        "gui_design_task_drive_content_replacement_never_renames_an_alias",
+        "gui_design_task_drive_rename_and_copy_promotion_preserve_original_titles"
       ],
       "device_cases": []
     },
@@ -1826,6 +1870,131 @@
         "p27_task_shutdown_preserves_panic_and_joins_remaining_children",
         "p27_task_shutdown_drop_aborts_owned_children",
         "p27_task_shutdown_cancelled_finish_keeps_child_ownership"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R22-Windows-Publikation",
+      "milestones": [
+        "RA-04"
+      ],
+      "expected": "Bestätigte Copy-/Move-Publikation bleibt an Objektidentität, Digest und Abbruch gebunden; strenger Elternbeleg bleibt von der allgemeinen VFS-Qualifikation getrennt.",
+      "scope": "Produktive Windows-Datei-/Handlepfade und kontrollierte Fehlerzustände; kein physischer FAT-/exFAT- oder Netzlaufwerknachweis.",
+      "native_platforms": [
+        "windows"
+      ],
+      "native_cases": [
+        "batches_task_transfer_compat_windows_publication_flushes_root_and_native_child",
+        "batches_task_transfer_compat_windows_publication_reopens_the_held_directory_after_rename",
+        "batches_task_transfer_compat_windows_publication_rejects_wrong_type_and_write_reservation",
+        "batches_task_transfer_compat_windows_publication_never_promotes_non_ntfs_or_remote_labels",
+        "batches_task_transfer_compat_windows_publication_propagates_directory_flush_failures",
+        "batches_task_transfer_compat_windows_publication_vfs_keeps_qualification_separate_from_parent_proof",
+        "batches_task_transfer_compat_windows_publication_live_write_through_needs_no_general_parent_proof",
+        "batches_task_transfer_compat_windows_publication_recorded_success_stays_bound_to_identity_digest_and_cancel"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R22-Apps-CLI",
+      "milestones": [
+        "P18"
+      ],
+      "expected": "Icon-Datenversion und Programmversion bleiben getrennt und die bestehende CLI-Befehlsstruktur gültig.",
+      "scope": "Produktiver Clap-Vertragsbaum; kein Start eines installierten Fremdprogramms.",
+      "native_platforms": [
+        "linux",
+        "windows"
+      ],
+      "native_cases": [
+        "batches_app_cli_icon_data_version_retains_default_and_explicit_values",
+        "batches_app_cli_program_version_remains_available_at_every_apps_level",
+        "batches_app_cli_complete_tree_and_icon_options_remain_valid"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R22-Apps-Journal",
+      "milestones": [
+        "P18"
+      ],
+      "expected": "Öffentliche oder verlinkte Journaldirektories bleiben abgewiesen.",
+      "scope": "Isolierte Linux-Dateirechte; kein produktives Nutzerjournal.",
+      "native_platforms": [
+        "linux"
+      ],
+      "native_cases": [
+        "batches_app_journal_rejects_public_and_symlinked_directories"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R22-Registry-Kompatibilitaet",
+      "milestones": [
+        "P15",
+        "P22"
+      ],
+      "expected": "Historische Registry bleibt ohne künstliches Nullfeld lesbar; neue Erweiterungen verändern den alten Parservertrag nicht.",
+      "scope": "Vorhandene Persistenzfixtures für beide Desktopplattformen.",
+      "native_platforms": [
+        "linux",
+        "windows"
+      ],
+      "native_cases": [
+        "drive_task_registry_v0_5_182_fixture_roundtrip_identical",
+        "drive_task_registry_old_parser_ignores_new_fields",
+        "drive_task_registry_ext_kinds_never_in_v1_file"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R22-Tresor-Index",
+      "milestones": [
+        "P21"
+      ],
+      "expected": "Der Ordnerindex lässt den Tresor weiterhin aus.",
+      "scope": "Bestehende lokale Fixture, keine echte Provideranmeldung.",
+      "native_platforms": [
+        "linux",
+        "windows"
+      ],
+      "native_cases": [
+        "vault_task_folder_index_skips_vault"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R22-Exec-Abschluss",
+      "milestones": [
+        "P6"
+      ],
+      "expected": "Beendete Kontrollbesitzer geben ihren Leser frei; aktive Besitzer bleiben bis Abschluss oder Peerabbruch erreichbar.",
+      "scope": "Produktiver Kontrollbesitzer und isolierte Loopbackverbindung.",
+      "native_platforms": [
+        "linux",
+        "windows"
+      ],
+      "native_cases": [
+        "batches_task_b5_finished_owner_releases_control_reader_without_socket_shutdown",
+        "batches_task_b5_idle_control_owner_stays_live_until_peer_cancels",
+        "batches_task_b5_finished_control_cannot_cancel_same_id_live_owner"
+      ],
+      "device_cases": []
+    },
+    {
+      "id": "R22-Netzwechsel",
+      "milestones": [
+        "P6"
+      ],
+      "expected": "Bestätigter Netzwechsel erhält deaktivierte Transportbehandlung, absolute Frist, Abbruch und Verbindungsschluss.",
+      "scope": "Kontrolliertes bestätigtes Netzwechselereignis; kein physischer NIC-Wechsel.",
+      "native_platforms": [
+        "linux",
+        "windows"
+      ],
+      "native_cases": [
+        "batches_task_b5_confirmed_network_change_preserves_disabled_transport",
+        "batches_task_b5_stale_offline_keeps_network_wait_deadline_cancel_and_close"
       ],
       "device_cases": []
     }

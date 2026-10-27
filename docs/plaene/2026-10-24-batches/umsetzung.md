@@ -1292,3 +1292,18 @@ seinen Start. Die gemeinsame Manifestintegration und der vollständige
 Rootgraph folgen nach dem letzten Fix.
 Der finale Abruf des bisherigen Laufs um 23:10:44 UTC
 bestätigt dessen Ende und den übersprungenen Gerätejob.
+
+
+### Releaseabschluss angefordert, 2026-10-27
+
+Alle M01–M14 sind nach vollständiger eigener Autorenreview integriert; letzter
+Quellcommit `5be2ba02`. Die gemeinsame Manifestintegration ergänzt die gesammelten
+Fälle ohne bestehende Auswahl zu entfernen. Auf den unmittelbaren Releaseauftrag
+des Nutzers folgt kein weiterer Tasklauf und keine zusätzliche Reviewrunde.
+Die zuvor geplante Suitewiederholung entfällt für diesen Abschluss. Der letzte
+ausgeführte Lauf `40406246032` bleibt fehlgeschlagen; die anschließenden Fixes
+sind statisch geprüft, ihre erneute funktionale Bestätigung fehlt ausdrücklich.
+Nach Rootgraph und Kandidatenpush übernimmt einmal der vorhandene vollständige
+Remote-Releaseweg. Signatur-, Hash-, Versions- und Publikationsintegrität bleiben
+verbindlich. Releaseerfolg wird erst mit sichtbarer vollständiger Veröffentlichung
+behauptet.
