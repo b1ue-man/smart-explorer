@@ -283,6 +283,50 @@ impl Drop for PreAuthPermit {
     }
 }
 
+/// The listener of `start_listener` for tests: the same accept loop,
+/// capability prelude and client handling over `host`, without publishing
+/// its address or generation. Dropping the value ends the loop.
+#[cfg(test)]
+pub(in crate::daemon) fn serve_for_test(host: ShareHost, token: String) -> io::Result<IpcListener> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    listener.set_nonblocking(true)?;
+    let addr = listener.local_addr()?;
+    let limiter = PreAuthLimiter::new(MAX_PRE_AUTH_CONNECTIONS);
+    let stopping = Arc::new(AtomicBool::new(false));
+    let loop_stopping = Arc::clone(&stopping);
+    std::thread::Builder::new()
+        .name("daemon-ipc-test".into())
+        .spawn(move || {
+            let admissions = std::cell::RefCell::new(admission::AdmissionQueue::default());
+            accept_loop(
+                &listener,
+                Duration::from_millis(20),
+                &loop_stopping,
+                &|| false,
+                |stream, peer| {
+                    admissions
+                        .borrow_mut()
+                        .accept(stream, peer, &host, &token, |stream| {
+                            admit_client(stream, &host, &token, &limiter)
+                        })
+                },
+                || {
+                    admissions.borrow_mut().poll(&host, &token, |stream| {
+                        admit_client(stream, &host, &token, &limiter)
+                    })
+                },
+            );
+        })?;
+    Ok(IpcListener { addr, stopping })
+}
+
+#[cfg(test)]
+impl IpcListener {
+    pub(in crate::daemon) fn addr(&self) -> SocketAddr {
+        self.addr
+    }
+}
+
 #[cfg(test)]
 #[path = "ipc_listener_tests.rs"]
 mod tests;

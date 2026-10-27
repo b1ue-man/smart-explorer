@@ -18,6 +18,10 @@ use super::ipc_listener::{clear_pre_auth_deadline, read_pre_auth_line, PreAuthPe
 use super::ipc_protocol::{bound_snapshot_for_ipc, write_response, IpcRequest, IpcResponse};
 pub use super::ipc_protocol::{ShareCommandReply, ShareWorkerSnapshot};
 
+/// Code of an `IpcResponse::Err` for a request whose capability was refused
+/// (here and in the prelude, `ipc_admission.rs`).
+pub(super) const AUTH_REJECTED_CODE: &str = "ipc_auth_rejected";
+
 pub(super) fn handle_client(
     mut stream: TcpStream,
     host: ShareHost,
@@ -27,16 +31,29 @@ pub(super) fn handle_client(
 ) -> io::Result<()> {
     let mut line = String::new();
     read_pre_auth_line(&mut stream, &mut line, auth_deadline)?;
-    let req: IpcRequest = serde_json::from_str(line.trim()).map_err(eio)?;
+    // The line is read: a refusal is answered before the stream closes
+    // (FIN, not RST), so the client sees the reason, not a reset.
+    let req: IpcRequest = match serde_json::from_str(line.trim()) {
+        Ok(req) => req,
+        Err(error) => return refuse(&mut stream, eio(error), None, Some(MALFORMED)),
+    };
     let bound = matches!(&req, IpcRequest::RuntimeCall { .. });
-    require_request_auth(token, &req, &host)?;
+    if let Err(error) = require_request_auth(token, &req, &host) {
+        return refuse(&mut stream, error, Some(AUTH_REJECTED_CODE), None);
+    }
     let runtime_context = match &req {
         IpcRequest::RuntimeCall { hello, .. } => Some(hello.clone()),
         _ => None,
     };
-    let req = super::runtime_hello::unwrap_request(req, host.generation(), host.initialized())?;
+    let req = match super::runtime_hello::unwrap_request(req, host.generation(), host.initialized())
+    {
+        Ok(req) => req,
+        Err(error) => return refuse(&mut stream, error, Some("reconnect_required"), None),
+    };
     if bound {
-        require_request_auth(token, &req, &host)?;
+        if let Err(error) = require_request_auth(token, &req, &host) {
+            return refuse(&mut stream, error, Some(AUTH_REJECTED_CODE), None);
+        }
     }
     let runtime_lease = match super::runtime_hello::request_lease(runtime_context.as_ref(), &req) {
         Ok(lease) => lease,
@@ -367,6 +384,22 @@ fn serve_mount_control(
         }
     }
 }
+
+/// Answers a refused request (`public`, else the token-free text of
+/// `error`; parser errors can quote values) and keeps `error` for the log.
+fn refuse(
+    stream: &mut TcpStream,
+    error: io::Error,
+    code: Option<&str>,
+    public: Option<&str>,
+) -> io::Result<()> {
+    let msg = public.map_or_else(|| error.to_string(), str::to_string);
+    let code = code.map(str::to_string);
+    let _ = write_response(stream, &IpcResponse::Err { msg, code });
+    Err(error)
+}
+
+const MALFORMED: &str = "Daemon-IPC-Anfrage ist ungueltig";
 
 fn require_token(want: &str, got: &str) -> io::Result<()> {
     if constant_time_eq(want, got) {

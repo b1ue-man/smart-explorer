@@ -131,6 +131,23 @@ impl MountManager {
         authenticated_entry(&mut state, id, session_token).map(|_| ())
     }
 
+    /// Whether `token` is the session token of a running drive host. The
+    /// IPC prelude admits `Vault::SpoolKey` with it (`ipc_admission.rs`);
+    /// `ShareHost::authorize_extension` then requires that it belongs to
+    /// exactly the mount the request names.
+    pub(in crate::daemon) fn is_host_session_token(&self, token: &str) -> bool {
+        let Ok(state) = self.state_guard() else {
+            return false;
+        };
+        state.values().fold(false, |found, entry| {
+            let matches = entry
+                .session_token
+                .as_deref()
+                .is_some_and(|expected| token_matches(expected, token));
+            found | matches
+        })
+    }
+
     pub(in crate::daemon) fn register_control(
         &self,
         id: &MountId,
@@ -349,6 +366,13 @@ impl MountManager {
                     )
                 })?
         };
+        // Tests stand in for the vault register of this process here.
+        #[cfg(test)]
+        {
+            if let Some(key) = session_fixture::injected_spool_key(id.as_str()) {
+                return key;
+            }
+        }
         let cache_root = crate::mount::prepare_spool_root(
             &crate::support_dirs::app_data_dir().join("mount-cache"),
         )?;
@@ -443,3 +467,7 @@ fn host_status_is_terminal(status: &MountStatus, has_recovery_boundary: bool) ->
 #[cfg(test)]
 #[path = "mount_manager_host_task_tests.rs"]
 mod task_tests;
+
+#[cfg(test)]
+#[path = "mount_manager_host_session_fixture.rs"]
+pub(in crate::daemon) mod session_fixture;

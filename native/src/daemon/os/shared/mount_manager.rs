@@ -23,6 +23,8 @@ mod capacity;
 mod entry_state;
 #[path = "mount_manager_host.rs"]
 mod host;
+#[cfg(test)]
+pub(in crate::daemon) use host::session_fixture;
 // DRV-M7: the lock participant of vault drives and its channel.
 #[path = "mount_lock_participant.rs"]
 pub(in crate::daemon) mod lock_participant;
