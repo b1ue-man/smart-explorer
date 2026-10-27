@@ -3,9 +3,10 @@ run-name: Targeted 0.5.185 fixes ${{ inputs.candidate_sha }}
 
 # Narrow remote check for the targeted fixes of 2026-10-27 (user: "fixe
 # gezielt die fehler … aber mache keine breiten review und test suits"):
-# Linux and Windows compile library, binaries and tests with Clippy (findings
+# Linux and Windows check library and binaries with Clippy (findings
 # count only on lines this batch changed since v0.5.185) and run the screen
-# metadata runtime cases; Android builds and runs its JVM unit tests.
+# metadata runtime cases (which compiles every unit test of the library);
+# Android builds and runs its JVM unit tests.
 
 on:
   workflow_dispatch:
@@ -63,7 +64,7 @@ jobs:
           cache-on-failure: true
           cache-workspace-crates: true
 
-      - name: Clippy on library, binaries and tests; findings on changed lines fail
+      - name: Clippy on library and binaries; findings on changed lines fail
         shell: bash
         timeout-minutes: 140
         run: |
@@ -72,7 +73,7 @@ jobs:
           set +e -uo pipefail
           git diff -U0 --no-color v0.5.185 HEAD -- native/src > "$RUNNER_TEMP/diff.txt"
           cd native
-          cargo clippy --lib --bins --tests --message-format short 2>&1 \
+          cargo clippy --lib --bins --message-format short 2>&1 \
             | tr '\\' '/' | tee "$RUNNER_TEMP/clippy.txt"
           status=${PIPESTATUS[0]}
           # A compile error anywhere fails.

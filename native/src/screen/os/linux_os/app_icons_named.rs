@@ -47,7 +47,10 @@ pub(crate) fn path_icon_rgba(path: &Path) -> Option<(u32, Vec<u8>)> {
     if path.is_dir() {
         return named_icon_rgba(&["folder"]);
     }
-    if path.extension().is_some_and(|extension| extension == "desktop") {
+    if path
+        .extension()
+        .is_some_and(|extension| extension == "desktop")
+    {
         let icon = read_bounded(path)
             .ok()
             .and_then(|bytes| String::from_utf8(bytes).ok())
@@ -79,9 +82,10 @@ fn mime_lines(file: &str) -> Vec<String> {
     for dir in data_dirs() {
         let path = dir.join("mime").join(file);
         let small = std::fs::metadata(&path).is_ok_and(|meta| meta.len() <= MAX_MIME_BYTES);
-        if let Ok(text) = small.then(|| std::fs::read_to_string(&path)).unwrap_or_else(|| {
-            Err(std::io::Error::other("mime file too large or missing"))
-        }) {
+        if !small {
+            continue;
+        }
+        if let Ok(text) = std::fs::read_to_string(&path) {
             lines.extend(text.lines().map(str::to_string));
         }
     }
