@@ -53,12 +53,13 @@ fn send_self(socket: i32) {
         message.msg_iov = &mut iov;
         message.msg_iovlen = 1;
         message.msg_control = control.as_mut_ptr().cast();
-        message.msg_controllen = libc::CMSG_SPACE(std::mem::size_of::<i32>() as u32) as usize;
+        // GNU uses size_t, musl socklen_t; these fixed lengths fit both.
+        message.msg_controllen = libc::CMSG_SPACE(std::mem::size_of::<i32>() as u32) as _;
         let header = libc::CMSG_FIRSTHDR(&message);
         if !header.is_null() {
             (*header).cmsg_level = libc::SOL_SOCKET;
             (*header).cmsg_type = libc::SCM_RIGHTS;
-            (*header).cmsg_len = libc::CMSG_LEN(std::mem::size_of::<i32>() as u32) as usize;
+            (*header).cmsg_len = libc::CMSG_LEN(std::mem::size_of::<i32>() as u32) as _;
             libc::CMSG_DATA(header).cast::<i32>().write(fd);
             let _ = libc::sendmsg(socket, &message, libc::MSG_DONTWAIT | libc::MSG_NOSIGNAL);
         }
@@ -78,7 +79,7 @@ impl ChildWitness {
             message.msg_iov = &mut iov;
             message.msg_iovlen = 1;
             message.msg_control = control.as_mut_ptr().cast();
-            message.msg_controllen = std::mem::size_of_val(&control);
+            message.msg_controllen = std::mem::size_of_val(&control) as _;
             if libc::recvmsg(
                 self.0.as_raw_fd(),
                 &mut message,
@@ -91,7 +92,8 @@ impl ChildWitness {
             if header.is_null()
                 || (*header).cmsg_level != libc::SOL_SOCKET
                 || (*header).cmsg_type != libc::SCM_RIGHTS
-                || (*header).cmsg_len != libc::CMSG_LEN(std::mem::size_of::<i32>() as u32) as usize
+                || (*header).cmsg_len as usize
+                    != libc::CMSG_LEN(std::mem::size_of::<i32>() as u32) as usize
             {
                 return Err(io::Error::other("original_child_pidfd_unavailable"));
             }

@@ -29,6 +29,20 @@ pub(crate) fn publish(source: &Path, target: &Path, replace: bool) -> io::Result
     #[cfg(not(target_os = "android"))]
     let no_replace: libc::c_uint = libc::RENAME_NOREPLACE;
     let flags = if replace { 0 } else { no_replace };
+    // libc 0.2.186 exposes the kernel syscall, but no musl renameat2 wrapper.
+    #[cfg(target_env = "musl")]
+    // SAFETY: both names and the same held parent descriptor stay alive.
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_renameat2,
+            fd,
+            source_name.as_ptr(),
+            fd,
+            target_name.as_ptr(),
+            flags,
+        )
+    };
+    #[cfg(not(target_env = "musl"))]
     // SAFETY: both names and the same held parent descriptor stay alive.
     let result =
         unsafe { libc::renameat2(fd, source_name.as_ptr(), fd, target_name.as_ptr(), flags) };
