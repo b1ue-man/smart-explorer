@@ -4,7 +4,7 @@ use super::super::engine_policy::RateWindow;
 use super::super::limiter::OpAccounts;
 use super::super::types::{TransferKind, TransferProgress};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Names of running files shown per transfer (spec: up to three).
@@ -40,6 +40,10 @@ pub(crate) struct Stats {
     memory_wait_ns: AtomicU64,
     /// Ranges of large files running right now.
     segments_running: AtomicU64,
+    /// Bytes read back to prove files; shared with `file_evidence`.
+    checked: Arc<AtomicU64>,
+    /// `checked` at the last snapshot: a change labels the file „prüft“.
+    checked_seen: AtomicU64,
 }
 
 /// The job's totals at one moment; the verdict works on the difference of two.
@@ -120,7 +124,14 @@ impl Stats {
             wait_ns: AtomicU64::new(0),
             memory_wait_ns: AtomicU64::new(0),
             segments_running: AtomicU64::new(0),
+            checked: Arc::new(AtomicU64::new(0)),
+            checked_seen: AtomicU64::new(0),
         }
+    }
+
+    /// The meter of bytes read back to prove files (`file_evidence`).
+    pub(crate) fn check_meter(&self) -> Arc<AtomicU64> {
+        self.checked.clone()
     }
 
     /// Books time spent by account.
@@ -261,7 +272,15 @@ impl Stats {
                 .rate
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            rate.record(elapsed_ms, self.bytes_moved.load(Ordering::Acquire));
+            // Read-backs that prove published files move bytes too; without
+            // them the rate fell to 0 while a large file was being checked.
+            let checked = self.checked.load(Ordering::Acquire);
+            rate.record(
+                elapsed_ms,
+                self.bytes_moved
+                    .load(Ordering::Acquire)
+                    .saturating_add(checked),
+            );
             rate.rate()
         };
         // Helpers of a large file run under its name: it is listed once.
@@ -285,7 +304,18 @@ impl Stats {
             self.files_total.load(Ordering::Acquire),
             self.bytes_total.load(Ordering::Acquire),
         );
-        progress.current = active.first().cloned().unwrap_or_default();
+        let checked = self.checked.load(Ordering::Acquire);
+        let checking = self.checked_seen.swap(checked, Ordering::AcqRel) != checked;
+        progress.current = active
+            .first()
+            .map(|name| {
+                if checking {
+                    format!("prüft {name}")
+                } else {
+                    name.clone()
+                }
+            })
+            .unwrap_or_default();
         progress.files_done = self.files_done.load(Ordering::Acquire);
         progress.bytes_done = self.bytes_done.load(Ordering::Acquire);
         progress.elapsed_ms = elapsed_ms;
@@ -310,6 +340,20 @@ impl Stats {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Read-back bytes keep the rate alive and label the file as checked,
+    /// without counting as transferred bytes.
+    #[test]
+    fn screen_metadata_runtime_task_read_back_shows_as_checking() {
+        let stats = Stats::new();
+        let _file = stats.begin("a.bin");
+        assert_eq!(stats.snapshot(TransferKind::Upload, 0).current, "a.bin");
+        stats.check_meter().fetch_add(1024, Ordering::AcqRel);
+        let checking = stats.snapshot(TransferKind::Upload, 0);
+        assert_eq!(checking.current, "prüft a.bin");
+        assert_eq!(checking.bytes_done, 0);
+        assert_eq!(stats.snapshot(TransferKind::Upload, 0).current, "a.bin");
+    }
 
     #[test]
     fn transfer_engine_task_stats_give_back_only_counted_bytes() {
