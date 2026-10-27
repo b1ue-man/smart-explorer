@@ -45,6 +45,7 @@ if (-not (Test-Path -LiteralPath $releaseVersionHelper -PathType Leaf)) {
 . $releaseVersionHelper
 $androidApkName = "smart-explorer-android.apk"
 $androidReleaseScript = "android/build-release-apk.sh"
+$script:preparedRustCrateLicensesSha256 = ""
 if ($AndroidApkDirectory) {
     if ($SkipLinuxFeed) {
         throw "-AndroidApkDirectory applies only to a complete release, not the -SkipLinuxFeed diagnostic."
@@ -87,7 +88,8 @@ function Invoke-AndroidReleaseScript([string[]]$Arguments) {
             @{ Name = "ANDROID_KEYSTORE_FILE"; Flags = "/up" },
             @{ Name = "ANDROID_KEYSTORE_PASSWORD"; Flags = "/u" },
             @{ Name = "ANDROID_KEY_ALIAS"; Flags = "/u" },
-            @{ Name = "ANDROID_KEY_PASSWORD"; Flags = "/u" }
+            @{ Name = "ANDROID_KEY_PASSWORD"; Flags = "/u" },
+            @{ Name = "SMART_EXPLORER_PREPARED_RUST_LICENSES_SHA256"; Flags = "/u" }
         ) | Where-Object {
             -not [string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable($_.Name, "Process"))
         } | ForEach-Object { "$($_.Name)$($_.Flags)" }
@@ -141,7 +143,18 @@ function New-CompleteReleaseAndroidApk([string]$StageRoot, [string]$Version) {
         } else {
             "$(Get-ReleaseRepoRootWsl)/release-native/$(Split-Path -Leaf $StageRoot)/android"
         }
-        Invoke-AndroidReleaseScript @("--expect-version", $Version, "--out", $scriptOutput)
+        # The wrapper already generated and checked this exact shared-checkout
+        # input. WSL must not acquire a new PowerShell installation requirement.
+        if ($script:preparedRustCrateLicensesSha256 -cnotmatch '^[0-9a-f]{64}$') {
+            throw "Rust crate license notices must be prepared before the Android release build."
+        }
+        $oldPreparedLicenses = $env:SMART_EXPLORER_PREPARED_RUST_LICENSES_SHA256
+        try {
+            $env:SMART_EXPLORER_PREPARED_RUST_LICENSES_SHA256 = $script:preparedRustCrateLicensesSha256
+            Invoke-AndroidReleaseScript @("--expect-version", $Version, "--out", $scriptOutput)
+        } finally {
+            $env:SMART_EXPLORER_PREPARED_RUST_LICENSES_SHA256 = $oldPreparedLicenses
+        }
     }
     return Get-PublicationAndroidReleaseApk `
         -RepoRoot $repoRoot `
@@ -898,6 +911,7 @@ function Test-ReleaseMutablePath([string]$Path) {
     $normalized = $Path.Replace('\', '/')
     return $normalized -eq "native/Cargo.toml" -or
         $normalized -eq "native/Cargo.lock" -or
+        $normalized -eq "third-party/rust-crates/THIRD-PARTY-LICENSES.txt" -or
         $normalized.StartsWith("native/agent-bin/") -or
         $normalized.StartsWith("release-native/update-feed/") -or
         $normalized.StartsWith("release-native/share-server/") -or
@@ -1187,10 +1201,13 @@ function Test-CompleteReleaseCandidateAvailable([string]$Version) {
 }
 
 function Assert-RustCrateLicenses {
+    param([switch]$Prepare)
+
     # Every build embeds third-party/rust-crates/THIRD-PARTY-LICENSES.txt
-    # (docs/RELEASING.md). A missing or stale file stops the release before the
-    # first build; -EnsureTool installs the cargo-about version pinned in
-    # native/rust-licenses.ps1 when it is missing.
+    # (docs/RELEASING.md). Only a new build prepares this generated input.
+    # Existing candidates and environment checks must remain check-only.
+    # -EnsureTool installs the pinned cargo-about version when it is missing.
+    $script:preparedRustCrateLicensesSha256 = ""
     $cargoBin = if (Test-RunningOnLinux) {
         Join-Path $HOME ".cargo/bin"
     } else {
@@ -1207,19 +1224,36 @@ function Assert-RustCrateLicenses {
     if (-not $pwsh) {
         throw "PowerShell 7 (pwsh) is required for native/rust-licenses.ps1."
     }
-    & $pwsh.Source -NoProfile -NonInteractive -File (Join-Path $scriptRoot "rust-licenses.ps1") -Mode Check -EnsureTool
+    $licenseScript = Join-Path $scriptRoot "rust-licenses.ps1"
+    if ($Prepare) {
+        & $pwsh.Source -NoProfile -NonInteractive -File $licenseScript -Mode Generate -EnsureTool
+        if ($LASTEXITCODE -ne 0) {
+            throw "Complete Rust crate license notice generation failed; no release build may start."
+        }
+    }
+    & $pwsh.Source -NoProfile -NonInteractive -File $licenseScript -Mode Check -EnsureTool
     if ($LASTEXITCODE -ne 0) {
-        throw "Rust crate license notices are missing or stale (native/rust-licenses.ps1 -Mode Check); the task suite job prepare regenerates third-party/rust-crates/THIRD-PARTY-LICENSES.txt."
+        throw "Rust crate license notices are missing, incomplete, or stale (native/rust-licenses.ps1 -Mode Check)."
+    }
+    if ($Prepare) {
+        $script:preparedRustCrateLicensesSha256 = Get-PublicationSha256 (
+            Join-Path $repoRoot "third-party/rust-crates/THIRD-PARTY-LICENSES.txt"
+        )
     }
 }
 
-# Rust crate license notices are verified before any build path, including the
-# -SkipLinuxFeed diagnostic.
-Assert-RustCrateLicenses
+# Environment checks retain the existing read-only license check. Generation
+# belongs to the new-build branch, after deciding whether a candidate is reused.
+if ($CheckEnvOnly) {
+    Assert-RustCrateLicenses
+}
 
 if ($SkipLinuxFeed) {
     if (Test-RunningOnLinux) {
         throw "-SkipLinuxFeed is a Windows-only non-publishable diagnostic."
+    }
+    if (-not $CheckEnvOnly) {
+        Assert-RustCrateLicenses -Prepare
     }
     Invoke-WindowsReleaseBuild
     exit 0
@@ -1248,12 +1282,14 @@ try {
 
     if ($plan.Action -ne "Tagged") {
         if (-not (Test-CompleteReleaseCandidateAvailable $version)) {
+            Assert-RustCrateLicenses -Prepare
             if (Test-RunningOnLinux) {
                 Invoke-LinuxCompleteReleaseBuild $completeReleaseLock
             } else {
                 Invoke-WindowsReleaseBuild
             }
         } else {
+            Assert-RustCrateLicenses
             Write-Host "Reusing the already verified v$version release build after a pre-tag interruption."
             Assert-CompleteReleaseAndroidApkCommitted $version
         }
@@ -1272,6 +1308,7 @@ try {
             -CandidateSha $candidateSha
     } else {
         $candidateSha = $plan.Candidate
+        Assert-RustCrateLicenses
         if (-not (Test-CompleteReleaseCandidateAvailable $version)) {
             throw "The immutable $($plan.Tag) candidate is incomplete in the local checkout."
         }

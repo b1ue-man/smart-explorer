@@ -740,6 +740,7 @@ function Get-PublicationReleaseCommitPaths {
     return @(
         "native/Cargo.toml",
         "native/Cargo.lock",
+        "third-party/rust-crates/THIRD-PARTY-LICENSES.txt",
         "native/agent-bin/se-agent-x86_64-linux-musl",
         "native/agent-bin/se-agent-aarch64-linux-musl",
         "release-native/Smart Explorer Setup $Version.exe",
@@ -883,7 +884,8 @@ function Invoke-ReleasePublicationCommit {
         -RepoRoot $RepoRoot `
         -Arguments @(
             "status", "--porcelain=v1", "--untracked-files=all", "--",
-            "native/Cargo.toml", "native/Cargo.lock", "native/agent-bin", "release-native"
+            "native/Cargo.toml", "native/Cargo.lock", "native/agent-bin", "release-native",
+            "third-party/rust-crates/THIRD-PARTY-LICENSES.txt"
         )).StdOut
     $unexpected = @()
     foreach ($line in @($releaseStatus -split "`r?`n")) {

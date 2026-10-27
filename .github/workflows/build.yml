@@ -657,6 +657,7 @@ jobs:
           declare -A allowed_release_change=()
           for path in \
             native/Cargo.toml native/Cargo.lock \
+            third-party/rust-crates/THIRD-PARTY-LICENSES.txt \
             native/agent-bin/se-agent-x86_64-linux-musl \
             native/agent-bin/se-agent-aarch64-linux-musl \
             "release-native/Smart Explorer Setup $ver.exe" \

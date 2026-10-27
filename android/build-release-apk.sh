@@ -230,6 +230,24 @@ check_build_env() {
   require_signing
 }
 
+prepare_rust_licenses() {
+  local notices="$repo_root/third-party/rust-crates/THIRD-PARTY-LICENSES.txt"
+  local prepared="${SMART_EXPLORER_PREPARED_RUST_LICENSES_SHA256:-}" actual
+  if [ -n "$prepared" ]; then
+    # Internal wrapper handoff: only after its successful Generate + Check.
+    # The hash binds those verified shared-checkout bytes across Windows/WSL;
+    # it is not itself an independent license-completeness check.
+    [[ "$prepared" =~ ^[0-9a-f]{64}$ ]] || die "invalid prepared Rust license SHA-256"
+    [ -s "$notices" ] || die "prepared Rust license notices are missing or empty"
+    actual="$(sha256sum "$notices" | awk '{ print $1 }')"
+    [ "$actual" = "$prepared" ] || die "Rust license notices differ from the wrapper's prepared input"
+    return
+  fi
+  require_tools pwsh
+  pwsh -NoProfile -NonInteractive -File "$native_dir/rust-licenses.ps1" -Mode Generate -EnsureTool
+  pwsh -NoProfile -NonInteractive -File "$native_dir/rust-licenses.ps1" -Mode Check -EnsureTool
+}
+
 rustls_maven_dir() {
   local metadata maven
   metadata="$(cd "$native_dir" && cargo metadata --locked --format-version 1 \
@@ -397,5 +415,6 @@ if [ "$mode" = verify ]; then
 fi
 
 check_build_env
+prepare_rust_licenses
 build_apk
 publish_verified "$built_apk" "$version" "$code" "$cert"
