@@ -10,27 +10,10 @@ pub(crate) fn list(
     principal: &ProvenPrincipal,
 ) -> io::Result<FamilyListing> {
     let owner = owner(principal)?;
-    let mut result = None;
-    let allowed = context.authority.admit(
-        principal,
-        &[Capability::ScreenView],
-        crate::share::core_now_secs(),
-        &mut || {
-            result = Some(context.backend.family_windows(&owner));
-        },
-    );
-    if !allowed {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "family_list_permission_revoked",
-        ));
-    }
-    result.unwrap_or_else(|| {
-        Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "family_list_not_admitted",
-        ))
-    })
+    super::host_metadata_jobs::check(context, principal, &[Capability::ScreenView])?;
+    let result = context.backend.family_windows(&owner);
+    super::host_metadata_jobs::check(context, principal, &[Capability::ScreenView])?;
+    result
 }
 
 pub(crate) fn admitted(context: &HostContext, principal: &ProvenPrincipal, control: bool) -> bool {

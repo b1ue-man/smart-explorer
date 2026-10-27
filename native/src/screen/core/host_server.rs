@@ -21,6 +21,7 @@ use super::authorize::{
 use super::frame_budget::{FrameCapabilities, FrameContract};
 use super::gop_stream::path_of;
 use super::host_backend::{ConsentBroker, ScreenHostBackend, SessionIndicator};
+use super::host_metadata::{self, HostMetadata};
 use super::host_pipeline::Pipeline;
 use super::negotiate::{negotiate_for_contract, CodecPreference};
 use super::registry::{NewSession, ScreenRegistry, SessionHandle};
@@ -101,18 +102,18 @@ impl Start<'_> {
 
     fn hello_ok(
         &self,
+        metadata: &HostMetadata,
         authorization: ScreenAuthorization,
         approval: ApprovalKind,
         frame_contract: Option<FrameContract>,
     ) -> ScreenHelloOk {
-        let backend = self.context.backend.as_ref();
         ScreenHelloOk {
             authorization,
-            platform: backend.platform(),
-            encoders: backend.encoders(),
-            input: backend.input(),
-            monitors: backend.monitors(),
-            limits: backend.limits(),
+            platform: metadata.platform,
+            encoders: metadata.encoders.clone(),
+            input: metadata.input.clone(),
+            monitors: metadata.monitors.clone(),
+            limits: metadata.limits.clone(),
             approval,
             frame_contract,
             icon_version: self.icon_version,
@@ -213,8 +214,12 @@ pub(crate) async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Res
     let asked = match decide(mode, view.decision, control.decision) {
         SessionDecision::Refused(code) => return start.refuse(code, false).await,
         SessionDecision::InfoOnly => {
-            let ok = start.hello_ok(authorization, ApprovalKind::NotRequired, None);
-            send_hello_reply(&mut *start.send, &HelloReply::Accepted(ok)).await?;
+            let metadata = match start.metadata(None).await {
+                Ok(metadata) => metadata,
+                Err(error) => return start.unavailable(error).await,
+            };
+            let ok = start.hello_ok(&metadata, authorization, ApprovalKind::NotRequired, None);
+            start.accepted(ok).await?;
             let _ = start.send.finish();
             let _ = tokio::time::timeout(CLOSE_GRACE, connection.closed()).await;
             return Ok(());
@@ -243,8 +248,12 @@ pub(crate) async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Res
                 Err(code) => return start.refuse(code, true).await,
             },
         };
-        let ok = start.hello_ok(authorization, approval, None);
-        send_hello_reply(&mut send, &HelloReply::Accepted(ok)).await?;
+        let metadata = match start.metadata(Some(&handle)).await {
+            Ok(metadata) => metadata,
+            Err(error) => return start.unavailable(error).await,
+        };
+        let ok = start.hello_ok(&metadata, authorization, approval, None);
+        start.accepted(ok).await?;
         log_event(
             context.audit,
             &principal,
@@ -264,8 +273,13 @@ pub(crate) async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Res
         )
         .await;
     }
-    let backend = context.backend.as_ref();
-    let Some(source_id) = hello.source.clone().or_else(|| primary_monitor(backend)) else {
+    let mut options =
+        host_metadata::source_options(&context, &principal, mode, hello.source.clone());
+    let options = match host_metadata::until(&connection, None, options.result()).await {
+        Ok(options) => options,
+        Err(error) => return start.unavailable(error).await,
+    };
+    let Some(source_id) = options.source else {
         return start.refuse(ScreenErrorCode::NoDisplay, false).await;
     };
     let screen_content = source_id.is_screen_content();
@@ -278,10 +292,10 @@ pub(crate) async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Res
             .refuse(ScreenErrorCode::ScreenUnsupported, false)
             .await;
     }
-    if screen_content && !backend.graphical_session() {
+    if screen_content && !options.graphical {
         return start.refuse(ScreenErrorCode::NoDisplay, false).await;
     }
-    if screen_content && !context.indicator.available() {
+    if screen_content && !options.indicator_available {
         return start
             .refuse(ScreenErrorCode::IndicatorUnavailable, false)
             .await;
@@ -319,6 +333,10 @@ pub(crate) async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Res
             }
         }
     };
+    let metadata = match start.metadata(Some(&handle)).await {
+        Ok(metadata) => metadata,
+        Err(error) => return start.unavailable(error).await,
+    };
     let startup::Ready {
         source,
         contract,
@@ -331,6 +349,7 @@ pub(crate) async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Res
         &source_id,
         &connection,
         &handle,
+        &metadata,
     )
     .await
     {
@@ -387,8 +406,8 @@ pub(crate) async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Res
                 .await;
         }
     }
-    let ok = start.hello_ok(authorization, approval, contract);
-    send_hello_reply(&mut send, &HelloReply::Accepted(ok)).await?;
+    let ok = start.hello_ok(&metadata, authorization, approval, contract);
+    start.accepted(ok).await?;
     let result = Some(approval_result(approval));
     log_event(
         context.audit,
@@ -414,7 +433,7 @@ pub(crate) async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Res
     pipeline.hold_admission(admission);
     pipeline.set_frame_contract(contract)?;
     if let Some(tiles) = negotiate_for_contract(
-        &backend.encoders(),
+        &metadata.encoders,
         &hello.decoders,
         CodecPreference::Tiles,
         contract,
@@ -441,15 +460,6 @@ pub(crate) async fn serve(context: HostContext, viewer: ProvenViewer) -> io::Res
     );
     session.run(recv, max_fps).await;
     Ok(())
-}
-
-fn primary_monitor(backend: &dyn ScreenHostBackend) -> Option<SourceId> {
-    let monitors = backend.monitors();
-    let primary = monitors
-        .iter()
-        .find(|monitor| monitor.primary)
-        .or_else(|| monitors.first())?;
-    Some(SourceId::Monitor(primary.id.clone()))
 }
 
 fn approval_result(approval: ApprovalKind) -> ApprovalResult {

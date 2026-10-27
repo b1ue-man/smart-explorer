@@ -365,3 +365,34 @@ pub(crate) fn attach_apps(apps: &mut [crate::screen::core::window_list::AppEntry
     }
 }
 
+#[cfg(test)]
+mod metadata_runtime_tests {
+    use super::*;
+    use crate::screen::core::{host_metadata_jobs, screen_metadata_runtime_fixtures as fixtures};
+
+    #[test]
+    fn screen_metadata_runtime_task_linux_theme_and_installed_icon_lookup_use_blocking_boundary() {
+        fixtures::run(false, async {
+            let rig = fixtures::rig();
+            let mut query = host_metadata_jobs::spawn(
+                &rig.context,
+                &rig.principal,
+                &[crate::share::access_grant::Capability::ScreenView],
+                |_, _| {
+                    let theme = current_theme();
+                    let mut list = WindowList {
+                        windows: Vec::new(),
+                        apps: Vec::new(),
+                        list_source: ListSource::Ewmh,
+                        limits: Vec::new(),
+                    };
+                    attach(&mut list);
+                    Ok(theme)
+                },
+            );
+            let theme = fixtures::bounded(query.result()).await.unwrap();
+            assert!(safe_relative(&theme));
+            assert!(rig.rights.0.lock().is_ok());
+        });
+    }
+}

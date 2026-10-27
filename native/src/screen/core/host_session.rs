@@ -17,6 +17,7 @@ use tokio::sync::mpsc;
 use super::{HostContext, CLOSE_GRACE};
 use crate::screen::core::authorize::log_event;
 use crate::screen::core::gop_stream::now_us;
+use crate::screen::core::host_metadata::{self, Fallback, Requests as MetadataRequests};
 use crate::screen::core::host_pipeline::{Pipeline, PipelineActor, Produced, WorkCompletion};
 use crate::screen::core::input_model::{InputEvent, PressedInputs};
 use crate::screen::core::registry::SessionHandle;
@@ -81,6 +82,7 @@ pub(super) struct Session<'a> {
     input_floor: Option<u64>,
     observed_reference_floor: u64,
     icons_supported: bool,
+    metadata: MetadataRequests,
     family: family::FamilyState,
 }
 
@@ -127,6 +129,7 @@ impl<'a> Session<'a> {
             input_floor: None,
             observed_reference_floor,
             icons_supported,
+            metadata: MetadataRequests::new(FRAME_QUEUE),
             family: family::FamilyState::new(families_supported, family_source),
         }
     }
@@ -154,7 +157,8 @@ impl<'a> Session<'a> {
                         break (signalled.unwrap_or(EndReason::HostShutdown), None);
                     }
                 }
-                frame = frames.recv() => match frame {
+                _ = self.connection.closed() => break (closed_reason(self.connection), None),
+                frame = frames.recv(), if self.metadata.can_accept() => match frame {
                     None => break (EndReason::ViewerClosed, None),
                     Some(Err(_)) => break (closed_reason(self.connection), None),
                     Some(Ok(frame)) => {
@@ -164,6 +168,12 @@ impl<'a> Session<'a> {
                         }
                     }
                 },
+                (fallback, result) = self.metadata.next() => {
+                    if self.metadata_reply(fallback, result).await.is_err() {
+                        break ((*stop.borrow()).unwrap_or(EndReason::ConnectionLost), None);
+                    }
+                    self.metadata.advance(self.context, self.principal);
+                }
                 _ = capture.tick() => {
                     if let Some(ending) = self.produce().await {
                         break ending;
@@ -195,6 +205,35 @@ impl<'a> Session<'a> {
     async fn error(&mut self, code: ScreenErrorCode, detail: String) -> io::Result<()> {
         let error = ScreenWireError::new(code, Some(detail));
         self.frame(HostFrame::Error(error)).await
+    }
+
+    /// The answer of a finished metadata job, as the synchronous path gave
+    /// it: a failed window list is an `ERROR` and the session goes on, a
+    /// failed icon lookup omits the icon, a lost right or a failed family
+    /// list ends the session.
+    async fn metadata_reply(
+        &mut self,
+        fallback: Fallback,
+        result: io::Result<HostFrame>,
+    ) -> io::Result<()> {
+        let response = match (fallback, result) {
+            (Fallback::Windows, Err(error)) => {
+                return self
+                    .error(ScreenErrorCode::CaptureFailed, error.to_string())
+                    .await
+            }
+            (fallback, result) => fallback.settle(result)?,
+        };
+        host_metadata::send(
+            self.context,
+            self.principal,
+            self.mode,
+            self.connection,
+            &mut self.send,
+            &response,
+            self.handle.stop_signal(),
+        )
+        .await
     }
 
     async fn report(&mut self, state: SessionState, reason: Option<&str>) -> io::Result<()> {
@@ -336,6 +375,7 @@ impl<'a> Session<'a> {
     }
 
     async fn finish(mut self, (reason, error): Ending) {
+        self.metadata.cancel();
         self.pipeline.cancel();
         self.release_control();
         let last = async {
@@ -373,3 +413,7 @@ fn closed_reason(connection: &Connection) -> EndReason {
         Some(_) => EndReason::ConnectionLost,
     }
 }
+
+#[cfg(test)]
+#[path = "screen_metadata_runtime_task_tests.rs"]
+mod metadata_runtime_tests;

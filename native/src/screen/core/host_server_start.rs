@@ -25,6 +25,51 @@ struct PreparedOutput {
     result: Result<Box<dyn PreparedSource>, super::super::host_backend::SourceRefusal>,
     _admission: Arc<SessionAdmission>,
 }
+
+impl Start<'_> {
+    /// `HELLO_OK` metadata from a blocking job; a stop of `handle` cancels it.
+    pub(super) async fn metadata(
+        &self,
+        handle: Option<&SessionHandle>,
+    ) -> io::Result<HostMetadata> {
+        let mut query = HostMetadata::query(self.context, self.principal, self.mode);
+        let stop = handle.map(SessionHandle::stop_signal);
+        host_metadata::until(self.connection, stop, query.result()).await
+    }
+
+    /// Sends `HELLO_OK`; every write needs the rights of this mode.
+    pub(super) async fn accepted(&mut self, ok: ScreenHelloOk) -> io::Result<()> {
+        let reply = HelloReply::Accepted(ok);
+        let (context, principal, mode) = (self.context, self.principal, self.mode);
+        host_metadata::hello(context, principal, mode, self.connection, self.send, &reply).await
+    }
+
+    /// A failed metadata step of the start: a stop or a leaving viewer ends
+    /// it quietly like a cancelled preparation, a lost right refuses as
+    /// such, any other failure (time limit, platform panic) refuses as a
+    /// capture failure with its detail in the access log.
+    pub(super) async fn unavailable(&mut self, error: io::Error) -> io::Result<()> {
+        match error.kind() {
+            io::ErrorKind::Interrupted | io::ErrorKind::ConnectionAborted => Ok(()),
+            io::ErrorKind::PermissionDenied => {
+                self.refuse(ScreenErrorCode::PermissionDenied, false).await
+            }
+            _ => {
+                let reason = error.to_string();
+                let (audit, principal) = (self.context.audit, self.principal);
+                log_event(
+                    audit,
+                    principal,
+                    self.mode,
+                    "session_refused",
+                    None,
+                    Some(&reason),
+                );
+                self.refuse(ScreenErrorCode::CaptureFailed, true).await
+            }
+        }
+    }
+}
 pub(super) async fn prepare(
     context: &HostContext,
     principal: &ProvenPrincipal,
@@ -32,20 +77,35 @@ pub(super) async fn prepare(
     source_id: &SourceId,
     connection: &Connection,
     handle: &SessionHandle,
+    metadata: &HostMetadata,
 ) -> Result<Ready, Failure> {
-    let backend = context.backend.as_ref();
     let session = super::super::family_protocol::token().map_err(Failure::Capture)?;
-    let facts = backend.memory_facts();
-    let ceiling = backend.capacity_ceiling(facts);
-    let offered = backend.session_memory_ceiling().min(
+    let mut resources = host_metadata::capture_resources(context, principal, hello.mode);
+    let resources =
+        host_metadata::until(connection, Some(handle.stop_signal()), resources.result())
+            .await
+            .map_err(|error| match error.kind() {
+                io::ErrorKind::Interrupted | io::ErrorKind::ConnectionAborted => Failure::Cancelled,
+                // The same refusal as a preparation whose rights went away.
+                io::ErrorKind::PermissionDenied => Failure::Source(
+                    super::super::host_backend::SourceRefusal::new("source_permission_revoked"),
+                ),
+                _ => Failure::Capture(error),
+            })?;
+    let offered = resources.session_memory_ceiling.min(
         hello
             .frame_capabilities
             .map_or(super::super::frame_budget::MAX_WORKING_BYTES, |caps| {
                 caps.frames.working_bytes
             }),
     );
-    let admission = super::super::frame_memory::admit_session(facts, ceiling, offered, &session)
-        .map_err(Failure::Capture)?;
+    let admission = super::super::frame_memory::admit_session(
+        resources.facts,
+        resources.ceiling,
+        offered,
+        &session,
+    )
+    .map_err(Failure::Capture)?;
     let mut stop = handle.stop_signal();
     if stop.borrow().is_some() {
         return Err(Failure::Cancelled);
@@ -90,7 +150,7 @@ pub(super) async fn prepare(
     let mut contract =
         FrameContract::negotiate(Some(host), hello.frame_capabilities).map_err(Failure::Capture)?;
     let mut choices = negotiate_for_contract(
-        &backend.encoders(),
+        &metadata.encoders,
         &hello.decoders,
         CodecPreference::Auto,
         contract,
@@ -106,7 +166,7 @@ pub(super) async fn prepare(
             contract.hybrid_regions = false;
         }
         choices = negotiate_for_contract(
-            &backend.encoders(),
+            &metadata.encoders,
             &hello.decoders,
             CodecPreference::Auto,
             contract,
@@ -125,7 +185,7 @@ pub(super) async fn prepare(
     let size = limits.fit(limits.max_size);
     let codec = if choice.codec == super::super::negotiate::CodecKind::Tiles {
         HostCodecPlan::Tiles
-    } else if backend.platform() == super::super::wire_hello::HostPlatform::Windows {
+    } else if metadata.platform == super::super::wire_hello::HostPlatform::Windows {
         HostCodecPlan::MediaFoundation {
             output_buffer_bytes: 64 * 1024 * 1024,
         }

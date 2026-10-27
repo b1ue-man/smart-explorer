@@ -69,6 +69,8 @@ pub(crate) mod host_admission;
 pub(crate) mod host_backend;
 pub(crate) mod host_codec_adapters;
 pub(crate) mod host_hybrid;
+pub(crate) mod host_metadata;
+pub(crate) mod host_metadata_jobs;
 pub(crate) mod host_pipeline;
 pub(crate) mod host_server;
 pub(crate) mod host_stage;
@@ -128,6 +130,9 @@ pub(crate) mod worker_family;
 
 #[cfg(test)]
 pub(crate) mod capture_test_support;
+
+#[cfg(test)]
+pub(crate) mod screen_metadata_runtime_fixtures;
 
 #[cfg(test)]
 pub(crate) mod batches_capture_pipeline_task_tests;
