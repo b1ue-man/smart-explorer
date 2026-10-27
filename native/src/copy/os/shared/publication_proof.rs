@@ -21,7 +21,7 @@ pub(crate) fn confirm_transfer_publication(
     confirm_saved_publication(
         target,
         expected_identity,
-        expected_sha256,
+        Some(expected_sha256),
         cancel,
         SavedPublication::Unconfirmed,
     )
@@ -39,9 +39,32 @@ pub(crate) fn confirm_acknowledged_transfer_publication(
     confirm_saved_publication(
         target,
         expected_identity,
-        expected_sha256,
+        Some(expected_sha256),
         cancel,
         SavedPublication::Acknowledged,
+    )
+}
+
+/// `confirm_transfer_publication` (or, for a durably acknowledged receipt,
+/// `confirm_acknowledged_transfer_publication`) bound by the object identity
+/// alone: for a receipt whose unchanged metadata identity decided, so the
+/// destination is flushed and bound without reading its content.
+pub(crate) fn confirm_transfer_publication_identity(
+    target: &Path,
+    expected_identity: &str,
+    acknowledged: bool,
+    cancel: &AtomicBool,
+) -> io::Result<()> {
+    confirm_saved_publication(
+        target,
+        expected_identity,
+        None,
+        cancel,
+        if acknowledged {
+            SavedPublication::Acknowledged
+        } else {
+            SavedPublication::Unconfirmed
+        },
     )
 }
 
@@ -53,13 +76,14 @@ enum SavedPublication {
 fn confirm_saved_publication(
     target: &Path,
     expected_identity: &str,
-    expected_sha256: &str,
+    expected_sha256: Option<&str>,
     cancel: &AtomicBool,
     basis: SavedPublication,
 ) -> io::Result<()> {
     if expected_identity.is_empty()
-        || expected_sha256.len() != 64
-        || !expected_sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || expected_sha256.is_some_and(|sha256| {
+            sha256.len() != 64 || !sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
     {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -69,7 +93,9 @@ fn confirm_saved_publication(
     active(cancel)?;
     let mut held = Publication::open(target)?;
     held.require_identity(expected_identity)?;
-    held.require_digest(expected_sha256, cancel)?;
+    if let Some(sha256) = expected_sha256 {
+        held.require_digest(sha256, cancel)?;
+    }
     active(cancel)?;
     held.file.sync_all()?;
     active(cancel)?;
@@ -83,7 +109,9 @@ fn confirm_saved_publication(
     }
     // Re-read the same handle after flushing. This also detects changed bytes
     // during the first read/flush instead of accepting an earlier cached hash.
-    held.require_digest(expected_sha256, cancel)?;
+    if let Some(sha256) = expected_sha256 {
+        held.require_digest(sha256, cancel)?;
+    }
     held.require_identity(expected_identity)?;
     held.verify_binding()?;
     if super::imp::local_file_identity_handle(&held.parent.entry(&held.name)?)? != expected_identity

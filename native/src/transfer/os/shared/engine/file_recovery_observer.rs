@@ -1,9 +1,10 @@
 //! Local move quarantine and held-handle publication callbacks.
 use std::io;
 
+use super::super::file_evidence::stamp;
 use super::{
-    active, after, after_checked, failure, observe, preparation_failed, previous_target, revoke,
-    snapshot, Engine, FileWork, Path, Side, SourceGuard,
+    active, after, after_checked, failure, preparation_failed, previous_presence, revoke, snapshot,
+    Engine, FileWork, Path, Side, SourceGuard,
 };
 
 pub(in crate::transfer::engine) struct LocalObserver<'e, 'a> {
@@ -34,8 +35,10 @@ impl crate::copy::PublicationObserver for LocalObserver<'_, '_> {
             return Ok(());
         };
         active(self.engine)?;
+        // The quarantined source by metadata (a rename keeps its object);
+        // nothing is read.
         let source = crate::copy::native_path_text(source)?;
-        let mut proof = observe(Side::Local, &source, self.engine.stop_flag())?;
+        let mut proof = stamp(Side::Local, &source)?;
         proof.path = crate::copy::native_path_text(quarantine)?;
         let destination = self.engine.folders.path_of(&self.file.rel);
         record.start_file(
@@ -44,11 +47,7 @@ impl crate::copy::PublicationObserver for LocalObserver<'_, '_> {
             None,
             destination.clone(),
             Some(proof),
-            previous_target(
-                self.engine.view.target,
-                &destination,
-                self.engine.stop_flag(),
-            )?,
+            previous_presence(self.engine.view.target, &destination)?,
         )?;
         active(self.engine)
     }
@@ -62,8 +61,10 @@ impl crate::copy::PublicationObserver for LocalObserver<'_, '_> {
         }
         let staged = crate::copy::native_path_text(staged)?;
         let target = crate::copy::native_path_text(target)?;
-        let proof = observe(Side::Local, &staged, self.engine.stop_flag())?;
-        let previous = previous_target(self.engine.view.target, &target, self.engine.stop_flag())?;
+        // The stage's metadata identity becomes the publication evidence:
+        // the rename keeps the object. Nothing is read (2026-10-27).
+        let proof = stamp(Side::Local, &staged)?;
+        let previous = previous_presence(self.engine.view.target, &target)?;
         record.start_file(
             self.file,
             self.source.clone(),

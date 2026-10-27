@@ -1,5 +1,8 @@
-//! Live "transfer missing" retains the journal without claiming crash ownership.
-use super::{failure, verify, verify_source, with_backend, Receipt};
+//! Live "transfer missing" retains the journal without claiming crash
+//! ownership; resumed and retried files are decided in doubt per file.
+use super::doubt::{self, Ownership};
+use super::{failure, verify, verify_source, with_backend, JobRun, Receipt};
+use crate::transfer::engine::file_evidence::{decisive, readback_unavailable, stamp_matches};
 use crate::transfer::engine::view::JobView;
 use crate::transfer::engine::{
     ops::{At, OpError, Outcome},
@@ -76,13 +79,18 @@ pub(super) fn acknowledged(
     }
     match with_backend(view.source, |backend| backend.stat(&receipt.source.path)) {
         Ok(_) => verify_source(receipt, view.source, cancel)?,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            let proof = receipt
-                .proof
-                .as_ref()
-                .ok_or_else(|| failure("Bestätigtes Moveziel hat keinen Inhaltsbeleg"))?;
-            verify(proof, view.target, cancel, false)?;
-        }
+        // The live move removed its source only after the acknowledged
+        // publication: the target is the only copy and is never touched.
+        Err(error) if error.kind() == io::ErrorKind::NotFound => match &receipt.proof {
+            Some(proof) if !proof.sha256.is_empty() => verify(proof, view.target, cancel, false)?,
+            _ if doubt::shape(receipt, view.source, view.target)?.is_none() => {}
+            _ => {
+                return Err(failure(format!(
+                    "Bestätigtes Moveziel fehlt oder weicht ab: {}",
+                    receipt.destination
+                )))
+            }
+        },
         Err(error) => return Err(error),
     }
     Ok(true)
@@ -107,26 +115,103 @@ pub(crate) fn resume(engine: &Engine<'_>, file: &FileWork) -> Result<Option<Outc
             failure("Journalneueintrag hat keine bestätigte Publikationserlaubnis"),
         ));
     }
+    // Unchanged since this job acknowledged it: its own, nothing is read.
+    match unchanged(engine, &receipt) {
+        Ok(true) => return Ok(Some(own(engine, file, &receipt))),
+        Ok(false) => {}
+        Err(error) => return Err(OpError::at(At::Unknown, error)),
+    }
+    let content_proof = receipt.proof.clone().filter(|p| !p.sha256.is_empty());
+    let Some(proof) = content_proof else {
+        return in_doubt(engine, record, file, receipt);
+    };
+    // A content proof of 0.5.185/0.5.186.
     if live(&engine.view) && (receipt.acknowledged || receipt.confirmed) {
         return Ok(None);
     }
     let result = (|| {
-        let proof = receipt
-            .proof
-            .as_ref()
-            .ok_or_else(|| failure("Dateipublikation bleibt unbestätigt"))?;
-        verify(proof, engine.view.target, engine.stop_flag(), true)?;
-        verify_source(&receipt, engine.view.source, engine.stop_flag())?;
-        Ok(())
+        verify(&proof, engine.view.target, engine.stop_flag(), false)?;
+        verify_source(&receipt, engine.view.source, engine.stop_flag())
     })();
     result.map_err(|error| OpError::at(At::Unknown, error))?;
+    Ok(Some(own(engine, file, &receipt)))
+}
+
+/// The target still has the metadata identity recorded when it was
+/// published (the acknowledgement's stamp, or a local stage's object renamed
+/// into place) and the source is unchanged: decided without hashing.
+fn unchanged(engine: &Engine<'_>, receipt: &Receipt) -> io::Result<bool> {
+    let metadata = receipt.proof.as_ref().filter(|p| p.sha256.is_empty());
+    let evidence = receipt.published.as_ref().or(metadata);
+    let Some(evidence) = evidence.filter(|stamp| decisive(stamp)) else {
+        return Ok(false);
+    };
+    Ok(stamp_matches(evidence, engine.view.target)?
+        && doubt::source_unchanged(receipt, engine.view.source).is_ok())
+}
+
+/// A receipt without a stored content proof: the content digest of source
+/// and target, each from the device that holds it, decides (`doubt`). Only
+/// here, never in the live uninterrupted path.
+fn in_doubt(
+    engine: &Engine<'_>,
+    record: &JobRun,
+    file: &FileWork,
+    mut receipt: Receipt,
+) -> Result<Option<Outcome>, OpError> {
+    let live = live(&engine.view);
+    let decided = match doubt::ownership(
+        &receipt,
+        engine.view.source,
+        engine.view.target,
+        engine.stop_flag(),
+    ) {
+        Ok(decided) => decided,
+        // "Transfer missing" on a target that can be neither hashed nor
+        // read keeps its rule (K8): a same-sized file stays, nothing is
+        // replaced. The job log says why.
+        Err(error) if live && readback_unavailable(engine.view.target, &error) => {
+            engine.issues.note(&receipt.destination, &error.to_string());
+            return Ok(None);
+        }
+        Err(error) => return Err(OpError::at(At::Unknown, error)),
+    };
+    match decided {
+        Ownership::Own => Ok(Some(own(engine, file, &receipt))),
+        // "Transfer missing" never replaces an existing file (K8).
+        Ownership::Foreign if live => Err(OpError::at(
+            At::Publish,
+            io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!(
+                    "Ziel „{}“ hat einen anderen Inhalt als die Quelle – nicht ersetzt",
+                    receipt.destination
+                ),
+            ),
+        )),
+        // Not this job's file: transferred like a fresh run would, under
+        // the job's conflict policy (keep both, overwrite or skip).
+        Ownership::Foreign | Ownership::Absent => {
+            receipt.discarded = true;
+            receipt.proof = None;
+            receipt.staged = None;
+            record
+                .write_file(&receipt)
+                .map_err(|error| OpError::at(At::Unknown, error))?;
+            Ok(None)
+        }
+    }
+}
+
+/// The destination holds this job's file: skipped, under its actual name.
+fn own(engine: &Engine<'_>, file: &FileWork, receipt: &Receipt) -> Outcome {
     if crate::transfer::engine_names::parent_rel(&file.rel).is_none() {
         engine.folders.record_alias(
             &file.rel,
             crate::transfer::engine_names::base_name(&receipt.destination),
         );
     }
-    Ok(Some(Outcome::Skipped))
+    Outcome::Skipped
 }
 
 #[cfg(test)]

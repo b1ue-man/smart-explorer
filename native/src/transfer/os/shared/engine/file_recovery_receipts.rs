@@ -35,6 +35,10 @@ pub(super) struct Receipt {
     pub(super) publication_authorized: bool,
     #[serde(default)]
     pub(super) previous: Option<PreviousTarget>,
+    /// The target's metadata identity at acknowledgement (no content): a
+    /// resumed job keeps an unchanged target without hashing it.
+    #[serde(default)]
+    pub(super) published: Option<Proof>,
 }
 
 pub(super) fn authorized_default() -> bool {
@@ -324,7 +328,11 @@ impl JobRun {
         let previous = self.read_file_unlocked(file, &data)?;
         let new_key = previous.is_none();
         let stage = staged.clone();
-        let mut proof = staged;
+        // A metadata stage record (empty digest) becomes the publication's
+        // evidence only on a local target, whose rename keeps the object.
+        let mut proof = staged.filter(|proof| {
+            !proof.sha256.is_empty() || (data.target.local && proof.object.is_some())
+        });
         if let Some(proof) = &mut proof {
             proof.path = destination.clone();
         }
@@ -350,6 +358,7 @@ impl JobRun {
             discarded: false,
             publication_authorized: true,
             previous: Some(previous_target),
+            published: None,
         };
         validate(&receipt, &data)?;
         if new_key {
