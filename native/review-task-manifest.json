@@ -1898,7 +1898,8 @@
     {
       "id": "R22-Apps-CLI",
       "milestones": [
-        "P18"
+        "P3",
+        "P5"
       ],
       "expected": "Icon-Datenversion und Programmversion bleiben getrennt und die bestehende CLI-Befehlsstruktur gültig.",
       "scope": "Produktiver Clap-Vertragsbaum; kein Start eines installierten Fremdprogramms.",
@@ -1916,7 +1917,7 @@
     {
       "id": "R22-Apps-Journal",
       "milestones": [
-        "P18"
+        "P5"
       ],
       "expected": "Öffentliche oder verlinkte Journaldirektories bleiben abgewiesen.",
       "scope": "Isolierte Linux-Dateirechte; kein produktives Nutzerjournal.",
@@ -1931,7 +1932,6 @@
     {
       "id": "R22-Registry-Kompatibilitaet",
       "milestones": [
-        "P15",
         "P22"
       ],
       "expected": "Historische Registry bleibt ohne künstliches Nullfeld lesbar; neue Erweiterungen verändern den alten Parservertrag nicht.",
@@ -1966,7 +1966,8 @@
     {
       "id": "R22-Exec-Abschluss",
       "milestones": [
-        "P6"
+        "P19",
+        "P28"
       ],
       "expected": "Beendete Kontrollbesitzer geben ihren Leser frei; aktive Besitzer bleiben bis Abschluss oder Peerabbruch erreichbar.",
       "scope": "Produktiver Kontrollbesitzer und isolierte Loopbackverbindung.",
@@ -1984,7 +1985,7 @@
     {
       "id": "R22-Netzwechsel",
       "milestones": [
-        "P6"
+        "P28"
       ],
       "expected": "Bestätigter Netzwechsel erhält deaktivierte Transportbehandlung, absolute Frist, Abbruch und Verbindungsschluss.",
       "scope": "Kontrolliertes bestätigtes Netzwechselereignis; kein physischer NIC-Wechsel.",
