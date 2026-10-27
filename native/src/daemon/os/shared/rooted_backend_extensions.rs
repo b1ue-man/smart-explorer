@@ -2,7 +2,11 @@
 //! Reservation requires a writable child and checked destination; identity
 //! reads the uncached object behind a checked existing path. Capacity keeps
 //! the mount's read-only fact. Source metadata completion checks its stage
-//! as an existing writable child. Provider errors remain sanitized.
+//! as an existing writable child. A content digest maps and confines its
+//! path exactly like `open_read` and is computed where the file is stored.
+//! Provider errors remain sanitized.
+use std::sync::atomic::AtomicBool;
+
 use crate::vfs::{self, BackendExtensions, StageFinish, StageFinished, VfsResult};
 
 use super::super::mount_error::encode as sanitize_error;
@@ -36,6 +40,24 @@ impl BackendExtensions for RootedBackend {
         let _operation = self.operation.read()?;
         let path = self.checked_existing(path)?;
         vfs::file_identity(&*self.raw_inner, &path).map_err(sanitize_error)
+    }
+
+    /// Same gate and path resolution as `open_read`; the inner backend hashes
+    /// next to the data or answers `None` (never a read-back here).
+    fn content_digest(
+        &self,
+        path: &str,
+        cancel: &AtomicBool,
+    ) -> VfsResult<Option<vfs::ContentDigest>> {
+        let digest = {
+            let _operation = self.operation.read()?;
+            let path = self.checked_existing(path)?;
+            vfs::content_digest(&*self.inner, &path, cancel).map_err(sanitize_error)?
+        };
+        // A vault locked while hashing: the digest is not handed out. The
+        // first guard is released first; the gate's lock is not reentrant.
+        let _operation = self.operation.read()?;
+        Ok(digest)
     }
 
     fn capacity(&self, root: &str) -> VfsResult<vfs::CapacitySnapshot> {

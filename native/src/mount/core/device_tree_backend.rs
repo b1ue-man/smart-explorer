@@ -302,6 +302,15 @@ impl Backend for LazyChildBackend {
 }
 
 impl BackendExtensions for LazyChildBackend {
+    /// The device's own backend hashes where the file is stored or answers
+    /// `None`; a lost connection is forgotten like for every other call.
+    fn content_digest(
+        &self,
+        path: &str,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> VfsResult<Option<crate::vfs::ContentDigest>> {
+        self.call(|inner| crate::vfs::content_digest(&**inner, path, cancel))
+    }
     fn capacity(&self, root: &str) -> VfsResult<crate::vfs::CapacitySnapshot> {
         self.call(|inner| crate::vfs::capacity(&**inner, root))
     }

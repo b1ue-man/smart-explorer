@@ -3,6 +3,9 @@
 //! own items; every other one is walked here: tolerant listings, links,
 //! special files and unreadable entries as omissions (never a failed walk),
 //! files below the minimum size left out, digests read only where asked.
+//! A SHA-256 walk on one regular file is the file digest of
+//! `query::FILE_DIGEST` (`backend_file_digest.rs`): hashed where it is
+//! stored, never read here.
 use std::io::{self, Read};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -17,6 +20,12 @@ use crate::vfs::{
 
 use super::backend_budget::WalkBudget;
 use super::backend_server::{emit, Sink};
+
+#[cfg(test)]
+#[path = "backend_file_digest_task_tests.rs"]
+mod backend_file_digest_task_tests;
+#[path = "backend_file_digest.rs"]
+mod file_digest;
 
 fn canceled() -> io::Error {
     io::Error::new(io::ErrorKind::Interrupted, "daemon hash walk canceled")
@@ -70,6 +79,11 @@ pub(super) fn walk_hashed2(
             io::ErrorKind::InvalidInput,
             "unbekannter Hashalgorithmus",
         ));
+    }
+    if algorithm == crate::agent_proto::digest::SHA256
+        && file_digest::serve(sink, id, backend, root, cancel)?
+    {
+        return Ok(());
     }
     let request = HashWalkRequest {
         algorithm: algorithm_from_wire(algorithm),

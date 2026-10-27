@@ -105,6 +105,10 @@ pub(super) fn query(backend: &BackendHandle, kind: u8, path: &str) -> io::Result
         },
         query::SYNC_FILESYSTEM => yes(vfs::sync_filesystem(&**backend, path)?),
         query::REMOVE_TREE => yes(vfs::supports_remove_tree(&**backend, path)?),
+        // The one-file SHA-256 walk is always understood; a served backend
+        // that cannot hash next to its data answers it "unsupported"
+        // (`backend_file_digest.rs`), so the client gets `None`.
+        query::FILE_DIGEST => 1,
         _ => 0,
     };
     Ok(Frame::Answer(value))
