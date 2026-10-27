@@ -1476,6 +1476,12 @@ Der vollständige Flow (bauen → Feed → GitHub-Release → Selbst-Update) ste
    Veröffentlichung laufen auf GitHub-Runnern. Vorher baut der Job
    `android-release-apk` auf Ubuntu die signierte APK mit derselben
    Versionsplanung und übergibt sie dem Wrapper per `-AndroidApkDirectory`.
+   Vor neuen Android- und Desktopbauten erzeugt und prüft der jeweilige
+   Releaseeinstieg die vollständigen Rust-Lizenztexte mit dem vorhandenen
+   gepinnten Generator. Der Wrapper nimmt genau den kanonischen Text
+   `third-party/rust-crates/THIRD-PARTY-LICENSES.txt` in seinen begrenzten
+   Releasecommit auf. Vollständige vorhandene und getaggte Kandidaten bleiben
+   bei der Prüfung ihrer bestehenden Eingaben; sie werden nicht neu gebaut.
    Alternativ führt ein menschlicher Release-Operator lokal den nicht bauenden
    Preflight aus:
    `pwsh ./native/publish-release-local.ps1 -CheckEnvOnly`.
