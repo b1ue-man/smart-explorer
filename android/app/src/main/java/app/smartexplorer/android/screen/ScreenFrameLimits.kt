@@ -24,9 +24,13 @@ internal object ScreenFrameLimits {
     fun checkOutput(format: MediaFormat, width: Int, height: Int, budget:app.smartexplorer.android.api.ScreenBufferBudget?=null) {
         val codedWidth=format.getInteger(MediaFormat.KEY_WIDTH)
         val codedHeight=format.getInteger(MediaFormat.KEY_HEIGHT)
+        // The output frame is the decoder's own buffer: MediaCodec documents KEY_WIDTH/KEY_HEIGHT
+        // as the frame size and the crop keys as the picture inside it, with no bound on the
+        // padding (a decoder may align to 32, 64 or more). The picture itself is what the budget
+        // admits; the in-band SPS (checkAvc) already bounds the coded size to 15 pixels.
         checkedBytes(codedWidth,codedHeight)
-        budget?.checkedBytes(codedWidth,codedHeight)
-        require(codedWidth>=width && codedHeight>=height && codedWidth.toLong()<=width.toLong()+15 && codedHeight.toLong()<=height.toLong()+15)
+        budget?.checkedBytes(width,height)
+        require(codedWidth>=width && codedHeight>=height)
         fun crop(key: String, fallback: Int) = if(format.containsKey(key)) format.getInteger(key) else fallback
         val left=crop("crop-left",0)
         val top=crop("crop-top",0)

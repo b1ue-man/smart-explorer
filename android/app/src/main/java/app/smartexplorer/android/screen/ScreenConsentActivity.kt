@@ -138,11 +138,9 @@ class ScreenConsentActivity : ComponentActivity() {
             lifecycleScope.launch { ScreenHostControl.projectionFailed(id, ScreenProjectionIdentity.UNVERIFIED_APP) }
             return
         }
-        if (getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked == true) {
-            lifecycleScope.launch { ScreenHostControl.projectionFailed(id, "host_locked") }
-            finish()
-            return
-        }
+        // No own keyguard check: SystemUI asks for the unlock before its dialog, an app the
+        // `PROJECT_MEDIA` app op exempts gets its token at once, and a projection Android forbids
+        // while locked stops through `onStop` (`host_locked`).
         val manager = getSystemService(MediaProjectionManager::class.java)
         if (manager == null) {
             lifecycleScope.launch { endQuietly(id, "capture_failed") }

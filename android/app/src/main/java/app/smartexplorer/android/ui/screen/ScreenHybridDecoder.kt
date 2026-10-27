@@ -247,26 +247,39 @@ internal class ScreenHybridDecoder(private val width: Int, private val height: I
     private fun rgba(image: Image, format: MediaFormat, rects:List<Rect>) {
         val crop=image.cropRect
         require(crop.width()==width && crop.height()==height && image.planes.size==3)
+        // MediaCodec's Image.getPlanes() copies its array per call and every Plane getter checks
+        // the image: buffers, bases and strides are read once per image, not per pixel.
         val planes=image.planes
+        val buffers=Array(3) {planes[it].buffer}
+        val bases=IntArray(3) {buffers[it].position()}
+        val rows=IntArray(3) {planes[it].rowStride}
+        val steps=IntArray(3) {planes[it].pixelStride}
+        val limits=IntArray(3) {buffers[it].limit()}
         fun sample(p: Int,x: Int,y: Int): Int {
-            val plane=planes[p]; val buffer=plane.buffer
-            val at=buffer.position().toLong()+y.toLong()*plane.rowStride+x.toLong()*plane.pixelStride
-            require(at >= 0 && at < buffer.limit())
-            return buffer.get(at.toInt()).toInt() and 255
+            val at=bases[p].toLong()+y.toLong()*rows[p]+x.toLong()*steps[p]
+            require(at >= 0 && at < limits[p])
+            return buffers[p].get(at.toInt()).toInt() and 255
         }
         val full=format.containsKey(MediaFormat.KEY_COLOR_RANGE) && format.getInteger(MediaFormat.KEY_COLOR_RANGE)==MediaFormat.COLOR_RANGE_FULL
         val hd=!format.containsKey(MediaFormat.KEY_COLOR_STANDARD) || format.getInteger(MediaFormat.KEY_COLOR_STANDARD)==MediaFormat.COLOR_STANDARD_BT709
         val out=staging ?: error("Missing hybrid staging pixels")
-        for(r in rects) for (y in r.y until r.y+r.h) for (x in r.x until r.x+r.w) {
-            val sx=x+crop.left; val sy=y+crop.top
-            val luma=sample(0,sx,sy); val u=sample(1,sx/2,sy/2)-128; val v=sample(2,sx/2,sy/2)-128
-            val yy=if(full) luma.toDouble() else (luma-16)*255.0/219.0
-            val uv=if(full) 1.0 else 255.0/224.0
-            val at=(y*width+x)*4
-            out[at]=(yy+(if(hd)1.5748 else 1.402)*v*uv).toInt().coerceIn(0,255).toByte()
-            out[at+1]=(yy-(if(hd)0.187324 else 0.344136)*u*uv-(if(hd)0.468124 else 0.714136)*v*uv).toInt().coerceIn(0,255).toByte()
-            out[at+2]=(yy+(if(hd)1.8556 else 1.772)*u*uv).toInt().coerceIn(0,255).toByte()
-            out[at+3]=255.toByte()
+        val uv=if(full) 1.0 else 255.0/224.0
+        val rv=if(hd)1.5748 else 1.402
+        val gu=if(hd)0.187324 else 0.344136
+        val gv=if(hd)0.468124 else 0.714136
+        val bu=if(hd)1.8556 else 1.772
+        for(r in rects) for (y in r.y until r.y+r.h) {
+            val sy=y+crop.top
+            for (x in r.x until r.x+r.w) {
+                val sx=x+crop.left
+                val luma=sample(0,sx,sy); val u=sample(1,sx/2,sy/2)-128; val v=sample(2,sx/2,sy/2)-128
+                val yy=if(full) luma.toDouble() else (luma-16)*255.0/219.0
+                val at=(y*width+x)*4
+                out[at]=(yy+rv*v*uv).toInt().coerceIn(0,255).toByte()
+                out[at+1]=(yy-gu*u*uv-gv*v*uv).toInt().coerceIn(0,255).toByte()
+                out[at+2]=(yy+bu*u*uv).toInt().coerceIn(0,255).toByte()
+                out[at+3]=255.toByte()
+            }
         }
     }
     private fun lz4(input: ByteArray, size: Int): ByteArray {

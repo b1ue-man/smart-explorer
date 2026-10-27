@@ -74,15 +74,9 @@ internal class ScreenProjectionFrames(
         // arise while an encoder, a previous image and the producer overlap.
         val output=budget.tryBuffer(ScreenCaptureBudget.SOURCE_PIXELS,bytes) ?: return null
         try {
-            val plane=image.planes[0];val input=plane.buffer
-            output.access {target ->
-                for(y in 0 until height) for(x in 0 until width) {
-                    val at=input.position().toLong()+y.toLong()*plane.rowStride+x.toLong()*plane.pixelStride
-                    require(at>=0 && at+4<=input.limit())
-                    target.put(input.get(at.toInt()));target.put(input.get(at.toInt()+1))
-                    target.put(input.get(at.toInt()+2));target.put(255.toByte())
-                }
-            }
+            val plane=image.planes[0]
+            // Row-wise bulk copy; a per-pixel loop cost millions of index calls per frame.
+            output.access {target -> ScreenRgbaPlanes.copyRgba(ScreenPlane(plane.buffer,plane.rowStride,plane.pixelStride),width,height,target)}
             return output
         } catch(error: Throwable) {output.close();throw error}
     }
