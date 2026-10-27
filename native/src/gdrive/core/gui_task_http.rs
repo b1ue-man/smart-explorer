@@ -18,7 +18,39 @@ pub(crate) struct Request {
 }
 
 pub(crate) enum Reply { Json(Value), Status(u16), HttpError(u16, Value), Session, Bytes(String) }
-pub(crate) struct Step { method: &'static str, path: &'static str, reply: Reply }
+pub(crate) struct Step {
+    method: &'static str,
+    path: &'static str,
+    query: Vec<(&'static str, Option<String>)>,
+    reply: Reply,
+}
+
+impl Step {
+    /// Expected wire values, including their URL encoding. `None` requires
+    /// that the parameter is absent. Duplicate occurrences of an expected
+    /// parameter never match.
+    pub(crate) fn query(mut self, name: &'static str, value: Option<String>) -> Self {
+        self.query.push((name, value));
+        self
+    }
+
+    fn matches(&self, request: &Request) -> bool {
+        if request.method != self.method
+            || request.target.split('?').next() != Some(self.path)
+        {
+            return false;
+        }
+        let query = request.target.split_once('?').map(|(_, query)| query).unwrap_or("");
+        self.query.iter().all(|(name, expected)| {
+            let mut values = query.split('&').filter_map(|part| {
+                let (key, value) = part.split_once('=').unwrap_or((part, ""));
+                (key == *name).then_some(value)
+            });
+            let matches = values.next() == expected.as_deref();
+            matches && values.next().is_none()
+        })
+    }
+}
 struct Capture { requests: Vec<Request>, pending: usize, errors: Vec<String> }
 pub(crate) struct Fixture {
     base: String,
@@ -51,11 +83,19 @@ impl Fixture {
                     let request = receive(&mut stream)?;
                     let step = steps.pop_front();
                     let reply = match step {
-                        Some(step) if request.method == step.method
-                            && request.target.split('?').next() == Some(step.path) => step.reply,
-                        _ => {
-                            capture.errors.push(format!("unexpected request: {request:?}"));
-                            Reply::Status(400)
+                        Some(step) if step.matches(&request) => step.reply,
+                        expected => {
+                            let expected = expected.map(|step| {
+                                format!("{} {} with query {:?}", step.method, step.path, step.query)
+                            }).unwrap_or_else(|| "no further request".into());
+                            let detail = format!(
+                                "request {} expected {expected}, got {} {}",
+                                capture.requests.len() + 1, request.method, request.target
+                            );
+                            capture.errors.push(detail.clone());
+                            Reply::HttpError(400, serde_json::json!({
+                                "error": {"code": 400, "message": detail}
+                            }))
                         }
                     };
                     capture.requests.push(request);
@@ -143,6 +183,6 @@ fn read_until(stream: &mut TcpStream, mut target: &mut [u8], deadline: Instant) 
 }
 
 pub(crate) fn step(method: &'static str, path: &'static str, reply: Reply) -> Step {
-    Step { method, path, reply }
+    Step { method, path, query: Vec::new(), reply }
 }
 
