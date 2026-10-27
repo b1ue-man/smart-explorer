@@ -2,7 +2,7 @@
 //! content digest are recorded durably before publication; equal size never
 //! establishes ownership during recovery.
 use super::file_evidence::{
-    observe, observe_available, observe_source, readback_unavailable, verify, Proof,
+    observe, observe_source, readback_unavailable, verify, Proof,
 };
 use super::job_store::{endpoint, snapshot, with_backend, JobRun};
 use super::queue::FileWork;
@@ -71,20 +71,22 @@ pub(super) fn before(
     if !source.verified || source.directory || source.link {
         return Err(failure("Quelle des Dateibelegs ist unbestätigt"));
     }
-    let proof = observe_available(engine.view.target, staged, engine.stop_flag())?;
-    if proof.is_none() {
-        super::file_evidence::validate_copy_target(
-            engine.view.source,
-            &file.source,
-            source.size,
-            engine.view.target,
-            staged,
-        )?;
-    }
+    // No content proof by reading the file back (user 2026-10-27: far too
+    // slow, it read every file back twice): the transport delivers every byte
+    // integrity-protected and acknowledges each write; size and kind of the
+    // stage are checked. A restart therefore cannot claim the target as its
+    // own and treats it as a conflict.
+    super::file_evidence::validate_copy_target(
+        engine.view.source,
+        &file.source,
+        source.size,
+        engine.view.target,
+        staged,
+    )?;
     record.start_file(
         file,
         source,
-        proof,
+        None,
         destination.to_string(),
         None,
         previous_target(engine.view.target, destination, engine.stop_flag())?,
@@ -136,22 +138,19 @@ fn after_checked(
             }
         }
     } else {
-        let proof = observe_available(engine.view.target, destination, engine.stop_flag())?;
-        if proof.is_none() {
-            super::file_evidence::validate_copy_target(
-                engine.view.source,
-                &file.source,
-                receipt.source.size,
-                engine.view.target,
-                destination,
-            )?;
-        }
+        super::file_evidence::validate_copy_target(
+            engine.view.source,
+            &file.source,
+            receipt.source.size,
+            engine.view.target,
+            destination,
+        )?;
         let (relative, destination) = destination_parts(&super::lock(&record.data), destination)?;
         receipt.destination = destination;
         receipt.relative = relative;
         receipt.previous = None;
-        receipt.proof = proof;
-        verify_source(&receipt, engine.view.source, engine.stop_flag())?;
+        receipt.proof = None;
+        source_unchanged(&receipt, engine.view.source)?;
     }
     receipt.confirmed = observed
         && receipt
@@ -160,6 +159,24 @@ fn after_checked(
             .is_some_and(|proof| proof.object.is_some());
     receipt.acknowledged = true;
     record.write_file(&receipt)
+}
+
+/// The source still is the file that was sent: identity, size and time
+/// from its metadata, without reading its content again.
+fn source_unchanged(receipt: &Receipt, side: Side<'_>) -> io::Result<()> {
+    let now = snapshot(side, &receipt.source.path);
+    if !now.verified
+        || now.id != receipt.source.id
+        || now.object != receipt.source.object
+        || now.size != receipt.source.size
+        || now.mtime_ms != receipt.source.mtime_ms
+    {
+        return Err(failure(format!(
+            "Quelle des Dateibelegs wurde geändert: {}",
+            receipt.source.path
+        )));
+    }
+    Ok(())
 }
 
 pub(super) fn prepare_batch(engine: &Engine<'_>, file: &FileWork) -> io::Result<()> {

@@ -107,13 +107,17 @@ jobs:
           fi
           echo "clippy clean on changed lines"
 
-      - name: Screen metadata runtime cases
+      - name: Screen metadata runtime cases and transfer recovery contracts
         shell: bash
         timeout-minutes: 120
         run: |
           set -Eeuo pipefail
           cd native
           cargo test --lib screen_metadata_runtime_task_ -- --test-threads=1
+          # The live transfer path no longer reads files back (2026-10-27):
+          # the recovery, missing-only retry and publication contracts.
+          cargo test --lib -- file_recovery batches_publication_compatibility \
+            batches_missing_retry_compatibility batches_backend_compatibility
 
   # The Android side of the batch (screen keyboard field, Android cfg of the
   # screen host): the existing Android build mode of the Android suite —

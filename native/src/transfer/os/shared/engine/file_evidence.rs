@@ -58,6 +58,8 @@ pub(super) fn observe(side: Side<'_>, path: &str, cancel: &AtomicBool) -> io::Re
 
 /// Readback is optional for a live acknowledged remote copy. Its absence
 /// never supplies a restart ownership proof or authorizes source cleanup.
+/// The live transfer path no longer reads back (2026-10-27); tests keep it.
+#[cfg(test)]
 pub(super) fn observe_available(
     side: Side<'_>,
     path: &str,
