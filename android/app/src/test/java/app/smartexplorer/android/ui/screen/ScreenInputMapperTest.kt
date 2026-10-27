@@ -222,4 +222,17 @@ class ScreenInputMapperTest {
             m.events(),
         )
     }
+
+    /** The hidden keyboard field: appends, autocorrect and deletions become backspaces plus text; padding is never typed. */
+    @Test
+    fun screen_task_android_keyboard_field_edits_become_text() {
+        val pad = "\u200B".repeat(4)
+        assertEquals(0 to "a", keyboardEdit(pad, pad + "a"))
+        assertEquals(0 to "a", keyboardEdit(pad, "a" + pad))
+        assertEquals(0 to "lo", keyboardEdit(pad + "hel", pad + "hello"))
+        assertEquals(2 to "he ", keyboardEdit(pad + "teh", pad + "the "))
+        assertEquals(1 to "", keyboardEdit(pad + "ab", pad + "a"))
+        assertEquals(1 to "", keyboardEdit(pad, pad.dropLast(1)))
+        assertEquals(0 to "ä", keyboardEdit(pad, pad + "ä"))
+    }
 }

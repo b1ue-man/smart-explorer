@@ -57,7 +57,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -464,7 +466,9 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
                 failure?.let { Text(it, color = Color.White, modifier = Modifier.align(Alignment.Center).padding(24.dp)) }
                 FamilyWindowMenu(family, onClose, onLocalUiOpen = { familyMenuOpen = it }, onKeyboard = { keyboardOn = !keyboardOn })
             }
-            if (sending && keyboardOn) ScreenKeyboardField(mapper, flush)
+            // The field stays while the keyboard is on; short input pauses
+            // (new picture, visibility) must not close and reopen the IME.
+            if (keyboardOn && controlOn && mode == "control") ScreenKeyboardField(mapper, flush)
         }
     }
 }
@@ -487,8 +491,11 @@ private fun surfaceView(context: android.content.Context, onSurface: (Surface?) 
  */
 @Composable
 private fun ScreenKeyboardField(mapper: ScreenInputMapper, flush: Channel<Unit>) {
-    val pad = "​".repeat(FIELD_PAD)
-    var text by remember { mutableStateOf(pad) }
+    val pad = "\u200B".repeat(FIELD_PAD)
+    // The cursor starts and stays behind the padding: a field from a plain
+    // String puts it at index 0, so every typed character landed in front of
+    // the padding and was never sent (2026-10-27: phone typing never arrived).
+    var field by remember { mutableStateOf(TextFieldValue(pad, TextRange(pad.length))) }
     val focus = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
     LaunchedEffect(Unit) {
@@ -497,16 +504,21 @@ private fun ScreenKeyboardField(mapper: ScreenInputMapper, flush: Channel<Unit>)
     }
     DisposableEffect(Unit) { onDispose { keyboard?.hide() } }
     BasicTextField(
-        value = text,
+        value = field,
         onValueChange = { next ->
-            when {
-                next.length > text.length && next.startsWith(text) -> mapper.onText(next.substring(text.length))
-                next.length < text.length -> repeat(text.length - next.length) { mapper.tapKey("backspace") }
+            val (removed, inserted) = keyboardEdit(field.text, next.text)
+            repeat(removed) { mapper.tapKey("backspace") }
+            if (inserted.isNotEmpty()) mapper.onText(inserted)
+            if (removed > 0 || inserted.isNotEmpty()) flush.trySend(Unit)
+            val length = next.text.length
+            field = if (next.composition == null && (length < FIELD_PAD / 2 || length > FIELD_PAD * 8)) {
+                TextFieldValue(pad, TextRange(pad.length))
+            } else {
+                next
             }
-            flush.trySend(Unit)
-            text = if (next.length < FIELD_PAD / 2 || next.length > FIELD_PAD * 8) pad else next
         },
         modifier = Modifier.size(1.dp).alpha(0f).focusRequester(focus),
+        singleLine = true,
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
         keyboardActions = KeyboardActions(onSend = {
             mapper.tapKey("enter")
