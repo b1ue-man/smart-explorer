@@ -649,3 +649,10 @@ Nach Rootgraph und Kandidatenpush übernimmt einmal der vorhandene vollständige
 Remote-Releaseweg. Signatur-, Hash-, Versions- und Publikationsintegrität bleiben
 verbindlich. Releaseerfolg wird erst mit sichtbarer vollständiger Veröffentlichung
 behauptet.
+
+Der anschließende vollständige Release `40425126500` für `2081be2e` ist
+fehlgeschlagen. Die Android-APK samt Signaturprüfung wurde erfolgreich gebaut;
+der Desktopwrapper verweigert den Build wegen veralteter Rust-Lizenztexte.
+Das ist keine neue Suiteausführung. [R01](../plaene/2026-10-24-batches/release-recovery.md)
+behebt ausschließlich diese verbundene Releaseeingabe; die beabsichtigte
+Version bleibt 0.5.185. Kein neuer Tag oder Release wurde dadurch veröffentlicht.

@@ -34,8 +34,13 @@ Task-Suite und keine zusätzliche Reviewrunde; unmittelbar der vollständige
 Remote-Release über den bestehenden Wrapper. Der Rootgraph wird vor dem Push
 aktualisiert. Der Releasewrapper behält seine Artefakt-, Signatur-, Hash-,
 Versions- und Publikationsprüfungen. Ein ausgelassener Lauf ist kein Erfolg;
-Compilererfolg ist kein Funktions- oder Leistungsnachweis. Offen ist jetzt die
-vollständige Veröffentlichung; noch wird kein Releaseerfolg behauptet.
+Compilererfolg ist kein Funktions- oder Leistungsnachweis. Der vollständige
+Release wurde für `2081be2e` gestartet: [Lauf 40425126500](https://github.com/b1ue-man/smart-explorer/actions/runs/40425126500).
+Die signierte Android-APK wurde erfolgreich gebaut. Der Desktopwrapper stoppte
+vor Build und Versionswechsel wegen veralteter eingecheckter Rust-Lizenztexte.
+Die begrenzte [Wiederherstellung R01](plaene/2026-10-24-batches/release-recovery.md)
+macht diese Eingabe im vorhandenen Releaseweg vollständig. Die beabsichtigte
+Version bleibt 0.5.185; noch wurde kein Release veröffentlicht.
 
 This table is the live list of remaining work, roughly by value. The lower
 sections preserve shipped/history context and explicitly label anything that is
