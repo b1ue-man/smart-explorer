@@ -108,7 +108,9 @@ pub(super) fn run_file(engine: &Engine<'_>, mut file: FileWork, buffer: &mut [u8
         }
         let meter = Meter::new(&permits, &engine.stats);
         meter.add_wait(std::mem::take(&mut waited));
-        let result = ops::transfer(engine, &file, parent_created, &mut carry, &meter, buffer);
+        let result = super::file_evidence::with_check_meter(engine.stats.check_meter(), || {
+            ops::transfer(engine, &file, parent_created, &mut carry, &meter, buffer)
+        });
         let moved = meter.moved();
         let accounts = meter.accounts();
         permits.finish_with(

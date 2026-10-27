@@ -4,9 +4,37 @@ use super::{job_store::with_backend, view::Side};
 use ring::digest::{Context, SHA256};
 use serde::{Deserialize, Serialize};
 use std::{
+    cell::RefCell,
     io::{self, Read},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc,
+    },
 };
+
+thread_local! {
+    /// The job's meter of bytes read to prove files, while a worker runs one
+    /// file (`with_check_meter`): read-backs show in the rate instead of a
+    /// frozen display.
+    static CHECK_METER: RefCell<Option<Arc<AtomicU64>>> = const { RefCell::new(None) };
+}
+
+/// Runs `run` with `meter` counting every byte this thread reads to prove a
+/// file.
+pub(super) fn with_check_meter<T>(meter: Arc<AtomicU64>, run: impl FnOnce() -> T) -> T {
+    let previous = CHECK_METER.with(|cell| cell.replace(Some(meter)));
+    let result = run();
+    CHECK_METER.with(|cell| *cell.borrow_mut() = previous);
+    result
+}
+
+fn count_checked(bytes: u64) {
+    CHECK_METER.with(|cell| {
+        if let Some(meter) = cell.borrow().as_ref() {
+            meter.fetch_add(bytes, Ordering::AcqRel);
+        }
+    });
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct Proof {
@@ -190,6 +218,7 @@ fn hash(
             Ok(0) => break,
             Ok(read) => {
                 total = total.saturating_add(read as u64);
+                count_checked(read as u64);
                 if expected.is_some_and(|size| total > size) {
                     return Err(io::Error::other("Dateibelegquelle ist gewachsen"));
                 }
