@@ -23,11 +23,14 @@ impl PresentedFrame {
     pub(crate) fn active(&self) -> bool {
         self.validity.active()
     }
+    /// Pixels of `rhs` may replace these in place: the same session and either
+    /// the same still-active validity (a new picture group of the same stream
+    /// keeps it, `Shared::begin_frame`) or the same group and receipt epoch.
     pub(crate) fn same_source(&self, rhs: &Self) -> bool {
         self.session == rhs.session
-            && self.gop_id == rhs.gop_id
             && self.active()
-            && (self.epoch == rhs.epoch || self.validity == rhs.validity)
+            && (self.validity == rhs.validity
+                || (self.gop_id == rhs.gop_id && self.epoch == rhs.epoch))
     }
 }
 #[derive(Default)]
@@ -75,9 +78,20 @@ impl Shared {
     /// Captured before decoding, so cancellation cannot bless an in-flight old image.
     pub(crate) fn begin_frame(&self, gop_id: u64, frame_id: u64) -> PresentedFrame {
         let mut state = lock(&self.presentation);
-        if state.gop_id != gop_id || !state.validity.active() {
+        if !state.validity.active() {
             state.gop_id = gop_id;
             state.invalidate();
+            lock(&self.resume).block();
+        } else if state.gop_id != gop_id {
+            // A new picture group (key frame after a stream reset, a decode
+            // error or a key frame request) ends the receipts of the old one
+            // and blocks input until its own first picture is presented, but
+            // the last shown pixels stay until that picture replaces them.
+            // Revoking them here blanked the picture from the group's first
+            // record until its key frame was transferred, decoded and
+            // uploaded: a black flash per stream reset.
+            state.gop_id = gop_id;
+            state.suspend_receipts();
             lock(&self.resume).block();
         }
         PresentedFrame {
@@ -114,6 +128,26 @@ impl Shared {
                 crate::screen::core::session_state::SessionState::Starting
                     | crate::screen::core::session_state::SessionState::Streaming
             )
+    }
+
+    /// `frame` belongs to the current presentation but waits for the
+    /// visibility acknowledgement (`ResumeGate::awaiting_floor`).
+    pub(super) fn awaiting_floor(&self, frame: &PresentedFrame) -> bool {
+        lock(&self.presentation).matches(frame)
+            && lock(&self.resume).awaiting_floor()
+            && self.display_active()
+    }
+
+    /// Puts a picture that could not be shown yet back, unless a newer one
+    /// arrived meanwhile; the acknowledgement's wake shows it.
+    pub(super) fn keep_picture(&self, picture: super::screen_session::Picture) {
+        let presentation = lock(&self.presentation);
+        if presentation.matches(&picture.presented) {
+            let mut slot = lock(&self.picture);
+            if slot.is_none() {
+                *slot = Some(picture);
+            }
+        }
     }
 
     pub(super) fn can_present(&self, frame: &PresentedFrame) -> bool {
@@ -167,5 +201,17 @@ impl Shared {
         lock(&self.presentation).invalidate();
         lock(&self.resume).block();
         lock(&self.picture).take();
+    }
+}
+
+impl super::screen_session::ViewerSession {
+    /// A picture that matches the presentation but arrived before the host's
+    /// visibility acknowledgement goes back into the slot instead of being
+    /// dropped: a host with an unchanged screen sends no next picture, and
+    /// the view stayed black with input blocked.
+    pub(crate) fn keep_if_awaiting_floor(&self, picture: super::screen_session::Picture) {
+        if self.shared.awaiting_floor(&picture.presented) {
+            self.shared.keep_picture(picture);
+        }
     }
 }

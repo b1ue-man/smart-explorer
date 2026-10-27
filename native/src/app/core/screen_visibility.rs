@@ -108,6 +108,22 @@ impl VisibilityTracker {
             state = VisibilityState::Unknown;
             rects.clear();
         }
+        // A native sample that raced (Z order or geometry changed between its
+        // two reads) is uncertain, not new: when its conservative rectangles
+        // equal the last proven ones the host would get the same pixels, so
+        // the proven state stays. Otherwise every race cost a report, which
+        // blanks the picture, blocks input and releases the host's keys.
+        if window.shown.is_none()
+            && state == VisibilityState::Unknown
+            && !rects.is_empty()
+            && self.last.as_ref().is_some_and(|last| {
+                last.state == VisibilityState::Visible
+                    && last.minimized == window.minimized
+                    && last.rects == rects
+            })
+        {
+            state = VisibilityState::Visible;
+        }
         // The host reads state, minimized and the rectangles (in picture
         // pixels); a picture that only moves on screen changes none of them
         // and must not cost a new reference picture.
@@ -183,6 +199,12 @@ impl ResumeGate {
     }
     pub(crate) fn ready(&self) -> bool {
         (self.generation == 0 || self.visible) && self.ready
+    }
+    /// Visible and modern, but the host's acknowledgement with the floor has
+    /// not arrived: pictures and control frames travel on separate streams,
+    /// so the first fresh picture may come first.
+    pub(crate) fn awaiting_floor(&self) -> bool {
+        self.generation != 0 && self.visible && !self.legacy && self.floor.is_none()
     }
 }
 

@@ -253,7 +253,9 @@ impl DecodeState {
                 self.gop = Some(gop);
             }
             Err(error) => {
-                self.shared.cancel_presentation();
+                // The failed picture was never shown; the shown one stays
+                // without receipts until the requested key frame.
+                self.shared.suspend_presentation();
                 self.broken = Some(header.gop_id);
                 self.broken_frame = Some(record.frame_id);
                 if header.frame_contract.is_some_and(|c| c.hybrid_regions)

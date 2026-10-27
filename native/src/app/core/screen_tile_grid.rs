@@ -407,7 +407,11 @@ fn accept_preview_picture(
             ))
         })
         .is_some_and(|window| window.hidden());
-    if hidden || !session.can_present(picture.presented.clone()) {
+    if hidden {
+        return None;
+    }
+    if !session.can_present(picture.presented.clone()) {
+        session.keep_if_awaiting_floor(picture);
         return None;
     }
     let super::screen_session::PictureData::Bgra(image) = picture.data else {

@@ -290,11 +290,12 @@ impl ViewWidget {
         }
         session.refresh_visibility();
         if let Some(picture) = session.take_picture() {
-            if !window.hidden()
-                && !session.is_ended()
-                && session.can_present(picture.presented.clone())
-            {
-                self.accept(&ctx, session, picture);
+            if !window.hidden() && !session.is_ended() {
+                if session.can_present(picture.presented.clone()) {
+                    self.accept(&ctx, session, picture);
+                } else {
+                    session.keep_if_awaiting_floor(picture);
+                }
             }
         }
         let ppp = ctx.pixels_per_point();

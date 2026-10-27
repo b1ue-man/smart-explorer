@@ -102,7 +102,9 @@ impl DecodeState {
                 if gop_id < self.latest_gop {
                     return false;
                 }
-                self.shared.cancel_presentation();
+                // Only the rest of the group is lost: the shown picture stays
+                // (without receipts, input blocked) until the key frame.
+                self.shared.suspend_presentation();
                 if self.gop.as_ref().is_some_and(|gop| gop.id == gop_id) {
                     self.gop = None;
                 }

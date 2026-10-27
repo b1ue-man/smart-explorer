@@ -336,20 +336,24 @@ impl super::screen_render_owner::RendererOwner {
             return false;
         };
         if !image.matches_view(rect, screen.pixels_per_point, screen.size_in_pixels) {
-            if !r.upload.drain.confirmed() {
-                return false;
-            }
+            // `Queue::write_buffer` runs at the start of the next submit, after
+            // all earlier submissions in queue order, so the new view needs no
+            // wait for the previous upload. Skipping the draw instead left a
+            // black frame on every resize or panel change while it was pending.
             image.set_view(
                 &b.state.queue,
                 rect,
                 screen.pixels_per_point,
                 screen.size_in_pixels,
             );
-            r.upload = UploadTicket {
-                drain: b.submit(),
-                package: r.package.clone(),
-                staging: None,
-            };
+            // An unconfirmed ticket still guards its own staging; it is kept.
+            if r.upload.drain.confirmed() {
+                r.upload = UploadTicket {
+                    drain: b.submit(),
+                    package: r.package.clone(),
+                    staging: None,
+                };
+            }
         }
         true
     }
