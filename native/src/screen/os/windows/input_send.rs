@@ -13,7 +13,7 @@
 //! is ever logged.
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use windows_sys::Win32::Foundation::{HWND, RECT};
+use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY,
     KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, KEYEVENTF_UNICODE, MOUSEEVENTF_ABSOLUTE,
@@ -22,8 +22,8 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL, MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, MOUSEINPUT,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetSystemMetrics, GetWindowRect, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
-    SM_YVIRTUALSCREEN, XBUTTON1, XBUTTON2,
+    GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+    XBUTTON1, XBUTTON2,
 };
 
 use super::{input_integrity, monitors, secure_desktop};
@@ -84,23 +84,41 @@ fn target_area(target: &Target) -> Option<Area> {
             width: entry.info.width as i32,
             height: entry.info.height as i32,
         }),
+        // The window picture of Graphics Capture covers the visible frame.
+        // GetWindowRect "may include invisible resize borders"; Microsoft
+        // names DWMWA_EXTENDED_FRAME_BOUNDS for the visible bounds (physical
+        // pixels, "not adjusted for DPI"), the same rectangle the family path
+        // (`remote_window::os::windows::facts`) maps its input onto.
         Target::Window(handle) => {
-            let mut rect = RECT {
-                left: 0,
-                top: 0,
-                right: 0,
-                bottom: 0,
+            let mut rect = windows::Win32::Foundation::RECT::default();
+            // SAFETY: a plain query on a window handle value into a local of
+            // the size passed.
+            let read = unsafe {
+                windows::Win32::Graphics::Dwm::DwmGetWindowAttribute(
+                    windows::Win32::Foundation::HWND(*handle as HWND),
+                    windows::Win32::Graphics::Dwm::DWMWA_EXTENDED_FRAME_BOUNDS,
+                    (&mut rect as *mut windows::Win32::Foundation::RECT).cast(),
+                    std::mem::size_of_val(&rect) as u32,
+                )
             };
-            // SAFETY: a plain query on a window handle value into a local.
-            let read = unsafe { GetWindowRect(*handle as HWND, &mut rect) };
-            (read != 0).then(|| Area {
-                left: rect.left,
-                top: rect.top,
-                width: rect.right - rect.left,
-                height: rect.bottom - rect.top,
-            })
+            if read.is_err() {
+                return None;
+            }
+            window_area(rect.left, rect.top, rect.right, rect.bottom)
         }
     }
+}
+
+/// The area of a window rectangle; none for an empty or inverted one.
+fn window_area(left: i32, top: i32, right: i32, bottom: i32) -> Option<Area> {
+    let width = right.checked_sub(left).filter(|width| *width > 0)?;
+    let height = bottom.checked_sub(top).filter(|height| *height > 0)?;
+    Some(Area {
+        left,
+        top,
+        width,
+        height,
+    })
 }
 
 fn virtual_desktop() -> Area {

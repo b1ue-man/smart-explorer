@@ -157,9 +157,11 @@ hickory-resolver = "0.26"
 # default-features off so TLS stays on rustls/webpki and avoids native TLS.
 tungstenite = { version = "0.24", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
 # Quick Share (quickshare.rs, #Q): mDNS discovery/advertisement of the Nearby
-# Share service so Android devices appear on the LAN. Pure Rust (if-addrs +
-# socket2), cross-compiles clean.
-mdns-sd = "0.11"
+# Share service so Android devices appear on the LAN, and LAN presence of paired
+# devices. Pure Rust (if-addrs, socket2, mio, socket-pktinfo over libc), no build
+# script. >= 0.21.2: 0.11.5 panicked in dns_parser on malformed packets
+# (index out of bounds, seen on Android); 0.21.1/0.21.2 harden read_name and HINFO.
+mdns-sd = "0.21.5"
 if-addrs = "0.13"
 # ZIP archive browse + extract (zipfs.rs). zip 9 (not 2.4.2): RUSTSEC-2026-0367
 # (SUID/SGID bits on extraction), RUSTSEC-2026-0368 and RUSTSEC-2026-0369 (Unix

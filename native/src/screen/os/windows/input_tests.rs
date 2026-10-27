@@ -148,3 +148,33 @@ fn screen_task_windows_elevated_blocked_reported() {
     let move_only = [InputEvent::PointerAbs { x: 100, y: 100 }];
     assert_eq!(inject(&move_only), Err(ControlBlock::ElevatedWindow));
 }
+
+#[test]
+fn screen_metadata_runtime_task_window_input_area_is_the_visible_frame() {
+    // DWMWA_EXTENDED_FRAME_BOUNDS of a window at (100, 50), 800 x 600
+    // visible pixels: the pointer range covers exactly that frame.
+    let area = window_area(100, 50, 900, 650).unwrap();
+    assert_eq!(
+        area,
+        Area {
+            left: 100,
+            top: 50,
+            width: 800,
+            height: 600,
+        }
+    );
+    let desk = Area {
+        left: 0,
+        top: 0,
+        width: 1920,
+        height: 1080,
+    };
+    // The source origin is the frame's first visible pixel, not the
+    // invisible resize border GetWindowRect may add to its left.
+    let (x, y) = absolute(area, desk, 0, 0);
+    assert_eq!(x, (100 * 65_535 / 1919) as i32);
+    assert_eq!(y, (50 * 65_535 / 1079) as i32);
+    assert_eq!(window_area(10, 10, 10, 20), None);
+    assert_eq!(window_area(10, 20, 30, 5), None);
+    assert_eq!(window_area(i32::MIN, 0, i32::MAX, 1), None);
+}

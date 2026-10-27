@@ -193,12 +193,13 @@ impl FamilyScreenSource {
                 .ok_or_else(|| {
                     io::Error::new(io::ErrorKind::WouldBlock, "window_surface_not_ready")
                 })?;
-            if surface.size() != FrameSize::new(member.geometry.width, member.geometry.height) {
-                return Err(io::Error::new(
-                    io::ErrorKind::WouldBlock,
-                    "window_capture_geometry_changed",
-                ));
-            }
+            // A window capture's picture is not documented to equal the
+            // visible frame (Graphics Capture ContentSize, a resize in
+            // flight): copy the overlap instead of withholding every picture,
+            // which left single windows black indefinitely.
+            let captured = surface.size();
+            let width = captured.width.min(member.geometry.width);
+            let height = captured.height.min(member.geometry.height);
             let left = usize::try_from(i64::from(member.geometry.x) - i64::from(bounds.x))
                 .map_err(|_| io::Error::other("invalid_window_surface_offset"))?;
             let top = u32::try_from(i64::from(member.geometry.y) - i64::from(bounds.y))
@@ -206,13 +207,18 @@ impl FamilyScreenSource {
             let start = left
                 .checked_mul(4)
                 .ok_or_else(|| io::Error::other("window_surface_offset_overflow"))?;
-            let bytes = member.geometry.width as usize * 4;
-            for y in 0..member.geometry.height {
+            let bytes = width as usize * 4;
+            for y in 0..height {
                 let row = image
                     .row_mut(top + y)
                     .and_then(|row| row.get_mut(start..start + bytes))
                     .ok_or_else(|| io::Error::other("window_surface_outside_canvas"))?;
-                row.copy_from_slice(surface.view().row(y));
+                let source = surface
+                    .view()
+                    .row(y)
+                    .get(..bytes)
+                    .ok_or_else(|| io::Error::other("window_surface_row_short"))?;
+                row.copy_from_slice(source);
                 for pixel in row.chunks_exact_mut(4) {
                     pixel[3] = 255;
                 }

@@ -109,14 +109,24 @@ impl PreparedWgc {
         if size.Width <= 0 || size.Height <= 0 {
             return Ok(None);
         }
-        let native = FrameSize::new(size.Width as u32, size.Height as u32);
+        self.geometry_for(FrameSize::new(size.Width as u32, size.Height as u32))
+            .map(Some)
+    }
+    /// The geometry of `native` pixels, also of a frame's own `ContentSize`.
+    fn geometry_for(&self, native: FrameSize) -> io::Result<CaptureGeometry> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "original WGC source closed",
+            ));
+        }
         let limits = self.devices.capture_limits(native)?;
-        Ok(Some(CaptureGeometry {
+        Ok(CaptureGeometry {
             native,
             delivered: self.devices.delivered_size(native.width, native.height)?,
             limits,
             kind: CaptureKind::Wgc,
-        }))
+        })
     }
 }
 impl Drop for PreparedWgc {
@@ -135,12 +145,6 @@ impl Live {
 }
 fn create(target: &PreparedWgc, budget: &CaptureBudget) -> io::Result<Live> {
     let expected = budget.geometry().native;
-    let actual = target
-        .geometry()?
-        .ok_or_else(|| io::Error::other("WGC native metadata pending"))?;
-    if actual.native != expected {
-        return Err(io::Error::other("WGC geometry changed before activation"));
-    }
     let slice = budget.claim_native()?;
     let size = SizeInt32 {
         Width: expected.width as i32,
@@ -163,6 +167,12 @@ pub(super) struct WgcCapture {
 }
 impl WgcCapture {
     pub(super) fn open(target: PreparedWgc, budget: CaptureBudget) -> io::Result<Self> {
+        let actual = target
+            .geometry()?
+            .ok_or_else(|| io::Error::other("WGC native metadata pending"))?;
+        if actual.native != budget.geometry().native {
+            return Err(io::Error::other("WGC geometry changed before activation"));
+        }
         let live = create(&target, &budget)?;
         let size = budget.geometry().displayed();
         Ok(Self {
@@ -195,15 +205,22 @@ impl WgcCapture {
             }
         }
     }
-    fn restart(&mut self) -> io::Result<()> {
+    /// `content` is the `ContentSize` of a frame that no longer fits the
+    /// pool: Microsoft recreates the pool for the item's new size and copies
+    /// out "a sub-rect using the ContentSize property"; the pool follows the
+    /// size the frames report, never a possibly older `item.Size()`.
+    fn restart(&mut self, content: Option<FrameSize>) -> io::Result<()> {
         // WindowsSource can resume through reopen after a hidden secure-
         // desktop pause without a preceding backend activity notification.
         self.recovery.request(true);
         self.stop()?;
-        let geometry = self
-            .target
-            .geometry()?
-            .ok_or_else(|| io::Error::other("WGC native metadata pending"))?;
+        let geometry = match content {
+            Some(native) => self.target.geometry_for(native)?,
+            None => self
+                .target
+                .geometry()?
+                .ok_or_else(|| io::Error::other("WGC native metadata pending"))?,
+        };
         self.budget.replace(geometry)?;
         self.live = Some(create(&self.target, &self.budget)?);
         self.size = geometry.displayed();
@@ -221,31 +238,30 @@ impl WgcCapture {
         self.budget.suspend();
         Ok(())
     }
-    fn read(&mut self, frame: &Direct3D11CaptureFrame) -> io::Result<Option<CapturedImage>> {
+    /// The picture of `frame`, or `Err(size)` with its `ContentSize` when
+    /// that differs from the pool.
+    fn read(
+        &mut self,
+        frame: &Direct3D11CaptureFrame,
+    ) -> io::Result<Result<CapturedImage, FrameSize>> {
         let content = frame.ContentSize().map_err(io::Error::other)?;
         if content.Width <= 0 || content.Height <= 0 {
             return Err(io::Error::other("capture frame has no content"));
         }
         let size = FrameSize::new(content.Width as u32, content.Height as u32);
         if self.live.as_ref().map(|live| live.size) != Some(size) {
-            return Ok(None);
+            return Ok(Err(size));
         }
         let surface = frame.Surface().map_err(io::Error::other)?;
         let access: IDirect3DDxgiInterfaceAccess = surface.cast().map_err(io::Error::other)?;
         // SAFETY: a WGC surface is a D3D11 texture of this frame's device.
         let texture: ID3D11Texture2D =
             unsafe { access.GetInterface() }.map_err(io::Error::other)?;
-        Ok(Some(
-            self.readback
-                .read(
-                    &self.target.devices,
-                    &texture,
-                    size.width,
-                    size.height,
-                    &self.budget,
-                )?
-                .freeze(),
-        ))
+        let devices = &self.target.devices;
+        let image = self
+            .readback
+            .read(devices, &texture, size.width, size.height, &self.budget)?;
+        Ok(Ok(image.freeze()))
     }
 }
 impl Grabber for WgcCapture {
@@ -269,7 +285,7 @@ impl Grabber for WgcCapture {
             return Err(io::Error::new(io::ErrorKind::NotFound, "WGC source closed"));
         }
         let recovery = self.recovery;
-        if !recovery.ensure_live(self.live.is_some(), || self.restart())? {
+        if !recovery.ensure_live(self.live.is_some(), || self.restart(None))? {
             return Ok(SourceFrame::Unchanged);
         }
         let deadline = Instant::now() + FIRST_FRAME_WAIT;
@@ -290,9 +306,15 @@ impl Grabber for WgcCapture {
                     }
                     result => result?,
                 };
-                let Some(image) = image else {
-                    self.restart()?;
-                    continue;
+                let image = match image {
+                    Ok(image) => image,
+                    Err(content) => {
+                        // One rebuild per call: a frame whose size never
+                        // matches cannot spin this loop. The new generation
+                        // makes the caller discard this call anyway.
+                        self.restart(Some(content))?;
+                        return Ok(SourceFrame::Unchanged);
+                    }
                 };
                 self.size = image.size();
                 self.last = Some(image.clone());
@@ -323,12 +345,12 @@ impl Grabber for WgcCapture {
             self.stop()?;
         } else {
             self.recovery
-                .activate(self.live.is_some(), || self.restart())?;
+                .activate(self.live.is_some(), || self.restart(None))?;
         }
         Ok(())
     }
     fn reopen(&mut self) -> io::Result<()> {
-        self.restart()
+        self.restart(None)
     }
 }
 impl Drop for WgcCapture {

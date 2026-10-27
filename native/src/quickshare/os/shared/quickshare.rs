@@ -38,6 +38,14 @@ impl QuickShare {
     pub fn start(my_name: &str) -> Result<QuickShare, String> {
         let daemon = mdns_sd::ServiceDaemon::new()
             .map_err(|error| format!("mDNS-Dienst konnte nicht gestartet werden: {error}"))?;
+        // mdns-sd >= 0.17 also uses loopback interfaces by default; 0.11 did
+        // not. Keep discovery on the LAN interfaces only.
+        daemon
+            .disable_interface(vec![
+                mdns_sd::IfKind::LoopbackV4,
+                mdns_sd::IfKind::LoopbackV6,
+            ])
+            .map_err(|error| format!("mDNS-Dienst konnte nicht eingerichtet werden: {error}"))?;
 
         // Advertise ourselves so Android can see this PC (best-effort).
         if let Ok(host) = hostname_local() {
@@ -70,7 +78,7 @@ impl QuickShare {
                                 .get_addresses()
                                 .iter()
                                 .next()
-                                .map(|a| format!("{}:{}", a, info.get_port()))
+                                .map(|a| format!("{}:{}", a.to_ip_addr(), info.get_port()))
                                 .unwrap_or_default();
                             devices
                                 .insert(info.get_fullname().to_string(), QsDevice { name, addr });
