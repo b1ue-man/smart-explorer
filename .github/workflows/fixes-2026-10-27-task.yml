@@ -66,7 +66,9 @@ jobs:
         shell: bash
         timeout-minutes: 140
         run: |
-          set -uo pipefail
+          # GitHub runs bash with -e; Clippy's own exit status must not end
+          # the step before the findings are filtered.
+          set +e -uo pipefail
           git diff --name-only v0.5.185 HEAD -- native/src \
             | sed -n 's#^native/##p' | grep '\.rs$' > "$RUNNER_TEMP/changed.txt"
           echo "changed files: $(wc -l < "$RUNNER_TEMP/changed.txt")"

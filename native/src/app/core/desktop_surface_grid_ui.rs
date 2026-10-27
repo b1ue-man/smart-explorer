@@ -108,10 +108,7 @@ pub(crate) fn show_surface(
     windows::show(ctx);
 }
 
-/// The platform's icon of a tile, read once and kept for the session: a
-/// desktop file's own icon (Explorer's on Windows, the icon theme's on
-/// Linux), otherwise the first of the look's icon names the platform has.
-/// `None` draws the tile's neutral plate.
+/// A tile's platform icon (the file's own, else the first named one), cached.
 fn tile_icon(
     ctx: &egui::Context,
     names: &'static [&'static str],
@@ -134,11 +131,12 @@ fn tile_icon(
     }
     let rgba = file
         .as_deref()
-        .and_then(super::platform_helpers::shell_icon_rgba)
-        .or_else(|| super::platform_helpers::named_icon_rgba(names));
+        .and_then(crate::app::platform_helpers::shell_icon_rgba)
+        .or_else(|| crate::app::platform_helpers::named_icon_rgba(names));
+    let name = format!("se-desktop-icon:{key}");
     let texture = rgba.map(|(side, rgba)| {
         let image = egui::ColorImage::from_rgba_unmultiplied([side as usize, side as usize], &rgba);
-        ctx.load_texture(format!("se-desktop-icon:{key}"), image, egui::TextureOptions::LINEAR)
+        ctx.load_texture(name, image, egui::TextureOptions::LINEAR)
     });
     let id = texture.as_ref().map(egui::TextureHandle::id);
     cache.insert(key, texture);
@@ -451,7 +449,7 @@ fn rubber_band(ui: &egui::Ui, placed: &[(ItemId, Rect)], cx: &mut Cx<'_>) {
         painter.rect_stroke(
             band,
             0.0,
-            Stroke::new(1.0, Color32::from_rgb(120, 170, 235)),
+            Stroke::new(1.0_f32, Color32::from_rgb(120, 170, 235)),
         );
         cx.state.selected = placed
             .iter()
