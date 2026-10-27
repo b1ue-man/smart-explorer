@@ -129,14 +129,20 @@ pub(crate) fn look(item: ItemRef<'_>, now_secs: i64) -> TileLook {
             plain(icon, &vault.label, Some(status))
         }
         ItemRef::File(file) => plain(
-            if file.is_dir { &["folder"] } else { &["text-x-generic"] },
+            if file.is_dir {
+                &["folder"]
+            } else {
+                &["text-x-generic"]
+            },
             &file.name,
             None,
         ),
         ItemRef::System(SystemItem::RecycleBin) => {
             plain(&["user-trash"], SystemItem::RecycleBin.label(), None)
         }
-        ItemRef::System(SystemItem::ThisPc) => plain(&["computer"], SystemItem::ThisPc.label(), None),
+        ItemRef::System(SystemItem::ThisPc) => {
+            plain(&["computer"], SystemItem::ThisPc.label(), None)
+        }
         ItemRef::AllScreens => plain(&["video-display", "computer"], "Alle Bildschirme", None),
         ItemRef::Empty(action) => {
             let icon = match action {
@@ -190,7 +196,7 @@ pub(crate) fn paint(
         painter.rect_stroke(
             inner,
             6.0,
-            Stroke::new(1.0, Color32::from_rgb(120, 170, 235)),
+            Stroke::new(1.0_f32, Color32::from_rgb(120, 170, 235)),
         );
     } else if state.hovered {
         painter.rect_filled(
@@ -201,18 +207,20 @@ pub(crate) fn paint(
     }
     let icon_center = Pos2::new(rect.center().x, rect.top() + 30.0);
     match icon {
-        Some(texture) => painter.image(
-            texture,
-            Rect::from_center_size(icon_center, Vec2::splat(ICON_SIDE)),
-            Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-            Color32::from_white_alpha(alpha),
-        ),
+        Some(texture) => {
+            painter.image(
+                texture,
+                Rect::from_center_size(icon_center, Vec2::splat(ICON_SIDE)),
+                Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                Color32::from_white_alpha(alpha),
+            );
+        }
         // No platform icon (yet): a neutral plate, never a text symbol.
         None => {
             painter.rect_stroke(
                 Rect::from_center_size(icon_center, Vec2::splat(ICON_SIDE - 12.0)),
                 6.0,
-                Stroke::new(2.0, text_color),
+                Stroke::new(2.0_f32, text_color),
             );
         }
     }
@@ -221,10 +229,10 @@ pub(crate) fn paint(
         Mark::None => {}
         Mark::Dot(color) => {
             painter.circle_filled(mark_center, 6.0, color);
-            painter.circle_stroke(mark_center, 6.0, Stroke::new(1.5, Color32::BLACK));
+            painter.circle_stroke(mark_center, 6.0, Stroke::new(1.5_f32, Color32::BLACK));
         }
         Mark::Ring(color) => {
-            painter.circle_stroke(mark_center, 5.5, Stroke::new(2.5, color));
+            painter.circle_stroke(mark_center, 5.5, Stroke::new(2.5_f32, color));
         }
         Mark::Busy => {
             let spinner = Rect::from_center_size(mark_center, Vec2::splat(14.0));
