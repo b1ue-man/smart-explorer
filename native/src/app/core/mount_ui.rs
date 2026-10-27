@@ -25,7 +25,7 @@ pub(super) struct MountUiState {
     received_initial_list: bool,
     pub(super) recovery_draft: Option<recovery_ui::RecoveryDraft>,
     pub(super) recoveries: Vec<crate::mount::InactiveMountRecovery>,
-    pub(super) discard: Option<recovery_ui::Discard>,
+    discard: Option<recovery_ui::Discard>,
 }
 
 pub(super) enum MountUiResult {

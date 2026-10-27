@@ -192,13 +192,7 @@ impl App {
         row: Option<usize>,
     ) -> &'static str {
         match action {
-            RemoteContextAction::Open => {
-                if row_context.is_some_and(|(kind, _)| kind == RemoteContextEntryKind::Directory) {
-                    "Öffnen"
-                } else {
-                    "Öffnen"
-                }
-            }
+            RemoteContextAction::Open => "Öffnen",
             RemoteContextAction::OpenWith => "Öffnen mit…",
             RemoteContextAction::DownloadTo => "Diesen Eintrag herunterladen nach…",
             RemoteContextAction::CopyToClipboard => {
