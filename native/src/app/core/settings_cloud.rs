@@ -57,7 +57,7 @@ impl App {
             ui.horizontal(|ui| {
                 ui.colored_label(theme::accent(ui), "● Anmeldung gespeichert");
                 if ui
-                    .small_button("☁ Drive öffnen")
+                    .small_button("Drive öffnen")
                     .on_hover_text("Google Drive durchsuchen")
                     .clicked()
                 {

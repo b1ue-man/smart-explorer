@@ -196,7 +196,7 @@ impl App {
     /// commits + recomputes immediately for that pane.
     pub(in crate::app) fn ui_pane_search(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.label("🔍");
+            ui.label("Suche");
             let resp = ui.add(
                 egui::TextEdit::singleline(&mut self.text_draft)
                     .hint_text("Filtern (Name/Regex/Glob)…")
@@ -240,18 +240,16 @@ impl App {
 
     pub(in crate::app) fn tab_title(&self, i: usize) -> String {
         // Per-tab path + connection (active tab's live in the App fields).
-        let (p, remote_label, is_share) = if i == self.active_tab {
+        let (p, remote_label) = if i == self.active_tab {
             (
                 &self.root_path,
                 self.remote.as_ref().map(|r| r.label.as_str()),
-                self.net_conn.is_some(),
             )
         } else {
             let t = &self.tabs[i];
             (
                 &t.root_path,
                 t.remote.as_ref().map(|r| r.label.as_str()),
-                t.net_conn.is_some(),
             )
         };
         if p.is_empty() && remote_label.is_none() {
@@ -266,9 +264,7 @@ impl App {
         let title = if let Some(label) = remote_label {
             // "sftp://user@host:port" -> "user@host:port"
             let host = label.split("://").nth(1).unwrap_or(label);
-            format!("🌐 {host} · {base}")
-        } else if is_share {
-            format!("🖧 {base}")
+            format!("{host} · {base}")
         } else {
             base.to_string()
         };

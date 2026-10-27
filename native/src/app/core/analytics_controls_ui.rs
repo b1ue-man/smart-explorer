@@ -94,14 +94,14 @@ impl App {
                     controls.rescan_source = Some(StorageScanSource::local(root.clone()));
                 }
             }
-            if ui.button("📁 Ordner…").clicked() {
+            if ui.button("Ordner…").clicked() {
                 controls.pick_folder = true;
             }
             if let Some(remote @ StorageScanSource::Remote { root, label, .. }) = &remote_scan {
                 let txt = if label.is_empty() {
-                    "📡 Remote-Ordner".to_string()
+                    "Remote-Ordner".to_string()
                 } else {
-                    format!("📡 {}", label)
+                    label.to_string()
                 };
                 if ui
                     .button(txt)
@@ -139,7 +139,7 @@ impl App {
                 if ui
                     .add_enabled(
                         source.is_some() && focus_node.is_some(),
-                        egui::Button::new("📂 Im Explorer öffnen"),
+                        egui::Button::new("Im Explorer öffnen"),
                     )
                     .clicked()
                 {

@@ -85,7 +85,7 @@ impl App {
         if self.submit_job_for(job, purpose) {
             self.notice = Some((
                 format!(
-                    "⬇ Lade {count} Element(e) für andere Programme herunter — Fortschritt unter „Übertragungen“"
+                    "Lade {count} Element(e) für andere Programme herunter — Fortschritt unter „Übertragungen“"
                 ),
                 Instant::now(),
             ));

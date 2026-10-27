@@ -178,6 +178,9 @@ pub(in crate::mcp_launcher) fn same_image_file(file: &File, path: &Path) -> Resu
 pub(in crate::mcp_launcher) fn protect(path: &Path, _executable: bool) -> Result<(), String> {
     security::protect(path)
 }
+pub(in crate::mcp_launcher) fn make_private_directory(path: &Path) -> Result<(), String> {
+    security::make_private_directory(path)
+}
 pub(in crate::mcp_launcher) fn process_identity(pid: u32) -> Result<ProcessIdentity, String> {
     use windows_sys::Win32::Foundation::*;
     use windows_sys::Win32::System::Threading::*;

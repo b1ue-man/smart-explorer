@@ -7,10 +7,10 @@ use crate::transfer::{ExternalSnapshot, Limiter, TransferJob, TransferKind, Tran
 
 pub(in crate::app) fn kind_icon(kind: TransferKind) -> &'static str {
     match kind {
-        TransferKind::Upload => "⬆",
-        TransferKind::Download => "⬇",
+        TransferKind::Upload => "↑",
+        TransferKind::Download => "↓",
         TransferKind::RemoteCopy => "⇄",
-        TransferKind::Local | TransferKind::Move => "📋",
+        TransferKind::Local | TransferKind::Move => "⧉",
     }
 }
 

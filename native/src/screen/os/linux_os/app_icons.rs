@@ -10,9 +10,12 @@ use crate::screen::core::window_list::{ListSource, WindowEntry, WindowList};
 
 #[path = "app_icon_catalog.rs"]
 mod installed;
+#[path = "app_icons_named.rs"]
+mod named;
 #[path = "app_icon_netwm.rs"]
 mod netwm;
 use installed::{catalog, desktop_for, ini, read_bounded, safe_relative, DesktopIcon};
+pub(crate) use named::{named_icon_rgba, path_icon_rgba};
 use netwm::window_icon;
 pub(crate) use netwm::window_identity;
 
@@ -47,28 +50,8 @@ fn current_theme() -> String {
         }
     }
     // GTK's current GSettings value, read directly over the session portal (no subprocess).
-    if let Ok(connection) = zbus::blocking::connection::Builder::session().and_then(|builder| {
-        builder
-            .method_timeout(std::time::Duration::from_millis(500))
-            .build()
-    }) {
-        if let Ok(proxy) = zbus::blocking::Proxy::new(
-            &connection,
-            "org.freedesktop.portal.Desktop",
-            "/org/freedesktop/portal/desktop",
-            "org.freedesktop.portal.Settings",
-        ) {
-            if let Ok(value) = proxy.call::<_, _, zbus::zvariant::OwnedValue>(
-                "Read",
-                &("org.gnome.desktop.interface", "icon-theme"),
-            ) {
-                if let Ok(theme) = <String>::try_from(value) {
-                    if safe_relative(&theme) {
-                        return theme;
-                    }
-                }
-            }
-        }
+    if let Some(theme) = super::app_units::off_runtime(portal_theme) {
+        return theme;
     }
     if let Some(config) = config {
         for file in ["gtk-4.0/settings.ini", "gtk-3.0/settings.ini"] {
@@ -84,6 +67,33 @@ fn current_theme() -> String {
         }
     }
     "hicolor".into()
+}
+
+/// GTK's icon theme from the portal's GSettings mirror (blocking zbus).
+fn portal_theme() -> Option<String> {
+    let connection = zbus::blocking::connection::Builder::session()
+        .and_then(|builder| {
+            builder
+                .method_timeout(std::time::Duration::from_millis(500))
+                .build()
+        })
+        .ok()?;
+    let proxy = zbus::blocking::Proxy::new(
+        &connection,
+        "org.freedesktop.portal.Desktop",
+        "/org/freedesktop/portal/desktop",
+        "org.freedesktop.portal.Settings",
+    )
+    .ok()?;
+    let value = proxy
+        .call::<_, _, zbus::zvariant::OwnedValue>(
+            "Read",
+            &("org.gnome.desktop.interface", "icon-theme"),
+        )
+        .ok()?;
+    <String>::try_from(value)
+        .ok()
+        .filter(|theme| safe_relative(theme))
 }
 
 fn theme_icon(
@@ -354,3 +364,4 @@ pub(crate) fn attach_apps(apps: &mut [crate::screen::core::window_list::AppEntry
             });
     }
 }
+

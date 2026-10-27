@@ -166,7 +166,7 @@ pub(crate) fn section_ui(
     }
     for row in rows {
         ui.horizontal(|ui| {
-            let text = format!("{}  {}", row.label, row.state.icon());
+            let text = format!("{}  ({})", row.label, row.state.title());
             let width = (ui.available_width() - 24.0).max(1.0);
             let response = crate::app::sidebar_locations::sidebar_row(ui, &text, width, false)
                 .on_hover_text(row_hover(&row.label, row.state, row.reason.as_deref()));

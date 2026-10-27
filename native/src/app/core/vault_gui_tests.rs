@@ -166,8 +166,8 @@ fn vault_task_gui_render_sidebar_unlock_compare() {
     });
     for text in [
         "TRESORE",
-        "Privat  🔒",
-        "Arbeit  🔓",
+        "Privat  ",
+        "Arbeit  ",
         "Alt  ⏳",
         "Fern  ⚠",
         "Dieser Ordner enthält einen Tresor.",

@@ -320,7 +320,8 @@ pub use live::{
 };
 pub use mount_client::{
     connect_mount_host, import_mount_recovery, list_mount_recoveries, list_mounts,
-    reactivate_mount_recovery, retry_mount, save_remove_mount, start_mount, stop_mount,
+    discard_mount_recovery, reactivate_mount_recovery, retry_mount, save_remove_mount, start_mount,
+    stop_mount,
     MountHostConfig, MountHostSession,
 };
 pub(crate) use mount_client::{ensure_mounted_for, mount_path_for};

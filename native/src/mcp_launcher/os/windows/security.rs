@@ -134,6 +134,73 @@ pub(super) fn check(path: &Path, expected_owner: &[u8]) -> Result<(), String> {
     }
     Ok(())
 }
+/// Protected DACL for a directory this process just created (a capability
+/// probe under the user's temp folder): full access for the directory's owner
+/// and SYSTEM only, nothing inherited. The owner is the token's default owner
+/// (the user, or Administrators for an elevated updater), so `check` finds no
+/// foreign write grant afterwards. Installations are never repaired this way.
+pub(super) fn make_private_directory(path: &Path) -> Result<(), String> {
+    let (_sd, owner, _) = descriptor(path)?;
+    if owner.is_null() || unsafe { IsValidSid(owner) } == 0 {
+        return Err("runtime_acl_owner_invalid".into());
+    }
+    if !trusted_owner(owner)? {
+        return Err(format!("runtime_probe_owner_untrusted: {}", path.display()));
+    }
+    let mut system = [0u64; 16];
+    let mut system_length = std::mem::size_of_val(&system) as u32;
+    if unsafe {
+        CreateWellKnownSid(
+            WinLocalSystemSid,
+            std::ptr::null_mut(),
+            system.as_mut_ptr() as _,
+            &mut system_length,
+        )
+    } == 0
+    {
+        return Err("runtime_probe_system_sid".into());
+    }
+    let owner_length = unsafe { GetLengthSid(owner) } as usize;
+    let ace = std::mem::offset_of!(ACCESS_ALLOWED_ACE, SidStart);
+    let acl_length =
+        std::mem::size_of::<ACL>() + 2 * ace + owner_length + system_length as usize;
+    let mut acl = vec![0u64; acl_length.div_ceil(std::mem::size_of::<u64>())];
+    let acl_pointer = acl.as_mut_ptr() as *mut ACL;
+    let inherit = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
+    if unsafe {
+        InitializeAcl(acl_pointer, acl_length as u32, ACL_REVISION) == 0
+            || AddAccessAllowedAceEx(acl_pointer, ACL_REVISION, inherit, FILE_ALL_ACCESS, owner)
+                == 0
+            || AddAccessAllowedAceEx(
+                acl_pointer,
+                ACL_REVISION,
+                inherit,
+                FILE_ALL_ACCESS,
+                system.as_mut_ptr() as _,
+            ) == 0
+    } {
+        return Err(format!(
+            "runtime_probe_acl_build: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let result = unsafe {
+        SetNamedSecurityInfoW(
+            wide(path).as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            acl_pointer,
+            std::ptr::null_mut(),
+        )
+    };
+    if result != 0 {
+        return Err(format!("runtime_probe_acl_write {}: {result}", path.display()));
+    }
+    Ok(())
+}
+
 pub(super) fn protect(path: &Path) -> Result<(), String> {
     // Installation inherits the installer's protected root ACL. Fail rather
     // than silently repairing an attacker-writable installation at runtime.

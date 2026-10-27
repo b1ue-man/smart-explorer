@@ -23,3 +23,13 @@ pub(crate) use drive_inventory::{read_drive_capacity, read_drive_inventory};
 pub(in crate::app) fn local_path_text(path: &std::path::Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
+
+/// Explorer's icon of a local file, folder or shortcut (square RGBA, side).
+pub(in crate::app) fn shell_icon_rgba(path: &std::path::Path) -> Option<(u32, Vec<u8>)> {
+    crate::screen::os::app_icons::path_icon_rgba(path)
+}
+
+/// Windows' stock icon for the first of `names` (freedesktop icon names).
+pub(in crate::app) fn named_icon_rgba(names: &[&str]) -> Option<(u32, Vec<u8>)> {
+    crate::screen::os::app_icons::named_icon_rgba(names)
+}

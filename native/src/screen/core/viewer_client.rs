@@ -218,7 +218,16 @@ async fn handshake_for(
     hello.frame_capabilities = hello
         .frame_capabilities
         .map(|caps| caps.for_server(server.frame_memory_class))
-        .transpose()?;
+        .transpose()?
+        .map(|mut caps| {
+            // Hybrid regions (video for changed areas, lossless tiles for
+            // stable ones) stay off until they work on every host: on
+            // 2026-10-27 they left about 1 picture/s and a stale right third
+            // from Android and flickering, mostly black pictures from Linux
+            // and Windows hosts. The plain picture stream is the 0.5.184 path.
+            caps.hybrid_regions = false;
+            caps
+        });
     hello.family_version = server
         .family_version
         .filter(|version| *version == super::family_protocol::FAMILY_PROTOCOL);

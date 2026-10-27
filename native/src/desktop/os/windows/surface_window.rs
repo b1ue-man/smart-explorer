@@ -4,7 +4,9 @@
 //! minimize button (`with_minimize_button(false)`: otherwise winit sets
 //! `WS_MINIMIZEBOX` and Win+D would minimize it, R8, R10). After creation
 //! the window gets `WS_EX_TOOLWINDOW` without `WS_EX_APPWINDOW`, the exact
-//! physical `rcMonitor` and the bottom of the z-order, and a subclass
+//! physical `rcWork` (never `rcMonitor`: a borderless window of the monitor's
+//! size counts as full screen and hides the task bar) and the bottom of the
+//! z-order, and a subclass
 //! (`SetWindowSubclass`) with the three rules of C1.2:
 //! 1. `WM_WINDOWPOSCHANGING` sets `hwndInsertAfter = HWND_BOTTOM` and keeps
 //!    the flags, so an activation (a click) leaves the window at the bottom
@@ -51,7 +53,7 @@ struct SubclassState {
     taskbar_created: u32,
     /// Key of the surface's monitor.
     monitor: String,
-    /// `rcMonitor` of that monitor, physical pixels, read again on a change.
+    /// `rcWork` of that monitor, physical pixels, read again on a change.
     rect: Cell<Option<[i32; 4]>>,
 }
 
@@ -59,7 +61,7 @@ impl SubclassState {
     /// Reads the monitor again and puts the window back on it, at the bottom.
     fn refit(&self, hwnd: HWND) {
         self.rect
-            .set(monitors::info_for(&self.monitor).map(|info| info.rect));
+            .set(monitors::info_for(&self.monitor).map(|info| info.work));
         to_bottom(hwnd, self.rect.get());
     }
 }
@@ -150,7 +152,11 @@ unsafe extern "system" fn subclass(
             state.signals.raise(SurfaceSignal::Display);
         }
         WM_SETTINGCHANGE => match wparam as u32 {
-            SPI_SETWORKAREA => state.signals.raise(SurfaceSignal::Display),
+            SPI_SETWORKAREA => {
+                // The window follows the work area (task bar moved or resized).
+                state.refit(hwnd);
+                state.signals.raise(SurfaceSignal::Display);
+            }
             SPI_SETDESKWALLPAPER => state.signals.raise(SurfaceSignal::Wallpaper),
             _ => {}
         },
@@ -212,8 +218,10 @@ pub(crate) fn attach_surface(
             SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
         );
     }
-    // The whole monitor, so no Explorer desktop shows under a translucent
-    // or hidden task bar; the grid keeps to `rcWork`.
+    // The work area (`rcWork`), not the whole monitor: Explorer treats a
+    // borderless window of exactly the monitor's size as a full-screen
+    // program and hides the task bar while it is in front (user report
+    // 2026-10-27: the surface made the task bar disappear).
     // SAFETY: installed above; the window procedure runs on this thread.
     unsafe { (*state).refit(hwnd) };
     Ok(())

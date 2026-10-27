@@ -168,8 +168,24 @@ fn failed(error: impl std::fmt::Display) -> io::Error {
     io::Error::other(format!("systemd: {error}"))
 }
 
+/// Runs blocking zbus work outside any Tokio runtime. zbus's blocking API
+/// drives its own runtime and panics on a thread that already drives Tokio;
+/// Share host handlers list windows and icons from async tasks (crash
+/// 2026-10-27: "Cannot start a runtime from within a runtime" in share-iroh).
+pub(super) fn off_runtime<T: Send>(work: impl FnOnce() -> T + Send) -> T {
+    if tokio::runtime::Handle::try_current().is_err() {
+        return work();
+    }
+    std::thread::scope(|scope| scope.spawn(work).join())
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+}
+
 /// The apps in the user's systemd instance on the session bus.
 pub(crate) fn list() -> io::Result<WindowList> {
+    off_runtime(list_units)
+}
+
+fn list_units() -> io::Result<WindowList> {
     let connection = zbus::blocking::Connection::session().map_err(failed)?;
     let manager = zbus::blocking::Proxy::new(
         &connection,

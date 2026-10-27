@@ -36,6 +36,9 @@ pub(in crate::mcp_launcher) fn same_image_file(_file: &File, _path: &Path) -> Re
 pub(in crate::mcp_launcher) fn protect(_path: &Path, _executable: bool) -> Result<(), String> {
     unsupported()
 }
+pub(in crate::mcp_launcher) fn make_private_directory(_path: &Path) -> Result<(), String> {
+    unsupported()
+}
 pub(in crate::mcp_launcher) fn sync_directory(_path: &Path) -> Result<(), String> {
     unsupported()
 }

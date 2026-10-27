@@ -115,9 +115,9 @@ impl App {
         // here (auto-discovered, so no "Jetzt prüfen" needed, and independent of
         // the main-branch feed version).
         if let Some(newest) = self.update_release_available.clone() {
-            ui.colored_label(theme::success(ui), format!("⬆ Update verfügbar: v{newest}"));
+            ui.colored_label(theme::success(ui), format!("Update verfügbar: v{newest}"));
             if ui
-                .add_enabled(!downloading, egui::Button::new("⬆ Installieren"))
+                .add_enabled(!downloading, egui::Button::new("Installieren"))
                 .on_hover_text("Diese neuere Version laden und installieren (Neustart)")
                 .clicked()
             {

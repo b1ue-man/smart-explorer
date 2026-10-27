@@ -219,7 +219,7 @@ impl App {
                                     "Liste → Enter",
                                     "Öffnen; bei Ordner aus der Suche zurück zur Leiste",
                                 ),
-                                ("📊  ·  ›Analyse", "Speicher-Analyse: Treemap, größte Ordner/Dateien"),
+                                ("·  ›Analyse", "Speicher-Analyse: Treemap, größte Ordner/Dateien"),
                             ],
                         ),
                         (

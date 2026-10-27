@@ -178,6 +178,10 @@ pub(in crate::mcp_launcher) fn protect(path: &Path, executable: bool) -> Result<
     };
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).map_err(|e| e.to_string())
 }
+/// `tempfile` creates probe directories with mode 0700 already.
+pub(in crate::mcp_launcher) fn make_private_directory(_path: &Path) -> Result<(), String> {
+    Ok(())
+}
 pub(in crate::mcp_launcher) fn sync_directory(path: &Path) -> Result<(), String> {
     File::open(path)
         .and_then(|f| f.sync_all())

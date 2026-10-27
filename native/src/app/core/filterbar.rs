@@ -44,7 +44,7 @@ impl App {
                 let q = self.text_draft.trim().to_string();
                 let enabled = !q.is_empty() && self.filter.text_mode != TextMode::Regex;
                 if ui
-                    .add_enabled(enabled, egui::Button::new("🔎 Server"))
+                    .add_enabled(enabled, egui::Button::new("Server"))
                     .on_hover_text(
                         "Rekursive Suche serverseitig über den Agent — durchsucht den ganzen \
                          Unterbaum und liefert nur die Treffer (enthält/Glob).",
@@ -333,7 +333,7 @@ impl App {
         }
     }
 
-    /// Calendar-based date range input: a "von 📅"/"bis 📅" button that turns
+    /// Calendar-based date range input: a "von "/"bis " button that turns
     /// into a date-picker button + clear once set.
     pub(in crate::app) fn date_filter_ui(&mut self, ui: &mut egui::Ui, is_mtime: bool) {
         let mut changed = false;
@@ -365,7 +365,7 @@ impl App {
                     }
                 }
                 None => {
-                    let label = if is_min { "von 📅" } else { "bis 📅" };
+                    let label = if is_min { "von " } else { "bis " };
                     if ui.small_button(label).clicked() {
                         *field = Some(chrono::Local::now().date_naive());
                         changed = true;

@@ -84,9 +84,12 @@ fn vault_task_gui_unlock_states() {
         RowState::Unavailable,
     ]
     .iter()
-    .map(|state| state.icon())
+    .map(|state| state.title())
     .collect();
-    assert_eq!(marks, ["🔒", "🔓", "⏳", "⚠"]);
+    assert_eq!(
+        marks,
+        ["Gesperrt", "Entsperrt", "Wird gesperrt …", "Nicht erreichbar"]
+    );
 
     // The answers of the unlock dialog (U29-5): every code of the plan.
     let expected = [

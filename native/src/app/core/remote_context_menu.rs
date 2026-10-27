@@ -130,7 +130,7 @@ impl App {
                         }
                         if action == RemoteContextAction::NewFolder {
                             ui.menu_button("＋ Neu", |ui| {
-                                if ui.button("📁 Ordner").clicked() {
+                                if ui.button("Ordner").clicked() {
                                     selected = Some(RemoteContextAction::NewFolder);
                                     ui.close_menu();
                                 }
@@ -194,31 +194,31 @@ impl App {
         match action {
             RemoteContextAction::Open => {
                 if row_context.is_some_and(|(kind, _)| kind == RemoteContextEntryKind::Directory) {
-                    "📂 Öffnen"
+                    "Öffnen"
                 } else {
-                    "📄 Öffnen"
+                    "Öffnen"
                 }
             }
-            RemoteContextAction::OpenWith => "📂 Öffnen mit…",
-            RemoteContextAction::DownloadTo => "⬇ Diesen Eintrag herunterladen nach…",
+            RemoteContextAction::OpenWith => "Öffnen mit…",
+            RemoteContextAction::DownloadTo => "Diesen Eintrag herunterladen nach…",
             RemoteContextAction::CopyToClipboard => {
                 if row_context.is_some_and(|(_, selection)| {
                     selection == RemoteRowSelection::MultipleIncludingClicked
                 }) {
-                    "📋 Auswahl in Zwischenablage kopieren"
+                    "Auswahl in Zwischenablage kopieren"
                 } else {
-                    "📋 In Zwischenablage kopieren"
+                    "In Zwischenablage kopieren"
                 }
             }
-            RemoteContextAction::ProvideForPrograms => "📤 Für andere Programme bereitstellen",
+            RemoteContextAction::ProvideForPrograms => "Für andere Programme bereitstellen",
             RemoteContextAction::Rename => "✎ Umbenennen",
             RemoteContextAction::Delete => {
                 if row_context.is_some_and(|(_, selection)| {
                     selection == RemoteRowSelection::MultipleIncludingClicked
                 }) {
-                    "🗑 Auswahl löschen"
+                    "Auswahl löschen"
                 } else {
-                    "🗑 Löschen"
+                    "Löschen"
                 }
             }
             RemoteContextAction::ToggleFavorite => {
@@ -233,12 +233,12 @@ impl App {
                 }
             }
             RemoteContextAction::CopyPath => "⧉ Remote-Pfad kopieren",
-            RemoteContextAction::AnalyzeDirectory => "📊 Ordner analysieren",
-            RemoteContextAction::Paste => "📥 Einfügen",
+            RemoteContextAction::AnalyzeDirectory => "Ordner analysieren",
+            RemoteContextAction::Paste => "Einfügen",
             RemoteContextAction::NewFolder | RemoteContextAction::NewFile(_) => unreachable!(),
-            RemoteContextAction::SelectAll => "☑ Alles auswählen",
+            RemoteContextAction::SelectAll => "Alles auswählen",
             RemoteContextAction::InvertSelection => "⇄ Auswahl umkehren",
-            RemoteContextAction::AnalyzeCurrentFolder => "📊 Aktuellen Ordner analysieren",
+            RemoteContextAction::AnalyzeCurrentFolder => "Aktuellen Ordner analysieren",
             RemoteContextAction::Refresh => "⟳ Aktualisieren",
         }
     }

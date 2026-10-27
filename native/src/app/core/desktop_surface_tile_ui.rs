@@ -3,7 +3,7 @@
 //! and "Dieser PC", "Alle Bildschirme" and the tiles of the empty state.
 //! Labels stay readable on every wallpaper: light text on a translucent dark
 //! plate; the state shows as a colored mark at the symbol.
-use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Stroke, Vec2};
+use eframe::egui::{self, Color32, FontId, Pos2, Rect, Stroke, Vec2};
 
 use super::desktop_surface_view_model::ItemRef;
 use crate::desktop::core::items::SystemItem;
@@ -11,7 +11,11 @@ use crate::desktop::core::tiles::{DeviceTile, EmptyAction, TileCode, UNKNOWN_TEX
 
 /// Size of one grid cell in points.
 pub(crate) const CELL: Vec2 = Vec2::new(104.0, 108.0);
-const ICON_FONT: f32 = 36.0;
+/// Side of a platform icon in points.
+const ICON_SIDE: f32 = 48.0;
+const ROOM: &[&str] = &["network-workgroup", "folder-remote"];
+const LOCKED: &[&str] = &["folder-locked", "changes-prevent", "folder"];
+const UNLOCKED: &[&str] = &["folder-unlocked", "changes-allow", "folder-open", "folder"];
 const TITLE_FONT: f32 = 13.0;
 const STATUS_FONT: f32 = 11.0;
 const GREEN: Color32 = Color32::from_rgb(76, 175, 80);
@@ -34,7 +38,9 @@ pub(crate) enum Mark {
 /// The look of one tile.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TileLook {
-    pub(crate) icon: &'static str,
+    /// Freedesktop icon names, best first; the platform shows the first it
+    /// has (Windows: stock icons). Desktop files use their own file icon.
+    pub(crate) icon: &'static [&'static str],
     pub(crate) title: String,
     pub(crate) status: Option<String>,
     pub(crate) mark: Mark,
@@ -83,7 +89,7 @@ pub(crate) fn device_look(tile: &DeviceTile, now_secs: i64) -> TileLook {
     };
     let tooltip = (tile.code == TileCode::Failed).then(|| tile.status_text.clone());
     TileLook {
-        icon: "💻",
+        icon: &["computer"],
         title: tile.name.clone(),
         status: Some(status),
         mark,
@@ -91,7 +97,7 @@ pub(crate) fn device_look(tile: &DeviceTile, now_secs: i64) -> TileLook {
     }
 }
 
-fn plain(icon: &'static str, title: &str, status: Option<String>) -> TileLook {
+fn plain(icon: &'static [&'static str], title: &str, status: Option<String>) -> TileLook {
     TileLook {
         icon,
         title: title.to_string(),
@@ -110,26 +116,32 @@ pub(crate) fn look(item: ItemRef<'_>, now_secs: i64) -> TileLook {
                 1 => "1 Gerät".to_string(),
                 count => format!("{count} Geräte"),
             };
-            plain("👥", &room.name, Some(count))
+            plain(ROOM, &room.name, Some(count))
         }
         ItemRef::Vault(vault) => {
             let (icon, status) = match vault.state.as_str() {
-                "locked" => ("🔒", "Gesperrt".to_string()),
-                "unlocked" => ("🔓", "Entsperrt".to_string()),
-                "locking" => ("🔒", "Wird gesperrt".to_string()),
-                "unavailable" => ("🔒", "Nicht verfügbar".to_string()),
-                other => ("🔒", other.to_string()),
+                "locked" => (LOCKED, "Gesperrt".to_string()),
+                "unlocked" => (UNLOCKED, "Entsperrt".to_string()),
+                "locking" => (LOCKED, "Wird gesperrt".to_string()),
+                "unavailable" => (LOCKED, "Nicht verfügbar".to_string()),
+                other => (LOCKED, other.to_string()),
             };
             plain(icon, &vault.label, Some(status))
         }
-        ItemRef::File(file) => plain(if file.is_dir { "📁" } else { "📄" }, &file.name, None),
-        ItemRef::System(SystemItem::RecycleBin) => plain("🗑", SystemItem::RecycleBin.label(), None),
-        ItemRef::System(SystemItem::ThisPc) => plain("🖥", SystemItem::ThisPc.label(), None),
-        ItemRef::AllScreens => plain("📺", "Alle Bildschirme", None),
+        ItemRef::File(file) => plain(
+            if file.is_dir { &["folder"] } else { &["text-x-generic"] },
+            &file.name,
+            None,
+        ),
+        ItemRef::System(SystemItem::RecycleBin) => {
+            plain(&["user-trash"], SystemItem::RecycleBin.label(), None)
+        }
+        ItemRef::System(SystemItem::ThisPc) => plain(&["computer"], SystemItem::ThisPc.label(), None),
+        ItemRef::AllScreens => plain(&["video-display", "computer"], "Alle Bildschirme", None),
         ItemRef::Empty(action) => {
             let icon = match action {
-                EmptyAction::AddDevice => "➕",
-                EmptyAction::JoinRoom => "🚪",
+                EmptyAction::AddDevice => &["list-add", "computer"],
+                EmptyAction::JoinRoom => ROOM,
             };
             plain(icon, action.label(), None)
         }
@@ -155,8 +167,16 @@ pub(crate) fn label_rect(rect: Rect) -> Rect {
     )
 }
 
-/// Paints one tile into `rect` (one grid cell).
-pub(crate) fn paint(ui: &mut egui::Ui, rect: Rect, look: &TileLook, state: TileState) {
+/// Paints one tile into `rect` (one grid cell). `icon` is the platform's
+/// own icon of a desktop file (Explorer's on Windows); without it the tile
+/// keeps its symbol.
+pub(crate) fn paint(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    look: &TileLook,
+    state: TileState,
+    icon: Option<egui::TextureId>,
+) {
     let painter = ui.painter().clone();
     let alpha = if state.dimmed { 110 } else { 255 };
     let text_color = Color32::from_rgba_unmultiplied(255, 255, 255, alpha);
@@ -180,13 +200,22 @@ pub(crate) fn paint(ui: &mut egui::Ui, rect: Rect, look: &TileLook, state: TileS
         );
     }
     let icon_center = Pos2::new(rect.center().x, rect.top() + 30.0);
-    painter.text(
-        icon_center,
-        Align2::CENTER_CENTER,
-        look.icon,
-        FontId::proportional(ICON_FONT),
-        text_color,
-    );
+    match icon {
+        Some(texture) => painter.image(
+            texture,
+            Rect::from_center_size(icon_center, Vec2::splat(ICON_SIDE)),
+            Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+            Color32::from_white_alpha(alpha),
+        ),
+        // No platform icon (yet): a neutral plate, never a text symbol.
+        None => {
+            painter.rect_stroke(
+                Rect::from_center_size(icon_center, Vec2::splat(ICON_SIDE - 12.0)),
+                6.0,
+                Stroke::new(2.0, text_color),
+            );
+        }
+    }
     let mark_center = icon_center + Vec2::new(17.0, 14.0);
     match look.mark {
         Mark::None => {}

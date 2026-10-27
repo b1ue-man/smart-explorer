@@ -106,7 +106,7 @@ impl AppClip {
     pub(in crate::app) fn copied_notice(&self) -> String {
         let n = self.count();
         if self.cut {
-            format!("✂ {n} Element(e) ausgeschnitten – Strg+V verschiebt sie")
+            format!("{n} Element(e) ausgeschnitten – Strg+V verschiebt sie")
         } else {
             format!("✓ {n} Element(e) kopiert – Strg+V startet die Übertragung")
         }

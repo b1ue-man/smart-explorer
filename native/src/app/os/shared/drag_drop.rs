@@ -161,7 +161,7 @@ impl App {
                     egui::Id::new("file_drag_chip"),
                 ));
                 let text = format!(
-                    "📄 {} Element(e){}",
+                    "{} Element(e){}",
                     n,
                     if shift { " — verschieben" } else { "" }
                 );

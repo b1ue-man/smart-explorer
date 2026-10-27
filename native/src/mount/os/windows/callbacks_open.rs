@@ -1,7 +1,7 @@
 use std::io;
 
 use windows_sys::Win32::Foundation::{
-    ERROR_DIRECTORY, ERROR_NOT_SUPPORTED, STATUS_OBJECT_NAME_COLLISION,
+    ERROR_ACCESS_DENIED, ERROR_DIRECTORY, ERROR_NOT_SUPPORTED, STATUS_OBJECT_NAME_COLLISION,
 };
 
 use crate::mount::{MountStatus, NamespaceOutcome, OpenDisposition, OpenFileOptions};
@@ -75,6 +75,9 @@ pub(super) unsafe extern "system" fn create_file(
             if let Some(meta) = &existing {
                 reject_open_symlink(meta)?;
             }
+            if existing.is_none() && shell_scaffolding(&path) {
+                return Err(win32(ERROR_ACCESS_DENIED));
+            }
             let explicitly_directory = create_options & FILE_DIRECTORY_FILE != 0;
             let explicitly_file = create_options & FILE_NON_DIRECTORY_FILE != 0;
             let is_directory = explicitly_directory
@@ -109,6 +112,20 @@ pub(super) unsafe extern "system" fn create_file(
             }
         })
     }
+}
+
+/// Windows shell scaffolding a remote drive must not create on the remote
+/// (`$RECYCLE.BIN`, `System Volume Information`). Explorer then deletes
+/// directly instead of keeping a recycle folder on the server (user report
+/// 2026-10-27: a pending recovery for `/$RECYCLE.BIN/desktop.ini`).
+fn shell_scaffolding(path: &str) -> bool {
+    let first = path
+        .trim_start_matches(['/', '\\'])
+        .split(['/', '\\'])
+        .next()
+        .unwrap_or("");
+    first.eq_ignore_ascii_case("$RECYCLE.BIN")
+        || first.eq_ignore_ascii_case("System Volume Information")
 }
 
 fn open_directory(

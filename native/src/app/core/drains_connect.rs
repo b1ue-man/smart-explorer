@@ -87,7 +87,7 @@ impl App {
             UpdateMsg::Staged(bundle) => {
                 let version = bundle.version().to_string();
                 self.notice = Some((
-                    format!("⬆ Update auf v{} bereit (Neustart wendet es an)", version),
+                    format!("Update auf v{} bereit (Neustart wendet es an)", version),
                     std::time::Instant::now(),
                 ));
                 self.update_release_available = None;

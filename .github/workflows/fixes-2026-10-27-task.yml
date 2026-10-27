@@ -1,0 +1,90 @@
+name: fixes-2026-10-27-task
+run-name: Targeted 0.5.185 fixes ${{ inputs.candidate_sha }}
+
+# Narrow remote check for the targeted fixes of 2026-10-27 (user: "fixe
+# gezielt die fehler … aber mache keine breiten review und test suits"):
+# Linux and Windows compile library, binaries and tests with Clippy; findings
+# count only in the files this batch changed since v0.5.185.
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Full pushed candidate SHA, matching the selected ref
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fixes-2026-10-27-task-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 150
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 1
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind workflow and checkout to the requested candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+          shared-key: search-recursive-access
+          cache-on-failure: true
+          cache-workspace-crates: true
+
+      - name: Clippy on library, binaries and tests; findings in changed files fail
+        shell: bash
+        timeout-minutes: 140
+        run: |
+          set -uo pipefail
+          git diff --name-only v0.5.185 HEAD -- native/src \
+            | sed -n 's#^native/##p' | grep '\.rs$' > "$RUNNER_TEMP/changed.txt"
+          echo "changed files: $(wc -l < "$RUNNER_TEMP/changed.txt")"
+          cd native
+          cargo clippy --lib --bins --tests --message-format short 2>&1 \
+            | tr '\\' '/' | tee "$RUNNER_TEMP/clippy.txt"
+          status=${PIPESTATUS[0]}
+          grep -E '^(src/[^:]+):[0-9]+:[0-9]+: (error|warning)' "$RUNNER_TEMP/clippy.txt" \
+            | grep -F -f "$RUNNER_TEMP/changed.txt" > "$RUNNER_TEMP/findings.txt" || true
+          if [[ -s "$RUNNER_TEMP/findings.txt" ]]; then
+            echo "::error::findings in changed files"
+            cat "$RUNNER_TEMP/findings.txt"
+            exit 1
+          fi
+          # A compile error anywhere fails; Clippy lints of unchanged files
+          # (pre-existing debt) do not.
+          if grep -E ': error\[E[0-9]+\]|^error\[E[0-9]+\]' "$RUNNER_TEMP/clippy.txt"; then
+            echo "::error::compile errors (clippy status $status)"
+            exit 1
+          fi
+          echo "clippy clean for changed files"

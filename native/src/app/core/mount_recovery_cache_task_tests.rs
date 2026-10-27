@@ -26,7 +26,8 @@ fn failed() -> MountSnapshot {
 #[test]
 fn mount_recovery_cache_task_startup_shows_details_and_later_failures_still_alert() {
     let mount = failed();
-    assert!(has_mount_attention(std::slice::from_ref(&mount)));
+    // Cached changes alone do not open the drive window at start (2026-10-27).
+    assert!(!has_mount_attention(std::slice::from_ref(&mount)));
     assert!(mount_list_alert(&[], std::slice::from_ref(&mount), true).is_none());
     assert!(mount_list_alert(&[], std::slice::from_ref(&mount), false).is_some());
     assert!(mount_list_alert(

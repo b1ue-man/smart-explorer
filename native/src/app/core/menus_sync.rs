@@ -57,7 +57,7 @@ impl App {
                 ui.horizontal(|ui| {
                     if ui
                         .add(
-                            egui::Button::new(RichText::new(format!("🖧 {}", c.display())).small())
+                            egui::Button::new(RichText::new(c.display().to_string()).small())
                                 .frame(false),
                         )
                         .on_hover_text(c.to_target())
@@ -136,7 +136,7 @@ impl App {
         ui.separator();
         ui.horizontal(|ui| {
             if ui
-                .small_button("⚙ Sync-Setups…")
+                .small_button("Sync-Setups…")
                 .on_hover_text("Gespeicherte Sync-Aufträge verwalten (Quelle, Ziel, Methode, Zeitplan) — bleiben nach Neustart erhalten")
                 .clicked()
             {

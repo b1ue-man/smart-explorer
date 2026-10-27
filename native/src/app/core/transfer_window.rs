@@ -376,7 +376,7 @@ fn issue_list(
 fn external_row(ui: &mut egui::Ui, entry: &ExternalEntry, actions: &mut Vec<RowAction>) {
     let snapshot = &entry.snapshot;
     ui.push_id(("external", snapshot.id), |ui| {
-        title_row(ui, "📋", &snapshot.label);
+        title_row(ui, "⧉", &snapshot.label);
         let fraction = if snapshot.files_total > 0 {
             (snapshot.files_done as f32 / snapshot.files_total as f32).clamp(0.0, 1.0)
         } else {

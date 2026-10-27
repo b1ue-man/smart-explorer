@@ -52,7 +52,12 @@ impl App {
     }
 }
 
-pub(super) fn show_retained(ui: &mut egui::Ui, records: &[crate::mount::InactiveMountRecovery]) {
+/// The recovery whose deletion the user asked for: (recovery ID, drive label).
+pub(super) fn show_retained(
+    ui: &mut egui::Ui,
+    records: &[crate::mount::InactiveMountRecovery],
+) -> Option<(String, String)> {
+    let mut discard = None;
     for record in records {
         egui::CollapsingHeader::new(format!("Recovery: {} ({})", record.config.label, record.id))
             .id_salt(("inactive_mount_recovery", &record.id))
@@ -93,6 +98,92 @@ pub(super) fn show_retained(ui: &mut egui::Ui, records: &[crate::mount::Inactive
                     "Manuell reaktivieren: se drive recovery reactivate {}",
                     record.id
                 ));
+                if ui.button("Gecachte Änderungen löschen").clicked() {
+                    discard = Some((record.id.clone(), record.config.label.clone()));
+                }
             });
     }
+    discard
+}
+
+/// A final deletion of cached drive changes the user still confirms (user
+/// 2026-10-27: „ja löschen können will ich es trotzdem“).
+pub(super) enum Discard {
+    /// A drive with cached changes: entry removed, its changes deleted.
+    Drive { id: crate::mount::MountId, label: String },
+    /// An inactive recovery: the cache it retains deleted.
+    Recovery { id: String, label: String },
+}
+
+impl App {
+    pub(super) fn ui_mount_discard(&mut self, ctx: &egui::Context) {
+        let Some(discard) = self.mount_ui.discard.as_ref() else {
+            return;
+        };
+        let (label, drive) = match discard {
+            Discard::Drive { label, .. } => (label.clone(), true),
+            Discard::Recovery { label, .. } => (label.clone(), false),
+        };
+        let mut open = true;
+        let mut confirm = false;
+        let idle = self.mount_ui.action_rx.is_none();
+        super::super::dialog_geometry::window(ctx, "mount_discard", "Gecachte Änderungen löschen")
+            .open(&mut open).default_width(480.0)
+            .max_size(super::super::theme::window_content_limit(ctx))
+            .show(ctx, |ui| {
+                ui.label(format!("Laufwerk: {label}"));
+                ui.label("Die lokal gecachten, noch nicht übertragenen Änderungen werden endgültig gelöscht. Dateien auf dem Remote bleiben unverändert.");
+                if drive {
+                    ui.label("Der Laufwerkseintrag wird entfernt; das Laufwerk lässt sich danach neu einrichten.");
+                }
+                confirm = ui
+                    .add_enabled(idle, egui::Button::new("Endgültig löschen"))
+                    .clicked();
+            });
+        if confirm {
+            match self.mount_ui.discard.take() {
+                Some(Discard::Drive { id, label }) => {
+                    self.spawn_mount_action("Gecachte Änderungen werden gelöscht", move || {
+                        discard_drive(id, label)
+                    });
+                }
+                Some(Discard::Recovery { id, label }) => {
+                    self.spawn_mount_action("Gecachte Änderungen werden gelöscht", move || {
+                        crate::daemon::discard_mount_recovery(id.clone()).map(|()| {
+                            MountUiResult::Discarded {
+                                mount: None,
+                                recovery: Some(id),
+                                label,
+                            }
+                        })
+                    });
+                }
+                None => {}
+            }
+        } else if !open {
+            self.mount_ui.discard = None;
+        }
+    }
+}
+
+/// Removes a drive with cached changes through the checked save-and-remove
+/// transaction into a private temporary folder, then deletes the retained
+/// cache and that folder.
+fn discard_drive(id: crate::mount::MountId, label: String) -> Result<MountUiResult, String> {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or(0);
+    let staging = std::env::temp_dir().join(format!("se-drive-discard-{}-{stamp}", id.as_str()));
+    std::fs::create_dir(&staging).map_err(|error| error.to_string())?;
+    let result = crate::daemon::save_remove_mount(id, staging.clone()).and_then(|record| {
+        crate::daemon::discard_mount_recovery(record.id.clone()).map(|()| record)
+    });
+    let _ = std::fs::remove_dir_all(&staging);
+    let record = result?;
+    Ok(MountUiResult::Discarded {
+        mount: Some(record.config.id),
+        recovery: Some(record.id),
+        label,
+    })
 }
