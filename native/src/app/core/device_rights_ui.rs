@@ -18,13 +18,11 @@ type Shared = Arc<Mutex<Snapshot>>;
 pub(super) fn ui(app: &mut App, ui: &mut egui::Ui, device_id: &str, public_key: &str) {
     let id = egui::Id::new(("device_rights", device_id, public_key));
     let shared = ui.data_mut(|data| data.get_temp_mut_or_default::<Shared>(id).clone());
-    let refresh = ui.button("Rechte aktualisieren").clicked();
     let should_load = {
         let mut state = shared.lock().unwrap_or_else(|poison| poison.into_inner());
-        let due = refresh
-            || state
-                .loaded
-                .is_none_or(|at| at.elapsed() >= Duration::from_secs(2));
+        let due = state
+            .loaded
+            .is_none_or(|at| at.elapsed() >= Duration::from_secs(2));
         if due && !state.loading {
             state.loading = true;
             true
@@ -81,104 +79,51 @@ pub(super) fn ui(app: &mut App, ui: &mut egui::Ui, device_id: &str, public_key: 
     let Some(view) = view else {
         return;
     };
-    ui.label("Jede Verbindung verwendet genau ihre eigene Freigabe. Der Gesamtzugang zeigt erreichbare Beziehungen mit deren Bedingungen.");
     if model::remaining_room_access(&view) {
         ui.colored_label(theme::warning(ui), "Der Entzug einer Direktfreigabe beendet den Raumzugang nicht. Verbleibende Raumrechte stehen bei ihrer jeweiligen Quelle.");
     }
-    theme::section(ui, "Rechte je Beziehung");
     if view.relations.is_empty() {
-        ui.label("Für diese gepinnte Geräteidentität gibt es keine Freigabequelle.");
+        ui.label("Für diese Geräteidentität gibt es keine Freigabe.");
     }
+    // One relation at a time; a choice only when the device has several
+    // (Direct and rooms). Without a choice the first active one is shown.
     let selected_id = id.with("selected_source");
-    // The editable card stays visible: without a choice it shows the first
-    // active relation (2026-10-27: the screen and command rights were not
-    // findable behind a button at the end of the page).
-    let mut selected = ui
-        .data_mut(|data| data.get_temp::<String>(selected_id))
-        .or_else(|| {
-            let active = view.relations.iter().find(|relation| relation.active);
-            active
-                .or(view.relations.first())
-                .map(|relation| model::target_key(&relation.target))
-        });
-    for relation in &view.relations {
-        ui.push_id(model::target_key(&relation.target), |ui| {
-            egui::Frame::group(ui.style()).show(ui, |ui| {
-                ui.label(RichText::new(model::source_name(relation)).strong());
-                ui.label(if relation.active {
-                    "Beziehung aktiv"
-                } else {
-                    "Beziehung inaktiv – derzeit kein Zugang über diese Quelle"
-                });
-                source_table(ui, relation);
-                for line in model::condition_lines(relation) {
-                    ui.add(egui::Label::new(line).wrap());
-                }
-                if ui
-                    .button("Bildschirm- und Befehlsrechte dieser Verbindung …")
-                    .clicked()
-                {
-                    selected = Some(model::target_key(&relation.target));
-                }
-            });
-        });
-    }
-    theme::section(ui, "Erreichbarer Gesamtzugang");
-    let active_files = view
-        .relations
-        .iter()
-        .filter(|relation| relation.active && model::has_files(relation));
-    let mut any = false;
-    for relation in active_files {
-        any = true;
-        ui.label(format!("Dateien und Verbindungen über {} – siehe die freigegebenen Bereiche und Schreibgrenzen oben", model::source_name(relation)));
-    }
-    for right in &view.reachable {
-        any = true;
-        let source = view
-            .relations
-            .iter()
-            .find(|relation| relation.target == right.source);
-        if let Some(source) = source {
-            ui.label(format!(
-                "{}: {} über {}",
-                model::capability_label(right.capability),
-                model::decision_label(right.decision),
-                model::source_name(source)
-            ));
-        }
-    }
-    if !any {
-        ui.label("Derzeit kein Zugang über eine aktive Beziehung.");
-    }
-    if let Some(key) = selected.clone() {
-        if let Some(source) = view
-            .relations
-            .iter()
-            .find(|relation| model::target_key(&relation.target) == key)
-        {
-            theme::section(
-                ui,
-                &format!("Bildschirm und Befehle über {}", model::source_name(source)),
+    let stored = ui.data_mut(|data| data.get_temp::<String>(selected_id));
+    let mut index = stored
+        .and_then(|key| {
+            view.relations
+                .iter()
+                .position(|relation| model::target_key(&relation.target) == key)
+        })
+        .or_else(|| view.relations.iter().position(|relation| relation.active))
+        .unwrap_or(0);
+    let names: Vec<String> = view.relations.iter().map(model::source_name).collect();
+    let labels: Vec<&str> = names.iter().map(String::as_str).collect();
+    crate::app::device_page_layout::relation_picker(ui, &labels, &mut index);
+    if let Some(source) = view.relations.get(index) {
+        let key = model::target_key(&source.target);
+        ui.data_mut(|data| data.insert_temp(selected_id, key.clone()));
+        if !source.active {
+            ui.colored_label(
+                theme::warning(ui),
+                "Diese Freigabe ist inaktiv – derzeit kein Zugang darüber.",
             );
-            crate::app::share_exec_ui::ui_exec_target(app, ui, &key);
-            if source.relation_kind == "room" {
-                ui.small("Dateifreigaben und das Schreibrecht dieses Raums gelten für alle zugelassenen Mitglieder. Sie werden auf der Raumseite bearbeitet.");
-                if ui.button("Raumrichtlinie öffnen …").clicked() {
+        }
+        source_table(ui, source);
+        for line in model::condition_lines(source) {
+            ui.add(egui::Label::new(RichText::new(line).small()).wrap());
+        }
+        ui.add_space(4.0);
+        crate::app::share_exec_ui::ui_exec_card(app, ui, &key, true);
+        if source.relation_kind == "room" {
+            ui.horizontal_wrapped(|ui| {
+                ui.small("Dateifreigaben und Schreibrecht eines Raums gelten für alle zugelassenen Mitglieder.");
+                if ui.button("Raum öffnen …").clicked() {
                     app.open_share_room_page(&source.relation_id);
                 }
-            }
-        } else {
-            selected = None;
+            });
         }
     }
-    ui.data_mut(|data| {
-        if let Some(selected) = selected {
-            data.insert_temp(selected_id, selected);
-        } else {
-            data.remove::<String>(selected_id);
-        }
-    });
     egui::CollapsingHeader::new("Diagnose dieser Geräteidentität")
         .id_salt(id.with("diagnostics"))
         .show(ui, |ui| {
@@ -247,18 +192,27 @@ fn source_table(ui: &mut egui::Ui, relation: &AccessRelationView) {
         } else {
             model::decision_label(decision)
         };
+        let chosen = model::decision_label(decision);
         rows.push((
             model::capability_label(capability).into(),
-            format!("{} · wirksam: {effective}", model::decision_label(decision)),
+            if effective == chosen {
+                chosen.to_string()
+            } else {
+                format!("{chosen} (wirksam: {effective})")
+            },
         ));
     }
-    let labels: Vec<_> = rows.iter().map(|(label, _)| label.as_str()).collect();
-    let mut form = crate::app::settings_form::Form::new(ui, "rights_rows", &labels);
-    for (label, value) in &rows {
-        form.row(ui, label, |ui| {
-            ui.add(egui::Label::new(value).wrap());
+    egui::Grid::new("rights_rows")
+        .num_columns(2)
+        .striped(true)
+        .spacing([16.0, 4.0])
+        .show(ui, |ui| {
+            for (label, value) in &rows {
+                ui.label(RichText::new(label).color(theme::muted(ui)));
+                ui.add(egui::Label::new(value).wrap());
+                ui.end_row();
+            }
         });
-    }
     for connection in &relation.exports.shared_connections {
         let access =
             if connection.access == crate::share::ExportAccess::ReadWrite && relation.may_write {

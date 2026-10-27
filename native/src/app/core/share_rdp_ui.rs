@@ -66,8 +66,6 @@ type Shared = Arc<Mutex<State>>;
 type OwnedNodes = Arc<Mutex<BTreeSet<String>>>;
 
 pub(super) fn device(ui: &mut egui::Ui, profiles: &ShareProfiles, device: &str, key: &str) {
-    ui.separator();
-    ui.heading("Remote Desktop / RemoteApp");
     ui.label("Eigener Zugang über den vorhandenen RDP-Dienst dieses Geräts. Der gemeinsame Bildschirm bleibt separat verfügbar.");
     let mut choices = Vec::new();
     for contact in &profiles.direct_contacts {
@@ -119,13 +117,8 @@ pub(super) fn device(ui: &mut egui::Ui, profiles: &ShareProfiles, device: &str, 
     if choices.is_empty() {
         ui.label("Keine gespeicherte ausgehende Direkt- oder Raumverbindung zu dieser bestätigten Geräteidentität.");
     } else {
-        egui::ComboBox::from_id_salt(identity)
-            .selected_text(&choices[selected].label)
-            .show_ui(ui, |ui| {
-                for (index, choice) in choices.iter().enumerate() {
-                    ui.selectable_value(&mut selected, index, &choice.label);
-                }
-            });
+        let labels: Vec<&str> = choices.iter().map(|choice| choice.label.as_str()).collect();
+        super::device_page_layout::relation_picker(ui, &labels, &mut selected);
         ui.ctx().data_mut(|d| d.insert_temp(identity, selected));
         panel(ui, identity, &choices[selected], &owned_nodes);
     }

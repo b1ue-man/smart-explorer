@@ -61,8 +61,6 @@ pub(crate) fn install_window_opener() {
     OPENER.get_or_init(|| super::family_picker::open_confirmed);
 }
 pub(crate) fn device(ui: &mut egui::Ui, profiles: &ShareProfiles, device: &str, key: &str) {
-    ui.separator();
-    ui.heading("Programme auf diesem Gerät");
     let mut choices = Vec::new();
     for contact in &profiles.direct_contacts {
         if contact.remote_device_id.as_deref() == Some(device)
@@ -98,13 +96,8 @@ pub(crate) fn device(ui: &mut egui::Ui, profiles: &ShareProfiles, device: &str, 
         .ctx()
         .data_mut(|d| *d.get_temp_mut_or_insert_with(id, || 0usize))
         .min(choices.len() - 1);
-    egui::ComboBox::from_id_salt(id)
-        .selected_text(&choices[selected].label)
-        .show_ui(ui, |ui| {
-            for (index, choice) in choices.iter().enumerate() {
-                ui.selectable_value(&mut selected, index, &choice.label);
-            }
-        });
+    let labels: Vec<&str> = choices.iter().map(|choice| choice.label.as_str()).collect();
+    super::device_page_layout::relation_picker(ui, &labels, &mut selected);
     ui.ctx().data_mut(|d| d.insert_temp(id, selected));
     panel(ui, &choices[selected].target, Some(device));
 }
@@ -179,7 +172,8 @@ fn panel(ui: &mut egui::Ui, target: &PeerOpenTarget, expected: Option<&str>) {
             });
         }
         if let Some(error) = &state.error {
-            ui.colored_label(egui::Color32::RED, error);
+            let text = super::device_page_layout::explain_remote_error(error);
+            ui.colored_label(egui::Color32::RED, text);
         }
         if let Some(saved) = &state.saved {
             ui.separator();

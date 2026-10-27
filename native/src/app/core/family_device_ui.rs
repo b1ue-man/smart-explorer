@@ -32,7 +32,6 @@ pub(super) fn device(
     if choices.is_empty() {
         return;
     }
-    ui.separator();
     let id = egui::Id::new(("family-device-relation", device, key));
     let selected = ui
         .ctx()
@@ -45,13 +44,8 @@ pub(super) fn device(
                 .is_ok_and(|peer| peer.endpoint_prefix() == selected)
         })
         .unwrap_or(0);
-    egui::ComboBox::from_id_salt(id)
-        .selected_text(&choices[index].0)
-        .show_ui(ui, |ui| {
-            for (position, (label, _)) in choices.iter().enumerate() {
-                ui.selectable_value(&mut index, position, label);
-            }
-        });
+    let labels: Vec<&str> = choices.iter().map(|(label, _)| label.as_str()).collect();
+    super::device_page_layout::relation_picker(ui, &labels, &mut index);
     if let Ok(peer) = choices[index].1.to_peer() {
         ui.ctx()
             .data_mut(|data| data.insert_temp(id, peer.endpoint_prefix()));

@@ -75,6 +75,8 @@ mod delete_worker;
 #[path = "desktop_modules.rs"]
 mod desktop_modules;
 pub(crate) use desktop_modules::*;
+#[path = "core/device_page_layout.rs"]
+mod device_page_layout;
 #[path = "core/device_rights_model.rs"]
 mod device_rights_model;
 #[path = "core/device_rights_ui.rs"]

@@ -15,8 +15,6 @@ struct Choice {
     node: String,
 }
 pub(super) fn device(ui: &mut egui::Ui, profiles: &ShareProfiles, device: &str, key: &str) {
-    ui.separator();
-    ui.heading("TCP-Weiterleitungen");
     let mut choices = Vec::new();
     for contact in &profiles.direct_contacts {
         if contact.remote_device_id.as_deref() == Some(device)
@@ -59,13 +57,8 @@ pub(super) fn device(ui: &mut egui::Ui, profiles: &ShareProfiles, device: &str, 
         .data_mut(|data| *data.get_temp_mut_or_insert_with(selected_id, || 0usize));
     selected = selected.min(choices.len().saturating_sub(1));
     if !choices.is_empty() {
-        egui::ComboBox::from_id_salt(selected_id)
-            .selected_text(&choices[selected].label)
-            .show_ui(ui, |ui| {
-                for (index, choice) in choices.iter().enumerate() {
-                    ui.selectable_value(&mut selected, index, &choice.label);
-                }
-            });
+        let labels: Vec<&str> = choices.iter().map(|choice| choice.label.as_str()).collect();
+        super::device_page_layout::relation_picker(ui, &labels, &mut selected);
         ui.ctx()
             .data_mut(|data| data.insert_temp(selected_id, selected));
         let choice = &choices[selected];

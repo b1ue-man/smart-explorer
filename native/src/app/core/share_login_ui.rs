@@ -26,8 +26,6 @@ pub(crate) fn tick(ctx: &egui::Context) {
     }
 }
 pub(super) fn device(ui: &mut egui::Ui, device: &str, ordinary_key: &str) {
-    ui.separator();
-    ui.heading("Maschinenanmeldung");
     // This key only scopes the UI draft. It never becomes a machine pin/grant.
     let id = egui::Id::new(("explicit-login-machine", device, ordinary_key));
     let pane: Arc<Mutex<LoginViewerPane>> = ui.ctx().data_mut(|data| {
