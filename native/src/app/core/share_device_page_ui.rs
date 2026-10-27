@@ -286,9 +286,6 @@ fn contact_page(app: &mut App, ui: &mut egui::Ui, contact_id: &str) {
                 }
             }
         }
-        if let Some((device, key)) = &identity {
-            own_programs(ui, device, key);
-        }
     });
     if let Some((device, key)) = &identity {
         uses_card(app, ui, device, key);
@@ -332,7 +329,6 @@ fn grant_page(app: &mut App, ui: &mut egui::Ui, device_id: &str) {
     );
     layout::card(ui, "Was dieses Gerät bei mir darf", None, |ui| {
         grant_rights(app, ui, &grant);
-        own_programs(ui, &grant.device_id, &grant.public_key);
     });
     uses_card(app, ui, &grant.device_id, &grant.public_key);
     layout::card(ui, "Verbindung", None, |ui| {
@@ -388,25 +384,12 @@ fn grant_rights(app: &mut App, ui: &mut egui::Ui, grant: &crate::share::DirectGr
     crate::app::device_rights_ui::ui(app, ui, &grant.device_id, &grant.public_key);
 }
 
-/// My own programs this device may start here.
-fn own_programs(ui: &mut egui::Ui, device: &str, key: &str) {
-    ui.add_space(6.0);
-    layout::tool(
-        ui,
-        ("own-apps", device),
-        "Eigene Programme für dieses Gerät",
-        |ui| {
-            crate::app::share_app_grant_ui::device(ui, device, key);
-        },
-    );
-}
-
 /// What I use on the other device.
 fn uses_card(app: &App, ui: &mut egui::Ui, device: &str, key: &str) {
     let profiles = &app.share_profiles;
     layout::card(ui, "Was ich auf diesem Gerät nutze", None, |ui| {
         layout::tool(ui, ("apps", device), "Programme", |ui| {
-            ui.small("Startet Programme des anderen Geräts. Dafür muss es dir dort unter „Eigene Programme für dieses Gerät“ Programme freigeben.");
+            ui.small("Startet Programme des anderen Geräts. Dafür muss es dir dort „Bildschirm steuern“ erlauben; das schließt Programme, Fenster und RDP ein.");
             crate::app::share_apps_ui::device(ui, profiles, device, key);
         });
         layout::tool(ui, ("windows", device), "Fenster", |ui| {
@@ -488,7 +471,6 @@ fn pinned_page(app: &mut App, ui: &mut egui::Ui, device_id: &str, public_key: &s
     }
     layout::card(ui, "Was dieses Gerät bei mir darf", None, |ui| {
         crate::app::device_rights_ui::ui(app, ui, device_id, public_key);
-        own_programs(ui, device_id, public_key);
     });
     uses_card(app, ui, device_id, public_key);
     layout::card(ui, "Verbindung", None, |ui| {

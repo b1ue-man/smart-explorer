@@ -75,9 +75,19 @@ pub(crate) fn explain_remote_error(text: &str) -> String {
     if text.contains("app catalog disclosure is not authorized")
         || text.contains("no app catalog entries are granted")
     {
-        return "Das andere Gerät hat dir keine Programme freigegeben. Dort unter \
-                „Geräte“ → dieses Gerät → „Eigene Programme für dieses Gerät“ \
-                die Programme erlauben."
+        return "Das andere Gerät erlaubt dir „Bildschirm steuern“ nicht. Dort unter \
+                „Geräte“ → dieses Gerät → „Bildschirm- und Befehlsrechte“ \
+                „Bildschirm steuern“ auf „Erlauben“ stellen; das schließt \
+                Programme, Fenster und RDP ohne Nachfrage ein."
+            .into();
+    }
+    if text.contains("root/setuid workers cannot start GUI applications")
+        || text.contains("process is not in the active graphical login session")
+    {
+        return "Auf dem anderen Gerät läuft se nicht in einer angemeldeten \
+                Desktop-Sitzung (zum Beispiel als Systemdienst vor der \
+                Anmeldung). Programme startet es erst, wenn se dort in der \
+                Sitzung des angemeldeten Nutzers läuft."
             .into();
     }
     if text.contains("screen-view metadata permission") {

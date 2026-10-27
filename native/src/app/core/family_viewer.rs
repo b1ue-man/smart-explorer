@@ -251,6 +251,7 @@ impl eframe::App for FamilyViewerApp {
                         dimmed: info.state != SessionState::Streaming,
                         status,
                         stats: lines.as_deref(),
+                        hint: None,
                     };
                     let result = self.widget.show(ui, session, &params);
                     if result.escape && !self.control && self.fullscreen {

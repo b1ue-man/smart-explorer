@@ -16,6 +16,9 @@ impl ShareIrohNode {
                 let host = tokio::task::spawn_blocking(crate::rdp::probe_local_host)
                     .await
                     .map_err(eio)?;
+                crate::share::access_steering::note_own_rdp_ports(
+                    host.services.iter().filter_map(|service| service.port),
+                );
                 self.require_inventory(principal)?;
                 Ok(AppsResult::RdpProbe { host })
             }
@@ -169,7 +172,10 @@ impl ShareIrohNode {
         let grant = principal_grant(&state, principal)
             .ok_or_else(|| eio("relationship ended"))?
             .access_grant();
-        if grant.expired_at(now_secs()) || !grant.decision(Capability::AppLaunch).is_on() {
+        if grant.expired_at(now_secs())
+            || !(grant.decision(Capability::AppLaunch).is_on()
+                || crate::share::access_steering::steers(&grant, now_secs()))
+        {
             return Err(eio("app catalog disclosure is not authorized"));
         }
         catalog.apps.retain(|app| {

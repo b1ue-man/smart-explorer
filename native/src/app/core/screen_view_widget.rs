@@ -33,6 +33,8 @@ pub(crate) struct ViewParams<'a> {
     /// Shown in the middle while no picture exists.
     pub status: &'a str,
     pub stats: Option<&'a [String]>,
+    /// Painted over the picture; never changes the layout.
+    pub hint: Option<&'a str>,
 }
 
 /// What the widget tells the viewer app.
@@ -353,6 +355,15 @@ impl ViewWidget {
         }
         if let Some(lines) = params.stats {
             screen_stats_overlay::show(ui, area, lines);
+        }
+        if let Some(hint) = params.hint.filter(|_| shown.is_some()) {
+            painter.text(
+                area.left_top() + Vec2::new(8.0, 8.0),
+                Align2::LEFT_TOP,
+                hint,
+                FontId::proportional(14.0),
+                Color32::from_gray(230),
+            );
         }
         if let Some(report) = self.visibility.report(
             &window,

@@ -169,16 +169,18 @@ impl ScreenViewerApp {
                 }
             }
         }
-        let mut status = view.status_text();
-        if status.is_empty()
+        let status = view.status_text();
+        // Painted over the picture: as a status panel it changed the picture
+        // area, every change sent a visibility report, the report invalidated
+        // the picture and input — an endless black/picture loop while
+        // steering in a window.
+        let waiting = (status.is_empty()
             && view.control_on
             && view
                 .session
                 .as_ref()
-                .is_some_and(|session| !session.input_ready())
-        {
-            status = "Warte auf ein vollständiges aktuelles Bild …".into();
-        }
+                .is_some_and(|session| !session.input_ready()))
+        .then_some("Warte auf ein vollständiges aktuelles Bild …");
         let name = view.device_name(common);
         let denied = view
             .session
@@ -251,6 +253,7 @@ impl ScreenViewerApp {
                     dimmed: state != SessionState::Streaming,
                     status: &status,
                     stats: stats.as_deref(),
+                    hint: waiting,
                 };
                 result = Some(view.widget.show(ui, session, &params));
             });

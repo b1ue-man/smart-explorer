@@ -16,6 +16,8 @@ pub(crate) mod access_grant;
 pub(crate) mod access_grant_runtime;
 #[path = "core/access_grant_wire.rs"]
 pub(crate) mod access_grant_wire;
+#[path = "core/access_steering.rs"]
+pub(crate) mod access_steering;
 #[path = "os/shared/consent_launch.rs"]
 pub(crate) mod consent_launch;
 #[path = "core/exec_access_view.rs"]
