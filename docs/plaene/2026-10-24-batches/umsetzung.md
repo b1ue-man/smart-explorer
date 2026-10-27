@@ -323,6 +323,11 @@ Reviewstatus steht im Abschnitt „Zusätzlicher Reviewauftrag“.
   korrigiert. Der Crossdevice-Beleg entsteht vor dem Rename; ein unklarer
   Fehler nach Dispatch erhält weiterhin Quarantäne und Wiederaufnahmebeleg.
   Noch kein Laufzeitnachweis.
+  Ersetzt am 2026-10-27 (Nutzerentscheid): Die Publikations- und
+  Quarantänebelege entstehen im laufenden Transfer ohne Rücklesen als
+  Metadatenstempel; der Inhalt wird nur bei Wiederaufnahme und nur bei
+  verändertem Ziel geprüft, als Prüfsumme auf dem Gerät, das die Datei hat
+  (`vfs::content_digest`). Siehe `docs/TODO.md`, Zeile TRANSFER-READBACK.
 - P32: Medienzustand und adaptive Anordnung sind in `20caeb5e` gepusht.
   Die Nutzerpräzisierung legt Android-Systemeinstellungen fest; `3c24152a`
   entfernt die angenommene Appauswahl und ist ebenfalls auf `main` gepusht.
