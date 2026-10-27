@@ -185,11 +185,18 @@ impl MountHostSession {
 }
 
 pub fn connect_mount_host(id: MountId) -> Result<MountHostSession, String> {
+    attach(id, take_host_environment()?)
+}
+
+/// Attaches the host of `id` with its one-use launch capability: the worker
+/// answers with the configuration and the session token, then the private
+/// backend stream opens and the control reader starts.
+fn attach(id: MountId, environment: HostEnvironment) -> Result<MountHostSession, String> {
     let HostEnvironment {
         launch_token,
         ipc_addr,
         cache_root,
-    } = take_host_environment()?;
+    } = environment;
     let mut control = host_stream(ipc_addr, HOST_ATTACH_TIMEOUT)?;
     write_request(
         &mut control,
@@ -394,3 +401,7 @@ impl Backend for MountProxyIdentity {
         Self::unavailable()
     }
 }
+
+#[cfg(test)]
+#[path = "screen_metadata_runtime_task_tests.rs"]
+mod screen_metadata_runtime_task_tests;

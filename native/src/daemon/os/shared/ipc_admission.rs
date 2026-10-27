@@ -1,8 +1,21 @@
 //! A bounded, nonblocking capability prelude. Unauthenticated connections
 //! never reserve a client worker or a long-lived authentication permit.
+//!
+//! Capabilities: the daemon token for the GUI, `se` and `se mcp`; the
+//! launch, backend and session tokens of a drive host for its `MountHost*`
+//! requests. Two host requests carry the session token of their drive in
+//! other fields: `MountHostExt` (`session_token` of its `id`) and
+//! `Vault::SpoolKey` (`token`; the mount id sits in the payload behind the
+//! prefix). The prelude admits `vault` with a session token of any running
+//! drive host; `ipc.rs::require_request_auth` then admits exactly
+//! `SpoolKey` for exactly the mount of that token and nothing else.
+//!
+//! A decoded capability the prelude refuses gets one explicit
+//! `IpcResponse::Err` (no token, no request field) instead of a silently
+//! dropped connection; malformed or empty prefixes are still dropped.
 use std::collections::VecDeque;
-use std::io;
-use std::net::{SocketAddr, TcpStream};
+use std::io::{self, Read};
+use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
 
 use serde::de::{IgnoredAny, MapAccess, Visitor};
@@ -39,7 +52,8 @@ impl AdmissionQueue {
             return;
         }
         match inspect(&stream, |hint| authorized(hint, host, token)) {
-            Ok(Some(true)) => serve(stream),
+            Ok(Some(Verdict::Admit)) => serve(stream),
+            Ok(Some(Verdict::Refuse)) => refuse(stream),
             Ok(None) => {
                 // Reclaim an unproven connection rather than reserve all
                 // capacity against newly arriving legitimate clients.
@@ -70,7 +84,8 @@ impl AdmissionQueue {
                 continue;
             }
             match inspect(&pending.stream, |hint| authorized(hint, host, token)) {
-                Ok(Some(true)) => serve(pending.stream),
+                Ok(Some(Verdict::Admit)) => serve(pending.stream),
+                Ok(Some(Verdict::Refuse)) => refuse(pending.stream),
                 Ok(None) => self.pending.push_back(pending),
                 _ => {}
             }
@@ -78,6 +93,14 @@ impl AdmissionQueue {
         !self.pending.is_empty()
     }
 }
+
+/// Host requests whose capability belongs to the drive named by `id`.
+const MOUNT_HOST_KINDS: [&str; 4] = [
+    "mount_host_attach",
+    "mount_host_backend",
+    "mount_host_status",
+    "mount_host_ext",
+];
 
 // No Debug implementation: the prelude contains a live IPC capability.
 #[derive(Default)]
@@ -91,7 +114,7 @@ struct Hint {
 impl Hint {
     fn complete(&self) -> bool {
         match self.kind.as_deref() {
-            Some("mount_host_attach" | "mount_host_backend" | "mount_host_status") => {
+            Some(kind) if MOUNT_HOST_KINDS.contains(&kind) => {
                 self.id.is_some() && self.token.is_some()
             }
             Some(_) => self.token.is_some(),
@@ -145,19 +168,72 @@ fn decode_hint(bytes: &[u8]) -> Result<Hint, serde_json::Error> {
     captured.map(Ok).unwrap_or(result)
 }
 
-fn inspect(stream: &TcpStream, authorize: impl FnOnce(&Hint) -> bool) -> io::Result<Option<bool>> {
+/// What the prelude decided about one connection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Verdict {
+    /// The capability holds: a client worker serves the request.
+    Admit,
+    /// A complete capability that does not hold: answered, then closed.
+    Refuse,
+    /// Empty or malformed prefix: dropped without an answer.
+    Drop,
+}
+
+fn inspect(
+    stream: &TcpStream,
+    authorize: impl FnOnce(&Hint) -> bool,
+) -> io::Result<Option<Verdict>> {
     let mut bytes = [0u8; PREFIX_BYTES];
     let count = match stream.peek(&mut bytes) {
-        Ok(0) => return Ok(Some(false)),
+        Ok(0) => return Ok(Some(Verdict::Drop)),
         Ok(count) => count,
         Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(None),
         Err(error) => return Err(error),
     };
     match decode_hint(&bytes[..count]) {
-        Ok(hint) => Ok(Some(authorize(&hint))),
+        Ok(hint) if authorize(&hint) => Ok(Some(Verdict::Admit)),
+        Ok(_) => Ok(Some(Verdict::Refuse)),
         Err(error) if error.is_eof() && count < PREFIX_BYTES => Ok(None),
-        Err(_) => Ok(Some(false)),
+        Err(_) => Ok(Some(Verdict::Drop)),
     }
+}
+
+/// Text of a refused capability. It names neither the token nor any field
+/// of the request.
+const REFUSED: &str =
+    "Daemon-IPC-Anfrage abgelehnt: die Berechtigung ist ungueltig oder gehoert zu keinem laufenden Laufwerk-Host";
+
+/// Answers a refused capability on the still nonblocking stream. The
+/// request line already received is consumed first (up to its newline, at
+/// most 16 KiB, never waiting), so closing the socket sends FIN and not RST:
+/// an RST makes the client's read fail with WSAECONNRESET (10054) or
+/// ECONNRESET before it sees the answer.
+fn refuse(mut stream: TcpStream) {
+    let mut sink = [0u8; 1024];
+    let mut consumed = 0usize;
+    loop {
+        let want = sink.len().min(PREFIX_BYTES.saturating_sub(consumed));
+        if want == 0 {
+            break;
+        }
+        match stream.read(&mut sink[..want]) {
+            Ok(0) | Err(_) => break,
+            Ok(read) => {
+                consumed += read;
+                if sink[..read].contains(&b'\n') {
+                    break;
+                }
+            }
+        }
+    }
+    let _ = super::super::ipc_protocol::write_response(
+        &mut stream,
+        &super::super::ipc_protocol::IpcResponse::Err {
+            msg: REFUSED.into(),
+            code: Some(super::super::ipc::AUTH_REJECTED_CODE.into()),
+        },
+    );
+    let _ = stream.shutdown(Shutdown::Write);
 }
 
 fn authorized(hint: &Hint, host: &ShareHost, expected_token: &str) -> bool {
@@ -179,12 +255,19 @@ fn authorized(hint: &Hint, host: &ShareHost, expected_token: &str) -> bool {
                     .as_ref()
                     .is_some_and(|id| host.mounts.check_backend_token(id, token).is_ok())
         }
-        "mount_host_status" => {
+        "mount_host_status" | "mount_host_ext" => {
             hint.token_field.as_deref() == Some("session_token")
                 && hint
                     .id
                     .as_ref()
                     .is_some_and(|id| host.mounts.check_session_token(id, token).is_ok())
+        }
+        // `Vault::SpoolKey` carries the session token of its drive host in
+        // `token`; every other vault request carries the daemon token there.
+        "vault" => {
+            hint.token_field.as_deref() == Some("token")
+                && (constant_time_eq(expected_token, token)
+                    || host.mounts.is_host_session_token(token))
         }
         _ => {
             hint.token_field.as_deref() == Some("token") && constant_time_eq(expected_token, token)
@@ -220,10 +303,10 @@ mod tests {
             .unwrap();
         let deadline = Instant::now() + Duration::from_secs(1);
         loop {
-            if let Some(accepted) =
+            if let Some(verdict) =
                 inspect(&server, |hint| hint.token.as_deref() == Some("valid")).unwrap()
             {
-                assert!(accepted);
+                assert_eq!(verdict, Verdict::Admit);
                 break;
             }
             assert!(Instant::now() < deadline);
