@@ -87,9 +87,7 @@ fn install(state: &mut State, snapshot: LocalAppGrantSnapshot) {
     }
 }
 pub(crate) fn device(ui: &mut egui::Ui, device: &str, key: &str) {
-    ui.separator();
-    ui.heading("Eigene Programme für dieses Gerät freigeben");
-    ui.label("Wähle eine einzelne Direkt- oder Raumfreigabe. Die Appauswahl stammt aus der aktuellen Anmeldung auf diesem Host.");
+    ui.label("Die Appauswahl stammt aus der aktuellen Anmeldung auf diesem Rechner.");
     let id = egui::Id::new(("local-app-grants", device, key));
     let shared: Shared = ui.ctx().data_mut(|d| {
         d.get_temp_mut_or_insert_with(id, || Arc::new(Mutex::new(State::default())))

@@ -44,7 +44,6 @@ pub(crate) fn panel(ui: &mut egui::Ui, target: &ScreenTarget) {
     let mut selected = None;
     {
         let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
-        ui.heading("Einzelne Programmfenster");
         if ui
             .add_enabled(
                 !state.busy,
@@ -67,7 +66,8 @@ pub(crate) fn panel(ui: &mut egui::Ui, target: &ScreenTarget) {
             });
         }
         if let Some(error) = &state.error {
-            ui.colored_label(egui::Color32::RED, error);
+            let text = super::device_page_layout::explain_remote_error(error);
+            ui.colored_label(egui::Color32::RED, text);
         }
         if let Some(list) = &state.list {
             if list.entries.is_empty() {

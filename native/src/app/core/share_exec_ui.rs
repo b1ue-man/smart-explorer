@@ -1,8 +1,8 @@
-//! Tab „Befehle“ and the section „Zugriff“ of a device (PRM-M9): the open
-//! requests on top, one line per device with its access, „Ändern…“ and
-//! „Einstellungen“, then the jobs, this host's access log and „Konten
+//! Tab „Befehle“ and the screen/command card of a device (PRM-M9): the open
+//! requests on top, one line per device with its access and „Bildschirm- und
+//! Befehlsrechte …“, then the jobs, this host's access log and „Konten
 //! dieses Geräts“ (`share_access_accounts_ui.rs`); the card of one device
-//! with its access, „Ändern…“ (the access dialog,
+//! with its access, „Bildschirm- und Befehlsrechte ändern …“ (the dialog,
 //! `share_access_dialog_ui.rs`) and „Zugriff entziehen“. Every change goes
 //! to the worker through `Access::MutateGrant` at the revision shown.
 use super::App;
@@ -90,6 +90,17 @@ pub(in crate::app) fn ui_exec_overview(app: &mut App, ui: &mut egui::Ui) -> Opti
 /// The access section of one device (device page and tab „Befehle“);
 /// `false` when the key names no current device.
 pub(in crate::app) fn ui_exec_target(app: &mut App, ui: &mut egui::Ui, target_key: &str) -> bool {
+    ui_exec_card(app, ui, target_key, false)
+}
+
+/// The access card of one target; `compact` (device page) leaves out the
+/// device name, the identity and the rights list the page already shows.
+pub(in crate::app) fn ui_exec_card(
+    app: &mut App,
+    ui: &mut egui::Ui,
+    target_key: &str,
+    compact: bool,
+) -> bool {
     let views = exec_device_views(&app.share_profiles);
     let Some(view) = views
         .iter()
@@ -101,27 +112,8 @@ pub(in crate::app) fn ui_exec_target(app: &mut App, ui: &mut egui::Ui, target_ke
     let provider = cached_provider_status(ui);
     provider_line(ui, &provider);
     let now = crate::share::core_now_secs();
-    ui.horizontal_wrapped(|ui| {
-        ui.label(RichText::new(&view.device_name).strong());
-        ui.label(&view.relation);
-    });
-    egui::CollapsingHeader::new("Identität abgleichen")
-        .id_salt(("access_identity", &view.target_key))
-        .show(ui, |ui| {
-            ui.label("Fingerabdruck");
-            ui.monospace(&view.fingerprint);
-            if ui.button("Fingerabdruck kopieren").clicked() {
-                ui.ctx().copy_text(view.fingerprint.clone());
-            }
-        });
-    for (capability, label) in [
-        (Capability::ScreenView, "Bildschirm ansehen"),
-        (Capability::ScreenControl, "Bildschirm steuern"),
-        (Capability::ExecCommands, "Befehle"),
-        (Capability::ExecTerminal, "Terminal"),
-    ] {
-        let decision = view.access.decision_at(capability, now);
-        ui.label(format!("{label}: {}", decision_word(decision)));
+    if !compact {
+        identity_and_rights(ui, &view, now);
     }
     let account = view.access.account.label(&provider.user_label);
     ui.label(format!("Ausführen als: {account}"));
@@ -437,6 +429,32 @@ fn device_view(view: crate::share::ExecTargetView) -> ExecDeviceView {
         programs: view.programs,
         access: view.access,
         room_id: view.room_id,
+    }
+}
+
+/// Device name, relation, identity and the four rights of one access card.
+fn identity_and_rights(ui: &mut egui::Ui, view: &ExecDeviceView, now: i64) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new(&view.device_name).strong());
+        ui.label(&view.relation);
+    });
+    egui::CollapsingHeader::new("Identität abgleichen")
+        .id_salt(("access_identity", &view.target_key))
+        .show(ui, |ui| {
+            ui.label("Fingerabdruck");
+            ui.monospace(&view.fingerprint);
+            if ui.button("Fingerabdruck kopieren").clicked() {
+                ui.ctx().copy_text(view.fingerprint.clone());
+            }
+        });
+    for (capability, label) in [
+        (Capability::ScreenView, "Bildschirm ansehen"),
+        (Capability::ScreenControl, "Bildschirm steuern"),
+        (Capability::ExecCommands, "Befehle"),
+        (Capability::ExecTerminal, "Terminal"),
+    ] {
+        let decision = view.access.decision_at(capability, now);
+        ui.label(format!("{label}: {}", decision_word(decision)));
     }
 }
 

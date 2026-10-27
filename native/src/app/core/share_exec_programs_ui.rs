@@ -12,11 +12,10 @@ use crate::app::theme;
 use crate::share::access_catalog::{
     capability_catalog, CapabilityEntry, HelperState, HelperStatus, HostFacts,
 };
-use crate::share::access_grant::{AccessPreset, AccountProfile, Capability, CapabilityDecision};
+use crate::share::access_grant::{AccountProfile, Capability, CapabilityDecision};
 use crate::share::exec_helper_protocol::AccountChoiceProfile;
 use crate::share::ExecProviderStatus;
 
-use AccessPreset::{FullOwn, Programs, RemoteAccount};
 use CapabilityDecision::{Allow, Ask, Off};
 
 /// The periods the dialog offers, in hours.
@@ -242,6 +241,10 @@ pub(super) fn account_options(views: &[ExecDeviceView]) -> (Vec<AccountOption>, 
     (options.collect(), helper.state)
 }
 
+#[path = "share_access_controls_ui.rs"]
+mod controls_ui;
+pub(in crate::app) use controls_ui::controls;
+
 /// The capability rows of this host (S4 adds its rows to the catalog).
 pub(super) fn catalog(helper: HelperState) -> Vec<CapabilityEntry> {
     let account_helper = HelperStatus {
@@ -267,143 +270,6 @@ fn account_name(profile: &AccountProfile, own_label: &str) -> String {
         AccountProfile::Remote => "Fernzugriffskonto se-remote".into(),
         AccountProfile::Account { name } => format!("Konto {name}"),
     }
-}
-
-/// Presets, „Mit Rückfrage“, „Ausführen als“, the rows, the period and the
-/// program list of `draft`.
-pub(super) fn controls(
-    ui: &mut egui::Ui,
-    draft: &mut AccessDraft,
-    own_label: &str,
-    other_accounts: bool,
-) {
-    heading(ui, "VOREINSTELLUNG");
-    let remote = draft
-        .accounts
-        .iter()
-        .find(|o| o.profile == AccountProfile::Remote)
-        .cloned();
-    let presets = [
-        (
-            FullOwn,
-            format!("Volle Rechte als mein Konto ({own_label})"),
-            true,
-        ),
-        (
-            RemoteAccount,
-            "Eingeschränktes Fernzugriffskonto se-remote".into(),
-            remote.as_ref().is_some_and(|o| o.available),
-        ),
-        (Programs, "Nur bestimmte Programme".into(), true),
-    ];
-    for (preset, label, enabled) in presets {
-        if preset == RemoteAccount && remote.is_none() {
-            continue;
-        }
-        let response = ui.add_enabled(
-            enabled,
-            egui::RadioButton::new(draft.preset == Some(preset), label),
-        );
-        if response.clicked() {
-            draft.select(preset);
-        }
-    }
-    if let Some(reason) = remote.and_then(|option| option.reason) {
-        ui.small(reason);
-    }
-    if draft.preset.is_none() {
-        ui.add_enabled(false, egui::RadioButton::new(true, "Eigene Auswahl"));
-    }
-    let mut ask = draft.ask;
-    if ui
-        .checkbox(
-            &mut ask,
-            "Mit Rückfrage: jeder Start wartet auf eine Bestätigung an diesem Gerät",
-        )
-        .changed()
-    {
-        draft.set_ask(ask);
-    }
-    heading(ui, "AUSFÜHREN ALS");
-    egui::ComboBox::from_id_salt(("share_access_account", &draft.key))
-        .selected_text(account_name(&draft.account, own_label))
-        .show_ui(ui, |ui| {
-            for option in draft.accounts.clone() {
-                let label = account_name(&option.profile, own_label);
-                let chosen = option.profile == draft.account;
-                let response =
-                    ui.add_enabled(option.available, egui::SelectableLabel::new(chosen, label));
-                if response.clicked() {
-                    draft.set_account(option.profile);
-                }
-            }
-        });
-    if other_accounts {
-        ui.horizontal_wrapped(|ui| {
-            ui.label("Anderes lokales Konto:");
-            ui.add(egui::TextEdit::singleline(&mut draft.account_input).desired_width(140.0));
-            if ui.button("Wählen").clicked() {
-                let account = AccountProfile::Account {
-                    name: draft.account_input.trim().into(),
-                };
-                draft.account_error = account.validate().err();
-                if draft.account_error.is_none() {
-                    draft.set_account(account);
-                }
-            }
-        });
-        if let Some(error) = &draft.account_error {
-            ui.colored_label(theme::danger(ui), error);
-        }
-    }
-    heading(ui, "RECHTE");
-    ui.label("Dieser Dialog ändert Befehle, Terminal und Bildschirmrechte. Appstart, Anmeldezugang und TCP-Weiterleitung bleiben erhalten.");
-    let entries = catalog(draft.helper);
-    let wide = ui.available_width() >= egui::TextStyle::Body.resolve(ui.style()).size * 34.0;
-    if wide {
-        egui::Grid::new(("capability_table", &draft.key))
-            .num_columns(4)
-            .striped(true)
-            .show(ui, |ui| {
-                ui.strong("Fähigkeit");
-                let headers = [
-                    ui.strong("Aus").id,
-                    ui.strong("Fragen").id,
-                    ui.strong("Erlauben").id,
-                ];
-                ui.end_row();
-                for entry in &entries {
-                    let label = ui.label(entry.label).on_hover_text(entry.description);
-                    for (column, decision) in [Off, Ask, Allow].into_iter().enumerate() {
-                        capability_option(ui, draft, entry, decision, "")
-                            .labelled_by(label.id)
-                            .labelled_by(headers[column]);
-                    }
-                    ui.end_row();
-                }
-            });
-    } else {
-        for entry in &entries {
-            capability_row(ui, draft, entry);
-        }
-    }
-    heading(ui, "GÜLTIG");
-    period_choice(ui, draft);
-    let title = format!("Programmliste ({})", draft.programs.len());
-    egui::CollapsingHeader::new(title)
-        .id_salt(("share_access_programs", &draft.key))
-        .default_open(draft.preset == Some(Programs))
-        .show(ui, |ui| {
-            let (mut list, mut input, mut error) = (
-                draft.programs.clone(),
-                std::mem::take(&mut draft.program_input),
-                draft.error.take(),
-            );
-            if list_editor(ui, &draft.key, &mut list, &mut input, &mut error) {
-                draft.set_programs(list);
-            }
-            (draft.program_input, draft.error) = (input, error);
-        });
 }
 
 fn capability_row(ui: &mut egui::Ui, draft: &mut AccessDraft, entry: &CapabilityEntry) {

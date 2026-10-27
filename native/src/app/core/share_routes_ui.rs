@@ -10,7 +10,6 @@ pub(crate) fn device(
     device_id: &str,
     public_key: &str,
 ) {
-    ui.label(egui::RichText::new("VERBINDUNGSWEG").strong());
     let Some(routes) = routes else {
         ui.label("Für diesen Worker ist keine Routediagnose verfügbar.");
         return;
