@@ -131,12 +131,20 @@ pub(super) fn run_file(engine: &Engine<'_>, mut file: FileWork, buffer: &mut [u8
         match decide(engine, &mut file, &failure, asked_access) {
             Decision::Stop => return,
             Decision::Retry(delay) => {
+                engine.issues.note(
+                    &file.source,
+                    &format!("Neuer Versuch ab Byte 0 nach: {}", failure.error),
+                );
                 file.retried = true;
                 if !super::sleep_unless(engine.stop_flag(), delay) {
                     return;
                 }
             }
             Decision::Wait(delay) => {
+                engine.issues.note(
+                    &file.source,
+                    &format!("Gegenstelle ausgelastet: {}", failure.error),
+                );
                 if !super::sleep_unless(engine.stop_flag(), delay) {
                     return;
                 }

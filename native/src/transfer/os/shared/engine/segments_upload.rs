@@ -181,6 +181,10 @@ pub(super) fn conclude(
         stage,
         moved,
     } = ranges;
+    // Helper bytes belong to this file: a failure at any later step (held
+    // stage, source check, finish, publication) gives them back with the
+    // owner's (`worker::run_file`); on success nothing reads them.
+    meter.absorb(moved);
     let Some(stage) = stage else {
         return Err(OpError::at(
             At::Unknown,
@@ -212,7 +216,6 @@ pub(super) fn conclude(
         }
         Err(SegmentError::Failed(error)) => {
             stage.abort();
-            meter.absorb(moved);
             Err(error)
         }
     }
