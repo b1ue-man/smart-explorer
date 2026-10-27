@@ -207,6 +207,16 @@ pub(super) fn ini(path: &Path) -> Result<BTreeMap<(String, String), String>, Str
     }
     Ok(values)
 }
+/// The section names of an ini file in file order.
+pub(super) fn ini_sections(path: &Path) -> Result<Vec<String>, String> {
+    let text = read_text(path)?;
+    Ok(text
+        .lines()
+        .map(str::trim)
+        .filter_map(|line| line.strip_prefix('[').and_then(|s| s.strip_suffix(']')))
+        .map(str::to_string)
+        .collect())
+}
 pub(super) fn argument<'a>(command: &'a [String], name: &str) -> Option<&'a str> {
     command.iter().enumerate().find_map(|(index, value)| {
         if value == name {
