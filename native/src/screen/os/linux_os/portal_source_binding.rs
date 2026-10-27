@@ -40,6 +40,31 @@ fn failed(error: impl std::fmt::Display) -> Refusal {
     Refusal::Failed(format!("portal_source_binding: {error}"))
 }
 
+/// SelectSources options within what the portal advertises. The ScreenCast
+/// spec: `cursor_mode` "must be one of the cursor modes advertised in
+/// AvailableCursorModes. Setting a cursor mode not advertised will cause the
+/// screen cast session to be closed." The pointer is embedded when offered,
+/// else the portal default (Hidden) applies; monitors and windows as far as
+/// AvailableSourceTypes lists either (unreadable: both, as before).
+pub(crate) async fn advertised_sources(
+    screencast: &ashpd::desktop::screencast::Screencast,
+) -> ashpd::desktop::screencast::SelectSourcesOptions {
+    use ashpd::desktop::screencast::{CursorMode, SelectSourcesOptions, SourceType};
+    let wanted = SourceType::Monitor | SourceType::Window;
+    let types = match screencast.available_source_types().await {
+        Ok(available) if !(available & wanted).is_empty() => available & wanted,
+        _ => wanted,
+    };
+    let cursor = match screencast.available_cursor_modes().await {
+        Ok(modes) if modes.contains(CursorMode::Embedded) => Some(CursorMode::Embedded),
+        _ => None,
+    };
+    SelectSourcesOptions::default()
+        .set_cursor_mode(cursor)
+        .set_sources(types)
+        .set_multiple(false)
+}
+
 pub(crate) fn session_path<T: SessionPortal>(session: &Session<T>) -> Result<String, Refusal> {
     serde_json::to_value(session)
         .map_err(failed)?

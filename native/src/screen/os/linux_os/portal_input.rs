@@ -16,9 +16,7 @@
 use std::sync::{Arc, Mutex, PoisonError};
 
 use ashpd::desktop::remote_desktop::{DeviceType, KeyState, RemoteDesktop, SelectDevicesOptions};
-use ashpd::desktop::screencast::{
-    CursorMode, OpenPipeWireRemoteOptions, Screencast, SelectSourcesOptions, SourceType,
-};
+use ashpd::desktop::screencast::{OpenPipeWireRemoteOptions, Screencast};
 use ashpd::desktop::{PersistMode, Session};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
@@ -324,10 +322,7 @@ async fn negotiate(
         .map_err(refusal)?
         .response()
         .map_err(refusal)?;
-    let sources = SelectSourcesOptions::default()
-        .set_cursor_mode(CursorMode::Embedded)
-        .set_sources(SourceType::Monitor | SourceType::Window)
-        .set_multiple(false);
+    let sources = source_binding::advertised_sources(screencast).await;
     screencast
         .select_sources(session, sources)
         .await
