@@ -300,3 +300,19 @@ class ScreenInputMapper(
         }
     }
 }
+
+/**
+ * What the screen keyboard field's change from [before] to [after] means for
+ * the remote host: how many characters to delete with backspace, then which
+ * text to type. Works wherever the IME edits (append, autocorrect of the
+ * word before the cursor, deletion); padding characters are never typed.
+ */
+internal fun keyboardEdit(before: String, after: String): Pair<Int, String> {
+    val prefix = before.commonPrefixWith(after).length
+    val suffix = before.substring(prefix).commonSuffixWith(after.substring(prefix)).length
+    // A deleted padding character is a backspace the user pressed on an
+    // empty field: it deletes on the remote side as well.
+    val removed = before.length - suffix - prefix
+    val inserted = after.substring(prefix, after.length - suffix).replace("\u200B", "")
+    return removed to inserted
+}
