@@ -142,6 +142,14 @@ impl BackendExtensions for CachingBackend {
         calls::hash_walk(&*self.inner, root, request, tx, cancel)
     }
 
+    fn content_digest(
+        &self,
+        path: &str,
+        cancel: &AtomicBool,
+    ) -> VfsResult<Option<crate::vfs::ContentDigest>> {
+        crate::vfs::content_digest(&*self.inner, path, cancel)
+    }
+
     fn supports_recycle(&self, path: &str) -> VfsResult<bool> {
         calls::supports_recycle(&*self.inner, path)
     }

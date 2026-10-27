@@ -374,6 +374,9 @@ pub(in crate::share) fn run(
     cancel: Arc<AtomicBool>,
     p: Progress,
 ) -> io::Result<()> {
+    if request.single_file {
+        return crate::share::host_hash_file::run(request, access, tx, cancel, p);
+    }
     if request.algo == Some(FsHashAlgo::Unknown) {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,

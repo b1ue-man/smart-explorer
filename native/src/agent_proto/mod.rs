@@ -16,6 +16,9 @@ mod codec;
 #[cfg(test)]
 #[path = "core/codec_tests.rs"]
 mod codec_tests;
+#[cfg(test)]
+#[path = "core/content_digest_task_tests.rs"]
+mod content_digest_task_tests;
 #[path = "core/credit.rs"]
 mod credit;
 #[cfg(test)]
@@ -74,6 +77,8 @@ mod server;
 mod server_session;
 #[path = "core/session.rs"]
 mod session;
+#[path = "core/sha256.rs"]
+mod sha256;
 #[path = "os/shared/stage_ops.rs"]
 mod stage_ops;
 #[path = "os/shared/transfer.rs"]

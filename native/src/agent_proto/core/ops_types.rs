@@ -24,6 +24,11 @@ pub mod query {
     /// 1 = the folder is deleted in one operation next to the data
     /// (`Frame::RemoveTree`). Older servers answer 0 and never get that frame.
     pub const REMOVE_TREE: u8 = 6;
+    /// 1 = `WalkHashed2` with `digest::SHA256` takes one regular file as its
+    /// root and answers it as one `HashEntry` with an empty `rel` (only the
+    /// digest crosses the connection). Older servers answer 0 and never get
+    /// such a walk.
+    pub const FILE_DIGEST: u8 = 7;
 }
 
 /// `WireOmission::reason` codes.

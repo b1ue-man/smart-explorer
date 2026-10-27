@@ -516,6 +516,8 @@ mod fs_path_adapter;
 mod fs_policy;
 #[path = "os/shared/host_duplicate_verify.rs"]
 mod host_duplicate_verify;
+#[path = "os/shared/host_hash_file.rs"]
+mod host_hash_file;
 #[path = "os/shared/host_hash_walk.rs"]
 mod host_hash_walk;
 #[path = "os/shared/host_list.rs"]
@@ -534,6 +536,8 @@ mod node_apps;
 mod node_apps_link;
 #[path = "core/node_policy.rs"]
 mod node_policy;
+#[path = "core/peer_content_digest.rs"]
+mod peer_content_digest;
 #[path = "core/peer_duplicates.rs"]
 mod peer_duplicates;
 #[path = "core/peer_extensions.rs"]

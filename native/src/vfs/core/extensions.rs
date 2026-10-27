@@ -236,6 +236,19 @@ pub trait BackendExtensions: Backend {
         Ok(false)
     }
 
+    /// SHA-256 of the regular file `path`, computed on the device that stores
+    /// it (call it through `vfs::content_digest`). `Ok(None)` = not possible
+    /// without moving the content over the network; the default for every
+    /// backend and for wrappers that do not forward it.
+    fn content_digest(
+        &self,
+        path: &str,
+        cancel: &AtomicBool,
+    ) -> VfsResult<Option<super::ContentDigest>> {
+        let _ = (path, cancel);
+        Ok(None)
+    }
+
     /// Whether `recycle` can move `path` into its device's trash.
     fn supports_recycle(&self, path: &str) -> VfsResult<bool> {
         let _ = path;

@@ -152,6 +152,13 @@ impl BackendExtensions for PeerBackend {
         }
         super::peer_hash_walk::walk(self, root, request, tx, cancel)
     }
+    fn content_digest(
+        &self,
+        path: &str,
+        cancel: &AtomicBool,
+    ) -> io::Result<Option<crate::vfs::ContentDigest>> {
+        super::peer_content_digest::digest(self, path, cancel)
+    }
     fn supports_recycle(&self, path: &str) -> io::Result<bool> {
         Ok(peer_stream::features(self, path)?.remote_trash_v1)
     }

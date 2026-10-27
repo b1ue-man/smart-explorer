@@ -248,6 +248,8 @@ impl CopyPastePeerFixture {
 
 #[path = "analysis_request_id_task_tests.rs"]
 mod analysis_request_id_task_tests;
+#[path = "content_digest_task_tests.rs"]
+mod content_digest_task_tests;
 #[path = "direct_open_task_tests.rs"]
 mod direct_open_task_tests;
 #[path = "lz4_stream_loopback_tests.rs"]

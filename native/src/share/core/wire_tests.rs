@@ -159,6 +159,7 @@ fn one_of_each() -> Vec<FsRequest> {
             path: path(),
             algo: Some(FsHashAlgo::Md5),
             min_bytes: 0,
+            single_file: false,
         }),
         FsRequest::ListDirBatch(FsListBatch {
             path: path(),

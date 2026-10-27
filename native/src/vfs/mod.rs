@@ -32,6 +32,10 @@ pub use self::capacity::{
 mod capabilities;
 #[path = "core/congestion.rs"]
 mod congestion;
+#[path = "core/content_digest.rs"]
+mod content_digest;
+pub use self::content_digest::{content_digest, ContentDigest};
+pub(crate) use self::content_digest::{digest_by_local_read, is_sha256_hex, sha256_exact};
 #[path = "os/shared/copy_transfer.rs"]
 mod copy_transfer;
 #[path = "core/core.rs"]
@@ -170,6 +174,9 @@ pub(crate) use self::promotion::{promote_staged_no_replace_with, promote_staged_
 pub use self::ranges::SegmentedStage;
 pub use self::unpublished::{unpublished_error, unpublished_of};
 
+#[cfg(test)]
+#[path = "core/content_digest_task_tests.rs"]
+mod content_digest_task_tests;
 #[cfg(test)]
 #[path = "os/shared/copy_paste_task_tests.rs"]
 mod copy_paste_task_tests;
