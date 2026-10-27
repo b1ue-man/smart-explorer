@@ -11,7 +11,7 @@ impl App {
                 let name = zip_path.rsplit('/').next().unwrap_or("Archiv").to_string();
                 self.remote = Some(crate::connect::RemoteState {
                     backend: Arc::new(be),
-                    label: format!("📦 {}", name),
+                    label: name.to_string(),
                     agent_version: None,
                     zip_return: parent,
                     sftp: None,
@@ -58,7 +58,7 @@ impl App {
         match spawn {
             Ok(_) => {
                 self.remote_op_rx = Some(rx);
-                self.notice = Some((format!("📦 Entpacke „{name}“…"), std::time::Instant::now()));
+                self.notice = Some((format!("Entpacke „{name}“…"), std::time::Instant::now()));
             }
             Err(error) => {
                 self.remote_op_rx = None;

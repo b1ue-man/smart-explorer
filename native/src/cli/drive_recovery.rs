@@ -35,6 +35,12 @@ enum RecoveryCommand {
         #[arg(long)]
         json: bool,
     },
+    #[command(about = "Delete an inactive recovery and the cached changes it retains; the saved package stays")]
+    Discard {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
     #[command(about = "Restore an inactive package as a stopped mount; auto-remount remains off")]
     Reactivate {
         id: String,
@@ -70,6 +76,14 @@ pub(super) fn run(args: RecoveryArgs) -> Result<i32, String> {
         RecoveryCommand::Import { package, json } => {
             let record = crate::daemon::import_mount_recovery(absolute(package)?)?;
             print_record(&record, json)?;
+        }
+        RecoveryCommand::Discard { id, json } => {
+            crate::daemon::discard_mount_recovery(id.clone())?;
+            if json {
+                println!("{}", serde_json::json!({ "discarded": id }));
+            } else {
+                println!("recovery\tgelöscht\t{id}");
+            }
         }
         RecoveryCommand::Reactivate { id, json } => {
             let snapshot = crate::daemon::reactivate_mount_recovery(id)?;

@@ -400,10 +400,10 @@ impl App {
             .striped(false)
             .show(ui, |ui| {
                 ui.label("Dateien");
-                ui.label(format!("{}", s.files));
+                ui.label(s.files.to_string());
                 ui.end_row();
                 ui.label("Ordner");
-                ui.label(format!("{}", s.dirs));
+                ui.label(s.dirs.to_string());
                 ui.end_row();
                 ui.label("Gesamtgröße");
                 ui.label(format_bytes(s.bytes));

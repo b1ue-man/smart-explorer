@@ -29,15 +29,15 @@ pub(in crate::app) enum PickerPurpose {
 impl PickerPurpose {
     pub(in crate::app) fn title(&self) -> &'static str {
         match self {
-            PickerPurpose::SyncSource => "📂 Quelle wählen",
-            PickerPurpose::SyncTarget => "📂 Ziel wählen",
-            PickerPurpose::ScanFolder => "📂 Ordner öffnen",
-            PickerPurpose::AnalyticsFolder => "📂 Ordner für Analyse",
+            PickerPurpose::SyncSource => "Quelle wählen",
+            PickerPurpose::SyncTarget => "Ziel wählen",
+            PickerPurpose::ScanFolder => "Ordner öffnen",
+            PickerPurpose::AnalyticsFolder => "Ordner für Analyse",
             PickerPurpose::ReclaimFolder => "Ordner fuer Aufraeumen",
-            PickerPurpose::MirrorDest => "📂 Ziel zum Spiegeln",
-            PickerPurpose::BisyncDest => "📂 Ziel für 2-Wege-Sync",
-            PickerPurpose::CopyDest => "📂 Zielordner wählen",
-            PickerPurpose::DownloadTo { .. } => "📂 Speichern unter…",
+            PickerPurpose::MirrorDest => "Ziel zum Spiegeln",
+            PickerPurpose::BisyncDest => "Ziel für 2-Wege-Sync",
+            PickerPurpose::CopyDest => "Zielordner wählen",
+            PickerPurpose::DownloadTo { .. } => "Speichern unter…",
         }
     }
     /// Stable geometry keys are independent of labels, paths and endpoints.

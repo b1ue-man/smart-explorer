@@ -25,6 +25,7 @@ pub(super) struct MountUiState {
     received_initial_list: bool,
     pub(super) recovery_draft: Option<recovery_ui::RecoveryDraft>,
     pub(super) recoveries: Vec<crate::mount::InactiveMountRecovery>,
+    pub(super) discard: Option<recovery_ui::Discard>,
 }
 
 pub(super) enum MountUiResult {
@@ -37,6 +38,12 @@ pub(super) enum MountUiResult {
     Opened,
     RecoverySaved(crate::mount::InactiveMountRecovery),
     RecoveryList(Vec<crate::mount::InactiveMountRecovery>),
+    /// Cached changes deleted: the drive entry and/or the recovery are gone.
+    Discarded {
+        mount: Option<crate::mount::MountId>,
+        recovery: Option<String>,
+        label: String,
+    },
 }
 
 impl Default for MountUiState {
@@ -52,6 +59,7 @@ impl Default for MountUiState {
             received_initial_list: false,
             recovery_draft: None,
             recoveries: Vec::new(),
+            discard: None,
         }
     }
 }
@@ -124,6 +132,17 @@ impl App {
                         self.mount_ui.received_initial_list = true;
                         if initial && has_mount_attention(&mounts) {
                             self.mount_ui.show_manager = true;
+                        } else if let Some(mount) = mounts
+                            .iter()
+                            .find(|mount| initial && mount.recovery.requires_retention())
+                        {
+                            self.notice = Some((
+                                format!(
+                                    "Laufwerk „{}“ hat gecachte Änderungen; verwalten unter Laufwerke",
+                                    mount.config.label
+                                ),
+                                Instant::now(),
+                            ));
                         }
                         let alert = mount_list_alert(&self.mount_ui.mounts, &mounts, initial);
                         mounts.retain(|mount| {
@@ -154,6 +173,19 @@ impl App {
                         self.mount_ui.recoveries.push(record);
                     }
                     MountUiResult::RecoveryList(records) => self.mount_ui.recoveries = records,
+                    MountUiResult::Discarded { mount, recovery, label } => {
+                        if let Some(mount) = mount {
+                            self.mount_ui.mounts.retain(|known| known.config.id != mount);
+                        }
+                        if let Some(recovery) = recovery {
+                            self.mount_ui.recoveries.retain(|known| known.id != recovery);
+                        }
+                        self.mount_ui.discard = None;
+                        self.notice = Some((
+                            format!("Gecachte Änderungen von „{label}“ gelöscht"),
+                            Instant::now(),
+                        ));
+                    }
                     MountUiResult::Options(snapshot) => {
                         let state = if snapshot.config.auto_remount {
                             "ein"
@@ -205,6 +237,7 @@ impl App {
         self.ui_mount_draft(ctx);
         self.ui_mount_manager(ctx);
         self.ui_mount_recovery(ctx);
+        self.ui_mount_discard(ctx);
     }
 
     fn ui_mount_manager(&mut self, ctx: &egui::Context) {
@@ -220,6 +253,7 @@ impl App {
         let mut open_folder: Option<std::path::PathBuf> = None;
         let mut install_runtime = false;
         let mut save_recovery = None;
+        let mut discard_request = None;
         let mut show_recoveries = false;
         super::dialog_geometry::window(ctx, "mount_ui.0", "Smart-Explorer-Laufwerke")
             .id(egui::Id::new("Smart-Explorer-Laufwerke"))
@@ -297,6 +331,14 @@ impl App {
                                         egui::Button::new("Sichern und entfernen")).clicked() {
                                     save_recovery = Some((mount.config.id.clone(), mount.config.label.clone()));
                                 }
+                                if mount.recovery.requires_retention()
+                                    && ui.add_enabled(self.mount_ui.action_rx.is_none(),
+                                        egui::Button::new("Änderungen löschen und entfernen")).clicked() {
+                                    discard_request = Some(recovery_ui::Discard::Drive {
+                                        id: mount.config.id.clone(),
+                                        label: mount.config.label.clone(),
+                                    });
+                                }
                             }
                             crate::mount::MountStatus::Unmounted => {}
                             _ => {
@@ -332,13 +374,18 @@ impl App {
                 ui.separator();
                 show_recoveries = ui.add_enabled(self.mount_ui.action_rx.is_none(),
                     egui::Button::new("Inaktiven Recoverybestand anzeigen")).clicked();
-                recovery_ui::show_retained(ui, &self.mount_ui.recoveries);
+                if let Some((id, label)) = recovery_ui::show_retained(ui, &self.mount_ui.recoveries) {
+                    discard_request = Some(recovery_ui::Discard::Recovery { id, label });
+                }
                 let enabled = self.mount_ui.action_rx.is_none();
                 ui.horizontal(|ui| {
                     install_runtime = install_controls(ui, enabled, "Dokany-Laufzeit / Hilfe");
                 });
             });
         self.mount_ui.show_manager = open;
+        if discard_request.is_some() {
+            self.mount_ui.discard = discard_request;
+        }
         if let Some((id, label)) = save_recovery {
             self.mount_ui.recovery_draft = Some(recovery_ui::RecoveryDraft::new(id, label));
         } else if show_recoveries {

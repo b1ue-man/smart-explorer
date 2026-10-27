@@ -32,7 +32,7 @@ impl App {
                 self.agent_activate_rx = Some(rx);
                 self.agent_activate_for = Some(target);
                 self.notice = Some((
-                    "⚡ Aktiviere Remote-Agent…".to_string(),
+                    "Aktiviere Remote-Agent…".to_string(),
                     std::time::Instant::now(),
                 ));
             }
@@ -79,7 +79,7 @@ impl App {
                         ));
                     } else {
                         self.notice = Some((
-                            "⚡ Remote-Agent aktiv".to_string(),
+                            "Remote-Agent aktiv".to_string(),
                             std::time::Instant::now(),
                         ));
                     }
@@ -170,7 +170,7 @@ impl App {
             return;
         }
         let (tx, rx) = unbounded();
-        let notice = format!("⬇ Lade v{version} …");
+        let notice = format!("Lade v{version} …");
         let spawn = std::thread::Builder::new()
             .name("version-dl".into())
             .spawn(move || {
@@ -217,7 +217,7 @@ impl App {
             Ok(_) => {
                 self.update_rx = Some(rx);
                 self.notice = Some((
-                    format!("⬇ Stage Update v{shown_version} …"),
+                    format!("Stage Update v{shown_version} …"),
                     std::time::Instant::now(),
                 ));
             }
@@ -241,7 +241,7 @@ impl App {
                     if !self.update_release_notified {
                         self.update_release_notified = true;
                         self.notice = Some((
-                            format!("⬆ Update verfügbar: v{v} — im Update-Menü installierbar"),
+                            format!("Update verfügbar: v{v} — im Update-Menü installierbar"),
                             std::time::Instant::now(),
                         ));
                     }

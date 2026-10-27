@@ -64,7 +64,7 @@ impl App {
             String::new()
         };
 
-        super::dialog_geometry::window(ctx, "reclaim_ui.0", "📊 Speicher-Analyse")
+        super::dialog_geometry::window(ctx, "reclaim_ui.0", "Speicher-Analyse")
             .id(egui::Id::new("analyse_reclaim"))
             .open(&mut open)
             .collapsible(false)

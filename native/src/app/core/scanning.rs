@@ -58,11 +58,10 @@ impl App {
             self.filter.text.clear();
             self.text_draft.clear();
         }
-        let root_text = if self.remote.is_some() && !is_local_style(&requested) {
-            requested.into_owned()
-        } else {
-            local_path_text(&root)
-        };
+        // Remote roots too: a Windows `PathBuf` separates with `\`, which
+        // vault and Share backends reject, while Unix keeps `\` as a name
+        // character (`local_path_text` is the identity there).
+        let root_text = local_path_text(&root);
         if self.root_path != root_text {
             self.tree.collapsed.clear();
             self.read_access = Default::default();
@@ -242,7 +241,7 @@ impl App {
         self.scan_handle = Some(handle);
         self.scan_running = true;
         self.notice = Some((
-            "🔎 Server-Suche läuft…".to_string(),
+            "Server-Suche läuft…".to_string(),
             std::time::Instant::now(),
         ));
     }

@@ -1,7 +1,7 @@
 //! A drive that mounts a remote place (a Share device, a saved connection,
 //! Google Drive) is analysed by that place instead of being walked through
 //! the mount: a Share device analyses its own disk with its local worker,
-//! exactly as "📡 Remote-Ordner" does. The analysis stays the drive path for
+//! exactly as "Remote-Ordner" does. The analysis stays the drive path for
 //! everything shown and opened; only the walk goes to the remote.
 use super::prelude::format_bytes;
 use crate::mount::{MountSnapshot, MountSource, MountStatus, PeerMountTarget};

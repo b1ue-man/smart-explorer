@@ -53,7 +53,7 @@ impl App {
         }
         ui.horizontal(|ui| {
             if ui
-                .small_button("📜 Protokoll")
+                .small_button("Protokoll")
                 .on_hover_text("Protokoll der Hintergrund-Sync-Läufe anzeigen")
                 .clicked()
             {

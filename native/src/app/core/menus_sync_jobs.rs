@@ -9,8 +9,8 @@ impl App {
     /// Read-only viewer for the background daemon's run log (Group J).
     pub(in crate::app) fn ui_daemon_log(&mut self, ctx: &egui::Context) {
         let mut open = self.show_daemon_log;
-        super::dialog_geometry::window(ctx, "menus_sync_jobs.0", "📜 Sync-Protokoll")
-            .id(egui::Id::new("📜 Sync-Protokoll"))
+        super::dialog_geometry::window(ctx, "menus_sync_jobs.0", "Sync-Protokoll")
+            .id(egui::Id::new("Sync-Protokoll"))
             .open(&mut open)
             .collapsible(false)
             .resizable(true)
@@ -59,8 +59,8 @@ impl App {
             .map(|job| job.id.clone())
             .collect();
         let states = super::sync_job_state_ui::states(ctx, &jobs);
-        super::dialog_geometry::window(ctx, "menus_sync_jobs.1", "⚙ Sync-Setups")
-            .id(egui::Id::new("⚙ Sync-Setups"))
+        super::dialog_geometry::window(ctx, "menus_sync_jobs.1", "Sync-Setups")
+            .id(egui::Id::new("Sync-Setups"))
             .open(&mut open)
             .collapsible(false)
             .resizable(true)
@@ -117,7 +117,7 @@ impl App {
                                         toggle_id = Some(j.id.clone());
                                     }
                                     if vault_row.has_versions && ui.small_button("Versionen").clicked() { versions_id = Some(j.id.clone()); }
-                                    if ui.small_button("📜 Protokoll").on_hover_text("Live-Protokoll dieses Syncs: jeder gelesene Ordner, jeder Vergleich, jede Aktion").clicked() {
+                                    if ui.small_button("Protokoll").on_hover_text("Live-Protokoll dieses Syncs: jeder gelesene Ordner, jeder Vergleich, jede Aktion").clicked() {
                                         let name = if j.name.trim().is_empty() { j.id.clone() } else { j.name.clone() };
                                         super::sync_job_log_ui::open(ctx, &j.id, &name);
                                     }
@@ -132,7 +132,7 @@ impl App {
                                         run_id = Some(j.id.clone());
                                     }
                                     if !self.preview_running
-                                        && ui.small_button("🔍 Vergleichen").on_hover_text("Beide Seiten vergleichen, ohne etwas zu ändern (zeigt, was synchronisiert würde)").clicked()
+                                        && ui.small_button("Vergleichen").on_hover_text("Beide Seiten vergleichen, ohne etwas zu ändern (zeigt, was synchronisiert würde)").clicked()
                                     {
                                         compare_id = Some(j.id.clone());
                                     }

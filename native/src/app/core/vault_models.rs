@@ -29,16 +29,6 @@ impl RowState {
         }
     }
 
-    /// The mark after the label.
-    pub(crate) fn icon(self) -> &'static str {
-        match self {
-            Self::Locked => "🔒",
-            Self::Unlocked => "🔓",
-            Self::Locking => "⏳",
-            Self::Unavailable => "⚠",
-        }
-    }
-
     pub(crate) fn title(self) -> &'static str {
         match self {
             Self::Locked => "Gesperrt",

@@ -213,15 +213,9 @@ impl App {
                             ))
                             .paint_at(ui, icon_rect);
                         } else {
+                            // The system icon arrives with the next frame; no
+                            // text symbol stands in for it meanwhile.
                             needed_icons.push(key);
-                            let emoji = if e.is_dir { "📁" } else { "📄" };
-                            ui.painter().text(
-                                icon_center,
-                                egui::Align2::CENTER_CENTER,
-                                emoji,
-                                egui::TextStyle::Body.resolve(ui.style()),
-                                color,
-                            );
                         }
                         paint_cell_text(ui, rect, e.name.as_ref(), false, color, indent + 20.0);
                         handle_resp(resp, ui, "Name", e.name.as_ref());

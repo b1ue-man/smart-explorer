@@ -40,6 +40,10 @@ pub(crate) enum DriveIpcRequest {
     RecoveryReactivate {
         id: String,
     },
+    /// Deletes an inactive recovery and the cache it owns.
+    RecoveryDiscard {
+        id: String,
+    },
     /// `se drive set`, the drive window: the options of a managed drive.
     SetOptions {
         id: MountId,
@@ -85,6 +89,7 @@ impl DriveIpcRequest {
                 | Self::RecoverySaveRemove { .. }
                 | Self::RecoveryImport { .. }
                 | Self::RecoveryReactivate { .. }
+                | Self::RecoveryDiscard { .. }
                 | Self::MountPathFor { .. }
                 | Self::DevicesEnable { .. }
                 | Self::DevicesDisable
@@ -109,6 +114,10 @@ pub(crate) fn serve(
         DriveIpcRequest::RecoveryImport { package } => {
             recovery_answer(host.mounts.recovery_import(&package))
         }
+        DriveIpcRequest::RecoveryDiscard { id } => match host.mounts.recovery_discard(&id) {
+            Ok(()) => IpcResponse::Ok,
+            Err(msg) => IpcResponse::Err { msg, code: None },
+        },
         DriveIpcRequest::RecoveryReactivate { id } => match host.mounts.recovery_reactivate(&id) {
             Ok(mount) => IpcResponse::Mount { mount },
             Err(msg) => IpcResponse::Err { msg, code: None },

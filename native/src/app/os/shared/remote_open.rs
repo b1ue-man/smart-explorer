@@ -170,7 +170,7 @@ impl App {
             Ok(_) => {
                 self.file_open_rx.push((rx, mode, dest));
                 self.notice = Some((
-                    format!("⬇ Öffne „{}“ (Speichern landet auf dem Remote)…", name),
+                    format!("Öffne „{}“ (Speichern landet auf dem Remote)…", name),
                     std::time::Instant::now(),
                 ));
             }

@@ -110,11 +110,11 @@ pub(in crate::app) enum RemoteEditableFile {
 impl RemoteEditableFile {
     pub(in crate::app) fn details(self) -> (&'static str, &'static str, &'static str) {
         match self {
-            Self::Text => ("📄 Textdatei (.txt)", "Neue Textdatei", "txt"),
-            Self::Markdown => ("📝 Markdown (.md)", "Neue Notiz", "md"),
-            Self::Csv => ("📊 CSV (.csv)", "Neue Tabelle", "csv"),
-            Self::Json => ("🔧 JSON (.json)", "Neue Datei", "json"),
-            Self::Html => ("🌐 HTML (.html)", "Neue Seite", "html"),
+            Self::Text => ("Textdatei (.txt)", "Neue Textdatei", "txt"),
+            Self::Markdown => ("Markdown (.md)", "Neue Notiz", "md"),
+            Self::Csv => ("CSV (.csv)", "Neue Tabelle", "csv"),
+            Self::Json => ("JSON (.json)", "Neue Datei", "json"),
+            Self::Html => ("HTML (.html)", "Neue Seite", "html"),
             Self::Rust => ("</> Code (.rs)", "Neue Datei", "rs"),
         }
     }

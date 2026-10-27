@@ -81,6 +81,14 @@ pub fn reactivate_mount_recovery(id: String) -> Result<MountSnapshot, String> {
     }
 }
 
+/// Deletes an inactive recovery and the cache it owns (the saved package stays).
+pub fn discard_mount_recovery(id: String) -> Result<(), String> {
+    match recovery_request(DriveIpcRequest::RecoveryDiscard { id })? {
+        IpcResponse::Ok => Ok(()),
+        _ => Err("Unerwartete Recoverylösch-IPC-Antwort".into()),
+    }
+}
+
 fn recovery_request(req: DriveIpcRequest) -> Result<IpcResponse, String> {
     super::ipc_client::ensure_worker_ready()?;
     let (mut stream, token) = authenticated_stream(CONTROL_TIMEOUT)?;

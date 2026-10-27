@@ -85,12 +85,12 @@ impl App {
                                         ui.label(
                                             RichText::new("ORTE").small().color(theme::muted(ui)),
                                         );
-                                        if ui.selectable_label(false, "🏠 Home").clicked() {
+                                        if ui.selectable_label(false, "Home").clicked() {
                                             open_local = Some(home.clone());
                                         }
                                         for (d, _f, _t) in &drives {
                                             if ui
-                                                .selectable_label(false, format!("💽 {}", d))
+                                                .selectable_label(false, d.to_string())
                                                 .clicked()
                                             {
                                                 open_local = Some(d.clone());
@@ -113,7 +113,7 @@ impl App {
                                             }
                                             if gdrive_connected
                                                 && ui
-                                                    .selectable_label(false, "☁ Google Drive")
+                                                    .selectable_label(false, "Google Drive")
                                                     .clicked()
                                             {
                                                 open_gdrive = true;
@@ -122,7 +122,7 @@ impl App {
                                                 if ui
                                                     .selectable_label(
                                                         false,
-                                                        format!("🖧 {}", c.display()),
+                                                        c.display().to_string(),
                                                     )
                                                     .on_hover_text(c.to_target())
                                                     .clicked()
@@ -170,7 +170,7 @@ impl App {
                                 ui.set_height(body_height);
                                 ui.set_width(ui.available_width());
                                 ui.horizontal(|ui| {
-                                    if ui.button("⬆ Hoch").clicked() {
+                                    if ui.button("Hoch").clicked() {
                                         go_up = true;
                                     }
                                     if !conn_label.is_empty() {
@@ -231,7 +231,7 @@ impl App {
                                         for (index, name) in entries.iter().enumerate() {
                                             let response = ui.selectable_label(
                                                 selected == Some(index),
-                                                format!("📁 {}", name),
+                                                name.to_string(),
                                             );
                                             if response.clicked() {
                                                 selected = Some(index);

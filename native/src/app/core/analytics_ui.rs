@@ -101,7 +101,7 @@ impl App {
         let mut recomputed: Option<(Vec<TmCell>, egui::Rect)> = None;
 
         {
-            super::dialog_geometry::window(ctx, "analytics_ui.0", "📊 Speicher-Analyse")
+            super::dialog_geometry::window(ctx, "analytics_ui.0", "Speicher-Analyse")
                 .id(egui::Id::new("analyse_treemap_v2"))
                 .open(&mut open)
                 .collapsible(false)
@@ -195,7 +195,7 @@ impl App {
                                 ui.label(
                                     RichText::new(format!(
                                         "{}{}",
-                                        if cell.is_dir { "📁 " } else { "" },
+                                        if cell.is_dir { "Ordner: " } else { "" },
                                         cell.name
                                     ))
                                     .strong(),

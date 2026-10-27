@@ -70,7 +70,7 @@ fn transfer_engine_task_rows_list_counts_activity_and_tallies() {
         tally_line(&running).as_deref(),
         Some("übersprungen: 3 · Fehler: 1.234")
     );
-    assert_eq!(kind_icon(TransferKind::Upload), "⬆");
+    assert_eq!(kind_icon(TransferKind::Upload), "↑");
     assert_eq!(kind_icon(TransferKind::RemoteCopy), "⇄");
 }
 

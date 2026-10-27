@@ -166,12 +166,12 @@ impl App {
                 let q = raw.trim_start().trim_start_matches('>').trim();
                 let cmds: &[(&str, &str, OmniCmd)] = &[
                     ("＋", "Neuer Ordner", OmniCmd::NewFolder),
-                    ("🗗", "Im Explorer anzeigen", OmniCmd::Reveal),
+                    ("↗", "Im Explorer anzeigen", OmniCmd::Reveal),
                     ("▶", "Terminal hier öffnen", OmniCmd::Terminal),
                     ("⧉", "Pfad kopieren", OmniCmd::CopyPath),
                     ("★", "Favorit umschalten", OmniCmd::StarToggle),
                     ("⟳", "Aktualisieren", OmniCmd::Refresh),
-                    ("📊", "Speicher-Analyse", OmniCmd::Analytics),
+                    ("▦", "Speicher-Analyse", OmniCmd::Analytics),
                 ];
                 for (icon, label, cmd) in cmds {
                     if fuzzy_contains(label, q) {
@@ -192,7 +192,7 @@ impl App {
                 let q = raw.trim_start().trim_start_matches('/').trim();
                 for (p, _score) in self.folder_search_results.iter().take(30) {
                     items.push(OmniItem {
-                        icon: "📁",
+                        icon: "▸",
                         label: p.clone(),
                         sub: p.clone(),
                         action: OmniAction::Go(p.clone()),
@@ -212,7 +212,7 @@ impl App {
         let home = self.home.to_string_lossy().to_string();
         if fuzzy_contains("Persönlicher Ordner", q) || fuzzy_contains(&home, q) {
             items.push(OmniItem {
-                icon: "🏠",
+                icon: "⌂",
                 label: "Persönlicher Ordner".into(),
                 sub: home.clone(),
                 action: OmniAction::Go(home),
@@ -222,7 +222,7 @@ impl App {
             let trimmed = d.trim_end_matches(['\\', '/']).to_string();
             if fuzzy_contains(&trimmed, q) {
                 items.push(OmniItem {
-                    icon: "💽",
+                    icon: "▣",
                     label: format!("Laufwerk {}", trimmed),
                     sub: d.clone(),
                     action: OmniAction::Go(d.clone()),
@@ -242,7 +242,7 @@ impl App {
             };
             if fuzzy_contains(&label, q) || fuzzy_contains(&sub, q) {
                 items.push(OmniItem {
-                    icon: "🌐",
+                    icon: "◎",
                     label,
                     sub,
                     action: OmniAction::Connect(i),

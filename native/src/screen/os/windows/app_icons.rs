@@ -25,6 +25,9 @@ mod shell;
 use shell::shell_bitmap;
 
 const SIDE: usize = 128;
+#[path = "app_icons_path.rs"]
+mod path_icon;
+pub(crate) use path_icon::{named_icon_rgba, path_icon_rgba};
 type RawHandle = *mut c_void;
 
 #[repr(C)]
@@ -292,7 +295,8 @@ fn render_on(icon: RawHandle, background: u8) -> Option<Vec<u8>> {
     }
 }
 
-fn raster(icon: RawHandle, app_id: &str) -> Option<IconReply> {
+/// Straight-alpha RGBA (`SIDE`×`SIDE`) of one icon.
+fn icon_rgba(icon: RawHandle) -> Option<Vec<u8>> {
     let black = render_on(icon, 0)?;
     let white = render_on(icon, 255)?;
     let mut rgba = Vec::with_capacity(SIDE * SIDE * 4);
@@ -312,6 +316,11 @@ fn raster(icon: RawHandle, app_id: &str) -> Option<IconReply> {
         };
         rgba.extend_from_slice(&[straight(2), straight(1), straight(0), alpha as u8]);
     }
+    Some(rgba)
+}
+
+fn raster(icon: RawHandle, app_id: &str) -> Option<IconReply> {
+    let rgba = icon_rgba(icon)?;
     let png = super::app_icon_raster::rgba_png(SIDE as u32, SIDE as u32, &rgba).ok()?;
     IconReply::new(app_id, &png).ok()
 }

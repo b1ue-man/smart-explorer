@@ -12,7 +12,7 @@ impl App {
         painter.rect_filled(rect, 0.0, Color32::from_rgba_unmultiplied(0, 0, 0, 200));
         let (text, color) = match self.drop_target() {
             Some(p) => (
-                format!("📥 Hier ablegen → {}\n(Umschalt = verschieben)", p),
+                format!("Hier ablegen → {}\n(Umschalt = verschieben)", p),
                 Color32::from_rgb(150, 220, 255),
             ),
             None => (
@@ -49,7 +49,7 @@ impl App {
                     }
                 }
             }
-            let pick = ui.add_sized([22.0, 22.0], egui::Button::new("📂"))
+            let pick = ui.add_sized([22.0, 22.0], egui::Button::new("…"))
                 .on_hover_text("Ordner auswählen");
             self.accel_push('O', pick.rect, AccelAct::PickFolder);
             if pick.clicked() {
@@ -63,7 +63,7 @@ impl App {
             let path_width = (ui.available_width()
                 - Self::toolbar_commands_width(ui, wide) - trailing_icons - 12.0).max(60.0);
             self.ui_toolbar_path(ui, path_width);
-            if ui.add_sized([22.0, 22.0], egui::Button::new("✏"))
+            if ui.add_sized([22.0, 22.0], egui::Button::new("✎"))
                 .on_hover_text("Pfad bearbeiten (Ctrl+L)").clicked() {
                 self.path_edit_mode = true;
                 self.path_edit_focus = true;

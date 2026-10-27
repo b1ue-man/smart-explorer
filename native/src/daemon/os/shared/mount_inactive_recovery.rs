@@ -150,6 +150,41 @@ pub(in crate::daemon) fn reactivate(config: &MountConfig) -> io::Result<()> {
     Ok(())
 }
 
+/// Deletes one inactive recovery (user 2026-10-27: „ja löschen können will
+/// ich es trotzdem“): the cache directories it still owns are removed, then
+/// its record leaves the registry. The saved package stays where the user
+/// put it. A reactivated record no longer owns a cache; only its record goes.
+pub(in crate::daemon) fn discard(recovery_id: &str) -> io::Result<InactiveMountRecovery> {
+    let directory = super::ensure_registry_directory()?;
+    let record = list_in(&directory)?
+        .into_iter()
+        .find(|record| record.id == recovery_id)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Recovery-ID ist nicht vorhanden"))?;
+    if record.owns_mount_cache {
+        for id in &record.cache_ids {
+            // `MountId` is one validated path component; `remove_dir_all`
+            // does not follow links out of the directory.
+            match std::fs::remove_dir_all(record.retained_cache.join(id.as_str())) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
+    }
+    for file_name in FILES {
+        let mut document = read_document(&directory, file_name)?;
+        let mut book = book(&document)?;
+        let before = book.records.len();
+        book.records.retain(|known| known.id != recovery_id);
+        if book.records.len() != before {
+            document[FIELD] = serde_json::to_value(book).map_err(io::Error::other)?;
+            write_document(&directory, file_name, &document)?;
+        }
+    }
+    reconcile(&directory);
+    Ok(record)
+}
+
 /// Ordinary legacy-compatible writers preserve the ownership field.
 pub(super) fn preserve_field(
     directory: &Path,

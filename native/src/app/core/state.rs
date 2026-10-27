@@ -290,7 +290,7 @@ pub struct App {
     /// Rollback-to-a-released-version download in flight: Ok((version, exe)).
     pub(in crate::app) rollback_rx: Option<Receiver<Result<(String, PathBuf), String>>>,
     /// Newest released version that is strictly newer than the running one, once
-    /// the release list has been fetched. Drives the "⬆ Update verfügbar" banner
+    /// the release list has been fetched. Drives the "Update verfügbar" banner
     /// and a one-shot notice, so a newer release is offered automatically
     /// without pressing "Jetzt prüfen", independent of the main-branch feed.
     pub(in crate::app) update_release_available: Option<String>,

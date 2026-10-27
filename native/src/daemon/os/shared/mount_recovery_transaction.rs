@@ -110,6 +110,25 @@ impl MountManager {
         Ok(record)
     }
 
+    /// Deletes an inactive recovery and the cache it owns; an active drive of
+    /// the same ID is never touched.
+    pub(in crate::daemon) fn recovery_discard(&self, recovery_id: &str) -> Result<(), String> {
+        let _lifecycle = self.lifecycle_guard()?;
+        self.ensure_registry_ready()?;
+        let record = super::super::mount_registry::inactive::list()
+            .map_err(detail)?
+            .into_iter()
+            .find(|record| record.id == recovery_id)
+            .ok_or_else(|| "Recovery-ID ist nicht vorhanden".to_string())?;
+        let state = self.state_guard()?;
+        if record.owns_mount_cache && state.contains_key(record.config.id.as_str()) {
+            return Err("Die Mount-ID ist aktiv; der Cache gehört dem Laufwerk".into());
+        }
+        super::super::mount_registry::inactive::discard(recovery_id)
+            .map(|_| ())
+            .map_err(detail)
+    }
+
     pub(in crate::daemon) fn recovery_reactivate(
         &self,
         recovery_id: &str,

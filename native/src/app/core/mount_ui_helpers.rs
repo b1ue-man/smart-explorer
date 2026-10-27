@@ -53,8 +53,11 @@ pub(super) fn mount_status_alert(
 /// The first poll imports existing daemon state; it is not a fresh failure.
 /// Keep its details visible in the manager and alert on later transitions or
 /// explicit actions through mount_status_alert as before.
+/// A drive needs the window at start. Cached changes alone never do (user
+/// 2026-10-27: „bestehende gecachete änderungen sind kein grund beim öffnen
+/// von se immer das laufwerksfenster zu öffnen“); the start notice names them.
 pub(super) fn has_mount_attention(mounts: &[crate::mount::MountSnapshot]) -> bool {
-    mounts.iter().any(|mount| match &mount.status {
+    mounts.iter().filter(|mount| !mount.recovery.requires_retention()).any(|mount| match &mount.status {
         crate::mount::MountStatus::Failed { detail } => !waits_for_vault(detail),
         crate::mount::MountStatus::Conflict { .. }
         | crate::mount::MountStatus::RuntimeUnavailable { .. } => true,

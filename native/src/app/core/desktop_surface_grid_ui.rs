@@ -108,12 +108,56 @@ pub(crate) fn show_surface(
     windows::show(ctx);
 }
 
+/// The platform's icon of a tile, read once and kept for the session: a
+/// desktop file's own icon (Explorer's on Windows, the icon theme's on
+/// Linux), otherwise the first of the look's icon names the platform has.
+/// `None` draws the tile's neutral plate.
+fn tile_icon(
+    ctx: &egui::Context,
+    names: &'static [&'static str],
+    file: Option<std::path::PathBuf>,
+) -> Option<egui::TextureId> {
+    type Cache = std::sync::Arc<
+        std::sync::Mutex<std::collections::HashMap<String, Option<egui::TextureHandle>>>,
+    >;
+    let key = match &file {
+        Some(path) => format!("path:{}", path.display()),
+        None => format!("name:{}", names.join(",")),
+    };
+    let cache = ctx.data_mut(|data| {
+        data.get_temp_mut_or_default::<Cache>(egui::Id::new("se-desktop-icons"))
+            .clone()
+    });
+    let mut cache = cache.lock().ok()?;
+    if let Some(known) = cache.get(&key) {
+        return known.as_ref().map(egui::TextureHandle::id);
+    }
+    let rgba = file
+        .as_deref()
+        .and_then(super::platform_helpers::shell_icon_rgba)
+        .or_else(|| super::platform_helpers::named_icon_rgba(names));
+    let texture = rgba.map(|(side, rgba)| {
+        let image = egui::ColorImage::from_rgba_unmultiplied([side as usize, side as usize], &rgba);
+        ctx.load_texture(format!("se-desktop-icon:{key}"), image, egui::TextureOptions::LINEAR)
+    });
+    let id = texture.as_ref().map(egui::TextureHandle::id);
+    cache.insert(key, texture);
+    id
+}
+
 /// The work area in points of the window (the whole window while unknown).
 fn work_area(ctx: &egui::Context, screen: Rect, host: &dyn SurfaceHost) -> Rect {
     let (Some(monitor), Some(work)) = (host_ui::monitor_rect(host), host.work_area()) else {
         return screen;
     };
     let ppp = ctx.pixels_per_point();
+    // A surface placed on the work area itself (Windows, so the task bar
+    // stays) is the work area; insets apply only to a monitor-sized window.
+    let window = screen.size() * ppp;
+    let work_size = Vec2::new((work[2] - work[0]) as f32, (work[3] - work[1]) as f32);
+    if (window - work_size).abs().max_elem() <= 2.0 {
+        return screen;
+    }
     let offset = |x: i32, y: i32| screen.min + Vec2::new(x as f32, y as f32) / ppp;
     let area = Rect::from_min_max(
         offset(work[0] - monitor[0], work[1] - monitor[1]),
@@ -192,6 +236,11 @@ fn item_tile(ui: &mut egui::Ui, item: &ItemId, rect: Rect, area: Rect, now: i64,
         return;
     };
     let look = tile_ui::look(found, now);
+    let file = match found {
+        ItemRef::File(file) => cx.view.file_path(file),
+        _ => None,
+    };
+    let icon = tile_icon(ui.ctx(), look.icon, file);
     let is_room = matches!(found, ItemRef::Room(_));
     let is_file = matches!(found, ItemRef::File(_));
     let id = egui::Id::new(("se-desktop-item", item.encode()));
@@ -206,7 +255,7 @@ fn item_tile(ui: &mut egui::Ui, item: &ItemId, rect: Rect, area: Rect, now: i64,
             .as_ref()
             .is_some_and(|rename| rename.item == *item),
     };
-    tile_ui::paint(ui, rect, &look, state);
+    tile_ui::paint(ui, rect, &look, state, icon);
     if let Some(tooltip) = &look.tooltip {
         response = response.on_hover_text(tooltip.as_str());
     }
@@ -235,7 +284,7 @@ fn item_tile(ui: &mut egui::Ui, item: &ItemId, rect: Rect, area: Rect, now: i64,
                 dimmed: true,
                 ..TileState::default()
             };
-            tile_ui::paint(ui, ghost, &look, ghost_state);
+            tile_ui::paint(ui, ghost, &look, ghost_state, icon);
         }
     }
     if response.drag_stopped() {
@@ -335,7 +384,8 @@ fn room_flyout(
                             hovered: response.hovered(),
                             ..TileState::default()
                         };
-                        tile_ui::paint(ui, rect, &look, state);
+                        let icon = tile_icon(ui.ctx(), look.icon, None);
+                        tile_ui::paint(ui, rect, &look, state, icon);
                         if response.clicked() {
                             select(cx.state, &member_item, false);
                         }

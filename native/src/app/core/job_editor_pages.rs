@@ -66,7 +66,7 @@ impl JobEditorPage {
     }
 }
 
-/// Renders one page of the editor into `ui`. A "📂" click is reported through
+/// Renders one page of the editor into `ui`. A "…" click is reported through
 /// `pick` (field and start value), as before the split into pages.
 pub(super) fn render_job_editor_page(
     ui: &mut egui::Ui,
@@ -124,7 +124,7 @@ fn general(ui: &mut egui::Ui, ed: &mut JobEditor, pick: &mut Option<(PickerPurpo
                     .desired_width(280.0),
             );
             if ui
-                .button("📂")
+                .button("…")
                 .on_hover_text(
                     "Im Explorer wählen — lokale Laufwerke oder gespeicherte Verbindungen",
                 )

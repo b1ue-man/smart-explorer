@@ -8,8 +8,8 @@ impl App {
         let mut open = self.show_preview;
         // Set when the user clicks a row's "▶" to sync just that one file.
         let mut sync_one: Option<crate::bisync::Action> = None;
-        super::dialog_geometry::window(ctx, "bisync_ui.0", "🔍 Vergleich (Vorschau)")
-            .id(egui::Id::new("🔍 Vergleich (Vorschau)"))
+        super::dialog_geometry::window(ctx, "bisync_ui.0", "Vergleich (Vorschau)")
+            .id(egui::Id::new("Vergleich (Vorschau)"))
             .open(&mut open)
             .collapsible(false)
             .resizable(true)
@@ -138,16 +138,16 @@ impl App {
                                     ("←", theme::success(ui), r)
                                 }
                                 crate::bisync::Action::DeleteB(r) => {
-                                    ("🗑→", theme::warning(ui), r)
+                                    ("✕→", theme::warning(ui), r)
                                 }
                                 crate::bisync::Action::DeleteA(r) => {
-                                    ("🗑←", theme::warning(ui), r)
+                                    ("✕←", theme::warning(ui), r)
                                 }
                                 crate::bisync::Action::FinalizeMoveAtoB(r) => {
-                                    ("✓🗑→", theme::warning(ui), r)
+                                    ("✓✕→", theme::warning(ui), r)
                                 }
                                 crate::bisync::Action::FinalizeMoveBtoA(r) => {
-                                    ("✓🗑←", theme::warning(ui), r)
+                                    ("✓✕←", theme::warning(ui), r)
                                 }
                                 crate::bisync::Action::KeepBothAtoB(r) => {
                                     ("⇄→", theme::warning(ui), r)

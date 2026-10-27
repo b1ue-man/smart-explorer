@@ -39,7 +39,7 @@ pub(super) fn treemap_accessible_list(
                         let kind = if child.is_dir { "Ordner" } else { "Datei" };
                         let visible = format!(
                             "{} {} — {}",
-                            if child.is_dir { "📁" } else { "📄" },
+                            kind,
                             child.name,
                             format_bytes(child.size)
                         );

@@ -329,6 +329,9 @@ pub fn staged_runtime_managed(path: &Path, hash: &str, version: &str) -> Result<
         .tempdir()
         .map_err(|e| e.to_string())?;
     let root = std::fs::canonicalize(directory.path()).map_err(|e| e.to_string())?;
+    // The new temp directory inherits the temp folder's ACL; give it its
+    // own owner-only DACL before the check rejects inherited grants.
+    os::make_private_directory(&root)?;
     os::protect(&root, true)?;
     let target = root.join(os::CLI_NAME);
     copy_immutable(&root, path, &target, hash)?;
@@ -340,6 +343,9 @@ pub fn verify_staged_launcher(path: &Path, hash: &str, version: &str) -> Result<
         .tempdir()
         .map_err(|e| e.to_string())?;
     let root = std::fs::canonicalize(directory.path()).map_err(|e| e.to_string())?;
+    // The new temp directory inherits the temp folder's ACL; give it its
+    // own owner-only DACL before the check rejects inherited grants.
+    os::make_private_directory(&root)?;
     os::protect(&root, true)?;
     let target = root.join(os::LAUNCHER_NAME);
     copy_immutable(&root, path, &target, hash)?;
