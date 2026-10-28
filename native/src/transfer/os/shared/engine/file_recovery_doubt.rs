@@ -165,3 +165,36 @@ pub(super) fn source_unchanged(receipt: &Receipt, side: Side<'_>) -> io::Result<
     }
     Ok(())
 }
+
+/// A move's source after its quarantine rename (it is renamed before any
+/// byte is copied): the stamp taken just before the rename is the source as
+/// it was sent, and the renamed object still has that identity, size and
+/// time. The raw file index is not compared after the rename; FAT derives it
+/// from the directory entry, which a longer name moves (Microsoft,
+/// BY_HANDLE_FILE_INFORMATION). The copy layer bound the renamed object to
+/// its held handle.
+pub(super) fn quarantined_source_unchanged(
+    receipt: &Receipt,
+    quarantine: &Proof,
+    side: Side<'_>,
+) -> io::Result<()> {
+    let sent = &receipt.source;
+    let now = snapshot(side, &quarantine.path);
+    if sent.id != quarantine.id
+        || sent.object != quarantine.object
+        || sent.size != quarantine.size
+        || sent.mtime_ms != quarantine.mtime_ms
+        || !now.verified
+        || now.directory
+        || now.link
+        || now.object != quarantine.object
+        || now.size != quarantine.size
+        || now.mtime_ms != quarantine.mtime_ms
+    {
+        return Err(io::Error::other(format!(
+            "Quelle des Dateibelegs wurde geändert: {}",
+            receipt.source.path
+        )));
+    }
+    Ok(())
+}
