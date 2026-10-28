@@ -13,8 +13,8 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use super::fuse_task_backends::{local, sftp};
 use super::fuse_task_harness::{
-    names_in, program, remote_bytes, remove_remote_tree, require_task_stage, tool, unmount_cleanly,
-    FuseTaskHost, HostSetup,
+    eventually, names_in, program, remote_bytes, remove_remote_tree, require_task_stage, tool,
+    unmount_cleanly, FuseTaskHost, HostSetup,
 };
 use crate::mount::MountMode;
 
@@ -51,20 +51,20 @@ fn drive_task_fuse_mount_local_fixture_rw() -> io::Result<()> {
     assert_eq!(fs::read(host.path("docs/seed.txt"))?, b"seed");
 
     fs::write(host.path("new.txt"), b"written through FUSE")?;
-    assert_eq!(fs::read(root.join("new.txt"))?, b"written through FUSE");
+    assert!(settled(&root.join("new.txt"), b"written through FUSE"));
     let mut appended = OpenOptions::new().append(true).open(host.path("new.txt"))?;
     appended.write_all(b" + appended")?;
     drop(appended);
-    assert_eq!(
-        fs::read(root.join("new.txt"))?,
+    assert!(settled(
+        &root.join("new.txt"),
         b"written through FUSE + appended"
-    );
-    // ftruncate(2) through a descriptor, published at close(2).
+    ));
+    // ftruncate(2) through a descriptor, uploaded after close(2).
     OpenOptions::new()
         .write(true)
         .open(host.path("docs/seed.txt"))?
         .set_len(2)?;
-    assert_eq!(fs::read(root.join("docs/seed.txt"))?, b"se");
+    assert!(settled(&root.join("docs/seed.txt"), b"se"));
 
     fs::create_dir(host.path("made"))?;
     assert!(root.join("made").is_dir());
@@ -91,9 +91,11 @@ fn drive_task_fuse_sftp_container_rw() -> io::Result<()> {
     let remote = |name: &str| format!("{server}/{name}");
 
     fs::write(host.path("hello.txt"), b"hello over SFTP")?;
-    assert_eq!(
-        remote_bytes(&raw, &remote("hello.txt"))?,
-        b"hello over SFTP"
+    assert!(
+        eventually(Duration::from_secs(30), || {
+            remote_bytes(&raw, &remote("hello.txt")).is_ok_and(|bytes| bytes == b"hello over SFTP")
+        }),
+        "the upload after close(2) reaches the server"
     );
     assert_eq!(fs::read(host.path("hello.txt"))?, b"hello over SFTP");
     fs::create_dir(host.path("folder"))?;
@@ -139,7 +141,7 @@ fn drive_task_fuse_editor_save_rename_over() -> io::Result<()> {
     fs::rename(host.path("note.txt"), host.path("note.txt~"))?;
     fs::write(host.path("note.txt"), b"v3")?;
     fs::remove_file(host.path("note.txt~"))?;
-    assert_eq!(fs::read(root.join("note.txt"))?, b"v3");
+    assert!(settled(&root.join("note.txt"), b"v3"));
     assert_eq!(names_in(&root)?, ["note.txt"]);
     assert_eq!(host.names()?, ["note.txt"]);
     unmount_cleanly(host)
@@ -304,4 +306,12 @@ fn drive_task_fuse_rsync_a_exit_zero() -> io::Result<()> {
     assert_eq!(code, 0, "second rsync -a: {output}");
     assert_eq!(names_in(&root.join("copy"))?, ["a.txt", "sub"]);
     unmount_cleanly(host)
+}
+
+/// G4 ML1: `close(2)` returns before the upload; the exported file shows
+/// `expected` once the background upload is done.
+fn settled(path: &Path, expected: &[u8]) -> bool {
+    eventually(Duration::from_secs(30), || {
+        fs::read(path).is_ok_and(|bytes| bytes == expected)
+    })
 }

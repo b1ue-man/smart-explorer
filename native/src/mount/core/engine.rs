@@ -40,6 +40,8 @@ pub struct MountEngine {
     pub(super) retirements: Arc<super::retirement_queue::RetirementQueue>,
     /// Times and modes of dirty files on a POSIX drive (DRV-M4).
     pub(super) pending_attributes: super::pending_attributes::PendingAttributeTable,
+    /// Background uploads of closed dirty files (G4 ML1).
+    pub(super) write_back: super::upload_queue::WriteBack,
 }
 
 pub(super) struct Entry {
@@ -58,6 +60,12 @@ pub(super) struct EntryState {
     pub(super) clean_since: std::time::Instant,
     /// Ownership was transferred to the idle index or the spool was disposed.
     pub(super) retired: bool,
+    /// Counts content changes of the spool (G4 ML1): a background upload that
+    /// copied without the entry lock publishes only the content it read.
+    pub(super) content_epoch: u64,
+    /// The streaming download that fills this clean spool (G4 ML4); `None`
+    /// for a spool that was complete when the entry was installed.
+    pub(super) hydration: Option<Arc<super::hydration::Hydration>>,
 }
 
 impl MountEngine {
@@ -193,7 +201,17 @@ impl EntryState {
             delete_committed: false,
             clean_since: std::time::Instant::now(),
             retired: false,
+            content_epoch: 0,
+            hydration: None,
         }
+    }
+
+    /// Whether the spool holds its whole content: no download is filling it
+    /// and none failed (G4 ML4).
+    pub(super) fn content_complete(&self) -> bool {
+        self.hydration
+            .as_ref()
+            .is_none_or(|hydration| hydration.succeeded())
     }
 }
 

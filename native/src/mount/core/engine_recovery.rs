@@ -216,6 +216,7 @@ impl MountEngine {
             detached: Mutex::new(HashMap::new()),
             retirements,
             pending_attributes: Default::default(),
+            write_back: Default::default(),
         };
         if validate_remote {
             engine.recover_pending_deletes()?;

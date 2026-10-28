@@ -158,6 +158,35 @@ pub(super) fn walk_snapshot_with_options(
     fold_case: bool,
     opts: BisyncOptions,
 ) -> io::Result<Snapshot> {
+    walk_snapshot_observed(
+        be,
+        root,
+        cancel,
+        filter,
+        hash,
+        prev,
+        allow_duplicate_files,
+        fold_case,
+        opts,
+        None,
+    )
+}
+
+/// `walk_snapshot_with_options` that tells `listed` about every folder it
+/// listed completely (G4 MS14: copies during the scan).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn walk_snapshot_observed(
+    be: &dyn Backend,
+    root: &str,
+    cancel: &AtomicBool,
+    filter: &WalkFilter,
+    hash: HashMode,
+    prev: Option<&Tree>,
+    allow_duplicate_files: bool,
+    fold_case: bool,
+    opts: BisyncOptions,
+    listed: Option<&dyn super::early_copy::FolderListed>,
+) -> io::Result<Snapshot> {
     if cancel.load(Ordering::Acquire) {
         return Err(io::Error::new(
             io::ErrorKind::Interrupted,
@@ -201,6 +230,7 @@ pub(super) fn walk_snapshot_with_options(
         reads: flow.clone().map(|flow| (flow, next_job())),
         progress: Progress::default(),
         log: super::run_log::current(),
+        listed,
     };
     let started = std::time::Instant::now();
     let tree = walk_tree(&context, flow, be.parallelism().max(1))?;

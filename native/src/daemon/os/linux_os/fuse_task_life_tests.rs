@@ -170,9 +170,10 @@ fn drive_task_fuse_kernel_request_timeout_reported() -> io::Result<()> {
     let places = host.places();
     let mut file = File::create(host.path("slow.txt"))?;
     file.write_all(b"published by the retry")?;
-    // A slow backend: the upload at close(2) outlasts the kernel's limit.
+    // A slow backend: the upload at fsync(2) outlasts the kernel's limit
+    // (close(2) returns once the file is in the local write cache, G4 ML1).
     let gate = gated.gate(Gated::Upload);
-    let closing = std::thread::spawn(move || close_checked(file));
+    let closing = std::thread::spawn(move || file.sync_all());
     assert!(
         gate.entered_within(Duration::from_secs(30)),
         "the save never started its upload"
@@ -180,7 +181,7 @@ fn drive_task_fuse_kernel_request_timeout_reported() -> io::Result<()> {
     let closed = closing
         .join()
         .map_err(|_| io::Error::other("the closing thread panicked"))?;
-    assert!(closed.is_err(), "close(2) fails when the kernel aborts");
+    assert!(closed.is_err(), "fsync(2) fails when the kernel aborts");
     gate.release(false);
     let (result, reports) = host.end()?;
     let cause =
@@ -194,8 +195,15 @@ fn drive_task_fuse_kernel_request_timeout_reported() -> io::Result<()> {
         other => panic!("unexpected final report {other:?}"),
     }
     assert!(crate::vfs::Backend::stat(&*gated.inner, "/slow.txt").is_err());
-    // Retry: a new host on the same places publishes the journal.
+    // Retry: a new host on the same places publishes the journal, in the
+    // background since G4 ML1.
     let host = FuseTaskHost::start(HostSetup::new(gated.drive(RW)?, RW).at(&places))?;
+    assert!(
+        eventually(Duration::from_secs(30), || {
+            crate::vfs::Backend::stat(&*gated.inner, "/slow.txt").is_ok()
+        }),
+        "the restarted host uploads the journal"
+    );
     assert_eq!(gated.inner.bytes("/slow.txt"), b"published by the retry");
     unmount_cleanly(host)
 }
@@ -327,10 +335,9 @@ fn drive_task_fuse_recovery_retries_pending_after_restart() -> io::Result<()> {
     let places = host.places();
     let mut file = File::create(host.path("pending.txt"))?;
     file.write_all(b"kept in the journal")?;
-    assert!(
-        close_checked(file).is_err(),
-        "the failed upload reaches close(2)"
-    );
+    // G4 ML1: close(2) returns once the file is in the local write cache; the
+    // failing background upload keeps it in the journal.
+    close_checked(file)?;
     let (result, reports) = host.finish(false)?;
     assert!(result.is_err(), "{result:?}");
     assert!(
@@ -341,9 +348,15 @@ fn drive_task_fuse_recovery_retries_pending_after_restart() -> io::Result<()> {
         "{reports:?}"
     );
     assert!(crate::vfs::Backend::stat(&*fixture, "/pending.txt").is_err());
-    // After the restart the host retries the journal before it mounts.
+    // After the restart the host resumes the upload in the background.
     fixture.fail_upload(false);
     let host = FuseTaskHost::start(HostSetup::new(drive()?, RW).at(&places))?;
+    assert!(
+        eventually(Duration::from_secs(30), || {
+            crate::vfs::Backend::stat(&*fixture, "/pending.txt").is_ok()
+        }),
+        "the restarted host uploads the journal"
+    );
     assert_eq!(fixture.bytes("/pending.txt"), b"kept in the journal");
     assert_eq!(fs::read(host.path("pending.txt"))?, b"kept in the journal");
     unmount_cleanly(host)

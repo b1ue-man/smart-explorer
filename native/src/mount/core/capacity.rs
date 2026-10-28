@@ -63,6 +63,10 @@ pub struct MountCapacityReport {
     pub observed_at_ms: i64,
     pub stale: bool,
     pub remote_stale: bool,
+    /// Background uploads of closed files (G4 ML1); `None` for a drive
+    /// without write-back and from hosts before it.
+    #[serde(default)]
+    pub uploads: Option<super::upload_queue::MountUploadStatus>,
 }
 
 impl MountCapacityReport {
@@ -91,6 +95,7 @@ impl MountCapacityReport {
             observed_at_ms: crate::vfs::observed_now_ms(),
             stale: false,
             remote_stale: false,
+            uploads: None,
         }
         .with_freshness(crate::vfs::observed_now_ms())
     }

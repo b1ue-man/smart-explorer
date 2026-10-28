@@ -1,7 +1,15 @@
-//! Runtime checkpoint sink: bounded pending batches, a periodic heartbeat,
+//! Runtime checkpoint sink: bounded pending batches, a group committer,
 //! target flush before journaling, and final compaction even after cancel.
+//!
+//! Workers only queue their results (`Inbox`, a short lock) and read the
+//! stop state from an atomic flag; while `during` runs, the committer thread
+//! `sync-checkpoint` flushes the queue as one group (target `syncfs`, then
+//! one journal frame), so no worker waits for a flush (G4 MS5). Without a
+//! running committer, or when the queue outgrows its bound, the reporting
+//! thread flushes itself as before.
 use std::io;
-use std::sync::{mpsc, Mutex, MutexGuard};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use super::baseline_records::RecordBook;
@@ -15,22 +23,44 @@ use super::run_types::{RunStop, StateKey};
 use super::snapshot_types::{DirSet, SideSnapshot};
 use super::types::{Baseline, PairSide};
 
-const CHECKPOINT_ACTIONS: usize = 64;
-const CHECKPOINT_INTERVAL: Duration = Duration::from_secs(2);
+/// Without a committer: the reporting thread flushes after this many
+/// actions or this much time (the established batch).
+pub(super) const CHECKPOINT_ACTIONS: usize = 64;
+pub(super) const CHECKPOINT_INTERVAL: Duration = Duration::from_secs(2);
+/// With a committer: one group commit per this many queued actions, or
+/// after this much time with anything queued. A shorter interval only
+/// loses less finished work to an interruption; no worker waits for it.
+pub(super) const GROUP_ACTIONS: usize = 1024;
+pub(super) const GROUP_INTERVAL: Duration = Duration::from_millis(250);
+/// The queue bound: past it a reporting worker commits itself, so memory
+/// stays bounded when the committer falls behind a slow target flush.
+pub(super) const INLINE_ACTIONS: usize = 8 * GROUP_ACTIONS;
 
-struct State {
-    records: RecordBook,
-    dirs: DirSet,
-    dirs_bytes: u64,
-    journal: Journal,
-    pending: Vec<CompletedAction>,
+/// Commit state: owned by whoever flushes.
+pub(super) struct State {
+    pub(super) records: RecordBook,
+    pub(super) dirs: DirSet,
+    pub(super) dirs_bytes: u64,
+    pub(super) journal: Journal,
+    /// Actions an earlier flush could not record yet (target not durable).
+    pub(super) pending: Vec<CompletedAction>,
+    pub(super) error: Option<String>,
+    pub(super) last: Instant,
+}
+
+/// What reporting workers hand over; only ever held briefly.
+#[derive(Default)]
+pub(super) struct Inbox {
+    pub(super) queued: Vec<CompletedAction>,
     omitted: Vec<(String, OmissionKind)>,
     deferred: Vec<(String, String)>,
     stopped: Option<RunStop>,
-    error: Option<String>,
-    last: Instant,
     counts: Option<[u64; 2]>,
     presence: std::collections::BTreeMap<(PairSide, String, bool), bool>,
+    /// A committer thread is running (`during`).
+    committer: bool,
+    /// `during`'s work returned; the committer ends.
+    ending: bool,
 }
 
 pub(super) struct CheckpointResult {
@@ -44,14 +74,18 @@ pub(super) struct CheckpointResult {
 }
 
 pub(super) struct CheckpointSink<'a> {
-    endpoints: SyncEndpoints<'a>,
-    lock: &'a PairLock,
-    key: &'a StateKey,
-    keys: KeyPolicy,
+    pub(super) endpoints: SyncEndpoints<'a>,
+    pub(super) lock: &'a PairLock,
+    pub(super) key: &'a StateKey,
+    pub(super) keys: KeyPolicy,
     observer: Option<&'a dyn ApplySink>,
     observed: Option<([&'a SideSnapshot; 2], &'a Spellings)>,
-    aliases: Option<&'a PathAliases>,
-    state: Mutex<State>,
+    pub(super) aliases: Option<&'a PathAliases>,
+    pub(super) state: Mutex<State>,
+    pub(super) inbox: Mutex<Inbox>,
+    wake: Condvar,
+    /// An error or stop was recorded: no new admission (read lock-free).
+    pub(super) halted: AtomicBool,
 }
 
 impl<'a> CheckpointSink<'a> {
@@ -86,14 +120,12 @@ impl<'a> CheckpointSink<'a> {
                 dirs_bytes,
                 journal,
                 pending: Vec::new(),
-                omitted: Vec::new(),
-                deferred: Vec::new(),
-                stopped: None,
                 error: None,
                 last: Instant::now(),
-                counts: None,
-                presence: Default::default(),
             }),
+            inbox: Mutex::new(Inbox::default()),
+            wake: Condvar::new(),
+            halted: AtomicBool::new(false),
         })
     }
 
@@ -104,7 +136,7 @@ impl<'a> CheckpointSink<'a> {
         counts: [u64; 2],
     ) -> Self {
         self.observed = Some((observed, spellings));
-        self.lock().counts = Some(counts);
+        self.inbox().counts = Some(counts);
         self
     }
 
@@ -113,17 +145,29 @@ impl<'a> CheckpointSink<'a> {
         self
     }
 
-    fn directory_key(&self, rel: &str, side: PairSide) -> String {
+    pub(super) fn directory_key(&self, rel: &str, side: PairSide) -> String {
         self.aliases.map_or_else(
             || self.keys.key(rel).into_owned(),
             |aliases| aliases.key(rel, side, self.keys),
         )
     }
 
-    fn lock(&self) -> MutexGuard<'_, State> {
+    pub(super) fn lock(&self) -> MutexGuard<'_, State> {
         self.state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    pub(super) fn inbox(&self) -> MutexGuard<'_, Inbox> {
+        self.inbox
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Records a commit error and stops admission.
+    pub(super) fn fail(&self, state: &mut State, error: String) {
+        state.error.get_or_insert(error);
+        self.halted.store(true, Ordering::Release);
     }
 
     /// Already observed convergence and stale spellings, without file I/O.
@@ -151,38 +195,58 @@ impl<'a> CheckpointSink<'a> {
         Ok(())
     }
 
-    /// The timer flushes completed work even while the next transfer is slow.
-    /// It is joined before returning, and does not change the user's cancel.
+    /// The committer records completed work as group commits, also while the
+    /// next transfer is slow. It is joined before returning, and does not
+    /// change the user's cancel.
     pub fn during<T>(&self, work: impl FnOnce() -> T) -> T {
         std::thread::scope(|scope| {
-            let (end, wait) = mpsc::channel::<()>();
-            let timer = std::thread::Builder::new()
-                .name("sync-checkpoint".into())
-                .spawn_scoped(scope, move || {
-                    while matches!(
-                        wait.recv_timeout(CHECKPOINT_INTERVAL),
-                        Err(mpsc::RecvTimeoutError::Timeout)
-                    ) {
-                        let mut state = self.lock();
-                        self.flush(&mut state);
-                    }
-                });
-            if let Err(error) = &timer {
-                self.lock().error.get_or_insert_with(|| {
-                    format!("Zwischenstand kann nicht gestartet werden: {error}")
-                });
+            {
+                let mut inbox = self.inbox();
+                inbox.committer = true;
+                inbox.ending = false;
             }
+            let committer = std::thread::Builder::new()
+                .name("sync-checkpoint".into())
+                .spawn_scoped(scope, || self.commit_loop());
+            if let Err(error) = &committer {
+                self.inbox().committer = false;
+                let mut state = self.lock();
+                self.fail(
+                    &mut state,
+                    format!("Zwischenstand kann nicht gestartet werden: {error}"),
+                );
+            }
+            // Ends the committer also when `work` unwinds, so the scope can
+            // join it.
+            let end = EndCommitter(self);
             let result = work();
-            let _ = end.send(());
-            if let Ok(timer) = timer {
-                if timer.join().is_err() {
-                    self.lock()
-                        .error
-                        .get_or_insert_with(|| "Zwischenstand unerwartet beendet".into());
+            drop(end);
+            if let Ok(committer) = committer {
+                if committer.join().is_err() {
+                    let mut state = self.lock();
+                    self.fail(&mut state, "Zwischenstand unerwartet beendet".into());
                 }
             }
             result
         })
+    }
+
+    fn commit_loop(&self) {
+        loop {
+            let inbox = self.inbox();
+            let (inbox, _) = self
+                .wake
+                .wait_timeout_while(inbox, GROUP_INTERVAL, |inbox| {
+                    !inbox.ending && inbox.queued.len() < GROUP_ACTIONS
+                })
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if inbox.ending {
+                return;
+            }
+            drop(inbox);
+            let mut state = self.lock();
+            self.flush(&mut state);
+        }
     }
 
     pub fn finish(self) -> CheckpointResult {
@@ -202,6 +266,10 @@ impl<'a> CheckpointSink<'a> {
                 }
             }
         }
+        let inbox = self
+            .inbox
+            .into_inner()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let state = self
             .state
             .into_inner()
@@ -209,11 +277,11 @@ impl<'a> CheckpointSink<'a> {
         CheckpointResult {
             baseline: state.records.baseline,
             dirs: state.dirs,
-            omitted: state.omitted,
-            deferred: state.deferred,
-            stopped: state.stopped,
+            omitted: inbox.omitted,
+            deferred: inbox.deferred,
+            stopped: inbox.stopped,
             error: state.error,
-            counts: state.counts,
+            counts: inbox.counts,
         }
     }
 
@@ -222,164 +290,35 @@ impl<'a> CheckpointSink<'a> {
     pub fn can_delete(&self) -> bool {
         let mut state = self.lock();
         self.flush(&mut state);
+        let inbox = self.inbox();
         state.error.is_none()
-            && state.stopped.is_none()
+            && inbox.stopped.is_none()
             && state.pending.is_empty()
-            && state.omitted.is_empty()
-            && state.deferred.is_empty()
+            && inbox.queued.is_empty()
+            && inbox.omitted.is_empty()
+            && inbox.deferred.is_empty()
     }
 
     pub fn completed_deletion(&self, rel: &str, side: PairSide) -> bool {
-        self.lock()
+        self.inbox()
             .presence
             .get(&(side, self.keys.key(rel).into_owned(), false))
             == Some(&false)
     }
 
     pub fn protected_paths(&self) -> super::SyncOmissions {
-        let state = self.lock();
+        let inbox = self.inbox();
         let mut protected = super::SyncOmissions::new(self.keys.fold_case);
-        for (rel, kind) in &state.omitted {
+        for (rel, kind) in &inbox.omitted {
             protected.record_kind(rel, *kind, kind.reported_by_default());
         }
-        for (rel, _) in &state.deferred {
+        for (rel, _) in &inbox.deferred {
             protected.record_kind(rel, OmissionKind::Unreadable, false);
         }
         protected
     }
 
-    fn flush(&self, state: &mut State) {
-        if state.pending.is_empty() {
-            return;
-        }
-        if self.lock.id() != self.key.lock_id.to_ascii_lowercase() {
-            state
-                .error
-                .get_or_insert_with(|| "Zwischenstand hält die falsche Paarsperre".into());
-            return;
-        }
-        let mut flush_a = false;
-        let mut flush_b = false;
-        for result in state.pending.iter().filter(|action| !action.durable) {
-            for side in durability_sides(result.kind) {
-                match side {
-                    PairSide::A => flush_a = true,
-                    PairSide::B => flush_b = true,
-                }
-            }
-        }
-        let durable_a = self.flush_side(PairSide::A, flush_a, state);
-        let durable_b = self.flush_side(PairSide::B, flush_b, state);
-        let mut frame = Frame {
-            fold_case: self.keys.fold_case,
-            ..Frame::default()
-        };
-        let mut waiting = Vec::new();
-        for action in std::mem::take(&mut state.pending) {
-            if !action.durable
-                && !durability_sides(action.kind)
-                    .into_iter()
-                    .all(|side| match side {
-                        PairSide::A => durable_a,
-                        PairSide::B => durable_b,
-                    })
-            {
-                waiting.push(action);
-                continue;
-            }
-            if let Some(entry) = action.baseline_entry() {
-                frame.records.push((action.rel.clone(), entry));
-            } else {
-                match action.kind {
-                    CompletedKind::DirCreated { side } => {
-                        frame.dirs_add.push(self.directory_key(&action.rel, side));
-                    }
-                    CompletedKind::DirRemoved { side } => {
-                        frame
-                            .dirs_remove
-                            .push(self.directory_key(&action.rel, side));
-                    }
-                    _ => {}
-                }
-            }
-        }
-        if !frame.is_empty() {
-            let result = frame
-                .ensure_fits(
-                    &state.records,
-                    &state.dirs,
-                    state.dirs_bytes,
-                    super::SyncLimits::for_memory(crate::transfer::physical_memory()),
-                )
-                .and_then(|bytes| {
-                    state.journal.append(&frame)?;
-                    frame.apply(&mut state.records, &mut state.dirs)?;
-                    state.dirs_bytes = bytes;
-                    Ok(())
-                });
-            if let Err(error) = result {
-                state.error.get_or_insert_with(|| error.to_string());
-                // Keep authoritative deltas for another final flush attempt.
-                for (rel, entry) in frame.records {
-                    waiting.push(CompletedAction {
-                        rel,
-                        kind: CompletedKind::Copied { from: PairSide::A },
-                        src_sig: entry.0,
-                        dst_sig: entry.1,
-                        durable: true,
-                    });
-                }
-                for rel in frame.dirs_add {
-                    waiting.push(CompletedAction {
-                        rel,
-                        kind: CompletedKind::DirCreated { side: PairSide::A },
-                        src_sig: None,
-                        dst_sig: None,
-                        durable: true,
-                    });
-                }
-                for rel in frame.dirs_remove {
-                    waiting.push(CompletedAction {
-                        rel,
-                        kind: CompletedKind::DirRemoved { side: PairSide::A },
-                        src_sig: None,
-                        dst_sig: None,
-                        durable: true,
-                    });
-                }
-            }
-        }
-        state.pending = waiting;
-        state.last = Instant::now();
-    }
-
-    fn flush_side(&self, side: PairSide, needed: bool, state: &mut State) -> bool {
-        if !needed {
-            return true;
-        }
-        let (backend, root) = match side {
-            PairSide::A => (self.endpoints.a, self.endpoints.root_a),
-            PairSide::B => (self.endpoints.b, self.endpoints.root_b),
-        };
-        match crate::vfs::sync_filesystem(backend, root) {
-            Ok(true) => true,
-            Ok(false) => {
-                state.error.get_or_insert_with(|| {
-                    format!(
-                        "Dateien auf {} noch nicht dauerhaft bestätigt",
-                        side.label()
-                    )
-                });
-                false
-            }
-            Err(error) => {
-                state.error.get_or_insert_with(|| error.to_string());
-                false
-            }
-        }
-    }
-
-    fn count_completed(&self, state: &mut State, action: &CompletedAction) {
+    fn count_completed(&self, inbox: &mut Inbox, action: &CompletedAction) {
         let Some((observed, spellings)) = self.observed else {
             return;
         };
@@ -404,11 +343,11 @@ impl<'a> CheckpointSink<'a> {
                 observed[index].tree.contains_key(literal)
                     || observed[index].filtered.contains_key(literal)
             };
-            let was_present = state
+            let was_present = inbox
                 .presence
                 .insert((side, key, directory), present)
                 .unwrap_or(initial);
-            if let Some(counts) = &mut state.counts {
+            if let Some(counts) = &mut inbox.counts {
                 if present && !was_present {
                     counts[index] = counts[index].saturating_add(1);
                 }
@@ -420,37 +359,61 @@ impl<'a> CheckpointSink<'a> {
     }
 }
 
+/// Tells a running committer to end (see `during`).
+struct EndCommitter<'s, 'a>(&'s CheckpointSink<'a>);
+
+impl Drop for EndCommitter<'_, '_> {
+    fn drop(&mut self) {
+        {
+            let mut inbox = self.0.inbox();
+            inbox.committer = false;
+            inbox.ending = true;
+        }
+        self.0.wake.notify_all();
+    }
+}
+
 impl ApplySink for CheckpointSink<'_> {
     fn completed(&self, action: CompletedAction) {
-        let mut state = self.lock();
-        self.count_completed(&mut state, &action);
-        state.pending.push(action.clone());
-        if state.pending.len() >= CHECKPOINT_ACTIONS || state.last.elapsed() >= CHECKPOINT_INTERVAL
-        {
-            self.flush(&mut state);
+        let (queued, committer) = {
+            let mut inbox = self.inbox();
+            self.count_completed(&mut inbox, &action);
+            inbox.queued.push(action.clone());
+            (inbox.queued.len(), inbox.committer)
+        };
+        if committer {
+            if queued >= GROUP_ACTIONS {
+                self.wake.notify_all();
+            }
+            if queued >= INLINE_ACTIONS {
+                let mut state = self.lock();
+                self.flush(&mut state);
+            }
+        } else {
+            let mut state = self.lock();
+            if queued >= CHECKPOINT_ACTIONS || state.last.elapsed() >= CHECKPOINT_INTERVAL {
+                self.flush(&mut state);
+            }
         }
-        drop(state);
         if let Some(observer) = self.observer {
             observer.completed(action);
         }
     }
 
     fn should_stop(&self) -> bool {
-        let state = self.lock();
-        let stopped = state.error.is_some() || state.stopped.is_some();
-        drop(state);
-        stopped || self.observer.is_some_and(|observer| observer.should_stop())
+        self.halted.load(Ordering::Acquire)
+            || self.observer.is_some_and(|observer| observer.should_stop())
     }
 
     fn omitted(&self, rel: &str, kind: OmissionKind) {
-        self.lock().omitted.push((rel.to_string(), kind));
+        self.inbox().omitted.push((rel.to_string(), kind));
         if let Some(observer) = self.observer {
             observer.omitted(rel, kind);
         }
     }
 
     fn deferred(&self, rel: &str, reason: &str) {
-        self.lock()
+        self.inbox()
             .deferred
             .push((rel.to_string(), reason.to_string()));
         if let Some(observer) = self.observer {
@@ -459,19 +422,14 @@ impl ApplySink for CheckpointSink<'_> {
     }
 
     fn stopped(&self, stop: RunStop) {
-        self.lock().stopped.get_or_insert(stop);
+        self.inbox().stopped.get_or_insert(stop);
+        self.halted.store(true, Ordering::Release);
         if let Some(observer) = self.observer {
             observer.stopped(stop);
         }
     }
 }
 
-fn durability_sides(kind: CompletedKind) -> Vec<PairSide> {
-    match kind {
-        CompletedKind::Copied { from } => vec![from.other()],
-        CompletedKind::Moved { from } => vec![from, from.other()],
-        CompletedKind::Deleted { side }
-        | CompletedKind::DirCreated { side }
-        | CompletedKind::DirRemoved { side } => vec![side],
-    }
-}
+#[cfg(test)]
+#[path = "checkpoint_commit_tests.rs"]
+mod commit_tests;

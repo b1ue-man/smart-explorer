@@ -26,6 +26,8 @@ pub(crate) mod apply_boundary;
 mod apply_dedupe;
 #[path = "os/shared/apply_delete.rs"]
 mod apply_delete;
+#[path = "os/shared/apply_dir_levels.rs"]
+mod apply_dir_levels;
 #[path = "os/shared/apply_dirs.rs"]
 mod apply_dirs;
 #[path = "os/shared/apply_groups.rs"]
@@ -34,6 +36,8 @@ mod apply_groups;
 mod apply_guard;
 #[path = "os/shared/apply_mirror.rs"]
 mod apply_mirror;
+#[path = "os/shared/apply_path_context.rs"]
+mod apply_path_context;
 #[path = "os/shared/apply_pool.rs"]
 mod apply_pool;
 #[path = "os/shared/apply_reporting.rs"]
@@ -42,6 +46,8 @@ mod apply_reporting;
 mod apply_retry;
 #[path = "os/shared/apply_stage.rs"]
 pub(crate) mod apply_stage;
+#[path = "os/shared/apply_stage_bytes.rs"]
+mod apply_stage_bytes;
 #[path = "os/shared/apply_transaction.rs"]
 pub(crate) mod apply_transaction;
 #[path = "os/shared/apply_transfer.rs"]
@@ -54,6 +60,8 @@ mod backend_identity_state;
 mod baseline_records;
 #[path = "os/shared/checkpoint.rs"]
 mod checkpoint;
+#[path = "os/shared/checkpoint_commit.rs"]
+mod checkpoint_commit;
 #[path = "os/shared/checkpoint_journal.rs"]
 mod checkpoint_journal;
 #[path = "os/shared/checkpoint_run.rs"]
@@ -74,6 +82,8 @@ mod duplicate_observation;
 mod duplicate_plan;
 #[path = "core/duplicate_types.rs"]
 mod duplicate_types;
+#[path = "os/shared/early_copy.rs"]
+mod early_copy;
 #[path = "os/shared/engine_change_feed.rs"]
 mod engine_change_feed;
 #[cfg(test)]
@@ -301,6 +311,9 @@ mod replica_review_tests;
 #[cfg(test)]
 #[path = "os/shared/stream_hash_tests.rs"]
 mod stream_hash_tests;
+#[cfg(test)]
+#[path = "os/shared/sync_speed_task_tests.rs"]
+mod sync_speed_task_tests;
 #[cfg(test)]
 #[path = "os/shared/test_remote.rs"]
 pub(crate) mod test_remote;

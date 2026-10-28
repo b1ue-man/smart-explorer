@@ -5,6 +5,7 @@ use super::engine::{
     EntryState, MountEngine,
 };
 use super::entry_lifecycle::EntryPin;
+use super::hydration::{Download, Hydration};
 use super::path::ProjectedPath;
 use super::types::{Baseline, EntryCondition, OpenDisposition};
 use std::{
@@ -26,10 +27,15 @@ struct PreparedMaterialization<'a> {
     engine: &'a MountEngine,
     record: Option<IdleClean>,
     condition: EntryCondition,
+    /// The streaming download of this spool (G4 ML4); it starts only after
+    /// its entry was installed.
+    download: Option<Download>,
 }
 
 impl Drop for PreparedMaterialization<'_> {
     fn drop(&mut self) {
+        // An unstarted download closes its reader and spool handle first.
+        drop(self.download.take());
         if let Some(mut record) = self.record.take() {
             // Failed disposal is not forgotten: it remains owned/accounted but
             // cannot be reused, even when the original download was incomplete.
@@ -101,7 +107,7 @@ impl MountEngine {
             }
             (path, slot.generation.load(Ordering::Acquire))
         };
-        let prepared = self.materialize_fetch(&path, disposition)?;
+        let prepared = self.materialize_fetch(&path, disposition, true)?;
         let _namespace = read_lock(&self.namespace)?;
         if slot.generation.load(Ordering::Acquire) != generation {
             return Err(io::Error::new(
@@ -109,8 +115,12 @@ impl MountEngine {
                 "mounted namespace changed during content acquisition",
             ));
         }
-        self.materialize_install(&path, prepared, disposition)
-            .map(EntryPin::new)
+        let (entry, download) = self.materialize_install(&path, prepared, disposition)?;
+        let pin = EntryPin::new(entry);
+        if let Some(download) = download {
+            download.start(Arc::clone(&pin));
+        }
+        Ok(pin)
     }
 
     /// Namespace-owned rename path: deliberately does not acquire a path gate.
@@ -122,8 +132,8 @@ impl MountEngine {
         if let Some(entry) = self.materialize_cached(path, disposition)? {
             return Ok(entry);
         }
-        let prepared = self.materialize_fetch(path, disposition)?;
-        let entry = self.materialize_install(path, prepared, disposition)?;
+        let prepared = self.materialize_fetch(path, disposition, false)?;
+        let (entry, _) = self.materialize_install(path, prepared, disposition)?;
         entry.schedule_retirement();
         Ok(entry)
     }
@@ -146,14 +156,34 @@ impl MountEngine {
         if state.delete_token.is_some() {
             return Err(not_found(path.backend()));
         }
+        let failed = state
+            .hydration
+            .as_ref()
+            .is_some_and(|hydration| hydration.failed());
         drop(state);
+        if failed {
+            // G4 ML4: the remote file changed during its download. Handles of
+            // that entry keep failing; this open downloads the new version.
+            let mut entries = lock(&self.entries)?;
+            let key = self.cache_key(path.backend());
+            if entries
+                .get(&key)
+                .is_some_and(|current| Arc::ptr_eq(current, &entry))
+            {
+                entries.remove(&key);
+            }
+            return Ok(None);
+        }
         Ok(Some(entry))
     }
 
+    /// `stream`: a download may fill the spool after the entry is installed
+    /// (G4 ML4) where the spool storage allows reads while writing.
     fn materialize_fetch(
         &self,
         path: &ProjectedPath,
         disposition: OpenDisposition,
+        stream: bool,
     ) -> io::Result<PreparedMaterialization<'_>> {
         let remote = match self.backend.stat(path.backend()) {
             Ok(meta) => Some(meta),
@@ -190,6 +220,7 @@ impl MountEngine {
                     engine: self,
                     record: Some(record),
                     condition: EntryCondition::Clean,
+                    download: None,
                 };
                 let record = prepared
                     .record
@@ -230,7 +261,7 @@ impl MountEngine {
         };
         self.clean_cache
             .trim(&self.spool, self.config.cache.retained_bytes())?;
-        let _growth = self.reserve_growth(bytes)?;
+        let growth = self.reserve_growth(bytes)?;
         // Content reaches the spool only through the drive's `SpoolStorage` (V1).
         let mut allocated = self.spool.allocate()?;
         let mut prepared = PreparedMaterialization {
@@ -248,6 +279,7 @@ impl MountEngine {
             } else {
                 EntryCondition::Clean
             },
+            download: None,
         };
         if !create && !truncates {
             let meta = remote
@@ -256,8 +288,22 @@ impl MountEngine {
             let reader = self
                 .backend
                 .open_read_id(path.backend(), meta.id.as_deref())?;
+            if stream && meta.size > super::hydration::STREAM_ABOVE && self.spool.streams() {
+                if let Some(record) = prepared.record.as_mut() {
+                    record.bytes = meta.size;
+                }
+                prepared.download = Some(Download {
+                    hydration: Hydration::new(meta.size),
+                    reader,
+                    spool: allocated.file,
+                    backend: Arc::clone(&self.backend),
+                    meta: meta.clone(),
+                    growth,
+                });
+                return Ok(prepared);
+            }
             let mut reader = reader.take(bytes);
-            let copied = io::copy(&mut reader, &mut allocated.file)?;
+            let copied = super::bulk_copy::copy(&mut reader, &mut allocated.file)?;
             // Release proxy request ownership before the second stat.
             drop(reader);
             if copied != meta.size {
@@ -282,17 +328,19 @@ impl MountEngine {
         }
         // Successful acquisition relinquishes its OS handle before publication.
         drop(allocated.file);
+        drop(growth);
         Ok(prepared)
     }
 
+    /// The installed entry and, for a new streaming spool, its download.
     fn materialize_install(
         &self,
         path: &ProjectedPath,
         mut prepared: PreparedMaterialization<'_>,
         disposition: OpenDisposition,
-    ) -> io::Result<Arc<Entry>> {
+    ) -> io::Result<(Arc<Entry>, Option<Download>)> {
         if let Some(existing) = self.materialize_cached(path, disposition)? {
-            return Ok(existing);
+            return Ok((existing, None));
         }
         let mut entries = lock(&self.entries)?;
         let key = self.cache_key(path.backend());
@@ -303,12 +351,13 @@ impl MountEngine {
                     "file was concurrently materialized",
                 ));
             }
-            return Ok(Arc::clone(existing));
+            return Ok((Arc::clone(existing), None));
         }
         let record = prepared
             .record
             .take()
             .ok_or_else(|| invalid_data("missing prepared spool"))?;
+        let download = prepared.download.take();
         let entry = Arc::new(Entry {
             pins: AtomicUsize::new(0),
             retirements: Arc::clone(&self.retirements),
@@ -321,6 +370,10 @@ impl MountEngine {
                 delete_committed: false,
                 clean_since: record.created,
                 retired: false,
+                content_epoch: 0,
+                hydration: download
+                    .as_ref()
+                    .map(|download| Arc::clone(&download.hydration)),
             }),
         });
         let mut state = lock(&entry.state)?;
@@ -340,6 +393,6 @@ impl MountEngine {
             }
         }
         drop(state);
-        Ok(entry)
+        Ok((entry, download))
     }
 }

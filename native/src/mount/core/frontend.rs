@@ -20,6 +20,7 @@ use super::types::{
     BackendRoot, DeleteToken, EntryCondition, FlushOutcome, HandleId, MountId, NamespaceOutcome,
     OpenFileOptions, RenameOutcome,
 };
+use super::upload_queue::MountUploadStatus;
 
 /// Asked between bounded steps of background work; `true` ends the work.
 pub type StopProbe<'a> = &'a (dyn Fn() -> bool + Sync);
@@ -95,6 +96,13 @@ pub trait MountFilesystem: Send + Sync {
     fn len(&self, handle: HandleId) -> io::Result<u64>;
     fn truncate(&self, handle: HandleId, length: u64) -> io::Result<()>;
     fn flush(&self, handle: HandleId) -> io::Result<FlushOutcome>;
+    /// The save of a closing handle (FUSE `flush`, Dokany `Cleanup`). An
+    /// engine with write-back returns once the file is durable in its local
+    /// cache and uploads it in the background (G4 ML1); `fsync` and
+    /// `FlushFileBuffers` keep calling `flush`.
+    fn flush_on_close(&self, handle: HandleId) -> io::Result<FlushOutcome> {
+        self.flush(handle)
+    }
     fn close(&self, handle: HandleId) -> io::Result<()>;
     fn set_pending_attributes(
         &self,
@@ -152,4 +160,15 @@ pub trait MountFilesystem: Send + Sync {
     /// Publishes pending changes and removes clean cached content before a
     /// vault locks (S2-V4, S2-V10).
     fn prepare_lock(&self) -> io::Result<LockReadiness>;
+    /// Background uploads still pending (G4 ML1); `None` without write-back.
+    fn upload_status(&self) -> Option<MountUploadStatus> {
+        None
+    }
+    /// Conflicts that background uploads found since the last call.
+    fn take_upload_conflicts(&self) -> Vec<(String, EntryCondition)> {
+        Vec::new()
+    }
+    /// At unmount: tries every queued upload once more and waits for the
+    /// running ones; what fails stays in the journal.
+    fn finish_write_back(&self) {}
 }

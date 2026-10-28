@@ -5,13 +5,16 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::thread::ScopedJoinHandle;
 use std::time::Duration;
 
+use super::early_copy::{EarlyLane, FolderListed, SideListed};
 use super::incremental::SyncEndpoints;
 use super::omissions::SyncOmissions;
 use super::snapshot::{
-    hash_mode, prev_side, walk_snapshot_with_options, HashMode, Snapshot, WalkFilter,
+    hash_mode, prev_side, walk_snapshot_observed, HashMode, Snapshot, WalkFilter,
 };
 use super::snapshot_types::SideSnapshot;
-use super::types::{Action, Baseline, BisyncOptions, Conflict, DeletePolicy, Direction, Tree};
+use super::types::{
+    Action, Baseline, BisyncOptions, Conflict, DeletePolicy, Direction, PairSide, Tree,
+};
 use crate::vfs::Backend;
 
 /// The reading thread passes the user's cancel on to both walks this often
@@ -62,6 +65,19 @@ pub(super) fn read_pair(
     filter: &WalkFilter,
     baseline: &Baseline,
 ) -> Result<PairSnapshot, (String, String)> {
+    read_pair_with(endpoints, opts, cancel, filter, baseline, None)
+}
+
+/// `read_pair` whose walks tell `early` about every listed folder, so new
+/// files can be copied while the scan still runs (G4 MS14).
+pub(super) fn read_pair_with(
+    endpoints: SyncEndpoints<'_>,
+    opts: BisyncOptions,
+    cancel: &AtomicBool,
+    filter: &WalkFilter,
+    baseline: &Baseline,
+    early: Option<&EarlyLane<'_>>,
+) -> Result<PairSnapshot, (String, String)> {
     let SyncEndpoints {
         a,
         root_a,
@@ -90,16 +106,27 @@ pub(super) fn read_pair(
     };
     // Both sides are read on their own threads; they log into this run's log.
     let log = super::run_log::current();
+    let observer_a = early.map(|lane| SideListed {
+        lane,
+        side: PairSide::A,
+    });
+    let observer_b = early.map(|lane| SideListed {
+        lane,
+        side: PairSide::B,
+    });
+    let listed_a = observer_a.as_ref().map(|side| side as &dyn FolderListed);
+    let listed_b = observer_b.as_ref().map(|side| side as &dyn FolderListed);
     let read = &|side: u8,
                  backend: &dyn Backend,
                  root: &str,
                  hash: HashMode,
                  prev: &Tree,
-                 duplicates: bool|
+                 duplicates: bool,
+                 listed: Option<&dyn FolderListed>|
      -> SideRead {
         let _current = super::run_log::enter(log.clone());
         let walked = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            walk_snapshot_with_options(
+            walk_snapshot_observed(
                 backend,
                 root,
                 &stop,
@@ -109,6 +136,7 @@ pub(super) fn read_pair(
                 duplicates,
                 fold_case,
                 opts,
+                listed,
             )
         }));
         let failure = match walked {
@@ -123,12 +151,12 @@ pub(super) fn read_pair(
         let side_a = std::thread::Builder::new()
             .name("sync-read-a".to_string())
             .spawn_scoped(scope, move || {
-                read(SIDE_A, a, root_a, hash_a, prev_a, duplicates_a)
+                read(SIDE_A, a, root_a, hash_a, prev_a, duplicates_a, listed_a)
             });
         let side_b = std::thread::Builder::new()
             .name("sync-read-b".to_string())
             .spawn_scoped(scope, move || {
-                read(SIDE_B, b, root_b, hash_b, prev_b, duplicates_b)
+                read(SIDE_B, b, root_b, hash_b, prev_b, duplicates_b, listed_b)
             });
         for (side, spawned) in [(SIDE_A, side_a.is_ok()), (SIDE_B, side_b.is_ok())] {
             if !spawned {

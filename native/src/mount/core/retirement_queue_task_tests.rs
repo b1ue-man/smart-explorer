@@ -25,6 +25,8 @@ fn entry(queue: &Arc<RetirementQueue>) -> Arc<Entry> {
             delete_committed: false,
             clean_since: Instant::now(),
             retired: false,
+            content_epoch: 0,
+            hydration: None,
         }),
         pins: AtomicUsize::new(0),
         retirements: Arc::clone(queue),
@@ -35,7 +37,10 @@ fn identities(batch: impl Iterator<Item = Weak<Entry>>) -> HashSet<usize> {
     let mut result = HashSet::new();
     for ticket in batch {
         let identity = ticket.upgrade().expect("fixture still owns the identity");
-        assert!(result.insert(Arc::as_ptr(&identity) as usize), "duplicate ticket");
+        assert!(
+            result.insert(Arc::as_ptr(&identity) as usize),
+            "duplicate ticket"
+        );
     }
     result
 }
@@ -44,25 +49,43 @@ fn identities(batch: impl Iterator<Item = Weak<Entry>>) -> HashSet<usize> {
 fn mount_vault_task_retirement_batches_deduplicate_10000_identities() {
     let queue = Arc::new(RetirementQueue::default());
     let entries = (0..10_000).map(|_| entry(&queue)).collect::<Vec<_>>();
-    let expected = entries.iter().map(|entry| Arc::as_ptr(entry) as usize)
+    let expected = entries
+        .iter()
+        .map(|entry| Arc::as_ptr(entry) as usize)
         .collect::<HashSet<_>>();
     for entry in &entries {
-        for _ in 0..4 { queue.enqueue(entry); }
-        assert_eq!(Arc::strong_count(entry), 1, "queue never owns file contents");
+        for _ in 0..4 {
+            queue.enqueue(entry);
+        }
+        assert_eq!(
+            Arc::strong_count(entry),
+            1,
+            "queue never owns file contents"
+        );
         assert_eq!(Arc::weak_count(entry), 1, "dedup retains one weak ticket");
     }
     let first_batch = queue.take();
-    assert!(queue.is_empty(), "taking releases all old dedup keys immediately");
+    assert!(
+        queue.is_empty(),
+        "taking releases all old dedup keys immediately"
+    );
 
     let replacement = entry(&queue);
     queue.enqueue(&entries[0]);
     queue.enqueue(&entries[0]);
     queue.enqueue(&replacement);
     assert_eq!(identities(first_batch), expected);
-    assert!(!queue.is_empty(), "new work is separate from the consumed batch");
-    assert_eq!(identities(queue.take()), HashSet::from([
-        Arc::as_ptr(&entries[0]) as usize, Arc::as_ptr(&replacement) as usize,
-    ]));
+    assert!(
+        !queue.is_empty(),
+        "new work is separate from the consumed batch"
+    );
+    assert_eq!(
+        identities(queue.take()),
+        HashSet::from([
+            Arc::as_ptr(&entries[0]) as usize,
+            Arc::as_ptr(&replacement) as usize,
+        ])
+    );
     assert!(queue.is_empty());
     assert_eq!(queue.take().count(), 0);
 }
@@ -85,7 +108,11 @@ fn mount_vault_task_retirement_tickets_are_weak_and_last_pin_driven() {
     drop(repinned);
     let expected = HashSet::from([Arc::as_ptr(&identity) as usize]);
     assert_eq!(identities(old_batch), expected);
-    assert_eq!(identities(queue.take()), expected, "last pin can reschedule taken work");
+    assert_eq!(
+        identities(queue.take()),
+        expected,
+        "last pin can reschedule taken work"
+    );
 
     queue.enqueue(&identity);
     assert_eq!(Arc::strong_count(&identity), 1);
@@ -96,10 +123,16 @@ fn mount_vault_task_retirement_tickets_are_weak_and_last_pin_driven() {
     assert!(queue.is_empty());
 }
 
-fn engine(directory: &FixtureDirectory, backend: &Arc<OptimizationBackend>, mib: u32) -> MountEngine {
+fn engine(
+    directory: &FixtureDirectory,
+    backend: &Arc<OptimizationBackend>,
+    mib: u32,
+) -> MountEngine {
     let config = MountRuntimeConfig::new(
-        MountId::parse("vault-retirement-task").unwrap(), MountMode::ReadWrite,
-    ).with_cache_policy(MountCachePolicy::new(mib).unwrap());
+        MountId::parse("vault-retirement-task").unwrap(),
+        MountMode::ReadWrite,
+    )
+    .with_cache_policy(MountCachePolicy::new(mib).unwrap());
     let engine = MountEngine::open_host_cache(config, backend.clone(), directory.path()).unwrap();
     engine.prepare_host_remote().unwrap();
     engine
@@ -111,7 +144,9 @@ fn mount_vault_task_retirement_last_pin_reuses_clean_spool_without_double_dispos
     let backend = OptimizationBackend::new();
     backend.put("/note", b"pinned bytes");
     let engine = engine(&directory, &backend, 500);
-    let acquisition = engine.materialize_at("\\note", OpenDisposition::OpenExisting).unwrap();
+    let acquisition = engine
+        .materialize_at("\\note", OpenDisposition::OpenExisting)
+        .unwrap();
     let identity = Arc::clone(&acquisition);
     let last = acquisition.clone();
     drop(acquisition);
@@ -130,14 +165,24 @@ fn mount_vault_task_retirement_last_pin_reuses_clean_spool_without_double_dispos
         state.spool_name.clone()
     };
     assert!(lock(&engine.entries).unwrap().is_empty());
-    let reopened = engine.materialize_at("\\note", OpenDisposition::OpenExisting).unwrap();
+    let reopened = engine
+        .materialize_at("\\note", OpenDisposition::OpenExisting)
+        .unwrap();
     assert!(!Arc::ptr_eq(&identity, &reopened));
     assert_eq!(lock(&reopened.state).unwrap().spool_name, old_spool);
     engine.retirements.enqueue(&identity);
     engine.maintain_cache().unwrap();
     let mut bytes = Vec::new();
-    engine.spool.open_file(&old_spool, false).unwrap().read_to_end(&mut bytes).unwrap();
-    assert_eq!(bytes, b"pinned bytes", "late old identity cannot dispose adopted spool");
+    engine
+        .spool
+        .open_file(&old_spool, false)
+        .unwrap()
+        .read_to_end(&mut bytes)
+        .unwrap();
+    assert_eq!(
+        bytes, b"pinned bytes",
+        "late old identity cannot dispose adopted spool"
+    );
     assert!(!lock(&reopened.state).unwrap().retired);
     assert_eq!(backend.read_count(), 1, "the same clean spool was adopted");
     drop(reopened);
@@ -151,9 +196,15 @@ fn mount_vault_task_retirement_preserves_dirty_and_recovery_referenced_spools() 
     let backend = OptimizationBackend::new();
     backend.put("/note", b"old");
     let engine = engine(&directory, &backend, 0);
-    let handle = engine.open_file("\\note", OpenFileOptions {
-        writable: true, disposition: OpenDisposition::OpenExisting,
-    }).unwrap();
+    let handle = engine
+        .open_file(
+            "\\note",
+            OpenFileOptions {
+                writable: true,
+                disposition: OpenDisposition::OpenExisting,
+            },
+        )
+        .unwrap();
     engine.write(handle, 0, b"new").unwrap();
     let identity = match engine.handle(handle).unwrap().kind {
         OpenHandleKind::Materialized(pin) => pin.release(),
@@ -179,10 +230,17 @@ fn mount_vault_task_retirement_preserves_dirty_and_recovery_referenced_spools() 
     }
     engine.maintain_cache().unwrap();
     assert!(!lock(&identity.state).unwrap().retired);
-    assert!(lock(&engine.entries).unwrap().get("/note")
+    assert!(lock(&engine.entries)
+        .unwrap()
+        .get("/note")
         .is_some_and(|current| Arc::ptr_eq(current, &identity)));
     let mut bytes = Vec::new();
-    engine.spool.open_file(&spool, false).unwrap().read_to_end(&mut bytes).unwrap();
+    engine
+        .spool
+        .open_file(&spool, false)
+        .unwrap()
+        .read_to_end(&mut bytes)
+        .unwrap();
     assert_eq!(bytes, b"new");
     assert_eq!(backend.bytes("/note"), b"old");
     let _namespace = write_lock(&engine.namespace).unwrap();

@@ -51,8 +51,7 @@ impl MountBackendCapabilities {
             staged_namespace_replace: staged_write.namespace_replace,
             case_sensitive_paths: backend.case_sensitive_paths("/"),
             delete_disposition: backend.delete_disposition().into(),
-            // The daemon proxy itself admits at most eight active requests.
-            parallelism: backend.parallelism().clamp(1, 8) as u8,
+            parallelism: drive_parallelism(backend),
         }
     }
 
@@ -63,6 +62,19 @@ impl MountBackendCapabilities {
             namespace_replace: self.staged_namespace_replace,
         }
     }
+}
+
+/// G4 ML8: a drive admits as many requests at once as the backend's transfer
+/// pool carries (`transfer_ceiling`, e.g. SFTP channels × handles, Share
+/// transfer slots), never fewer than its walk width (`parallelism`). A pool
+/// without a known bound is limited only by what one agent connection of the
+/// daemon serves (`CREDIT_REQUEST_LIMIT`), which is also the upper bound of
+/// every value; the wire field holds it without loss (64 < 256).
+pub(in super::super) fn drive_parallelism(backend: &crate::vfs::BackendHandle) -> u8 {
+    let connection = crate::agent_proto::CREDIT_REQUEST_LIMIT;
+    let pool = backend.transfer_ceiling("/").unwrap_or(connection);
+    let slots = pool.max(backend.parallelism()).clamp(1, connection);
+    u8::try_from(slots).unwrap_or(u8::MAX)
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]

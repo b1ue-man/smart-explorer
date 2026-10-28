@@ -4,10 +4,48 @@
 //! recovery text, the failure reports and the journal audit.
 use std::io;
 
-use crate::mount::{EntryCondition, MountEngine, MountRecovery, MountStatus};
+use crate::mount::{EntryCondition, MountEngine, MountFilesystem, MountRecovery, MountStatus};
 
 use super::super::host_platform::VolumeLocation;
 use super::HostControl;
+
+/// The status a running volume starts with: its first conflict, else
+/// mounted. A `Dirty` entry is an upload still pending in the background
+/// (G4 ML1), not a conflict.
+pub(super) fn running_status(
+    location: &VolumeLocation,
+    entries: &[(String, EntryCondition)],
+) -> MountStatus {
+    match entries
+        .iter()
+        .find(|(_, condition)| matches!(condition, EntryCondition::Conflict(_)))
+    {
+        Some(conflict) => conflict_status(location.clone(), conflict),
+        None => mounted_status(location.clone()),
+    }
+}
+
+/// Reports every conflict a background upload found since the last turn,
+/// as the save at close reported it before write-back (G4 ML1).
+pub(super) fn report_upload_conflicts(
+    control: &dyn HostControl,
+    engine: &dyn MountFilesystem,
+    location: &VolumeLocation,
+) {
+    for conflict in engine.take_upload_conflicts() {
+        let _ = control.report(conflict_status(location.clone(), &conflict), None);
+    }
+}
+
+/// Ends the background uploads before the host gives up its cache lease,
+/// on every way out of the flow; `close_and_finalize` drains them first.
+pub(super) struct WriteBackStop<'a>(pub(super) &'a MountEngine);
+
+impl Drop for WriteBackStop<'_> {
+    fn drop(&mut self) {
+        self.0.finish_write_back();
+    }
+}
 
 pub(super) fn mounted_status(location: VolumeLocation) -> MountStatus {
     match location {

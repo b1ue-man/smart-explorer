@@ -1,4 +1,4 @@
-//! Fsynced append-only checkpoint frames. A torn final frame is ignored and
+//! Data-synced append-only checkpoint frames. A torn final frame is ignored and
 //! truncated before further appends; fully written corrupt frames are errors.
 //! Compaction writes baseline and folder history before retiring the journal.
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -141,6 +141,7 @@ impl Journal {
                 "checkpoint journal exceeds its budget",
             ));
         }
+        let mut created = false;
         let mut file = match std::fs::symlink_metadata(&self.path) {
             Ok(meta) if meta.is_file() && !meta.file_type().is_symlink() => {
                 crate::creds::private_storage::open_file(&self.path, true)?
@@ -152,6 +153,7 @@ impl Journal {
                 ))
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                created = true;
                 crate::creds::private_storage::create_file(&self.path)?
             }
             Err(error) => return Err(error),
@@ -163,14 +165,18 @@ impl Journal {
         file.write_all(&(bytes.len() as u64).to_be_bytes())?;
         file.write_all(&Sha256::digest(&bytes))?;
         file.write_all(&bytes)?;
-        file.sync_all()?;
+        // The frame's bytes and the file length that reaches them; the
+        // journal's directory entry is made durable once, when it is created
+        // (no whole-filesystem flush of the application volume per frame).
+        file.sync_data()?;
+        drop(file);
+        if created {
+            if let Some(parent) = self.path.parent() {
+                crate::support_dirs::sync_private_dir(parent)?;
+            }
+        }
         self.valid_bytes = self.valid_bytes.saturating_add(40 + bytes.len() as u64);
-        let backend = crate::vfs::LocalBackend::new("/");
-        let path = self
-            .path
-            .to_str()
-            .ok_or_else(|| io::Error::other("checkpoint path is not Unicode"))?;
-        crate::vfs::sync_filesystem(&backend, path).map(|_| ())
+        Ok(())
     }
 
     pub fn compact(

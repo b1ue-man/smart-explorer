@@ -420,6 +420,10 @@ impl Throttle {
             state: Mutex::new((std::time::Instant::now(), 0)),
         }
     }
+    /// No bandwidth limit: a kernel copy may move the bytes at full speed.
+    pub(crate) fn unlimited(&self) -> bool {
+        self.limit_bps == 0
+    }
     pub(super) fn consume(&self, n: u64) {
         if self.limit_bps == 0 {
             return;

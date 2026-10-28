@@ -5,8 +5,60 @@ use std::{
     io::{self, Write},
     sync::Arc,
 };
+
+/// What a background upload read without the entry lock (G4 ML1).
+struct UploadSnapshot {
+    remote_path: String,
+    spool_name: String,
+    baseline: Baseline,
+    content_epoch: u64,
+}
+
+impl UploadSnapshot {
+    fn of(state: &EntryState) -> Self {
+        Self {
+            remote_path: state.remote_path.clone(),
+            spool_name: state.spool_name.clone(),
+            baseline: state.baseline.clone(),
+            content_epoch: state.content_epoch,
+        }
+    }
+
+    /// The entry still owns exactly the content that was uploaded.
+    fn still_current(&self, state: &EntryState) -> bool {
+        state.condition == EntryCondition::Dirty
+            && state.delete_token.is_none()
+            && !state.delete_committed
+            && !state.retired
+            && state.content_epoch == self.content_epoch
+            && state.spool_name == self.spool_name
+            && state.remote_path == self.remote_path
+            && state.baseline == self.baseline
+    }
+
+    /// Another save published this same content meanwhile.
+    fn saved_by_another(&self, state: &EntryState) -> bool {
+        state.condition == EntryCondition::Clean
+            && state.content_epoch == self.content_epoch
+            && state.spool_name == self.spool_name
+    }
+}
+
 impl MountEngine {
     pub(super) fn flush_entry(&self, entry: &Arc<Entry>) -> io::Result<FlushOutcome> {
+        self.flush_entry_with(entry, false)
+    }
+
+    /// `unlocked_copy` (background uploads, G4 ML1): the data copy runs
+    /// without the entry lock, so reads, metadata and new writes of this file
+    /// never wait for the network. The promotion happens only when the entry
+    /// still holds exactly the uploaded content; otherwise the own stage is
+    /// discarded and `Interrupted` asks for another upload.
+    pub(super) fn flush_entry_with(
+        &self,
+        entry: &Arc<Entry>,
+        unlocked_copy: bool,
+    ) -> io::Result<FlushOutcome> {
         let mut state = lock(&entry.state)?;
         if state.delete_committed {
             // A handle that survived FILE_SHARE_DELETE refers to the detached
@@ -56,8 +108,11 @@ impl MountEngine {
                 return Err(error);
             }
         };
+        let snapshot = unlocked_copy.then(|| UploadSnapshot::of(&state));
+        // A background upload releases the entry lock for the data copy.
+        let held = (!unlocked_copy).then_some(state);
         let upload = (|| {
-            io::copy(&mut source, &mut destination)?;
+            super::bulk_copy::copy(&mut source, &mut *destination)?;
             destination.flush()?;
             drop(destination);
             Ok(())
@@ -67,6 +122,22 @@ impl MountEngine {
             // the user's file would show up as `<name>.se-mount-…`.
             self.discard_own_stage(&staged, spool_len);
             return Err(error);
+        }
+        let mut state = match held {
+            Some(state) => state,
+            None => lock(&entry.state)?,
+        };
+        if let Some(snapshot) = &snapshot {
+            if !snapshot.still_current(&state) {
+                self.discard_own_stage(&staged, spool_len);
+                if snapshot.saved_by_another(&state) {
+                    return Ok(FlushOutcome::NoChanges);
+                }
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "the file changed while it was uploading; its newer content uploads next",
+                ));
+            }
         }
         // Uploading a whole-file spool may take minutes. Revalidate immediately
         // before the atomic promotion so a remote edit during that transfer is

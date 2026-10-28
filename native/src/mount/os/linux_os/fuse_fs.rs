@@ -32,6 +32,8 @@ use crate::mount::{HandleId, MountFilesystem};
 /// Largest write request (decision C2: 1 MiB; the kernel default is 256
 /// pages).
 const MAX_WRITE: u32 = 1024 * 1024;
+/// Read-ahead and asynchronous requests the kernel keeps in flight (G4 ML9).
+const MAX_BACKGROUND: u16 = 64;
 
 /// The user every file of the drive belongs to: the one who mounted it.
 #[derive(Clone, Copy, Debug)]
@@ -248,6 +250,13 @@ impl Filesystem for FuseFs {
         // fetches the old content first.
         let _ = config.add_capabilities(InitFlags::FUSE_ATOMIC_O_TRUNC);
         let _ = config.set_max_write(MAX_WRITE);
+        // Large read-ahead, parallel lookups (G4 ML9); no writeback cache:
+        // sizes and times stay owned by this host.
+        let _ = config.add_capabilities(InitFlags::FUSE_PARALLEL_DIROPS);
+        if let Err(nearest) = config.set_max_readahead(MAX_WRITE) {
+            let _ = config.set_max_readahead(nearest);
+        }
+        let _ = config.set_max_background(MAX_BACKGROUND);
         Ok(())
     }
 
@@ -438,7 +447,7 @@ impl Filesystem for FuseFs {
     ) {
         // Durable on a drive means published.
         self.shared
-            .run(move |shared| file_io::flush(shared, fh.0, reply));
+            .run(move |shared| file_io::fsync(shared, fh.0, reply));
     }
 
     fn opendir(&self, _req: &Request, ino: INodeNo, _flags: OpenFlags, reply: ReplyOpen) {

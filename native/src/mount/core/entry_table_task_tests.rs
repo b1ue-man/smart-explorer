@@ -17,6 +17,8 @@ fn entry(path: &str, retirements: &Arc<RetirementQueue>) -> Arc<Entry> {
             delete_committed: false,
             clean_since: Instant::now(),
             retired: false,
+            content_epoch: 0,
+            hydration: None,
         }),
         pins: AtomicUsize::new(0),
         retirements: Arc::clone(retirements),
@@ -28,7 +30,10 @@ fn assert_index(table: &EntryTable, expected: &HashMap<String, Arc<Entry>>) {
     assert_eq!(table.values().count(), expected.len());
     let mut by_parent: HashMap<&str, HashSet<*const Entry>> = HashMap::new();
     for (key, identity) in expected {
-        by_parent.entry(parent_path(key)).or_default().insert(Arc::as_ptr(identity));
+        by_parent
+            .entry(parent_path(key))
+            .or_default()
+            .insert(Arc::as_ptr(identity));
     }
     assert_eq!(table.parents.len(), by_parent.len());
     let mut visited = HashSet::new();
@@ -42,9 +47,15 @@ fn assert_index(table: &EntryTable, expected: &HashMap<String, Arc<Entry>>) {
             assert_eq!(indexed.parent_slot, slot, "reverse slot for {key}");
             assert!(Arc::ptr_eq(&indexed.entry, expected.get(key).unwrap()));
         }
-        let actual = table.children(parent).map(Arc::as_ptr).collect::<HashSet<_>>();
-        assert_eq!(&actual, by_parent.get(parent.as_str()).unwrap(),
-            "exact-parent overlay for {parent}");
+        let actual = table
+            .children(parent)
+            .map(Arc::as_ptr)
+            .collect::<HashSet<_>>();
+        assert_eq!(
+            &actual,
+            by_parent.get(parent.as_str()).unwrap(),
+            "exact-parent overlay for {parent}"
+        );
     }
     assert_eq!(visited.len(), expected.len());
 }
@@ -100,14 +111,23 @@ fn mount_vault_task_entry_table_replace_and_rename_keys_across_10000_identities(
         let path = format!("/parent-{:03}/note-{index:05}", index / 100);
         expected.insert(path.clone(), entry(&path, &retirements));
     }
-    table.extend(expected.iter().map(|(key, value)| (key.clone(), Arc::clone(value))));
+    table.extend(
+        expected
+            .iter()
+            .map(|(key, value)| (key.clone(), Arc::clone(value))),
+    );
     assert_index(&table, &expected);
     for index in (0..10_000).step_by(97) {
         let path = format!("/parent-{:03}/note-{index:05}", index / 100);
         let slot = table.paths.get(&path).unwrap().parent_slot;
         let replacement = entry(&path, &retirements);
-        let previous = table.insert(path.clone(), Arc::clone(&replacement)).unwrap();
-        assert!(Arc::ptr_eq(&previous, &expected.insert(path.clone(), replacement).unwrap()));
+        let previous = table
+            .insert(path.clone(), Arc::clone(&replacement))
+            .unwrap();
+        assert!(Arc::ptr_eq(
+            &previous,
+            &expected.insert(path.clone(), replacement).unwrap()
+        ));
         assert_eq!(table.paths.get(&path).unwrap().parent_slot, slot);
     }
     assert_index(&table, &expected);
@@ -126,7 +146,7 @@ fn mount_vault_task_entry_table_replace_and_rename_keys_across_10000_identities(
         let wanted = expected.insert(destination.into(), moved);
         match (displaced, wanted) {
             (Some(actual), Some(wanted)) => assert!(Arc::ptr_eq(&actual, &wanted)),
-            (None, None) => {},
+            (None, None) => {}
             _ => panic!("replacement must return exactly the old destination identity"),
         }
         assert!(!table.contains_key(source));
@@ -138,9 +158,11 @@ fn mount_vault_task_entry_table_replace_and_rename_keys_across_10000_identities(
         ("/renamed".into(), replacement),
         ("/new-parent/second".into(), added),
     ];
-    table.extend(additions.iter().map(|(key, value): &(String, Arc<Entry>)| {
-        (key.clone(), Arc::clone(value))
-    }));
+    table.extend(
+        additions
+            .iter()
+            .map(|(key, value): &(String, Arc<Entry>)| (key.clone(), Arc::clone(value))),
+    );
     expected.extend(additions);
     assert_index(&table, &expected);
 }

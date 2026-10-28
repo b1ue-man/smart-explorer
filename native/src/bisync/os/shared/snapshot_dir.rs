@@ -44,6 +44,8 @@ pub(super) struct WalkContext<'a> {
     pub(super) progress: Progress,
     /// The job's live log of the run that started this walk.
     pub(super) log: Option<std::sync::Arc<super::run_log::RunLog>>,
+    /// Told about every folder listed completely (G4 MS14).
+    pub(super) listed: Option<&'a dyn super::early_copy::FolderListed>,
 }
 
 /// What one folder contributes to the snapshot.

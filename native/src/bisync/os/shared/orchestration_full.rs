@@ -10,7 +10,6 @@ use super::omissions::OmissionKind;
 use super::orchestration::{failure, Outcome, RunState};
 use super::orchestration_plan::{blocked, context, prepare_spelled};
 use super::run_types::RunBlock;
-use super::snapshot_pair::read_pair;
 use super::state_metadata::{now_ms, save_history, PairHistory};
 use super::types::{Action, DeletePolicy, Direction, PairSide};
 
@@ -42,8 +41,30 @@ pub(super) fn run_full_locked(state: &RunState<'_>) -> Outcome {
     }
     let cursor = super::incremental::mirror_source(endpoints, opts)
         .and_then(|(source, root, _)| source.current_change_cursor(root).ok().flatten());
-    let mut snapshot = match read_pair(endpoints, opts, state.cancel, state.filter, state.baseline)
-    {
+    // G4 MS14: new files may be copied while the scan runs (FS3 as of
+    // 2026-10-28: only deletions and absence decisions wait for it).
+    let held = state.history.map_or([false; 2], |history| {
+        [history.entries_a > 0, history.entries_b > 0]
+    });
+    let lane = super::early_copy::EarlyLane::new(
+        endpoints,
+        opts,
+        keys,
+        state.baseline,
+        held,
+        !names.aliases.is_empty(),
+        state.cancel,
+        state.versions,
+    );
+    let (read, early) = super::early_copy::read_pair_copying(
+        endpoints,
+        opts,
+        state.cancel,
+        state.filter,
+        state.baseline,
+        lane,
+    );
+    let mut snapshot = match read {
         Ok(snapshot) => snapshot,
         Err((path, error)) => {
             return Outcome {
@@ -378,7 +399,10 @@ pub(super) fn run_full_locked(state: &RunState<'_>) -> Outcome {
         versions: state.versions,
         spellings: &plan.spellings,
     };
+    let mut early_copied = [0u64; 2];
     let report = sink.during(|| {
+        early_copied =
+            super::early_copy::record(early, &mut plan.actions, &plan.spellings, keys, &sink);
         super::apply::apply_planned_reporting(
             &plan.actions,
             &plan.dirs,
@@ -405,6 +429,8 @@ pub(super) fn run_full_locked(state: &RunState<'_>) -> Outcome {
             .record_kind(&rel, kind, kind.reported_by_default());
     }
     let mut stats = report.stats;
+    stats.a_to_b = stats.a_to_b.saturating_add(early_copied[0]);
+    stats.b_to_a = stats.b_to_a.saturating_add(early_copied[1]);
     stats.deleted = stats.deleted.saturating_add(deduped);
     stats.errors = stats.errors.saturating_add(error_count);
     stats.conflicts = plan.conflicts.len() as u64;

@@ -43,8 +43,8 @@ mod reports;
 
 pub(crate) use host_storage::{LockAnswer, LockOrder, SpoolKeyAnswer};
 use reports::{
-    conflict_status, inspect_recovery, mounted_status, recovery_detail, report_engine_failure,
-    report_failure, report_failure_with_recovery,
+    inspect_recovery, recovery_detail, report_engine_failure, report_failure,
+    report_failure_with_recovery, report_upload_conflicts, running_status, WriteBackStop,
 };
 
 /// One control wait between two loop turns (value of v0.5.182).
@@ -245,7 +245,7 @@ fn run_leased(
         Err(detail) => return Ended::failed(detail),
     };
     let engine = match MountEngine::open_host_cache_with(runtime, backend, spool_root, storage) {
-        Ok(engine) => engine.with_cache_space_probe(Arc::clone(&space)),
+        Ok(engine) => Arc::new(engine.with_cache_space_probe(Arc::clone(&space))),
         Err(_) => {
             return Ended::failed(report_failure_with_recovery(
                 control,
@@ -277,6 +277,9 @@ fn run_leased(
         let detail = format!("mounted-drive remote root validation failed: {error}");
         return Ended::failed(report_engine_failure(control, &engine, &detail));
     }
+    // G4 ML1: pending uploads resume in the background from here on.
+    engine.start_write_back();
+    let _write_back = WriteBackStop(&engine);
     if let Err(error) = engine.retry_pending_changes() {
         let detail = format!(
             "cached mounted-drive changes could not be retried safely: {error}; keep the cache and use Retry after connectivity is restored"
@@ -297,7 +300,6 @@ fn run_leased(
     if let Err(error) = control.report(MountStatus::Mounting, Some(reconciled)) {
         return Ended::failed(error);
     }
-    let engine = Arc::new(engine);
     if let Err(error) = platform.prepare_volume(&engine, config, spool_root) {
         return Ended::failed(match error {
             HostStepError::Plain(detail) => report_failure(control, &detail),
@@ -348,8 +350,7 @@ fn run_until_stopped_with_capacity(
         return finish(platform, control, engine, Some(detail), HostExit::Stopped);
     };
     let initial_status = match engine.dirty_entries() {
-        Ok(entries) if entries.is_empty() => mounted_status(location),
-        Ok(entries) => conflict_status(location, &entries[0]),
+        Ok(entries) => running_status(&location, &entries),
         Err(_) => {
             let detail = "the mounted drive could not inspect its recovery state";
             return finish(platform, control, engine, Some(detail), HostExit::Stopped);
@@ -392,6 +393,7 @@ fn run_until_stopped_with_capacity(
                 return finish(platform, control, engine, None, HostExit::Stopped)
             }
         }
+        report_upload_conflicts(control, engine, &location);
         match platform.deliver_changes() {
             Ok(()) => notification_error_reported = false,
             Err(error) if !notification_error_reported => {
@@ -434,6 +436,8 @@ fn close_and_finalize(
     // one (Linux kernel request timeout); every other report is unchanged.
     let cause = platform.failure_cause();
     let prior_failure = cause.as_deref().or(prior_failure);
+    // G4 ML1: queued and running uploads end before the journal decides.
+    engine.finish_write_back();
     match engine.dirty_entries() {
         Ok(entries) if !entries.is_empty() => Err(report_failure_with_recovery(
             control,

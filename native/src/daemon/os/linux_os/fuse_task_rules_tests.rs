@@ -16,8 +16,7 @@ use super::fuse_task_backends::{
     local, memory, rooted, Gated, GatedBackend, NamesBackend, HIDDEN_NAMES, LISTED_NAMES,
 };
 use super::fuse_task_harness::{
-    close_checked, eventually, last, names_in, require_task_stage, unmount_cleanly, FuseTaskHost,
-    HostSetup,
+    eventually, last, names_in, require_task_stage, unmount_cleanly, FuseTaskHost, HostSetup,
 };
 use crate::mount::range_read_task_tests::RangeBackend;
 use crate::mount::{MountMode, MountRecovery, MountStatus};
@@ -71,10 +70,10 @@ fn drive_task_fuse_conflict_returns_ebusy_and_copy() -> io::Result<()> {
     let host = FuseTaskHost::start(HostSetup::new(gated.drive(RW)?, RW))?;
     let mut file = OpenOptions::new().write(true).open(host.path("doc.txt"))?;
     file.write_all(b"local edit")?;
-    // The save at close(2) waits before its upload; the remote file
-    // changes meanwhile.
+    // The save at fsync(2) waits before its upload; the remote file changes
+    // meanwhile (close(2) no longer waits for the upload, G4 ML1).
     let gate = gated.gate(Gated::Upload);
-    let closing = std::thread::spawn(move || close_checked(file));
+    let closing = std::thread::spawn(move || file.sync_all());
     assert!(
         gate.entered_within(Duration::from_secs(30)),
         "the save never started its upload"
@@ -84,7 +83,7 @@ fn drive_task_fuse_conflict_returns_ebusy_and_copy() -> io::Result<()> {
     let closed = closing
         .join()
         .map_err(|_| io::Error::other("the closing thread panicked"))?;
-    let error = closed.expect_err("close(2) reports the conflict");
+    let error = closed.expect_err("fsync(2) reports the conflict");
     assert_eq!(error.raw_os_error(), Some(libc::EBUSY), "{error}");
     // The remote change stays; the save lies beside it as a conflict copy.
     assert_eq!(gated.inner.bytes("/doc.txt"), b"remote change");

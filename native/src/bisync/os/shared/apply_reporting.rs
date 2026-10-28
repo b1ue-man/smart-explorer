@@ -121,25 +121,46 @@ pub(super) fn run(
         return report;
     }
     let stopped = AtomicBool::new(false);
+    // Root and directory facts fixed for this run are established once.
+    let paths = super::apply_path_context::PathContext::new();
+    let dir_workers = match opts.max_transfers {
+        0 => std::thread::available_parallelism().map_or(1, |count| count.get()),
+        max => max,
+    };
     let directory_pass =
         |creating: bool, report: &mut ApplyReport, errors: &mut Vec<(String, String)>| {
-            for action in dirs
-                .iter()
-                .filter(|action| matches!(action, DirAction::Create { .. }) == creating)
-            {
-                if cancel.load(Ordering::Acquire)
+            let failures = Mutex::new((0u64, Vec::new()));
+            let halted = || {
+                cancel.load(Ordering::Acquire)
                     || scope.sink.should_stop()
                     || stopped.load(Ordering::Acquire)
-                {
-                    break;
-                }
-                if let Err(error) = super::apply_dirs::run(action, endpoints, opts, scope, cancel) {
+            };
+            let each = |action: &DirAction| {
+                let result = super::apply_path_context::scoped(&paths, || {
+                    super::apply_dirs::run(action, endpoints, opts, scope, cancel)
+                });
+                if let Err(error) = result {
                     if !classify(&error, action.rel(), action.side(), scope, &stopped) {
-                        report.stats.errors += 1;
-                        if errors.len() < 100 {
-                            errors.push((action.rel().to_string(), error.to_string()));
+                        let mut failures = failures.lock().unwrap_or_else(|e| e.into_inner());
+                        failures.0 += 1;
+                        if failures.1.len() < 100 {
+                            failures
+                                .1
+                                .push((action.rel().to_string(), error.to_string()));
                         }
                     }
+                }
+            };
+            let chosen = dirs
+                .iter()
+                .filter(|action| matches!(action, DirAction::Create { .. }) == creating)
+                .collect();
+            super::apply_dir_levels::run(chosen, creating, dir_workers, &halted, &each);
+            let (count, failed) = failures.into_inner().unwrap_or_else(|e| e.into_inner());
+            report.stats.errors += count;
+            for failure in failed {
+                if errors.len() < 100 {
+                    errors.push(failure);
                 }
             }
         };
@@ -195,7 +216,7 @@ pub(super) fn run(
     };
     let completed = Mutex::new(Vec::new());
     let partial = Mutex::new(BisyncStats::default());
-    let admit = |action: &Action| {
+    let admit_one = |action: &Action| {
         if cancel.load(Ordering::Acquire) || stop() {
             return None;
         }
@@ -254,13 +275,14 @@ pub(super) fn run(
             _ => flows.transfer(cancel),
         }
     };
+    let admit = |action: &Action| super::apply_path_context::scoped(&paths, || admit_one(action));
     let execute = |action: &Action| {
         let mut stats = BisyncStats::default();
         let result = run_with_retry(
             opts.retries,
             Duration::from_secs(opts.retry_delay_secs),
             cancel,
-            || runner.run(action, &mut stats),
+            || super::apply_path_context::scoped(&paths, || runner.run(action, &mut stats)),
         );
         match result {
             Ok(()) => {

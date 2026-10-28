@@ -101,7 +101,10 @@ impl MountEngine {
         let parent = self.cache_key(path.backend());
         // Namespace read ownership makes these identity keys stable through
         // selection. Never wait for an unrelated file's upload state mutex.
-        let entries = lock(&self.entries)?.children(&parent).cloned().collect::<Vec<_>>();
+        let entries = lock(&self.entries)?
+            .children(&parent)
+            .cloned()
+            .collect::<Vec<_>>();
         let mut overlays = Vec::new();
         for entry in entries {
             let state = lock(&entry.state)?;
@@ -140,14 +143,24 @@ impl MountEngine {
             .and_then(|file| file.metadata())
         {
             Ok(metadata) => metadata.len(),
-            Err(error) if error.kind() == io::ErrorKind::NotFound
-                && self.spool.is_missing_recovery(&state.spool_name) => {
+            Err(error)
+                if error.kind() == io::ErrorKind::NotFound
+                    && self.spool.is_missing_recovery(&state.spool_name) =>
+            {
                 // Keep the conflicted name visible without blocking its whole
                 // directory. This is only the last known size, never replacement
                 // content: data access still reports the absent recovery file.
-                match state.baseline { Baseline::Present { size, .. } => size, Baseline::Missing => 0 }
+                match state.baseline {
+                    Baseline::Present { size, .. } => size,
+                    Baseline::Missing => 0,
+                }
             }
             Err(error) => return Err(error),
+        };
+        // G4 ML4: a spool still being filled shows its final length.
+        let size = match &state.hydration {
+            Some(hydration) if !state.content_complete() => hydration.total(),
+            _ => size,
         };
         let mtime_ms = match &state.baseline {
             Baseline::Missing => 0,

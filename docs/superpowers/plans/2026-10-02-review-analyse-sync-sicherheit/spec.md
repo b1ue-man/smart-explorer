@@ -130,6 +130,13 @@ RV1“ und kommt auf das Board (`docs/TODO.md`).
   nicht als Löschung. Ein Stopp wird als „blockiert“ gemeldet, nicht minütlich wiederholt, und lässt sich
   nach Prüfung bestätigen. Inkrementelle Spiegel prüfen das Ziel regelmäßig vollständig (täglich).
   [Y31, Y62, Y92, Y39, Y69]
+  **Fassung ab 2026-10-28 (G4 MS14):** Nach dem vollständigen Scan beider Seiten kommen nur noch
+  Löschungen und jede Entscheidung, die aus einem Fehlen folgt (Seite leer, Löschschutz, Spiegel-Waisen,
+  übernommene Löschungen). Eine neue Datei darf schon während des Scans kopiert werden, sobald die
+  Zielseite genug Ordner gelistet hat, um den Namen dort als fehlend zu belegen, und die Basis den Namen
+  nicht kennt. Die Kopie ersetzt nie etwas, nutzt die Schreibweise der vorhandenen Zielordner und wird erst
+  nach dem vollständigen Plan als dessen Aktion verbucht (`native/src/bisync/os/shared/early_copy.rs`).
+  Hat eine Seite früher Einträge gehabt und ist ihre Wurzel jetzt leer, kopiert der Lauf vorab nichts.
 - **FS4 Ein einzelner Problemeintrag stoppt keinen Lauf.** Unlesbare, verschwundene, nicht darstellbare
   Einträge, Pipes/Sockets/Geräte, systemeigene Ordner an Laufwerkswurzeln, eigene Zwischendateien und
   gefilterte Einträge werden ausgelassen, gemeldet und nie als Löschung gedeutet. Groß-/Kleinschreibung

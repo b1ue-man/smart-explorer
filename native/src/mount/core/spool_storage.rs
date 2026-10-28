@@ -38,6 +38,12 @@ pub trait SpoolStorage: Send + Sync {
     fn create_new(&self, path: &Path) -> io::Result<Box<dyn SpoolFile>>;
     /// Opens an existing spool file.
     fn open(&self, path: &Path, writable: bool) -> io::Result<Box<dyn SpoolFile>>;
+    /// Whether bytes written through one open file are readable through
+    /// another at once (G4 ML4: reads while the download still runs). A
+    /// storage that seals content in chunks keeps the default `false`.
+    fn reads_while_writing(&self) -> bool {
+        false
+    }
 }
 
 /// Spool and path protection of one drive (contract V1).
@@ -78,6 +84,11 @@ impl SpoolStorage for PlainSpoolStorage {
             .write(writable)
             .open(path)
             .map(PlainSpoolFile::boxed)
+    }
+
+    /// One OS file: a write is visible to every other open at once.
+    fn reads_while_writing(&self) -> bool {
+        true
     }
 }
 

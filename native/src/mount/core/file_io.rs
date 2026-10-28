@@ -115,6 +115,12 @@ impl MountEngine {
             return Ok(read);
         }
         let entry = self.materialize_opened(handle, opened)?;
+        // G4 ML4: wait only for this range while the download still runs;
+        // never under the entry lock, which the rest of the drive needs.
+        let hydration = lock(&entry.state)?.hydration.clone();
+        if let Some(hydration) = hydration {
+            hydration.wait_for(offset.saturating_add(output.len() as u64))?;
+        }
         let state = lock(&entry.state)?;
         let mut file = self.spool.open_file(&state.spool_name, false)?;
         file.seek(SeekFrom::Start(offset))?;
@@ -143,6 +149,7 @@ impl MountEngine {
             ));
         }
         let entry = self.materialize_opened(handle, opened)?;
+        await_complete(&entry)?;
         let mut state = lock(&entry.state)?;
         let mut file = self.spool.open_file(&state.spool_name, true)?;
         let end = offset
@@ -167,6 +174,7 @@ impl MountEngine {
             ));
         }
         let entry = self.materialize_opened(handle, opened)?;
+        await_complete(&entry)?;
         let mut state = lock(&entry.state)?;
         let mut file = self.spool.open_file(&state.spool_name, true)?;
         let _growth = self.reserve_growth(input.len() as u64)?;
@@ -181,6 +189,12 @@ impl MountEngine {
         match self.handle(handle)?.kind {
             OpenHandleKind::Materialized(entry) => {
                 let state = lock(&entry.state)?;
+                if !state.content_complete() {
+                    // A download still fills the spool: its final length.
+                    if let Some(hydration) = &state.hydration {
+                        return Ok(hydration.total());
+                    }
+                }
                 Ok(self
                     .spool
                     .open_file(&state.spool_name, false)?
@@ -254,6 +268,7 @@ impl MountEngine {
     }
 
     fn truncate_entry(&self, entry: &Arc<Entry>, length: u64) -> io::Result<()> {
+        await_complete(entry)?;
         let mut state = lock(&entry.state)?;
         // Every spool access goes through the drive's `SpoolStorage` (V1).
         let mut file = self.spool.open_file(&state.spool_name, true)?;
@@ -269,6 +284,9 @@ impl MountEngine {
             // object and intentionally never re-enter the remote namespace.
             return Ok(());
         }
+        // Every content change: a background upload that read the spool
+        // without the entry lock must not publish (G4 ML1).
+        state.content_epoch = state.content_epoch.wrapping_add(1);
         match state.condition {
             EntryCondition::Clean => {
                 let persisted = state.with_condition(EntryCondition::Dirty);
@@ -290,5 +308,16 @@ impl MountEngine {
                 "file has an unresolved remote conflict",
             )),
         }
+    }
+}
+
+/// Waits until a streaming download has filled the whole spool (G4 ML4).
+/// Writes and truncation never touch a spool that is still being filled;
+/// a download that failed (the remote file changed) fails them too.
+fn await_complete(entry: &Arc<Entry>) -> io::Result<()> {
+    let hydration = lock(&entry.state)?.hydration.clone();
+    match hydration {
+        Some(hydration) => hydration.wait_complete(),
+        None => Ok(()),
     }
 }
