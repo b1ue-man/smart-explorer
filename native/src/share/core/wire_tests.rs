@@ -80,6 +80,8 @@ fn one_of_each() -> Vec<FsRequest> {
         FsRequest::WriteNew {
             path: path(),
             lz4: true,
+            evidence: false,
+            probe: None,
         },
         FsRequest::WriteDone,
         FsRequest::MkdirAll { path: path() },
@@ -110,17 +112,22 @@ fn one_of_each() -> Vec<FsRequest> {
         FsRequest::PutBatch {
             nonce: "0123456789abcdef".into(),
             entries: Vec::new(),
+            evidence: false,
         },
         FsRequest::PutBatchStatus {
             nonce: "0123456789abcdef".into(),
         },
-        FsRequest::GetBatch { items: Vec::new() },
+        FsRequest::GetBatch {
+            items: Vec::new(),
+            evidence: false,
+        },
         FsRequest::ReadAt {
             path: path(),
             id: None,
             offset: 0,
             len: 0,
             lz4: false,
+            evidence: false,
         },
         FsRequest::ReadAt {
             path: path(),
@@ -128,6 +135,7 @@ fn one_of_each() -> Vec<FsRequest> {
             offset: 8 << 20,
             len: 8 << 20,
             lz4: true,
+            evidence: false,
         },
         FsRequest::SegmentedStageOpen(crate::share::wire::FsSegmentedOpen {
             path: path(),
@@ -148,6 +156,7 @@ fn one_of_each() -> Vec<FsRequest> {
             staged: path(),
             destination: path(),
             copy: false,
+            evidence: false,
         },
         FsRequest::DiscardStage { path: path() },
         FsRequest::DuplicateSearch(FsDuplicateSearch {

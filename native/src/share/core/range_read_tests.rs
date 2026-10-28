@@ -85,6 +85,7 @@ fn speed_task_share_read_at_len_beyond_the_end_is_clamped() -> io::Result<()> {
         offset: MIB as u64 - 7,
         len: u64::MAX,
         lz4: false,
+        evidence: false,
     };
     let peer = &fixture.peer;
     let endpoint = peer.current_endpoint()?;

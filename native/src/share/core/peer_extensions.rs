@@ -200,4 +200,41 @@ impl BackendExtensions for PeerBackend {
     ) -> io::Result<Option<ChangeSubscription>> {
         super::peer_watch::subscribe(self, root, tx)
     }
+    fn host_batch_limits(&self) -> Option<crate::vfs::BatchLimits> {
+        self.host_batch_limits_any()
+    }
+    fn transfer_evidence(&self, _path: &str) -> bool {
+        self.evidence_offered()
+    }
+    fn put_batch_evidence(
+        &self,
+        entries: &[crate::vfs::BatchPut],
+        data: &mut dyn std::io::Read,
+        prepare: &mut crate::vfs::PreparePut<'_>,
+    ) -> io::Result<Vec<crate::vfs::EvidencePutOutcome>> {
+        self.put_batch_evidenced(entries, data, prepare)
+    }
+    fn promote_copy_stage_evidence(
+        &self,
+        staged: &str,
+        destination: &str,
+    ) -> io::Result<Option<crate::vfs::FileEvidence>> {
+        self.promote_evidenced(staged, destination)
+    }
+    fn open_read_evidence(
+        &self,
+        path: &str,
+        id: Option<&str>,
+    ) -> io::Result<Option<(Box<dyn std::io::Read + Send>, crate::vfs::FileEvidence)>> {
+        self.read_evidenced(path, id)
+    }
+    fn take_stage_evidence(&self, stage: &str) -> Option<crate::vfs::StageEvidence> {
+        self.take_written(stage)
+    }
+    fn supports_create_dirs(&self, root: &str) -> bool {
+        !crate::share::fs_capabilities::is_synthetic_container(root) && self.create_dirs_offered()
+    }
+    fn create_dirs(&self, paths: &[String]) -> io::Result<Vec<io::Result<bool>>> {
+        self.create_dirs_bulk(paths)
+    }
 }

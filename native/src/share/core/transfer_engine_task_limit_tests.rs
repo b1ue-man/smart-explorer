@@ -32,6 +32,7 @@ fn transfer_engine_task_share_oversized_frames_are_refused() -> io::Result<()> {
             path: "/A/huge.bin".into(),
             size: oversized.len() as u64,
         }],
+        evidence: false,
     });
     let ready = peer.node.block_on(async {
         send_ctrl(&mut batch.send, &header).await?;
@@ -53,6 +54,8 @@ fn transfer_engine_task_share_oversized_frames_are_refused() -> io::Result<()> {
     let open = fs_request(FsRequest::WriteNew {
         path: "/A/big-frame.bin".into(),
         lz4: false,
+        evidence: false,
+        probe: None,
     });
     let ready = peer.node.block_on(async {
         send_ctrl(&mut write.send, &open).await?;
@@ -111,6 +114,8 @@ fn transfer_engine_task_share_stalled_client_frees_its_slot() -> io::Result<()> 
     let open = fs_request(FsRequest::WriteNew {
         path: "/A/stalled.bin".into(),
         lz4: false,
+        evidence: false,
+        probe: None,
     });
     let ready = peer.node.block_on(async {
         send_ctrl(&mut writing.send, &open).await?;

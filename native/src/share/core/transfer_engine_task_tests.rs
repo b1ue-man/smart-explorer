@@ -180,6 +180,7 @@ fn transfer_engine_task_share_batch_status_resolves_a_lost_reply() -> io::Result
                 path: path.to_string(),
                 size,
             }],
+            evidence: false,
         },
         lease: None,
     };

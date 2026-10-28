@@ -258,11 +258,18 @@ fn outcome_bytes(status: &FsBatchStatus) -> usize {
         .map(|outcome| {
             OUTCOME_OVERHEAD
                 + match outcome {
-                    FsBatchOutcome::Published { path } => path.len(),
+                    FsBatchOutcome::Published { path, evidence } => {
+                        path.len() + evidence.as_ref().map_or(0, evidence_bytes)
+                    }
                     FsBatchOutcome::Failed { msg, .. } => msg.len(),
                 }
         })
         .sum()
+}
+
+/// Text an outcome's evidence keeps (its numbers count as overhead).
+fn evidence_bytes(evidence: &crate::share::wire::FsFileEvidence) -> usize {
+    evidence.id.as_ref().map_or(0, String::len) + evidence.identity.as_ref().map_or(0, String::len)
 }
 
 #[cfg(test)]

@@ -23,6 +23,12 @@ use super::session::{
 use super::types::{PeerEndpoint, ShareEvent};
 use super::wire::{Ctrl, FsResponse, PeerHello, TRANSFER_V1_CAPABILITY};
 
+/// Streams (requests) this process opened to peers: the measure of the
+/// `speed_task_share_*` benchmarks.
+#[cfg(test)]
+pub(super) static OPENED_STREAMS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
 pub(super) struct OpenedPeerStream {
     pub(super) send: SendStream,
     pub(super) recv: RecvStream,
@@ -148,6 +154,8 @@ impl ShareIrohNode {
         identity: &ShareIdentity,
         deadline: Instant,
     ) -> io::Result<OpenedPeerStream> {
+        #[cfg(test)]
+        OPENED_STREAMS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.require_sharing_active()?;
         let key = session_key(endpoint);
         let generation = self

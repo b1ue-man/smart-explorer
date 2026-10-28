@@ -1,4 +1,7 @@
-use super::wire::{FsBatchStatus, FsErrorKind, FsMeta, FsWalkNode, FsWriteCapabilities};
+use super::wire::{
+    FsBatchStatus, FsDirOutcome, FsErrorKind, FsFileEvidence, FsMeta, FsWalkNode,
+    FsWriteCapabilities, FsWritten,
+};
 use serde::{Deserialize, Serialize};
 
 #[path = "duplicate_wire.rs"]
@@ -108,7 +111,33 @@ pub(crate) enum FsResponse {
     Data {
         size: u64,
     },
+    /// `evidence_v1` reads (ReadAt, GetBatch items): `Data` plus what the
+    /// host read about the file when it opened it.
+    EvidencedData {
+        size: u64,
+        evidence: FsFileEvidence,
+    },
     Ready,
+    /// `evidence_v1` PutBatch: accepted; per entry whether its requested
+    /// path existed (`None` = unknown). Nothing is published before the
+    /// client's commit.
+    BatchReady {
+        existed: Vec<Option<bool>>,
+    },
+    /// `evidence_v1` PromoteNoReplace: published, with the published file
+    /// as the host read it back (`None` when it could not).
+    Published {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        evidence: Option<FsFileEvidence>,
+    },
+    /// `evidence_v1` WriteNew: the committed stage.
+    Written {
+        written: FsWritten,
+    },
+    /// `create_dirs_v1` CreateDirs: one outcome per folder, in request order.
+    Dirs {
+        outcomes: Vec<FsDirOutcome>,
+    },
     /// `ranges_v1`: the stage `SegmentedStageOpen` created (its path in the
     /// export, with the name the host picked).
     SegmentedStageReady {

@@ -61,7 +61,6 @@ pub(super) fn response_matches(request: &FsRequest, response: &FsResponse) -> bo
         | FsRequest::RenameNoReplace { .. }
         | FsRequest::RenameReservedDirectory { .. }
         | FsRequest::PromoteStaged { .. }
-        | FsRequest::PromoteNoReplace { .. }
         | FsRequest::RemoveFile { .. }
         | FsRequest::RemoveDir { .. }
         | FsRequest::MkdirAll { .. }
@@ -69,6 +68,11 @@ pub(super) fn response_matches(request: &FsRequest, response: &FsResponse) -> bo
         | FsRequest::CreateDirExclusive { .. }
         | FsRequest::DiscardStage { .. }
         | FsRequest::ReleaseLease => matches!(response, FsResponse::Ok),
+        FsRequest::PromoteNoReplace { evidence, .. } => {
+            matches!(response, FsResponse::Ok)
+                || (*evidence && matches!(response, FsResponse::Published { .. }))
+        }
+        FsRequest::CreateDirs(_) => matches!(response, FsResponse::Dirs { .. }),
         FsRequest::PutBatchStatus { .. } => matches!(response, FsResponse::Batch { .. }),
         FsRequest::SegmentedStageOpen(_) => {
             matches!(response, FsResponse::SegmentedStageReady { .. })

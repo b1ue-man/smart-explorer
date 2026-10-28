@@ -7,6 +7,7 @@
 use super::super::engine_names::{next_numbered, parent_rel};
 use super::super::local_stage::{create_download_part, ensure_local_space};
 use super::super::walk_listers::native;
+use super::file_evidence::HostEvidence;
 use super::ops::{At, Carry, Meter, OpError, OpResult, Outcome};
 use super::queue::FileWork;
 use super::source::RemoteCheck;
@@ -159,7 +160,10 @@ pub(super) fn download<'e>(
             return Err(error);
         }
     }
-    let mut reader = match open_reader(source, file, &mut part, &mut check, buffer) {
+    // A fresh read from a peer with transfer evidence also brings what the
+    // peer read about the source, so publishing asks for nothing more.
+    let mut known = None;
+    let mut reader = match open_reader(source, file, &mut part, &mut check, buffer, &mut known) {
         Ok(reader) => reader,
         Err(error) => {
             carry.part = Some(part);
@@ -190,7 +194,8 @@ pub(super) fn download<'e>(
     drop(reader);
     let read = part.written();
     check.finish(source, file, read)?;
-    publish_local(engine, part, &destination, file)
+    let known = known.map(super::batch_put::host_evidence);
+    publish_local_known(engine, part, &destination, file, known)
 }
 
 /// Opens the source where the part stops: from its written length when the
@@ -201,6 +206,7 @@ fn open_reader(
     part: &mut Part,
     check: &mut RemoteCheck,
     buffer: &mut [u8],
+    known: &mut Option<crate::vfs::FileEvidence>,
 ) -> Result<Box<dyn Read + Send>, OpError> {
     if part.written() > 0 {
         let resumed = source
@@ -213,6 +219,12 @@ fn open_reader(
             return Ok(reader);
         }
         part.restart()?;
+    }
+    let evidenced = crate::vfs::open_read_evidence(source, &file.source, file.id.as_deref())
+        .map_err(OpError::source)?;
+    if let Some((reader, evidence)) = evidenced {
+        *known = Some(evidence);
+        return Ok(reader);
     }
     source
         .open_read_id(&file.source, file.id.as_deref())
@@ -269,17 +281,30 @@ pub(super) fn existing(
 /// Publishes a complete part under the job's conflict policy.
 pub(super) fn publish_local(
     engine: &Engine<'_>,
-    mut part: Part,
+    part: Part,
     destination: &Path,
     file: &FileWork,
 ) -> OpResult {
+    publish_local_known(engine, part, destination, file, None)
+}
+
+/// `publish_local` with the remote source as the peer described it while
+/// sending it (`known`): its receipt then asks the peer for nothing.
+pub(super) fn publish_local_known(
+    engine: &Engine<'_>,
+    mut part: Part,
+    destination: &Path,
+    file: &FileWork,
+    known: Option<HostEvidence>,
+) -> OpResult {
+    let known = known.as_ref();
     let overwrite = engine.view.conflict == Conflict::Overwrite && !engine.resume;
     part.close(overwrite)?;
     if overwrite {
         refuse_folder_or_link(destination)?;
         let staged = crate::copy::native_path_text(&part.path).map_err(OpError::target)?;
         let target = crate::copy::native_path_text(destination).map_err(OpError::target)?;
-        prepare_part(engine, file, &mut part, &staged, &target)?;
+        prepare_part(engine, file, &mut part, &staged, &target, known)?;
         if let Err(error) = super::super::platform::replace_file_atomic(&part.path, destination) {
             part.retained = true;
             return Err(OpError::at(At::Publish, error));
@@ -294,7 +319,7 @@ pub(super) fn publish_local(
     loop {
         let staged = crate::copy::native_path_text(&part.path).map_err(OpError::target)?;
         let actual = crate::copy::native_path_text(&target).map_err(OpError::target)?;
-        prepare_part(engine, file, &mut part, &staged, &actual)?;
+        prepare_part(engine, file, &mut part, &staged, &actual, known)?;
         match crate::vfs::promote_local_copy(&part.path, &target) {
             Ok(()) => {
                 part.published = true;
@@ -341,8 +366,11 @@ fn prepare_part(
     part: &mut Part,
     staged: &str,
     target: &str,
+    known: Option<&HostEvidence>,
 ) -> Result<(), OpError> {
-    if let Err(error) = super::file_recovery::before(engine, file, staged, target) {
+    let prepared =
+        super::file_recovery::before_known(engine, file, staged, target, known, None, None);
+    if let Err(error) = prepared {
         if let Err(failure) = super::file_recovery::preparation_failed(engine, file) {
             part.retained = true;
             return Err(OpError::at(At::Unknown, io::Error::other(format!("Publikationsvorbereitung fehlgeschlagen: {error}; Nichtpublikation unbestätigt: {failure}; eigene Teildatei bleibt erhalten: {staged}"))));

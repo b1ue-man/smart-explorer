@@ -3,6 +3,8 @@
 //! named with the client nonce; only the client's commit (WriteDone)
 //! publishes them, never replacing and numbered when a name is taken (K18c).
 //! Anything that ends the stream before the commit removes every stage.
+//! With `evidence_v1` the host first answers `BatchReady` with the entries'
+//! existing destinations and reports each published file's evidence.
 use std::io::{self, Write};
 use std::time::Duration;
 
@@ -11,15 +13,17 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::share::core::eio;
 use crate::share::framing::{recv_data_frame, reply, reply_err, TAG_CTRL, TAG_DATA};
-use crate::share::fs::ResolvedTarget;
-use crate::share::fs_access::FsAccess;
+use crate::share::host_evidence::Scopes;
 use crate::share::io_deadline;
 use crate::share::server_transfer::STREAM_BUFFER_CHUNKS;
 use crate::share::wire::{Ctrl, FsBatchOutcome, FsBatchPut, FsBatchStatus, FsRequest, FsResponse};
-use crate::vfs::remote_util::{numbered_remote_name, REMOTE_UNIQUE_ATTEMPTS};
 
 use super::batch_status::{self, BatchKey};
 use super::fs_dispatch::BatchAuthority;
+
+#[path = "server_batch_stage.rs"]
+mod stage;
+use stage::{discard, invalid, open_stage, presence, publish, Parents, Staged};
 
 /// A client finishes its side as soon as it holds the outcomes; one round
 /// trip even over a slow relay, with the margin of a control attempt (20 s).
@@ -32,6 +36,8 @@ pub(super) struct PutBatchJob {
     pub(super) authority: BatchAuthority,
     /// Lease the commit must repeat (mounted streams).
     pub(super) expected_lease: Option<String>,
+    /// `evidence_v1`: `BatchReady` and evidence in the outcomes.
+    pub(super) evidence: bool,
 }
 
 enum PutCommand {
@@ -69,16 +75,31 @@ pub(super) async fn serve<G: Send + 'static>(
     }
     let key = job.key.clone();
     let expected_lease = job.expected_lease.clone();
+    let evidence = job.evidence;
     let (commands, receiver) = mpsc::channel(STREAM_BUFFER_CHUNKS);
     let (done_tx, done_rx) = oneshot::channel();
+    let (ready_tx, ready_rx) = oneshot::channel();
     let worker = crate::share::blocking::spawn_holding("Share batch upload", slot, move || {
-        let _ = done_tx.send(put_worker(job, receiver));
+        let _ = done_tx.send(put_worker(job, receiver, ready_tx));
         Ok(())
     });
-    // Accepted: the client may already be sending its bytes.
-    let frames = match reply(&mut send, FsResponse::Ready).await {
-        Ok(()) => forward_frames(&mut recv, &commands, expected_lease.as_deref(), stall).await,
-        Err(error) => Err(Stop::Transport(error)),
+    // Accepted: the client may already be sending its bytes. An evidence
+    // batch names the existing destinations first; nothing is published
+    // before the client's commit, which follows only after this reply.
+    let ready = if evidence {
+        ready_rx
+            .await
+            .map(|existed| FsResponse::BatchReady { existed })
+            .map_err(|_| Stop::Worker)
+    } else {
+        Ok(FsResponse::Ready)
+    };
+    let frames = match ready {
+        Ok(ready) => match reply(&mut send, ready).await {
+            Ok(()) => forward_frames(&mut recv, &commands, expected_lease.as_deref(), stall).await,
+            Err(error) => Err(Stop::Transport(error)),
+        },
+        Err(stop) => Err(stop),
     };
     drop(commands);
     let result = match done_rx.await {
@@ -155,7 +176,18 @@ async fn await_delivery(recv: &mut RecvStream, key: &BatchKey) {
     }
 }
 
-fn put_worker(job: PutBatchJob, mut commands: mpsc::Receiver<PutCommand>) -> PutResult {
+fn put_worker(
+    job: PutBatchJob,
+    mut commands: mpsc::Receiver<PutCommand>,
+    ready: oneshot::Sender<Vec<Option<bool>>>,
+) -> PutResult {
+    if job.evidence {
+        let existed = job
+            .authority
+            .admit(|access| Ok(presence(access, &job.entries)))
+            .unwrap_or_else(|_| vec![None; job.entries.len()]);
+        let _ = ready.send(existed);
+    }
     let mut upload = Upload::new(&job);
     let received = upload.receive(&mut commands);
     // Closing the channel tells the frame loop that nothing more is taken.
@@ -177,14 +209,6 @@ fn put_worker(job: PutBatchJob, mut commands: mpsc::Receiver<PutCommand>) -> Put
     result
 }
 
-/// A stage this batch created and still owns.
-struct Staged {
-    stage: ResolvedTarget,
-    /// Peer-namespace folder and name the entry asked for.
-    parent: String,
-    name: String,
-}
-
 enum EntryState {
     Waiting,
     Writing(Staged),
@@ -198,6 +222,8 @@ struct Upload<'a> {
     current: usize,
     written: u64,
     writer: Option<Box<dyn Write + Send>>,
+    /// Folders resolved while the entries arrive.
+    parents: Parents,
 }
 
 impl<'a> Upload<'a> {
@@ -208,6 +234,7 @@ impl<'a> Upload<'a> {
             current: 0,
             written: 0,
             writer: None,
+            parents: Parents::default(),
         }
     }
 
@@ -281,9 +308,10 @@ impl<'a> Upload<'a> {
         let Some(entry) = job.entries.get(index) else {
             return;
         };
+        let parents = &mut self.parents;
         let opened = job
             .authority
-            .admit(|access| open_stage(access, entry, &job.nonce, index));
+            .admit(|access| open_stage(access, parents, entry, &job.nonce, index));
         let state = match opened {
             Ok((staged, writer)) => {
                 self.writer = Some(writer);
@@ -340,15 +368,21 @@ impl<'a> Upload<'a> {
         }
     }
 
-    /// Publishes every complete entry in request order, each admitted again.
+    /// Publishes every complete entry in request order, each admitted again;
+    /// each folder is resolved again once for the commit.
     fn commit(self) -> Vec<FsBatchOutcome> {
         let job = self.job;
+        let mut parents = Parents::default();
+        let mut scopes = job.evidence.then(Scopes::default);
         self.states
             .into_iter()
             .map(|state| match state {
                 EntryState::Staged(staged) => {
-                    match job.authority.admit(|access| publish(access, &staged)) {
-                        Ok(path) => FsBatchOutcome::Published { path },
+                    let published = job
+                        .authority
+                        .admit(|access| publish(access, &mut parents, &staged, scopes.as_mut()));
+                    match published {
+                        Ok((path, evidence)) => FsBatchOutcome::Published { path, evidence },
                         Err(error) => {
                             discard(&staged);
                             FsBatchOutcome::failed(&error)
@@ -361,96 +395,5 @@ impl<'a> Upload<'a> {
                 }
             })
             .collect()
-    }
-}
-
-fn open_stage(
-    access: &FsAccess,
-    entry: &FsBatchPut,
-    nonce: &str,
-    index: usize,
-) -> io::Result<(Staged, Box<dyn Write + Send>)> {
-    let (parent, name) = split_entry(&entry.path)?;
-    // The client nonce in the name ties the stage to this batch (K18e).
-    let stage = access.resolve(&format!("{parent}/{name}.se-batch-{nonce}-{index}"))?;
-    let destination = access.resolve(&format!("{parent}/{name}"))?;
-    access.require_same_backend(&stage, &destination)?;
-    let writer = stage
-        .backend
-        .open_write_copy_stage_sized(&stage.path, entry.size)?;
-    Ok((
-        Staged {
-            stage,
-            parent,
-            name,
-        },
-        writer,
-    ))
-}
-
-/// Publishes without replacing; a taken name gets the next free number.
-fn publish(access: &FsAccess, staged: &Staged) -> io::Result<String> {
-    for index in 1..=REMOTE_UNIQUE_ATTEMPTS {
-        let path = format!(
-            "{}/{}",
-            staged.parent,
-            numbered_remote_name(&staged.name, index)
-        );
-        let destination = access.resolve(&path)?;
-        access.require_same_backend(&staged.stage, &destination)?;
-        match staged
-            .stage
-            .backend
-            .promote_copy_stage(&staged.stage.path, &destination.path)
-        {
-            Ok(()) => return Ok(path),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(error),
-        }
-    }
-    Err(io::Error::new(
-        io::ErrorKind::AlreadyExists,
-        format!("Kein freier Name nach {REMOTE_UNIQUE_ATTEMPTS} Versuchen"),
-    ))
-}
-
-/// Removes an own, never published stage; a failure leaves it in place, as a
-/// single upload does.
-fn discard(staged: &Staged) {
-    let _ = staged.stage.backend.discard_copy_stage(&staged.stage.path);
-}
-
-/// Peer-namespace folder and file name of an entry; the file must lie below
-/// an exported folder, never be the export itself.
-fn split_entry(path: &str) -> io::Result<(String, String)> {
-    let mut parts = crate::share::fs_paths::split_clean(path)?;
-    let name = parts
-        .pop()
-        .filter(|_| !parts.is_empty())
-        .ok_or_else(|| invalid("Paketeintrag liegt nicht in einem freigegebenen Ordner"))?;
-    Ok((format!("/{}", parts.join("/")), name))
-}
-
-fn invalid(message: &str) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, message.to_string())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::split_entry;
-
-    #[test]
-    fn transfer_engine_task_batch_entries_stay_below_an_export() {
-        assert_eq!(
-            split_entry("/A/dir/datei.txt").unwrap(),
-            ("/A/dir".to_string(), "datei.txt".to_string())
-        );
-        assert_eq!(
-            split_entry("//A//x ").unwrap(),
-            ("/A".to_string(), "x ".to_string())
-        );
-        assert!(split_entry("/A").is_err());
-        assert!(split_entry("/").is_err());
-        assert!(split_entry("/A/../x").is_err());
     }
 }

@@ -4,7 +4,10 @@
 //! (`{"op": "…", field: …}`), so every field stays additive.
 use serde::{Deserialize, Serialize};
 
-use super::{is_false, FsBatchGet, FsBatchPut, FsSegmentedFinish, FsSegmentedOpen, FsStageWrite};
+use super::{
+    is_false, FsBatchGet, FsBatchPut, FsCreateDirs, FsSegmentedFinish, FsSegmentedOpen,
+    FsStageWrite,
+};
 
 /// What a request does to the host's files. Every request is named in
 /// `FsRequest::effect` (no catch-all arm), so a new request cannot reach a
@@ -218,6 +221,12 @@ pub(crate) enum FsRequest {
         /// `lz4_v1`: the client may send content blocks.
         #[serde(default, skip_serializing_if = "is_false")]
         lz4: bool,
+        /// `evidence_v1`: the commit answers `Written` with the stage's
+        /// evidence and whether `probe` (a sibling) existed.
+        #[serde(default, skip_serializing_if = "is_false")]
+        evidence: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        probe: Option<String>,
     },
     WriteDone,
     MkdirAll {
@@ -265,6 +274,10 @@ pub(crate) enum FsRequest {
     PutBatch {
         nonce: String,
         entries: Vec<FsBatchPut>,
+        /// `evidence_v1`: `BatchReady` names existing destinations before the
+        /// commit, and each published outcome carries its evidence.
+        #[serde(default, skip_serializing_if = "is_false")]
+        evidence: bool,
     },
     /// Transfer v1: the state of this principal's PutBatch `nonce` after its
     /// reply was lost.
@@ -274,6 +287,9 @@ pub(crate) enum FsRequest {
     /// Transfer v1: many small files in one stream, in request order.
     GetBatch {
         items: Vec<FsBatchGet>,
+        /// `evidence_v1`: item headers are `EvidencedData`.
+        #[serde(default, skip_serializing_if = "is_false")]
+        evidence: bool,
     },
     /// Transfer v1: read from `offset` (resume) or by provider ID. With
     /// `ranges_v1` the read may name its length: `len` bytes from `offset`
@@ -288,6 +304,9 @@ pub(crate) enum FsRequest {
         /// `lz4_v1`: the host may send content blocks (`TAG_DATA_LZ4`).
         #[serde(default, skip_serializing_if = "is_false")]
         lz4: bool,
+        /// `evidence_v1`: the header is `EvidencedData`.
+        #[serde(default, skip_serializing_if = "is_false")]
+        evidence: bool,
     },
     /// `ranges_v1`: create the exclusive stage of the file `path` (the host
     /// picks its name and holds the handle) and answer
@@ -311,7 +330,12 @@ pub(crate) enum FsRequest {
         destination: String,
         #[serde(default, skip_serializing_if = "is_false")]
         copy: bool,
+        /// `evidence_v1`: answered `Published` with the published file.
+        #[serde(default, skip_serializing_if = "is_false")]
+        evidence: bool,
     },
+    /// `create_dirs_v1`: many folders, parents first, in one request.
+    CreateDirs(FsCreateDirs),
     /// Transfer v1: remove a copy stage the client created and never published.
     DiscardStage {
         path: String,
@@ -361,6 +385,7 @@ impl FsRequest {
             | Self::WriteDone
             | Self::MkdirAll { .. }
             | Self::CreateDir { .. }
+            | Self::CreateDirs(_)
             | Self::Rename { .. }
             | Self::RenameNoReplace { .. }
             | Self::RenameReservedDirectory { .. }
@@ -425,6 +450,7 @@ impl FsRequest {
                 | Self::GetBatch { .. }
                 | Self::ReadAt { .. }
                 | Self::CreateDir { .. }
+                | Self::CreateDirs(_)
                 | Self::PromoteNoReplace { .. }
                 | Self::DiscardStage { .. }
                 | Self::SegmentedStageOpen(_)
@@ -439,31 +465,8 @@ fn is_zero(value: &u64) -> bool {
 }
 
 #[cfg(test)]
-mod reservation_compatibility_tests {
-    use super::*;
-    #[test]
-    fn batches_task_transfer_compat_reserved_share_rename_is_a_single_write_with_distinct_wire_operation(
-    ) {
-        let request = FsRequest::RenameReservedDirectory {
-            src: "/owned".into(),
-            dst: "/final".into(),
-        };
-        assert!(request.mutates_filesystem());
-        let wire = serde_json::to_value(&request).unwrap();
-        assert_eq!(wire["op"], "rename_reserved_directory");
-        assert_eq!(wire["src"], "/owned");
-        assert_eq!(wire["dst"], "/final");
-        let decoded: FsRequest = serde_json::from_value(wire).unwrap();
-        assert!(decoded.mutates_filesystem());
-        let ordinary: FsRequest =
-            serde_json::from_str(r#"{"op":"rename_no_replace","src":"/old","dst":"/new"}"#)
-                .unwrap();
-        assert_eq!(
-            serde_json::to_value(ordinary).unwrap()["op"],
-            "rename_no_replace"
-        );
-    }
-}
+#[path = "fs_request_tests.rs"]
+mod reservation_compatibility_tests;
 
 /// The caller persists recovery intent before sending this mutation once.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

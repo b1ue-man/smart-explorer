@@ -12,6 +12,7 @@ fn put_header(entries: Vec<FsBatchPut>, lease: Option<String>) -> Ctrl {
         req: FsRequest::PutBatch {
             nonce: "0".repeat(NONCE_HEX_LEN),
             entries,
+            evidence: false,
         },
         lease,
     }
@@ -39,6 +40,7 @@ fn transfer_engine_task_batch_frames_round_trip() {
                     size: 0,
                 },
             ],
+            evidence: true,
         },
         FsRequest::PutBatchStatus {
             nonce: NONCE.into(),
@@ -56,6 +58,7 @@ fn transfer_engine_task_batch_frames_round_trip() {
                     size: 2,
                 },
             ],
+            evidence: false,
         },
         FsRequest::ReadAt {
             path: "/A/big.bin".into(),
@@ -63,6 +66,7 @@ fn transfer_engine_task_batch_frames_round_trip() {
             offset: 1 << 40,
             len: 0,
             lz4: false,
+            evidence: false,
         },
         FsRequest::CreateDir {
             path: "/A/neu".into(),
@@ -76,6 +80,7 @@ fn transfer_engine_task_batch_frames_round_trip() {
             staged: "/A/x.se-copy".into(),
             destination: "/A/x".into(),
             copy: true,
+            evidence: false,
         },
         FsRequest::DiscardStage {
             path: "/A/x.se-copy".into(),
@@ -114,6 +119,7 @@ fn transfer_engine_task_batch_frames_round_trip() {
             outcomes: vec![
                 FsBatchOutcome::Published {
                     path: "/A/eins (2).txt".into(),
+                    evidence: None,
                 },
                 FsBatchOutcome::failed(&io::Error::new(
                     io::ErrorKind::PermissionDenied,
@@ -162,6 +168,7 @@ fn transfer_engine_task_legacy_host_rejects_batch_requests() {
             id: None,
             size: 1,
         }],
+        evidence: false,
     })
     .unwrap();
     assert!(serde_json::from_str::<LegacyRequest>(&json).is_err());
@@ -325,9 +332,11 @@ fn transfer_engine_task_batch_status_summary_counts_outcomes() {
         outcomes: vec![
             FsBatchOutcome::Published {
                 path: "/A/a".into(),
+                evidence: None,
             },
             FsBatchOutcome::Published {
                 path: "/A/b".into(),
+                evidence: None,
             },
             FsBatchOutcome::Failed {
                 kind: None,

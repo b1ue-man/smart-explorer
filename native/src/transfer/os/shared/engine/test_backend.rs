@@ -15,6 +15,10 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+#[path = "test_backend_evidence.rs"]
+mod evidence;
+#[path = "test_backend_evidence_tests.rs"]
+mod evidence_tests;
 #[path = "test_backend_streams.rs"]
 mod streams;
 use streams::{FakeReader, FakeWriter, Guard};
@@ -63,6 +67,12 @@ pub(super) struct Counters {
     pub overlap: AtomicBool,
     pub opened: Mutex<Vec<String>>,
     pub batched: Mutex<Vec<String>>,
+    /// Requests the engine asked of the fake per kind (`stat`,
+    /// `file_identity`, single folder creations, bulk folder creations).
+    pub stats: AtomicUsize,
+    pub identities: AtomicUsize,
+    pub dirs: AtomicUsize,
+    pub bulk_dirs: AtomicUsize,
 }
 
 /// Range reads of the fake: what it offers and what was asked of it.
@@ -100,6 +110,10 @@ pub(super) struct Fake {
     /// Explicitly expose the fixture filesystem's durable object proofs.
     pub identity_proofs: bool,
     pub batch: Option<BatchLimits>,
+    /// Reports transfer evidence like an `evidence_v1` Share host.
+    pub evidence: bool,
+    /// Creates folders in bulk like a `create_dirs_v1` Share host.
+    pub bulk_dirs: bool,
     pub batch_ambiguous: bool,
     pub read_delay: Duration,
     pub extra: Option<Vec<u8>>,
@@ -125,6 +139,8 @@ impl Fake {
             concurrent: true,
             identity_proofs: false,
             batch: None,
+            evidence: false,
+            bulk_dirs: false,
             batch_ambiguous: false,
             read_delay: Duration::ZERO,
             extra: None,
@@ -177,7 +193,7 @@ impl Fake {
 
 impl Backend for Fake {
     fn extensions(&self) -> Option<&dyn crate::vfs::BackendExtensions> {
-        self.identity_proofs.then_some(self)
+        (self.identity_proofs || self.evidence || self.bulk_dirs).then_some(self)
     }
     fn scheme(&self) -> Scheme {
         Scheme::Local
@@ -197,6 +213,7 @@ impl Backend for Fake {
             .collect())
     }
     fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
+        self.counters.stats.fetch_add(1, Ordering::SeqCst);
         let mut meta = self.inner.stat(path)?;
         if let Some(md5) = self.md5.get(path) {
             meta.content_md5 = Some(md5.clone());
@@ -348,12 +365,14 @@ impl Backend for Fake {
         self.inner.mkdir_all(path)
     }
     fn create_dir(&self, path: &str) -> VfsResult<()> {
+        self.counters.dirs.fetch_add(1, Ordering::SeqCst);
         if let Some(refused) = self.faults.refuse_dir() {
             return Err(refused);
         }
         self.inner.create_dir(path)
     }
     fn create_dir_new(&self, path: &str) -> VfsResult<()> {
+        self.counters.dirs.fetch_add(1, Ordering::SeqCst);
         if let Some(refused) = self.faults.refuse_dir() {
             return Err(refused);
         }
@@ -392,6 +411,9 @@ impl Backend for Fake {
         self.fake_put_batch(entries, data)
     }
     fn get_batch(&self, items: &[BatchGet], sink: &mut dyn BatchSink) -> VfsResult<()> {
+        if self.evidence {
+            return self.evidenced_get_batch(items, sink);
+        }
         self.fake_get_batch(items, sink)
     }
 }
@@ -407,6 +429,45 @@ impl crate::vfs::BackendExtensions for Fake {
         crate::vfs::directory_identity(&self.inner, path)
     }
     fn file_identity(&self, path: &str) -> VfsResult<Option<String>> {
+        self.counters.identities.fetch_add(1, Ordering::SeqCst);
         crate::vfs::file_identity(&self.inner, path)
+    }
+    fn transfer_evidence(&self, _path: &str) -> bool {
+        self.evidence
+    }
+    fn put_batch_evidence(
+        &self,
+        entries: &[BatchPut],
+        data: &mut dyn Read,
+        prepare: &mut crate::vfs::PreparePut<'_>,
+    ) -> VfsResult<Vec<crate::vfs::EvidencePutOutcome>> {
+        self.evidenced_put_batch(entries, data, prepare)
+    }
+    fn promote_copy_stage_evidence(
+        &self,
+        staged: &str,
+        destination: &str,
+    ) -> VfsResult<Option<crate::vfs::FileEvidence>> {
+        self.promote_copy_stage(staged, destination)?;
+        Ok(self
+            .evidence
+            .then(|| self.evidence_of(destination))
+            .flatten())
+    }
+    fn open_read_evidence(
+        &self,
+        path: &str,
+        id: Option<&str>,
+    ) -> VfsResult<Option<(Box<dyn Read + Send>, crate::vfs::FileEvidence)>> {
+        self.evidenced_read(path, id)
+    }
+    fn take_stage_evidence(&self, stage: &str) -> Option<crate::vfs::StageEvidence> {
+        self.stage_evidence(stage)
+    }
+    fn supports_create_dirs(&self, _root: &str) -> bool {
+        self.bulk_dirs
+    }
+    fn create_dirs(&self, paths: &[String]) -> VfsResult<Vec<io::Result<bool>>> {
+        self.bulk_create_dirs(paths)
     }
 }

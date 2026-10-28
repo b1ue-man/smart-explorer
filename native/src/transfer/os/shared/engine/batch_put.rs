@@ -9,12 +9,14 @@ use super::super::flow::classify_error;
 use super::super::flow_control::OpOutcome;
 use super::super::memory::reserve_memory;
 use super::batch::{Attempt, Failures};
+use super::file_evidence::HostEvidence;
+use super::file_recovery::PacketIntent;
 use super::ops::{nanos, relabeled, At, Meter, OpError, Outcome};
 use super::queue::FileWork;
 use super::source::LocalSource;
 use super::worker::{finished, run_file};
 use super::Engine;
-use crate::vfs::{Backend, BatchPut, BatchPutOutcome};
+use crate::vfs::{Backend, BatchPut, BatchPutOutcome, EvidencePutOutcome, FileEvidence};
 use std::io::{self, Read};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
@@ -46,7 +48,8 @@ pub(super) fn upload(
         }
         return;
     }
-    let bytes: u64 = opened.iter().map(|(_, source)| source.length()).sum();
+    let (files, mut sources): (Vec<FileWork>, Vec<LocalSource>) = opened.into_iter().unzip();
+    let bytes: u64 = sources.iter().map(LocalSource::length).sum();
     let memory_asked = Instant::now();
     let Some(reservation) = reserve_memory(bytes, engine.stop_flag()) else {
         return;
@@ -60,10 +63,11 @@ pub(super) fn upload(
     let waited = memory_wait.saturating_add(nanos(permit_asked.elapsed()));
     let active = engine
         .stats
-        .begin(&format!("{} kleine Dateien (Paket)", opened.len()));
+        .begin(&format!("{} kleine Dateien (Paket)", files.len()));
     engine.queue.notify();
-    let entries: Vec<BatchPut> = opened
+    let entries: Vec<BatchPut> = files
         .iter()
+        .zip(&sources)
         .map(|(file, source)| BatchPut {
             path: engine.folders.path_of(&file.rel),
             size: source.length(),
@@ -71,28 +75,44 @@ pub(super) fn upload(
         .collect();
     let meter = Meter::new(&permits, &engine.stats);
     meter.add_wait(waited);
+    // A peer with transfer evidence names the existing destinations before
+    // its commit and returns each published file's evidence: the intents
+    // are written in that moment (`prepare`), still before anything can be
+    // published, and no member costs a request of its own.
+    let evidenced = crate::vfs::transfer_evidence(target, engine.folders.root());
     // Packet protocols publish before returning their object IDs. Persist
     // the uncertainty first; a lost answer can never authorize a resend.
-    for (file, _) in &opened {
-        if let Err(error) = super::file_recovery::prepare_batch(engine, file) {
-            for (prepared, _) in &opened {
+    // One record for the whole packet; without the peer's report each
+    // member's previous presence is looked up as before.
+    if !evidenced {
+        let unknown = vec![None; files.len()];
+        if let Err(error) = prepare_part(engine, &files, 0, &unknown) {
+            for prepared in &files {
                 let _ = super::file_recovery::unpublished(engine, prepared);
             }
             engine.fatal(format!("Paketpublikation vorbereiten: {error}"));
             return;
         }
     }
+    let mut prepare_failure: Option<String> = None;
     let started = Instant::now();
     let read_before = meter.accounts().source_ns;
     let (result, delivery) = {
-        let mut data = PacketData::new(
-            opened.iter_mut().map(|(_, source)| source).collect(),
-            &meter,
-            engine.stop_flag(),
-        );
-        let result = target.put_batch(&entries, &mut data);
+        let mut data = PacketData::new(sources.iter_mut().collect(), &meter, engine.stop_flag());
+        let result = if evidenced {
+            let mut prepare = |offset: usize, existed: &[Option<bool>]| {
+                prepare_part(engine, &files, offset, existed).map_err(|error| {
+                    prepare_failure = Some(error.to_string());
+                    error
+                })
+            };
+            crate::vfs::put_batch_evidence(target, &entries, &mut data, &mut prepare)
+        } else {
+            target.put_batch(&entries, &mut data).map(without_evidence)
+        };
         (result, data.delivery())
     };
+    drop(sources);
     // The packet's reads are booked to the source as they happen; the rest
     // of the call is the wire and the peer: the target.
     let read = meter.accounts().source_ns.saturating_sub(read_before);
@@ -108,9 +128,8 @@ pub(super) fn upload(
     drop(active);
     drop(reservation);
     super::lock(&engine.sizer).record(bytes, started.elapsed().as_millis() as u64);
-    let files: Vec<FileWork> = opened.into_iter().map(|(file, _)| file).collect();
-    let outcomes = match result {
-        Ok(outcomes) => outcomes,
+    match result {
+        Ok(outcomes) => settle(engine, files, outcomes, &delivery),
         // Refused before anything was sent: each file goes alone.
         Err(error) if error.kind() == io::ErrorKind::Unsupported => {
             engine.stats.unmoved(delivery.served.iter().sum());
@@ -123,16 +142,88 @@ pub(super) fn upload(
                 }
                 run_file(engine, file, buffer);
             }
-            return;
         }
-        Err(error) => return packet_lost(engine, files, &delivery, &error),
-    };
+        Err(error) => packet_lost(engine, files, &delivery, &error),
+    }
+    // The member intents could not be written: nothing of that part was
+    // published, and the job ends as when a single intent fails.
+    if let Some(error) = prepare_failure {
+        engine.fatal(format!("Paketpublikation vorbereiten: {error}"));
+    }
+}
+
+/// The intents of the members `offset..` with the destinations' presence
+/// the peer reported, as one record (`file_recovery::prepare_batch_known`).
+fn prepare_part(
+    engine: &Engine<'_>,
+    files: &[FileWork],
+    offset: usize,
+    existed: &[Option<bool>],
+) -> io::Result<()> {
+    let members = files
+        .get(offset..)
+        .and_then(|rest| rest.get(..existed.len()))
+        .ok_or_else(|| io::Error::other("Paketannahme nennt unbekannte Einträge"))?;
+    let intents: Vec<PacketIntent<'_>> = members
+        .iter()
+        .zip(existed)
+        .map(|(file, existed)| PacketIntent {
+            file,
+            source: None,
+            existed_before: *existed,
+        })
+        .collect();
+    super::file_recovery::prepare_batch_known(engine, &intents)
+}
+
+fn without_evidence(outcomes: Vec<BatchPutOutcome>) -> Vec<EvidencePutOutcome> {
+    outcomes
+        .into_iter()
+        .map(|outcome| match outcome {
+            BatchPutOutcome::Published(path) => EvidencePutOutcome::Published {
+                path,
+                evidence: None,
+            },
+            BatchPutOutcome::Failed(error) => EvidencePutOutcome::Failed(error),
+        })
+        .collect()
+}
+
+/// The packet's evidence as the recovery records it.
+pub(super) fn host_evidence(evidence: FileEvidence) -> HostEvidence {
+    HostEvidence {
+        path: evidence.path,
+        object: evidence.object,
+        id: evidence.id,
+        size: evidence.size,
+        mtime_ms: evidence.mtime_ms,
+    }
+}
+
+/// Completes the members the peer answered for: a published member's
+/// receipt from the peer's evidence (or, without it, by asking), a failed
+/// one decided by what the stream delivered.
+fn settle(
+    engine: &Engine<'_>,
+    files: Vec<FileWork>,
+    outcomes: Vec<EvidencePutOutcome>,
+    delivery: &Delivery,
+) {
     let mut failures = Failures::new(engine);
     let mut outcomes = outcomes.into_iter();
     for (index, file) in files.into_iter().enumerate() {
         match outcomes.next() {
-            Some(BatchPutOutcome::Published(path)) => {
-                if let Err(error) = super::file_recovery::after(engine, &file, &path) {
+            Some(EvidencePutOutcome::Published { path, evidence }) => {
+                let acknowledged = match evidence {
+                    Some(evidence) => super::file_recovery::after_known(
+                        engine,
+                        &file,
+                        &path,
+                        Some(&host_evidence(evidence)),
+                    ),
+                    None => super::file_recovery::after(engine, &file, &path),
+                };
+                if let Err(error) = acknowledged {
                     failures.member(
                         file,
                         OpError::at(At::Unknown, error),
@@ -145,7 +236,7 @@ pub(super) fn upload(
                 }
                 finished(engine, Outcome::Done);
             }
-            Some(BatchPutOutcome::Failed(error)) => {
+            Some(EvidencePutOutcome::Failed(error)) => {
                 engine.stats.unmoved(delivery.served[index]);
                 let (failure, mut attempt) = delivery.judge(index, OpError::target(error));
                 // The peer says it published nothing for this file: it may
@@ -289,176 +380,5 @@ impl Read for PacketData<'_, '_> {
 }
 
 #[cfg(test)]
-pub(super) mod speed_tests {
-    use super::super::test_backend::{job, run, write, Fake};
-    use crate::transfer::Endpoint;
-    use crate::vfs::{
-        unpublished_error, Backend, BackendHandle, BatchLimits, BatchPut, BatchPutOutcome, Scheme,
-        VfsMeta, VfsResult,
-    };
-    use std::io::{self, Read, Write};
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
-
-    /// Forwards the listed methods to the wrapped fake remote.
-    macro_rules! forward {
-        ($($name:ident($($arg:ident: $ty:ty),*) -> $ret:ty;)*) => {
-            $(fn $name(&self, $($arg: $ty),*) -> $ret { self.0.$name($($arg),*) })*
-        };
-    }
-
-    pub(in super::super) use forward;
-
-    /// A packet peer whose first packet refuses its first member before
-    /// publishing anything; the rest of the fake behaves as usual.
-    struct Refusing(Arc<Fake>, AtomicBool);
-
-    impl Backend for Refusing {
-        forward! {
-            scheme() -> Scheme; root_display() -> String; namespace_identity() -> String;
-            list_dir(path: &str) -> VfsResult<Vec<VfsMeta>>; stat(path: &str) -> VfsResult<VfsMeta>;
-            open_read(path: &str) -> VfsResult<Box<dyn Read + Send>>;
-            open_write(path: &str) -> VfsResult<Box<dyn Write + Send>>;
-            open_write_new(path: &str) -> VfsResult<Box<dyn Write + Send>>;
-            open_write_fresh(path: &str, size: u64) -> VfsResult<Option<Box<dyn Write + Send>>>;
-            promote_copy_stage(stage: &str, destination: &str) -> VfsResult<()>;
-            rename(src: &str, dst: &str) -> VfsResult<()>;
-            rename_no_replace(src: &str, dst: &str) -> VfsResult<()>;
-            remove_file(path: &str) -> VfsResult<()>; remove_dir(path: &str) -> VfsResult<()>;
-            mkdir_all(path: &str) -> VfsResult<()>; create_dir(path: &str) -> VfsResult<()>;
-            create_dir_new(path: &str) -> VfsResult<()>;
-            discard_copy_stage(stage: &str) -> VfsResult<()>;
-            case_sensitive_paths(root: &str) -> bool; flow_key(path: &str) -> String;
-            concurrent_read_write() -> bool; batch_limits(dir: &str) -> Option<BatchLimits>;
-        }
-
-        fn put_batch(
-            &self,
-            entries: &[BatchPut],
-            data: &mut dyn Read,
-        ) -> VfsResult<Vec<BatchPutOutcome>> {
-            let Some((first, rest)) = entries.split_first() else {
-                return Ok(Vec::new());
-            };
-            if self.1.swap(true, Ordering::SeqCst) {
-                return self.0.put_batch(entries, data);
-            }
-            data.read_exact(&mut vec![0u8; first.size as usize])?;
-            let refused = unpublished_error(io::ErrorKind::ConnectionReset, "fixture: refused");
-            let mut outcomes = vec![BatchPutOutcome::Failed(refused)];
-            outcomes.extend(self.0.put_batch(rest, data)?);
-            Ok(outcomes)
-        }
-    }
-
-    #[test]
-    fn speed_task_batch_unpublished_failure_is_retried_once() {
-        let root = tempfile::tempdir().expect("temp dir");
-        let local = root.path().join("local/Vault");
-        for index in 0..4 {
-            write(
-                &local.join(format!("f{index}.txt")),
-                format!("file {index}").as_bytes(),
-            );
-        }
-        let remote = root.path().join("remote");
-        std::fs::create_dir(&remote).expect("remote");
-        let mut fake = Fake::new("unpublished-retry");
-        fake.batch = Some(BatchLimits {
-            max_files: 64,
-            max_bytes: 1024 * 1024,
-        });
-        let (fake, _) = fake.handle();
-        let handle: BackendHandle = Arc::new(Refusing(fake.clone(), AtomicBool::new(false)));
-        let finished = run(job(
-            Endpoint::Local,
-            Endpoint::Remote(handle),
-            &remote,
-            &[&local],
-        ));
-        assert!(finished.issues.is_empty(), "{:?}", finished.issues);
-        assert_eq!(finished.progress.files_done, 4);
-        for index in 0..4 {
-            let published = remote.join(format!("Vault/f{index}.txt"));
-            assert_eq!(
-                std::fs::read(&published).expect("published"),
-                format!("file {index}").as_bytes()
-            );
-        }
-        // Exactly one single upload: the refused member, sent once more.
-        assert_eq!(fake.counters.stages.load(Ordering::SeqCst), 1);
-    }
-
-    /// A packet peer far away: every packet takes a while on the wire.
-    struct SlowWire(Arc<Fake>);
-
-    impl Backend for SlowWire {
-        forward! {
-            scheme() -> Scheme; root_display() -> String; namespace_identity() -> String;
-            list_dir(path: &str) -> VfsResult<Vec<VfsMeta>>; stat(path: &str) -> VfsResult<VfsMeta>;
-            open_read(path: &str) -> VfsResult<Box<dyn Read + Send>>;
-            open_write(path: &str) -> VfsResult<Box<dyn Write + Send>>;
-            open_write_new(path: &str) -> VfsResult<Box<dyn Write + Send>>;
-            open_write_fresh(path: &str, size: u64) -> VfsResult<Option<Box<dyn Write + Send>>>;
-            promote_copy_stage(stage: &str, destination: &str) -> VfsResult<()>;
-            rename(src: &str, dst: &str) -> VfsResult<()>;
-            rename_no_replace(src: &str, dst: &str) -> VfsResult<()>;
-            remove_file(path: &str) -> VfsResult<()>; remove_dir(path: &str) -> VfsResult<()>;
-            mkdir_all(path: &str) -> VfsResult<()>; create_dir(path: &str) -> VfsResult<()>;
-            create_dir_new(path: &str) -> VfsResult<()>;
-            discard_copy_stage(stage: &str) -> VfsResult<()>;
-            case_sensitive_paths(root: &str) -> bool; flow_key(path: &str) -> String;
-            transfer_ceiling(path: &str) -> Option<usize>;
-            concurrent_read_write() -> bool; batch_limits(dir: &str) -> Option<BatchLimits>;
-        }
-
-        fn put_batch(
-            &self,
-            entries: &[BatchPut],
-            data: &mut dyn Read,
-        ) -> VfsResult<Vec<BatchPutOutcome>> {
-            std::thread::sleep(std::time::Duration::from_millis(300));
-            self.0.put_batch(entries, data)
-        }
-    }
-
-    #[test]
-    fn speed_task_batch_jobs_book_time_accounts() {
-        // 200 tiny files in packets of 8, each packet 300 ms on the wire: the
-        // time goes to the target side, and after three windows the progress
-        // names the connection, which only packets-with-accounts can do
-        let root = tempfile::tempdir().expect("temp dir");
-        let local = root.path().join("local/Vault");
-        for index in 0..200 {
-            write(&local.join(format!("f{index:03}.txt")), b"small file");
-        }
-        let remote = root.path().join("remote");
-        std::fs::create_dir(&remote).expect("remote");
-        let mut fake = Fake::new("packet-accounts");
-        fake.ceiling = Some(1);
-        fake.batch = Some(BatchLimits {
-            max_files: 8,
-            max_bytes: 1024 * 1024,
-        });
-        let (fake, _) = fake.handle();
-        let handle: BackendHandle = Arc::new(SlowWire(fake.clone()));
-        let finished = run(job(
-            Endpoint::Local,
-            Endpoint::Remote(handle),
-            &remote,
-            &[&local],
-        ));
-        assert!(finished.issues.is_empty(), "{:?}", finished.issues);
-        assert_eq!(finished.progress.files_done, 200);
-        assert!(fake.counters.put_batches.load(Ordering::SeqCst) >= 20);
-        let progress = &finished.progress;
-        assert!(
-            progress.limiter.names_a_resource(),
-            "{:?} {:?}",
-            progress.limiter,
-            progress.limiter_text
-        );
-        let [source, target, _, _] = progress.limiter_shares;
-        assert!(target > source, "{:?}", progress.limiter_shares);
-    }
-}
+#[path = "batch_put_speed_tests.rs"]
+pub(super) mod speed_tests;

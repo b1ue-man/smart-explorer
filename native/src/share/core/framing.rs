@@ -79,10 +79,12 @@ pub(super) async fn send_tagged(send: &mut SendStream, tag: u8, payload: &[u8]) 
     if n > MAX_FRAME {
         return Err(eio("Frame zu gross"));
     }
-    send.write_all(&(n as u32).to_be_bytes())
-        .await
-        .map_err(io::Error::from)?;
-    send.write_all(&[tag]).await.map_err(io::Error::from)?;
+    // Length and tag in one write: one lock of the connection and one
+    // wake-up of its driver fewer per frame (Z-P5); the bytes are unchanged.
+    let mut head = [0u8; 5];
+    head[..4].copy_from_slice(&(n as u32).to_be_bytes());
+    head[4] = tag;
+    send.write_all(&head).await.map_err(io::Error::from)?;
     send.write_all(payload).await.map_err(io::Error::from)?;
     send.flush().await.map_err(eio)
 }

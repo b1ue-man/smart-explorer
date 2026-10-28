@@ -43,7 +43,7 @@ pub(super) fn resolve_mount_capabilities(
 /// Whether `path` is one of the synthetic mountpoint containers (`/` and
 /// `/Verbindungen`), which hold no files of their own; invalid paths count
 /// as such, since nothing can be written there either.
-pub(super) fn is_synthetic_container(path: &str) -> bool {
+pub(crate) fn is_synthetic_container(path: &str) -> bool {
     match normalize(path) {
         Ok(normalized) => normalized == "/" || normalized == CONNECTIONS_ROOT,
         Err(_) => true,

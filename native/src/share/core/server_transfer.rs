@@ -14,7 +14,7 @@ use super::fs_access::FsAccess;
 use super::io_deadline;
 use super::mount_lease::{run_authorized, MountLeaseAuthorization};
 use super::transfer_meter as stats;
-use super::wire::{Ctrl, FsRequest, FsResponse};
+use super::wire::{Ctrl, FsRequest, FsResponse, FsWritten};
 
 #[path = "server_read.rs"]
 mod server_read;
@@ -37,6 +37,9 @@ pub(super) struct WriteTarget {
     pub(super) authorization: Option<MountLeaseAuthorization>,
     /// The client may send LZ4 blocks (`lz4_v1`).
     pub(super) lz4: bool,
+    /// `evidence_v1` WriteNew: the commit answers `Written`, naming whether
+    /// the inner path (a sibling of the new file) existed.
+    pub(super) evidence: Option<Option<String>>,
 }
 
 /// The `slot` (transfer admission) stays held until the worker ends; a
@@ -163,7 +166,8 @@ pub(super) async fn write_file<G: Send + 'static>(
                 }
                 drop(command_tx);
                 return match await_write_result(&mut done_rx, &mut worker).await {
-                    Ok(()) => reply(&mut send, FsResponse::Ok).await,
+                    Ok(None) => reply(&mut send, FsResponse::Ok).await,
+                    Ok(Some(written)) => reply(&mut send, FsResponse::Written { written }).await,
                     Err(error) => reply_err(&mut send, error).await,
                 };
             }
@@ -194,11 +198,14 @@ struct WriteJob {
     abandoned: Arc<AtomicBool>,
 }
 
+/// What a committed write reports: `Written` for an `evidence_v1` WriteNew.
+type WriteDone = io::Result<Option<FsWritten>>;
+
 fn write_worker(
     job: WriteJob,
     ready: oneshot::Sender<io::Result<()>>,
     mut commands: mpsc::Receiver<WriteCommand>,
-    done: oneshot::Sender<io::Result<()>>,
+    done: oneshot::Sender<WriteDone>,
 ) -> io::Result<()> {
     let WriteJob {
         target:
@@ -208,6 +215,7 @@ fn write_worker(
                 authorization: lease_authorization,
                 // Unpacking the blocks happens before the worker (`write_file`).
                 lz4: _,
+                evidence,
             },
         access,
         abandoned,
@@ -282,8 +290,12 @@ fn write_worker(
                     drop(output);
                     if replace_after_upload {
                         crate::vfs::promote_staged_replace(&*target.backend, &staging, &target.path)
+                            .map(|()| None)
                     } else {
-                        Ok(())
+                        let probe = |probe: &Option<String>| {
+                            written(&access, &path, &target, probe.as_deref())
+                        };
+                        Ok(evidence.as_ref().and_then(probe))
                     }
                 });
             }
@@ -304,10 +316,34 @@ fn write_worker(
     Ok(())
 }
 
+/// The evidence of the closed new file `path` (`target`) and whether the
+/// sibling `probe` exists; `None` when it cannot be read (the client then
+/// asks for it as before).
+fn written(
+    access: &FsAccess,
+    path: &str,
+    target: &super::fs::ResolvedTarget,
+    probe: Option<&str>,
+) -> Option<FsWritten> {
+    let mut scopes = super::host_evidence::Scopes::default();
+    let evidence = super::host_evidence::of_target(access, path, target, &mut scopes)?;
+    let existed = probe
+        .filter(|probe| sibling(path, probe))
+        .and_then(|probe| access.resolve(probe).ok())
+        .and_then(|probe| super::host_evidence::exists(&probe));
+    Some(FsWritten { evidence, existed })
+}
+
+/// Whether `probe` lies in the same peer folder as `path`.
+fn sibling(path: &str, probe: &str) -> bool {
+    let parent = |path: &str| path.rsplit_once('/').map(|(parent, _)| parent.to_string());
+    parent(path).is_some() && parent(path) == parent(probe)
+}
+
 async fn await_write_result(
-    done: &mut Option<oneshot::Receiver<io::Result<()>>>,
+    done: &mut Option<oneshot::Receiver<WriteDone>>,
     worker: &mut Option<blocking::BlockingTask<()>>,
-) -> io::Result<()> {
+) -> WriteDone {
     let result = match done.take() {
         Some(done) => done
             .await
@@ -321,18 +357,18 @@ async fn await_write_result(
 }
 
 async fn await_write_cleanup(
-    done: &mut Option<oneshot::Receiver<io::Result<()>>>,
+    done: &mut Option<oneshot::Receiver<WriteDone>>,
     worker: &mut Option<blocking::BlockingTask<()>>,
 ) {
     let _ = await_write_result(done, worker).await;
 }
 
 async fn await_write_error(
-    done: &mut Option<oneshot::Receiver<io::Result<()>>>,
+    done: &mut Option<oneshot::Receiver<WriteDone>>,
     worker: &mut Option<blocking::BlockingTask<()>>,
 ) -> io::Error {
     match await_write_result(done, worker).await {
-        Ok(()) => eio("Share write worker stopped before accepting the command"),
+        Ok(_) => eio("Share write worker stopped before accepting the command"),
         Err(error) => error,
     }
 }

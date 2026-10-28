@@ -48,4 +48,10 @@ pub trait BatchSink {
     fn end(&mut self, index: usize, result: io::Result<()>) -> io::Result<()>;
     /// Item `index` could not be read at all (nothing was sent for it).
     fn failed(&mut self, index: usize, error: io::Error) -> io::Result<()>;
+    /// What the host read about item `index` when it opened it, before its
+    /// `begin` (`vfs::transfer_evidence`); hosts without it never call this.
+    fn evidence(&mut self, index: usize, evidence: super::FileEvidence) -> io::Result<()> {
+        let _ = (index, evidence);
+        Ok(())
+    }
 }

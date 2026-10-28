@@ -1,8 +1,9 @@
 use std::io::{self, Write};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use iroh::endpoint::{RecvStream, SendStream};
 
+use super::backend::peer_evidence::WrittenReport;
 use super::backend::peer_stages::StageTicket;
 use super::core::eio;
 use super::framing::lz4_stream::{frame_for, Lz4Stream};
@@ -11,7 +12,7 @@ use super::fs;
 use super::node::ShareIrohNode;
 use super::quic_stats_hub::track_client;
 use super::transfer_meter as stats;
-use super::wire::{Ctrl, FsRequest, FsResponse};
+use super::wire::{Ctrl, FsRequest, FsResponse, FsWritten};
 
 /// A successful WriteDone acknowledgement, rather than Ready or the filename,
 /// makes an exclusively created stage available to finish/publication.
@@ -19,12 +20,23 @@ pub(super) fn owned_writer(
     inner: Box<dyn Write + Send>,
     ticket: StageTicket,
 ) -> Box<dyn Write + Send> {
+    owned_writer_reporting(inner, ticket, None)
+}
+
+/// `owned_writer` whose commit keeps the stage evidence the host reported
+/// (`evidence_v1`) for the transfer engine.
+pub(super) fn owned_writer_reporting(
+    inner: Box<dyn Write + Send>,
+    ticket: StageTicket,
+    report: Option<WrittenReport>,
+) -> Box<dyn Write + Send> {
     Box::new(OwnedStageWriter {
         inner,
         ticket,
         written: 0,
         committed: false,
         failure: None,
+        report,
     })
 }
 
@@ -34,6 +46,7 @@ struct OwnedStageWriter {
     written: u64,
     committed: bool,
     failure: Option<(io::ErrorKind, String)>,
+    report: Option<WrittenReport>,
 }
 
 impl OwnedStageWriter {
@@ -82,6 +95,9 @@ impl Write for OwnedStageWriter {
             return Err(self.remember_failure(error));
         }
         self.committed = true;
+        if let Some(report) = &self.report {
+            report.record();
+        }
         Ok(())
     }
 }
@@ -94,6 +110,10 @@ impl Drop for OwnedStageWriter {
     }
 }
 
+/// Where an `evidence_v1` WriteNew commit leaves its `Written` reply.
+pub(super) type WrittenSlot = Arc<Mutex<Option<FsWritten>>>;
+
+#[allow(clippy::too_many_arguments)]
 pub(super) fn writer(
     node: Arc<ShareIrohNode>,
     send: SendStream,
@@ -102,6 +122,7 @@ pub(super) fn writer(
     lz4: bool,
     session_key: String,
     generation: usize,
+    written: Option<WrittenSlot>,
 ) -> Box<dyn Write + Send> {
     track_client(&node, &session_key);
     stats::stream_started();
@@ -114,6 +135,7 @@ pub(super) fn writer(
         session_key,
         generation,
         state: WriterState::Open,
+        written,
     })
 }
 
@@ -133,6 +155,8 @@ struct PeerWriter {
     session_key: String,
     generation: usize,
     state: WriterState,
+    /// Receives the `Written` reply of an `evidence_v1` commit.
+    written: Option<WrittenSlot>,
 }
 
 impl PeerWriter {
@@ -166,13 +190,11 @@ impl PeerWriter {
         );
         match result {
             Ok(response) => match decode_resp(response) {
-                Ok(FsResponse::Ok) => match send.finish().map_err(eio) {
-                    Ok(()) => {
-                        self.state = WriterState::Committed;
-                        Ok(())
-                    }
-                    Err(error) => Err(self.fail_stream_parts(&mut send, &mut recv, error)),
-                },
+                Ok(FsResponse::Ok) => self.committed_stream(&mut send, &mut recv),
+                Ok(FsResponse::Written { written }) => {
+                    self.keep_written(written);
+                    self.committed_stream(&mut send, &mut recv)
+                }
                 Ok(_) => Err(self.fail_stream_parts(
                     &mut send,
                     &mut recv,
@@ -181,6 +203,23 @@ impl PeerWriter {
                 Err(error) => Err(self.remember_failure(error)),
             },
             Err(error) => Err(self.fail_stream_parts(&mut send, &mut recv, error)),
+        }
+    }
+
+    /// The host acknowledged the commit: our side of the stream ends.
+    fn committed_stream(&mut self, send: &mut SendStream, recv: &mut RecvStream) -> io::Result<()> {
+        match send.finish().map_err(eio) {
+            Ok(()) => {
+                self.state = WriterState::Committed;
+                Ok(())
+            }
+            Err(error) => Err(self.fail_stream_parts(send, recv, error)),
+        }
+    }
+
+    fn keep_written(&self, written: FsWritten) {
+        if let Some(Ok(mut slot)) = self.written.as_ref().map(|slot| slot.lock()) {
+            *slot = Some(written);
         }
     }
 

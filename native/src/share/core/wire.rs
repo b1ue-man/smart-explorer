@@ -9,6 +9,8 @@ use super::types::{ExecRequest, ExecResult, PeerPresence};
 
 #[path = "batch_wire.rs"]
 mod batch_wire;
+#[path = "evidence_wire.rs"]
+mod evidence_wire;
 #[path = "fs_request.rs"]
 mod fs_request;
 #[path = "stage_ranges_wire.rs"]
@@ -20,6 +22,9 @@ pub(crate) use self::batch_wire::{
     discardable_stage, plan_batches, validate_get, validate_put, BatchPart, FsBatchGet,
     FsBatchOutcome, FsBatchPut, FsBatchStatus, FsTransferCapabilities, BATCH_MAX_BYTES,
     BATCH_MAX_FILES, NONCE_HEX_LEN, TRANSFER_V1_CAPABILITY,
+};
+pub(crate) use self::evidence_wire::{
+    validate_create_dirs, FsCreateDirs, FsDirOutcome, FsFileEvidence, FsWritten, CREATE_DIRS_MAX,
 };
 pub(crate) use self::fs_request::{
     FsDuplicateSearch, FsHashWalk, FsListBatch, FsRecycle, FsRequest, FsReversibleReplace,

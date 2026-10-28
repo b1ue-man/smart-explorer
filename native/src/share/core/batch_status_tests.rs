@@ -16,6 +16,7 @@ fn done(length: usize) -> FsBatchStatus {
     FsBatchStatus::Done {
         outcomes: vec![FsBatchOutcome::Published {
             path: "p".repeat(length),
+            evidence: None,
         }],
     }
 }

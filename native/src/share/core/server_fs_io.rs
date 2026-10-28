@@ -27,7 +27,7 @@ pub(super) async fn write(
     mut send: SendStream,
     recv: RecvStream,
     context: &StreamContext,
-    (path, mode, lz4): (String, WriteMode, bool),
+    (path, mode, lz4, evidence): (String, WriteMode, bool, Option<Option<String>>),
     access: FsAccess,
     authorization: Option<MountLeaseAuthorization>,
 ) -> io::Result<()> {
@@ -41,6 +41,7 @@ pub(super) async fn write(
         mode,
         authorization,
         lz4,
+        evidence,
     };
     crate::share::server_transfer::write_file(send, recv, target, access, slot, context.stall())
         .await

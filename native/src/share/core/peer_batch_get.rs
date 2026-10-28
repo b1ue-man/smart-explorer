@@ -12,9 +12,10 @@ use crate::share::framing::{recv_data_frame, recv_resp_wire, send_ctrl, TAG_CTRL
 use crate::share::fs_error::into_io;
 use crate::share::io_deadline;
 use crate::share::node_sessions::OpenedPeerStream;
-use crate::share::wire::{BatchPart, Ctrl, FsBatchGet, FsRequest, FsResponse};
+use crate::share::wire::{BatchPart, Ctrl, FsBatchGet, FsFileEvidence, FsRequest, FsResponse};
 use crate::vfs::{BatchGet, BatchSink, VfsResult};
 
+use super::peer_evidence::EvidenceBinding;
 use super::peer_transfer::plan_request;
 use super::PeerBackend;
 
@@ -43,7 +44,14 @@ impl PeerBackend {
                 size: item.size,
             })
             .collect();
-        let envelope = get_header(Vec::new(), lease.clone());
+        // `evidence_v1`: each item header carries what the host read, bound
+        // to this connection like a FileIdentity reply.
+        let binding = if self.evidence_offered() {
+            Some(EvidenceBinding::capture(self)?)
+        } else {
+            None
+        };
+        let envelope = get_header(Vec::new(), lease.clone(), binding.is_some());
         for part in plan_request(&envelope, &wire, |item| item.size, limits)? {
             match part {
                 BatchPart::Oversized(index) => {
@@ -53,7 +61,9 @@ impl PeerBackend {
                     );
                     sink.failed(index, error)?;
                 }
-                BatchPart::Items(range) => self.get_part(&wire, range, &lease, sink)?,
+                BatchPart::Items(range) => {
+                    self.get_part(&wire, range, &lease, binding.as_ref(), sink)?
+                }
             }
         }
         Ok(())
@@ -64,14 +74,20 @@ impl PeerBackend {
         items: &[FsBatchGet],
         range: Range<usize>,
         lease: &Option<String>,
+        binding: Option<&EvidenceBinding>,
         sink: &mut dyn BatchSink,
     ) -> io::Result<()> {
         let Some(part) = items.get(range.clone()) else {
             return Err(eio("Paketbereich ist ungültig"));
         };
         let mut opened = self.open_batch_stream()?;
-        let header = get_header(part.to_vec(), lease.clone());
-        match self.receive_part(&mut opened, &header, range, sink) {
+        let header = get_header(part.to_vec(), lease.clone(), binding.is_some());
+        let mut receiver = Receiver {
+            items,
+            binding,
+            sink,
+        };
+        match self.receive_part(&mut opened, &header, range, &mut receiver) {
             Ok(()) => Ok(()),
             Err(GetFailure::Refused(error)) => Err(error),
             Err(GetFailure::Local(error)) => {
@@ -93,7 +109,7 @@ impl PeerBackend {
         opened: &mut OpenedPeerStream,
         header: &Ctrl,
         range: Range<usize>,
-        sink: &mut dyn BatchSink,
+        receiver: &mut Receiver<'_, '_>,
     ) -> Result<(), GetFailure> {
         self.node
             .block_on_route(
@@ -111,7 +127,7 @@ impl PeerBackend {
             }
         }
         for index in range {
-            self.receive_item(&mut opened.recv, opened.generation, index, sink)?;
+            self.receive_item(&mut opened.recv, opened.generation, index, receiver)?;
         }
         Ok(())
     }
@@ -135,18 +151,26 @@ impl PeerBackend {
         recv: &mut RecvStream,
         generation: usize,
         index: usize,
-        sink: &mut dyn BatchSink,
+        receiver: &mut Receiver<'_, '_>,
     ) -> Result<(), GetFailure> {
         let size = match self.next_response(recv, generation)? {
             FsResponse::Data { size } => size,
+            FsResponse::EvidencedData { size, evidence } => {
+                receiver.evidence(self, index, evidence)?;
+                size
+            }
             FsResponse::Err { kind, msg } => {
-                return sink
+                return receiver
+                    .sink
                     .failed(index, into_io(kind, msg))
                     .map_err(GetFailure::Local)
             }
             _ => return Err(GetFailure::Transport(eio("unerwartete Antwort im Paket"))),
         };
-        sink.begin(index, size).map_err(GetFailure::Local)?;
+        receiver
+            .sink
+            .begin(index, size)
+            .map_err(GetFailure::Local)?;
         let mut remaining = size;
         while remaining > 0 {
             let (tag, payload) = self
@@ -159,7 +183,10 @@ impl PeerBackend {
             if tag != TAG_DATA {
                 // The host ends an item early only with its failure.
                 let error = early_failure(tag, &payload)?;
-                return sink.end(index, Err(error)).map_err(GetFailure::Local);
+                return receiver
+                    .sink
+                    .end(index, Err(error))
+                    .map_err(GetFailure::Local);
             }
             let length = payload.len() as u64;
             if length > remaining {
@@ -168,7 +195,10 @@ impl PeerBackend {
                 )));
             }
             remaining -= length;
-            sink.data(index, &payload).map_err(GetFailure::Local)?;
+            receiver
+                .sink
+                .data(index, &payload)
+                .map_err(GetFailure::Local)?;
         }
         let result = match self.next_response(recv, generation)? {
             FsResponse::Ok => Ok(()),
@@ -179,7 +209,7 @@ impl PeerBackend {
                 )))
             }
         };
-        sink.end(index, result).map_err(GetFailure::Local)
+        receiver.sink.end(index, result).map_err(GetFailure::Local)
     }
 }
 
@@ -196,9 +226,41 @@ fn early_failure(tag: u8, payload: &[u8]) -> Result<io::Error, GetFailure> {
     }
 }
 
-fn get_header(items: Vec<FsBatchGet>, lease: Option<String>) -> Ctrl {
+fn get_header(items: Vec<FsBatchGet>, lease: Option<String>, evidence: bool) -> Ctrl {
     Ctrl::Fs {
-        req: FsRequest::GetBatch { items },
+        req: FsRequest::GetBatch { items, evidence },
         lease,
+    }
+}
+
+/// The sink of one part and how its evidence is bound.
+struct Receiver<'s, 'b> {
+    items: &'s [FsBatchGet],
+    binding: Option<&'b EvidenceBinding>,
+    sink: &'s mut dyn BatchSink,
+}
+
+impl Receiver<'_, '_> {
+    /// Hands the sink the item's evidence while the connection's binding
+    /// still holds; otherwise the item goes on without it.
+    fn evidence(
+        &mut self,
+        backend: &PeerBackend,
+        index: usize,
+        evidence: FsFileEvidence,
+    ) -> Result<(), GetFailure> {
+        let (Some(binding), Some(item)) = (self.binding, self.items.get(index)) else {
+            return Ok(());
+        };
+        if !binding.still_current(backend) {
+            return Ok(());
+        }
+        match binding.file(&item.path, evidence) {
+            Some(evidence) => self
+                .sink
+                .evidence(index, evidence)
+                .map_err(GetFailure::Local),
+            None => Ok(()),
+        }
     }
 }

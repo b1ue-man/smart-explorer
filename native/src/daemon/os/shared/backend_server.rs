@@ -61,10 +61,12 @@ fn canceled_request_lost_client(
 
 /// The version this service announces for `backend`: batches only when the
 /// peer moves them itself (never emulated file by file), and no more
-/// transfer slots than the peer admits.
+/// transfer slots than the peer admits. A Share peer's root is its export
+/// list, which holds no files, so its batches are asked for host-wide
+/// (Z-P1); each batch request is still checked against its own folder.
 fn service_version(backend: &BackendHandle) -> String {
     let root = backend.root_display();
-    let batch = backend.batch_limits(&root).is_some();
+    let batch = crate::vfs::host_batch_limits(&**backend).is_some();
     let slots = agent_proto::service_slots(backend.transfer_ceiling(&root));
     // `range-v1` and `lz4-v1` only for a backend that reads ranges: the
     // frames behind them are forwarded to it (`backend_ranges`).

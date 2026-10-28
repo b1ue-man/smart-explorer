@@ -11,7 +11,7 @@ use super::framing::{decode_resp, recv_resp_wire, send_ctrl, TAG_DATA};
 use super::io_deadline;
 use super::node::closed_idle;
 use super::node_sessions::OpenedPeerStream;
-use super::wire::{Ctrl, FsRequest, FsResponse};
+use super::wire::{Ctrl, FsFileEvidence, FsRequest, FsResponse};
 
 #[path = "peer_request_policy.rs"]
 mod policy;
@@ -246,6 +246,17 @@ impl PeerBackend {
         request: FsRequest,
         operation: &'static str,
     ) -> VfsResult<Box<dyn Read + Send>> {
+        self.open_read_stream(request, operation)
+            .map(|(reader, _)| reader)
+    }
+
+    /// `open_read_request` with the evidence an `evidence_v1` ReadAt
+    /// header carries.
+    pub(super) fn open_read_stream(
+        &self,
+        request: FsRequest,
+        operation: &'static str,
+    ) -> VfsResult<(Box<dyn Read + Send>, Option<FsFileEvidence>)> {
         let lz4 = request.asks_lz4();
         let deadline = Instant::now() + IDEMPOTENT_CONTROL_BUDGET;
         let lease = self.mount_lease.current()?;
@@ -294,15 +305,12 @@ impl PeerBackend {
             match result {
                 Ok(response) => match decode_resp(response) {
                     Ok(FsResponse::Data { size }) => {
-                        return Ok(super::peer_read::reader(
-                            self.node.clone(),
-                            opened.recv,
-                            size,
-                            TAG_DATA,
-                            lz4,
-                            opened.session_key,
-                            opened.generation,
-                        ));
+                        let reader = self.read_stream(opened, size, lz4);
+                        return Ok((reader, None));
+                    }
+                    Ok(FsResponse::EvidencedData { size, evidence }) => {
+                        let reader = self.read_stream(opened, size, lz4);
+                        return Ok((reader, Some(evidence)));
                     }
                     Ok(_) => {
                         io_deadline::abort(&mut opened.send, &mut opened.recv);
@@ -326,10 +334,33 @@ impl PeerBackend {
         Err(last_error.unwrap_or_else(|| eio("Peer-Leseanforderung ohne Ergebnis beendet")))
     }
 
+    fn read_stream(&self, opened: OpenedPeerStream, size: u64, lz4: bool) -> Box<dyn Read + Send> {
+        super::peer_read::reader(
+            self.node.clone(),
+            opened.recv,
+            size,
+            TAG_DATA,
+            lz4,
+            opened.session_key,
+            opened.generation,
+        )
+    }
+
     pub(super) fn open_writer(
         &self,
         request: FsRequest,
         operation: &'static str,
+    ) -> VfsResult<Box<dyn Write + Send>> {
+        self.open_writer_reporting(request, operation, None)
+    }
+
+    /// `open_writer` whose commit leaves an `evidence_v1` `Written` reply in
+    /// `written`.
+    pub(super) fn open_writer_reporting(
+        &self,
+        request: FsRequest,
+        operation: &'static str,
+        written: Option<super::peer_writer::WrittenSlot>,
     ) -> VfsResult<Box<dyn Write + Send>> {
         let lz4 = request.asks_lz4();
         let lease = self.mount_lease.current()?;
@@ -395,6 +426,7 @@ impl PeerBackend {
                 lz4,
                 opened.session_key,
                 opened.generation,
+                written,
             ));
         }
         Err(last_error.unwrap_or_else(|| eio("Peer-Schreibanforderung ohne Ergebnis beendet")))
@@ -407,74 +439,5 @@ fn control_attempt_deadline(overall: Instant) -> io::Result<Instant> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn remote_drive_task_only_idempotent_control_reads_are_replayable() {
-        assert!(is_retryable_read(&FsRequest::ListDir { path: "/".into() }));
-        assert!(is_retryable_read(&FsRequest::Stat { path: "/".into() }));
-        assert!(is_retryable_read(&FsRequest::Capabilities {
-            path: "/Docs".into(),
-            acquire_lease: true,
-            lease_request_id: Some("mount-request".into()),
-        }));
-        assert!(!is_retryable_read(&FsRequest::Read {
-            path: "/x".into(),
-            lz4: false,
-        }));
-        assert!(!is_retryable_read(&FsRequest::Write {
-            path: "/x".into(),
-            lz4: false,
-        }));
-        assert!(!is_retryable_read(&FsRequest::Rename {
-            src: "/a".into(),
-            dst: "/b".into(),
-        }));
-        assert!(!is_retryable_read(&FsRequest::RemoveFile {
-            path: "/x".into()
-        }));
-        assert!(!is_retryable_read(&FsRequest::ReleaseLease));
-    }
-
-    #[test]
-    fn transfer_engine_task_only_batch_status_is_replayable() {
-        assert!(is_retryable_read(&FsRequest::PutBatchStatus {
-            nonce: "0123456789abcdef".into(),
-        }));
-        assert!(!is_retryable_read(&FsRequest::PutBatch {
-            nonce: "0123456789abcdef".into(),
-            entries: Vec::new(),
-        }));
-        assert!(!is_retryable_read(&FsRequest::CreateDir {
-            path: "/A/x".into(),
-            exclusive: true,
-        }));
-        assert!(!is_retryable_read(&FsRequest::PromoteNoReplace {
-            staged: "/A/x.stage".into(),
-            destination: "/A/x".into(),
-            copy: true,
-        }));
-        assert!(response_matches(
-            &FsRequest::PutBatchStatus {
-                nonce: "0123456789abcdef".into(),
-            },
-            &FsResponse::Batch {
-                status: super::super::wire::FsBatchStatus::Pending,
-            }
-        ));
-        assert!(!response_matches(
-            &FsRequest::CreateDir {
-                path: "/A/x".into(),
-                exclusive: false,
-            },
-            &FsResponse::Ready
-        ));
-        assert!(response_matches(
-            &FsRequest::DiscardStage {
-                path: "/A/x.stage".into(),
-            },
-            &FsResponse::Ok
-        ));
-    }
-}
+#[path = "peer_request_tests.rs"]
+mod tests;

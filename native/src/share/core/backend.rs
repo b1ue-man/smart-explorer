@@ -25,6 +25,8 @@ pub(crate) use super::node::ShareIrohNode;
 mod peer_batch_get;
 #[path = "peer_batch_put.rs"]
 mod peer_batch_put;
+#[path = "peer_evidence.rs"]
+pub(super) mod peer_evidence;
 #[path = "peer_stage_ranges.rs"]
 mod peer_stage_ranges;
 #[path = "peer_stages.rs"]
