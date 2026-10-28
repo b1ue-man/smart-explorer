@@ -43,6 +43,10 @@ const MIN_BATCH_BYTES: u64 = 256 * 1024;
 /// A packet should carry at least this many files; a file above a packet's
 /// share goes alone (its own transfer time already dwarfs a round trip).
 const FILES_PER_BATCH_SHARE: u64 = 8;
+/// Files up to this size always qualify for packets (K-E, 2026-10-28): at
+/// the start the rate target alone allowed only 32 KiB, so ordinary
+/// documents and photos paid every per-file round trip.
+const SMALL_FILE_FLOOR: u64 = 1024 * 1024;
 
 /// The operation may succeed when tried again: the connection dropped or
 /// stalled, or the peer asked to slow down (`overload` is the flow's
@@ -211,9 +215,22 @@ impl BatchSizer {
         wanted.clamp(MIN_BATCH_BYTES.min(max_bytes), max_bytes.max(1))
     }
 
-    /// Files up to this size travel in packets.
+    /// Files up to this size travel in packets: an eighth of the target,
+    /// at least `SMALL_FILE_FLOOR`, never above the backend's bound.
     pub(crate) fn small_file_limit(&self, max_bytes: u64) -> u64 {
-        self.target_bytes(max_bytes) / FILES_PER_BATCH_SHARE
+        (self.target_bytes(max_bytes) / FILES_PER_BATCH_SHARE)
+            .max(SMALL_FILE_FLOOR)
+            .min(max_bytes.max(1))
+    }
+
+    /// Bytes one packet may carry: the rate target, but room for at least
+    /// two files at the small-file limit, so a packet of tiny files is
+    /// bounded by the backend's file count rather than by bytes (256 files
+    /// of 4 KiB fit from the first packet on).
+    pub(crate) fn packet_bytes(&self, max_bytes: u64) -> u64 {
+        self.target_bytes(max_bytes)
+            .max(self.small_file_limit(max_bytes).saturating_mul(2))
+            .min(max_bytes.max(1))
     }
 }
 
@@ -312,9 +329,22 @@ mod tests {
         let mut sizer = BatchSizer::default();
         let max = 16 * 1024 * 1024;
         assert_eq!(sizer.target_bytes(max), MIN_BATCH_BYTES);
+        assert_eq!(sizer.small_file_limit(max), SMALL_FILE_FLOOR, "K-E floor");
+        assert_eq!(sizer.packet_bytes(max), 2 * SMALL_FILE_FLOOR);
+        assert!(
+            sizer.packet_bytes(max) >= 256 * 4096,
+            "256 files of 4 KiB fit the first packet"
+        );
+        assert_eq!(
+            sizer.small_file_limit(512 * 1024),
+            512 * 1024,
+            "backend bound"
+        );
+        assert_eq!(sizer.packet_bytes(512 * 1024), 512 * 1024);
         sizer.record(40_000_000, 1_000);
         assert_eq!(sizer.target_bytes(max), 10_000_000);
         assert_eq!(sizer.small_file_limit(max), 1_250_000);
+        assert_eq!(sizer.packet_bytes(max), 10_000_000);
         sizer.record(4_000_000_000, 1_000);
         assert_eq!(
             sizer.target_bytes(max),

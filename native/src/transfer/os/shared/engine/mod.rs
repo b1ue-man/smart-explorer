@@ -44,6 +44,8 @@ mod ops;
 mod prepare;
 #[path = "publish.rs"]
 mod publish;
+#[path = "publish_queue.rs"]
+mod publish_queue;
 use prepare::prepare;
 #[path = "queue.rs"]
 mod queue;
@@ -172,6 +174,15 @@ fn side_flow(side: Side<'_>, path: &str) -> Arc<Flow> {
     }
 }
 
+/// Packet limits for the files of the selected `first`: below it when it is
+/// a folder (an export at a host's root has nothing packable above it),
+/// below its parent when it is a file (K-E).
+fn source_batch_limits(backend: &dyn crate::vfs::Backend, first: &str) -> Option<BatchLimits> {
+    backend
+        .batch_limits(first)
+        .or_else(|| backend.batch_limits(&parent_path(first)))
+}
+
 fn first_source(items: &JobItems) -> &str {
     match items {
         JobItems::Roots { paths, .. } => paths.first().map(String::as_str),
@@ -241,7 +252,7 @@ impl<'a> Engine<'a> {
             .then(|| Arc::new(AccessGate::new(&view.gate_root())));
         let batch = match (view.source, view.target) {
             (Side::Local, Side::Remote(backend)) => backend.batch_limits(view.target_dir),
-            (Side::Remote(backend), Side::Local) => backend.batch_limits(&parent_path(first)),
+            (Side::Remote(backend), Side::Local) => source_batch_limits(backend, first),
             _ => None,
         }
         .filter(|limits| limits.max_files > 1 && limits.max_bytes > 0);
@@ -444,6 +455,9 @@ mod segments_tests;
 #[cfg(test)]
 #[path = "segments_upload_tests.rs"]
 mod segments_upload_tests;
+#[cfg(test)]
+#[path = "speed_task_tests.rs"]
+mod speed_task_tests;
 #[cfg(test)]
 #[path = "test_backend.rs"]
 mod test_backend;

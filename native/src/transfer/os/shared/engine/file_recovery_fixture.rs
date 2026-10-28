@@ -9,15 +9,17 @@ pub(super) fn fixture<'a>(
 ) -> io::Result<Engine<'a>> {
     let view = JobView::of(job);
     let path = store.join("job.json");
-    let (data, completed, files) = if path.exists() {
+    let (data, completed, files, journal) = if path.exists() {
         let data: JobRecord = read_record(&path, RecordKind::Job, &job.id, u64::MAX, false)?;
         verify_target(&view, &data)?;
-        let files = file_recovery::verify_saved(&view, &data, &path, None, cancel)?;
+        let journal = file_recovery::Journal::open(&path, &data, None, !data.mutation_started)?;
+        let files = file_recovery::verify_saved(&view, &data, &journal, cancel)?;
         let completed = verify_sources(&view, &data, &files)?;
         (
             data,
             completed,
             files.into_values().map(|(_, root)| root).collect(),
+            journal,
         )
     } else {
         let mut data = contract(&view, view.target_dir, &job.id)?;
@@ -29,14 +31,15 @@ pub(super) fn fixture<'a>(
             crate::vfs::directory_identity(backend, view.target_dir)
         })?;
         write_record(&path, RecordKind::Job, &data.id, None, &data)?;
-        (data, Vec::new(), Vec::new())
+        let journal = file_recovery::Journal::open(&path, &data, None, true)?;
+        (data, Vec::new(), Vec::new(), journal)
     };
-    file_recovery::initialize(&path, &data, None)?;
     let run = JobRun {
         path,
         _lock: crate::support_dirs::open_private_lock(&store.join("job.lock"))?,
         context: None,
         data: Mutex::new(data),
+        journal,
         completed,
         files,
     };

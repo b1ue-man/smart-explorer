@@ -1,9 +1,11 @@
-//! The dispatcher of one job: starts a worker while files wait and the flows
-//! have a free permit, reports progress every ~150 ms and ends when the queue
-//! is drained and the last worker is gone. A thread the process refuses to
-//! start is overload, not a file error: the flows halve and learn the number
-//! of operations that ran as their bound, and the dispatcher tries again
-//! shortly (U44-6 point 7).
+//! The dispatcher of one job: starts a worker while files wait, no worker is
+//! idle and the flows have a free permit (K-E: a worker past its permit, in
+//! a folder wait or a packet's acknowledgements, no longer holds the next one
+//! back), up to a bound above the flows' limit; reports progress every
+//! ~150 ms and ends when the queue is drained and the last worker is gone.
+//! A thread the process refuses to start is overload, not a file error: the
+//! flows halve and learn the number of operations that ran as their bound,
+//! and the dispatcher tries again shortly (U44-6 point 7).
 use super::{discovery, roots, worker, Engine, MIN_WAIT, PROGRESS_INTERVAL};
 use crate::transfer::TransferMsg;
 use std::io;
@@ -62,11 +64,11 @@ impl Engine<'_> {
                 if !queued.producing && drained && queued.workers == 0 {
                     break;
                 }
-                let busy = self.stats.running() >= queued.workers;
                 let spawn = queued.queued > 0
                     && queued.idle == 0
                     && !self.stopped()
-                    && (queued.workers == 0 || (busy && self.flows_have_spare()));
+                    && (queued.workers == 0
+                        || (queued.workers < self.worker_bound() && self.flows_have_spare()));
                 if spawn {
                     let slot = self.queue.add_worker();
                     let started = if start_refused_by_test() {
@@ -98,6 +100,19 @@ impl Engine<'_> {
                     .wait_changed(PROGRESS_INTERVAL.saturating_sub(waited).max(MIN_WAIT));
             }
         });
+    }
+
+    /// Workers beyond the flows' limit only wait (for a folder, memory or
+    /// the acknowledgements after a packet); half the limit again keeps the
+    /// permits busy while that many wait, without a thread per queued file.
+    fn worker_bound(&self) -> usize {
+        let limit = self
+            .op_flows
+            .1
+            .as_ref()
+            .map_or(0, |flow| flow.limit())
+            .max(self.op_flows.0.limit());
+        limit.saturating_add(limit / 2).saturating_add(2)
     }
 
     /// A worker could not be started: overload for the job's flows (they

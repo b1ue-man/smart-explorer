@@ -25,6 +25,8 @@ pub(super) struct JobRun {
     _lock: std::fs::File,
     pub(super) context: Option<RecordContext>,
     pub(super) data: Mutex<JobRecord>,
+    /// The job's crash log (receipts of every publication).
+    pub(super) journal: super::file_recovery::Journal,
     completed: Vec<crate::transfer::ResolvedRoot>,
     files: Vec<crate::transfer::ResolvedRoot>,
 }
@@ -92,7 +94,7 @@ pub(super) fn begin(
         .map_err(|error| io::Error::other(format!("Job {id} wird bereits ausgeführt: {error}")))?;
     let expected = contract(view, target_root, id)?;
     let context = record_context(&expected.vault_locations)?;
-    let (data, completed, files) = match read_record::<JobRecord>(
+    let (data, completed, files, journal) = match read_record::<JobRecord>(
         &path,
         RecordKind::Job,
         id,
@@ -142,11 +144,15 @@ pub(super) fn begin(
                 }
                 write_record(&path, RecordKind::Job, id, context.as_ref(), &data)?;
             }
-            if !data.mutation_started {
-                super::file_recovery::initialize(&path, &data, context.as_ref())?;
-            }
-            let receipts =
-                super::file_recovery::verify_saved(view, &data, &path, context.as_ref(), cancel)?;
+            // Created only before any mutation; a lost log of a started job
+            // never looks unstarted.
+            let journal = super::file_recovery::Journal::open(
+                &path,
+                &data,
+                context.clone(),
+                !data.mutation_started,
+            )?;
+            let receipts = super::file_recovery::verify_saved(view, &data, &journal, cancel)?;
             if super::file_recovery::missing_retry::live(view) {
                 for guard in data.guards.iter_mut().filter(|guard| !guard.verified) {
                     let current = snapshot(view.source, &guard.path);
@@ -158,7 +164,7 @@ pub(super) fn begin(
             }
             let completed = verify_sources(view, &data, &receipts)?;
             let files = receipts.into_values().map(|(_, root)| root).collect();
-            (data, completed, files)
+            (data, completed, files, journal)
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             if view.recovery == crate::transfer::RecoveryMode::Resume
@@ -180,7 +186,8 @@ pub(super) fn begin(
                 .map(|path| snapshot(view.source, path))
                 .collect();
             write_record(&path, RecordKind::Job, id, context.as_ref(), &data)?;
-            (data, Vec::new(), Vec::new())
+            let journal = super::file_recovery::Journal::open(&path, &data, context.clone(), true)?;
+            (data, Vec::new(), Vec::new(), journal)
         }
         Err(error) => return Err(error),
     };
@@ -193,11 +200,11 @@ pub(super) fn begin(
         }
     }
     data.file_journal = true;
-    super::file_recovery::initialize(&path, &data, context.as_ref())?;
     Ok(Some(JobRun {
         path,
         _lock: lock,
         data: Mutex::new(data),
+        journal,
         context,
         completed,
         files,
@@ -331,6 +338,9 @@ impl JobRun {
     }
 
     pub fn finish(&self, complete: bool) -> io::Result<()> {
+        // Acknowledgements written without their own sync are durable
+        // before the job record says how the run ended.
+        self.journal.flush()?;
         let mut data = self
             .data
             .lock()
