@@ -85,8 +85,49 @@ Grenzen: keine lokalen Builds/Tests; eine Remote-Suite; ein Release am Ende.
   Aktivierung (winit `with_active`, unter X11/Wayland ohne Wirkung), damit
   eine gesteuerte Windows-Anwendung den Tastaturfokus behält.
 
-### r2/r6, r3–r5
-Offen bis Analyse und Inventur vorliegen (Schleifenstand unten).
+### r2/r6 Kopierarchitektur (Grundlage `analyse-kopieren.md`)
+
+Befund: Jeder Einfügeweg aus GUI und Android läuft mit Absturzprotokoll
+(`recoverable: true`): je Datei vier dauerhafte private Schreibvorgänge (Unix je
+zwei fsync), drei davon unter einer Sperre je Auftrag; Share-Wege zusätzlich zwei
+bis drei serielle Anfragen je Datei in den Belegen; Pakete nur bis 32 KiB und nicht
+beim Herunterladen einer ganzen Freigabe; Host synchronisiert jede Paketdatei;
+Nebenläufigkeit startet bei 2; jeder Ordner eine eigene Anfrage. `se cp` ohne
+Protokoll erreichte 6000 Dateien/s, der GUI-Weg schätzungsweise 15–300.
+
+Gewählte Zielarchitektur (alle Invarianten bleiben: Absicht dauerhaft vor
+Veröffentlichung, kein Überschreiben, Behalten-beider-Nummerierung, Abbruch,
+Wiederaufnahme, versiegelte Namen bei Tresorzielen):
+- K-A Absturzprotokoll v2: ein Anhängeprotokoll je Auftrag mit CRC je Eintrag
+  (Tresorziele: je Eintrag versiegelt), Gruppen-fsync durch einen Commit-Thread,
+  Ordnerhandle einmal geöffnet; eine Absichtszeile je Paket; „veröffentlicht“
+  ohne eigenes fsync. Ersetzt `index.json`, `pending`, `count` und die
+  Einzelbelegdateien; Wiederherstellung liest das Protokoll (abgeschnittene
+  letzte Zeile = heutige `pending`-Reparatur).
+- K-B Belege aus den Antworten des Hosts: PutBatch-/GetBatch-/ReadAt-/Promote-
+  Antworten tragen Größe, Zeit und Dateiidentität und ob das Ziel vorher bestand
+  (Fähigkeitskennzeichen; ältere Hosts behalten die heutigen Einzelanfragen).
+- K-C Veröffentlichen nach dem Download außerhalb der Stream-Schleife.
+- K-D Host: Paketstufen ohne fsync für Kopien (wie der Einzeldateiweg,
+  `publish.rs:70-73`), dauerhaft nur bei Verschieben/Überschreiben; jeder
+  Elternordner einmal je Paket aufgelöst.
+- K-E Paket- und Nebenläufigkeitsregeln: Kleindateigrenze max(Ziel÷8, 1 MiB),
+  Pakete bis 256 Dateien nach Anzahl, Paketgrenzen für den tatsächlich
+  übertragenen Ordner, Startfenster 8, neue Worker nach freien Erlaubnissen,
+  Pakete auch bei Wiederaufnahme.
+- K-F Ordner gesammelt anlegen (`CreateDirs`, Host meldet angelegte Ordner).
+- K-G Ganzer neuer Ordner als eine Einheit (PutTree/GetTree bzw. lokal Stufenordner
+  und ein Umbenennen ohne Ersetzen) für neue oberste Ordner; Zusammenführen in
+  bestehende Ordner und Tresorziele bleiben beim Einzeldateiweg.
+- K-H Zwischenablage für andere Programme über die Engine ohne Protokoll
+  (Wegwerfziel) und ohne fsync je Datei.
+
+Verworfen: Protokoll für GUI-Einfügen abschalten (verliert die
+Absturzfestigkeit, Nutzer r57 des Vorauftrags: „absturzfest“); nur mehr
+Nebenläufigkeit (die Sperre je Auftrag und fsync begrenzen trotzdem).
+
+### r3–r5, r7
+Entwurf läuft (`entwurf-einrichtung.md`), Grundlage `inventur-einrichtung.md`.
 
 ## D — Arbeitsplan
 
