@@ -38,7 +38,14 @@ pub(super) fn upload(
     // A direct fresh publication needs source-content verification after
     // flush. Keep optical sources staged so their bytes are not read twice.
     let fresh_parent = parent_created && !source.is_optical();
-    let mut destination = publish::open(engine, target, file, Some(size), fresh_parent)?;
+    let mut destination = publish::open(
+        engine,
+        target,
+        file,
+        Some(size),
+        fresh_parent,
+        engine.folders.known_absent(&file.rel),
+    )?;
     let mut copied = 0u64;
     loop {
         if engine.stopped() {

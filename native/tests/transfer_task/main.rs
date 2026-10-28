@@ -16,7 +16,8 @@
 //!   checked by the transfer note) and G3-11 (FTP ranges in a fresh job,
 //!   checked byte for byte).
 //! - `backends_g3.rs`: the G3 follow-ups (SMB single-file compounds, G3-07;
-//!   Nextcloud chunked upload, G3-12) against the suite's servers.
+//!   Nextcloud chunked upload, G3-12; SFTP copy batches and same-account
+//!   packets through the engine, G3-13) against the suite's servers.
 mod backends_g3;
 mod crash_log;
 mod speed;

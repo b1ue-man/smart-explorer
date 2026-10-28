@@ -106,6 +106,13 @@ fn handle_stamp(path: &str, file: &File, object: Option<Option<String>>) -> io::
     })
 }
 
+/// The evidence of a local stage whose handle is still open: what
+/// `before_publish_handle` records for a single file, for a local packet
+/// member staged before its packet's intent (R4, 2026-10-28).
+pub(in crate::transfer::engine) fn stage_proof(staged: &Path, file: &File) -> io::Result<Proof> {
+    handle_stamp(&crate::copy::native_path_text(staged)?, file, None)
+}
+
 /// `file_evidence::confirm_stamp` for a just published local file whose
 /// handle is still open (M4): the published name must name the held object
 /// (one look at the path) and the handle must still show the recorded size

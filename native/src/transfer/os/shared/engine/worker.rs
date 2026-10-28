@@ -143,6 +143,17 @@ pub(super) fn run_file(engine: &Engine<'_>, mut file: FileWork, buffer: &mut [u8
                     return;
                 }
             }
+            // The planned name was taken between listing and write
+            // (G3-08b): nothing was published, the staged path numbers it.
+            Decision::Again => {
+                engine.issues.note(
+                    &file.source,
+                    &format!(
+                        "Name inzwischen belegt, neuer Versuch mit Stufe: {}",
+                        failure.error
+                    ),
+                );
+            }
             Decision::Wait(delay) => {
                 engine.issues.note(
                     &file.source,
@@ -182,6 +193,9 @@ pub(super) enum Decision {
     Stop,
     /// The one retry of a transient failure, after this pause.
     Retry(Duration),
+    /// At once, without using the retry: a one-request publication found
+    /// its name taken and published nothing (G3-08b).
+    Again,
     /// The peer is too busy: again after this pause, without using the retry.
     Wait(Duration),
     Access,
@@ -197,6 +211,10 @@ pub(super) fn decide(
 ) -> Decision {
     if engine.stopped() {
         return Decision::Stop;
+    }
+    if failure.absent_taken && !file.absent_refused {
+        file.absent_refused = true;
+        return Decision::Again;
     }
     let kind = failure.error.kind();
     if failure.at == At::Source

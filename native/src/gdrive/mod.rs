@@ -103,6 +103,9 @@ mod transfer_ops;
 mod trash;
 
 #[cfg(test)]
+#[path = "core/absent_engine_task_tests.rs"]
+mod absent_engine_task_tests;
+#[cfg(test)]
 #[path = "core/absent_write_tests.rs"]
 mod absent_write_tests;
 #[cfg(test)]

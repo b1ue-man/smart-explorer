@@ -3,8 +3,9 @@
 //! small files of a packet come from the source in one `get_batch` round
 //! trip into the engine's reserved memory and go to the target as one
 //! `put_batch`, instead of one read stream, one stage and one publication
-//! round trip per file. Inside one account the server copies itself
-//! (`remote_copy::server_copy`), so no packet is formed there.
+//! round trip per file. Inside one account the server copies itself; its
+//! packets ask for the server copies of many files in one call
+//! (`batch_remote_server`).
 //!
 //! The rules of both packet kinds hold: a member reaches the target only
 //! when the source delivered exactly its listed bytes (and its listed MD5);
@@ -32,8 +33,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 /// Packet limits between two connections: what both sides take, so one
-/// packet is one `get_batch` and one `put_batch`. `None` inside one account
-/// (the server copies) and where either side moves no packets.
+/// packet is one `get_batch` and one `put_batch`. Inside one account the
+/// packets are server copies (`batch_remote_server::SERVER_PACKET`); `None`
+/// where either side moves no packets.
 pub(super) fn limits(
     view: &JobView<'_>,
     source: &dyn Backend,
@@ -41,7 +43,7 @@ pub(super) fn limits(
     first: &str,
 ) -> Option<BatchLimits> {
     if view.source.same_namespace(view.target) {
-        return None;
+        return Some(super::batch_remote_server::SERVER_PACKET);
     }
     let from = super::source_batch_limits(source, first)?;
     let to = target.batch_limits(view.target_dir)?;
@@ -64,6 +66,9 @@ pub(super) fn copy(
     files: Vec<FileWork>,
     buffer: &mut [u8],
 ) {
+    if engine.view.source.same_namespace(engine.view.target) {
+        return super::batch_remote_server::copy(engine, source, target, files);
+    }
     // Exports change their length on the way: they go alone.
     let mut members = Vec::with_capacity(files.len());
     for file in files {
@@ -320,6 +325,8 @@ fn prepare(
             file,
             source: source.as_ref(),
             existed_before: *existed,
+            stage: None,
+            destination: None,
         })
         .collect();
     super::file_recovery::prepare_batch_known(engine, &intents)

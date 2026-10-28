@@ -54,7 +54,7 @@ pub(super) use journal::log_path;
 pub(super) use journal::Journal;
 #[cfg(test)]
 pub(super) use legacy::{convert_to_old_format, old_receipt_file};
-pub(super) use observer::LocalObserver;
+pub(super) use observer::{stage_proof, LocalObserver};
 use paths::destination_parts;
 use receipts::{PreviousTarget, Receipt};
 pub(super) use verification::verify_saved;
@@ -79,16 +79,9 @@ pub(super) type FileRoots =
 
 pub(super) use missing_retry::resume;
 
-/// One member of a packet whose intent is written with all the others
-/// (`prepare_batch_known`).
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) struct PacketIntent<'f> {
-    pub file: &'f FileWork,
-    /// The remote source as a host reply described it (download packets).
-    pub source: Option<&'f HostEvidence>,
-    /// Whether the destination existed before, as the host reported it.
-    pub existed_before: Option<bool>,
-}
+#[path = "file_recovery_packet.rs"]
+mod packet;
+pub(super) use packet::{prepare_batch_known, PacketIntent};
 
 /// The source as recorded: from the host's reply when it carried it,
 /// otherwise looked at (one stat and identity request for a remote source).
@@ -216,6 +209,17 @@ fn known_stage(
 
 pub(super) fn after(engine: &Engine<'_>, file: &FileWork, destination: &str) -> io::Result<()> {
     after_checked(engine, file, destination, None, None)
+}
+
+/// `after` for a local publication whose stage handle is still open: the
+/// target is compared through it (M4), as the single file's observer does.
+pub(super) fn after_held(
+    engine: &Engine<'_>,
+    file: &FileWork,
+    destination: &str,
+    held: &std::fs::File,
+) -> io::Result<()> {
+    after_checked(engine, file, destination, Some(held), None)
 }
 
 /// `after` with the published target as the host's reply described it: no
@@ -358,32 +362,6 @@ fn known_target(
 
 pub(super) fn prepare_batch(engine: &Engine<'_>, file: &FileWork) -> io::Result<()> {
     prepare_direct(engine, file, &engine.folders.path_of(&file.rel))
-}
-
-/// The intents of a whole packet as one durable record (one sync for all
-/// members), each with what the host already reported. Nothing is written
-/// when any member cannot be prepared.
-#[cfg_attr(not(test), allow(dead_code))]
-pub(super) fn prepare_batch_known(
-    engine: &Engine<'_>,
-    members: &[PacketIntent<'_>],
-) -> io::Result<()> {
-    let Some(record) = &engine.job_record else {
-        return Ok(());
-    };
-    active(engine)?;
-    let mut intents = Vec::with_capacity(members.len());
-    for member in members {
-        let source = source_guard(engine, member.file, member.source)?;
-        if !source.verified || source.directory || source.link {
-            return Err(failure("Paketquelle des Dateibelegs ist unbestätigt"));
-        }
-        let destination = engine.folders.path_of(&member.file.rel);
-        let previous = previous_known(engine.view.target, &destination, member.existed_before)?;
-        intents.push(record.intent(member.file, source, None, destination, None, previous)?);
-    }
-    record.start_files(&intents)?;
-    active(engine)
 }
 
 pub(super) fn prepare_direct(

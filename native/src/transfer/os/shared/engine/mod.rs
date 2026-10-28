@@ -9,6 +9,7 @@ mod batch;
 mod batch_get;
 mod batch_put;
 mod batch_remote;
+mod batch_remote_server;
 #[cfg(test)]
 mod batches_backend_compatibility_task_tests;
 mod bottleneck;
@@ -214,6 +215,8 @@ pub(crate) struct Engine<'a> {
     breaker: Mutex<Breaker>,
     batch: Option<BatchLimits>,
     sizer: Mutex<BatchSizer>,
+    /// Inside one account: the server copied none of a packet (no batch).
+    server_packets_refused: AtomicBool,
     /// Large files being transferred in parts, by id (helper workers find
     /// their file here).
     segments: segments::Registry<'a>,
@@ -285,6 +288,7 @@ impl<'a> Engine<'a> {
             breaker: Mutex::new(Breaker::default()),
             batch,
             sizer: Mutex::new(BatchSizer::default()),
+            server_packets_refused: AtomicBool::new(false),
             segments: segments::Registry::new(),
             resume: view.resume.is_some(),
             moved_dirs: Mutex::new(Vec::new()),

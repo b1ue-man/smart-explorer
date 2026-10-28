@@ -1,7 +1,8 @@
-//! The publication hooks of one local packet member (M3): at the name the
-//! packet's intent covers it needs no intent of its own (only the job's stop
-//! is checked, and the acknowledgement follows like the packet receipts of
-//! remote packets); at any other name (a numbered one) it is the single
+//! The publication hooks of one local packet member (M3, R4): at the name
+//! the packet's intent covers (which records the member's stage) it needs
+//! no intent of its own (only the job's stop is checked) and is acknowledged
+//! through its still open stage handle; a failed rename there is revoked
+//! against that stage. At any other name (a numbered one) it is the single
 //! file's observer (`LocalObserver`), which records its own intent with the
 //! stage first.
 use super::super::super::file_recovery::{self, LocalObserver};
@@ -55,13 +56,16 @@ impl<'e, 'a> PacketObserver<'e, 'a> {
         Ok(())
     }
 
-    fn acknowledge(&self, target: &Path) -> io::Result<()> {
+    fn acknowledge(&self, target: &Path, held: Option<&std::fs::File>) -> io::Result<()> {
         #[cfg(test)]
         if super::tests::ack_lost() {
             return Err(io::Error::other("crash before the acknowledgement (test)"));
         }
         let destination = crate::copy::native_path_text(target)?;
-        file_recovery::after(self.engine, self.file, &destination)
+        match held {
+            Some(held) => file_recovery::after_held(self.engine, self.file, &destination, held),
+            None => file_recovery::after(self.engine, self.file, &destination),
+        }
     }
 }
 
@@ -85,26 +89,23 @@ impl PublicationObserver for PacketObserver<'_, '_> {
     }
     fn after_publish(&self, target: &Path) -> io::Result<()> {
         if self.covers(target) {
-            return self.acknowledge(target);
+            return self.acknowledge(target, None);
         }
         self.single().after_publish(target)
     }
     fn after_publish_handle(&self, target: &Path, held: &std::fs::File) -> io::Result<()> {
         if self.covers(target) {
-            return self.acknowledge(target);
+            return self.acknowledge(target, Some(held));
         }
         self.single().after_publish_handle(target, held)
     }
     fn publication_preparation_failed(&self, _: &Path, _: &Path) -> io::Result<()> {
         file_recovery::preparation_failed(self.engine, self.file)
     }
-    /// A failed rename at the covered name (its packet receipt names no
-    /// stage) is revoked as a failed preparation: durably not authorized
-    /// before the stage goes or a numbered name gets its own intent.
+    /// A failed rename is revoked against the receipt's stage and name,
+    /// covered or not: durably not authorized before the stage goes or a
+    /// numbered name gets its own intent.
     fn publication_failed(&self, staged: &Path, target: &Path) -> io::Result<()> {
-        if self.covers(target) {
-            return file_recovery::preparation_failed(self.engine, self.file);
-        }
         self.single().publication_failed(staged, target)
     }
 }

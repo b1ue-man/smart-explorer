@@ -18,7 +18,7 @@ use super::super::flow::{classify_error, Flow};
 use super::super::flow_control::OpOutcome;
 use super::super::walk_listers::native;
 use super::view::Side;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -106,6 +106,9 @@ pub(crate) struct FolderRegister<'a> {
     flow: Arc<Flow>,
     /// Remote targets: free names for new top-level entries.
     planner: Option<Mutex<NamePlanner>>,
+    /// Top-level names claimed against a complete listing of the target
+    /// folder: absent when the job planned them (G3-08b).
+    claimed: Mutex<HashSet<String>>,
     /// Planned top-level folder → the name it was planned from; created
     /// exclusively and renumbered when taken meanwhile.
     exclusive: Mutex<HashMap<String, String>>,
@@ -127,6 +130,7 @@ impl<'a> FolderRegister<'a> {
             root: root.to_string(),
             flow,
             planner: None,
+            claimed: Mutex::new(HashSet::new()),
             exclusive: Mutex::new(HashMap::new()),
             aliases: Mutex::new(HashMap::new()),
             slots: Mutex::new(HashMap::new()),
@@ -145,9 +149,23 @@ impl<'a> FolderRegister<'a> {
     /// elsewhere `wanted` itself).
     pub(crate) fn claim_name(&self, wanted: &str) -> Option<String> {
         match &self.planner {
-            Some(planner) => lock(planner).claim(wanted),
+            Some(planner) => {
+                let mut planner = lock(planner);
+                let claimed = planner.claim(wanted);
+                if let Some(name) = claimed.as_ref().filter(|_| planner.listed()) {
+                    lock(&self.claimed).insert(name.clone());
+                }
+                claimed
+            }
             None => Some(wanted.to_string()),
         }
+    }
+
+    /// Whether the target path of `rel` was seen absent when the job planned
+    /// it: a top-level name claimed against a complete listing (G3-08b).
+    /// Only a hint for one write request; the provider still proves it.
+    pub(crate) fn known_absent(&self, rel: &str) -> bool {
+        parent_rel(rel).is_none() && lock(&self.claimed).contains(rel)
     }
 
     /// `taken` exists after all: the next free top-level name for `wanted`.

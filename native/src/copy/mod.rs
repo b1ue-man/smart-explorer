@@ -28,6 +28,7 @@ pub(crate) struct SourceFacts {
 pub(crate) use imp::{
     copy_to_new_file, discard_transfer_stage, local_file_identity, local_file_identity_handle,
     move_folder, native_path_text, packet_start, path_names_handle, prune_empty_dirs,
-    recover_transfer_quarantine, transfer_local, transfer_local_from, transfer_local_observed,
-    validate_directory_target, LocalFailure, LocalOutcome, LocalRequest, PublicationObserver,
+    recover_transfer_quarantine, stage_local_from, transfer_local, transfer_local_from,
+    transfer_local_observed, validate_directory_target, LocalFailure, LocalOutcome, LocalRequest,
+    PacketStage, PacketStaging, PublicationObserver,
 };

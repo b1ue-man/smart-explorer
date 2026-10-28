@@ -44,6 +44,9 @@ pub(crate) struct FileWork {
     /// Since when the peer has refused this file as too busy (K13): it
     /// waits while the job still moves.
     pub overloaded_since: Option<Instant>,
+    /// A one-request publication under the planned name found it taken
+    /// (G3-08b): this file takes the staged path, which numbers the name.
+    pub absent_refused: bool,
 }
 
 impl FileWork {
@@ -60,6 +63,7 @@ impl FileWork {
             retried: false,
             alone: false,
             overloaded_since: None,
+            absent_refused: false,
         }
     }
 
