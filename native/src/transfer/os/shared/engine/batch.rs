@@ -92,10 +92,15 @@ fn resume_allows(engine: &Engine<'_>, file: &FileWork) -> bool {
     (!engine.resume || download) && !super::file_recovery::has_receipt(engine, file)
 }
 
+/// A local member must not be on an optical medium. Discovery queues only
+/// regular files, so the cached per-folder probe applies (M6): no volume
+/// resolution per member on Windows.
 fn packet_source(engine: &Engine<'_>, file: &FileWork) -> bool {
-    !engine.view.source.is_local()
-        || crate::source_media::probe(&super::super::walk_listers::native(&file.source))
-            .is_ok_and(|source| source.is_none())
+    if !engine.view.source.is_local() {
+        return true;
+    }
+    let path = super::super::walk_listers::native(&file.source);
+    crate::source_media::probe_regular_file(&path).is_ok_and(|source| source.is_none())
 }
 
 /// Runs one packet of `first` and `members`. The members' folders that do

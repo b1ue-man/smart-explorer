@@ -25,7 +25,7 @@ fn mount_vault_task_fifo_admission_drains_10000_without_overtaking() {
                 assert_eq!(next.status(), WAITING);
             }
             assert_eq!(*state.waiter_count(class), waiters.len() - index - 1);
-            state.active -= 1;
+            state.release(class);
         }
         assert!(state.queue(class).entries.is_empty());
         assert_eq!(*state.waiter_count(class), 0);
@@ -47,7 +47,7 @@ fn mount_vault_task_metadata_burst_lets_one_transfer_through_then_resumes() {
     for waiter in metadata.iter().take(MAX_METADATA_PRIORITY_BURST) {
         state.dispatch(1);
         assert_eq!(waiter.status(), GRANTED);
-        state.active -= 1;
+        state.release(RequestClass::Metadata);
     }
     state.dispatch(1);
     assert_eq!(
@@ -55,9 +55,34 @@ fn mount_vault_task_metadata_burst_lets_one_transfer_through_then_resumes() {
         GRANTED,
         "the burst bound admits the transfer"
     );
-    state.active -= 1;
+    state.release(RequestClass::Transfer);
     state.dispatch(1);
     assert_eq!(metadata[MAX_METADATA_PRIORITY_BURST].status(), GRANTED);
+}
+
+/// With several slots, waiting metadata takes the slot transfers leave free
+/// even when the burst bound says a transfer is next.
+#[test]
+fn mount_vault_task_metadata_takes_the_slot_transfers_cannot() {
+    let mut state = GateState::default();
+    let transfers: Vec<_> = (0..3).map(|_| waiting()).collect();
+    for waiter in &transfers {
+        state.transfers.entries.push_back(waiter.clone());
+        state.transfer_waiters += 1;
+    }
+    state.dispatch(3);
+    assert_eq!(state.active, 2, "transfers keep one slot free");
+    assert_eq!(transfers[2].status(), WAITING);
+    let metadata = waiting();
+    state.metadata.entries.push_back(metadata.clone());
+    state.metadata_waiters = 1;
+    state.metadata_burst = MAX_METADATA_PRIORITY_BURST;
+    state.dispatch(3);
+    assert_eq!(metadata.status(), GRANTED);
+    assert_eq!(transfers[2].status(), WAITING);
+    state.release(RequestClass::Transfer);
+    state.dispatch(3);
+    assert_eq!(transfers[2].status(), GRANTED);
 }
 
 #[test]
@@ -69,7 +94,7 @@ fn mount_vault_task_abort_releases_the_whole_queue() {
     for waiter in waiters.iter().take(64) {
         state.dispatch(1);
         assert_eq!(waiter.status(), GRANTED);
-        state.active -= 1;
+        state.release(RequestClass::Metadata);
     }
     state.abort_waiters();
     assert_eq!(state.metadata_waiters, 0);

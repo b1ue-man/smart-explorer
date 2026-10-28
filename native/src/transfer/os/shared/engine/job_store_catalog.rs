@@ -3,7 +3,9 @@
 //! record and crash log serve the "transfer missing files" retry of a run
 //! that just ended; afterwards they would grow `transfer-jobs` and this
 //! catalog's start forever.
+use std::fs::File;
 use std::io;
+use std::path::Path;
 use std::time::Duration;
 
 use super::{
@@ -17,7 +19,8 @@ const COMPLETED_RETENTION: Duration = Duration::from_secs(14 * 24 * 60 * 60);
 /// Removes the completed job `id` when its record is older than
 /// `COMPLETED_RETENTION` and no run holds it (its lock is taken first, so
 /// a live retry of the same job is never cut short). The record goes first,
-/// then the crash log folder; a crash between leaves a folder no job reads.
+/// then the crash log folder, the folder aliases (under their own lock) and
+/// last the job's lock file; a crash between leaves files no job reads.
 /// Failures leave the job as it is.
 fn prune_completed(id: &str) {
     let Ok(record) = path(id) else {
@@ -31,17 +34,49 @@ fn prune_completed(id: &str) {
     if !old {
         return;
     }
-    let Ok(lock) = crate::support_dirs::open_private_lock(&root().join(format!("{id}.lock")))
-    else {
+    let lock_path = root().join(format!("{id}.lock"));
+    let Ok(lock) = crate::support_dirs::open_private_lock(&lock_path) else {
         return;
     };
     if lock.try_lock().is_err() {
         return;
     }
-    if std::fs::remove_file(&record).is_ok() {
-        let _ = std::fs::remove_dir_all(record.with_extension("files"));
+    if std::fs::remove_file(&record).is_err() {
+        return;
     }
+    let _ = std::fs::remove_dir_all(record.with_extension("files"));
+    prune_aliases(id);
+    remove_lock_file(&lock_path, lock);
+}
+
+/// The folder aliases of the pruned job `id` (`transfer-aliases`), unless a
+/// run holds them.
+fn prune_aliases(id: &str) {
+    let aliases = crate::support_dirs::app_data_file("transfer-aliases");
+    let lock_path = aliases.join(format!("{id}.lock"));
+    let lock = match std::fs::symlink_metadata(&lock_path) {
+        Ok(_) => match crate::support_dirs::open_private_lock(&lock_path) {
+            Ok(lock) if lock.try_lock().is_ok() => Some(lock),
+            _ => return,
+        },
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(_) => return,
+    };
+    let _ = std::fs::remove_file(aliases.join(format!("{id}.json")));
+    if let Some(lock) = lock {
+        remove_lock_file(&lock_path, lock);
+    }
+}
+
+/// Removes the lock file `path` whose lock `lock` holds: while it is held
+/// where the system allows that (no later opener finds the old file), else
+/// right after its release (Windows keeps open files). Best effort.
+fn remove_lock_file(path: &Path, lock: File) {
+    let removed = std::fs::remove_file(path).is_ok();
     drop(lock);
+    if !removed {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 pub(crate) fn unconfirmed_jobs() -> io::Result<Vec<JobRecord>> {
@@ -207,5 +242,45 @@ impl RecoveryCatalog {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// M21: a pruned job leaves neither its lock file nor its folder aliases.
+    #[test]
+    fn transfer_engine_task_pruned_job_leaves_no_lock_or_alias_files() {
+        let mut bytes = [0u8; 32];
+        getrandom::getrandom(&mut bytes).expect("random job id");
+        let id: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+        crate::support_dirs::ensure_private_dir(&root()).expect("job folder");
+        let aliases = crate::support_dirs::app_data_file("transfer-aliases");
+        crate::support_dirs::ensure_private_dir(&aliases).expect("alias folder");
+        let record = path(&id).expect("record path");
+        std::fs::write(&record, b"{}").expect("record");
+        let old = std::time::SystemTime::now() - COMPLETED_RETENTION - Duration::from_secs(60);
+        File::options()
+            .write(true)
+            .open(&record)
+            .and_then(|file| file.set_modified(old))
+            .expect("an old record");
+        std::fs::create_dir_all(record.with_extension("files")).expect("crash log");
+        let alias = aliases.join(format!("{id}.json"));
+        std::fs::write(&alias, b"{}").expect("alias");
+        let alias_lock = aliases.join(format!("{id}.lock"));
+        drop(crate::support_dirs::open_private_lock(&alias_lock).expect("alias lock"));
+        prune_completed(&id);
+        let leftovers = [
+            record.clone(),
+            record.with_extension("files"),
+            root().join(format!("{id}.lock")),
+            alias,
+            alias_lock,
+        ];
+        for leftover in leftovers {
+            assert!(!leftover.exists(), "{}", leftover.display());
+        }
     }
 }

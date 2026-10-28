@@ -16,7 +16,7 @@ mod status;
 
 pub use permit::{
     acquire, acquire_current, acquire_file, acquire_file_current, acquire_regular_file,
-    acquire_source, with_cancellation, Guard, Priority,
+    acquire_source, context_canceled, with_cancellation, Guard, Priority,
 };
 pub use reader::{guard_file_reader, guard_reader, GuardedIterator};
 pub use status::{snapshots, ReadMode, Status};

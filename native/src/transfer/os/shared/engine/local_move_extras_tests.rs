@@ -1,8 +1,10 @@
 //! M15 (2026-10-28) in the engine: a large move between two different block
 //! devices asks for range threads like a copy; a move on one device (one
 //! rename), or between sides of unknown devices, asks for none.
-use super::extras_tests::Registered;
+use super::extras_tests::{not_asked, Registered};
+use super::plan::extras_wanted;
 use super::*;
+use crate::transfer::segments::MIN_SEGMENT;
 use crate::types::CopyMode;
 
 const MIB: u64 = 1024 * 1024;
@@ -50,5 +52,38 @@ fn speed_task_local_move_engine_grants_threads_only_across_volumes() {
             // flow had it free.
             assert!((1..=2).contains(&seen[0]), "{seen:?}");
         }
+    }
+}
+
+/// Pinned, deliberately changed by M15 (2026-10-28): a move that stays one
+/// rename on its volume gets no extras; a move to another volume is a durable
+/// copy whose stage is synced whole before publication, so it asks like a copy.
+#[test]
+fn speed_task_local_no_extras_for_small_files_or_moves() {
+    assert_eq!(extras_wanted(SPLIT_FROM - 1, false, 0), 0);
+    assert_eq!(extras_wanted(SPLIT_FROM, false, 0), 1);
+    assert_eq!(extras_wanted(SPLIT_FROM + MIN_SEGMENT - 1, false, 0), 1);
+    assert_eq!(extras_wanted(SPLIT_FROM + MIN_SEGMENT, false, 0), 2);
+    assert_eq!(extras_wanted(64 * MIB, true, 0), 0, "a move on one volume");
+    assert_eq!(
+        extras_wanted(64 * MIB, false, 0),
+        7,
+        "a move across volumes"
+    );
+    // Neither a small file nor a renaming move asks the drive or the memory.
+    for (size, renames) in [(SPLIT_FROM - 1, false), (512 * MIB, true)] {
+        let planned = plan::plan(size, renames, 0, true, not_asked, not_asked);
+        assert_eq!(planned, Plan::Single, "{size} {renames}");
+    }
+    // What the system says of the drive under the target.
+    let folder = tempfile::tempdir().expect("temp dir");
+    let target = folder.path().join("big.bin");
+    for (rotation, drive) in [
+        (Some(true), Drive::Spinning),
+        (None, Drive::Unknown),
+        (Some(false), Drive::Flash),
+    ] {
+        let _registered = Registered::new(folder.path(), rotation);
+        assert_eq!(drive_of(&target), drive, "{rotation:?}");
     }
 }

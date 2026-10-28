@@ -39,7 +39,10 @@ pub fn with_cancellation<T>(cancel: &AtomicBool, operation: impl FnOnce() -> T) 
     operation()
 }
 
-pub(super) fn context_canceled() -> bool {
+/// Whether a cancellation flag this thread runs under (`with_cancellation`)
+/// is set: synchronous backend code without a flag of its own (a paced
+/// Drive create) stops waiting on it.
+pub fn context_canceled() -> bool {
     CANCEL.with(|stack| {
         stack.borrow().iter().any(|flag| {
             // SAFETY: with_cancellation owns every scoped borrow until its stack

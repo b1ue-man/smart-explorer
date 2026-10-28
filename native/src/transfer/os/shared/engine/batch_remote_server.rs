@@ -115,7 +115,8 @@ pub(super) fn copy(
             }
         }
     }
-    permits.finish_with(outcome, meter.accounts());
+    let accounts = meter.accounts();
+    permits.finish_with(outcome, accounts);
     drop(active);
     super::lock(&engine.sizer).record(copied_bytes, started.elapsed().as_millis() as u64);
     // Members the server did not copy stream alone, on whichever worker is
