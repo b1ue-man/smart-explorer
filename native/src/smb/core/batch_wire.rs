@@ -444,6 +444,17 @@ pub(super) fn get(
         ));
     }
     let share = common_share(items.iter().map(|item| item.path.as_str()))?;
-    let wire = wire_for(session, &share)?;
-    session.block_on(batch::get_all(&wire, items, sink))
+    // The wire runs on a fetcher thread, the sink here outside the runtime
+    // (G3-01: it may call this backend; the wire goes on while it publishes).
+    crate::sftp::hand_off_packet(
+        "smb-packet-get",
+        |forward| {
+            let wire = wire_for(session, &share)?;
+            session.block_on(batch::get_all_with(&wire, items, forward))
+        },
+        |index, done| match items.get(index) {
+            Some(item) => batch::deliver(sink, index, item, done),
+            None => Err(batch::unknown_member()),
+        },
+    )
 }

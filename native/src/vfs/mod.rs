@@ -150,8 +150,8 @@ pub use self::staging_names::is_staging_name;
 pub(crate) use self::staging_names::{fit_stage_name, is_unique_stage, split_stage_name};
 pub use self::transfer_evidence::{
     create_dirs, host_batch_limits, open_read_evidence, promote_copy_stage_evidence,
-    put_batch_evidence, supports_create_dirs, take_stage_evidence, transfer_evidence,
-    EvidencePutOutcome, FileEvidence, PreparePut, StageEvidence,
+    put_batch_evidence, single_put, supports_create_dirs, take_stage_evidence, transfer_evidence,
+    transfer_scope, EvidencePutOutcome, FileEvidence, PreparePut, StageEvidence,
 };
 pub use self::tree_remove_listed::{remove_tree_listed, TREE_LEAF_PORTION};
 pub use self::tree_remove_pipelined::remove_leaves_pipelined;
@@ -176,7 +176,10 @@ pub use self::local::LocalBackend;
 pub(crate) use self::local_platform::create_new_private as create_local_copy_stage;
 pub(crate) use self::local_platform::rename_no_replace as promote_local_copy;
 pub(crate) use self::local_platform::replace_file as replace_local_file;
-pub use self::promotion::{promote_staged_create, promote_staged_replace, unique_staging_path};
+pub use self::promotion::{
+    creates_stages_exclusively, promote_staged_create, promote_staged_replace, stage_proven,
+    unique_staging_path,
+};
 pub(crate) use self::promotion::{promote_staged_no_replace_with, promote_staged_with};
 pub use self::ranges::SegmentedStage;
 pub use self::unpublished::{unpublished_error, unpublished_of};

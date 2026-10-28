@@ -69,6 +69,19 @@ pub(crate) struct FsTransferCapabilities {
     /// `create_dirs_v1`: `CreateDirs` creates many folders in one request.
     #[serde(default, skip_serializing_if = "is_false")]
     pub(crate) create_dirs_v1: bool,
+    /// `single_put_v1` (Z-P4): a client may send one new file as a PutBatch
+    /// of one entry, its whole upload in one round trip. The host answers
+    /// `BatchReady` (with `evidence_v1`) before its commit, publishes
+    /// without replacing (numbered when the name is taken), answers with the
+    /// result and its evidence, and keeps the outcome for `PutBatchStatus`.
+    /// A client without it uploads a single file as before.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) single_put_v1: bool,
+    /// `bulk_connections_v1` (Z-P6): the client may open up to three more
+    /// connections for transfers; each passes the full handshake, and the
+    /// admission stays per device. A client without it keeps one.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) bulk_connections_v1: bool,
 }
 
 impl FsTransferCapabilities {
@@ -83,6 +96,8 @@ impl FsTransferCapabilities {
             lz4_v1: !crate::agent_proto::lz4_switched_off(),
             evidence_v1: true,
             create_dirs_v1: true,
+            single_put_v1: true,
+            bulk_connections_v1: true,
         }
     }
 

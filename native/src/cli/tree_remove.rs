@@ -94,7 +94,7 @@ pub(super) fn remove_transferred_source_checked(
 
 /// Directories that hold an omitted entry themselves or below them. A child
 /// always has a larger index than its parent.
-fn directories_holding_omissions(plan: &TransferPlan) -> Vec<bool> {
+pub(super) fn directories_holding_omissions(plan: &TransferPlan) -> Vec<bool> {
     let mut keep = vec![false; plan.entries.len()];
     for index in (0..plan.entries.len()).rev() {
         let entry = &plan.entries[index];

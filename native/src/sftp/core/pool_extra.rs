@@ -2,6 +2,7 @@
 //! that sets one up, the check that nothing stands in the way, the install
 //! into the pool and the watchdog that closes idle ones. The decisions are
 //! in link_rules.rs, the connection itself in extra_link.rs.
+use super::agent_grant;
 use super::channel_pool::ChannelPool;
 use super::connection::SftpConnection;
 use super::link_log::{self, LinkIdent};
@@ -13,7 +14,7 @@ use super::session::{establish, Established, Request, SSH_WINDOW};
 use crate::transfer::try_reserve_memory;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Idle extra connections are looked at this often, so they close after a
 /// minute without any transfer asking.
@@ -87,6 +88,12 @@ impl ChannelPool {
             self.hub.attempt_cancelled();
             return;
         }
+        if matches!(support.login, ExtraLogin::Agent) && agent_grant::usable(&account).is_none() {
+            // The agent's identity needs a person (or none is known): no
+            // network, no block; the next job asks again.
+            self.hub.attempt_failed();
+            return;
+        }
         let Ok(generation) = support.connection.current() else {
             self.hub.attempt_cancelled();
             return;
@@ -117,6 +124,7 @@ impl ChannelPool {
             runtime: support.runtime.clone(),
         };
         let hub = self.hub.clone();
+        let began = Instant::now();
         let built = support.runtime.block_on(async move {
             let Established { link, channel } = establish(request).await?;
             match setup(channel).await {
@@ -141,7 +149,7 @@ impl ChannelPool {
                     1 + self.open_links.load(Ordering::Acquire),
                     "weitere Verbindung für parallele Übertragung",
                 ));
-                self.hub.attempt_installed();
+                self.hub.attempt_installed(began.elapsed());
                 self.ensure_watchdog();
             }
             Err(reason) => {

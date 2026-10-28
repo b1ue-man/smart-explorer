@@ -247,3 +247,48 @@ fn transfer_engine_task_drive_full_storage_and_daily_quota_are_permanent() {
     assert_eq!(count(&requests, "POST", "/upload/drive/v3/files"), 1);
     assert_eq!(count(&requests, "GET", "/drive/v3/files/daily"), 1);
 }
+
+#[test]
+fn speed_task_drive_large_upload_sends_while_the_next_chunk_fills_byte_exact() {
+    // G3-08c: a full chunk goes out on its own thread while the writer fills
+    // the next one. The fake Drive asserts every chunk starts at the
+    // confirmed offset; the stored object must be the exact bytes.
+    let (drive, server) = drive_server();
+    let backend = job_backend(&server);
+    let chunk = super::resumable::CHUNK_SIZE;
+    let content: Vec<u8> = (0..2 * chunk + 7)
+        .map(|index| (index % 251) as u8 ^ (index / 4096) as u8)
+        .collect();
+    let path = "Job/ueberlappt.bin";
+    let mut writer = backend
+        .open_write_fresh(path, content.len() as u64)
+        .unwrap()
+        .unwrap();
+    for piece in content.chunks(64 * 1024 + 3) {
+        writer.write_all(piece).unwrap();
+    }
+    writer.flush().unwrap();
+    let id = backend.cached_id(path).unwrap().unwrap();
+    let object = drive.object(&id).unwrap();
+    assert_eq!(object["size"], content.len().to_string());
+    assert_eq!(
+        object["md5Checksum"],
+        format!("{:x}", md5::compute(&content))
+    );
+    // The chunks went out in order and without a gap or an overlap.
+    let mut next = 0usize;
+    for request in server
+        .requests()
+        .iter()
+        .filter(|request| request.method == "PUT")
+    {
+        let range = request.header("content-range").unwrap();
+        let span = range.strip_prefix("bytes ").unwrap();
+        let (from, rest) = span.split_once('-').unwrap();
+        let (to, total) = rest.split_once('/').unwrap();
+        assert_eq!(from.parse::<usize>().unwrap(), next, "{range}");
+        assert_eq!(total.parse::<usize>().unwrap(), content.len());
+        next = to.parse::<usize>().unwrap() + 1;
+    }
+    assert_eq!(next, content.len(), "every byte was sent once");
+}

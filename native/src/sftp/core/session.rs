@@ -21,6 +21,8 @@ mod extra;
 #[path = "host_key_handler.rs"]
 mod handler;
 
+#[cfg(test)]
+pub(super) use self::extra::{connect_checked, Checked};
 pub(super) use self::extra::{establish, Established, ExtraLink, Request};
 
 const SSH_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);

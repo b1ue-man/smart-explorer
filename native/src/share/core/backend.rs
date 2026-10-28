@@ -86,7 +86,21 @@ impl PeerBackend {
         self.list_dir("/")
     }
 
+    /// The relay start phase (D1) reads "Verbunden", never a "Relay" that sticks.
     pub(crate) fn transport_status(&self) -> ShareStatus {
+        let key = super::session::session_key(self.initial_endpoint());
+        let connection = self
+            .node
+            .sessions
+            .lock()
+            .ok()
+            .and_then(|s| s.get(&key).cloned());
+        let phase = connection
+            .and_then(|c| super::route_monitor::snapshot(&c))
+            .map(|s| s.phase);
+        if phase == Some(super::route_state::RoutePhase::RelayStart) {
+            return ShareStatus::Connected;
+        }
         self.node
             .session_transport(self.initial_endpoint())
             .map(|transport| match transport {
@@ -318,10 +332,10 @@ impl Backend for PeerBackend {
     }
 
     fn transfer_hint(&self) -> Option<String> {
-        // A relay path carries all bytes through the relay server, whose
-        // bandwidth is a limit of its own (research §3.1).
-        (self.node.session_transport(self.initial_endpoint()) == Some("relay"))
-            .then(|| "über Relay: die Bandbreite begrenzt der Relay-Server".to_string())
+        // The route of the cached session: a relay start phase while the
+        // direct path is set up, a relay fallback (whose server limits the
+        // bandwidth, research §3.1) or nothing for a direct path (D1).
+        self.node.session_route_hint(self.initial_endpoint())
     }
 
     fn copy_file(&self, src: &str, dst: &str) -> VfsResult<u64> {

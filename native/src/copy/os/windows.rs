@@ -170,12 +170,23 @@ pub(super) fn path_key(path: &Path) -> io::Result<String> {
     path_text(path).map(|path| path.to_lowercase())
 }
 
-pub(super) fn commit_staged(staged: &Path, dest: &Path, overwrite: bool) -> io::Result<()> {
+/// Only `durable` publications (moves, replacements) rename write-through;
+/// a new copy's stage is not flushed either (M9, 2026-10-28).
+pub(super) fn commit_staged(
+    staged: &Path,
+    dest: &Path,
+    overwrite: bool,
+    durable: bool,
+) -> io::Result<()> {
     if overwrite {
         replace_file_atomic(staged, dest)
     } else {
         crate::copy::publication_proof::preflight_no_replace(dest)?;
-        move_file_no_replace(staged, dest)
+        if durable {
+            move_file_no_replace(staged, dest)
+        } else {
+            move_file_ex(staged, dest, 0)
+        }
     }
 }
 
@@ -225,23 +236,31 @@ const HANDLE_COPY_BUFFER: usize = 1024 * 1024;
 const HANDLE_COPY_DEPTH: usize = 4;
 
 /// New copies go through `CopyFile2` onto the fresh stage name.
+/// `known` is what the caller already learned of the source (its size
+/// and whether it is on an optical medium, M10): no second probe and no
+/// second metadata look per file; `None` looks both up here.
 pub(super) fn copy_by_path(
     source: &Path,
     stage: &Path,
     cancel: &std::sync::atomic::AtomicBool,
     progress: &mut dyn FnMut(u64),
+    known: Option<super::SourceFacts>,
 ) -> Option<io::Result<Option<(u64, File)>>> {
-    match crate::source_media::probe(source) {
-        Ok(Some(_)) => {
-            if let Some(result) = windows_optical::copy(source, stage, cancel, progress) {
-                return Some(result);
-            }
-            crate::source_media::mark_mode(source, crate::source_media::ReadMode::MetadataFallback);
+    let optical = match known {
+        Some(facts) => facts.optical,
+        None => match crate::source_media::probe(source) {
+            Ok(found) => found.is_some(),
+            Err(error) => return Some(Err(error)),
+        },
+    };
+    if optical {
+        if let Some(result) = windows_optical::copy(source, stage, cancel, progress) {
+            return Some(result);
         }
-        Ok(None) => {}
-        Err(error) => return Some(Err(error)),
+        crate::source_media::mark_mode(source, crate::source_media::ReadMode::MetadataFallback);
     }
-    Some(copy_to_fresh(source, stage, cancel, progress))
+    let size = known.map(|facts| facts.size);
+    Some(copy_to_fresh(source, stage, cancel, progress, size))
 }
 
 /// `CopyFile2` onto `stage`, then the stage opened without following a
@@ -252,8 +271,9 @@ fn copy_to_fresh(
     stage: &Path,
     cancel: &std::sync::atomic::AtomicBool,
     progress: &mut dyn FnMut(u64),
+    size: Option<u64>,
 ) -> io::Result<Option<(u64, File)>> {
-    let Some(reported) = kernel_copy_file(source, stage, cancel, progress)? else {
+    let Some(reported) = kernel_copy_file(source, stage, cancel, progress, size)? else {
         return Ok(None);
     };
     let (file, length) = match open_staged(stage) {
@@ -377,11 +397,12 @@ fn kernel_copy_file(
     stage: &Path,
     cancel: &std::sync::atomic::AtomicBool,
     progress: &mut dyn FnMut(u64),
+    size: Option<u64>,
 ) -> io::Result<Option<u64>> {
     use windows_sys::Win32::Storage::FileSystem::{CopyFile2, COPYFILE2_EXTENDED_PARAMETERS};
     let source_wide = wide(&crate::local_access::normalize_scan_root(source));
     let stage_wide = wide(&crate::local_access::normalize_scan_root(stage));
-    let flags = copy_flags(source, stage);
+    let flags = copy_flags(source, stage, size);
     let mut context = CopyContext {
         cancel,
         progress,
@@ -416,12 +437,15 @@ fn kernel_copy_file(
     Err(error)
 }
 
-/// The flags of one copy (`copy_flags.rs`): the size of the source, the
-/// memory the system has to spare and whether a share is on either end.
-fn copy_flags(source: &Path, stage: &Path) -> u32 {
-    let size = std::fs::metadata(crate::local_access::normalize_scan_root(source))
-        .map(|metadata| metadata.len())
-        .unwrap_or(0);
+/// The flags of one copy (`copy_flags.rs`): the size of the source (the
+/// caller's, else looked up), the memory to spare and whether a share is
+/// on either end.
+fn copy_flags(source: &Path, stage: &Path, size: Option<u64>) -> u32 {
+    let size = size.unwrap_or_else(|| {
+        std::fs::metadata(crate::local_access::normalize_scan_root(source))
+            .map(|metadata| metadata.len())
+            .unwrap_or(0)
+    });
     let on_share = |path: &Path| path.to_str().is_some_and(is_unc);
     windows_copy_flags(
         size,

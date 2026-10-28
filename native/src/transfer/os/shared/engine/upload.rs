@@ -30,6 +30,11 @@ pub(super) fn upload(
     {
         return Ok(outcome);
     }
+    // A peer that takes a single file as a packet of one publishes it in
+    // one round trip (Z-P4); the classic path below otherwise.
+    if let Some(result) = super::batch_put::one::upload(engine, target, file, &mut source, meter) {
+        return result;
+    }
     // A direct fresh publication needs source-content verification after
     // flush. Keep optical sources staged so their bytes are not read twice.
     let fresh_parent = parent_created && !source.is_optical();

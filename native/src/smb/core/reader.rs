@@ -14,9 +14,10 @@ use super::session::Generation;
 use crate::transfer::read_pipeline::Pipeline;
 use smb2::FileReader;
 use std::collections::VecDeque;
+use std::future::Future;
 use std::io::{self, Read};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
 use tokio::task::JoinHandle;
 
@@ -54,6 +55,8 @@ pub(super) struct SmbReader {
     chunk: u64,
     inflight: VecDeque<InflightRead>,
     pipeline: Pipeline,
+    /// Fastest full answer, taught to the session when the reader ends.
+    fastest: Option<Duration>,
     buffer: Vec<u8>,
     consumed: usize,
     ended: bool,
@@ -82,13 +85,19 @@ impl SmbReader {
             .max(MIN_MAX_READ);
         let chunk = u64::from(READ_CHUNK.min(max_read));
         let cap = conn.credit_capacity_for(chunk);
+        let size = bounded_size(reader.size(), end);
+        // The size is known at open, so no READ goes beyond it: the reader
+        // starts at the depth the session learned (G3-06b for SMB, G3-07).
+        let needed = size.saturating_sub(start).div_ceil(chunk.max(1));
+        let pipeline = generation.seeded_pipeline(chunk, cap, needed);
         Self {
-            size: bounded_size(reader.size(), end),
+            size,
             reader: Some(Arc::new(reader)),
             next: start,
             chunk,
             inflight: VecDeque::new(),
-            pipeline: Pipeline::new(chunk, cap),
+            pipeline,
+            fastest: None,
             buffer: Vec::new(),
             consumed: 0,
             ended: false,
@@ -163,10 +172,11 @@ impl SmbReader {
             }
         };
         let got = data.len() as u64;
-        self.pipeline.answered(
-            arrived.saturating_duration_since(read.sent),
-            got == read.len,
-        );
+        let latency = arrived.saturating_duration_since(read.sent);
+        self.pipeline.answered(latency, got == read.len);
+        if got == read.len && self.fastest.is_none_or(|fastest| latency < fastest) {
+            self.fastest = Some(latency);
+        }
         if got < read.len {
             // Shorter than the size seen at open allows: the file shrank.
             self.stop();
@@ -199,12 +209,32 @@ impl Read for SmbReader {
 impl Drop for SmbReader {
     fn drop(&mut self) {
         self.stop();
+        self.generation.learn(self.pipeline.depth(), self.fastest);
         // smb2 has no async Drop: close the handle here or it stays open
-        // until the session ends. Best effort.
+        // until the session ends. Best effort, and without waiting for the
+        // answer (G3-07): the CLOSE is put on the connection before this
+        // returns (its first poll sends it), the runtime takes the answer.
         if let Some(reader) = self.reader.take() {
             if let Ok(reader) = Arc::try_unwrap(reader) {
-                let _ = self.rt.block_on(reader.close());
+                close_detached(&self.rt, reader);
             }
         }
+    }
+}
+
+/// Sends the CLOSE of `reader` now and leaves its answer to the runtime.
+fn close_detached(rt: &Runtime, reader: FileReader) {
+    let mut close = Box::pin(async move {
+        let _ = reader.close().await;
+    });
+    let waker = futures_util::task::noop_waker();
+    let first = {
+        let _entered = rt.enter();
+        close
+            .as_mut()
+            .poll(&mut std::task::Context::from_waker(&waker))
+    };
+    if first.is_pending() {
+        drop(rt.spawn(close));
     }
 }

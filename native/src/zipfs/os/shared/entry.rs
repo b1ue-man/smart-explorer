@@ -13,8 +13,8 @@ use zip::result::ZipError;
 use zip::ZipArchive;
 
 /// Bytes a streamed entry hands over at once. A streaming reader holds at
-/// most three (one being filled, one queued, one being read): 768 KiB, below
-/// the 1 MiB an operation buffers anyway (recherche §2).
+/// most four (one being filled, one queued, one being read, one returned for
+/// reuse): 1 MiB, what an operation buffers anyway (recherche §2).
 pub(super) const STREAM_CHUNK: usize = 256 * 1024;
 
 /// The archive file of one reader, opened on first use: cloning the parse
@@ -107,6 +107,9 @@ enum Piece {
 /// A larger entry, decompressed by its own thread one chunk ahead.
 pub(super) struct Streamed {
     pieces: crossbeam_channel::Receiver<Piece>,
+    /// Read chunks go back to the thread, which fills them again instead of
+    /// allocating and zeroing a new 256 KiB buffer per chunk (G4 MZ4).
+    recycle: crossbeam_channel::Sender<Vec<u8>>,
     current: Vec<u8>,
     consumed: usize,
     ended: bool,
@@ -122,7 +125,10 @@ impl Read for Streamed {
         if self.consumed >= self.current.len() {
             match self.pieces.recv() {
                 Ok(Piece::Data(data)) => {
-                    self.current = data;
+                    let used = std::mem::replace(&mut self.current, data);
+                    if used.capacity() == STREAM_CHUNK {
+                        let _ = self.recycle.try_send(used);
+                    }
                     self.consumed = 0;
                 }
                 Ok(Piece::End) => {
@@ -160,6 +166,7 @@ fn fill(entry: &mut impl Read, chunk: &mut [u8]) -> io::Result<usize> {
 /// stops the thread at its next chunk.
 pub(super) fn stream(mut archive: Archive, index: usize) -> io::Result<Streamed> {
     let (sender, pieces) = crossbeam_channel::bounded::<Piece>(1);
+    let (recycle, recycled) = crossbeam_channel::bounded::<Vec<u8>>(1);
     #[cfg(test)]
     let produced = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     #[cfg(test)]
@@ -175,7 +182,13 @@ pub(super) fn stream(mut archive: Archive, index: usize) -> io::Result<Streamed>
                 }
             };
             loop {
-                let mut chunk = vec![0u8; STREAM_CHUNK];
+                let mut chunk = match recycled.try_recv() {
+                    Ok(mut used) => {
+                        used.resize(STREAM_CHUNK, 0);
+                        used
+                    }
+                    Err(_) => vec![0u8; STREAM_CHUNK],
+                };
                 let piece = match fill(&mut entry, &mut chunk) {
                     Ok(0) => Piece::End,
                     Ok(filled) => {
@@ -194,6 +207,7 @@ pub(super) fn stream(mut archive: Archive, index: usize) -> io::Result<Streamed>
         })?;
     Ok(Streamed {
         pieces,
+        recycle,
         current: Vec::new(),
         consumed: 0,
         ended: false,

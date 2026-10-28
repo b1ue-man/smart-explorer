@@ -6,8 +6,9 @@ use super::super::tree_observer::{TreeObserver, TreePhase};
 use super::super::tree_ops::{
     copy_entry_with, remove_copied_source_verified, TreeOutcome, TreeRequest,
 };
-use super::super::{folder_conflict, transfer};
+use super::super::{folder_conflict, transfer, tree_engine};
 use super::print_notices;
+use crate::types::CopyMode;
 
 /// `se mv`: prints skipped entries and the source directories kept for them.
 pub(crate) fn move_path(
@@ -180,20 +181,22 @@ pub(in crate::cli) fn move_observed_in_job(
     if meta.is_symlink {
         return Err(link_move_refused(&src.path));
     }
-    let receipt = copy_entry_with(
-        &*src.backend,
-        &src.path,
-        &*dst.backend,
-        &dst_path,
-        &TreeRequest {
-            recursive,
-            force,
-            resume: resume.is_some(),
-            expected_root: Some(&meta),
-            destination_check: None,
-            observer,
-        },
-    )?;
+    let request = TreeRequest {
+        recursive,
+        force,
+        resume: resume.is_some(),
+        expected_root: Some(&meta),
+        destination_check: None,
+        observer,
+    };
+    // Across volumes (or into an existing folder) between local paths: the
+    // planned tree as the engine's journaled move (M16).
+    let engine = tree_engine::transfer_tree(src, dst, dst_path, &request, CopyMode::Move)?;
+    if let Some(outcome) = engine {
+        context.finish()?;
+        return Ok(outcome);
+    }
+    let receipt = copy_entry_with(&*src.backend, &src.path, &*dst.backend, dst_path, &request)?;
     observer.check()?;
     observer.set_phase(TreePhase::RemovingSource);
     let kept = remove_copied_source_verified(&*src.backend, &*dst.backend, &receipt, observer)?;

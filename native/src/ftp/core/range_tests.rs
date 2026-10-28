@@ -1,13 +1,14 @@
-//! Ranges over FTP (E13, U48-8, security answers S12 and S6 a): REST and a
-//! RETR cut with ABOR after the range, only on connections that are logged in
-//! and free already, never a new login for a range; and the stage probe that
-//! is skipped for names made from the system's random source. A scripted
-//! passive-mode server on loopback serves one 64 KiB file, `/f`.
+//! Ranges over FTP (E13, U48-8, G3-11 superseding S12, S6 a): REST and a
+//! RETR cut with ABOR after the range, on a free pool connection or one
+//! logged in for the range with the same credentials (never the browsing
+//! connection); and the stage probe that is skipped for names made from the
+//! system's random source. A scripted passive-mode server on loopback serves
+//! one 64 KiB file, `/f`.
 use super::backend_from_url;
 use super::data_overlap_server::{lock as lock_events, Server as ProbeServer};
 use super::pool::ranges_possible;
 use super::staging::{from_system_random, probe_needed, require_stage_free};
-use crate::vfs::{congestion_of, Backend};
+use crate::vfs::Backend;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -298,38 +299,60 @@ fn speed_task_ftp_range_without_rest_returns_none() {
 }
 
 #[test]
-fn speed_task_ftp_range_needs_two_connections() {
-    let server = Server::start(true, false);
+fn speed_task_ftp_range_logs_in_for_a_fresh_job_and_assembles_byte_exact() {
+    let server = Server::start(true, true);
     let backend = server.backend();
-    // Nothing is free yet: no ranges, and asking does not log in.
-    assert!(!backend.supports_range_reads("/f"));
-    let logins = server.logins();
-    let error = read_range(&backend, 0, 100)
-        .err()
-        .expect("no free connection");
-    assert!(congestion_of(&error).is_some(), "{error}");
-    assert_eq!(server.logins(), logins, "a range never logs in");
-    // One free connection is not enough either.
-    let mut single = backend.open_read("/f").unwrap();
-    single.read_to_end(&mut Vec::new()).unwrap();
-    drop(single);
-    assert!(!backend.supports_range_reads("/f"));
-    // Two are.
-    warm(&backend);
+    // A fresh job has no free connection: ranges still run (G3-11).
     assert!(backend.supports_range_reads("/f"));
-    // The rule as a function: two idle, no refusal, room for two transfers.
+    let before = server.logins();
+    // Four ranges at once, each on a connection of its own, assembled by
+    // offset like the engine's part file.
+    let part = (FILE / 4) as u64;
+    let mut whole = vec![0u8; FILE];
+    std::thread::scope(|scope| {
+        let readers: Vec<_> = (0..4u64)
+            .map(|index| {
+                let backend = &backend;
+                scope.spawn(move || {
+                    let offset = index * part;
+                    let bytes = read_range(backend, offset, part)
+                        .expect("range read")
+                        .expect("REST offered");
+                    (offset as usize, bytes)
+                })
+            })
+            .collect();
+        for reader in readers {
+            let (offset, bytes) = reader.join().expect("range thread");
+            assert_eq!(bytes.len() as u64, part, "exactly len bytes");
+            whole[offset..offset + bytes.len()].copy_from_slice(&bytes);
+        }
+    });
+    assert_eq!(
+        whole,
+        content(),
+        "the ranges assemble to the file, byte for byte"
+    );
+    let logged_in = server.logins() - before;
+    assert!(
+        (1..=4).contains(&logged_in),
+        "ranges logged in their own connections ({logged_in})"
+    );
+    // Back in the pool: the next ranges reuse them without a login.
+    let again = read_range(&backend, 3, 10_000).unwrap().unwrap();
+    assert_eq!(again, content()[3..10_003]);
+    assert_eq!(server.logins() - before, logged_in, "reused, no login");
+    // The rule as a function: no refusal, room for two transfers.
     let now = Instant::now();
-    assert!(ranges_possible(2, None, None, now));
-    assert!(ranges_possible(2, None, Some(2), now));
-    assert!(!ranges_possible(1, None, None, now));
-    assert!(!ranges_possible(2, None, Some(1), now));
+    assert!(ranges_possible(None, None, now));
+    assert!(ranges_possible(None, Some(2), now));
+    assert!(!ranges_possible(None, Some(1), now), "server allows one");
     assert!(!ranges_possible(
-        2,
         Some(now + Duration::from_secs(60)),
         None,
         now
     ));
-    assert!(ranges_possible(2, Some(now), None, now));
+    assert!(ranges_possible(Some(now), None, now));
 }
 
 #[test]

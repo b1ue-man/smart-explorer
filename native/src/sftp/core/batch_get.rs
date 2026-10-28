@@ -3,11 +3,13 @@
 //! behind the end on the wire at once (the growth probe), then closes the
 //! handle; the chains of up to `open-handles` members overlap. The files go
 //! to the sink strictly in request order, a later one that is ready first
-//! waits in memory (the engine reserved the packet's bytes).
+//! waits in memory (the engine reserved the packet's bytes). The wire runs
+//! on a fetcher thread, the sink on the caller's thread (`batch_handoff.rs`).
 use super::backend::SftpBackend;
 use super::batch_ops::{
     channel_or_unsupported, open_failure, window, BatchWire, ChannelWire, BATCH_BYTES,
 };
+use crate::sftp::PacketForward;
 use crate::vfs::{BatchGet, BatchSink, VfsResult};
 use futures_util::future::{join, join_all, FutureExt, LocalBoxFuture};
 use futures_util::stream::{FuturesUnordered, StreamExt};
@@ -43,18 +45,49 @@ pub(super) fn run(
     }
     let lease = channel_or_unsupported(backend.pool.lease(backend)?)?;
     let wire = ChannelWire::new(lease.channel().clone(), backend.connection.clone());
-    let result = backend.rt.block_on(get_all(&wire, items, sink));
+    let runtime = &backend.rt;
+    // The wire runs on a fetcher thread; the sink runs here, outside the
+    // runtime (G3-01: it may call this backend, and the wire goes on while
+    // it publishes).
+    let result = crate::sftp::hand_off_packet(
+        "sftp-packet-get",
+        |forward| runtime.block_on(get_all_with(&wire, items, forward)),
+        |index, fetched| match items.get(index) {
+            Some(item) => deliver(sink, index, item, fetched),
+            None => Err(unknown_member()),
+        },
+    );
     drop(lease);
     result
+}
+
+fn unknown_member() -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, "Paket-Eintrag unbekannt")
 }
 
 /// Hands every item to `sink` in request order. A sink error stops the
 /// packet: nothing new is started, the members on the wire finish and close
 /// their handles, then the error is returned.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) async fn get_all(
     wire: &dyn BatchWire,
     items: &[BatchGet],
     sink: &mut dyn BatchSink,
+) -> io::Result<()> {
+    let mut forward = |index: usize, fetched: Fetched| match items.get(index) {
+        Some(item) => deliver(sink, index, item, fetched),
+        None => Err(unknown_member()),
+    };
+    get_all_with(wire, items, &mut forward).await
+}
+
+/// `get_all` with every finished member handed to `forward` in request
+/// order instead of a sink: an error of `forward` stops the packet like a
+/// sink error.
+async fn get_all_with(
+    wire: &dyn BatchWire,
+    items: &[BatchGet],
+    forward: &mut PacketForward<'_, Fetched>,
 ) -> io::Result<()> {
     let window = window(wire, items.len());
     let mut running: Running<'_> = FuturesUnordered::new();
@@ -74,11 +107,10 @@ pub(super) async fn get_all(
         };
         ready.insert(index, fetched);
         while sink_error.is_none() {
-            let (Some(item), Some(fetched)) = (items.get(delivered), ready.remove(&delivered))
-            else {
+            let (Some(_), Some(fetched)) = (items.get(delivered), ready.remove(&delivered)) else {
                 break;
             };
-            match deliver(sink, delivered, item, fetched) {
+            match forward(delivered, fetched) {
                 Ok(()) => delivered += 1,
                 Err(error) => sink_error = Some(error),
             }

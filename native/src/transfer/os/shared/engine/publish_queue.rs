@@ -2,14 +2,15 @@
 //! 2026-10-28). The sink of `get_batch` hands every finished part to a
 //! `Publisher` and goes on reading the stream at network speed, while one
 //! publisher thread publishes the parts in arrival order through
-//! `download::publish_local`: no replacement, keep-both numbering, the
+//! `download::publish_local_known`: no replacement, keep-both numbering, the
 //! receipts and their failure semantics stay exactly those of the single
 //! download. One thread keeps the numbering as sequential as before. A part
 //! handed over is published even when the stream fails later; what never
 //! finished goes alone again, as before. Without a thread the parts are
 //! published on the calling thread, in the stream as before.
 #![cfg_attr(not(test), allow(dead_code))]
-use super::download::{publish_local, Part};
+use super::download::{publish_local_known, Part};
+use super::file_evidence::HostEvidence;
 use super::ops::OpResult;
 use super::queue::FileWork;
 use super::Engine;
@@ -22,6 +23,9 @@ struct Task {
     part: Part,
     destination: PathBuf,
     file: FileWork,
+    /// The remote source as the peer described it while sending it: its
+    /// receipt then asks the peer for nothing (`publish_local_known`).
+    known: Option<HostEvidence>,
 }
 
 /// Takes the finished parts of one packet (`with_publisher`).
@@ -34,13 +38,28 @@ pub(super) struct Publisher<'p, 'e> {
 
 impl Publisher<'_, '_> {
     /// Publishes `part` as `destination` for packet member `index`, on the
-    /// publisher thread when there is one.
+    /// publisher thread when there is one. The engine always passes the
+    /// stream's evidence (`submit_known`); tests use this short form.
+    #[cfg(test)]
     pub(super) fn submit(&self, index: usize, part: Part, destination: PathBuf, file: FileWork) {
+        self.submit_known(index, part, destination, file, None);
+    }
+
+    /// `submit` with the source evidence the packet's stream carried.
+    pub(super) fn submit_known(
+        &self,
+        index: usize,
+        part: Part,
+        destination: PathBuf,
+        file: FileWork,
+        known: Option<HostEvidence>,
+    ) {
         let task = Task {
             index,
             part,
             destination,
             file,
+            known,
         };
         let task = match &self.tasks {
             Some(tasks) => match tasks.send(task) {
@@ -49,7 +68,13 @@ impl Publisher<'_, '_> {
             },
             None => task,
         };
-        let result = publish_local(self.engine, task.part, &task.destination, &task.file);
+        let result = publish_local_known(
+            self.engine,
+            task.part,
+            &task.destination,
+            &task.file,
+            task.known,
+        );
         self.inline.borrow_mut().push((task.index, result));
     }
 }
@@ -68,7 +93,13 @@ pub(super) fn with_publisher<'e, T>(
             .name("transfer-publish".into())
             .spawn_scoped(scope, move || {
                 for task in queued {
-                    let result = publish_local(engine, task.part, &task.destination, &task.file);
+                    let result = publish_local_known(
+                        engine,
+                        task.part,
+                        &task.destination,
+                        &task.file,
+                        task.known,
+                    );
                     if done.send((task.index, result)).is_err() {
                         return;
                     }

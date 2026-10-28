@@ -110,6 +110,9 @@ fn state(target: &PeerOpenTarget) -> State {
             window: Some(window),
         }),
         node: Some("authenticated-node".into()),
+        // Design 6 F6: a confirmed window opens by itself once; this one
+        // was opened already, so drawing shows that instead of opening.
+        opened: Some(request()),
         ..State::default()
     }
 }
@@ -198,7 +201,7 @@ fn batches_task_device_navigation_surface_draws_picker_and_p4_errors() {
     );
     assert!(text
         .iter()
-        .any(|text| text == "Bestätigtes Appfenster öffnen"));
+        .any(|text| text == "Programmfenster wurde geöffnet."));
     assert!(text.iter().any(|text| text == "Current generation refused"));
     assert!(!text
         .iter()

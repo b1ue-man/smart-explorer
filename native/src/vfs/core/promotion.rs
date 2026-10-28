@@ -27,10 +27,27 @@ pub(super) fn promote_to_id<B: Backend + ?Sized>(
     backend.promote_staged(staged, destination)
 }
 
+/// `BackendExtensions::creates_stages_exclusively`; `false` without
+/// extensions.
+pub fn creates_stages_exclusively<B: Backend + ?Sized>(backend: &B) -> bool {
+    backend
+        .extensions()
+        .is_some_and(|extensions| extensions.creates_stages_exclusively())
+}
+
+/// `BackendExtensions::stage_proven`; `false` without extensions.
+pub fn stage_proven<B: Backend + ?Sized>(backend: &B, stage: &str) -> bool {
+    backend
+        .extensions()
+        .is_some_and(|extensions| extensions.stage_proven(stage))
+}
+
 /// Allocate an absent, hard-to-guess sibling name
 /// `<name>.se-<purpose>-<16 hex>`; a long `<name>` is shortened so the stage
 /// stays one storable name component (255 bytes and UTF-16 units). Probe
-/// failures are errors, never interpreted as a free path.
+/// failures are errors, never interpreted as a free path. A backend whose
+/// stage writers create exclusively is not probed: its create refuses a taken
+/// name with `AlreadyExists`, and the caller takes the next name then.
 pub fn unique_staging_path<B: Backend + ?Sized>(
     backend: &B,
     destination: &str,
@@ -40,13 +57,14 @@ pub fn unique_staging_path<B: Backend + ?Sized>(
         Some(index) => destination.split_at(index + 1),
         None => ("", destination),
     };
+    let exclusive = creates_stages_exclusively(backend);
     for attempt in 0..UNIQUE_ATTEMPTS {
         let tail = format!(
             ".se-{purpose}-{:016x}",
             random_suffix(destination, purpose, attempt)
         );
         let candidate = format!("{parent}{}", super::fit_stage_name("", name, &tail));
-        if !backend.try_exists(&candidate)? {
+        if exclusive || !backend.try_exists(&candidate)? {
             return Ok(candidate);
         }
     }
@@ -98,7 +116,7 @@ pub(crate) fn promote_staged_no_replace_with<B: Backend + ?Sized>(
     destination: &str,
     create: impl FnOnce(&str, &str) -> io::Result<()>,
 ) -> io::Result<()> {
-    validate_staged_file(backend, staged)?;
+    validate_proven_or_staged(backend, staged)?;
     create(staged, destination)
 }
 
@@ -132,7 +150,7 @@ pub(crate) fn promote_staged_with<B: Backend + ?Sized>(
     if !backend.try_exists(destination)? {
         return backend.promote_staged_no_replace(staged, destination);
     }
-    validate_staged_file(backend, staged)?;
+    validate_proven_or_staged(backend, staged)?;
 
     let destination_meta = backend.stat(destination)?;
     if destination_meta.is_dir || destination_meta.is_symlink || destination_meta.special {
@@ -142,6 +160,15 @@ pub(crate) fn promote_staged_with<B: Backend + ?Sized>(
         ));
     }
     replace(staged, destination)
+}
+
+/// A stage its own writer proved a regular file (`stage_proven`) needs no
+/// second look; any other is checked with a stat.
+fn validate_proven_or_staged<B: Backend + ?Sized>(backend: &B, staged: &str) -> io::Result<()> {
+    if stage_proven(backend, staged) {
+        return Ok(());
+    }
+    validate_staged_file(backend, staged)
 }
 
 fn validate_staged_file<B: Backend + ?Sized>(backend: &B, staged: &str) -> io::Result<()> {

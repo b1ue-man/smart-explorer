@@ -192,10 +192,31 @@ impl SizedWriter {
         let md5 = format!("{:x}", self.md5.clone().compute());
         // One upload per path at a time, like every writer of this backend.
         let _path = self.backend.upload_path_guard(&self.key)?;
+        // New objects are spaced as Drive's refusals taught (G3-08a).
+        let pacer = super::create_pacer::for_account(&self.backend.drive_account_key);
+        pacer.wait();
         self.create_sent = true;
+        let mime = match self.send_create(&md5) {
+            Ok(mime) => {
+                pacer.created();
+                mime
+            }
+            Err(error) => {
+                if let Some(congestion) = crate::vfs::congestion_of(&error) {
+                    pacer.congested(congestion.retry_after);
+                }
+                return Err(error);
+            }
+        };
+        self.finish_commit(mime)
+    }
+
+    /// The one create of the object; its MIME type once confirmed.
+    fn send_create(&mut self, md5: &str) -> io::Result<String> {
+        let md5 = md5.to_string();
         let backend = &self.backend;
         let object = &self.object;
-        let mime = match &mut self.body {
+        Ok(match &mut self.body {
             Body::Memory { data, .. } => {
                 backend.create_multipart(object, data.as_slice(), self.size, &md5)?
             }
@@ -224,7 +245,12 @@ impl SizedWriter {
                 let failure = sent.err().unwrap_or_else(|| unconfirmed(object));
                 backend.verify_created(object, self.size, Some(&md5), failure)?
             }
-        };
+        })
+    }
+
+    fn finish_commit(&mut self, mime: String) -> io::Result<()> {
+        let backend = &self.backend;
+        let object = &self.object;
         if matches!(self.purpose, Purpose::Stage) {
             // Like the spooled stage: the stage name must lead to exactly this
             // ID, else the caller picks another name (and discards this one).

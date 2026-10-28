@@ -12,8 +12,13 @@
 //! truncated file behind.
 //! WRITEs are already pipelined by smb2 (`WriteBehind::Adaptive`: about
 //! uplink rate × round trip in flight, within the credit window).
+//! An engine copy stage also reports its evidence at the commit: the
+//! destination's stat goes out with the CLOSE, the stage's right after it
+//! (stage_evidence.rs, G3-02).
 use super::errors;
 use super::session::Generation;
+use super::stage_evidence::StageReport;
+use super::wire;
 use smb2::{FileWriter, Tree};
 use std::io::{self, Write};
 use std::sync::Arc;
@@ -67,6 +72,8 @@ pub(super) struct SmbWriter {
     tree: Arc<Tree>,
     generation: Arc<Generation>,
     rt: Arc<Runtime>,
+    /// Evidence of an engine copy stage, recorded at an unsynced commit.
+    report: Option<StageReport>,
 }
 
 impl SmbWriter {
@@ -91,12 +98,30 @@ impl SmbWriter {
             tree,
             generation,
             rt,
+            report: None,
         }
     }
 
     pub(super) fn with_commit(mut self, commit: Commit) -> Self {
         self.commit = commit;
         self
+    }
+
+    /// Records the stage's evidence at an unsynced commit.
+    pub(super) fn with_report(mut self, report: Option<StageReport>) -> Self {
+        self.report = report;
+        self
+    }
+
+    /// The stage's stat after its CLOSE (one round trip; the destination's
+    /// answer came with the CLOSE).
+    fn record(&mut self, destination: Option<smb2::Result<super::listing::Attributes>>) {
+        let Some(report) = self.report.take() else {
+            return;
+        };
+        let conn = self.generation.connection();
+        let stage = self.rt.block_on(wire::stat(&conn, &self.tree, &self.rel));
+        report.record(&stage, destination.as_ref(), self.accepted);
     }
 
     /// A sized stage whose source delivered another length: the partial
@@ -187,15 +212,36 @@ impl Write for SmbWriter {
             return Err(io::Error::other("SMB-Datei ist bereits geschlossen"));
         };
         let committed = match self.commit {
-            Commit::Durable => self.rt.block_on(writer.finish()).map(|_| Ok(())),
-            Commit::Unsynced => self
-                .rt
-                .block_on(writer.abort())
-                .map(|confirmed| unsynced_commit(self.accepted, confirmed)),
+            Commit::Durable => self.rt.block_on(writer.finish()).map(|_| Ok(None)),
+            Commit::Unsynced => {
+                let probe = self
+                    .report
+                    .as_ref()
+                    .map(|report| report.destination_rel.clone());
+                let conn = self.generation.connection();
+                let tree = self.tree.clone();
+                let accepted = self.accepted;
+                self.rt
+                    .block_on(async move {
+                        let destination = async {
+                            match &probe {
+                                Some(rel) => Some(wire::stat(&conn, &tree, rel).await),
+                                None => None,
+                            }
+                        };
+                        let (confirmed, destination) =
+                            futures_util::future::join(writer.abort(), destination).await;
+                        confirmed.map(|confirmed| (confirmed, destination))
+                    })
+                    .map(|(confirmed, destination)| {
+                        unsynced_commit(accepted, confirmed).map(|()| destination)
+                    })
+            }
         };
         match committed {
-            Ok(Ok(())) => {
+            Ok(Ok(destination)) => {
                 self.state = WriteState::Committed;
+                self.record(destination);
                 Ok(())
             }
             Ok(Err(error)) => {

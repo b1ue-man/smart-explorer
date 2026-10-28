@@ -25,7 +25,7 @@
 use crate::transfer::read_pipeline::Pipeline;
 use std::collections::VecDeque;
 use std::io::{self, Read};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Smallest READ asked for after the server answered short (OpenSSH's
 /// `MIN_READ_SIZE`).
@@ -80,6 +80,8 @@ pub(super) struct PipelinedRead<S: ReadSource> {
     done: bool,
     /// A failed stream keeps failing instead of looking like a short file.
     failure: Option<(io::ErrorKind, String)>,
+    /// Fastest answer to a full READ (G3-06b: taught to the channel).
+    fastest: Option<Duration>,
 }
 
 impl<S: ReadSource> PipelinedRead<S> {
@@ -99,7 +101,13 @@ impl<S: ReadSource> PipelinedRead<S> {
             delivered: 0,
             done: false,
             failure: None,
+            fastest: None,
         }
+    }
+
+    /// The depth this reader reached and its fastest full answer.
+    pub(super) fn learned(&self) -> (usize, Option<Duration>) {
+        (self.pipeline.depth(), self.fastest)
     }
 
     /// Reads only `[start, end)`: no READ goes beyond `end` (absolute), the
@@ -167,8 +175,11 @@ impl<S: ReadSource> PipelinedRead<S> {
             Outcome::Pending(pending) => {
                 let (result, arrived) = self.source.wait(pending);
                 let full = matches!(&result, Ok(Reply::Data(data)) if data.len() == len as usize);
-                self.pipeline
-                    .answered(arrived.saturating_duration_since(sent), full);
+                let latency = arrived.saturating_duration_since(sent);
+                self.pipeline.answered(latency, full);
+                if full && self.fastest.is_none_or(|fastest| latency < fastest) {
+                    self.fastest = Some(latency);
+                }
                 result
             }
         };

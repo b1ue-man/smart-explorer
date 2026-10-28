@@ -258,6 +258,8 @@ mod evidence_task_tests;
 mod lz4_stream_loopback_tests;
 #[path = "range_read_tests.rs"]
 mod range_read_tests;
+#[path = "speed_task_share_kp5_tests.rs"]
+mod speed_task_share_kp5_tests;
 #[path = "speed_task_share_tests.rs"]
 mod speed_task_share_tests;
 #[path = "stage_ranges_tests.rs"]

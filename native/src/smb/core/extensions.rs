@@ -143,4 +143,37 @@ impl BackendExtensions for SmbBackend {
             self.remove_tree_leaves(&share, leaves)
         })
     }
+
+    /// The stage's evidence its writer recorded at the commit
+    /// (stage_evidence.rs, G3-02).
+    fn take_stage_evidence(&self, stage: &str) -> Option<crate::vfs::StageEvidence> {
+        self.written.take(stage)
+    }
+
+    /// One compound publishes the stage and describes the published file;
+    /// a stage without evidence is published as before.
+    fn promote_copy_stage_evidence(
+        &self,
+        staged: &str,
+        destination: &str,
+    ) -> VfsResult<Option<crate::vfs::FileEvidence>> {
+        let Some(proven) = self.written.proven(staged) else {
+            return self.promote_copy_stage(staged, destination).map(|()| None);
+        };
+        let (from, to) = super::url::rename_paths(staged, destination)?;
+        let (from_rel, to_rel) = (from.rel, to.rel);
+        let published =
+            self.session
+                .write(&from.share, "Umbenennen", staged, |conn, tree| async move {
+                    super::stage_evidence::rename_no_replace_evidenced(
+                        &conn, &tree, &from_rel, &to_rel,
+                    )
+                    .await
+                })?;
+        self.written.forget(staged);
+        Ok(
+            super::stage_evidence::regular_evidence(destination, &published)
+                .filter(|evidence| evidence.size == proven.size),
+        )
+    }
 }

@@ -14,6 +14,11 @@ pub(super) fn probe(path: &Path) -> io::Result<Option<Source>> {
     probe_device(metadata.dev())
 }
 
+/// A regular file is on its own device: the same as `probe`.
+pub(super) fn probe_regular_file(path: &Path) -> io::Result<Option<Source>> {
+    probe(path)
+}
+
 pub(super) fn probe_file(file: &fs::File) -> io::Result<Option<Source>> {
     #[cfg(test)]
     {
@@ -29,6 +34,18 @@ pub(super) fn probe_file(file: &fs::File) -> io::Result<Option<Source>> {
 
 fn probe_device(device: u64) -> io::Result<Option<Source>> {
     let key = format!("{}:{}", libc::major(device), libc::minor(device));
+    // A device found on no optical drive a moment ago (M6): no sysfs walk.
+    if super::probe_cache::known_plain(&key) {
+        return Ok(None);
+    }
+    let found = probe_sysfs(&key)?;
+    if found.is_none() {
+        super::probe_cache::remember_plain(key);
+    }
+    Ok(found)
+}
+
+fn probe_sysfs(key: &str) -> io::Result<Option<Source>> {
     let sys = match fs::canonicalize(format!("/sys/dev/block/{key}")) {
         Ok(sys) => sys,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),

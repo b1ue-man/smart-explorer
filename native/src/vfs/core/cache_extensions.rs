@@ -89,6 +89,14 @@ impl BackendExtensions for CachingBackend {
         })
     }
 
+    fn creates_stages_exclusively(&self) -> bool {
+        crate::vfs::creates_stages_exclusively(&*self.inner)
+    }
+
+    fn stage_proven(&self, stage: &str) -> bool {
+        crate::vfs::stage_proven(&*self.inner, stage)
+    }
+
     fn finish_stage(&self, stage: &str, finish: StageFinish) -> VfsResult<StageFinished> {
         let result = calls::finish_stage(&*self.inner, stage, finish);
         self.invalidate(stage);
@@ -191,6 +199,14 @@ impl BackendExtensions for CachingBackend {
 
     fn host_batch_limits(&self) -> Option<crate::vfs::BatchLimits> {
         crate::vfs::host_batch_limits(&*self.inner)
+    }
+
+    fn single_put(&self) -> bool {
+        crate::vfs::single_put(&*self.inner)
+    }
+
+    fn transfer_scope(&self) -> Option<Box<dyn std::any::Any + Send>> {
+        crate::vfs::transfer_scope(&*self.inner)
     }
 
     fn transfer_evidence(&self, path: &str) -> bool {

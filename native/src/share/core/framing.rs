@@ -1,7 +1,7 @@
 use std::io;
 
 use iroh::endpoint::{ReadExactError, RecvStream, SendStream};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::core::eio;
 use super::wire::{Ctrl, FsResponse};
@@ -72,21 +72,50 @@ pub(super) fn decode_resp(resp: FsResponse) -> io::Result<FsResponse> {
 }
 
 pub(super) async fn send_tagged(send: &mut SendStream, tag: u8, payload: &[u8]) -> io::Result<()> {
-    let n = payload
+    let head = frame_head(tag, payload.len())?;
+    // Length, tag and payload as one write of two chunks: one lock of the
+    // connection and one wake-up of its driver per frame while the window
+    // has room (Z-P5). The payload is copied once, as `write` would; the
+    // chunks' type is the stream's own (`Bytes` from a `Vec`, no copy).
+    send.write_all_chunks(&mut [head.to_vec().into(), payload.to_vec().into()])
+        .await
+        .map_err(io::Error::from)?;
+    send.flush().await.map_err(eio)
+}
+
+/// A frame whose payload follows `FRAME_HEAD` reserved bytes in `frame`:
+/// the head is written in place and the whole frame goes out in one write
+/// (the host reader's pooled buffers, Z-P5).
+pub(super) async fn send_framed(
+    send: &mut SendStream,
+    tag: u8,
+    frame: &mut [u8],
+) -> io::Result<()> {
+    let payload = frame
         .len()
+        .checked_sub(FRAME_HEAD)
+        .ok_or_else(|| eio("Frame ohne Kopf"))?;
+    let head = frame_head(tag, payload)?;
+    frame[..FRAME_HEAD].copy_from_slice(&head);
+    send.write_all(frame).await.map_err(io::Error::from)?;
+    send.flush().await.map_err(eio)
+}
+
+/// Bytes in front of a frame's payload: length (`u32`, big endian, counting
+/// the tag) and tag.
+pub(super) const FRAME_HEAD: usize = 5;
+
+fn frame_head(tag: u8, payload: usize) -> io::Result<[u8; FRAME_HEAD]> {
+    let n = payload
         .checked_add(1)
         .ok_or_else(|| eio("Frame zu gross"))?;
     if n > MAX_FRAME {
         return Err(eio("Frame zu gross"));
     }
-    // Length and tag in one write: one lock of the connection and one
-    // wake-up of its driver fewer per frame (Z-P5); the bytes are unchanged.
-    let mut head = [0u8; 5];
+    let mut head = [0u8; FRAME_HEAD];
     head[..4].copy_from_slice(&(n as u32).to_be_bytes());
     head[4] = tag;
-    send.write_all(&head).await.map_err(io::Error::from)?;
-    send.write_all(payload).await.map_err(io::Error::from)?;
-    send.flush().await.map_err(eio)
+    Ok(head)
 }
 
 /// One frame of a transfer stream: a data chunk or its closing control frame.
@@ -114,45 +143,75 @@ pub(super) async fn recv_content_frame_or_end(
     recv: &mut RecvStream,
     lz4: bool,
 ) -> io::Result<Option<(u8, Vec<u8>)>> {
-    let mut len4 = [0u8; 4];
-    match recv.read_exact(&mut len4).await {
+    let mut head = [0u8; FRAME_HEAD];
+    match recv.read_exact(&mut head).await {
         Ok(()) => {}
         Err(ReadExactError::FinishedEarly(0)) => return Ok(None),
         Err(error) => return Err(read_exact_error(error)),
     }
-    let n = u32::from_be_bytes(len4) as usize;
     let limit = if lz4 {
         MAX_DATA_FRAME_LZ4
     } else {
         MAX_DATA_FRAME
     };
-    validate_frame_len(n, limit)?;
-    let mut tag = [0u8; 1];
-    recv.read_exact(&mut tag).await.map_err(read_exact_error)?;
-    let mut payload = vec![0u8; n - 1];
-    recv.read_exact(&mut payload)
-        .await
-        .map_err(read_exact_error)?;
-    Ok(Some((tag[0], payload)))
+    let (tag, n) = parse_head(head, limit)?;
+    Ok(Some((tag, read_payload(recv, n - 1).await?)))
 }
 
 pub(super) async fn recv_tagged_limited(
     recv: &mut RecvStream,
     max_frame: usize,
 ) -> io::Result<(u8, Vec<u8>)> {
-    let mut len4 = [0u8; 4];
-    recv.read_exact(&mut len4).await.map_err(read_exact_error)?;
-    let n = u32::from_be_bytes(len4) as usize;
+    // Length and tag in one read; the payload is received into its final
+    // buffer without zeroing it first (Z-P5).
+    let mut head = [0u8; FRAME_HEAD];
+    recv.read_exact(&mut head).await.map_err(read_exact_error)?;
+    let (tag, n) = parse_head(head, max_frame)?;
+    Ok((tag, read_payload(recv, n - 1).await?))
+}
+
+/// The tag and the validated frame length (tag included) of a head.
+fn parse_head(head: [u8; FRAME_HEAD], max_frame: usize) -> io::Result<(u8, usize)> {
+    let n = u32::from_be_bytes([head[0], head[1], head[2], head[3]]) as usize;
     validate_frame_len(n, max_frame)?;
-    // The tag is read on its own, so the payload is received into its final
-    // buffer without a second copy.
-    let mut tag = [0u8; 1];
-    recv.read_exact(&mut tag).await.map_err(read_exact_error)?;
-    let mut payload = vec![0u8; n - 1];
-    recv.read_exact(&mut payload)
-        .await
-        .map_err(read_exact_error)?;
-    Ok((tag[0], payload))
+    Ok((head[4], n))
+}
+
+/// Exactly `len` payload bytes, read into uninitialized capacity: no
+/// `memset` of a buffer that is overwritten anyway.
+async fn read_payload(recv: &mut RecvStream, len: usize) -> io::Result<Vec<u8>> {
+    let mut payload = Vec::with_capacity(len);
+    while payload.len() < len {
+        let want = (len - payload.len()) as u64;
+        let read = (&mut *recv)
+            .take(want)
+            .read_buf(&mut payload)
+            .await
+            .map_err(read_io_error)?;
+        if read == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                format!("peer stream closed after {} bytes", payload.len()),
+            ));
+        }
+    }
+    Ok(payload)
+}
+
+/// `read_exact_error` for the `AsyncRead` path: a lost connection keeps its
+/// cause across the daemon error frame.
+fn read_io_error(error: io::Error) -> io::Error {
+    let lost = error
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<iroh::endpoint::ReadError>())
+        .and_then(|inner| match inner {
+            iroh::endpoint::ReadError::ConnectionLost(lost) => Some(lost.to_string()),
+            _ => None,
+        });
+    match lost {
+        Some(cause) => super::io_deadline::disconnected(format!("connection lost: {cause}")),
+        None => error,
+    }
 }
 
 fn validate_frame_len(len: usize, requested_max: usize) -> io::Result<()> {

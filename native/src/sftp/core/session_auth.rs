@@ -8,7 +8,9 @@
 //!   it (`<key>-cert.pub`, as `ssh` loads it) is tried first.
 //! - SSH agent (`SSH_AUTH_SOCK` on Unix; the Windows OpenSSH agent pipe,
 //!   then Pageant): every identity the agent holds, including keys on FIDO2
-//!   or smartcard tokens that only the agent can sign with.
+//!   or smartcard tokens that only the agent can sign with. The identity
+//!   that logged in and whether it signed without a person are recorded for
+//!   extra connections (agent_grant.rs, G3-10).
 use std::io;
 use std::sync::Arc;
 
@@ -19,9 +21,10 @@ use russh::keys::HashAlg;
 use russh::MethodKind;
 use tokio::io::{AsyncRead, AsyncWrite};
 
+use super::super::agent_grant::{self, AgentGrant, TimedSigner};
 use super::super::config::{SftpAuth, SftpConfig};
 use super::super::io_err;
-use super::super::link_rules::ExtraLogin;
+use super::super::link_rules::{account_key, ExtraLogin};
 use super::super::ssh_agent;
 use super::Client;
 
@@ -36,7 +39,10 @@ pub(super) async fn authenticate(
         SftpAuth::Key { path, passphrase } => {
             key_file_login(session, &cfg.user, path, passphrase.as_deref()).await
         }
-        SftpAuth::Agent => agent_login(session, &cfg.user).await,
+        SftpAuth::Agent => {
+            let account = account_key(&cfg.host, cfg.port, &cfg.user);
+            agent_login(session, &cfg.user, &account).await
+        }
     }
 }
 
@@ -68,12 +74,15 @@ async fn password_login<H: client::Handler>(
 /// password is read from the sealed store for this login and dropped right
 /// after it (`password`, or `keyboard-interactive` under the rules below:
 /// one hidden password prompt, a fixed number of rounds; any other question
-/// is a refusal); a key file uses the decrypted key of the main login. No
-/// prompt for the person, never the SSH agent. `None`: the server refused.
+/// is a refusal); a key file uses the decrypted key of the main login; the
+/// SSH agent signs only with the identity the main login showed to sign
+/// without a person (agent_grant.rs, G3-10). No prompt for the person.
+/// `None`: the server refused. `account` is `link_rules::account_key`.
 pub(in crate::sftp) async fn login_extra<H: client::Handler>(
     session: &mut client::Handle<H>,
     user: &str,
     login: &ExtraLogin,
+    account: &str,
 ) -> io::Result<Option<&'static str>> {
     match login {
         ExtraLogin::Password(source) => {
@@ -85,7 +94,86 @@ pub(in crate::sftp) async fn login_extra<H: client::Handler>(
         ExtraLogin::Key { path, key } => Ok(key_login(session, user, path, key.clone())
             .await?
             .then_some("publickey")),
+        ExtraLogin::Agent => {
+            let Some(fingerprint) = agent_grant::usable(account) else {
+                return Ok(None);
+            };
+            let agent = ssh_agent::connect().await.map_err(agent_error)?;
+            agent_extra(session, user, agent, account, &fingerprint).await
+        }
     }
+}
+
+/// The extra login through the agent: only the recorded identity; a
+/// signature that needed a person revokes the grant (agent_grant.rs).
+async fn agent_extra<H, S>(
+    session: &mut client::Handle<H>,
+    user: &str,
+    mut agent: AgentClient<S>,
+    account: &str,
+    fingerprint: &str,
+) -> io::Result<Option<&'static str>>
+where
+    H: client::Handler,
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let identities = agent.request_identities().await.map_err(agent_error)?;
+    let Some(identity) = identities
+        .into_iter()
+        .find(|identity| agent_grant::identity_facts(identity).0 == fingerprint)
+    else {
+        // The agent no longer holds it: nothing is signed.
+        agent_grant::revoke(account);
+        return Ok(None);
+    };
+    let (_, algorithm) = agent_grant::identity_facts(&identity);
+    let rsa_hash = rsa_hash(session).await?;
+    let mut signer = TimedSigner::new(&mut agent);
+    let result = sign_in(session, user, identity, rsa_hash, &mut signer).await?;
+    if !agent_grant::quick(&algorithm, signer.took) {
+        agent_grant::revoke(account);
+    }
+    Ok(result.then_some("publickey (SSH-Agent)"))
+}
+
+/// One publickey attempt with an agent identity (a key or a certificate).
+async fn sign_in<H, S>(
+    session: &mut client::Handle<H>,
+    user: &str,
+    identity: AgentIdentity,
+    rsa_hash: Option<HashAlg>,
+    signer: &mut S,
+) -> io::Result<bool>
+where
+    H: client::Handler,
+    S: russh::Signer + Send,
+    S::Error: std::fmt::Display,
+{
+    match identity {
+        AgentIdentity::PublicKey { key, .. } => {
+            let hash = key.algorithm().is_rsa().then_some(rsa_hash).flatten();
+            session
+                .authenticate_publickey_with(user, key, hash, signer)
+                .await
+        }
+        AgentIdentity::Certificate { certificate, .. } => {
+            let hash = certificate
+                .algorithm()
+                .is_rsa()
+                .then_some(rsa_hash)
+                .flatten();
+            session
+                .authenticate_certificate_with(user, certificate, hash, signer)
+                .await
+        }
+    }
+    .map(|result| result.success())
+    .map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("SSH agent: {error}"),
+        )
+    })
 }
 
 /// Most server `InfoRequest` rounds one keyboard-interactive login takes
@@ -218,15 +306,22 @@ async fn rsa_hash<H: client::Handler>(session: &client::Handle<H>) -> io::Result
 
 /// The platform adapter (`os/ssh_agent_*.rs`) finds the agent; the login
 /// with its identities is the same everywhere.
-async fn agent_login(session: &mut client::Handle<Client>, user: &str) -> io::Result<bool> {
+async fn agent_login(
+    session: &mut client::Handle<Client>,
+    user: &str,
+    account: &str,
+) -> io::Result<bool> {
     let agent = ssh_agent::connect().await.map_err(agent_error)?;
-    agent_identities(session, user, agent).await
+    agent_identities(session, user, agent, account).await
 }
 
+/// Tries every identity of the agent; the one that logs in is recorded for
+/// extra connections with whether it signed without a person.
 async fn agent_identities<S>(
     session: &mut client::Handle<Client>,
     user: &str,
     mut agent: AgentClient<S>,
+    account: &str,
 ) -> io::Result<bool>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -240,31 +335,11 @@ where
     }
     let rsa_hash = rsa_hash(session).await?;
     for identity in identities {
-        let result = match identity {
-            AgentIdentity::PublicKey { key, .. } => {
-                let hash = key.algorithm().is_rsa().then_some(rsa_hash).flatten();
-                session
-                    .authenticate_publickey_with(user, key, hash, &mut agent)
-                    .await
-            }
-            AgentIdentity::Certificate { certificate, .. } => {
-                let hash = certificate
-                    .algorithm()
-                    .is_rsa()
-                    .then_some(rsa_hash)
-                    .flatten();
-                session
-                    .authenticate_certificate_with(user, certificate, hash, &mut agent)
-                    .await
-            }
-        }
-        .map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!("SSH agent: {error}"),
-            )
-        })?;
-        if result.success() {
+        let (fingerprint, algorithm) = agent_grant::identity_facts(&identity);
+        let mut signer = TimedSigner::new(&mut agent);
+        if sign_in(session, user, identity, rsa_hash, &mut signer).await? {
+            let quick = agent_grant::quick(&algorithm, signer.took);
+            agent_grant::record(account, AgentGrant { fingerprint, quick });
             return Ok(true);
         }
     }

@@ -337,11 +337,20 @@ impl PeerBackend {
     /// A new stream for one batch.
     pub(super) fn open_batch_stream(&self) -> io::Result<OpenedPeerStream> {
         let endpoint = self.current_endpoint()?;
-        self.node.open_stream_until(
-            &endpoint,
-            &self.identity,
-            Instant::now() + CONTROL_ATTEMPT_TIMEOUT,
-        )
+        self.transfer_stream(&endpoint, Instant::now() + CONTROL_ATTEMPT_TIMEOUT)
+    }
+
+    /// A stream for one transfer: on an extra connection when the host
+    /// offers them (Z-P6, `node_bulk`). Ranged uploads never use it: their
+    /// stage table belongs to the first connection.
+    pub(in crate::share) fn transfer_stream(
+        &self,
+        endpoint: &crate::share::types::PeerEndpoint,
+        deadline: Instant,
+    ) -> io::Result<OpenedPeerStream> {
+        let bulk = self.bulk_offered();
+        self.node
+            .open_transfer_stream_until(endpoint, &self.identity, deadline, bulk)
     }
 }
 

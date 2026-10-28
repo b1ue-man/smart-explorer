@@ -13,6 +13,13 @@ pub(crate) trait PublicationObserver {
     }
 
     fn before_publish(&self, staged: &Path, target: &Path) -> io::Result<()>;
+    /// `before_publish` with the stage's open handle, which the caller has
+    /// just compared with the stage path: evidence may be read from it
+    /// instead of reopening the path (M4).
+    fn before_publish_handle(&self, staged: &Path, target: &Path, file: &File) -> io::Result<()> {
+        let _ = file;
+        self.before_publish(staged, target)
+    }
     fn after_publish(&self, target: &Path) -> io::Result<()>;
     /// The just-published stage/move handle remains live through this hook.
     /// A receipt may use its existing write rights without changing readonly
@@ -65,8 +72,19 @@ pub(super) fn before(
     observer: Option<&dyn PublicationObserver>,
     source: &Path,
     target: &Path,
+    file: &File,
 ) -> io::Result<()> {
-    observer.map_or(Ok(()), |observer| observer.before_publish(source, target))
+    observer.map_or(Ok(()), |observer| {
+        observer.before_publish_handle(source, target, file)
+    })
+}
+
+/// Whether `path` names the very object behind `file` now (one look at the
+/// path, no open on Linux; one attribute-only open on Windows). A missing
+/// path does not.
+pub(crate) fn path_names_handle(path: &Path, file: &File) -> io::Result<bool> {
+    let identity = super::super::platform::file_identity(file)?;
+    super::super::platform::path_matches_identity(path, identity)
 }
 
 pub(super) fn preparation_failed(

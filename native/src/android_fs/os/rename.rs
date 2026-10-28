@@ -58,24 +58,44 @@ pub(super) enum Step {
 }
 
 pub(crate) fn rename_no_replace(source: &Path, destination: &Path) -> io::Result<()> {
-    let error = match renameat2_no_replace(source, destination) {
-        Ok(()) => return Ok(()),
-        Err(error) => error,
+    // M11: on a device already known to lack the flag, the failing steps
+    // are not tried again (one `lstat` instead of two failed syscalls).
+    let remembered = remembered_ladder(source);
+    let error = match &remembered {
+        Some(_) => io::Error::from_raw_os_error(libc::EOPNOTSUPP),
+        None => match renameat2_no_replace(source, destination) {
+            Ok(()) => return Ok(()),
+            Err(error) => error,
+        },
     };
     if !flag_unsupported(error.raw_os_error()) {
         return Err(error);
     }
-    record_fallback(Attempt::Renameat2, error.raw_os_error());
-    let source_is_dir = std::fs::symlink_metadata(source)?.is_dir();
-    if fallback_for(source_is_dir) == Step::HardLink {
+    let (metadata, links_missing) = match remembered {
+        Some(known) => known,
+        None => {
+            record_fallback(Attempt::Renameat2, error.raw_os_error());
+            (std::fs::symlink_metadata(source)?, false)
+        }
+    };
+    let mut links_missing = links_missing;
+    if fallback_for(metadata.is_dir()) == Step::HardLink && !links_missing {
         match std::fs::hard_link(source, destination) {
-            Ok(()) => return remove_linked_source(source, destination),
-            Err(error) if after_link_failure(error.raw_os_error()) == Step::Fail => {
-                return Err(error)
+            Ok(()) => {
+                remember(metadata.dev(), false);
+                return remove_linked_source(source, destination);
             }
-            Err(error) => record_fallback(Attempt::HardLink, error.raw_os_error()),
+            Err(error) if after_link_failure(error.raw_os_error()) == Step::Fail => {
+                remember(metadata.dev(), false);
+                return Err(error);
+            }
+            Err(error) => {
+                record_fallback(Attempt::HardLink, error.raw_os_error());
+                links_missing = true;
+            }
         }
     }
+    remember(metadata.dev(), links_missing);
     if !checked_rename_allowed(source) {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
@@ -86,6 +106,42 @@ pub(crate) fn rename_no_replace(source: &Path, destination: &Path) -> io::Result
         ));
     }
     checked_rename(source, destination)
+}
+
+/// Devices (`st_dev`) whose filesystem refused `RENAME_NOREPLACE`, and
+/// whether it also has no hard links (M11). A rename never crosses devices,
+/// so the source's device is the destination's. Bounded: a device beyond the
+/// first `MAX_REMEMBERED` simply walks the whole ladder each time.
+static UNSUPPORTED: Mutex<Vec<(u64, bool)>> = Mutex::new(Vec::new());
+const MAX_REMEMBERED: usize = 64;
+
+/// The source's metadata and "no hard links" when its device is known to
+/// lack the flag; `None` (and no syscall) while no device is remembered.
+fn remembered_ladder(source: &Path) -> Option<(std::fs::Metadata, bool)> {
+    let known = UNSUPPORTED
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    if known.is_empty() {
+        return None;
+    }
+    let metadata = std::fs::symlink_metadata(source).ok()?;
+    let links_missing = known
+        .iter()
+        .find(|(device, _)| *device == metadata.dev())?
+        .1;
+    Some((metadata, links_missing))
+}
+
+fn remember(device: u64, links_missing: bool) {
+    let mut known = UNSUPPORTED
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    match known.iter_mut().find(|(known, _)| *known == device) {
+        Some(entry) => entry.1 |= links_missing,
+        None if known.len() < MAX_REMEMBERED => known.push((device, links_missing)),
+        None => {}
+    }
 }
 
 /// The racy last step: on Android for every move (shared storage has no

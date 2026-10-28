@@ -43,6 +43,8 @@ mod segmented_stage;
 mod server_copy;
 #[path = "core/session.rs"]
 mod session;
+#[path = "core/stage_evidence.rs"]
+mod stage_evidence;
 #[path = "core/stage_finish.rs"]
 mod stage_finish;
 #[path = "core/io.rs"]

@@ -9,12 +9,14 @@ mod platform;
 #[cfg(not(any(windows, target_os = "linux")))]
 #[path = "os/unsupported.rs"]
 mod platform;
+#[cfg(any(windows, target_os = "linux"))]
+mod probe_cache;
 mod reader;
 mod status;
 
 pub use permit::{
-    acquire, acquire_current, acquire_file, acquire_file_current, acquire_source,
-    with_cancellation, Guard, Priority,
+    acquire, acquire_current, acquire_file, acquire_file_current, acquire_regular_file,
+    acquire_source, with_cancellation, Guard, Priority,
 };
 pub use reader::{guard_file_reader, guard_reader, GuardedIterator};
 pub use status::{snapshots, ReadMode, Status};
@@ -89,6 +91,18 @@ pub fn mark_mode(path: &Path, mode: ReadMode) {
 pub(crate) mod test_profiles;
 #[cfg(all(test, any(windows, target_os = "linux")))]
 mod tests;
+
+/// `probe` of a path the caller knows to name a regular file (a file is
+/// never a mount point, so it is on its folder's medium). Windows remembers
+/// "not optical" per folder for a moment instead of resolving the volume of
+/// every file; elsewhere it is `probe`.
+pub fn probe_regular_file(path: &Path) -> io::Result<Option<Source>> {
+    #[cfg(test)]
+    if let Some(source) = test_profiles::probe(path) {
+        return Ok(Some(source));
+    }
+    platform::probe_regular_file(path)
+}
 
 /// Facts bound to an existing handle, preserving retained-root authority.
 pub fn probe_file(file: &std::fs::File) -> io::Result<Option<Source>> {

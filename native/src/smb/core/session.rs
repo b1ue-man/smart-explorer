@@ -6,6 +6,7 @@
 //! each failure keeps its own meaning (network, SMB1-only server, sign-in).
 use super::errors;
 use super::url::{server_addr, split_domain_user};
+use crate::transfer::read_pipeline::Pipeline;
 use smb2::client::{Cipher, Connection};
 use smb2::{Session, Tree};
 use std::collections::HashMap;
@@ -48,12 +49,41 @@ pub(super) struct Generation {
     dead: AtomicBool,
     session: Session,
     conn: Connection,
+    /// READ depth and fastest answer the last reader on this connection
+    /// reached (G3-06b/G3-07): the next file starts there instead of at two.
+    learned: Mutex<Option<(usize, Duration)>>,
 }
 
 impl Generation {
     /// A cheap clone sharing the session (smb2 multiplexes clones).
     pub(super) fn connection(&self) -> Connection {
         self.conn.clone()
+    }
+
+    /// Remembers what a finished reader's pipeline reached.
+    pub(super) fn learn(&self, depth: usize, fastest: Option<Duration>) {
+        if let (Some(fastest), Ok(mut learned)) = (fastest, self.learned.lock()) {
+            *learned = Some((depth, fastest));
+        }
+    }
+
+    /// A pipeline started at the learned depth, never deeper than `needed`
+    /// requests (as `sftp`'s `PoolChannel::seeded_pipeline`).
+    pub(super) fn seeded_pipeline(&self, chunk: u64, cap: usize, needed: u64) -> Pipeline {
+        let mut pipeline = Pipeline::new(chunk, cap);
+        let learned = self.learned.lock().ok().and_then(|learned| *learned);
+        let Some((depth, fastest)) = learned else {
+            return pipeline;
+        };
+        let target = usize::try_from(needed).unwrap_or(usize::MAX).min(depth);
+        while pipeline.depth() < target {
+            let before = pipeline.depth();
+            pipeline.answered(fastest, true);
+            if pipeline.depth() == before {
+                break;
+            }
+        }
+        pipeline
     }
 
     fn alive(&self) -> bool {
@@ -239,6 +269,7 @@ fn connect_generation(rt: &Runtime, config: &SmbConfig) -> io::Result<Generation
             dead: AtomicBool::new(false),
             session,
             conn,
+            learned: Mutex::new(None),
         })
     })
 }

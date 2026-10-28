@@ -12,11 +12,15 @@
 //! "is very likely to cause deadlocks". A server that accepts only one
 //! connection serves transfers on the browsing connection, as before.
 //!
-//! Ranges of one large file (E13, answer to the security question S12) never
-//! log in: they run on connections that are logged in and free already, and
-//! only when at least two are (`ranges_ready`). A 421 or 530 to a range ends
-//! the file as one stream and keeps ranges off for fifteen minutes
-//! (`refuse_ranges`).
+//! Ranges of one large file (G3-11, decided 2026-10-28 by the main agent on
+//! the user's instruction "maximal möglicher Datentransferspeed", superseding
+//! the security answer S12): a range takes a logged-in free connection or
+//! logs in one more with the same credentials and the same TLS policy as
+//! every pool connection (`lease_range`), like `lftp pget -n`; how many run
+//! at once is the flow control's measured window, and the server's own limit
+//! (421/530 at a login) caps them as for whole files. Never the browsing
+//! connection. A 421 or 530 to REST/RETR of a range ends the file as one
+//! stream and keeps ranges off for fifteen minutes (`refuse_ranges`).
 use super::connection::refusal_code;
 use super::io_adapters::{FtpConnection, FtpReconnect};
 use std::io::{self, Read, Write};
@@ -30,8 +34,8 @@ const IDLE_RETIRE: Duration = Duration::from_secs(60);
 /// this long (like the engine's memory of a connection that cannot read
 /// ranges).
 const RANGES_OFF_FOR: Duration = Duration::from_secs(15 * 60);
-/// Ranges need this many logged-in free connections: one alone would be a
-/// single stream with extra steps.
+/// Ranges need room for this many transfer connections: one alone would be
+/// a single stream with extra steps.
 const RANGE_CONNECTIONS: usize = 2;
 
 pub(super) struct FtpPool {
@@ -51,16 +55,15 @@ struct PoolState {
     no_ranges_until: Option<Instant>,
 }
 
-/// Whether ranges may run: `idle` logged-in free connections, no recent
-/// refusal, and a server limit that leaves room for two transfers.
+/// Whether ranges may run: no recent refusal, and a server limit (when
+/// known) that leaves room for two transfer connections. Free connections
+/// are not needed any more: a range logs in one (G3-11).
 pub(super) fn ranges_possible(
-    idle: usize,
     no_ranges_until: Option<Instant>,
     capacity: Option<usize>,
     now: Instant,
 ) -> bool {
-    idle >= RANGE_CONNECTIONS
-        && no_ranges_until.is_none_or(|until| until <= now)
+    no_ranges_until.is_none_or(|until| until <= now)
         && capacity.is_none_or(|capacity| capacity >= RANGE_CONNECTIONS)
 }
 
@@ -123,20 +126,39 @@ impl FtpPool {
             .retain(|(_, since)| now.saturating_duration_since(*since) < IDLE_RETIRE);
     }
 
-    /// Whether a file can be read in ranges now: no login is needed for it.
+    /// Whether a file can be read in ranges now.
     pub(super) fn ranges_ready(&self) -> bool {
         self.retire_idle();
         let state = lock(&self.state);
-        ranges_possible(
-            state.idle.len(),
-            state.no_ranges_until,
-            capacity(state.limit),
-            Instant::now(),
-        )
+        ranges_possible(state.no_ranges_until, capacity(state.limit), Instant::now())
     }
 
-    /// A logged-in free connection for one range; never a new login and
-    /// never the browsing connection.
+    /// A connection for one range: a logged-in free one, else a new login
+    /// (same credentials and TLS policy, `connect`), never the browsing
+    /// connection. `None` once the server is known to allow fewer than two
+    /// transfer connections (the file then goes as one stream); at a limit
+    /// with room for ranges the range gets congestion and the flow control
+    /// holds back.
+    pub(super) fn lease_range(self: &Arc<Self>) -> io::Result<Option<FtpLease>> {
+        if !self.room_for_ranges() {
+            return Ok(None);
+        }
+        match self.lease() {
+            Ok(lease) if lease.pooled => Ok(Some(lease)),
+            // Only the browsing connection is left: no range on it.
+            Ok(_) => Ok(None),
+            // The login for the range taught a limit without room for ranges.
+            Err(_) if !self.room_for_ranges() => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn room_for_ranges(&self) -> bool {
+        capacity(lock(&self.state).limit).is_none_or(|capacity| capacity >= RANGE_CONNECTIONS)
+    }
+
+    /// A logged-in free connection (metadata of parallel transfers); never
+    /// a new login and never the browsing connection.
     pub(super) fn lease_idle(self: &Arc<Self>) -> Option<FtpLease> {
         self.retire_idle();
         let mut state = lock(&self.state);

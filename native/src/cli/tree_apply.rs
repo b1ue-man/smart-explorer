@@ -72,6 +72,20 @@ pub(super) fn apply_transfer(
     Ok(plan)
 }
 
+/// The read-only final checks of a plan and every planned folder created
+/// (missing destination ancestors first): what `apply_transfer` does before
+/// its first file, for a run whose files go another way (`tree_engine`).
+pub(super) fn prepare_directories(
+    source: &dyn Backend,
+    destination: &dyn Backend,
+    plan: &mut TransferPlan,
+) -> Result<(), String> {
+    plan.validate_source_tree(source)?;
+    plan.validate_destinations(destination)?;
+    create_external_ancestors(source, destination, plan)?;
+    create_planned_directories(source, destination, plan)
+}
+
 fn create_external_ancestors(
     source: &dyn Backend,
     destination: &dyn Backend,

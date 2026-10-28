@@ -10,6 +10,7 @@ use super::io_err;
 use super::pool_growth::PoolHub;
 use super::posix_rename::POSIX_RENAME;
 use super::session::ExtraLink;
+use crate::transfer::read_pipeline::Pipeline;
 use russh::client;
 use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::client::rawsession::Limits;
@@ -75,6 +76,12 @@ pub(super) struct PoolChannel {
     active: AtomicUsize,
     idle_since: Mutex<Instant>,
     broken: AtomicBool,
+    /// Pipeline depth and fastest answer the last transfer on this channel
+    /// reached (G3-06b): the next one starts there instead of at two.
+    learned: Mutex<Option<(usize, Duration)>>,
+    /// File data has moved over this channel; an extra connection's first
+    /// bytes start the judgement of its effect (pool_growth.rs `carried`).
+    carried: AtomicBool,
 }
 
 impl PoolChannel {
@@ -102,7 +109,41 @@ impl PoolChannel {
             active: AtomicUsize::new(0),
             idle_since: Mutex::new(Instant::now()),
             broken: AtomicBool::new(false),
+            learned: Mutex::new(None),
+            carried: AtomicBool::new(false),
         }
+    }
+
+    /// Remembers what a finished transfer's pipeline reached on this
+    /// channel; a transfer without one answer teaches nothing.
+    pub(super) fn learn(&self, depth: usize, fastest: Option<Duration>) {
+        if let Some(fastest) = fastest {
+            *lock(&self.learned) = Some((depth, fastest));
+        }
+    }
+
+    /// A pipeline of `chunk`-byte requests up to `cap` in flight, started at
+    /// the depth the channel's last transfer reached instead of at two, but
+    /// never deeper than the `needed` requests the transfer has (G3-06b: a
+    /// 1 MiB file then moves in one round trip instead of three). The depth
+    /// still grows only with memory reserved for it (`Pipeline`), and the
+    /// learned fastest answer keeps the queue bound of the last transfer.
+    pub(super) fn seeded_pipeline(&self, chunk: u64, cap: usize, needed: u64) -> Pipeline {
+        let mut pipeline = Pipeline::new(chunk, cap);
+        let Some((depth, fastest)) = *lock(&self.learned) else {
+            return pipeline;
+        };
+        let target = usize::try_from(needed).unwrap_or(usize::MAX).min(depth);
+        while pipeline.depth() < target {
+            let before = pipeline.depth();
+            // One answer as fast as the fastest grows the depth by one,
+            // exactly as a transfer that measured it would have.
+            pipeline.answered(fastest, true);
+            if pipeline.depth() == before {
+                break;
+            }
+        }
+        pipeline
     }
 
     /// Bytes per READ: the server's `limits@openssh.com` read length, else
@@ -132,6 +173,9 @@ impl PoolChannel {
     /// File data moved over this channel; feeds the throughput window that
     /// decides about extra connections.
     pub(super) fn moved(&self, bytes: u64) {
+        if bytes > 0 && self.is_extra() && !self.carried.swap(true, Ordering::AcqRel) {
+            self.hub.carried();
+        }
         self.hub.note(bytes);
     }
 

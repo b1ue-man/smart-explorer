@@ -151,6 +151,23 @@ pub trait BackendExtensions: Backend {
         self.open_write_copy_stage_sized(path, size)
     }
 
+    /// Whether every stage writer of this backend (`open_write_new`,
+    /// `open_write_copy_stage*`) creates its file exclusively, so a taken
+    /// name fails with `AlreadyExists` instead of being overwritten;
+    /// `unique_staging_path` then probes no candidate (`vfs::creates_stages_exclusively`).
+    fn creates_stages_exclusively(&self) -> bool {
+        false
+    }
+
+    /// Whether `stage` was written and finished by this process and its
+    /// writer proved it a regular file of the written size (SFTP: FSTAT of
+    /// the exclusively created handle); promotion then skips its own stat
+    /// of the stage (`vfs::stage_proven`).
+    fn stage_proven(&self, stage: &str) -> bool {
+        let _ = stage;
+        false
+    }
+
     /// Give a complete, closed, unpublished stage its source time and the
     /// requested durability before `promote_*` publishes it. Failing to store
     /// the time is no error (`mtime_applied: false`); failing to flush is.
@@ -310,6 +327,24 @@ pub trait BackendExtensions: Backend {
     /// namespace whose root holds no files (the Share's export list) still
     /// moves packets below it. `None` = no batches at all.
     fn host_batch_limits(&self) -> Option<super::BatchLimits> {
+        None
+    }
+
+    /// Whether the peer publishes one new file in one round trip as a
+    /// packet of one (`vfs::single_put`, Z-P4): the intent is recorded
+    /// before the commit, the peer publishes without replacing (numbered
+    /// when the name is taken) and answers with the result, and a lost
+    /// answer is resolved by the peer's outcome registry, never by sending
+    /// again. Wrappers that rewrite paths keep `false`.
+    fn single_put(&self) -> bool {
+        false
+    }
+
+    /// A guard the transfer engine holds from a job's start to its end
+    /// (`vfs::transfer_scope`, G3-04b). While it lives the backend may keep
+    /// knowledge for this job, such as FTP's listings of the folders it
+    /// publishes into. `None` = nothing to keep.
+    fn transfer_scope(&self) -> Option<Box<dyn std::any::Any + Send>> {
         None
     }
 

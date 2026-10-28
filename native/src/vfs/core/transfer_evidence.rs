@@ -61,6 +61,22 @@ pub fn host_batch_limits<B: Backend + ?Sized>(backend: &B) -> Option<super::Batc
     })
 }
 
+/// Whether `backend` takes a single new file as a packet of one
+/// (`BackendExtensions::single_put`); `false` without extensions.
+pub fn single_put<B: Backend + ?Sized>(backend: &B) -> bool {
+    backend
+        .extensions()
+        .is_some_and(|extensions| extensions.single_put())
+}
+
+/// The job guard of `backend` (`BackendExtensions::transfer_scope`); the
+/// engine drops it when the job ends. `None` without extensions.
+pub fn transfer_scope<B: Backend + ?Sized>(backend: &B) -> Option<Box<dyn std::any::Any + Send>> {
+    backend
+        .extensions()
+        .and_then(|extensions| extensions.transfer_scope())
+}
+
 /// Whether `put_batch_evidence`, `promote_copy_stage_evidence`,
 /// `open_read_evidence`, `take_stage_evidence` and the evidence of
 /// `BatchSink::evidence` are served for files below `path`.

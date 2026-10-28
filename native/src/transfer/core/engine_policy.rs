@@ -43,10 +43,13 @@ const MIN_BATCH_BYTES: u64 = 256 * 1024;
 /// A packet should carry at least this many files; a file above a packet's
 /// share goes alone (its own transfer time already dwarfs a round trip).
 const FILES_PER_BATCH_SHARE: u64 = 8;
-/// Files up to this size always qualify for packets (K-E, 2026-10-28): at
-/// the start the rate target alone allowed only 32 KiB, so ordinary
-/// documents and photos paid every per-file round trip.
-const SMALL_FILE_FLOOR: u64 = 1024 * 1024;
+/// Files up to an eighth of the backend's packet bound, at most this much,
+/// always qualify for packets (K-E and G3-05, 2026-10-28): at the start the
+/// rate target alone allowed only 32 KiB, and a rate measured on packets of
+/// tiny files is round-trip bound, so medium files (photos, documents of
+/// 1–2 MiB) paid every per-file round trip of the single path. With the
+/// common 16 MiB bound a packet still carries eight such files.
+const SMALL_FILE_CEILING: u64 = 2 * 1024 * 1024;
 
 /// The operation may succeed when tried again: the connection dropped or
 /// stalled, or the peer asked to slow down (`overload` is the flow's
@@ -216,10 +219,12 @@ impl BatchSizer {
     }
 
     /// Files up to this size travel in packets: an eighth of the target,
-    /// at least `SMALL_FILE_FLOOR`, never above the backend's bound.
+    /// at least an eighth of the backend's bound up to `SMALL_FILE_CEILING`,
+    /// never above the backend's bound.
     pub(crate) fn small_file_limit(&self, max_bytes: u64) -> u64 {
+        let floor = (max_bytes / FILES_PER_BATCH_SHARE).min(SMALL_FILE_CEILING);
         (self.target_bytes(max_bytes) / FILES_PER_BATCH_SHARE)
-            .max(SMALL_FILE_FLOOR)
+            .max(floor)
             .min(max_bytes.max(1))
     }
 
@@ -329,22 +334,36 @@ mod tests {
         let mut sizer = BatchSizer::default();
         let max = 16 * 1024 * 1024;
         assert_eq!(sizer.target_bytes(max), MIN_BATCH_BYTES);
-        assert_eq!(sizer.small_file_limit(max), SMALL_FILE_FLOOR, "K-E floor");
-        assert_eq!(sizer.packet_bytes(max), 2 * SMALL_FILE_FLOOR);
+        assert_eq!(
+            sizer.small_file_limit(max),
+            SMALL_FILE_CEILING,
+            "G3-05: 2 MiB files go in packets from the start"
+        );
+        assert!(
+            sizer.small_file_limit(max) >= 1024 * 1024 + 300 * 1024,
+            "a 1.3 MiB photo is a packet member"
+        );
+        assert_eq!(sizer.packet_bytes(max), 2 * SMALL_FILE_CEILING);
         assert!(
             sizer.packet_bytes(max) >= 256 * 4096,
             "256 files of 4 KiB fit the first packet"
         );
         assert_eq!(
             sizer.small_file_limit(512 * 1024),
-            512 * 1024,
-            "backend bound"
+            64 * 1024,
+            "an eighth of a small backend bound"
         );
-        assert_eq!(sizer.packet_bytes(512 * 1024), 512 * 1024);
+        assert_eq!(sizer.packet_bytes(512 * 1024), MIN_BATCH_BYTES);
         sizer.record(40_000_000, 1_000);
         assert_eq!(sizer.target_bytes(max), 10_000_000);
-        assert_eq!(sizer.small_file_limit(max), 1_250_000);
+        assert_eq!(
+            sizer.small_file_limit(max),
+            SMALL_FILE_CEILING,
+            "a slow rate never lowers the floor"
+        );
         assert_eq!(sizer.packet_bytes(max), 10_000_000);
+        sizer.record(400_000_000, 1_000);
+        assert_eq!(sizer.small_file_limit(max), max / 8, "rate target");
         sizer.record(4_000_000_000, 1_000);
         assert_eq!(
             sizer.target_bytes(max),

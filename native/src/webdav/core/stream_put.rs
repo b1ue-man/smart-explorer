@@ -153,6 +153,8 @@ pub(super) struct StreamPut {
     expected: u64,
     written: u64,
     state: PutState,
+    /// A copy stage's URL, reported once its PUT is committed (put_stages.rs).
+    reports: Option<String>,
 }
 
 impl StreamPut {
@@ -188,7 +190,14 @@ impl StreamPut {
             expected: size,
             written: 0,
             state: PutState::Open,
+            reports: None,
         })
+    }
+
+    /// Reports the committed PUT of the copy stage at `url` (put_stages.rs).
+    pub(super) fn reporting(mut self, url: String) -> Self {
+        self.reports = Some(url);
+        self
     }
 
     /// The upload's own result once its thread ended.
@@ -274,6 +283,9 @@ impl Write for StreamPut {
         match self.outcome() {
             Ok(()) => {
                 self.state = PutState::Committed;
+                if let Some(url) = self.reports.take() {
+                    super::put_stages::committed(&url);
+                }
                 Ok(())
             }
             Err(error) => {

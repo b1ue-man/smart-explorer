@@ -5,19 +5,23 @@ use std::sync::{Arc, Mutex};
 use iroh::endpoint::Connection;
 use iroh::{EndpointAddr, EndpointId, RelayUrl, TransportAddr};
 
-use super::core::{eio, now_secs, public_fingerprint, verify_hmac};
+use super::core::{eio, now_secs, public_fingerprint};
 use super::direct_protocol::DirectPeerIdentity;
 use super::direct_reciprocal::DirectRelationMaterial;
 use super::direct_reciprocal_session::{AuthenticatedDirectSession, DirectSessionAuthorization};
 use super::direct_reciprocal_wire::DIRECT_RECIPROCAL_CAPABILITY;
-use super::profiles::{fingerprint_matches, ShareProfiles};
 use super::relation_rights::{RestrictionSet, SessionAuthorization};
 use super::types::{DirectGrantState, PeerEndpoint, PeerPresence, ShareAuthState, ShareScope};
 use super::wire::PeerHello;
 
+#[path = "session_authorize.rs"]
+mod authorize;
+
 #[derive(Clone, Debug)]
 pub(super) struct IncomingSession {
     hello: PeerHello,
+    /// The verified proof of this session (Z-H1, `session_authorize`).
+    memo: Arc<authorize::AuthMemo>,
 }
 
 /// Secret-bearing authorization snapshot for exactly one reciprocal stream.
@@ -120,6 +124,7 @@ pub(super) fn authenticate_incoming_session(
     }
     let session = IncomingSession {
         hello: hello.clone(),
+        memo: Arc::default(),
     };
     session.authorize(auth)?;
     Ok(session)
@@ -144,9 +149,7 @@ impl IncomingSession {
             .any(|value| value == capability)
     }
 
-    /// Re-evaluates the identity, grant, relation secret, and export policy for
-    /// every accepted filesystem stream. The QUIC connection alone is never an
-    /// authorization cache.
+    /// `authorize_state` of the current state (`session_authorize`).
     pub(super) fn authorize(
         &self,
         auth: &Arc<Mutex<ShareAuthState>>,
@@ -224,83 +227,6 @@ impl IncomingSession {
             // own Direct secret. Persisted conflicts are rejected by the store.
             expected_remote_material: None,
         })
-    }
-
-    pub(super) fn authorize_state(
-        &self,
-        state: &ShareAuthState,
-    ) -> io::Result<SessionAuthorization> {
-        let hello = &self.hello;
-        match hello.relation_kind.as_str() {
-            "direct" if hello.relation_id == state.identity.direct_lookup_id => {
-                if !state.direct_online {
-                    return Err(eio("Direktverbindung ist offline"));
-                }
-                let grant = state
-                    .direct_grants
-                    .iter()
-                    .find(|g| {
-                        g.authorizes_session(&hello.device_id, &hello.public_key, &hello.node_id)
-                    })
-                    .ok_or_else(|| eio("Direktfreigabe nicht akzeptiert"))?;
-                if !fingerprint_matches(&grant.public_key, &grant.fingerprint) {
-                    return Err(eio("Direktfreigabe hat ungueltigen Fingerprint"));
-                }
-                let payload = session_payload(
-                    "direct",
-                    &hello.relation_id,
-                    &hello.device_id,
-                    &state.identity.device_id,
-                    &hello.node_id,
-                    &state.identity.node_id,
-                    &hello.session_nonce,
-                );
-                if !verify_hmac(&state.direct_secret, &payload, &hello.session_proof) {
-                    return Err(eio("Session-Proof ungueltig"));
-                }
-                Ok(SessionAuthorization::direct(
-                    state.default_direct_exports.clone(),
-                    grant,
-                ))
-            }
-            "room" => {
-                let room = state
-                    .rooms
-                    .iter()
-                    .find(|r| r.room_id == hello.relation_id && r.auto_join)
-                    .ok_or_else(|| eio("Unbekannter Raum"))?;
-                let member = room
-                    .members
-                    .iter()
-                    .find(|m| {
-                        m.authorizes_session(&hello.device_id, &hello.public_key, &hello.node_id)
-                    })
-                    .ok_or_else(|| eio("Geraet nicht im Raum"))?;
-                if member.node_id != hello.node_id || member.public_key != hello.public_key {
-                    return Err(eio("Raumgeraet hat Identitaetskonflikt"));
-                }
-                if !fingerprint_matches(&member.public_key, &member.fingerprint) {
-                    return Err(eio("Raumgeraet hat ungueltigen Fingerprint"));
-                }
-                let secret = ShareProfiles::room_secret_checked(room)
-                    .map_err(eio)?
-                    .ok_or_else(|| eio("Raum-Secret fehlt"))?;
-                let payload = session_payload(
-                    "room",
-                    &hello.relation_id,
-                    &hello.device_id,
-                    &state.identity.device_id,
-                    &hello.node_id,
-                    &state.identity.node_id,
-                    &hello.session_nonce,
-                );
-                if !verify_hmac(&secret, &payload, &hello.session_proof) {
-                    return Err(eio("Session-Proof ungueltig"));
-                }
-                Ok(SessionAuthorization::room(room))
-            }
-            _ => Err(eio("Unbekannte oder nicht autorisierte Relation")),
-        }
     }
 }
 

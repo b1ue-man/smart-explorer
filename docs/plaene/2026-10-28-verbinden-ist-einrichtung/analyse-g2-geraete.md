@@ -541,7 +541,7 @@ einmal je Paket), **K-F** (`CreateDirs`). „neu“ = von KP2 nicht abgedeckt.
 | Nr | Änderung | Gewinn | Invariante | KP2 |
 |---|---|---|---|---|
 | Z-R1 | Relay-Rate des eigenen Servers konfigurierbar (heute fest 64 MiB/s, `share-server/src/relay.rs:23-24`) | selbst betriebene Server mit mehr Bandbreite | Server bleibt Vermittler; Daten direkt zuerst | neu |
-| Z-R2 | Produktentscheidung: Nutzdaten über Relay schon während der Direktsuche erlauben und auf LAN/Direkt wechseln, sobald validiert (die Politik wechselt heute schon im 25-ms-Takt nach oben) | erstes Byte bei reinem Relay: Sekunden → 1 RTT | „Relay nur als sichtbar gekennzeichneter Rückfall“ (`ARCHITEKTUR.md`, Kernprinzip) wäre berührt. **Nicht ohne Nutzerentscheidung** | neu |
+| Z-R2 | Produktentscheidung: Nutzdaten über Relay schon während der Direktsuche erlauben und auf LAN/Direkt wechseln, sobald validiert (die Politik wechselt heute schon im 25-ms-Takt nach oben) | erstes Byte bei reinem Relay: Sekunden → 1 RTT | „Relay nur als sichtbar gekennzeichneter Rückfall“ (`ARCHITEKTUR.md`, Kernprinzip) wäre berührt. **Entschieden 2026-10-28** (Nutzer: „entscheide selbst“): Relay als Startbrücke, danach nur Rückfall; umgesetzt in Paket D1 (`share/core/route_start.rs`, Zustand `relay_start`) | entschieden |
 
 ### 10.5 Einstiege
 

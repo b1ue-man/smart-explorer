@@ -210,7 +210,7 @@ fn take_extras(
     // (a lock every worker shares) and no permit taking.
     if engine.is_move()
         || size < SPLIT_FROM
-        || crate::source_media::probe(source).is_ok_and(|source| source.is_some())
+        || crate::source_media::probe_regular_file(source).is_ok_and(|source| source.is_some())
     {
         return (none(), None);
     }

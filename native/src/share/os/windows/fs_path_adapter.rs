@@ -52,6 +52,48 @@ fn hostile_name(name: &str) -> bool {
             .any(|c| c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*'))
 }
 
+/// Physical identity of the directory `path` names (volume serial and the
+/// full 128-bit file ID), following links; `None` when the provider reports
+/// none (FAT's root has ID 0) or it cannot be read. The host's policy cache
+/// compares it to skip a repeated ancestor walk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct DirectoryIdentity(u64, [u8; 16]);
+
+pub(super) fn directory_identity(path: &Path) -> Option<DirectoryIdentity> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileIdInfo, GetFileInformationByHandleEx, FILE_FLAG_BACKUP_SEMANTICS, FILE_ID_INFO,
+        FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+    let file = std::fs::OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)
+        .ok()?;
+    if !file.metadata().ok()?.is_dir() {
+        return None;
+    }
+    // SAFETY: an all-zero FILE_ID_INFO is a valid value of this plain struct.
+    let mut info: FILE_ID_INFO = unsafe { std::mem::zeroed() };
+    // SAFETY: the handle stays open for the call and `info` is a correctly
+    // sized output buffer of the requested class.
+    let read = unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle(),
+            FileIdInfo,
+            (&mut info as *mut FILE_ID_INFO).cast(),
+            std::mem::size_of::<FILE_ID_INFO>() as u32,
+        )
+    };
+    if read == 0 || info.FileId.Identifier == [0; 16] {
+        return None;
+    }
+    let identity = DirectoryIdentity(info.VolumeSerialNumber, info.FileId.Identifier);
+    Some(identity)
+}
+
 pub(super) fn from_os_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }

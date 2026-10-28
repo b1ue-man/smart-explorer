@@ -59,3 +59,60 @@ fn symlink_escape_is_blocked_when_supported() {
     }
     let _ = std::fs::remove_dir_all(base);
 }
+
+/// Z-H2: a folder proven outside the private roots is remembered by path and
+/// identity; replacing it with a link out of the export, or a link into the
+/// app's private data, is still refused on the very next request.
+#[test]
+fn speed_task_share_host_policy_cache_keeps_link_confinement() {
+    let base = std::env::temp_dir().join(format!("se-share-zh2-{}", std::process::id()));
+    let root = base.join("root");
+    let outside = base.join("outside");
+    std::fs::create_dir_all(root.join("a")).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("file.txt"), b"outside").unwrap();
+    let root = root.canonicalize().unwrap();
+    let link = root.join("a");
+    let root_s = root.to_string_lossy().replace('\\', "/");
+    let policy = TargetPolicy::new(ExportAccess::ReadWrite, false, true);
+    let policy = policy.with_root(&root_s);
+    let inside = format!("{root_s}/a/file.txt");
+    let rest = ["a".to_string(), "file.txt".to_string()];
+    // Proven once (and remembered).
+    policy.read(&inside).unwrap();
+    policy.read(&inside).unwrap();
+    std::fs::remove_dir(&link).unwrap();
+    if create_directory_link(&outside, &link).is_ok() {
+        assert!(policy.read(&inside).is_err());
+        assert!(secure_local_target(&root_s, &rest).is_err());
+        remove_link(&link);
+        let private = crate::support_dirs::app_data_dir();
+        if create_directory_link(&private, &link).is_ok() {
+            assert!(policy.read(&inside).is_err());
+            assert!(policy.write(&inside).is_err());
+            remove_link(&link);
+        }
+    }
+    super::fs_host_policy::forget_verified_directories();
+    let _ = std::fs::remove_dir_all(base);
+}
+
+fn remove_link(link: &std::path::Path) {
+    if std::fs::remove_dir(link).is_err() {
+        std::fs::remove_file(link).unwrap();
+    }
+}
+
+#[test]
+fn speed_task_share_host_paths_refuse_parent_segments() {
+    let base = std::env::temp_dir().join(format!("se-share-zh2-dots-{}", std::process::id()));
+    let root = base.join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(base.join("sibling")).unwrap();
+    let root_s = root.to_string_lossy().replace('\\', "/");
+    let sibling = secure_local_target(&root_s, &["..".to_string(), "sibling".to_string()]);
+    assert!(sibling.is_err());
+    let missing = secure_local_target(&root_s, &["..".to_string(), "missing".to_string()]);
+    assert!(missing.is_err());
+    let _ = std::fs::remove_dir_all(base);
+}

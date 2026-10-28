@@ -6,6 +6,7 @@ use super::io_err;
 use super::link_rules::plan;
 use super::metadata::{basename, to_vfs};
 use super::pool_writer::SizedWriter;
+use super::stage_evidence::WrittenStages;
 use crate::vfs::{
     Backend, BatchGet, BatchLimits, BatchPut, BatchPutOutcome, BatchSink, Scheme, VfsMeta,
     VfsResult,
@@ -26,6 +27,8 @@ pub struct SftpBackend {
     pub(super) pool: Arc<ChannelPool>,
     /// Verdicts on the folder chain of stages for ranges (segmented_stage.rs).
     pub(super) stage_folders: Arc<Mutex<HashMap<String, (bool, Instant)>>>,
+    /// Evidence of committed copy stages for the receipts (stage_evidence.rs).
+    pub(super) written: WrittenStages,
     root: String,
     /// Read by `url()` (UI display), consumed in the connect-UI step.
     #[allow(dead_code)]
@@ -33,16 +36,18 @@ pub struct SftpBackend {
 }
 
 impl SftpBackend {
-    /// A connection whose login a person may have typed into: no extra SSH
-    /// connections for transfers (`connect_with_origin`).
+    /// A connection whose login a person may have typed into: extra SSH
+    /// connections for transfers only through the SSH agent (G3-10,
+    /// agent_grant.rs), never with typed credentials (`connect_with_origin`).
     pub fn connect(cfg: SftpConfig) -> io::Result<SftpBackend> {
         Self::connect_with_origin(cfg, SftpLoginOrigin::Interactive)
     }
 
     /// Like `connect`, with how the credentials of `cfg` were obtained. When
-    /// the main login needed no input (`SftpLoginOrigin`), transfers may add
-    /// extra SSH connections of the same account, one at a time while the
-    /// throughput still rises (security answer E13-S15).
+    /// the main login needed no input (`SftpLoginOrigin`) or used the SSH
+    /// agent, transfers may add extra SSH connections of the same account,
+    /// one at a time while the throughput still rises (security answer
+    /// E13-S15, extended to the agent by G3-10).
     pub fn connect_with_origin(
         cfg: SftpConfig,
         origin: SftpLoginOrigin,
@@ -59,6 +64,7 @@ impl SftpBackend {
             connection,
             pool,
             stage_folders: Arc::new(Mutex::new(HashMap::new())),
+            written: WrittenStages::default(),
             root,
             url,
         })
@@ -147,6 +153,33 @@ impl SftpBackend {
         {
             return Ok(self.target_writer(path, Box::new(writer)));
         }
+        self.main_writer(path, flags, expected, commit)
+    }
+
+    /// A copy stage on a pool channel reports what the server answered at
+    /// its commit (stage_evidence.rs); on the main session it does not.
+    fn stage_writer(
+        &self,
+        path: &str,
+        size: u64,
+        commit: Commit,
+    ) -> VfsResult<Box<dyn Write + Send>> {
+        if let Some(writer) = self
+            .open_pool_stage_writer(path, size, commit)
+            .map_err(|error| self.target_error(path, error))?
+        {
+            return Ok(self.target_writer(path, Box::new(writer)));
+        }
+        self.main_writer(path, create_new_flags(), Some(size), commit)
+    }
+
+    fn main_writer(
+        &self,
+        path: &str,
+        flags: OpenFlags,
+        expected: Option<u64>,
+        commit: Commit,
+    ) -> VfsResult<Box<dyn Write + Send>> {
         let writer = self
             .open_main_writer(path, flags, commit)
             .map_err(|error| self.target_error(path, error))?;
@@ -294,7 +327,7 @@ impl Backend for SftpBackend {
         path: &str,
         size: u64,
     ) -> VfsResult<Box<dyn Write + Send>> {
-        self.writer(path, create_new_flags(), Some(size), Commit::Durable)
+        self.stage_writer(path, size, Commit::Durable)
     }
 
     /// The sized stage committed without `fsync@openssh.com`: all
@@ -304,7 +337,7 @@ impl Backend for SftpBackend {
         path: &str,
         size: u64,
     ) -> VfsResult<Box<dyn Write + Send>> {
-        self.writer(path, create_new_flags(), Some(size), Commit::Unsynced)
+        self.stage_writer(path, size, Commit::Unsynced)
     }
 
     /// Inside one server the server copies itself (`copy-data`,
@@ -358,26 +391,9 @@ impl Backend for SftpBackend {
         })
     }
 
+    /// From the deepest existing folder down (MS7, transfer_ops.rs).
     fn mkdir_all(&self, path: &str) -> VfsResult<()> {
-        let absolute = path.starts_with('/');
-        let parts: Vec<String> = path
-            .split('/')
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string())
-            .collect();
-        let mut cur = String::new();
-        for part in parts {
-            if cur.is_empty() {
-                if absolute {
-                    cur.push('/');
-                }
-            } else {
-                cur.push('/');
-            }
-            cur.push_str(&part);
-            self.create_one_dir(&cur, false)?;
-        }
-        Ok(())
+        self.make_dirs(path)
     }
 
     /// One MKDIR; an existing real folder (not a link) is success.
@@ -395,6 +411,7 @@ impl Backend for SftpBackend {
     /// Stages are created with an exclusive OPEN, so the name is this
     /// client's until it is published.
     fn discard_copy_stage(&self, stage: &str) -> VfsResult<()> {
+        self.written.forget(stage);
         self.discard_stage(stage)
     }
 

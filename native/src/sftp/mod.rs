@@ -34,24 +34,32 @@
 //! no channel at all, goes over the main session (channel_pool.rs,
 //! main_range.rs). On a long fat link one TCP stream caps the rate, so a
 //! backend whose login needed no input (`SftpBackend::connect_with_origin`)
-//! adds extra SSH connections for transfers, one at a time while the measured
-//! throughput still rises; they only run the subsystem `sftp`, must show the
-//! main connection's host key, close after a minute idle and are blocked for
-//! 15 minutes after any failure (security answer E13-S15; extra_link.rs,
-//! link_rules.rs, pool_growth.rs, pool_extra.rs).
+//! or went through the SSH agent (G3-10, agent_grant.rs) adds extra SSH
+//! connections for transfers, one at a time while the measured throughput
+//! still rises (judged half a second windows after the new one carried its
+//! first byte); they only run the subsystem `sftp`, must show the main
+//! connection's host key, close after a minute idle and are blocked for 15
+//! minutes after any failure (security answer E13-S15 as changed by G3-10;
+//! extra_link.rs, link_rules.rs, pool_growth.rs, pool_extra.rs).
 //! A folder is deleted with one READDIR per folder and many REMOVEs in
 //! flight on the main session (tree_remove.rs).
 //! An interactive terminal (pty-req, then shell or exec) opens as one more
 //! session channel and is driven like a command (terminal.rs, command.rs).
 
+#[path = "core/agent_grant.rs"]
+mod agent_grant;
 #[path = "core/backend.rs"]
 mod backend;
 #[path = "core/batch_get.rs"]
 mod batch_get;
+#[path = "core/batch_handoff.rs"]
+mod batch_handoff;
 #[path = "core/batch_ops.rs"]
 mod batch_ops;
 #[path = "core/batch_put.rs"]
 mod batch_put;
+#[path = "core/batch_put_evidence.rs"]
+mod batch_put_evidence;
 #[path = "core/channel_pool.rs"]
 mod channel_pool;
 #[path = "core/command.rs"]
@@ -62,6 +70,8 @@ mod config;
 mod connection;
 #[path = "core/copy_data.rs"]
 mod copy_data;
+#[path = "core/enqueue.rs"]
+mod enqueue;
 #[path = "core/errors.rs"]
 mod errors;
 #[path = "core/exec.rs"]
@@ -98,6 +108,8 @@ mod pool_reader;
 mod pool_writer;
 #[path = "core/posix_rename.rs"]
 mod posix_rename;
+#[path = "core/promote_evidence.rs"]
+mod promote_evidence;
 #[path = "core/reversible_replace.rs"]
 mod reversible_replace;
 #[path = "core/segmented_stage.rs"]
@@ -110,6 +122,10 @@ mod ssh_agent;
 #[cfg(windows)]
 #[path = "os/ssh_agent_windows.rs"]
 mod ssh_agent;
+#[path = "core/stage_evidence.rs"]
+mod stage_evidence;
+#[path = "core/stage_finish.rs"]
+mod stage_finish;
 #[path = "core/terminal.rs"]
 mod terminal;
 #[path = "core/transfer_ops.rs"]
@@ -128,6 +144,9 @@ mod batch_tests;
 #[cfg(test)]
 #[path = "core/delete_speed_task_tests.rs"]
 mod delete_speed_task_tests;
+#[cfg(test)]
+#[path = "core/extra_link_tests.rs"]
+mod extra_link_tests;
 #[cfg(test)]
 #[path = "core/link_tests.rs"]
 mod link_tests;
@@ -157,7 +176,9 @@ pub use host_key_ops::{
 pub use terminal::{SshTerminalError, SshTerminalRequest};
 pub use url::backend_from_url;
 
+pub(crate) use batch_handoff::{hand_off as hand_off_packet, Forward as PacketForward};
 pub(crate) use errors::io_err;
+pub(crate) use stage_evidence::{stage_destination as upload_stage_destination, WrittenStages};
 
 #[path = "core/capacity.rs"]
 mod capacity;

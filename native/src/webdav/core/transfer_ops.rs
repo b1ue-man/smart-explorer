@@ -153,12 +153,14 @@ impl WebdavBackend {
         } else {
             self.write_agent.clone()
         };
-        let writer = StreamPut::start(agent, self.url_for(path), self.auth.clone(), size)?;
-        Ok(Box::new(writer))
+        let url = self.url_for(path);
+        let writer = StreamPut::start(agent, url.clone(), self.auth.clone(), size)?;
+        Ok(Box::new(writer.reporting(url)))
     }
 
     /// Removes an unpublished stage; one that is gone leaves nothing to do.
     pub(super) fn discard_stage(&self, stage: &str) -> VfsResult<()> {
+        super::super::put_stages::take(&self.url_for(stage));
         match self.stat(stage) {
             Ok(meta) if !meta.is_dir => self.remove_file(stage),
             Ok(_) => Err(io::Error::new(

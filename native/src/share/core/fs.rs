@@ -200,8 +200,7 @@ pub(crate) fn resolve(
     else {
         return Err(eio("Ungueltiges Freigabeziel"));
     };
-    let root = secure_local_target(&root, &[])?;
-    let target = secure_local_target(&root, rest)?;
+    let (root, target) = local_paths::secure_local_resolved(&root, rest)?;
     guard_target(
         ResolvedTarget {
             backend: Arc::new(LocalBackend::new(&root)),
@@ -228,8 +227,7 @@ fn resolve_connection(
             secret.as_deref(),
         )?;
         let configured = c.root.replace('\\', "/");
-        let root = secure_local_target(&configured, &[])?;
-        let path = secure_local_target(&root, rest)?;
+        let (root, path) = local_paths::secure_local_resolved(&configured, rest)?;
         return guard_target(
             ResolvedTarget {
                 backend: Arc::new(LocalBackend::new(&root)),

@@ -126,6 +126,15 @@ pub(crate) fn run_view(
     report: &(dyn Fn(TransferMsg) + Sync),
     cancel: &AtomicBool,
 ) {
+    // Per-job knowledge of each remote side (G3-04b: FTP keeps the listings
+    // of the folders it publishes into) lives exactly as long as this job.
+    let _scopes: Vec<Box<dyn std::any::Any + Send>> = [view.source, view.target]
+        .into_iter()
+        .filter_map(|side| match side {
+            Side::Remote(backend) => crate::vfs::transfer_scope(backend),
+            Side::Local => None,
+        })
+        .collect();
     let kind = view.kind();
     let mut first = TransferProgress::new(kind, kind.label(), 0, 0);
     first.source = view.source_label.to_string();
@@ -455,6 +464,9 @@ mod segments_tests;
 #[cfg(test)]
 #[path = "segments_upload_tests.rs"]
 mod segments_upload_tests;
+#[cfg(test)]
+#[path = "speed_task_local_tests.rs"]
+mod speed_task_local_tests;
 #[cfg(test)]
 #[path = "speed_task_tests.rs"]
 mod speed_task_tests;

@@ -184,7 +184,7 @@ fn transfer_local_inner(
     }
 
     loop {
-        if let Err(error) = publication::before(observer, &staged.temp, &target) {
+        if let Err(error) = publication::before(observer, &staged.temp, &target, &staged.file) {
             publication::preparation_failed(
                 observer,
                 &staged.temp,
@@ -203,6 +203,7 @@ fn transfer_local_inner(
             &staged.temp,
             &target,
             request.conflict == Conflict::Overwrite,
+            durable,
         );
         if let Err(error) = &committed {
             publication::commit_failed(

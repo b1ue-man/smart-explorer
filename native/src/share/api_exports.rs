@@ -237,3 +237,5 @@ mod tracked_signal_tests;
 #[cfg(test)]
 #[path = "core/walk_tests.rs"]
 mod walk_tests;
+// The Share's own containers (`/`, `/Verbindungen`) hold no files (Z-P1).
+pub(crate) use self::fs_capabilities::is_synthetic_container;

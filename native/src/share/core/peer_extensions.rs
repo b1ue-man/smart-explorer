@@ -203,6 +203,9 @@ impl BackendExtensions for PeerBackend {
     fn host_batch_limits(&self) -> Option<crate::vfs::BatchLimits> {
         self.host_batch_limits_any()
     }
+    fn single_put(&self) -> bool {
+        self.single_put_offered()
+    }
     fn transfer_evidence(&self, _path: &str) -> bool {
         self.evidence_offered()
     }

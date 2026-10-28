@@ -75,7 +75,8 @@ impl BatchAuthority {
             return lease.run(|| operation(&self.access));
         }
         self.node.require_sharing_active()?;
-        self.session.authorize(&self.auth)?;
+        // The grant still authorizes the session (Z-H1: no export copy).
+        self.session.may_write(&self.auth)?;
         self.access.check_read()?;
         operation(&self.access)
     }

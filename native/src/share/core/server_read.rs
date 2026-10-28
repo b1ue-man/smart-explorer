@@ -10,8 +10,10 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::share::blocking;
 use crate::share::core::eio;
-use crate::share::framing::lz4_stream::{self, Lz4Stream};
-use crate::share::framing::{reply, reply_err, send_tagged, TAG_DATA, TAG_DATA_LZ4};
+use crate::share::framing::lz4_stream::{self, Lz4Link, Lz4Stream};
+use crate::share::framing::{
+    reply, reply_err, send_framed, send_tagged, FRAME_HEAD, TAG_DATA, TAG_DATA_LZ4,
+};
 use crate::share::fs;
 use crate::share::fs_access::FsAccess;
 use crate::share::io_deadline;
@@ -37,12 +39,33 @@ pub(in crate::share) struct ReadSource {
 
 /// One chunk on its way to the stream, already in its frame form.
 struct ReadChunk {
-    tag: u8,
-    bytes: Vec<u8>,
+    payload: Payload,
     /// Raw bytes of the chunk (what the stream's window and the client's
     /// accounting count).
     raw: usize,
 }
+
+enum Payload {
+    /// A plain chunk in a pooled buffer: `FRAME_HEAD` reserved bytes, then
+    /// the data; `len` is the frame's length. The buffer goes back to the
+    /// reader once sent (Z-P5: no allocation and no zeroing per block).
+    Pooled { frame: Vec<u8>, len: usize },
+    /// An LZ4 block (`TAG_DATA_LZ4`).
+    Packed(Vec<u8>),
+}
+
+impl Payload {
+    /// Bytes on the wire after the frame head.
+    fn wire_len(&self) -> usize {
+        match self {
+            Payload::Pooled { len, .. } => len.saturating_sub(FRAME_HEAD),
+            Payload::Packed(block) => block.len(),
+        }
+    }
+}
+
+/// A pooled buffer: frame head plus one chunk.
+const POOLED_FRAME: usize = FRAME_HEAD + fs::CHUNK;
 
 /// Metadata of `path`, or of the item `id` among equal names in its folder
 /// (ID providers behind an export); without an ID exactly `stat`.
@@ -77,15 +100,19 @@ pub(in crate::share) async fn read_file<G: Send + 'static>(
     source: ReadSource,
     access: FsAccess,
     slot: G,
-    stall: Duration,
+    (stall, link): (Duration, Option<Lz4Link>),
 ) -> io::Result<()> {
     let (ready_tx, ready_rx) = oneshot::channel();
     let (data_tx, mut data_rx) = mpsc::channel(STREAM_BUFFER_CHUNKS);
+    let (recycle, recycled) = std::sync::mpsc::channel::<Vec<u8>>();
     let live = access.clone();
-    let lz4 = lz4_stream::negotiated(source.lz4).then(Lz4Stream::new);
+    let lz4 = lz4_stream::negotiated(source.lz4).then(|| match &link {
+        Some(link) => link.stream(),
+        None => Lz4Stream::new(),
+    });
     let packing = lz4.clone();
     let worker = blocking::spawn_holding("Share read", slot, move || {
-        read_worker(source, access, ready_tx, data_tx, packing)
+        read_worker(source, access, ready_tx, data_tx, (packing, recycled))
     });
 
     let (size, evidence) = match ready_rx.await {
@@ -111,14 +138,25 @@ pub(in crate::share) async fn read_file<G: Send + 'static>(
         };
         let chunk = chunk?;
         live.check_read()?;
+        let wire = chunk.payload.wire_len();
         let started = Instant::now();
-        let sent = send_tagged(&mut send, chunk.tag, &chunk.bytes);
-        // Returning drops the channel: the worker stops and frees the slot.
-        io_deadline::run_for("Share read data", stall, sent).await?;
+        match chunk.payload {
+            Payload::Pooled { mut frame, len } => {
+                let sent = send_framed(&mut send, TAG_DATA, &mut frame[..len]);
+                // Returning drops the channel: the worker stops and frees
+                // the slot.
+                io_deadline::run_for("Share read data", stall, sent).await?;
+                let _ = recycle.send(frame);
+            }
+            Payload::Packed(block) => {
+                let sent = send_tagged(&mut send, TAG_DATA_LZ4, &block);
+                io_deadline::run_for("Share read data", stall, sent).await?;
+            }
+        }
         let blocked = started.elapsed();
         if stats::enabled() {
             stats::meter().add(stats::Phase::NetWait, blocked);
-            stats::bytes(chunk.raw, chunk.bytes.len());
+            stats::bytes(chunk.raw, wire);
         }
         if let Some(lz4) = &lz4 {
             lz4.record_send(chunk.raw, blocked, Instant::now());
@@ -140,7 +178,7 @@ fn read_worker(
     access: FsAccess,
     ready: oneshot::Sender<io::Result<(u64, Option<FsFileEvidence>)>>,
     chunks: mpsc::Sender<io::Result<ReadChunk>>,
-    lz4: Option<Lz4Stream>,
+    (lz4, recycled): (Option<Lz4Stream>, std::sync::mpsc::Receiver<Vec<u8>>),
 ) -> io::Result<()> {
     let (size, evidence, mut reader) = match open_source(&access, &source) {
         Ok(opened) => opened,
@@ -152,10 +190,16 @@ fn read_worker(
     if ready.send(Ok((size, evidence))).is_err() {
         return Ok(());
     }
+    // A buffer the stream sent comes back; one that was packed stays here.
+    let mut spare: Option<Vec<u8>> = None;
     loop {
-        let mut buffer = vec![0u8; fs::CHUNK];
+        let mut frame = spare
+            .take()
+            .or_else(|| recycled.try_recv().ok())
+            .filter(|frame| frame.len() == POOLED_FRAME)
+            .unwrap_or_else(|| vec![0u8; POOLED_FRAME]);
         let reading = stats::Timer::start();
-        let read = reader.read(&mut buffer);
+        let read = reader.read(&mut frame[FRAME_HEAD..]);
         reading.stop(stats::Phase::DiskRead);
         let read = match read {
             Ok(read) => read,
@@ -167,19 +211,18 @@ fn read_worker(
         if read == 0 {
             return Ok(());
         }
-        buffer.truncate(read);
-        let chunk = match lz4.as_ref().and_then(|stream| stream.pack(&buffer)) {
-            Some(block) => ReadChunk {
-                tag: TAG_DATA_LZ4,
-                bytes: block,
-                raw: read,
-            },
-            None => ReadChunk {
-                tag: TAG_DATA,
-                bytes: buffer,
-                raw: read,
+        let data = &frame[FRAME_HEAD..FRAME_HEAD + read];
+        let payload = match lz4.as_ref().and_then(|stream| stream.pack(data)) {
+            Some(block) => {
+                spare = Some(frame);
+                Payload::Packed(block)
+            }
+            None => Payload::Pooled {
+                frame,
+                len: FRAME_HEAD + read,
             },
         };
+        let chunk = ReadChunk { payload, raw: read };
         if chunks.blocking_send(Ok(chunk)).is_err() {
             return Ok(());
         }

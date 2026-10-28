@@ -265,17 +265,13 @@ impl PeerBackend {
         while attempts.next() {
             let endpoint = self.current_endpoint()?;
             let attempt_deadline = control_attempt_deadline(deadline)?;
-            let mut opened =
-                match self
-                    .node
-                    .open_stream_until(&endpoint, &self.identity, attempt_deadline)
-                {
-                    Ok(opened) => opened,
-                    Err(error) => {
-                        last_error = Some(error);
-                        continue;
-                    }
-                };
+            let mut opened = match self.transfer_stream(&endpoint, attempt_deadline) {
+                Ok(opened) => opened,
+                Err(error) => {
+                    last_error = Some(error);
+                    continue;
+                }
+            };
             let timeout = match io_deadline::remaining(attempt_deadline, operation) {
                 Ok(timeout) => timeout,
                 Err(error) => {
@@ -370,9 +366,7 @@ impl PeerBackend {
             let endpoint = self.current_endpoint()?;
             let deadline = Instant::now() + io_deadline::PEER_OP_TIMEOUT;
             let connect_deadline = control_attempt_deadline(deadline)?;
-            let mut opened =
-                self.node
-                    .open_stream_until(&endpoint, &self.identity, connect_deadline)?;
+            let mut opened = self.transfer_stream(&endpoint, connect_deadline)?;
             let connection = opened.connection.clone();
             let response_deadline = Instant::now() + io_deadline::PEER_OP_TIMEOUT;
             let timeout = match io_deadline::remaining(response_deadline, operation) {

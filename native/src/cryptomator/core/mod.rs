@@ -4,6 +4,7 @@ use std::fmt;
 use std::io;
 
 mod cipher_combo;
+mod content_batch;
 mod content_chunks;
 mod content_header;
 mod content_stream;

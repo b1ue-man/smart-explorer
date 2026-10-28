@@ -112,6 +112,13 @@ impl Read for PoolReader {
     }
 }
 
+impl Drop for PoolReader {
+    fn drop(&mut self) {
+        let (depth, fastest) = self.inner.learned();
+        self.inner.source().channel.learn(depth, fastest);
+    }
+}
+
 /// More READs than one channel window cannot arrive within one round trip.
 fn window_depth(chunk: u32) -> usize {
     usize::try_from(SSH_WINDOW / chunk.max(1))
@@ -198,7 +205,16 @@ impl SftpBackend {
                 }
             };
             let chunk = channel.read_chunk();
-            let pipeline = Pipeline::new(u64::from(chunk), window_depth(chunk));
+            // A range knows its length and starts at the depth the channel
+            // learned (G3-06b); a whole file of unknown length starts at two,
+            // so a small one costs no READs beyond its end.
+            let pipeline = match end {
+                Some(end) => {
+                    let needed = end.saturating_sub(offset).div_ceil(u64::from(chunk.max(1)));
+                    channel.seeded_pipeline(u64::from(chunk), window_depth(chunk), needed)
+                }
+                None => Pipeline::new(u64::from(chunk), window_depth(chunk)),
+            };
             let source = ChannelFile {
                 rt: self.rt.clone(),
                 connection: self.connection.clone(),

@@ -172,5 +172,61 @@ fn download_into(
     local_dir: &Path,
 ) -> Result<(), String> {
     let dest = local_dir.join(file.rel.replace('/', MAIN_SEPARATOR_STR));
+    if be.is_local() {
+        return copy_local_into(file, &dest);
+    }
     download_collected_file(be, file, &dest).map(|_| ())
+}
+
+/// A local file (the long-path clipboard of a local selection, M18,
+/// 2026-10-28) is copied by the kernel (`copy_file_range`, `CopyFile2`) into
+/// a fresh stage beside `dest` instead of through a user-space read/write
+/// loop: the copy checks the expected size and that the source did not
+/// change, and its medium arbitration is the copy's. The stage is published
+/// without replacing anything; like every staging for other programs it is
+/// not synced (the session's temp folder is disposable).
+fn copy_local_into(file: &RemoteFileEntry, dest: &Path) -> Result<(), String> {
+    let source = super::walk_listers::native(&file.src);
+    let never = AtomicBool::new(false);
+    let mut last = None;
+    for attempt in 0..STAGE_ATTEMPTS {
+        let stage = stage_beside(dest, attempt);
+        match crate::copy::copy_to_new_file(&source, &stage, file.size, &never) {
+            Ok(_) => {
+                if let Err(error) = crate::vfs::promote_local_copy(&stage, dest) {
+                    let _ = std::fs::remove_file(&stage);
+                    return Err(format!(
+                        "Ziel „{}“ ohne Ersetzen veröffentlichen: {error}",
+                        dest.display()
+                    ));
+                }
+                return Ok(());
+            }
+            // A foreign entry of that exact name: never ours, next name.
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => last = Some(error),
+            Err(error) => return Err(format!("{}: {error}", file.src)),
+        }
+    }
+    Err(format!(
+        "{}: keine freie Kopierstufe: {}",
+        file.src,
+        last.map_or_else(String::new, |error| error.to_string())
+    ))
+}
+
+/// Names tried for one stage.
+const STAGE_ATTEMPTS: u32 = 16;
+
+/// An unpredictable sibling name of `dest` for its stage.
+fn stage_beside(dest: &Path, attempt: u32) -> std::path::PathBuf {
+    let parent = dest.parent().unwrap_or_else(|| Path::new("."));
+    let name = dest
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "copy".to_string());
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_nanos());
+    let tail = format!(".se-clip-{nonce:x}-{attempt}.part");
+    parent.join(crate::vfs::fit_stage_name(".", &name, &tail))
 }

@@ -21,8 +21,9 @@ use std::io;
 use std::time::{Duration, Instant};
 
 pub(super) fn run(engine: &Engine<'_>, _slot: WorkerSlot<'_>) {
-    // The foreground keeps the cores it asks for; this thread takes the rest.
-    super::super::platform::lower_thread_priority();
+    // Every engine job is one a person started and waits for (paste, drop,
+    // dialog, Android, `se cp`/`se mv`, MCP): its workers keep the normal
+    // priority (M20, 2026-10-28). Background sync does not run here.
     let mut buffer = vec![0u8; COPY_BUFFER];
     while let Some(work) = engine.queue.pop(engine.stop_flag(), super::WORKER_LINGER) {
         match work {
