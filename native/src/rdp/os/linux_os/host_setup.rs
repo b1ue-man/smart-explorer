@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 /// The polkit path of the root steps (`pkexec <se> rdp host-setup …`).
 #[path = "host_setup_pkexec.rs"]
 mod pkexec;
+#[cfg(test)]
 pub(crate) use pkexec::pkexec_outcome;
 use pkexec::via_pkexec;
 

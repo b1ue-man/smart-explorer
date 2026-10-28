@@ -4,19 +4,20 @@ pub(crate) mod core;
 mod os;
 pub(crate) use self::core::{AuthenticatedProbe, HostProbe};
 pub(crate) use os::probe as probe_local_host;
-pub(crate) use os::shared::clients::{
-    choose_client, local_clients, watch_process_exit, Credentials, NEEDS_SDL,
-};
+#[cfg(all(target_os = "linux", test))]
+pub(crate) use os::shared::clients::choose_client;
+pub(crate) use os::shared::clients::{local_clients, watch_process_exit, Credentials, NEEDS_SDL};
 /// Host-side RDP self-setup (design 3): triggers, state and system steps.
 pub(crate) use os::shared::self_setup as host_setup;
+/// The Android bridge's open (`mobile/.../rdp.rs`).
+#[cfg(any(target_os = "android", all(unix, test)))]
+pub(crate) use os::shared::session::open_device;
 pub(crate) use os::shared::session::SessionView;
 pub(crate) use os::shared::session::{begin_owned_shutdown, resume_owned_sessions};
 pub(crate) use os::shared::session::{
     close_owned_session, owned_sessions, shutdown_owned_sessions,
 };
-pub(crate) use os::shared::session::{
-    open_device, open_device_session, open_device_with, OpenOptions,
-};
+pub(crate) use os::shared::session::{open_device_session, open_device_with, OpenOptions};
 
 /// A host up to 0.5.188 answers no probe v2 and so has no SHA-1 thumbprint
 /// for mstsc (design 2.7.2); RDP is not started then.

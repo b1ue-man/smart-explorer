@@ -137,8 +137,8 @@ fn remember(device: u64, links_missing: bool) {
     let mut known = UNSUPPORTED
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    match known.iter_mut().find(|(known, _)| *known == device) {
-        Some(entry) => entry.1 |= links_missing,
+    match known.iter().position(|(known, _)| *known == device) {
+        Some(index) => known[index].1 |= links_missing,
         None if known.len() < MAX_REMEMBERED => known.push((device, links_missing)),
         None => {}
     }

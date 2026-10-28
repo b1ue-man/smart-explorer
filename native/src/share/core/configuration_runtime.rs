@@ -53,7 +53,7 @@ impl RuntimeConfiguration<'_> {
         )>,
     ) -> io::Result<()> {
         let transition = self.iroh.begin_runtime_transition()?;
-        let mut steering_change = None;
+        let steering_change;
         let (restrictions, snapshot) = {
             let mut state = self.auth.lock().map_err(|_| eio("Share-State gesperrt"))?;
             let mut candidate = state.clone();

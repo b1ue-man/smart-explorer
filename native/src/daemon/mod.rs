@@ -232,9 +232,11 @@ pub(crate) use transfer_job_client::run_transfer_in_worker;
 mod tcp_ipc_client;
 #[path = "os/shared/transfer_job_ipc.rs"]
 mod transfer_job_ipc;
+/// The Android bridge's start with its admission (`mobile/.../tcp.rs`).
+#[cfg(any(target_os = "android", all(unix, test)))]
+pub(crate) use tcp_ipc_client::tcp_start_with;
 pub(crate) use tcp_ipc_client::{
-    tcp_close, tcp_list, tcp_start, tcp_start_for_process, tcp_start_with, tcp_start_within,
-    tcp_status,
+    tcp_close, tcp_list, tcp_start, tcp_start_for_process, tcp_start_within, tcp_status,
 };
 #[path = "os/shared/apps_ipc.rs"]
 mod apps_ipc;

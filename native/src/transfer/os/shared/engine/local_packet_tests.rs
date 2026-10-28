@@ -11,7 +11,7 @@ use crate::transfer::engine::view::JobView;
 use crate::transfer::{Endpoint, RecoveryMode, TransferJob, TransferMsg};
 use std::cell::{Cell, RefCell};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 
 /// Switches local packets off for every job (comparison benchmarks only;

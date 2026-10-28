@@ -29,7 +29,7 @@ pub(super) fn print(snapshot: &MountSnapshot) {
                     .display_lines()
                     .iter()
                     .map(|line| super::drive_print::clean(line))
-                    .collect()
+                    .collect::<Vec<String>>()
             })
             .unwrap_or_default();
         for line in lines.iter().chain(&uploads) {
