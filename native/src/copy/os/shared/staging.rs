@@ -84,8 +84,9 @@ pub(super) struct Parallel<'a> {
 }
 
 /// Copies `source` into a new stage next to `target`; `None` when canceled.
-/// `durable` (moves, replacements) syncs the stage to disk. `parallel` is
-/// what the copy may use; durable copies get one thread and no measurement.
+/// `durable` (moves, replacements) syncs the stage to disk once all bytes
+/// are in, whatever number of threads wrote them. `parallel` is what the
+/// copy may use, durable or not (M15); an optical source always gets one.
 pub(super) fn stage_copy(
     source: &Path,
     target: &Path,

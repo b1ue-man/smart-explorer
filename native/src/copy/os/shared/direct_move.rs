@@ -87,14 +87,20 @@ pub(super) fn try_move(
             restore_quarantine_if_any(quarantine.as_ref()).map_err(LocalFailure::Source)?;
             return Ok(Some(LocalOutcome::Canceled));
         }
-        let committed = crate::copy::publication_proof::preflight_direct_move(&live, target)
-            .and_then(|()| {
+        let rename = || {
+            crate::copy::publication_proof::preflight_direct_move(&live, target).and_then(|()| {
                 platform::move_file(
                     rename_source,
                     target,
                     request.conflict == Conflict::Overwrite,
                 )
-            });
+            })
+        };
+        // Tests answer like another volume (EXDEV) without renaming.
+        #[cfg(test)]
+        let committed = super::durable_ranges_tests::rename_reply(rename);
+        #[cfg(not(test))]
+        let committed = rename();
         #[cfg(test)]
         let committed = compatibility_tests::move_reply(committed);
         if let Err(error) = &committed {

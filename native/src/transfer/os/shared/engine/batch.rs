@@ -6,7 +6,9 @@
 //! feeds the breaker at most once, however many members it takes along.
 //! Tiny files fill a packet up to the backend's file count (K-E); a resumed
 //! job packs every file without a receipt of its own, and "transfer missing
-//! files" packs downloads, whose packet asks `existing` per member.
+//! files" packs downloads, whose packet asks `existing` per member. Small
+//! local copies of a job with a crash log travel in local packets: one
+//! intent record and one permit for many files (`local_packet`, M3).
 use super::super::engine_names::parent_rel;
 use super::super::engine_policy::{ends_job_at_target, is_back_pressure, is_transient};
 use super::super::flow::classify_error;
@@ -20,9 +22,15 @@ use super::worker::{
 use super::Engine;
 use std::time::Duration;
 
+#[path = "local_packet.rs"]
+mod local_packet;
+
 /// More small files for a packet with `file`, or `None` for a single
 /// transfer (no batch support, a large file, nothing else small queued).
 pub(super) fn members(engine: &Engine<'_>, file: &FileWork) -> Option<Vec<FileWork>> {
+    if local_packet::applies(engine) {
+        return local_packet::members(engine, file);
+    }
     let limits = engine.batch?;
     if file.retried || file.alone || !resume_allows(engine, file) || !packet_source(engine, file) {
         return None;
@@ -42,6 +50,12 @@ pub(super) fn members(engine: &Engine<'_>, file: &FileWork) -> Option<Vec<FileWo
         target.saturating_sub(file.size),
         small,
     );
+    admit(engine, candidates)
+}
+
+/// The candidates a packet keeps; the others go back to the queue as single
+/// files before any packet reader can take their permit.
+fn admit(engine: &Engine<'_>, candidates: Vec<FileWork>) -> Option<Vec<FileWork>> {
     let mut more = Vec::with_capacity(candidates.len());
     let mut single = Vec::new();
     // The first SSD member does not authorize any later member's medium.
@@ -109,6 +123,9 @@ pub(super) fn run(engine: &Engine<'_>, first: FileWork, members: Vec<FileWork>, 
         }
         (Side::Remote(source), Side::Remote(target)) => {
             super::batch_remote::copy(engine, source, target, files, buffer)
+        }
+        (Side::Local, Side::Local) if local_packet::applies(engine) => {
+            local_packet::run(engine, files, buffer)
         }
         _ => {
             for file in files {
