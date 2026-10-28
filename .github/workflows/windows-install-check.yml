@@ -61,12 +61,19 @@ jobs:
           $admin = ([Security.Principal.WindowsPrincipal]$identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
           "user: $($identity.Name); elevated administrator: $admin"
           "root: $root"
-          & "$helper\Smart Explorer Updater.exe" --install-bundle --root $root `
-            --app-staged 'Smart Explorer.exe' --app-sha256 $hashes.'smart_explorer.exe' `
-            --cli-staged 'se.exe' --cli-sha256 $hashes.'se.exe' `
-            --launcher-staged 'se-mcp-launcher.exe' --launcher-sha256 $hashes.'se-mcp-launcher.exe' `
-            --helper-sha256 $hashes.'smart_explorer_updater.exe' --version $Version --no-gui-start 2>&1
-          "helper exit code: $LASTEXITCODE"
+          # A GUI-subsystem helper: wait for it as the setup's ExecWait does.
+          # One argument string with explicit quotes behaves the same in
+          # Windows PowerShell 5.1 and PowerShell 7.
+          $arguments = "--install-bundle --root `"$root`" --app-staged `"Smart Explorer.exe`" " +
+            "--app-sha256 $($hashes.'smart_explorer.exe') --cli-staged se.exe --cli-sha256 $($hashes.'se.exe') " +
+            "--launcher-staged se-mcp-launcher.exe --launcher-sha256 $($hashes.'se-mcp-launcher.exe') " +
+            "--helper-sha256 $($hashes.'smart_explorer_updater.exe') --version $Version --no-gui-start"
+          $run = Start-Process -FilePath "$helper\Smart Explorer Updater.exe" -ArgumentList $arguments `
+            -WorkingDirectory $helper -Wait -PassThru `
+            -RedirectStandardOutput "$helper\out.txt" -RedirectStandardError "$helper\err.txt"
+          '--- helper stdout'; Get-Content "$helper\out.txt"
+          '--- helper stderr'; Get-Content "$helper\err.txt"
+          "helper exit code: $($run.ExitCode)"
           $log = Join-Path $env:APPDATA 'smart_explorer\updater.log'
           if (Test-Path $log) { '--- updater.log'; Get-Content $log -Tail 40 }
           '--- installed'
@@ -89,8 +96,9 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $password = 'Se!' + [guid]::NewGuid().ToString('N').Substring(0, 16)
-          net user setest $password /add | Out-Null
-          $credential = [pscredential]::new('setest', (ConvertTo-SecureString $password -AsPlainText -Force))
+          net user setest $password /add
+          if ($LASTEXITCODE -ne 0) { throw "net user failed: $LASTEXITCODE" }
+          $credential = [pscredential]::new("$env:COMPUTERNAME\setest", (ConvertTo-SecureString $password -AsPlainText -Force))
           $out = 'C:\se-stage\standard.out.txt'
           $err = 'C:\se-stage\standard.err.txt'
           $process = Start-Process -FilePath 'powershell.exe' -Credential $credential -LoadUserProfile -Wait -PassThru `
