@@ -170,10 +170,10 @@ fn confined_parent_os(
 
 fn local_directory_identity(path: &str) -> io::Result<Option<String>> {
     let path = local_platform::to_os(path);
+    // A volume root follows the same durability rule as its children: a
+    // folder reservation in it chooses its path from this parent identity.
     if path.file_name().is_none() {
-        return crate::local_access::ConfinedDirectory::open_root(&path)?
-            .identity()
-            .map(Some);
+        return crate::local_access::ConfinedDirectory::open_root(&path)?.stable_identity();
     }
     let (parent, name) = confined_parent_os(&path)?;
     let entry = parent.selected_entry(&name)?;

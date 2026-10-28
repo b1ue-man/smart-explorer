@@ -25,7 +25,7 @@ pub(crate) use quarantine::QuarantinedChild;
 mod create;
 pub(crate) use create::secure_private_handle;
 #[path = "directory_identity.rs"]
-mod identity;
+pub(super) mod identity;
 #[path = "private_access.rs"]
 mod private_access;
 #[path = "private_ancestors.rs"]

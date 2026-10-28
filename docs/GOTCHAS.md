@@ -902,3 +902,19 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   `(os error 3)`, `(os error 80|183)` and the English messages); anything else
   stays `Other` with its message. Prefer `try_exists` over stat-and-catch when
   a new call needs existence only.
+
+## Windows removable media (FAT/exFAT)
+
+- **A FAT volume's root directory has file ID 0** (fastfat
+  `FatGenerateFileIdFromDirentOffset`: "Our root always has fileid 0"; FAT
+  answers `FileIdInfo` with `ERROR_INVALID_PARAMETER`, so the identity comes
+  from `GetFileInformationByHandle`). Every pin of a USB stick root therefore
+  failed with "provider has no directory identity". `local_access/os/windows/
+  directory_identity.rs` accepts ID 0 only for the volume root: its
+  `FileNameInfo` is exactly `\`, and its identity is the volume serial
+  (`windows-root:<serial>`). Any other object with ID 0 keeps failing.
+- **FAT/exFAT folders have no durable identity** (Microsoft: a FAT file ID is
+  derived from the directory entry's position and can change). The VFS
+  `directory_identity` of a root therefore follows `stable_identity` like its
+  children (NTFS/ReFS only), so a folder reservation on a stick creates the
+  folder directly instead of through a stage that would need an identity.

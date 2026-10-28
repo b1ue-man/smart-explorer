@@ -10,10 +10,10 @@ use std::{
     sync::{Arc, Mutex, PoisonError},
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    FileDispositionInfo, FileIdInfo, GetFileInformationByHandle, GetFileInformationByHandleEx,
-    SetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_DISPOSITION_INFO,
-    FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_ID_INFO, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE,
-    FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES,
+    FileDispositionInfo, GetFileInformationByHandle, SetFileInformationByHandle,
+    BY_HANDLE_FILE_INFORMATION, FILE_DISPOSITION_INFO, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
+    FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    FILE_WRITE_ATTRIBUTES,
 };
 #[path = "confined_names.rs"]
 mod names;
@@ -437,43 +437,7 @@ fn information(file: &File) -> io::Result<BY_HANDLE_FILE_INFORMATION> {
     Ok(info)
 }
 fn identity(file: &File) -> io::Result<String> {
-    let mut full: FILE_ID_INFO = unsafe { std::mem::zeroed() };
-    if unsafe {
-        GetFileInformationByHandleEx(
-            file.as_raw_handle(),
-            FileIdInfo,
-            (&mut full as *mut FILE_ID_INFO).cast(),
-            std::mem::size_of::<FILE_ID_INFO>() as u32,
-        )
-    } != 0
-    {
-        if full.FileId.Identifier == [0; 16] {
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "provider has no directory identity",
-            ));
-        }
-        return Ok(format!(
-            "windows-full:{}:{}",
-            full.VolumeSerialNumber,
-            data_encoding::HEXLOWER.encode(&full.FileId.Identifier)
-        ));
-    }
-    let error = io::Error::last_os_error();
-    if !matches!(error.raw_os_error(), Some(1 | 50 | 87 | 124)) {
-        return Err(error);
-    }
-    let info = information(file)?;
-    if info.nFileIndexHigh == 0 && info.nFileIndexLow == 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "provider has no directory identity",
-        ));
-    }
-    Ok(format!(
-        "windows:{}:{}:{}",
-        info.dwVolumeSerialNumber, info.nFileIndexHigh, info.nFileIndexLow
-    ))
+    super::directory_handle::identity::identity(file).map(|identity| identity.key())
 }
 fn boundary() -> io::Error {
     io::Error::new(
