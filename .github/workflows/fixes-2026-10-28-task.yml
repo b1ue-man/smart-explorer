@@ -1,0 +1,203 @@
+name: fixes-2026-10-28-task
+run-name: Fixes of 2026-10-28 ${{ inputs.candidate_sha }}
+
+# Task suite of 2026-10-28. User reports: "windows copy paste auf externen
+# speicher, usb, fehler provider has no directory identity" and, on a
+# Windows install, "update ging nicht … installer probiert" (exit code only;
+# the helper stopped at runtime_acl_foreign_write_grant on its own root when
+# elevated). Clippy on library and binaries (findings count only on lines
+# changed since v0.5.187); on Windows the job attaches a FAT32 and an exFAT
+# volume and pastes into their roots and a folder, checks the installation
+# ACL rules, and installs the built payloads elevated like the setup does —
+# fresh and over that installation.
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Full pushed candidate SHA, matching the selected ref
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fixes-2026-10-28-task-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 240
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 1
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind workflow and checkout to the requested candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+          shared-key: search-recursive-access
+          cache-on-failure: true
+          cache-workspace-crates: true
+
+      - name: Clippy on library and binaries; findings on changed lines fail
+        shell: bash
+        timeout-minutes: 140
+        run: |
+          set +e -uo pipefail
+          git diff -U0 --no-color v0.5.187 HEAD -- native/src > "$RUNNER_TEMP/diff.txt"
+          cd native
+          cargo clippy --lib --bins --message-format short 2>&1 \
+            | tr '\\' '/' | tee "$RUNNER_TEMP/clippy.txt"
+          status=${PIPESTATUS[0]}
+          if grep -E ': error\[E[0-9]+\]|^error\[E[0-9]+\]' "$RUNNER_TEMP/clippy.txt"; then
+            echo "::error::compile errors (clippy status $status)"
+            exit 1
+          fi
+          PY=$(command -v python3 || command -v python)
+          "$PY" - "$RUNNER_TEMP/diff.txt" "$RUNNER_TEMP/clippy.txt" > "$RUNNER_TEMP/findings.txt" <<'PYEOF'
+          import re, sys
+          changed, current = {}, None
+          for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+              if line.startswith("+++ "):
+                  path = line[4:].strip()
+                  current = path[len("b/native/"):] if path.startswith("b/native/") else None
+              elif line.startswith("@@") and current:
+                  m = re.search(r"\+(\d+)(?:,(\d+))?", line)
+                  start, count = int(m.group(1)), int(m.group(2) or 1)
+                  changed.setdefault(current, set()).update(range(start, start + count))
+          for line in open(sys.argv[2], encoding="utf-8", errors="replace"):
+              m = re.match(r"^(src/[^:]+):(\d+):\d+: (error|warning)", line)
+              if m and int(m.group(2)) in changed.get(m.group(1), ()):
+                  print(line.rstrip())
+          PYEOF
+          if [[ -s "$RUNNER_TEMP/findings.txt" ]]; then
+            echo "::error::findings on changed lines"
+            sort -u "$RUNNER_TEMP/findings.txt"
+            exit 1
+          fi
+          echo "clippy clean on changed lines"
+
+      - name: Attach a FAT32 and an exFAT volume
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 30
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $volumes = @(@{ Fs = 'fat32'; Letter = 'Y' }, @{ Fs = 'exfat'; Letter = 'Z' })
+          foreach ($volume in $volumes) {
+            $file = Join-Path $env:RUNNER_TEMP "$($volume.Fs).vhdx"
+            $script = Join-Path $env:RUNNER_TEMP "$($volume.Fs).diskpart"
+            @(
+              "create vdisk file=`"$file`" maximum=256 type=expandable",
+              "select vdisk file=`"$file`"",
+              'attach vdisk',
+              'convert mbr',
+              'create partition primary',
+              "format fs=$($volume.Fs) quick label=SE$($volume.Fs.ToUpper())",
+              "assign letter=$($volume.Letter)"
+            ) | Set-Content -Encoding ascii $script
+            diskpart /s $script
+            if ($LASTEXITCODE -ne 0) { throw "diskpart $($volume.Fs) failed: $LASTEXITCODE" }
+            $root = "$($volume.Letter):\"
+            fsutil fsinfo volumeinfo $root
+            New-Item -ItemType Directory -Path (Join-Path $root 'probe') | Out-Null
+            # The providers' actual IDs of the root and of a folder.
+            fsutil file queryfileid $root
+            fsutil file queryfileid (Join-Path $root 'probe')
+            Remove-Item (Join-Path $root 'probe')
+          }
+          "SE_TASK_REMOVABLE_ROOTS=Y:\;Z:\" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Paste onto the volumes, identity and installation ACL rules
+        shell: bash
+        timeout-minutes: 120
+        run: |
+          set -Eeuo pipefail
+          cd native
+          cargo test --lib -- --test-threads=1 --nocapture \
+            removable_media_task_ install_owner_task_ | tee "$RUNNER_TEMP/task.txt"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            grep -F 'removable media roots checked: 2' "$RUNNER_TEMP/task.txt"
+            grep -F 'install_owner_task_elevated_setup_root_trusts_the_running_account ... ok' \
+              "$RUNNER_TEMP/task.txt"
+          fi
+
+      - name: Build the four setup payloads
+        if: runner.os == 'Windows'
+        shell: bash
+        timeout-minutes: 120
+        run: |
+          set -Eeuo pipefail
+          cd native
+          cargo build --bin smart_explorer --bin se --bin smart_explorer_updater --bin se-mcp-launcher
+
+      - name: Install elevated as the setup does, fresh and over that installation
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 30
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bin = Join-Path $env:GITHUB_WORKSPACE 'native\target\debug'
+          # The setup extracts the payloads under these names next to the
+          # helper and passes bare names (installer.nsi, ExecWait).
+          $stage = Join-Path $env:RUNNER_TEMP 'se-setup'
+          New-Item -ItemType Directory -Force $stage | Out-Null
+          Copy-Item "$bin\smart_explorer.exe" "$stage\Smart Explorer.exe"
+          Copy-Item "$bin\smart_explorer_updater.exe" "$stage\Smart Explorer Updater.exe"
+          Copy-Item "$bin\se.exe" "$stage\se.exe"
+          Copy-Item "$bin\se-mcp-launcher.exe" "$stage\se-mcp-launcher.exe"
+          function Sha([string]$path) { (Get-FileHash $path -Algorithm SHA256).Hash.ToLower() }
+          $version = (Select-String -Path native\Cargo.toml -Pattern '^version = "(.+)"' |
+            Select-Object -First 1).Matches[0].Groups[1].Value
+          $root = Join-Path $env:LOCALAPPDATA 'Programs\Smart Explorer'
+          New-Item -ItemType Directory -Force $root | Out-Null
+          foreach ($round in 'fresh', 'over the installed one') {
+            $arguments = "--install-bundle --root `"$root`" --app-staged `"Smart Explorer.exe`" " +
+              "--app-sha256 $(Sha "$stage\Smart Explorer.exe") --cli-staged se.exe --cli-sha256 $(Sha "$stage\se.exe") " +
+              "--launcher-staged se-mcp-launcher.exe --launcher-sha256 $(Sha "$stage\se-mcp-launcher.exe") " +
+              "--helper-sha256 $(Sha "$stage\Smart Explorer Updater.exe") --version $version --no-gui-start"
+            $run = Start-Process -FilePath "$stage\Smart Explorer Updater.exe" -ArgumentList $arguments `
+              -WorkingDirectory $stage -Wait -PassThru `
+              -RedirectStandardOutput "$stage\out.txt" -RedirectStandardError "$stage\err.txt"
+            "--- install ($round): exit $($run.ExitCode)"
+            Get-Content "$stage\out.txt"
+            Get-Content "$stage\err.txt"
+            if ($run.ExitCode -ne 0) {
+              $log = Join-Path $env:APPDATA 'smart_explorer\updater.log'
+              if (Test-Path $log) { Get-Content $log -Tail 40 }
+              throw "install ($round) failed: $($run.ExitCode)"
+            }
+            if (-not (Select-String -Path "$stage\out.txt" -Pattern '"status":"installed"' -Quiet)) {
+              throw "install ($round) reported no installation"
+            }
+          }
+          & (Join-Path $root 'se.exe') --version
+          if ($LASTEXITCODE -ne 0) { throw "installed se.exe failed: $LASTEXITCODE" }

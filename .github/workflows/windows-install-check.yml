@@ -4,8 +4,10 @@ run-name: Install a published Windows release ${{ inputs.version }}
 # Installs a published release the way the setup does (the verified update
 # helper's --install-bundle into %LOCALAPPDATA%\Programs\Smart Explorer, the
 # payloads staged under the setup's names in the helper's working folder),
-# once from the runner's elevated account and once as a standard user, and
-# prints the helper's exact result. The setup itself shows only the exit code.
+# from the runner's elevated account (an elevated setup: Administrators own
+# what it creates in the user's profile), and prints the helper's exact
+# result. The setup itself shows only the exit code. A separate standard
+# account gets no loaded profile folders on the hosted runner.
 
 on:
   workflow_dispatch:
@@ -46,14 +48,6 @@ jobs:
           $hashes | ConvertTo-Json | Set-Content "$stage\hashes.json"
           @'
           param([string]$Stage, [string]$Version)
-          # Start-Process -Credential hands over the caller's environment;
-          # take this account's own folders from its token.
-          $env:LOCALAPPDATA = [Environment]::GetFolderPath('LocalApplicationData')
-          $env:APPDATA = [Environment]::GetFolderPath('ApplicationData')
-          $env:USERPROFILE = [Environment]::GetFolderPath('UserProfile')
-          $env:TEMP = Join-Path $env:LOCALAPPDATA 'Temp'
-          $env:TMP = $env:TEMP
-          New-Item -ItemType Directory -Force $env:TEMP | Out-Null
           $hashes = Get-Content "$Stage\hashes.json" -Raw | ConvertFrom-Json
           $root = Join-Path $env:LOCALAPPDATA 'Programs\Smart Explorer'
           New-Item -ItemType Directory -Force $root | Out-Null
@@ -82,6 +76,7 @@ jobs:
           '--- helper stdout'; Get-Content "$helper\out.txt"
           '--- helper stderr'; Get-Content "$helper\err.txt"
           "helper exit code: $($run.ExitCode)"
+          $code = $run.ExitCode
           $log = Join-Path $env:APPDATA 'smart_explorer\updater.log'
           if (Test-Path $log) { '--- updater.log'; Get-Content $log -Tail 40 }
           '--- installed'
@@ -91,29 +86,10 @@ jobs:
           while ($path) { icacls $path; $path = Split-Path $path }
           '--- temp ACL'
           icacls $env:TEMP
+          if ($code -ne 0) { throw "installation failed: $code" }
           '@ | Set-Content "$stage\install.ps1"
 
       - name: Install as the runner's elevated account
         shell: pwsh
         run: |
           & C:\se-stage\install.ps1 -Stage C:\se-stage -Version $env:VERSION
-
-      - name: Install as a standard user
-        if: always()
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          # At most 14 characters: net user asks before accepting a longer one.
-          $password = 'Se!' + [guid]::NewGuid().ToString('N').Substring(0, 10)
-          net user setest $password /add
-          if ($LASTEXITCODE -ne 0) { throw "net user failed: $LASTEXITCODE" }
-          $credential = [pscredential]::new("$env:COMPUTERNAME\setest", (ConvertTo-SecureString $password -AsPlainText -Force))
-          $out = 'C:\se-stage\standard.out.txt'
-          $err = 'C:\se-stage\standard.err.txt'
-          $process = Start-Process -FilePath 'powershell.exe' -Credential $credential -LoadUserProfile -Wait -PassThru `
-            -WorkingDirectory 'C:\se-stage' `
-            -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'C:\se-stage\install.ps1', '-Stage', 'C:\se-stage', '-Version', $env:VERSION `
-            -RedirectStandardOutput $out -RedirectStandardError $err
-          Get-Content $out
-          Get-Content $err
-          "process exit: $($process.ExitCode)"
