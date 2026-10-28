@@ -14,6 +14,11 @@ impl BackendExtensions for FtpBackend {
         true
     }
 
+    fn transfer_scope(&self) -> Option<Box<dyn std::any::Any + Send>> {
+        // Keeps the folder listings this job publishes into (name_cache.rs).
+        Some(Box::new(self.listing_scope()))
+    }
+
     fn create_dir_exclusive(&self, path: &str) -> VfsResult<()> {
         super::folder_reservation::create(self, path)
     }
