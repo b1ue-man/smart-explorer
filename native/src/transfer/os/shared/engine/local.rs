@@ -2,7 +2,10 @@
 //! transfer (kernel copy into a private stage, no-replace publication under
 //! the conflict policy, quarantined moves). A move of whole unfiltered
 //! folders on one volume is first tried as one no-replace rename; the rest
-//! moves file by file and empty source folders are removed afterwards.
+//! moves file by file and empty source folders are removed afterwards. A
+//! large copy, and a large move to another volume (M15), takes the permits
+//! the flows have to spare as range threads. Small new copies of a job with
+//! a crash log travel in packets (`batch::local_packet`, M3).
 use super::super::engine_names::{base_name, parent_rel};
 use super::super::flow::{classify_error, Flow, FlowPermit};
 use super::super::flow_control::OpOutcome;
@@ -161,6 +164,16 @@ fn device_key(source: &Path, target: &Path) -> Option<DeviceKey> {
     }
 }
 
+/// Whether a move between the device pair `key` copies instead of renaming
+/// (M15): only a pair of two known, different block devices counts. A side
+/// without a block device (network, FUSE, virtual) or a platform without
+/// ranges (`device_key` is `None`) keeps the move on one thread, as before;
+/// a rename that still fails across a bind mount on one device copies on
+/// one thread as well.
+fn crosses_volumes(key: Option<DeviceKey>) -> bool {
+    key.is_some_and(|(source, target)| source != target)
+}
+
 /// The extra permits of one copy, taken before it and given back after it.
 pub(super) struct Extras {
     permits: Vec<(FlowPermit, Option<FlowPermit>)>,
@@ -206,19 +219,22 @@ fn take_extras(
     let none = || Extras {
         permits: Vec::new(),
     };
-    // The common small file or move asks for nothing: no look into the queue
-    // (a lock every worker shares) and no permit taking.
-    if engine.is_move()
-        || size < SPLIT_FROM
+    // The common small file asks for nothing: no look into the queue (a lock
+    // every worker shares) and no permit taking.
+    if size < SPLIT_FROM
         || crate::source_media::probe_regular_file(source).is_ok_and(|source| source.is_some())
     {
         return (none(), None);
     }
     let key = device_key(source, target);
+    let renames = engine.is_move() && !crosses_volumes(key);
+    if renames {
+        return (none(), None);
+    }
     let memory = || key.map_or(Memory::Unavailable, |key| VERDICTS.memory(key));
     let planned = plan::plan(
         size,
-        engine.is_move(),
+        renames,
         engine.queue.view().queued,
         unbuffered_of(size, target),
         || drive_of(target),
@@ -384,3 +400,6 @@ fn plain_dir(path: &std::path::Path) -> bool {
 #[cfg(test)]
 #[path = "local_extras_tests.rs"]
 mod extras_tests;
+#[cfg(test)]
+#[path = "local_move_extras_tests.rs"]
+mod move_extras_tests;

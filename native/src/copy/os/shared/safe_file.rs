@@ -1,27 +1,31 @@
-//! One local file copied or moved into a prepared folder: private stage,
-//! kernel copy, no-replace publication under the conflict policy, and a move
-//! that relocates its source to an unpredictable quarantine first. New copies
-//! skip the per-file disk sync; moves and replacements keep it.
+//! One local file copied or moved into a prepared folder, in three phases:
+//! the first name (conflict policy), the private stage (kernel copy, the
+//! source observed), and the publication (`local_publish`: no-replace rename
+//! under the policy, each attempt behind the observer's durable intent). A
+//! move first relocates its source to an unpredictable quarantine. New copies
+//! skip the per-file disk sync; moves and replacements keep it, and since
+//! M15 (2026-10-28) they copy with the same range threads as new copies.
 use crate::types::{Conflict, CopyMode};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::super::platform;
-use super::durability::finish_staged_commit;
 #[cfg(test)]
 use super::move_guard::{quarantine_source, restore_quarantine, source_snapshot_path};
 use super::move_guard::{
     quarantine_source_observed, restore_after_error, restore_quarantine_if_any,
-    source_changed_error,
 };
 #[cfg(test)]
 use super::path_guard::prepare_target_parent;
-use super::publication::{self, PublicationObserver};
+use super::publication::PublicationObserver;
 use super::staging::{stage_copy, LocalFailure, Parallel};
 
 #[path = "direct_move.rs"]
 mod direct_move;
+#[path = "local_publish.rs"]
+mod local_publish;
+pub(crate) use local_publish::packet_start;
 
 /// Numbered names tried for one file when others keep taking them.
 const MAX_RENAME_RACE_RETRIES: usize = 1000;
@@ -35,11 +39,12 @@ pub(crate) struct LocalRequest<'a> {
     pub mode: CopyMode,
     pub cancel: &'a AtomicBool,
     /// Threads that may copy this one file's byte ranges at once (1 = one).
-    /// Only a new copy uses more: moves and replacements stay at one.
+    /// Durable copies (moves across volumes, replacements) use them too
+    /// (M15): their stage is still synced as a whole before publication.
     pub parallel: usize,
     /// Set (with `parallel` > 1) for a drive not known to be flash: the copy
     /// measures whether ranges help and reports the verdict here; the rest of
-    /// the file is copied accordingly. Ignored by moves and replacements.
+    /// the file is copied accordingly.
     pub probe: Option<&'a dyn Fn(bool)>,
 }
 
@@ -59,7 +64,7 @@ pub(crate) fn transfer_local(
     request: &LocalRequest<'_>,
     progress: &mut dyn FnMut(u64),
 ) -> Result<LocalOutcome, LocalFailure> {
-    transfer_local_inner(request, progress, None)
+    transfer_local_inner(request, None, progress, None)
 }
 
 /// The same local transfer with durable receipt hooks around publication.
@@ -68,11 +73,31 @@ pub(crate) fn transfer_local_observed(
     progress: &mut dyn FnMut(u64),
     observer: &dyn PublicationObserver,
 ) -> Result<LocalOutcome, LocalFailure> {
-    transfer_local_inner(request, progress, Some(observer))
+    transfer_local_inner(request, None, progress, Some(observer))
+}
+
+/// A member of a local packet (M3): a new copy under "skip" or "keep both"
+/// whose first name `start` was chosen by `packet_start` before the packet's
+/// intent; "keep both" numbers from `request.target` on any later conflict.
+/// Stage and publication are those of `transfer_local_observed`.
+pub(crate) fn transfer_local_from(
+    request: &LocalRequest<'_>,
+    start: &Path,
+    progress: &mut dyn FnMut(u64),
+    observer: &dyn PublicationObserver,
+) -> Result<LocalOutcome, LocalFailure> {
+    if request.mode != CopyMode::Copy || request.conflict == Conflict::Overwrite {
+        return Err(LocalFailure::Target(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "only new copies under skip or keep both start at a chosen name",
+        )));
+    }
+    transfer_local_inner(request, Some(start), progress, Some(observer))
 }
 
 fn transfer_local_inner(
     request: &LocalRequest<'_>,
+    start: Option<&Path>,
     progress: &mut dyn FnMut(u64),
     observer: Option<&dyn PublicationObserver>,
 ) -> Result<LocalOutcome, LocalFailure> {
@@ -87,9 +112,14 @@ fn transfer_local_inner(
             format!("source is not a regular, non-link file: {}", src.display()),
         )));
     }
+    // Phase 1: the first name.
     let requested = request.target.to_path_buf();
-    let Some(mut target) = select_initial_target(src, &requested, request.conflict)? else {
-        return Ok(LocalOutcome::Skipped);
+    let mut target = match start {
+        Some(start) => start.to_path_buf(),
+        None => match select_initial_target(src, &requested, request.conflict)? {
+            Some(target) => target,
+            None => return Ok(LocalOutcome::Skipped),
+        },
     };
     if request.cancel.load(Ordering::Acquire) {
         return Ok(LocalOutcome::Canceled);
@@ -125,18 +155,18 @@ fn transfer_local_inner(
         }
     }
 
+    // Phase 2: the stage. A durable copy (a move to another volume, a
+    // replacement) takes the range threads too (M15, 2026-10-28): the
+    // threads only decide how the bytes get into the stage, which is synced
+    // as a whole (`stage_copy`) before the publication below, so "durable
+    // before published" holds as with one thread.
     let durable = request.mode == CopyMode::Move || request.conflict == Conflict::Overwrite;
-    let parallel = if durable {
-        Parallel {
-            threads: 1,
-            probe: None,
-        }
-    } else {
-        Parallel {
-            threads: request.parallel.max(1),
-            probe: request.probe,
-        }
+    let parallel = Parallel {
+        threads: request.parallel.max(1),
+        probe: request.probe,
     };
+    #[cfg(test)]
+    durable_ranges_tests::saw(parallel.threads, durable);
     let staged = match stage_copy(
         &source_path,
         &target,
@@ -153,124 +183,21 @@ fn transfer_local_inner(
         }
         Err(failure) => return Err(restore_failure(quarantine.as_ref(), failure)),
     };
-    if request.cancel.load(Ordering::Acquire) {
-        staged.discard().map_err(LocalFailure::Publish)?;
-        restore_quarantine_if_any(quarantine.as_ref()).map_err(LocalFailure::Source)?;
-        return Ok(LocalOutcome::Canceled);
-    }
-    let identity = platform::file_identity(&staged.file).map_err(LocalFailure::Target);
-    let same = identity.and_then(|identity| {
-        platform::path_matches_identity(&staged.temp, identity).map_err(LocalFailure::Target)
-    });
-    if !matches!(same, Ok(true)) {
-        staged.discard().map_err(LocalFailure::Publish)?;
-        let error = io::Error::new(
-            io::ErrorKind::InvalidData,
-            "staged copy path changed before commit",
-        );
-        return Err(LocalFailure::Target(restore_after_error(
-            quarantine.as_ref(),
-            error,
-        )));
-    }
-    if let Some(source) = &quarantine {
-        if staged.snapshot != source.snapshot {
-            staged.discard().map_err(LocalFailure::Publish)?;
-            return Err(LocalFailure::Source(restore_after_error(
-                quarantine.as_ref(),
-                source_changed_error(&source.path),
-            )));
-        }
-    }
-
-    loop {
-        if let Err(error) = publication::before(observer, &staged.temp, &target, &staged.file) {
-            publication::preparation_failed(
-                observer,
-                &staged.temp,
-                &target,
-                &error,
-                quarantine.as_ref(),
-            )
-            .map_err(LocalFailure::Publish)?;
-            staged.discard().map_err(LocalFailure::Publish)?;
-            return Err(LocalFailure::Publish(restore_after_error(
-                quarantine.as_ref(),
-                error,
-            )));
-        }
-        let committed = platform::commit_staged(
-            &staged.temp,
-            &target,
-            request.conflict == Conflict::Overwrite,
+    // Phase 3: the publication.
+    local_publish::publish(
+        local_publish::Publication {
+            staged,
+            requested,
+            target,
+            conflict: request.conflict,
             durable,
-        );
-        if let Err(error) = &committed {
-            publication::commit_failed(
-                observer,
-                &staged.temp,
-                &target,
-                &staged.file,
-                error,
-                quarantine.as_ref(),
-            )
-            .map_err(LocalFailure::Publish)?;
-        }
-        match committed {
-            Ok(()) => break,
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => match request.conflict {
-                Conflict::Skip => {
-                    staged.discard().map_err(LocalFailure::Publish)?;
-                    restore_quarantine_if_any(quarantine.as_ref()).map_err(LocalFailure::Source)?;
-                    return Ok(LocalOutcome::Skipped);
-                }
-                Conflict::Rename => match next_name(&requested, &mut races) {
-                    Ok(next) => target = next,
-                    Err(error) => {
-                        staged.discard().map_err(LocalFailure::Publish)?;
-                        return Err(LocalFailure::Publish(restore_after_error(
-                            quarantine.as_ref(),
-                            error,
-                        )));
-                    }
-                },
-                Conflict::Overwrite => {
-                    staged.discard().map_err(LocalFailure::Publish)?;
-                    return Err(LocalFailure::Publish(restore_after_error(
-                        quarantine.as_ref(),
-                        error,
-                    )));
-                }
-            },
-            Err(error) => {
-                staged.discard().map_err(LocalFailure::Publish)?;
-                return Err(LocalFailure::Publish(restore_after_error(
-                    quarantine.as_ref(),
-                    error,
-                )));
-            }
-        }
-    }
-    let bytes = staged.bytes;
-    if durable {
-        crate::copy::publication_proof::confirm_handle_publication(&target, &staged.file, request.cancel)
-            .map_err(|error| {
-                let retained = quarantine.as_ref().map_or(String::new(), |source|
-                    format!("; secured move source retained at {}", source.path.display()));
-                LocalFailure::Publish(io::Error::new(error.kind(), format!(
-                    "destination committed at {}{retained}; destination durability confirmation failed: {error}",
-                    target.display(),
-                )))
-            })?;
-    }
-    publication::after(observer, &target, &staged.file, quarantine.as_ref())
-        .map_err(LocalFailure::Publish)?;
-    drop(staged.file);
-    if durable {
-        finish_staged_commit(&target, src, &mut quarantine, platform::sync_parent)
-            .map_err(LocalFailure::Publish)?;
-    }
-    Ok(LocalOutcome::Completed { bytes, target })
+            cancel: request.cancel,
+            original: src,
+        },
+        &mut races,
+        &mut quarantine,
+        observer,
+    )
 }
 
 /// The quarantined move source goes back where it was when the copy failed.
@@ -426,6 +353,9 @@ pub(super) fn transfer_file(
     }
 }
 
+#[cfg(test)]
+#[path = "durable_ranges_tests.rs"]
+mod durable_ranges_tests;
 #[cfg(test)]
 #[path = "safe_file_tests.rs"]
 mod tests;

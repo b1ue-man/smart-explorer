@@ -6,9 +6,11 @@ use super::plan::{extras_wanted, plan, unbuffered, PROBE_FROM, UNBUFFERED_EXTRAS
 use super::*;
 use crate::transfer::flow;
 use crate::transfer::segments::MIN_SEGMENT;
-use std::cell::Cell;
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::{
+    cell::Cell,
+    sync::Mutex,
+    time::{Duration, Instant},
+};
 
 /// Per test: the folder whose copies are recorded and the drive kind they
 /// are told to have. Engine workers run on other threads, so the table is
@@ -72,14 +74,14 @@ pub(super) fn forced_key(target: &Path) -> Option<Option<DeviceKey>> {
     Some(entry.key)
 }
 
-struct Registered(PathBuf);
+pub(super) struct Registered(PathBuf);
 
 impl Registered {
     fn new(folder: &Path, rotation: Option<bool>) -> Self {
         Self::on(folder, rotation, None)
     }
 
-    fn on(folder: &Path, rotation: Option<bool>, key: Option<DeviceKey>) -> Self {
+    pub(super) fn on(folder: &Path, rotation: Option<bool>, key: Option<DeviceKey>) -> Self {
         let mut prefixes = vec![folder.to_path_buf()];
         prefixes.extend(std::fs::canonicalize(folder));
         entries().push(Entry {
@@ -112,7 +114,7 @@ impl Registered {
             .unwrap_or_default()
     }
 
-    fn seen(&self) -> Vec<usize> {
+    pub(super) fn seen(&self) -> Vec<usize> {
         let entries = entries();
         entries
             .iter()
@@ -135,6 +137,10 @@ fn completed() -> Result<LocalOutcome, LocalFailure> {
         bytes: 1,
         target: PathBuf::from("t"),
     })
+}
+
+fn not_asked<T>() -> T {
+    unreachable!("not asked")
 }
 
 fn in_flight(flow: &Arc<Flow>) -> usize {
@@ -225,24 +231,25 @@ fn speed_task_local_extra_permits_never_wait() {
     main.finish(OpOutcome::Done);
 }
 
+/// Pinned, deliberately changed by M15 (2026-10-28): a move that stays one
+/// rename on its volume gets no extras; a move to another volume is a durable
+/// copy whose stage is synced whole before publication, so it asks like a copy.
 #[test]
 fn speed_task_local_no_extras_for_small_files_or_moves() {
     assert_eq!(extras_wanted(SPLIT_FROM - 1, false, 0), 0);
     assert_eq!(extras_wanted(SPLIT_FROM, false, 0), 1);
     assert_eq!(extras_wanted(SPLIT_FROM + MIN_SEGMENT - 1, false, 0), 1);
     assert_eq!(extras_wanted(SPLIT_FROM + MIN_SEGMENT, false, 0), 2);
-    assert_eq!(extras_wanted(64 * MIB, true, 0), 0, "a move");
-    // Neither a small file nor a move asks the drive or the memory.
-    for (size, is_move) in [(SPLIT_FROM - 1, false), (512 * MIB, true)] {
-        let planned = plan(
-            size,
-            is_move,
-            0,
-            true,
-            || unreachable!("the drive is not asked"),
-            || unreachable!("the memory is not asked"),
-        );
-        assert_eq!(planned, Plan::Single, "{size} {is_move}");
+    assert_eq!(extras_wanted(64 * MIB, true, 0), 0, "a move on one volume");
+    assert_eq!(
+        extras_wanted(64 * MIB, false, 0),
+        7,
+        "a move across volumes"
+    );
+    // Neither a small file nor a renaming move asks the drive or the memory.
+    for (size, renames) in [(SPLIT_FROM - 1, false), (512 * MIB, true)] {
+        let planned = plan(size, renames, 0, true, not_asked, not_asked);
+        assert_eq!(planned, Plan::Single, "{size} {renames}");
     }
     // What the system says of the drive under the target.
     let folder = tempfile::tempdir().expect("temp dir");
@@ -327,7 +334,7 @@ fn speed_task_local_probe_is_planned_only_for_a_direct_copy_on_a_drive_not_known
         plan(PROBE_FROM - 1, false, 0, true, spinning, || Memory::Helps),
         Plan::Ranges(3)
     );
-    // Work waiting, a move and a file below two parts never measure.
+    // Work waiting, a renaming move and a file below two parts never measure.
     assert_eq!(
         plan(size, false, 1, true, spinning, || Memory::Untested),
         Plan::Single

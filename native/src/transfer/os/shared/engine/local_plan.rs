@@ -81,13 +81,15 @@ pub(super) enum Plan {
 }
 
 /// How many threads beyond the one that holds the operation's permit may
-/// copy ranges of a file: none unless it is a copy (a move stays one
-/// rename or one durable copy) of at least two shortest transfer parts and
-/// nothing else waits in the queue (another file would use the permit
+/// copy ranges of a file: none for a move that stays one rename on its
+/// volume (`renames`), none below two shortest transfer parts and none while
+/// anything else waits in the queue (another file would use the permit
 /// better); at most one per part beyond the first, because every thread
-/// needs a part of at least `MIN_SEGMENT`.
-pub(super) fn extras_wanted(size: u64, is_move: bool, queued: usize) -> usize {
-    if is_move || queued > 0 || size < SPLIT_FROM {
+/// needs a part of at least `MIN_SEGMENT`. A move to another volume is a
+/// durable copy and asks like any copy (M15, 2026-10-28): its stage is
+/// synced whole before publication however many threads filled it.
+pub(super) fn extras_wanted(size: u64, renames: bool, queued: usize) -> usize {
+    if renames || queued > 0 || size < SPLIT_FROM {
         return 0;
     }
     usize::try_from(size / MIN_SEGMENT - 1).unwrap_or(usize::MAX)
@@ -106,13 +108,13 @@ pub(super) fn extras_wanted(size: u64, is_move: bool, queued: usize) -> usize {
 /// gain). The drive and the memory are asked only when the file qualifies.
 pub(super) fn plan(
     size: u64,
-    is_move: bool,
+    renames: bool,
     queued: usize,
     unbuffered: bool,
     drive: impl FnOnce() -> Drive,
     memory: impl FnOnce() -> Memory,
 ) -> Plan {
-    let mut extras = extras_wanted(size, is_move, queued);
+    let mut extras = extras_wanted(size, renames, queued);
     if unbuffered {
         extras = extras.min(UNBUFFERED_EXTRAS);
     }

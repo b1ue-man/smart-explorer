@@ -327,8 +327,10 @@ pub(super) fn copy_by_path(
 /// available memory on block devices goes around the page cache first
 /// (`linux_direct`: O_DIRECT, at most 4 threads); a file system that takes no
 /// direct I/O falls back to the ranges below before a byte has moved. Callers
-/// with `parallel == 1` (moves, replacements, server copies) never copy
-/// directly. `None` when canceled.
+/// with `parallel == 1` (server copies, small files) never copy directly;
+/// durable copies (moves across volumes, replacements) may use ranges since
+/// M15 and sync the stage afterwards (`staging::stage_copy`). `None` when
+/// canceled.
 pub(super) fn copy_handles(
     reader: &File,
     writer: &mut File,
