@@ -7,6 +7,7 @@ impl App {
     pub(in crate::app) fn drain_scan(&mut self) {
         self.drain_watcher();
         self.poll_read_access();
+        self.poll_view_refresh();
         let rx = match self.scan_rx.take() {
             Some(r) => r,
             None => return,

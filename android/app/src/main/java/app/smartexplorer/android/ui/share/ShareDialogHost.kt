@@ -98,7 +98,15 @@ internal fun ShareDialogHost(
     when (dialog) {
         is ShareDialog.Tcp -> TcpDialog(dialog, onDismiss)
         is ShareDialog.Rdp -> RdpDialog(dialog, onDismiss)
-        is ShareDialog.Apps -> AppsDialog(dialog, onDismiss, onOpenWindow = { onReplace(ShareDialog.AppWindow(it)) })
+        is ShareDialog.Apps -> AppsDialog(
+            dialog,
+            onDismiss,
+            onOpenWindow = { onReplace(ShareDialog.AppWindow(it)) },
+            // The existing screen-open flow (SCR-M9): the Share page shows the screen above this dialog.
+            onOpenScreen = { target ->
+                app.smartexplorer.android.ui.AppNav.send(app.smartexplorer.android.ui.NavRequest.OpenScreen(target.toJson()))
+            },
+        )
         is ShareDialog.Families -> FamilyTargetsDialog(dialog, onDismiss, onReplace)
         is ShareDialog.FamilyView -> app.smartexplorer.android.ui.screen.FamilyScreen(dialog.target, dialog.entry, dialog.name, onDismiss) { family, close ->
             app.smartexplorer.android.ui.screen.ScreenViewScreen(family.target, family.title, close, family = family)

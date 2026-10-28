@@ -39,6 +39,7 @@ import app.smartexplorer.android.api.SavedRemoteApp
 import app.smartexplorer.android.api.TcpApi
 import app.smartexplorer.android.api.TcpTarget
 import app.smartexplorer.android.screen.HostCatalogApp
+import app.smartexplorer.android.ui.screen.ScreenTarget
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -48,13 +49,16 @@ import kotlinx.coroutines.launch
  * an unclear start is clarified with the same receipt whenever the device comes back or its windows
  * change, a start that waits for the locked host session starts again once it is unlocked, and a
  * confirmed window opens by itself. Remote apps share only the saved device relationship, never
- * Exec/Screen rights; the double-start guard stays.
+ * Exec/Screen rights; the double-start guard stays. While the host session is locked,
+ * „Bildschirm steuern“ opens the device's screen through [onOpenScreen] (the screen's own rights
+ * apply); the dialog stays open underneath, so the waiting start follows after the unlock.
  */
 @Composable
 internal fun AppsDialog(
     selector: ShareDialog.Apps,
     onDismiss: () -> Unit,
     onOpenWindow: ((ConfirmedRemoteAppWindow) -> Unit)? = null,
+    onOpenScreen: ((ScreenTarget) -> Unit)? = null,
 ) {
     val context = LocalContext.current.applicationContext
     val scope = rememberCoroutineScope()
@@ -96,6 +100,7 @@ internal fun AppsDialog(
     // Not final yet: se asks the same receipt again on every host event (design 6 F4).
     val unresolved = saved != null && (result?.receipt == null || result?.receipt?.state in setOf("outcome_unknown", "started_window_pending"))
     val locked = result?.receipt?.state == "consent_required" && catalog?.session?.unlocked != true
+    val unlockScreen = onOpenScreen?.let { lockedSessionScreen(selected, locked, catalog?.session?.unlocked) }
     fun query() {
         if (busy) return
         val target = selected ?: return
@@ -184,6 +189,7 @@ internal fun AppsDialog(
                     Text("Letzter Start: ${attempt.name}", style = MaterialTheme.typography.titleSmall)
                     SelectionContainer { Text("Request-ID: ${attempt.request.requestId}") }
                     result?.receipt?.let { ReceiptDetails(it, locked) } ?: Text("Startergebnis wird geklärt")
+                    if (locked && unlockScreen != null) UnlockScreenButton { onOpenScreen?.invoke(unlockScreen) }
                     result?.window?.let {
                         if (onOpenWindow != null) Text("Programmfenster wurde geöffnet.")
                         else Text("Fensterbindung bestätigt; der Anschluss an die aktuelle Fernfensterauswahl ist noch nicht verfügbar.")
@@ -194,6 +200,7 @@ internal fun AppsDialog(
                     Text("Benutzer: ${snapshot.session.userId}\nSitzung: ${snapshot.session.sessionId}", style = MaterialTheme.typography.bodySmall)
                     snapshot.limits.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
                     if (!snapshot.session.interactive || !snapshot.session.unlocked) Text("Die Hostsitzung ist nicht interaktiv oder gesperrt; ein Start wartet, bis sie entsperrt ist.")
+                    if (!locked && unlockScreen != null) UnlockScreenButton { onOpenScreen?.invoke(unlockScreen) }
                     OutlinedTextField(value = search, onValueChange = { search = it; page = 0 }, label = { Text("Programme suchen") }, singleLine = true)
                     val apps = snapshot.apps.filter { it.name.contains(search, ignoreCase = true) || it.appId.contains(search, ignoreCase = true) }
                     val pages = ((apps.size + 11) / 12).coerceAtLeast(1)
@@ -259,6 +266,26 @@ private fun ReceiptDetails(receipt: RemoteAppReceipt, locked: Boolean) {
         Text("Noch keine bestätigte Bindung an ein Fernfenster vorhanden. Der Startbeleg enthält keinen auswählbaren Fensterbeleg.")
     }
 }
+@Composable
+private fun UnlockScreenButton(onClick: () -> Unit) {
+    TextButton(onClick = onClick) { Text("Bildschirm steuern") }
+}
+
+/**
+ * The screen to open next to a locked host session: the selected device with control, pinned to its
+ * current node key; `null` while the session is unlocked or no device is selected.
+ */
+internal fun lockedSessionScreen(target: TcpTarget?, locked: Boolean, sessionUnlocked: Boolean?): ScreenTarget? {
+    if (target == null || (!locked && sessionUnlocked != false)) return null
+    return ScreenTarget(
+        relation = target.relation,
+        relationId = target.relationId,
+        deviceId = target.deviceId.ifBlank { null },
+        control = true,
+        expectedNodeId = target.nodeId.ifBlank { null },
+    )
+}
+
 private fun endpoint(target: TcpTarget): String? = when (target.relation) {
     "direct" -> "share://direct/${target.relationId}"
     "room" -> "share://room/${target.relationId}/${target.deviceId}"
