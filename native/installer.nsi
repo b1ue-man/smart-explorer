@@ -109,7 +109,7 @@ Section "Smart Explorer (erforderlich)" SEC_MAIN
   IfErrors bundle_failed
   IntCmp $1 0 bundle_installed
   bundle_failed:
-    MessageBox MB_OK|MB_ICONSTOP "Die geprüfte Installation konnte nicht abgeschlossen werden (Exitcode $1).$\r$\nDie Update-Diagnose enthält den Austausch- und Wiederherstellungsstatus."
+    MessageBox MB_OK|MB_ICONSTOP "Smart Explorer wurde nicht installiert (Exitcode $1).$\r$\nDer genaue Grund steht im Update-Protokoll:$\r$\n$APPDATA\smart_explorer\updater.log"
     Abort
   bundle_installed:
   SetOutPath "$INSTDIR"
