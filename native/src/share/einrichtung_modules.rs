@@ -12,6 +12,9 @@ mod einrichtung_host_task_tests;
 #[cfg(test)]
 #[path = "core/einrichtung_link_task_tests.rs"]
 mod einrichtung_link_task_tests;
+#[cfg(test)]
+#[path = "core/einrichtung_review_task_tests.rs"]
+mod einrichtung_review_task_tests;
 #[path = "core/loopback_services.rs"]
 pub(crate) mod loopback_services;
 /// OS facade of TCP socket facts (design 9.1 `crate::share::os_sockets`).

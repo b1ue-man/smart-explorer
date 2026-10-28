@@ -1,5 +1,5 @@
 use crate::rdp::{
-    core::{CertificateFingerprint, HostKind, HostService, SessionMode},
+    core::{CertificateFingerprint, CertificateSha1, HostKind, HostService, SessionMode},
     os::shared::process::{capture, find_tool, read_text},
 };
 use std::{
@@ -167,8 +167,20 @@ pub(super) fn attach_listener(service: &mut HostService, unit: &Unit, expected: 
         Err(error) => service.unavailable_reason = Some(error),
     }
 }
+/// The digest of one `openssl x509 -noout -<digest> -fingerprint` output
+/// line (`SHA256 Fingerprint=AB:CD:…`, `SHA1 Fingerprint=…`).
+pub(super) fn fingerprint_digest(text: &str) -> Result<&str, String> {
+    text.trim()
+        .split_once('=')
+        .map(|(_, digest)| digest)
+        .ok_or_else(|| "X.509 certificate fingerprint output is invalid".to_string())
+}
+/// The SHA-256 pin (FreeRDP) and the SHA-1 thumbprint (mstsc `CertHash`,
+/// design 2.7.2) of the one configured certificate, both read by `openssl`
+/// from the same file. A missing SHA-1 alone keeps the SHA-256 pin; the
+/// reason lands in the evidence.
 pub(super) fn certificate(service: &mut HostService, path: &Path) {
-    let result = (|| {
+    let fingerprint = |digest: &str| -> Result<String, String> {
         if !path.is_absolute() {
             return Err("RDP certificate inventory path is not absolute".into());
         }
@@ -178,33 +190,26 @@ pub(super) fn certificate(service: &mut HostService, path: &Path) {
         let path_text = path
             .to_str()
             .ok_or_else(|| "RDP certificate path is not UTF-8".to_string())?;
-        let text = capture(
-            &openssl,
-            &[
-                "x509",
-                "-noout",
-                "-sha256",
-                "-fingerprint",
-                "-in",
-                path_text,
-            ],
-        )?;
-        let digest = text
-            .trim()
-            .split_once('=')
-            .map(|(_, digest)| digest)
-            .ok_or_else(|| "X.509 certificate fingerprint output is invalid".to_string())?;
-        CertificateFingerprint::parse(digest)
-    })();
-    match result {
+        let args = ["x509", "-noout", digest, "-fingerprint", "-in", path_text];
+        let text = capture(&openssl, &args)?;
+        fingerprint_digest(&text).map(str::to_string)
+    };
+    match fingerprint("-sha256").and_then(|digest| CertificateFingerprint::parse(&digest)) {
         Ok(pin) => {
             service.certificate_sha256 = Some(pin);
             service.certificate_source = Some(format!(
-                "Configured X.509 certificate {} (SHA-256 of DER; no private key read)",
+                "Configured X.509 certificate {} (SHA-256 and SHA-1 of DER; no private key read)",
                 path.display()
             ));
         }
-        Err(error) => service.evidence.push(error),
+        Err(error) => {
+            service.evidence.push(error);
+            return;
+        }
+    }
+    match fingerprint("-sha1").and_then(|digest| CertificateSha1::parse(&digest)) {
+        Ok(thumbprint) => service.certificate_sha1 = Some(thumbprint),
+        Err(error) => service.evidence.push(format!("SHA-1 thumbprint: {error}")),
     }
 }
 pub(super) fn ini(path: &Path) -> Result<BTreeMap<(String, String), String>, String> {
@@ -244,3 +249,7 @@ pub(super) fn argument<'a>(command: &'a [String], name: &str) -> Option<&'a str>
         }
     })
 }
+
+#[cfg(test)]
+#[path = "inventory_cert_tests.rs"]
+mod einrichtung_review_cert_tests;

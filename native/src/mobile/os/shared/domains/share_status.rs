@@ -26,6 +26,8 @@ pub(super) struct WorkerFacts {
     pub relay_url: String,
     pub last_error: Option<String>,
     pub lan_presence: String,
+    /// This device's Remote Desktop self-setup lines (design 3.4).
+    pub rdp_setup: Vec<String>,
 }
 
 impl WorkerFacts {
@@ -36,6 +38,11 @@ impl WorkerFacts {
             relay_url: snapshot.relay_url.clone(),
             last_error: snapshot.last_error.clone(),
             lan_presence: snapshot.lan.presence.label(),
+            rdp_setup: snapshot
+                .rdp_setup
+                .as_ref()
+                .map(|setup| setup.lines())
+                .unwrap_or_default(),
         }
     }
 }
@@ -286,6 +293,7 @@ pub(super) fn status_json(input: &StatusInput<'_>) -> Value {
         "lastError": last_error,
         "server": (!server.is_empty()).then_some(server),
         "lanPresence": lan_presence,
+        "rdpSetup": (!worker.rdp_setup.is_empty()).then(|| worker.rdp_setup.join("\n")),
         "identity": identity,
         "devices": devices,
         "execProvider": provider_json(input.exec_provider),

@@ -55,6 +55,9 @@ enum RdpCommand {
     HostSetup {
         #[arg(long)]
         system: String,
+        /// Windows: the signed-in user's SID the elevated setup admits.
+        #[arg(long)]
+        user_sid: Option<String>,
     },
 }
 
@@ -197,11 +200,9 @@ pub(super) fn run(
             json,
             &json!({"id":id,"closed":crate::rdp::close(TunnelId::parse(&id)?)?}),
         ),
-        RdpCommand::HostSetup { system } => {
-            let (line, code) = match crate::rdp::host_setup::run_system_step(&system) {
-                Ok(line) => (line, 0),
-                Err(line) => (line, 1),
-            };
+        RdpCommand::HostSetup { system, user_sid } => {
+            let (line, code) =
+                crate::rdp::host_setup::run_system_step(&system, user_sid.as_deref());
             println!("{line}");
             return Ok(code);
         }

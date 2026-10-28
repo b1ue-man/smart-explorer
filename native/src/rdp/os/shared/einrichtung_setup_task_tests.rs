@@ -14,12 +14,23 @@ fn marker(state: SetupState) -> Marker {
         state,
         trigger: SetupTrigger::VersionStart,
         at: 1,
+        device: None,
+        facts: Some("session-a".into()),
+    }
+}
+
+fn asking(device: Option<&str>, facts: &str) -> Asking {
+    Asking {
+        device: device.map(str::to_string),
+        facts: facts.into(),
     }
 }
 
 #[test]
 fn einrichtung_task_triggers_follow_the_marker_rules() {
     use SetupTrigger::{Grant, PeerOnline, PeerRequest, VersionStart};
+    let now = asking(None, "session-b");
+    let decide = |trigger, marker: Option<&Marker>| decide(trigger, marker, &now);
     for trigger in [Grant, VersionStart, PeerOnline, PeerRequest] {
         let first = decide(trigger, None);
         assert_eq!(first, Decision::Run, "{trigger:?}");
@@ -43,6 +54,85 @@ fn einrichtung_task_triggers_follow_the_marker_rules() {
     let kept = decide(PeerOnline, Some(&impossible));
     assert!(matches!(kept, Decision::Keep(_)));
     assert_eq!(decide(PeerRequest, Some(&impossible)), Decision::Run);
+}
+
+/// Review R1: a missing interactive session is retried by a presence event
+/// only after the session facts changed, not on every event.
+#[test]
+fn einrichtung_task_review_no_session_waits_for_changed_facts() {
+    let failed = marker(SetupState::Failed("no_interactive_session".into()));
+    let same = decide(
+        SetupTrigger::PeerOnline,
+        Some(&failed),
+        &asking(None, "session-a"),
+    );
+    assert!(matches!(same, Decision::Keep(_)));
+    let changed = decide(
+        SetupTrigger::PeerOnline,
+        Some(&failed),
+        &asking(None, "session-b"),
+    );
+    assert_eq!(changed, Decision::Run);
+    // The viewer's own action still retries (design 3.4: T3/T4).
+    let viewer = decide(
+        SetupTrigger::PeerRequest,
+        Some(&failed),
+        &asking(Some("d"), "session-a"),
+    );
+    assert_eq!(viewer, Decision::Run);
+}
+
+/// Review S3: the device whose own request was declined cannot raise the
+/// administrator prompt again; another device and a new grant can.
+#[test]
+fn einrichtung_task_review_declined_request_does_not_repeat_the_prompt() {
+    let declined = Marker {
+        trigger: SetupTrigger::PeerRequest,
+        device: Some("viewer-1".into()),
+        ..marker(SetupState::Declined)
+    };
+    let same = decide(
+        SetupTrigger::PeerRequest,
+        Some(&declined),
+        &asking(Some("viewer-1"), "s"),
+    );
+    assert_eq!(same, Decision::Keep(SetupState::Declined));
+    let other = decide(
+        SetupTrigger::PeerRequest,
+        Some(&declined),
+        &asking(Some("viewer-2"), "s"),
+    );
+    assert_eq!(other, Decision::Run);
+    let grant = decide(SetupTrigger::Grant, Some(&declined), &asking(None, "s"));
+    assert_eq!(grant, Decision::Run);
+    // A marker written before the device field existed still parses.
+    let old: Marker =
+        serde_json::from_str(r#"{"state":"declined","trigger":"peer_request","at":5}"#)
+            .expect("old marker");
+    assert_eq!(old.device, None);
+}
+
+/// Review S2: the status every surface shows names a running setup as
+/// Smart Explorer's administrator prompt and the last result.
+#[test]
+fn einrichtung_task_review_setup_status_lines() {
+    let running = SetupStatus {
+        running: true,
+        ..SetupStatus::default()
+    };
+    assert!(running.lines()[0].starts_with(STATUS_TEXT));
+    assert!(running.lines()[0].contains("Smart Explorer"));
+    let declined = SetupStatus {
+        state: Some(SetupState::Declined),
+        ..SetupStatus::default()
+    };
+    assert_eq!(declined.lines().len(), 1);
+    assert!(declined.lines()[0].contains("abgelehnt"));
+    let encoded = serde_json::to_string(&declined).expect("encode");
+    let decoded: SetupStatus = serde_json::from_str(&encoded).expect("decode");
+    assert_eq!(decoded, declined);
+    let (line, code) = run_system_step("unknown-step", Some("S-1-5-21-1"));
+    assert_ne!(code, 0, "{line}");
 }
 
 #[test]
@@ -264,10 +354,10 @@ fn einrichtung_task_linux_setup_decisions() {
 #[test]
 #[ignore = "installs and starts xrdp; the suite runs it as root with --ignored"]
 fn einrichtung_task_h3_xrdp_on_loopback_as_root() {
-    let line = run_system_step("install-xrdp").expect("install-xrdp");
-    assert_eq!(line, "state=done");
-    let line = run_system_step("configure-xrdp").expect("configure-xrdp");
-    assert_eq!(line, "state=done");
+    let (line, code) = run_system_step("install-xrdp", None);
+    assert_eq!((line.as_str(), code), ("state=done", 0));
+    let (line, code) = run_system_step("configure-xrdp", None);
+    assert_eq!((line.as_str(), code), ("state=done", 0));
     let ss = std::process::Command::new("ss")
         .args(["-ltnH"])
         .output()

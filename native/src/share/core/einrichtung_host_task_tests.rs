@@ -55,7 +55,7 @@ fn einrichtung_task_h2_steering_reaches_exactly_the_exposed_loopback_ports() {
 
 #[test]
 fn einrichtung_task_binding_scope_and_exposure_rule() {
-    for loopback in ["127.0.0.1", "127.5.6.7", "::1", "::ffff:127.0.0.1"] {
+    for loopback in ["127.0.0.1", "::1", "::ffff:127.0.0.1"] {
         let address: IpAddr = loopback.parse().expect("address");
         let scope = scope_of(address);
         assert_eq!(scope, Some(BindScope::LoopbackOnly), "{loopback}");
@@ -65,6 +65,12 @@ fn einrichtung_task_binding_scope_and_exposure_rule() {
         assert_eq!(scope_of(address), Some(BindScope::Wildcard), "{wildcard}");
     }
     assert_eq!(scope_of("192.168.1.4".parse().expect("address")), None);
+    // Review B5: the host dials 127.0.0.1/::1 only; a listener on another
+    // loopback address (systemd-resolved 127.0.0.53) is not reachable.
+    for unreachable in ["127.0.0.53", "127.5.6.7", "::ffff:127.0.0.54"] {
+        let address: IpAddr = unreachable.parse().expect("address");
+        assert_eq!(scope_of(address), None, "{unreachable}");
+    }
     let service = |scope, owner| LoopbackService {
         port: 5000,
         scope,
@@ -122,7 +128,9 @@ fn einrichtung_task_se_programs_next_to_the_running_exe_are_internal() {
     let updater = Path::new("/opt/se/smart_explorer_updater");
     assert!(is_se_image(updater, exe));
     assert!(!is_se_image(Path::new("/opt/se/python3"), exe));
-    assert!(!is_se_image(Path::new("/usr/bin/se"), exe));
+    // Review S4: an se of another install location is se too.
+    assert!(is_se_image(Path::new("/home/a/.local/bin/se"), exe));
+    assert!(!is_se_image(Path::new("/usr/bin/postgres"), exe));
 }
 
 #[test]

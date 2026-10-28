@@ -828,3 +828,22 @@ erzeugten Befehle und stdin-Inhalte geprüft und im Abschlussbericht als ungepr�
 Keine. Alle Wahlpunkte sind aus r3–r7 und den Rechtegrenzen abgeleitet. Ausdrücklich als Entscheidung
 markiert (bei Widerspruch durch den Nutzer änderbar): Wildcard-gebundene Systemdienste bleiben
 ausgenommen (T-L2), und das Host-LAN wird nicht automatisch weitergegeben (4.5).
+
+## 13. Nachträge nach der Gesamtreview (2026-10-28)
+
+- 2.7.1: Eine abgewiesene Verbindung nennt die gebundene PID („nicht PID n“), nicht die fremde.
+- 3.1: Lehnt der Mensch am Host die Administratorfreigabe für ein Gerät ab, fragt dessen nächste
+  Anfrage nicht erneut; ein anderes Gerät, eine neue Freigabe oder eine neue Version fragt wieder.
+  Unter Windows erhöht die Abfrage `se.exe rdp host-setup --system …`, nicht PowerShell.
+- 3.3: GNOME lässt sich nicht auf Loopback begrenzen (`grdctl` kennt nur `set-port`). se dreht die
+  verwalteten Zugangsdaten bei jedem Ende der Abdeckung (Widerruf, Änderung, Fristablauf zum
+  Zeitpunkt) und schaltet die von se eingerichtete GNOME-Freigabe ab, sobald kein Gerät mehr
+  steuern darf. Während eine Sitzung läuft, gibt der Host dieselben Zugangsdaten erneut aus (nur im
+  Speicher). Offen: Solange mindestens ein Gerät steuern darf, bleibt der Netzlistener an
+  (zufälliges 256-Bit-Passwort); eine laufende GNOME-Sitzung eines widerrufenen Geräts endet erst
+  mit dem Ende aller Abdeckung.
+- 4.2: Nur `127.0.0.1`, `::1` und `::ffff:127.0.0.1` gelten als nur-Loopback; eine fehlgeschlagene
+  Auflistung gibt nichts frei; vor jedem neuen Datenstrom prüft der Host Besitzer und Bereich neu.
+- 9.3: `expires_at` ist eine Zahl (`i64::MAX` = ohne feste Frist); die Relay-Startphase reist als
+  `relay_fallback` mit `relay_start: true`.
+

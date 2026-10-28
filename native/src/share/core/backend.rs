@@ -86,21 +86,10 @@ impl PeerBackend {
         self.list_dir("/")
     }
 
-    /// The relay start phase (D1) reads "Verbunden", never a "Relay" that sticks.
+    /// A session whose payload runs over the relay reads "Verbunden
+    /// (Relay)", also in the start phase (D1): relay use is always marked
+    /// (core principle, review B6); the route view names the start phase.
     pub(crate) fn transport_status(&self) -> ShareStatus {
-        let key = super::session::session_key(self.initial_endpoint());
-        let connection = self
-            .node
-            .sessions
-            .lock()
-            .ok()
-            .and_then(|s| s.get(&key).cloned());
-        let phase = connection
-            .and_then(|c| super::route_monitor::snapshot(&c))
-            .map(|s| s.phase);
-        if phase == Some(super::route_state::RoutePhase::RelayStart) {
-            return ShareStatus::Connected;
-        }
         self.node
             .session_transport(self.initial_endpoint())
             .map(|transport| match transport {

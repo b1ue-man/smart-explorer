@@ -87,8 +87,9 @@ impl ManagedSecret {
     pub(crate) fn new(value: String) -> Self {
         Self(value)
     }
-    // Consumer: the viewer handing the credential to its client (WP2).
-    #[allow(dead_code)]
+    // Callers: `rdp::os::windows::trust`, `rdp::os::linux_os::clients`;
+    // Android has no RDP client (design 2.4).
+    #[cfg_attr(target_os = "android", allow(dead_code))]
     pub(crate) fn expose(&self) -> &str {
         &self.0
     }

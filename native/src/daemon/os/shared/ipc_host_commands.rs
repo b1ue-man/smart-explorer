@@ -155,6 +155,7 @@ fn state_snapshot(state: &mut ShareHostState, drain: bool, now: i64) -> ShareWor
         lan: state.lan_status.clone(),
         discovery_offers: state.discovery_offers.offers(now),
         peer_feeds: crate::share::peer_feed::views(),
+        rdp_setup: Some(crate::rdp::host_setup::status()),
     }
 }
 

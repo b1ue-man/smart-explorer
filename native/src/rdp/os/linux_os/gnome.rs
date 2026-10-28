@@ -306,8 +306,21 @@ pub(super) fn issue_credential(device_id: &str) -> Result<(String, String), Stri
     Ok((username, password))
 }
 
+/// No device may steer this screen any more: GNOME desktop sharing that se
+/// set up (`credentials_managed`) is switched off, which closes its
+/// network-wide listener and ends its sessions. A sharing the person set up
+/// themselves stays untouched. `Ok(true)` when it was switched off.
+pub(crate) fn withdraw() -> Result<bool, String> {
+    if !credentials_managed() {
+        return Ok(false);
+    }
+    let grdctl = grdctl().map_err(|state| state.text())?;
+    grdctl_run(&grdctl, &["rdp", "disable"], None).map_err(|state| state.text())?;
+    Ok(true)
+}
+
 /// New random credentials that nobody receives (after a revocation).
-pub(super) fn rotate_credential(device_id: &str) -> Result<(), String> {
+pub(crate) fn rotate_credential(device_id: &str) -> Result<(), String> {
     if !credentials_managed() {
         return Ok(());
     }

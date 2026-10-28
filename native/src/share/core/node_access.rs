@@ -188,7 +188,15 @@ async fn access_expiry(auth: Weak<Mutex<ShareAuthState>>, registry: Arc<AccessLe
             };
             let now = now_secs();
             registry.recheck(&state, now);
-            let seconds = registry.next_deadline().map_or(30, |end| {
+            // A steering grant's own `valid_until` is an event of its own: the
+            // loop wakes at that instant and rotates se-managed RDP credentials
+            // (threat T-R2), even when no lease runs.
+            let steering_end = super::configuration_runtime::recheck_steering(&state, now);
+            let next = [registry.next_deadline(), steering_end]
+                .into_iter()
+                .flatten()
+                .min();
+            let seconds = next.map_or(30, |end| {
                 u64::try_from(end.saturating_sub(now)).unwrap_or(0).min(30)
             });
             Duration::from_secs(seconds)

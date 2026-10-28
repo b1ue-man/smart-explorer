@@ -94,9 +94,6 @@ pub(crate) struct Gate {
     bound: watch::Receiver<Option<BoundProcess>>,
 }
 impl Gate {
-    pub(crate) fn admission(&self) -> ListenerAdmission {
-        self.admission
-    }
     /// `Ok` when the connection from `peer` to `listener` may be forwarded.
     /// The owner lookup reads OS tables and runs on the blocking pool.
     pub(crate) async fn admit(

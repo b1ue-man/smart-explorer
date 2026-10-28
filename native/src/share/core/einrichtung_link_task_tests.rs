@@ -213,7 +213,8 @@ fn bound(child: &Child) -> BoundProcess {
 
 /// V1 (and the mechanism behind A5): a listener bound to one started
 /// process forwards that process's connection and refuses another
-/// process's connection, naming its PID; a connection of this account
+/// process's connection, naming the bound PID it is not (review R3: only
+/// the bound process's sockets are read); a connection of this account
 /// passes `SameAccount`.
 #[cfg(any(windows, target_os = "linux"))]
 #[test]
@@ -230,7 +231,7 @@ fn einrichtung_task_origin_check_admits_only_the_bound_process() {
     let (_foreign, stranger_peer) = accept(&listener);
     let refused = check.process(stranger_peer, local, binding).unwrap_err();
     assert!(
-        refused.contains(&format!("PID {}", stranger.id())),
+        refused.contains(&format!("nicht PID {}", owner.id())),
         "{refused}"
     );
     let restarted = BoundProcess {

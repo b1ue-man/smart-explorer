@@ -11,10 +11,60 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, RwLock};
 
-/// Status line while an administrator prompt may be open (threat T-R6).
-// Consumer: the host page „Dieses Gerät“ (work package WP3).
-#[allow(dead_code)]
+/// Status line while an administrator prompt may be open (threat T-R6);
+/// `SetupStatus::lines` shows it on every surface.
 pub(crate) const STATUS_TEXT: &str = "Remote Desktop wird eingerichtet (Administratorfreigabe)";
+
+/// The host's RDP self-setup as the worker snapshot carries it
+/// (`ShareWorkerSnapshot.rdp_setup`) for „Dieses Gerät“, `se share status`
+/// and the Android status (design 3.4, threat T-R6).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct SetupStatus {
+    /// A setup runs now; an administrator prompt (UAC/polkit) may be open.
+    pub(crate) running: bool,
+    /// The marker of this version: the last result.
+    pub(crate) state: Option<SetupState>,
+    pub(crate) trigger: Option<SetupTrigger>,
+    pub(crate) at: Option<i64>,
+    /// A failure the marker could not carry.
+    pub(crate) last_error: Option<String>,
+}
+impl SetupStatus {
+    /// The German lines every surface shows.
+    pub(crate) fn lines(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+        if self.running {
+            lines.push(format!(
+                "{STATUS_TEXT}: Smart Explorer fragt nach der Freigabe des Betriebssystems"
+            ));
+        }
+        match &self.state {
+            Some(state) => lines.push(format!("Remote-Desktop-Einrichtung: {}", state.text())),
+            None if !self.running => {
+                lines.push("Remote-Desktop-Einrichtung: noch nicht gelaufen".into())
+            }
+            None => {}
+        }
+        if let Some(error) = &self.last_error {
+            lines.push(format!("Remote-Desktop-Einrichtung: {error}"));
+        }
+        lines
+    }
+}
+
+/// The current setup status of this host.
+pub(crate) fn status() -> SetupStatus {
+    let marker = read_marker();
+    let stored = marker.as_ref().map(|marker| marker.state.clone());
+    SetupStatus {
+        running: in_progress(),
+        state: platform::impossible().or(stored),
+        trigger: marker.as_ref().map(|marker| marker.trigger),
+        at: marker.as_ref().map(|marker| marker.at),
+        last_error: last_error(),
+    }
+}
 
 /// One setup at a time; a viewer's request (T4) waits for a running one.
 static RUN: Mutex<()> = Mutex::new(());
@@ -33,6 +83,23 @@ pub(crate) struct Marker {
     pub(crate) state: SetupState,
     pub(crate) trigger: SetupTrigger,
     pub(crate) at: i64,
+    /// The device whose „Remote Desktop“ (T4) led to this result.
+    #[serde(default)]
+    pub(crate) device: Option<String>,
+    /// The session facts at this result (`platform::session_facts`): a
+    /// missing interactive session is retried only once they changed.
+    #[serde(default)]
+    pub(crate) facts: Option<String>,
+}
+
+/// Who asks for a setup and in which session (the inputs of `decide`
+/// beside the trigger and the marker).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Asking {
+    /// The requesting device of T4.
+    pub(crate) device: Option<String>,
+    /// `platform::session_facts()` now.
+    pub(crate) facts: String,
 }
 
 /// What a trigger does with the current marker (design 3.1, 3.4).
@@ -42,20 +109,32 @@ pub(crate) enum Decision {
     Keep(SetupState),
 }
 
-/// T1/T4 are a person's action and always run (they also ask again after
-/// `declined`). T2 runs once per version. T3 runs without a marker or after
-/// the failures that a present device can resolve (no interactive session,
-/// locked keyring), so no administrator prompt repeats unattended.
-pub(crate) fn decide(trigger: SetupTrigger, marker: Option<&Marker>) -> Decision {
+/// T1 is the host person's action and always runs. T4 (a viewer's
+/// „Remote Desktop“) runs too, also after `declined` — except when that
+/// same device's own request was the one declined: then only a new grant
+/// (T1) or a new version asks again, so one device cannot repeat the
+/// administrator prompt (review S3, threat T-R6). T2 runs once per version.
+/// T3 runs without a marker or after the failures a present device can
+/// resolve: a locked keyring, and a missing interactive session once the
+/// session facts changed (a process whose session cannot change is not
+/// retried on every presence event, review R1).
+pub(crate) fn decide(trigger: SetupTrigger, marker: Option<&Marker>, asking: &Asking) -> Decision {
     let Some(marker) = marker else {
         return Decision::Run;
     };
-    if trigger.user_action() {
-        return Decision::Run;
-    }
+    let declined_by_same_device = marker.state == SetupState::Declined
+        && marker.trigger == SetupTrigger::PeerRequest
+        && marker.device.is_some()
+        && marker.device == asking.device;
     match (trigger, &marker.state) {
+        (SetupTrigger::Grant, _) => Decision::Run,
+        (SetupTrigger::PeerRequest, _) if !declined_by_same_device => Decision::Run,
+        (SetupTrigger::PeerOnline, SetupState::Failed(reason)) if reason == "keyring_locked" => {
+            Decision::Run
+        }
         (SetupTrigger::PeerOnline, SetupState::Failed(reason))
-            if matches!(reason.as_str(), "no_interactive_session" | "keyring_locked") =>
+            if reason == "no_interactive_session"
+                && marker.facts.as_deref() != Some(asking.facts.as_str()) =>
         {
             Decision::Run
         }
@@ -90,8 +169,6 @@ fn note_error(error: String) {
 }
 
 /// The last setup failure that the marker could not carry.
-// Consumer: the host page „Dieses Gerät“ (work package WP3).
-#[allow(dead_code)]
 pub(crate) fn last_error() -> Option<String> {
     LAST_ERROR.read().ok().and_then(|last| last.clone())
 }
@@ -104,6 +181,15 @@ pub(crate) fn note_host_device(device_id: &str) {
 
 fn host_device() -> Option<String> {
     HOST_DEVICE.read().ok().and_then(|current| current.clone())
+}
+
+/// Threat T-R6: the platform adapter calls this right before it raises the
+/// OS prompt (UAC, polkit), so the prompt is labelled as Smart Explorer's
+/// by a system notice next to the status line on „Dieses Gerät“. Callers:
+/// `windows::host_setup::ensure`, `linux_os::host_setup_pkexec::via_pkexec`.
+#[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]
+pub(crate) fn prompt_follows() {
+    crate::notify_desktop::notify_access("Smart Explorer", STATUS_TEXT);
 }
 
 /// Whether a setup (possibly with an open administrator prompt) runs now.
@@ -171,9 +257,23 @@ pub(crate) fn refresh_probe() -> HostProbe {
 /// Runs the self-setup for `trigger` and returns its result. Blocks while an
 /// administrator prompt (UAC, polkit) or a package installation runs; there
 /// is no fixed limit (user rule r7).
-pub(crate) fn ensure_rdp_host(trigger: SetupTrigger) -> SetupState {
+/// `device` names the requesting device of T4. A request that waited for a
+/// setup running meanwhile takes that setup's result instead of starting
+/// one more (no repeated prompt for requests queued behind an open one).
+pub(crate) fn ensure_rdp_host(trigger: SetupTrigger, device: Option<String>) -> SetupState {
+    let asked_at = crate::share::core_now_secs();
     let _turn = RUN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Decision::Keep(state) = decide(trigger, read_marker().as_ref()) {
+    let asking = Asking {
+        device,
+        facts: platform::session_facts(),
+    };
+    let marker = read_marker();
+    if let Some(marker) = &marker {
+        if trigger != SetupTrigger::Grant && marker.at > asked_at {
+            return marker.state.clone();
+        }
+    }
+    if let Decision::Keep(state) = decide(trigger, marker.as_ref(), &asking) {
         return state;
     }
     let mut probe = refresh_probe();
@@ -196,6 +296,8 @@ pub(crate) fn ensure_rdp_host(trigger: SetupTrigger) -> SetupState {
         state: state.clone(),
         trigger,
         at: crate::share::core_now_secs(),
+        device: asking.device,
+        facts: Some(asking.facts),
     };
     if let Err(error) = write_marker(&marker) {
         note_error(error);
@@ -212,7 +314,7 @@ pub(crate) fn request(trigger: SetupTrigger) {
     let spawned = std::thread::Builder::new()
         .name("rdp-self-setup".into())
         .spawn(move || {
-            ensure_rdp_host(trigger);
+            ensure_rdp_host(trigger, None);
         });
     if let Err(error) = spawned {
         note_error(format!("Einrichtungsthread startet nicht: {error}"));
@@ -241,7 +343,7 @@ pub(crate) fn on_service_start(steering: bool) {
         .spawn(move || {
             refresh_probe();
             if steering {
-                ensure_rdp_host(SetupTrigger::VersionStart);
+                ensure_rdp_host(SetupTrigger::VersionStart, None);
             }
         });
     if let Err(error) = spawned {
@@ -258,9 +360,21 @@ pub(crate) fn peer_present(device_id: &str, public_key: &str) {
     }
 }
 
-/// New se-managed credentials for `service_id` (design 2.8); se keeps no
-/// copy. Only a service whose credentials se manages qualifies.
-pub(crate) fn issue_managed_credential(service_id: &str) -> Result<(String, String), String> {
+/// The se-managed credential handed out last, in memory only (never on
+/// disk), so concurrent sessions to the same service keep one valid
+/// password (review B8). Cleared on every rotation.
+type Issued = (String, String, zeroize::Zeroizing<String>);
+static ISSUED: Mutex<Option<Issued>> = Mutex::new(None);
+
+/// Se-managed credentials for `service_id` (design 2.8). While a session to
+/// that service's port runs (`in_use`, the host's target tunnels), the same
+/// credential is handed out again, so a second viewer's start does not
+/// break the first one's reconnects; otherwise new ones are set. Only a
+/// service whose credentials se manages qualifies.
+pub(crate) fn issue_managed_credential(
+    service_id: &str,
+    in_use: impl Fn(u16) -> bool,
+) -> Result<(String, String), String> {
     let probe = refresh_probe();
     let service = probe
         .services
@@ -270,21 +384,63 @@ pub(crate) fn issue_managed_credential(service_id: &str) -> Result<(String, Stri
             format!("RDP-Dienst {service_id} hat keine von se verwalteten Zugangsdaten")
         })?;
     let device = host_device().ok_or("Geräteidentität ist noch nicht bekannt")?;
-    platform::issue_credential(service, &device)
+    let mut issued = ISSUED
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((id, username, password)) = issued.as_ref() {
+        if id == service_id && service.port.is_some_and(&in_use) {
+            return Ok((username.clone(), password.to_string()));
+        }
+    }
+    let (username, password) = platform::issue_credential(service, &device)?;
+    *issued = Some((
+        service_id.to_string(),
+        username.clone(),
+        zeroize::Zeroizing::new(password.clone()),
+    ));
+    Ok((username, password))
+}
+
+fn forget_issued() {
+    *ISSUED
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
 }
 
 /// After a revocation of steering: new random credentials that nobody
 /// receives, so a revoked device knows no valid password (threat T-R2).
 pub(crate) fn rotate_managed_credentials() {
+    coverage_ended(true);
+}
+
+/// A device's steering coverage ended (revocation, configuration change or
+/// the grant's own expiry instant): the se-managed credentials are rotated
+/// at once. When no device steers this screen any more, the network-wide
+/// listener of an se-managed GNOME desktop sharing is switched off as well
+/// (GNOME offers no loopback binding; `grdctl` knows only `set-port`); the
+/// next grant (T1) or a viewer's „Remote Desktop“ (T4) switches it on again.
+pub(crate) fn coverage_ended(steering_remains: bool) {
     if cfg!(test) {
         return;
     }
     let spawned = std::thread::Builder::new()
         .name("rdp-credential-rotate".into())
-        .spawn(|| {
+        .spawn(move || {
+            // Not behind `RUN`: an open administrator prompt of a setup must
+            // not delay the rotation.
+            forget_issued();
             if let Some(device) = host_device() {
                 if let Err(error) = platform::rotate_credentials(&device) {
                     note_error(format!("Zugangsdaten nach Entzug nicht erneuert: {error}"));
+                }
+            }
+            if !steering_remains {
+                match platform::withdraw_managed() {
+                    Ok(true) => {
+                        refresh_probe();
+                    }
+                    Ok(false) => {}
+                    Err(error) => note_error(format!("RDP bleibt eingeschaltet: {error}")),
                 }
             }
         });
@@ -295,10 +451,13 @@ pub(crate) fn rotate_managed_credentials() {
     }
 }
 
-/// `se rdp host-setup --system <step>` (design 3.3): one fixed root step;
-/// called by `cli::rdp`.
-pub(crate) fn run_system_step(step: &str) -> Result<String, String> {
-    platform::run_system_step(step)
+/// `se rdp host-setup --system <step> [--user-sid <sid>]` (design 3.2,
+/// 3.3): one fixed elevated step; the line to print and the exit code.
+/// Linux runs its root steps through `pkexec`; Windows runs its setup
+/// script in this elevated se, so the UAC prompt names Smart Explorer's se
+/// instead of Windows PowerShell (threat T-R6). Called by `cli::rdp`.
+pub(crate) fn run_system_step(step: &str, user_sid: Option<&str>) -> (String, i32) {
+    platform::run_system_step(step, user_sid)
 }
 
 #[cfg(test)]

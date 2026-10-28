@@ -3,38 +3,27 @@
 //! a present relation (design 2.2) and subscribes to its window families,
 //! shared services and RDP short state; surfaces read
 //! `ShareWorkerSnapshot.peer_feeds`. No timer retries: an ended session
-//! starts again only on a presence event of that device or a new profile
-//! revision. A probe handshake learns the rights first, so the background
-//! never makes the host ask its user („Nachfragen“ is reported instead).
+//! starts again only on a presence event of that device, a new profile
+//! revision or, after a lost connection, this service's reconnect. A probe
+//! handshake learns the rights first, so the background never makes the
+//! host ask its user („Nachfragen“ is reported instead).
 use crate::rdp::core::RdpFeedSummary;
-use crate::screen::core::family_protocol::{FamilyListing, FAMILY_PROTOCOL};
-use crate::screen::core::feed_host::decode_feed_update;
-use crate::screen::core::negotiate::CodecOffer;
-use crate::screen::core::viewer_client::{refusal_text, ViewerRequest};
-use crate::screen::core::window_list::SourceId;
-use crate::screen::core::wire::{self, FAMILY_FEED_VERSION, FEED_UPDATE, MAX_WINDOWS_BYTES};
-use crate::screen::core::wire_control::{send_subscribe_feed, ScreenWireError};
-use crate::screen::core::wire_hello::{
-    recv_hello_reply, recv_server_hello, send_client_hello, HelloReply, ScreenHelloOk, SessionMode,
-};
-use crate::share::access_grant::CapabilityDecision;
+use crate::screen::core::family_protocol::FamilyListing;
 use crate::share::auto_forward::{self, MappedService};
 use crate::share::loopback_services::LoopbackService;
-use crate::share::node_screen::ScreenLink;
 use crate::share::peer_select::present_relation;
 use crate::share::{DirectContact, PeerOpenTarget, ShareEvent, ShareProfiles, ShareService};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use std::io;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
-use std::time::Duration;
 use tokio::sync::watch;
 
-/// Per handshake step on the active route (design 7: kept).
-const HANDSHAKE: Duration = Duration::from_secs(20);
+/// Handshake, subscription and update loop of one feed session.
+#[path = "peer_feed_link.rs"]
+mod link;
+
 /// Share of the 2 MiB IPC line for the feeds of all devices.
 const MAX_SNAPSHOT_BYTES: usize = 768 * 1024;
-const OLDER_VERSION: &str = "Gerät hat eine ältere Version";
 const TOO_LARGE: &str = "Zu groß für den Statuskanal; `se screen families` ruft einzeln ab";
 
 /// The feed state of one device, as every surface shows it.
@@ -54,6 +43,10 @@ pub(crate) struct PeerFeedView {
     pub(crate) rdp: Option<RdpFeedSummary>,
     /// Why there is no feed (older version, rights, connection).
     pub(crate) unavailable: Option<String>,
+    /// The feed ended by a lost connection (not a refusal): it starts again
+    /// on the next reconnect of this service to the network (review B7).
+    #[serde(skip)]
+    pub(crate) retry_on_network: bool,
 }
 
 struct Session {
@@ -160,6 +153,24 @@ pub(crate) fn observe(
         if moved.contains(device_id) {
             state.retry.insert(key.clone());
         }
+    }
+    // Event, not timer: a feed lost with the connection starts again once
+    // this service is back on the network.
+    if events
+        .iter()
+        .any(|event| matches!(event, ShareEvent::ServerConnected))
+    {
+        let lost: Vec<String> = state
+            .sessions
+            .iter()
+            .filter(|(_, session)| {
+                let ended = session.thread.as_ref().is_none_or(|t| t.is_finished());
+                let view = session.view.lock().unwrap_or_else(PoisonError::into_inner);
+                ended && view.retry_on_network
+            })
+            .map(|(key, _)| key.clone())
+            .collect();
+        state.retry.extend(lost);
     }
     let gone: Vec<String> = state
         .sessions
@@ -335,170 +346,20 @@ impl Context {
 
 fn run(context: Context, stopped: watch::Receiver<bool>) {
     // `None`: stopped by `observe`, which also removed the mappings.
-    if let Some(reason) = feed(&context, stopped) {
+    if let Some(ended) = link::feed(&context, stopped) {
         context.map_services(&[]);
+        // An ended feed keeps nothing of the device (threat T-W1 „Feed endet
+        // mit dem Recht“): no windows, services or RDP state stay visible.
         context.show(|view| {
             view.live = false;
-            view.unavailable = Some(reason);
+            view.families = None;
+            view.families_unavailable = None;
+            view.services.clear();
+            view.services_unavailable = None;
+            view.rdp = None;
+            view.unavailable = Some(ended.reason);
+            view.retry_on_network = ended.connection_lost;
         });
     }
 }
 
-fn viewer_request(mode: SessionMode) -> ViewerRequest {
-    ViewerRequest {
-        mode,
-        source: (mode != SessionMode::Probe).then_some(SourceId::Synthetic),
-        decoders: vec![CodecOffer::tiles()],
-        display_size: None,
-        max_fps: 1,
-        frame_capabilities: None,
-    }
-}
-
-/// One raw handshake on a fresh connection: the probe (rights, no question
-/// to the host's user) or the metadata channel.
-async fn handshake(
-    link: ScreenLink,
-    mode: SessionMode,
-) -> Result<(ScreenHelloOk, iroh::endpoint::Connection, Streams), String> {
-    let connection = link.connection.clone();
-    let (mut send, mut recv) =
-        crate::share::route_protocol::run_with_route(&connection, HANDSHAKE, None, async {
-            connection.accept_bi().await.map_err(io::Error::other)
-        })
-        .await
-        .map_err(|error| error.to_string())?;
-    let server = crate::share::route_protocol::run_with_route(
-        &connection,
-        HANDSHAKE,
-        None,
-        recv_server_hello(&mut recv),
-    )
-    .await
-    .map_err(|error| error.to_string())?;
-    if !wire::supports_version(server.protocol_version) {
-        return Err(OLDER_VERSION.into());
-    }
-    if mode != SessionMode::Probe && server.family_feed_version != Some(FAMILY_FEED_VERSION) {
-        return Err(OLDER_VERSION.into());
-    }
-    let mut hello = link
-        .client_hello(&server, &viewer_request(mode))
-        .map_err(|error| error.to_string())?;
-    // Outside the signed transcript, as in `viewer_client::handshake_for`.
-    hello.family_version = server.family_version.filter(|v| *v == FAMILY_PROTOCOL);
-    hello.icon_version = None;
-    hello.metadata_only = mode != SessionMode::Probe && hello.family_version.is_some();
-    hello.frame_capabilities = None;
-    connection.set_max_concurrent_uni_streams(iroh::endpoint::VarInt::from_u32(0));
-    send_client_hello(&mut send, &hello)
-        .await
-        .map_err(|error| error.to_string())?;
-    let reply = crate::share::route_protocol::run_with_route(
-        &connection,
-        HANDSHAKE,
-        None,
-        recv_hello_reply(&mut recv),
-    )
-    .await
-    .map_err(|error| error.to_string())?;
-    match reply {
-        HelloReply::Accepted(accepted) => Ok((accepted, connection, (send, recv))),
-        HelloReply::Refused(refused) => Err(refusal_text(&refused.code)),
-        HelloReply::Pending(_) => {
-            // Never a question from the background: withdraw at once.
-            connection.close(iroh::endpoint::VarInt::from_u32(0), b"feed does not ask");
-            Err(ASKS.into())
-        }
-    }
-}
-
-type Streams = (iroh::endpoint::SendStream, iroh::endpoint::RecvStream);
-const ASKS: &str =
-    "„Bildschirm ansehen“ steht auf diesem Gerät auf „Nachfragen“; Fenster und Dienste erscheinen mit „Erlauben“";
-
-/// A new screen connection to the device (blocking).
-fn link(context: &Context) -> Result<ScreenLink, String> {
-    context
-        .service
-        .screen_link(&context.target)
-        .map_err(|error| error.detail())
-}
-
-/// Probe, subscribe, apply every update; the reason the feed ended, `None`
-/// when `observe` stopped it.
-fn feed(context: &Context, mut stopped: watch::Receiver<bool>) -> Option<String> {
-    let runtime = context.service.screen_runtime();
-    let probe = match link(context) {
-        Ok(link) => runtime.block_on(handshake(link, SessionMode::Probe)),
-        Err(error) => return Some(error),
-    };
-    let (probe, connection, _) = match probe {
-        Ok(opened) => opened,
-        Err(error) => return Some(error),
-    };
-    connection.close(iroh::endpoint::VarInt::from_u32(0), b"probe done");
-    match probe.authorization.view {
-        CapabilityDecision::Allow => {}
-        CapabilityDecision::Ask => return Some(ASKS.into()),
-        _ => return Some(refusal_text("permission_denied")),
-    }
-    if *stopped.borrow() {
-        return None;
-    }
-    let link = match link(context) {
-        Ok(link) => link,
-        Err(error) => return Some(error),
-    };
-    runtime.block_on(async {
-        tokio::select! {
-            biased;
-            _ = stopped.wait_for(|stop| *stop) => None,
-            ended = subscribed(context, link) => Some(ended),
-        }
-    })
-}
-
-async fn subscribed(context: &Context, link: ScreenLink) -> String {
-    let (_, connection, (mut send, mut recv)) = match handshake(link, SessionMode::View).await {
-        Ok(opened) => opened,
-        Err(error) => return error,
-    };
-    if let Err(error) = send_subscribe_feed(&mut send).await {
-        return format!("Gerätefeed nicht abonniert: {error}");
-    }
-    context.show(|view| {
-        view.live = true;
-        view.unavailable = None;
-    });
-    // No receive limit: QUIC's idle detection (20 s) ends a dead feed.
-    let ended = loop {
-        let (tag, payload) = match wire::read_frame(&mut recv, MAX_WINDOWS_BYTES).await {
-            Ok(frame) => frame,
-            Err(error) => break format!("Gerätefeed beendet: {error}"),
-        };
-        if tag == wire::ERROR {
-            let error: Result<ScreenWireError, _> = wire::from_json(&payload);
-            break error.map_or_else(|e| e.to_string(), |error| refusal_text(&error.code));
-        }
-        if tag != FEED_UPDATE {
-            continue;
-        }
-        let update = match decode_feed_update(&payload) {
-            Ok(update) => update,
-            Err(error) => break format!("Ungültiges Gerätefeed-Update: {error}"),
-        };
-        let services = update.services.clone().unwrap_or_default();
-        context.show(|view| {
-            view.families = update.families;
-            view.families_unavailable = update.families_unavailable;
-            view.services = services.clone();
-            view.services_unavailable = update.services_unavailable;
-            view.rdp = update.rdp;
-        });
-        context.map_services(&services);
-    };
-    connection.close(iroh::endpoint::VarInt::from_u32(0), b"feed ended");
-    drop(send);
-    ended
-}

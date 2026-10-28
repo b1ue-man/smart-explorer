@@ -117,6 +117,16 @@ fn json_value(
             .collect::<Vec<_>>(),
         "events": snapshot.events.iter().filter_map(public_event).collect::<Vec<_>>(),
         "discoverable": discoverable_values(snapshot, profiles),
+        // This host's Remote Desktop self-setup: running (an administrator
+        // prompt of Smart Explorer may be open), last result, failure.
+        "rdp_setup": snapshot.rdp_setup.as_ref().map(|setup| serde_json::json!({
+            "running": setup.running,
+            "state": setup.state,
+            "trigger": setup.trigger,
+            "at": setup.at,
+            "last_error": setup.last_error,
+            "lines": setup.lines(),
+        })),
     })
 }
 
@@ -141,6 +151,9 @@ fn print_text(
             .unwrap_or("-")
     );
     println!("relay_url\t{}", snapshot.relay_url);
+    for line in snapshot.rdp_setup.iter().flat_map(|setup| setup.lines()) {
+        println!("rdp_setup\t{}", clean(&line));
+    }
     print_routes(snapshot);
     for contact in &profiles.direct_contacts {
         println!(

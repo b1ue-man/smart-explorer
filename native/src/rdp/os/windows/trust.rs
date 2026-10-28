@@ -49,6 +49,7 @@ pub(crate) fn write_cert_hash(listener: SocketAddr, sha1: &CertificateSha1) -> R
 }
 
 /// The stored thumbprint of one name, for the task tests.
+#[cfg(test)]
 pub(crate) fn read_cert_hash(name: &str) -> Option<Vec<u8>> {
     let key = RegKey::predef(HKEY_CURRENT_USER)
         .open_subkey(format!(r"{SERVERS}\{name}"))
@@ -61,7 +62,13 @@ fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(Some(0)).collect()
 }
 
-/// A session-only `TERMSRV/<address>` credential, deleted on drop.
+/// Sessions of this process per credential target: the credential is
+/// deleted when the last of them ends, not by the first one (review B8;
+/// the host hands concurrent sessions the same credential).
+static LIVE: std::sync::Mutex<Vec<(Vec<u16>, usize)>> = std::sync::Mutex::new(Vec::new());
+
+/// A session-only `TERMSRV/<address>` credential, deleted on drop of the
+/// last session of this process that uses it.
 struct SessionCredential {
     target: Vec<u16>,
 }
@@ -99,15 +106,38 @@ impl SessionCredential {
         if written == 0 {
             return Err(format!("RDP-Zugangsdaten nicht übergeben: {error}"));
         }
+        let mut live = LIVE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match live.iter_mut().find(|(known, _)| *known == target) {
+            Some((_, count)) => *count += 1,
+            None => live.push((target.clone(), 1)),
+        }
         Ok(Self { target })
     }
 }
 impl Drop for SessionCredential {
     fn drop(&mut self) {
         use windows_sys::Win32::Security::Credentials::{CredDeleteW, CRED_TYPE_GENERIC};
-        // SAFETY: terminated target name of the credential written above.
-        unsafe {
-            CredDeleteW(self.target.as_ptr(), CRED_TYPE_GENERIC, 0);
+        let mut live = LIVE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let last = match live.iter().position(|(known, _)| *known == self.target) {
+            Some(index) => {
+                live[index].1 -= 1;
+                let last = live[index].1 == 0;
+                if last {
+                    live.swap_remove(index);
+                }
+                last
+            }
+            None => true,
+        };
+        if last {
+            // SAFETY: terminated target name of the credential written above.
+            unsafe {
+                CredDeleteW(self.target.as_ptr(), CRED_TYPE_GENERIC, 0);
+            }
         }
     }
 }

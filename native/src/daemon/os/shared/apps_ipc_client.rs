@@ -180,12 +180,26 @@ fn probe_v2(
     setup: crate::rdp::core::SetupState,
 ) -> Result<(crate::rdp::AuthenticatedProbe, crate::rdp::core::SetupState), String> {
     if host.version != crate::rdp::core::RDP_PROBE_VERSION_V2 {
-        return Err("RDP-Probe v2 antwortete mit einer anderen Version".into());
+        return Err(probe_v2_mismatch(&host, &setup));
     }
     Ok((
         crate::rdp::AuthenticatedProbe::from_authenticated_peer(node, host)?,
         setup,
     ))
+}
+
+/// A v2 reply in the v1 form (hosts of this version before review B2 built
+/// an unavailable probe that way): the reason the reply carries, never a
+/// bare version error.
+fn probe_v2_mismatch(host: &crate::rdp::HostProbe, setup: &crate::rdp::core::SetupState) -> String {
+    use crate::rdp::core::SetupState;
+    match (setup, &host.unavailable_reason) {
+        (SetupState::Impossible(_) | SetupState::Failed(_) | SetupState::Declined, _) => {
+            setup.text()
+        }
+        (_, Some(reason)) => format!("Remote Desktop nicht verfügbar: {reason}"),
+        _ => "RDP-Probe v2 antwortete mit einer anderen Version".into(),
+    }
 }
 
 /// Design 9.2 `RdpProbeV2`: the authenticated host inventory with SHA-1
@@ -292,5 +306,28 @@ pub(crate) fn apps_set_local_grant(
     match local(AppsIpcRequest::SetLocalGrant { change })? {
         AppsIpcReply::LocalGrantMutation { result } if result.target == target => Ok(result),
         _ => Err("Local app grant mutation identity mismatch".into()),
+    }
+}
+
+#[cfg(test)]
+mod einrichtung_review_tests {
+    use crate::rdp::core::SetupState;
+
+    /// Review B2: a v2 reply in the v1 form names the host's reason (Windows
+    /// Home, Android, a failed inventory), never only a version error.
+    #[test]
+    fn einrichtung_task_review_v1_form_reply_names_the_reason() {
+        let host = crate::rdp::HostProbe::unavailable("windows", "Windows Home edition");
+        let home = SetupState::Impossible("windows_home".into());
+        let text = super::probe_v2_mismatch(&host, &home);
+        assert!(text.contains("Windows Home"), "{text}");
+        let android = SetupState::Impossible("android".into());
+        assert!(super::probe_v2_mismatch(&host, &android).contains("Android"));
+        let reason = super::probe_v2_mismatch(&host, &SetupState::NotNeeded);
+        assert!(reason.contains("Windows Home edition"), "{reason}");
+        let mut v2 = host;
+        v2.version = crate::rdp::core::RDP_PROBE_VERSION_V2;
+        v2.validate()
+            .expect("an unavailable probe is a valid v2 answer");
     }
 }

@@ -107,9 +107,17 @@ pub(crate) fn excluded_ports() -> BTreeSet<u16> {
 /// at least one active relation; T3 of the RDP self-setup asks here.
 static STEERING_DEVICES: RwLock<BTreeSet<(String, String)>> = RwLock::new(BTreeSet::new());
 
-pub(crate) fn note_steering_devices(devices: BTreeSet<(String, String)>) {
-    if let Ok(mut current) = STEERING_DEVICES.write() {
-        *current = devices;
+/// Replaces the steering devices; `true` when a device noted before is no
+/// longer among them (its coverage ended by revocation, configuration
+/// change or time expiry: threat T-R2 rotates se-managed RDP credentials).
+pub(crate) fn note_steering_devices(devices: BTreeSet<(String, String)>) -> bool {
+    match STEERING_DEVICES.write() {
+        Ok(mut current) => {
+            let ended = !current.is_subset(&devices);
+            *current = devices;
+            ended
+        }
+        Err(_) => false,
     }
 }
 
