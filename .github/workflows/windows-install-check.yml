@@ -95,7 +95,8 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $password = 'Se!' + [guid]::NewGuid().ToString('N').Substring(0, 16)
+          # At most 14 characters: net user asks before accepting a longer one.
+          $password = 'Se!' + [guid]::NewGuid().ToString('N').Substring(0, 10)
           net user setest $password /add
           if ($LASTEXITCODE -ne 0) { throw "net user failed: $LASTEXITCODE" }
           $credential = [pscredential]::new("$env:COMPUTERNAME\setest", (ConvertTo-SecureString $password -AsPlainText -Force))
