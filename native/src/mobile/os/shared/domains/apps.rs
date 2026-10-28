@@ -72,12 +72,12 @@ pub(super) fn handle(method: &str, args: &Value) -> Option<Result<Value, ApiErro
                     .filter(|n| *n > 0)
                     .ok_or_else(|| ApiError::new("invalid", "waitSeconds must be positive"))
             })
-            .transpose()?
-            .unwrap_or(30);
+            .transpose()?;
+        // No fixed wait (design 7): only an explicit `waitSeconds` bounds it.
         let (node, device, result) = crate::daemon::apps_command(
             target,
             command?,
-            Some(std::time::Duration::from_secs(wait)),
+            wait.map(std::time::Duration::from_secs),
             || {},
         )
         .map_err(ApiError::internal)?;

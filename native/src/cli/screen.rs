@@ -15,7 +15,7 @@ use crate::share::{PeerOpenTarget, ShareProfiles};
 
 mod bench;
 mod codec;
-mod families;
+pub(super) mod families;
 pub(crate) mod input;
 mod output;
 #[cfg(target_os = "linux")]

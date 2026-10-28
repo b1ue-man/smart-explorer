@@ -7,6 +7,7 @@ use crate::{
     apps::{CatalogSnapshot, LaunchReceipt, LaunchRequest},
     share::{
         apps_wire::{AppsCommand, AppsResult},
+        loopback_services::LoopbackService,
         PeerOpenTarget,
     },
 };
@@ -161,6 +162,89 @@ pub(crate) fn apps_rdp_probe(
             crate::rdp::AuthenticatedProbe::from_authenticated_peer(node, host)
         }
         _ => Err("Unexpected RDP probe reply".into()),
+    }
+}
+/// A failed 0.5.189 command: when the same host still answers the old
+/// probe it is an older version, which is reported as such. Nothing of the
+/// old answer is used (no silent return to the 0.5.188 flow).
+fn newer_command_failed(target: PeerOpenTarget, wait: Option<Duration>, error: String) -> String {
+    match apps_rdp_probe(target, wait, || {}) {
+        Ok(_) => crate::rdp::OLD_HOST.into(),
+        Err(_) => error,
+    }
+}
+
+fn probe_v2(
+    node: String,
+    host: crate::rdp::HostProbe,
+    setup: crate::rdp::core::SetupState,
+) -> Result<(crate::rdp::AuthenticatedProbe, crate::rdp::core::SetupState), String> {
+    if host.version != crate::rdp::core::RDP_PROBE_VERSION_V2 {
+        return Err("RDP-Probe v2 antwortete mit einer anderen Version".into());
+    }
+    Ok((
+        crate::rdp::AuthenticatedProbe::from_authenticated_peer(node, host)?,
+        setup,
+    ))
+}
+
+/// Design 9.2 `RdpProbeV2`: the authenticated host inventory with SHA-1
+/// thumbprints and the host's self-setup state. Under „Nachfragen“ it waits
+/// for the host's answer; `wait` = `None` has no time limit.
+pub(crate) fn apps_rdp_probe_v2(
+    target: PeerOpenTarget,
+    wait: Option<Duration>,
+    pending: impl FnMut(),
+) -> Result<(crate::rdp::AuthenticatedProbe, crate::rdp::core::SetupState), String> {
+    let reply = apps_command(target.clone(), AppsCommand::RdpProbeV2, wait, pending);
+    match reply.map_err(|error| newer_command_failed(target, wait, error))? {
+        (node, _, AppsResult::RdpProbeV2 { host, setup }) => probe_v2(node, host, setup),
+        _ => Err("Unexpected RDP probe v2 reply".into()),
+    }
+}
+
+/// Design 9.2 `RdpPrepare` (trigger T4): the host runs its RDP self-setup,
+/// which may show the host's UAC/polkit dialog, then probes again.
+pub(crate) fn apps_rdp_prepare(
+    target: PeerOpenTarget,
+    wait: Option<Duration>,
+    pending: impl FnMut(),
+) -> Result<(crate::rdp::AuthenticatedProbe, crate::rdp::core::SetupState), String> {
+    let reply = apps_command(target.clone(), AppsCommand::RdpPrepare, wait, pending);
+    match reply.map_err(|error| newer_command_failed(target, wait, error))? {
+        (node, _, AppsResult::RdpPrepare { setup, host }) => probe_v2(node, host, setup),
+        _ => Err("Unexpected RDP prepare reply".into()),
+    }
+}
+
+/// Design 9.2 `RdpCredential`: se-managed service credentials (GNOME
+/// desktop sharing), newly set by the host on every call.
+pub(crate) fn apps_rdp_credential(
+    target: PeerOpenTarget,
+    service_id: &str,
+    wait: Option<Duration>,
+) -> Result<(String, crate::share::apps_wire::ManagedSecret), String> {
+    let command = AppsCommand::RdpCredential {
+        service_id: service_id.into(),
+    };
+    match apps_command(target, command, wait, || {})?.2 {
+        AppsResult::RdpCredential { username, password } => Ok((username, password)),
+        _ => Err("Unexpected RDP credential reply".into()),
+    }
+}
+
+/// Design 9.2 `LocalServices`: the host's services shared with this device
+/// (CLI/MCP without a running feed); `unavailable` names why none are known.
+pub(crate) fn apps_local_services(
+    target: PeerOpenTarget,
+    wait: Option<Duration>,
+) -> Result<(Vec<LoopbackService>, Option<String>), String> {
+    match apps_command(target, AppsCommand::LocalServices, wait, || {})?.2 {
+        AppsResult::LocalServices {
+            services,
+            unavailable,
+        } => Ok((services, unavailable)),
+        _ => Err("Unexpected local services reply".into()),
     }
 }
 fn local(request: AppsIpcRequest) -> Result<AppsIpcReply, String> {

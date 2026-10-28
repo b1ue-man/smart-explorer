@@ -4,8 +4,10 @@
 //! 900 ms (the calm GUI cadence `SHARE_IDLE_POLL`), in the same tick the S3
 //! vault sites (`Vault::Status`, H5), and the desktop folders after a change
 //! notice; a thread of `feed_sources` follows the S2 device tree with its long
-//! poll (`DevicesWatch`). Nothing here starts the service (V11, Vorschlag V1
-//! of C10) or takes the GUI's events (F8). The button "Verbinden" of a
+//! poll (`DevicesWatch`). The same live state carries each device's feed of
+//! windows, services and Remote Desktop (design 5.2), put on its tile.
+//! Nothing here starts the service (V11, Vorschlag V1 of C10) or takes the
+//! GUI's events (F8). The button "Verbinden" of a
 //! surface starts the service like the se window does, once at a time, in a
 //! thread of its own.
 use std::collections::BTreeMap;
@@ -201,9 +203,9 @@ impl FeedRound {
         let peek = (self.sources.peek)();
         let share_state = share_state_of(&peek);
         let running = matches!(peek, Ok(Some(_)));
-        let profiles = match peek {
-            Ok(Some(snapshot)) => Ok(snapshot.profiles),
-            _ => self.stored_profiles(),
+        let (profiles, live) = match peek {
+            Ok(Some(mut snapshot)) => (Ok(std::mem::take(&mut snapshot.profiles)), Some(snapshot)),
+            _ => (self.stored_profiles(), None),
         };
         let vaults = self.vaults(running);
         self.refresh_files();
@@ -215,7 +217,16 @@ impl FeedRound {
             device_paths: device_tree.mounted_paths().unwrap_or(&no_paths),
             vaults: vaults.as_deref(),
         };
-        let tiles = tiles::project(&input);
+        let mut model = tiles::project(&input);
+        // Windows, services and Remote Desktop of each device come from the
+        // background service's device feed (design 5.2); neither the host's
+        // nor this device's se window has to run for it.
+        if let (Some(snapshot), Ok(profiles)) = (&live, &profiles) {
+            tiles::attach_feeds(&mut model, profiles, |device, key| {
+                tiles::feed_of(snapshot, device, key)
+            });
+        }
+        let tiles = model;
         self.tick += 1;
         let unchanged = self.last.as_ref().is_some_and(|last| {
             last.tiles == tiles && last.files == self.files && last.device_tree == *device_tree

@@ -206,7 +206,17 @@ pub(super) fn screen(args: &Args) -> Result<CallToolResult, String> {
         "snapshot" => snapshot(args),
         "families" => {
             let (target, _) = crate::cli::screen::device_target(&args.string("device")?)?;
-            let list = crate::daemon::screen_families(target, Some(wait(args)?), |_| {})?;
+            // The device feed first (design 5.2); the device is asked only
+            // when the background service holds no listing of it.
+            let fed = crate::daemon::share_worker_snapshot()
+                .ok()
+                .and_then(|snapshot| {
+                    crate::cli::screen::families::feed_listing(&snapshot, &target)
+                });
+            let list = match fed {
+                Some(list) => list,
+                None => crate::daemon::screen_families(target, Some(wait(args)?), |_| {})?,
+            };
             Ok(response::ok(
                 serde_json::to_value(list).map_err(|error| error.to_string())?,
             ))

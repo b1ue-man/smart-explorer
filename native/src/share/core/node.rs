@@ -161,6 +161,7 @@ impl ShareIrohNode {
                 ALPN.to_vec(),
                 EXEC_ALPN.to_vec(),
                 super::tcp_forward::TCP_ALPN.to_vec(),
+                super::tcp_forward::TCP_ALPN_V1.to_vec(),
                 super::apps_wire::APPS_ALPN.to_vec(),
                 super::lan_link_wire::LAN_LINK_ALPN.to_vec(),
                 crate::screen::core::wire::SCREEN_ALPN.to_vec(),
@@ -227,6 +228,7 @@ impl ShareIrohNode {
         });
         node.start_access_expiry();
         node.spawn_accept_loop();
+        super::configuration_runtime::on_node_start(&node.auth, &identity.device_id);
         Ok(node)
     }
 

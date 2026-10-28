@@ -16,10 +16,7 @@ pub(super) fn probe(report: &mut HostProbe) {
     match unit("xrdp.service", false, "xrdp") {
         Err(error) => found.unavailable_reason = Some(error),
         Ok(unit) => {
-            let config = argument(&unit.command, "--config")
-                .or_else(|| argument(&unit.command, "-c"))
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("/etc/xrdp/xrdp.ini"));
+            let config = config_of(&unit.command);
             match ini(&config) {
                 Err(error) => found.unavailable_reason = Some(error),
                 Ok(values) => {
@@ -28,7 +25,7 @@ pub(super) fn probe(report: &mut HostProbe) {
                             .get(&("Globals".into(), key.into()))
                             .map(String::as_str)
                     };
-                    let configured_port = global("port").and_then(|s| s.parse::<u16>().ok());
+                    let configured_port = global("port").and_then(parse_port).map(|(port, _)| port);
                     attach_listener(&mut found, &unit, configured_port);
                     found.tls = match global("security_layer") {
                         Some("tls" | "negotiate") => Some(true),
@@ -108,4 +105,110 @@ pub(super) fn probe(report: &mut HostProbe) {
         }
     }
     report.services.push(found);
+}
+
+/// The `xrdp.ini` that the running unit uses (`--config`/`-c`), else the
+/// packaged default.
+pub(super) fn config_of(command: &[String]) -> PathBuf {
+    argument(command, "--config")
+        .or_else(|| argument(command, "-c"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/etc/xrdp/xrdp.ini"))
+}
+
+/// The configuration file of the xrdp unit, also when it is not running.
+pub(super) fn config_path() -> PathBuf {
+    match unit("xrdp.service", false, "xrdp") {
+        Ok(unit) => config_of(&unit.command),
+        Err(_) => config_of(&[]),
+    }
+}
+
+/// Port and loopback-only flag of one `[Globals] port=` value. Forms of
+/// xrdp 0.9.24/0.10.3 (`xrdp/xrdp.ini.in`): `3389` and `tcp://:3389` listen
+/// on every interface, `tcp://.:3389` means 127.0.0.1:3389. Other socket
+/// kinds (vsock, unix) and lists of several listeners return `None`.
+pub(crate) fn parse_port(value: &str) -> Option<(u16, bool)> {
+    let value = value.trim();
+    if let Ok(port) = value.parse::<u16>() {
+        return Some((port, false));
+    }
+    let rest = value
+        .strip_prefix("tcp://")
+        .or_else(|| value.strip_prefix("tcp6://"))?;
+    let (host, port) = rest.rsplit_once(':')?;
+    let port = port.parse::<u16>().ok()?;
+    let host = host.trim_start_matches('{').trim_end_matches('}');
+    let address = host.parse::<std::net::IpAddr>();
+    let loopback = host == "." || address.is_ok_and(|address| address.is_loopback());
+    Some((port, loopback))
+}
+
+/// Rewrites `xrdp.ini` so xrdp listens on loopback only (design 3.3): the
+/// `[Globals]` port becomes `tcp://.:<p>` and `security_layer` becomes `tls`
+/// unless it is `tls` or `negotiate`. A network-wide listener is changed
+/// only when se installed xrdp itself; another administrator's network-wide
+/// setup stays untouched and is reported. Returns the text and whether it
+/// changed.
+pub(crate) fn loopback_config(text: &str, se_installed: bool) -> Result<(String, bool), String> {
+    const FOREIGN: &str = "xrdp_network_wide_not_se_installed";
+    let mut lines: Vec<String> = Vec::new();
+    let mut section = String::new();
+    let mut globals_end = None;
+    let (mut port_seen, mut layer_seen, mut changed) = (false, false, false);
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if let Some(name) = trimmed.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            if section == "Globals" {
+                globals_end = Some(lines.len());
+            }
+            section = name.to_string();
+        } else if section == "Globals" && !trimmed.starts_with(['#', ';']) {
+            if let Some((key, value)) = trimmed.split_once('=') {
+                match key.trim() {
+                    "port" => {
+                        port_seen = true;
+                        let (port, loopback) = parse_port(value)
+                            .ok_or_else(|| format!("xrdp_port_unsupported:{}", value.trim()))?;
+                        if !loopback {
+                            if !se_installed {
+                                return Err(FOREIGN.into());
+                            }
+                            lines.push(format!("port=tcp://.:{port}"));
+                            changed = true;
+                            continue;
+                        }
+                    }
+                    "security_layer" => {
+                        layer_seen = true;
+                        if !matches!(value.trim(), "tls" | "negotiate") {
+                            lines.push("security_layer=tls".into());
+                            changed = true;
+                            continue;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        lines.push(line.to_string());
+    }
+    if section == "Globals" {
+        globals_end = Some(lines.len());
+    }
+    let end = globals_end.ok_or_else(|| "xrdp.ini has no [Globals] section".to_string())?;
+    let mut missing = Vec::new();
+    if !port_seen {
+        // Without `port` xrdp listens on 3389 on every interface.
+        if !se_installed {
+            return Err(FOREIGN.into());
+        }
+        missing.push("port=tcp://.:3389".to_string());
+    }
+    if !layer_seen {
+        missing.push("security_layer=tls".to_string());
+    }
+    changed |= !missing.is_empty();
+    lines.splice(end..end, missing);
+    Ok((lines.join("\n") + "\n", changed))
 }

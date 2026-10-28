@@ -51,7 +51,7 @@ impl ShareIrohNode {
                     // automatic reconnects of paired devices are never throttled.
                     let exec = connection.alpn() == EXEC_ALPN;
                     let screen = connection.alpn() == SCREEN_ALPN;
-                    let tcp = connection.alpn() == super::tcp_forward::TCP_ALPN;
+                    let tcp = super::tcp_forward::tcp_version_for_alpn(connection.alpn()).is_some();
                     let apps = connection.alpn() == super::apps_wire::APPS_ALPN;
                     if super::auth_penalty::refusal_applies(exec || screen || tcp || apps, known) {
                         let now = std::time::Instant::now();
@@ -116,7 +116,16 @@ impl ShareIrohNode {
                             completion.wait().await; Ok(())
                         }) => {
                             match admitted {
-                                Ok(()) => dispatch.await,
+                                Ok(()) => {
+                                    // Hello verified: the host logs its route
+                                    // changes too (D1, "über Relay …" → "direkt").
+                                    super::route_policy::route_start::log_route_changes(
+                                        &connection,
+                                        connection.remote_id().to_string(),
+                                        node.ev.clone(),
+                                    );
+                                    dispatch.await
+                                }
                                 Err(error) => { refuse(&connection); Err(error) }
                             }
                         }
@@ -181,7 +190,9 @@ async fn dispatch_connection(
         }
         EXEC_ALPN => super::exec_server::handle_connection(node, connection, permit).await,
         SCREEN_ALPN => node.handle_screen_connection(connection, permit).await,
-        super::tcp_forward::TCP_ALPN => node.handle_tcp_connection(connection, permit).await,
+        super::tcp_forward::TCP_ALPN | super::tcp_forward::TCP_ALPN_V1 => {
+            node.handle_tcp_connection(connection, permit).await
+        }
         super::apps_wire::APPS_ALPN => node.handle_apps_connection(connection, permit).await,
         _ => Err(eio("Unbekanntes Share-Protokoll")),
     }

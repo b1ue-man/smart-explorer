@@ -1,16 +1,24 @@
-//! Device-local P4 choice. Only the exact authenticated list entry is opened.
+//! Device-local P4 windows (design 5.2, user rule r5 „wenn n fenster offen
+//! ist sehen es andere se desktops“): the open windows of a device arrive
+//! through the background service's device feed without a click, and a
+//! window opens with control when the device lets this one steer, else
+//! viewing. Only the exact authenticated list entry is opened. A device
+//! without a feed (older than 0.5.189) is asked once when the page shows.
 use super::screen_target::ScreenTarget;
+use super::share_rdp_ui::feed::{self, FeedRead};
+use crate::desktop::core::tiles;
 use crate::screen::core::family_protocol::{FamilyListEntry, FamilyListing};
 use eframe::egui;
 use std::sync::{Arc, Mutex, PoisonError};
 
 #[derive(Default)]
 struct State {
+    /// The single read of a device without a feed was started.
+    asked: bool,
     busy: bool,
     pending: Option<String>,
     error: Option<String>,
     list: Option<FamilyListing>,
-    control: bool,
 }
 
 pub(crate) fn open_entry(target: &ScreenTarget, entry: &FamilyListEntry) -> Result<(), String> {
@@ -21,8 +29,42 @@ pub(crate) fn open_entry(target: &ScreenTarget, entry: &FamilyListEntry) -> Resu
     super::screen_launch::open_view(&target)
 }
 
-/// Main places this panel on a concrete device page, alongside the existing
-/// screen/fullscreen actions. Refresh is explicit because a listing pins leases.
+/// The feed's window listing of `target`, whether the device lets this one
+/// steer, and why windows are unavailable.
+struct FeedWindows {
+    listing: Option<FamilyListing>,
+    control: bool,
+    notes: Vec<String>,
+    /// The background service holds a feed of this device.
+    known: bool,
+}
+
+fn feed_windows(ctx: &egui::Context, target: &ScreenTarget) -> Result<FeedWindows, String> {
+    let peer = target.to_peer()?;
+    let read = feed::read(ctx, |snapshot| {
+        let (device, key) = tiles::identity_of(&snapshot.profiles, &peer)?;
+        let projected = tiles::feed_of(snapshot, &device, &key)?;
+        Some(FeedWindows {
+            listing: tiles::families_of(snapshot, &device, &key),
+            control: projected.control,
+            notes: projected.notes,
+            known: projected.known,
+        })
+    });
+    match read {
+        FeedRead::Ready(Some(windows)) => Ok(windows),
+        FeedRead::Ready(None) | FeedRead::Pending => Ok(FeedWindows {
+            listing: None,
+            control: false,
+            notes: Vec::new(),
+            known: false,
+        }),
+        FeedRead::Unavailable(reason) => Err(reason),
+    }
+}
+
+/// Main places this panel on a concrete device page. The list follows the
+/// feed; there is no refresh button and no control checkbox.
 pub(crate) fn panel(ui: &mut egui::Ui, target: &ScreenTarget) {
     let id = egui::Id::new((
         "family-picker",
@@ -32,28 +74,28 @@ pub(crate) fn panel(ui: &mut egui::Ui, target: &ScreenTarget) {
         &target.expected_node,
     ));
     let state: Arc<Mutex<State>> = ui.ctx().data_mut(|d| {
-        d.get_temp_mut_or_insert_with(id, || {
-            Arc::new(Mutex::new(State {
-                control: target.control,
-                ..Default::default()
-            }))
-        })
-        .clone()
+        d.get_temp_mut_or_insert_with(id, || Arc::new(Mutex::new(State::default())))
+            .clone()
     });
+    let windows = match feed_windows(ui.ctx(), target) {
+        Ok(windows) => windows,
+        Err(reason) => {
+            ui.label(reason);
+            return;
+        }
+    };
     let mut start = false;
     let mut selected = None;
     {
         let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
-        if ui
-            .add_enabled(
-                !state.busy,
-                egui::Button::new("Fensterliste abrufen / aktualisieren"),
-            )
-            .clicked()
-        {
+        for note in &windows.notes {
+            ui.label(note);
+        }
+        // A device without a feed (older version) is asked once.
+        if windows.listing.is_none() && !windows.known && !state.asked {
+            state.asked = true;
             start = true;
         }
-        ui.checkbox(&mut state.control, "Fenster mit Steuerrecht öffnen");
         if state.busy {
             ui.horizontal(|ui| {
                 ui.spinner();
@@ -69,15 +111,17 @@ pub(crate) fn panel(ui: &mut egui::Ui, target: &ScreenTarget) {
             let text = super::device_page_layout::explain_remote_error(error);
             ui.colored_label(egui::Color32::RED, text);
         }
-        if let Some(list) = &state.list {
+        let control = windows.control;
+        if let Some(list) = windows.listing.as_ref().or(state.list.as_ref()) {
             if list.entries.is_empty() {
-                ui.label("Der Host stellt aktuell keine bestätigten Fensterfamilien bereit.");
+                ui.label("Auf diesem Gerät ist gerade kein Fenster offen.");
             }
             for entry in &list.entries {
                 ui.horizontal(|ui| {
                     ui.label(format!("{} · {}", entry.window.app, entry.window.title));
-                    if ui.button("Öffnen").clicked() {
-                        selected = Some((entry.clone(), state.control));
+                    let label = if control { "Steuern" } else { "Ansehen" };
+                    if ui.button(label).clicked() {
+                        selected = Some(entry.clone());
                     }
                 });
             }
@@ -85,12 +129,12 @@ pub(crate) fn panel(ui: &mut egui::Ui, target: &ScreenTarget) {
                 ui.label(limitation);
             }
         }
-    }
-    if let Some((entry, control)) = selected {
-        let mut target = target.clone();
-        target.control = control;
-        if let Err(error) = open_entry(&target, &entry) {
-            state.lock().unwrap_or_else(PoisonError::into_inner).error = Some(error);
+        if let Some(entry) = selected.take() {
+            let mut target = target.clone();
+            target.control = control;
+            if let Err(error) = open_entry(&target, &entry) {
+                state.error = Some(error);
+            }
         }
     }
     if start {

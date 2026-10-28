@@ -314,6 +314,34 @@ pub(crate) async fn recv_viewer_frame<R: AsyncRead + Unpin>(
     decode_viewer_frame(tag, &payload)
 }
 
+/// A frame on a capture-free metadata channel: a regular viewer frame or the
+/// device-feed subscription (design 5.2). The subscription is no
+/// `ViewerFrame` variant, so every existing frame match stays exhaustive.
+pub(crate) enum MetadataFrame {
+    Viewer(ViewerFrame),
+    SubscribeFeed,
+}
+
+/// Host side of a metadata channel; `SUBSCRIBE_FEED` carries `{}`.
+pub(crate) async fn recv_metadata_frame<R: AsyncRead + Unpin>(
+    reader: &mut R,
+) -> io::Result<MetadataFrame> {
+    let (tag, payload) = read_frame(reader, MAX_CONTROL_BYTES).await?;
+    if tag == super::wire::SUBSCRIBE_FEED {
+        super::wire::from_json::<serde_json::Map<String, serde_json::Value>>(&payload)?;
+        return Ok(MetadataFrame::SubscribeFeed);
+    }
+    decode_viewer_frame(tag, &payload).map(MetadataFrame::Viewer)
+}
+
+/// Viewer side: subscribes a metadata channel to the host's device feed.
+/// Only after the host announced `family_feed_version` in its hello.
+// Consumer: the viewer's device feed (work package WP2, `peer_feed.rs`).
+#[allow(dead_code)]
+pub(crate) async fn send_subscribe_feed<W: AsyncWrite + Unpin>(writer: &mut W) -> io::Result<()> {
+    write_frame(writer, super::wire::SUBSCRIBE_FEED, b"{}").await
+}
+
 pub(crate) async fn send_host_frame<W: AsyncWrite + Unpin>(
     writer: &mut W,
     frame: &HostFrame,

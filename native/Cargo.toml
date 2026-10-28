@@ -166,10 +166,10 @@ if-addrs = "0.13"
 # ZIP archive browse + extract (zipfs.rs). zip 9 (not 2.4.2): RUSTSEC-2026-0367
 # (SUID/SGID bits on extraction), RUSTSEC-2026-0368 and RUSTSEC-2026-0369 (Unix
 # permissions through links) are fixed from 9.0.0. Feature `deflate-flate2` (not
-# `deflate`, which in zip 9 also pulls the Zopfli encoder and `zlib-rs`): deflate
-# through flate2 with its pure-Rust miniz_oxide backend, which the direct `flate2`
-# dependency below enables (zip itself builds flate2 without a backend), so no new
-# C deps for the windows-gnu build.
+# `deflate`, which in zip 9 also pulls the Zopfli encoder): deflate through the
+# one flate2 of the build, whose backend the direct `flate2` dependency below
+# selects (zip itself builds flate2 without a backend), so no C deps for the
+# windows-gnu build.
 zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 # RV1 (all already in the lock through other crates): streaming WebDAV
 # multistatus parsing, TCP keepalive on FTP sockets, NFC planning keys for
@@ -191,7 +191,13 @@ sha2-011 = { package = "sha2", version = "0.11.0", default-features = false }
 sha1-011 = { package = "sha1", version = "0.11.0", default-features = false }
 scrypt = { version = "0.12.0", default-features = false }
 data-encoding = { version = "2.11.0", default-features = false, features = ["alloc"] }
-flate2 = "1"
+# MZ3 (plan 2026-10-28, ZIP extraction): the pure-Rust `zlib-rs` backend
+# instead of miniz_oxide for inflating. Features unify into the single flate2
+# that zip and russh use too; flate2 prefers `zlib-rs` over miniz_oxide when both are on
+# (russh keeps flate2's default `rust_backend`). New in the lock: `zlib-rs`
+# (Zlib license, accepted in third-party/rust-crates/about.toml); the lock and
+# the license notices are refreshed on the runner (lock-refresh.yml).
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 # Lossless tile codec of the screen protocol (screen/core/tiles_codec.rs):
 # pure-Rust LZ4 block format, already in the lock through smb2.
 lz4_flex = "0.14"
@@ -218,6 +224,9 @@ windows-sys = { version = "0.59", features = [
     "Win32_Security_Authentication_Identity",
     # Handle-bound migration and verification of owner-only private storage.
     "Win32_Security_Authorization",
+    # RDP viewer: CredWriteW/CredDeleteW for se-managed GNOME credentials
+    # (plan 2026-10-28, design 2.8).
+    "Win32_Security_Credentials",
     "Win32_Security_Cryptography",
     "Win32_Security_WinTrust",
     "Win32_Storage_FileSystem",
@@ -393,6 +402,10 @@ egui-wgpu = "=0.29.1"
 # window type (suite run 3, desktop_task_x11_*). winit's x11 and wayland
 # backends were already built; no further crate joins the lock.
 egui-winit = { version = "=0.29.1", default-features = false, features = ["x11", "wayland"] }
+# RDP self-setup (plan 2026-10-28, design 3.3): the self-signed TLS certificate
+# of GNOME desktop sharing. Already in the lock through iroh (ring backend,
+# MIT OR Apache-2.0); default features off so no aws-lc toolchain joins.
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
 
 [build-dependencies]
 # Pure-Rust verification of prepared DLL bytes; never compile/download Dokany

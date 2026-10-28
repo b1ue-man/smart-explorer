@@ -197,9 +197,9 @@ pub(super) fn tools() -> Vec<Tool> {
         tool("screen", "Screen of paired devices", screen_tool::DESCRIPTION, screen_tool::properties(), &["action"], read_only(true)),
         tool("screen_window", "Open a native remote window viewer", super::screen_window_tool::DESCRIPTION, super::screen_window_tool::properties(), &["device", "source"], changes(true, false)),
         tool("screen_input", "Input on the screen of a paired device", screen_tool::INPUT_DESCRIPTION, screen_tool::input_properties(), &["device"], changes(true, false)),
-        tool("tcp_forward", "TCP tunnel to a paired device", super::tcp_tool::DESCRIPTION, super::tcp_tool::properties(), &["action"], changes(true, false)),
+        tool("tcp_forward", "TCP and services of paired devices", super::tcp_tool::DESCRIPTION, super::tcp_tool::properties(), &["action"], changes(true, false)),
         tool("apps", "Installed application catalog and launch", super::apps_tool::DESCRIPTION, super::apps_tool::properties(), &["action"], changes(true, false)),
-        tool("rdp", "Authenticated RDP and RemoteApp", super::rdp_tool::DESCRIPTION, super::rdp_tool::properties(), &["action"], changes(true, false)),
+        tool("rdp", "Remote Desktop to a paired device", super::rdp_tool::DESCRIPTION, super::rdp_tool::properties(), &["action"], changes(true, false)),
         tool("login", "Explicit machine login viewer", super::login_tool::DESCRIPTION, super::login_tool::properties(), &["action"], changes(true, false)),
     ];
     tools.into_iter().map(upfront).collect()

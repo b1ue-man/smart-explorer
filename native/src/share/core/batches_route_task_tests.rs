@@ -287,9 +287,7 @@ fn batches_task_b5_confirmed_network_change_preserves_disabled_transport() {
             .unwrap()
             .unwrap();
         assert_eq!(&bytes, b"after!");
-        sender
-            .send_datagram(b"ungated".to_vec().into())
-            .unwrap();
+        sender.send_datagram(b"ungated".to_vec().into()).unwrap();
         assert_eq!(
             &tokio::time::timeout(WAIT, receiver.read_datagram())
                 .await
@@ -304,10 +302,7 @@ fn batches_task_b5_confirmed_network_change_preserves_disabled_transport() {
         assert_eq!(current.revision, original.revision);
         assert_eq!(current.network_change_count, 0);
         assert_eq!(current.application_tx_bytes, 0);
-        assert_eq!(
-            receiver.application_path_policy().application_rx_bytes,
-            0
-        );
+        assert_eq!(receiver.application_path_policy().application_rx_bytes, 0);
         assert!(!current.requires_new_generation);
         assert!(sender.application_data_allowed());
         assert!(matches!(
@@ -383,19 +378,25 @@ fn batches_task_b5_frozen_deadline_relay_fallback_and_late_direct_lan_upgrade() 
         retry_intervals: vec![Duration::from_millis(20)],
         max_probe_attempts: 2,
     };
-    assert_eq!(policy.observe(0, &paths, Some(&round)), None);
-    assert_eq!(policy.observe(30, &paths, Some(&round)), None);
+    // Start bridge (Z-R2): the validated relay carries payload at once while
+    // the finite direct phase runs; the phase marks it.
+    let relay = Some("relay".to_string());
+    assert_eq!(policy.observe(0, &paths, Some(&round)), relay);
+    assert_eq!(policy.status().phase, RoutePhase::RelayStart);
+    assert_eq!(policy.observe(30, &paths, Some(&round)), relay);
     let deadline = policy.budget().direct_deadline_ms;
     assert_eq!(deadline, 110);
     // New hints, a new round and long retry intervals cannot prolong the attempt.
     round.round = "late-upgrade".into();
     round.retry_intervals = vec![Duration::from_secs(600)];
     paths.push(candidate("late", RouteClass::Direct, false));
-    assert_eq!(policy.observe(deadline - 1, &paths, Some(&round)), None);
-    assert_eq!(
-        policy.observe(deadline, &paths, Some(&round)),
-        Some("relay".into())
-    );
+    assert_eq!(policy.observe(deadline - 1, &paths, Some(&round)), relay);
+    assert_eq!(policy.status().phase, RoutePhase::RelayStart);
+    assert_eq!(policy.observe(deadline, &paths, Some(&round)), relay);
+    // Same path, still admitted: the fallback mark is no interruption.
+    assert_eq!(policy.status().phase, RoutePhase::RelayFallback);
+    assert!(policy.status().application_allowed);
+    assert_eq!(policy.status().pause_epoch, 0);
     assert_eq!(policy.budget().direct_deadline_ms, deadline);
     assert_eq!(policy.budget().frozen_candidates, 2);
     paths[1].validated = true;
@@ -432,13 +433,15 @@ fn batches_task_b5_round_completion_waits_for_responses_validation_and_open_path
         retry_intervals: vec![Duration::from_secs(1)],
         max_probe_attempts: 2,
     };
-    policy.observe(0, &paths, Some(&round));
-    assert_eq!(policy.observe(30, &paths, Some(&round)), None);
-    assert_eq!(policy.observe(78, &paths, Some(&round)), None);
+    let relay = Some("relay".to_string());
+    assert_eq!(policy.observe(0, &paths, Some(&round)), relay);
+    assert_eq!(policy.observe(30, &paths, Some(&round)), relay);
+    assert_eq!(policy.observe(78, &paths, Some(&round)), relay);
+    assert_eq!(policy.status().phase, RoutePhase::RelayStart);
     round.pending_path_opens = 0;
-    assert_eq!(policy.observe(79, &paths, Some(&round)), None);
-    assert_eq!(
-        policy.observe(80, &paths, Some(&round)),
-        Some("relay".into())
-    );
+    assert_eq!(policy.observe(79, &paths, Some(&round)), relay);
+    assert_eq!(policy.status().phase, RoutePhase::RelayStart);
+    assert_eq!(policy.observe(80, &paths, Some(&round)), relay);
+    assert_eq!(policy.status().phase, RoutePhase::RelayFallback);
+    assert_eq!(policy.status().pause_epoch, 0);
 }

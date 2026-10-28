@@ -23,6 +23,9 @@ use super::session::{
 use super::types::{PeerEndpoint, ShareEvent};
 use super::wire::{Ctrl, FsResponse, PeerHello, TRANSFER_V1_CAPABILITY};
 
+#[path = "node_bulk.rs"]
+mod bulk;
+
 /// Streams (requests) this process opened to peers: the measure of the
 /// `speed_task_share_*` benchmarks.
 #[cfg(test)]
@@ -401,6 +404,12 @@ impl ShareIrohNode {
                             transport,
                             started.elapsed().as_millis()
                         )));
+                        // "über Relay, Direktweg wird aufgebaut" → "direkt" in the log.
+                        super::route_policy::route_start::log_route_changes(
+                            &connection,
+                            remote_device.clone(),
+                            self.ev.clone(),
+                        );
                         Ok(connection)
                     }
                     Ctrl::FsResp {

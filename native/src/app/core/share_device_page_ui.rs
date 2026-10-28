@@ -1,8 +1,9 @@
 //! Page „Geräte“: one row per device (direct contacts, authorizations of
 //! devices without a contact, room members) and the page of one device. The
 //! device page has one card per area: what the device may do here (files,
-//! screen, commands, own programs), what I use on it (its programs, windows,
-//! Remote Desktop, TCP forwarding, machine login), the connection and
+//! screen, commands, own programs), what I use on it (its programs, its open
+//! windows, Remote Desktop and its local services from the device feed, TCP
+//! forwarding, machine login), the connection and
 //! removal. „Gerät hinzufügen“ (PIN or Direkt-Code) and „Entfernte Geräte“
 //! are pages of their own.
 use super::pages_ui::{self, SharePage, TAB_DEVICES, TAB_REQUESTS};
@@ -389,17 +390,17 @@ fn uses_card(app: &App, ui: &mut egui::Ui, device: &str, key: &str) {
     let profiles = &app.share_profiles;
     layout::card(ui, "Was ich auf diesem Gerät nutze", None, |ui| {
         layout::tool(ui, ("apps", device), "Programme", |ui| {
-            ui.small("Startet Programme des anderen Geräts. Dafür muss es dir dort „Bildschirm steuern“ erlauben; das schließt Programme, Fenster und RDP ein.");
+            ui.small("Startet Programme des anderen Geräts. Dafür muss es dir dort „Bildschirm steuern“ erlauben; das schließt Programme, Fenster, Remote Desktop und seine lokalen Dienste ein.");
             crate::app::share_apps_ui::device(ui, profiles, device, key);
         });
         layout::tool(ui, ("windows", device), "Fenster", |ui| {
-            ui.small("Zeigt einzelne Fenster des anderen Geräts. Dafür muss es dir „Bildschirm ansehen“ erlauben.");
+            ui.small("Die offenen Fenster des anderen Geräts erscheinen hier von selbst. Dafür muss es dir „Bildschirm ansehen“ erlauben.");
             crate::app::family_device_ui::device(ui, profiles, device, key);
         });
-        layout::tool(ui, ("rdp", device), "Remote Desktop / RemoteApp", |ui| {
+        layout::tool(ui, ("rdp", device), "Remote Desktop", |ui| {
             crate::app::share_rdp_ui::device(ui, profiles, device, key);
         });
-        layout::tool(ui, ("tcp", device), "TCP-Weiterleitungen", |ui| {
+        layout::tool(ui, ("tcp", device), "Dienste und TCP", |ui| {
             crate::app::share_tcp_ui::device(ui, profiles, device, key);
         });
         layout::tool(ui, ("login", device), "Maschinenanmeldung", |ui| {

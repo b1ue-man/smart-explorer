@@ -29,8 +29,23 @@ import java.util.UUID
 @Serializable data class FamilyOperationResult(val request_id: String, val status: String? = null, val reason: String? = null, val snapshot: FamilySnapshot? = null)
 @Serializable data class FamilyState(val snapshot: FamilySnapshot? = null, val notice: String? = null, val last_operation: FamilyOperationResult? = null)
 @Serializable data class FamilyRequestReply(val request_id: String)
+/** The background service's feed of one device (design 5.2); `control`: the device lets this one steer. */
+@Serializable data class DeviceFeed(
+    val known: Boolean = false,
+    val present: Boolean = false,
+    val families: FamilyListing? = null,
+    val familiesUnavailable: String? = null,
+    val servicesUnavailable: String? = null,
+    val rdp: RdpFeedState? = null,
+    val unavailable: String? = null,
+    val control: Boolean = false,
+)
 
 object FamilyApi {
+    /** Windows, services and Remote Desktop state of a device without any request to it. */
+    suspend fun feed(deviceId: String, publicKey: String): DeviceFeed = Core.request("screen.feed", buildJsonObject {
+        put("deviceId", deviceId); put("publicKey", publicKey)
+    })
     suspend fun list(target: ScreenTarget): FamilyListing = Core.request("screen.families", buildJsonObject {
         put("relation", target.relation); put("relationId", target.relationId); target.deviceId?.let { put("deviceId", it) }
         target.expectedNodeId?.let { put("expectedNodeId", it) }

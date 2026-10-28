@@ -6,7 +6,7 @@ use super::host_server::HostContext;
 use super::registry::SessionHandle;
 use super::session_state::EndReason;
 use super::window_list::WindowList;
-use super::wire_control::{recv_viewer_frame, HostFrame, Pong, ViewerFrame};
+use super::wire_control::{recv_metadata_frame, HostFrame, MetadataFrame, Pong, ViewerFrame};
 use super::wire_hello::SessionMode;
 use crate::share::access_grant::Capability;
 use crate::share::relation_proof::ProvenPrincipal;
@@ -59,6 +59,7 @@ async fn answer(
 }
 
 /// Only list/icon/ping frames are accepted. No source, encoder or input path exists here.
+/// `SUBSCRIBE_FEED` turns the channel into the host's device feed (design 5.2).
 pub(crate) async fn serve_metadata(
     context: &HostContext,
     principal: &ProvenPrincipal,
@@ -73,7 +74,7 @@ pub(crate) async fn serve_metadata(
     let result = loop {
         let frame = tokio::select! {
             changed=stop.changed()=>{let _=changed;break Ok(());},
-            frame=tokio::time::timeout(Duration::from_secs(15),recv_viewer_frame(&mut recv))=>match frame {
+            frame=tokio::time::timeout(Duration::from_secs(15),recv_metadata_frame(&mut recv))=>match frame {
                 Ok(Ok(frame))=>frame,
                 Ok(Err(error))=>break Err(error),
                 Err(_)=>break Ok(()),
@@ -82,6 +83,22 @@ pub(crate) async fn serve_metadata(
         if stop.borrow().is_some() {
             break Ok(());
         }
+        let frame = match frame {
+            MetadataFrame::Viewer(frame) => frame,
+            MetadataFrame::SubscribeFeed => {
+                let stop = stop.clone();
+                let feed = super::feed_host::run(
+                    context,
+                    principal,
+                    connection,
+                    &mut send,
+                    recv,
+                    stop,
+                    families_supported,
+                );
+                break feed.await;
+            }
+        };
         let response = match frame {
             ViewerFrame::ListFamilies if families_supported => {
                 answer(context, principal, connection, &stop, Request::Families).await

@@ -68,6 +68,11 @@ pub struct ShareWorkerSnapshot {
     /// the daemon's persistent view and is never consumed by a reader.
     #[serde(default)]
     pub discovery_offers: Vec<crate::share::OwnDiscoveryOffer>,
+    /// Device feeds of the other devices (design 5.2): their open windows,
+    /// shared services with this device's mapping, RDP short state. Absent
+    /// when reading a worker predating 0.5.189.
+    #[serde(default)]
+    pub(crate) peer_feeds: Vec<crate::share::peer_feed::PeerFeedView>,
 }
 
 /// Result data of a Share command that the caller needs, returned over IPC

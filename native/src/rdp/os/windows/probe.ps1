@@ -1,5 +1,6 @@
 # Read-only Windows host inventory. No credentials, key export, service,
 # registry, NLA, TLS or firewall mutation. Evaluated only as fixed source.
+# The self-setup (host_setup.ps1) changes RDP; this probe never does.
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $notes = [System.Collections.Generic.List[string]]::new()
@@ -15,7 +16,19 @@ $port = $null
 $tls = $null
 $nla = $null
 $sha256 = $null
+$sha1 = $null
 $certSource = $null
+$termServicePid = $null
+$policyDenies = $false
+$policyKey = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
+if (Test-Path -LiteralPath $policyKey) {
+    $policy = Get-ItemProperty -LiteralPath $policyKey -ErrorAction SilentlyContinue
+    if ($null -ne $policy -and $null -ne $policy.fDenyTSConnections -and [int]$policy.fDenyTSConnections -eq 1) { $policyDenies = $true }
+}
+$passwordless = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\PasswordLess\Device' -ErrorAction SilentlyContinue
+if ($null -ne $passwordless -and [int]$passwordless.DevicePasswordLessBuildVersion -eq 2) {
+    $notes.Add('Kennwortlose Windows-Anmeldung aktiv: RDP braucht das Kontokennwort')
+}
 $apps = [System.Collections.Generic.List[object]]::new()
 if ($supported) {
     try {
@@ -24,6 +37,7 @@ if ($supported) {
         $enabled = [int]$settings.fDenyTSConnections -eq 0
         $service = Get-CimInstance -ClassName Win32_Service -Filter "Name='TermService'"
         $running = $service.State -eq 'Running'
+        if ($running) { $termServicePid = [uint32]$service.ProcessId }
         $configuredPort = [int]$listener.PortNumber
         if ($running -and $configuredPort -gt 0 -and $configuredPort -le 65535) {
             $sockets = @(Get-NetTCPConnection -State Listen -LocalPort $configuredPort -ErrorAction Stop |
@@ -35,6 +49,8 @@ if ($supported) {
         $nla = [uint32]$general.UserAuthenticationRequired -eq 1
         $thumbprint = ([string]$general.SSLCertificateSHA1Hash).Replace(' ', '')
         if ($thumbprint -match '^[0-9A-Fa-f]{40}$') {
+            # The listener's own thumbprint is what mstsc stores as CertHash.
+            $sha1 = $thumbprint.ToUpperInvariant()
             # SHA-1 is only the OS certificate lookup key; the advertised pin
             # is independently SHA-256 over the bound certificate DER.
             $certificates = @()
@@ -85,6 +101,9 @@ if ($supported) {
     nla = $nla
     certificate_sha256 = $sha256
     certificate_source = $certSource
+    certificate_sha1 = $sha1
+    termservice_pid = $termServicePid
+    policy_denies = [bool]$policyDenies
     remote_apps = @($apps.ToArray())
     notes = @($notes.ToArray())
 } | ConvertTo-Json -Depth 5 -Compress

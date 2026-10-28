@@ -269,13 +269,29 @@ fn remote_drive_task_trusted_reads_cache_case_resolution_but_revalidate_root() {
 
     assert_eq!(
         stats.load(Ordering::SeqCst) - stats_before_reads,
-        4,
-        "trusted reads revalidate the root and observe the final target live"
+        3,
+        "a remote root is checked once until an event; final targets stay live"
     );
     assert_eq!(
         lists.load(Ordering::SeqCst) - lists_before_reads,
         1,
         "trusted case resolution must reuse the shared listing cache"
+    );
+    // G4 ML3: events, never a clock, invalidate the remembered root check.
+    let before_refresh = stats.load(Ordering::SeqCst);
+    backend.invalidate_cache();
+    assert_eq!(backend.stat("/note.md").unwrap().name, "note.md");
+    assert_eq!(
+        stats.load(Ordering::SeqCst) - before_refresh,
+        2,
+        "a cache refresh makes the next request check the root again"
+    );
+    let before_error = stats.load(Ordering::SeqCst);
+    assert!(backend.stat("/missing.md").is_err());
+    assert_eq!(backend.stat("/note.md").unwrap().name, "note.md");
+    assert!(
+        stats.load(Ordering::SeqCst) - before_error >= 2,
+        "a failed resolution makes the next request check the root again"
     );
 }
 

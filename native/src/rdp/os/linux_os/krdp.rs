@@ -1,6 +1,6 @@
 use super::inventory::{argument, attach_listener, certificate, service, unit};
 use crate::rdp::{
-    core::{HostKind, HostProbe, SessionMode},
+    core::{HostKind, HostProbe, SessionMode, SetupState},
     os::shared::process::{capture, capture_with_env, find_tool},
 };
 use std::path::Path;
@@ -134,4 +134,48 @@ pub(super) fn probe(report: &mut HostProbe) {
         }
     }
     report.services.push(found);
+}
+
+/// One `krdpserverrc` `[General]` value through `kreadconfig6`.
+fn general(key: &str) -> Result<String, String> {
+    let tool = find_tool(&["kreadconfig6"]).ok_or_else(|| "kreadconfig6_missing".to_string())?;
+    let args = ["--file", "krdpserverrc", "--group", "General", "--key", key];
+    capture(&tool, &args).map(|value| value.trim().to_string())
+}
+
+/// Whether KRdp may admit anyone: configured KRdp users or the system-user
+/// login (`SystemUserEnabled`). se creates no KRdp users; KRdp keeps their
+/// passwords itself (design 3.3).
+pub(crate) fn has_users(users: &str, system_user: &str) -> bool {
+    let system = matches!(
+        system_user.to_ascii_lowercase().as_str(),
+        "true" | "on" | "yes" | "1"
+    );
+    system || users.split(',').any(|user| !user.trim().is_empty())
+}
+
+/// Plasma session with `krdpserver` (design 3.3): start the user unit when
+/// KRdp can admit a user; otherwise say what the person has to add.
+pub(super) fn configure() -> SetupState {
+    let users = match general("Users") {
+        Ok(users) => users,
+        Err(error) => return SetupState::Failed(format!("krdp_config: {error}")),
+    };
+    let system_user = general("SystemUserEnabled").unwrap_or_default();
+    if !has_users(&users, &system_user) {
+        return SetupState::Impossible("krdp_no_users".into());
+    }
+    let Some(systemctl) = find_tool(&["systemctl"]) else {
+        return SetupState::Failed("systemctl_missing".into());
+    };
+    let unit = [
+        "--user",
+        "enable",
+        "--now",
+        "app-org.kde.krdpserver.service",
+    ];
+    match super::host_setup::run_tool(&systemctl, &unit, None) {
+        Ok(_) => SetupState::Done,
+        Err(error) => SetupState::Failed(format!("krdp_unit: {error}")),
+    }
 }

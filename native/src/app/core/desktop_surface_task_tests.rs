@@ -130,6 +130,7 @@ fn device(target: PeerOpenTarget, code: TileCode) -> DeviceTile {
         device_id: Some("geraet-1".into()),
         folder_path: None,
         open,
+        feed: Default::default(),
     }
 }
 

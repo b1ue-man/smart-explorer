@@ -148,7 +148,7 @@ pub(crate) fn dispatch(
         "login" => login_view::handle(method, args),
         "apps" => app_launch::handle(method, args).or_else(|| apps::handle(method, args)),
         "rdp" => rdp::handle(method, args, |target| {
-            crate::daemon::apps_rdp_probe(target, Some(std::time::Duration::from_secs(30)), || {})
+            crate::daemon::apps_rdp_probe(target, None, || {})
         }),
         "analyze" | "reclaim" => analysis_method(rt, method, args),
         "update" => update_method(rt, method),

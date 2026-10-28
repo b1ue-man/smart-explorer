@@ -59,7 +59,19 @@ pub(crate) struct LoginSessionView {
     pub state: String,
     pub challenge: Option<Challenge>,
     pub access: Option<GatewayAccess>,
+    /// A route a newer worker describes with a phase this build does not
+    /// know (such as `relay_start` before 0.5.189) reads as no route instead
+    /// of failing the whole session reply.
+    #[serde(default, deserialize_with = "tolerant_route")]
     pub route: Option<RouteStatus>,
+}
+
+fn tolerant_route<'de, D>(deserializer: D) -> Result<Option<RouteStatus>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|value| serde_json::from_value(value).ok()))
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]

@@ -14,6 +14,32 @@ mod platform {
             "This platform has no supported RDP host; Android is a viewer, not an RDP host",
         )
     }
+    /// Android and every other platform host no RDP service (design 3.4).
+    pub(crate) mod host_setup {
+        use crate::rdp::core::{HostProbe, HostService, SetupState};
+        pub(crate) fn impossible() -> Option<SetupState> {
+            Some(SetupState::Impossible(if cfg!(target_os = "android") {
+                "android".into()
+            } else {
+                format!("platform_{}", std::env::consts::OS)
+            }))
+        }
+        pub(crate) fn ensure(_: &HostProbe, _: Option<&str>) -> SetupState {
+            impossible().unwrap_or_else(|| SetupState::Failed("platform".into()))
+        }
+        pub(crate) fn issue_credential(
+            _: &HostService,
+            _: &str,
+        ) -> Result<(String, String), String> {
+            Err("This platform hosts no RDP service".into())
+        }
+        pub(crate) fn rotate_credentials(_: &str) -> Result<(), String> {
+            Ok(())
+        }
+        pub(crate) fn run_system_step(_: &str) -> Result<String, String> {
+            Err("This platform hosts no RDP service".into())
+        }
+    }
     pub(crate) mod clients {
         use crate::rdp::core::{ClientCapability, HostService, StartRequest};
         use std::{net::SocketAddr, process::Command};

@@ -1,7 +1,7 @@
 //! Length-delimited JSON only during setup; connected streams carry raw TCP
 //! bytes. The relation proof also covers every destination/setup field.
 use super::relation_proof::{RelationClientHello, RelationServerHello};
-use super::tcp_forward::{TcpStart, TunnelId, TCP_PROTOCOL_VERSION};
+use super::tcp_forward::{TcpStart, TunnelId};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::io;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -40,7 +40,9 @@ impl TcpServerHello {
             .map_err(io::Error::other)?;
         Ok(RelationServerHello {
             transcript_prefix: format!("smart-explorer/share-tcp/v1|{}:{setup}|", setup.len()),
-            protocol_version: TCP_PROTOCOL_VERSION,
+            // The version this host announced for the connection's ALPN
+            // (1 or 2); the client's hello must name the same one.
+            protocol_version: self.version,
             capability: "tcp_forward".into(),
             challenge: self.challenge.clone(),
             server_device_id: self.device_id.clone(),

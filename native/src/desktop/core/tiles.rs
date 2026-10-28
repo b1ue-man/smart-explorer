@@ -8,9 +8,13 @@ use serde::{Deserialize, Serialize};
 
 use super::layout::ItemId;
 use crate::share::device_view;
+
+#[path = "tile_feed.rs"]
+mod feed;
 use crate::share::{
     DirectContact, PeerOpenTarget, RoomMember, RoomProfile, ShareProfiles, ShareStatus,
 };
+pub(crate) use feed::*;
 
 /// Shown for every device while only the profiles are known (C4.5).
 pub(crate) const UNKNOWN_TEXT: &str = "Status unbekannt – nicht verbunden";
@@ -113,6 +117,10 @@ pub(crate) struct DeviceTile {
     /// Folder of the device in the S2 device tree while it is mounted.
     pub(crate) folder_path: Option<String>,
     pub(crate) open: TileOpen,
+    /// Windows, services and Remote Desktop of the device from the
+    /// background service's feed (design 5.2); empty without a feed.
+    #[serde(default)]
+    pub(crate) feed: TileFeed,
 }
 
 /// A room as folder group with its member devices.
@@ -254,6 +262,7 @@ fn device_tile(facts: DeviceFacts<'_>, live: bool, paths: &BTreeMap<String, Stri
         location,
         device_id: facts.device_id,
         open,
+        feed: TileFeed::default(),
     }
 }
 
@@ -347,5 +356,25 @@ pub(crate) fn project(input: &TileInput<'_>) -> TileModel {
         rooms,
         vaults,
         empty_actions,
+    }
+}
+
+/// Puts each device's feed on its tile (design 5.2); `lookup(device_id,
+/// public_key)` reads the background service's feed of that device.
+pub(crate) fn attach_feeds(
+    model: &mut TileModel,
+    profiles: &ShareProfiles,
+    lookup: impl Fn(&str, &str) -> Option<TileFeed>,
+) {
+    let tiles = model.devices.iter_mut().chain(
+        model
+            .rooms
+            .iter_mut()
+            .flat_map(|room| room.members.iter_mut()),
+    );
+    for tile in tiles {
+        tile.feed = identity_of(profiles, &tile.target)
+            .and_then(|(device, key)| lookup(&device, &key))
+            .unwrap_or_default();
     }
 }

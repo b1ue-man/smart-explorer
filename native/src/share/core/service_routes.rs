@@ -209,6 +209,7 @@ impl ConnectionRouteDiagnostics {
                 RoutePhase::CheckingDirect => "checking_direct",
                 RoutePhase::Lan => "lan",
                 RoutePhase::Direct => "direct",
+                RoutePhase::RelayStart => "relay_start",
                 RoutePhase::RelayFallback => "relay_fallback",
                 RoutePhase::Paused => "paused",
                 RoutePhase::Offline => "offline",

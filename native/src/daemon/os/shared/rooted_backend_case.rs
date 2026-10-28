@@ -1,6 +1,67 @@
 use crate::mount::PathDialect;
 use crate::vfs::{BackendHandle, CachingBackend, VfsMeta};
 use std::io;
+use std::sync::Mutex;
+
+/// The root check of one drive (G4 ML3). A remote root keeps its last passed
+/// check until an event invalidates it: any error on a resolution, an own
+/// folder change (rename, folder removal or creation) and a cache refresh
+/// of the drive. There is no time-based expiry. A local root is checked on
+/// every request; there a check costs microseconds and a link swapped in
+/// by another local program must be seen at once.
+pub(super) struct RootCheckCache {
+    remembers: bool,
+    passed: Mutex<Option<VfsMeta>>,
+}
+
+impl RootCheckCache {
+    pub(super) fn new(remembers: bool) -> Self {
+        Self {
+            remembers,
+            passed: Mutex::new(None),
+        }
+    }
+
+    /// The root metadata and whether it was observed by this very call.
+    fn validated(
+        &self,
+        backend: &BackendHandle,
+        ancestors: &[String],
+    ) -> io::Result<(VfsMeta, bool)> {
+        if self.remembers {
+            if let Some(passed) = self.passed.lock().ok().and_then(|slot| slot.clone()) {
+                return Ok((passed, false));
+            }
+        }
+        match validate_root(backend, ancestors) {
+            Ok(metadata) => {
+                if self.remembers {
+                    if let Ok(mut slot) = self.passed.lock() {
+                        *slot = Some(metadata.clone());
+                    }
+                }
+                Ok((metadata, true))
+            }
+            Err(error) => {
+                self.invalidate();
+                Err(error)
+            }
+        }
+    }
+
+    pub(super) fn invalidate(&self) {
+        if let Ok(mut slot) = self.passed.lock() {
+            *slot = None;
+        }
+    }
+}
+
+/// The backend that checks the root ancestors, with the drive's cache.
+#[derive(Clone, Copy)]
+pub(super) struct RootValidator<'a> {
+    pub backend: &'a BackendHandle,
+    pub cache: &'a RootCheckCache,
+}
 
 /// Resolves one helper-owned virtual path below its authorized backend root.
 /// Backends without a proven case-sensitive contract are made predictably
@@ -9,7 +70,7 @@ use std::io;
 pub(super) struct PathResolver<'a> {
     pub backend: &'a BackendHandle,
     pub case_cache: Option<&'a CachingBackend>,
-    pub root_validator: Option<&'a BackendHandle>,
+    pub root_validator: Option<RootValidator<'a>>,
     pub root: &'a str,
     pub root_ancestors: &'a [String],
     pub case_sensitive: bool,
@@ -32,7 +93,23 @@ impl PathResolver<'_> {
         metadata.ok_or_else(|| io::Error::other("resolved stat has no terminal metadata"))
     }
 
+    /// Any failed resolution invalidates the remembered root check (ML3).
     fn walk(
+        &self,
+        components: &[String],
+        allow_missing: bool,
+        terminal: Option<&BackendHandle>,
+    ) -> io::Result<(String, Option<VfsMeta>)> {
+        let walked = self.walk_checked(components, allow_missing, terminal);
+        if walked.is_err() {
+            if let Some(validator) = self.root_validator {
+                validator.cache.invalidate();
+            }
+        }
+        walked
+    }
+
+    fn walk_checked(
         &self,
         components: &[String],
         allow_missing: bool,
@@ -40,15 +117,21 @@ impl PathResolver<'_> {
     ) -> io::Result<(String, Option<VfsMeta>)> {
         let root_metadata = self
             .root_validator
-            .map(|validator| validate_root(validator, self.root_ancestors))
+            .map(|validator| {
+                validator
+                    .cache
+                    .validated(validator.backend, self.root_ancestors)
+            })
             .transpose()?;
         let mut current = self.root.to_string();
         if components.is_empty() {
             let metadata = match terminal {
                 Some(raw) => {
+                    // A remembered check proves the root chain; the root's
+                    // own metadata is still observed fresh.
                     let metadata = match root_metadata {
-                        Some(metadata) => metadata,
-                        None => raw.stat(&current)?,
+                        Some((metadata, true)) => metadata,
+                        _ => raw.stat(&current)?,
                     };
                     validate_entry(&metadata, false)?;
                     Some(metadata)

@@ -5,8 +5,26 @@ use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 pub(crate) const TCP_LOCAL_ACCESS_NOTICE: &str = "Jeder gleichzeitig lokal laufende Prozess kann diesen Loopbackport erreichen. Der weitergeleitete Dienst muss seine Benutzer selbst authentifizieren; ohne eigene Authentifizierung erhält dieser Prozess Zugriff auf den Dienst.";
-pub(crate) const TCP_PROTOCOL_VERSION: u16 = 1;
-pub(crate) const TCP_ALPN: &[u8] = b"smart-explorer/share-tcp/1";
+/// Protocol version 2 (0.5.189, design 4.6): `lifetime_secs = 0` means no
+/// fixed lifetime; the tunnel lives as long as its QUIC connection, its
+/// grant and (on the viewer) its bound client. Version 1 stays for hosts up
+/// to 0.5.188, whose maximum lifetime is 86400 seconds.
+pub(crate) const TCP_PROTOCOL_VERSION: u16 = 2;
+pub(crate) const TCP_ALPN: &[u8] = b"smart-explorer/share-tcp/2";
+pub(crate) const TCP_PROTOCOL_VERSION_V1: u16 = 1;
+pub(crate) const TCP_ALPN_V1: &[u8] = b"smart-explorer/share-tcp/1";
+/// Highest lifetime a version-1 host accepts; a viewer sends it to such a
+/// host when it asked for no fixed lifetime.
+pub(crate) const TCP_V1_MAX_LIFETIME_SECS: u32 = 24 * 60 * 60;
+
+/// The protocol version an accepted connection's ALPN selects.
+pub(crate) fn tcp_version_for_alpn(alpn: &[u8]) -> Option<u16> {
+    match alpn {
+        TCP_ALPN => Some(TCP_PROTOCOL_VERSION),
+        TCP_ALPN_V1 => Some(TCP_PROTOCOL_VERSION_V1),
+        _ => None,
+    }
+}
 /// 64 sessions * 16 sockets * two 8-KiB pump buffers = 16 MiB of copy
 /// buffers per node, in addition to the existing bounded QUIC buffers.
 pub(crate) const MAX_TCP_TUNNELS: usize = 64;
@@ -129,30 +147,67 @@ pub(crate) struct TcpStart {
     /// Port zero asks the OS for an ephemeral loopback port. No LAN bind.
     #[serde(default)]
     pub(crate) local_port: u16,
-    /// The caller explicitly confirmed TCP_LOCAL_ACCESS_NOTICE. Required
-    /// even when the target claims to provide its own authentication.
+    /// Version 1: the caller confirmed TCP_LOCAL_ACCESS_NOTICE. Version 2:
+    /// the viewer's listener checks every local connection's origin by its
+    /// `ListenerAdmission`; viewers always send `true` (old hosts check it).
     #[serde(default)]
     pub(crate) acknowledge_local_access: bool,
-    #[serde(default = "default_lifetime")]
+    /// 0 = no fixed lifetime (version 2 only); otherwise 1..=86400 seconds,
+    /// an explicitly chosen limit (`--lifetime-secs`).
+    #[serde(default)]
     pub(crate) lifetime_secs: u32,
 }
-fn default_lifetime() -> u32 {
-    15 * 60
-}
 impl TcpStart {
+    /// Validation under the current protocol version.
     pub(crate) fn validate(&self) -> Result<(), String> {
+        self.validate_for(TCP_PROTOCOL_VERSION)
+    }
+    /// Validation under the protocol `version` of the connection.
+    pub(crate) fn validate_for(&self, version: u16) -> Result<(), String> {
         self.destination.validate()?;
         if !self.acknowledge_local_access {
             return Err(TCP_LOCAL_ACCESS_NOTICE.into());
         }
-        if !(1..=24 * 60 * 60).contains(&self.lifetime_secs) {
-            return Err("TCP tunnel lifetime must be 1..86400 seconds".into());
+        let lowest = if version >= TCP_PROTOCOL_VERSION {
+            0
+        } else {
+            1
+        };
+        if !(lowest..=TCP_V1_MAX_LIFETIME_SECS).contains(&self.lifetime_secs) {
+            return Err(if lowest == 0 {
+                "TCP tunnel lifetime must be 0 (no fixed lifetime) or 1..86400 seconds".into()
+            } else {
+                "TCP tunnel lifetime must be 1..86400 seconds".into()
+            });
         }
         Ok(())
+    }
+    /// The fixed lifetime, if one was chosen.
+    pub(crate) fn fixed_lifetime(&self) -> Option<std::time::Duration> {
+        (self.lifetime_secs > 0)
+            .then(|| std::time::Duration::from_secs(u64::from(self.lifetime_secs)))
+    }
+    /// The Unix second at which a tunnel started at `now` ends, if fixed.
+    pub(crate) fn expires_at(&self, now: i64) -> Option<i64> {
+        (self.lifetime_secs > 0).then(|| now.saturating_add(i64::from(self.lifetime_secs)))
     }
     pub(crate) fn listener(&self) -> SocketAddr {
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), self.local_port)
     }
+}
+
+/// Which local connections a viewer's listener forwards (design 4.4, 9.3).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ListenerAdmission {
+    /// Connections of processes of the background service's own account.
+    #[default]
+    SameAccount,
+    /// RDP: only connections of the one client process bound later on the
+    /// same IPC stream (PID and process start time).
+    AwaitProcess,
+    /// Android only: the OS discloses no connection owner (assumption A7).
+    AnyLocal,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -176,7 +231,11 @@ pub(crate) struct TunnelView {
     pub(crate) bound_target: Option<SocketAddr>,
     pub(crate) listener: Option<SocketAddr>,
     pub(crate) started_at: i64,
-    pub(crate) expires_at: i64,
+    /// `None` = no fixed lifetime (protocol version 2).
+    pub(crate) expires_at: Option<i64>,
+    /// Origin rule of a listener; `None` for a target tunnel.
+    #[serde(default)]
+    pub(crate) admission: Option<ListenerAdmission>,
     pub(crate) active_connections: usize,
     pub(crate) socket_read_bytes: u64,
     pub(crate) socket_written_bytes: u64,

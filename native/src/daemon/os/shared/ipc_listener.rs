@@ -54,6 +54,8 @@ pub(crate) fn start_listener(host: ShareHost) -> io::Result<IpcListener> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     listener.set_nonblocking(true)?;
     let addr = listener.local_addr()?;
+    // se's own IPC port is never offered as a shared loopback service.
+    crate::share::access_steering::note_ipc_port(addr.port());
     write_ipc_generation(host.generation())?;
     if let Err(error) = write_ipc_addr(addr) {
         clear_ipc_generation();

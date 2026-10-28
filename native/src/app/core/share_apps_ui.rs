@@ -1,4 +1,12 @@
-//! Device-scoped application picker; independent from Exec and screen capture.
+//! Device-scoped programs (design 6, user rule r3 „der rest muss laufen“):
+//! the catalog loads by itself when the device is present, an unclear start
+//! is clarified by se with the same receipt whenever the host comes back or
+//! its windows change, a start that waits for a locked host session starts
+//! again by itself once the session is unlocked, and a confirmed window
+//! opens by itself. Independent from Exec; the double-start guard stays.
+use super::share_rdp_ui::feed::{self, FeedRead};
+use crate::desktop::core::tiles;
+use crate::share::peer_select::present_relation;
 use crate::{
     apps::{AppId, CatalogSnapshot, LaunchReceipt, LaunchRequest, LaunchState, WindowBinding},
     share::{PeerOpenTarget, ShareProfiles},
@@ -8,15 +16,29 @@ use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex, OnceLock, PoisonError},
 };
+#[path = "share_apps_catalog.rs"]
+mod catalog;
 #[path = "share_apps_jobs.rs"]
 mod jobs;
 #[path = "share_apps_store.rs"]
 mod store;
 
+/// Shown while the outcome of a start is being clarified (design 6 F4).
+pub(crate) const CLARIFYING: &str = "Startergebnis wird geklärt";
+/// A start waits for the locked host session (design 6 F5).
+pub(crate) const LOCKED: &str = "Hostsitzung gesperrt – zum Entsperren den Bildschirm öffnen";
+
 enum Icon {
     Loading,
     Ready(egui::TextureHandle),
     Unavailable(String),
+}
+/// What the device feed says about the host now; every change is an event
+/// on which se clarifies an open start (design 6 F4, F5). No timer.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct HostEvent {
+    pub(crate) present: bool,
+    pub(crate) windows: Vec<String>,
 }
 #[derive(Default)]
 struct State {
@@ -32,13 +54,18 @@ struct State {
     page: usize,
     icons: BTreeMap<AppId, Icon>,
     icons_busy: bool,
-    new_request_ack: bool,
+    /// The last host state seen and the number of its changes.
+    event: Option<HostEvent>,
+    events: u64,
+    /// The event at which the catalog / the receipt was last asked.
+    catalog_round: Option<u64>,
+    receipt_round: Option<u64>,
+    /// A start that waits for the unlocked host session.
+    relaunch: Option<AppId>,
+    /// The request whose confirmed window was already opened.
+    opened: Option<LaunchRequest>,
 }
 type Shared = Arc<Mutex<State>>;
-struct Choice {
-    target: PeerOpenTarget,
-    label: String,
-}
 #[derive(Clone)]
 struct Surface {
     target: PeerOpenTarget,
@@ -61,45 +88,12 @@ pub(crate) fn install_window_opener() {
     OPENER.get_or_init(|| super::family_picker::open_confirmed);
 }
 pub(crate) fn device(ui: &mut egui::Ui, profiles: &ShareProfiles, device: &str, key: &str) {
-    let mut choices = Vec::new();
-    for contact in &profiles.direct_contacts {
-        if contact.remote_device_id.as_deref() == Some(device)
-            && contact.remote_public_key.as_deref() == Some(key)
-        {
-            choices.push(Choice {
-                target: PeerOpenTarget::Direct {
-                    contact_id: contact.id.clone(),
-                },
-                label: format!("Direkt: {}", contact.display_name),
-            });
+    match present_relation(profiles, device, key) {
+        Some(target) => panel(ui, &target, Some(device)),
+        None => {
+            ui.label(super::share_rdp_ui::OFFLINE);
         }
     }
-    for room in &profiles.rooms {
-        for member in &room.members {
-            if member.device_id == device && member.public_key == key && !member.blocked {
-                choices.push(Choice {
-                    target: PeerOpenTarget::RoomDevice {
-                        room_id: room.room_id.clone(),
-                        device_id: device.into(),
-                    },
-                    label: format!("Raum „{}“ / {}", room.name, member.device_name),
-                });
-            }
-        }
-    }
-    if choices.is_empty() {
-        ui.label("Keine gespeicherte ausgehende Beziehung zu dieser bestätigten Geräteidentität.");
-        return;
-    }
-    let id = egui::Id::new(("apps-relation", device, key));
-    let mut selected = ui
-        .ctx()
-        .data_mut(|d| *d.get_temp_mut_or_insert_with(id, || 0usize))
-        .min(choices.len() - 1);
-    let labels: Vec<&str> = choices.iter().map(|choice| choice.label.as_str()).collect();
-    super::device_page_layout::relation_picker(ui, &labels, &mut selected);
-    ui.ctx().data_mut(|d| d.insert_temp(id, selected));
-    panel(ui, &choices[selected].target, Some(device));
 }
 pub(crate) fn open_surface(ctx: &egui::Context, target: PeerOpenTarget, label: String) {
     let id = egui::Id::new("device-apps-windows");
@@ -136,17 +130,78 @@ pub(crate) fn surface_windows(ctx: &egui::Context) {
             .retain(|w| !closed.contains(&w.target));
     });
 }
+
+/// The host state of `target` in the background service's feed.
+fn host_event(ctx: &egui::Context, target: &PeerOpenTarget) -> HostEvent {
+    let read = feed::read(ctx, |snapshot| {
+        let Some((device, key)) = tiles::identity_of(&snapshot.profiles, target) else {
+            return HostEvent::default();
+        };
+        HostEvent {
+            present: present_relation(&snapshot.profiles, &device, &key).is_some(),
+            windows: tiles::feed_of(snapshot, &device, &key)
+                .map(|feed| feed.windows.into_iter().map(|w| w.source).collect())
+                .unwrap_or_default(),
+        }
+    });
+    match read {
+        FeedRead::Ready(event) => event,
+        FeedRead::Pending | FeedRead::Unavailable(_) => HostEvent::default(),
+    }
+}
+
+/// A receipt that is not final yet: se keeps asking for the same request
+/// on every host event (design 6 F4).
+pub(crate) fn unresolved(saved: bool, receipt: Option<&LaunchReceipt>) -> bool {
+    saved
+        && receipt.is_none_or(|r| {
+            matches!(
+                r.state,
+                LaunchState::OutcomeUnknown | LaunchState::StartedWindowPending
+            )
+        })
+}
+
+/// What one frame asks the host without a click (design 6): the catalog
+/// once the device is present, the same receipt on every host event while
+/// it is not final, and the catalog again for a start that waits for an
+/// unlocked session.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct AutoWork {
+    pub(crate) catalog: bool,
+    pub(crate) receipt: bool,
+}
+pub(crate) fn auto_work(
+    event: &HostEvent,
+    events: u64,
+    has_catalog: bool,
+    catalog_round: Option<u64>,
+    receipt_open: bool,
+    receipt_round: Option<u64>,
+    relaunch: bool,
+) -> AutoWork {
+    if !event.present {
+        return AutoWork::default();
+    }
+    AutoWork {
+        catalog: (!has_catalog || relaunch) && catalog_round != Some(events),
+        receipt: receipt_open && receipt_round != Some(events),
+    }
+}
+
 fn panel(ui: &mut egui::Ui, target: &PeerOpenTarget, expected: Option<&str>) {
     let id = egui::Id::new(("device-apps", target.endpoint_prefix(), expected));
     let shared: Shared = ui.ctx().data_mut(|d| {
         d.get_temp_mut_or_insert_with(id, || Arc::new(Mutex::new(State::default())))
             .clone()
     });
-    let load;
+    let event = host_event(ui.ctx(), target);
+    let mut load;
     let mut launch = None;
     let mut receipt = None;
     let mut open = None;
     let mut icon_batch = None;
+    let mut screen = false;
     {
         let mut state = shared.lock().unwrap_or_else(PoisonError::into_inner);
         if !state.restored && !state.busy {
@@ -154,11 +209,30 @@ fn panel(ui: &mut egui::Ui, target: &PeerOpenTarget, expected: Option<&str>) {
             jobs::restore(ui.ctx(), &shared, target.clone());
             return;
         }
-        load = ui
-            .add_enabled(
-                !state.busy,
-                egui::Button::new("Programmkatalog abfragen / aktualisieren"),
-            )
+        if state.event.as_ref() != Some(&event) {
+            state.event = Some(event.clone());
+            state.events += 1;
+        }
+        let open_receipt = unresolved(state.saved.is_some(), state.receipt.as_ref());
+        let work = auto_work(
+            &event,
+            state.events,
+            state.catalog.is_some(),
+            state.catalog_round,
+            open_receipt,
+            state.receipt_round,
+            state.relaunch.is_some(),
+        );
+        load = !state.busy && work.catalog;
+        if !state.busy && work.receipt && !load {
+            state.receipt_round = Some(state.events);
+            receipt = state.saved.as_ref().map(|saved| saved.request.clone());
+        }
+        if load {
+            state.catalog_round = Some(state.events);
+        }
+        load |= ui
+            .add_enabled(!state.busy, egui::Button::new("Neu laden"))
             .clicked();
         if state.busy {
             ui.horizontal(|ui| {
@@ -171,158 +245,62 @@ fn panel(ui: &mut egui::Ui, target: &PeerOpenTarget, expected: Option<&str>) {
                 );
             });
         }
+        if !event.present && state.catalog.is_none() {
+            ui.label(super::share_rdp_ui::OFFLINE);
+        }
         if let Some(error) = &state.error {
             let text = super::device_page_layout::explain_remote_error(error);
             ui.colored_label(egui::Color32::RED, text);
         }
         if let Some(saved) = &state.saved {
             ui.separator();
-            ui.label(format!("Letzter gespeicherter Auftrag: {}", saved.name));
-            ui.label(format!("Request-ID: {}", saved.request.request_id));
-            if let Some(result) = &state.receipt {
-                receipt_ui(ui, result);
-                if let Some(window) = confirmed(target, &state) {
-                    if OPENER.get().is_some() {
-                        if ui
-                            .add_enabled(
-                                !state.busy,
-                                egui::Button::new("Bestätigtes Appfenster öffnen"),
-                            )
-                            .clicked()
-                        {
-                            open = Some(window);
-                        }
-                    } else {
-                        ui.label("Fensterbindung bestätigt; der Anschluss an die aktuelle Fernfensterauswahl ist noch nicht verfügbar.");
+            ui.label(format!("Letzter Start: {}", saved.name));
+            match &state.receipt {
+                Some(result) => {
+                    let locked = receipt_ui(ui, result, state.catalog.as_ref());
+                    if locked && ui.button("Bildschirm steuern").clicked() {
+                        screen = true;
                     }
                 }
-            } else {
-                ui.label("Startstatus noch nicht bestätigt. Derselbe Auftrag wird ausschließlich abgefragt.");
+                None => {
+                    ui.label(CLARIFYING);
+                }
             }
-            if ui
-                .add_enabled(
-                    !state.busy,
-                    egui::Button::new("Ergebnis derselben Request-ID abfragen"),
-                )
-                .clicked()
-            {
-                receipt = Some(saved.request.clone());
+            if let Some(window) = confirmed(target, &state) {
+                if OPENER.get().is_some() {
+                    if state.opened.as_ref() == Some(&window.request) {
+                        ui.label("Programmfenster wurde geöffnet.");
+                    } else {
+                        state.opened = Some(window.request.clone());
+                        open = Some(window);
+                    }
+                } else {
+                    ui.label("Fensterbindung bestätigt; der Anschluss an die aktuelle Fernfensterauswahl ist noch nicht verfügbar.");
+                }
+            }
+        }
+        // A start that waited for the locked session runs again by itself
+        // with a new request once the catalog reports it unlocked (F5).
+        if let Some(app) = state.relaunch.clone() {
+            let waiting = state
+                .receipt
+                .as_ref()
+                .is_some_and(|r| r.state == LaunchState::ConsentRequired);
+            let unlocked = state.catalog.as_ref().map(|c| c.session.unlocked);
+            if !waiting {
+                state.relaunch = None;
+            } else if unlocked == Some(true) && !state.busy && !load {
+                launch = state
+                    .catalog
+                    .as_ref()
+                    .and_then(|c| c.apps.iter().find(|a| a.app_id == app).cloned());
+                state.relaunch = None;
             }
         }
         if let Some(catalog) = state.catalog.clone() {
-            ui.separator();
-            ui.label(format!(
-                "Benutzer: {} · Sitzung: {}",
-                catalog.session.user_id, catalog.session.session_id
-            ));
-            for limit in &catalog.limits {
-                ui.small(limit);
-            }
-            if !catalog.session.interactive || !catalog.session.unlocked {
-                ui.label("Die aktuelle Hostsitzung ist nicht interaktiv oder gesperrt; ein Start kann Zustimmung verlangen oder verweigert werden.");
-            }
-            if ui.text_edit_singleline(&mut state.search).changed() {
-                state.page = 0;
-            }
-            let needle = state.search.to_lowercase();
-            let apps: Vec<_> = catalog
-                .apps
-                .iter()
-                .filter(|app| {
-                    app.name.to_lowercase().contains(&needle)
-                        || app.app_id.as_str().to_lowercase().contains(&needle)
-                })
-                .cloned()
-                .collect();
-            const PAGE: usize = 12;
-            let pages = apps.len().div_ceil(PAGE).max(1);
-            state.page = state.page.min(pages - 1);
-            ui.horizontal(|ui| {
-                if ui
-                    .add_enabled(state.page > 0, egui::Button::new("Zurück"))
-                    .clicked()
-                {
-                    state.page -= 1;
-                }
-                ui.label(format!(
-                    "Seite {} von {pages} · {} Programme",
-                    state.page + 1,
-                    apps.len()
-                ));
-                if ui
-                    .add_enabled(state.page + 1 < pages, egui::Button::new("Weiter"))
-                    .clicked()
-                {
-                    state.page += 1;
-                }
-            });
-            let visible: Vec<_> = apps
-                .into_iter()
-                .skip(state.page * PAGE)
-                .take(PAGE)
-                .collect();
-            // At most the current page's textures; an 8192-entry catalog never
-            // allocates thousands of image buffers or parallel requests.
-            state
-                .icons
-                .retain(|app, _| visible.iter().any(|v| v.app_id == *app));
-            let unresolved = state.saved.is_some()
-                && state.receipt.as_ref().is_none_or(|r| {
-                    matches!(
-                        r.state,
-                        LaunchState::OutcomeUnknown | LaunchState::ConsentRequired
-                    )
-                });
-            if unresolved {
-                ui.label("Vor einem weiteren Start zuerst den gespeicherten Beleg abfragen. Lokale Zustimmung erfolgt am Zielgerät.");
-                ui.checkbox(&mut state.new_request_ack,"Ich möchte ausdrücklich einen neuen Auftrag erstellen. Der vorige Start kann bereits erfolgt sein.");
-            }
-            for app in &visible {
-                ui.group(|ui| {
-                    ui.horizontal(|ui| {
-                        match state.icons.get(&app.app_id) {
-                            Some(Icon::Ready(texture)) => {
-                                ui.image((texture.id(), egui::vec2(32.0, 32.0)));
-                            }
-                            Some(Icon::Loading) => {
-                                ui.spinner();
-                            }
-                            Some(Icon::Unavailable(reason)) => {
-                                ui.label("◇")
-                                    .on_hover_text(format!("Appsymbol nicht verfügbar: {reason}"));
-                            }
-                            None => {
-                                ui.label("◇")
-                                    .on_hover_text("Kein bestätigtes Appsymbol im Katalog.");
-                            }
-                        }
-                        ui.label(&app.name);
-                        if ui
-                            .add_enabled(
-                                !state.busy
-                                    && (!unresolved || state.new_request_ack)
-                                    && app.can_launch,
-                                egui::Button::new("Starten"),
-                            )
-                            .clicked()
-                        {
-                            launch = Some(app.clone());
-                        }
-                    });
-                    if let Some(reason) = &app.unavailable_reason {
-                        ui.small(format!("Start nicht verfügbar: {reason}"));
-                    }
-                    ui.collapsing("App-ID", |ui| {
-                        ui.label(app.app_id.as_str());
-                    });
-                });
-            }
-            if visible.is_empty() {
-                ui.label("Keine für diese Beziehung sichtbaren Programme passen zur Suche.");
-            }
-            icon_batch = Some((catalog.revision, visible));
-        } else if !state.busy {
-            ui.label("Noch kein aktueller Programmkatalog für diese Gerätebeziehung geladen.");
+            icon_batch = catalog::show(ui, &mut state, &catalog, open_receipt, &mut launch);
+        } else if !state.busy && event.present {
+            ui.label("Der Programmkatalog wird geladen, sobald das Gerät antwortet.");
         }
     }
     if load {
@@ -348,18 +326,52 @@ fn panel(ui: &mut egui::Ui, target: &PeerOpenTarget, expected: Option<&str>) {
             }
         }
     }
+    if screen {
+        let device = expected.map(str::to_string).or_else(|| {
+            let state = shared.lock().unwrap_or_else(PoisonError::into_inner);
+            let saved = state.saved.as_ref()?;
+            Some(saved.request.target_device_id.as_str().to_string())
+        });
+        if let Err(error) = open_screen(target, device.as_deref()) {
+            shared.lock().unwrap_or_else(PoisonError::into_inner).error = Some(error);
+        }
+    }
     if !load {
         if let Some((revision, apps)) = icon_batch {
             jobs::icons(ui.ctx(), &shared, target.clone(), revision, apps);
         }
     }
 }
-fn receipt_ui(ui: &mut egui::Ui, receipt: &LaunchReceipt) {
+
+/// „Bildschirm steuern“ beside a start that waits for the locked session.
+fn open_screen(target: &PeerOpenTarget, device: Option<&str>) -> Result<(), String> {
+    let mut screen = match target {
+        PeerOpenTarget::Direct { contact_id } => {
+            super::screen_target::ScreenTarget::direct(contact_id, device)
+        }
+        PeerOpenTarget::RoomDevice { room_id, device_id } => {
+            super::screen_target::ScreenTarget::room(room_id, device_id)
+        }
+    };
+    screen.control = true;
+    super::screen_launch::open_view(&screen)
+}
+
+/// The receipt in words; `true` when the start waits for the locked host
+/// session (a desktop host asks for consent only then, design 6 F5).
+fn receipt_ui(
+    ui: &mut egui::Ui,
+    receipt: &LaunchReceipt,
+    catalog: Option<&CatalogSnapshot>,
+) -> bool {
+    let locked = receipt.state == LaunchState::ConsentRequired
+        && catalog.is_none_or(|catalog| !catalog.session.unlocked);
     let label = match receipt.state {
-        LaunchState::OutcomeUnknown => "Startergebnis unklar; Beleg derselben ID erneut abfragen",
+        LaunchState::OutcomeUnknown => CLARIFYING,
         LaunchState::StartedWindowPending => "Gestartet; Fenster noch nicht verfügbar",
         LaunchState::Started => "Gestartet",
         LaunchState::Activated => "Aktiviert",
+        LaunchState::ConsentRequired if locked => LOCKED,
         LaunchState::ConsentRequired => "Lokale Zustimmung am Zielgerät erforderlich",
         LaunchState::Denied => "Start verweigert",
         LaunchState::Unsupported => "Start auf dem Zielgerät nicht unterstützt",
@@ -374,6 +386,7 @@ fn receipt_ui(ui: &mut egui::Ui, receipt: &LaunchReceipt) {
     {
         ui.small("Noch keine bestätigte Bindung an ein Fernfenster vorhanden. Der Startbeleg enthält keinen auswählbaren Fensterbeleg.");
     }
+    locked
 }
 fn confirmed(target: &PeerOpenTarget, state: &State) -> Option<ConfirmedAppWindow> {
     let receipt = state.receipt.as_ref()?;
