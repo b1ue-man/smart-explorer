@@ -46,6 +46,14 @@ jobs:
           $hashes | ConvertTo-Json | Set-Content "$stage\hashes.json"
           @'
           param([string]$Stage, [string]$Version)
+          # Start-Process -Credential hands over the caller's environment;
+          # take this account's own folders from its token.
+          $env:LOCALAPPDATA = [Environment]::GetFolderPath('LocalApplicationData')
+          $env:APPDATA = [Environment]::GetFolderPath('ApplicationData')
+          $env:USERPROFILE = [Environment]::GetFolderPath('UserProfile')
+          $env:TEMP = Join-Path $env:LOCALAPPDATA 'Temp'
+          $env:TMP = $env:TEMP
+          New-Item -ItemType Directory -Force $env:TEMP | Out-Null
           $hashes = Get-Content "$Stage\hashes.json" -Raw | ConvertFrom-Json
           $root = Join-Path $env:LOCALAPPDATA 'Programs\Smart Explorer'
           New-Item -ItemType Directory -Force $root | Out-Null
