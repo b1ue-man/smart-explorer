@@ -8,12 +8,16 @@
 // The descriptors carry relative paths ("Projekt\Unterordner\datei.txt"),
 // sizes and write times (FD_WRITESTIME keeps modification dates on paste).
 // File bytes are served lazily as IStreams at paste time, so copying is
-// instant regardless of data volume.
+// instant regardless of data volume. The object and its streams live on
+// their own STA thread (`local_worker.rs`), so Explorer reads at disk speed
+// instead of at the GUI thread's frame rate (M17).
 
 #![cfg(windows)]
 
 use std::mem::ManuallyDrop;
 
+#[path = "local_worker.rs"]
+mod local_worker;
 #[path = "read_stream.rs"]
 mod read_stream;
 
@@ -30,7 +34,6 @@ use windows::Win32::System::DataExchange::{GetClipboardSequenceNumber, RegisterC
 use windows::Win32::System::Memory::{
     GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE, GMEM_ZEROINIT,
 };
-use windows::Win32::System::Ole::OleSetClipboard;
 use windows::Win32::UI::Shell::{
     SHCreateStdEnumFmtEtc, FD_FILESIZE, FD_PROGRESSUI, FD_WRITESTIME, FILEDESCRIPTORW,
     FILEGROUPDESCRIPTORW,
@@ -69,6 +72,8 @@ struct VirtualFilesDataObject {
     cf_descriptor: u16,
     cf_contents: u16,
     cf_dropeffect: u16,
+    /// Ends the owning worker thread once OLE and every paste released us.
+    _life: local_worker::LifeGuard,
 }
 
 impl VirtualFilesDataObject {
@@ -255,11 +260,17 @@ impl IDataObject_Impl for VirtualFilesDataObject_Impl {
     }
 }
 
-/// Put the virtual files on the OLE clipboard. Must be called on the main
-/// (STA, message-pumped) thread. Returns the clipboard sequence number so the
+/// Put the virtual files on the OLE clipboard. The data object is created
+/// and owned by its own STA thread, which serves Explorer's reads; the
+/// calling thread (the GUI's STA) only waits, message-pumped, until the
+/// object is on the clipboard. Returns the clipboard sequence number so the
 /// app can later detect whether the clipboard still holds OUR data (in-app
 /// paste fast path that skips the stream round-trip).
 pub fn set_clipboard(files: Vec<VirtualFile>) -> Result<u32> {
+    place_files(files).map(|placed| placed.sequence)
+}
+
+fn place_files(files: Vec<VirtualFile>) -> Result<local_worker::Placed> {
     if files
         .iter()
         .any(|file| file.rel.encode_utf16().count() >= 260 || file.rel.contains('\0'))
@@ -269,17 +280,18 @@ pub fn set_clipboard(files: Vec<VirtualFile>) -> Result<u32> {
             "Virtueller Zwischenablage-Pfad überschreitet die Windows-Deskriptorgrenze",
         ));
     }
-    let obj: IDataObject = VirtualFilesDataObject {
-        files,
-        cf_descriptor: register("FileGroupDescriptorW"),
-        cf_contents: register("FileContents"),
-        cf_dropeffect: register("Preferred DropEffect"),
-    }
-    .into();
-    unsafe {
-        OleSetClipboard(&obj)?;
-        Ok(GetClipboardSequenceNumber())
-    }
+    local_worker::place(Box::new(
+        move |life: local_worker::LifeGuard| -> IDataObject {
+            VirtualFilesDataObject {
+                files,
+                cf_descriptor: register("FileGroupDescriptorW"),
+                cf_contents: register("FileContents"),
+                cf_dropeffect: register("Preferred DropEffect"),
+                _life: life,
+            }
+            .into()
+        },
+    ))
 }
 
 /// Current clipboard sequence number (for in-app fast-path detection).

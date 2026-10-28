@@ -208,6 +208,7 @@ impl App {
             || self.band_active
             || !self.file_open_rx.is_empty()
             || !self.transfer_center.is_idle()
+            || self.view_refresh.busy()
             || self.remote_op_rx.is_some()
             || self.clip_download_rx.is_some()
             || self.job_connect_rx.is_some()

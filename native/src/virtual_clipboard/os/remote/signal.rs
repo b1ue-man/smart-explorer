@@ -10,9 +10,9 @@ use windows::Win32::System::Threading::{CreateEventW, SetEvent, WaitForSingleObj
 
 /// Back-stop for a missed wake-up and the interval of cancellation checks
 /// while waiting; a notification itself wakes the waiter at once.
-pub(super) const WAIT_SLICE: Duration = Duration::from_millis(100);
+pub(in crate::virtual_clipboard) const WAIT_SLICE: Duration = Duration::from_millis(100);
 
-pub(super) struct Signal(HANDLE);
+pub(in crate::virtual_clipboard) struct Signal(HANDLE);
 
 // SAFETY: an event handle is a process-wide kernel object. SetEvent and the
 // waits are thread-safe, and the handle is closed exactly once, in Drop.
@@ -23,18 +23,18 @@ impl Signal {
     /// A `sticky` signal stays set once notified (one-time completion);
     /// otherwise each notification wakes one waiter, and a notification that
     /// arrives before the wait is kept until then.
-    pub(super) fn new(sticky: bool) -> Result<Self> {
+    pub(in crate::virtual_clipboard) fn new(sticky: bool) -> Result<Self> {
         let handle = unsafe { CreateEventW(None, sticky, false, PCWSTR::null())? };
         Ok(Self(handle))
     }
 
-    pub(super) fn notify(&self) {
+    pub(in crate::virtual_clipboard) fn notify(&self) {
         // SetEvent on a valid event handle has no failure a caller could act on.
         let _ = unsafe { SetEvent(self.0) };
     }
 
     /// Waits at most `timeout`; true when notified.
-    pub(super) fn wait(&self, timeout: Duration) -> bool {
+    pub(in crate::virtual_clipboard) fn wait(&self, timeout: Duration) -> bool {
         let millis = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX - 1);
         match unsafe { CoWaitForMultipleHandles(COWAIT_DEFAULT.0 as u32, millis, &[self.0]) } {
             Ok(_) => true,

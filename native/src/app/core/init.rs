@@ -187,6 +187,7 @@ impl App {
             view: Vec::new(),
             tree: Default::default(),
             read_access: Default::default(),
+            view_refresh: Default::default(),
             selection: HashSet::new(),
             last_anchor: None,
             cursor: None,

@@ -20,7 +20,7 @@ mod producer;
 #[path = "remote/session.rs"]
 mod session;
 #[path = "remote/signal.rs"]
-mod signal;
+pub(super) mod signal;
 #[path = "remote/stream.rs"]
 mod stream;
 #[path = "remote/worker.rs"]
