@@ -50,6 +50,8 @@ fn main() {
             Ok(()) => return,
             Err(error) => {
                 eprintln!("Smart Explorer installer: {error}");
+                // The setup shows only the exit code and names this log.
+                append_log(&format!("install-bundle error: {error}"));
                 std::process::exit(1);
             }
         }

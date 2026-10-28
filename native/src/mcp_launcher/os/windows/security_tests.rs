@@ -93,3 +93,62 @@ fn batches_p13_windows_ancestor_trust_follows_token_user_not_object_owner() {
         assert!(!trusted_owner(sid.as_mut_ptr() as _).unwrap());
     }
 }
+
+fn token_user() -> Vec<u64> {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    let mut raw = std::ptr::null_mut();
+    assert_ne!(unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut raw) }, 0);
+    let token = unsafe { OwnedHandle::from_raw_handle(raw as _) };
+    let mut bytes = 0;
+    unsafe { GetTokenInformation(token.as_raw_handle() as _, TokenUser, std::ptr::null_mut(), 0, &mut bytes); }
+    let mut storage = vec![0u64; (bytes as usize).div_ceil(8)];
+    assert_ne!(unsafe {
+        GetTokenInformation(token.as_raw_handle() as _, TokenUser, storage.as_mut_ptr() as _, bytes, &mut bytes)
+    }, 0);
+    let user = unsafe { &*(storage.as_ptr() as *const TOKEN_USER) };
+    let length = unsafe { GetLengthSid(user.User.Sid) };
+    let mut sid = vec![0u64; (length as usize).div_ceil(8)];
+    assert_ne!(unsafe { CopySid(length, sid.as_mut_ptr() as _, user.User.Sid) }, 0);
+    sid
+}
+
+fn set_owner(path: &Path, owner: PSID) {
+    assert_eq!(unsafe {
+        SetNamedSecurityInfoW(
+            wide(path).as_ptr(), SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION,
+            owner, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(),
+        )
+    }, 0);
+}
+
+/// An elevated setup's default owner is Administrators, while the profile
+/// folder hands down the running account's full access (the suite runner is
+/// elevated, which this case needs to set that owner).
+#[test]
+fn install_owner_task_elevated_setup_root_trusts_the_running_account() {
+    let root = tempfile::tempdir().unwrap();
+    let mut user = token_user();
+    let user_text = sid_text(user.as_mut_ptr() as _);
+    let mut admins = [0u64; 16];
+    let mut length = std::mem::size_of_val(&admins) as u32;
+    assert_ne!(unsafe {
+        CreateWellKnownSid(
+            WinBuiltinAdministratorsSid, std::ptr::null_mut(), admins.as_mut_ptr() as _, &mut length,
+        )
+    }, 0);
+    set_owner(root.path(), admins.as_mut_ptr() as _);
+    set_dacl(root.path(), &format!("(A;OICI;FA;;;{user_text})"));
+    let expected = owner(root.path()).unwrap();
+    check(root.path(), &expected).unwrap();
+    // A later unelevated update adds files the running account owns.
+    let file = root.path().join("se.exe");
+    std::fs::write(&file, b"payload").unwrap();
+    set_owner(&file, user.as_mut_ptr() as _);
+    check(&file, &expected).unwrap();
+    // Every other account's write grant stays foreign.
+    set_dacl(root.path(), &format!("(A;OICI;FA;;;{user_text})(A;;GW;;;BU)"));
+    assert!(check(root.path(), &expected)
+        .unwrap_err()
+        .starts_with("runtime_acl_foreign_write_grant:"));
+}

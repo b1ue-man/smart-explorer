@@ -1,4 +1,6 @@
-//! Reject reparse points and write grants outside owner/Administrators/SYSTEM.
+//! Reject reparse points and write grants outside the trusted principals:
+//! the object's owner, the running account, Administrators, SYSTEM and
+//! TrustedInstaller.
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::fs::MetadataExt;
 use std::path::Path;
@@ -71,16 +73,12 @@ pub(super) fn check(path: &Path, expected_owner: &[u8]) -> Result<(), String> {
     }
     let (_sd, owner, acl) = descriptor(path)?;
     let expected_sid = expected_owner.as_ptr() as PSID;
-    let administrative_pair = !owner.is_null()
-        && unsafe {
-            (IsWellKnownSid(owner, WinLocalSystemSid) != 0
-                || IsWellKnownSid(owner, WinBuiltinAdministratorsSid) != 0)
-                && (IsWellKnownSid(expected_sid, WinLocalSystemSid) != 0
-                    || IsWellKnownSid(expected_sid, WinBuiltinAdministratorsSid) != 0)
-        };
+    // An elevated setup creates Administrators-owned objects in the user's
+    // own profile, a later unelevated update user-owned ones: any trusted
+    // owner, as for the ancestors.
     if acl.is_null()
         || owner.is_null()
-        || (!administrative_pair && unsafe { EqualSid(owner, expected_sid) } == 0)
+        || !(unsafe { EqualSid(owner, expected_sid) } != 0 || trusted_owner(owner)?)
     {
         return Err(format!(
             "runtime_acl_owner_or_dacl_invalid: {}",
@@ -116,12 +114,9 @@ pub(super) fn check(path: &Path, expected_owner: &[u8]) -> Result<(), String> {
             let ace = unsafe { &*(raw as *const ACCESS_ALLOWED_ACE) };
             if file_rights(ace.Mask) & MUTATING != 0 {
                 let sid = &ace.SidStart as *const u32 as PSID;
-                let trusted = unsafe {
-                    EqualSid(sid, owner) != 0
-                        || IsWellKnownSid(sid, WinLocalSystemSid) != 0
-                        || IsWellKnownSid(sid, WinBuiltinAdministratorsSid) != 0
-                };
-                if !trusted {
+                // The running account's own grant is not foreign: an elevated
+                // setup's Administrators-owned root still carries it.
+                if unsafe { EqualSid(sid, owner) } == 0 && !trusted_owner(sid)? {
                     return Err(format!(
                         "runtime_acl_foreign_write_grant: {}",
                         path.display()
