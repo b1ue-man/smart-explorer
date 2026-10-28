@@ -48,11 +48,28 @@ pub(crate) enum At {
 pub(crate) struct OpError {
     pub error: io::Error,
     pub at: At,
+    /// A one-request publication under the planned name found the name
+    /// taken and published nothing (G3-08b): the file is tried again at
+    /// once on the staged path, without using up its retry.
+    pub absent_taken: bool,
 }
 
 impl OpError {
     pub(crate) fn at(at: At, error: io::Error) -> Self {
-        Self { error, at }
+        Self {
+            error,
+            at,
+            absent_taken: false,
+        }
+    }
+
+    /// The name a one-request publication wanted is taken; nothing of this
+    /// attempt is left under it (`publish::complete`, G3-08b).
+    pub(crate) fn absent_taken(error: io::Error) -> Self {
+        Self {
+            absent_taken: true,
+            ..Self::at(At::Target, error)
+        }
     }
 
     pub(crate) fn source(error: io::Error) -> Self {

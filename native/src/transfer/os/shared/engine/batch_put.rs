@@ -171,6 +171,8 @@ fn prepare_part(
             file,
             source: None,
             existed_before: *existed,
+            stage: None,
+            destination: None,
         })
         .collect();
     super::file_recovery::prepare_batch_known(engine, &intents)

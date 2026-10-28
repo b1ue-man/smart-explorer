@@ -23,6 +23,12 @@ pub(crate) enum Destination {
         path: String,
         writer: Box<dyn Write + Send>,
     },
+    /// Created under its final name in one write request, the name having
+    /// been seen absent (G3-08b); the provider proves it after `flush`.
+    Absent {
+        path: String,
+        writer: Box<dyn Write + Send>,
+    },
     /// A private stage published afterwards.
     Staged {
         path: String,
@@ -34,21 +40,24 @@ pub(crate) enum Destination {
 impl Destination {
     pub(crate) fn writer(&mut self) -> &mut (dyn Write + Send) {
         match self {
-            Destination::Fresh { writer, .. } | Destination::Staged { writer, .. } => {
-                writer.as_mut()
-            }
+            Destination::Fresh { writer, .. }
+            | Destination::Absent { writer, .. }
+            | Destination::Staged { writer, .. } => writer.as_mut(),
         }
     }
 }
 
 /// Opens where `file` goes on `target`: exactly `size` bytes when known
 /// (`None` for exported documents, whose length shows only while reading).
+/// `known_absent`: the job saw the destination name absent (a top-level name
+/// claimed against the target listing, `FolderRegister::known_absent`).
 pub(crate) fn open(
     engine: &Engine<'_>,
     target: &dyn Backend,
     file: &FileWork,
     size: Option<u64>,
     parent_created: bool,
+    known_absent: bool,
 ) -> Result<Destination, OpError> {
     let path = engine.folders.path_of(&file.rel);
     if let Some(size) = size.filter(|_| parent_created && !engine.resume) {
@@ -57,6 +66,20 @@ pub(crate) fn open(
             .map_err(OpError::target)?
         {
             return Ok(Destination::Fresh { path, writer });
+        }
+    }
+    let one_request = known_absent
+        && !engine.resume
+        && !file.absent_refused
+        && engine.view.conflict == crate::types::Conflict::Rename;
+    if let Some(size) = size.filter(|_| one_request) {
+        match crate::vfs::open_write_absent(target, &path, size) {
+            Ok(Some(writer)) => return Ok(Destination::Absent { path, writer }),
+            // Not offered, or the name is taken already: the staged path
+            // below numbers it.
+            Ok(None) => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(OpError::target(error)),
         }
     }
     let (stage, writer) = open_stage(target, &path, size)?;
@@ -109,7 +132,8 @@ pub(crate) fn open_stage(
 /// Gives up a destination before it was completed: nothing is published.
 pub(crate) fn abandon(engine: &Engine<'_>, target: &dyn Backend, destination: Destination) {
     match destination {
-        Destination::Fresh { writer, .. } => drop(writer),
+        // Dropping an unflushed writer publishes nothing.
+        Destination::Fresh { writer, .. } | Destination::Absent { writer, .. } => drop(writer),
         Destination::Staged { stage, writer, .. } => {
             drop(writer);
             discard(engine, target, &stage);
@@ -164,6 +188,7 @@ pub(crate) fn complete(
                 .map_err(|error| OpError::at(At::Unknown, error))?;
             Ok(Outcome::Done)
         }
+        Destination::Absent { path, writer } => complete_absent(engine, file, path, writer, verify),
         Destination::Staged {
             path,
             stage,
@@ -182,6 +207,56 @@ pub(crate) fn complete(
             publish(engine, target, file, &stage, path)
         }
     }
+}
+
+/// Completes a one-request publication under a name seen absent (G3-08b):
+/// like a fresh object, but the receipt records the absence the listing
+/// showed instead of asking again, and a name taken meanwhile (the provider
+/// withdrew its own object) sends the file to the staged path at once.
+fn complete_absent(
+    engine: &Engine<'_>,
+    file: &FileWork,
+    path: String,
+    mut writer: Box<dyn Write + Send>,
+    verify: impl FnOnce() -> Result<(), OpError>,
+) -> Result<Outcome, OpError> {
+    if let Err(error) = verify() {
+        drop(writer);
+        return Err(error);
+    }
+    if let Err(error) =
+        super::file_recovery::prepare_direct_known(engine, file, &path, None, Some(false))
+    {
+        super::file_recovery::preparation_failed(engine, file)
+            .map_err(|failure| OpError::at(At::Unknown, failure))?;
+        return Err(OpError::target(error));
+    }
+    if let Err(error) = writer.flush() {
+        drop(writer);
+        if error.kind() == io::ErrorKind::AlreadyExists {
+            super::file_recovery::unpublished(engine, file)
+                .map_err(|error| OpError::at(At::Unknown, error))?;
+            return Err(OpError::absent_taken(relabeled(
+                &error,
+                &format!("„{path}“ ist inzwischen belegt"),
+            )));
+        }
+        let refused =
+            ends_job_at_target(error.kind()) || crate::vfs::congestion_of(&error).is_some();
+        let at = if refused { At::Target } else { At::Unknown };
+        if refused {
+            super::file_recovery::unpublished(engine, file)
+                .map_err(|error| OpError::at(At::Unknown, error))?;
+        }
+        return Err(OpError::at(
+            at,
+            relabeled(&error, &format!("„{path}“ abschließen")),
+        ));
+    }
+    drop(writer);
+    super::file_recovery::after(engine, file, &path)
+        .map_err(|error| OpError::at(At::Unknown, error))?;
+    Ok(Outcome::Done)
 }
 
 /// Create-only publication of `stage` as `path`, numbered when taken.

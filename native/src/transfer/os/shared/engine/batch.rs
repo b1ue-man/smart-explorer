@@ -32,6 +32,9 @@ pub(super) fn members(engine: &Engine<'_>, file: &FileWork) -> Option<Vec<FileWo
         return local_packet::members(engine, file);
     }
     let limits = engine.batch?;
+    if super::batch_remote_server::refused(engine) {
+        return None;
+    }
     if file.retried || file.alone || !resume_allows(engine, file) || !packet_source(engine, file) {
         return None;
     }

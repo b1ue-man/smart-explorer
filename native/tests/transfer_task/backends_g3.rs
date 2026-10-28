@@ -1,6 +1,7 @@
 //! The G3 follow-up items against real servers (plan 2026-10-28, G3-07 and
 //! G3-12; G3-08b needs a Drive account and runs against the loopback Drive
-//! in `gdrive/core/absent_write_tests.rs`).
+//! in `gdrive/core/absent_write_tests.rs` and, through the engine, in
+//! `gdrive/core/absent_engine_task_tests.rs`).
 //!
 //! - SMB (`SE_TASK_SMB`): an engine copy stage that fits one WRITE commits
 //!   as WRITE + CLOSE in one compound. Its exclusive CREATE still answers a
@@ -10,6 +11,9 @@
 //!   below, at and above one READ block.
 //! - Nextcloud (`SE_TASK_NEXTCLOUD`): a 2 GiB upload goes as parallel chunks
 //!   and must come back byte for byte.
+//! - SFTP (`SE_TASK_SFTP`): server-side copies of a packet in one call, and a
+//!   same-account copy through the engine as packets of server copies,
+//!   byte-exact and never replacing.
 use crate::speed::{bench_job, local_case, report, same_bytes, LARGE, TOP};
 use crate::support::{job, local_folder, nextcloud, remote_folder, slash, smb};
 use smart_explorer::transfer::Endpoint;
@@ -208,4 +212,80 @@ fn speed_task_remote_sftp_server_copy_batch() {
     assert_eq!(refused.err(), Some(ErrorKind::AlreadyExists));
     assert_eq!(read_path(&*backend, &taken), b"theirs");
     cleanup(&*backend, &folder);
+}
+
+/// Same-account packets through the engine (G3-13/R2): an SFTP → same SFTP
+/// copy of many small files goes as packets of server copies
+/// (`vfs::server_copy_batch`). Every file must land byte for byte, a name
+/// that exists at the target is never replaced (the copy is numbered), and
+/// no private stage is left behind. Without `copy-data` the files stream
+/// alone and the same must hold.
+#[test]
+#[ignore = "needs the task suite's SFTP server"]
+fn speed_task_remote_sftp_same_account_packets_byte_exact_never_replace() {
+    let (backend, root) = crate::support::sftp();
+    let folder = remote_folder(&*backend, &root, "same-account-packets");
+    let source = format!("{folder}/src/Vault");
+    backend.mkdir_all(&source).expect("source folder");
+    let mut expected = std::collections::BTreeMap::new();
+    for index in 0..150usize {
+        let name = format!("f{index:03}.bin");
+        let bytes = content(index * 53 + 1, index as u8);
+        write_new(&*backend, &format!("{source}/{name}"), &bytes);
+        expected.insert(name, Some(bytes));
+    }
+    // The target already holds one of the names: it must stay theirs.
+    let target = format!("{folder}/dst");
+    backend
+        .mkdir_all(&format!("{target}/Vault"))
+        .expect("target");
+    write_new(&*backend, &format!("{target}/Vault/f007.bin"), b"theirs");
+    let ours = expected
+        .insert("f007.bin".to_string(), Some(b"theirs".to_vec()))
+        .expect("listed");
+    expected.insert("f007 (2).bin".to_string(), ours);
+
+    let started = std::time::Instant::now();
+    let measured = crate::support::run(
+        job(
+            Endpoint::Remote(backend.clone()),
+            Endpoint::Remote(backend.clone()),
+            vec![source.clone()],
+            target.clone(),
+            "same-account",
+        ),
+        std::time::Duration::from_secs(600),
+    );
+    let seconds = started.elapsed().as_secs_f64().max(f64::EPSILON);
+    println!(
+        "BENCH sftp_same_account_packets files_per_s={:.1}",
+        150.0 / seconds
+    );
+    assert_eq!(measured.files, 150);
+    let landed = crate::support::remote_tree(&*backend, &format!("{target}/Vault"));
+    let stages: Vec<&String> = landed
+        .keys()
+        .filter(|name| name.contains(".se-upload-"))
+        .collect();
+    assert!(stages.is_empty(), "stages left behind: {stages:?}");
+    assert!(
+        landed == expected,
+        "every file byte for byte, none replaced"
+    );
+    cleanup_tree(&*backend, &folder);
+}
+
+/// Best effort: removes a case folder with its subfolders.
+fn cleanup_tree(backend: &dyn Backend, folder: &str) {
+    if let Ok(entries) = backend.list_dir(folder) {
+        for entry in entries {
+            let path = format!("{folder}/{}", entry.name);
+            if entry.is_dir {
+                cleanup_tree(backend, &path);
+            } else {
+                let _ = backend.remove_file(&path);
+            }
+        }
+    }
+    let _ = backend.remove_dir(folder);
 }

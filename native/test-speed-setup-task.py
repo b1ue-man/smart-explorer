@@ -26,9 +26,11 @@ Jobs (--job):
               account is refused (Linux, sudo -u nobody);
               elevated: H3 xrdp on loopback as root (Linux, sudo), H4 RDP
               switched on without a firewall change (Windows runner is admin);
-              `--test transfer_task` crash-log cases against real servers
-              (Linux: SFTP atmoz/sftp, FTP vsftpd, SMB dockurr/samba, WebDAV
-              httpd mod_dav; Windows: FTP pyftpdlib, SFTP cases skipped)
+              `--test transfer_task` crash-log cases and the G3 cases
+              (`G3_FUNCTIONAL`) against real servers (Linux: SFTP atmoz/sftp,
+              FTP vsftpd, SMB dockurr/samba, WebDAV httpd mod_dav; Windows:
+              FTP pyftpdlib, SFTP and G3 cases skipped); app data isolated
+              per run (XDG_DATA_HOME/XDG_CONFIG_HOME, Windows APPDATA)
   measure     --part local          (Linux, Windows) user-level `se cp -r` and
                                     cross-volume `se mv` of v0.5.188 and of the
                                     candidate next to cp -r, rsync -a, mv
@@ -39,7 +41,9 @@ Jobs (--job):
                                     `speed_task_` benchmark of the library
               --part remote-bench   (Linux) every `speed_task_remote_*`
                                     benchmark of `transfer_task` against the
-                                    four servers, the FTP ones again against
+                                    four servers and Nextcloud
+                                    (nextcloud:30-apache, user from occ), the
+                                    FTP ones again against
                                     pyftpdlib (MLST); reference tools rclone,
                                     lftp, scp, smbclient on the same data
               --part remote-cli     (Linux) `se cp` up and down of v0.5.188 and
@@ -62,6 +66,7 @@ Helpers (results, isolated `se` clients, SSH host-key confirmation) come from
 test-ai-plugin-task.py; the Share pair from sync-reliability-share-fixture.py.
 """
 import argparse
+import base64
 import contextlib
 import difflib
 import hashlib
@@ -80,6 +85,7 @@ import sys
 import tempfile
 import time
 import types
+import urllib.error
 import urllib.request
 import zipfile
 
@@ -104,7 +110,15 @@ ensure = ai.ensure
 
 # Test names of this batch (functional job). The prefixes are substring
 # filters, so `local_speed_task_*` (KP4) is selected by `speed_task_` too.
-PREFIXES = ("speed_task_", "einrichtung_task_", "removable_media_task_", "batch_handoff_task_")
+# Added after G5 (packages R1-R4, D1, D3, KP5a): the worker's job service
+# (`worker_job_task_`), remote-to-remote packets (`remote_packet_task_`), the
+# relay start bridge (`route_start_task_`, Linux relay fixture with Iroh's
+# `test-utils` dev feature from native/Cargo.toml) and its adapted B5 tests,
+# the drive request gate (`mount_vault_task_`) and the rooted drive backend
+# (`remote_drive_task_`). Everything else new is named `speed_task_`.
+PREFIXES = ("speed_task_", "einrichtung_task_", "removable_media_task_", "batch_handoff_task_",
+            "worker_job_task_", "remote_packet_task_", "route_start_task_", "batches_task_b5_",
+            "mount_vault_task_", "remote_drive_task_")
 # Tests the batch moved into new files unchanged (KP2: under 500 lines).
 MOVED = ("batches_task_transfer_compat_reserved_share_rename_is_a_single_write_with_distinct_wire_operation",
          "remote_drive_task_only_idempotent_control_reads_are_replayable",
@@ -133,6 +147,16 @@ RDP_CLIENT_TESTS = {
 H3 = "einrichtung_task_h3_xrdp_on_loopback_as_root"
 H4 = "einrichtung_task_h4_windows_rdp_switched_on_without_firewall_change"
 CRASH_LOG_PREFIX = "transfer_task_crash_log_"
+# Correctness cases of the G3 follow-ups in `transfer_task` (ignored, real
+# servers), run once in the functional job: SMB compound stage (G3-07), the
+# SFTP copy batch and same-account packets through the engine (G3-13/R2).
+# The Nextcloud chunk upload (G3-12) is a 2 GiB case and runs in the
+# remote-bench measurement next to its benchmarks.
+G3_FUNCTIONAL = ("speed_task_remote_smb_compound_stage_never_replaces",
+                 "speed_task_remote_sftp_server_copy_batch",
+                 "speed_task_remote_sftp_same_account_packets_byte_exact_never_replace")
+# Nextcloud for SE_TASK_NEXTCLOUD (G3-12): a pinned major line with Apache.
+NEXTCLOUD_IMAGE = "nextcloud:30-apache"
 # Ignored library tests named `speed_task_` that are no benchmark of this batch.
 NOT_BENCHMARKS = ("speed_task_smb_segments_end_to_end",)
 
@@ -366,7 +390,7 @@ def job_fmt(results, log_root):
 # --------------------------------------------------------------------------- servers (Linux, Docker)
 
 class Servers:
-    """SFTP, FTP, SMB and WebDAV on the runner's loopback; every failure is kept per kind."""
+    """SFTP, FTP, SMB, WebDAV and Nextcloud on the runner's loopback; every failure is kept per kind."""
 
     def __init__(self, work, log_root):
         self.work, self.log = Path(work), Path(log_root) / "servers.log"
@@ -457,6 +481,51 @@ class Servers:
         ensure(wait_tcp(port), f"httpd does not answer on {port}")
         self.info["webdav"] = dict(container=name, port=port, data="/tmp/sync-dav/data", remote="/")
 
+    def _nextcloud(self):
+        # SQLite installation by the image's entrypoint; the bench user comes from occ.
+        admin = secrets.token_hex(12)
+        SECRETS.add(admin)
+        name = self.docker("nextcloud", NEXTCLOUD_IMAGE,
+                           ["-p", "127.0.0.1::80", "-e", "SQLITE_DATABASE=nextcloud",
+                            "-e", "NEXTCLOUD_ADMIN_USER=admin", "-e", f"NEXTCLOUD_ADMIN_PASSWORD={admin}",
+                            "-e", "NEXTCLOUD_TRUSTED_DOMAINS=127.0.0.1 localhost",
+                            "-e", "PHP_UPLOAD_LIMIT=4G", "-e", "PHP_MEMORY_LIMIT=1G"])
+        port = self.port(name, 80)
+        # The entrypoint copies the code and installs before Apache listens.
+        occ = ["docker", "exec", "-u", "www-data", name, "php", "occ"]
+        deadline = time.monotonic() + 1200
+        while True:
+            status = run([*occ, "status", "--output=json"], timeout=120, log=self.log)
+            if status.ok and '"installed":true' in status.stdout.replace(" ", ""):
+                break
+            ensure(time.monotonic() < deadline, f"Nextcloud did not finish its installation: {status.tail(400)}")
+            time.sleep(5)
+        ensure(wait_tcp(port, timeout=600), f"Nextcloud does not answer on {port}")
+        # Many parallel requests from one address must not be slowed down as an attack.
+        run([*occ, "config:system:set", "auth.bruteforce.protection.enabled", "--value=false",
+             "--type=boolean"], timeout=120, log=self.log)
+        added = run(["docker", "exec", "-u", "www-data", "-e", f"OC_PASS={self.password}", name, "php", "occ",
+                     "user:add", "--password-from-env", USER], timeout=300, log=self.log)
+        ensure(added.ok, f"occ user:add {USER}: {added.tail(400)}")
+        # The case root below the user's DAV files path.
+        token = base64.b64encode(f"{USER}:{self.password}".encode()).decode()
+        request = urllib.request.Request(f"http://127.0.0.1:{port}/remote.php/dav/files/{USER}/bench",
+                                         method="MKCOL", headers={"Authorization": f"Basic {token}"})
+        created = None
+        for _ in range(60):
+            try:
+                with urllib.request.urlopen(request, timeout=120) as answer:
+                    created = answer.status
+            except urllib.error.HTTPError as error:
+                created = error.code
+            except (urllib.error.URLError, OSError) as error:  # Apache still starting
+                created = f"{type(error).__name__}: {error}"
+            if created in (201, 405):
+                break
+            time.sleep(5)
+        ensure(created in (201, 405), f"MKCOL of the Nextcloud case root: {created}")
+        self.info["nextcloud"] = dict(container=name, port=port, remote=f"/remote.php/dav/files/{USER}/bench")
+
     def env(self):
         """The variables of native/tests/transfer_task/support.rs."""
         values = {}
@@ -470,6 +539,9 @@ class Servers:
             values["SE_TASK_SMB"] = f"127.0.0.1:{self.info['smb']['port']}:{USER}:{self.password}:/{USER}"
         if "webdav" in self.info:
             values["SE_TASK_WEBDAV"] = f"http://{USER}:{self.password}@127.0.0.1:{self.info['webdav']['port']}/"
+        if "nextcloud" in self.info:
+            info = self.info["nextcloud"]
+            values["SE_TASK_NEXTCLOUD"] = f"http://{USER}:{self.password}@127.0.0.1:{info['port']}{info['remote']}"
         return values
 
     # Server-side file access through the container (seed, check, purge).
@@ -567,8 +639,7 @@ def stage_unit(results, log_root, executable, env):
     in_sources = set()
     for path in list((NATIVE / "src").rglob("*.rs")):
         text = path.read_text(encoding="utf-8", errors="replace")
-        for name in re.findall(r"\bfn (\w*(?:speed_task_|einrichtung_task_|removable_media_task_|"
-                               r"batch_handoff_task_)\w*)\s*\(", text):
+        for name in re.findall(r"\bfn (\w*(?:" + "|".join(PREFIXES) + r")\w*)\s*\(", text):
             in_sources.add(name)
     absent = sorted(in_sources - compiled)
     (log_root / "not-compiled-here.txt").write_text("\n".join(absent) + "\n", encoding="utf-8")
@@ -645,10 +716,14 @@ def stage_transfer_task(results, log_root, work, env):
                    "" if executable else built.tail(3000))
     if not executable:
         return
-    names = [name for name in list_tests(executable, ignored=True, env=env) if CRASH_LOG_PREFIX in name]
+    listed = list_tests(executable, ignored=True, env=env)
+    names = [name for name in listed if CRASH_LOG_PREFIX in name]
     if not names:
         results.record("transfer_task", f"{CRASH_LOG_PREFIX}* cases listed", False, "no ignored crash-log case")
         return
+    g3 = [name for name in listed if leaf(name) in G3_FUNCTIONAL]
+    results.record("transfer_task", "G3 correctness cases listed", len(g3) == len(G3_FUNCTIONAL),
+                   ", ".join(sorted(set(G3_FUNCTIONAL) - {leaf(name) for name in g3})))
     environment = dict(env)
     servers = pyftp = None
     try:
@@ -661,7 +736,9 @@ def stage_transfer_task(results, log_root, work, env):
                 results.record("transfer_task", "pyftpdlib server", False, error)
                 return
             # No SFTP server without Linux containers; SMB and WebDAV print SKIP (optional).
+            # The G3 cases need the SFTP and SMB containers.
             names = [name for name in names if "_sftp_" not in name]
+            g3 = []
             expected_skips = ("SE_TASK_SMB", "SE_TASK_WEBDAV")
         else:
             servers = Servers(work, log_root).start(["sftp", "ftp", "smb", "webdav"])
@@ -669,6 +746,7 @@ def stage_transfer_task(results, log_root, work, env):
                 results.record("transfer_task", f"{kind} server", False, reason)
             environment.update(servers.env())
             expected_skips = ()
+        names = names + g3
         ran = run([executable, "--ignored", "--test-threads=1", "--exact", *names], cwd=NATIVE,
                   env=environment, timeout=3 * 3600, log=log_root / "transfer-task.log")
         outcomes = test_outcomes(ran.output)
@@ -687,7 +765,16 @@ def stage_transfer_task(results, log_root, work, env):
 
 def job_functional(results, log_root):
     work = Path(tempfile.mkdtemp(prefix="se-speed-setup-"))
+    # The copy-paste and GUI task constructors (`App::new_for_copy_task`, R3's
+    # `speed_task_view_insert_keeps_sort_order_and_selection`) refuse to run
+    # without their switch; every test then works in its own app data, never
+    # the runner account's.
     env = dict(os.environ, SMART_EXPLORER_COPY_PASTE_TASK="1", SMART_EXPLORER_GUI_TASK="1", RUST_BACKTRACE="1")
+    profile = work / "app-profile"
+    isolated = ("APPDATA",) if WINDOWS else ("XDG_DATA_HOME", "XDG_CONFIG_HOME")
+    for variable in isolated:
+        (profile / variable.lower()).mkdir(parents=True, exist_ok=True)
+        env[variable] = str(profile / variable.lower())
     try:
         executable, built = cargo_executable(["test", "--locked", "--lib"], "smart_explorer",
                                              log_root / "build.log", env=env)
@@ -1554,7 +1641,7 @@ def part_remote_bench(ledger, work, args):
     rclone_binary, rclone_note = fetch_rclone(work, ledger.log_root / "rclone.log")
     ledger.facts["rclone"] = rclone_note
     rclone = Rclone(rclone_binary, work) if rclone_binary else None
-    servers = Servers(work, ledger.log_root).start(["sftp", "ftp", "smb", "webdav"])
+    servers = Servers(work, ledger.log_root).start(["sftp", "ftp", "smb", "webdav", "nextcloud"])
     for kind, reason in servers.failed.items():
         ledger.note(f"{kind} server: {reason}")
         ledger.results.record("measure", f"{kind} server", False, reason)
@@ -1569,9 +1656,12 @@ def part_remote_bench(ledger, work, args):
                               seed=servers.seed, stats=servers.stats, purge=servers.purge, work=work)
         if bins.transfer_task:
             env = dict(os.environ, RUST_BACKTRACE="1", **servers.env())
+            # Nextcloud has no `se cp` path (saved WebDAV connections are HTTPS only):
+            # its chunk-upload case and benchmarks run here only.
+            bench_kinds = kinds + [kind for kind in ("nextcloud",) if kind in servers.info]
             names = [name for name in list_tests(bins.transfer_task, ignored=True, env=env)
                      if "speed_task_remote_" in leaf(name)
-                     and any(f"_{kind}_" in leaf(name) for kind in kinds)]
+                     and any(f"_{kind}_" in leaf(name) for kind in bench_kinds)]
             ledger.facts["transfer_task benchmarks"] = len(names)
             run_benchmarks(ledger, bins.transfer_task, names, env, ledger.reps)
             bench_rows(ledger, "loopback")

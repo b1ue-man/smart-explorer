@@ -76,7 +76,7 @@ pub(crate) fn remote_planner(
                 classify_error(&error) == OpOutcome::Overload,
             ) =>
         {
-            Ok(Some(NamePlanner::new(Vec::new(), case_sensitive)))
+            Ok(Some(NamePlanner::unlisted(case_sensitive)))
         }
         Err(error) => Err(format!("Zielordner „{}“ lesen: {error}", view.target_dir)),
     }

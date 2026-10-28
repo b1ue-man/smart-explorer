@@ -234,6 +234,8 @@ fn speed_task_crash_log_packet_intents_are_one_record_and_host_evidence_acknowle
                 file,
                 source: None,
                 existed_before: Some(false),
+                stage: None,
+                destination: None,
             })
             .collect();
         prepare_batch_known(&engine, &members).unwrap();

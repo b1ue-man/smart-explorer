@@ -26,6 +26,9 @@ mod direct_move;
 #[path = "local_publish.rs"]
 mod local_publish;
 pub(crate) use local_publish::packet_start;
+#[path = "packet_stage.rs"]
+mod packet_stage;
+pub(crate) use packet_stage::{stage_local_from, PacketStage, PacketStaging};
 
 /// Numbered names tried for one file when others keep taking them.
 const MAX_RENAME_RACE_RETRIES: usize = 1000;

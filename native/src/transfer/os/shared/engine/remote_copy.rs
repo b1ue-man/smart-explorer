@@ -136,7 +136,14 @@ fn stream(
         .source
         .open_read_id(&file.source, file.id.as_deref())
         .map_err(OpError::source)?;
-    let mut destination = publish::open(engine, pair.target, file, expected, parent_created)?;
+    let mut destination = publish::open(
+        engine,
+        pair.target,
+        file,
+        expected,
+        parent_created,
+        engine.folders.known_absent(&file.rel),
+    )?;
     let mut check = RemoteCheck::new(file, expected);
     // The reader thread books its read time here; this thread books the rest.
     let read_ns = AtomicU64::new(0);
@@ -271,7 +278,14 @@ fn bridge(
     drop(reader);
     check.finish(pair.source, file, spooled)?;
     spool.seek(SeekFrom::Start(0)).map_err(OpError::target)?;
-    let mut destination = publish::open(engine, pair.target, file, Some(spooled), parent_created)?;
+    let mut destination = publish::open(
+        engine,
+        pair.target,
+        file,
+        Some(spooled),
+        parent_created,
+        engine.folders.known_absent(&file.rel),
+    )?;
     let uploaded = upload_spool(engine, &mut spool, &mut destination, &mut buffer, meter);
     if let Err(error) = uploaded {
         publish::abandon(engine, pair.target, destination);

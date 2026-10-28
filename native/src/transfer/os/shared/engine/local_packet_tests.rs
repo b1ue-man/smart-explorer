@@ -116,6 +116,18 @@ fn names(path: &Path) -> Vec<String> {
     names
 }
 
+/// Private local stages (`.smart-explorer-….part`) in `path`.
+fn is_stage(name: &str) -> bool {
+    name.contains(".smart-explorer-") && name.ends_with(".part")
+}
+
+/// The published names in `path` (stages left out) and the stage count.
+fn published(path: &Path) -> (Vec<String>, usize) {
+    let (stages, published): (Vec<String>, Vec<String>) =
+        names(path).into_iter().partition(|name| is_stage(name));
+    (published, stages.len())
+}
+
 /// `count` small sources `f<i>.txt` (content `file <i>`) and an empty
 /// target folder.
 fn layout(root: &Path, count: usize) -> (Vec<PathBuf>, PathBuf) {
@@ -194,11 +206,12 @@ fn speed_task_local_packet_crash_after_the_intent_publishes_nothing_twice() {
         engine.job_record.as_ref().unwrap().prepare_apply().unwrap();
         CRASH_BEFORE.with(|crash| crash.set(Some(0)));
         packet(&engine, works(&sources));
-        // One durable intent for every member; no byte and no stage yet.
+        // One durable intent for every member, written after their stages
+        // (R4): nothing is published, every stage is recorded.
         for file in works(&sources) {
             assert!(file_recovery::has_receipt(&engine, &file), "{}", file.rel);
         }
-        assert!(names(&target).is_empty(), "{:?}", names(&target));
+        assert_eq!(published(&target), (Vec::<String>::new(), 6));
     }
     CRASH_BEFORE.with(|crash| crash.set(None));
     candidate.recovery = RecoveryMode::Resume;
@@ -207,6 +220,7 @@ fn speed_task_local_packet_crash_after_the_intent_publishes_nothing_twice() {
         apply(&engine, file);
     }
     assert_eq!(engine.issues.total(), 0, "{:?}", engine.issues.shown().0);
+    // The resumed job removed every recorded stage: no orphan is left.
     exactly_once(&target, 6);
 }
 
@@ -226,7 +240,9 @@ fn speed_task_local_packet_crash_before_acknowledgements_loses_nothing() {
         ACKS_LOST.with(|lost| lost.set(true));
         CRASH_BEFORE.with(|crash| crash.set(Some(2)));
         packet(&engine, works(&sources));
-        assert_eq!(names(&target), ["f0.txt", "f1.txt"]);
+        // The three not yet published are staged and recorded.
+        let expected = vec!["f0.txt".to_string(), "f1.txt".to_string()];
+        assert_eq!(published(&target), (expected, 3));
     }
     ACKS_LOST.with(|lost| lost.set(false));
     CRASH_BEFORE.with(|crash| crash.set(None));
@@ -237,7 +253,7 @@ fn speed_task_local_packet_crash_before_acknowledgements_loses_nothing() {
     }
     assert_eq!(engine.issues.total(), 0, "{:?}", engine.issues.shown().0);
     // The two published files are this job's own (no numbered second copy);
-    // the three never tried arrive once.
+    // the three staged ones arrive once and none of their stages is left.
     exactly_once(&target, 5);
 }
 

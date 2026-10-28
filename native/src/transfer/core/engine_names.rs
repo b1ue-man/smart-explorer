@@ -138,6 +138,9 @@ pub(crate) fn next_numbered(name: &str) -> impl Iterator<Item = String> {
 pub(crate) struct NamePlanner {
     taken: HashSet<String>,
     case_sensitive: bool,
+    /// The names came from a complete listing (or a folder created just
+    /// now): a claimed name was absent then (G3-08b).
+    listed: bool,
 }
 
 impl NamePlanner {
@@ -145,12 +148,26 @@ impl NamePlanner {
         let mut planner = Self {
             taken: HashSet::new(),
             case_sensitive,
+            listed: true,
         };
         for name in existing {
             let key = planner.key(&name);
             planner.taken.insert(key);
         }
         planner
+    }
+
+    /// A planner without a listing (it failed for a transient reason): it
+    /// numbers within the job only and proves no name absent.
+    pub(crate) fn unlisted(case_sensitive: bool) -> Self {
+        let mut planner = Self::new(Vec::new(), case_sensitive);
+        planner.listed = false;
+        planner
+    }
+
+    /// Whether a claimed name was seen absent in a listing of the folder.
+    pub(crate) fn listed(&self) -> bool {
+        self.listed
     }
 
     fn key(&self, name: &str) -> String {

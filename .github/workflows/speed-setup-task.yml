@@ -14,9 +14,14 @@ run-name: Connecting is the setup, fast transfers ${{ inputs.candidate_sha }}
 #               xfreerdp3/mstsc, other account) on a prepared runner; H3 (xrdp
 #               as root) and H4 (Windows RDP, elevated); the integration target
 #               `transfer_task` with the crash log against SFTP, FTP, SMB and
-#               WebDAV servers (Windows: FTP only); the FAT32/exFAT paste
+#               WebDAV servers plus the G3 cases (SMB compound stage, SFTP copy
+#               batch and same-account packets; Windows: FTP only); the
+#               FAT32/exFAT paste; the copy-paste task switch with isolated
+#               app data
 #   measure     (input measure) G5: every ignored `speed_task_` benchmark in
-#               release mode, `repetitions` times, median; v0.5.188 built in a
+#               release mode, `repetitions` times, median (remote-bench also
+#               against Nextcloud nextcloud:30-apache, SE_TASK_NEXTCLOUD, with
+#               the 2 GiB chunk-upload case); v0.5.188 built in a
 #               worktree next to the candidate and both measured with the same
 #               user-level operations (`se cp`/`se mv`, remote `se cp`, Share
 #               pair) against cp, rsync, robocopy /MT, rclone, lftp, scp,

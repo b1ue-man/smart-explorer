@@ -1,19 +1,21 @@
 //! Local packets (M3, 2026-10-28): small new local copies of a job with a
 //! crash log share one durable intent record and one permit. A worker takes
-//! up to `MAX_FILES` small files, decides each first name (`packet_start`),
-//! writes one intent for every member whose requested name is free
-//! (`file_recovery::prepare_batch_known`: one record, one group commit),
-//! then copies and publishes the members one after another through the
-//! single file's stage and publication (`copy::transfer_local_from`).
+//! up to `MAX_FILES` small files and decides each first name
+//! (`packet_start`). Every member whose requested name is free is covered:
+//! the covered members are staged in groups (`local_packet_stage`), one
+//! intent record names each one's stage and destination
+//! (`file_recovery::prepare_batch_known`: one record, one group commit), and
+//! then they are published one after another, each acknowledged through its
+//! still open stage handle. A member that must be numbered ("keep both",
+//! requested name taken) is copied and published alone afterwards, behind
+//! an intent of its own with its stage (`LocalObserver`), and so is a
+//! covered one whose name a race takes after the record.
 //!
-//! Order. The intent comes before the first stage: the packet record holds
-//! no stage evidence (`PacketIntent` has none), so writing it after staging
-//! would only keep every member's stage handle open and leave up to a whole
-//! packet of private stages behind a crash instead of the one in progress.
-//! It is still durable before any member is published, which is the
-//! invariant; a member that must be numbered ("keep both", requested name
-//! taken) or whose requested name is taken by a race publishes behind an
-//! intent of its own with its stage (`LocalObserver`).
+//! Order (R4, 2026-10-28). The record comes after the stages and before any
+//! publication: a crash after it leaves no stage the resumed job does not
+//! know (it removes them); a crash while a group is staged leaves that
+//! group's stages, as a single file's crash between its stage and its intent
+//! leaves its one. A group holds at most `STAGE_GROUP` stage handles.
 //!
 //! Parallelism (flow model, `flow.rs`/`flow_control.rs`). The flow's limit
 //! is the number of operations that run at once; every running operation is
@@ -26,12 +28,10 @@
 //! plus a fixed weight per finished operation, so a packet credits that
 //! weight once per member it finished: the controller sees the same work
 //! whether files come alone or packed.
-use super::super::file_evidence::{with_check_meter, HostEvidence};
-use super::super::file_recovery::{self, PacketIntent};
-use super::super::job_store::snapshot;
+use super::super::file_evidence::with_check_meter;
+use super::super::file_recovery;
 use super::super::ops::{self, nanos, At, Meter, OpError, Outcome};
 use super::super::queue::{FileWork, Work};
-use super::super::view::Side;
 use super::super::worker::{finished, run_file};
 use super::super::Engine;
 use super::{Attempt, Failures};
@@ -122,9 +122,9 @@ impl Member {
     }
 }
 
-/// Runs one local packet (the members' folders exist; `batch::run`). The
-/// intent's group commit is waited for before the permit is taken: it is no
-/// work of the flow's volume, and other workers' copies go on meanwhile.
+/// Runs one local packet (the members' folders exist; `batch::run`) under
+/// one permit: the members' stages, their intent's group commit and their
+/// publications.
 pub(super) fn run(engine: &Engine<'_>, files: Vec<FileWork>, buffer: &mut [u8]) {
     let Some(members) = first_names(engine, files) else {
         return;
@@ -137,9 +137,6 @@ pub(super) fn run(engine: &Engine<'_>, files: Vec<FileWork>, buffer: &mut [u8]) 
     }
     #[cfg(test)]
     tests::ran(engine.folders.root(), members.len());
-    let Some(members) = intend(engine, members) else {
-        return;
-    };
     let mut failures = Failures::new(engine);
     let memory_asked = Instant::now();
     let Some(reservation) = reserve_memory(ops::reservation(engine), engine.stop_flag()) else {
@@ -220,59 +217,6 @@ fn alone(engine: &Engine<'_>, mut file: FileWork) {
     engine.queue.push_front(Work::File(file));
 }
 
-/// The one durable intent of the covered members, each with the source as
-/// it is before its copy (as the single path records it). A covered member
-/// whose source cannot be recorded goes alone. `None` when the packet ends
-/// here: the job stopped, or the intent failed (every member then goes
-/// alone and meets the same problem on its own path, reported per file).
-fn intend(engine: &Engine<'_>, members: Vec<Member>) -> Option<Vec<Member>> {
-    let mut kept = Vec::with_capacity(members.len());
-    let mut evidence = Vec::with_capacity(members.len());
-    for member in members {
-        if !member.covered() {
-            kept.push(member);
-            continue;
-        }
-        let guard = snapshot(Side::Local, &member.file.source);
-        if !guard.verified || guard.directory || guard.link {
-            alone(engine, member.file);
-            continue;
-        }
-        evidence.push(HostEvidence {
-            path: guard.path,
-            object: guard.object,
-            id: guard.id,
-            size: guard.size,
-            mtime_ms: guard.mtime_ms,
-        });
-        kept.push(member);
-    }
-    let covered: Vec<&Member> = kept.iter().filter(|member| member.covered()).collect();
-    let intents: Vec<PacketIntent<'_>> = covered
-        .iter()
-        .zip(&evidence)
-        .map(|(member, source)| PacketIntent {
-            file: &member.file,
-            source: Some(source),
-            existed_before: None,
-        })
-        .collect();
-    let prepared = file_recovery::prepare_batch_known(engine, &intents);
-    drop(intents);
-    if prepared.is_ok() {
-        return Some(kept);
-    }
-    for member in covered {
-        let _ = file_recovery::unpublished(engine, &member.file);
-    }
-    if !engine.stopped() {
-        for member in kept {
-            alone(engine, member.file);
-        }
-    }
-    None
-}
-
 #[derive(Default)]
 struct Tally {
     done: usize,
@@ -280,7 +224,9 @@ struct Tally {
     error: Option<io::Error>,
 }
 
-/// Copies and publishes the members one after another.
+/// Copies and publishes the members: the covered ones group by group
+/// (stages, one intent naming them, publications), then the numbered ones
+/// one after another.
 fn run_members(
     engine: &Engine<'_>,
     members: Vec<Member>,
@@ -288,15 +234,44 @@ fn run_members(
     failures: &mut Failures<'_, '_>,
 ) -> Tally {
     let mut tally = Tally::default();
-    let mut members = members.into_iter().enumerate();
-    // `_index` is read by the test hooks only.
-    while let Some((_index, member)) = members.next() {
+    let (covered, numbered): (Vec<Member>, Vec<Member>) =
+        members.into_iter().partition(Member::covered);
+    let mut covered = covered.into_iter();
+    let mut numbered = numbered.into_iter();
+    // `index` counts the publications; the test hooks read it.
+    let mut index = 0usize;
+    loop {
+        let group: Vec<Member> = covered.by_ref().take(STAGE_GROUP).collect();
+        if group.is_empty() {
+            break;
+        }
+        let ended = stage::run_group(engine, group, meter, failures, &mut tally, &mut index);
+        match ended {
+            Ended::Next => {}
+            Ended::Crash => return tally,
+            Ended::Stopped => {
+                untried(failures, None, covered.chain(numbered));
+                return tally;
+            }
+            Ended::Alone => {
+                if !engine.stopped() {
+                    for member in covered.chain(numbered) {
+                        alone(engine, member.file);
+                    }
+                }
+                return tally;
+            }
+        }
+    }
+    while let Some(member) = numbered.next() {
+        let _current = index;
+        index += 1;
         #[cfg(test)]
-        if tests::crash_before(_index) {
+        if tests::crash_before(_current) {
             return tally;
         }
         if engine.stopped() {
-            untried(failures, Some(member), members.map(|(_, member)| member));
+            untried(failures, Some(member), numbered);
             return tally;
         }
         let before = meter.moved();
@@ -313,9 +288,9 @@ fn run_members(
             &mut tally,
         );
         #[cfg(test)]
-        tests::after(engine, _index);
+        tests::after(engine, _current);
         if canceled {
-            untried(failures, None, members.map(|(_, member)| member));
+            untried(failures, None, numbered);
             return tally;
         }
     }
@@ -349,8 +324,8 @@ fn transfer(
         parallel: 1,
         probe: None,
     };
-    let covered = member.covered().then_some(member.requested.as_path());
-    let observer = PacketObserver::new(engine, &member.file, covered);
+    // A numbered member: every name it gets has an intent of its own.
+    let observer = PacketObserver::new(engine, &member.file, None);
     let mut progress = |bytes: u64| meter.add(bytes);
     meter.timed_target(|| {
         crate::copy::transfer_local_from(&request, &member.start, &mut progress, &observer)
@@ -436,6 +411,9 @@ fn disabled() -> bool {
 #[path = "local_packet_observer.rs"]
 mod observer;
 use observer::PacketObserver;
+#[path = "local_packet_stage.rs"]
+mod stage;
+use stage::{Ended, STAGE_GROUP};
 
 #[cfg(test)]
 #[path = "speed_task_local_packet_tests.rs"]
