@@ -108,14 +108,15 @@ fn route_start_task_gate_switch_mid_transfer_keeps_every_file_once() {
         spanning.expect("the stream across the switch completes once");
         let relay_end = relay_tx(&pair.client);
         assert!(relay_end <= relay_at_switch, "new payload over relay");
-        let files = pair.ledger.files.lock().unwrap();
-        assert_eq!(files.len(), 21);
-        assert!(files.values().all(|(_, count)| *count == 1));
-        assert_eq!(files[&4].0, sha(&content(4, big)));
-        for id in (0..21).filter(|id| *id != 4) {
-            assert_eq!(files[&id].0, sha(&content(id, FILE)), "file {id}");
+        {
+            let files = pair.ledger.files.lock().unwrap();
+            assert_eq!(files.len(), 21);
+            assert!(files.values().all(|(_, count)| *count == 1));
+            assert_eq!(files[&4].0, sha(&content(4, big)));
+            for id in (0..21).filter(|id| *id != 4) {
+                assert_eq!(files[&id].0, sha(&content(id, FILE)), "file {id}");
+            }
         }
-        drop(files);
         pair.close().await;
     });
 }

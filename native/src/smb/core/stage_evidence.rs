@@ -106,7 +106,7 @@ impl StageReport {
 }
 
 /// The publication compound: CREATE(stage, not a folder, a link as itself)
-/// + SET_INFO(rename without replacing) + CLOSE. The CREATE's attributes
+/// then SET_INFO(rename without replacing), then CLOSE. The CREATE's attributes
 /// describe the published file. A failure after a successful CREATE closes
 /// the handle by hand, as `wire::create_set_close`.
 pub(super) async fn rename_no_replace_evidenced(

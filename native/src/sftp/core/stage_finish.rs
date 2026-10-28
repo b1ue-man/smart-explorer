@@ -185,9 +185,9 @@ impl SftpBackend {
             }
             None => false,
         };
-        let actual = fstat.map_err(&failed)?.attrs;
-        close.map_err(&failed)?;
-        if not_regular(&look.map_err(&failed)?.attrs) {
+        let actual = fstat.map_err(failed)?.attrs;
+        close.map_err(failed)?;
+        if not_regular(&look.map_err(failed)?.attrs) {
             return Err(type_changed());
         }
         judge(&actual, &finish, mtime, durable)

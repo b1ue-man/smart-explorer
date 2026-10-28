@@ -254,12 +254,10 @@ pub(super) fn plan_roots(
         let tail = segments(path);
         // Another spelling than the view's (a backslash in a name): only a full
         // rescan is safe.
-        let Some(tail) = tail.get(skip..).filter(|tail| tail.len() == depth as usize) else {
-            return None;
-        };
-        let Some((name, above)) = tail.split_last() else {
-            return None;
-        };
+        let tail = tail
+            .get(skip..)
+            .filter(|tail| tail.len() == depth as usize)?;
+        let (name, above) = tail.split_last()?;
         found.push(ChangedRoot {
             path: join(view, tail),
             parent: join(view, above),

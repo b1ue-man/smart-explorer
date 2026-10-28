@@ -371,7 +371,7 @@ fn rooted(
     backend: crate::vfs::BackendHandle,
     config: &MountConfig,
 ) -> std::io::Result<crate::vfs::BackendHandle> {
-    super::super::rooted_backend::RootedBackend::new(
+    super::super::rooted_backend::RootedBackend::open_windows(
         backend,
         config.source.root(),
         config.mode,

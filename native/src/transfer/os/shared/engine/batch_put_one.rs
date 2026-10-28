@@ -60,9 +60,8 @@ pub(in super::super) fn upload(
         let mut data = PacketData::new(vec![source], meter, engine.stop_flag());
         let result = if evidenced {
             let mut prepare = |offset: usize, existed: &[Option<bool>]| {
-                prepare_part(engine, files, offset, existed).map_err(|error| {
+                prepare_part(engine, files, offset, existed).inspect_err(|error| {
                     prepare_failure = Some(io::Error::new(error.kind(), error.to_string()));
-                    error
                 })
             };
             crate::vfs::put_batch_evidence(target, &entries, &mut data, &mut prepare)

@@ -241,9 +241,8 @@ fn send(
         let mut data = MemoryData::new(&parts, meter, engine.stop_flag());
         let result = if evidenced {
             let mut prepare_part = |offset: usize, existed: &[Option<bool>]| {
-                prepare(engine, &files, &sources, offset, existed).map_err(|error| {
+                prepare(engine, &files, &sources, offset, existed).inspect_err(|error| {
                     prepare_failure = Some(error.to_string());
-                    error
                 })
             };
             crate::vfs::put_batch_evidence(target, &entries, &mut data, &mut prepare_part)

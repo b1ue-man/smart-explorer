@@ -235,8 +235,15 @@ jobs:
             # The letter becomes visible a moment after diskpart reports it.
             for ($i = 0; $i -lt 300 -and -not (Test-Path -LiteralPath $root); $i++) { Start-Sleep -Milliseconds 100 }
             if (-not (Test-Path -LiteralPath $root)) { throw "volume $root did not appear" }
-            fsutil fsinfo volumeinfo $root
-            if ($LASTEXITCODE -ne 0) { throw "fsutil volumeinfo $root failed: $LASTEXITCODE" }
+            # A folder created and removed proves the volume is writable; the
+            # IDs of its root and of the folder are logged as evidence.
+            $probe = Join-Path $root 'probe'
+            New-Item -ItemType Directory -Path $probe | Out-Null
+            fsutil file queryfileid $root
+            if ($LASTEXITCODE -ne 0) { throw "fsutil queryfileid $root failed: $LASTEXITCODE" }
+            fsutil file queryfileid $probe
+            if ($LASTEXITCODE -ne 0) { throw "fsutil queryfileid $probe failed: $LASTEXITCODE" }
+            Remove-Item -LiteralPath $probe
           }
           "SE_TASK_REMOVABLE_ROOTS=Y:\;Z:\" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
