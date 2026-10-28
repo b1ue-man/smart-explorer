@@ -137,6 +137,24 @@ Entwurf läuft (`entwurf-einrichtung.md`), Grundlage `inventur-einrichtung.md`.
 | D2 | Kopierarchitektur | folgt aus Analyse | Suite-Messung Dateien/s vorher/nachher je Pfad |
 | D3 | Selbsteinrichtung RDP/TCP/Fenster | folgt aus Inventur | je Oberfläche kein Formular mehr nötig |
 
+## Stand der Umsetzung (2026-10-28)
+
+| Paket | Inhalt | Stand |
+|---|---|---|
+| r1 | Anzeigefenster als NOTIFICATION ohne Fenstermanager | `ae369611`, Suite grün |
+| KP1 | Absturzprotokoll v2, Paket-/Nebenläufigkeitsregeln, Zwischenablage | `b67a2bf7` |
+| KP2 | Hostbelege, ungesyncte Paketstufen, Sammelordner, Pakete über den Proxy | `04261ddf` |
+| WP1–WP3, D1 | Einrichtung durch Verbinden, Relay-Startphase | `cf6f47e9` |
+| KP3–KP6, KP5a, D2 | lokale Wege, Share-Host/Protokoll, SFTP/SMB/FTP/WebDAV/Drive, Tresore, ZIP | `74a7e071` |
+| D3 | se-Laufwerke (Schreibcache, Lesen während des Downloads), Sync während des Scans | in Arbeit |
+| Rest | Engine im Worker (Z-P2), entfernt→entfernt-Pakete (G3-13), Drive-Einzelschreiben (G3-08b), Nextcloud-Chunks (G3-12), SMB-Compound (G3-07), Zwischenablage-STA (M17), Ansichtseinfügen statt Neuscan (M19) | geplant |
+
+Entscheidungen auf Nutzeranweisung „decide yourself“ (r13): Relay schon während der
+Direktsuche (markiert, Wechsel auf direkt); zusätzliche Anmeldungen für parallele
+SFTP-/FTP-Ströme (ersetzt S12/E13-S15 hierfür); Laufwerks-Schreibcache und Lesen während
+des Downloads; Sync kopiert während des Scans, Löschungen erst danach; Tresor-Cache behält
+eigenen Schlüssel; keine festen Laufwerks-Torzeiten.
+
 ## Schleifenstand (kreative Schleife)
 
 - Ziel: r3–r6 — Lösungsweg für (a) schnelles Kopieren, (b) Einrichtung allein durch Verbinden.
