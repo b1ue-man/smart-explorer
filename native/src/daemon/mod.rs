@@ -384,7 +384,7 @@ pub(crate) fn windows_remote_task_rooted(
     backend: crate::vfs::BackendHandle,
     mode: crate::mount::MountMode,
 ) -> std::io::Result<crate::vfs::BackendHandle> {
-    rooted_backend::RootedBackend::new(
+    rooted_backend::RootedBackend::open_windows(
         backend,
         &crate::mount::BackendRoot::parse("/")?,
         mode,

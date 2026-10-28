@@ -29,7 +29,7 @@ impl VaultTaskBridge {
     pub fn new() -> io::Result<Self> {
         let tree = VaultTree::new();
         let raw: BackendHandle = tree.clone();
-        let rooted = RootedBackend::new(
+        let rooted = RootedBackend::open_windows(
             raw.clone(),
             &BackendRoot::parse("/")?,
             MountMode::ReadWrite,

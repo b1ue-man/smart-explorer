@@ -24,7 +24,9 @@ pub(crate) use ownership::{
 use ownership::{owners, PendingStart};
 #[path = "open_device.rs"]
 mod open_device;
-pub(crate) use open_device::{open_device, open_device_session, open_device_with, OpenOptions};
+#[cfg(any(target_os = "android", all(unix, test)))]
+pub(crate) use open_device::open_device;
+pub(crate) use open_device::{open_device_session, open_device_with, OpenOptions};
 #[cfg(test)]
 #[path = "einrichtung_open_task_tests.rs"]
 mod einrichtung_open_task_tests;

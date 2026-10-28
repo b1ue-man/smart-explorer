@@ -28,9 +28,6 @@ impl AuthenticatedProbe {
     pub(crate) fn report(&self) -> &HostProbe {
         &self.report
     }
-    pub(crate) fn node_id(&self) -> &str {
-        &self.node_id
-    }
     pub(crate) fn service(&self, id: &str) -> Result<&HostService, String> {
         self.report
             .services

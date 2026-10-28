@@ -126,7 +126,7 @@ impl Fixture {
 #[test]
 fn remote_drive_task_enforced_root_rejects_unverified_backend() {
     let fixture = Fixture::new();
-    let error = only_error(RootedBackend::new(
+    let error = only_error(RootedBackend::open_windows(
         fixture.unverified(),
         &fixture.root,
         MountMode::ReadOnly,
@@ -138,7 +138,7 @@ fn remote_drive_task_enforced_root_rejects_unverified_backend() {
 #[test]
 fn remote_drive_task_trusted_root_accepts_unverified_backend() {
     let fixture = Fixture::new();
-    let backend = RootedBackend::new(
+    let backend = RootedBackend::open_windows(
         fixture.unverified(),
         &fixture.root,
         MountMode::ReadOnly,
@@ -171,7 +171,7 @@ fn remote_drive_task_rooted_backend_consumes_one_combined_capability_snapshot() 
         root_confinement: RootConfinement::Enforced,
     });
 
-    let backend = RootedBackend::new(
+    let backend = RootedBackend::open_windows(
         inner,
         &fixture.root,
         MountMode::ReadWrite,
@@ -204,7 +204,7 @@ fn remote_drive_task_enforced_reads_reuse_resolution_but_keep_final_stat_live() 
         case_sensitive: false,
         root_confinement: RootConfinement::Enforced,
     });
-    let backend = RootedBackend::new(
+    let backend = RootedBackend::open_windows(
         inner,
         &fixture.root,
         MountMode::ReadOnly,
@@ -254,7 +254,7 @@ fn remote_drive_task_trusted_reads_cache_case_resolution_but_revalidate_root() {
         case_sensitive: false,
         root_confinement: RootConfinement::Unverified,
     });
-    let backend = RootedBackend::new(
+    let backend = RootedBackend::open_windows(
         inner,
         &fixture.root,
         MountMode::ReadOnly,
@@ -303,7 +303,7 @@ fn remote_drive_task_confined_projection_blocks_escape_and_preserves_exclusive_o
     std::fs::write(fixture.root_path.join("claimed.stage"), b"first owner").unwrap();
     std::os::unix::fs::symlink(&outside, fixture.root_path.join("escape-link")).unwrap();
 
-    let backend = RootedBackend::new(
+    let backend = RootedBackend::open_windows(
         fixture.confined(),
         &fixture.root,
         MountMode::ReadWrite,
@@ -350,7 +350,7 @@ fn remote_drive_task_confined_projection_blocks_escape_and_preserves_exclusive_o
 fn remote_drive_task_case_colliding_listing_fails_closed() {
     let fixture = Fixture::new();
     std::fs::write(fixture.root_path.join("NOTE.md"), b"collision").unwrap();
-    let backend = RootedBackend::new(
+    let backend = RootedBackend::open_windows(
         Arc::new(RootConfinedLocalBackend {
             inner: LocalBackend::new(fixture.root.as_str()),
             scheme: Scheme::Sftp,

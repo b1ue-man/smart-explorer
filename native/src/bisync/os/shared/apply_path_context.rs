@@ -22,13 +22,16 @@ use std::io;
 use std::sync::{Arc, Mutex};
 
 /// Per-run memory of root and directory facts; see the module comment.
+/// (backend address, root, directory, cross_mounts).
+type MountKey = (usize, String, String, bool);
+
 #[derive(Default)]
 pub(crate) struct PathContext {
     /// (backend address, root) → limits. Backends outlive the run that
     /// installs this context, so their address identifies them within it.
     limits: Mutex<HashMap<(usize, String), TargetLimits>>,
     /// (backend address, root, directory, cross_mounts) → mount omission.
-    mounts: Mutex<HashMap<(usize, String, String, bool), Option<OmissionKind>>>,
+    mounts: Mutex<HashMap<MountKey, Option<OmissionKind>>>,
     /// (backend address, folder) this run created or found as a folder.
     parents: Mutex<HashSet<(usize, String)>>,
 }

@@ -19,7 +19,12 @@ pub use imp::*;
 /// What a caller already learned of a copy's source from its open handle
 /// (M10, 2026-10-28): the platform copy then neither probes the medium nor
 /// reads the metadata again.
+///
+/// Only the Windows copy by path (`CopyFile2`) consumes the facts; the Linux
+/// copy always fills the stage through handles (`copy_by_path` is `None`
+/// there), so the fields are read on Windows alone.
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) struct SourceFacts {
     pub size: u64,
     pub optical: bool,

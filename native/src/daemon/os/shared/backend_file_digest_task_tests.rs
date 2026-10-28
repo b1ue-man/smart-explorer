@@ -136,7 +136,7 @@ impl BackendExtensions for DigestProbe {
 
 fn rooted(probe: &Arc<DigestProbe>) -> BackendHandle {
     let inner: BackendHandle = probe.clone();
-    RootedBackend::new(
+    RootedBackend::open_windows(
         inner,
         &BackendRoot::parse("/root").unwrap(),
         MountMode::ReadOnly,

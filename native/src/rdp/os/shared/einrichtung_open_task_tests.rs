@@ -131,8 +131,8 @@ fn einrichtung_task_mstsc_requires_the_probe_v2_thumbprint() {
 trait AmbiguousIfClone<A> {
     fn check() {}
 }
-impl<T: ?Sized> AmbiguousIfClone<()> for T {}
-impl<T: ?Sized + Clone> AmbiguousIfClone<u8> for T {}
+impl<T> AmbiguousIfClone<()> for T {}
+impl<T: Clone> AmbiguousIfClone<u8> for T {}
 
 /// V6: one probe, one start. `RdpSession::start` takes the probe by value
 /// and the probe cannot be cloned, so a second start without a new probe

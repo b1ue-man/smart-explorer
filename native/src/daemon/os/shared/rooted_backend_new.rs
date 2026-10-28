@@ -19,7 +19,7 @@ use super::RootedBackend;
 impl RootedBackend {
     /// A drive served with the Windows name rules (Dokany).
     #[cfg_attr(not(any(windows, test)), allow(dead_code))]
-    pub(in super::super) fn new(
+    pub(in super::super) fn open_windows(
         raw_inner: BackendHandle,
         root: &BackendRoot,
         mode: MountMode,

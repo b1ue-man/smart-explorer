@@ -266,7 +266,8 @@ pub(crate) fn apply(
     Ok(())
 }
 
-/// Android tap „Öffnen“ (and an explicit open on desktops).
+/// Android tap „Öffnen“ (only the Android bridge calls it).
+#[cfg(any(target_os = "android", all(unix, test)))]
 pub(crate) fn open(device_id: &str, public_key: &str, port: u16) -> Result<MappedService, String> {
     let mut all = devices();
     let device = all
@@ -299,6 +300,7 @@ pub(crate) fn open(device_id: &str, public_key: &str, port: u16) -> Result<Mappe
 }
 
 /// Android tap „Schließen“.
+#[cfg(any(target_os = "android", all(unix, test)))]
 pub(crate) fn close(device_id: &str, public_key: &str, port: u16) -> bool {
     let mut all = devices();
     let Some(device) = all.get_mut(&device_key(device_id, public_key)) else {
