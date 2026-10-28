@@ -155,7 +155,14 @@ fn after_checked(
         receipt.destination = destination;
         receipt.relative = relative;
         receipt.previous = None;
-        doubt::source_unchanged(&receipt, engine.view.source)?;
+        // A move reads from its quarantined source; the original path is
+        // empty by then.
+        match &receipt.quarantine {
+            Some(quarantine) => {
+                doubt::quarantined_source_unchanged(&receipt, quarantine, engine.view.source)?
+            }
+            None => doubt::source_unchanged(&receipt, engine.view.source)?,
+        }
         super::file_evidence::stamp_of(engine.view.target, &receipt.destination, meta)?
     };
     receipt.confirmed = receipt
