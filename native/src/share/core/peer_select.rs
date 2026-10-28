@@ -80,7 +80,6 @@ pub(crate) fn present_relation_at(
 
 /// Design 9.1 contract: the present relation at the host clock's now.
 // Consumers: RDP open, device feed, programs, TCP (work package WP2).
-#[allow(dead_code)]
 pub(crate) fn present_relation(
     profiles: &ShareProfiles,
     device_id: &str,

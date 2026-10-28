@@ -5,7 +5,6 @@
 //! acknowledgement (the listener admits only this account's programs) and
 //! has no fixed lifetime unless `--lifetime-secs` names one (user rule r7).
 use crate::desktop::core::tiles;
-use crate::share::apps_wire::{AppsCommand, AppsResult};
 use crate::share::tcp_forward::{TcpDestination, TcpStart, TunnelId, TunnelView};
 use clap::{Args, Subcommand};
 use serde_json::{json, Value};
@@ -75,6 +74,12 @@ impl StartArgs {
     }
 }
 
+/// The `local_access_notice` key that `se tcp start --json` and MCP
+/// `tcp_forward start` returned up to 0.5.188; kept so scripts reading it
+/// still find it, now describing the account-bound admission (design 4.4).
+pub(crate) const LOCAL_ACCESS_NOTICE: &str =
+    "Nur Programme dieses Benutzerkontos erreichen den lokalen Port; die Weiterleitung bleibt offen, bis sie geschlossen wird, außer eine Lebensdauer ist gesetzt.";
+
 pub(super) fn run(args: TcpArgs) -> Result<i32, String> {
     match args.command {
         TcpCommand::Start(start) => {
@@ -83,7 +88,8 @@ pub(super) fn run(args: TcpArgs) -> Result<i32, String> {
             let tunnel = crate::daemon::tcp_start(target, request, || {
                 eprintln!("Warte auf die Antwort von {name} …");
             })?;
-            output(start.json, &json!({"tunnel": tunnel}), || text(&tunnel));
+            let value = json!({"tunnel": tunnel, "local_access_notice": LOCAL_ACCESS_NOTICE});
+            output(start.json, &value, || text(&tunnel));
         }
         TcpCommand::Services { device, json } => {
             let value = services(&device)?;
@@ -121,16 +127,8 @@ pub(crate) fn services(selector: &str) -> Result<Value, String> {
     let snapshot = crate::daemon::share_worker_snapshot()?;
     let feed = tiles::identity_of(&snapshot.profiles, &target)
         .and_then(|(device, key)| tiles::feed_of(&snapshot, &device, &key));
-    let waiting = || eprintln!("Warte auf die Antwort von {name} …");
-    let (_, _, result) =
-        crate::daemon::apps_command(target, AppsCommand::LocalServices, None, waiting)?;
-    let AppsResult::LocalServices {
-        services,
-        unavailable,
-    } = result
-    else {
-        return Err("Unerwartete Antwort auf die Dienstabfrage.".into());
-    };
+    eprintln!("Warte auf die Antwort von {name} …");
+    let (services, unavailable) = crate::daemon::apps_local_services(target, None)?;
     Ok(services_value(&name, &services, unavailable, feed.as_ref()))
 }
 

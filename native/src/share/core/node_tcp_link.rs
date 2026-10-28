@@ -32,6 +32,10 @@ use tokio::sync::mpsc;
 pub(crate) const OLD_HOST_NOTICE: &str =
     "Gegenstelle älter als 0.5.189: Weiterleitung endet nach 24 h";
 
+/// A background tunnel the host would ask its user about (review B9).
+const NOT_SHARED_ANY_MORE: &str =
+    "Dienst ist auf dem Gerät nicht mehr freigegeben (es würde nachfragen); abgewiesen";
+
 /// An auto-forward tunnel: its ID and the sender of further admitted local
 /// connections. A send fails, returning the socket, once the tunnel ended.
 pub(crate) type ChannelLink = (TunnelId, mpsc::Sender<TcpStream>);
@@ -115,13 +119,16 @@ impl ShareIrohNode {
     /// Dials, authenticates and asks the host to open `request`; returns
     /// after the host's `Opened`. A human confirmation on the host has no
     /// time limit; closing the caller's request drops this transport.
+    /// `pending` `None` never waits for one: a background tunnel (automatic
+    /// mapping) treats the host's question as a refusal and withdraws, so
+    /// the background never makes the host ask its user (review B9).
     pub(crate) async fn open_tcp_link(
         &self,
         identity: &ShareIdentity,
         endpoint: &PeerEndpoint,
         request: TcpStart,
         id: &TunnelId,
-        pending: &mut (dyn FnMut() + Send),
+        mut pending: Option<&mut (dyn FnMut() + Send)>,
         cancellation: Option<&Arc<RouteCancellation>>,
     ) -> io::Result<OpenedLink> {
         let (close, version) = self.connect_tcp(endpoint).await?;
@@ -204,7 +211,13 @@ impl ShareIrohNode {
                     }
                     TcpHelloReply::Pending if !asked => {
                         asked = true;
-                        pending();
+                        match pending.as_mut() {
+                            Some(pending) => pending(),
+                            None => {
+                                let kind = io::ErrorKind::PermissionDenied;
+                                return Err(io::Error::new(kind, NOT_SHARED_ANY_MORE));
+                            }
+                        }
                     }
                     TcpHelloReply::Pending => {
                         return Err(io::Error::new(
@@ -338,9 +351,8 @@ impl ShareService {
                     io::Error::new(io::ErrorKind::WouldBlock, "TCP-Grenze 64 erreicht")
                 })?;
             let id = TunnelId::generate().map_err(eio)?;
-            let mut no_pending = || {};
             let link = node
-                .open_tcp_link(&identity, &endpoint, request, &id, &mut no_pending, None)
+                .open_tcp_link(&identity, &endpoint, request, &id, None, None)
                 .await?;
             let view = tunnel_view(id.clone(), &identity, &endpoint, &link, listener, admission);
             let registration = node.tcp.registry.insert(view, link.close.0.clone())?;
@@ -391,7 +403,14 @@ async fn start_listener(
     let id = TunnelId::generate().map_err(eio)?;
     let port = request.local_port;
     let link = node
-        .open_tcp_link(identity, endpoint, request, &id, pending, cancellation)
+        .open_tcp_link(
+            identity,
+            endpoint,
+            request,
+            &id,
+            Some(pending),
+            cancellation,
+        )
         .await?;
     let address = SocketAddr::new(
         IpAddr::V4(options.bind.unwrap_or(Ipv4Addr::LOCALHOST)),

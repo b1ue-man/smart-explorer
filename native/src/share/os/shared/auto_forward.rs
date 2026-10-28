@@ -68,16 +68,15 @@ impl OriginCheck for SocketOwnerCheck {
         listener: SocketAddr,
         bound: BoundProcess,
     ) -> Result<(), String> {
-        let pid = os_sockets::connection_owner(peer, listener)
-            .map_err(|error| {
-                format!("Herkunft der Verbindung nicht ermittelbar ({error}); abgewiesen")
-            })?
-            .ok_or_else(|| {
-                "Verbindung eines fremden Prozesses abgewiesen (PID nicht ermittelbar)".to_string()
-            })?;
-        if pid != bound.pid {
+        // Only the bound process's own sockets are read (review R3): a flood
+        // of foreign connections costs no walk over every process.
+        let pid = bound.pid;
+        let owned = os_sockets::connection_owned_by(peer, listener, pid).map_err(|error| {
+            format!("Herkunft der Verbindung nicht ermittelbar ({error}); abgewiesen")
+        })?;
+        if !owned {
             return Err(format!(
-                "Verbindung eines fremden Prozesses abgewiesen (PID {pid})"
+                "Verbindung eines fremden Prozesses abgewiesen (nicht PID {pid})"
             ));
         }
         let identity = os_sockets::process_identity(pid)
@@ -128,7 +127,7 @@ pub(crate) fn bind_mapping(
         Ok(listener) => (listener, None),
         Err(error) => {
             let note = match error.kind() {
-                io::ErrorKind::AddrInUse => "Port belegt",
+                io::ErrorKind::AddrInUse => crate::share::tcp_sockets::taken_note(address, port),
                 io::ErrorKind::PermissionDenied => "Port für dieses Konto nicht erlaubt",
                 _ => return Err(error),
             };

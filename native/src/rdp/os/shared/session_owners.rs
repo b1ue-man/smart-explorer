@@ -1,9 +1,6 @@
 // Central native-client ownership for GUI/MCP/Bridge. Only immutable views
 // escape; every process handle remains owned until both child and lease close.
-use super::{
-    AuthenticatedProbe, PeerOpenTarget, RdpSession, SessionView, StartContext, StartRequest,
-    TunnelId,
-};
+use super::{RdpSession, SessionView, TunnelId};
 use std::{
     collections::BTreeMap,
     sync::{
@@ -137,24 +134,6 @@ impl Drop for PendingStart {
         let mut state = owners();
         state.pending = state.pending.saturating_sub(1);
     }
-}
-/// GUI/MCP/Bridge: start and hand over to the central owner (design 2.1
-/// step 7). The probe is consumed; `context.wait` `None` has no limit.
-pub(crate) fn start_owned(
-    target: PeerOpenTarget,
-    probe: AuthenticatedProbe,
-    request: &StartRequest,
-    context: StartContext,
-    pending: impl FnMut(),
-) -> Result<SessionView, String> {
-    let session = RdpSession::start_guarded(target, probe, request, context, pending, || {
-        if owners().closing {
-            Err("RDP-Start wurde durch das Beenden von Smart Explorer abgebrochen.".into())
-        } else {
-            Ok(())
-        }
-    })?;
-    adopt_owned(session)
 }
 pub(crate) fn adopt_owned(mut session: RdpSession) -> Result<SessionView, String> {
     // This guard spans the return from start(), registry insertion and worker

@@ -46,7 +46,7 @@ pub(super) fn tcp_forward(args: &Args) -> Result<CallToolResult, String> {
             let (target, _) = crate::cli::screen::device_target(&args.string("device")?)?;
             let request = start_request(args)?;
             let tunnel = crate::daemon::tcp_start_within(target, request, wait(args)?, || {})?;
-            json!({"tunnel": tunnel})
+            json!({"tunnel": tunnel, "local_access_notice": crate::cli::tcp::LOCAL_ACCESS_NOTICE})
         }
         action => {
             return Err(format!(

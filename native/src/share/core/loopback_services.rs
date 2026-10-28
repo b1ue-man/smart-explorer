@@ -11,7 +11,7 @@ use std::net::{IpAddr, SocketAddr};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum BindScope {
-    /// 127.0.0.0/8, ::1 or ::ffff:127.0.0.0/104 only.
+    /// 127.0.0.1, ::1 or ::ffff:127.0.0.1 only (`scope_of`).
     LoopbackOnly,
     /// 0.0.0.0 or ::, therefore also loopback.
     Wildcard,
@@ -37,9 +37,10 @@ pub(crate) struct ListenerRow {
     pub owner: OwnerClass,
 }
 
-/// One listening port as the host offers it to a steering device.
+/// One listening port as the host offers it to a steering device. Unknown
+/// fields of a later host are ignored (review C2): one new field must not
+/// make the whole device feed update invalid; `validate` bounds the known.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct LoopbackService {
     pub port: u16,
     pub scope: BindScope,
@@ -71,14 +72,18 @@ pub(crate) const MAX_SERVICES: usize = 512;
 /// The binding scope of one listener address; `None` for an address that
 /// is bound to one non-loopback interface and therefore unreachable over
 /// the host's loopback.
+/// The host reaches a service through `127.0.0.1` and `::1` only
+/// (`tcp_sockets::resolve`), so a listener on another loopback address
+/// (systemd-resolved on 127.0.0.53, review B5) is not offered.
 pub(crate) fn scope_of(address: IpAddr) -> Option<BindScope> {
+    use std::net::Ipv4Addr;
     match address {
-        IpAddr::V4(v4) if v4.is_loopback() => Some(BindScope::LoopbackOnly),
+        IpAddr::V4(v4) if v4 == Ipv4Addr::LOCALHOST => Some(BindScope::LoopbackOnly),
         IpAddr::V4(v4) if v4.is_unspecified() => Some(BindScope::Wildcard),
         IpAddr::V6(v6) if v6.is_loopback() => Some(BindScope::LoopbackOnly),
         IpAddr::V6(v6) if v6.is_unspecified() => Some(BindScope::Wildcard),
         IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
-            Some(v4) if v4.is_loopback() => Some(BindScope::LoopbackOnly),
+            Some(v4) if v4 == Ipv4Addr::LOCALHOST => Some(BindScope::LoopbackOnly),
             _ => None,
         },
         IpAddr::V4(_) => None,
@@ -169,17 +174,25 @@ pub(crate) const SE_PROGRAM_STEMS: &[&str] = &[
     "se",
     "smart_explorer",
     "smart_explorer_updater",
+    "smart explorer",
+    "smart explorer updater",
     "se-mcp-launcher",
     "se-share-server",
     "se-agent",
 ];
 
-/// Whether `image` is an installed se program next to `own_exe`.
+/// Whether `image` is an se program: next to `own_exe` or in any other
+/// install location (`~/.local/bin` beside `/usr/local/bin`, review S4).
+/// Treating a foreign program of the same name as se only keeps its port
+/// unshared, never shares one of se's.
 pub(crate) fn is_se_image(image: &std::path::Path, own_exe: &std::path::Path) -> bool {
-    let same_dir = image.parent().is_some() && image.parent() == own_exe.parent();
-    let stem = image
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .map(str::to_ascii_lowercase);
-    same_dir && stem.is_some_and(|stem| SE_PROGRAM_STEMS.contains(&stem.as_str()))
+    let stem = |path: &std::path::Path| {
+        path.file_stem()
+            .and_then(|stem| stem.to_str())
+            .map(str::to_ascii_lowercase)
+    };
+    let own = stem(own_exe);
+    stem(image).is_some_and(|stem| {
+        SE_PROGRAM_STEMS.contains(&stem.as_str()) || Some(&stem) == own.as_ref()
+    })
 }

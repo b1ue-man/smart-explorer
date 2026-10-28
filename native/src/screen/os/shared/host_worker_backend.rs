@@ -112,6 +112,10 @@ pub(crate) struct WorkerBackend {
     /// The host processes of sessions that may control, newest last.
     pub(super) controls: Mutex<Vec<Weak<Mutex<super::WorkerLink>>>>,
     pub(super) families: Mutex<super::family_backend::FamilyPins>,
+    /// The last window enumeration for the family listings of all subscribed
+    /// viewers: one enumeration per feed rate on this host, not one per
+    /// viewer (review R2, threat T-D1).
+    shared_windows: Mutex<Option<(Instant, WindowList)>>,
 }
 
 impl WorkerBackend {
@@ -130,7 +134,26 @@ impl WorkerBackend {
             openh264_dir,
             controls: Mutex::new(Vec::new()),
             families: Mutex::new(super::family_backend::FamilyPins::default()),
+            shared_windows: Mutex::new(None),
         }
+    }
+
+    /// The window list for a family listing, enumerated at most once per
+    /// device-feed rate for every viewer together.
+    fn listing_windows(&self) -> io::Result<WindowList> {
+        let rate = crate::screen::core::feed_host::FEED_RATE;
+        let mut shared = self
+            .shared_windows
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some((at, list)) = shared.as_ref() {
+            if at.elapsed() < rate {
+                return Ok(list.clone());
+            }
+        }
+        let list = self.inner.windows()?;
+        *shared = Some((Instant::now(), list.clone()));
+        Ok(list)
     }
 
     fn codecs(&self) -> CodecRegistry {
@@ -206,7 +229,7 @@ impl ScreenHostBackend for WorkerBackend {
     ) -> io::Result<crate::screen::core::family_protocol::FamilyListing> {
         // Fail explicitly on Wayland/Android rather than deriving app rights
         // from their normal portal/system-selected source lists.
-        let list = self.inner.windows()?;
+        let list = self.listing_windows()?;
         self.families
             .lock()
             .map_err(|_| io::Error::other("family_pin_store_poisoned"))?

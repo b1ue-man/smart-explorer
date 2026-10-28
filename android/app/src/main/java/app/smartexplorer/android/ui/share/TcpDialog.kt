@@ -172,7 +172,8 @@ internal fun TcpDialog(selector: ShareDialog.Tcp, onDismiss: () -> Unit) {
 }
 
 private fun lifetime(expiresAt: Long?): String = when (expiresAt) {
-    null -> "Ohne feste Frist"
+    // The bridge writes "no fixed lifetime" as Long.MAX_VALUE (readable by 0.5.188 apps).
+    null, Long.MAX_VALUE -> "Ohne feste Frist"
     else -> "Endet ${Format.dateTime(expiresAt * 1000)} (ausdrücklich gewählte Frist)"
 }
 private fun destination(value: JsonObject): String {

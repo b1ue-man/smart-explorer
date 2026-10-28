@@ -226,7 +226,6 @@ pub(crate) fn listeners() -> io::Result<Vec<ListenerRow>> {
 }
 
 /// The PID owning the connection socket `local → remote` (design 2.7.1).
-#[allow(dead_code)]
 pub(crate) fn connection_owner(local: SocketAddr, remote: SocketAddr) -> io::Result<Option<u32>> {
     let rows = match local {
         SocketAddr::V4(_) => v4_rows(TCP_TABLE_OWNER_PID_CONNECTIONS)?,
@@ -238,9 +237,28 @@ pub(crate) fn connection_owner(local: SocketAddr, remote: SocketAddr) -> io::Res
         .map(|(_, _, pid)| pid))
 }
 
+/// Whether `pid` owns the connection socket `local → remote` (one table
+/// read, design 2.7.1).
+pub(crate) fn connection_owned_by(
+    local: SocketAddr,
+    remote: SocketAddr,
+    pid: u32,
+) -> io::Result<bool> {
+    Ok(connection_owner(local, remote)? == Some(pid))
+}
+
+/// Root-published se ports exist on Linux only (`proc_net_tcp`). On Windows
+/// a se process of another account whose image this account cannot open
+/// stays unrecognized (documented residual of review S4).
+pub(crate) fn publish_internal_port(_: u16) {}
+
+/// See `publish_internal_port`: none on Windows.
+pub(crate) fn internal_ports() -> std::collections::BTreeSet<u16> {
+    std::collections::BTreeSet::new()
+}
+
 /// The string SID owning the connection socket `local → remote`.
-// Consumer: the viewer's listener admission (work package WP2, design 4.4).
-#[allow(dead_code)]
+// Caller: `auto_forward::SocketOwnerCheck` (design 4.4).
 pub(crate) fn connection_account(
     local: SocketAddr,
     remote: SocketAddr,
@@ -252,7 +270,6 @@ pub(crate) fn connection_account(
 }
 
 /// The account of this process, in the form of `connection_account`.
-#[allow(dead_code)]
 pub(crate) fn own_account() -> io::Result<String> {
     process_sid(std::process::id())
 }

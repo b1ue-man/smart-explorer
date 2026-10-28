@@ -336,8 +336,7 @@ pub(crate) async fn recv_metadata_frame<R: AsyncRead + Unpin>(
 
 /// Viewer side: subscribes a metadata channel to the host's device feed.
 /// Only after the host announced `family_feed_version` in its hello.
-// Consumer: the viewer's device feed (work package WP2, `peer_feed.rs`).
-#[allow(dead_code)]
+// Caller: `peer_feed_link::subscribed`.
 pub(crate) async fn send_subscribe_feed<W: AsyncWrite + Unpin>(writer: &mut W) -> io::Result<()> {
     write_frame(writer, super::wire::SUBSCRIBE_FEED, b"{}").await
 }

@@ -280,8 +280,9 @@ pub(crate) fn feed_of(
     Some(feed)
 }
 
-/// The authenticated window listing of that device's feed (the device page
-/// opens an exact entry of it).
+/// The authenticated window listing of that device's running feed (the
+/// device page opens an exact entry of it); `None` once the feed ended, so
+/// CLI and MCP ask the device itself instead of serving an old list.
 pub(crate) fn families_of(
     snapshot: &crate::daemon::ShareWorkerSnapshot,
     device_id: &str,
@@ -290,7 +291,8 @@ pub(crate) fn families_of(
     snapshot
         .peer_feeds
         .iter()
-        .find(|view| view.device_id == device_id && view.public_key == public_key)?
+        .find(|view| view.device_id == device_id && view.public_key == public_key)
+        .filter(|view| view.live)?
         .families
         .clone()
 }

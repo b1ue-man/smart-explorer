@@ -262,9 +262,11 @@ impl ShareIrohNode {
                     let authority = access.clone();
                     let initial_socket = initial_socket.take();
                     let hold = self.incoming_stream_started(&activity);
+                    let (auth, leases) = (self.auth.clone(), self.access_registry().clone());
                     children.spawn(async move {
                         let _slot = slot;
                         let _hold = hold;
+                        reverify_exposure(&destination, &auth, &leases).await;
                         let result = super::route_protocol::scope(connection.clone(), async {
                             tokio::select! {
                                 biased;
@@ -333,10 +335,32 @@ async fn serve_socket(
     .await??;
     super::tcp_pump::pump(connection, socket.stream(), &mut send, &mut recv, counters).await
 }
+/// Before every further data stream of a running tunnel to a loopback port
+/// (review S5): the service listing is read again and every lease is
+/// rechecked under the auth lock, so a port that changed owner or scope
+/// since the tunnel opened is no longer reached through steering; a TCP
+/// grant that names the port keeps it, as before.
+async fn reverify_exposure(
+    destination: &super::tcp_forward::TcpDestination,
+    auth: &std::sync::Mutex<super::types::ShareAuthState>,
+    leases: &super::access_revocation::AccessLeaseRegistry,
+) {
+    use super::access_constraints::TcpHost;
+    let rdp = super::access_steering::own_rdp_ports().contains(&destination.port.get());
+    if destination.host != TcpHost::Loopback || rdp {
+        return;
+    }
+    refresh_exposed_ports(destination).await;
+    if let Ok(state) = auth.lock() {
+        leases.recheck(&state, super::core::now_secs());
+    }
+}
+
 /// Steering exposes the local services of the last listing (design 4.2).
 /// After a restart, or for a service started since then, that set is stale:
-/// list once more before the decision. A failed listing keeps the old set,
-/// and the admission below refuses with its usual reason.
+/// list once more before the decision. A failed listing exposes nothing
+/// (`tcp_sockets::local_services`), and the admission below refuses with
+/// its usual reason.
 async fn refresh_exposed_ports(destination: &super::tcp_forward::TcpDestination) {
     use super::access_constraints::TcpHost;
     if destination.host == TcpHost::Loopback {

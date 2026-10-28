@@ -116,17 +116,44 @@ fn exit_code(program: &str, encode: bool) -> Result<i32, String> {
         .ok_or_else(|| "setup process ended without exit code".into())
 }
 
+/// The fixed step name of `se rdp host-setup --system` on Windows.
+const WINDOWS_STEP: &str = "windows-rdp";
+
 /// The elevated run through `Start-Process -Verb RunAs`; a declined prompt
-/// becomes exit code 1223.
-fn uac_program(script: &str) -> Result<String, String> {
-    let engine = powershell()?;
-    let engine = engine
-        .to_str()
-        .ok_or_else(|| "powershell path is not Unicode".to_string())?;
-    let arguments = format!(
-        "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {}",
-        encoded(script)
-    );
+/// becomes exit code 1223. The elevated program is Smart Explorer's own
+/// `se.exe` (`se rdp host-setup --system windows-rdp --user-sid <SID>`), so
+/// the UAC prompt names it instead of Windows PowerShell (threat T-R6); only
+/// when no `se.exe` lies next to this program does PowerShell carry the
+/// fixed script itself, as before.
+fn uac_program(script: &str, sid: &str) -> Result<String, String> {
+    let se = crate::updater::installed_cli_path()
+        .ok()
+        .filter(|path| path.is_file());
+    let (program, arguments) = match se {
+        Some(se) => {
+            let se = se
+                .to_str()
+                .ok_or_else(|| "se path is not Unicode".to_string())?
+                .to_string();
+            (
+                se,
+                format!("rdp host-setup --system {WINDOWS_STEP} --user-sid {sid}"),
+            )
+        }
+        None => {
+            let engine = powershell()?;
+            let engine = engine
+                .to_str()
+                .ok_or_else(|| "powershell path is not Unicode".to_string())?
+                .to_string();
+            let arguments = format!(
+                "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {}",
+                encoded(script)
+            );
+            (engine, arguments)
+        }
+    };
+    let engine = program.as_str();
     let launch = format!(
         "{SYSTEM_MODULES}try {{ $p = Start-Process -FilePath {} -Verb RunAs -Wait -WindowStyle Hidden -PassThru \
          -ArgumentList {}; exit $p.ExitCode }} catch {{ $code = 1224; $e = $_.Exception; \
@@ -171,17 +198,15 @@ pub(crate) fn ensure(_probe: &HostProbe, _device_id: Option<&str>) -> SetupState
     if !valid_sid(&context.sid) {
         return SetupState::Failed("invalid_user_sid".into());
     }
-    let script = format!(
-        "{SYSTEM_MODULES}$UserSid={};\n{SETUP_SCRIPT}",
-        quote(&context.sid)
-    );
+    let script = setup_script(&context.sid);
     let code = if context.elevated {
         exit_code(&script, true)
     } else if context.session == 0 {
         // A service without a desktop cannot show the UAC prompt.
         return SetupState::Failed("no_interactive_session".into());
     } else {
-        uac_program(&script).and_then(|launch| exit_code(&launch, false))
+        crate::rdp::host_setup::prompt_follows();
+        uac_program(&script, &context.sid).and_then(|launch| exit_code(&launch, false))
     };
     match code {
         Ok(code) => state_for_exit(code),
@@ -198,7 +223,63 @@ pub(crate) fn rotate_credentials(_: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// The Linux root steps have no Windows counterpart.
-pub(crate) fn run_system_step(step: &str) -> Result<String, String> {
-    Err(format!("Systemschritt {step} gibt es nur unter Linux"))
+/// What decides whether a UAC prompt can appear: the active console
+/// session and its signed-in user (empty at the sign-in screen).
+pub(crate) fn session_facts() -> String {
+    use windows_sys::Win32::System::RemoteDesktop::{
+        WTSFreeMemory, WTSGetActiveConsoleSessionId, WTSQuerySessionInformationW, WTSUserName,
+        WTS_CURRENT_SERVER_HANDLE,
+    };
+    // SAFETY: no arguments; returns a session ID or 0xFFFFFFFF.
+    let console = unsafe { WTSGetActiveConsoleSessionId() };
+    let mut buffer: windows_sys::core::PWSTR = std::ptr::null_mut();
+    let mut bytes = 0u32;
+    // SAFETY: both out pointers refer to live locals; a returned buffer is
+    // freed with WTSFreeMemory below.
+    let queried = unsafe {
+        WTSQuerySessionInformationW(
+            WTS_CURRENT_SERVER_HANDLE,
+            console,
+            WTSUserName,
+            &mut buffer,
+            &mut bytes,
+        )
+    };
+    let mut user = String::new();
+    if queried != 0 && !buffer.is_null() {
+        let units = usize::try_from(bytes / 2).unwrap_or(0);
+        // SAFETY: WTS wrote `bytes` bytes of UTF-16 at `buffer`.
+        let wide = unsafe { std::slice::from_raw_parts(buffer, units) };
+        user = String::from_utf16_lossy(wide)
+            .trim_end_matches('\0')
+            .to_string();
+        // SAFETY: the buffer came from WTSQuerySessionInformationW.
+        unsafe { WTSFreeMemory(buffer.cast()) };
+    }
+    format!("console={console}|user={user}")
+}
+
+/// Windows RDP listens only behind the loopback tunnel (no firewall rule,
+/// design 3.2); nothing se-managed is withdrawn.
+pub(crate) fn withdraw_managed() -> Result<bool, String> {
+    Ok(false)
+}
+
+/// The fixed script with the validated SID in front of it.
+fn setup_script(sid: &str) -> String {
+    format!("{SYSTEM_MODULES}$UserSid={};\n{SETUP_SCRIPT}", quote(sid))
+}
+
+/// `se rdp host-setup --system windows-rdp --user-sid <SID>`, run elevated
+/// through UAC by `uac_program`: the fixed script with that SID; the exit
+/// code is the script's, which `state_for_exit` reads in the caller. The
+/// Linux root steps have no Windows counterpart.
+pub(crate) fn run_system_step(step: &str, user_sid: Option<&str>) -> (String, i32) {
+    let code = match (step, user_sid) {
+        (WINDOWS_STEP, Some(sid)) if valid_sid(sid) => {
+            exit_code(&setup_script(sid), true).unwrap_or(30)
+        }
+        _ => 30,
+    };
+    (format!("state={}", state_for_exit(code)), code)
 }

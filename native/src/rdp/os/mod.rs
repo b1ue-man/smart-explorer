@@ -36,8 +36,14 @@ mod platform {
         pub(crate) fn rotate_credentials(_: &str) -> Result<(), String> {
             Ok(())
         }
-        pub(crate) fn run_system_step(_: &str) -> Result<String, String> {
-            Err("This platform hosts no RDP service".into())
+        pub(crate) fn withdraw_managed() -> Result<bool, String> {
+            Ok(false)
+        }
+        pub(crate) fn session_facts() -> String {
+            String::new()
+        }
+        pub(crate) fn run_system_step(_: &str, _: Option<&str>) -> (String, i32) {
+            ("state=impossible:platform".into(), 1)
         }
     }
     pub(crate) mod clients {

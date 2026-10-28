@@ -177,16 +177,57 @@ fn granted_since_start(
 /// Records the steering devices and starts the RDP self-setup (T1) or the
 /// rotation of se-managed RDP credentials after a revocation (T-R2).
 fn apply_steering_change(granted: bool, revoked: bool, steering: BTreeSet<(String, String)>) {
-    super::access_steering::note_steering_devices(steering);
+    let remaining = !steering.is_empty();
+    let ended = super::access_steering::note_steering_devices(steering) || revoked;
     if cfg!(test) {
         return;
     }
     if granted {
         crate::rdp::host_setup::request(crate::rdp::core::SetupTrigger::Grant);
     }
-    if revoked {
-        crate::rdp::host_setup::rotate_managed_credentials();
+    if ended {
+        crate::rdp::host_setup::coverage_ended(remaining);
     }
+}
+
+/// The access-expiry loop (`node_access::access_expiry`) calls this after
+/// every recheck: a steering grant that ended by its `valid_until` never
+/// passes through `apply`, so its end is noted here at that instant and the
+/// se-managed RDP credentials are rotated (threat T-R2). Returns the next
+/// instant at which a current steering grant ends, for the loop's wake-up.
+pub(super) fn recheck_steering(state: &ShareAuthState, now: i64) -> Option<i64> {
+    let steering = steering_devices(state, now);
+    let remaining = !steering.is_empty();
+    if super::access_steering::note_steering_devices(steering) && !cfg!(test) {
+        crate::rdp::host_setup::coverage_ended(remaining);
+    }
+    next_steering_end(state, now)
+}
+
+/// The earliest `valid_until` after `now` of a grant that steers now.
+pub(super) fn next_steering_end(state: &ShareAuthState, now: i64) -> Option<i64> {
+    use super::access_steering::steers;
+    let ends = |grant: super::access_grant::AccessGrant| {
+        steers(&grant, now)
+            .then_some(grant.valid_until)
+            .flatten()
+            .filter(|end| *end > now)
+    };
+    let direct = state
+        .direct_grants
+        .iter()
+        .filter(|grant| {
+            state.direct_online && grant.state == super::types::DirectGrantState::Accepted
+        })
+        .filter_map(|grant| ends(grant.exec.access_grant()));
+    let rooms = state
+        .rooms
+        .iter()
+        .filter(|room| room.auto_join)
+        .flat_map(|room| room.members.iter())
+        .filter(|member| member.is_admitted())
+        .filter_map(|member| ends(member.exec.access_grant()));
+    direct.chain(rooms).min()
 }
 
 /// Service start (design 3.1): the RDP port list is filled once in the

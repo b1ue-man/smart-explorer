@@ -231,7 +231,10 @@ pub(crate) struct TunnelView {
     pub(crate) bound_target: Option<SocketAddr>,
     pub(crate) listener: Option<SocketAddr>,
     pub(crate) started_at: i64,
-    /// `None` = no fixed lifetime (protocol version 2).
+    /// `None` = no fixed lifetime (protocol version 2). Written as
+    /// `i64::MAX` (review C1): GUIs, scripts and the Android app of 0.5.188
+    /// read a number here; this build reads `i64::MAX` and `null` as `None`.
+    #[serde(with = "no_fixed_end")]
     pub(crate) expires_at: Option<i64>,
     /// Origin rule of a listener; `None` for a target tunnel.
     #[serde(default)]
@@ -241,4 +244,20 @@ pub(crate) struct TunnelView {
     pub(crate) socket_written_bytes: u64,
     pub(crate) closing: bool,
     pub(crate) last_error: Option<String>,
+}
+
+/// `TunnelView.expires_at`: `None` travels as `i64::MAX`.
+mod no_fixed_end {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub(super) fn serialize<S: Serializer>(value: &Option<i64>, out: S) -> Result<S::Ok, S::Error> {
+        out.serialize_i64(value.unwrap_or(i64::MAX))
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        input: D,
+    ) -> Result<Option<i64>, D::Error> {
+        let at = Option::<i64>::deserialize(input)?;
+        Ok(at.filter(|at| *at != i64::MAX))
+    }
 }

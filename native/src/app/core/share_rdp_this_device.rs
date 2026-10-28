@@ -2,8 +2,10 @@
 //! Desktop and which of this device's services they use right now (design
 //! 3.4 and 8 T-L1). The background service sets Remote Desktop up by itself
 //! when a device receives „Bildschirm steuern: Erlauben“; this page reads
-//! the result (the same read-only probe the service uses) and lists every
-//! running target tunnel with a handling to close it.
+//! the result (the same read-only probe the service uses), shows the
+//! service's setup state (an open administrator prompt of Smart Explorer,
+//! a declined or impossible setup) and lists every running target tunnel
+//! with a handling to close it.
 use crate::rdp::HostProbe;
 use crate::share::tcp_forward::{TunnelId, TunnelRole, TunnelView};
 use eframe::egui;
@@ -23,6 +25,8 @@ struct State {
     probing: bool,
     tunnels: Vec<TunnelView>,
     tunnels_at: Option<Instant>,
+    /// The background service's setup state (design 3.4, threat T-R6).
+    setup: Option<crate::rdp::host_setup::SetupStatus>,
     listing: bool,
     error: Option<String>,
 }
@@ -64,6 +68,16 @@ pub(crate) fn this_device(ui: &mut egui::Ui) {
     let mut close = None;
     {
         let state = shared.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(setup) = &state.setup {
+            for line in setup.lines() {
+                ui.horizontal_wrapped(|ui| {
+                    if setup.running {
+                        ui.spinner();
+                    }
+                    ui.label(line);
+                });
+            }
+        }
         match &state.probe {
             Some(probe) => {
                 for line in probe_lines(probe) {
@@ -135,7 +149,21 @@ fn refresh(ctx: &egui::Context, shared: &Shared) {
     if list {
         spawn(ctx, shared, "this-device-tunnels", |state| {
             let result = crate::daemon::tcp_list();
+            let setup = crate::daemon::share_worker_snapshot()
+                .ok()
+                .and_then(|snapshot| snapshot.rdp_setup);
             let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some(setup) = setup {
+                // A setup that just ended shows its new result: probe again.
+                if state
+                    .setup
+                    .as_ref()
+                    .is_some_and(|old| old.state != setup.state)
+                {
+                    state.probe_at = None;
+                }
+                state.setup = Some(setup);
+            }
             state.tunnels_at = Some(Instant::now());
             state.listing = false;
             match result {

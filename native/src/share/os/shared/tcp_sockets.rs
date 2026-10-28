@@ -147,9 +147,12 @@ pub(crate) async fn connect_bound_reusing(
 }
 
 /// Design 2.7 point 4: a loopback connection to one of this host's RDP
-/// ports is forwarded only while the RDP service process that the last probe
-/// proved still owns that listener. A foreign process that took the port
-/// between probe and connection is refused (threat T-R4).
+/// ports is forwarded only while the RDP service process owns that listener.
+/// The owner noted by the last probe is checked first; on a mismatch (the
+/// service restarted with a new PID) the host probes once more and checks
+/// the current owner, so restarts of TermService/xrdp keep RDP and manual
+/// TCP forwards to that port working. A foreign process that took the port
+/// is still refused (threat T-R4).
 async fn verify_rdp_listener(destination: &TcpDestination, admitted: SocketAddr) -> io::Result<()> {
     if destination.host != TcpHost::Loopback || !admitted.ip().is_loopback() {
         return Ok(());
@@ -158,24 +161,38 @@ async fn verify_rdp_listener(destination: &TcpDestination, admitted: SocketAddr)
     if !crate::share::access_steering::own_rdp_ports().contains(&port) {
         return Ok(());
     }
-    let Some(pid) = crate::share::access_steering::own_rdp_listener(port) else {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "RDP-Dienstbesitz des Ports ist nicht belegt; Remote Desktop neu öffnen (neue Probe)",
-        ));
-    };
-    use crate::share::os_sockets;
-    let owned = tokio::task::spawn_blocking(move || os_sockets::listener_owned_by(port, pid))
-        .await
-        .map_err(io::Error::other)??;
-    if owned {
-        Ok(())
-    } else {
-        Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            format!("RDP-Port {port} gehört nicht mehr dem RDP-Dienst (PID {pid}); Verbindung abgewiesen"),
-        ))
+    if owned_by_noted_listener(port).await? {
+        return Ok(());
     }
+    // One fresh probe for all connections that found the same mismatch.
+    static REPROBE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _turn = REPROBE.lock().await;
+    if owned_by_noted_listener(port).await? {
+        return Ok(());
+    }
+    tokio::task::spawn_blocking(crate::rdp::host_setup::refresh_probe)
+        .await
+        .map_err(io::Error::other)?;
+    if owned_by_noted_listener(port).await? {
+        return Ok(());
+    }
+    let owner = crate::share::access_steering::own_rdp_listener(port)
+        .map_or_else(|| "kein RDP-Dienst".to_string(), |pid| format!("PID {pid}"));
+    Err(io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        format!("RDP-Port {port} gehört nicht dem RDP-Dienst ({owner}); Verbindung abgewiesen"),
+    ))
+}
+
+/// Whether the RDP listener the last probe noted for `port` owns it now.
+async fn owned_by_noted_listener(port: u16) -> io::Result<bool> {
+    use crate::share::os_sockets;
+    let Some(pid) = crate::share::access_steering::own_rdp_listener(port) else {
+        return Ok(false);
+    };
+    tokio::task::spawn_blocking(move || os_sockets::listener_owned_by(port, pid))
+        .await
+        .map_err(io::Error::other)?
 }
 
 /// The local services this host currently exposes under steering (design
@@ -183,13 +200,22 @@ async fn verify_rdp_listener(destination: &TcpDestination, admitted: SocketAddr)
 /// without a readable socket table (Android, assumption A7) reports why.
 pub(crate) fn local_services() -> Result<Vec<LoopbackService>, String> {
     use crate::share::{access_steering, loopback_services, os_sockets};
-    let rows = os_sockets::listeners().map_err(|error| {
-        format!("Lauschende Dienste dieses Geräts sind nicht ermittelbar: {error}")
-    })?;
+    let rows = match os_sockets::listeners() {
+        Ok(rows) => rows,
+        Err(error) => {
+            // An unknown listing exposes nothing: the old set never stays in
+            // force for new tunnels (review S5).
+            access_steering::note_exposed_ports([]);
+            return Err(format!(
+                "Lauschende Dienste dieses Geräts sind nicht ermittelbar: {error}"
+            ));
+        }
+    };
     let own_exe = std::env::current_exe().ok();
     let skip = |pid: u32| se_process(pid, own_exe.as_deref());
     let services = loopback_services::services_from(&rows, skip, os_sockets::process_name);
-    let excluded = access_steering::excluded_ports();
+    let mut excluded = access_steering::excluded_ports();
+    excluded.extend(os_sockets::internal_ports());
     access_steering::note_exposed_ports(loopback_services::exposed_ports(&services, &excluded));
     Ok(services
         .into_iter()
@@ -197,8 +223,8 @@ pub(crate) fn local_services() -> Result<Vec<LoopbackService>, String> {
         .collect())
 }
 
-/// se's own listeners (threat T-L3): this process, or an se program next to
-/// the running executable.
+/// se's own listeners (threat T-L3): this process, or any se program whose
+/// image this account can read, wherever it is installed.
 fn se_process(pid: u32, own_exe: Option<&std::path::Path>) -> bool {
     use crate::share::{loopback_services, os_sockets};
     if pid == std::process::id() {
@@ -212,6 +238,36 @@ fn se_process(pid: u32, own_exe: Option<&std::path::Path>) -> bool {
         _ => false,
     }
 }
+
+/// Why `address:port` could not be bound for an automatic mapping. The
+/// device address follows from public identity data, so another account of
+/// this computer can take the port first (review S6): then the stable
+/// address names that account's program, not the device, and says so.
+pub(crate) fn taken_note(address: Ipv4Addr, port: u16) -> &'static str {
+    use crate::share::loopback_services::OwnerClass;
+    use crate::share::os_sockets;
+    let (Ok(own), Ok(rows)) = (os_sockets::own_account(), os_sockets::listeners()) else {
+        return "Port belegt";
+    };
+    let mine = |owner: &OwnerClass| match owner {
+        OwnerClass::NormalUser { uid_or_sid } => *uid_or_sid == own,
+        OwnerClass::System => own == "0",
+        OwnerClass::Unknown => false,
+    };
+    let foreign = rows
+        .iter()
+        .filter(|row| row.local.port() == port)
+        .filter(|row| row.local.ip() == IpAddr::V4(address) || row.local.ip().is_unspecified())
+        .any(|row| !mine(&row.owner));
+    if foreign {
+        TAKEN_BY_OTHER_ACCOUNT
+    } else {
+        "Port belegt"
+    }
+}
+
+const TAKEN_BY_OTHER_ACCOUNT: &str =
+    "Port von einem anderen Konto dieses Computers belegt: dort antwortet nicht das Gerät";
 
 fn access_revoked() -> io::Error {
     io::Error::new(

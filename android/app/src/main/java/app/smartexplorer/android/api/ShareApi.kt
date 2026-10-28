@@ -164,6 +164,8 @@ data class ShareStatus(
     val lanPresence: String = "",
     /** The stored setting „Gekoppelte Geräte im lokalen Netz finden“ (default on). */
     val lanPresenceEnabled: Boolean = true,
+    /** This device's Remote Desktop self-setup lines (`null` from older bridges). */
+    val rdpSetup: String? = null,
     val identity: ShareIdentityInfo = ShareIdentityInfo(),
     val devices: List<ShareDevice> = emptyList(),
     /** This phone as exec host (ShareExecApi.kt). */

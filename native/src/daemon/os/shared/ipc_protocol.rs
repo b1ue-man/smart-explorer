@@ -75,6 +75,11 @@ pub struct ShareWorkerSnapshot {
     /// when reading a worker predating 0.5.189.
     #[serde(default)]
     pub(crate) peer_feeds: Vec<crate::share::peer_feed::PeerFeedView>,
+    /// This host's RDP self-setup: a running setup (open UAC/polkit
+    /// prompt), its last result and failure (design 3.4, threat T-R6).
+    /// Absent when reading a worker predating it.
+    #[serde(default)]
+    pub(crate) rdp_setup: Option<crate::rdp::host_setup::SetupStatus>,
 }
 
 /// Result data of a Share command that the caller needs, returned over IPC

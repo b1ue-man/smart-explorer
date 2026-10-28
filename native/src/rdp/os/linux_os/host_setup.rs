@@ -10,6 +10,12 @@ use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
+/// The polkit path of the root steps (`pkexec <se> rdp host-setup …`).
+#[path = "host_setup_pkexec.rs"]
+mod pkexec;
+pub(crate) use pkexec::pkexec_outcome;
+use pkexec::via_pkexec;
+
 // Pure decisions of the setup adapters for the task suite.
 #[cfg(test)]
 pub(crate) use super::gnome::{credential_input, managed_username};
@@ -338,73 +344,6 @@ fn system_step(step: SystemStep) -> SetupState {
     result.err().unwrap_or(SetupState::Done)
 }
 
-/// Administrator-owned file in administrator-owned directories without
-/// group/world write access (as `client_trust::trusted_system_path`).
-fn root_owned(path: &Path) -> Result<(), String> {
-    use std::os::unix::fs::MetadataExt;
-    let path = std::fs::canonicalize(path).map_err(|e| e.to_string())?;
-    for ancestor in path.ancestors() {
-        let metadata = std::fs::metadata(ancestor).map_err(|e| e.to_string())?;
-        if metadata.uid() != 0 || metadata.mode() & 0o022 != 0 {
-            return Err(format!("{} is not administrator-owned", ancestor.display()));
-        }
-    }
-    Ok(())
-}
-
-/// The result of `pkexec <se> rdp host-setup --system <step>`: the child's
-/// `state=` line when it ran; otherwise pkexec's documented exit codes
-/// (126 dialog dismissed, 127 not authorized or no agent).
-pub(crate) fn pkexec_outcome(code: Option<i32>, stdout: &str, stderr: &str) -> SetupState {
-    let reported = stdout
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("state="))
-        .and_then(|state| SetupState::parse(state).ok());
-    if let Some(state) = reported {
-        return state;
-    }
-    match code {
-        Some(126) => SetupState::Declined,
-        Some(127) if stderr.contains("No authentication agent") => {
-            SetupState::Failed("no_polkit_agent".into())
-        }
-        Some(127) if stderr.contains("Not authorized") => SetupState::Declined,
-        Some(code) => {
-            let detail = last_line(stderr.as_bytes());
-            SetupState::Failed(format!("pkexec_exit_{code}: {detail}"))
-        }
-        None => SetupState::Failed("pkexec_ended_by_signal".into()),
-    }
-}
-
-fn via_pkexec(step: SystemStep) -> SetupState {
-    if !has_display() {
-        return SetupState::Failed("no_interactive_session".into());
-    }
-    let Some(pkexec) = find_tool(&["pkexec"]) else {
-        return SetupState::Impossible("polkit_missing".into());
-    };
-    let se = match crate::updater::installed_cli_path() {
-        Ok(se) => se,
-        Err(error) => return SetupState::Failed(format!("se_path: {error}")),
-    };
-    if root_owned(&se).is_err() {
-        return SetupState::Impossible("se_binary_not_root_owned".into());
-    }
-    let Some(se) = se.to_str() else {
-        return SetupState::Impossible("se_binary_not_root_owned".into());
-    };
-    let args = [se, "rdp", "host-setup", "--system", step.name()];
-    match run_unbounded(&pkexec, &args, &[]) {
-        Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            pkexec_outcome(output.status.code(), &stdout, &stderr)
-        }
-        Err(error) => SetupState::Failed(error),
-    }
-}
-
 fn system(step: SystemStep) -> SetupState {
     if is_root() {
         system_step(step)
@@ -473,20 +412,33 @@ pub(crate) fn issue_credential(
     super::gnome::issue_credential(device_id)
 }
 
-pub(crate) fn rotate_credentials(device_id: &str) -> Result<(), String> {
-    super::gnome::rotate_credential(device_id)
+/// Rotation after a revocation and withdrawal when no device steers any
+/// more concern only the GNOME sharing se manages (xrdp set up by se listens
+/// on loopback only and stays).
+pub(crate) use super::gnome::{
+    rotate_credential as rotate_credentials, withdraw as withdraw_managed,
+};
+
+/// What decides whether this process can show a polkit prompt: root, and
+/// the graphical session of its environment (fixed for the process).
+pub(crate) fn session_facts() -> String {
+    let var = |name: &str| std::env::var(name).unwrap_or_default();
+    format!(
+        "root={}|display={}|wayland={}|desktop={}",
+        is_root(),
+        var("DISPLAY"),
+        var("WAYLAND_DISPLAY"),
+        var("XDG_CURRENT_DESKTOP")
+    )
 }
 
-/// `se rdp host-setup --system <step>`: `Ok("state=done")` or
-/// `Err("state=<state>")`; the CLI prints the line and exits 0 or 1.
-pub(crate) fn run_system_step(step: &str) -> Result<String, String> {
-    let Some(step) = SystemStep::parse(step) else {
-        return Err("state=failed:unknown_system_step".into());
+/// `se rdp host-setup --system <step>`: `state=<state>` and exit code 0
+/// when done, 1 otherwise. Linux steps take no user SID.
+pub(crate) fn run_system_step(step: &str, user_sid: Option<&str>) -> (String, i32) {
+    let state = match (SystemStep::parse(step), user_sid) {
+        (Some(step), None) => system_step(step),
+        _ => SetupState::Failed("unknown_system_step".into()),
     };
-    let state = system_step(step);
-    let line = format!("state={state}");
-    match state {
-        SetupState::Done | SetupState::NotNeeded => Ok(line),
-        _ => Err(line),
-    }
+    let code = i32::from(!matches!(state, SetupState::Done | SetupState::NotNeeded));
+    (format!("state={state}"), code)
 }

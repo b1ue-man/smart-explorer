@@ -172,8 +172,48 @@ pub(crate) fn socket_inodes(pid: u32) -> io::Result<BTreeSet<u64>> {
     Ok(inodes)
 }
 
+/// Inode → PID found by earlier walks, and the inodes no readable process
+/// owned. A socket inode names one socket while it is in the table, so the
+/// device feed's listing (once per second) walks `/proc/*/fd` only for new
+/// listeners instead of every second (review R2).
+type OwnerCache = (BTreeMap<u64, u32>, BTreeSet<u64>);
+static OWNERS: std::sync::Mutex<OwnerCache> =
+    std::sync::Mutex::new((BTreeMap::new(), BTreeSet::new()));
+
 /// Inode → PID for every process whose descriptors this account may read.
 fn inode_owners(wanted: &BTreeSet<u64>) -> BTreeMap<u64, u32> {
+    let mut cache = OWNERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (known, unowned) = &mut *cache;
+    unowned.retain(|inode| wanted.contains(inode));
+    // A cached owner still counts only while that process holds the inode.
+    let mut held: BTreeMap<u32, BTreeSet<u64>> = BTreeMap::new();
+    let mut owners = BTreeMap::new();
+    for (inode, pid) in known.iter().filter(|(inode, _)| wanted.contains(*inode)) {
+        let inodes = held
+            .entry(*pid)
+            .or_insert_with(|| socket_inodes(*pid).unwrap_or_default());
+        if inodes.contains(inode) {
+            owners.insert(*inode, *pid);
+        }
+    }
+    let missing: BTreeSet<u64> = wanted
+        .iter()
+        .filter(|inode| !owners.contains_key(*inode) && !unowned.contains(*inode))
+        .copied()
+        .collect();
+    if !missing.is_empty() {
+        let found = walk_owners(&missing);
+        unowned.extend(missing.iter().filter(|inode| !found.contains_key(*inode)));
+        owners.extend(found);
+    }
+    known.clone_from(&owners);
+    owners
+}
+
+/// One walk over every process's descriptors for `wanted`.
+fn walk_owners(wanted: &BTreeSet<u64>) -> BTreeMap<u64, u32> {
     let mut owners = BTreeMap::new();
     let Ok(entries) = std::fs::read_dir("/proc") else {
         return owners;
@@ -236,10 +276,22 @@ fn same_endpoint(row: SocketAddr, wanted: SocketAddr) -> bool {
     row.port() == wanted.port() && canonical(row.ip()) == canonical(wanted.ip())
 }
 
+/// Whether the connection socket `local → remote` is one of `pid`'s open
+/// descriptors; reads that one process only (design 2.7.1).
+pub(crate) fn connection_owned_by(
+    local: SocketAddr,
+    remote: SocketAddr,
+    pid: u32,
+) -> io::Result<bool> {
+    let Some(row) = connection_row(local, remote)? else {
+        return Ok(false);
+    };
+    Ok(socket_inodes(pid)?.contains(&row.inode))
+}
+
 /// The PID of the process that owns the connection socket `local → remote`;
 /// `None` when this account cannot see that process's descriptors.
-// Consumer: the viewer's RDP listener admission (work package WP2, 2.7.1).
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn connection_owner(local: SocketAddr, remote: SocketAddr) -> io::Result<Option<u32>> {
     let Some(row) = connection_row(local, remote)? else {
         return Ok(None);
@@ -249,8 +301,6 @@ pub(crate) fn connection_owner(local: SocketAddr, remote: SocketAddr) -> io::Res
 }
 
 /// The account (decimal UID) that owns the connection socket.
-// Consumer: the viewer's listener admission (work package WP2, design 4.4).
-#[allow(dead_code)]
 pub(crate) fn connection_account(
     local: SocketAddr,
     remote: SocketAddr,
@@ -259,10 +309,59 @@ pub(crate) fn connection_account(
 }
 
 /// The account of this process, in the form of `connection_account`.
-#[allow(dead_code)]
 pub(crate) fn own_account() -> io::Result<String> {
     // SAFETY: geteuid takes no pointer and has no side effects.
     Ok(unsafe { libc::geteuid() }.to_string())
+}
+
+/// Loopback ports of root se processes (review S4, threat T-L3): a user
+/// service cannot read a root process's descriptors, so such a port would
+/// look like a foreign service. The directory is root-owned and writable by
+/// root alone; one file per port holds the publishing PID.
+const INTERNAL_PORTS_DIR: &str = "/run/smart-explorer/loopback-ports";
+
+/// Owned by root and not writable by group or others.
+fn root_only(path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::symlink_metadata(path)
+        .is_ok_and(|meta| meta.is_dir() && meta.uid() == 0 && meta.mode() & 0o022 == 0)
+}
+
+/// A root se process publishes one of its loopback ports; any other
+/// process publishes nothing (its listeners are readable by a root service
+/// and recognized by their image).
+pub(crate) fn publish_internal_port(port: u16) {
+    // SAFETY: geteuid takes no pointer and has no side effects.
+    if cfg!(target_os = "android") || unsafe { libc::geteuid() } != 0 {
+        return;
+    }
+    let dir = Path::new(INTERNAL_PORTS_DIR);
+    let parent_ok = dir.parent().is_some_and(|parent| {
+        std::fs::create_dir_all(dir).is_ok() && root_only(parent) && root_only(dir)
+    });
+    if parent_ok {
+        let _ = std::fs::write(dir.join(port.to_string()), std::process::id().to_string());
+    }
+}
+
+/// The loopback ports root se processes that still run have published.
+pub(crate) fn internal_ports() -> BTreeSet<u16> {
+    let dir = Path::new(INTERNAL_PORTS_DIR);
+    if !root_only(dir) {
+        return BTreeSet::new();
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return BTreeSet::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let port: u16 = entry.file_name().to_str()?.parse().ok()?;
+            let text = std::fs::read_to_string(entry.path()).ok()?;
+            let pid: u32 = text.trim().parse().ok()?;
+            Path::new(&format!("/proc/{pid}")).exists().then_some(port)
+        })
+        .collect()
 }
 
 /// Field 22 (`starttime`) of `/proc/<pid>/stat`; the command name in
@@ -315,6 +414,7 @@ pub(crate) fn listener_owned_by(port: u16, pid: u32) -> io::Result<bool> {
 
 /// Ports of LISTEN sockets owned by `uid` on loopback or wildcard addresses:
 /// the RDP inventory's proof when the service's descriptors are unreadable.
+// Caller: the Linux RDP inventory (`rdp::os::linux_os::inventory`); Android hosts no RDP.
 #[cfg_attr(target_os = "android", allow(dead_code))]
 pub(crate) fn loopback_listen_ports_of_uid(uid: u32) -> io::Result<Vec<u16>> {
     let mut ports: Vec<_> = table()?

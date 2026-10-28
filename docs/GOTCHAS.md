@@ -775,10 +775,10 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   set up, payload may already use a validated relay path (route state `relay_start`, transfer hint
   "über Relay, Direktweg wird aufgebaut") and moves in place to the first admitted LAN/direct path;
   after that the relay carries payload again only as the marked fallback (`relay_fallback`). An
-  open during the start phase reports "Verbunden", not "Verbunden (Relay)", so the tile does not
-  keep "Relay" after the move (`PeerBackend::transport_status`). A GUI before 0.5.189 cannot parse
-  the phase `relay_start` in a login session's route; from 0.5.189 an unknown phase there reads
-  as no route (`ipc_protocol_login.rs` `tolerant_route`). Code: `native/src/share/core/route_start.rs`.
+  open during the start phase reports "Verbunden (Relay)" (`PeerBackend::transport_status`). On
+  the wire the start phase travels as `relay_fallback` with `relay_start: true`, so a 0.5.188 GUI
+  still parses it; from 0.5.189 an unknown phase reads as no route (`ipc_protocol_login.rs`
+  `tolerant_route`). A TCP tunnel without a fixed end carries `expires_at` = `i64::MAX`. Code: `native/src/share/core/route_start.rs`.
 - Google Drive allows several same-name siblings. `GDriveBackend::list_dir`
   keeps the canonical copy (newest `modifiedTime`, then smaller id) under the
   plain name and renders every further sibling as `Name [drive-id <8-char id

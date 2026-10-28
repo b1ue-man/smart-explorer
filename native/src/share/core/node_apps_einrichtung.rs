@@ -24,7 +24,7 @@ impl ShareIrohNode {
             }
             AppsCommand::RdpProbeV2 => {
                 self.require_inventory(principal)?;
-                let host = probe().await?;
+                let host = probe_v2().await?;
                 let setup = crate::rdp::host_setup::current_state(&host);
                 self.require_inventory(principal)?;
                 Ok(AppsResult::RdpProbeV2 { host, setup })
@@ -35,20 +35,35 @@ impl ShareIrohNode {
                 // installation. `Pending` ends the viewer's first-reply wait;
                 // no fixed limit follows (user rule r7). QUIC detects a dead peer.
                 apps_wire::send(send, &AppsReply::Pending).await?;
-                let setup = tokio::task::spawn_blocking(|| {
-                    crate::rdp::host_setup::ensure_rdp_host(SetupTrigger::PeerRequest)
+                // The device is recorded with the result: after its own
+                // request was declined it cannot raise the prompt again (S3).
+                let device = format!("{}|{}", principal.device_id, principal.public_key);
+                let setup = tokio::task::spawn_blocking(move || {
+                    crate::rdp::host_setup::ensure_rdp_host(SetupTrigger::PeerRequest, Some(device))
                 })
                 .await
                 .map_err(eio)?;
-                let host = probe().await?;
+                let host = probe_v2().await?;
                 self.require_steering(principal)?;
                 Ok(AppsResult::RdpPrepare { setup, host })
             }
             AppsCommand::RdpCredential { service_id } => {
                 self.require_steering(principal)?;
                 let id = service_id.clone();
+                let tunnels = self.tcp.registry.clone();
                 let issued = tokio::task::spawn_blocking(move || {
-                    crate::rdp::host_setup::issue_managed_credential(&id)
+                    // A running session to the service's port keeps the
+                    // credential it was given (review B8).
+                    let in_use = |port: u16| {
+                        tunnels.list().iter().any(|tunnel| {
+                            tunnel.role == crate::share::tcp_forward::TunnelRole::Target
+                                && !tunnel.closing
+                                && tunnel.destination.host
+                                    == crate::share::access_constraints::TcpHost::Loopback
+                                && tunnel.destination.port.get() == port
+                        })
+                    };
+                    crate::rdp::host_setup::issue_managed_credential(&id, in_use)
                 })
                 .await
                 .map_err(eio)?
@@ -110,4 +125,14 @@ async fn probe() -> io::Result<crate::rdp::HostProbe> {
     tokio::task::spawn_blocking(crate::rdp::host_setup::refresh_probe)
         .await
         .map_err(eio)
+}
+
+/// The probe in the v2 form. A host without any RDP service (Windows Home,
+/// Android, a failed inventory) builds its answer with
+/// `HostProbe::unavailable`, which is the v1 form; the v2 reply still says
+/// v2 so the viewer shows the carried `setup` reason (review B2).
+async fn probe_v2() -> io::Result<crate::rdp::HostProbe> {
+    let mut host = probe().await?;
+    host.version = crate::rdp::core::RDP_PROBE_VERSION_V2;
+    Ok(host)
 }

@@ -12,14 +12,12 @@ use clap::{CommandFactory, Parser};
 /// `se` with only its `rdp` command, as `cli::Command::Rdp` nests it.
 #[derive(Parser)]
 #[command(name = "se")]
-#[allow(dead_code)]
 struct SeRoot {
     #[command(subcommand)]
     command: SeCommand,
 }
 
 #[derive(clap::Subcommand)]
-#[allow(dead_code)]
 enum SeCommand {
     Rdp(RdpArgs),
 }
@@ -42,6 +40,8 @@ struct StartRoot {
 /// `--json`; every switch of 0.5.188 still parses and is ignored.
 #[test]
 fn einrichtung_task_cli_rdp_open_needs_only_the_device() {
+    let parsed = SeRoot::try_parse_from(["se", "rdp", "open", "laptop"]).expect("se rdp open");
+    let SeCommand::Rdp(_rdp) = parsed.command;
     let mut root = SeRoot::command();
     let open = root
         .find_subcommand_mut("rdp")

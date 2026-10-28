@@ -332,12 +332,13 @@ impl CertificateSha1 {
         }
         Ok(Self(normalized.to_ascii_uppercase()))
     }
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
     /// The 20 bytes of the digest (`CertHash` is REG_BINARY).
-    #[allow(dead_code)] // Consumer: the viewer's mstsc `CertHash` (WP2).
+    /// Caller: `rdp::os::windows::trust::write_cert_hash` (mstsc only).
+    #[cfg_attr(not(any(windows, test)), allow(dead_code))]
     pub(crate) fn bytes(&self) -> [u8; 20] {
         let mut out = [0u8; 20];
         for (index, byte) in out.iter_mut().enumerate() {
@@ -372,12 +373,6 @@ pub(crate) enum SetupTrigger {
     /// T4: a viewer clicked „Remote Desktop“ (`RdpPrepare`).
     PeerRequest,
 }
-impl SetupTrigger {
-    /// A person acted: a declined or failed setup may ask again.
-    pub(crate) fn user_action(self) -> bool {
-        matches!(self, Self::Grant | Self::PeerRequest)
-    }
-}
 
 /// Result of the host's RDP self-setup; the marker file and the probe v2
 /// field `setup` carry it as `done`, `declined`, `not_needed`,
@@ -410,7 +405,6 @@ impl SetupState {
         })
     }
     /// A later setup may still make Remote Desktop available.
-    #[allow(dead_code)] // Consumers: the viewer's RDP entries (WP2/WP3).
     pub(crate) fn setup_possible(&self) -> bool {
         !matches!(self, Self::Impossible(_))
     }

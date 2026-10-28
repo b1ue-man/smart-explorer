@@ -85,9 +85,8 @@ pub(crate) fn encode_feed_update(update: &FeedUpdate) -> io::Result<Vec<u8>> {
     ))
 }
 
-/// Viewer side: one received `FEED_UPDATE` payload, validated.
-// Consumer: the viewer's device feed (work package WP2, `peer_feed.rs`).
-#[allow(dead_code)]
+/// Viewer side: one received `FEED_UPDATE` payload, validated
+/// (`peer_feed_link::subscribed`).
 pub(crate) fn decode_feed_update(payload: &[u8]) -> io::Result<FeedUpdate> {
     let update: FeedUpdate = super::wire::from_json(payload)?;
     update.validate()?;

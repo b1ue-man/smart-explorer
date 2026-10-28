@@ -36,7 +36,12 @@ pub(crate) enum RemoteRouteGuarantee {
     LocalSenderOnly,
 }
 
+/// On the IPC wire `RelayStart` is written as `relay_fallback` with
+/// `relay_start: true` (review C1): a 0.5.188 GUI reading a newer worker's
+/// login session then parses a known phase, and this build restores
+/// `RelayStart` from the flag.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(from = "RouteStatusWire", into = "RouteStatusWire")]
 pub(crate) struct RouteStatus {
     pub(crate) generation: u64,
     pub(crate) revision: u64,
@@ -47,6 +52,59 @@ pub(crate) struct RouteStatus {
     pub(crate) application_allowed: bool,
     pub(crate) reason: String,
     pub(crate) remote_guarantee: RemoteRouteGuarantee,
+}
+
+#[derive(Serialize, Deserialize)]
+struct RouteStatusWire {
+    generation: u64,
+    revision: u64,
+    pause_epoch: u64,
+    phase: RoutePhase,
+    class: Option<RouteClass>,
+    application_allowed: bool,
+    reason: String,
+    remote_guarantee: RemoteRouteGuarantee,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    relay_start: bool,
+}
+impl From<RouteStatus> for RouteStatusWire {
+    fn from(status: RouteStatus) -> Self {
+        let relay_start = status.phase == RoutePhase::RelayStart;
+        Self {
+            generation: status.generation,
+            revision: status.revision,
+            pause_epoch: status.pause_epoch,
+            phase: if relay_start {
+                RoutePhase::RelayFallback
+            } else {
+                status.phase
+            },
+            class: status.class,
+            application_allowed: status.application_allowed,
+            reason: status.reason,
+            remote_guarantee: status.remote_guarantee,
+            relay_start,
+        }
+    }
+}
+impl From<RouteStatusWire> for RouteStatus {
+    fn from(wire: RouteStatusWire) -> Self {
+        let relay_start = wire.relay_start && wire.phase == RoutePhase::RelayFallback;
+        Self {
+            generation: wire.generation,
+            revision: wire.revision,
+            pause_epoch: wire.pause_epoch,
+            phase: if relay_start {
+                RoutePhase::RelayStart
+            } else {
+                wire.phase
+            },
+            class: wire.class,
+            application_allowed: wire.application_allowed,
+            reason: wire.reason,
+            remote_guarantee: wire.remote_guarantee,
+        }
+    }
 }
 
 impl RouteStatus {

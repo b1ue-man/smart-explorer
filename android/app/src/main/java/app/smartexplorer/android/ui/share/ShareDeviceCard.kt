@@ -82,6 +82,9 @@ internal fun ThisDeviceCard(status: ShareStatus, nowMs: Long, actions: DeviceCar
                 Text(if (status.lanPresenceEnabled) "Erkennung im lokalen Netz eingeschaltet" else "Erkennung im lokalen Netz ausgeschaltet", style = MaterialTheme.typography.bodySmall, modifier = inset)
                 Column(inset) { IdentityDiagnostic("LAN: ${status.lanPresence}\nGerät: ${status.identity.deviceId}") }
             }
+            status.rdpSetup?.takeIf { it.isNotBlank() }?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, modifier = inset)
+            }
             status.lastError?.takeIf { it.isNotBlank() }?.let {
                 Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = inset)
             }
