@@ -17,6 +17,9 @@ pub(crate) enum RoutePhase {
     CheckingDirect,
     Lan,
     Direct,
+    /// Payload over a validated relay while LAN/direct paths are still being
+    /// established (start bridge, `route_start.rs`); moves up in place.
+    RelayStart,
     RelayFallback,
     Paused,
     Offline,
@@ -67,6 +70,7 @@ impl RouteStatus {
             RoutePhase::CheckingDirect => "Direktverbindung wird geprüft",
             RoutePhase::Lan => "LAN/WLAN",
             RoutePhase::Direct => "Direkt",
+            RoutePhase::RelayStart => "über Relay, Direktweg wird aufgebaut",
             RoutePhase::RelayFallback => "über Relay (Rückfall)",
             RoutePhase::Paused => "pausiert wegen Pfadwechsel",
             RoutePhase::Offline => "offline",

@@ -225,14 +225,18 @@ mod screen_ipc_still;
 mod tcp_ipc;
 #[path = "os/shared/tcp_ipc_client.rs"]
 mod tcp_ipc_client;
-pub(crate) use tcp_ipc_client::{tcp_close, tcp_list, tcp_start, tcp_start_within, tcp_status};
+pub(crate) use tcp_ipc_client::{
+    tcp_close, tcp_list, tcp_start, tcp_start_for_process, tcp_start_with, tcp_start_within,
+    tcp_status,
+};
 #[path = "os/shared/apps_ipc.rs"]
 mod apps_ipc;
 #[path = "os/shared/apps_ipc_client.rs"]
 mod apps_ipc_client;
 pub(crate) use apps_ipc_client::{
-    apps_catalog, apps_command, apps_icon, apps_launch, apps_local_grants, apps_rdp_probe,
-    apps_receipt, apps_set_local_grant,
+    apps_catalog, apps_command, apps_icon, apps_launch, apps_local_grants, apps_local_services,
+    apps_rdp_credential, apps_rdp_prepare, apps_rdp_probe, apps_rdp_probe_v2, apps_receipt,
+    apps_set_local_grant,
 };
 #[path = "os/shared/login_ipc.rs"]
 mod login_ipc;
@@ -319,10 +323,9 @@ pub use live::{
     last_catch_up_ms, request_catch_up,
 };
 pub use mount_client::{
-    connect_mount_host, import_mount_recovery, list_mount_recoveries, list_mounts,
-    discard_mount_recovery, reactivate_mount_recovery, retry_mount, save_remove_mount, start_mount,
-    stop_mount,
-    MountHostConfig, MountHostSession,
+    connect_mount_host, discard_mount_recovery, import_mount_recovery, list_mount_recoveries,
+    list_mounts, reactivate_mount_recovery, retry_mount, save_remove_mount, start_mount,
+    stop_mount, MountHostConfig, MountHostSession,
 };
 pub(crate) use mount_client::{ensure_mounted_for, mount_path_for};
 pub use mount_probe_client::probe_share_mount_capabilities;

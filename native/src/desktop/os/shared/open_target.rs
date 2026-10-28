@@ -2,8 +2,11 @@
 //! se window (`--open-location`, F7: the window calls `navigate_to_location`),
 //! device and room pages (`--open-page`), the S4 viewer (`--screen-view
 //! <ziel-json>`, `--screen-grid [--room <id>]`, V5), folders of the S2 device
-//! tree and desktop files through the app's `open_local_path`, and "se
-//! Desktop neu starten" through `se desktop restart` beside the GUI program.
+//! tree and desktop files through the app's `open_local_path`, "se Desktop
+//! neu starten" through `se desktop restart` beside the GUI program, and the
+//! device feed's handlings (design 5.2): a window's family viewer, "Remote
+//! Desktop" through `se rdp open` beside the GUI program and a forwarded web
+//! service in the browser.
 //!
 //! A device whose peer has not granted access yet or whose identity changed
 //! opens its page, never its files (C4.5). Windows start detached with null
@@ -34,6 +37,15 @@ pub(crate) enum OpenRequest {
     ShellFolder(&'static str),
     /// "se Desktop neu starten".
     Restart,
+    /// "Remote Desktop" or one published RemoteApp of a device (design 5.2):
+    /// `se rdp open <device> [--remote-app <alias>]` beside the GUI program,
+    /// which owns the native client until it ends.
+    Rdp {
+        device: String,
+        remote_app: Option<String>,
+    },
+    /// A forwarded web service of a device in the standard browser.
+    Url(String),
 }
 
 /// Starts a process: program and arguments (production: detached).
@@ -103,6 +115,43 @@ pub(crate) fn device_screen(tile: &DeviceTile, control: bool) -> Option<OpenRequ
     }
     let target_json = ScreenTarget::for_tile(tile, control)?.to_arg().ok()?;
     Some(window(StartRequest::ScreenView { target_json }))
+}
+
+/// One open window of a device (design 5.2): its family viewer, with
+/// control when the device lets this one steer, otherwise viewing.
+pub(crate) fn device_window(tile: &DeviceTile, source: &str) -> Option<OpenRequest> {
+    if tile.code == TileCode::IdentityConflict {
+        return None;
+    }
+    let mut target = ScreenTarget::for_tile(tile, tile.feed.control)?;
+    target.source = Some(source.to_string());
+    let target_json = target.to_arg().ok()?;
+    Some(window(StartRequest::ScreenView { target_json }))
+}
+
+/// "Remote Desktop" and each published RemoteApp of a device (design 5.2).
+/// The device is named by its exact relation endpoint, never by a name.
+pub(crate) fn device_rdp(tile: &DeviceTile, remote_app: Option<&str>) -> Option<OpenRequest> {
+    if tile.code == TileCode::IdentityConflict {
+        return None;
+    }
+    Some(OpenRequest::Rdp {
+        device: tile.location.clone(),
+        remote_app: remote_app.map(str::to_string),
+    })
+}
+
+/// The arguments of `se` for a Remote Desktop start from the surface;
+/// `--notify-errors` reports a failure as a system notice, because the
+/// detached process has no window of its own.
+pub(crate) fn rdp_args(device: &str, remote_app: Option<&str>) -> Vec<String> {
+    let mut args = vec!["rdp".to_string(), "open".to_string(), device.to_string()];
+    if let Some(alias) = remote_app {
+        args.push("--remote-app".into());
+        args.push(alias.into());
+    }
+    args.push("--notify-errors".into());
+    args
 }
 
 /// "Bildschirme des Raums": `--screen-grid --room <local room profile ID>`.
@@ -199,6 +248,20 @@ pub(crate) fn launch(
         }
         OpenRequest::ShellFolder(target) => {
             open_path(Path::new(target), false);
+            Ok(())
+        }
+        OpenRequest::Rdp { device, remote_app } => {
+            let cli = cli_beside(gui);
+            if !cli.is_file() {
+                return Err(format!(
+                    "Remote Desktop braucht das Programm {} neben se Desktop.",
+                    cli.display()
+                ));
+            }
+            spawn(&cli, &rdp_args(device, remote_app.as_deref()))
+        }
+        OpenRequest::Url(url) => {
+            open_path(Path::new(url), false);
             Ok(())
         }
         OpenRequest::Restart => {

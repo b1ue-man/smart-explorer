@@ -20,6 +20,9 @@ fn service() -> HostService {
         }],
         evidence: vec!["listener owned by service".into()],
         unavailable_reason: None,
+        certificate_sha1: None,
+        managed_credentials: false,
+        listener_pid: None,
     }
 }
 
@@ -39,33 +42,27 @@ fn request() -> StartRequest {
         client_id: "freerdp3".into(),
         certificate_policy: CertificatePolicy::PeerPinOrNativeTrust,
         remote_app: None,
-        acknowledge_local_access: true,
-        acknowledge_session_effect: true,
-        acknowledge_certificate_dialog: false,
-        lifetime_secs: 900,
     }
 }
 
+/// Design 2.1: no acknowledgement switches any more; only an unprovable pin
+/// policy or an unadvertised service is refused.
 #[test]
 fn batches_rdp_requires_explicit_session_local_access_and_certificate_policy() {
     let probe =
         AuthenticatedProbe::from_authenticated_peer("host-node".into(), report(service())).unwrap();
     assert!(request().validate(&probe).is_ok());
-    for case in 0..5 {
+    for case in 0..2 {
         let mut request = request();
         match case {
-            0 => request.acknowledge_session_effect = false,
-            1 => request.acknowledge_local_access = false,
-            2 => request.certificate_policy = CertificatePolicy::ExactPeerPin,
-            3 => request.certificate_policy = CertificatePolicy::NativeDialog,
-            4 => request.service_id = "unadvertised-service".into(),
+            0 => request.certificate_policy = CertificatePolicy::ExactPeerPin,
+            1 => request.service_id = "unadvertised-service".into(),
             _ => unreachable!(),
         }
         assert!(request.validate(&probe).is_err(), "case {case}");
     }
     let mut native = request();
     native.certificate_policy = CertificatePolicy::NativeDialog;
-    native.acknowledge_certificate_dialog = true;
     assert!(native.validate(&probe).is_ok());
 }
 
@@ -145,7 +142,8 @@ fn batches_rdp_tunnel_is_bound_to_authenticated_peer_exact_service_and_loopback_
         bound_target: None,
         listener: Some("127.0.0.1:40001".parse().unwrap()),
         started_at: 100,
-        expires_at: 1000,
+        expires_at: Some(1000),
+        admission: None,
         active_connections: 0,
         socket_read_bytes: 0,
         socket_written_bytes: 0,

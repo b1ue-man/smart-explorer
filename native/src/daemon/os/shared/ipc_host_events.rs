@@ -47,6 +47,7 @@ impl ShareHost {
             .as_ref()
             .map(|identity| identity.device_id.clone());
         let now = crate::share::core_now_secs();
+        let presence_events = presence_events(&events);
         for event in events {
             use crate::share::ShareEvent as Event;
             if let Event::Discovery(discovery) = &event {
@@ -262,8 +263,54 @@ impl ShareHost {
                 state.last_reload = std::time::Instant::now();
             }
         }
+        peers_present(&state, local_device_id.as_deref(), &presence_events);
         drop(state);
         self.flush_legacy_answers();
+    }
+}
+
+/// The presence events of one drain (design 5.2 feed triggers, 3.1 T3).
+fn presence_events(events: &[crate::share::ShareEvent]) -> Vec<crate::share::ShareEvent> {
+    use crate::share::ShareEvent as Event;
+    events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                Event::DirectAvailable { .. }
+                    | Event::DirectOffline { .. }
+                    | Event::RoomJoined { .. }
+                    | Event::RoomRoster { .. }
+                    | Event::RoomLeft { .. }
+                    | Event::LanPeerSeen { .. }
+                    | Event::LanPeerLost { .. }
+            )
+        })
+        .cloned()
+        .collect()
+}
+
+/// After the profiles are final: the device feeds follow presence and
+/// relations (WP2), and a present device that steers this screen starts the
+/// RDP self-setup in the background (T3, design 3.1).
+fn peers_present(
+    state: &ShareHostState,
+    local_device_id: Option<&str>,
+    events: &[crate::share::ShareEvent],
+) {
+    use crate::share::ShareEvent as Event;
+    crate::share::peer_feed::observe(state.service.as_ref(), &state.profiles, events);
+    let presences = events.iter().flat_map(|event| match event {
+        Event::DirectAvailable { presence, .. } | Event::RoomJoined { presence, .. } => {
+            std::slice::from_ref(presence)
+        }
+        Event::RoomRoster { members, .. } => members.as_slice(),
+        _ => &[],
+    });
+    for presence in presences {
+        if Some(presence.device_id.as_str()) != local_device_id {
+            crate::rdp::host_setup::peer_present(&presence.device_id, &presence.public_key);
+        }
     }
 }
 

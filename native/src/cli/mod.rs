@@ -49,6 +49,7 @@ mod tcp;
 mod transfer;
 mod tree_apply;
 mod tree_destination;
+mod tree_engine;
 mod tree_guard;
 mod tree_observer;
 mod tree_ops;
@@ -326,7 +327,7 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
         Command::Tcp(args) => tcp::run(args),
         Command::Apps(args) => apps::run(args),
         Command::Rdp(args) => rdp::run(args, |target| {
-            crate::daemon::apps_rdp_probe(target, Some(std::time::Duration::from_secs(30)), || {})
+            crate::daemon::apps_rdp_probe(target, None, || {})
         }),
         Command::Login(args) => login::run(args),
         Command::Vault(args) => vault::run(args),

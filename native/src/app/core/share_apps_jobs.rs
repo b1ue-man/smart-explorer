@@ -1,4 +1,7 @@
-//! Bounded asynchronous catalog/icon work and one launch followed only by receipts.
+//! Asynchronous catalog/icon work and one launch followed only by receipts.
+//! No fixed wait (design 7, user rule r7 „keinen random ass default
+//! timeouts“): a request waits until the host answers, the person leaves
+//! the page or the connection is detected dead.
 use super::{store, Shared};
 use crate::{
     apps::{AppId, CatalogApp, LaunchRequest},
@@ -8,7 +11,7 @@ use crate::{
     },
 };
 use eframe::egui;
-use std::{sync::PoisonError, time::Duration};
+use std::sync::PoisonError;
 
 fn run(
     ctx: &egui::Context,
@@ -53,7 +56,7 @@ pub(super) fn catalog(
     target: PeerOpenTarget,
     expected: Option<String>,
 ) {
-    begin(state, "Programmkatalog des Zielgeräts abfragen …");
+    begin(state, "Programmkatalog des Geräts wird geladen …");
     {
         let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
         state.catalog = None;
@@ -61,7 +64,7 @@ pub(super) fn catalog(
         state.page = 0;
     }
     run(ctx, state, move |shared, ctx| {
-        let result = crate::daemon::apps_catalog(target, Some(Duration::from_secs(30)), || {});
+        let result = crate::daemon::apps_catalog(target, None, || {});
         let mut state = shared.lock().unwrap_or_else(PoisonError::into_inner);
         match result {
             Ok(catalog) if expected.as_deref().is_none_or(|d|d==catalog.device_id.as_str())=>state.catalog=Some(catalog),
@@ -84,7 +87,7 @@ pub(super) fn launch(
         let catalog = state
             .catalog
             .as_ref()
-            .ok_or("Zuerst einen aktuellen Programmkatalog abfragen.")?;
+            .ok_or("Der Programmkatalog ist noch nicht geladen.")?;
         let mut bytes = [0u8; 16];
         getrandom::getrandom(&mut bytes).map_err(|e| e.to_string())?;
         let id: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
@@ -120,14 +123,17 @@ pub(super) fn launch(
             state.saved = Some(saved);
             state.receipt = None;
             state.node = None;
-            state.new_request_ack = false;
+            state.opened = None;
+            state.relaunch = None;
+            // An unclear outcome is asked again at once (design 6 F4).
+            state.receipt_round = None;
         }
         let result = crate::daemon::apps_command(
             target.clone(),
             AppsCommand::Launch {
                 request: request.clone(),
             },
-            Some(Duration::from_secs(30)),
+            None,
             || {
                 let mut state = shared.lock().unwrap_or_else(PoisonError::into_inner);
                 state.pending = Some("Warte auf Bestätigung am Zielgerät …".into());
@@ -144,7 +150,7 @@ pub(super) fn launch(
                     AppsCommand::Receipt {
                         request: request.clone(),
                     },
-                    Some(Duration::from_secs(30)),
+                    None,
                     || {},
                 ),
                 Some(error),
@@ -161,17 +167,14 @@ pub(super) fn receipt(
     target: PeerOpenTarget,
     request: LaunchRequest,
 ) {
-    begin(
-        state,
-        "Ergebnis derselben gespeicherten Request-ID abfragen …",
-    );
+    begin(state, "Startergebnis wird geklärt …");
     run(ctx, state, move |shared, ctx| {
         let result = crate::daemon::apps_command(
             target,
             AppsCommand::Receipt {
                 request: request.clone(),
             },
-            Some(Duration::from_secs(30)),
+            None,
             || {},
         );
         settle(&shared, &request, result, None);
@@ -201,6 +204,15 @@ fn settle(
             };
             match receipt {
                 Some(receipt) if receipt.request == *request => {
+                    // A start that waits for the locked host session runs
+                    // again by itself once the session is unlocked (F5).
+                    let locked = state
+                        .catalog
+                        .as_ref()
+                        .is_some_and(|catalog| !catalog.session.unlocked);
+                    if receipt.state == crate::apps::LaunchState::ConsentRequired && locked {
+                        state.relaunch = Some(request.app_id.clone());
+                    }
                     state.node = Some(node);
                     state.receipt = Some(receipt);
                     state.error = None;
@@ -210,7 +222,8 @@ fn settle(
                 }
                 None => {
                     state.error = Some(format!(
-                        "Noch kein Startbeleg für diese Request-ID. Kein automatischer Neustart.{}",
+                        "{}: noch kein Startbeleg; se fragt denselben Beleg erneut, sobald das Gerät wieder erscheint oder sich seine Fenster ändern.{}",
+                        super::CLARIFYING,
                         launch_error
                             .map(|e| format!(" Ursprüngliche Antwort: {e}"))
                             .unwrap_or_default()
@@ -223,7 +236,8 @@ fn settle(
         }
         Err(error) => {
             state.error = Some(format!(
-                "Startergebnis unklar; ausschließlich denselben Beleg erneut abfragen: {error}"
+                "{}; se fragt denselben Beleg erneut, sobald das Gerät wieder erscheint: {error}",
+                super::CLARIFYING
             ))
         }
     }
@@ -283,7 +297,7 @@ pub(super) fn icons(
                         app.clone(),
                         icon.clone(),
                         revision.clone(),
-                        Some(Duration::from_secs(15)),
+                        None,
                     )?
                     .ok_or("Symbol ist am Zielgerät nicht mehr verfügbar.")?;
                     let png = reply.bytes_for(&icon).map_err(|e| e.to_string())?;

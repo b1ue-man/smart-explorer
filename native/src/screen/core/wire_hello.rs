@@ -96,6 +96,11 @@ pub(crate) struct ScreenServerHello {
     pub server_node_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon_version: Option<u8>,
+    /// Device feed (design 5.2): `Some(1)` when this host answers
+    /// `SUBSCRIBE_FEED` on a metadata channel. The viewer's subscription
+    /// frame is its opt-in, so the client hello needs no field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family_feed_version: Option<u16>,
 }
 
 impl ScreenServerHello {
@@ -116,6 +121,7 @@ impl ScreenServerHello {
             server_node_id,
             icon_version: Some(super::app_icon::ICON_VERSION),
             family_version: Some(super::family_protocol::FAMILY_PROTOCOL),
+            family_feed_version: Some(super::wire::FAMILY_FEED_VERSION),
         }
     }
 

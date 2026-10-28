@@ -1,11 +1,16 @@
 //! Owns the exact spawned process handle and the matching daemon TCP lease.
-use crate::rdp::core::{AuthenticatedProbe, ClientCapability, HostService, StartRequest};
+//! The tunnel's listener forwards only this client's connections (PID and
+//! start time, design 2.7.1) and lives as long as the client and its QUIC
+//! connection (design 2.6); the daemon holds its own handle of the process.
+use super::clients::Credentials;
+use crate::rdp::core::{AuthenticatedProbe, ClientCapability, StartRequest};
 use crate::share::{
     tcp_forward::{TunnelId, TunnelView},
     PeerOpenTarget,
 };
 use serde::Serialize;
 use std::{
+    net::Ipv4Addr,
     process::{Child, ExitStatus},
     time::{Duration, Instant},
 };
@@ -17,6 +22,12 @@ pub(crate) use ownership::{
     resume_owned_sessions, shutdown_owned_sessions, start_owned,
 };
 use ownership::{owners, PendingStart};
+#[path = "open_device.rs"]
+mod open_device;
+pub(crate) use open_device::{open_device, open_device_session, open_device_with, OpenOptions};
+#[cfg(test)]
+#[path = "einrichtung_open_task_tests.rs"]
+mod einrichtung_open_task_tests;
 
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct SessionView {
@@ -26,6 +37,16 @@ pub(crate) struct SessionView {
     pub(crate) session_notice: String,
     pub(crate) certificate_sha256: String,
     pub(crate) remote_app: Option<String>,
+}
+
+/// What one start needs besides the probe and the request.
+#[derive(Default)]
+pub(crate) struct StartContext {
+    /// The device address of design 4.3; `None` = 127.0.0.1.
+    pub(crate) bind: Option<Ipv4Addr>,
+    pub(crate) credentials: Option<Credentials>,
+    /// `None` (default): no time limit for the host's answer (design 2.6).
+    pub(crate) wait: Option<Duration>,
 }
 
 pub(crate) struct RdpSession {
@@ -46,91 +67,87 @@ impl RdpSession {
 
     /// GUI owns this object; CLI waits with it; a daemon may move it into its
     /// existing job owner. Dropping the owner closes both service and client.
+    /// `probe` is consumed: one authenticated probe serves one start.
     pub(crate) fn start(
         target: PeerOpenTarget,
-        probe: &AuthenticatedProbe,
+        probe: AuthenticatedProbe,
         request: &StartRequest,
-        wait: Duration,
+        context: StartContext,
         pending: impl FnMut(),
     ) -> Result<Self, String> {
-        Self::start_guarded(target, probe, request, wait, pending, || Ok(()))
+        Self::start_guarded(target, probe, request, context, pending, || Ok(()))
     }
     pub(crate) fn start_guarded(
         target: PeerOpenTarget,
-        probe: &AuthenticatedProbe,
+        probe: AuthenticatedProbe,
         request: &StartRequest,
-        wait: Duration,
+        context: StartContext,
         pending: impl FnMut(),
         admit_client: impl FnOnce() -> Result<(), String>,
     ) -> Result<Self, String> {
         let registration = PendingStart::begin()?;
-        if wait.is_zero() || wait > Duration::from_secs(300) {
-            return Err("RDP setup wait must be 1..300 seconds".into());
-        }
-        let service = request.validate(probe)?;
+        let service = request.validate(&probe)?.clone();
         let client = super::clients::check_client(request)?;
-        let tunnel_request = request.tunnel_request(service)?;
-        let tunnel = crate::daemon::tcp_start_within(target, tunnel_request, Some(wait), pending)?;
-        let closing = { owners().closing };
-        let opened = if closing {
-            Err("RDP-Start wurde durch das Beenden von Smart Explorer abgebrochen.".into())
-        } else {
-            admit_client()
-                .and_then(|()| Self::on_tunnel(probe, request, service, client, tunnel.clone()))
-        };
-        match opened {
-            Ok(mut session) => {
-                session.registration = Some(registration);
-                Ok(session)
-            }
-            Err(error) => match crate::daemon::tcp_close(tunnel.id.clone()) {
-                Ok(_) => Err(error),
-                Err(close) => {
-                    owners()
-                        .cleanup
-                        .insert(tunnel.id.as_str().into(), tunnel.id.clone());
-                    Err(format!(
-                        "{error}; TCP lease {} cleanup failed: {close}",
-                        tunnel.id.as_str()
-                    ))
-                }
-            },
+        StartRequest::require_client_evidence(&service, &client)?;
+        let credentials = context.credentials.as_ref();
+        if credentials.is_none() && super::clients::needs_credential_input(&client.id) {
+            return Err(super::clients::NEEDS_SDL.into());
         }
-    }
-    fn on_tunnel(
-        probe: &AuthenticatedProbe,
-        request: &StartRequest,
-        service: &HostService,
-        client: ClientCapability,
-        tunnel: TunnelView,
-    ) -> Result<Self, String> {
-        // Approval may have waited: recheck the inventory age and every binding.
-        request.validate(probe)?;
-        probe.check_tunnel(service, &tunnel)?;
+        let tunnel_request = request.tunnel_request(&service)?;
+        // Dropping `unbound` on any error below ends its IPC stream; the
+        // daemon then closes the tunnel (no half state, design 9.3).
+        let unbound = crate::daemon::tcp_start_for_process(
+            target,
+            tunnel_request,
+            context.bind,
+            context.wait,
+            pending,
+        )?;
+        if owners().closing {
+            return Err("RDP-Start wurde durch das Beenden von Smart Explorer abgebrochen.".into());
+        }
+        admit_client()?;
+        let tunnel = unbound.tunnel().clone();
+        probe.check_tunnel(&service, &tunnel)?;
         let listener = tunnel
             .listener
             .ok_or_else(|| "RDP listener is missing".to_string())?;
         let certificate = service
             .certificate_sha256
             .as_ref()
-            .ok_or_else(|| "RDP fingerprint disappeared from immutable inventory".to_string())?;
-        let client_process = super::clients::launch(request, service, listener)?;
-        let child = client_process.child;
+            .ok_or_else(|| "RDP fingerprint disappeared from immutable inventory".to_string())?
+            .as_str()
+            .to_string();
+        let trust = super::clients::prepare_trust(listener, &service, credentials)?;
+        let client_process = super::clients::launch(request, &service, listener, credentials)?;
+        let mut child = client_process.child;
+        let pid = child.id();
+        let bound = crate::share::os_sockets::process_identity(pid)
+            .map_err(|error| format!("RDP-Client {pid} nicht prüfbar: {error}"))
+            .and_then(|identity| unbound.bind(pid, identity.started));
+        let tunnel = match bound {
+            Ok(tunnel) => tunnel,
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("{error}; RDP-Client beendet"));
+            }
+        };
         let view = SessionView {
-            process_id: child.id(),
+            process_id: pid,
             tunnel,
             client,
             session_notice: service.session_mode.notice().into(),
-            certificate_sha256: certificate.as_str().into(),
+            certificate_sha256: certificate,
             remote_app: request.remote_app.clone(),
         };
         Ok(Self {
             child,
-            _client_resources: client_process.resources,
+            _client_resources: Box::new((client_process.resources, trust)),
             view,
             tunnel_closed: false,
             finished: false,
-            registration: None,
+            registration: Some(registration),
         })
     }
     pub(crate) fn try_wait(&mut self) -> Result<Option<ExitStatus>, String> {

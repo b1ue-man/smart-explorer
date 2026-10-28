@@ -167,11 +167,7 @@ async fn dispatch(
         "rdp" => {
             blocking(move || {
                 super::rdp_tool::rdp(&Args::new(owned.as_ref()), |target| {
-                    crate::daemon::apps_rdp_probe(
-                        target,
-                        Some(std::time::Duration::from_secs(30)),
-                        || {},
-                    )
+                    crate::daemon::apps_rdp_probe(target, None, || {})
                 })
             })
             .await

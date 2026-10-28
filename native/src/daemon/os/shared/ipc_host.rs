@@ -267,6 +267,8 @@ impl ShareHost {
         let result = self.reload_inputs_locked();
         if let Ok(mut state) = self.state.lock() {
             state.reload_gate.reloaded(inputs, result.is_err());
+            // Feeds follow the reloaded relations and the (re)started service.
+            crate::share::peer_feed::observe(state.service.as_ref(), &state.profiles, &[]);
         }
         result
     }

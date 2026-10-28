@@ -151,6 +151,7 @@ fn tile(target: PeerOpenTarget, name: &str, code: TileCode) -> DeviceTile {
         device_id: None,
         folder_path: None,
         open,
+        feed: Default::default(),
     }
 }
 

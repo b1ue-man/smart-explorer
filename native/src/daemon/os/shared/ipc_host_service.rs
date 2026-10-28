@@ -233,6 +233,8 @@ fn share_service_requested(
 
 pub(in crate::daemon) fn stop_service_locked(state: &mut ShareHostState) -> Result<(), String> {
     if let Some(service) = state.service.take() {
+        // Device feeds and their mappings hold this service's endpoint.
+        crate::share::peer_feed::stop_all();
         super::end_tracked_offers(state);
         service.cmd(crate::share::ShareCmd::Stop)?;
     }

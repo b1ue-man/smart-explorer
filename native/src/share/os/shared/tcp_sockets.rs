@@ -2,6 +2,7 @@
 //! loopback-only listeners. No target hostname reaches TcpStream::connect.
 use crate::share::access_constraints::TcpHost;
 use crate::share::access_revocation::AccessHandle;
+use crate::share::loopback_services::LoopbackService;
 use crate::share::tcp_forward::{TcpDestination, TcpStart};
 use std::{
     io,
@@ -113,6 +114,7 @@ pub(crate) async fn connect_bound_reusing(
             }
             None => None,
         };
+        verify_rdp_listener(destination, admitted).await?;
         let stream = match retained {
             Some(stream) => stream,
             None => tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(admitted))
@@ -141,6 +143,73 @@ pub(crate) async fn connect_bound_reusing(
         biased;
         () = revoked_signal(&mut revoked) => Err(access_revoked()),
         result = connect => result,
+    }
+}
+
+/// Design 2.7 point 4: a loopback connection to one of this host's RDP
+/// ports is forwarded only while the RDP service process that the last probe
+/// proved still owns that listener. A foreign process that took the port
+/// between probe and connection is refused (threat T-R4).
+async fn verify_rdp_listener(destination: &TcpDestination, admitted: SocketAddr) -> io::Result<()> {
+    if destination.host != TcpHost::Loopback || !admitted.ip().is_loopback() {
+        return Ok(());
+    }
+    let port = admitted.port();
+    if !crate::share::access_steering::own_rdp_ports().contains(&port) {
+        return Ok(());
+    }
+    let Some(pid) = crate::share::access_steering::own_rdp_listener(port) else {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "RDP-Dienstbesitz des Ports ist nicht belegt; Remote Desktop neu öffnen (neue Probe)",
+        ));
+    };
+    use crate::share::os_sockets;
+    let owned = tokio::task::spawn_blocking(move || os_sockets::listener_owned_by(port, pid))
+        .await
+        .map_err(io::Error::other)??;
+    if owned {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("RDP-Port {port} gehört nicht mehr dem RDP-Dienst (PID {pid}); Verbindung abgewiesen"),
+        ))
+    }
+}
+
+/// The local services this host currently exposes under steering (design
+/// 4.1/4.2) and the refreshed exposed-port set of `access_steering`. An OS
+/// without a readable socket table (Android, assumption A7) reports why.
+pub(crate) fn local_services() -> Result<Vec<LoopbackService>, String> {
+    use crate::share::{access_steering, loopback_services, os_sockets};
+    let rows = os_sockets::listeners().map_err(|error| {
+        format!("Lauschende Dienste dieses Geräts sind nicht ermittelbar: {error}")
+    })?;
+    let own_exe = std::env::current_exe().ok();
+    let skip = |pid: u32| se_process(pid, own_exe.as_deref());
+    let services = loopback_services::services_from(&rows, skip, os_sockets::process_name);
+    let excluded = access_steering::excluded_ports();
+    access_steering::note_exposed_ports(loopback_services::exposed_ports(&services, &excluded));
+    Ok(services
+        .into_iter()
+        .filter(|service| loopback_services::exposable(service, &excluded))
+        .collect())
+}
+
+/// se's own listeners (threat T-L3): this process, or an se program next to
+/// the running executable.
+fn se_process(pid: u32, own_exe: Option<&std::path::Path>) -> bool {
+    use crate::share::{loopback_services, os_sockets};
+    if pid == std::process::id() {
+        return true;
+    }
+    let image = os_sockets::process_identity(pid)
+        .ok()
+        .and_then(|identity| identity.image);
+    match (image, own_exe) {
+        (Some(image), Some(own_exe)) => loopback_services::is_se_image(&image, own_exe),
+        _ => false,
     }
 }
 

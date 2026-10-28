@@ -13,6 +13,7 @@ Speicheranalyse – als Desktop-App (Windows, Linux; Rust + egui) und als Androi
 **Kernprinzip der Verbindungen zwischen Geräten** (Nutzer, 2026-10-24: „so wenig wie möglich zwischen A und B, server als router nur und relay als fallback“):
 - Daten laufen direkt zwischen den Geräten. Das gilt für Dateien, Laufwerke, Sync, Befehle und Bildschirm.
 - Die Reihenfolge ist: gleiches LAN oder WLAN, dann die übrigen Direktwege, erst danach das Relay als sichtbar gekennzeichneter Rückfall.
+- Startbrücke (Z-R2, entschieden 2026-10-28 auf „entscheide selbst“ des Nutzers für „maximal möglicher Datentransferspeed von Anfang zu Ende“): Solange LAN- und Direktwege noch aufgebaut werden, dürfen Nutzdaten schon über einen geprüften Relay-Pfad laufen. Sie wechseln ohne Neustart auf den ersten zugelassenen LAN- oder Direktweg; danach trägt das Relay Nutzdaten nur noch als gekennzeichneter Rückfall. Routenzustand `relay_start`, Code `native/src/share/core/route_start.rs`.
 - Der Share-Server vermittelt nur Anwesenheit und Adressen.
 - Stand und Lücken: `docs/plaene/2026-10-22-fernzugriff-desktop/machbarkeit.md`, Abschnitt P28; Brettzeile `DIREKT-ZUERST`.
 

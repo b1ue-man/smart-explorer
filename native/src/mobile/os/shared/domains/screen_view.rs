@@ -7,6 +7,7 @@
 //!
 //! - `screen.devices {roomId?}` → `{"devices":[…]}` (profiles and the last
 //!   `probe`; `null` = unknown).
+//! - `screen.feed {deviceId, publicKey}` → the device feed (design 5.2).
 //! - `screen.probe {relation, relationId, deviceId}` and `screen.windows
 //!   {…}` answer like `ProbeReport` and `WindowList` with camelCase keys.
 //! - `screen.viewOpen {…, mode, source?, decoders, displayWidth,
@@ -42,6 +43,8 @@ use crate::share::{PeerOpenTarget, ShareProfiles};
 
 #[path = "screen_family.rs"]
 mod family;
+#[path = "screen_feed.rs"]
+mod feed;
 #[path = "screen_icons.rs"]
 mod icons;
 #[path = "screen_view_json.rs"]
@@ -68,6 +71,7 @@ pub(super) fn handle(method: &str, args: &Value) -> Option<Result<Value, ApiErro
     }
     Some(match method {
         "screen.devices" => Ok(devices(args)),
+        "screen.feed" => feed::device(args),
         "screen.probe" => probe(args),
         "screen.windows" => windows(args),
         "screen.icon" => icon(args),

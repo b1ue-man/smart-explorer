@@ -1,6 +1,7 @@
 //! Context menus of the surface and the handlings behind them (DSK-M4,
 //! C4.7): device (Öffnen, Im Explorer/Dateimanager öffnen, Bildschirm
-//! ansehen, Bildschirm steuern, Geräteseite), room (Mitglieder, Bildschirme
+//! ansehen, Bildschirm steuern, Geräteseite, Programme, from the device feed
+//! Remote Desktop, RemoteApps, its open windows and services), room (Mitglieder, Bildschirme
 //! des Raums, Raumseite), vault and the other tiles (Öffnen), desktop file
 //! (Öffnen, Öffnen mit, Umbenennen, In Papierkorb, Ausschneiden, Kopieren),
 //! every tile (Auf Bildschirm verschieben) and the surface (Neuer Ordner,
@@ -146,10 +147,64 @@ fn device_menu(ui: &mut egui::Ui, tile: &DeviceTile, cx: &mut Cx<'_>) {
         share_apps_ui::open_surface(ui.ctx(), tile.target.clone(), tile.name.clone());
         ui.close_menu();
     }
+    if let Some(request) = feed_menu(ui, tile) {
+        chosen = Some(request);
+    }
     if let Some(request) = chosen {
         cx.actions.open(request);
         ui.close_menu();
     }
+}
+
+/// The device feed's handlings (design 5.2): "Remote Desktop" and each
+/// published RemoteApp while the device reports Remote Desktop startable or
+/// its setup possible, each open window (its viewer opens with control when
+/// the device lets this one steer) and each forwarded service.
+fn feed_menu(ui: &mut egui::Ui, tile: &DeviceTile) -> Option<OpenRequest> {
+    let mut chosen = None;
+    for entry in tile.feed.tile_rdp_entries() {
+        if ui.button(entry.label.as_str()).clicked() {
+            chosen = open_target::device_rdp(tile, entry.remote_app.as_deref());
+        }
+    }
+    if !tile.feed.windows.is_empty() {
+        ui.menu_button(format!("Fenster ({})", tile.feed.windows.len()), |ui| {
+            for window in &tile.feed.windows {
+                let label = format!("{} – {}", window.app, window.title);
+                if ui.button(label).clicked() {
+                    chosen = open_target::device_window(tile, &window.source);
+                    ui.close_menu();
+                }
+            }
+        });
+    }
+    if !tile.feed.services.is_empty() {
+        ui.menu_button(format!("Dienste ({})", tile.feed.services.len()), |ui| {
+            for service in &tile.feed.services {
+                let target = service.target();
+                let clicked = ui
+                    .add_enabled(target.is_some(), egui::Button::new(service.line()))
+                    .on_hover_text(if service.url.is_some() {
+                        "Im Browser öffnen"
+                    } else {
+                        "Adresse kopieren"
+                    })
+                    .clicked();
+                match target {
+                    Some(url) if clicked && service.url.is_some() => {
+                        chosen = Some(OpenRequest::Url(url));
+                        ui.close_menu();
+                    }
+                    Some(address) if clicked => {
+                        ui.ctx().copy_text(address);
+                        ui.close_menu();
+                    }
+                    _ => {}
+                }
+            }
+        });
+    }
+    chosen
 }
 
 fn room_menu(ui: &mut egui::Ui, room: &RoomGroup, cx: &mut Cx<'_>) {

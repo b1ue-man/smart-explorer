@@ -58,6 +58,12 @@ pub(crate) const FAMILIES: u8 = 41;
 pub(crate) const FAMILY_SNAPSHOT: u8 = 42;
 pub(crate) const FAMILY_OPERATION_RESULT: u8 = 43;
 pub(crate) const FAMILY_INPUT_RESULT: u8 = 44;
+// Device feed (0.5.189, design 5.2): the viewer subscribes once on a
+// metadata channel; the host then sends the full state on every change.
+pub(crate) const SUBSCRIBE_FEED: u8 = 45;
+pub(crate) const FEED_UPDATE: u8 = 46;
+/// Version of the device feed a host announces in `SERVER_HELLO`.
+pub(crate) const FAMILY_FEED_VERSION: u16 = 1;
 
 /// Control frames except `WINDOWS` and the separately bounded icon frames;
 /// the 64 KiB of `MAX_HANDSHAKE_BYTES`
@@ -76,7 +82,9 @@ pub(crate) fn supports_version(version: u16) -> bool {
 /// The byte limit of the payload of `tag`.
 pub(crate) fn tag_limit(tag: u8) -> usize {
     match tag {
-        WINDOWS | FAMILIES | FAMILY_SNAPSHOT | FAMILY_OPERATION_RESULT => MAX_WINDOWS_BYTES,
+        WINDOWS | FAMILIES | FAMILY_SNAPSHOT | FAMILY_OPERATION_RESULT | FEED_UPDATE => {
+            MAX_WINDOWS_BYTES
+        }
         ICON_REQUEST => super::app_icon::MAX_ICON_REQUEST_BYTES,
         ICON_REPLY => super::app_icon::MAX_ICON_REPLY_BYTES,
         PRESENTED => 16,

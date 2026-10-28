@@ -55,12 +55,25 @@ pub(super) fn unit(name: &str, user: bool, executable: &str) -> Result<Unit, Str
 
 /// Match listening socket inodes to this process's own descriptors. A port
 /// merely found somewhere on the machine is never evidence of this service.
+/// Without access to another account's descriptors (a user service probing
+/// root's xrdp, design 3.3) a LISTEN socket of the service's own UID on a
+/// loopback or wildcard address is the proof.
 pub(super) fn listeners(pid: u32) -> Result<Vec<u16>, String> {
     if pid == 0 {
         return Ok(Vec::new());
     }
-    let fds = std::fs::read_dir(format!("/proc/{pid}/fd"))
-        .map_err(|e| format!("Cannot inspect RDP service sockets: {e}"))?;
+    let fds = match std::fs::read_dir(format!("/proc/{pid}/fd")) {
+        Ok(fds) => fds,
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            use std::os::unix::fs::MetadataExt;
+            let uid = std::fs::metadata(format!("/proc/{pid}"))
+                .map_err(|e| format!("Cannot identify the RDP service account: {e}"))?
+                .uid();
+            return crate::share::os_sockets::loopback_listen_ports_of_uid(uid)
+                .map_err(|e| format!("Cannot read the TCP listener table: {e}"));
+        }
+        Err(error) => return Err(format!("Cannot inspect RDP service sockets: {error}")),
+    };
     let mut inodes = BTreeSet::new();
     for entry in fds.take(65536) {
         if let Ok(target) = entry
@@ -120,6 +133,9 @@ pub(super) fn service(id: &str, kind: HostKind, mode: SessionMode) -> HostServic
         remote_apps: Vec::new(),
         evidence: Vec::new(),
         unavailable_reason: None,
+        certificate_sha1: None,
+        managed_credentials: false,
+        listener_pid: None,
     }
 }
 pub(super) fn attach_listener(service: &mut HostService, unit: &Unit, expected: Option<u16>) {
@@ -144,6 +160,8 @@ pub(super) fn attach_listener(service: &mut HostService, unit: &Unit, expected: 
             ));
             if service.port.is_none() {
                 service.unavailable_reason = Some("The configured RDP port cannot be bound to one unambiguous process-owned listener".into());
+            } else {
+                service.listener_pid = Some(unit.pid);
             }
         }
         Err(error) => service.unavailable_reason = Some(error),

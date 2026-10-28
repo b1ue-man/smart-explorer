@@ -58,6 +58,7 @@ pub(crate) mod catalog_entries;
 pub(crate) mod codec_registry;
 pub(crate) mod control_sender;
 pub(crate) mod decoded_frame;
+pub(crate) mod feed_host;
 pub(crate) mod frame_budget;
 pub(crate) mod frame_memory;
 pub(crate) mod frame_protocol;

@@ -1,5 +1,8 @@
 //! One finite, platform-independent LAN → direct → relay decision per generation.
 //! Clock and transport facts are inputs; no address hint grants identity or rights.
+//! A validated relay carries payload from the start until the first LAN/direct
+//! admission (`route_start.rs`); the finite direct phase only decides when the
+//! relay becomes the marked fallback.
 use super::route_diagnostics::{milliseconds, RouteBudget};
 use super::route_state::{RouteClass, RoutePhase, RouteStatus};
 use std::collections::BTreeSet;
@@ -9,6 +12,9 @@ const MAX_FROZEN_CANDIDATES: usize = 128;
 #[cfg(test)]
 #[path = "batches_route_task_tests.rs"]
 pub(crate) mod batches_route_task_tests;
+
+#[path = "route_start.rs"]
+pub(super) mod route_start;
 
 #[derive(Clone, Debug)]
 pub(crate) struct RouteCandidate {
@@ -43,6 +49,7 @@ pub(crate) struct RoutePolicy {
     initial_round: Option<String>,
     chosen: Option<String>,
     had_route: bool,
+    start: route_start::StartPhase,
 }
 
 impl RoutePolicy {
@@ -66,6 +73,7 @@ impl RoutePolicy {
             initial_round: None,
             chosen: None,
             had_route: false,
+            start: route_start::StartPhase::default(),
         }
     }
 
@@ -140,40 +148,15 @@ impl RoutePolicy {
                 || (!paths.iter().any(|path| path.validation_pending)
                     && self.round_completed(now_ms, round)));
         let lan_done = self.frozen && (self.lan_candidates.is_empty() || direct_done);
-        let rank = |class| match class {
-            RouteClass::Lan => 0,
-            RouteClass::Direct => 1,
-            RouteClass::Relay => 2,
+        let progress = route_start::Progress {
+            lan_done,
+            direct_done,
+            expired,
         };
-        let best = paths
-            .iter()
-            .filter(|p| {
-                p.validated
-                    && match p.class {
-                        RouteClass::Lan => true,
-                        RouteClass::Direct => lan_done,
-                        RouteClass::Relay => direct_done,
-                    }
-            })
-            .min_by_key(|p| (rank(p.class), p.rtt.unwrap_or(Duration::MAX), p.key.clone()));
-        if let Some(path) = best {
-            let reason = match path.class {
-                RouteClass::Lan => "Validierter on-link-Pfad über physisches LAN/WLAN-Interface",
-                RouteClass::Direct => "LANversuche beendet; validierter Direktpfad",
-                RouteClass::Relay if expired => "Absolute Direktfrist abgelaufen; im aktuellen Versuch kein validierter Direktpfad",
-                RouteClass::Relay => "Initiale Proberunde, Antwortfrist und Pfadvalidierung beendet; kein validierter Direktpfad",
-            };
-            self.set_state(
-                match path.class {
-                    RouteClass::Lan => RoutePhase::Lan,
-                    RouteClass::Direct => RoutePhase::Direct,
-                    RouteClass::Relay => RoutePhase::RelayFallback,
-                },
-                Some(path.class),
-                true,
-                reason,
-            );
-            self.chosen = Some(path.key.clone());
+        if let Some(choice) = self.start.choose(paths, progress) {
+            let key = choice.path.key.clone();
+            self.set_state(choice.phase, Some(choice.path.class), true, choice.reason);
+            self.chosen = Some(key);
             self.had_route = true;
         } else {
             let phase = if direct_done {
@@ -216,6 +199,7 @@ impl RoutePolicy {
     }
 
     pub(crate) fn gate_rejected(&mut self) {
+        self.start.rejected();
         self.chosen = None;
         self.set_state(
             RoutePhase::Paused,

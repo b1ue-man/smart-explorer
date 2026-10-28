@@ -1,5 +1,7 @@
 //! Bridge RDP adapter. Android reports its absent host/client-verification
-//! capability explicitly; it never substitutes an unverified app URI.
+//! capability explicitly; it never substitutes an unverified app URI. On a
+//! platform with an RDP program `rdp.open` needs only the device (design
+//! 2.9, user rule r3).
 use super::args::{invalid, opt_str, str_arg};
 use crate::{
     mobile::ApiError,
@@ -107,56 +109,39 @@ fn target(args: &Value) -> Result<PeerOpenTarget, ApiError> {
         _ => Err(invalid("RDP relation must be direct or room")),
     }
 }
+/// The Bridge refusal without a usable local RDP program (Android has none,
+/// design 2.4); no TCP port is opened and no app link is started.
+pub(crate) const NO_CLIENT: &str = "No installed local RDP client exposes a documented certificate-verification and credential-entry adapter in this app context; no TCP port was opened";
+
+/// `rdp.open`: only `deviceId`/`publicKey` (and an optional `remoteApp`).
+/// Relation, probe, host setup, service, client, trust and the session's
+/// life are derived (design 2.9); older arguments are ignored.
 fn open(
     args: &Value,
-    probe: &mut impl FnMut(PeerOpenTarget) -> Result<AuthenticatedProbe, String>,
+    _probe: &mut impl FnMut(PeerOpenTarget) -> Result<AuthenticatedProbe, String>,
 ) -> Result<Value, ApiError> {
-    if crate::rdp::local_clients()
-        .iter()
-        .all(|client| !client.available)
-    {
-        return Err(invalid("No installed local RDP client exposes a documented certificate-verification and credential-entry adapter in this app context; no TCP port was opened"));
+    let clients = crate::rdp::local_clients();
+    open_with(args, &clients, crate::rdp::open_device)
+}
+
+/// `rdp.open` with the local clients and the opener injected (tests).
+pub(crate) fn open_with(
+    args: &Value,
+    clients: &[crate::rdp::core::ClientCapability],
+    open: impl FnOnce(&str, &str, Option<&str>) -> Result<crate::rdp::SessionView, String>,
+) -> Result<Value, ApiError> {
+    if clients.iter().all(|client| !client.available) {
+        return Err(invalid(NO_CLIENT));
     }
-    let target = target(args)?;
-    let report = probe(target.clone()).map_err(invalid)?;
-    let policy = match opt_str(args, "certificatePolicy").unwrap_or("exact_peer_pin") {
-        "exact_peer_pin" => crate::rdp::CertificatePolicy::ExactPeerPin,
-        "peer_pin_or_native_trust" => crate::rdp::CertificatePolicy::PeerPinOrNativeTrust,
-        "native_dialog" => crate::rdp::CertificatePolicy::NativeDialog,
-        _ => return Err(invalid("Invalid RDP certificatePolicy")),
-    };
-    let flag = |name: &str| -> Result<bool, ApiError> {
-        match args.get(name) {
-            None | Some(Value::Null) => Ok(false),
-            Some(Value::Bool(flag)) => Ok(*flag),
-            _ => Err(invalid(format!("{name} must be boolean"))),
-        }
-    };
-    let seconds = args.get("lifetimeSecs").map_or(Ok(900), |value| {
-        value
-            .as_u64()
-            .ok_or_else(|| invalid("lifetimeSecs must be an integer"))
-    })?;
-    let request = crate::rdp::StartRequest {
-        service_id: str_arg(args, "service")?.into(),
-        client_id: str_arg(args, "client")?.into(),
-        certificate_policy: policy,
-        remote_app: opt_str(args, "remoteApp").map(str::to_string),
-        acknowledge_local_access: flag("acknowledgeLocalAccess")?,
-        acknowledge_session_effect: flag("acknowledgeSessionEffect")?,
-        acknowledge_certificate_dialog: flag("acknowledgeCertificateDialog")?,
-        lifetime_secs: u32::try_from(seconds)
-            .map_err(|_| invalid("lifetimeSecs must be 1..86400"))?,
-    };
-    let session = crate::rdp::start(
-        target,
-        &report,
-        &request,
-        std::time::Duration::from_secs(30),
-        || {},
-    )
-    .map_err(invalid)?;
-    as_json(json!({"session":crate::rdp::own_in_background(session).map_err(invalid)?}))
+    let device = str_arg(args, "deviceId")?;
+    let key = str_arg(args, "publicKey")?;
+    if device.is_empty() || key.is_empty() {
+        return Err(invalid(
+            "Die gepinnte RDP-Geräteidentität ist unvollständig.",
+        ));
+    }
+    let session = open(device, key, opt_str(args, "remoteApp")).map_err(invalid)?;
+    as_json(json!({ "session": session }))
 }
 fn as_json(value: impl serde::Serialize) -> Result<Value, ApiError> {
     serde_json::to_value(value)

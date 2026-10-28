@@ -7,6 +7,7 @@ use super::*;
 pub(super) fn ui(app: &mut App, ui: &mut egui::Ui) {
     identity(app, ui);
     crate::app::share_login_ui::host_indicator(ui);
+    crate::app::share_rdp_ui::this_device(ui);
     super::pages_ui::heading(ui, "GERAETENAME");
     let mut form = crate::app::settings_form::Form::new(
         ui,

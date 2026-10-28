@@ -6,7 +6,7 @@ use super::handshake_limits::ApplicationHandshakePermit;
 use super::node::ShareIrohNode;
 use super::relation_proof::prove_relation;
 use super::session::PeerPrincipal;
-use super::tcp_forward::{MAX_TCP_STREAMS, MAX_TCP_TUNNELS, TCP_PROTOCOL_VERSION};
+use super::tcp_forward::{tcp_version_for_alpn, MAX_TCP_STREAMS, MAX_TCP_TUNNELS};
 use super::tcp_registry::TcpRegistry;
 use super::tcp_wire::{
     self, TcpClientHello, TcpDataOpen, TcpDataReply, TcpHelloReply, TcpServerHello,
@@ -66,14 +66,23 @@ impl ShareIrohNode {
         })?;
         self.require_sharing_active()?;
         require_policy(&connection)?;
+        // `/2` and `/1` are both registered (design 4.6); the ALPN fixes the
+        // protocol version of the whole tunnel.
+        let version = tcp_version_for_alpn(connection.alpn())
+            .ok_or_else(|| eio("unknown TCP tunnel protocol"))?;
         self.await_route(&connection, None, None).await?;
-        super::route_protocol::scope(connection.clone(), self.serve_tcp(connection, permit)).await
+        super::route_protocol::scope(
+            connection.clone(),
+            self.serve_tcp(connection, permit, version),
+        )
+        .await
     }
 
     async fn serve_tcp(
         self: &Arc<Self>,
         connection: Connection,
         permit: ApplicationHandshakePermit,
+        version: u16,
     ) -> io::Result<()> {
         let deadline = super::route_protocol::active_now() + Duration::from_secs(20);
         let (mut send, mut recv) =
@@ -88,7 +97,7 @@ impl ShareIrohNode {
             .identity
             .clone();
         let server = TcpServerHello {
-            version: TCP_PROTOCOL_VERSION,
+            version,
             challenge: format!("rp1.{}", random_token(32).map_err(eio)?),
             device_id: identity.device_id,
             public_key: identity.public_key,
@@ -119,7 +128,7 @@ impl ShareIrohNode {
                 return Err(error);
             }
         };
-        if let Err(error) = client.request.validate() {
+        if let Err(error) = client.request.validate_for(version) {
             self.auth_penalties().record(
                 &remote,
                 super::auth_penalty::PenaltyKind::AuthFailure,
@@ -173,6 +182,7 @@ impl ShareIrohNode {
             client.nonce.starts_with("rp1."),
         );
         drop(permit);
+        refresh_exposed_ports(&client.request.destination).await;
         // DNS is resolved by this target host; the peer supplies no resolved
         // IP authority. Selection consults the exact stored relation only.
         let mut setup_close = [0u8; 1];
@@ -214,7 +224,16 @@ impl ShareIrohNode {
         let _control_send = send;
         let mut close_byte = [0];
         let mut cancelled = registration.cancelled.clone();
-        let ttl = tokio::time::sleep(Duration::from_secs(u64::from(client.request.lifetime_secs)));
+        // Only an explicitly chosen lifetime ends the tunnel by time; with
+        // `lifetime_secs = 0` (version 2) it ends with the connection, the
+        // grant or a close (design 2.6, user rule r7).
+        let fixed = client.request.fixed_lifetime();
+        let ttl = async move {
+            match fixed {
+                Some(lifetime) => tokio::time::sleep(lifetime).await,
+                None => std::future::pending::<()>().await,
+            }
+        };
         tokio::pin!(ttl);
         let streams = Arc::new(Semaphore::new(MAX_TCP_STREAMS));
         let activity = Arc::new(super::node::IncomingActivity::default());
@@ -314,6 +333,18 @@ async fn serve_socket(
     .await??;
     super::tcp_pump::pump(connection, socket.stream(), &mut send, &mut recv, counters).await
 }
+/// Steering exposes the local services of the last listing (design 4.2).
+/// After a restart, or for a service started since then, that set is stale:
+/// list once more before the decision. A failed listing keeps the old set,
+/// and the admission below refuses with its usual reason.
+async fn refresh_exposed_ports(destination: &super::tcp_forward::TcpDestination) {
+    use super::access_constraints::TcpHost;
+    if destination.host == TcpHost::Loopback {
+        let listing = tokio::task::spawn_blocking(super::tcp_sockets::local_services);
+        let _ = listing.await;
+    }
+}
+
 pub(crate) fn require_policy(connection: &Connection) -> io::Result<()> {
     if connection.application_path_policy().enabled {
         Ok(())

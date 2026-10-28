@@ -29,15 +29,81 @@ pub(crate) enum AppsCommand {
         request: LaunchRequest,
     },
     RdpProbe,
+    /// Design 9.2 (0.5.189). Hosts up to 0.5.188 refuse these variants as
+    /// unknown; the viewer then reports „Gegenstelle älter als 0.5.189“.
+    RdpProbeV2,
+    /// T4: run the host's RDP self-setup, then probe again.
+    RdpPrepare,
+    /// se-managed service credentials (GNOME desktop sharing), new per call.
+    RdpCredential {
+        service_id: String,
+    },
+    /// Locally listening services that steering exposes (CLI/MCP without feed).
+    LocalServices,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum AppsResult {
-    Catalog { catalog: CatalogSnapshot },
-    Icon { reply: Option<IconReply> },
-    Launch { receipt: LaunchReceipt },
-    Receipt { receipt: Option<LaunchReceipt> },
-    RdpProbe { host: crate::rdp::HostProbe },
+    Catalog {
+        catalog: CatalogSnapshot,
+    },
+    Icon {
+        reply: Option<IconReply>,
+    },
+    Launch {
+        receipt: LaunchReceipt,
+    },
+    Receipt {
+        receipt: Option<LaunchReceipt>,
+    },
+    RdpProbe {
+        host: crate::rdp::HostProbe,
+    },
+    RdpProbeV2 {
+        host: crate::rdp::HostProbe,
+        setup: crate::rdp::core::SetupState,
+    },
+    RdpPrepare {
+        setup: crate::rdp::core::SetupState,
+        host: crate::rdp::HostProbe,
+    },
+    RdpCredential {
+        username: String,
+        password: ManagedSecret,
+    },
+    LocalServices {
+        services: Vec<super::loopback_services::LoopbackService>,
+        unavailable: Option<String>,
+    },
+}
+
+/// A credential se generated for one RDP start. Serialized as the plain
+/// string inside the authenticated reply; its Debug form never shows it, so
+/// a logged `AppsResult` cannot leak the password.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub(crate) struct ManagedSecret(String);
+impl ManagedSecret {
+    pub(crate) fn new(value: String) -> Self {
+        Self(value)
+    }
+    // Consumer: the viewer handing the credential to its client (WP2).
+    #[allow(dead_code)]
+    pub(crate) fn expose(&self) -> &str {
+        &self.0
+    }
+}
+impl std::fmt::Debug for ManagedSecret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ManagedSecret(<redacted>)")
+    }
+}
+impl Drop for ManagedSecret {
+    fn drop(&mut self) {
+        // Overwrite the bytes before the allocation is released.
+        // SAFETY: zero bytes keep the String valid UTF-8.
+        unsafe { self.0.as_bytes_mut() }.fill(0);
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

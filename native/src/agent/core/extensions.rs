@@ -149,6 +149,12 @@ impl BackendExtensions for AgentBackend {
         vfs::version_archive_policy(&*self.inner)
     }
 
+    /// The worker announces a packet of one (Z-P4) only for a peer that
+    /// offers it (`backend_server::service_version`).
+    fn single_put(&self) -> bool {
+        self.version().contains(".single-put-v1")
+    }
+
     fn previous_state_identities(&self) -> VfsResult<Vec<String>> {
         crate::vfs::previous_state_identities(&*self.inner)
     }

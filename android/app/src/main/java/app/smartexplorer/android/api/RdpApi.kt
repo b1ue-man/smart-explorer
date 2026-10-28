@@ -2,6 +2,7 @@ package app.smartexplorer.android.api
 
 import app.smartexplorer.android.core.Core
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
@@ -32,12 +33,23 @@ data class RdpClient(
 @Serializable
 data class RdpClients(val clients: List<RdpClient> = emptyList(), val unavailableReason: String? = null)
 
-/** Read-only on Android: no URI, client installation or TCP fallback. */
+/** The RDP short state of a device's feed (design 9.4). */
+@Serializable
+data class RdpFeedState(
+    val startable: Boolean = false,
+    val setupText: String = "",
+    val setupPossible: Boolean = true,
+    val remoteApps: List<RdpRemoteApp> = emptyList(),
+)
+
+/**
+ * Android has no RDP program (design 2.4): no URI, client installation or TCP fallback. On a
+ * platform with one, `rdp.open` needs only the device; se derives everything else.
+ */
 object RdpApi {
     suspend fun localHost(): RdpHost = Core.request("rdp.localProbe")
     suspend fun clients(): RdpClients = Core.request("rdp.clients")
-    suspend fun probe(target: TcpTarget): RdpHost = Core.request("rdp.probe", buildJsonObject {
-        put("relation", target.relation); put("relationId", target.relationId)
-        put("deviceId", target.deviceId); put("publicKey", target.publicKey); put("nodeId", target.nodeId)
+    suspend fun open(deviceId: String, publicKey: String, remoteApp: String? = null): JsonObject = Core.request("rdp.open", buildJsonObject {
+        put("deviceId", deviceId); put("publicKey", publicKey); remoteApp?.let { put("remoteApp", it) }
     })
 }

@@ -1,6 +1,6 @@
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::io;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use super::core::{eio, now_secs};
 use super::direct_reciprocal_coordinator::{DirectReciprocalCoordinator, DirectRepairCandidate};
@@ -53,6 +53,7 @@ impl RuntimeConfiguration<'_> {
         )>,
     ) -> io::Result<()> {
         let transition = self.iroh.begin_runtime_transition()?;
+        let mut steering_change = None;
         let (restrictions, snapshot) = {
             let mut state = self.auth.lock().map_err(|_| eio("Share-State gesperrt"))?;
             let mut candidate = state.clone();
@@ -67,6 +68,13 @@ impl RuntimeConfiguration<'_> {
             // The live snapshot owns replay state and immediately learned
             // signatures. A delayed persisted profile cannot erase either.
             super::authorization_policy::preserve_signature_facts(&state, &mut candidate);
+            let steering_before = steering_devices(&state, now_secs());
+            let steering_after = steering_devices(&candidate, now_secs());
+            steering_change = Some((
+                granted_since_start(&candidate, &steering_before, now_secs()),
+                !steering_before.is_subset(&steering_after),
+                steering_after,
+            ));
             let restrictions = authorization_restrictions(&state, &candidate);
             if !restrictions.is_empty() {
                 candidate.authorization_epoch = state
@@ -92,12 +100,110 @@ impl RuntimeConfiguration<'_> {
             self.direct_requests_sent.clear();
         }
         drop(transition);
+        if let Some((granted, revoked, steering)) = steering_change {
+            apply_steering_change(granted, revoked, steering);
+        }
         if let Some(reciprocal) = self.iroh.direct_repair_coordinator() {
             reciprocal.set_current_generation(snapshot.authorization_epoch);
             schedule_snapshot(&snapshot, &reciprocal);
         }
         Ok(())
     }
+}
+
+/// Unix second of this process's first configuration; grants changed
+/// before it were applied by an earlier process (T2 covers those).
+static PROCESS_START: OnceLock<i64> = OnceLock::new();
+
+fn process_start() -> i64 {
+    *PROCESS_START.get_or_init(now_secs)
+}
+
+/// Every (device ID, public key) that may steer this screen in an active
+/// relation of `state` at `now` (`access_steering::steers`).
+pub(super) fn steering_devices(state: &ShareAuthState, now: i64) -> BTreeSet<(String, String)> {
+    use super::access_steering::steers;
+    let mut devices = BTreeSet::new();
+    if state.direct_online {
+        for grant in state.direct_grants.iter().filter(|grant| {
+            grant.state == super::types::DirectGrantState::Accepted
+                && steers(&grant.exec.access_grant(), now)
+        }) {
+            devices.insert((grant.device_id.clone(), grant.public_key.clone()));
+        }
+    }
+    for room in state.rooms.iter().filter(|room| room.auto_join) {
+        for member in room
+            .members
+            .iter()
+            .filter(|member| member.is_admitted() && steers(&member.exec.access_grant(), now))
+        {
+            devices.insert((member.device_id.clone(), member.public_key.clone()));
+        }
+    }
+    devices
+}
+
+/// T1 (design 3.1): a device that did not steer before received the right
+/// while this process runs. A grant loaded at start is T2's case, so a
+/// restart never repeats an administrator prompt by itself (T-R6).
+fn granted_since_start(
+    candidate: &ShareAuthState,
+    before: &BTreeSet<(String, String)>,
+    now: i64,
+) -> bool {
+    let start = process_start();
+    let fresh = |device: &str, key: &str, exec: &super::exec_policy::ExecGrant| {
+        exec.changed_at >= start
+            && super::access_steering::steers(&exec.access_grant(), now)
+            && !before.contains(&(device.to_string(), key.to_string()))
+    };
+    let direct = candidate.direct_online
+        && candidate.direct_grants.iter().any(|grant| {
+            grant.state == super::types::DirectGrantState::Accepted
+                && fresh(&grant.device_id, &grant.public_key, &grant.exec)
+        });
+    direct
+        || candidate
+            .rooms
+            .iter()
+            .filter(|room| room.auto_join)
+            .flat_map(|room| room.members.iter())
+            .any(|member| {
+                member.is_admitted() && fresh(&member.device_id, &member.public_key, &member.exec)
+            })
+}
+
+/// Records the steering devices and starts the RDP self-setup (T1) or the
+/// rotation of se-managed RDP credentials after a revocation (T-R2).
+fn apply_steering_change(granted: bool, revoked: bool, steering: BTreeSet<(String, String)>) {
+    super::access_steering::note_steering_devices(steering);
+    if cfg!(test) {
+        return;
+    }
+    if granted {
+        crate::rdp::host_setup::request(crate::rdp::core::SetupTrigger::Grant);
+    }
+    if revoked {
+        crate::rdp::host_setup::rotate_managed_credentials();
+    }
+}
+
+/// Service start (design 3.1): the RDP port list is filled once in the
+/// background, and T2 runs when a relation steers this screen.
+pub(super) fn on_node_start(auth: &Arc<Mutex<ShareAuthState>>, device_id: &str) {
+    process_start();
+    let steering = match auth.lock() {
+        Ok(state) => steering_devices(&state, now_secs()),
+        Err(_) => BTreeSet::new(),
+    };
+    let any = !steering.is_empty();
+    super::access_steering::note_steering_devices(steering);
+    if cfg!(test) {
+        return;
+    }
+    crate::rdp::host_setup::note_host_device(device_id);
+    crate::rdp::host_setup::on_service_start(any);
 }
 
 pub(super) fn schedule_current(

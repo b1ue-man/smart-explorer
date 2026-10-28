@@ -1,7 +1,7 @@
 use std::io::{self, Read, Write};
 use std::sync::Arc;
 
-use crate::mount::{BackendRoot, MountMode, MountRootSecurity, PathDialect};
+use crate::mount::PathDialect;
 use crate::vfs::{
     Backend, BackendHandle, CachingBackend, DeleteDisposition, MountPathCapabilities,
     RootConfinement, Scheme, StagedWriteCapabilities, VfsMeta, VfsResult,
@@ -9,10 +9,7 @@ use crate::vfs::{
 
 use super::mount_error::{encode as sanitize_error, encoded as coded_error};
 use super::rooted_backend_io::{sanitize_metadata, SanitizedReader, SanitizedWriter};
-use super::rooted_backend_paths::{
-    canonical_virtual_components, components, permission_denied, root_ancestor_chain,
-    validate_windows_components,
-};
+use super::rooted_backend_paths::{canonical_virtual_components, validate_windows_components};
 
 /// A daemon-side authorization boundary for the untrusted mount helper.
 /// Every helper path is a canonical virtual `/...` path and is mapped beneath
@@ -27,6 +24,8 @@ pub(super) struct RootedBackend {
     root: String,
     root_ancestors: Vec<String>,
     revalidate_root: bool,
+    /// G4 ML3: the last passed root check, invalidated by events only.
+    root_check: super::rooted_backend_case::RootCheckCache,
     read_only: bool,
     windows_paths: bool,
     /// Name rules of the frontend that serves the drive (DRV-M1/M4): a
@@ -40,100 +39,6 @@ pub(super) struct RootedBackend {
 }
 
 impl RootedBackend {
-    /// A drive served with the Windows name rules (Dokany).
-    #[cfg_attr(not(any(windows, test)), allow(dead_code))]
-    pub(super) fn new(
-        raw_inner: BackendHandle,
-        root: &BackendRoot,
-        mode: MountMode,
-        root_security: MountRootSecurity,
-    ) -> io::Result<BackendHandle> {
-        Self::new_in(raw_inner, root, mode, root_security, PathDialect::Windows)
-    }
-
-    /// A drive served with the name rules of `dialect`: the Windows rules
-    /// check every root and path component of a local Windows export; the
-    /// POSIX rules (Linux FUSE, DRV-M4) leave names as the backend has them
-    /// and never alias Share names.
-    pub(super) fn new_in(
-        raw_inner: BackendHandle,
-        root: &BackendRoot,
-        mode: MountMode,
-        root_security: MountRootSecurity,
-        dialect: PathDialect,
-    ) -> io::Result<BackendHandle> {
-        let mount_capabilities = raw_inner.mount_path_capabilities(root.as_str())?;
-        let root_confinement = mount_capabilities.root_confinement;
-        let access = crate::vault::mount_access(&raw_inner, root_confinement.is_enforced())?;
-        let vault_trusted = access.is_some() && !root_confinement.is_enforced();
-        if root_security == MountRootSecurity::Enforced
-            && !root_confinement.is_enforced()
-            && !vault_trusted
-        {
-            return Err(permission_denied(
-                "backend does not technically enforce the selected mount root; explicit trusted-root mode is required",
-            ));
-        }
-        // A kernel/provider-confined backend may intentionally be unable to
-        // inspect ancestors above its root (Landlock does exactly this). Its
-        // capability already covers them; only revalidate the selected root.
-        let root_ancestors = if root_confinement.is_enforced() || raw_inner.scheme() == Scheme::Peer
-        {
-            vec![root.as_str().to_string()]
-        } else {
-            root_ancestor_chain(root.as_str())?
-        };
-        let windows_paths = dialect == PathDialect::Windows && raw_inner.is_local();
-        if windows_paths {
-            validate_windows_components(&components(root.as_str())?)?;
-        }
-        let staged_write = if mode == MountMode::ReadWrite {
-            mount_capabilities.staged_write
-        } else {
-            StagedWriteCapabilities::default()
-        };
-        // A local/UNC Windows export and a generic peer can never inherit a
-        // case-sensitive claim accidentally. Protocol backends may opt in only
-        // after proving the semantics for this exact root.
-        let case_sensitive_paths = !windows_paths
-            && raw_inner.scheme() != Scheme::Peer
-            && raw_inner.case_sensitive_paths(root.as_str());
-        let project_peer_names = raw_inner.scheme() == Scheme::Peer;
-        let root_metadata = super::rooted_backend_case::validate_root(&raw_inner, &root_ancestors)
-            .map_err(sanitize_error)?;
-        if root_metadata.is_symlink || !root_metadata.is_dir {
-            return Err(permission_denied(
-                "mount root must be an existing plain directory",
-            ));
-        }
-        let revalidate_root =
-            root_security == MountRootSecurity::Trusted || !root_confinement.is_enforced();
-        let child_key = if case_sensitive_paths {
-            None
-        } else {
-            Some(crate::mount::windows_ordinal_key as fn(&str) -> String)
-        };
-        let case_cache = Arc::new(CachingBackend::for_mount(Arc::clone(&raw_inner), child_key));
-        let inner: BackendHandle = case_cache.clone();
-        let backend = Self {
-            inner,
-            case_cache,
-            raw_inner,
-            root: root.as_str().to_string(),
-            root_ancestors,
-            revalidate_root,
-            read_only: mode == MountMode::ReadOnly,
-            windows_paths,
-            dialect,
-            staged_write,
-            case_sensitive_paths,
-            project_peer_names,
-            root_confinement,
-            operation: super::rooted_backend_gate::OperationGate::authorized(access),
-        };
-        Ok(Arc::new(backend))
-    }
-
     fn checked_existing(&self, virtual_path: &str) -> io::Result<String> {
         self.checked(virtual_path, false, false)
     }
@@ -173,6 +78,10 @@ impl RootedBackend {
     }
 
     fn resolver(&self, for_write: bool) -> super::rooted_backend_case::PathResolver<'_> {
+        let root_validator = super::rooted_backend_case::RootValidator {
+            backend: &self.raw_inner,
+            cache: &self.root_check,
+        };
         super::rooted_backend_case::PathResolver {
             backend: if for_write {
                 &self.raw_inner
@@ -180,7 +89,7 @@ impl RootedBackend {
                 &self.inner
             },
             case_cache: (!for_write).then_some(self.case_cache.as_ref()),
-            root_validator: self.revalidate_root.then_some(&self.raw_inner),
+            root_validator: self.revalidate_root.then_some(root_validator),
             root: &self.root,
             root_ancestors: &self.root_ancestors,
             case_sensitive: self.case_sensitive_paths,
@@ -359,6 +268,7 @@ impl Backend for RootedBackend {
         Self::require_child(dst)?;
         let src = self.checked_existing_for_write(src)?;
         let dst = self.checked_destination(dst)?;
+        self.root_check.invalidate();
         self.inner.rename(&src, &dst).map_err(sanitize_error)
     }
 
@@ -369,6 +279,7 @@ impl Backend for RootedBackend {
         Self::require_child(dst)?;
         let src = self.checked_existing_for_write(src)?;
         let dst = self.checked_destination(dst)?;
+        self.root_check.invalidate();
         self.inner
             .rename_no_replace(&src, &dst)
             .map_err(sanitize_error)
@@ -411,6 +322,7 @@ impl Backend for RootedBackend {
         let _operation = self.operation.write()?;
         self.require_write()?;
         Self::require_child(path)?;
+        self.root_check.invalidate();
         self.inner
             .remove_dir(&self.checked_existing_for_write(path)?)
             .map_err(sanitize_error)
@@ -419,6 +331,7 @@ impl Backend for RootedBackend {
     fn mkdir_all(&self, path: &str) -> VfsResult<()> {
         let _operation = self.operation.write()?;
         self.require_write()?;
+        self.root_check.invalidate();
         self.inner
             .mkdir_all(&self.checked_destination(path)?)
             .map_err(sanitize_error)
@@ -434,6 +347,12 @@ impl Backend for RootedBackend {
 
     fn parallelism(&self) -> usize {
         self.inner.parallelism()
+    }
+
+    /// G4 ML8: the drive gate and the daemon's service slots follow the
+    /// authorized backend's transfer pool.
+    fn transfer_ceiling(&self, _path: &str) -> Option<usize> {
+        self.inner.transfer_ceiling(&self.root)
     }
 
     fn rename_overwrites(&self) -> bool {
@@ -479,9 +398,12 @@ impl Backend for RootedBackend {
     }
 
     fn invalidate_cache(&self) {
+        self.root_check.invalidate();
         self.inner.invalidate_cache();
     }
 }
 
+#[path = "rooted_backend_new.rs"]
+mod construct;
 #[path = "rooted_backend_extensions.rs"]
 mod extensions;

@@ -1,5 +1,7 @@
 //! Owner-protected native client profile. Kept read-only and non-replaceable
 //! until the exact spawned client exits; contains no username or password.
+//! The address is the device address (design 4.3); `prompt for
+//! credentials:i:0` lets saved credentials of that address apply.
 use std::os::windows::{
     ffi::OsStrExt,
     fs::{MetadataExt, OpenOptionsExt},
@@ -66,7 +68,7 @@ impl Profile {
         }
         profile.parent = Some(parent);
         let mut body = format!(
-            "full address:s:{listener}\r\nauthentication level:i:2\r\nenablecredsspsupport:i:1\r\n"
+            "full address:s:{listener}\r\nauthentication level:i:2\r\nenablecredsspsupport:i:1\r\nprompt for credentials:i:0\r\n"
         );
         if let Some(alias) = alias {
             if !crate::rdp::core::PublishedApp::valid_alias(alias) {

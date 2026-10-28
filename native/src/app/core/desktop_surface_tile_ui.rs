@@ -1,4 +1,5 @@
-//! Tiles of the surface (C4.5, C4.6): one look per device state, rooms as
+//! Tiles of the surface (C4.5, C4.6): one look per device state with the
+//! device's open windows and services on hover (design 5.2), rooms as
 //! folder groups, vaults with their lock state, desktop files, "Papierkorb"
 //! and "Dieser PC", "Alle Bildschirme" and the tiles of the empty state.
 //! Labels stay readable on every wallpaper: light text on a translucent dark
@@ -7,7 +8,7 @@ use eframe::egui::{self, Color32, FontId, Pos2, Rect, Stroke, Vec2};
 
 use super::desktop_surface_view_model::ItemRef;
 use crate::desktop::core::items::SystemItem;
-use crate::desktop::core::tiles::{DeviceTile, EmptyAction, TileCode, UNKNOWN_TEXT};
+use crate::desktop::core::tiles::{DeviceTile, EmptyAction, TileCode, TileFeed, UNKNOWN_TEXT};
 
 /// Size of one grid cell in points.
 pub(crate) const CELL: Vec2 = Vec2::new(104.0, 108.0);
@@ -87,7 +88,12 @@ pub(crate) fn device_look(tile: &DeviceTile, now_secs: i64) -> TileLook {
         TileCode::Failed => ("Fehler".to_string(), Mark::Dot(RED)),
         TileCode::IdentityConflict => ("Identität geändert – prüfen".to_string(), Mark::Dot(RED)),
     };
-    let tooltip = (tile.code == TileCode::Failed).then(|| tile.status_text.clone());
+    let mut tips = Vec::new();
+    if tile.code == TileCode::Failed {
+        tips.push(tile.status_text.clone());
+    }
+    tips.extend(feed_lines(&tile.feed));
+    let tooltip = (!tips.is_empty()).then(|| tips.join("\n"));
     TileLook {
         icon: &["computer"],
         title: tile.name.clone(),
@@ -95,6 +101,28 @@ pub(crate) fn device_look(tile: &DeviceTile, now_secs: i64) -> TileLook {
         mark,
         tooltip,
     }
+}
+
+/// The device feed on hover (design 5.2): the open windows, the services
+/// with their address here and why something is unavailable. The context
+/// menu offers each window and service as a handling of its own.
+pub(crate) fn feed_lines(feed: &TileFeed) -> Vec<String> {
+    let mut lines = Vec::new();
+    if let Some(summary) = feed.summary() {
+        lines.push(summary);
+    }
+    lines.extend(
+        feed.windows
+            .iter()
+            .map(|window| format!("Fenster: {} – {}", window.app, window.title)),
+    );
+    lines.extend(
+        feed.services
+            .iter()
+            .map(|service| format!("Dienst: {}", service.line())),
+    );
+    lines.extend(feed.notes.iter().cloned());
+    lines
 }
 
 fn plain(icon: &'static [&'static str], title: &str, status: Option<String>) -> TileLook {

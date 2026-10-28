@@ -1,5 +1,20 @@
+//! The Remote Desktop sessions this process owns for one device. A session
+//! has no fixed end: it lives as long as its RDP program and the connection
+//! (design 2.6, user rule r7 „keinen random ass default timeouts“); its
+//! effect on the host's session is shown as a notice (design 2.7 point 5).
 use eframe::egui;
 use std::sync::{Arc, Mutex, PoisonError};
+
+/// „ohne feste Frist“ or the rest of an explicitly chosen lifetime.
+pub(crate) fn lifetime_text(expires_at: Option<i64>) -> String {
+    match expires_at {
+        None => "ohne feste Frist (endet mit dem RDP-Programm)".into(),
+        Some(at) => format!(
+            "endet in {} s (ausdrücklich gewählte Frist)",
+            at.saturating_sub(crate::share::core_now_secs()).max(0)
+        ),
+    }
+}
 
 pub(super) fn show(ui: &mut egui::Ui, nodes: &[&str]) {
     ui.label("Native RDP-Sitzungen dieses Geräts");
@@ -25,7 +40,7 @@ pub(super) fn show(ui: &mut egui::Ui, nodes: &[&str]) {
         .filter(|s| nodes.contains(&s.tunnel.remote_node.as_str()))
         .collect();
     if sessions.is_empty() {
-        ui.label("Keine von diesem Smart-Explorer-Prozess gehaltene RDP-Sitzung zu diesem Gerät.");
+        ui.label("Keine laufende Remote-Desktop-Sitzung dieses Fensters zu diesem Gerät.");
     }
     for session in sessions {
         egui::Frame::group(ui.style()).show(ui, |ui| {
@@ -43,20 +58,16 @@ pub(super) fn show(ui: &mut egui::Ui, nodes: &[&str]) {
                 session.tunnel.relation_id
             ));
             ui.label(format!(
-                "Lokaler Listener: {} · spätester Ablauf in {} s · {} Verbindungen",
+                "Lokaler Zugang: {} · {} · {} Verbindungen",
                 session
                     .tunnel
                     .listener
                     .map_or_else(|| "nicht vorhanden".into(), |a| a.to_string()),
-                session
-                    .tunnel
-                    .expires_at
-                    .saturating_sub(crate::share::core_now_secs())
-                    .max(0),
+                lifetime_text(session.tunnel.expires_at),
                 session.tunnel.active_connections
             ));
             if session.tunnel.closing {
-                ui.label("Client und TCP-Lease werden geschlossen …");
+                ui.label("RDP-Programm und Verbindung werden geschlossen …");
             }
             if let Some(error) = &session.tunnel.last_error {
                 ui.colored_label(egui::Color32::RED, error);
@@ -76,7 +87,7 @@ pub(super) fn show(ui: &mut egui::Ui, nodes: &[&str]) {
                     .spawn(move || {
                         let closed = crate::rdp::close_owned_session(&id).map(|found| {
                             if found {
-                                "RDP-Client und TCP-Lease geschlossen.".into()
+                                "RDP-Programm und Verbindung geschlossen.".into()
                             } else {
                                 "Diese RDP-Sitzung ist bereits beendet.".into()
                             }

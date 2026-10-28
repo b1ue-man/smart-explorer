@@ -1,6 +1,10 @@
 //! Catalog disclosure, exact app request admission and host execution.
 use super::*;
 
+// RDP probe/setup/credentials and the steering service list (design 9.2).
+#[path = "node_apps_einrichtung.rs"]
+mod einrichtung;
+
 impl ShareIrohNode {
     pub(super) async fn apps_execute(
         self: &Arc<Self>,
@@ -11,17 +15,11 @@ impl ShareIrohNode {
     ) -> io::Result<AppsResult> {
         self.require_sharing_active()?;
         match command {
-            AppsCommand::RdpProbe => {
-                self.require_inventory(principal)?;
-                let host = tokio::task::spawn_blocking(crate::rdp::probe_local_host)
-                    .await
-                    .map_err(eio)?;
-                crate::share::access_steering::note_own_rdp_ports(
-                    host.services.iter().filter_map(|service| service.port),
-                );
-                self.require_inventory(principal)?;
-                Ok(AppsResult::RdpProbe { host })
-            }
+            AppsCommand::RdpProbe
+            | AppsCommand::RdpProbeV2
+            | AppsCommand::RdpPrepare
+            | AppsCommand::RdpCredential { .. }
+            | AppsCommand::LocalServices => self.apps_einrichtung(principal, command, send).await,
             AppsCommand::Catalog => {
                 let host = self.apps.host(principal)?;
                 let catalog = tokio::task::spawn_blocking(move || host.catalog())
