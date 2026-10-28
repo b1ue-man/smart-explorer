@@ -25,6 +25,16 @@ impl BackendExtensions for SftpBackend {
         true
     }
 
+    fn creates_stages_exclusively(&self) -> bool {
+        // `open_write_new`, the copy stage writers and server copy-data all
+        // open with CREATE|EXCLUDE (`create_new_flags`, copy_data.rs).
+        true
+    }
+
+    fn stage_proven(&self, stage: &str) -> bool {
+        self.written.proven(stage).is_some()
+    }
+
     fn create_dir_exclusive(&self, path: &str) -> VfsResult<()> {
         super::folder_reservation::create(self, path)
     }
