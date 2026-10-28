@@ -4,22 +4,14 @@ use super::*;
 use crate::vfs::Backend;
 use std::{path::PathBuf, sync::atomic::Ordering, time::Duration};
 
-fn receipt_files(root: &Path) -> Vec<PathBuf> {
-    fs::read_dir(root.join("job.files"))
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .filter(|path| path.file_name().unwrap() != "index.json")
-        .collect()
-}
-fn pending_index(root: &Path, id: &str, candidate: &Path, count: u64) {
-    let receipt: serde_json::Value =
-        read_record(candidate, RecordKind::Job, id, u64::MAX, false).unwrap();
-    let path = root.join("job.files/index.json");
-    let mut index: serde_json::Value =
-        read_record(&path, RecordKind::Job, id, u64::MAX, false).unwrap();
-    index["pending"] = receipt;
-    index["count"] = count.into();
-    write_record(&path, RecordKind::Job, id, None, &index).unwrap();
+/// Rewrites the closed job's crash log as the journal of 0.5.188, with the
+/// receipt of `pending` as the index's pending new-key intent (its file kept
+/// or not); returns the job's path.
+fn to_old_format(root: &Path, id: &str, pending: Option<(&FileWork, bool)>) -> PathBuf {
+    let job_path = root.join("job.json");
+    let data: JobRecord = read_record(&job_path, RecordKind::Job, id, u64::MAX, false).unwrap();
+    file_recovery::convert_to_old_format(&job_path, &data, pending).unwrap();
+    job_path
 }
 
 #[test]
@@ -44,12 +36,9 @@ fn batches_task_p14_pending_new_key_resumes_with_or_without_the_receipt_file() {
                 &fwd(&target.join("a.jpg")),
             )
             .unwrap();
-            let candidate = receipt_files(root.path()).pop().unwrap();
-            pending_index(root.path(), &job.id, &candidate, 0);
-            if missing_candidate {
-                fs::remove_file(candidate).unwrap();
-            }
         }
+        let pending = file(&source, "a.jpg");
+        to_old_format(root.path(), &job.id, Some((&pending, !missing_candidate)));
         let engine = fixture(&job, root.path(), &cancel, &report).unwrap();
         assert!(!stage.exists());
         assert_eq!(fs::read(&source).unwrap(), b"alpha");
@@ -81,7 +70,6 @@ fn batches_task_p14_pending_intent_cannot_recount_a_lost_committed_receipt() {
     {
         let engine = fixture(&job, root.path(), &cancel, &report).unwrap();
         apply(&engine, file(&first, "a.jpg"));
-        let committed = receipt_files(root.path()).pop().unwrap();
         file_recovery::before(
             &engine,
             &file(&second, "b.jpg"),
@@ -89,13 +77,14 @@ fn batches_task_p14_pending_intent_cannot_recount_a_lost_committed_receipt() {
             &fwd(&target.join("b.jpg")),
         )
         .unwrap();
-        let candidate = receipt_files(root.path())
-            .into_iter()
-            .find(|path| *path != committed)
-            .unwrap();
-        pending_index(root.path(), &job.id, &candidate, 1);
-        fs::remove_file(committed).unwrap();
     }
+    let pending = file(&second, "b.jpg");
+    let job_path = to_old_format(root.path(), &job.id, Some((&pending, true)));
+    fs::remove_file(file_recovery::old_receipt_file(
+        &job_path,
+        &file(&first, "a.jpg"),
+    ))
+    .unwrap();
     assert!(fixture(&job, root.path(), &cancel, &report).is_err());
     assert!(stage.exists());
     assert_eq!(fs::read(&second).unwrap(), b"beta");

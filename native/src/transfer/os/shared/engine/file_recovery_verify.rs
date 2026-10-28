@@ -4,9 +4,8 @@ use std::io;
 use super::super::file_evidence::{current_source, stamp_matches};
 use super::state::{publication_state, Evidence};
 use super::{
-    doubt, endpoint, failure, missing_retry, receipt_path, verify, visit_saved, with_backend,
-    write_record, AtomicBool, FileRoots, JobRecord, JobView, Ordering, Path, PreviousTarget, Proof,
-    Receipt, RecordContext, RecordKind, Side,
+    doubt, endpoint, failure, missing_retry, verify, with_backend, AtomicBool, FileRoots,
+    JobRecord, JobView, Journal, Ordering, PreviousTarget, Proof, Receipt, Side,
 };
 
 /// What was at a destination before a publication that records no content
@@ -38,8 +37,7 @@ pub(super) fn selected_key(record: &JobRecord, receipt: &Receipt) -> String {
 pub(in crate::transfer::engine) fn verify_saved(
     view: &JobView<'_>,
     record: &JobRecord,
-    job_path: &Path,
-    context: Option<&RecordContext>,
+    journal: &Journal,
     cancel: &AtomicBool,
 ) -> io::Result<FileRoots> {
     if endpoint(view.source) != record.source || endpoint(view.target) != record.target {
@@ -56,7 +54,7 @@ pub(in crate::transfer::engine) fn verify_saved(
         .collect();
     let mut recovery = Vec::new();
     // Validate every receipt before any quarantine cleanup or restoration.
-    visit_saved(record, job_path, context, |receipt| {
+    journal.visit(|receipt| {
         if receipt.discarded {
             return Ok(());
         }
@@ -188,13 +186,7 @@ pub(in crate::transfer::engine) fn verify_saved(
             receipt.proof = None;
             receipt.staged = None;
             receipt.quarantine = None;
-            write_record(
-                &receipt_path(job_path, &receipt.key),
-                RecordKind::Job,
-                &record.id,
-                context,
-                &receipt,
-            )?;
+            journal.put(std::slice::from_ref(&receipt), false, true)?;
         }
     }
     Ok(roots)

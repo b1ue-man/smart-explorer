@@ -10,6 +10,11 @@ use std::time::{Duration, Instant};
 
 /// Flows unused for this long are forgotten (their connection is gone or idle).
 const FLOW_RETENTION: Duration = Duration::from_secs(15 * 60);
+/// A Share peer's flow starts at this many operations (K-E, 2026-10-28):
+/// its streams share one QUIC connection without a handshake each and the
+/// host admits 60 per device, so slow start need not climb from 2 through
+/// several windows of round trips first.
+const PEER_START_LIMIT: usize = 8;
 
 struct Registry {
     flows: HashMap<String, (Arc<Flow>, Instant)>,
@@ -38,6 +43,16 @@ pub fn flow_with_identity(
     identity: Option<String>,
     ceiling: Option<usize>,
 ) -> Arc<Flow> {
+    flow_with_floor(key, identity, ceiling, None)
+}
+
+/// Like `flow_with_identity`; a new flow starts at least at `floor`.
+fn flow_with_floor(
+    key: String,
+    identity: Option<String>,
+    ceiling: Option<usize>,
+    floor: Option<usize>,
+) -> Arc<Flow> {
     let ceiling = ceiling
         .unwrap_or(RESOURCE_CEILING)
         .clamp(1, RESOURCE_CEILING);
@@ -55,7 +70,11 @@ pub fn flow_with_identity(
         flow.set_ceiling(ceiling);
         return flow;
     }
-    let start = identity.as_deref().and_then(super::hints::start_limit);
+    let learned = identity.as_deref().and_then(super::hints::start_limit);
+    let start = match (learned, floor) {
+        (Some(learned), Some(floor)) => Some(learned.max(floor)),
+        (learned, floor) => learned.or(floor),
+    };
     let flow = Arc::new(Flow::new(key.clone(), identity, start, ceiling));
     registry.flows.insert(key, (flow.clone(), now));
     flow
@@ -63,10 +82,12 @@ pub fn flow_with_identity(
 
 /// The flow of the connection serving `path` on `backend`.
 pub fn flow_for(backend: &dyn crate::vfs::Backend, path: &str) -> Arc<Flow> {
-    flow_with_identity(
+    let floor = (backend.scheme() == crate::vfs::Scheme::Peer).then_some(PEER_START_LIMIT);
+    flow_with_floor(
         backend.flow_key(path),
         Some(backend.flow_identity(path)),
         backend.transfer_ceiling(path),
+        floor,
     )
 }
 

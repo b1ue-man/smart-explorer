@@ -88,6 +88,7 @@ impl crate::copy::PublicationObserver for LocalObserver<'_, '_> {
             self.file,
             &crate::copy::native_path_text(target)?,
             Some(held),
+            None,
         )
     }
 }

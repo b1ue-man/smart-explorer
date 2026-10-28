@@ -47,6 +47,35 @@ pub(super) struct Proof {
     pub sha256: String,
 }
 
+/// A file's metadata identity as a host reply already reported it (a
+/// stage, a published target or a packet item): the fields of a metadata
+/// `Proof`, without a digest. Evidence passed this way replaces the stat
+/// and file-identity requests the receipts would otherwise send
+/// (`file_recovery::*_known`); it comes from the same authenticated host
+/// under the same permission check as those requests.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct HostEvidence {
+    pub path: String,
+    pub object: Option<String>,
+    pub id: Option<String>,
+    pub size: u64,
+    pub mtime_ms: i64,
+}
+
+impl HostEvidence {
+    /// The metadata proof this evidence stands for (empty digest).
+    pub(super) fn proof(&self) -> Proof {
+        Proof {
+            path: self.path.clone(),
+            object: self.object.clone(),
+            id: self.id.clone(),
+            size: self.size,
+            mtime_ms: self.mtime_ms,
+            sha256: String::new(),
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Observation {
     Published,
@@ -205,6 +234,37 @@ pub(super) fn stamp_matches(proof: &Proof, side: Side<'_>) -> io::Result<bool> {
         || with_backend(side, |backend| {
             crate::vfs::file_identity(backend, &proof.path)
         })? == proof.object)
+}
+
+/// `verify` of metadata evidence that returns the stamp it compared: one
+/// stat and one identity look instead of a check and a second stamp.
+pub(super) fn confirm_stamp(proof: &Proof, side: Side<'_>) -> io::Result<Proof> {
+    let changed = || {
+        io::Error::other(format!(
+            "Datei ist geändert oder durch ein fremdes Objekt ersetzt: {}",
+            proof.path
+        ))
+    };
+    if proof.object.is_none() {
+        return Err(changed());
+    }
+    let meta = match with_backend(side, |backend| backend.stat(&proof.path)) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Err(changed()),
+        Err(error) => return Err(error),
+    };
+    if meta.is_dir || meta.is_symlink || meta.special {
+        return Err(changed());
+    }
+    let now = stamp_of(side, &proof.path, meta)?;
+    if now.id != proof.id
+        || now.size != proof.size
+        || now.mtime_ms != proof.mtime_ms
+        || now.object != proof.object
+    {
+        return Err(changed());
+    }
+    Ok(now)
 }
 
 /// Metadata evidence decides alone only when it names more than a size.

@@ -19,6 +19,22 @@ pub(crate) fn open_private_file(path: &std::path::Path) -> std::io::Result<std::
     crate::creds::private_storage::open_file(path, false)
 }
 
+/// An existing private file opened for reading and writing (a crash log
+/// that is appended to through this one handle).
+pub(crate) fn open_private_file_rw(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    if let Some(parent) = path.parent() {
+        ensure_private_dir(parent)?;
+    }
+    crate::creds::private_storage::open_file(path, true)
+}
+
+/// Makes the entries of a private directory durable (a renamed or created
+/// file in it). Windows has no documented directory flush; there the files'
+/// own flush and write-through promotion carry it.
+pub(crate) fn sync_private_dir(path: &std::path::Path) -> std::io::Result<()> {
+    crate::creds::private_storage::sync_directory(path)
+}
+
 pub(crate) fn open_private_lock(path: &std::path::Path) -> std::io::Result<std::fs::File> {
     match create_private_file(path) {
         Ok(file) => {

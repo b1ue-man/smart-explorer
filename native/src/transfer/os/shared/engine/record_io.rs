@@ -70,6 +70,38 @@ pub(crate) fn write_record<T: Serialize>(
     }
 }
 
+/// One record's payload for a crash log: sealed for a vault job (no name
+/// is ever stored in plaintext), the plain JSON otherwise.
+pub(crate) fn seal_payload(
+    kind: RecordKind,
+    id: &str,
+    context: Option<&RecordContext>,
+    plain: &[u8],
+) -> io::Result<Vec<u8>> {
+    match context {
+        Some(context) => crate::vault::seal_transfer_blob(context, kind.purpose(), id, plain),
+        None => Ok(plain.to_vec()),
+    }
+}
+
+/// Opens a payload of `seal_payload`. A vault job accepts only sealed
+/// payloads; a plain job only plain JSON (a sealed envelope never parses as
+/// the domain record).
+pub(crate) fn open_payload<T: DeserializeOwned>(
+    kind: RecordKind,
+    id: &str,
+    stored: &[u8],
+    require_sealed: bool,
+) -> io::Result<T> {
+    if !require_sealed {
+        return serde_json::from_slice(stored).map_err(io::Error::other);
+    }
+    let max_plain = usize::try_from(crate::transfer::memory_budget()).unwrap_or(usize::MAX);
+    let plain = crate::vault::open_transfer_blob(kind.purpose(), id, stored, max_plain)
+        .map_err(record_error)?;
+    serde_json::from_slice(&plain).map_err(io::Error::other)
+}
+
 pub(crate) fn read_record<T: DeserializeOwned>(
     path: &Path,
     kind: RecordKind,

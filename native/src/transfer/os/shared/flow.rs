@@ -246,6 +246,11 @@ impl Flow {
         self.lock().free()
     }
 
+    /// The current concurrency limit (no facts are taken, unlike `snapshot`).
+    pub fn limit(&self) -> usize {
+        self.lock().control.limit()
+    }
+
     pub fn snapshot(&self) -> FlowSnapshot {
         let mut state = self.lock();
         self.tick(&mut state);

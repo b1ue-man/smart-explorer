@@ -4,6 +4,9 @@
 //! A member of a failed packet goes alone again only when it certainly was
 //! not published, a peer that is too busy is waited for, and one packet
 //! feeds the breaker at most once, however many members it takes along.
+//! Tiny files fill a packet up to the backend's file count (K-E); a resumed
+//! job packs every file without a receipt of its own, and "transfer missing
+//! files" packs downloads, whose packet asks `existing` per member.
 use super::super::engine_policy::{ends_job_at_target, is_back_pressure, is_transient};
 use super::super::flow::classify_error;
 use super::super::flow_control::OpOutcome;
@@ -20,18 +23,13 @@ use std::time::Duration;
 /// transfer (no batch support, a large file, nothing else small queued).
 pub(super) fn members(engine: &Engine<'_>, file: &FileWork) -> Option<Vec<FileWork>> {
     let limits = engine.batch?;
-    if file.retried
-        || file.alone
-        || engine.resume
-        || engine.view.recovery == crate::transfer::RecoveryMode::Resume
-        || !packet_source(engine, file)
-    {
+    if file.retried || file.alone || !resume_allows(engine, file) || !packet_source(engine, file) {
         return None;
     }
     let (target, small) = {
         let sizer = super::lock(&engine.sizer);
         (
-            sizer.target_bytes(limits.max_bytes),
+            sizer.packet_bytes(limits.max_bytes),
             sizer.small_file_limit(limits.max_bytes),
         )
     };
@@ -49,7 +47,7 @@ pub(super) fn members(engine: &Engine<'_>, file: &FileWork) -> Option<Vec<FileWo
     // Probe after releasing the queue mutex; optical/probe-error entries go
     // back as single files before any packet reader can acquire their permit.
     for mut candidate in candidates {
-        if packet_source(engine, &candidate) {
+        if resume_allows(engine, &candidate) && packet_source(engine, &candidate) {
             more.push(candidate);
         } else {
             candidate.alone = true;
@@ -60,6 +58,20 @@ pub(super) fn members(engine: &Engine<'_>, file: &FileWork) -> Option<Vec<FileWo
         engine.queue.push_front(Work::File(candidate));
     }
     (!more.is_empty()).then_some(more)
+}
+
+/// Whether a resumed job may send `file` in a packet: a file with a receipt
+/// of this job is decided alone (`file_recovery::resume`), and "transfer
+/// missing files" keeps an existing destination, which only the download
+/// packet checks per member (`batch_get` asks `existing`); uploads go alone
+/// there. A new job packs everything.
+fn resume_allows(engine: &Engine<'_>, file: &FileWork) -> bool {
+    let resumed = engine.view.recovery == crate::transfer::RecoveryMode::Resume;
+    if !resumed && !engine.resume {
+        return true;
+    }
+    let download = !engine.view.source.is_local() && engine.view.target.is_local();
+    (!engine.resume || download) && !super::file_recovery::has_receipt(engine, file)
 }
 
 fn packet_source(engine: &Engine<'_>, file: &FileWork) -> bool {

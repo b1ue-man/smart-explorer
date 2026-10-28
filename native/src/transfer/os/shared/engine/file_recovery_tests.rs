@@ -205,8 +205,7 @@ fn batches_task_p14_identityless_remote_receipt_adopts_only_equal_content() {
     file_recovery::verify_saved(
         &engine.view,
         &super::super::lock(&record.data),
-        &record.path,
-        None,
+        &record.journal,
         &cancel,
     )
     .unwrap();
@@ -381,12 +380,17 @@ fn batches_task_p14_missing_publication_receipt_is_an_incomplete_journal() {
         apply(&engine, file(&source, "a.jpg"));
         assert_eq!(engine.issues.total(), 0);
     }
-    let receipt = fs::read_dir(root.path().join("job.files"))
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .find(|path| path.file_name().unwrap() != "index.json")
-        .unwrap();
-    fs::remove_file(receipt).unwrap();
+    // The journal of 0.5.188 that lost a counted receipt file: converting it
+    // must fail instead of starting over.
+    let job_path = root.path().join("job.json");
+    let data: JobRecord =
+        read_record(&job_path, RecordKind::Job, &job.id, u64::MAX, false).unwrap();
+    file_recovery::convert_to_old_format(&job_path, &data, None).unwrap();
+    fs::remove_file(file_recovery::old_receipt_file(
+        &job_path,
+        &file(&source, "a.jpg"),
+    ))
+    .unwrap();
     let error = match fixture(&job, root.path(), &cancel, &report) {
         Ok(_) => panic!("missing receipt must not look unstarted"),
         Err(error) => error,

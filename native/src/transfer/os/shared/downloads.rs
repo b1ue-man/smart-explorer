@@ -118,7 +118,18 @@ fn download_remote_dir_for_clipboard(
         return Ok(());
     }
 
-    let mut dirs: Vec<&str> = root.dirs.iter().map(String::as_str).collect();
+    // Every folder once, including each file's parent (the staging of a
+    // file creates none, K-H).
+    let mut dirs: Vec<&str> = root
+        .dirs
+        .iter()
+        .map(String::as_str)
+        .chain(
+            root.files
+                .iter()
+                .filter_map(|file| file.rel.rsplit_once('/').map(|(parent, _)| parent)),
+        )
+        .collect();
     dirs.sort_unstable();
     dirs.dedup();
     for dir in dirs {

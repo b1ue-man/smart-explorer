@@ -1,3 +1,9 @@
+//! One file staged for other programs (clipboard, drag and drop, long
+//! paths) into a disposable temp folder (K-H, 2026-10-28): the caller
+//! created the folder, so no folder is created per file, and the copy is
+//! not synced, because a crash loses only the session's temp folder, which
+//! its cleanup removes. The destination is still published without
+//! replacing anything.
 use super::local_stage::{cleanup_partial, create_download_part, ensure_local_space};
 use super::types::{TransferMsg, TransferProgress};
 use std::path::Path;
@@ -22,10 +28,6 @@ pub(super) fn download_file_progress(
     let read_size = be
         .read_size(src, expected)
         .map_err(|error| error.to_string())?;
-    if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        super::cancel::check_optional(cancel)?;
-    }
     ensure_local_space(dest, expected)?;
     let mut reader = be.open_read(src).map_err(|e| e.to_string())?;
     super::cancel::check_optional(cancel)?;
@@ -81,7 +83,7 @@ pub(super) fn download_file_progress(
         progress.bytes_done = progress.bytes_done.saturating_add(n as u64);
         super::progress::send_transfer_progress(tx, progress, last, false);
     }
-    if let Err(error) = output.flush().and_then(|_| output.sync_all()) {
+    if let Err(error) = output.flush() {
         drop(output);
         cleanup_partial(&part);
         return Err(error.to_string());

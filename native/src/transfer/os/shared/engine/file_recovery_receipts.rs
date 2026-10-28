@@ -1,12 +1,12 @@
-//! Receipt models, complete journal indexes and durable per-file intents.
+//! Receipt models and the job's durable per-file intents in its crash log
+//! (`journal`).
 use std::io;
 
-use ring::digest::SHA256;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    destination_parts, failure, read_record, write_record, FileWork, JobRecord, JobRun, Path,
-    PathBuf, Proof, RecordContext, RecordKind, SourceGuard, StoredEndpoint,
+    destination_parts, failure, FileWork, JobRecord, JobRun, Path, PathBuf, Proof, SourceGuard,
+    StoredEndpoint,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -52,25 +52,6 @@ pub(super) enum PreviousTarget {
     Unconfirmed,
 }
 
-#[derive(Serialize, Deserialize)]
-pub(super) struct Index {
-    pub(super) job: String,
-    pub(super) source: StoredEndpoint,
-    pub(super) target: StoredEndpoint,
-    pub(super) root: String,
-    pub(super) count: u64,
-    #[serde(default)]
-    pub(super) pending: Option<Receipt>,
-}
-
-pub(super) fn digest(bytes: &[u8]) -> String {
-    ring::digest::digest(&SHA256, bytes)
-        .as_ref()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
-}
-
 pub(super) fn key(file: &FileWork) -> String {
     file.receipt_key.clone().unwrap_or_else(|| {
         format!(
@@ -81,134 +62,10 @@ pub(super) fn key(file: &FileWork) -> String {
     })
 }
 
+/// The job's private folder: its crash log (and, before 0.5.189, one file
+/// per receipt).
 pub(super) fn directory(job_path: &Path) -> PathBuf {
     job_path.with_extension("files")
-}
-
-pub(in crate::transfer::engine) fn initialize(
-    job_path: &Path,
-    record: &JobRecord,
-    context: Option<&RecordContext>,
-) -> io::Result<()> {
-    crate::support_dirs::ensure_private_dir(&directory(job_path))?;
-    match read_index(job_path, record, context) {
-        Ok(_) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound && !record.mutation_started => {
-            write_record(
-                &directory(job_path).join("index.json"),
-                RecordKind::Job,
-                &record.id,
-                context,
-                &Index {
-                    job: record.id.clone(),
-                    source: record.source.clone(),
-                    target: record.target.clone(),
-                    root: record.target_dir.clone(),
-                    count: 0,
-                    pending: None,
-                },
-            )
-        }
-        Err(error) => Err(error),
-    }
-}
-
-pub(super) fn read_index(
-    job_path: &Path,
-    record: &JobRecord,
-    context: Option<&RecordContext>,
-) -> io::Result<Index> {
-    let index: Index = read_record(
-        &directory(job_path).join("index.json"),
-        RecordKind::Job,
-        &record.id,
-        u64::MAX,
-        context.is_some(),
-    )?;
-    if index.job != record.id
-        || index.source != record.source
-        || index.target != record.target
-        || index.root != record.target_dir
-    {
-        return Err(failure(
-            "Dateijournalindex gehört zu einem abweichenden Auftrag",
-        ));
-    }
-    Ok(index)
-}
-
-pub(super) fn receipt_path(job_path: &Path, key: &str) -> PathBuf {
-    directory(job_path).join(format!("{}.json", digest(key.as_bytes())))
-}
-
-pub(super) fn repair_new_entry(
-    job_path: &Path,
-    record: &JobRecord,
-    context: Option<&RecordContext>,
-    index: &mut Index,
-) -> io::Result<()> {
-    let Some(intent) = index.pending.clone() else {
-        return Ok(());
-    };
-    validate(&intent, record)?;
-    let candidate = receipt_path(job_path, &intent.key);
-    let mut unapproved = intent.clone();
-    unapproved.publication_authorized = false;
-    let mut committed = 0u64;
-    for entry in std::fs::read_dir(directory(job_path))? {
-        let entry = entry?;
-        if entry.file_name() == "index.json"
-            || entry.path().extension().and_then(|ext| ext.to_str()) != Some("json")
-        {
-            continue;
-        }
-        let receipt: Receipt = read_record(
-            &entry.path(),
-            RecordKind::Job,
-            &record.id,
-            u64::MAX,
-            context.is_some(),
-        )?;
-        validate(&receipt, record)?;
-        if receipt_path(job_path, &receipt.key) != entry.path() {
-            return Err(failure("Abweichender Dateijournalschlüssel"));
-        }
-        if entry.path() == candidate {
-            if receipt != intent && receipt != unapproved {
-                return Err(failure("Unbestätigter Journalneueintrag wurde verändert"));
-            }
-        } else {
-            committed = committed
-                .checked_add(1)
-                .ok_or_else(|| failure("Dateijournalzähler übergelaufen"))?;
-        }
-    }
-    // The intent identifies exactly one never-authorized new key. Every
-    // previously committed key must still be present; never recount loss.
-    if committed != index.count {
-        return Err(failure(
-            "Bestehende Dateibelege fehlen während Journalwiederaufnahme",
-        ));
-    }
-    write_record(
-        &candidate,
-        RecordKind::Job,
-        &record.id,
-        context,
-        &unapproved,
-    )?;
-    index.count = index
-        .count
-        .checked_add(1)
-        .ok_or_else(|| failure("Dateijournalzähler übergelaufen"))?;
-    index.pending = None;
-    write_record(
-        &directory(job_path).join("index.json"),
-        RecordKind::Job,
-        &record.id,
-        context,
-        index,
-    )
 }
 
 pub(super) fn validate(receipt: &Receipt, record: &JobRecord) -> io::Result<()> {
@@ -225,93 +82,39 @@ pub(super) fn validate(receipt: &Receipt, record: &JobRecord) -> io::Result<()> 
     super::paths::validate(receipt, record)
 }
 
-pub(super) fn visit_saved(
-    record: &JobRecord,
-    job_path: &Path,
-    context: Option<&RecordContext>,
-    mut visit: impl FnMut(Receipt) -> io::Result<()>,
-) -> io::Result<()> {
-    let mut index = read_index(job_path, record, context)?;
-    repair_new_entry(job_path, record, context, &mut index)?;
-    let mut count = 0u64;
-    let entries = match std::fs::read_dir(directory(job_path)) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == io::ErrorKind::NotFound && !record.mutation_started => {
-            return Ok(())
-        }
-        Err(error) => return Err(error),
-    };
-    for entry in entries {
-        let entry = entry?;
-        if entry.file_name() == "index.json"
-            || entry.path().extension().and_then(|ext| ext.to_str()) != Some("json")
-        {
-            continue;
-        }
-        count = count
-            .checked_add(1)
-            .ok_or_else(|| failure("Dateijournalzähler übergelaufen"))?;
-        let receipt: Receipt = read_record(
-            &entry.path(),
-            RecordKind::Job,
-            &record.id,
-            u64::MAX,
-            context.is_some(),
-        )?;
-        validate(&receipt, record)?;
-        if receipt_path(job_path, &receipt.key) != entry.path() {
-            return Err(failure(
-                "Dateibeleg hat einen abweichenden Speicherschlüssel",
-            ));
-        }
-        visit(receipt)?;
-    }
-    if count != index.count {
-        return Err(failure(
-            "Dateijournal ist unvollständig oder enthält unbestätigte Belege",
-        ));
-    }
-    Ok(())
-}
-
 impl JobRun {
+    /// The newest receipt of `file`, from memory or the crash log.
     pub(super) fn read_file(&self, file: &FileWork) -> io::Result<Option<Receipt>> {
-        let data = super::super::lock(&self.data);
-        self.read_file_unlocked(file, &data)
-    }
-    pub(super) fn read_file_unlocked(
-        &self,
-        file: &FileWork,
-        data: &JobRecord,
-    ) -> io::Result<Option<Receipt>> {
-        let path = receipt_path(&self.path, &key(file));
-        match read_record::<Receipt>(
-            &path,
-            RecordKind::Job,
-            &data.id,
-            u64::MAX,
-            self.context.is_some(),
-        ) {
-            Ok(receipt) => {
-                validate(&receipt, &data)?;
-                if receipt.key != key(file) || receipt.source.path != file.source {
-                    return Err(failure("Dateibeleg passt nicht zur Auswahl"));
-                }
-                Ok(Some(receipt))
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(error),
+        let key = key(file);
+        let Some(receipt) = self.journal.get(&key)? else {
+            return Ok(None);
+        };
+        validate(&receipt, &super::super::lock(&self.data))?;
+        if receipt.key != key || receipt.source.path != file.source {
+            return Err(failure("Dateibeleg passt nicht zur Auswahl"));
         }
+        Ok(Some(receipt))
     }
+
+    /// Whether `file` has any receipt in this job (memory only).
+    pub(super) fn has_receipt(&self, file: &FileWork) -> bool {
+        self.journal.contains(&key(file))
+    }
+
+    /// A durable change of a receipt (discarded, revoked, decided).
     pub(super) fn write_file(&self, receipt: &Receipt) -> io::Result<()> {
-        write_record(
-            &receipt_path(&self.path, &receipt.key),
-            RecordKind::Job,
-            &receipt.job,
-            self.context.as_ref(),
-            receipt,
-        )
+        self.journal.put(std::slice::from_ref(receipt), false, true)
     }
+
+    /// A publication's acknowledgement: no sync of its own, durable with the
+    /// next intent's group commit or the job's end. Lost by a crash, the
+    /// file is in doubt and decided when the job resumes.
+    pub(super) fn write_published(&self, receipt: &Receipt) -> io::Result<()> {
+        self.journal
+            .put(std::slice::from_ref(receipt), false, false)
+    }
+
+    /// Records the durable intent of one publication.
     pub(super) fn start_file(
         &self,
         file: &FileWork,
@@ -321,16 +124,38 @@ impl JobRun {
         quarantine: Option<Proof>,
         previous_target: PreviousTarget,
     ) -> io::Result<()> {
+        let receipt = self.intent(
+            file,
+            source,
+            staged,
+            destination,
+            quarantine,
+            previous_target,
+        )?;
+        self.journal.put(std::slice::from_ref(&receipt), true, true)
+    }
+
+    /// Records the intents of a whole packet as one durable record.
+    pub(super) fn start_files(&self, intents: &[Receipt]) -> io::Result<()> {
+        self.journal.put(intents, true, true)
+    }
+
+    /// The intent receipt of one publication, not yet written.
+    pub(super) fn intent(
+        &self,
+        file: &FileWork,
+        source: SourceGuard,
+        staged: Option<Proof>,
+        destination: String,
+        quarantine: Option<Proof>,
+        previous_target: PreviousTarget,
+    ) -> io::Result<Receipt> {
+        let previous = self.read_file(file)?;
         let data = super::super::lock(&self.data);
         let (relative, destination) = destination_parts(&data, &destination)?;
-        let mut index = read_index(&self.path, &data, self.context.as_ref())?;
-        repair_new_entry(&self.path, &data, self.context.as_ref(), &mut index)?;
-        let previous = self.read_file_unlocked(file, &data)?;
-        let new_key = previous.is_none();
-        let stage = staged.clone();
         // A metadata stage record (empty digest) becomes the publication's
         // evidence only on a local target, whose rename keeps the object.
-        let mut proof = staged.filter(|proof| {
+        let mut proof = staged.clone().filter(|proof| {
             !proof.sha256.is_empty() || (data.target.local && proof.object.is_some())
         });
         if let Some(proof) = &mut proof {
@@ -352,7 +177,7 @@ impl JobRun {
             destination,
             proof,
             quarantine: quarantine.or_else(|| previous.and_then(|receipt| receipt.quarantine)),
-            staged: stage,
+            staged,
             confirmed: false,
             acknowledged: false,
             discarded: false,
@@ -361,31 +186,6 @@ impl JobRun {
             published: None,
         };
         validate(&receipt, &data)?;
-        if new_key {
-            index.pending = Some(receipt.clone());
-            write_record(
-                &directory(&self.path).join("index.json"),
-                RecordKind::Job,
-                &data.id,
-                self.context.as_ref(),
-                &index,
-            )?;
-        }
-        self.write_file(&receipt)?;
-        if new_key {
-            index.pending = None;
-            index.count = index
-                .count
-                .checked_add(1)
-                .ok_or_else(|| failure("Dateijournalzähler übergelaufen"))?;
-            write_record(
-                &directory(&self.path).join("index.json"),
-                RecordKind::Job,
-                &data.id,
-                self.context.as_ref(),
-                &index,
-            )?;
-        }
-        Ok(())
+        Ok(receipt)
     }
 }

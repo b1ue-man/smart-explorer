@@ -212,7 +212,7 @@ fn batches_task_transfer_compat_missing_only_keeps_stored_recovery_and_journal_l
     );
     let files =
         crate::support_dirs::app_data_file("transfer-jobs").join(format!("{}.files", candidate.id));
-    fs::remove_file(files.join("index.json")).unwrap();
+    fs::remove_file(files.join("journal.log")).unwrap();
     repeat(&mut candidate, first.roots);
     assert!(
         !run(candidate).issues.is_empty(),

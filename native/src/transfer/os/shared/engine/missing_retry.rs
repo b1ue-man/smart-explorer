@@ -100,6 +100,12 @@ pub(crate) fn resume(engine: &Engine<'_>, file: &FileWork) -> Result<Option<Outc
     let Some(record) = &engine.job_record else {
         return Ok(None);
     };
+    // A new job without any receipt yet (the common paste): nothing to
+    // decide and nothing is looked up. Otherwise the receipt comes from
+    // memory or the crash log, never from a file per receipt.
+    if engine.view.recovery == crate::transfer::RecoveryMode::New && record.journal.is_empty() {
+        return Ok(None);
+    }
     let Some(receipt) = record
         .read_file(file)
         .map_err(|error| OpError::at(At::Unknown, error))?
