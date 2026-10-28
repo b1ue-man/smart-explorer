@@ -1,0 +1,102 @@
+name: windows-install-check
+run-name: Install a published Windows release ${{ inputs.version }}
+
+# Installs a published release the way the setup does (the verified update
+# helper's --install-bundle into %LOCALAPPDATA%\Programs\Smart Explorer, the
+# payloads staged under the setup's names in the helper's working folder),
+# once from the runner's elevated account and once as a standard user, and
+# prints the helper's exact result. The setup itself shows only the exit code.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Published release version, e.g. 0.5.187
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ inputs.version }}
+    steps:
+      - name: Download the release payloads
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:VERSION -notmatch '^\d+\.\d+\.\d+$') { throw "version invalid: $env:VERSION" }
+          $stage = 'C:\se-stage'
+          New-Item -ItemType Directory -Force $stage | Out-Null
+          $names = 'smart_explorer.exe', 'smart_explorer_updater.exe', 'se.exe', 'se-mcp-launcher.exe'
+          $hashes = @{}
+          foreach ($name in $names) {
+            gh release download "v$env:VERSION" -R $env:GITHUB_REPOSITORY -p $name -p "$name.sha256" -D $stage --clobber
+            if ($LASTEXITCODE -ne 0) { throw "download $name failed" }
+            $expected = (Get-Content "$stage\$name.sha256" -Raw).Trim().Split(' ')[0].ToLower()
+            $actual = (Get-FileHash "$stage\$name" -Algorithm SHA256).Hash.ToLower()
+            if ($expected -ne $actual) { throw "$name hash mismatch" }
+            $hashes[$name] = $actual
+          }
+          $hashes | ConvertTo-Json | Set-Content "$stage\hashes.json"
+          @'
+          param([string]$Stage, [string]$Version)
+          $hashes = Get-Content "$Stage\hashes.json" -Raw | ConvertFrom-Json
+          $root = Join-Path $env:LOCALAPPDATA 'Programs\Smart Explorer'
+          New-Item -ItemType Directory -Force $root | Out-Null
+          # The setup extracts into its own temp folder and passes bare names.
+          $helper = Join-Path $env:TEMP ('se-install-' + [guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Force $helper | Out-Null
+          Copy-Item "$Stage\smart_explorer.exe" "$helper\Smart Explorer.exe"
+          Copy-Item "$Stage\smart_explorer_updater.exe" "$helper\Smart Explorer Updater.exe"
+          Copy-Item "$Stage\se.exe" "$helper\se.exe"
+          Copy-Item "$Stage\se-mcp-launcher.exe" "$helper\se-mcp-launcher.exe"
+          Set-Location $helper
+          $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+          $admin = ([Security.Principal.WindowsPrincipal]$identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+          "user: $($identity.Name); elevated administrator: $admin"
+          "root: $root"
+          & "$helper\Smart Explorer Updater.exe" --install-bundle --root $root `
+            --app-staged 'Smart Explorer.exe' --app-sha256 $hashes.'smart_explorer.exe' `
+            --cli-staged 'se.exe' --cli-sha256 $hashes.'se.exe' `
+            --launcher-staged 'se-mcp-launcher.exe' --launcher-sha256 $hashes.'se-mcp-launcher.exe' `
+            --helper-sha256 $hashes.'smart_explorer_updater.exe' --version $Version --no-gui-start 2>&1
+          "helper exit code: $LASTEXITCODE"
+          $log = Join-Path $env:APPDATA 'smart_explorer\updater.log'
+          if (Test-Path $log) { '--- updater.log'; Get-Content $log -Tail 40 }
+          '--- installed'
+          Get-ChildItem -Force $root | Format-Table Mode, Length, Name | Out-String
+          '--- ACL of the root and its ancestors'
+          $path = $root
+          while ($path) { icacls $path; $path = Split-Path $path }
+          '--- temp ACL'
+          icacls $env:TEMP
+          '@ | Set-Content "$stage\install.ps1"
+
+      - name: Install as the runner's elevated account
+        shell: pwsh
+        run: |
+          & C:\se-stage\install.ps1 -Stage C:\se-stage -Version $env:VERSION
+
+      - name: Install as a standard user
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $password = 'Se!' + [guid]::NewGuid().ToString('N').Substring(0, 16)
+          net user setest $password /add | Out-Null
+          $credential = [pscredential]::new('setest', (ConvertTo-SecureString $password -AsPlainText -Force))
+          $out = 'C:\se-stage\standard.out.txt'
+          $err = 'C:\se-stage\standard.err.txt'
+          $process = Start-Process -FilePath 'powershell.exe' -Credential $credential -LoadUserProfile -Wait -PassThru `
+            -WorkingDirectory 'C:\se-stage' `
+            -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'C:\se-stage\install.ps1', '-Stage', 'C:\se-stage', '-Version', $env:VERSION `
+            -RedirectStandardOutput $out -RedirectStandardError $err
+          Get-Content $out
+          Get-Content $err
+          "process exit: $($process.ExitCode)"
