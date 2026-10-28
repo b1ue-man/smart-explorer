@@ -121,7 +121,8 @@ pub(super) fn copy(
             Ok(()) => OpOutcome::Done,
             Err(error) => classify_error(error),
         };
-        permits.finish_with(outcome, meter.accounts());
+        let accounts = meter.accounts();
+        permits.finish_with(outcome, accounts);
         drop(active);
         drop(reservation);
         for file in members {

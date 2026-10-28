@@ -19,6 +19,12 @@ const MAX_METADATA_PRIORITY_BURST: usize = 8;
 /// (socket error or the connection's own liveness check), drops its permit
 /// and hands the slot on, so queued requests fail there just as fast. A
 /// poisoned gate aborts all waiters.
+///
+/// Without a deadline, streamed transfers (hydration, write-back, open
+/// files) that hold every slot would stall listings and `stat` until one of
+/// them ends. Where the backend has more than one slot, transfers therefore
+/// never take the last one (`transfer_limit`): it stays for metadata, which
+/// only reorders waiters otherwise and cannot pre-empt a running stream.
 pub(super) struct MountRequestGate {
     limit: usize,
     state: Mutex<GateState>,
@@ -27,6 +33,8 @@ pub(super) struct MountRequestGate {
 #[derive(Default)]
 struct GateState {
     active: usize,
+    /// Of `active`, the transfer-class permits.
+    transfers_active: usize,
     transfer_waiters: usize,
     metadata_waiters: usize,
     metadata_burst: usize,
@@ -93,7 +101,17 @@ impl GateState {
             RequestClass::Metadata => {
                 self.metadata_burst = self.metadata_burst.saturating_add(1);
             }
-            RequestClass::Transfer => self.metadata_burst = 0,
+            RequestClass::Transfer => {
+                self.transfers_active += 1;
+                self.metadata_burst = 0;
+            }
+        }
+    }
+
+    fn release(&mut self, class: RequestClass) {
+        self.active = self.active.saturating_sub(1);
+        if let RequestClass::Transfer = class {
+            self.transfers_active = self.transfers_active.saturating_sub(1);
         }
     }
 
@@ -176,6 +194,7 @@ impl MountRequestGate {
             state.reserve(class);
             return Ok(MountRequestPermit {
                 gate: Arc::clone(self),
+                class,
             });
         }
         let waiter = Arc::new(Waiter {
@@ -190,6 +209,7 @@ impl MountRequestGate {
                 GRANTED => {
                     return Ok(MountRequestPermit {
                         gate: Arc::clone(self),
+                        class,
                     })
                 }
                 ABORTED => return Err(unavailable()),
@@ -200,7 +220,7 @@ impl MountRequestGate {
                 Err(poisoned) => {
                     let mut state = poisoned.into_inner();
                     if waiter.status() == GRANTED {
-                        state.active = state.active.saturating_sub(1);
+                        state.release(class);
                     }
                     state.abort_waiters();
                     return Err(unavailable());
@@ -216,18 +236,32 @@ fn unavailable() -> io::Error {
     io::Error::other("mounted-drive backend concurrency state is unavailable")
 }
 
+/// The slots transfers may hold at once: all but one, which stays free for
+/// metadata; a single-slot backend has none to spare.
+fn transfer_limit(limit: usize) -> usize {
+    limit.saturating_sub(1).max(1)
+}
+
+fn transfer_has_room(state: &GateState, limit: usize) -> bool {
+    state.active < limit && state.transfers_active < transfer_limit(limit)
+}
+
 fn transfer_can_enter(state: &GateState, limit: usize) -> bool {
-    state.active < limit
+    transfer_has_room(state, limit)
         && (state.metadata_waiters == 0 || state.metadata_burst >= MAX_METADATA_PRIORITY_BURST)
 }
 
+/// The burst bound only hands a slot to a transfer that can take it.
 fn metadata_can_enter(state: &GateState, limit: usize) -> bool {
     state.active < limit
-        && (state.transfer_waiters == 0 || state.metadata_burst < MAX_METADATA_PRIORITY_BURST)
+        && (state.transfer_waiters == 0
+            || state.metadata_burst < MAX_METADATA_PRIORITY_BURST
+            || !transfer_has_room(state, limit))
 }
 
 pub(super) struct MountRequestPermit {
     gate: Arc<MountRequestGate>,
+    class: RequestClass,
 }
 
 impl Drop for MountRequestPermit {
@@ -236,12 +270,12 @@ impl Drop for MountRequestPermit {
             Ok(state) => state,
             Err(poisoned) => {
                 let mut state = poisoned.into_inner();
-                state.active = state.active.saturating_sub(1);
+                state.release(self.class);
                 state.abort_waiters();
                 return;
             }
         };
-        state.active = state.active.saturating_sub(1);
+        state.release(self.class);
         state.dispatch(self.gate.limit);
     }
 }
@@ -344,25 +378,55 @@ mod task_tests {
         Ok(())
     }
 
-    /// ML8: the gate admits exactly the announced pool capacity at once.
+    /// ML8: the gate admits exactly the announced pool capacity at once:
+    /// transfers all slots but one, metadata the last.
     #[test]
     fn speed_task_drive_gate_admits_full_pool_capacity() -> io::Result<()> {
         let gate = MountRequestGate::new(24);
-        let permits = (0..24)
+        let mut permits = (0..23)
             .map(|_| gate.enter())
             .collect::<io::Result<Vec<_>>>()?;
+        let waiting_gate = Arc::clone(&gate);
+        let transfer = std::thread::spawn(move || waiting_gate.enter().map(|_permit| ()));
+        wait_for_waiters(&gate, 1, 0)?;
+        permits.push(gate.enter_metadata()?);
         {
             let state = gate
                 .state
                 .lock()
                 .map_err(|_| io::Error::other("test gate poisoned"))?;
             assert_eq!(state.active, 24);
+            assert_eq!(state.transfers_active, 23);
         }
         let waiting_gate = Arc::clone(&gate);
         let queued = std::thread::spawn(move || waiting_gate.enter_metadata().map(|_permit| ()));
-        wait_for_waiters(&gate, 0, 1)?;
+        wait_for_waiters(&gate, 1, 1)?;
         drop(permits);
         queued.join().unwrap()?;
+        transfer.join().unwrap()?;
+        Ok(())
+    }
+
+    /// Streams that never end on their own (a hydration of a large file)
+    /// hold every transfer slot; a listing still enters at once.
+    #[test]
+    fn speed_task_drive_gate_keeps_a_slot_for_metadata_behind_streams() -> io::Result<()> {
+        let gate = MountRequestGate::new(4);
+        let streams = (0..3)
+            .map(|_| gate.enter())
+            .collect::<io::Result<Vec<_>>>()?;
+        let waiting_gate = Arc::clone(&gate);
+        let fourth = std::thread::spawn(move || waiting_gate.enter().map(|_permit| ()));
+        wait_for_waiters(&gate, 1, 0)?;
+        // Not queued behind the streams or the waiting transfer.
+        drop(gate.enter_metadata()?);
+        drop(gate.enter_metadata()?);
+        assert!(!fourth.is_finished(), "the last slot is not a transfer's");
+        drop(streams);
+        fourth.join().unwrap()?;
+        // A single-slot backend has nothing to keep back.
+        let single = MountRequestGate::new(1);
+        drop(single.enter()?);
         Ok(())
     }
 

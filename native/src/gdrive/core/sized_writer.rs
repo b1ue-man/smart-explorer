@@ -214,9 +214,10 @@ impl SizedWriter {
         let md5 = format!("{:x}", self.md5.clone().compute());
         // One upload per path at a time, like every writer of this backend.
         let _path = self.backend.upload_path_guard(&self.key)?;
-        // New objects are spaced as Drive's refusals taught (G3-08a).
+        // New objects are spaced as Drive's refusals taught (G3-08a); a
+        // cancel during the wait ends it before anything is created.
         let pacer = super::create_pacer::for_account(&self.backend.drive_account_key);
-        pacer.wait();
+        pacer.wait()?;
         // The absent path holds the name's slot from its create to its proof,
         // so no publication of this process to that name interleaves.
         let _slot = match self.purpose {

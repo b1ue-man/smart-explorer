@@ -26,8 +26,12 @@ pub(crate) fn copy_to_new_file(
     expected: u64,
     cancel: &AtomicBool,
 ) -> io::Result<u64> {
-    let optical =
-        crate::source_media::acquire(source, crate::source_media::Priority::Foreground, cancel)?;
+    // A regular file: the cached per-folder probe (M6), one per file.
+    let optical = crate::source_media::acquire_regular_file(
+        source,
+        crate::source_media::Priority::Foreground,
+        cancel,
+    )?;
     if let Some(guard) = &optical {
         guard.set_mode(crate::source_media::ReadMode::Sequential);
     }
@@ -36,7 +40,13 @@ pub(crate) fn copy_to_new_file(
     // cancel flag, the handle loop elsewhere). Progress is counted by the
     // engine once the copy returns.
     let mut quiet = |_: u64| {};
-    let (bytes, file) = match platform::copy_by_path(source, stage, cancel, &mut quiet, None) {
+    // What is known of the source already: no second probe (M10).
+    let known = crate::copy::SourceFacts {
+        size: before.len,
+        optical: optical.is_some(),
+    };
+    let copied = platform::copy_by_path(source, stage, cancel, &mut quiet, Some(known));
+    let (bytes, file) = match copied {
         Some(Ok(Some(copied))) => copied,
         Some(Ok(None)) => {
             return Err(io::Error::new(

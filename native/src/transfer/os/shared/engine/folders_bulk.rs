@@ -8,6 +8,13 @@
 //! folders keep their exclusive creation with keep-both numbering and are
 //! never part of a bulk request. The host reports which folders it created,
 //! so "this register created it or one of its parents" stays exact.
+//!
+//! No asker ever waits for a folder while it holds a claim that is not
+//! below that folder: a single creation claims one unbroken run upwards and
+//! waits only for the folder above it; `ensure_many`, whose claims come from
+//! several chains, waits for nothing while it holds claims and gives a chain
+//! back (its folders are then created when their files ask) when the folder
+//! above it is still being created by someone else.
 use super::super::super::engine_names::parent_rel;
 use super::super::view::Side;
 use super::{lock, FolderError, FolderRegister, Slot};
@@ -37,7 +44,7 @@ impl FolderRegister<'_> {
         let mut mine = HashSet::new();
         let mut claimed = self.claim_chain(&self.ancestors(rel), &mut mine);
         claimed.push(rel.to_string());
-        let mut settled = self.bulk(backend, claimed, cancel);
+        let mut settled = self.bulk(backend, claimed, cancel, Bases::Wait);
         let own = settled.remove(rel);
         for (folder, result) in &settled {
             self.settle_slot(folder, result);
@@ -56,23 +63,50 @@ impl FolderRegister<'_> {
         let Some(backend) = self.bulk_backend() else {
             return;
         };
-        let mut mine = HashSet::new();
-        let mut claimed = Vec::new();
+        let mut chains = Vec::new();
+        let mut tops = HashSet::new();
         for rel in rels.iter().filter(|rel| !rel.is_empty()) {
             if lock(&self.exclusive).contains_key(*rel) {
                 continue;
             }
             let mut chain = vec![rel.to_string()];
             chain.extend(self.ancestors(rel));
-            claimed.extend(self.claim_chain(&chain, &mut mine));
+            // The planned top-level folder above the chain (never part of a
+            // bulk request) is ensured now, while this call holds no claim:
+            // waiting for it later would wait while holding claims.
+            if let Some(top) = chain.last().and_then(|last| parent_rel(last)) {
+                if tops.insert(top.to_string()) {
+                    // A failure stays in its slot for the chains below.
+                    let _ = self.ensure(top, cancel);
+                }
+            }
+            chains.push(chain);
+        }
+        let mut mine = HashSet::new();
+        let mut claimed = Vec::new();
+        for chain in &chains {
+            claimed.extend(self.claim_chain(chain, &mut mine));
         }
         if claimed.is_empty() {
             return;
         }
-        for (folder, result) in &self.bulk(backend, claimed, cancel) {
+        for (folder, result) in &self.bulk(backend, claimed, cancel, Bases::Peek) {
             self.settle_slot(folder, result);
         }
         self.changed.notify_all();
+    }
+
+    /// The lasting state of folder `rel` without waiting: `None` while it is
+    /// being created (or nobody created it yet).
+    fn settled_now(&self, rel: &str) -> Option<Result<bool, FolderError>> {
+        match lock(&self.slots).get(rel) {
+            Some(Slot::Ready { created }) => Some(Ok(*created)),
+            Some(Slot::Failed(error)) => Some(Err(error.repeated())),
+            Some(Slot::Refused { error, until }) if Instant::now() < *until => {
+                Some(Err(error.repeated()))
+            }
+            _ => None,
+        }
     }
 
     fn bulk_backend(&self) -> Option<&dyn Backend> {
@@ -129,33 +163,62 @@ impl FolderRegister<'_> {
 
     /// Creates the claimed folders, parents first, in one request (portions
     /// of it are the backend's business). A claimed folder whose parent is
-    /// not claimed has that parent ensured first, as a single creation would.
+    /// not claimed has that parent ensured first, as a single creation would
+    /// (`Bases::Wait`), or, with `Bases::Peek`, only looked at: a parent not
+    /// settled yet gives the folder (and its claimed folders below) back.
     fn bulk(
         &self,
         backend: &dyn Backend,
         mut claimed: Vec<String>,
         cancel: &AtomicBool,
+        mode: Bases,
     ) -> Settled {
         claimed.sort_by_key(|rel| rel.matches('/').count());
         let inside: HashSet<String> = claimed.iter().cloned().collect();
         let mut settled = Settled::new();
         let mut bases: BTreeMap<String, Result<bool, FolderError>> = BTreeMap::new();
+        let mut released: HashSet<String> = HashSet::new();
         let mut create = Vec::new();
         for rel in claimed {
-            match parent_rel(&rel).filter(|parent| !inside.contains(*parent)) {
-                Some(parent) => {
-                    let base = bases
-                        .entry(parent.to_string())
-                        .or_insert_with(|| self.ensure(parent, cancel));
-                    match base {
-                        Ok(_) => create.push(rel),
-                        Err(error) => {
-                            settled.insert(rel, Err(error.repeated()));
-                        }
-                    }
-                }
-                None => create.push(rel),
+            let parent = parent_rel(&rel);
+            if parent.is_some_and(|parent| released.contains(parent)) {
+                released.insert(rel);
+                continue;
             }
+            let Some(parent) = parent.filter(|parent| !inside.contains(*parent)) else {
+                create.push(rel);
+                continue;
+            };
+            let base = match bases.get(parent) {
+                Some(base) => Some(base.clone()),
+                None => {
+                    let base = match mode {
+                        Bases::Wait => Some(self.ensure(parent, cancel)),
+                        Bases::Peek => self.settled_now(parent),
+                    };
+                    if let Some(base) = &base {
+                        bases.insert(parent.to_string(), base.clone());
+                    }
+                    base
+                }
+            };
+            match base {
+                Some(Ok(_)) => create.push(rel),
+                Some(Err(error)) => {
+                    settled.insert(rel, Err(error.repeated()));
+                }
+                None => {
+                    released.insert(rel);
+                }
+            }
+        }
+        if !released.is_empty() {
+            let mut slots = lock(&self.slots);
+            for rel in &released {
+                slots.remove(rel);
+            }
+            drop(slots);
+            self.changed.notify_all();
         }
         if create.is_empty() {
             return settled;
@@ -198,6 +261,17 @@ impl FolderRegister<'_> {
         }
         settled
     }
+}
+
+/// How `bulk` treats the parent of a claimed folder it does not create.
+#[derive(Clone, Copy)]
+enum Bases {
+    /// Ensures it (waiting for another asker): only where every claim of the
+    /// call is below that parent (one unbroken run upwards).
+    Wait,
+    /// Takes it only when it is settled already; otherwise the folder is
+    /// given back unclaimed.
+    Peek,
 }
 
 /// A folder the bulk creation should have answered for but did not.

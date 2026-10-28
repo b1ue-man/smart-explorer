@@ -172,7 +172,8 @@ pub(super) fn run(engine: &Engine<'_>, files: Vec<FileWork>, buffer: &mut [u8]) 
         (Some(error), 0) => classify_error(error),
         _ => OpOutcome::Done,
     };
-    permits.finish_with(outcome, meter.accounts());
+    let accounts = meter.accounts();
+    permits.finish_with(outcome, accounts);
     drop(active);
     drop(reservation);
     failures.finish();

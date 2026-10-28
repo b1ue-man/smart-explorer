@@ -6,8 +6,11 @@
 //! spaces creates at twice the interval the recent successes came at (half
 //! their rate), and shortens the interval by a sixteenth with every success
 //! (rate probing upward), doubling it again at the next refusal. No fixed
-//! rate, no timer: only Drive's own answers move it.
+//! rate, no timer: only Drive's own answers move it. A wait for a slot ends
+//! as soon as the job running on the thread is canceled, and then no create
+//! goes out.
 use std::collections::{HashMap, VecDeque};
+use std::io;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -18,6 +21,8 @@ const RECENT: usize = 32;
 const MAX_INTERVAL: Duration = Duration::from_secs(60);
 /// Below this spacing the pacer steps aside again.
 const NO_PACING: Duration = Duration::from_micros(500);
+/// How often a waiting create looks at its job's cancel flag.
+const CANCEL_SLICE: Duration = Duration::from_millis(50);
 
 #[derive(Default)]
 struct PaceState {
@@ -43,26 +48,59 @@ pub(super) fn for_account(account: &str) -> Arc<CreatePacer> {
 }
 
 impl CreatePacer {
-    /// How long the next create waits for its slot (and takes the slot).
-    pub(super) fn slot(&self) -> Duration {
-        self.slot_at(Instant::now())
-    }
-
+    #[cfg(test)]
     fn slot_at(&self, now: Instant) -> Duration {
-        let mut state = lock(&self.state);
-        let Some(interval) = state.interval else {
-            return Duration::ZERO;
-        };
-        let at = state.next.map_or(now, |next| next.max(now));
-        state.next = Some(at + interval);
-        at.saturating_duration_since(now)
+        self.reserve_at(now)
+            .map_or(Duration::ZERO, |(at, _)| at.saturating_duration_since(now))
     }
 
-    /// Waits for the next create's slot.
-    pub(super) fn wait(&self) {
-        let delay = self.slot();
-        if !delay.is_zero() {
-            std::thread::sleep(delay);
+    /// Takes the next create's slot: when it starts and when the one after
+    /// it may start (`None` while the pacer steps aside).
+    fn reserve_at(&self, now: Instant) -> Option<(Instant, Instant)> {
+        let mut state = lock(&self.state);
+        let interval = state.interval?;
+        let at = state.next.map_or(now, |next| next.max(now));
+        let end = at + interval;
+        state.next = Some(end);
+        Some((at, end))
+    }
+
+    /// A slot whose create never went out: the next asker may take it,
+    /// unless someone reserved after it already.
+    fn give_back(&self, at: Instant, end: Instant) {
+        let mut state = lock(&self.state);
+        if state.next == Some(end) {
+            state.next = Some(at);
+        }
+    }
+
+    /// Waits for the next create's slot; `Interrupted` (and the slot given
+    /// back) once the job running on this thread is canceled
+    /// (`source_media::with_cancellation`, set by every transfer worker).
+    pub(super) fn wait(&self) -> io::Result<()> {
+        self.wait_unless(crate::source_media::context_canceled)
+    }
+
+    fn wait_unless(&self, canceled: impl Fn() -> bool) -> io::Result<()> {
+        let slot = self.reserve_at(Instant::now());
+        loop {
+            if canceled() {
+                if let Some((at, end)) = slot {
+                    self.give_back(at, end);
+                }
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "Drive-Upload abgebrochen, bevor die Datei angelegt wurde",
+                ));
+            }
+            let now = Instant::now();
+            let Some(remaining) = slot
+                .map(|(at, _)| at.saturating_duration_since(now))
+                .filter(|remaining| !remaining.is_zero())
+            else {
+                return Ok(());
+            };
+            std::thread::sleep(remaining.min(CANCEL_SLICE));
         }
     }
 
@@ -147,5 +185,34 @@ mod tests {
             Some(Duration::from_micros(375_000)),
             "halves again"
         );
+    }
+
+    #[test]
+    fn speed_task_drive_pacer_wait_ends_at_cancel_and_gives_the_slot_back() {
+        let pacer = CreatePacer::default();
+        lock(&pacer.state).interval = Some(MAX_INTERVAL);
+        // The first slot is free; the second would wait a whole interval.
+        pacer.wait_unless(|| false).expect("the free slot");
+        let reserved = lock(&pacer.state).next;
+        let started = Instant::now();
+        let canceled = std::sync::atomic::AtomicBool::new(false);
+        let error = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                std::thread::sleep(Duration::from_millis(100));
+                canceled.store(true, std::sync::atomic::Ordering::Release);
+            });
+            pacer
+                .wait_unless(|| canceled.load(std::sync::atomic::Ordering::Acquire))
+                .expect_err("a cancel ends the wait")
+        });
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+        assert!(started.elapsed() < MAX_INTERVAL, "not the whole interval");
+        assert_eq!(
+            lock(&pacer.state).next,
+            reserved,
+            "the canceled create's slot is free again"
+        );
+        // Canceled before any wait: no create either.
+        assert!(pacer.wait_unless(|| true).is_err());
     }
 }

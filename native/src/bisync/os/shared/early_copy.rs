@@ -24,7 +24,7 @@
 //! guard must decide first).
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Condvar, Mutex};
+use std::sync::{Condvar, Mutex, OnceLock};
 
 use super::apply_guard::ExpectedFile;
 use super::incremental::SyncEndpoints;
@@ -101,7 +101,10 @@ pub(super) struct EarlyLane<'a> {
     keys: KeyPolicy,
     base: HashSet<String>,
     held_entries: [bool; 2],
-    deferred: [bool; 2],
+    /// Per side: whether a later real root syncfs can cover a Deferred
+    /// stage, proven with the first early copy to that side (a run without
+    /// early copies issues no syncfs before its scan).
+    deferred: [OnceLock<bool>; 2],
     throttle: Throttle,
     cancel: &'a AtomicBool,
     versions: &'a RunVersions,
@@ -143,18 +146,6 @@ impl<'a> EarlyLane<'a> {
         if off {
             return None;
         }
-        // The same proof as the apply's: a later real root syncfs covers a
-        // deferred stage; the checkpoint performs it before recording.
-        let mut deferred = [false; 2];
-        if !opts.cross_mounts {
-            for (slot, backend, root) in [
-                (0, endpoints.a, endpoints.root_a),
-                (1, endpoints.b, endpoints.root_b),
-            ] {
-                deferred[slot] = backend.is_local()
-                    && crate::vfs::sync_filesystem(backend, root).unwrap_or(false);
-            }
-        }
         Some(Self {
             endpoints,
             opts,
@@ -164,7 +155,7 @@ impl<'a> EarlyLane<'a> {
                 .map(|rel| keys.key(rel).into_owned())
                 .collect(),
             held_entries,
-            deferred,
+            deferred: [OnceLock::new(), OnceLock::new()],
             throttle: Throttle::new(opts.bwlimit_bps),
             cancel,
             versions,
@@ -391,7 +382,7 @@ impl<'a> EarlyLane<'a> {
         let (target, target_root) = self.side(to);
         let sp = crate::vfs::sync_path(source, source_root, &job.rel).ok()?;
         let dp = crate::vfs::sync_path(target, target_root, &job.target_rel).ok()?;
-        let durability = if self.deferred[index(to)] {
+        let durability = if self.deferred(to) {
             StageDurability::Deferred
         } else {
             StageDurability::Now
@@ -429,6 +420,18 @@ impl<'a> EarlyLane<'a> {
             source: self.hashed(job.from, outcome.source),
             destination: self.hashed(to, outcome.destination),
             durable: outcome.durable,
+        })
+    }
+
+    /// The same proof as the apply's, made once per side at its first early
+    /// copy: a later real root syncfs covers a deferred stage; the
+    /// checkpoint performs it before recording.
+    fn deferred(&self, to: PairSide) -> bool {
+        *self.deferred[index(to)].get_or_init(|| {
+            let (backend, root) = self.side(to);
+            !self.opts.cross_mounts
+                && backend.is_local()
+                && crate::vfs::sync_filesystem(backend, root).unwrap_or(false)
         })
     }
 
