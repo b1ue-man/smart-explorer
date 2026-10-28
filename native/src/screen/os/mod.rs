@@ -280,6 +280,12 @@ mod x11_monitors;
 #[path = "linux_os/x11_windows.rs"]
 mod x11_windows;
 
+/// Whether a window manager manages the X server of `DISPLAY` (EWMH).
+#[cfg(target_os = "linux")]
+pub(crate) fn x11_window_manager_running() -> std::io::Result<bool> {
+    x11_windows::window_manager_running()
+}
+
 /// Task tests of the Windows host with real windows and monitors (stage
 /// `windows-screen`).
 #[cfg(all(windows, test))]

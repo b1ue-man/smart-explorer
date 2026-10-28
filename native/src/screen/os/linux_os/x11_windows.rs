@@ -185,6 +185,27 @@ pub(crate) fn is_hidden<C: Connection>(
     Ok(states.contains(&atoms.wm_state_hidden))
 }
 
+/// Whether an EWMH window manager manages the X server of `DISPLAY`: its
+/// root names a `_NET_SUPPORTING_WM_CHECK` window, the rule the window list
+/// uses too. LightDM greeters run without one and focus every window that
+/// is mapped (unity-greeter `focus_upon_map`, lightdm-gtk-greeter
+/// `wm_window_filter`), except windows of type NOTIFICATION.
+pub(crate) fn window_manager_running() -> io::Result<bool> {
+    let (conn, screen_number) = RustConnection::connect(None).map_err(failed)?;
+    let root = conn.setup().roots[screen_number].root;
+    let check = conn
+        .intern_atom(true, b"_NET_SUPPORTING_WM_CHECK")
+        .map_err(failed)?
+        .reply()
+        .map_err(failed)?
+        .atom;
+    // An atom nobody interned yet: no window manager ever announced itself.
+    if check == u32::from(AtomEnum::NONE) {
+        return Ok(false);
+    }
+    Ok(!words(&conn, root, check, AtomEnum::WINDOW)?.is_empty())
+}
+
 /// The windows of the session of `DISPLAY`.
 pub(crate) fn list() -> io::Result<WindowList> {
     let (conn, screen_number) = RustConnection::connect(None).map_err(failed)?;
