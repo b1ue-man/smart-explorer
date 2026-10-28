@@ -338,6 +338,12 @@ impl TreeWalk<'_> {
             );
         }
         let listed = scan_listing(self.context, dir, dir_rel, listing.entries)?;
+        // Only a complete listing: a stopped walk may return part of one.
+        if let Some(observer) = self.context.listed {
+            if !self.context.cancel.load(Ordering::Relaxed) {
+                observer.listed(dir_rel, &listed);
+            }
+        }
         if let Some(log) = &self.context.log {
             log.line(
                 "Gelesen",

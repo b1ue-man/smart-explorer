@@ -35,6 +35,8 @@ mod device_tree_routing;
 #[path = "core/device_tree_types.rs"]
 mod device_tree_types;
 // DRV-M6: `PeerOpenTarget` to `PeerMountTarget` and the key of a device.
+#[path = "core/bulk_copy.rs"]
+mod bulk_copy;
 #[path = "os/shared/device_key.rs"]
 mod device_key;
 #[path = "core/engine.rs"]
@@ -58,6 +60,8 @@ mod frontend_engine;
 #[cfg(test)]
 #[path = "core/frontend_tests.rs"]
 mod frontend_tests;
+#[path = "core/hydration.rs"]
+mod hydration;
 #[path = "core/journal.rs"]
 mod journal;
 #[path = "core/journal_record.rs"]
@@ -147,6 +151,8 @@ mod types;
 #[cfg(test)]
 #[path = "core/types_split_tests.rs"]
 mod types_split_tests;
+#[path = "core/upload_queue.rs"]
+mod upload_queue;
 #[cfg(test)]
 #[path = "core/vault_scheduler_task_tests.rs"]
 mod vault_scheduler_task_tests;
@@ -154,6 +160,8 @@ mod vault_scheduler_task_tests;
 mod windows_access;
 #[path = "core/windows_case.rs"]
 mod windows_case;
+#[path = "core/write_back.rs"]
+mod write_back;
 
 #[cfg(all(test, not(windows)))]
 #[path = "core/metadata_cache_task_tests.rs"]
@@ -199,6 +207,9 @@ pub(crate) use recovery_state::fail_next_recovery_at;
 pub(crate) use recovery_state::{recovery_checkpoint, RecoveryCommitPoint};
 pub(crate) use recovery_storage::publish as publish_recovery_object;
 
+#[cfg(all(test, unix))]
+#[path = "core/drive_speed_task_tests.rs"]
+mod drive_speed_task_tests;
 #[cfg(test)]
 #[path = "core/mount_save_task_tests.rs"]
 mod mount_save_task_tests;
@@ -259,6 +270,7 @@ pub use types::{
     MountRuntimeConfig, MountSource, MountStatus, NamespaceOutcome, OpenDisposition,
     OpenFileOptions, PeerMountTarget, RenameOutcome,
 };
+pub use upload_queue::MountUploadStatus;
 // DRV-M4: the Linux runtime report, its install answer and the unmount from
 // outside the host (`se drive`, the desktop window).
 #[cfg(target_os = "linux")]

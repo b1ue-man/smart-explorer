@@ -190,7 +190,9 @@ fn flush_for_cleanup(context: &CallbackContext, snapshot: &HandleSnapshot) -> io
     let NodeHandle::File(handle) = snapshot.node else {
         return Ok(());
     };
-    match context.filesystem.flush(handle)? {
+    // G4 ML1: Cleanup returns once the file is safe in the local write
+    // cache; a background upload reports its conflicts through the host.
+    match context.filesystem.flush_on_close(handle)? {
         FlushOutcome::NoChanges | FlushOutcome::Committed => Ok(()),
         FlushOutcome::CommittedPendingVerification(conflict) | FlushOutcome::Conflict(conflict) => {
             let drive = context.selected_drive()?;

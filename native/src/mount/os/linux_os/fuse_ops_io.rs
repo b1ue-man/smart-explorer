@@ -165,7 +165,21 @@ pub(crate) fn write(shared: &FuseShared, number: u64, offset: u64, data: &[u8], 
     }
 }
 
+/// `close(2)`: the file is safe in the local write cache when this returns;
+/// with write-back its upload follows in the background (G4 ML1).
 pub(crate) fn flush(shared: &FuseShared, number: u64, reply: ReplyEmpty) {
+    let file = match shared.file(number) {
+        Ok(file) => file,
+        Err(errno) => return reply.error(errno),
+    };
+    match save(shared, file, true) {
+        Ok(()) => reply.ok(),
+        Err(errno) => reply.error(errno),
+    }
+}
+
+/// `fsync(2)`: durable on a drive means published, so this waits for it.
+pub(crate) fn fsync(shared: &FuseShared, number: u64, reply: ReplyEmpty) {
     let file = match shared.file(number) {
         Ok(file) => file,
         Err(errno) => return reply.error(errno),
@@ -178,10 +192,20 @@ pub(crate) fn flush(shared: &FuseShared, number: u64, reply: ReplyEmpty) {
 
 /// Publishes the pending content behind a writable descriptor.
 pub(crate) fn publish(shared: &FuseShared, file: OpenFile) -> Result<(), Errno> {
+    save(shared, file, false)
+}
+
+/// `on_close`: the engine may queue the upload instead of waiting for it.
+fn save(shared: &FuseShared, file: OpenFile, on_close: bool) -> Result<(), Errno> {
     if !file.writable {
         return Ok(());
     }
-    match shared.filesystem.flush(file.handle) {
+    let outcome = if on_close {
+        shared.filesystem.flush_on_close(file.handle)
+    } else {
+        shared.filesystem.flush(file.handle)
+    };
+    match outcome {
         Ok(FlushOutcome::NoChanges) => Ok(()),
         Ok(FlushOutcome::Committed) => {
             shared.shown.remove(file.ino);

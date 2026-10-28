@@ -143,6 +143,11 @@ impl WholeFileSpool {
         &self.stages
     }
 
+    /// Reads may start while a download still fills the spool (G4 ML4).
+    pub(super) fn streams(&self) -> bool {
+        self.storage.reads_while_writing()
+    }
+
     pub fn allocate(&self) -> io::Result<AllocatedSpool> {
         for _ in 0..ALLOCATION_ATTEMPTS {
             let name = format!("{}.spool", random_hex()?);

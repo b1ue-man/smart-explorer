@@ -28,6 +28,10 @@ use crate::vfs::VfsMeta;
 
 pub(crate) const TTL: Duration = Duration::from_secs(1);
 const BLOCK_SIZE: u32 = 4096;
+/// Preferred I/O size reported to programs (`st_blksize`): copy tools size
+/// their buffers by it, so they write in the 1 MiB FUSE requests this host
+/// accepts instead of 4 KiB calls (G4 ML9).
+const IO_BLOCK_SIZE: u32 = 1024 * 1024;
 const NAME_MAX: u32 = 255;
 
 pub(crate) fn lookup(shared: &FuseShared, parent: u64, name: &OsStr, reply: ReplyEntry) {
@@ -108,7 +112,7 @@ pub(crate) fn attr_for(shared: &FuseShared, ino: u64, meta: &VfsMeta) -> FileAtt
         uid: shared.owner.uid,
         gid: shared.owner.gid,
         rdev: 0,
-        blksize: BLOCK_SIZE,
+        blksize: IO_BLOCK_SIZE,
         flags: 0,
     }
 }

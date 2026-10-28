@@ -30,7 +30,10 @@ impl Reporter {
                 std::io::ErrorKind::PermissionDenied => crate::vfs::CapacityFailure::Authorization,
                 _ => crate::vfs::CapacityFailure::Temporary,
             });
+        let mut report = MountCapacityReport::from_observation(remote, budget);
+        // G4 ML1: pending background uploads travel with this report.
+        report.uploads = engine.upload_status();
         // Missing statistics must never stop a drive or alter recovery ownership.
-        let _ = control.report_capacity(MountCapacityReport::from_observation(remote, budget));
+        let _ = control.report_capacity(report);
     }
 }

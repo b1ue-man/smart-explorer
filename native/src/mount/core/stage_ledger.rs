@@ -76,7 +76,7 @@ impl StageLedger {
         if let Ok(mut state) = self.lock() {
             state.active.insert(stage.to_string());
             state.recorded.stages.insert(stage.to_string(), max_len);
-            let _ = self.write(&state.recorded);
+            let _ = self.write(&state.recorded, true);
         }
         ActiveStage {
             ledger: self,
@@ -88,7 +88,9 @@ impl StageLedger {
     pub(super) fn resolve(&self, stage: &str) {
         if let Ok(mut state) = self.lock() {
             if state.recorded.stages.remove(stage).is_some() {
-                let _ = self.write(&state.recorded);
+                // A lost removal only lists a stage that no longer exists;
+                // the next cleanup finds it gone. No flush of its own (G4 ML7).
+                let _ = self.write(&state.recorded, false);
             }
         }
     }
@@ -113,13 +115,17 @@ impl StageLedger {
             .map_err(|_| io::Error::other("mount stage ledger lock poisoned"))
     }
 
-    fn write(&self, recorded: &Recorded) -> io::Result<()> {
+    /// `durable`: the record is on stable storage before its stage is
+    /// created (a begin); a resolve only shortens the cleanup list.
+    fn write(&self, recorded: &Recorded, durable: bool) -> io::Result<()> {
         let sealed = recorded.map_stages(|stage| self.sealer.seal(stage))?;
         let bytes = serde_json::to_vec(&sealed).map_err(io::Error::other)?;
         let next = self.path.with_extension("json.new");
         let mut file = fs::File::create(&next)?;
         file.write_all(&bytes)?;
-        file.sync_data()?;
+        if durable {
+            file.sync_data()?;
+        }
         drop(file);
         fs::rename(&next, &self.path)
     }

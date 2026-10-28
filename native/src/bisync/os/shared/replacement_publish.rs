@@ -89,10 +89,11 @@ pub(super) fn publish(
     if metadata.size != staged.bytes.bytes {
         return Err(drift("published copy has the wrong size"));
     }
-    if metadata
-        .content_md5
-        .as_ref()
-        .is_some_and(|hash| !hash.eq_ignore_ascii_case(&staged.bytes.hex()))
+    if staged.digest_known()
+        && metadata
+            .content_md5
+            .as_ref()
+            .is_some_and(|hash| !hash.eq_ignore_ascii_case(&staged.bytes.hex()))
     {
         return Err(drift("published copy has the wrong digest"));
     }
@@ -135,7 +136,11 @@ pub(super) fn publish(
         destination: Sig {
             size: metadata.size,
             mtime_ms: metadata.mtime_ms,
-            hash: staged.bytes.hash(),
+            hash: if staged.digest_known() {
+                staged.bytes.hash()
+            } else {
+                0
+            },
         },
         durable,
     })

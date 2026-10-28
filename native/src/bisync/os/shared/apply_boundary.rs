@@ -82,7 +82,7 @@ pub(crate) fn target(
     size: Option<u64>,
 ) -> io::Result<()> {
     super::sync_relative_path::SyncRelativePath::parse(rel)?;
-    let limits = crate::vfs::target_limits(backend, root);
+    let limits = super::apply_path_context::target_limits(backend, root);
     if rel.split('/').any(|name| limits.name_issue(name).is_some()) {
         return Err(protected(OmissionKind::NameImpossibleOnTarget));
     }

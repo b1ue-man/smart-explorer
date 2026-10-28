@@ -62,7 +62,7 @@ pub(super) fn copy(
         "copy destination",
     )
     .map_err(AttemptError::pre_commit)?;
-    let mut staged = super::apply_stage::stage(
+    let mut staged = super::apply_stage::stage_as(
         source,
         source_path,
         &source_state,
@@ -74,6 +74,7 @@ pub(super) fn copy(
         throttle,
         cancel,
         bytes,
+        digest_use(source, destination.backend, &destination_state, opts),
     )
     .map_err(AttemptError::pre_commit)?;
     gate(cancel, sink).map_err(AttemptError::pre_commit)?;
@@ -84,13 +85,18 @@ pub(super) fn copy(
         "copy destination",
     )
     .map_err(AttemptError::pre_commit)?;
-    super::apply_boundary::guard(
-        destination.backend,
-        destination.root,
-        rel,
-        opts.cross_mounts,
-    )
-    .map_err(AttemptError::pre_commit)?;
+    // A replaced file is archived next: check the parents before that
+    // mutation. A new file mutates nothing until its publication, which is
+    // guarded again right before it below.
+    if destination_state.metadata.is_some() {
+        super::apply_boundary::guard(
+            destination.backend,
+            destination.root,
+            rel,
+            opts.cross_mounts,
+        )
+        .map_err(AttemptError::pre_commit)?;
+    }
     let preserved = if destination_state.metadata.is_some() && opts.reversible {
         let versions = versions.ok_or_else(|| {
             AttemptError::pre_commit(io::Error::new(
@@ -180,6 +186,30 @@ pub(super) fn copy(
             }
             Err(AttemptError::commit_attempted(error))
         }
+    }
+}
+
+/// A new file whose digest nobody records or checks (size+time comparison
+/// without provider hashes, no `verify`, no move, nothing replaced or
+/// versioned). The baseline then stores hash 0 ("unknown") for it, exactly
+/// what `Actions::hashed` stores for such pairs today.
+fn digest_use(
+    source: &dyn Backend,
+    destination: &dyn Backend,
+    destination_state: &CapturedFile,
+    opts: BisyncOptions,
+) -> super::apply_stage::Digest {
+    use super::snapshot_hash::{hash_mode, HashMode};
+    // A move compares both digests before it removes its source.
+    let unused = !opts.verify
+        && !opts.move_files
+        && destination_state.metadata.is_none()
+        && matches!(hash_mode(source, destination, opts.compare), HashMode::None)
+        && matches!(hash_mode(destination, source, opts.compare), HashMode::None);
+    if unused {
+        super::apply_stage::Digest::Unused
+    } else {
+        super::apply_stage::Digest::Needed
     }
 }
 

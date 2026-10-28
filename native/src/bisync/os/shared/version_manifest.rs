@@ -105,7 +105,10 @@ pub(super) fn write(backend: &dyn Backend, path: &str, manifest: &Manifest) -> i
     }
     let stage = crate::vfs::unique_staging_path(backend, path, "version-index")?;
     let result = (|| {
-        let mut writer = backend.open_write_copy_stage_sized(&stage, bytes.len() as u64)?;
+        // One flush: `finish_stage(Now)` below forces the written record to
+        // stable storage after its mode is set (a synced stage writer would
+        // flush the same bytes twice).
+        let mut writer = backend.open_write_copy_stage_unsynced(&stage, bytes.len() as u64)?;
         writer.write_all(&bytes)?;
         writer.flush()?;
         drop(writer);

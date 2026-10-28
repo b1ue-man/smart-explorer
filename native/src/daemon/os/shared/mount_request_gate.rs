@@ -2,24 +2,23 @@ use std::collections::VecDeque;
 use std::io;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::{Duration, Instant};
 
-const METADATA_GATE_TIMEOUT: Duration = Duration::from_secs(10);
-/// Transfers queue behind long whole-file fetches on backends that allow one
-/// in-flight request. Every waiting callback occupies a Dokany dispatcher
-/// thread, so an unbounded wait lets one slow transfer starve the entire
-/// drive — including fully cached metadata. A bounded wait fails the queued
-/// transfer with a retryable timeout instead and keeps the drive responsive.
-/// The budget is short: even bounded waiters hold dispatcher threads, so it
-/// must drain a routine queue but never pin the pool for minutes behind one
-/// long download.
-const TRANSFER_GATE_TIMEOUT: Duration = Duration::from_secs(15);
+/// Metadata requests may overtake queued transfers this many times in a
+/// row; then one transfer enters, so neither class starves the other.
 const MAX_METADATA_PRIORITY_BURST: usize = 8;
 
 /// Bounds the mount host's in-flight requests before they enter the agent
 /// protocol. A permit stays attached to streamed readers/writers until their
-/// request is closed. This counts local admission, not remote worker lifetime:
-/// returning a client timeout does not cancel a synchronous backend operation.
+/// request is closed. This counts local admission, not remote worker lifetime.
+///
+/// G4 (2026-10-28): a queued request waits until a slot frees; there is no
+/// wall-clock deadline. The limit is the backend's transfer pool capacity
+/// (`MountBackendCapabilities::from_backend`, ML8), so queueing here only
+/// reflects real remote capacity. A dead connection is not detected by a
+/// timer: every request in flight on it fails at the agent connection
+/// (socket error or the connection's own liveness check), drops its permit
+/// and hands the slot on, so queued requests fail there just as fast. A
+/// poisoned gate aborts all waiters.
 pub(super) struct MountRequestGate {
     limit: usize,
     state: Mutex<GateState>,
@@ -31,7 +30,6 @@ struct GateState {
     transfer_waiters: usize,
     metadata_waiters: usize,
     metadata_burst: usize,
-    metadata_served_at: Option<Instant>,
     transfers: WaitQueue,
     metadata: WaitQueue,
 }
@@ -44,7 +42,6 @@ enum RequestClass {
 
 const WAITING: u8 = 0;
 const GRANTED: u8 = 1;
-const CANCELED: u8 = 2;
 const ABORTED: u8 = 3;
 
 struct Waiter {
@@ -52,21 +49,9 @@ struct Waiter {
     // Atomic only for interior mutability through Arc. All reads/writes and
     // predicate checks occur under this waiter's one owning gate mutex.
     status: AtomicU8,
-    initial_deadline: Instant,
-    progress_timeout: Option<Duration>,
 }
 
 impl Waiter {
-    fn deadline(&self, served_at: Option<Instant>) -> Instant {
-        match (self.progress_timeout, served_at) {
-            (Some(timeout), Some(served_at)) => served_at
-                .checked_add(timeout)
-                .unwrap_or(self.initial_deadline)
-                .max(self.initial_deadline),
-            _ => self.initial_deadline,
-        }
-    }
-
     fn status(&self) -> u8 {
         self.status.load(Ordering::Relaxed)
     }
@@ -75,31 +60,14 @@ impl Waiter {
 #[derive(Default)]
 struct WaitQueue {
     entries: VecDeque<Arc<Waiter>>,
-    canceled: usize,
 }
 
 impl WaitQueue {
-    fn prune_canceled(&mut self) {
-        while self.entries.front().is_some_and(|waiter| waiter.status() == CANCELED) {
-            self.entries.pop_front();
-            self.canceled -= 1;
-        }
-        // No linear removal per timeout. A full pass occurs only when canceled
-        // entries pay for at least half its work; retained tombstones stay below
-        // the live count or 32. FIFO order of remaining requests is unchanged.
-        if self.canceled >= 32 && self.canceled >= self.entries.len() / 2 {
-            self.entries.retain(|waiter| waiter.status() != CANCELED);
-            self.canceled = 0;
-        }
+    fn pop(&mut self) -> Option<Arc<Waiter>> {
+        let waiter = self.entries.pop_front();
         if self.entries.is_empty() {
             self.entries = VecDeque::new();
         }
-    }
-
-    fn pop(&mut self) -> Option<Arc<Waiter>> {
-        self.prune_canceled();
-        let waiter = self.entries.pop_front();
-        self.prune_canceled();
         waiter
     }
 }
@@ -119,20 +87,11 @@ impl GateState {
         }
     }
 
-    fn cancel(&mut self, class: RequestClass, waiter: &Waiter) {
-        waiter.status.store(CANCELED, Ordering::Relaxed);
-        *self.waiter_count(class) -= 1;
-        let queue = self.queue(class);
-        queue.canceled += 1;
-        queue.prune_canceled();
-    }
-
-    fn reserve(&mut self, class: RequestClass, now: Instant) {
+    fn reserve(&mut self, class: RequestClass) {
         self.active += 1;
         match class {
             RequestClass::Metadata => {
                 self.metadata_burst = self.metadata_burst.saturating_add(1);
-                self.metadata_served_at = Some(now);
             }
             RequestClass::Transfer => self.metadata_burst = 0,
         }
@@ -146,7 +105,6 @@ impl GateState {
                     waiter.wake.notify_one();
                 }
             }
-            queue.canceled = 0;
             queue.entries = VecDeque::new();
         }
         self.transfer_waiters = 0;
@@ -162,63 +120,40 @@ impl GateState {
             } else {
                 break;
             };
-            let Some(waiter) = self.queue(class).pop() else { break };
+            let Some(waiter) = self.queue(class).pop() else {
+                break;
+            };
             *self.waiter_count(class) -= 1;
-            let now = Instant::now();
-            if now >= waiter.deadline(self.metadata_served_at) {
-                waiter.status.store(CANCELED, Ordering::Relaxed);
-            } else {
-                // Reservation precedes notification: a later caller cannot
-                // take this slot while the selected waiter is still waking.
-                self.reserve(class, now);
-                waiter.status.store(GRANTED, Ordering::Relaxed);
-            }
+            // Reservation precedes notification: a later caller cannot
+            // take this slot while the selected waiter is still waking.
+            self.reserve(class);
+            waiter.status.store(GRANTED, Ordering::Relaxed);
             waiter.wake.notify_one();
         }
     }
 }
 
 impl MountRequestGate {
+    /// `limit` is the backend's transfer pool capacity as announced in the
+    /// mount capabilities (at least one slot).
     pub(super) fn new(limit: usize) -> Arc<Self> {
         Arc::new(Self {
-            limit: limit.clamp(1, 8),
+            limit: limit.max(1),
             state: Mutex::new(GateState::default()),
         })
     }
 
     pub(super) fn enter(self: &Arc<Self>) -> io::Result<MountRequestPermit> {
-        self.enter_until(Instant::now() + TRANSFER_GATE_TIMEOUT)
+        self.enter_queued(RequestClass::Transfer)
     }
 
-    fn enter_until(self: &Arc<Self>, deadline: Instant) -> io::Result<MountRequestPermit> {
-        self.enter_queued(RequestClass::Transfer, deadline, None)
-    }
-
-    /// Metadata may sit behind a long-lived streamed reader when a backend
-    /// advertises only one in-flight request. Bound lack of metadata service,
-    /// not a healthy FIFO backlog's total age. Progress wakes only its selected
-    /// waiter; the others reconsider their deadline when their own timer wakes.
+    /// Metadata may sit behind long streamed transfers on a backend with few
+    /// slots; it has priority for a bounded burst (`MAX_METADATA_PRIORITY_BURST`).
     pub(super) fn enter_metadata(self: &Arc<Self>) -> io::Result<MountRequestPermit> {
-        self.enter_metadata_until(Instant::now() + METADATA_GATE_TIMEOUT)
+        self.enter_queued(RequestClass::Metadata)
     }
 
-    fn enter_metadata_until(self: &Arc<Self>, deadline: Instant) -> io::Result<MountRequestPermit> {
-        let timeout = deadline.saturating_duration_since(Instant::now());
-        self.enter_queued(RequestClass::Metadata, deadline, Some(timeout))
-    }
-
-    fn enter_queued(
-        self: &Arc<Self>,
-        class: RequestClass,
-        deadline: Instant,
-        progress_timeout: Option<Duration>,
-    ) -> io::Result<MountRequestPermit> {
-        let waiter = Waiter {
-            wake: Condvar::new(),
-            status: AtomicU8::new(WAITING),
-            initial_deadline: deadline,
-            progress_timeout,
-        };
+    fn enter_queued(self: &Arc<Self>, class: RequestClass) -> io::Result<MountRequestPermit> {
         let mut state = match self.state.lock() {
             Ok(state) => state,
             Err(poisoned) => {
@@ -227,44 +162,43 @@ impl MountRequestGate {
             }
         };
         state.dispatch(self.limit);
-        let now = Instant::now();
-        if now >= waiter.deadline(state.metadata_served_at) {
-            return Err(queue_timeout(class));
-        }
         let can_enter = match class {
-            RequestClass::Transfer => state.transfer_waiters == 0
-                && transfer_can_enter(&state, self.limit),
-            RequestClass::Metadata => state.metadata_waiters == 0
-                && metadata_can_enter(&state, self.limit),
+            RequestClass::Transfer => {
+                state.transfer_waiters == 0 && transfer_can_enter(&state, self.limit)
+            }
+            RequestClass::Metadata => {
+                state.metadata_waiters == 0 && metadata_can_enter(&state, self.limit)
+            }
         };
         if can_enter {
             // Uncontended calls allocate no queue entry or waiter Arc.
             // Queued predecessors have already reserved any available slots.
-            state.reserve(class, now);
-            return Ok(MountRequestPermit { gate: Arc::clone(self) });
+            state.reserve(class);
+            return Ok(MountRequestPermit {
+                gate: Arc::clone(self),
+            });
         }
-        let waiter = Arc::new(waiter);
+        let waiter = Arc::new(Waiter {
+            wake: Condvar::new(),
+            status: AtomicU8::new(WAITING),
+        });
         state.queue(class).entries.push_back(Arc::clone(&waiter));
         *state.waiter_count(class) += 1;
         state.dispatch(self.limit);
         loop {
             match waiter.status() {
-                GRANTED => return Ok(MountRequestPermit { gate: Arc::clone(self) }),
-                CANCELED => return Err(queue_timeout(class)),
+                GRANTED => {
+                    return Ok(MountRequestPermit {
+                        gate: Arc::clone(self),
+                    })
+                }
                 ABORTED => return Err(unavailable()),
                 _ => {}
             }
-            let deadline = waiter.deadline(state.metadata_served_at);
-            let now = Instant::now();
-            if now >= deadline {
-                state.cancel(class, &waiter);
-                state.dispatch(self.limit);
-                return Err(queue_timeout(class));
-            }
-            state = match waiter.wake.wait_timeout(state, deadline - now) {
-                Ok((state, _)) => state,
+            state = match waiter.wake.wait(state) {
+                Ok(state) => state,
                 Err(poisoned) => {
-                    let (mut state, _) = poisoned.into_inner();
+                    let mut state = poisoned.into_inner();
                     if waiter.status() == GRANTED {
                         state.active = state.active.saturating_sub(1);
                     }
@@ -272,26 +206,14 @@ impl MountRequestGate {
                     return Err(unavailable());
                 }
             };
-            // Both status and progress are checked again under the same mutex,
-            // including after spurious wakes and races with a timeout/grant.
+            // The status is checked again under the same mutex, including
+            // after spurious wakes.
         }
     }
 }
 
 fn unavailable() -> io::Error {
     io::Error::other("mounted-drive backend concurrency state is unavailable")
-}
-
-fn queue_timeout(class: RequestClass) -> io::Error {
-    io::Error::new(
-        io::ErrorKind::TimedOut,
-        match class {
-            RequestClass::Transfer => "mounted-drive transfer waited too long for the remote backend",
-            RequestClass::Metadata => {
-                "mounted-drive metadata queue made no service progress for too long"
-            }
-        },
-    )
 }
 
 fn transfer_can_enter(state: &GateState, limit: usize) -> bool {
@@ -332,9 +254,38 @@ mod bulk_task_tests;
 mod task_tests {
     use super::*;
     use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    fn wait_for_waiters(
+        gate: &MountRequestGate,
+        transfers: usize,
+        metadata: usize,
+    ) -> io::Result<()> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let (transfer_waiters, metadata_waiters) = {
+                let state = gate
+                    .state
+                    .lock()
+                    .map_err(|_| io::Error::other("test gate poisoned"))?;
+                (state.transfer_waiters, state.metadata_waiters)
+            };
+            if transfer_waiters == transfers && metadata_waiters == metadata {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "the expected waiters did not queue",
+                ));
+            }
+            std::thread::yield_now();
+        }
+    }
 
     #[test]
-    fn mount_vault_task_remote_drive_task_metadata_waiter_has_priority_over_a_new_transfer() -> io::Result<()> {
+    fn mount_vault_task_remote_drive_task_metadata_waiter_has_priority_over_a_new_transfer(
+    ) -> io::Result<()> {
         let gate = MountRequestGate::new(1);
         let occupied = gate.enter()?;
         let (send, receive) = mpsc::channel();
@@ -353,34 +304,14 @@ mod task_tests {
             send.send("metadata")
                 .map_err(|_| io::Error::other("test receiver closed"))
         });
-
-        let deadline = Instant::now() + Duration::from_secs(1);
-        loop {
-            let (transfer_waiters, metadata_waiters) = {
-                let state = gate
-                    .state
-                    .lock()
-                    .map_err(|_| io::Error::other("test gate poisoned"))?;
-                (state.transfer_waiters, state.metadata_waiters)
-            };
-            if transfer_waiters == 1 && metadata_waiters == 1 {
-                break;
-            }
-            if Instant::now() >= deadline {
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "transfer and metadata waiters did not both queue",
-                ));
-            }
-            std::thread::yield_now();
-        }
+        wait_for_waiters(&gate, 1, 1)?;
         drop(occupied);
         assert_eq!(
-            receive.recv_timeout(Duration::from_secs(1)).unwrap(),
+            receive.recv_timeout(Duration::from_secs(5)).unwrap(),
             "metadata"
         );
         assert_eq!(
-            receive.recv_timeout(Duration::from_secs(1)).unwrap(),
+            receive.recv_timeout(Duration::from_secs(5)).unwrap(),
             "transfer"
         );
         metadata.join().unwrap()?;
@@ -388,38 +319,50 @@ mod task_tests {
         Ok(())
     }
 
+    /// G4: a transfer queued behind a long one is never failed by a clock;
+    /// it enters as soon as the slot frees, however long that takes.
     #[test]
-    fn mount_vault_task_remote_drive_task_transfer_gate_times_out_instead_of_starving_the_drive() -> io::Result<()> {
+    fn speed_task_drive_gate_waits_without_deadline() -> io::Result<()> {
         let gate = MountRequestGate::new(1);
-        let _occupied = gate.enter()?;
-        let started = Instant::now();
-        let error = gate
-            .enter_until(started + Duration::from_millis(25))
-            .err()
-            .ok_or_else(|| io::Error::other("transfer wait unexpectedly succeeded"))?;
-        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
-        assert!(started.elapsed() < Duration::from_secs(1));
-        // The failed waiter must not leave a stale counter that would block
-        // later metadata priority decisions.
+        let occupied = gate.enter()?;
+        let waiting_gate = Arc::clone(&gate);
+        let queued = std::thread::spawn(move || waiting_gate.enter().map(|_permit| ()));
+        wait_for_waiters(&gate, 1, 0)?;
+        // Longer than the former 15 s transfer budget is not needed to prove
+        // the absence of a deadline: the waiter has no timer at all, so it
+        // is still queued after any delay and enters only on release.
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(!queued.is_finished(), "the queued transfer must still wait");
+        drop(occupied);
+        queued.join().unwrap()?;
         let state = gate
             .state
             .lock()
             .map_err(|_| io::Error::other("test gate poisoned"))?;
         assert_eq!(state.transfer_waiters, 0);
+        assert_eq!(state.active, 0);
         Ok(())
     }
 
+    /// ML8: the gate admits exactly the announced pool capacity at once.
     #[test]
-    fn mount_vault_task_remote_drive_task_metadata_gate_times_out_without_service_progress() -> io::Result<()> {
-        let gate = MountRequestGate::new(1);
-        let _occupied = gate.enter()?;
-        let started = Instant::now();
-        let error = gate
-            .enter_metadata_until(started + Duration::from_millis(25))
-            .err()
-            .ok_or_else(|| io::Error::other("metadata wait unexpectedly succeeded"))?;
-        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
-        assert!(started.elapsed() < Duration::from_secs(1));
+    fn speed_task_drive_gate_admits_full_pool_capacity() -> io::Result<()> {
+        let gate = MountRequestGate::new(24);
+        let permits = (0..24)
+            .map(|_| gate.enter())
+            .collect::<io::Result<Vec<_>>>()?;
+        {
+            let state = gate
+                .state
+                .lock()
+                .map_err(|_| io::Error::other("test gate poisoned"))?;
+            assert_eq!(state.active, 24);
+        }
+        let waiting_gate = Arc::clone(&gate);
+        let queued = std::thread::spawn(move || waiting_gate.enter_metadata().map(|_permit| ()));
+        wait_for_waiters(&gate, 0, 1)?;
+        drop(permits);
+        queued.join().unwrap()?;
         Ok(())
     }
 

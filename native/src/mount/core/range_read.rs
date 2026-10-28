@@ -76,27 +76,37 @@ impl MountEngine {
             // the remote, including an absent recovery payload.
             return Ok(None);
         }
-        let current = self.backend.stat(path.backend())?;
-        require_regular(&current)?;
+        // The identity taken at open bounds every read: the stat after the
+        // bytes proves they belong to it (a change between two reads is
+        // caught by the later read's check), so no stat precedes the read.
         let expected = baseline_from_meta(meta);
-        if baseline_from_meta(&current) != expected {
-            return Err(changed());
-        }
-        let length = current.size.saturating_sub(offset).min(output.len() as u64) as usize;
+        let length = meta.size.saturating_sub(offset).min(output.len() as u64) as usize;
         if length == 0 {
+            let current = self.backend.stat(path.backend())?;
+            require_regular(&current)?;
+            if baseline_from_meta(&current) != expected {
+                return Err(changed());
+            }
             return Ok(Some(0));
         }
         let Some(mut reader) =
             self.backend
-                .open_read_at(path.backend(), current.id.as_deref(), offset)?
+                .open_read_at(path.backend(), meta.id.as_deref(), offset)?
         else {
             // Preserve support for backends that cannot address a byte offset.
             return Ok(None);
         };
         // read_exact retries Interrupted and rejects a premature end, so a
         // short network read cannot become false EOF in the Windows callback.
-        reader.read_exact(&mut output[..length])?;
+        let read = reader.read_exact(&mut output[..length]);
         drop(reader); // Cancel unread frames and release the request gate before stat.
+        if let Err(error) = read {
+            // A file that shrank or was replaced ends early: report the change.
+            return match self.backend.stat(path.backend()) {
+                Ok(after) if baseline_from_meta(&after) != expected => Err(changed()),
+                _ => Err(error),
+            };
+        }
         let after = self.backend.stat(path.backend())?;
         require_regular(&after)?;
         if baseline_from_meta(&after) != expected {

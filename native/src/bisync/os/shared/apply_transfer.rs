@@ -152,7 +152,10 @@ pub(super) fn copy_conflict_sibling_at(
     let captured = capture(backend, source_path, expected, "conflict source")
         .map_err(AttemptError::pre_commit)?;
     let missing = CapturedFile { metadata: None };
-    let mut staged = super::apply_stage::stage(
+    // Nothing consumes the sibling's digest: one connection copies it on
+    // its server (local: reflink/`copy_file_range`) instead of a download
+    // and an upload through this machine (G4 MS13).
+    let mut staged = super::apply_stage::stage_as(
         backend,
         source_path,
         &captured,
@@ -164,6 +167,7 @@ pub(super) fn copy_conflict_sibling_at(
         throttle,
         cancel,
         |_| {},
+        super::apply_stage::Digest::Unused,
     )
     .map_err(AttemptError::pre_commit)?;
     for ordinal in 0..UNIQUE_ATTEMPTS {

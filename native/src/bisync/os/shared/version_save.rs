@@ -86,8 +86,11 @@ fn archive(
     let mut digest = meta.content_md5.clone();
     // Native provider hashes and stable metadata/ID permit a server-side
     // archive without downloading the old payload. A planned content hash
-    // still demands verification when no native hash is available.
-    if side.backend.is_local() || (expected.hash() != 0 && digest.is_none()) {
+    // still demands verification when no native hash is available. A local
+    // archive renames the very file whose size and time `revalidate` proves
+    // unchanged, so it is not read just to record a digest (restores then
+    // check its size; G4 MS11).
+    if expected.hash() != 0 && digest.is_none() {
         let mut reader = crate::vfs::open_read_regular(side.backend, path, meta.id.as_deref())?;
         let content = super::transfer_stream::stream(
             &mut *reader,

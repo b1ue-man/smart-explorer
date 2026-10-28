@@ -87,22 +87,29 @@ impl Actions<'_> {
             .map_err(AttemptError::pre_commit)?;
         let dp = crate::vfs::sync_path(target.backend, target.root, target_rel)
             .map_err(AttemptError::pre_commit)?;
-        super::apply_boundary::guard(
-            source.backend,
-            source.root,
-            source_rel,
-            self.opts.cross_mounts,
-        )
-        .map_err(AttemptError::pre_commit)?;
+        // A deletion guards its own side first thing in `delete`, a plain
+        // copy guards its destination first thing in `copy`; the checks
+        // below are the ones nothing else performs before the next step.
+        if !deletion {
+            super::apply_boundary::guard(
+                source.backend,
+                source.root,
+                source_rel,
+                self.opts.cross_mounts,
+            )
+            .map_err(AttemptError::pre_commit)?;
+        }
         // Deletion rechecks the absent peer too; a concurrent recreation
         // never authorizes deleting a now-independent destination.
-        super::apply_boundary::guard(
-            target.backend,
-            target.root,
-            target_rel,
-            self.opts.cross_mounts,
-        )
-        .map_err(AttemptError::pre_commit)?;
+        if deletion || finalizing || both {
+            super::apply_boundary::guard(
+                target.backend,
+                target.root,
+                target_rel,
+                self.opts.cross_mounts,
+            )
+            .map_err(AttemptError::pre_commit)?;
+        }
         let source_expected = self.expected(from, rel);
         let target_expected = self.expected(from.other(), rel);
         if deletion {

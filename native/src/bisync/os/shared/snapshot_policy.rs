@@ -8,22 +8,59 @@ pub(crate) fn own_path(backend: &dyn Backend, path: &str) -> bool {
         return false;
     }
     let path = std::path::Path::new(path);
-    if path.starts_with(crate::support_dirs::app_data_dir()) {
-        return true;
+    own_prefixes()
+        .iter()
+        .any(|prefix| !prefix.as_os_str().is_empty() && path.starts_with(prefix))
+}
+
+/// The environment facts the application's own folders derive from. The
+/// prefixes are recomputed only when one of them changes, so the private
+/// application folder is created once instead of on every checked entry.
+#[derive(Clone, PartialEq, Eq)]
+struct PrefixKey {
+    host: bool,
+    data: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+    appdata: Option<std::ffi::OsString>,
+    cache: Option<std::ffi::OsString>,
+}
+
+fn prefix_key() -> PrefixKey {
+    PrefixKey {
+        host: crate::support_dirs::host().is_some(),
+        data: std::env::var_os("XDG_DATA_HOME"),
+        home: std::env::var_os("HOME"),
+        appdata: std::env::var_os("APPDATA"),
+        cache: std::env::var_os("XDG_CACHE_HOME"),
     }
+}
+
+type Prefixes = std::sync::Arc<Vec<std::path::PathBuf>>;
+
+fn own_prefixes() -> Prefixes {
+    static CACHE: std::sync::Mutex<Option<(PrefixKey, Prefixes)>> = std::sync::Mutex::new(None);
+    let key = prefix_key();
+    let mut cache = CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((cached, prefixes)) = cache.as_ref() {
+        if *cached == key {
+            return prefixes.clone();
+        }
+    }
+    let mut prefixes = vec![crate::support_dirs::app_data_dir()];
     if let Some(host) = crate::support_dirs::host() {
-        if !host.cache_dir.as_os_str().is_empty() && path.starts_with(&host.cache_dir) {
-            return true;
-        }
+        prefixes.push(host.cache_dir.clone());
     }
-    if let Some(cache) = std::env::var_os("XDG_CACHE_HOME") {
-        if path.starts_with(std::path::Path::new(&cache).join("smart_explorer")) {
-            return true;
-        }
+    if let Some(cache_home) = &key.cache {
+        prefixes.push(std::path::Path::new(cache_home).join("smart_explorer"));
     }
-    std::env::var_os("HOME").is_some_and(|home| {
-        path.starts_with(std::path::Path::new(&home).join(".cache/smart_explorer"))
-    })
+    if let Some(home) = &key.home {
+        prefixes.push(std::path::Path::new(home).join(".cache/smart_explorer"));
+    }
+    let prefixes = std::sync::Arc::new(prefixes);
+    *cache = Some((key, prefixes.clone()));
+    prefixes
 }
 
 pub(crate) fn protected(
@@ -59,12 +96,17 @@ pub(crate) fn protected(
         return Ok(Some(OmissionKind::SystemFolder));
     }
     if meta.is_dir && backend.is_local() {
-        let mounted = crate::vfs::local_mount_boundary(path)?.is_some();
-        if super::snapshot_mounts::missing(backend, root, path, mounted)?
-            || (mounted && !cross_mounts)
-        {
-            return Ok(Some(OmissionKind::Mount));
-        }
+        return super::apply_path_context::mount_omission(
+            backend,
+            root,
+            path,
+            cross_mounts,
+            || {
+                let mounted = crate::vfs::local_mount_boundary(path)?.is_some();
+                let missing = super::snapshot_mounts::missing(backend, root, path, mounted)?;
+                Ok((missing || (mounted && !cross_mounts)).then_some(OmissionKind::Mount))
+            },
+        );
     }
     Ok(None)
 }

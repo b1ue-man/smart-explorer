@@ -75,6 +75,22 @@ impl MountFilesystem for MountEngine {
         MountEngine::flush(self, handle)
     }
 
+    fn flush_on_close(&self, handle: HandleId) -> io::Result<FlushOutcome> {
+        MountEngine::flush_on_close(self, handle)
+    }
+
+    fn upload_status(&self) -> Option<super::upload_queue::MountUploadStatus> {
+        MountEngine::upload_status(self)
+    }
+
+    fn take_upload_conflicts(&self) -> Vec<(String, EntryCondition)> {
+        MountEngine::take_upload_conflicts(self)
+    }
+
+    fn finish_write_back(&self) {
+        MountEngine::finish_write_back(self)
+    }
+
     fn close(&self, handle: HandleId) -> io::Result<()> {
         MountEngine::close(self, handle)
     }
@@ -211,7 +227,7 @@ impl MountFilesystem for MountEngine {
     fn prepare_lock(&self) -> io::Result<LockReadiness> {
         // Publishing failures are reported, not fatal: the lock participant
         // decides with its deadline whether sealed changes stay behind.
-        let published = MountEngine::retry_pending_changes(self);
+        let published = MountEngine::publish_pending_changes(self);
         MountEngine::maintain_cache(self)?;
         self.clean_cache.trim(&self.spool, 0)?;
         Ok(LockReadiness {
