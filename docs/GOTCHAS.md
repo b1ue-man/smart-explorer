@@ -800,6 +800,23 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
 
 ## Updater
 
+- **An elevated setup owns what it creates by Administrators** (run as
+  administrator, or UAC off: the elevated token's default owner). The
+  installation check (`mcp_launcher/os/windows/security.rs::check`) therefore
+  trusts the same principals as the ancestor check: the object's owner, the
+  running account, Administrators, SYSTEM and TrustedInstaller. Until
+  0.5.188 it trusted only owner/SYSTEM/Administrators, so the user's own
+  inherited full access on the new root was a "foreign write grant" and every
+  elevated install failed (`runtime_acl_foreign_write_grant: …\Programs\Smart
+  Explorer`). `.github/workflows/windows-install-check.yml` installs a
+  published release elevated on a fresh runner and prints the helper's result.
+- **The update helper is a GUI-subsystem program** in release builds; its
+  stderr reaches nobody when the setup starts it with `ExecWait`.
+  `--install-bundle` failures are written to `%APPDATA%\smart_explorer\updater.log`,
+  which the setup's failure message names. PowerShell starts a GUI-subsystem
+  program without waiting: use `Start-Process -Wait -PassThru` with
+  redirected output to see its result.
+
 - Per-user install under `%LOCALAPPDATA%\Programs\Smart Explorer\`; app data in
   `%APPDATA%\smart_explorer\`. A normal check downloads the OS-specific
   app/updater/`se` trio to app data, verifies every SHA-256, and atomically
@@ -918,3 +935,12 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   `directory_identity` of a root therefore follows `stable_identity` like its
   children (NTFS/ReFS only), so a folder reservation on a stick creates the
   folder directly instead of through a stage that would need an identity.
+- **Measured on Windows Server 2025 (fsutil):** the root of a FAT32 and of an
+  exFAT volume both have file ID 0; their subfolders have nonzero IDs.
+- **A move renames its source into a quarantine before copying a byte**
+  (`copy/os/shared/safe_file.rs`). Without a stage proof (targets without a
+  durable identity, such as a stick) the transfer receipt checks that
+  quarantined source, not the then empty original path
+  (`file_recovery_doubt.rs::quarantined_source_unchanged`); the raw file
+  index is not compared after the rename, because FAT derives it from the
+  directory entry.
