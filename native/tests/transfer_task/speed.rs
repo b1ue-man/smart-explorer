@@ -11,7 +11,7 @@
 //! `smbclient`, `curl`). Only the file count is asserted, so a broken
 //! transfer cannot pass as fast.
 use crate::support::{
-    ftp, job, local_folder, remote_folder, run, sftp, sftp_stored, slash, smb, webdav,
+    ftp, job, local_folder, nextcloud, remote_folder, run, sftp, sftp_stored, slash, smb, webdav,
     with_crash_log, Measured,
 };
 use smart_explorer::transfer::Endpoint;
@@ -23,7 +23,7 @@ use std::time::Duration;
 /// A benchmark job may take this long before the case fails (2 GiB over a
 /// slow shaped link).
 const LIMIT: Duration = Duration::from_secs(3 * 60 * 60);
-const TOP: &str = "bench";
+pub(crate) const TOP: &str = "bench";
 const MIB: f64 = 1024.0 * 1024.0;
 
 /// One G5 case: `files` files of `bytes` bytes in `folders` folders.
@@ -51,6 +51,14 @@ const MEDIUM: Case = Case {
     folders: 1,
     files: 1_000,
     bytes: 1024 * 1024,
+};
+/// G3-07: single files above the packet size (2 MiB) that still fit one
+/// SMB WRITE of a large-MTU server (8 MiB): each goes as one compound.
+const SINGLE_COMPOUND: Case = Case {
+    name: "single_compound",
+    folders: 1,
+    files: 200,
+    bytes: 3 * 1024 * 1024,
 };
 /// G5 names 10 GiB; a CI runner's disk and time allow 2 GiB.
 pub(crate) const LARGE: Case = Case {
@@ -190,6 +198,7 @@ remote_benchmarks!(
     speed_task_remote_smb_small_50_folders => SMALL_50_FOLDERS,
     speed_task_remote_smb_medium => MEDIUM,
     speed_task_remote_smb_large => LARGE,
+    speed_task_remote_smb_single_compound => SINGLE_COMPOUND,
 );
 
 remote_benchmarks!(
@@ -208,6 +217,15 @@ remote_benchmarks!(
     speed_task_remote_webdav_small_50_folders => SMALL_50_FOLDERS,
     speed_task_remote_webdav_medium => MEDIUM,
     speed_task_remote_webdav_large => LARGE,
+);
+
+// G3-12: the same cases on a Nextcloud, whose large files go up as chunks.
+remote_benchmarks!(
+    "nextcloud",
+    nextcloud(),
+    speed_task_remote_nextcloud_small_one_folder => SMALL_ONE_FOLDER,
+    speed_task_remote_nextcloud_medium => MEDIUM,
+    speed_task_remote_nextcloud_large => LARGE,
 );
 
 /// G3-10: one large file up and down with a login that needed no input, so
@@ -312,7 +330,7 @@ fn speed_task_remote_ftp_large_download_ranges_fresh_job() {
 }
 
 /// Two files compared in 1 MiB blocks (a 2 GiB file is never held whole).
-fn same_bytes(left: &Path, right: &Path) -> bool {
+pub(crate) fn same_bytes(left: &Path, right: &Path) -> bool {
     use std::io::Read;
     let (Ok(mut left), Ok(mut right)) = (std::fs::File::open(left), std::fs::File::open(right))
     else {

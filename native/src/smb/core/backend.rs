@@ -1,6 +1,5 @@
 use super::batch;
 use super::listing;
-use super::reader::SmbReader;
 use super::replace;
 use super::server_copy::{self, ServerCopy, TreeOps};
 use super::session::{SmbConfig, SmbSession};
@@ -83,6 +82,12 @@ impl SmbBackend {
         expected: Option<u64>,
         commit: Commit,
     ) -> VfsResult<Box<dyn Write + Send>> {
+        // An engine stage that fits one WRITE commits in one compound.
+        if let Some(size) = expected.filter(|_| exclusive && commit == Commit::Unsynced) {
+            if let Some(writer) = super::compound_put::open(self, path, size)? {
+                return Ok(writer);
+            }
+        }
         let target = entry_path(path)?;
         let (generation, tree) = self.session.target(&target.share)?;
         let opened = self.session.block_on(async {
@@ -148,36 +153,15 @@ impl SmbBackend {
         Ok(copied.engine_answer())
     }
 
-    /// A reader from byte `start`; a connection lost before any byte was
-    /// read is replaced and the open repeated once.
+    /// A reader from byte `start`: open and first READ in one compound
+    /// (compound_read.rs, G3-07).
     fn reader_at(
         &self,
         path: &str,
         start: u64,
         end: Option<u64>,
     ) -> VfsResult<Box<dyn Read + Send>> {
-        let target = entry_path(path)?;
-        let mut retried = false;
-        loop {
-            let (generation, tree) = self.session.target(&target.share)?;
-            let opened = self
-                .session
-                .block_on(tree.open_file_reader(generation.connection(), &target.rel));
-            match opened {
-                Ok(reader) => {
-                    return Ok(Box::new(SmbReader::new(
-                        reader,
-                        start,
-                        end,
-                        path,
-                        generation,
-                        self.session.runtime(),
-                    )))
-                }
-                Err(error) if generation.note(&error) && !retried => retried = true,
-                Err(error) => return Err(super::errors::map(error, "Öffnen", path)),
-            }
-        }
+        self.open_reader(path, start, end)
     }
 
     /// One folder in one round trip (`create_dir`: an existing real folder

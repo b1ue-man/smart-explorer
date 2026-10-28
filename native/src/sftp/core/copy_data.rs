@@ -288,7 +288,67 @@ async fn release(session: &Arc<RawSftpSession>, handles: Vec<String>, answering:
     }
 }
 
+/// Most copy chains one channel carries at once (`server_copy_batch`).
+const BATCH_CHAINS: usize = 64;
+
+/// What `server_copy_to_stage` answers for one finished chain.
+fn engine_answer(backend: &SftpBackend, copied: io::Result<ServerCopy>) -> io::Result<Option<u64>> {
+    match copied? {
+        ServerCopy::Copied(copied) => Ok(Some(copied)),
+        ServerCopy::Refused => {
+            backend.pool.refuse_copy_data();
+            Ok(None)
+        }
+        ServerCopy::Stream => Ok(None),
+    }
+}
+
 impl SftpBackend {
+    /// `server_copy_batch`: the `copy_to_stage` chains of up to 64 items at
+    /// once on one leased channel (their requests pipeline over its one
+    /// `sftp-server`), the next 64 after them. Each item gets what
+    /// `copy_on_server` would answer; without a channel or `copy-data`, or
+    /// once the server refused it, the remaining items are `None` (stream)
+    /// and nothing is sent for them.
+    pub(super) fn copy_batch_on_server(
+        &self,
+        items: &[(String, String, u64)],
+    ) -> Vec<io::Result<Option<u64>>> {
+        let streamed = |count: usize| (0..count).map(|_| Ok(None));
+        if self.pool.copy_data_refused() {
+            return streamed(items.len()).collect();
+        }
+        let Ok(Some(lease)) = self.pool.lease(self) else {
+            return streamed(items.len()).collect();
+        };
+        let channel = lease.channel().clone();
+        if !channel.copy_data {
+            return streamed(items.len()).collect();
+        }
+        let note = |error: &SftpError| {
+            note_failure(&self.connection, &channel, error);
+        };
+        let cancel = AtomicBool::new(false);
+        let mut results = Vec::with_capacity(items.len());
+        for chunk in items.chunks(BATCH_CHAINS) {
+            if self.pool.copy_data_refused() {
+                results.extend(streamed(chunk.len()));
+                continue;
+            }
+            let chains = chunk.iter().map(|(source, stage, size)| {
+                copy_to_stage(&channel.session, source, stage, *size, &cancel, &note)
+            });
+            let answers = self.rt.block_on(join_all(chains));
+            results.extend(
+                answers
+                    .into_iter()
+                    .map(|copied| engine_answer(self, copied)),
+            );
+        }
+        drop(lease);
+        results
+    }
+
     /// `server_copy_to_stage`: `None` (stream) without a pool channel, when
     /// the server does not offer `copy-data`, refused it before or declines
     /// this copy, and when the source does not open. Nothing of the attempt
@@ -324,13 +384,6 @@ impl SftpBackend {
             &note,
         ));
         drop(lease);
-        match copied? {
-            ServerCopy::Copied(copied) => Ok(Some(copied)),
-            ServerCopy::Refused => {
-                self.pool.refuse_copy_data();
-                Ok(None)
-            }
-            ServerCopy::Stream => Ok(None),
-        }
+        engine_answer(self, copied)
     }
 }

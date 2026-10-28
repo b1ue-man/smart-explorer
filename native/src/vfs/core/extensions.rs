@@ -2,7 +2,7 @@
 //! opts in by implementing `BackendExtensions` and returning itself from
 //! `Backend::extensions`; callers use the free functions of
 //! `extension_calls.rs`, which supply the fallbacks for everyone else.
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
@@ -338,6 +338,34 @@ pub trait BackendExtensions: Backend {
     /// again. Wrappers that rewrite paths keep `false`.
     fn single_put(&self) -> bool {
         false
+    }
+
+    /// A writer that creates `path` (exactly `size` bytes) under its final
+    /// name in an existing folder, for providers whose objects appear only
+    /// complete (Drive): one write request instead of stage + publication
+    /// (`vfs::open_write_absent`, G3-08b). The caller has seen `path` absent
+    /// and asks only under the "keep both" policy. Nothing exists under the
+    /// name before `flush`; after a successful `flush` the name leads to
+    /// exactly this new object. `AlreadyExists` (from the open or `flush`)
+    /// means nothing was published and nothing of this writer is left under
+    /// the name: the caller takes its staged path, which numbers the name.
+    /// Any other `flush` error leaves the outcome open. Dropping the writer
+    /// unflushed publishes nothing. `Ok(None)` = not offered.
+    fn open_write_absent(&self, path: &str, size: u64) -> VfsResult<Option<Box<dyn Write + Send>>> {
+        let _ = (path, size);
+        Ok(None)
+    }
+
+    /// Several server-side copies within this namespace at once, for a
+    /// packet of small files (`vfs::server_copy_batch`): per item
+    /// `(source, stage, size)` what `server_copy_to_stage(source, stage,
+    /// size)` answers, in item order. `Ok(Some(len))`: copied into the new
+    /// private stage; `Ok(None)`: not copied here and nothing of the attempt
+    /// exists (the caller streams that file); `Err`: failed (`AlreadyExists`
+    /// = the stage name is taken and was left alone). Default: `Ok(None)`
+    /// for every item, nothing is sent.
+    fn server_copy_batch(&self, items: &[(String, String, u64)]) -> Vec<io::Result<Option<u64>>> {
+        items.iter().map(|_| Ok(None)).collect()
     }
 
     /// A guard the transfer engine holds from a job's start to its end

@@ -92,6 +92,12 @@ impl BackendExtensions for GDriveBackend {
         super::sized_writer::open_stage_timed(self, path, size, mtime_ms)
     }
 
+    /// One write request for a new file in an existing folder: created under
+    /// its final name, then proven unique or withdrawn (absent_write.rs).
+    fn open_write_absent(&self, path: &str, size: u64) -> VfsResult<Option<Box<dyn Write + Send>>> {
+        super::sized_writer::open_absent(self, path, size).map(Some)
+    }
+
     fn finish_stage(&self, stage: &str, finish: StageFinish) -> VfsResult<StageFinished> {
         let key = norm(stage);
         let id = self

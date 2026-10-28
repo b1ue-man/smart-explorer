@@ -149,9 +149,10 @@ pub use self::local_extensions::{local_mount_boundary, local_volume_identity};
 pub use self::staging_names::is_staging_name;
 pub(crate) use self::staging_names::{fit_stage_name, is_unique_stage, split_stage_name};
 pub use self::transfer_evidence::{
-    create_dirs, host_batch_limits, open_read_evidence, promote_copy_stage_evidence,
-    put_batch_evidence, single_put, supports_create_dirs, take_stage_evidence, transfer_evidence,
-    transfer_scope, EvidencePutOutcome, FileEvidence, PreparePut, StageEvidence,
+    create_dirs, host_batch_limits, open_read_evidence, open_write_absent,
+    promote_copy_stage_evidence, put_batch_evidence, server_copy_batch, single_put,
+    supports_create_dirs, take_stage_evidence, transfer_evidence, transfer_scope,
+    EvidencePutOutcome, FileEvidence, PreparePut, StageEvidence,
 };
 pub use self::tree_remove_listed::{remove_tree_listed, TREE_LEAF_PORTION};
 pub use self::tree_remove_pipelined::remove_leaves_pipelined;

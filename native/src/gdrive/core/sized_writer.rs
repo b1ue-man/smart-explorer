@@ -4,6 +4,9 @@
 //! pre-generated ID): no probe, no stage, no promotion. The sized copy stage
 //! creates its private object the same way. Both stream instead of spooling to
 //! a temporary file while the transfer memory budget allows.
+//! `open_absent` (G3-08b) creates a new file under its final name in an
+//! existing folder the same way, then proves the name leads to it alone
+//! (absent_write.rs).
 use super::chunk_stream::{with_bearer, Stream, FIRST_CHUNK};
 use super::core::{norm, split_parent};
 use super::new_object::NewObject;
@@ -24,6 +27,9 @@ enum Purpose {
     Fresh,
     /// Private copy stage (`open_write_copy_stage_sized`).
     Stage,
+    /// New file under its final name in an existing folder the caller saw
+    /// it absent in (`open_write_absent`); uniqueness proven after create.
+    Absent,
 }
 
 pub(super) fn open_fresh(
@@ -36,6 +42,20 @@ pub(super) fn open_fresh(
         path,
         size,
         Purpose::Fresh,
+        None,
+    )?))
+}
+
+pub(super) fn open_absent(
+    backend: &GDriveBackend,
+    path: &str,
+    size: u64,
+) -> VfsResult<Box<dyn Write + Send>> {
+    Ok(Box::new(SizedWriter::open(
+        backend,
+        path,
+        size,
+        Purpose::Absent,
         None,
     )?))
 }
@@ -123,8 +143,10 @@ impl SizedWriter {
         let (parent_id, id, new_id) = match purpose {
             // The transfer created this folder, so the name is free there: no
             // probe. An ID an earlier, possibly committed attempt reserved is
-            // kept, so a retry gets 409 instead of making a second file.
-            Purpose::Fresh => {
+            // kept, so a retry gets 409 instead of making a second file. The
+            // absent path does the same: its caller saw the name free, and
+            // the check after the create proves it.
+            Purpose::Fresh | Purpose::Absent => {
                 let parent_id = backend.resolve(&parent)?;
                 if backend.bound_folder(&parent_id, name)?.is_some() {
                     return Err(io::Error::new(
@@ -195,6 +217,15 @@ impl SizedWriter {
         // New objects are spaced as Drive's refusals taught (G3-08a).
         let pacer = super::create_pacer::for_account(&self.backend.drive_account_key);
         pacer.wait();
+        // The absent path holds the name's slot from its create to its proof,
+        // so no publication of this process to that name interleaves.
+        let _slot = match self.purpose {
+            Purpose::Absent => Some(self.backend.mutation_slots_guard(&[(
+                self.object.parent_id.as_str(),
+                self.object.title.as_str(),
+            )])?),
+            Purpose::Fresh | Purpose::Stage => None,
+        };
         self.create_sent = true;
         let mime = match self.send_create(&md5) {
             Ok(mime) => {
@@ -265,8 +296,13 @@ impl SizedWriter {
                 ));
             }
         }
+        if matches!(self.purpose, Purpose::Absent) {
+            // The name must lead to this ID alone; otherwise the own object
+            // goes to the trash and the caller numbers the name.
+            backend.settle_absent(object, &self.key)?;
+        }
         backend.remember_path(&self.key, &object.id, Some(&mime))?;
-        if matches!(self.purpose, Purpose::Fresh) {
+        if matches!(self.purpose, Purpose::Fresh | Purpose::Absent) {
             let mut pending = backend.pending_upload_ids_guard()?;
             if pending.get(&self.key) == Some(&object.id) {
                 pending.remove(&self.key);
@@ -343,7 +379,7 @@ impl Drop for SizedWriter {
             return;
         }
         let owner = match self.purpose {
-            Purpose::Fresh => self.backend.pending_upload_ids_guard(),
+            Purpose::Fresh | Purpose::Absent => self.backend.pending_upload_ids_guard(),
             Purpose::Stage => self.backend.owned_stages_guard(),
         };
         if let Ok(mut owner) = owner {

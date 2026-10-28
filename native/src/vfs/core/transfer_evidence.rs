@@ -69,6 +69,33 @@ pub fn single_put<B: Backend + ?Sized>(backend: &B) -> bool {
         .is_some_and(|extensions| extensions.single_put())
 }
 
+/// A writer that publishes a new file under its final name in one write
+/// request (`BackendExtensions::open_write_absent`); `Ok(None)` without the
+/// extension, and then nothing was sent.
+pub fn open_write_absent<B: Backend + ?Sized>(
+    backend: &B,
+    path: &str,
+    size: u64,
+) -> VfsResult<Option<Box<dyn std::io::Write + Send>>> {
+    match backend.extensions() {
+        Some(extensions) => extensions.open_write_absent(path, size),
+        None => Ok(None),
+    }
+}
+
+/// Server-side copies of a packet (`BackendExtensions::server_copy_batch`):
+/// one answer per `(source, stage, size)` item, in order; `Ok(None)` for
+/// every item without the extension, and then nothing was sent.
+pub fn server_copy_batch<B: Backend + ?Sized>(
+    backend: &B,
+    items: &[(String, String, u64)],
+) -> Vec<io::Result<Option<u64>>> {
+    match backend.extensions() {
+        Some(extensions) => extensions.server_copy_batch(items),
+        None => items.iter().map(|_| Ok(None)).collect(),
+    }
+}
+
 /// The job guard of `backend` (`BackendExtensions::transfer_scope`); the
 /// engine drops it when the job ends. `None` without extensions.
 pub fn transfer_scope<B: Backend + ?Sized>(backend: &B) -> Option<Box<dyn std::any::Any + Send>> {

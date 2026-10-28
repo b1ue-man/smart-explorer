@@ -1,7 +1,8 @@
 //! Downloads with several positioned READs of one file on the wire at once.
-//! smb2's `FileReader::read_at` takes `&self` and keeps no cursor, so
-//! "concurrent positioned reads over one reader are independent and pipeline
-//! over the single SMB session" (smb2 stream.rs): a few of them run as tasks
+//! The handle's `read_at` (compound_read.rs, as smb2's `FileReader::read_at`)
+//! takes `&self` and keeps no cursor, so concurrent positioned reads over one
+//! handle are independent and pipeline over the single SMB session (smb2
+//! stream.rs): a few of them run as tasks
 //! on the backend runtime and are delivered in offset order. How many is the
 //! shared pipeline's decision (it grows while answers come about as fast as
 //! the fastest one), never more than the credit window funds
@@ -9,10 +10,14 @@
 //! for credits. The size seen at open bounds the READs; a short answer means
 //! the file shrank since, so the stream ends there instead of skipping bytes.
 //! A range (`end`) is read the same way: the READs stay within `[start, end)`.
+//! The first READ came with the open (compound_read.rs, G3-07): its bytes
+//! are the stream's first buffer, and a file it covered completely is closed
+//! at once.
+use super::compound_read::{Handle, Opened};
 use super::errors;
 use super::session::Generation;
 use crate::transfer::read_pipeline::Pipeline;
-use smb2::FileReader;
+use smb2::client::Connection;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::io::{self, Read};
@@ -29,6 +34,16 @@ const READ_CHUNK: u32 = smb2::DOWNLOAD_CHUNK_SIZE;
 const MIN_MAX_READ: u32 = 65_536;
 
 type ReadTask = JoinHandle<(smb2::Result<Vec<u8>>, Instant)>;
+
+/// The length of one READ on `conn`: `READ_CHUNK`, never above the
+/// server's MaxReadSize.
+pub(super) fn read_chunk(conn: &Connection) -> u64 {
+    let max_read = conn
+        .params()
+        .map_or(MIN_MAX_READ, |params| params.max_read_size)
+        .max(MIN_MAX_READ);
+    u64::from(READ_CHUNK.min(max_read))
+}
 
 struct InflightRead {
     len: u64,
@@ -49,7 +64,7 @@ pub(super) fn next_read(next: u64, size: u64, chunk: u64) -> Option<(u64, u64)> 
 }
 
 pub(super) struct SmbReader {
-    reader: Option<Arc<FileReader>>,
+    reader: Option<Arc<Handle>>,
     size: u64,
     next: u64,
     chunk: u64,
@@ -69,9 +84,10 @@ pub(super) struct SmbReader {
 
 impl SmbReader {
     /// A reader from byte `start` (a resumed download starts mid-file) up to
-    /// `end` (a range; `None`: the whole rest of the file).
+    /// `end` (a range; `None`: the whole rest of the file), over a file
+    /// opened with its first READ (`opened.prefix`, from `start`).
     pub(super) fn new(
-        reader: FileReader,
+        opened: Opened,
         start: u64,
         end: Option<u64>,
         path: &str,
@@ -79,32 +95,51 @@ impl SmbReader {
         rt: Arc<Runtime>,
     ) -> Self {
         let conn = generation.connection();
-        let max_read = conn
-            .params()
-            .map_or(MIN_MAX_READ, |params| params.max_read_size)
-            .max(MIN_MAX_READ);
-        let chunk = u64::from(READ_CHUNK.min(max_read));
+        let chunk = read_chunk(&conn);
         let cap = conn.credit_capacity_for(chunk);
-        let size = bounded_size(reader.size(), end);
+        let size = bounded_size(opened.size, end);
+        // The first READ may have run past the end of a range.
+        let mut prefix = opened.prefix;
+        let wanted = size.saturating_sub(start);
+        prefix.truncate(usize::try_from(wanted).unwrap_or(usize::MAX));
+        let got = prefix.len() as u64;
+        let next = start + got;
+        // Shorter than asked: the end of the file (it may have shrunk since
+        // the open). Nothing beyond it is read, as after a short READ.
+        let ended = next >= size || got < opened.first.len.min(wanted);
         // The size is known at open, so no READ goes beyond it: the reader
         // starts at the depth the session learned (G3-06b for SMB, G3-07).
-        let needed = size.saturating_sub(start).div_ceil(chunk.max(1));
+        let needed = size.saturating_sub(next).div_ceil(chunk.max(1));
         let pipeline = generation.seeded_pipeline(chunk, cap, needed);
-        Self {
+        let mut reader = Self {
             size,
-            reader: Some(Arc::new(reader)),
-            next: start,
+            reader: opened.handle.map(Arc::new),
+            next,
             chunk,
             inflight: VecDeque::new(),
             pipeline,
             fastest: None,
-            buffer: Vec::new(),
+            buffer: prefix,
             consumed: 0,
-            ended: false,
+            ended,
             failure: None,
             path: path.to_string(),
             generation,
             rt,
+        };
+        if ended {
+            // Everything is here: the handle closes now, not at the drop.
+            reader.release();
+        }
+        reader
+    }
+
+    /// Closes the handle without waiting for the answer.
+    fn release(&mut self) {
+        if let Some(reader) = self.reader.take() {
+            if let Ok(reader) = Arc::try_unwrap(reader) {
+                close_detached(&self.rt, reader);
+            }
         }
     }
 
@@ -214,16 +249,12 @@ impl Drop for SmbReader {
         // until the session ends. Best effort, and without waiting for the
         // answer (G3-07): the CLOSE is put on the connection before this
         // returns (its first poll sends it), the runtime takes the answer.
-        if let Some(reader) = self.reader.take() {
-            if let Ok(reader) = Arc::try_unwrap(reader) {
-                close_detached(&self.rt, reader);
-            }
-        }
+        self.release();
     }
 }
 
 /// Sends the CLOSE of `reader` now and leaves its answer to the runtime.
-fn close_detached(rt: &Runtime, reader: FileReader) {
+fn close_detached(rt: &Runtime, reader: Handle) {
     let mut close = Box::pin(async move {
         let _ = reader.close().await;
     });

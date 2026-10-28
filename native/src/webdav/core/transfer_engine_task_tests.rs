@@ -16,8 +16,8 @@ use std::time::{Duration, Instant};
 pub(super) struct Seen {
     pub(super) method: String,
     pub(super) path: String,
-    headers: HashMap<String, String>,
-    body: Vec<u8>,
+    pub(super) headers: HashMap<String, String>,
+    pub(super) body: Vec<u8>,
     connection: usize,
 }
 
@@ -46,7 +46,7 @@ impl Answer {
         self
     }
 
-    fn body(mut self, body: impl Into<Vec<u8>>) -> Self {
+    pub(super) fn body(mut self, body: impl Into<Vec<u8>>) -> Self {
         self.body = body.into();
         self
     }
@@ -119,15 +119,33 @@ impl Http {
     }
 
     pub(super) fn backend(&self) -> WebdavBackend {
+        self.backend_at("/")
+    }
+
+    /// A backend whose start folder is `root` (a Nextcloud DAV path).
+    pub(super) fn backend_at(&self, root: &str) -> WebdavBackend {
         WebdavBackend::connect(WebdavConfig {
             https: false,
             host: self.address.ip().to_string(),
             port: self.address.port(),
             user: String::new(),
             password: String::new(),
-            root: "/".into(),
+            root: root.into(),
         })
         .unwrap()
+    }
+
+    /// `http://host:port`, as a `Destination` header starts.
+    pub(super) fn origin(&self) -> String {
+        format!("http://{}", self.address)
+    }
+
+    /// Method and path of every complete request so far.
+    pub(super) fn calls(&self) -> Vec<(String, String)> {
+        lock(&self.seen)
+            .iter()
+            .map(|seen| (seen.method.clone(), seen.path.clone()))
+            .collect()
     }
 
     /// Connection index of every complete request `method path`.

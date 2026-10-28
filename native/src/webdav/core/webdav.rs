@@ -311,6 +311,16 @@ impl Backend for WebdavBackend {
         self.read_range(path, offset, len)
     }
 
+    /// Nextcloud: the ranges of a large file as parts of a chunked upload
+    /// (chunked_stage.rs, G3-12); `None` on any other server.
+    fn open_segmented_stage(
+        &self,
+        stage: &str,
+        size: u64,
+    ) -> VfsResult<Option<Box<dyn crate::vfs::SegmentedStage>>> {
+        super::chunked_stage::open(self, stage, size)
+    }
+
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
         Ok(Box::new(WebdavWriter::new(
             self.write_agent.clone(),
