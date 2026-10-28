@@ -581,6 +581,15 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   The license is shown before every download.
 - **Old peers close with `session_limit`.** The host sends no session-count refusal any more
   (R15c); the viewer still maps `session_limit` for older hosts (`native/src/screen/core/wire_hello.rs:273`).
+- **LightDM greeters focus every mapped window.** They run without a window manager and give
+  the keyboard to each newly mapped window, except override-redirect windows and windows of type
+  NOTIFICATION (unity-greeter 24.04.1 `src/unity-greeter.vala` `focus_upon_map`;
+  lightdm-gtk-greeter `wm_window_filter` also skips COMBO and TOOLTIP). `WM_HINTS.input=False`
+  does not help. The screen indicator therefore takes the type NOTIFICATION when no EWMH window
+  manager announces itself (`_NET_SUPPORTING_WM_CHECK`), otherwise every key of a controlling
+  viewer lands in the indicator (`native/src/app/os/linux_os.rs`, `indicator_window_type`).
+  Measured 2026-10-28 on a LightDM/unity-greeter X server: an ordinary window and one with the
+  input hint off took the focus; a NOTIFICATION window did not.
 
 ## Cryptomator vaults (0.5.183)
 

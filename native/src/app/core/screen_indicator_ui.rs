@@ -25,13 +25,21 @@ const RETRY: Duration = Duration::from_secs(1);
 /// Runs the indicator until no session is left or the user closes it.
 pub(crate) fn run_screen_indicator() -> eframe::Result<()> {
     crate::app::update_stop_ui::arm_window();
+    // The indicator never takes the keyboard: keys of a controlling viewer
+    // belong to the program it controls (Windows: shown without activation;
+    // X11 login greeter: a NOTIFICATION, which greeters do not focus).
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_title("Bildschirmfreigabe – Smart Explorer")
+        .with_inner_size([440.0, 220.0])
+        .with_min_inner_size([340.0, 150.0])
+        .with_always_on_top()
+        .with_active(false)
+        .with_icon(crate::window_icon());
+    if let Some(window_type) = crate::app::platform_helpers::indicator_window_type() {
+        viewport = viewport.with_window_type(window_type);
+    }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("Bildschirmfreigabe – Smart Explorer")
-            .with_inner_size([440.0, 220.0])
-            .with_min_inner_size([340.0, 150.0])
-            .with_always_on_top()
-            .with_icon(crate::window_icon()),
+        viewport,
         ..Default::default()
     };
     eframe::run_native(

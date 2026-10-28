@@ -19,6 +19,11 @@ mod drive_inventory;
 pub(crate) use drive_events::start_drive_events;
 pub(crate) use drive_inventory::{read_drive_capacity, read_drive_inventory};
 
+/// Windows has no X11 window type.
+pub(in crate::app) fn indicator_window_type() -> Option<eframe::egui::X11WindowType> {
+    None
+}
+
 /// UI storage uses slash separators only on Windows; Unix backslashes are names.
 pub(in crate::app) fn local_path_text(path: &std::path::Path) -> String {
     path.to_string_lossy().replace('\\', "/")

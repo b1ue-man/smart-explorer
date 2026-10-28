@@ -247,6 +247,18 @@ mod drive_inventory;
 pub(crate) use drive_events::start_drive_events;
 pub(crate) use drive_inventory::{read_drive_capacity, read_drive_inventory};
 
+/// The X11 window type of the screen indicator. Without a window manager (a
+/// login greeter) NOTIFICATION, the one type the greeters do not focus when
+/// it is mapped: a focused indicator would take every key the viewer sends
+/// to the greeter. Under a window manager the indicator stays an ordinary
+/// window with its title bar and close button. No X server: no X11 type.
+pub(in crate::app) fn indicator_window_type() -> Option<eframe::egui::X11WindowType> {
+    match crate::screen::os::x11_window_manager_running() {
+        Ok(false) => Some(eframe::egui::X11WindowType::Notification),
+        Ok(true) | Err(_) => None,
+    }
+}
+
 pub(in crate::app) fn local_path_text(path: &std::path::Path) -> String {
     path.to_string_lossy().into_owned()
 }
