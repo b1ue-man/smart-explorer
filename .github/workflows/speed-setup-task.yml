@@ -231,7 +231,12 @@ jobs:
             ) | Set-Content -Encoding ascii $script
             diskpart /s $script
             if ($LASTEXITCODE -ne 0) { throw "diskpart $($volume.Fs) failed: $LASTEXITCODE" }
-            fsutil fsinfo volumeinfo "$($volume.Letter):\"
+            $root = "$($volume.Letter):\"
+            # The letter becomes visible a moment after diskpart reports it.
+            for ($i = 0; $i -lt 300 -and -not (Test-Path -LiteralPath $root); $i++) { Start-Sleep -Milliseconds 100 }
+            if (-not (Test-Path -LiteralPath $root)) { throw "volume $root did not appear" }
+            fsutil fsinfo volumeinfo $root
+            if ($LASTEXITCODE -ne 0) { throw "fsutil volumeinfo $root failed: $LASTEXITCODE" }
           }
           "SE_TASK_REMOVABLE_ROOTS=Y:\;Z:\" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 

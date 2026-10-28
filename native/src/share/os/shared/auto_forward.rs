@@ -338,11 +338,10 @@ pub(crate) fn views(device_id: &str, public_key: &str) -> Vec<MappedService> {
     let Some(device) = all.get(&device_key(device_id, public_key)) else {
         return Vec::new();
     };
-    let lock = |mapping: &Mapping| mapping.view.lock().map(|view| view.clone());
     device
         .mappings
         .values()
-        .filter_map(|mapping| lock(mapping).ok())
+        .filter_map(|mapping| mapping.view.lock().ok().map(|view| view.clone()))
         .collect()
 }
 

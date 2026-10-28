@@ -112,7 +112,7 @@ fn state(target: &PeerOpenTarget) -> State {
         node: Some("authenticated-node".into()),
         // Design 6 F6: a confirmed window opens by itself once; this one
         // was opened already, so drawing shows that instead of opening.
-        opened: Some(request()),
+        opened: Some(self::request()),
         ..State::default()
     }
 }
