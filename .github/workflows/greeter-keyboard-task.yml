@@ -1,0 +1,186 @@
+name: greeter-keyboard-task
+run-name: Greeter keyboard ${{ inputs.candidate_sha }}
+
+# Task suite of 2026-10-28 (second batch). User report: keys from a viewer
+# never reach the Linux login screen ("ich kann ... nicht mal enter drücken.
+# maus funktioniert"). Cause: LightDM greeters run without a window manager
+# and focus every window that is mapped, except windows of type
+# NOTIFICATION (unity-greeter focus_upon_map, lightdm-gtk-greeter
+# wm_window_filter); the screen indicator took the keyboard. The Linux job
+# starts the real indicator on Xvfb without a window manager (expected: type
+# NOTIFICATION, not focused) and under openbox (expected: the ordinary window
+# as before). Clippy on library and binaries on both systems; findings count
+# only on lines changed since v0.5.188.
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Full pushed candidate SHA, matching the selected ref
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: greeter-keyboard-task-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 240
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 1
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind workflow and checkout to the requested candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+          shared-key: search-recursive-access
+          cache-on-failure: true
+          cache-workspace-crates: true
+
+      - name: Clippy on library and binaries; findings on changed lines fail
+        shell: bash
+        timeout-minutes: 140
+        run: |
+          set +e -uo pipefail
+          git diff -U0 --no-color v0.5.188 HEAD -- native/src > "$RUNNER_TEMP/diff.txt"
+          cd native
+          cargo clippy --lib --bins --message-format short 2>&1 \
+            | tr '\\' '/' | tee "$RUNNER_TEMP/clippy.txt"
+          status=${PIPESTATUS[0]}
+          if grep -E ': error\[E[0-9]+\]|^error\[E[0-9]+\]' "$RUNNER_TEMP/clippy.txt"; then
+            echo "::error::compile errors (clippy status $status)"
+            exit 1
+          fi
+          PY=$(command -v python3 || command -v python)
+          "$PY" - "$RUNNER_TEMP/diff.txt" "$RUNNER_TEMP/clippy.txt" > "$RUNNER_TEMP/findings.txt" <<'PYEOF'
+          import re, sys
+          changed, current = {}, None
+          for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+              if line.startswith("+++ "):
+                  path = line[4:].strip()
+                  current = path[len("b/native/"):] if path.startswith("b/native/") else None
+              elif line.startswith("@@") and current:
+                  m = re.search(r"\+(\d+)(?:,(\d+))?", line)
+                  start, count = int(m.group(1)), int(m.group(2) or 1)
+                  changed.setdefault(current, set()).update(range(start, start + count))
+          for line in open(sys.argv[2], encoding="utf-8", errors="replace"):
+              m = re.match(r"^(src/[^:]+):(\d+):\d+: (error|warning)", line)
+              if m and int(m.group(2)) in changed.get(m.group(1), ()):
+                  print(line.rstrip())
+          PYEOF
+          if [[ -s "$RUNNER_TEMP/findings.txt" ]]; then
+            echo "::error::findings on changed lines"
+            sort -u "$RUNNER_TEMP/findings.txt"
+            exit 1
+          fi
+          echo "clippy clean on changed lines"
+
+      - name: Install the X server, a window manager and the X tools
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo -n apt-get update
+          sudo -n apt-get install -y xvfb xauth x11-utils openbox xdotool libegl1 libgl1 libgl1-mesa-dri libx11-6 libx11-xcb1 libxcursor1 libxi6 libxkbcommon0 libxkbcommon-x11-0 libxrandr2
+
+      - name: Build the desktop program
+        if: runner.os == 'Linux'
+        shell: bash
+        timeout-minutes: 90
+        run: |
+          set -Eeuo pipefail
+          cd native
+          cargo build --bin smart_explorer
+
+      - name: The indicator leaves the keyboard alone without a window manager
+        if: runner.os == 'Linux'
+        shell: bash
+        timeout-minutes: 15
+        run: |
+          set -Eeuo pipefail
+          export HOME="$RUNNER_TEMP/home" XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg"
+          mkdir -p "$HOME" "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
+          unset WAYLAND_DISPLAY
+          export DISPLAY=:99
+          Xvfb :99 -screen 0 1280x800x24 -nolisten tcp &
+          for _ in $(seq 1 100); do xdpyinfo >/dev/null 2>&1 && break; sleep 0.1; done
+          xdpyinfo >/dev/null
+          program="$PWD/native/target/debug/smart_explorer"
+          # A focused window that stands for the greeter's password field.
+          xmessage -name greeter "Passwort" &
+          greeter_pid=$!
+          g=""
+          for _ in $(seq 1 100); do
+            g=$(xdotool search --classname '^greeter$' 2>/dev/null | head -1 || true)
+            [[ -n "$g" ]] && break
+            sleep 0.1
+          done
+          [[ -n "$g" ]] || { echo "::error::no stand-in greeter window"; exit 1; }
+          xdotool windowfocus --sync "$g"
+          check() {
+            local expected="$1" label="$2"
+            "$program" --screen-indicator > "$RUNNER_TEMP/indicator-$label.log" 2>&1 &
+            local pid=$! w=""
+            for _ in $(seq 1 300); do
+              w=$(xdotool search --name 'Bildschirmfreigabe' 2>/dev/null | head -1 || true)
+              [[ -n "$w" ]] && break
+              sleep 0.1
+            done
+            if [[ -z "$w" ]]; then
+              cat "$RUNNER_TEMP/indicator-$label.log"
+              echo "::error::no indicator window ($label)"
+              exit 1
+            fi
+            sleep 1
+            local type
+            type=$(xprop -id "$w" _NET_WM_WINDOW_TYPE)
+            echo "$label: $type"
+            echo "$label: focus $(xdotool getwindowfocus) indicator $w greeter $g"
+            [[ "$type" == *"$expected"* ]] || { echo "::error::$label: expected $expected"; exit 1; }
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+            pkill -f 'smart_explorer --sync-daemon' 2>/dev/null || true
+          }
+          # No window manager: NOTIFICATION, and the greeter keeps the keyboard.
+          check _NET_WM_WINDOW_TYPE_NOTIFICATION bare
+          focus=$(xdotool getwindowfocus)
+          [[ "$focus" == "$g" ]] || { echo "::error::focus moved to $focus"; exit 1; }
+          # Under a window manager the indicator stays an ordinary window.
+          openbox &
+          wm_pid=$!
+          for _ in $(seq 1 100); do xprop -root _NET_SUPPORTING_WM_CHECK | grep -q 'window id' && break; sleep 0.1; done
+          xprop -root _NET_SUPPORTING_WM_CHECK
+          check _NET_WM_WINDOW_TYPE_NORMAL managed
+          kill "$wm_pid" "$greeter_pid" 2>/dev/null || true
+          echo "indicator window types checked: 2"
