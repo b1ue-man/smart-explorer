@@ -436,6 +436,9 @@ impl<'a> Engine<'a> {
 #[path = "limiter_tests.rs"]
 mod limiter_tests;
 #[cfg(test)]
+#[path = "removable_media_task_tests.rs"]
+mod removable_media_task_tests;
+#[cfg(test)]
 #[path = "segments_tests.rs"]
 mod segments_tests;
 #[cfg(test)]
