@@ -12,7 +12,7 @@ use super::super::local_stage::ensure_local_space;
 use super::super::memory::reserve_memory;
 use super::super::walk_listers::native;
 use super::batch::{Attempt, Failures};
-use super::download::{existing, publish_local_known, Part};
+use super::download::{existing, Part};
 use super::ops::{nanos, relabeled, Meter, OpError, OpResult};
 use super::publish_queue::Publisher;
 use super::queue::FileWork;
@@ -369,26 +369,15 @@ impl BatchSink for Sink<'_, '_, '_> {
             (Ok(()), None) => match (current.part, current.check) {
                 (Some(part), Some(check)) => match check.finish_streamed(file, part.written()) {
                     Err(failure) => Member::Done(Err(failure)),
-                    // A part with the peer's evidence is published here (the
-                    // publisher queue carries no evidence yet); any other
-                    // goes to the publisher, whose result comes later.
-                    Ok(()) => match current.evidence {
-                        Some(evidence) => {
-                            let known = Some(super::batch_put::host_evidence(evidence));
-                            Member::Done(publish_local_known(
-                                self.engine,
-                                part,
-                                destination,
-                                file,
-                                known,
-                            ))
-                        }
-                        None => {
-                            let (file, destination) = (file.clone(), destination.clone());
-                            self.publisher.submit(index, part, destination, file);
-                            return Ok(());
-                        }
-                    },
+                    // The publisher publishes the part with the evidence the
+                    // peer's stream carried; its result comes later.
+                    Ok(()) => {
+                        let known = current.evidence.map(super::batch_put::host_evidence);
+                        let (file, destination) = (file.clone(), destination.clone());
+                        self.publisher
+                            .submit_known(index, part, destination, file, known);
+                        return Ok(());
+                    }
                 },
                 _ => Member::Done(Err(OpError::target(io::Error::other(
                     "Paket-Eintrag ohne Teildatei",

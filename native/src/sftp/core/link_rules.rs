@@ -16,10 +16,15 @@ pub(super) const BLOCK_FOR: Duration = Duration::from_secs(15 * 60);
 /// The throughput must have grown by this factor (+10 %, the flow control's
 /// own step, U50) for another connection to be worth it.
 pub(super) const GROWTH_FACTOR: f64 = 1.10;
-/// Length of one throughput window.
-pub(super) const WINDOW: Duration = Duration::from_secs(1);
-/// A new connection needs this long before its effect is judged: log in and
-/// let the transfer hand it ranges.
+/// Length of one throughput window (G3-10: half a second, so the next
+/// connection follows sooner).
+pub(super) const WINDOW: Duration = Duration::from_millis(500);
+/// The longest a new connection waits before its effect is judged. It is
+/// judged by the first window that starts once it carried its first byte
+/// plus as long as its setup took (a fresh TCP stream needs about as many
+/// round trips to open its window as the setup took), at least one window
+/// and at most this; a connection that never carries a byte is judged this
+/// long after it came up.
 pub(super) const SETTLE: Duration = Duration::from_secs(2);
 
 /// How an extra connection logs in.
@@ -32,14 +37,20 @@ pub(super) enum ExtraLogin {
         path: String,
         key: Arc<russh::keys::PrivateKey>,
     },
+    /// The SSH agent, only with the identity that logged the main
+    /// connection in and only while it signs without a person
+    /// (agent_grant.rs).
+    Agent,
 }
 
-/// The login of extra connections, if the main login allows one (E13-S15
-/// (i)): only a password or a key file whose credentials came from the
-/// sealed store without input. The SSH agent never does (it may ask for a
-/// confirmation or a touch at every signature).
+/// The login of extra connections, if the main login allows one: a
+/// password or a key file whose credentials came from the sealed store
+/// without input (E13-S15 (i)), or the SSH agent (G3-10, 2026-10-28: the
+/// agent identity of the main login, only while it signs without a person;
+/// agent_grant.rs). Credentials a person typed are never kept for this.
 pub(super) fn plan(auth: &SftpAuth, origin: SftpLoginOrigin) -> Option<ExtraLogin> {
     match (auth, origin) {
+        (SftpAuth::Agent, _) => Some(ExtraLogin::Agent),
         (SftpAuth::Password(_), SftpLoginOrigin::StoredPassword(source)) => {
             Some(ExtraLogin::Password(source))
         }
@@ -80,10 +91,14 @@ enum Phase {
     Ready,
     /// A connection is being set up; `baseline` is the rate before it.
     Opening(f64),
-    /// It is up; its effect is judged by the first window starting at `from`.
+    /// It is up; its effect is judged by the first window starting at
+    /// `from`, which its first carried byte may bring forward (`carried`).
     Settling {
         baseline: f64,
         from: Instant,
+        /// How long after its first byte it is judged.
+        settle: Duration,
+        carried: bool,
     },
     Stopped,
 }
@@ -115,7 +130,7 @@ impl Growth {
                 }
             }
             Phase::Opening(_) | Phase::Stopped => Step::Hold,
-            Phase::Settling { baseline, from } => {
+            Phase::Settling { baseline, from, .. } => {
                 if started < from {
                     return Step::Hold;
                 }
@@ -130,13 +145,32 @@ impl Growth {
         }
     }
 
-    /// The connection is up at `now`.
-    pub(super) fn installed(&mut self, now: Instant) {
+    /// The connection is up at `now`; its setup took `setup`.
+    pub(super) fn installed(&mut self, now: Instant, setup: Duration) {
         if let Phase::Opening(baseline) = self.phase {
             self.phase = Phase::Settling {
                 baseline,
                 from: now + SETTLE,
+                settle: setup.clamp(WINDOW, SETTLE),
+                carried: false,
             };
+        }
+    }
+
+    /// The new connection carried its first byte at `now` (G3-10: the
+    /// measurement starts there instead of a fixed time after the setup).
+    pub(super) fn carried(&mut self, now: Instant) {
+        if let Phase::Settling {
+            from,
+            settle,
+            carried,
+            ..
+        } = &mut self.phase
+        {
+            if !*carried {
+                *carried = true;
+                *from = (*from).min(now + *settle);
+            }
         }
     }
 

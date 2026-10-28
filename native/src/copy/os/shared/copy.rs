@@ -43,7 +43,7 @@ pub use pairs::start_copy_pairs;
 pub(crate) use path_guard::validate_directory_target;
 pub(crate) use prune::prune_empty_dirs;
 pub(crate) use publication::{
-    local_file_identity, local_file_identity_handle, PublicationObserver,
+    local_file_identity, local_file_identity_handle, path_names_handle, PublicationObserver,
 };
 pub(crate) use recovery::{discard_transfer_stage, recover_transfer_quarantine};
 pub(crate) use safe_file::{transfer_local, transfer_local_observed, LocalOutcome, LocalRequest};

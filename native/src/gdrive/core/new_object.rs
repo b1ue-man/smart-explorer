@@ -16,6 +16,7 @@ pub(super) const CREATED_FIELDS: &str = "id,name,parents,size,md5Checksum,mimeTy
 pub(super) const MEDIA_TYPE: &str = "application/octet-stream";
 
 /// A new object: its reserved ID, its place and title.
+#[derive(Clone)]
 pub(super) struct NewObject {
     pub(super) id: String,
     pub(super) parent_id: String,

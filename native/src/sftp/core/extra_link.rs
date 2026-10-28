@@ -4,13 +4,16 @@
 //! is set up on a thread of its own, one at a time per host and port, and
 //! lives as long as its single pool channel (60 s idle at most) or the
 //! backend. Before the login it must show the host key the verified main
-//! connection showed (`same_host_key`); the login is the stored password or
-//! the main login's decrypted key, never the SSH agent and never a prompt.
+//! connection showed (`same_host_key`); the login is the stored password,
+//! the main login's decrypted key or the SSH agent's identity of the main
+//! login while it signs without a person (agent_grant.rs), never a prompt.
+//! A refused key ends this one attempt before any credential is sent; the
+//! main connection and extra connections already working go on.
 use super::super::connection::SftpGeneration;
 use super::super::host_key::UnknownHostKey;
 use super::super::known_hosts;
 use super::super::link_log::{self, LinkIdent};
-use super::super::link_rules::{same_host_key, ExtraLogin, LoginSlot};
+use super::super::link_rules::{account_key, same_host_key, ExtraLogin, LoginSlot};
 use super::{auth, client_config, connect_tcp};
 use crate::transfer::MemoryReservation;
 use russh::client::{self, ChannelOpenHandle, Session};
@@ -256,6 +259,46 @@ pub(in crate::sftp) async fn establish(request: Request<'_>) -> Result<Establish
         open_links,
         runtime,
     } = request;
+    let (handle, method, channel) =
+        connect_checked(host, port, user, login, main_key, slot).await?;
+    open_links.fetch_add(1, Ordering::AcqRel);
+    let link = Arc::new(ExtraLink {
+        generation,
+        session: Arc::new(handle),
+        runtime,
+        ident: LinkIdent {
+            host: host.to_string(),
+            port,
+            user: user.to_string(),
+            method: method.to_string(),
+        },
+        open_links,
+        reason: Mutex::new(DEFAULT_REASON),
+        dead: AtomicBool::new(false),
+        _memory: memory,
+    });
+    Ok(Established { link, channel })
+}
+
+/// A checked login and its first session channel: the connection, the
+/// method that logged in and the channel (subsystem not requested yet).
+pub(in crate::sftp) type Checked = (
+    client::Handle<ExtraClient>,
+    &'static str,
+    Channel<client::Msg>,
+);
+
+/// The network part of `establish` within `EXTRA_DEADLINE`: the host key
+/// is judged before any credential goes out; `slot` (one unauthenticated
+/// connection per server) is released right after the login.
+pub(in crate::sftp) async fn connect_checked(
+    host: &str,
+    port: u16,
+    user: &str,
+    login: &ExtraLogin,
+    main_key: UnknownHostKey,
+    slot: LoginSlot,
+) -> Result<Checked, String> {
     let attempt = async move {
         let failure = Arc::new(Mutex::new(None));
         let handler = ExtraClient {
@@ -278,33 +321,17 @@ pub(in crate::sftp) async fn establish(request: Request<'_>) -> Result<Establish
                     .take()
                     .unwrap_or_else(|| format!("SSH-Aufbau: {error}"))
             })?;
-        let method = auth::login_extra(&mut handle, user, login)
+        let account = account_key(host, port, user);
+        let method = auth::login_extra(&mut handle, user, login, &account)
             .await
             .map_err(|error| format!("Anmeldung: {error}"))?
             .ok_or_else(|| "Anmeldung abgelehnt".to_string())?;
         drop(slot);
-        let session = Arc::new(handle);
-        let channel = session
+        let channel = handle
             .channel_open_session()
             .await
             .map_err(|error| format!("Kanal abgelehnt: {error}"))?;
-        open_links.fetch_add(1, Ordering::AcqRel);
-        let link = Arc::new(ExtraLink {
-            generation,
-            session,
-            runtime,
-            ident: LinkIdent {
-                host: host.to_string(),
-                port,
-                user: user.to_string(),
-                method: method.to_string(),
-            },
-            open_links,
-            reason: Mutex::new(DEFAULT_REASON),
-            dead: AtomicBool::new(false),
-            _memory: memory,
-        });
-        Ok::<Established, String>(Established { link, channel })
+        Ok::<Checked, String>((handle, method, channel))
     };
     tokio::time::timeout(EXTRA_DEADLINE, attempt)
         .await

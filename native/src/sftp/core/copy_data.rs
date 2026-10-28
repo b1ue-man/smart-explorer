@@ -24,6 +24,7 @@ use super::backend::SftpBackend;
 use super::channel_pool::{note_failure, open_failed};
 use super::io_err;
 use crate::vfs::VfsResult;
+use futures_util::future::{join, join_all};
 use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::client::RawSftpSession;
 use russh_sftp::protocol::{FileAttributes, OpenFlags, Packet, StatusCode};
@@ -176,8 +177,9 @@ pub(super) async fn copy_to_stage(
     };
     match copy_ranges(session, &read, &write, size, cancel, note).await {
         Ok(ServerCopy::Copied(copied)) => {
-            release(session, vec![read], true).await;
-            match session.close(write).await {
+            // Both CLOSEs go out together (G3-06c); the stage's decides.
+            let (_, closed) = join(session.close(read), session.close(write)).await;
+            match closed {
                 Ok(_) => Ok(ServerCopy::Copied(copied)),
                 Err(error) => Err(failed(error, note).error),
             }
@@ -271,17 +273,18 @@ async fn stage_refused(
     open_failed(error)
 }
 
-/// Closes `handles`: awaited while the server answers, else only sent.
+/// Closes `handles`: all sent at once and awaited while the server
+/// answers, else only sent.
 async fn release(session: &Arc<RawSftpSession>, handles: Vec<String>, answering: bool) {
+    if answering {
+        join_all(handles.into_iter().map(|handle| session.close(handle))).await;
+        return;
+    }
     for handle in handles {
-        if answering {
+        let session = session.clone();
+        drop(tokio::spawn(async move {
             let _ = session.close(handle).await;
-        } else {
-            let session = session.clone();
-            drop(tokio::spawn(async move {
-                let _ = session.close(handle).await;
-            }));
-        }
+        }));
     }
 }
 

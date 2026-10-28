@@ -25,7 +25,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::connection::{connect_stream, parse_ftp_url, refusal_code};
 use super::io_adapters::{FtpConnection, FtpReconnect};
-use super::pool::{pool_full, FtpPool, Leased};
+use super::name_cache::{ListingScope, NameCache};
+use super::pool::{FtpPool, Leased};
 use super::streams::{range_refused, BoundedFtpReader};
 use super::writer::FtpWriter;
 use suppaftp::list::ListParser;
@@ -122,6 +123,8 @@ pub(super) fn parse_list_line_unchecked(line: &str) -> VfsResult<VfsMeta> {
 
 pub struct FtpBackend {
     pub(super) pool: Arc<FtpPool>,
+    /// Folder listings kept within a transfer job (name_cache.rs).
+    names: Arc<NameCache>,
     root: String,
     /// `ftp(s)://user@host:port/root` for UI display (connect-UI step).
     #[allow(dead_code)]
@@ -146,6 +149,7 @@ pub fn backend_from_url(url: &str) -> io::Result<FtpBackend> {
     let primary = FtpConnection::new(ftp, reconnect.clone())?;
     Ok(FtpBackend {
         pool: FtpPool::new(primary, reconnect),
+        names: Arc::new(NameCache::default()),
         root: u.root,
         url,
     })
@@ -161,13 +165,30 @@ fn transfer_err(error: io::Error) -> io::Error {
 }
 
 impl FtpBackend {
+    /// Keeps the folder listings of publications until the returned scope
+    /// (the transfer job) ends (name_cache.rs, G3-04b).
+    pub fn listing_scope(&self) -> ListingScope {
+        self.names.begin()
+    }
+
     /// Publishes a stage on a pooled connection when one is free, else on
     /// the browsing connection, so it never fails for want of a connection.
     fn publish(&self, staged: &str, destination: &str, replace: bool) -> VfsResult<()> {
-        match self.pool.lease() {
-            Ok(lease) => super::staging::publish(lease.connection(), staged, destination, replace),
-            Err(_) => super::staging::publish(self.pool.primary(), staged, destination, replace),
+        let lease = self.pool.lease();
+        let connection = match &lease {
+            Ok(lease) => lease.connection(),
+            Err(_) => self.pool.primary(),
+        };
+        let published = if replace {
+            super::staging::publish(connection, staged, destination, true)
+        } else {
+            super::staging::publish_new(connection, &self.names, staged, destination)
+        };
+        match &published {
+            Ok(()) => self.names.added(destination),
+            Err(_) => self.names.changed(destination),
         }
+        published
     }
 
     /// One MKD. An existing real folder is fine unless `exclusive`: the
@@ -175,6 +196,7 @@ impl FtpBackend {
     /// looked at afterwards to tell `AlreadyExists` from other refusals.
     fn make_dir(&self, path: &str, exclusive: bool) -> VfsResult<()> {
         super::errors::command_path(path)?;
+        self.names.changed(path);
         let made = self
             .pool
             .primary()
@@ -244,8 +266,14 @@ impl Backend for FtpBackend {
         Ok(listing.entries)
     }
 
+    /// On a logged-in free transfer connection when there is one (never a
+    /// new login), else on the browsing connection: metadata of parallel
+    /// transfers does not queue behind one control connection (G3-04a).
     fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
-        super::metadata::stat(self.pool.primary(), path)
+        match self.pool.lease_idle() {
+            Some(lease) => super::metadata::stat(lease.connection(), path),
+            None => super::metadata::stat(self.pool.primary(), path),
+        }
     }
 
     /// RETR on a pool connection of its own, so browsing and other
@@ -272,19 +300,20 @@ impl Backend for FtpBackend {
         Ok(reader.map(|reader| Box::new(Leased::new(reader, lease)) as Box<dyn Read + Send>))
     }
 
-    /// Ranges need two connections that are logged in and free (never a new
-    /// login for a range, security answer S12) and a server that has not
-    /// turned one down lately.
+    /// Ranges run on free or newly logged-in pool connections (G3-11) unless
+    /// the server turned one down lately or allows fewer than two transfer
+    /// connections.
     fn supports_range_reads(&self, path: &str) -> bool {
         let _ = path;
         self.pool.ranges_ready()
     }
 
-    /// REST + RETR of `len` bytes on a free pooled connection, cut with ABOR
-    /// after them. `None`: the server has no REST, or it answered 421 or 530
-    /// (the file then goes as one stream, and ranges stay off for 15 minutes).
-    /// A connection that is no longer free is the pool's congestion: the
-    /// file waits, then decides again.
+    /// REST + RETR of `len` bytes on a pool connection of its own (free, or
+    /// logged in for it with the same credentials and TLS policy, G3-11),
+    /// cut with ABOR after them. `None`: the server has no REST, or it
+    /// answered 421 or 530 (the file then goes as one stream, and ranges stay
+    /// off for 15 minutes). The server's connection limit is the pool's
+    /// congestion: the flow holds back, the file waits, then decides again.
     fn open_read_range(
         &self,
         path: &str,
@@ -296,8 +325,8 @@ impl Backend for FtpBackend {
         if len == 0 {
             return Ok(Some(Box::new(io::empty())));
         }
-        let Some(lease) = self.pool.lease_idle() else {
-            return Err(pool_full());
+        let Some(lease) = self.pool.lease_range()? else {
+            return Ok(None);
         };
         match lease.connection().open_reader_range(path, offset) {
             Ok(Some(reader)) => Ok(Some(Box::new(Leased::new(
@@ -314,6 +343,7 @@ impl Backend for FtpBackend {
     }
 
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
+        self.names.changed(path);
         Ok(Box::new(FtpWriter::new(
             self.pool.primary().clone(),
             path.to_string(),
@@ -323,6 +353,8 @@ impl Backend for FtpBackend {
     fn rename(&self, src: &str, dst: &str) -> VfsResult<()> {
         super::errors::command_path(src)?;
         super::errors::command_path(dst)?;
+        self.names.changed(src);
+        self.names.changed(dst);
         self.pool
             .primary()
             .with_stream_mutation(|stream| stream.rename(src, dst).map_err(io_err))
@@ -364,6 +396,7 @@ impl Backend for FtpBackend {
 
     fn remove_file(&self, path: &str) -> VfsResult<()> {
         super::errors::command_path(path)?;
+        self.names.changed(path);
         self.pool
             .primary()
             .with_stream_mutation(|stream| stream.rm(path).map_err(io_err))
@@ -371,6 +404,7 @@ impl Backend for FtpBackend {
 
     fn remove_dir(&self, path: &str) -> VfsResult<()> {
         super::errors::command_path(path)?;
+        self.names.changed(path);
         self.pool
             .primary()
             .with_stream_mutation(|stream| stream.rmdir(path).map_err(io_err))

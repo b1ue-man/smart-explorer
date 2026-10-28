@@ -735,8 +735,50 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   determined). Linux limits `SO_RCVBUF` of unprivileged processes to `net.core.rmem_max` (socket(7);
   not verified in this repository). The reporter reads that ceiling (`native/src/share/core/quic_stats_proc.rs:150-168`).
 
+### Tempo packages of 2026-10-28 (not built or run yet)
+
+- **`se cp`/`se mv` take two paths.** A copy into an existing folder or with `--force`, the MCP
+  keep-both copy and a move that is not one rename plan the whole tree and run on the engine
+  (`native/src/cli/tree_engine.rs`, M16); resume and every remote combination stay on the spool
+  path. A move interrupted by a crash on the engine path shows up in the GUI recovery catalog, not
+  in the `se` resume list.
+- **Local flows start wide unless the drive rotates.** Flash or unknown volumes start at twice the
+  cores within 8–16; a rotating drive keeps 2. Windows asks the volume for its seek penalty
+  (`IOCTL_STORAGE_QUERY_PROPERTY`); a volume spanning several disks or a refused query counts as
+  unknown and starts wide (`native/src/transfer/os/windows.rs` `volume_is_rotational`, M7).
+- **Copy workers keep normal priority.** They no longer lower it, so on a saturated CPU they
+  compete with the GUI thread (M20); background sync does not run on the engine.
+- **Completed jobs are pruned after 14 days.** Record first, then the `.files` folder, only while
+  the job's lock is free; the `<id>.lock` file stays behind (`engine/job_store_catalog.rs`, M21).
+- **A Windows copy is published without write-through.** A power loss right after the rename can
+  lose it: a journaled job recovers through its stage record, an unjournaled one leaves a `.part`
+  file (M9). Moves and replacements keep `MOVEFILE_WRITE_THROUGH`.
+- **The crash log is never compacted.** It holds about two JSON records per file; the in-memory
+  index costs about 60 bytes per file of a job (`engine/file_recovery_journal.rs`, KP1).
+- **A staged folder reservation records "published" lazily.** After the rename the flag is written
+  with the job's next alias save; after a crash the stored stage identity confirms the target
+  (`engine/folder_reservation.rs` `publish`, M13). A direct reservation (no identity) still writes
+  each step durably.
+- **The FTP name cache works only with MLST and inside a job.** The engine holds each remote
+  side's `vfs::transfer_scope` for the job's lifetime; the cache is active only once the FTP
+  backend returns its `listing_scope()` there (open on 2026-10-28). Without MLST (vsftpd) one
+  folder LIST per publish remains (`native/src/ftp/core/name_cache.rs`, G3-04b).
+- **A single download still stats its source after reading.** The host's evidence on `ReadAt` is
+  taken before the read, so it cannot replace the check that the file did not change while it was
+  read (`engine/source.rs` `RemoteCheck::finish`).
+- **The worker announces no `lz4-v1` on the loopback hop.** An older GUI talking to a new worker
+  sends uncompressed (Z-P8, `daemon/os/shared/backend_ranges.rs`).
+
 ## Share / local network
 
+- **The relay is the start bridge (D1, 2026-10-28).** While LAN and direct paths are still being
+  set up, payload may already use a validated relay path (route state `relay_start`, transfer hint
+  "über Relay, Direktweg wird aufgebaut") and moves in place to the first admitted LAN/direct path;
+  after that the relay carries payload again only as the marked fallback (`relay_fallback`). An
+  open during the start phase reports "Verbunden", not "Verbunden (Relay)", so the tile does not
+  keep "Relay" after the move (`PeerBackend::transport_status`). A GUI before 0.5.189 cannot parse
+  the phase `relay_start` in a login session's route; from 0.5.189 an unknown phase there reads
+  as no route (`ipc_protocol_login.rs` `tolerant_route`). Code: `native/src/share/core/route_start.rs`.
 - Google Drive allows several same-name siblings. `GDriveBackend::list_dir`
   keeps the canonical copy (newest `modifiedTime`, then smaller id) under the
   plain name and renders every further sibling as `Name [drive-id <8-char id

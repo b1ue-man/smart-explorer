@@ -1,7 +1,7 @@
 //! The intent lock is shared by foreground readers, exclusive for background
 //! admission checks. A waiting foreground reader retains its shared intent until it
 //! obtains the device lock, so an index cannot jump ahead between operations.
-use super::{platform, probe, status, ReadMode, Source};
+use super::{platform, probe, probe_regular_file, status, ReadMode, Source};
 use sha2::{Digest, Sha256};
 use std::{
     cell::RefCell,
@@ -99,6 +99,22 @@ impl Drop for Guard {
 
 pub fn acquire(path: &Path, priority: Priority, cancel: &AtomicBool) -> io::Result<Option<Guard>> {
     let Some(source) = probe(path)? else {
+        return Ok(None);
+    };
+    with_cancellation(cancel, || {
+        acquire_source(path, source, priority, || cancel.load(Ordering::Acquire))
+    })
+    .map(Some)
+}
+
+/// `acquire` for a path the caller knows to name a regular file
+/// (`probe_regular_file`): the copy of every file asks this.
+pub fn acquire_regular_file(
+    path: &Path,
+    priority: Priority,
+    cancel: &AtomicBool,
+) -> io::Result<Option<Guard>> {
+    let Some(source) = probe_regular_file(path)? else {
         return Ok(None);
     };
     with_cancellation(cancel, || {

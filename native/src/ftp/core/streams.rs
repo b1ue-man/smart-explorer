@@ -37,8 +37,8 @@ impl FtpConnection {
         self.open_reader_from(path, offset, true)
     }
 
-    /// `open_reader_at` for one range: a start that fails is never repeated
-    /// on a new login (ranges never log in; answer to the question S12).
+    /// `open_reader_at` for one range: a start that fails is not repeated
+    /// here on a new login; the engine's retry of the range decides (G3-11).
     pub(super) fn open_reader_range(
         self: &Arc<Self>,
         path: &str,

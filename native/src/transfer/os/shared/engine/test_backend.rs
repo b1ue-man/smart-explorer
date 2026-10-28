@@ -19,6 +19,8 @@ use std::time::Duration;
 mod evidence;
 #[path = "test_backend_evidence_tests.rs"]
 mod evidence_tests;
+#[path = "test_backend_single_put_tests.rs"]
+mod single_put_tests;
 #[path = "test_backend_streams.rs"]
 mod streams;
 use streams::{FakeReader, FakeWriter, Guard};
@@ -114,6 +116,8 @@ pub(super) struct Fake {
     pub evidence: bool,
     /// Creates folders in bulk like a `create_dirs_v1` Share host.
     pub bulk_dirs: bool,
+    /// Takes a single file as a packet of one like a `single_put_v1` host.
+    pub single_put: bool,
     pub batch_ambiguous: bool,
     pub read_delay: Duration,
     pub extra: Option<Vec<u8>>,
@@ -141,6 +145,7 @@ impl Fake {
             batch: None,
             evidence: false,
             bulk_dirs: false,
+            single_put: false,
             batch_ambiguous: false,
             read_delay: Duration::ZERO,
             extra: None,
@@ -431,6 +436,9 @@ impl crate::vfs::BackendExtensions for Fake {
     fn file_identity(&self, path: &str) -> VfsResult<Option<String>> {
         self.counters.identities.fetch_add(1, Ordering::SeqCst);
         crate::vfs::file_identity(&self.inner, path)
+    }
+    fn single_put(&self) -> bool {
+        self.single_put
     }
     fn transfer_evidence(&self, _path: &str) -> bool {
         self.evidence

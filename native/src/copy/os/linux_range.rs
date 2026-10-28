@@ -122,8 +122,9 @@ pub(super) fn copy_span_with(
                 let spawned = std::thread::Builder::new()
                     .name(format!("copy-range-{index}"))
                     .spawn_scoped(scope, move || {
+                        // A range thread serves one engine copy a person
+                        // waits for: normal priority like its worker (M20).
                         let _done = Done { running, caller };
-                        crate::transfer::lower_thread_priority();
                         shared.run(start, end, counter, &mut || {});
                     });
                 started = spawned.is_ok();

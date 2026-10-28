@@ -52,7 +52,8 @@ fn speed_task_sftp_batch_put_publishes_64_files_in_few_round_trips() {
             payload(index, 4096),
         );
     }
-    assert!(sim.now.get() - started >= 4 * 64 * RTT);
+    // OPEN, WRITEs with the CLOSE behind them (G3-06a), RENAME.
+    assert!(sim.now.get() - started >= 3 * 64 * RTT);
 }
 
 #[test]

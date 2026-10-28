@@ -18,6 +18,20 @@ pub(in crate::share) fn create_stage_file(path: &Path) -> std::io::Result<std::f
         .open(path)
 }
 
+/// Physical identity of the directory `path` names (device and inode),
+/// following links like `std::fs::metadata`; `None` when it cannot be read.
+/// The host's policy cache compares it to skip a repeated ancestor walk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct DirectoryIdentity(u64, u64);
+
+pub(super) fn directory_identity(path: &Path) -> Option<DirectoryIdentity> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = std::fs::metadata(path).ok()?;
+    metadata
+        .is_dir()
+        .then(|| DirectoryIdentity(metadata.dev(), metadata.ino()))
+}
+
 pub(super) fn from_os_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }

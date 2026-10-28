@@ -68,7 +68,7 @@ Operation, `OP_WEIGHT_BYTES`, damit reine Kleinstdatei-Last messbar ist) und reg
 
 | Parameter | Wert | Grund |
 |---|---|---|
-| Startgrenze | 2 (`START_LIMIT`); gelernt: die halbe zuletzt eingestellte Grenze, mindestens 2 (`start_from_learned`, `native/src/transfer/core/flow_window.rs:19-21`) | eine Operation in Arbeit, eine im Anlauf; ein bekannter Server startet nicht bei null |
+| Startgrenze | 2 (`START_LIMIT`); gelernt: die halbe zuletzt eingestellte Grenze, mindestens 2 (`start_from_learned`, `native/src/transfer/core/flow_window.rs:19-21`). Mindeststart je Art (`start_floor`, `native/src/transfer/os/shared/flow_registry.rs`, Stand 2026-10-28): Share 8; SFTP, SMB, WebDAV 8; FTP und Google Drive 4; lokales Volume, das nicht dreht oder dessen Art unbekannt ist, 2 × Kerne innerhalb 8–16; ein drehendes Laufwerk (Linux `queue/rotational`, Windows Seek-Penalty-Abfrage) und Tresore behalten 2. Die Protokollgrenze (`transfer_ceiling`) begrenzt jeden Start | eine Operation in Arbeit, eine im Anlauf; ein bekannter Server startet nicht bei null; Flash und Server mit vielen Strömen erreichen den stetigen Zustand ohne Hochlauf |
 | Fenster | Abschluss, wenn mindestens 100 ms (`MIN_WINDOW_MS`) und 8 Operationen (`MIN_COMPLETIONS`) vergangen sind; ohne Messung 1 s (`FALLBACK_WINDOW_MS`), höchstens 5 s (`MAX_WINDOW_MS`) | kurz genug zum Reagieren, lang genug gegen Rauschen |
 | Slow Start | verdoppeln, solange jede Messung um ≥ 10 % zulegt (`SLOW_START_GAIN` = 1,10; `flow_control.rs:7-8`, `:317-320`) | findet große Grenzen in wenigen Fenstern |
 | Proben | Schritt Grenze/8 (`PROBE_STEP_DIVISOR`), über 2 Fenster (`PROBE_WINDOWS`), alle 4 Fenster im Leerlauf (`PROBE_INTERVAL_WINDOWS`) | symmetrische Schritte halten die Grenze unter Rauschen am Optimum (Simulation mit ±10 %: ≥ 93 % der Bestleistung bei ≤ 1,11-facher Parallelität) |
@@ -171,11 +171,11 @@ mehr als der Hälfte der Arbeitszeit → diese Seite; sonst `remote`. Leitung: d
 | Lokal, UNC | Kernel-Kopie, Server-Offload | Kopie über die exklusiv erzeugte Stufe (Linux `copy_file_range` zwischen Handles, Windows `CopyFile2` „nicht ersetzen“ + Identitätsprüfung); innerhalb einer UNC-Freigabe kopiert der SMB-Server selbst (Offload/COPYCHUNK); kein fsync bei neuen Kopien, Verschieben auf demselben Volume als eine Umbenennung; Ring und Bereiche: siehe „Lokal, UNC“ unten | fsync nur bei Verschieben und Überschreiben; Abbrechen wirkt zwischen den Kopierblöcken |
 | Direct/Raum-Share (Iroh/QUIC) | viele Ströme je Verbindung | `fs_transfer_v1`: Pakete für kleine Dateien (Statusabfrage bei verlorener Antwort), Lesen ab Offset, exklusive Ordner, serverseitige Kopie; Bereiche mit der Capability `ranges_v1` (`native/src/share/core/batch_wire.rs:58`), LZ4 mit `lz4_v1` (`batch_wire.rs:63`, Abschnitt „Kompression“); alte Hosts: bisheriger Weg | 64 Ströme − 4 fürs Blättern = 60 Übertragungen je Gegenstelle (Host-Zulassung), davon nutzt der Flow höchstens 56, 4 bleiben für Vordergrund-Lesen; Host gesamt 256 (halbe Tokio-Blocking-Threads); alte Hosts 32; Paket ≤ 256 Dateien/16 MiB, Kopf ≤ 256 KiB; Fenster 16 MiB je Strom (1 Gbit/s × 100 ms), Verbindung 16–64 MiB je nach Speicher; voller Host antwortet „busy“ statt heimlich zu warten, alte Clients warten höchstens 45 s (ihre Frist ist 60 s). Stufen-Bereiche nur bei lokalen Exporten; für nicht lokale Exporte fehlt eine Handle-Schnittstelle in `vfs` (Stand U53). Unfertige Bereichsstufen des Wirts werden beim Verbindungsende, nach 300 s ohne Fortschritt und beim nächsten Start entfernt (Stand U53) |
 | SSH-Agent / Hintergrund-Dienst | Anfragen mit IDs über einen Kanal | Kredit je Anfrage (`+credit-v1`: ein langsamer Download blockiert kein Blättern), Pakete (`+batch-v1`), Stufen-Frames, Pool zusätzlicher Exec-Kanäle; Bereiche mit `Read {offset, len}`, Label `range-v1` (`native/src/agent_proto/core/features.rs:17`); die Bereichsstufe bleibt auf dem Kanal, der sie geöffnet hat (Stand U53) | 64 MiB Budget je Verbindung, 1 MiB Anfangskredit, Fenster bis 8 MiB je Strom; Kanal-Pool bis MaxSessions − 2; |
-| SFTP | gepipelinete Anfragen, mehrere Kanäle | viele gleichzeitige READs mit wachsender Tiefe, gebündelte WRITEs (Pakete, 16 MiB je Paket, `BATCH_BYTES`), Kanal-Pool, Kopien ohne fsync, serverseitige Kopie per `copy-data` wo angeboten (in Bereichen von ~10 s, lehnt der Server ab, wird gestreamt). Bereiche über Pool-Kanäle, die sich Handles teilen, und über Zusatzverbindungen (Regeln unter „SFTP-Kanäle und -Zusatzverbindungen“); jeder Kanal hat sein eigenes Serverfenster (OpenSSH 2 MiB). Schreiben von Bereichen nur, wenn die Ordnerkette bis `/` dem Konto oder root gehört und für Gruppe und andere gesperrt ist (oder Sticky-Bit und root; Sicherheitsantwort S7). Dateien mit gelistetem MD5 bleiben ein Strom | Dateien je Kanal gleichzeitig offen: höchstens `min(open-handles, 64)` (`OPEN_HANDLES`, `native/src/sftp/core/batch_ops.rs:52`; ohne Angabe des Servers 64); ein OPEN mit einfachem Fehlerstatus oder ohne Antwort ist Überlast, ein bestimmter Status (nicht gefunden, Zugriff verweigert) ein Dateifehler (`open_failure`); jede Datei hat vier Wartezeiten (OPEN, WRITE, CLOSE, RENAME), die sich über bis zu `open-handles` Dateien überlappen; Pool bis zur Ablehnung, 2 Kanäle Reserve; Kanäle in Einrichtung zählen bei der gelernten Grenze mit (`channel_pool.rs:57-59`, `:168-170`, `:357`); Obergrenze des Flows `transfer_ceiling` = Kanäle × Handles je Kanal (`backend.rs:428-430`, `channel_pool.rs:288-301`) |
-| FTP/FTPS | eine Übertragung je Steuerverbindung | Verbindungs-Pool, Größen-Stufe mit streamendem STOR, Fortsetzen per REST; Prüfen und Veröffentlichen auf der Verbindung der Übertragung (SIZE für den zufälligen Stufennamen, eine Auflistung des Ordners für Stufe und Ziel, dann RNFR/RNTO), ohne freie Verbindung auf der Blätter-Verbindung. Bereiche über `REST` und je eine bereits angemeldete freie Verbindung, Abbruch mit `ABOR`; nie eine neue Anmeldung für Bereiche (Sicherheitsantwort S12) | STOR und RETR gehen vor dem TCP-Aufbau der Datenverbindung hinaus (suppaftp); es gibt kein Befehls-Pipelining: das nächste Kommando geht erst nach der Antwort auf das vorige (Testserver `native/src/ftp/core/data_overlap_server.rs`). Grenze lernt der Pool aus 421/530 nach erfolgreicher Anmeldung; 421/530 auf REST/RETR: 15 Minuten keine Bereiche; eine Verbindung bleibt fürs Blättern; Stufenprobe entfällt nur für Namen `.se-upload-<16 Hex>` (`FTP_PROBE_STAGE_NAME`, S6) |
+| SFTP | gepipelinete Anfragen, mehrere Kanäle | viele gleichzeitige READs mit wachsender Tiefe, gebündelte WRITEs (Pakete, 16 MiB je Paket, `BATCH_BYTES`), Kanal-Pool, Kopien ohne fsync, serverseitige Kopie per `copy-data` wo angeboten (in Bereichen von ~10 s, lehnt der Server ab, wird gestreamt). Bereiche über Pool-Kanäle, die sich Handles teilen, und über Zusatzverbindungen (Regeln unter „SFTP-Kanäle und -Zusatzverbindungen“); jeder Kanal hat sein eigenes Serverfenster (OpenSSH 2 MiB). Schreiben von Bereichen nur, wenn die Ordnerkette bis `/` dem Konto oder root gehört und für Gruppe und andere gesperrt ist (oder Sticky-Bit und root; Sicherheitsantwort S7). Dateien mit gelistetem MD5 bleiben ein Strom | Dateien je Kanal gleichzeitig offen: höchstens `min(open-handles, 64)` (`OPEN_HANDLES`, `native/src/sftp/core/batch_ops.rs:52`; ohne Angabe des Servers 64); ein OPEN mit einfachem Fehlerstatus oder ohne Antwort ist Überlast, ein bestimmter Status (nicht gefunden, Zugriff verweigert) ein Dateifehler (`open_failure`); jede Datei hat vier Wartezeiten (OPEN, WRITE, CLOSE, RENAME), die sich über bis zu `open-handles` Dateien überlappen; Pool bis zur Ablehnung, 2 Kanäle Reserve; Kanäle in Einrichtung zählen bei der gelernten Grenze mit (`channel_pool.rs:57-59`, `:168-170`, `:357`); Obergrenze des Flows `transfer_ceiling` = Kanäle × Handles je Kanal (`backend.rs:428-430`, `channel_pool.rs:288-301`); `mkdir_all` fragt alle Pfadteile mit einem Schwung `LSTAT` ab (eine Rundreise) und legt nur den fehlenden Rest an, jeder vorhandene Teil muss ein echter Ordner sein (MS7, `native/src/sftp/core/transfer_ops.rs`); `finish_stage`: `LSTAT`, `OPEN`, dann `FSETSTAT`, `fsync@openssh.com`, `FSTAT`, `CLOSE` und `LSTAT` zusammen (3 statt 6 Rundreisen; MS8, `native/src/sftp/core/stage_finish.rs`) |
+| FTP/FTPS | eine Übertragung je Steuerverbindung | Verbindungs-Pool, Größen-Stufe mit streamendem STOR, Fortsetzen per REST; Prüfen und Veröffentlichen auf der Verbindung der Übertragung (SIZE für den zufälligen Stufennamen, eine Auflistung des Ordners für Stufe und Ziel, dann RNFR/RNTO), ohne freie Verbindung auf der Blätter-Verbindung. Bereiche über `REST` auf einer freien oder für den Bereich neu angemeldeten Pool-Verbindung (gleiche Zugangsdaten, gleiche TLS-Regel; nie die Blätter-Verbindung), Abbruch mit `ABOR` (G3-11, Entscheidung 2026-10-28, ersetzt S12; Abschnitt „Entscheidung G3-10/G3-11“) | STOR und RETR gehen vor dem TCP-Aufbau der Datenverbindung hinaus (suppaftp); es gibt kein Befehls-Pipelining: das nächste Kommando geht erst nach der Antwort auf das vorige (Testserver `native/src/ftp/core/data_overlap_server.rs`). Grenze lernt der Pool aus 421/530 nach erfolgreicher Anmeldung, auch bei Anmeldungen für Bereiche; wie viele Bereiche gleichzeitig laufen, bestimmt das gemessene Fenster des Flows; Bereiche ab 16 MiB Dateigröße (`SPLIT_FROM`); Bereiche nur, wenn der Server mindestens zwei Übertragungsverbindungen zulässt (`ftp/core/pool.rs` `ranges_possible`); 421/530 auf REST/RETR: 15 Minuten keine Bereiche; eine Verbindung bleibt fürs Blättern; Stufenprobe entfällt nur für Namen `.se-upload-<16 Hex>` (`FTP_PROBE_STAGE_NAME`, S6) |
 | WebDAV | viele HTTP-Verbindungen, COPY | gepoolte Mutationen, gestreamtes PUT mit Länge und `If-None-Match: *`, serverseitiges COPY, Range. Engine-Weg: PUT, PROPFIND (Stufe prüfen), MOVE. Sync-Weg: die Bestätigung der Zeit nach MOVE entfällt, wenn die MOVE-Antwort `X-OC-Mtime: accepted` trägt (`native/src/webdav/core/stage_move.rs:4-10`); ein PROPFIND je Sync-Upload weniger. Bereiche über `Range: bytes=a-b`; antwortet der Server mit 200, läuft die Datei als ein Strom | 429/503 → Überlast mit `Retry-After`; DELETE und leeres PUT ungepoolt (ureq würde sie wiederholen) |
-| Google Drive | parallele Verbindungen, `generateIds` | gepoolte Verbindungen, neue Datei ≤ 5 MB mit einem Aufruf, Resumable mit wachsenden Blöcken, ID-Vorrat, Cache im Hintergrund, Sperren je Name, `files.copy`; Bereiche über `Range: bytes=a-b`, antwortet der Server mit 200, läuft die Datei als ein Strom | Google begrenzt dauerhaft ~3 neue Dateien/s je Konto (Hinweis in der Zeile); Ratenlimits sofort als Überlast |
-| SMB | Credits, COPYCHUNK | Pakete über Compounds: CREATE, WRITE und CLOSE je Datei und das Umbenennen in zwei Rundreisen; Reparse-Punkte werden nie über `read_file_compound*` gelesen (eigene Anfragen, damit Links nicht gefolgt werden); mehrere Lese-Blöcke gleichzeitig, serverseitige Kopie wo angeboten, neue Kopien ohne FLUSH; Bereiche über `read_at`; Schreiben in Bereichen über eigene Handles, die vor dem ersten Byte gegen die Kennung der Stufe geprüft werden (S14) | Block ≤ 512 KiB bzw. MaxReadSize, Tiefe nach Credits; eine Serverkopie sieht Abbrechen erst an ihrem Ende |
+| Google Drive | parallele Verbindungen, `generateIds` | gepoolte Verbindungen, neue Datei ≤ 5 MB mit einem Aufruf, Resumable mit wachsenden Blöcken und zwei Puffern (ein Abschnitt geht auf einem eigenen Faden hinaus, während der nächste gefüllt wird; nur wenn der Speicher für den zweiten Puffer reserviert werden kann; G3-08c, `native/src/gdrive/core/chunk_stream.rs`), ID-Vorrat, Cache im Hintergrund, Sperren je Name, `files.copy`; Bereiche über `Range: bytes=a-b`, antwortet der Server mit 200, läuft die Datei als ein Strom | Google begrenzt dauerhaft ~3 neue Dateien/s je Konto (Hinweis in der Zeile); Ratenlimits sofort als Überlast |
+| SMB | Credits, COPYCHUNK | Pakete über Compounds: CREATE, WRITE und CLOSE je Datei und das Umbenennen in zwei Rundreisen; Reparse-Punkte werden nie über `read_file_compound*` gelesen (eigene Anfragen, damit Links nicht gefolgt werden); mehrere Lese-Blöcke gleichzeitig, serverseitige Kopie wo angeboten, neue Kopien ohne FLUSH; Bereiche über `read_at`; Schreiben in Bereichen über eigene Handles, die vor dem ersten Byte gegen die Kennung der Stufe geprüft werden (S14); Belege für Kopierstufen der Engine (G3-02): der `stat` des Ziels geht mit dem CLOSE der Stufe hinaus, der `stat` der Stufe direkt danach, die Veröffentlichung ist ein Compound CREATE (kein Ordner, Link als er selbst) + SET_INFO (Umbenennen ohne Ersetzen) + CLOSE, dessen CREATE-Antwort die veröffentlichte Datei beschreibt (`native/src/smb/core/stage_evidence.rs`) | Block ≤ 512 KiB bzw. MaxReadSize, Tiefe nach Credits; eine Serverkopie sieht Abbrechen erst an ihrem Ende |
 | ZIP (Quelle) | – | ein Parse je Archiv, Einträge gestreamt | Parallelität = Kernzahl (Entpacken ist CPU-gebunden) |
 
 **SFTP-Kanäle und -Zusatzverbindungen.** Ein Bereich nimmt einen leeren Kanal. Gibt es keinen, öffnet er
@@ -188,30 +188,46 @@ läuft, zählen bei der gelernten Grenze mit (`channel_pool.rs:57-59`, `:168-170
 
 Zusatzverbindungen sind eigene SSH-Verbindungen mit je einem Kanal im Subsystem `sftp`
 (`native/src/sftp/core/pool_channel.rs:284`). Sie öffnen nur Übertragungen; Auflistung, Metadaten,
-Befehle und der SSH-Agent bleiben auf der Hauptverbindung (Sicherheitsantwort E13-S15,
-`docs/plaene/2026-10-17-rechte-desktop-tresore/stand/SEC.md`, Punkt 15, Frage 1 (vi)). Sie gelten
-nur unter diesen Bedingungen:
+Befehle und die Exec-Kanäle des se-agent bleiben auf der Hauptverbindung (Sicherheitsantwort E13-S15,
+`docs/plaene/2026-10-17-rechte-desktop-tresore/stand/SEC.md`, Punkt 15, Frage 1 (vi); die
+Anmeldung über den SSH-Agenten geändert durch G3-10, Abschnitt „Entscheidung G3-10/G3-11“). Sie
+gelten nur unter diesen Bedingungen:
 
-- **Anmeldung ohne Eingabe:** gespeichertes Passwort oder Schlüssel, nie der SSH-Agent
-  (`link_rules.rs:41-55`). Ein Schlüssel hat diese Herkunft, wenn das Formular keine Passphrase
-  enthält (`native/src/connect/os/shared/connector.rs:100-102`); lässt sich der Schlüssel dann nicht
-  laden, entsteht keine Zusatzverbindung (`link_rules.rs:46-47`). Die Herkunft wird nur über
-  `SftpBackend::connect_with_origin` übergeben; `SftpBackend::connect` bleibt interaktiv
-  (`native/src/sftp/core/backend.rs:38-41`, `:46-50`).
+- **Anmeldung ohne Eingabe:** gespeichertes Passwort oder Schlüssel (`link_rules.rs` `plan`), oder
+  der SSH-Agent mit der Identität, mit der sich die Hauptverbindung angemeldet hat (G3-10). Ein
+  Schlüssel hat diese Herkunft, wenn das Formular keine Passphrase enthält
+  (`native/src/connect/os/shared/connector.rs:100-102`); lässt sich der Schlüssel dann nicht laden,
+  entsteht keine Zusatzverbindung. Die Herkunft wird nur über `SftpBackend::connect_with_origin`
+  übergeben; `SftpBackend::connect` gilt als interaktiv: ein getipptes Passwort oder eine getippte
+  Passphrase wird für Zusatzverbindungen nie aufbewahrt, nur der SSH-Agent ist dort möglich.
+- **SSH-Agent nur ohne Rückfrage** (`native/src/sftp/core/agent_grant.rs`): nur die Identität der
+  Hauptanmeldung (nach Fingerabdruck), nie ein Sicherheitsschlüssel (`sk-ssh-ed25519@openssh.com`,
+  `sk-ecdsa-sha2-nistp256@openssh.com`, fragt nach einer Berührung), und nur wenn die Signatur der
+  Hauptanmeldung höchstens 750 ms dauerte (`QUICK_SIGNATURE`; eine Bestätigung `ssh-add -c` oder eine
+  PIN dauert länger). Braucht die Signatur einer Zusatzanmeldung länger oder fehlt die Identität im
+  Agenten, nutzt keine weitere Zusatzanmeldung dieses Kontos den Agenten mehr; höchstens diese eine
+  Rückfrage kann also erscheinen. Der Agent wird dabei je Zusatzanmeldung über denselben
+  Betriebssystem-Adapter erreicht wie bei der Hauptanmeldung (`sftp/os/ssh_agent_*.rs`).
 - **Einzeln, bei Zuwachs:** Eine neue Verbindung öffnet sich erst, wenn die vorige den Durchsatz
-  um mindestens 10 % angehoben hat (`link_rules.rs:18`, `:107-131`). Gemessen wird in Fenstern von
-  1 s (`link_rules.rs:20`) nach 2 s Einrichtung (`link_rules.rs:23`). Ein Versuch läuft nur, wenn
-  mindestens zwei Ströme je offener Verbindung laufen (`pool_growth.rs:93`, `:109-111`). Bleibt der Zuwachs aus,
-  folgt keine weitere Verbindung, bis ein Fenster ohne Übertragung die Regel zurücksetzt
-  (`link_rules.rs:123-128`, `:157-161`). Scheitert der Aufbau, gilt die Sperre unten
-  (`link_rules.rs:144-146`).
+  um mindestens 10 % angehoben hat (`link_rules.rs` `GROWTH_FACTOR`, `Growth::window`). Gemessen
+  wird in Fenstern von 0,5 s (`WINDOW`, G3-10). Beurteilt wird eine neue Verbindung im ersten
+  Fenster, das beginnt, nachdem sie ihr erstes Byte trug und danach so lange wie ihr Aufbau dauerte
+  (mindestens ein Fenster, höchstens 2 s, `SETTLE`; `Growth::carried`, `pool_channel.rs` `moved`);
+  trägt sie kein Byte, 2 s nach dem Aufbau. Ein Versuch läuft nur, wenn mindestens zwei Ströme je
+  offener Verbindung laufen (`pool_growth.rs` `demand`). Bleibt der Zuwachs aus, folgt keine weitere
+  Verbindung, bis ein Fenster ohne Übertragung die Regel zurücksetzt. Scheitert der Aufbau, gilt die
+  Sperre unten.
 - **Eine Anmeldung je Host und Port:** Während eine unangemeldete Verbindung zu Host und Port
   aufgebaut wird, beginnt keine zweite; der Versuch wird verschoben, nicht gesperrt
   (`link_rules.rs:236-240`, `pool_extra.rs:99-102`).
 - **Host-Schlüssel:** Der Schlüssel muss im Vertrauensspeicher im Modus `Verify` stehen und in
   Algorithmus und Fingerabdruck dem der Hauptverbindung gleichen; unbekannte, geänderte oder
   widerrufene Schlüssel werden abgelehnt, und Zertifikate werden nicht anerkannt
-  (`native/src/sftp/core/extra_link.rs:37-46`, `:58-60`; `link_rules.rs:306-329`).
+  (`native/src/sftp/core/extra_link.rs` `ExtraClient::judge`; `link_rules.rs` `same_host_key`). Die
+  Ablehnung fällt vor jeder Anmeldung: an einen abgelehnten Server geht kein Passwort und keine
+  Signatur. Sie beendet nur diesen einen Aufbau; die Hauptverbindung und schon arbeitende
+  Zusatzverbindungen laufen weiter, die Übertragung nutzt deren Kanäle (Test
+  `native/src/sftp/core/extra_link_tests.rs`).
 - **Zeitgrenze:** Von der TCP-Verbindung bis zur geöffneten Sitzung höchstens 30 s
   (`extra_link.rs:24`, `:309-311`).
 - **Sperre:** Scheitert ein Aufbau, sind Zusatzverbindungen für Benutzer, Host und Port 15 Minuten
@@ -229,6 +245,23 @@ nur unter diesen Bedingungen:
   Verbindung offen ist, und während einer Sperre „Weitere Verbindungen zu <Host> 15 Minuten
   gesperrt: <Grund>“; beide Teile trennt „; “ (`link_rules.rs:288-299`, `pool_extra.rs:57-66`).
   Der Text läuft über das Feld `note` (Abschnitt „Wo es erscheint“).
+
+**Entscheidung G3-10/G3-11 (2026-10-28).** Der Nutzer verlangte „so schnell wie irgendwie möglich“
+und „maximal möglicher Datentransferspeed, at all times von Anfang zu Ende“ und überließ die
+Entscheidung dem Hauptagenten („decide yourself“). Der Hauptagent hat für diesen Zweck entschieden;
+die Entscheidung ersetzt die früheren Sicherheitsantworten S12 und E13-S15 (i) in diesen Punkten:
+
+- **G3-10 (SFTP):** Große Dateien und Anmeldungen über den SSH-Agenten dürfen zusätzliche,
+  angemeldete Verbindungen zum selben Host für parallele Ströme nutzen. Sie verwenden die
+  gespeicherten Zugangsdaten bzw. die Agent-Identität der bestehenden Anmeldung, dieselbe
+  Host-Schlüssel-Bindung, und lösen keine neue Rückfrage aus. Die Zahl der Ströme folgt dem
+  gemessenen Durchsatz (Regeln oben). Unverändert aus E13-S15: eine unangemeldete Verbindung je Host
+  und Port gleichzeitig, gleicher Host-Schlüssel, 15 Minuten Sperre nach einem Fehlschlag,
+  Dienstprotokoll ohne Geheimnisse.
+- **G3-11 (FTP/FTPS):** Große Downloads (ab 16 MiB) laufen in Bereichen über zusätzliche
+  Anmeldungen mit denselben Zugangsdaten und derselben TLS-Regel wie die Hauptverbindung
+  (`ftp/core/pool.rs` `lease_range`). Unverändert: die Blätter-Verbindung bleibt frei, 421/530 lehrt
+  die Grenze, 421/530 auf einen Bereich schaltet Bereiche 15 Minuten ab.
 
 **Lokal, UNC.** Auf Windows kopieren geschützte Quellen, Verschieben und Ersetzen über die
 Handle-Kopie; zwischen Lesen und Schreiben liegt ein Ring aus 4 Blöcken zu je 1 MiB
@@ -329,6 +362,64 @@ offen (U49): `--stats` zeigt beim Kopieren eines Verknüpfungsziels auf einem Re
 - Inhalte als IStreams mit Vorausladen der nächsten Dateien (16 MiB Vorauslesepuffer,
   höchstens das halbe Speicherbudget) unter dem Flow der Verbindung;
   `IDataObjectAsyncCapability` lässt den Explorer im Hintergrund kopieren.
+
+## Stand 2026-10-28: Tempo-Pakete KP1–KP6
+
+Plan `docs/plaene/2026-10-28-verbinden-ist-einrichtung/plan.md`. Diese Fassung ist nicht gebaut
+und nicht ausgeführt; die Messfälle (`speed_task_*`) laufen erst in der Task-Suite.
+
+- **Absturzprotokoll je Auftrag (KP1, K-A).** Ein Auftrag mit Absturzschutz schreibt eine
+  angehängte Protokolldatei (`journal.log`: 8 Byte Kennung, dann je Datensatz Länge, CRC-32 und
+  Nutzlast; `engine/file_recovery_log.rs`). Ein Commit-Faden fasst die `sync_data` gleichzeitiger
+  Absichten zusammen; ein Paket schreibt eine Absicht für alle Mitglieder. Ein abgerissener letzter
+  Datensatz wird beim Lesen abgeschnitten. Aufträge im alten Format (`index.json` und eine Datei je
+  Beleg) werden beim Öffnen umgewandelt (`engine/file_recovery_legacy.rs`). Tresoraufträge
+  versiegeln jede Nutzlast. Abgeschlossene Aufträge werden nach 14 Tagen gelöscht, wenn kein Lauf
+  ihre Sperre hält (`COMPLETED_RETENTION`, `engine/job_store_catalog.rs`, M21).
+- **Pakete (KP1 K-E, KP3 G3-05).** Dateien bis zu einem Achtel des Paketlimits des Backends,
+  höchstens 2 MiB (`SMALL_FILE_CEILING`, `native/src/transfer/core/engine_policy.rs`), gehen in
+  Pakete; ein Paket fasst mindestens zwei solche Dateien (`packet_bytes`). Paketgrenzen gelten für
+  den gewählten Ordner selbst, sonst für seinen Elternordner. Neue Worker starten, solange die
+  Flows freie Erlaubnisse haben, höchstens Grenze × 1,5 + 2 (`engine/dispatch.rs`). Heruntergeladene
+  Paketdateien veröffentlicht ein eigener Faden in Ankunftsreihenfolge (`engine/publish_queue.rs`,
+  K-C), mit dem Beleg, den der Strom der Gegenstelle trug.
+- **Belege aus den Antworten des Hosts (KP2, K-B/K-F).** Share-Hosts mit `evidence_v1` liefern
+  Größe, Zeit und Dateiidentität in PutBatch-, GetBatch-, ReadAt- und Promote-Antworten; die Engine
+  fragt dann nicht mehr einzeln nach Stat und FileIdentity. `create_dirs_v1` legt bis zu 256 Ordner
+  in einer Anfrage an (`CreateDirs`). Hosts ohne diese Kennzeichen behalten die Einzelanfragen. Über
+  den Worker-Proxy (GUI, Android, CLI, MCP) gehen Pakete, aber noch keine Belege (`agent_proto` hat
+  dafür keine Frames).
+- **Einzeldatei als Paket aus einem Eintrag (KP5a, Z-P4).** Kündigt der Host `single_put_v1` an (der
+  Worker als Label `.single-put-v1`), geht eine neue Datei bis 16 MiB als Paket aus einem Eintrag:
+  Absicht vor dem Commit, Veröffentlichen ohne Ersetzen mit Nummerierung, eine verlorene Antwort wird
+  über die Statusabfrage geklärt und nie erneut gesendet.
+- **Weitere QUIC-Verbindungen (KP5a, Z-P6).** Bei `bulk_connections_v1` öffnet der Client bis zu 3
+  weitere Verbindungen für Lesen, Einzelschreiben und Pakete, sobald die erste Verbindung ≥ 1 %
+  Verlust zeigt oder etwa 250 MiB/s erreicht (`share/core/node_bulk.rs`). Jede durchläuft Hallo,
+  Sitzungsnachweis und die Direkt-zuerst-Zulassung. Bereichs-Uploads bleiben auf der ersten.
+- **Worker (KP5a, Z-P3/Z-P8).** Der Worker nimmt Anfragen auf wiederverwendeten Fäden an (leer nach
+  30 s beendet, `daemon/os/shared/backend_pool.rs`) und kündigt auf dem Loopback-Sprung kein
+  `lz4-v1` mehr an.
+- **Lokal (KP4).** Kopien veröffentlichen unter Windows ohne `MOVEFILE_WRITE_THROUGH` (Verschieben
+  und Ersetzen behalten es, M9); Worker und Linux-Bereichsfäden senken ihre Priorität nicht mehr
+  (M20); `se cp` in einen vorhandenen Ordner oder mit `--force`, die MCP-Kopie „beide behalten“
+  und `se mv`/MCP-Verschieben, das keine einzelne Umbenennung ist, planen den ganzen Baum und laufen
+  über die Engine (`native/src/cli/tree_engine.rs`, M16). Die Ordnervorschau der GUI liest
+  lokale Wurzeln mit einem `lstat` und weckt die GUI, sobald ihr Ergebnis steht (M12). Eine
+  Ordnerreservierung über eine Stufe schreibt das „veröffentlicht“ nach dem Umbenennen nicht mehr
+  dauerhaft für sich; nach einem Absturz bestätigt die gespeicherte Identität der Stufe das Ziel
+  (`engine/folder_reservation.rs`, M13).
+- **Server-Backends (KP3).** SFTP- und SMB-Paket-Downloads holen auf einem eigenen Faden, die Senke
+  der Engine läuft außerhalb der Laufzeit (G3-01). SFTP schickt CLOSE direkt hinter das letzte
+  WRITE, FSTAT/LSTAT als Beleg mit und RENAME zusammen mit LSTAT (G3-02/G3-03/G3-06). WebDAV
+  verschiebt eine mit `If-None-Match: *` bestätigte Stufe ohne PROPFIND davor (G3-12). Google Drive
+  drosselt neue Dateien erst nach einer Ablehnung (G3-08a). FTP kann die Auflistungen der Ordner,
+  in die ein Auftrag veröffentlicht, behalten, solange der Auftrag läuft (`vfs::transfer_scope`,
+  G3-04b); die Engine hält den Rahmen, das FTP-Backend gibt ihn noch nicht zurück (offen). Jede
+  Veröffentlichung prüft den Zielnamen weiterhin einzeln.
+- **Unverändert:** Ein Einzel-Download prüft die Quelle nach dem Lesen weiter mit einem `stat`,
+  auch wenn der Host beim Öffnen einen Beleg lieferte: Der Beleg stammt von vor dem Lesen und
+  beweist nicht, dass die Datei während des Lesens gleich blieb.
 
 ## Was erhalten bleibt
 

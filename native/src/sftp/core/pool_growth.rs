@@ -9,7 +9,7 @@ use super::channel_pool::ChannelPool;
 use super::link_rules::{blocked, Growth, Step, WINDOW};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 struct Window {
     started: Instant,
@@ -110,11 +110,17 @@ impl PoolHub {
         self.active.load(Ordering::Acquire) >= 2 * self.links.load(Ordering::Acquire)
     }
 
-    /// The connection is up: its effect is judged after a settling time.
-    pub(super) fn attempt_installed(&self) {
+    /// The connection is up after a setup of `setup`: its effect is judged
+    /// once it carried data (`carried`), at the latest after `SETTLE`.
+    pub(super) fn attempt_installed(&self, setup: Duration) {
         let mut window = lock(&self.window);
-        window.growth.installed(Instant::now());
+        window.growth.installed(Instant::now(), setup);
         window.growing = false;
+    }
+
+    /// The newest extra connection moved its first file data.
+    pub(super) fn carried(&self) {
+        lock(&self.window).growth.carried(Instant::now());
     }
 
     /// Setting it up failed: no more attempts.

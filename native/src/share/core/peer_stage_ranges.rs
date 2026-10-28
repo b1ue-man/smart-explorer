@@ -12,7 +12,7 @@ use std::time::Instant;
 use super::peer_stages::StageTicket;
 use super::PeerBackend;
 use crate::share::core::eio;
-use crate::share::framing::lz4_stream::{frame_for, Lz4Stream};
+use crate::share::framing::lz4_stream::{frame_for, link_for, Lz4Stream};
 use crate::share::framing::{decode_resp, recv_resp_wire, send_ctrl, send_tagged};
 use crate::share::identity::ShareIdentity;
 use crate::share::io_deadline;
@@ -235,12 +235,16 @@ impl SegmentedStage for PeerSegmentedStage {
         }
         track_client(&self.node, &opened.session_key);
         stats::stream_started();
+        // The parts of a file share their connection's LZ4 measurements.
+        let lz4 = self
+            .lz4
+            .then(|| link_for(&opened.session_key, opened.generation).stream());
         Ok(Box::new(RangeWriter {
             node: self.node.clone(),
             opened: Some(opened),
             expected: len,
             sent: 0,
-            lz4: self.lz4.then(Lz4Stream::new),
+            lz4,
             state: RangeState::Open,
         }))
     }

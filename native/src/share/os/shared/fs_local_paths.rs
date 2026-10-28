@@ -10,6 +10,12 @@ use super::{
 pub(in crate::share) use super::fs_path_adapter::to_os_path;
 
 pub(super) fn secure_local_target(root: &str, rest: &[String]) -> io::Result<String> {
+    secure_local_resolved(root, rest).map(|(_, target)| target)
+}
+
+/// The canonical export root and the target below it, with the root
+/// resolved once (Z-H2: `resolve` needs both and resolved the root twice).
+pub(super) fn secure_local_resolved(root: &str, rest: &[String]) -> io::Result<(String, String)> {
     let root_norm = norm_root(root);
     let root_os = to_os_path(&root_norm);
     let root_canon = std::fs::canonicalize(&root_os).map_err(|error| {
@@ -22,16 +28,22 @@ pub(super) fn secure_local_target(root: &str, rest: &[String]) -> io::Result<Str
         .iter()
         .fold(root_canon.clone(), |p, segment| p.join(segment));
     ensure_under_root(&root_canon, &target_os)?;
-    Ok(from_os_path(&target_os))
+    Ok((from_os_path(&root_canon), from_os_path(&target_os)))
 }
 
 fn ensure_under_root(root_canon: &Path, target: &Path) -> io::Result<()> {
-    if target.exists() {
-        let target_canon = std::fs::canonicalize(target)?;
-        if !canonical_contains(root_canon, &target_canon) {
-            return Err(eio("Symlink/Reparse-Point fuehrt aus der Freigabe heraus"));
+    // One resolution for an existing target instead of a probe and then the
+    // resolution; a target that is missing (or only reachable as a dangling
+    // or looping link) is judged by its nearest existing parent, as before.
+    match std::fs::canonicalize(target) {
+        Ok(target_canon) => {
+            if !canonical_contains(root_canon, &target_canon) {
+                return Err(eio("Symlink/Reparse-Point fuehrt aus der Freigabe heraus"));
+            }
+            return Ok(());
         }
-        return Ok(());
+        Err(error) if target.exists() => return Err(error),
+        Err(_) => {}
     }
 
     let mut existing = target;

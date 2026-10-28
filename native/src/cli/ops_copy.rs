@@ -4,8 +4,9 @@ use super::super::target::Target;
 use super::super::transfer::{transfer_plan, transfer_plan_as};
 use super::super::tree_observer::{TreeObserver, TreePhase};
 use super::super::tree_ops::{copy_entry_with, TreeOutcome, TreeRequest};
-use super::super::{engine_copy, folder_conflict, transfer};
+use super::super::{engine_copy, folder_conflict, transfer, tree_engine};
 use super::print_notices;
+use crate::types::CopyMode;
 use std::time::Instant;
 
 /// `se cp` without `--stats` (the existing tests call it this way).
@@ -168,20 +169,24 @@ pub(in crate::cli) fn copy_observed_in_job(
             return Ok(outcome);
         }
     }
-    let receipt = copy_entry_with(
-        &*src.backend,
-        &src.path,
-        &*dst.backend,
-        dst_path,
-        &TreeRequest {
-            recursive,
-            force,
-            resume: resume.is_some(),
-            expected_root: Some(&source_snapshot),
-            destination_check: None,
-            observer,
-        },
-    )?;
+    let request = TreeRequest {
+        recursive,
+        force,
+        resume: resume.is_some(),
+        expected_root: Some(&source_snapshot),
+        destination_check: None,
+        observer,
+    };
+    // An existing destination folder, `--force` or a reserved "keep both"
+    // folder between local paths: the planned tree on the engine (M16).
+    if plain_source {
+        let engine = tree_engine::transfer_tree(src, dst, dst_path, &request, CopyMode::Copy)?;
+        if let Some(outcome) = engine {
+            context.finish()?;
+            return Ok(outcome);
+        }
+    }
+    let receipt = copy_entry_with(&*src.backend, &src.path, &*dst.backend, dst_path, &request)?;
     observer.set_phase(TreePhase::Done);
     context.finish()?;
     Ok(TreeOutcome {

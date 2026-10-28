@@ -1,6 +1,7 @@
 //! Copying many small files over a real loopback Share (KP2): packets reach
 //! the host through the background service's proxy (Z-P1), and the
-//! `#[ignore]` benchmarks print files per second and requests per file:
+//! `#[ignore]` benchmarks print files per second and requests per file (and,
+//! for single files and one large file, MiB per second, KP5a):
 //! `cargo test --release -- --ignored speed_task_share --nocapture --test-threads=1`.
 use std::fs;
 use std::io::{self, Read, Write};
@@ -9,9 +10,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
-use super::node_sessions::OPENED_STREAMS;
 use super::transfer_engine_task_support::{get, put, RecordingSink};
 use super::CopyPastePeerFixture;
+use crate::share::node_sessions::OPENED_STREAMS;
 use crate::transfer::{Endpoint, JobItems, Layout, TransferJob, TransferMsg};
 use crate::vfs::{BackendHandle, BatchPutOutcome};
 
@@ -221,4 +222,106 @@ fn speed_task_share_small_files_4k() -> io::Result<()> {
 #[ignore = "benchmark: run explicitly with --ignored --nocapture"]
 fn speed_task_share_medium_files_64k() -> io::Result<()> {
     bench_set("medium_1000x64k", 1000, 64 * 1024)
+}
+
+/// Runs one case and prints its byte rate and requests per job.
+fn bench_bytes(
+    case: &str,
+    bytes: u64,
+    jobs: u64,
+    job: impl FnOnce() -> io::Result<()>,
+) -> io::Result<()> {
+    let opened = OPENED_STREAMS.load(Ordering::Relaxed);
+    let started = Instant::now();
+    job()?;
+    let seconds = started.elapsed().as_secs_f64().max(f64::EPSILON);
+    let requests = OPENED_STREAMS
+        .load(Ordering::Relaxed)
+        .saturating_sub(opened);
+    println!(
+        "BENCH {case} mib_per_s={:.1} requests_per_job={:.2}",
+        bytes as f64 / seconds / (1024.0 * 1024.0),
+        requests as f64 / jobs.max(1) as f64
+    );
+    Ok(())
+}
+
+/// `jobs` jobs of one file each (the single-file path, Z-P4), up and down,
+/// directly and through the proxy.
+fn bench_single_files(label: &str, jobs: usize, size: usize) -> io::Result<()> {
+    for proxy in [false, true] {
+        let fixture = CopyPastePeerFixture::for_transfer_engine_task()?;
+        let backend = if proxy {
+            proxied(&fixture)?
+        } else {
+            fixture.backend.clone()
+        };
+        let route = if proxy { "proxy" } else { "direct" };
+        let local = tempfile::tempdir()?;
+        let sources: Vec<PathBuf> = (0..jobs)
+            .map(|index| local.path().join(format!("job{index:04}")))
+            .collect();
+        for (index, source) in sources.iter().enumerate() {
+            write_tree(source, 1, 1, size)?;
+            fs::create_dir_all(fixture.root_b.join(format!("dst{index:04}")))?;
+        }
+        let total = (jobs * size) as u64;
+        bench_bytes(
+            &format!("{label}_upload_{route}"),
+            total,
+            jobs as u64,
+            || {
+                for (index, source) in sources.iter().enumerate() {
+                    let target = format!("/B/dst{index:04}");
+                    let done = run(&backend, Endpoint::Local, &target, &[fwd(source)])?;
+                    assert_eq!(done, 1);
+                }
+                Ok(())
+            },
+        )?;
+    }
+    Ok(())
+}
+
+/// One large file up and down, directly and through the proxy: the rate a
+/// single transfer reaches (Z-P5, Z-P6, Z-P8).
+fn bench_large_file(label: &str, size: usize) -> io::Result<()> {
+    for proxy in [false, true] {
+        let fixture = CopyPastePeerFixture::for_transfer_engine_task()?;
+        let backend = if proxy {
+            proxied(&fixture)?
+        } else {
+            fixture.backend.clone()
+        };
+        let route = if proxy { "proxy" } else { "direct" };
+        let local = tempfile::tempdir()?;
+        let upload = local.path().join("large");
+        write_tree(&upload, 1, 1, size)?;
+        fs::create_dir(fixture.root_b.join("dst"))?;
+        bench_bytes(&format!("{label}_upload_{route}"), size as u64, 1, || {
+            run(&backend, Endpoint::Local, "/B/dst", &[fwd(&upload)])?;
+            Ok(())
+        })?;
+        write_tree(&fixture.root_a.join("src"), 1, 1, size)?;
+        let into = local.path().join("down");
+        fs::create_dir(&into)?;
+        let remote = Endpoint::Remote(backend.clone());
+        bench_bytes(&format!("{label}_download_{route}"), size as u64, 1, || {
+            run(&backend, remote, &fwd(&into), &["/A/src".to_string()])?;
+            Ok(())
+        })?;
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "benchmark: run explicitly with --ignored --nocapture"]
+fn speed_task_share_single_files_64k() -> io::Result<()> {
+    bench_single_files("single_200x64k", 200, 64 * 1024)
+}
+
+#[test]
+#[ignore = "benchmark: run explicitly with --ignored --nocapture"]
+fn speed_task_share_large_file_512m() -> io::Result<()> {
+    bench_large_file("large_1x512m", 512 * 1024 * 1024)
 }

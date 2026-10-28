@@ -8,6 +8,8 @@ mod listing_body;
 mod metadata;
 #[path = "core/multistatus.rs"]
 mod multistatus;
+#[path = "core/put_stages.rs"]
+mod put_stages;
 #[path = "core/stage_move.rs"]
 mod stage_move;
 #[path = "core/status.rs"]

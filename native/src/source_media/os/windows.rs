@@ -50,6 +50,27 @@ pub(super) fn probe(path: &Path) -> io::Result<Option<Source>> {
     probe_volume(&file, &root)
 }
 
+/// `probe` of a regular file: a file is never a mount point, so its folder
+/// decides. A folder found on no optical volume a moment ago is not
+/// resolved again (M6); positive answers are always resolved in full.
+pub(super) fn probe_regular_file(path: &Path) -> io::Result<Option<Source>> {
+    let normalized = crate::local_access::normalize_scan_root(path);
+    let Some(key) = normalized
+        .parent()
+        .map(|folder| folder.to_string_lossy().to_lowercase())
+    else {
+        return probe(path);
+    };
+    if super::probe_cache::known_plain(&key) {
+        return Ok(None);
+    }
+    let found = probe(path)?;
+    if found.is_none() {
+        super::probe_cache::remember_plain(key);
+    }
+    Ok(found)
+}
+
 pub(super) fn probe_file(file: &File) -> io::Result<Option<Source>> {
     // The handle decides the volume even when the retained root was renamed
     // or its old external spelling now names a different directory.

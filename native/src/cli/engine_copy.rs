@@ -63,12 +63,12 @@ pub(super) fn with_legacy_path<T>(run: impl FnOnce() -> T) -> T {
 }
 
 #[cfg(test)]
-fn enabled_now() -> bool {
+pub(super) fn enabled_now() -> bool {
     CLI_ENGINE_PATH && !LEGACY_ONLY.with(|flag| flag.get())
 }
 
 #[cfg(not(test))]
-fn enabled_now() -> bool {
+pub(super) fn enabled_now() -> bool {
     CLI_ENGINE_PATH
 }
 
@@ -248,7 +248,7 @@ fn probe(
 /// the same folder and the same test as `AccessGate::request`. Where it is
 /// true (Windows, local drive, no grant, no backup privilege) the older path
 /// reports a refused read as an error instead.
-fn access_prompt_possible(src: &Target, src_meta: &VfsMeta) -> bool {
+pub(super) fn access_prompt_possible(src: &Target, src_meta: &VfsMeta) -> bool {
     let root = if src_meta.is_dir {
         Some(src.path.clone())
     } else {
@@ -303,10 +303,38 @@ fn run(
     items: &JobItems,
     observer: &TreeObserver,
 ) -> Result<Finished, String> {
+    let options = RunOptions {
+        conflict: Conflict::Skip,
+        mode: CopyMode::Copy,
+        job_id: None,
+    };
+    run_job(src, dst, target_dir, items, observer, &options)
+}
+
+/// How an engine run of the terminal treats names and sources.
+pub(super) struct RunOptions {
+    /// `Skip`: a destination that appeared is left alone and reported;
+    /// `Overwrite` only for `--force`.
+    pub(super) conflict: Conflict,
+    pub(super) mode: CopyMode,
+    /// A crash log under this job id (moves: an interrupted move resumes
+    /// from the recovery catalog instead of leaving a quarantined source).
+    pub(super) job_id: Option<String>,
+}
+
+/// `run` with the conflict policy, mode and crash log of `options`.
+pub(super) fn run_job(
+    src: &Target,
+    dst: &Target,
+    target_dir: &str,
+    items: &JobItems,
+    observer: &TreeObserver,
+    options: &RunOptions,
+) -> Result<Finished, String> {
     let view = JobView {
-        recoverable: false,
+        recoverable: options.job_id.is_some(),
         recovery: crate::transfer::RecoveryMode::New,
-        id: None,
+        id: options.job_id.as_deref(),
         folders: &crate::transfer::FolderConflictPolicy::new(
             crate::transfer::FolderConflict::Merge,
         ),
@@ -316,8 +344,8 @@ fn run(
         items,
         layout: Layout::Tree,
         filter: None,
-        conflict: Conflict::Skip,
-        mode: CopyMode::Copy,
+        conflict: options.conflict,
+        mode: options.mode,
         source_label: &src.path,
         target_label: target_dir,
         resume: None,

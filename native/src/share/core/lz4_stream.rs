@@ -16,10 +16,18 @@ use std::io;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::agent_proto::{lz4_switched_off, unpack, BlockSender};
+use crate::agent_proto::{free_cores, lz4_switched_off, pack_lz4, unpack};
+use crate::transfer::compress_policy::{PROBE_BYTES, PROBE_PERIOD, WINDOW_BLOCKS};
 
 use super::{TAG_DATA, TAG_DATA_LZ4};
 use crate::share::transfer_meter as stats;
+
+#[path = "lz4_link.rs"]
+mod link;
+pub(in crate::share) use link::{link_for, Lz4Link};
+
+/// Kind byte and raw length in front of an LZ4 block (see `TAG_DATA_LZ4`).
+const BLOCK_HEAD: usize = 5;
 
 /// Whether this side serves (or uses) LZ4 content for a request that asked
 /// for it. The suite can switch it off in a development build.
@@ -27,8 +35,25 @@ pub(in crate::share) fn negotiated(requested: bool) -> bool {
     requested && !lz4_switched_off()
 }
 
+/// What one stream decides on its own: the hold of the last decision and
+/// where its next sample is due. The measurements are its link's.
+struct Local {
+    decision: bool,
+    held: u32,
+    next_probe: u64,
+    writer: u64,
+}
+
+enum Packer {
+    /// Decisions from the measurements of the stream's connection (Z-P8).
+    Link { link: Lz4Link, local: Local },
+    /// One stream's own policy with fixed measurements (tests).
+    #[cfg(test)]
+    Own(crate::agent_proto::BlockSender),
+}
+
 struct State {
-    sender: BlockSender,
+    packer: Packer,
     /// Raw bytes of this stream packed or passed so far (the sampling clock).
     offset: u64,
 }
@@ -40,17 +65,31 @@ struct State {
 pub(in crate::share) struct Lz4Stream(Arc<Mutex<State>>);
 
 impl Lz4Stream {
+    /// A stream with measurements of its own (a link of one stream).
     pub(in crate::share) fn new() -> Self {
-        let mut sender = BlockSender::new();
-        sender.start_file();
-        Self(Arc::new(Mutex::new(State { sender, offset: 0 })))
+        Lz4Link::default().stream()
+    }
+
+    fn on_link(link: Lz4Link, writer: u64) -> Self {
+        Self(Arc::new(Mutex::new(State {
+            packer: Packer::Link {
+                link,
+                local: Local {
+                    decision: false,
+                    held: 0,
+                    next_probe: 0,
+                    writer,
+                },
+            },
+            offset: 0,
+        })))
     }
 
     /// A stream whose policy already has measurements (tests).
     #[cfg(test)]
     pub(in crate::share) fn with_policy(policy: crate::transfer::compress_policy::Policy) -> Self {
         Self(Arc::new(Mutex::new(State {
-            sender: BlockSender::with_policy(policy),
+            packer: Packer::Own(crate::agent_proto::BlockSender::with_policy(policy)),
             offset: 0,
         })))
     }
@@ -68,7 +107,11 @@ impl Lz4Stream {
         let offset = state.offset;
         state.offset = offset.saturating_add(chunk.len() as u64);
         let timer = stats::Timer::start();
-        let packed = state.sender.try_pack(chunk, offset);
+        let packed = match &mut state.packer {
+            Packer::Link { link, local } => pack_on_link(link, local, chunk, offset),
+            #[cfg(test)]
+            Packer::Own(sender) => sender.try_pack(chunk, offset),
+        };
         timer.stop(stats::Phase::Lz4);
         if packed.is_some() {
             stats::lz4_block();
@@ -79,8 +122,54 @@ impl Lz4Stream {
     /// `bytes` of raw content went to the wire and the writer waited
     /// `blocked` for it.
     pub(in crate::share) fn record_send(&self, bytes: usize, blocked: Duration, now: Instant) {
-        self.state().sender.record_send(bytes, blocked, now);
+        match &mut self.state().packer {
+            Packer::Link { link, local } => link.record_send(local.writer, bytes, blocked, now),
+            #[cfg(test)]
+            Packer::Own(sender) => sender.record_send(bytes, blocked, now),
+        }
     }
+}
+
+/// The rule of `compress_policy` on a stream of a link: the stream holds a
+/// decision for `WINDOW_BLOCKS` blocks and samples the first block of its
+/// file and then every `PROBE_PERIOD`; the ratio, the core rate and the
+/// wire measurement are the link's, so a new stream (a small file, a part)
+/// starts with what its connection already learned.
+fn pack_on_link(link: &Lz4Link, local: &mut Local, chunk: &[u8], offset: u64) -> Option<Vec<u8>> {
+    let probe = offset >= local.next_probe;
+    if probe {
+        local.next_probe = (offset / PROBE_PERIOD + 1).saturating_mul(PROBE_PERIOD);
+    }
+    let compress = if local.held > 0 {
+        local.held -= 1;
+        local.decision
+    } else {
+        local.decision = link.input(free_cores()).favours_compression();
+        local.held = WINDOW_BLOCKS - 1;
+        local.decision
+    };
+    if compress {
+        let started = Instant::now();
+        let packed = pack_lz4(chunk);
+        let took = started.elapsed();
+        let size = packed
+            .as_ref()
+            .map_or(chunk.len(), |block| block.len().saturating_sub(BLOCK_HEAD));
+        link.observe_compression(chunk.len(), size, took);
+        return packed;
+    }
+    if probe {
+        // Only a sample is packed to measure; the bytes go out as they are.
+        let sample = &chunk[..chunk.len().min(PROBE_BYTES)];
+        let started = Instant::now();
+        let packed = pack_lz4(sample);
+        let took = started.elapsed();
+        let size = packed
+            .as_ref()
+            .map_or(sample.len(), |block| block.len().saturating_sub(BLOCK_HEAD));
+        link.observe_compression(sample.len(), size, took);
+    }
+    None
 }
 
 /// The frame to send for `chunk`: the tag and the bytes after packing. A

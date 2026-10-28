@@ -14,9 +14,10 @@ use std::sync::Arc;
 use zeroize::{Zeroize, Zeroizing};
 
 use super::cipher_combo::{CipherCombo, CHUNK_PAYLOAD};
+use super::content_batch::{decrypt_chunks, encrypt_chunks, BATCH_CHUNKS};
 use super::content_chunks::{decrypt_chunk, encrypt_chunk};
 use super::content_header::{decrypt_header, encrypt_header, FileHeader};
-use super::keys::MasterkeyCell;
+use super::keys::{Masterkey, MasterkeyCell};
 use super::FormatError;
 
 /// Encrypts and decrypts file contents of one unlocked vault.
@@ -77,6 +78,37 @@ impl ContentCryptor {
     }
 }
 
+impl ContentCryptor {
+    /// The masterkey for one batch: the vault lock is checked once per
+    /// batch, and the parallel chunk work never runs under the key's lock
+    /// (a waiting `wipe` must not stall the workers that hold the key).
+    /// The copy lives in zeroizing buffers and is wiped after the batch.
+    fn batch_key(&self) -> Result<Masterkey, FormatError> {
+        self.keys.with(|key| Masterkey::from_raw(&key.raw()))
+    }
+
+    /// Encrypts consecutive chunks from `first` in one batch (every chunk
+    /// but the last one full).
+    pub(crate) fn encrypt_chunks(
+        &self,
+        header: &FileHeader,
+        first: u64,
+        plaintext: &[u8],
+    ) -> Result<Vec<u8>, FormatError> {
+        encrypt_chunks(&self.batch_key()?, header, first, plaintext)
+    }
+
+    /// Authenticates and decrypts consecutive chunks from `first`.
+    pub(crate) fn decrypt_chunks(
+        &self,
+        header: &FileHeader,
+        first: u64,
+        ciphertext: &[u8],
+    ) -> Result<Zeroizing<Vec<u8>>, FormatError> {
+        decrypt_chunks(&self.batch_key()?, header, first, ciphertext)
+    }
+}
+
 /// Reads until `buffer` is full or the source ends; returns the bytes read.
 fn read_full(reader: &mut impl Read, buffer: &mut [u8]) -> io::Result<usize> {
     let mut filled = 0;
@@ -97,6 +129,8 @@ pub(crate) struct DecryptingReader<R: Read> {
     cryptor: ContentCryptor,
     header: FileHeader,
     index: u64,
+    /// Chunks the next read asks for (1, 2, 4, … up to `BATCH_CHUNKS`).
+    batch: usize,
     chunk: Vec<u8>,
     plain: Zeroizing<Vec<u8>>,
     position: usize,
@@ -112,12 +146,14 @@ impl<R: Read> DecryptingReader<R> {
             return Err(FormatError::InvalidHeader.into());
         }
         let header = cryptor.decrypt_header(&header)?;
-        let chunk = vec![0u8; cryptor.combo().chunk_size()];
+        // One read and one parallel authentication per batch of chunks.
+        let chunk = vec![0u8; cryptor.combo().chunk_size() * BATCH_CHUNKS];
         Ok(Self {
             inner,
             cryptor,
             header,
             index: 0,
+            batch: 1,
             chunk,
             plain: Zeroizing::new(Vec::new()),
             position: 0,
@@ -126,18 +162,24 @@ impl<R: Read> DecryptingReader<R> {
         })
     }
 
-    /// Decrypts the next chunk into `plain`; `false` at the end of the file.
+    /// Decrypts the next batch of chunks into `plain`; `false` at the end
+    /// of the file.
     fn next_chunk(&mut self) -> io::Result<bool> {
-        let read = read_full(&mut self.inner, &mut self.chunk)?;
+        // The batch grows from one chunk, so a short read (a file type
+        // sniff) never pulls a whole batch over the network.
+        let size = self.cryptor.combo().chunk_size();
+        let wanted = (size * self.batch).min(self.chunk.len());
+        let read = read_full(&mut self.inner, &mut self.chunk[..wanted])?;
         if read == 0 {
             return Ok(false);
         }
         let plain = self
             .cryptor
-            .decrypt_chunk(&self.header, self.index, &self.chunk[..read])?;
-        self.index += 1;
-        // Only a full chunk can be followed by another one.
-        self.ended = read < self.chunk.len();
+            .decrypt_chunks(&self.header, self.index, &self.chunk[..read])?;
+        self.index += read.div_ceil(size) as u64;
+        self.batch = (self.batch * 2).min(BATCH_CHUNKS);
+        // Only a full batch can be followed by another chunk.
+        self.ended = read < wanted;
         self.plain = plain;
         self.position = 0;
         Ok(true)
@@ -202,7 +244,7 @@ impl<W: Write> EncryptingWriter<W> {
             header,
             header_written: false,
             index: 0,
-            pending: Zeroizing::new(Vec::with_capacity(CHUNK_PAYLOAD)),
+            pending: Zeroizing::new(Vec::with_capacity(CHUNK_PAYLOAD * BATCH_CHUNKS)),
             failed: false,
         })
     }
@@ -222,14 +264,25 @@ impl<W: Write> EncryptingWriter<W> {
         Ok(())
     }
 
-    /// Encrypts the pending cleartext as the next chunk.
+    /// Encrypts all pending cleartext as the next chunks (the last one may
+    /// be partial only when the file ends).
     fn emit(&mut self) -> io::Result<()> {
-        let chunk = self
-            .cryptor
-            .encrypt_chunk(&self.header, self.index, &self.pending)?;
-        self.sink()?.write_all(&chunk)?;
-        self.index += 1;
-        self.pending.zeroize();
+        self.emit_prefix(self.pending.len())
+    }
+
+    /// Encrypts the first `length` pending bytes (whole chunks, or all of
+    /// them at the end) and writes them to the inner writer in one call.
+    fn emit_prefix(&mut self, length: usize) -> io::Result<()> {
+        if length == 0 {
+            return Ok(());
+        }
+        let chunks =
+            self.cryptor
+                .encrypt_chunks(&self.header, self.index, &self.pending[..length])?;
+        self.sink()?.write_all(&chunks)?;
+        self.index += length.div_ceil(CHUNK_PAYLOAD) as u64;
+        self.pending[..length].zeroize();
+        self.pending.drain(..length);
         Ok(())
     }
 
@@ -273,19 +326,23 @@ impl<W: Write> Write for EncryptingWriter<W> {
         }
         let header = self.write_header();
         self.checked(header)?;
-        let room = CHUNK_PAYLOAD - self.pending.len();
+        let room = CHUNK_PAYLOAD * BATCH_CHUNKS - self.pending.len();
         let count = room.min(buffer.len());
         self.pending.extend_from_slice(&buffer[..count]);
-        if self.pending.len() == CHUNK_PAYLOAD {
+        if self.pending.len() == CHUNK_PAYLOAD * BATCH_CHUNKS {
             let emitted = self.emit();
             self.checked(emitted)?;
         }
         Ok(count)
     }
 
-    /// Flushes the inner writer; a partial chunk stays pending (a chunk in
-    /// the middle of a file is always full).
+    /// Writes every full pending chunk and flushes the inner writer; a
+    /// partial chunk stays pending (a chunk in the middle of a file is
+    /// always full).
     fn flush(&mut self) -> io::Result<()> {
+        let full = self.pending.len() / CHUNK_PAYLOAD * CHUNK_PAYLOAD;
+        let emitted = self.emit_prefix(full);
+        self.checked(emitted)?;
         let flushed = self.sink().and_then(|inner| inner.flush());
         self.checked(flushed)
     }

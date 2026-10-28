@@ -44,16 +44,17 @@ pub(super) fn offers_ranges(backend: &BackendHandle) -> bool {
     backend.supports_range_reads(&backend.root_display())
 }
 
-/// The labels the service adds to its version text for `backend`.
+/// The labels the service adds to its version text for `backend`. Never
+/// `lz4-v1` (Z-P8): the service is the loopback hop between the engine and
+/// the worker, where packing costs a core on each side and saves no wire
+/// time; the worker's own peer streams decide LZ4 for the real line. The
+/// `ReadLz4` and `DataLz4` frames stay understood for a client that sends
+/// them anyway.
 pub(super) fn labels(backend: &BackendHandle) -> String {
     let mut labels = String::new();
     if offers_ranges(backend) {
         labels.push('.');
         labels.push_str(crate::agent_proto::LABEL_RANGE);
-        if !lz4_switched_off() {
-            labels.push('.');
-            labels.push_str(crate::agent_proto::LABEL_LZ4);
-        }
     }
     labels
 }

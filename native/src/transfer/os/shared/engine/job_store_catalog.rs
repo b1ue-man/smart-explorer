@@ -1,10 +1,48 @@
-//! Background discovery and live vault monitoring of stored jobs.
+//! Background discovery and live vault monitoring of stored jobs. Completed
+//! jobs are only kept for `COMPLETED_RETENTION` (M21, 2026-10-28): their
+//! record and crash log serve the "transfer missing files" retry of a run
+//! that just ended; afterwards they would grow `transfer-jobs` and this
+//! catalog's start forever.
 use std::io;
+use std::time::Duration;
 
 use super::{
     path, read_record, record_context, record_io, root, valid_id, Endpoint, JobRecord, Mutex,
     RecordContext, RecordKind, TransferJob,
 };
+
+/// A completed job's record and crash log stay this long after its end.
+const COMPLETED_RETENTION: Duration = Duration::from_secs(14 * 24 * 60 * 60);
+
+/// Removes the completed job `id` when its record is older than
+/// `COMPLETED_RETENTION` and no run holds it (its lock is taken first, so
+/// a live retry of the same job is never cut short). The record goes first,
+/// then the crash log folder; a crash between leaves a folder no job reads.
+/// Failures leave the job as it is.
+fn prune_completed(id: &str) {
+    let Ok(record) = path(id) else {
+        return;
+    };
+    let old = std::fs::metadata(&record)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .is_some_and(|age| age >= COMPLETED_RETENTION);
+    if !old {
+        return;
+    }
+    let Ok(lock) = crate::support_dirs::open_private_lock(&root().join(format!("{id}.lock")))
+    else {
+        return;
+    };
+    if lock.try_lock().is_err() {
+        return;
+    }
+    if std::fs::remove_file(&record).is_ok() {
+        let _ = std::fs::remove_dir_all(record.with_extension("files"));
+    }
+    drop(lock);
+}
 
 pub(crate) fn unconfirmed_jobs() -> io::Result<Vec<JobRecord>> {
     let entries = match std::fs::read_dir(root()) {
@@ -92,6 +130,7 @@ fn load_catalog() -> io::Result<(CatalogState, Vec<(String, RecordContext)>)> {
                 return Err(io::Error::other("Ungültiger Jobdatensatz"));
             }
             if record.complete {
+                prune_completed(id);
                 return Ok(None);
             }
             let context = record_context(&record.vault_locations)?;

@@ -20,7 +20,8 @@ pub(super) async fn read(
         Ok(slot) => slot,
         Err(error) => return reply_err(&mut send, error).await,
     };
-    crate::share::server_transfer::read_file(send, source, access, slot, context.stall()).await
+    let stream = (context.stall(), Some(context.lz4.clone()));
+    crate::share::server_transfer::read_file(send, source, access, slot, stream).await
 }
 
 pub(super) async fn write(

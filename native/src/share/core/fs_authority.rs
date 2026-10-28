@@ -50,7 +50,14 @@ impl AccessAuthority {
             rights,
         ))
     }
-    pub(in crate::share) fn check(&self) -> io::Result<SessionAuthorization> {
+    /// The per-request and per-block check: the share is running, the
+    /// stream is alive, the policy generation holds and the current auth
+    /// state still authorizes the session (Z-H1: without copying the export
+    /// table, the proof memoized per session by value).
+    pub(in crate::share) fn check(&self) -> io::Result<()> {
+        self.check_may_write().map(|_| ())
+    }
+    fn check_may_write(&self) -> io::Result<bool> {
         self.node
             .upgrade()
             .ok_or_else(|| eio("Share ist gestoppt"))?
@@ -66,7 +73,7 @@ impl AccessAuthority {
             ));
         }
         self.generation.check()?;
-        self.session.authorize(&self.auth).map_err(|_| {
+        self.session.may_write(&self.auth).map_err(|_| {
             io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "Share-Anfrage nicht autorisiert",
@@ -74,7 +81,7 @@ impl AccessAuthority {
         })
     }
     pub(in crate::share) fn check_write(&self) -> io::Result<()> {
-        if self.check()?.may_write {
+        if self.check_may_write()? {
             Ok(())
         } else {
             Err(io::Error::new(

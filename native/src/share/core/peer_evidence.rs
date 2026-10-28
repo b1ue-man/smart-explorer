@@ -166,6 +166,20 @@ impl PeerBackend {
         caps.v1 && caps.create_dirs_v1
     }
 
+    /// The host takes extra connections for transfers
+    /// (`bulk_connections_v1`, Z-P6).
+    pub(in crate::share) fn bulk_offered(&self) -> bool {
+        let caps = self.transfer_caps();
+        caps.v1 && caps.bulk_connections_v1
+    }
+
+    /// The host publishes a single file sent as a packet of one, with its
+    /// evidence (`single_put_v1`, Z-P4).
+    pub(in crate::share) fn single_put_offered(&self) -> bool {
+        let caps = self.transfer_caps();
+        caps.v1 && caps.single_put_v1 && caps.evidence_v1 && caps.batch_max_files > 0
+    }
+
     /// The WriteNew of an owned stage asks for its evidence and whether its
     /// destination exists; `None` for a host without `evidence_v1`.
     pub(in crate::share) fn written_report(&self, stage: &str) -> Option<WrittenReport> {

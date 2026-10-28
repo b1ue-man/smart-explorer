@@ -36,7 +36,7 @@ pub(crate) fn copy_to_new_file(
     // cancel flag, the handle loop elsewhere). Progress is counted by the
     // engine once the copy returns.
     let mut quiet = |_: u64| {};
-    let (bytes, file) = match platform::copy_by_path(source, stage, cancel, &mut quiet) {
+    let (bytes, file) = match platform::copy_by_path(source, stage, cancel, &mut quiet, None) {
         Some(Ok(Some(copied))) => copied,
         Some(Ok(None)) => {
             return Err(io::Error::new(

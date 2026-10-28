@@ -92,7 +92,7 @@ fn no_replace_commit_preserves_intervening_destination() {
     let target = base.join("target");
     std::fs::write(&staged, b"new").unwrap();
     std::fs::write(&target, b"intervening").unwrap();
-    let result = platform::commit_staged(&staged, &target, false);
+    let result = platform::commit_staged(&staged, &target, false, true);
     assert_eq!(result.unwrap_err().kind(), io::ErrorKind::AlreadyExists);
     assert_eq!(std::fs::read(&target).unwrap(), b"intervening");
     assert_eq!(std::fs::read(&staged).unwrap(), b"new");

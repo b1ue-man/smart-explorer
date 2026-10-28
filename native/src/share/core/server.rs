@@ -44,6 +44,8 @@ struct StreamContext {
     exec_slots: Arc<AtomicUsize>,
     legacy_connection: usize,
     activity: Arc<IncomingActivity>,
+    /// LZ4 measurements of this connection's content streams (Z-P8).
+    lz4: super::framing::lz4_stream::Lz4Link,
 }
 
 impl StreamContext {
@@ -186,6 +188,7 @@ pub(super) async fn handle_connection(
     let session = Arc::new(session);
     // Unfinished stages of ranged uploads go when this connection ends.
     let connection_stages = fs_dispatch::stage_ranges::ConnectionStages::start();
+    let connection_lz4 = super::framing::lz4_stream::Lz4Link::default();
     let exec_slots = super::exec::peer_slots(&remote_node);
     let legacy_connection = conn.stable_id();
     let _legacy_cleanup = super::mount_lease_cleanup::LegacyLeaseCleanup::new(
@@ -229,6 +232,7 @@ pub(super) async fn handle_connection(
             exec_slots: exec_slots.clone(),
             legacy_connection,
             activity: activity.clone(),
+            lz4: connection_lz4.clone(),
         };
         let node = node.clone();
         let connection = conn.clone();

@@ -2,11 +2,16 @@
 use crate::transfer::{FolderConflict, JobItems, Layout, TransferJob};
 use eframe::egui;
 use std::collections::VecDeque;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+
+/// The window's context once the admission was shown: the preview thread
+/// wakes the GUI through it when its result is ready (M12).
+type RepaintSlot = Arc<Mutex<Option<egui::Context>>>;
 
 pub(crate) struct Admission {
     job: Option<TransferJob>,
     preview: crate::transfer::FolderPreviewScan,
+    waker: RepaintSlot,
     index: usize,
     choice: FolderConflict,
     all: bool,
@@ -14,11 +19,21 @@ pub(crate) struct Admission {
 
 impl Admission {
     pub(crate) fn new(job: TransferJob) -> Result<Self, String> {
-        let preview = crate::transfer::FolderPreviewScan::start(job.clone())
-            .map_err(|error| format!("Ordnerprüfung nicht gestartet: {error}"))?;
+        let waker = RepaintSlot::default();
+        let wake = waker.clone();
+        let preview = crate::transfer::FolderPreviewScan::start_with_wake(
+            job.clone(),
+            Box::new(move || {
+                if let Some(ctx) = wake.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
+                    ctx.request_repaint();
+                }
+            }),
+        )
+        .map_err(|error| format!("Ordnerprüfung nicht gestartet: {error}"))?;
         Ok(Self {
             job: Some(job),
             preview,
+            waker,
             index: 0,
             choice: FolderConflict::KeepBoth,
             all: false,
@@ -30,6 +45,10 @@ impl Admission {
         &mut self,
         ctx: &egui::Context,
     ) -> Option<Result<Option<TransferJob>, String>> {
+        self.waker
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get_or_insert_with(|| ctx.clone());
         let state = self.preview.snapshot();
         if let Some(error) = &state.error {
             return Some(Err(error.clone()));

@@ -33,20 +33,22 @@ pub fn folder_conflicts(
         if cancel.load(Ordering::Acquire) {
             break;
         }
-        let mut inspected = crate::source_media::with_cancellation(cancel, || source.stat(path));
+        let local = job.source.is_local();
+        let inspect =
+            || crate::source_media::with_cancellation(cancel, || root_kind(source, local, path));
+        let mut inspected = inspect();
         if inspected
             .as_ref()
             .is_err_and(|error| error.kind() == io::ErrorKind::PermissionDenied)
         {
             if let Some(gate) = &gate {
                 if gate.request() == crate::transfer::AccessAnswer::Granted {
-                    inspected =
-                        crate::source_media::with_cancellation(cancel, || source.stat(path));
+                    inspected = inspect();
                 }
             }
         }
-        let meta = inspected?;
-        if !meta.is_dir || meta.is_symlink || job.folders.roots.contains_key(path) {
+        let (is_dir, is_link) = inspected?;
+        if !is_dir || is_link || job.folders.roots.contains_key(path) {
             continue;
         }
         let relative = super::super::engine_names::root_rel(path, base.as_deref());
@@ -94,6 +96,19 @@ pub fn folder_conflicts(
         });
     }
     Ok(out)
+}
+
+/// Whether the selected root is a folder and whether it is a link (M12): a
+/// local root costs one `lstat` and no name lookup; a remote one its
+/// backend's `stat`.
+fn root_kind(source: &dyn Backend, local: bool, path: &str) -> io::Result<(bool, bool)> {
+    if local {
+        let native = super::super::walk_listers::native(path);
+        let metadata = crate::local_access::symlink_metadata(&native)?;
+        let link = crate::local_access::metadata_is_link_like(&native, &metadata);
+        return Ok((metadata.is_dir(), link));
+    }
+    source.stat(path).map(|meta| (meta.is_dir, meta.is_symlink))
 }
 
 pub fn count_folder_conflict(
@@ -240,8 +255,25 @@ pub struct FolderPreviewScan {
     cancel: std::sync::Arc<AtomicBool>,
 }
 
+/// Calls the GUI's wake-up when dropped: every end of the preview thread,
+/// including an error, is seen at once (M12).
+struct WakeOnDrop(Box<dyn Fn() + Send>);
+
+impl Drop for WakeOnDrop {
+    fn drop(&mut self) {
+        (self.0)();
+    }
+}
+
 impl FolderPreviewScan {
     pub fn start(job: TransferJob) -> io::Result<Self> {
+        Self::start_with_wake(job, Box::new(|| {}))
+    }
+
+    /// `start`; `wake` is called when the folders are known, when their
+    /// counts are complete and when the preview ends, so a GUI shows the
+    /// result at once instead of at its next timer (M12).
+    pub fn start_with_wake(job: TransferJob, wake: Box<dyn Fn() + Send>) -> io::Result<Self> {
         let state = std::sync::Arc::new(std::sync::Mutex::new(
             crate::transfer::folder_conflict::FolderPreviewState::default(),
         ));
@@ -251,6 +283,7 @@ impl FolderPreviewScan {
         std::thread::Builder::new()
             .name("folder-conflict-preview".into())
             .spawn(move || {
+                let wake = WakeOnDrop(wake);
                 let paths: Vec<&str> = match &job.items {
                     JobItems::Roots { paths, .. } => paths.iter().map(String::as_str).collect(),
                     JobItems::Pairs(pairs) => {
@@ -300,6 +333,7 @@ impl FolderPreviewScan {
                     state.folders = folders.clone();
                     state.ready = true;
                 }
+                (wake.0)();
                 for (index, folder) in folders.iter_mut().enumerate() {
                     if stop.load(Ordering::Acquire) {
                         return;
@@ -317,6 +351,7 @@ impl FolderPreviewScan {
                         }
                     });
                 }
+                (wake.0)();
                 while context.is_some() && !stop.load(Ordering::Acquire) {
                     if !preview_context_valid(&progress, context.as_ref()) {
                         return;

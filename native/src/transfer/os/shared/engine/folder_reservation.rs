@@ -381,9 +381,13 @@ impl Reservations {
             ));
         }
         let _ = crate::vfs::confirm_namespace(backend, parent_rel(&target).unwrap_or(root))?;
+        // M13: no durable write of its own. The record already holds the
+        // stage's identity, and a target carrying exactly that identity is
+        // published: `confirm_resume`/`publish` find it by that identity
+        // after a crash and record it then. The next save of this job (any
+        // reservation) writes the flag along.
         saved.published = true;
         store.data.roots.insert(source.to_string(), saved.clone());
-        store.save()?;
         Ok(saved.relative)
     }
 }

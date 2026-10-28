@@ -96,8 +96,9 @@ pub(super) fn stage_copy(
     progress: &mut dyn FnMut(u64),
 ) -> Result<Option<Staged>, LocalFailure> {
     // `transfer_local` looked at the path a moment ago; the open below checks
-    // the type again and the final comparison catches any swap.
-    let optical = match crate::source_media::acquire(
+    // the type again and the final comparison catches any swap. A regular
+    // file's medium is its folder's (`acquire_regular_file`, M6).
+    let optical = match crate::source_media::acquire_regular_file(
         source,
         crate::source_media::Priority::Foreground,
         cancel,
@@ -285,7 +286,11 @@ fn stage_by_path(
 ) -> Result<Option<Option<Staged>>, LocalFailure> {
     for attempt in 0..STAGE_ATTEMPTS {
         let temp = stage_name(target, attempt);
-        match platform::copy_by_path(source, &temp, cancel, progress) {
+        let known = crate::copy::SourceFacts {
+            size: before.len,
+            optical,
+        };
+        match platform::copy_by_path(source, &temp, cancel, progress, Some(known)) {
             None => return Ok(None),
             Some(Ok(None)) => return Ok(Some(None)),
             Some(Ok(Some((bytes, file)))) => {

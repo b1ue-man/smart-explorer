@@ -37,6 +37,17 @@ pub(super) trait BatchWire {
     fn remove(&self, path: &str) -> WireFuture<'_, ()>;
     /// LSTAT: whether anything of any kind is there, links not followed.
     fn exists(&self, path: &str) -> WireFuture<'_, bool>;
+    /// LSTAT with the attributes (transfer evidence, stage_evidence.rs); a
+    /// wire without it answers that it cannot tell.
+    fn stat(&self, path: &str) -> WireFuture<'_, FileAttributes> {
+        let _ = path;
+        Box::pin(async {
+            Err(WireError {
+                error: io::Error::new(io::ErrorKind::Unsupported, "LSTAT nicht verfügbar"),
+                answered: true,
+            })
+        })
+    }
     fn open_read(&self, path: &str) -> WireFuture<'_, String>;
     /// An empty answer is the end of the file.
     fn read(&self, handle: &str, offset: u64, len: u32) -> WireFuture<'_, Vec<u8>>;
@@ -239,6 +250,21 @@ impl BatchWire for ChannelWire {
                 Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => {
                     Ok(false)
                 }
+                Err(error) => Err(self.failed(error, false)),
+            }
+        })
+    }
+
+    fn stat(&self, path: &str) -> WireFuture<'_, FileAttributes> {
+        let path = path.to_string();
+        Box::pin(async move {
+            match self.channel.session.lstat(path).await {
+                Ok(attrs) => Ok(attrs.attrs),
+                // An absent name is an answer, not a failing channel.
+                Err(SftpError::Status(status)) => Err(WireError {
+                    error: io_err(SftpError::Status(status)),
+                    answered: true,
+                }),
                 Err(error) => Err(self.failed(error, false)),
             }
         })

@@ -83,7 +83,3 @@ pub(crate) struct FsWritten {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) existed: Option<bool>,
 }
-
-#[cfg(test)]
-#[path = "evidence_wire_tests.rs"]
-mod tests;

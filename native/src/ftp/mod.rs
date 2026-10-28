@@ -8,6 +8,8 @@ mod data_finish;
 mod io_adapters;
 #[path = "core/listing_detail.rs"]
 mod listing_detail;
+#[path = "core/name_cache.rs"]
+mod name_cache;
 #[path = "core/pool.rs"]
 mod pool;
 #[path = "core/resolver.rs"]
@@ -47,6 +49,7 @@ mod speed_task_ftp_tests;
 mod transfer_engine_task_tests;
 
 pub use core_impl::backend_from_url;
+pub use name_cache::ListingScope;
 #[path = "core/errors.rs"]
 mod errors;
 #[path = "core/extensions.rs"]

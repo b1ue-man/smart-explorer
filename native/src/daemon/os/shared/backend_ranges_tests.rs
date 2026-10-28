@@ -292,11 +292,8 @@ fn speed_task_service_without_backend_support_announces_no_labels() {
         let (backend, shutdown) = client(served.address);
         let version = backend.version().to_string();
         assert_eq!(version.contains("range-v1"), labels, "{version}");
-        assert_eq!(
-            version.contains("lz4-v1"),
-            labels && !crate::agent_proto::lz4_switched_off(),
-            "{version}"
-        );
+        // Never LZ4 on the loopback hop to the worker (Z-P8).
+        assert!(!version.contains("lz4-v1"), "{version}");
         let hint = format!(
             "{}/never.bin.se-upload-0123456789abcdef",
             dir.path().to_string_lossy()

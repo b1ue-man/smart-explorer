@@ -35,6 +35,8 @@ mod chunk_stream;
 mod copy_writer;
 #[path = "core/core.rs"]
 mod core;
+#[path = "core/create_pacer.rs"]
+mod create_pacer;
 #[path = "core/duplicates.rs"]
 mod duplicates;
 #[path = "core/extensions.rs"]

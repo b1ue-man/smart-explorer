@@ -6,7 +6,7 @@ use iroh::endpoint::{RecvStream, SendStream};
 use super::backend::peer_evidence::WrittenReport;
 use super::backend::peer_stages::StageTicket;
 use super::core::eio;
-use super::framing::lz4_stream::{frame_for, Lz4Stream};
+use super::framing::lz4_stream::{frame_for, link_for, Lz4Stream};
 use super::framing::{decode_resp, recv_resp_wire, send_ctrl, send_tagged};
 use super::fs;
 use super::node::ShareIrohNode;
@@ -131,7 +131,8 @@ pub(super) fn writer(
         send: Some(send),
         recv: Some(recv),
         lease,
-        lz4: lz4.then(Lz4Stream::new),
+        // Every upload of a connection shares its LZ4 measurements (Z-P8).
+        lz4: lz4.then(|| link_for(&session_key, generation).stream()),
         session_key,
         generation,
         state: WriterState::Open,

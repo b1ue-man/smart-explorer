@@ -4,9 +4,11 @@ use super::reader::SmbReader;
 use super::replace;
 use super::server_copy::{self, ServerCopy, TreeOps};
 use super::session::{SmbConfig, SmbSession};
+use super::stage_evidence::StageReport;
 use super::streams::{Commit, SmbWriter};
 use super::url::{entry_path, rename_paths, split_path, SmbPath};
 use super::wire::{self, DeleteKind};
+use crate::sftp::WrittenStages;
 use crate::vfs::{
     Backend, BatchGet, BatchLimits, BatchPut, BatchPutOutcome, BatchSink, Scheme,
     StagedWriteCapabilities, VfsMeta, VfsResult,
@@ -33,6 +35,8 @@ pub struct SmbBackend {
     /// Until then this connection offers no ranges to a segmented stage
     /// (segmented_stage.rs).
     pub(super) no_ranges_until: Arc<Mutex<Option<Instant>>>,
+    /// Evidence of committed copy stages for the receipts (stage_evidence.rs).
+    pub(super) written: WrittenStages,
 }
 
 fn name_of(path: &str) -> String {
@@ -68,6 +72,7 @@ impl SmbBackend {
             namespace,
             copy_refused: Arc::new(AtomicBool::new(false)),
             no_ranges_until: Arc::new(Mutex::new(None)),
+            written: WrittenStages::default(),
         })
     }
 
@@ -102,7 +107,10 @@ impl SmbBackend {
             self.session.runtime(),
             expected,
         );
-        Ok(Box::new(writer.with_commit(commit)))
+        let report = (commit == Commit::Unsynced)
+            .then(|| StageReport::for_stage(path, &self.written))
+            .flatten();
+        Ok(Box::new(writer.with_commit(commit).with_report(report)))
     }
 
     /// `server_copy_to_stage` (server_copy.rs). Paths the server cannot
@@ -447,6 +455,7 @@ impl Backend for SmbBackend {
     /// Stages are created with `FileCreate`, so the name is this client's
     /// until it is published; only a regular file is removed.
     fn discard_copy_stage(&self, stage: &str) -> VfsResult<()> {
+        self.written.forget(stage);
         match self.stat(stage) {
             Ok(meta) if !meta.is_dir && !meta.is_symlink => self.remove_file(stage),
             Ok(_) => Err(io::Error::new(

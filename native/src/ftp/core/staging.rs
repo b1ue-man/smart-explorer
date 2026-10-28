@@ -23,6 +23,7 @@ use std::io;
 
 use super::core_impl::{basename, parent_dir};
 use super::io_adapters::FtpConnection;
+use super::name_cache::NameCache;
 use crate::vfs::{Backend, VfsMeta};
 use suppaftp::{RustlsFtpStream, Status};
 
@@ -186,6 +187,70 @@ pub(super) fn publish_with(
             rename_unverified(stream, staged, destination)
         }
     })
+}
+
+/// `publish` without replacing (G3-04b). While a job keeps its listings
+/// (name_cache.rs) on a server with MLST, the destination's absence comes
+/// from the kept listing of its folder plus an exact MLST probe of the name
+/// right before RNFR/RNTO, so a publication costs MLST of the stage, MLST of
+/// the name and RNFR/RNTO instead of a listing of the whole folder. The
+/// stage is still looked at (security answer S6, b). Otherwise as
+/// `publish`.
+pub(super) fn publish_new(
+    connection: &FtpConnection,
+    names: &NameCache,
+    staged: &str,
+    destination: &str,
+) -> io::Result<()> {
+    if !names.active() || !connection.features()?.mlst {
+        return publish(connection, staged, destination, false);
+    }
+    let stage = entry(connection, staged)?.ok_or_else(|| not_found(staged))?;
+    if stage.is_dir || stage.is_symlink || stage.special {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "staged promotion source must be a regular file",
+        ));
+    }
+    let listed = match names.contains(destination) {
+        Some(listed) => listed,
+        None => {
+            let folder = parent_dir(destination);
+            let entries = listing(connection, &folder)?;
+            let name = basename(destination);
+            let listed = entries.iter().any(|meta| meta.name == name);
+            names.fill(&folder, entries.into_iter().map(|meta| meta.name));
+            listed
+        }
+    };
+    if listed || present_now(connection, destination)? {
+        return Err(already_exists(destination));
+    }
+    super::errors::command_path(staged)?;
+    super::errors::command_path(destination)?;
+    connection.with_stream_mutation(|stream| {
+        stream
+            .rename(staged, destination)
+            .map_err(super::errors::map)
+    })
+}
+
+/// The exact name by MLST: a 550 is no entry (the kept listing proved the
+/// folder's names); a server that cannot answer MLST for it gets the full
+/// look of `entry`.
+fn present_now(connection: &FtpConnection, path: &str) -> io::Result<bool> {
+    let answer = connection.with_stream_read(|stream| match stream.mlst(Some(path)) {
+        Ok(_) => Ok(Some(true)),
+        Err(error) => match super::errors::reply_code(&error) {
+            Some(550) => Ok(Some(false)),
+            Some(500 | 502 | 504) => Ok(None),
+            _ => Err(super::errors::map(error)),
+        },
+    })?;
+    match answer {
+        Some(present) => Ok(present),
+        None => Ok(entry(connection, path)?.is_some()),
+    }
 }
 
 fn not_found(path: &str) -> io::Error {

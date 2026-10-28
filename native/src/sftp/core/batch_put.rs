@@ -3,8 +3,9 @@
 //! stage, all WRITEs at once, CLOSE, RENAME without replacing, a numbered
 //! name when the name is taken), and the chains of up to `open-handles`
 //! members overlap, so a packet costs about four round trips instead of
-//! four per file. Nothing is published before the stage is written and
-//! closed; only a RENAME without reply has an unknown result, which is never
+//! four per file (three since the CLOSE follows the WRITEs without waiting,
+//! G3-06a). Nothing is published before the stage is written and closed;
+//! only a RENAME without reply has an unknown result, which is never
 //! labeled as "unpublished".
 use super::backend::SftpBackend;
 use super::batch_ops::{
@@ -13,7 +14,7 @@ use super::batch_ops::{
 };
 use crate::transfer::engine_names::next_numbered;
 use crate::vfs::{congestion_of, unpublished_error, BatchPut, BatchPutOutcome, VfsResult};
-use futures_util::future::{join_all, FutureExt, LocalBoxFuture};
+use futures_util::future::{join, join_all, FutureExt, LocalBoxFuture};
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use std::io::{self, Read};
 
@@ -105,7 +106,7 @@ async fn collect(running: &mut Running<'_>, done: &mut [Option<BatchPutOutcome>]
 
 /// The next `size` bytes of `data`. An error is never retried (`read_exact`
 /// would repeat `Interrupted`, which is how a canceled packet stream ends).
-fn read_member(data: &mut dyn Read, size: u64) -> io::Result<Vec<u8>> {
+pub(super) fn read_member(data: &mut dyn Read, size: u64) -> io::Result<Vec<u8>> {
     if size > BATCH_BYTES {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -143,21 +144,32 @@ async fn put_member(wire: &dyn BatchWire, destination: &str, bytes: Vec<u8>) -> 
         Ok(opened) => opened,
         Err(error) => return BatchPutOutcome::Failed(error),
     };
-    if let Err(failure) = write_all(wire, &handle, &bytes).await {
-        let _ = wire.close(&handle).await;
-        let _ = wire.remove(&stage).await;
-        return BatchPutOutcome::Failed(judged(failure, &stage));
-    }
-    if let Err(failure) = wire.close(&handle).await {
+    if let Err(failure) = stage_written(wire, &handle, &bytes).await {
         let _ = wire.remove(&stage).await;
         return BatchPutOutcome::Failed(judged(failure, &stage));
     }
     publish(wire, &stage, destination).await
 }
 
+/// All WRITEs and the CLOSE behind them at once (G3-06a): the server
+/// handles one handle's requests in order, so CLOSE follows every WRITE
+/// without waiting for their answers. The handle is closed either way; the
+/// first failure in request order is the result.
+pub(super) async fn stage_written(
+    wire: &dyn BatchWire,
+    handle: &str,
+    bytes: &[u8],
+) -> Result<(), WireError> {
+    let (written, closed) = join(write_all(wire, handle, bytes), wire.close(handle)).await;
+    written.and(closed)
+}
+
 /// Exclusively creates a private stage next to `destination`; returns its
 /// name and handle.
-async fn open_stage(wire: &dyn BatchWire, destination: &str) -> io::Result<(String, String)> {
+pub(super) async fn open_stage(
+    wire: &dyn BatchWire,
+    destination: &str,
+) -> io::Result<(String, String)> {
     for _ in 0..STAGE_ATTEMPTS {
         let stage = stage_name(destination);
         match wire.open_new(&stage).await {
@@ -246,7 +258,7 @@ async fn publish(wire: &dyn BatchWire, stage: &str, destination: &str) -> BatchP
 /// destination, so nothing is published: "unpublished", also without a
 /// status reply (the stage may be left behind; the text then names it). A
 /// refusal as congestion stays one (the file waits for the server).
-fn judged(failure: WireError, stage: &str) -> io::Error {
+pub(super) fn judged(failure: WireError, stage: &str) -> io::Error {
     let WireError { error, answered } = failure;
     if congestion_of(&error).is_some() {
         return error;
@@ -262,7 +274,7 @@ fn judged(failure: WireError, stage: &str) -> io::Error {
 
 /// The RENAME got no reply: it may have published. The result is unknown and
 /// never labeled; the text names the stage.
-fn unknown(failure: WireError, stage: &str) -> io::Error {
+pub(super) fn unknown(failure: WireError, stage: &str) -> io::Error {
     let error = failure.error;
     io::Error::new(
         error.kind(),

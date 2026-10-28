@@ -379,6 +379,10 @@ impl Read for PacketData<'_, '_> {
     }
 }
 
+/// A single file as a packet of one (Z-P4).
+#[path = "batch_put_one.rs"]
+pub(super) mod one;
+
 #[cfg(test)]
 #[path = "batch_put_speed_tests.rs"]
 pub(super) mod speed_tests;

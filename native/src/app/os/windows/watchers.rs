@@ -228,6 +228,18 @@ impl App {
             let s = path.to_string_lossy().replace('\\', "/");
             !crate::folder_index::path_has_skipped_segment(&s)
         };
+        // M19: se's own file stages (`.….smart-explorer….part`, `….part`
+        // upload parts, `.se-private-….tmp`) are never folders, so no
+        // `metadata` is spent on them. Quarantines (`….move`) and other stage
+        // forms can be folders and are still looked at.
+        let own_file_stage = |path: &std::path::Path| -> bool {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    crate::vfs::is_staging_name(name)
+                        && (name.ends_with(".part") || name.starts_with(".se-private-"))
+                })
+        };
 
         let mut additions: Vec<String> = Vec::new();
         let mut remove_subtrees: Vec<String> = Vec::new();
@@ -244,7 +256,7 @@ impl App {
                         }
                         let is_dir = if assume_folder {
                             true
-                        } else if want_stat {
+                        } else if want_stat && !own_file_stage(p) {
                             std::fs::metadata(p).map(|m| m.is_dir()).unwrap_or(false)
                         } else {
                             false
@@ -274,7 +286,7 @@ impl App {
                     }
                     RenameMode::To => {
                         for p in &event.paths {
-                            if !allowed(p) {
+                            if !allowed(p) || own_file_stage(p) {
                                 continue;
                             }
                             if std::fs::metadata(p).map(|m| m.is_dir()).unwrap_or(false) {

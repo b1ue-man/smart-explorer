@@ -7,6 +7,7 @@
 //! Tiny files fill a packet up to the backend's file count (K-E); a resumed
 //! job packs every file without a receipt of its own, and "transfer missing
 //! files" packs downloads, whose packet asks `existing` per member.
+use super::super::engine_names::parent_rel;
 use super::super::engine_policy::{ends_job_at_target, is_back_pressure, is_transient};
 use super::super::flow::classify_error;
 use super::super::flow_control::OpOutcome;
@@ -80,10 +81,23 @@ fn packet_source(engine: &Engine<'_>, file: &FileWork) -> bool {
             .is_ok_and(|source| source.is_none())
 }
 
-/// Runs one packet of `first` and `members`.
+/// Runs one packet of `first` and `members`. The members' folders that do
+/// not exist yet are created first in one request where the target creates
+/// folders in bulk (`FolderRegister::ensure_many`), instead of one request
+/// per new folder when each member asks for its parent.
 pub(super) fn run(engine: &Engine<'_>, first: FileWork, members: Vec<FileWork>, buffer: &mut [u8]) {
-    let files: Vec<FileWork> = std::iter::once(first)
-        .chain(members)
+    let files: Vec<FileWork> = std::iter::once(first).chain(members).collect();
+    let mut parents: Vec<&str> = files
+        .iter()
+        .filter_map(|file| parent_rel(&file.rel))
+        .collect();
+    parents.sort_unstable();
+    parents.dedup();
+    if !parents.is_empty() {
+        engine.folders.ensure_many(&parents, engine.stop_flag());
+    }
+    let files: Vec<FileWork> = files
+        .into_iter()
         .filter(|file| parent_ready(engine, file).is_some())
         .collect();
     match (engine.view.source, engine.view.target) {

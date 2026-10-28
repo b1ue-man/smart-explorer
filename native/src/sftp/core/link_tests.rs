@@ -8,7 +8,8 @@ use super::host_key::{HostKeyVerdict, UnknownHostKey};
 use super::link_log::{self, LinkIdent};
 use super::link_rules::{
     account_key, begin_login, hint_text, limit_after_refusal, plan, same_host_key, seat,
-    server_key, Blocks, Candidate, Growth, Logins, Seat, Step, BLOCK_FOR, SETTLE,
+    server_key, Blocks, Candidate, ExtraLogin, Growth, Logins, Seat, Step, BLOCK_FOR, SETTLE,
+    WINDOW,
 };
 use super::pool_channel::handle_cap_of;
 use std::sync::Arc;
@@ -105,7 +106,7 @@ fn speed_task_sftp_growth_opens_one_at_a_time_while_throughput_rises() {
     let later = start + Duration::from_secs(1);
     assert_eq!(growth.window(later, 10.0 * MB, true), Step::Hold);
     let up = start + Duration::from_secs(3);
-    growth.installed(up);
+    growth.installed(up, SETTLE);
     // A window that began before the settling time says nothing yet.
     let early = up + Duration::from_secs(1);
     assert_eq!(growth.window(early, 30.0 * MB, true), Step::Hold);
@@ -113,7 +114,7 @@ fn speed_task_sftp_growth_opens_one_at_a_time_while_throughput_rises() {
     let judged = up + SETTLE;
     assert_eq!(growth.window(judged, 20.0 * MB, true), Step::Open);
     let second = judged + Duration::from_secs(2);
-    growth.installed(second);
+    growth.installed(second, SETTLE);
     // +3 %: below 10 %, no further connection.
     let judged = second + SETTLE;
     assert_eq!(growth.window(judged, 20.6 * MB, true), Step::Stop);
@@ -126,13 +127,13 @@ fn speed_task_sftp_growth_needs_ten_percent_not_less() {
     let start = Instant::now();
     let mut growth = Growth::new();
     assert_eq!(growth.window(start, 100.0 * MB, true), Step::Open);
-    growth.installed(start);
+    growth.installed(start, SETTLE);
     let judged = start + SETTLE;
     // +9 %: stop.
     assert_eq!(growth.window(judged, 109.0 * MB, true), Step::Stop);
     let mut growth = Growth::new();
     assert_eq!(growth.window(start, 100.0 * MB, true), Step::Open);
-    growth.installed(start);
+    growth.installed(start, SETTLE);
     // +12 %: the next one, if the transfer still asks for more.
     assert_eq!(growth.window(judged, 112.0 * MB, true), Step::Open);
 }
@@ -235,15 +236,55 @@ fn speed_task_sftp_one_unauthenticated_connection_per_server_at_a_time() {
 }
 
 #[test]
-fn speed_task_sftp_extra_login_only_for_stored_password_or_key_never_agent() {
+fn speed_task_sftp_growth_is_judged_after_the_first_byte_of_the_new_connection() {
+    assert_eq!(WINDOW, Duration::from_millis(500));
+    let start = Instant::now();
+    let mut growth = Growth::new();
+    assert_eq!(growth.window(start, 10.0 * MB, true), Step::Open);
+    // Set up in 0.3 s: judged one window (0.5 s, the floor) after its first
+    // byte instead of a fixed 2 s after the setup.
+    growth.installed(start, Duration::from_millis(300));
+    let first_byte = start + Duration::from_millis(100);
+    growth.carried(first_byte);
+    let early = first_byte + Duration::from_millis(400);
+    assert_eq!(growth.window(early, 30.0 * MB, true), Step::Hold);
+    let judged = first_byte + WINDOW;
+    assert_eq!(growth.window(judged, 30.0 * MB, true), Step::Open);
+    // A slow setup (long link) waits as long as the setup took, at most
+    // SETTLE, after the first byte; a later first byte moves nothing.
+    let next = judged + Duration::from_secs(1);
+    growth.installed(next, Duration::from_secs(9));
+    growth.carried(next);
+    growth.carried(next + Duration::from_secs(5));
+    let before = next + Duration::from_millis(1_900);
+    assert_eq!(growth.window(before, 60.0 * MB, true), Step::Hold);
+    assert_eq!(growth.window(next + SETTLE, 60.0 * MB, true), Step::Open);
+    // Without any byte on it the connection is judged SETTLE after it came up.
+    let mut idle = Growth::new();
+    assert_eq!(idle.window(start, 10.0 * MB, true), Step::Open);
+    idle.installed(start, Duration::from_millis(100));
+    assert_eq!(idle.window(start + WINDOW, 10.0 * MB, true), Step::Hold);
+    assert_eq!(idle.window(start + SETTLE, 10.5 * MB, true), Step::Stop);
+}
+
+#[test]
+fn speed_task_sftp_extra_login_for_stored_credentials_and_the_agent() {
     let password = SftpAuth::Password("secret".into());
     assert!(plan(&password, stored_password()).is_some());
     // A person typed something, or nothing is known: no extra connection.
     assert!(plan(&password, SftpLoginOrigin::Interactive).is_none());
-    // The SSH agent never: it may ask for a confirmation or a touch.
-    assert!(plan(&SftpAuth::Agent, stored_password()).is_none());
-    assert!(plan(&SftpAuth::Agent, SftpLoginOrigin::StoredKey).is_none());
-    assert!(plan(&SftpAuth::Agent, SftpLoginOrigin::Interactive).is_none());
+    // The SSH agent (G3-10): always planned; whether its identity may sign
+    // without a person is decided per login (agent_grant.rs).
+    for origin in [
+        stored_password(),
+        SftpLoginOrigin::StoredKey,
+        SftpLoginOrigin::Interactive,
+    ] {
+        assert!(matches!(
+            plan(&SftpAuth::Agent, origin),
+            Some(ExtraLogin::Agent)
+        ));
+    }
     // The origin must match the method of the main login.
     assert!(plan(&password, SftpLoginOrigin::StoredKey).is_none());
     let key = SftpAuth::Key {

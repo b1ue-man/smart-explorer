@@ -14,6 +14,7 @@
 //! smb2's `read_file_compound*`/`write_file_compound*` leave the attributes
 //! out, so a reparse point would be followed.
 pub(super) use super::batch_wire::{get, put};
+use crate::sftp::PacketForward;
 use crate::transfer::engine_names::next_numbered;
 use crate::vfs::{
     congestion_of, fit_stage_name, unpublished_error, BatchGet, BatchLimits, BatchPut,
@@ -314,7 +315,7 @@ pub(super) async fn put_all<W: SmbWire + ?Sized>(
 }
 
 /// What one member of a packet download ended with.
-enum Fetched {
+pub(super) enum Fetched {
     Data(Vec<u8>),
     Changed,
     Failed(io::Error),
@@ -373,7 +374,7 @@ async fn fetch<W: SmbWire + ?Sized>(wire: &W, item: &BatchGet) -> Fetched {
     Fetched::Data(data)
 }
 
-fn deliver(
+pub(super) fn deliver(
     sink: &mut dyn BatchSink,
     index: usize,
     item: &BatchGet,
@@ -401,10 +402,30 @@ fn deliver(
 /// Every item to `sink` in request order, whatever order the answers come
 /// in. A sink error stops the delivery; members already started finish (and
 /// close their handles) before the error is returned.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) async fn get_all<W: SmbWire + ?Sized>(
     wire: &W,
     items: &[BatchGet],
     sink: &mut dyn BatchSink,
+) -> io::Result<()> {
+    let mut forward = |index: usize, done: Fetched| match items.get(index) {
+        Some(item) => deliver(sink, index, item, done),
+        None => Err(unknown_member()),
+    };
+    get_all_with(wire, items, &mut forward).await
+}
+
+pub(super) fn unknown_member() -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, "Paket-Eintrag unbekannt")
+}
+
+/// `get_all` with every member handed to `forward` in request order (on
+/// the caller's thread, `batch_wire::get`): an error of `forward` stops the
+/// delivery like a sink error.
+pub(super) async fn get_all_with<W: SmbWire + ?Sized>(
+    wire: &W,
+    items: &[BatchGet],
+    forward: &mut PacketForward<'_, Fetched>,
 ) -> io::Result<()> {
     let mut arrived: Vec<Option<Fetched>> = items.iter().map(|_| None).collect();
     let mut running = FuturesUnordered::new();
@@ -418,7 +439,7 @@ pub(super) async fn get_all<W: SmbWire + ?Sized>(
         while next < items.len() && arrived[next].is_some() {
             let done = arrived[next].take();
             if let (Some(done), true) = (done, failure.is_none()) {
-                failure = deliver(sink, next, &items[next], done).err();
+                failure = forward(next, done).err();
             }
             next += 1;
         }

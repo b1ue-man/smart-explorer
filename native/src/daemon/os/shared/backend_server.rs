@@ -14,8 +14,11 @@ use super::backend_tree_send::handle_get_tree_backend;
 use super::backend_walk::{
     handle_search_backend, handle_walk_hashed_backend, handle_walk_tree_backend, remove_one_backend,
 };
-use super::request_workers::{RequestWorkers, LEGACY_MAX_REQUEST_WORKERS};
+use super::request_workers::LEGACY_MAX_REQUEST_WORKERS;
 
+#[path = "backend_pool.rs"]
+mod backend_pool;
+use backend_pool::RequestPool;
 #[path = "backend_ranges.rs"]
 mod backend_ranges;
 use backend_ranges::BackendStages;
@@ -68,10 +71,16 @@ fn service_version(backend: &BackendHandle) -> String {
     let root = backend.root_display();
     let batch = crate::vfs::host_batch_limits(&**backend).is_some();
     let slots = agent_proto::service_slots(backend.transfer_ceiling(&root));
-    // `range-v1` and `lz4-v1` only for a backend that reads ranges: the
-    // frames behind them are forwarded to it (`backend_ranges`).
+    // A single file as a packet of one (Z-P4), where the peer offers it.
+    let single = if batch && crate::vfs::single_put(&**backend) {
+        ".single-put-v1"
+    } else {
+        ""
+    };
+    // `range-v1` only for a backend that reads ranges: the frames behind it
+    // are forwarded to it (`backend_ranges`).
     format!(
-        "{}{}.capacity-v1.folder-reservation-v1.file-identity-v1 worker",
+        "{}{}.capacity-v1.folder-reservation-v1.file-identity-v1{single} worker",
         agent_proto::server_version_with(batch, slots),
         backend_ranges::labels(backend)
     )
@@ -132,7 +141,8 @@ pub(crate) fn serve_backend(
     let version = Arc::new(OnceLock::new());
     // Stages of ranged uploads: owned by this session, aborted with it.
     let stages = BackendStages::new();
-    let mut workers = RequestWorkers::default();
+    // Request threads are reused within the session (Z-P3).
+    let mut workers = RequestPool::default();
 
     loop {
         let next = match agent_proto::read_frame(&mut r) {
@@ -187,41 +197,39 @@ pub(crate) fn serve_backend(
         let backend2 = backend.clone();
         let version2 = version.clone();
         let stages2 = stages.clone();
-        match std::thread::Builder::new()
-            .name(format!("daemon-backend-request-{id}"))
-            .spawn(move || {
-                let result =
-                    dispatch_backend(&context, id, (backend2, &stages2), req, &version2, credit);
-                let result = match result {
-                    Ok(()) => Ok(()),
-                    Err(error) => {
-                        match emit(&context.sink, id, &Frame::Err(error_text(&error, credit))) {
-                            // The request failure has been surfaced to the
-                            // client; only a reporting failure remains a
-                            // worker-level error that tears down the link.
-                            Ok(()) => Ok(()),
-                            Err(report_error)
-                                if canceled_request_lost_client(
-                                    &error,
-                                    &report_error,
-                                    context.cancel.load(Ordering::Relaxed),
-                                ) =>
-                            {
-                                Ok(())
-                            }
-                            Err(report_error) => Err(io::Error::new(
-                                error.kind(),
-                                format!(
-                                    "request failed ({error}); reporting it failed: {report_error}"
-                                ),
-                            )),
+        match workers.submit(Box::new(move || {
+            let result =
+                dispatch_backend(&context, id, (backend2, &stages2), req, &version2, credit);
+            let result = match result {
+                Ok(()) => Ok(()),
+                Err(error) => {
+                    match emit(&context.sink, id, &Frame::Err(error_text(&error, credit))) {
+                        // The request failure has been surfaced to the
+                        // client; only a reporting failure remains a
+                        // worker-level error that tears down the link.
+                        Ok(()) => Ok(()),
+                        Err(report_error)
+                            if canceled_request_lost_client(
+                                &error,
+                                &report_error,
+                                context.cancel.load(Ordering::Relaxed),
+                            ) =>
+                        {
+                            Ok(())
                         }
+                        Err(report_error) => Err(io::Error::new(
+                            error.kind(),
+                            format!(
+                                "request failed ({error}); reporting it failed: {report_error}"
+                            ),
+                        )),
                     }
-                };
-                worker_session.close(id);
-                result
-            }) {
-            Ok(worker) => workers.push(worker),
+                }
+            };
+            worker_session.close(id);
+            result
+        })) {
+            Ok(()) => {}
             Err(error) => {
                 session.discard(id);
                 match spawn_failure_reply(&error) {

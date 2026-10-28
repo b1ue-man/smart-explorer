@@ -47,7 +47,7 @@ pub(super) fn try_move(
             restore_quarantine_if_any(quarantine.as_ref()).map_err(LocalFailure::Source)?;
             return Ok(Some(LocalOutcome::Canceled));
         }
-        if let Err(error) = publication::before(observer, rename_source, target) {
+        if let Err(error) = publication::before(observer, rename_source, target, &live) {
             drop(live);
             if let Err(uncertain) = publication::preparation_failed(
                 observer,

@@ -7,6 +7,53 @@ use super::transfer_route::{paste_job, TransferPlace, TransferSelection};
 use super::*;
 use crate::transfer::{launch_transfer, TransferJob};
 
+/// Selected roots a quick admission looks at on the GUI thread at most.
+const QUICK_ADMISSION_ROOTS: usize = 64;
+
+/// A local paste whose selected folders all have free names in the target
+/// folder raises no folder decision, so it starts at once instead of waiting
+/// for the preview thread and the next frame (M12, 2026-10-28). At most
+/// `QUICK_ADMISSION_ROOTS` roots are looked at here (one `lstat` each, two
+/// for a folder); more roots, a remote side, a selection with a base, or any
+/// doubt go through the preview as before. The folder policy of the job is
+/// unchanged: a name taken meanwhile is still decided by the engine's
+/// exclusive reservation ("keep both").
+fn quick_admission(job: &TransferJob) -> bool {
+    if !(job.source.is_local() && job.target.is_local()) {
+        return false;
+    }
+    let crate::transfer::JobItems::Roots { paths, base: None } = &job.items else {
+        return false;
+    };
+    paths.len() <= QUICK_ADMISSION_ROOTS
+        && paths
+            .iter()
+            .all(|path| root_name_free(path, &job.target_dir))
+}
+
+/// Whether the selected `root` raises no folder decision in `target_dir`: it
+/// is no plain folder (files and links never do), or no entry of its name is
+/// in the target folder. Every error is a doubt.
+fn root_name_free(root: &str, target_dir: &str) -> bool {
+    let native = crate::transfer::walk_listers::native;
+    let Ok(metadata) = crate::local_access::symlink_metadata(&native(root)) else {
+        return false;
+    };
+    let link = crate::local_access::metadata_is_link_like(&native(root), &metadata);
+    if !metadata.is_dir() || link {
+        return true;
+    }
+    let name = crate::transfer::engine_names::base_name(root);
+    if name.is_empty() {
+        return false;
+    }
+    let destination = format!("{}/{name}", target_dir.trim_end_matches('/'));
+    match crate::local_access::symlink_metadata(&native(&destination)) {
+        Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+        Ok(_) => false,
+    }
+}
+
 impl App {
     /// Start `job` and announce it ("⇄ Übertragung gestartet: …").
     pub(in crate::app) fn submit_job(&mut self, job: TransferJob) -> bool {
@@ -21,7 +68,7 @@ impl App {
         if matches!(purpose, TransferPurpose::Provide { .. }) {
             job.recoverable = false;
         }
-        if super::folder_conflict_ui::requires_preview(&job) {
+        if super::folder_conflict_ui::requires_preview(&job) && !quick_admission(&job) {
             return match super::folder_conflict_ui::enqueue(job, purpose) {
                 Ok(()) => true,
                 Err(error) => {

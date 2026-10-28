@@ -252,11 +252,13 @@ fn after_checked(
         // A local publication's evidence is its stage's object, renamed into
         // place (at the receipt's destination): compared by metadata, and
         // that look is the new stamp. Copy bound it to the name (and flushed
-        // it for moves and overwrites) before this hook.
-        confirmed_stamp = Some(super::file_evidence::confirm_stamp(
-            proof,
-            engine.view.target,
-        )?);
+        // it for moves and overwrites) before this hook. A local target whose
+        // handle is still held is compared through it: one look at the path
+        // (M4).
+        confirmed_stamp = Some(match held.filter(|_| engine.view.target.is_local()) {
+            Some(held) => observer::confirm_held(proof, held)?,
+            None => super::file_evidence::confirm_stamp(proof, engine.view.target)?,
+        });
     } else if let Some(proof) = &receipt.proof {
         let held = held.filter(|_| {
             engine.is_move() || engine.view.conflict == crate::types::Conflict::Overwrite

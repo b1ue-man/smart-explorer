@@ -268,7 +268,14 @@ pub(super) fn path_key(path: &Path) -> io::Result<String> {
     path_text(path)
 }
 
-pub(super) fn commit_staged(staged: &Path, dest: &Path, overwrite: bool) -> io::Result<()> {
+/// Publishes a stage; `durable` changes nothing here (the callers sync the
+/// parent folder themselves where it matters).
+pub(super) fn commit_staged(
+    staged: &Path,
+    dest: &Path,
+    overwrite: bool,
+    _durable: bool,
+) -> io::Result<()> {
     if overwrite {
         return crate::vfs::replace_local_file(staged, dest);
     }
@@ -304,6 +311,7 @@ pub(super) fn copy_by_path(
     _stage: &Path,
     _cancel: &std::sync::atomic::AtomicBool,
     _progress: &mut dyn FnMut(u64),
+    _known: Option<super::SourceFacts>,
 ) -> Option<io::Result<Option<(u64, File)>>> {
     None
 }

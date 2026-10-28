@@ -1,0 +1,410 @@
+name: speed-setup-task
+run-name: Connecting is the setup, fast transfers ${{ inputs.candidate_sha }}
+
+# Single task-level suite of the batch of 2026-10-28 "Verbinden ist
+# Einrichtung" (plan docs/plaene/2026-10-28-verbinden-ist-einrichtung/,
+# packages KP1-KP6 fast transfers, WP1-WP3 self-setup). Dispatch it once for
+# the exact pushed candidate SHA; it never builds release artifacts or
+# publishes. One entrypoint, native/test-speed-setup-task.py:
+#   gate        Clippy on library, binaries and tests (findings count only on
+#               lines changed since v0.5.188) and rustfmt of the changed lines
+#   functional  every `speed_task_`, `einrichtung_task_`, `removable_media_task_`
+#               and `batch_handoff_task_` test plus the directly affected
+#               modules; the RDP client checks (A4 sdl-freerdp3, A5
+#               xfreerdp3/mstsc, other account) on a prepared runner; H3 (xrdp
+#               as root) and H4 (Windows RDP, elevated); the integration target
+#               `transfer_task` with the crash log against SFTP, FTP, SMB and
+#               WebDAV servers (Windows: FTP only); the FAT32/exFAT paste
+#   measure     (input measure) G5: every ignored `speed_task_` benchmark in
+#               release mode, `repetitions` times, median; v0.5.188 built in a
+#               worktree next to the candidate and both measured with the same
+#               user-level operations (`se cp`/`se mv`, remote `se cp`, Share
+#               pair) against cp, rsync, robocopy /MT, rclone, lftp, scp,
+#               smbclient and iperf3 on the same data; netem 1 ms / 20 ms;
+#               Windows with Defender real-time on and with a folder exclusion.
+#               The table "reference | baseline | candidate | ratio" goes to
+#               the step summary, every number to the artifact. How to read
+#               it: docs/plaene/2026-10-28-verbinden-ist-einrichtung/messung.md
+#   android     the Android build stage (NDK check of the bridge, APKs with the
+#               changed Kotlin dialogs, JVM unit tests)
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Full pushed candidate SHA, matching the selected ref
+        required: true
+        type: string
+      measure:
+        description: Run the G5 measurement jobs (false = gate, functional and Android only)
+        required: false
+        default: true
+        type: boolean
+      repetitions:
+        description: Repetitions per measurement (the median is reported)
+        required: false
+        default: '3'
+        type: string
+      netem:
+        description: Also measure the remote paths with 1 ms and 20 ms netem delay (Linux)
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: speed-setup-task-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 240
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 1
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind workflow and checkout to the requested candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+          shared-key: search-recursive-access
+          cache-on-failure: true
+          cache-workspace-crates: true
+
+      - name: Clippy on library, binaries and tests; findings on changed lines fail
+        shell: bash
+        timeout-minutes: 160
+        run: |
+          set +e -uo pipefail
+          git diff -U0 --no-color v0.5.188 HEAD -- native/src native/tests > "$RUNNER_TEMP/diff.txt"
+          cd native
+          cargo clippy --lib --bins --tests --message-format short 2>&1 \
+            | tr '\\' '/' | tee "$RUNNER_TEMP/clippy.txt"
+          status=${PIPESTATUS[0]}
+          if grep -E ': error\[E[0-9]+\]|^error\[E[0-9]+\]' "$RUNNER_TEMP/clippy.txt"; then
+            echo "::error::compile errors (clippy status $status)"
+            exit 1
+          fi
+          PY=$(command -v python3 || command -v python)
+          "$PY" - "$RUNNER_TEMP/diff.txt" "$RUNNER_TEMP/clippy.txt" > "$RUNNER_TEMP/findings.txt" <<'PYEOF'
+          import re, sys
+          changed, current = {}, None
+          for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+              if line.startswith("+++ "):
+                  path = line[4:].strip()
+                  current = path[len("b/native/"):] if path.startswith("b/native/") else None
+              elif line.startswith("@@") and current:
+                  m = re.search(r"\+(\d+)(?:,(\d+))?", line)
+                  start, count = int(m.group(1)), int(m.group(2) or 1)
+                  changed.setdefault(current, set()).update(range(start, start + count))
+          for line in open(sys.argv[2], encoding="utf-8", errors="replace"):
+              m = re.match(r"^((?:src|tests)/[^:]+):(\d+):\d+: (error|warning)", line)
+              if m and int(m.group(2)) in changed.get(m.group(1), ()):
+                  print(line.rstrip())
+          PYEOF
+          if [[ -s "$RUNNER_TEMP/findings.txt" ]]; then
+            echo "::error::findings on changed lines"
+            sort -u "$RUNNER_TEMP/findings.txt"
+            exit 1
+          fi
+          echo "clippy clean on changed lines"
+
+      - name: rustfmt; deviations on changed lines fail
+        if: runner.os == 'Linux'
+        shell: bash
+        timeout-minutes: 15
+        run: >-
+          python native/test-speed-setup-task.py --job fmt
+          --log-root "$RUNNER_TEMP/speed-setup-fmt"
+
+  functional:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 330
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 1
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Bind workflow and checkout to the requested candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+          shared-key: search-recursive-access
+          cache-on-failure: true
+          cache-workspace-crates: true
+
+      - name: Install the X server and the FreeRDP 3 clients (A4, A5)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo -n apt-get update
+          sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y xvfb xauth x11-utils iproute2
+          # A4/A5 check exactly these package names; a missing package is
+          # reported by the tests themselves.
+          for package in freerdp3-sdl freerdp3-x11; do
+            sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y "$package" \
+              || echo "::warning::package $package could not be installed"
+          done
+          command -v sdl-freerdp3 xfreerdp3 || true
+
+      - name: Attach a FAT32 and an exFAT volume
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 30
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $volumes = @(@{ Fs = 'fat32'; Letter = 'Y' }, @{ Fs = 'exfat'; Letter = 'Z' })
+          foreach ($volume in $volumes) {
+            $file = Join-Path $env:RUNNER_TEMP "$($volume.Fs).vhdx"
+            $script = Join-Path $env:RUNNER_TEMP "$($volume.Fs).diskpart"
+            @(
+              "create vdisk file=`"$file`" maximum=256 type=expandable",
+              "select vdisk file=`"$file`"",
+              'attach vdisk',
+              'convert mbr',
+              'create partition primary',
+              "format fs=$($volume.Fs) quick label=SE$($volume.Fs.ToUpper())",
+              "assign letter=$($volume.Letter)"
+            ) | Set-Content -Encoding ascii $script
+            diskpart /s $script
+            if ($LASTEXITCODE -ne 0) { throw "diskpart $($volume.Fs) failed: $LASTEXITCODE" }
+            fsutil fsinfo volumeinfo "$($volume.Letter):\"
+          }
+          "SE_TASK_REMOVABLE_ROOTS=Y:\;Z:\" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Run the one task entrypoint (functional)
+        shell: bash
+        timeout-minutes: 310
+        run: >-
+          python native/test-speed-setup-task.py --job functional
+          --log-root "$RUNNER_TEMP/speed-setup-functional"
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          summary="$RUNNER_TEMP/speed-setup-functional/summary.md"
+          if [[ -f "$summary" ]]; then cat "$summary" >> "$GITHUB_STEP_SUMMARY"; fi
+
+      - name: Preserve acceptance and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: speed-setup-functional-${{ runner.os }}-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/speed-setup-functional
+          if-no-files-found: warn
+          retention-days: 14
+
+  measure:
+    if: ${{ inputs.measure }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            part: local
+          - os: ubuntu-24.04
+            part: remote-bench
+          - os: ubuntu-24.04
+            part: remote-cli
+          - os: windows-2025
+            part: local
+          - os: windows-2025
+            part: windows-remote
+    runs-on: ${{ matrix.os }}
+    # Release builds of the candidate and of v0.5.188 plus three repetitions
+    # of every measurement; the driver stops measuring at its own budget so
+    # the report is always written before this limit.
+    timeout-minutes: 355
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          # The baseline v0.5.188 is built from its tag in a git worktree.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind workflow and checkout to the requested candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          git rev-parse --verify v0.5.188^{commit}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      # No build cache: the release outputs of five jobs would evict the
+      # shared development caches of the other suites.
+
+      - name: Free disk space and install the reference tools
+        if: runner.os == 'Linux'
+        shell: bash
+        timeout-minutes: 30
+        run: |
+          set -Eeuo pipefail
+          df -h /
+          sudo -n rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/share/swift || true
+          df -h /
+          sudo -n apt-get update
+          sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            rsync lftp iperf3 openssh-client smbclient iproute2 curl openssl
+
+      - name: Run the one task entrypoint (measure ${{ matrix.part }})
+        shell: bash
+        timeout-minutes: 345
+        run: >-
+          python native/test-speed-setup-task.py --job measure --part ${{ matrix.part }}
+          --repetitions "${{ inputs.repetitions }}"
+          ${{ inputs.netem && '--netem' || '' }}
+          --budget-minutes 320
+          --log-root "$RUNNER_TEMP/speed-setup-measure"
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          summary="$RUNNER_TEMP/speed-setup-measure/summary.md"
+          if [[ -f "$summary" ]]; then cat "$summary" >> "$GITHUB_STEP_SUMMARY"; fi
+
+      - name: Preserve the measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: speed-setup-measure-${{ runner.os }}-${{ matrix.part }}-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/speed-setup-measure
+          if-no-files-found: warn
+          retention-days: 30
+
+  # The Android side of the batch (changed Kotlin dialogs RdpDialog, TcpDialog,
+  # AppsDialog, FamilyPicker and their API classes; the bridge's new TCP and
+  # screen-feed domains): the existing Android build mode of the Android suite
+  # — NDK check and build of native/android-bridge, APKs and the JVM unit tests.
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Bind workflow and checkout to the requested candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          log_root="$RUNNER_TEMP/android-task-logs"
+          mkdir -p "$log_root"
+          printf 'SMART_EXPLORER_TASK_LOG_ROOT=%s\n' "$log_root" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+          shared-key: android-task-ndk
+          cache-on-failure: true
+
+      - name: Android build, APKs and JVM unit tests
+        shell: bash
+        timeout-minutes: 140
+        run: |
+          set -Eeuo pipefail
+          bash android/test-android-task.sh android-build --out "$RUNNER_TEMP/android-task-apk" 2>&1 | \
+            tee "$SMART_EXPLORER_TASK_LOG_ROOT/suite-android-build.log"
+
+      - name: Upload failure diagnostics
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: speed-setup-android-logs-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/android-task-logs
+          if-no-files-found: warn
+          retention-days: 14

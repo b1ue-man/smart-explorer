@@ -35,6 +35,87 @@ pub(crate) fn available_space_for_path(path: &Path) -> Option<u64> {
     (ok != 0).then_some(free)
 }
 
+/// Whether the drive under `path` spins (`Some(true)`: it reports a seek
+/// penalty), is flash (`Some(false)`) or cannot be told (`None`: a network
+/// path, a volume spanning several disks, or a refused query). A path that
+/// does not exist yet is resolved through its volume root (M7).
+pub(crate) fn volume_is_rotational(path: &Path) -> Option<bool> {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, GetVolumeNameForVolumeMountPointW, GetVolumePathNameW, FILE_SHARE_DELETE,
+        FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+    use windows_sys::Win32::System::Ioctl::{
+        PropertyStandardQuery, IOCTL_STORAGE_QUERY_PROPERTY, STORAGE_PROPERTY_ID,
+        STORAGE_PROPERTY_QUERY,
+    };
+    use windows_sys::Win32::System::IO::DeviceIoControl;
+    /// `StorageDeviceSeekPenaltyProperty` (winioctl.h).
+    const SEEK_PENALTY_PROPERTY: STORAGE_PROPERTY_ID = 7;
+    /// `DEVICE_SEEK_PENALTY_DESCRIPTOR` (winioctl.h).
+    #[repr(C)]
+    #[derive(Default)]
+    struct SeekPenalty {
+        _version: u32,
+        size: u32,
+        incurs_seek_penalty: u8,
+    }
+    let wide = path_to_wide(path);
+    let mut root = vec![0u16; 32768];
+    if unsafe { GetVolumePathNameW(wide.as_ptr(), root.as_mut_ptr(), root.len() as u32) } == 0 {
+        return None;
+    }
+    let mut volume = vec![0u16; 1024];
+    let named = unsafe {
+        GetVolumeNameForVolumeMountPointW(root.as_ptr(), volume.as_mut_ptr(), volume.len() as u32)
+    };
+    if named == 0 {
+        return None;
+    }
+    // `\\?\Volume{…}\` opens the volume only without its last `\`.
+    let end = volume.iter().position(|c| *c == 0)?;
+    if end > 0 && volume[end - 1] == u16::from(b'\\') {
+        volume[end - 1] = 0;
+    }
+    let handle = unsafe {
+        CreateFileW(
+            volume.as_ptr(),
+            0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            0,
+            std::ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return None;
+    }
+    let mut query: STORAGE_PROPERTY_QUERY = unsafe { std::mem::zeroed() };
+    query.PropertyId = SEEK_PENALTY_PROPERTY;
+    query.QueryType = PropertyStandardQuery;
+    let mut answer = SeekPenalty::default();
+    let mut returned = 0u32;
+    let success = unsafe {
+        DeviceIoControl(
+            handle,
+            IOCTL_STORAGE_QUERY_PROPERTY,
+            (&query as *const STORAGE_PROPERTY_QUERY).cast(),
+            std::mem::size_of_val(&query) as u32,
+            (&mut answer as *mut SeekPenalty).cast(),
+            std::mem::size_of::<SeekPenalty>() as u32,
+            &mut returned,
+            std::ptr::null_mut(),
+        )
+    } != 0;
+    unsafe {
+        CloseHandle(handle);
+    }
+    // `size` covers the flag: an answer that ends before it tells nothing.
+    let complete = returned >= 9 && answer.size >= 9;
+    (success && complete).then_some(answer.incurs_seek_penalty != 0)
+}
+
 fn path_to_wide(path: &Path) -> Vec<u16> {
     use std::os::windows::ffi::OsStrExt;
     path.as_os_str().encode_wide().chain(Some(0)).collect()

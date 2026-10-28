@@ -8,6 +8,10 @@
 //!   server from `ssh-keyscan`, separated by spaces and in the order the SSH
 //!   client prefers the key types.
 //! - `SE_TASK_FTP_URL`: `ftp://user:password@host:port/root`.
+//! - `SE_TASK_SMB` (optional, `transfer_task` target):
+//!   `host:port:user:password:/share/root` of a Samba server.
+//! - `SE_TASK_WEBDAV` (optional, `transfer_task` target):
+//!   `http://user:password@host:port/root` of a WebDAV server.
 #![allow(dead_code)]
 
 use smart_explorer::transfer::{
@@ -62,6 +66,17 @@ fn confirm_sftp_host_key(host: &str, port: u16) {
 
 /// A connected SFTP backend and its writable root.
 pub fn sftp() -> (BackendHandle, String) {
+    sftp_with(false)
+}
+
+/// The same server with a login that needed no input (the stored password,
+/// as the app logs in a saved connection), so transfers may add extra SSH
+/// connections (G3-10).
+pub fn sftp_stored() -> (BackendHandle, String) {
+    sftp_with(true)
+}
+
+fn sftp_with(stored: bool) -> (BackendHandle, String) {
     let spec = env("SE_TASK_SFTP");
     let parts: Vec<&str> = spec.splitn(5, ':').collect();
     assert_eq!(
@@ -77,7 +92,18 @@ pub fn sftp() -> (BackendHandle, String) {
         auth: smart_explorer::sftp::SftpAuth::Password(parts[3].to_string()),
         root: parts[4].to_string(),
     };
-    let backend = smart_explorer::sftp::SftpBackend::connect(config).expect("SFTP connects");
+    let backend = if stored {
+        let password = parts[3].to_string();
+        let source: smart_explorer::sftp::PasswordSource =
+            Arc::new(move || Ok(zeroize::Zeroizing::new(password.clone())));
+        smart_explorer::sftp::SftpBackend::connect_with_origin(
+            config,
+            smart_explorer::sftp::SftpLoginOrigin::StoredPassword(source),
+        )
+    } else {
+        smart_explorer::sftp::SftpBackend::connect(config)
+    }
+    .expect("SFTP connects");
     (Arc::new(backend), parts[4].to_string())
 }
 
@@ -91,6 +117,68 @@ pub fn ftp() -> (BackendHandle, String) {
         .map(|root| format!("/{root}"))
         .unwrap_or_else(|| "/".to_string());
     (Arc::new(backend), root)
+}
+
+/// An optional server of the suite: `None` (the case is skipped with a
+/// note) when the suite did not start it.
+pub fn optional_env(name: &str) -> Option<String> {
+    let value = std::env::var(name)
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    if value.is_none() {
+        println!("SKIP {name} is not set: this server was not started");
+    }
+    value
+}
+
+/// A connected SMB backend and its writable root (`SE_TASK_SMB`).
+pub fn smb() -> Option<(BackendHandle, String)> {
+    let spec = optional_env("SE_TASK_SMB")?;
+    let parts: Vec<&str> = spec.splitn(5, ':').collect();
+    assert_eq!(
+        parts.len(),
+        5,
+        "SE_TASK_SMB is host:port:user:password:/share/root"
+    );
+    let config = smart_explorer::smb::SmbConfig {
+        host: parts[0].to_string(),
+        port: parts[1].parse().expect("SMB port"),
+        user: parts[2].to_string(),
+        password: parts[3].to_string(),
+        root: parts[4].to_string(),
+    };
+    let backend = smart_explorer::smb::SmbBackend::connect(config).expect("SMB connects");
+    Some((Arc::new(backend), parts[4].to_string()))
+}
+
+/// A connected WebDAV backend and its writable root (`SE_TASK_WEBDAV`).
+pub fn webdav() -> Option<(BackendHandle, String)> {
+    let url = optional_env("SE_TASK_WEBDAV")?;
+    let (scheme, rest) = url.split_once("://").expect("SE_TASK_WEBDAV is a URL");
+    let (authority, root) = match rest.find('/') {
+        Some(index) => (&rest[..index], rest[index..].to_string()),
+        None => (rest, "/".to_string()),
+    };
+    let (credentials, hostport) = authority.rsplit_once('@').expect("user:password@host");
+    let (user, password) = credentials.split_once(':').expect("user:password");
+    let (host, port) = hostport.rsplit_once(':').expect("host:port");
+    let config = smart_explorer::webdav::WebdavConfig {
+        https: scheme.eq_ignore_ascii_case("https"),
+        host: host.to_string(),
+        port: port.parse().expect("WebDAV port"),
+        user: user.to_string(),
+        password: password.to_string(),
+        root: root.clone(),
+    };
+    let backend = smart_explorer::webdav::WebdavBackend::connect(config).expect("WebDAV connects");
+    Some((Arc::new(backend), root))
+}
+
+/// `job` with the crash log on, as every GUI, Android and "provide for
+/// other programs" job runs (`recoverable: true`).
+pub fn with_crash_log(mut job: TransferJob) -> TransferJob {
+    job.recoverable = true;
+    job
 }
 
 /// Forward-slash form of a local path, as jobs take it.

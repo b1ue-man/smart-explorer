@@ -53,6 +53,29 @@ impl BackendExtensions for WebdavBackend {
         }
     }
 
+    /// A stage whose `PUT` this process saw committed is moved without a
+    /// `PROPFIND` first (put_stages.rs, G3-12); any other as before.
+    fn promote_copy_stage_evidence(
+        &self,
+        staged: &str,
+        destination: &str,
+    ) -> VfsResult<Option<crate::vfs::FileEvidence>> {
+        let url = self.url_for(staged);
+        if !super::put_stages::take(&url) {
+            return self.promote_copy_stage(staged, destination).map(|()| None);
+        }
+        match self.rename_no_replace(staged, destination) {
+            Ok(()) => Ok(None),
+            Err(error) => {
+                // Not moved: the next name still publishes the same stage.
+                if error.kind() == io::ErrorKind::AlreadyExists {
+                    super::put_stages::committed(&url);
+                }
+                Err(error)
+            }
+        }
+    }
+
     fn open_write_copy_stage_timed(
         &self,
         path: &str,
