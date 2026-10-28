@@ -64,7 +64,12 @@ pub fn open_share_backend(
                     Box::new(stream),
                     inner,
                 ) {
-                    Ok(agent) => return Ok((label, Arc::new(agent), status)),
+                    Ok(agent) => {
+                        let handle: crate::vfs::BackendHandle = Arc::new(agent);
+                        // Jobs on this handle may run in the worker (Z-P2).
+                        super::super::transfer_job_client::remember_share(&handle, &target);
+                        return Ok((label, handle, status));
+                    }
                     Err(error) => {
                         last = format!("Worker-Backend: {error}");
                         if restarted_after_agent_error {

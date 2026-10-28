@@ -166,7 +166,7 @@ pub(super) fn download(
 /// An item the peer did not send (nothing arrived, nothing was published).
 /// When its length or time changed since the listing it goes alone with
 /// what it is now; otherwise its failure is decided like any other.
-fn not_sent(
+pub(super) fn not_sent(
     engine: &Engine<'_>,
     source: &dyn Backend,
     mut file: FileWork,

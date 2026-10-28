@@ -9,11 +9,16 @@ use super::{
 pub(in crate::transfer::engine) fn endpoint(side: Side<'_>) -> StoredEndpoint {
     match side {
         Side::Local => StoredEndpoint::of(&Endpoint::Local),
-        Side::Remote(backend) => StoredEndpoint {
-            local: false,
-            namespace: backend.namespace_identity(),
-            state: backend.state_identity(),
-        },
+        Side::Remote(backend) => {
+            // The identity jobs on this place persist (Z-P2): the app's,
+            // also where the worker or Android reaches the place directly.
+            let (namespace, state) = super::super::stored_identity::identities_of(backend);
+            StoredEndpoint {
+                local: false,
+                namespace,
+                state,
+            }
+        }
     }
 }
 

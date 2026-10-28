@@ -202,8 +202,15 @@ fn open(plan: Plan) -> Result<Opened, ApiError> {
             (backend, path)
         }
         Plan::Share(target, path) => {
-            let (_, backend, _) =
-                crate::daemon::open_share_backend(target).map_err(ApiError::connection)?;
+            // Z-A1: the embedded worker's own Share host in this process,
+            // without the loopback proxy back into the same process; jobs
+            // still record the proxy's identity. Before the embedded worker
+            // serves, through the worker as before.
+            let (_, backend, _) = match crate::daemon::open_share_in_process(&target) {
+                Some(opened) => opened,
+                None => crate::daemon::open_share_backend(target),
+            }
+            .map_err(ApiError::connection)?;
             (backend, path)
         }
         Plan::Zip(archive, path) => {

@@ -30,6 +30,8 @@ pub(crate) mod login;
 pub(super) mod screen;
 #[path = "ipc_protocol_tcp.rs"]
 pub(super) mod tcp;
+#[path = "transfer_job_wire.rs"]
+pub(super) mod transfer;
 
 #[path = "ipc_protocol_mount_capabilities.rs"]
 mod mount_capabilities;
@@ -233,6 +235,12 @@ pub(super) enum IpcRequest {
         token: String,
         req: login::LoginIpcRequest,
     },
+    /// The worker's job service (Z-P2): transfer jobs with a Share side run
+    /// where the Share node lives. A daemon that predates it refuses it.
+    Transfer {
+        token: String,
+        req: transfer::TransferIpcRequest,
+    },
     /// A drive host's request beyond attach, backend and status (R5); the
     /// session token of its mount authorizes it, never the daemon token.
     MountHostExt {
@@ -302,7 +310,8 @@ impl IpcRequest {
             | Self::Screen { token, .. }
             | Self::Tcp { token, .. }
             | Self::Apps { token, .. }
-            | Self::Login { token, .. } => Some(token),
+            | Self::Login { token, .. }
+            | Self::Transfer { token, .. } => Some(token),
             Self::MountHostAttach { .. }
             | Self::MountHostBackend { .. }
             | Self::MountHostStatus { .. }
@@ -391,6 +400,7 @@ pub(super) enum IpcResponse {
     Tcp(tcp::TcpIpcReply),
     Apps(apps::AppsIpcReply),
     Login(login::LoginIpcReply),
+    Transfer(transfer::TransferIpcReply),
     MountHostExt(super::drive_modules::ipc_protocol_mount_host::MountHostReply),
     Devices {
         status: super::drive_modules::devices_ipc::DevicesStatus,

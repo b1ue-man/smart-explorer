@@ -24,7 +24,7 @@ impl App {
         let ids = self.transfer_center.poll();
         let mut refresh = false;
         for id in ids {
-            refresh |= self.report_finished(id);
+            refresh |= self.report_finished(id) && !self.refresh_transfer_roots(id);
         }
         self.transfer_center.trim_finished();
         if refresh && !self.root_path.is_empty() {

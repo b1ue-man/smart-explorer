@@ -166,10 +166,8 @@ fn plan_roots(
         });
     let reservations = if needs_aliases {
         let namespace = |side: Side<'_>| {
-            side.backend().map_or_else(
-                || "local".to_string(),
-                |backend| backend.namespace_identity(),
-            )
+            side.backend()
+                .map_or_else(|| "local".to_string(), super::stored_identity::namespace_of)
         };
         Some(
             super::folder_reservation::Reservations::open(
