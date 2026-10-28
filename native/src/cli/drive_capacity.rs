@@ -20,7 +20,19 @@ pub(super) fn run(args: super::SelectArgs) -> Result<i32, String> {
 
 pub(super) fn print(snapshot: &MountSnapshot) {
     if let Some(capacity) = &snapshot.capacity {
-        for line in capacity.display_lines() {
+        let lines = capacity.display_lines();
+        let uploads = capacity
+            .uploads
+            .as_ref()
+            .map(|uploads| {
+                uploads
+                    .display_lines()
+                    .iter()
+                    .map(|line| super::drive_print::clean(line))
+                    .collect()
+            })
+            .unwrap_or_default();
+        for line in lines.iter().chain(&uploads) {
             println!("{}\t{line}", snapshot.config.id);
         }
     } else {

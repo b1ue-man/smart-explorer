@@ -35,6 +35,36 @@ pub struct MountUploadStatus {
     pub last_error: Option<String>,
 }
 
+impl MountUploadStatus {
+    /// The lines the CLI and the desktop show for the uploads; each appears
+    /// only while files are pending, uploading, retrying or after a failure.
+    pub fn display_lines(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+        if self.pending_files > 0 {
+            let files = if self.pending_files == 1 {
+                "Datei"
+            } else {
+                "Dateien"
+            };
+            lines.push(format!(
+                "Uploads ausstehend: {} {files} ({})",
+                self.pending_files,
+                crate::format::format_bytes(self.pending_bytes)
+            ));
+        }
+        if self.uploading > 0 {
+            lines.push(format!("lädt hoch: {}", self.uploading));
+        }
+        if self.retrying > 0 {
+            lines.push(format!("Wiederholung: {}", self.retrying));
+        }
+        if let Some(error) = &self.last_error {
+            lines.push(format!("Letzter Fehler: {error}"));
+        }
+        lines
+    }
+}
+
 /// What one upload attempt ended with.
 pub(super) enum Uploaded {
     Done,
