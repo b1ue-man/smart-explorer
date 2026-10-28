@@ -11,6 +11,8 @@
 //! in the headless build env (no OAuth client). It compiles for host +
 //! windows-gnu and is gated behind an explicit, user-configured connection.
 
+#[path = "core/absent_write.rs"]
+mod absent_write;
 #[path = "core/api.rs"]
 mod api;
 #[path = "core/auth.rs"]
@@ -100,6 +102,9 @@ mod transfer_ops;
 #[path = "core/trash.rs"]
 mod trash;
 
+#[cfg(test)]
+#[path = "core/absent_write_tests.rs"]
+mod absent_write_tests;
 #[cfg(test)]
 #[path = "core/mutation_reconcile_tests.rs"]
 mod mutation_reconcile_tests;

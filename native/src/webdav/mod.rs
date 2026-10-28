@@ -1,3 +1,7 @@
+#[path = "core/chunked_stage.rs"]
+mod chunked_stage;
+#[path = "core/chunked_upload.rs"]
+mod chunked_upload;
 #[path = "core/webdav.rs"]
 mod core_impl;
 #[path = "core/extensions.rs"]
@@ -21,6 +25,9 @@ mod tree_remove;
 #[path = "core/writer.rs"]
 mod writer;
 
+#[cfg(test)]
+#[path = "core/chunked_stage_tests.rs"]
+mod chunked_stage_tests;
 #[cfg(test)]
 #[path = "core/delete_speed_task_tests.rs"]
 mod delete_speed_task_tests;

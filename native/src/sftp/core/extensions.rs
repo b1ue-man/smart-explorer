@@ -39,6 +39,11 @@ impl BackendExtensions for SftpBackend {
         super::folder_reservation::create(self, path)
     }
 
+    /// Up to 64 `copy-data` chains at once on one channel (copy_data.rs).
+    fn server_copy_batch(&self, items: &[(String, String, u64)]) -> Vec<io::Result<Option<u64>>> {
+        self.copy_batch_on_server(items)
+    }
+
     fn directory_identity(&self, path: &str) -> VfsResult<Option<String>> {
         super::folder_reservation::identity(self, path)
     }

@@ -94,19 +94,40 @@ impl Drop for PipeReader {
     }
 }
 
+/// What a PUT says besides its length: a copy stage is created exclusively
+/// (`If-None-Match: *`) and may carry its time; a part of a chunked upload
+/// (chunked_stage.rs) names its upload's destination instead.
+#[derive(Default)]
+pub(super) struct PutHeaders {
+    pub(super) mtime_ms: Option<i64>,
+    /// Not exclusive: a numbered part inside this client's own upload folder.
+    pub(super) part: bool,
+    pub(super) extra: Vec<(&'static str, String)>,
+}
+
+/// Whether `status` confirms the PUT: a created representation answers 201
+/// (202 does not confirm it); a part may also be stored as 200 or 204.
+fn confirmed(status: u16, part: bool) -> bool {
+    status == 201 || (part && matches!(status, 200 | 204))
+}
+
 fn put(
     agent: &ureq::Agent,
     url: &str,
     auth: &str,
     size: u64,
-    mtime_ms: Option<i64>,
+    headers: &PutHeaders,
     body: PipeReader,
 ) -> io::Result<()> {
-    let request = agent
-        .put(url)
-        .set("Content-Length", &size.to_string())
-        .set("If-None-Match", "*");
-    let request = match mtime_ms
+    let mut request = agent.put(url).set("Content-Length", &size.to_string());
+    if !headers.part {
+        request = request.set("If-None-Match", "*");
+    }
+    for (name, value) in &headers.extra {
+        request = request.set(name, value);
+    }
+    let request = match headers
+        .mtime_ms
         .map(|ms| ms.div_euclid(1_000))
         .filter(|seconds| *seconds > 86_400)
     {
@@ -131,9 +152,8 @@ fn put(
         };
         io::Error::new(kind, error.to_string())
     })?;
-    // A created representation answers 201; 202 does not confirm it.
     match response.status() {
-        201 => Ok(()),
+        status if confirmed(status, headers.part) => Ok(()),
         status => Err(io::Error::other(format!(
             "WebDAV PUT returned unexpected HTTP status {status}"
         ))),
@@ -175,6 +195,21 @@ impl StreamPut {
         size: u64,
         mtime_ms: Option<i64>,
     ) -> io::Result<Self> {
+        let headers = PutHeaders {
+            mtime_ms,
+            ..PutHeaders::default()
+        };
+        Self::start_with(agent, url, auth, size, headers)
+    }
+
+    /// The PUT with the given headers (a part of a chunked upload).
+    pub(super) fn start_with(
+        agent: ureq::Agent,
+        url: String,
+        auth: String,
+        size: u64,
+        headers: PutHeaders,
+    ) -> io::Result<Self> {
         let pipe = Arc::new(Pipe::default());
         let body = PipeReader {
             pipe: pipe.clone(),
@@ -183,7 +218,7 @@ impl StreamPut {
         };
         let upload = std::thread::Builder::new()
             .name("webdav-put".to_string())
-            .spawn(move || put(&agent, &url, &auth, size, mtime_ms, body))?;
+            .spawn(move || put(&agent, &url, &auth, size, &headers, body))?;
         Ok(Self {
             pipe,
             upload: Some(upload),

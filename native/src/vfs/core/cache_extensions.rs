@@ -1,6 +1,6 @@
 //! The browsing cache passes every optional extension to the live backend:
 //! listings and walks bypass the cache, writes and trash moves invalidate it.
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
@@ -203,6 +203,24 @@ impl BackendExtensions for CachingBackend {
 
     fn single_put(&self) -> bool {
         crate::vfs::single_put(&*self.inner)
+    }
+
+    /// A published file lands under `path`; the cache forgets it before and
+    /// after, and once more when the writer is flushed or dropped.
+    fn open_write_absent(&self, path: &str, size: u64) -> VfsResult<Option<Box<dyn Write + Send>>> {
+        self.invalidate(path);
+        let writer = crate::vfs::open_write_absent(&*self.inner, path, size);
+        self.invalidate(path);
+        Ok(writer?.map(|writer| self.wrap_writer(writer, path)))
+    }
+
+    fn server_copy_batch(&self, items: &[(String, String, u64)]) -> Vec<io::Result<Option<u64>>> {
+        let results = crate::vfs::server_copy_batch(&*self.inner, items);
+        // Also after a failure: a stage may exist.
+        for (_, stage, _) in items {
+            self.invalidate(stage);
+        }
+        results
     }
 
     fn transfer_scope(&self) -> Option<Box<dyn std::any::Any + Send>> {

@@ -12,6 +12,9 @@
 //!   `host:port:user:password:/share/root` of a Samba server.
 //! - `SE_TASK_WEBDAV` (optional, `transfer_task` target):
 //!   `http://user:password@host:port/root` of a WebDAV server.
+//! - `SE_TASK_NEXTCLOUD` (optional, `transfer_task` target): the same for a
+//!   Nextcloud whose root is `/remote.php/dav/files/<user>/...`, so large
+//!   uploads take its chunked upload (G3-12).
 #![allow(dead_code)]
 
 use smart_explorer::transfer::{
@@ -153,8 +156,17 @@ pub fn smb() -> Option<(BackendHandle, String)> {
 
 /// A connected WebDAV backend and its writable root (`SE_TASK_WEBDAV`).
 pub fn webdav() -> Option<(BackendHandle, String)> {
-    let url = optional_env("SE_TASK_WEBDAV")?;
-    let (scheme, rest) = url.split_once("://").expect("SE_TASK_WEBDAV is a URL");
+    webdav_from("SE_TASK_WEBDAV")
+}
+
+/// A Nextcloud through its DAV files path (`SE_TASK_NEXTCLOUD`).
+pub fn nextcloud() -> Option<(BackendHandle, String)> {
+    webdav_from("SE_TASK_NEXTCLOUD")
+}
+
+fn webdav_from(name: &str) -> Option<(BackendHandle, String)> {
+    let url = optional_env(name)?;
+    let (scheme, rest) = url.split_once("://").expect("the WebDAV server is a URL");
     let (authority, root) = match rest.find('/') {
         Some(index) => (&rest[..index], rest[index..].to_string()),
         None => (rest, "/".to_string()),

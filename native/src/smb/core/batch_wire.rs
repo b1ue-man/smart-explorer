@@ -69,7 +69,7 @@ pub(super) fn packet_create(name: String, new_stage: bool) -> CreateRequest {
 }
 
 /// One credit per 64 KiB of payload (MS-SMB2 3.2.4.1.5).
-fn charge(len: usize) -> CreditCharge {
+pub(super) fn charge(len: usize) -> CreditCharge {
     CreditCharge(
         (len as u64)
             .div_ceil(MIN_IO as u64)
@@ -77,7 +77,7 @@ fn charge(len: usize) -> CreditCharge {
     )
 }
 
-fn write_request(file_id: FileId, offset: u64, data: &[u8]) -> WriteRequest {
+pub(super) fn write_request(file_id: FileId, offset: u64, data: &[u8]) -> WriteRequest {
     WriteRequest {
         data_offset: WRITE_DATA_OFFSET,
         offset,
@@ -91,7 +91,7 @@ fn write_request(file_id: FileId, offset: u64, data: &[u8]) -> WriteRequest {
     }
 }
 
-fn read_request(file_id: FileId, offset: u64, len: usize) -> ReadRequest {
+pub(super) fn read_request(file_id: FileId, offset: u64, len: usize) -> ReadRequest {
     ReadRequest {
         padding: 0x50,
         flags: 0,
@@ -106,7 +106,7 @@ fn read_request(file_id: FileId, offset: u64, len: usize) -> ReadRequest {
 }
 
 /// Bytes the server confirmed for a WRITE.
-fn written(frame: &Frame) -> smb2::Result<usize> {
+pub(super) fn written(frame: &Frame) -> smb2::Result<usize> {
     if frame.header.status != NtStatus::SUCCESS {
         return Err(wire::protocol(frame.header.status, Command::Write));
     }
@@ -114,7 +114,7 @@ fn written(frame: &Frame) -> smb2::Result<usize> {
 }
 
 /// The bytes of a READ; reading at or past the end is an empty answer.
-fn read_data(frame: &Frame) -> smb2::Result<Vec<u8>> {
+pub(super) fn read_data(frame: &Frame) -> smb2::Result<Vec<u8>> {
     let status = frame.header.status;
     if status == NtStatus::END_OF_FILE {
         return Ok(Vec::new());

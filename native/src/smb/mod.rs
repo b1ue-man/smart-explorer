@@ -25,6 +25,10 @@ mod backend;
 mod batch;
 #[path = "core/batch_wire.rs"]
 mod batch_wire;
+#[path = "core/compound_put.rs"]
+mod compound_put;
+#[path = "core/compound_read.rs"]
+mod compound_read;
 #[path = "core/errors.rs"]
 mod errors;
 #[path = "core/extensions.rs"]
