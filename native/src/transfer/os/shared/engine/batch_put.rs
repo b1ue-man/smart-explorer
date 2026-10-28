@@ -176,7 +176,7 @@ fn prepare_part(
     super::file_recovery::prepare_batch_known(engine, &intents)
 }
 
-fn without_evidence(outcomes: Vec<BatchPutOutcome>) -> Vec<EvidencePutOutcome> {
+pub(super) fn without_evidence(outcomes: Vec<BatchPutOutcome>) -> Vec<EvidencePutOutcome> {
     outcomes
         .into_iter()
         .map(|outcome| match outcome {
@@ -203,7 +203,7 @@ pub(super) fn host_evidence(evidence: FileEvidence) -> HostEvidence {
 /// Completes the members the peer answered for: a published member's
 /// receipt from the peer's evidence (or, without it, by asking), a failed
 /// one decided by what the stream delivered.
-fn settle(
+pub(super) fn settle(
     engine: &Engine<'_>,
     files: Vec<FileWork>,
     outcomes: Vec<EvidencePutOutcome>,
@@ -261,7 +261,12 @@ fn settle(
 
 /// The packet's answer was lost (`Err`): what was not completely sent goes
 /// again, everything else has an unknown result.
-fn packet_lost(engine: &Engine<'_>, files: Vec<FileWork>, delivery: &Delivery, error: &io::Error) {
+pub(super) fn packet_lost(
+    engine: &Engine<'_>,
+    files: Vec<FileWork>,
+    delivery: &Delivery,
+    error: &io::Error,
+) {
     engine.stats.unmoved(delivery.served.iter().sum());
     if engine.stopped() {
         return;
@@ -276,12 +281,12 @@ fn packet_lost(engine: &Engine<'_>, files: Vec<FileWork>, delivery: &Delivery, e
 }
 
 /// What the packet stream handed to the peer.
-struct Delivery {
-    lengths: Vec<u64>,
+pub(super) struct Delivery {
+    pub(super) lengths: Vec<u64>,
     /// Bytes of each entry the stream delivered (and the progress counted).
-    served: Vec<u64>,
+    pub(super) served: Vec<u64>,
     /// The entry whose read or final check failed; the stream ended there.
-    failed: Option<(usize, io::ErrorKind, String)>,
+    pub(super) failed: Option<(usize, io::ErrorKind, String)>,
 }
 
 impl Delivery {

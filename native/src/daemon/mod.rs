@@ -223,8 +223,15 @@ mod screen_ipc_client;
 mod screen_ipc_still;
 #[path = "os/shared/tcp_ipc.rs"]
 mod tcp_ipc;
+#[path = "os/shared/transfer_job_client.rs"]
+mod transfer_job_client;
+#[allow(unused_imports)] // open_share_in_process: the Android pool (Z-A1)
+pub(crate) use transfer_job_client::open_share_in_process;
+pub(crate) use transfer_job_client::run_transfer_in_worker;
 #[path = "os/shared/tcp_ipc_client.rs"]
 mod tcp_ipc_client;
+#[path = "os/shared/transfer_job_ipc.rs"]
+mod transfer_job_ipc;
 pub(crate) use tcp_ipc_client::{
     tcp_close, tcp_list, tcp_start, tcp_start_for_process, tcp_start_with, tcp_start_within,
     tcp_status,

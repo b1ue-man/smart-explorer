@@ -319,6 +319,7 @@ pub(super) fn handle_client(
         request @ IpcRequest::Screen { .. } => host.serve_extension(stream, request),
         IpcRequest::Tcp { req, .. } => host.serve_tcp(stream, req),
         IpcRequest::Apps { req, .. } => host.serve_apps(stream, req),
+        IpcRequest::Transfer { req, .. } => host.serve_transfer(stream, req, runtime_lease),
         request @ IpcRequest::Login { .. } => host.serve_extension(stream, request),
         request @ IpcRequest::MountHostExt { .. } => host.serve_extension(stream, request),
     }

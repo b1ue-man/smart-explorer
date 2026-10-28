@@ -52,7 +52,7 @@ mod hints;
 mod job;
 #[path = "core/job_record.rs"]
 mod job_record;
-pub(crate) use job_record::{JobRecord, StoredEndpoint};
+pub(crate) use job_record::{JobRecord, StoredEndpoint, StoredFilter};
 #[path = "os/shared/lane.rs"]
 mod lane;
 #[path = "core/limiter.rs"]
@@ -142,9 +142,10 @@ pub(crate) use engine::record_io::{
     monitor_contexts, read_record, read_record_state, record_context, record_locations,
     write_record, RecordContext, RecordKind,
 };
+pub(crate) use engine::stored_identity::{address_of, remember as remember_identity};
 pub(crate) use engine::{count_folder_conflict, folder_conflicts, FolderPreviewScan};
 pub(crate) use engine::{reopen_job, unconfirmed_jobs, RecoveryCatalog};
-pub(crate) use engine::{run_view, JobView, Side};
+pub(crate) use engine::{run_view, run_view_here, JobView, Side};
 pub(crate) use engine_names::parent_path;
 pub use external::{external_snapshots, register_external, ExternalSnapshot, ExternalTransfer};
 pub use flow::{

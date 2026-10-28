@@ -5,26 +5,19 @@
 //! folders are still being listed. Every combination of local and remote
 //! endpoints runs here; progress goes out every ~150 ms and every issue into
 //! the job's log file.
-#[path = "batch.rs"]
 mod batch;
-#[path = "batch_get.rs"]
 mod batch_get;
-#[path = "batch_put.rs"]
 mod batch_put;
+mod batch_remote;
 #[cfg(test)]
 mod batches_backend_compatibility_task_tests;
-#[path = "bottleneck.rs"]
 mod bottleneck;
-#[path = "discovery.rs"]
 mod discovery;
-#[path = "dispatch.rs"]
 mod dispatch;
-#[path = "download.rs"]
 mod download;
 mod file_evidence;
 mod file_recovery;
 mod folder_alias_store;
-#[path = "folders.rs"]
 pub(crate) mod folders;
 mod job_store;
 pub(crate) mod record_io;
@@ -33,45 +26,27 @@ pub(crate) mod folder_reservation;
 pub use folder_alias_store::new_job_id;
 mod selection;
 pub(crate) use selection::{count_folder_conflict, folder_conflicts, FolderPreviewScan};
-#[path = "issues.rs"]
 mod issues;
-#[path = "legacy.rs"]
 mod legacy;
-#[path = "local.rs"]
 mod local;
-#[path = "ops.rs"]
 mod ops;
 mod prepare;
-#[path = "publish.rs"]
 mod publish;
-#[path = "publish_queue.rs"]
 mod publish_queue;
 use prepare::prepare;
-#[path = "queue.rs"]
 mod queue;
-#[path = "remote_copy.rs"]
 mod remote_copy;
-#[path = "roots.rs"]
 mod roots;
-#[path = "segments.rs"]
 mod segments;
-#[path = "segments_copy.rs"]
 mod segments_copy;
-#[path = "segments_download.rs"]
 mod segments_download;
-#[path = "segments_upload.rs"]
 mod segments_upload;
-#[path = "source.rs"]
 mod source;
-#[path = "stats.rs"]
 mod stats;
-#[path = "upload.rs"]
+pub(crate) mod stored_identity;
 mod upload;
-#[path = "util.rs"]
 mod util;
-#[path = "view.rs"]
 mod view;
-#[path = "worker.rs"]
 mod worker;
 
 use folders::FolderRegister;
@@ -121,7 +96,24 @@ pub(crate) fn run_job(
 }
 
 /// Runs a borrowed job; `report` receives progress and exactly one `Done`.
+/// A job with a Share side whose device the background worker reaches runs
+/// inside the worker (Z-P2): no byte goes through the worker's loopback
+/// proxy, and a crash of this process does not end a recoverable job.
+/// Everything else, and every worker without the job service, runs here.
 pub(crate) fn run_view(
+    view: JobView<'_>,
+    report: &(dyn Fn(TransferMsg) + Sync),
+    cancel: &AtomicBool,
+) {
+    if crate::daemon::run_transfer_in_worker(&view, report, cancel) {
+        return;
+    }
+    run_view_here(view, report, cancel)
+}
+
+/// Runs a borrowed job in this process (the worker's job service, Android,
+/// and every job `run_view` does not hand over).
+pub(crate) fn run_view_here(
     view: JobView<'_>,
     report: &(dyn Fn(TransferMsg) + Sync),
     cancel: &AtomicBool,
@@ -262,6 +254,10 @@ impl<'a> Engine<'a> {
         let batch = match (view.source, view.target) {
             (Side::Local, Side::Remote(backend)) => backend.batch_limits(view.target_dir),
             (Side::Remote(backend), Side::Local) => source_batch_limits(backend, first),
+            // G3-13: between two connections, packets both sides take.
+            (Side::Remote(source), Side::Remote(target)) => {
+                batch_remote::limits(&view, source, target, first)
+            }
             _ => None,
         }
         .filter(|limits| limits.max_files > 1 && limits.max_bytes > 0);
@@ -453,47 +449,32 @@ impl<'a> Engine<'a> {
 }
 
 #[cfg(test)]
-#[path = "limiter_tests.rs"]
 mod limiter_tests;
 #[cfg(test)]
-#[path = "removable_media_task_tests.rs"]
 mod removable_media_task_tests;
 #[cfg(test)]
-#[path = "segments_tests.rs"]
 mod segments_tests;
 #[cfg(test)]
-#[path = "segments_upload_tests.rs"]
 mod segments_upload_tests;
 #[cfg(test)]
-#[path = "speed_task_local_tests.rs"]
 mod speed_task_local_tests;
 #[cfg(test)]
-#[path = "speed_task_tests.rs"]
 mod speed_task_tests;
 #[cfg(test)]
-#[path = "test_backend.rs"]
 mod test_backend;
 #[cfg(test)]
-#[path = "test_faults.rs"]
 mod test_faults;
 #[cfg(test)]
-#[path = "test_run.rs"]
 mod test_run;
 #[cfg(test)]
-#[path = "tests_batch.rs"]
 mod tests_batch;
 #[cfg(test)]
-#[path = "tests_flow.rs"]
 mod tests_flow;
 #[cfg(test)]
-#[path = "tests_local.rs"]
 mod tests_local;
 #[cfg(test)]
-#[path = "tests_remote.rs"]
 mod tests_remote;
 #[cfg(test)]
-#[path = "tests_review.rs"]
 mod tests_review;
 #[cfg(test)]
-#[path = "tests_review_packets.rs"]
 mod tests_review_packets;

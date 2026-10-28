@@ -107,6 +107,9 @@ pub(super) fn run(engine: &Engine<'_>, first: FileWork, members: Vec<FileWork>, 
         (Side::Remote(source), Side::Local) => {
             super::batch_get::download(engine, source, files, buffer)
         }
+        (Side::Remote(source), Side::Remote(target)) => {
+            super::batch_remote::copy(engine, source, target, files, buffer)
+        }
         _ => {
             for file in files {
                 run_file(engine, file, buffer);

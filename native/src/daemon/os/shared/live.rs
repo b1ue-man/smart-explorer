@@ -96,6 +96,13 @@ pub fn drain_share_events_in_process() -> Option<Result<ShareWorkerSnapshot, Str
     })
 }
 
+/// The embedded worker's Share host, for opening a device in this process
+/// without the loopback proxy (Z-A1); `None` on desktop and while the
+/// embedded worker does not serve.
+pub(super) fn embedded_host() -> Option<ShareHost> {
+    lock().host.clone()
+}
+
 pub(super) fn mark_embedded() {
     lock().embedded = true;
 }

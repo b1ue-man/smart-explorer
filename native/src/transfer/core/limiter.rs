@@ -8,7 +8,7 @@
 //! the one the transfer waits for.
 
 /// The resource that sets the pace of a transfer.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Limiter {
     /// No verdict (yet, or nothing measured).
     #[default]

@@ -1,7 +1,9 @@
 //! Progress and completion values every transfer worker reports.
 use super::limiter::Limiter;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+// Serializable for the worker's job service (Z-P2): progress, issues and
+// roots of a job that runs in the background worker reach the app over IPC.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum TransferKind {
     Upload,
     Download,
@@ -24,7 +26,7 @@ impl TransferKind {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TransferProgress {
     pub kind: TransferKind,
     pub label: String,
@@ -124,7 +126,7 @@ impl TransferProgress {
 
 /// One entry that was not transferred, or a problem of the whole transfer
 /// (empty `path`), for lists users can read and copy.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TransferIssue {
     pub path: String,
     pub message: String,
@@ -133,7 +135,7 @@ pub struct TransferIssue {
 /// Where a selected entry landed below the target folder (possibly under a
 /// numbered name). A later "transfer missing files" run of the same job
 /// reuses these instead of creating new copies.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ResolvedRoot {
     /// The selected source path.
     pub source: String,
