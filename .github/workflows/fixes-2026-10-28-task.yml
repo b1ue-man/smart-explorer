@@ -168,18 +168,23 @@ jobs:
           $bin = Join-Path $env:GITHUB_WORKSPACE 'native\target\debug'
           # The setup extracts the payloads under these names next to the
           # helper and passes bare names (installer.nsi, ExecWait).
+          # The helper moves the staged payloads into the installation; the
+          # setup extracts them anew for every run, so does each round here.
           $stage = Join-Path $env:RUNNER_TEMP 'se-setup'
-          New-Item -ItemType Directory -Force $stage | Out-Null
-          Copy-Item "$bin\smart_explorer.exe" "$stage\Smart Explorer.exe"
-          Copy-Item "$bin\smart_explorer_updater.exe" "$stage\Smart Explorer Updater.exe"
-          Copy-Item "$bin\se.exe" "$stage\se.exe"
-          Copy-Item "$bin\se-mcp-launcher.exe" "$stage\se-mcp-launcher.exe"
+          function Stage {
+            New-Item -ItemType Directory -Force $stage | Out-Null
+            Copy-Item -Force "$bin\smart_explorer.exe" "$stage\Smart Explorer.exe"
+            Copy-Item -Force "$bin\smart_explorer_updater.exe" "$stage\Smart Explorer Updater.exe"
+            Copy-Item -Force "$bin\se.exe" "$stage\se.exe"
+            Copy-Item -Force "$bin\se-mcp-launcher.exe" "$stage\se-mcp-launcher.exe"
+          }
           function Sha([string]$path) { (Get-FileHash $path -Algorithm SHA256).Hash.ToLower() }
           $version = (Select-String -Path native\Cargo.toml -Pattern '^version = "(.+)"' |
             Select-Object -First 1).Matches[0].Groups[1].Value
           $root = Join-Path $env:LOCALAPPDATA 'Programs\Smart Explorer'
           New-Item -ItemType Directory -Force $root | Out-Null
           foreach ($round in 'fresh', 'over the installed one') {
+            Stage
             $arguments = "--install-bundle --root `"$root`" --app-staged `"Smart Explorer.exe`" " +
               "--app-sha256 $(Sha "$stage\Smart Explorer.exe") --cli-staged se.exe --cli-sha256 $(Sha "$stage\se.exe") " +
               "--launcher-staged se-mcp-launcher.exe --launcher-sha256 $(Sha "$stage\se-mcp-launcher.exe") " +
