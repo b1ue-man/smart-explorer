@@ -79,6 +79,7 @@ impl PeerBackend {
             offset,
             len,
             lz4: self.lz4_offered(),
+            evidence: false,
         };
         match self.open_read_request(request, "peer read range") {
             Ok(reader) => Ok(Some(reader)),

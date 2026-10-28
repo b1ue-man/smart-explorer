@@ -12,13 +12,14 @@ use super::super::local_stage::ensure_local_space;
 use super::super::memory::reserve_memory;
 use super::super::walk_listers::native;
 use super::batch::{Attempt, Failures};
-use super::download::{existing, publish_local, Part};
+use super::download::{existing, publish_local_known, Part};
 use super::ops::{nanos, relabeled, Meter, OpError, OpResult};
+use super::publish_queue::Publisher;
 use super::queue::FileWork;
 use super::source::RemoteCheck;
 use super::worker::{finished, run_file, target_refuses};
 use super::Engine;
-use crate::vfs::{Backend, BatchGet, BatchSink, VfsMeta};
+use crate::vfs::{Backend, BatchGet, BatchSink, FileEvidence, VfsMeta};
 use std::io;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -85,18 +86,28 @@ pub(super) fn download(
     meter.add_wait(waited);
     let started = Instant::now();
     let local_before = local_time(&meter);
-    let (result, outcomes, received) = {
-        let mut sink = Sink {
-            engine,
-            members: &members,
-            current: None,
-            outcomes: (0..members.len()).map(|_| None).collect(),
-            received: vec![0; members.len()],
-            meter: &meter,
-        };
-        let result = source.get_batch(&items, &mut sink);
-        (result, sink.outcomes, sink.received)
-    };
+    // Finished parts are published off the stream (K-C), which goes on at
+    // network speed; every handed-over part is published before this returns.
+    let ((result, mut outcomes, received), published) =
+        super::publish_queue::with_publisher(engine, |publisher| {
+            let mut sink = Sink {
+                engine,
+                members: &members,
+                current: None,
+                outcomes: (0..members.len()).map(|_| None).collect(),
+                received: vec![0; members.len()],
+                meter: &meter,
+                evidence: None,
+                publisher,
+            };
+            let result = source.get_batch(&items, &mut sink);
+            (result, sink.outcomes, sink.received)
+        });
+    for (index, published) in published {
+        if let Some(slot) = outcomes.get_mut(index) {
+            *slot = Some(Member::Done(published));
+        }
+    }
     // Hashing and writing here are booked as they happen; the rest of the
     // call is the wire and the peer: the source.
     let local = local_time(&meter).saturating_sub(local_before);
@@ -207,6 +218,8 @@ struct Current {
     /// The peer sends another length than listed: nothing is kept, the file
     /// goes alone with its current length.
     changed: bool,
+    /// What the peer read about the source when it opened it.
+    evidence: Option<FileEvidence>,
 }
 
 /// Time spent on this side of the packet so far (hashing and writing).
@@ -223,6 +236,9 @@ struct Sink<'s, 'e, 'm> {
     /// Bytes of each item the progress counted.
     received: Vec<u64>,
     meter: &'s Meter<'m>,
+    /// Evidence announced for the next item (`BatchSink::evidence`).
+    evidence: Option<(usize, FileEvidence)>,
+    publisher: &'s Publisher<'s, 'e>,
 }
 
 impl Sink<'_, '_, '_> {
@@ -270,12 +286,18 @@ impl BatchSink for Sink<'_, '_, '_> {
         } else {
             Part::create(destination).map(Some)
         };
+        let evidence = self
+            .evidence
+            .take()
+            .filter(|(at, _)| *at == index)
+            .map(|(_, evidence)| evidence);
         self.current = Some(Current {
             index,
             part: None,
             check,
             failure: None,
             changed,
+            evidence,
         });
         match part {
             Ok(part) => {
@@ -344,16 +366,41 @@ impl BatchSink for Sink<'_, '_, '_> {
                 format!("{}: Quelle wurde seit der Auflistung geändert", file.source),
             )),
             (Err(error), None) => Member::Done(Err(OpError::source(error))),
-            (Ok(()), None) => Member::Done(match (current.part, current.check) {
-                (Some(part), Some(check)) => check
-                    .finish_streamed(file, part.written())
-                    .and_then(|()| publish_local(self.engine, part, destination, file)),
-                _ => Err(OpError::target(io::Error::other(
+            (Ok(()), None) => match (current.part, current.check) {
+                (Some(part), Some(check)) => match check.finish_streamed(file, part.written()) {
+                    Err(failure) => Member::Done(Err(failure)),
+                    // A part with the peer's evidence is published here (the
+                    // publisher queue carries no evidence yet); any other
+                    // goes to the publisher, whose result comes later.
+                    Ok(()) => match current.evidence {
+                        Some(evidence) => {
+                            let known = Some(super::batch_put::host_evidence(evidence));
+                            Member::Done(publish_local_known(
+                                self.engine,
+                                part,
+                                destination,
+                                file,
+                                known,
+                            ))
+                        }
+                        None => {
+                            let (file, destination) = (file.clone(), destination.clone());
+                            self.publisher.submit(index, part, destination, file);
+                            return Ok(());
+                        }
+                    },
+                },
+                _ => Member::Done(Err(OpError::target(io::Error::other(
                     "Paket-Eintrag ohne Teildatei",
-                ))),
-            }),
+                )))),
+            },
         };
         self.record(index, outcome);
+        Ok(())
+    }
+
+    fn evidence(&mut self, index: usize, evidence: FileEvidence) -> io::Result<()> {
+        self.evidence = Some((index, evidence));
         Ok(())
     }
 
@@ -371,77 +418,5 @@ impl BatchSink for Sink<'_, '_, '_> {
 }
 
 #[cfg(test)]
-mod speed_tests {
-    use super::super::batch_put::speed_tests::forward;
-    use super::super::test_backend::{job, run, write, Fake};
-    use crate::transfer::Endpoint;
-    use crate::vfs::{
-        Backend, BackendHandle, BatchGet, BatchLimits, BatchSink, Scheme, VfsMeta, VfsResult,
-    };
-    use std::io::{self, Read, Write};
-    use std::sync::atomic::Ordering;
-    use std::sync::Arc;
-
-    /// A peer that offers packets but refuses every `get_batch`.
-    struct NoPackets(Arc<Fake>);
-
-    impl Backend for NoPackets {
-        forward! {
-            scheme() -> Scheme; root_display() -> String; namespace_identity() -> String;
-            list_dir(path: &str) -> VfsResult<Vec<VfsMeta>>; stat(path: &str) -> VfsResult<VfsMeta>;
-            open_read(path: &str) -> VfsResult<Box<dyn Read + Send>>;
-            open_write(path: &str) -> VfsResult<Box<dyn Write + Send>>;
-            rename(src: &str, dst: &str) -> VfsResult<()>;
-            remove_file(path: &str) -> VfsResult<()>; remove_dir(path: &str) -> VfsResult<()>;
-            mkdir_all(path: &str) -> VfsResult<()>; flow_key(path: &str) -> String;
-            batch_limits(dir: &str) -> Option<BatchLimits>;
-        }
-
-        fn get_batch(&self, _items: &[BatchGet], _sink: &mut dyn BatchSink) -> VfsResult<()> {
-            Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "fixture: no packets",
-            ))
-        }
-    }
-
-    #[test]
-    fn speed_task_batch_get_unsupported_falls_back_to_single_files() {
-        let root = tempfile::tempdir().expect("temp dir");
-        let remote = root.path().join("remote/Vault");
-        for index in 0..6 {
-            write(
-                &remote.join(format!("f{index}.txt")),
-                format!("content {index}").as_bytes(),
-            );
-        }
-        let dest = root.path().join("dest");
-        std::fs::create_dir(&dest).expect("dest");
-        let mut fake = Fake::new("get-unsupported");
-        fake.batch = Some(BatchLimits {
-            max_files: 64,
-            max_bytes: 1024 * 1024,
-        });
-        let (fake, _) = fake.handle();
-        let handle: BackendHandle = Arc::new(NoPackets(fake.clone()));
-        let finished = run(job(
-            Endpoint::Remote(handle),
-            Endpoint::Local,
-            &dest,
-            &[&remote],
-        ));
-        assert!(finished.issues.is_empty(), "{:?}", finished.issues);
-        assert_eq!(finished.progress.files_done, 6);
-        for index in 0..6 {
-            let downloaded = dest.join(format!("Vault/f{index}.txt"));
-            assert_eq!(
-                std::fs::read(&downloaded).expect("downloaded"),
-                format!("content {index}").as_bytes()
-            );
-        }
-        assert!(
-            fake.counters.opens.load(Ordering::SeqCst) >= 6,
-            "every file is read alone"
-        );
-    }
-}
+#[path = "batch_get_speed_tests.rs"]
+mod speed_tests;

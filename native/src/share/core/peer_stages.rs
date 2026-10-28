@@ -302,20 +302,26 @@ impl PeerBackend {
         path: &str,
     ) -> io::Result<Box<dyn std::io::Write + Send>> {
         let ticket = self.reserve_stage(path)?;
-        let opened = self.open_writer(
-            crate::share::wire::FsRequest::WriteNew {
-                path: path.into(),
-                lz4: self.lz4_offered(),
-            },
-            "peer exclusive write open",
-        );
+        // `evidence_v1`: the commit reports the stage and whether the file
+        // it is meant for exists, so publishing it asks for neither.
+        let report = ticket.as_ref().and_then(|_| self.written_report(path));
+        let request = crate::share::wire::FsRequest::WriteNew {
+            path: path.into(),
+            lz4: self.lz4_offered(),
+            evidence: report.is_some(),
+            probe: report.as_ref().and_then(|report| report.destination()),
+        };
+        let slot = report.as_ref().map(|report| report.slot.clone());
+        let opened = self.open_writer_reporting(request, "peer exclusive write open", slot);
         match (opened, ticket) {
             (Ok(writer), Some(ticket)) => {
                 if let Err(error) = ticket.opened() {
                     ticket.uncertain();
                     return Err(error);
                 }
-                Ok(crate::share::peer_writer::owned_writer(writer, ticket))
+                Ok(crate::share::peer_writer::owned_writer_reporting(
+                    writer, ticket, report,
+                ))
             }
             (Ok(writer), None) => Ok(writer),
             (Err(error), ticket) => {

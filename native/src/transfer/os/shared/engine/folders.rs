@@ -24,6 +24,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+#[path = "folders_bulk.rs"]
+mod bulk;
 #[path = "folders_local.rs"]
 mod local;
 pub(crate) use local::{ensure_plain_dir, existing_target_root, local_target_root};
@@ -220,34 +222,41 @@ impl<'a> FolderRegister<'a> {
             }
         }
         let result = self.create(rel, cancel);
-        {
-            let mut slots = lock(&self.slots);
-            match &result {
-                Ok(created) => {
-                    slots.insert(rel.to_string(), Slot::Ready { created: *created });
-                }
-                Err(error) if error.kind == io::ErrorKind::Interrupted => {
-                    slots.remove(rel);
-                }
-                // The askers waiting now get the refusal; after the longest
-                // wait a peer may ask for, the next asker creates again.
-                Err(error) if error.congestion => {
-                    let refused = Slot::Refused {
-                        error: error.clone(),
-                        until: Instant::now() + RETRY_AFTER_MAX,
-                    };
-                    slots.insert(rel.to_string(), refused);
-                }
-                Err(error) => {
-                    slots.insert(rel.to_string(), Slot::Failed(error.clone()));
-                }
-            }
-        }
+        self.settle_slot(rel, &result);
         self.changed.notify_all();
         result
     }
 
+    /// The slot of `rel` after its creation ended with `result`.
+    fn settle_slot(&self, rel: &str, result: &Result<bool, FolderError>) {
+        let mut slots = lock(&self.slots);
+        match result {
+            Ok(created) => {
+                slots.insert(rel.to_string(), Slot::Ready { created: *created });
+            }
+            Err(error) if error.kind == io::ErrorKind::Interrupted => {
+                slots.remove(rel);
+            }
+            // The askers waiting now get the refusal; after the longest
+            // wait a peer may ask for, the next asker creates again.
+            Err(error) if error.congestion => {
+                let refused = Slot::Refused {
+                    error: error.clone(),
+                    until: Instant::now() + RETRY_AFTER_MAX,
+                };
+                slots.insert(rel.to_string(), refused);
+            }
+            Err(error) => {
+                slots.insert(rel.to_string(), Slot::Failed(error.clone()));
+            }
+        }
+    }
+
     fn create(&self, rel: &str, cancel: &AtomicBool) -> Result<bool, FolderError> {
+        // Missing nested levels in one request where the target can.
+        if let Some(result) = self.create_bulk(rel, cancel) {
+            return result;
+        }
         let parent_created = match parent_rel(rel) {
             Some(parent) => self.ensure(parent, cancel)?,
             None => false,

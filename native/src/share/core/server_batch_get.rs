@@ -1,6 +1,8 @@
 //! Host side of GetBatch: many small files in one stream, in request order.
 //! Each item is announced with its length (or fails on its own), streamed,
 //! and closed with a result that reports a source changed while it was read.
+//! With `evidence_v1` the announcement carries what the host read about the
+//! item before it opened it (`EvidencedData`).
 use std::io::{self, Read};
 use std::time::Duration;
 
@@ -10,16 +12,17 @@ use tokio::sync::mpsc;
 use crate::share::framing::{reply, reply_err, send_tagged, TAG_DATA};
 use crate::share::fs::{ResolvedTarget, CHUNK};
 use crate::share::fs_access::FsAccess;
+use crate::share::host_evidence::{self, Scopes};
 use crate::share::io_deadline;
 use crate::share::server_transfer::{stat_item, STREAM_BUFFER_CHUNKS};
-use crate::share::wire::{FsBatchGet, FsResponse};
+use crate::share::wire::{FsBatchGet, FsFileEvidence, FsResponse};
 use crate::vfs::VfsMeta;
 
 use super::fs_dispatch::BatchAuthority;
 
 enum Event {
     /// The item follows with exactly this many bytes.
-    Begin(u64),
+    Begin(u64, Option<FsFileEvidence>),
     Data(Vec<u8>),
     /// All bytes sent and the source unchanged.
     Done,
@@ -36,12 +39,14 @@ pub(super) async fn serve<G: Send + 'static>(
     authority: BatchAuthority,
     slot: G,
     stall: Duration,
+    evidence: bool,
 ) -> io::Result<()> {
     let (events_tx, mut events) = mpsc::channel(STREAM_BUFFER_CHUNKS);
     let live = authority.stream_access();
     let worker = crate::share::blocking::spawn_holding("Share batch download", slot, move || {
+        let mut scopes = evidence.then(Scopes::default);
         for item in &items {
-            if !serve_item(item, &authority, &events_tx) {
+            if !serve_item(item, &authority, &events_tx, scopes.as_mut()) {
                 break;
             }
         }
@@ -66,8 +71,12 @@ async fn forward(
         live.check_read()?;
         // Every frame is bounded: a client that stops reading ends the batch.
         match event {
-            Event::Begin(size) => {
-                let header = reply(send, FsResponse::Data { size });
+            Event::Begin(size, evidence) => {
+                let header = match evidence {
+                    Some(evidence) => FsResponse::EvidencedData { size, evidence },
+                    None => FsResponse::Data { size },
+                };
+                let header = reply(send, header);
                 io_deadline::run_for("Share batch data", stall, header).await?;
             }
             Event::Data(bytes) => {
@@ -88,12 +97,27 @@ async fn forward(
 }
 
 /// Sends one item; false once the client is gone.
-fn serve_item(item: &FsBatchGet, authority: &BatchAuthority, events: &mpsc::Sender<Event>) -> bool {
-    let (target, before, mut reader) = match authority.admit(|access| open_item(access, item)) {
+fn serve_item(
+    item: &FsBatchGet,
+    authority: &BatchAuthority,
+    events: &mpsc::Sender<Event>,
+    scopes: Option<&mut Scopes>,
+) -> bool {
+    let opened = authority.admit(|access| {
+        let (target, before, reader) = open_item(access, item)?;
+        let evidence = scopes.and_then(|scopes| {
+            host_evidence::of_meta(access, &item.path, &target, &before, scopes)
+        });
+        Ok((target, before, reader, evidence))
+    });
+    let (target, before, mut reader, evidence) = match opened {
         Ok(opened) => opened,
         Err(error) => return events.blocking_send(Event::Fail(error)).is_ok(),
     };
-    if events.blocking_send(Event::Begin(item.size)).is_err() {
+    if events
+        .blocking_send(Event::Begin(item.size, evidence))
+        .is_err()
+    {
         return false;
     }
     let end = match stream_bytes(&mut *reader, item.size, events) {

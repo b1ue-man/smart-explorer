@@ -36,6 +36,8 @@ fn upload(
     let open = ctrl(FsRequest::WriteNew {
         path: path.to_string(),
         lz4,
+        evidence: false,
+        probe: None,
     });
     let ready = peer.node.block_on(io_deadline::run("test open", async {
         send_ctrl(&mut opened.send, &open).await?;

@@ -14,7 +14,7 @@ use crate::share::keepalive::TRANSFER_STREAMS_PER_CONNECTION;
 use crate::share::node_sessions::OpenedPeerStream;
 use crate::share::peer_request::{CONTROL_ATTEMPT_TIMEOUT, IDEMPOTENT_CONTROL_BUDGET};
 use crate::share::wire::{
-    discardable_stage, plan_batches, BatchPart, Ctrl, FsRequest, FsResponse,
+    discardable_stage, plan_batches, BatchPart, Ctrl, FsFileEvidence, FsRequest, FsResponse,
     FsTransferCapabilities, BATCH_MAX_BYTES, BATCH_MAX_FILES,
 };
 use crate::vfs::{Backend, BatchLimits, VfsResult};
@@ -45,6 +45,8 @@ pub(in crate::share) struct PeerTransferState {
     pub(in crate::share) features:
         Mutex<Option<(Option<usize>, crate::share::wire::FsHostFeatures)>>,
     pub(super) stages: super::peer_stages::StageLedger,
+    /// Evidence of committed stages until the engine takes it.
+    pub(in crate::share) written: super::peer_evidence::WrittenStages,
 }
 
 #[derive(Clone, Copy)]
@@ -123,6 +125,12 @@ impl PeerBackend {
         })
     }
 
+    /// The host's batch limits for files below any export (`/` itself and
+    /// `/Verbindungen` hold none): what a proxy announces for this peer.
+    pub(in crate::share) fn host_batch_limits_any(&self) -> Option<BatchLimits> {
+        self.host_batch_limits()
+    }
+
     /// Batches for files below `dir`; the synthetic containers hold none.
     pub(super) fn batch_limits_below(&self, dir: &str) -> Option<BatchLimits> {
         if crate::share::fs_capabilities::is_synthetic_container(dir) {
@@ -191,15 +199,32 @@ impl PeerBackend {
         destination: &str,
         copy: bool,
     ) -> VfsResult<()> {
+        self.promote_reporting(staged, destination, copy, false)
+            .map(|_| ())
+    }
+
+    /// `promote_without_replace`; with `evidence` (only to an `evidence_v1`
+    /// host) the reply carries the published file as the host read it.
+    pub(super) fn promote_reporting(
+        &self,
+        staged: &str,
+        destination: &str,
+        copy: bool,
+        evidence: bool,
+    ) -> VfsResult<Option<FsFileEvidence>> {
         let ticket = self.begin_stage_publication(staged)?;
         let result = if self.transfer_v1() {
             let request = FsRequest::PromoteNoReplace {
                 staged: staged.to_string(),
                 destination: destination.to_string(),
                 copy,
+                evidence,
             };
             self.stage_request_once(request, "promote_no_replace")
-                .and_then(|response| expect_ok(response, "promote_no_replace"))
+                .and_then(|response| match response {
+                    FsResponse::Published { evidence } => Ok(evidence),
+                    other => expect_ok(other, "promote_no_replace").map(|()| None),
+                })
         } else {
             crate::vfs::promote_staged_no_replace_with(self, staged, destination, |from, to| {
                 // The ticket already entered Pending before this one mutation.
@@ -214,6 +239,7 @@ impl PeerBackend {
                     "rename_no_replace",
                 )
             })
+            .map(|()| None)
         };
         if result.is_ok() {
             ticket.release();
@@ -241,6 +267,7 @@ impl PeerBackend {
                 error
             }
         })?;
+        let _ = self.transfer.written.take(stage);
         let request = FsRequest::DiscardStage {
             path: stage.to_string(),
         };
@@ -283,6 +310,7 @@ impl PeerBackend {
             offset,
             len: 0,
             lz4: self.lz4_offered(),
+            evidence: false,
         };
         match self.open_read_request(request, "peer read at") {
             Ok(reader) => Ok(Some(reader)),
@@ -359,6 +387,10 @@ pub(super) fn copy_error(error: &io::Error) -> io::Error {
         Some(congestion) => {
             crate::vfs::congestion_error(congestion.message.clone(), congestion.retry_after)
         }
+        // A failure that certainly published nothing stays one.
+        None if crate::vfs::unpublished_of(error) => {
+            crate::vfs::unpublished_error(error.kind(), error.to_string())
+        }
         None => io::Error::new(error.kind(), error.to_string()),
     }
 }
@@ -410,57 +442,5 @@ impl Write for SizedWriter {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    struct Recorder(std::sync::Arc<Mutex<Vec<u8>>>, std::sync::Arc<Mutex<bool>>);
-
-    impl Write for Recorder {
-        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            *self.1.lock().unwrap() = true;
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn transfer_engine_task_sized_stage_commits_only_exact_length() {
-        let bytes = std::sync::Arc::new(Mutex::new(Vec::new()));
-        let flushed = std::sync::Arc::new(Mutex::new(false));
-        let mut short = sized_writer(Box::new(Recorder(bytes.clone(), flushed.clone())), 5);
-        short.write_all(b"abc").unwrap();
-        assert_eq!(
-            short.flush().unwrap_err().kind(),
-            io::ErrorKind::InvalidData
-        );
-        assert!(
-            !*flushed.lock().unwrap(),
-            "a short stage is never committed"
-        );
-        assert_eq!(
-            short.write(b"def").unwrap_err().kind(),
-            io::ErrorKind::InvalidData
-        );
-        short.write_all(b"de").unwrap();
-        short.flush().unwrap();
-        assert!(*flushed.lock().unwrap());
-        assert_eq!(*bytes.lock().unwrap(), b"abcde");
-
-        let congestion = crate::vfs::congestion_error("voll", Some(Duration::from_secs(2)));
-        let copied = copy_error(&congestion);
-        let copied = crate::vfs::congestion_of(&copied).expect("congestion stays congestion");
-        assert_eq!(copied.retry_after, Some(Duration::from_secs(2)));
-        let plain = copy_error(&io::Error::new(io::ErrorKind::NotFound, "weg"));
-        assert_eq!(plain.kind(), io::ErrorKind::NotFound);
-        assert_eq!(plain.to_string(), "weg");
-        assert_eq!(server_copy_budget(0), PEER_OP_TIMEOUT);
-        assert_eq!(
-            server_copy_budget(10 * MIN_SERVER_COPY_RATE),
-            PEER_OP_TIMEOUT + Duration::from_secs(10)
-        );
-    }
-}
+#[path = "peer_transfer_tests.rs"]
+mod tests;

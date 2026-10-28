@@ -195,17 +195,46 @@ pub(crate) fn publish(
     let top_level = parent_rel(&file.rel).is_none();
     let mut destination = path;
     let mut names = next_numbered(base_name(&destination));
+    // A peer with transfer evidence reported the stage when the write was
+    // committed, and whether the file it is meant for existed then: the
+    // receipt needs no request of its own (a numbered name is asked about).
+    let known = crate::vfs::take_stage_evidence(target, stage);
+    let stage_known = known
+        .as_ref()
+        .map(|known| super::batch_put::host_evidence(known.stage.clone()));
     loop {
-        if let Err(error) = super::file_recovery::before(engine, file, stage, &destination) {
+        let existed = known
+            .as_ref()
+            .filter(|known| known.destination.as_deref() == Some(destination.as_str()))
+            .and_then(|known| known.existed);
+        let prepared = super::file_recovery::before_known(
+            engine,
+            file,
+            stage,
+            &destination,
+            None,
+            stage_known.as_ref(),
+            existed,
+        );
+        if let Err(error) = prepared {
             if let Err(failure) = super::file_recovery::preparation_failed(engine, file) {
                 return Err(OpError::at(At::Unknown, io::Error::other(format!("Publikationsvorbereitung fehlgeschlagen: {error}; Nichtpublikation unbestätigt: {failure}; eigene Stage bleibt erhalten: {stage}"))));
             }
             discard(engine, target, stage);
             return Err(OpError::target(error));
         }
-        match target.promote_copy_stage(stage, &destination) {
-            Ok(()) => {
-                super::file_recovery::after(engine, file, &destination).map_err(|error| OpError::at(At::Unknown, error))?;
+        match crate::vfs::promote_copy_stage_evidence(target, stage, &destination) {
+            Ok(published) => {
+                let acknowledged = match published {
+                    Some(evidence) => super::file_recovery::after_known(
+                        engine,
+                        file,
+                        &destination,
+                        Some(&super::batch_put::host_evidence(evidence)),
+                    ),
+                    None => super::file_recovery::after(engine, file, &destination),
+                };
+                acknowledged.map_err(|error| OpError::at(At::Unknown, error))?;
                 if top_level {
                     engine
                         .folders

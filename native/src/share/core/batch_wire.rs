@@ -6,7 +6,7 @@ use std::ops::Range;
 
 use serde::{Deserialize, Serialize};
 
-use super::FsErrorKind;
+use super::{is_false, FsErrorKind, FsFileEvidence};
 use crate::share::keepalive::TRANSFER_STREAMS_PER_CONNECTION;
 
 /// Hello capability of clients that understand a `Busy` reply: the host then
@@ -61,6 +61,14 @@ pub(crate) struct FsTransferCapabilities {
     /// session only; a side without it is never sent a block.
     #[serde(default)]
     pub(crate) lz4_v1: bool,
+    /// `evidence_v1`: PutBatch, GetBatch, ReadAt, PromoteNoReplace and
+    /// WriteNew with `evidence` answer with what the host read (size, time,
+    /// ID, file identity) and, for PutBatch, which destinations existed.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) evidence_v1: bool,
+    /// `create_dirs_v1`: `CreateDirs` creates many folders in one request.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) create_dirs_v1: bool,
 }
 
 impl FsTransferCapabilities {
@@ -73,6 +81,8 @@ impl FsTransferCapabilities {
             batch_max_bytes: BATCH_MAX_BYTES,
             ranges_v1: true,
             lz4_v1: !crate::agent_proto::lz4_switched_off(),
+            evidence_v1: true,
+            create_dirs_v1: true,
         }
     }
 
@@ -104,6 +114,10 @@ pub(crate) struct FsBatchGet {
 pub(crate) enum FsBatchOutcome {
     Published {
         path: String,
+        /// `evidence_v1` batches: the published file as the host read it
+        /// back (absent when it could not, or for other batches).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        evidence: Option<FsFileEvidence>,
     },
     Failed {
         #[serde(default, skip_serializing_if = "Option::is_none")]

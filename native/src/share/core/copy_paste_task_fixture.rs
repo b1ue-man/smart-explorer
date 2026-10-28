@@ -252,10 +252,14 @@ mod analysis_request_id_task_tests;
 mod content_digest_task_tests;
 #[path = "direct_open_task_tests.rs"]
 mod direct_open_task_tests;
+#[path = "evidence_task_tests.rs"]
+mod evidence_task_tests;
 #[path = "lz4_stream_loopback_tests.rs"]
 mod lz4_stream_loopback_tests;
 #[path = "range_read_tests.rs"]
 mod range_read_tests;
+#[path = "speed_task_share_tests.rs"]
+mod speed_task_share_tests;
 #[path = "stage_ranges_tests.rs"]
 mod stage_ranges_tests;
 #[path = "transfer_engine_task_limit_tests.rs"]

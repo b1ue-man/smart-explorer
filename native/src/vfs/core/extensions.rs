@@ -11,7 +11,8 @@ use super::extension_types::{
     ChangeNotice, ChangeSignalMode, ChangeSubscription, HashWalkItem, HashWalkRequest,
     RecycleExpectation, RecycleOutcome, StageFinish, StageFinished, TargetLimits, VfsListing,
 };
-use super::{Backend, VfsMeta, VfsResult, VolumeIdentity};
+use super::transfer_evidence::{EvidencePutOutcome, FileEvidence, PreparePut, StageEvidence};
+use super::{Backend, BatchPut, VfsMeta, VfsResult, VolumeIdentity};
 
 /// Where automatic sync versions can be stored; this grants no root access.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -303,5 +304,68 @@ pub trait BackendExtensions: Backend {
     ) -> VfsResult<Option<ChangeSubscription>> {
         let _ = (root, poll_interval, tx);
         Ok(None)
+    }
+
+    /// Batch limits of the backend's peer regardless of the folder: a
+    /// namespace whose root holds no files (the Share's export list) still
+    /// moves packets below it. `None` = no batches at all.
+    fn host_batch_limits(&self) -> Option<super::BatchLimits> {
+        None
+    }
+
+    /// Whether the transfer-evidence calls below are served for `path`
+    /// (`vfs::transfer_evidence`). Wrappers that rewrite paths keep `false`.
+    fn transfer_evidence(&self, path: &str) -> bool {
+        let _ = path;
+        false
+    }
+
+    /// `vfs::put_batch_evidence`; unsupported reads nothing from `data`.
+    fn put_batch_evidence(
+        &self,
+        entries: &[BatchPut],
+        data: &mut dyn Read,
+        prepare: &mut PreparePut<'_>,
+    ) -> VfsResult<Vec<EvidencePutOutcome>> {
+        let _ = (entries, data, prepare);
+        super::meta::unsupported("backend reports no transfer evidence")
+    }
+
+    /// `vfs::promote_copy_stage_evidence`: the backend's own publication,
+    /// without evidence unless the backend overrides this.
+    fn promote_copy_stage_evidence(
+        &self,
+        staged: &str,
+        destination: &str,
+    ) -> VfsResult<Option<FileEvidence>> {
+        self.promote_copy_stage(staged, destination).map(|()| None)
+    }
+
+    /// `vfs::open_read_evidence`.
+    fn open_read_evidence(
+        &self,
+        path: &str,
+        id: Option<&str>,
+    ) -> VfsResult<Option<(Box<dyn Read + Send>, FileEvidence)>> {
+        let _ = (path, id);
+        Ok(None)
+    }
+
+    /// `vfs::take_stage_evidence`.
+    fn take_stage_evidence(&self, stage: &str) -> Option<StageEvidence> {
+        let _ = stage;
+        None
+    }
+
+    /// Whether `create_dirs` is served below `root` (`vfs::create_dirs`).
+    fn supports_create_dirs(&self, root: &str) -> bool {
+        let _ = root;
+        false
+    }
+
+    /// `vfs::create_dirs`.
+    fn create_dirs(&self, paths: &[String]) -> VfsResult<Vec<std::io::Result<bool>>> {
+        let _ = paths;
+        super::meta::unsupported("backend creates no folders in bulk")
     }
 }

@@ -18,6 +18,7 @@ fn create_job(root: &std::path::Path, abandoned: bool) -> WriteJob {
             mode: WriteMode::Create,
             authorization: None,
             lz4: false,
+            evidence: None,
         },
         access: export(root),
         abandoned: Arc::new(AtomicBool::new(abandoned)),

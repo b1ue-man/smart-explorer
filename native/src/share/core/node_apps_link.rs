@@ -133,5 +133,12 @@ fn matches_result(command: &AppsCommand, result: &AppsResult) -> bool {
             | (AppsCommand::Icon { .. }, AppsResult::Icon { .. })
             | (AppsCommand::Receipt { .. }, AppsResult::Receipt { .. })
             | (AppsCommand::RdpProbe, AppsResult::RdpProbe { .. })
+            | (AppsCommand::RdpProbeV2, AppsResult::RdpProbeV2 { .. })
+            | (AppsCommand::RdpPrepare, AppsResult::RdpPrepare { .. })
+            | (
+                AppsCommand::RdpCredential { .. },
+                AppsResult::RdpCredential { .. }
+            )
+            | (AppsCommand::LocalServices, AppsResult::LocalServices { .. })
     )
 }

@@ -34,6 +34,7 @@ pub(super) fn request_label(request: &FsRequest) -> &'static str {
         FsRequest::GetBatch { .. } => "get_batch",
         FsRequest::ReadAt { .. } => "read_at",
         FsRequest::CreateDir { .. } => "create_dir",
+        FsRequest::CreateDirs(_) => "create_dirs",
         FsRequest::PromoteNoReplace { .. } => "promote_no_replace",
         FsRequest::DiscardStage { .. } => "discard_stage",
         FsRequest::SegmentedStageOpen(_) => "segmented_stage_open",
@@ -137,7 +138,14 @@ pub(super) fn response_summary(response: &FsResponse) -> String {
         }
         FsResponse::Analysis { .. } => "storage analysis".into(),
         FsResponse::Data { size } => format!("{size} bytes"),
+        FsResponse::EvidencedData { size, .. } => format!("{size} bytes mit Beleg"),
         FsResponse::Ready => "bereit".into(),
+        FsResponse::BatchReady { existed } => format!("bereit, {} Ziele geprüft", existed.len()),
+        FsResponse::Published { evidence } => {
+            format!("veröffentlicht, Beleg={}", evidence.is_some())
+        }
+        FsResponse::Written { written } => format!("geschrieben, {} bytes", written.evidence.size),
+        FsResponse::Dirs { outcomes } => format!("{} Ordner", outcomes.len()),
         FsResponse::SegmentedStageReady { .. } => "bereichsstufe bereit".into(),
         FsResponse::Ok => "ok".into(),
         FsResponse::Batch { status } => status.summary(),

@@ -13,7 +13,7 @@ const MAX_IDENTITY: usize = 65_536;
 
 /// A generated name is only a reason to demand a creator ticket. It never
 /// establishes ownership of an existing file.
-fn private_stage(path: &str) -> bool {
+pub(in crate::share) fn private_stage(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or(path);
     crate::vfs::is_unique_stage(name) || discardable_stage(name)
 }
@@ -60,6 +60,53 @@ fn root_scope(
     }
 }
 
+/// The host-bound identity of `target` (resolved from `path` through
+/// `access`), with the export scope a batch computed once (`scope`).
+pub(in crate::share) fn bound_with_scope(
+    scope: &str,
+    target: &crate::share::fs::ResolvedTarget,
+) -> io::Result<Option<String>> {
+    let identity = crate::vfs::file_identity(&*target.backend, &target.path)?;
+    bind_host(scope, target, identity)
+}
+
+/// The export scope `host` binds an identity of `path` to.
+pub(in crate::share) fn scope_of(
+    access: &FsAccess,
+    path: &str,
+    target: &crate::share::fs::ResolvedTarget,
+) -> io::Result<String> {
+    root_scope(access, path, target)
+}
+
+fn bind_host(
+    scope: &str,
+    target: &crate::share::fs::ResolvedTarget,
+    identity: Option<String>,
+) -> io::Result<Option<String>> {
+    identity
+        .map(|identity| {
+            if identity.len() > MAX_IDENTITY {
+                return Err(peer_stream::invalid("File identity exceeds protocol limit"));
+            }
+            let bound = serde_json::to_string(&(
+                "share-file-v1",
+                scope,
+                &target.mount_key,
+                target.backend.namespace_identity(),
+                identity,
+            ))
+            .map_err(io::Error::other)?;
+            // The proof binds physical root/account facts without disclosing
+            // host-local root paths through the remote metadata interface.
+            Ok(format!(
+                "share-file-v1:{:x}",
+                Sha256::digest(bound.as_bytes())
+            ))
+        })
+        .transpose()
+}
+
 pub(in crate::share) fn host(access: &FsAccess, path: &str) -> io::Result<Option<String>> {
     access.check_read()?;
     let stage = private_stage(path);
@@ -86,27 +133,7 @@ pub(in crate::share) fn host(access: &FsAccess, path: &str) -> io::Result<Option
     {
         return Err(denied("Share file identity export changed"));
     }
-    identity
-        .map(|identity| {
-            if identity.len() > MAX_IDENTITY {
-                return Err(peer_stream::invalid("File identity exceeds protocol limit"));
-            }
-            let bound = serde_json::to_string(&(
-                "share-file-v1",
-                scope,
-                &target.mount_key,
-                target.backend.namespace_identity(),
-                identity,
-            ))
-            .map_err(io::Error::other)?;
-            // The proof binds physical root/account facts without disclosing
-            // host-local root paths through the remote metadata interface.
-            Ok(format!(
-                "share-file-v1:{:x}",
-                Sha256::digest(bound.as_bytes())
-            ))
-        })
-        .transpose()
+    bind_host(&scope, &target, identity)
 }
 
 pub(in crate::share) async fn serve(
@@ -133,7 +160,7 @@ pub(in crate::share) async fn serve(
     }
 }
 
-fn peer_binding(backend: &PeerBackend) -> io::Result<String> {
+pub(in crate::share) fn peer_binding(backend: &PeerBackend) -> io::Result<String> {
     let endpoint = backend.current_endpoint()?;
     let (kind, relation) = relation_kind_id(&endpoint);
     serde_json::to_string(&(kind, relation, &endpoint.presence.node_id)).map_err(io::Error::other)
@@ -166,6 +193,15 @@ pub(super) fn client(backend: &PeerBackend, path: &str) -> io::Result<Option<Str
         // Read-only: retain the same Ready ticket for FinishStage/promotion.
         backend.verify_owned_stage(path)?;
     }
+    bind_client(&binding, identity)
+}
+
+/// A host-bound identity as `client` returns it for this connection's
+/// `binding` (`peer_binding`).
+pub(in crate::share) fn bind_client(
+    binding: &str,
+    identity: Option<String>,
+) -> io::Result<Option<String>> {
     identity
         .filter(|id| !id.is_empty())
         .map(|identity| {

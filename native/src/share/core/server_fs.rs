@@ -14,9 +14,8 @@ use crate::share::node::ShareIrohNode;
 use crate::share::server_transfer::{ReadSource, WriteMode};
 use crate::share::session::{IncomingSession, PeerPrincipal};
 use crate::share::types::ShareAuthState;
-use crate::share::wire::{discardable_stage, validate_get, validate_put, FsRequest, FsResponse};
+use crate::share::wire::{discardable_stage, FsRequest, FsResponse};
 
-use super::batch_status::{self, BatchKey};
 use super::StreamContext;
 #[path = "server_fs_io.rs"]
 mod streams;
@@ -24,6 +23,8 @@ use streams::{read, write};
 #[path = "server_fs_control.rs"]
 mod control_operations;
 use control_operations::{answer, control, reply_unit, simple};
+#[path = "server_fs_batches.rs"]
+mod batches;
 #[path = "server_stage_ranges.rs"]
 pub(super) mod stage_ranges;
 
@@ -172,6 +173,7 @@ pub(super) async fn serve(stream: FsStream, req: FsRequest) -> io::Result<()> {
                 offset: 0,
                 len: 0,
                 lz4,
+                evidence: false,
             };
             read(send, &context, source, access).await
         }
@@ -181,6 +183,7 @@ pub(super) async fn serve(stream: FsStream, req: FsRequest) -> io::Result<()> {
             offset,
             len,
             lz4,
+            evidence,
         } => {
             let source = ReadSource {
                 path,
@@ -188,6 +191,7 @@ pub(super) async fn serve(stream: FsStream, req: FsRequest) -> io::Result<()> {
                 offset,
                 len,
                 lz4,
+                evidence,
             };
             read(send, &context, source, access).await
         }
@@ -196,18 +200,23 @@ pub(super) async fn serve(stream: FsStream, req: FsRequest) -> io::Result<()> {
                 send,
                 recv,
                 &context,
-                (path, WriteMode::Replace, lz4),
+                (path, WriteMode::Replace, lz4, None),
                 access,
                 authorization,
             )
             .await
         }
-        FsRequest::WriteNew { path, lz4 } => {
+        FsRequest::WriteNew {
+            path,
+            lz4,
+            evidence,
+            probe,
+        } => {
             write(
                 send,
                 recv,
                 &context,
-                (path, WriteMode::Create, lz4),
+                (path, WriteMode::Create, lz4, evidence.then_some(probe)),
                 access,
                 authorization,
             )
@@ -282,14 +291,28 @@ pub(super) async fn serve(stream: FsStream, req: FsRequest) -> io::Result<()> {
             staged,
             destination,
             copy,
+            evidence,
         } => {
-            let result = control(&principal, "Share publish stage", move || {
-                run_authorized(authorization.as_ref(), || {
-                    access.promote_no_replace(&staged, &destination, copy)
-                })
-            })
-            .await;
-            reply_unit(&mut send, result).await
+            let stream = FsStream {
+                send,
+                recv,
+                access,
+                authorization,
+                context,
+                principal,
+            };
+            batches::promote(stream, staged, destination, copy, evidence).await
+        }
+        FsRequest::CreateDirs(request) => {
+            let stream = FsStream {
+                send,
+                recv,
+                access,
+                authorization,
+                context,
+                principal,
+            };
+            batches::create_dirs(stream, request).await
         }
         FsRequest::DiscardStage { path } if context.stages.holds(&path) => {
             // A stage of a ranged upload this connection still has open: the
@@ -361,48 +384,31 @@ pub(super) async fn serve(stream: FsStream, req: FsRequest) -> io::Result<()> {
             crate::share::host_remove_tree::serve(send, path, access, authorization, principal)
                 .await
         }
-        FsRequest::PutBatch { nonce, entries } => {
-            if let Err(error) = validate_put(&nonce, &entries) {
-                return reply_err(&mut send, error).await;
-            }
-            let admitted = context.admit(&send).await;
-            let slot = match admitted {
-                Ok(slot) => slot,
-                Err(error) => return reply_err(&mut send, error).await,
+        request @ (FsRequest::PutBatch { .. }
+        | FsRequest::PutBatchStatus { .. }
+        | FsRequest::GetBatch { .. }) => {
+            let stream = FsStream {
+                send,
+                recv,
+                access,
+                authorization,
+                context,
+                principal,
             };
-            let expected_lease = authorization
-                .as_ref()
-                .map(|authorization| authorization.token().to_string());
-            let job = super::batch_put::PutBatchJob {
-                key: BatchKey::new(principal, nonce.clone()),
-                nonce,
-                entries,
-                authority: BatchAuthority::new(access, authorization, &context),
-                expected_lease,
-            };
-            super::batch_put::serve(send, recv, job, slot, context.stall()).await
-        }
-        FsRequest::PutBatchStatus { nonce } => match batch_status::query(&principal, &nonce) {
-            Some(status) => reply(&mut send, FsResponse::Batch { status }).await,
-            None => {
-                let unknown = io::Error::new(
-                    io::ErrorKind::NotFound,
-                    "Paket ist dem Host unbekannt; sein Ergebnis bleibt offen",
-                );
-                reply_err(&mut send, unknown).await
+            match request {
+                FsRequest::PutBatch {
+                    nonce,
+                    entries,
+                    evidence,
+                } => batches::put_batch(stream, nonce, entries, evidence).await,
+                FsRequest::GetBatch { items, evidence } => {
+                    batches::get_batch(stream, items, evidence).await
+                }
+                FsRequest::PutBatchStatus { nonce } => {
+                    batches::put_batch_status(stream, nonce).await
+                }
+                _ => Err(eio("Paketanfrage falsch zugeordnet")),
             }
-        },
-        FsRequest::GetBatch { items } => {
-            if let Err(error) = validate_get(&items) {
-                return reply_err(&mut send, error).await;
-            }
-            let admitted = context.admit(&send).await;
-            let slot = match admitted {
-                Ok(slot) => slot,
-                Err(error) => return reply_err(&mut send, error).await,
-            };
-            let authority = BatchAuthority::new(access, authorization, &context);
-            super::batch_get::serve(send, items, authority, slot, context.stall()).await
         }
         FsRequest::DuplicateSearch(request) => {
             crate::share::host_requests::serve_duplicate_search(send, request, access, principal)

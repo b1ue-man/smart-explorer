@@ -188,4 +188,68 @@ impl BackendExtensions for CachingBackend {
     ) -> VfsResult<Option<ChangeSubscription>> {
         calls::change_signal(&*self.inner, root, poll_interval, tx)
     }
+
+    fn host_batch_limits(&self) -> Option<crate::vfs::BatchLimits> {
+        crate::vfs::host_batch_limits(&*self.inner)
+    }
+
+    fn transfer_evidence(&self, path: &str) -> bool {
+        crate::vfs::transfer_evidence(&*self.inner, path)
+    }
+
+    fn put_batch_evidence(
+        &self,
+        entries: &[crate::vfs::BatchPut],
+        data: &mut dyn Read,
+        prepare: &mut crate::vfs::PreparePut<'_>,
+    ) -> VfsResult<Vec<crate::vfs::EvidencePutOutcome>> {
+        let result = crate::vfs::put_batch_evidence(&*self.inner, entries, data, prepare);
+        for entry in entries {
+            self.invalidate(&entry.path);
+        }
+        if let Ok(outcomes) = &result {
+            for outcome in outcomes {
+                if let crate::vfs::EvidencePutOutcome::Published { path, .. } = outcome {
+                    self.invalidate(path);
+                }
+            }
+        }
+        result
+    }
+
+    fn promote_copy_stage_evidence(
+        &self,
+        staged: &str,
+        destination: &str,
+    ) -> VfsResult<Option<crate::vfs::FileEvidence>> {
+        let result = crate::vfs::promote_copy_stage_evidence(&*self.inner, staged, destination);
+        self.invalidate(staged);
+        self.invalidate(destination);
+        result
+    }
+
+    fn open_read_evidence(
+        &self,
+        path: &str,
+        id: Option<&str>,
+    ) -> VfsResult<Option<(Box<dyn Read + Send>, crate::vfs::FileEvidence)>> {
+        crate::vfs::open_read_evidence(&*self.inner, path, id)
+    }
+
+    fn take_stage_evidence(&self, stage: &str) -> Option<crate::vfs::StageEvidence> {
+        crate::vfs::take_stage_evidence(&*self.inner, stage)
+    }
+
+    fn supports_create_dirs(&self, root: &str) -> bool {
+        crate::vfs::supports_create_dirs(&*self.inner, root)
+    }
+
+    fn create_dirs(&self, paths: &[String]) -> VfsResult<Vec<std::io::Result<bool>>> {
+        let result = crate::vfs::create_dirs(&*self.inner, paths);
+        // A lost reply can still have created some of them.
+        for path in paths {
+            self.invalidate_ancestors(path);
+        }
+        result
+    }
 }
