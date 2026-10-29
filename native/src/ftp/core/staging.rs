@@ -147,7 +147,10 @@ pub(super) fn publish_with(
         // the metadata module's complete-listing absence proof.
         (entry(connection, staged)?, entry(connection, destination)?)
     } else if parent_dir(staged) == parent_dir(destination) {
-        let entries = listing(connection, &parent_dir(destination))?;
+        let entries = match super::pair_listing::rows(connection, staged, destination)? {
+            Some(entries) => entries,
+            None => listing(connection, &parent_dir(destination))?,
+        };
         let find = |path: &str| {
             let name = basename(path);
             entries.iter().find(|meta| meta.name == name).cloned()

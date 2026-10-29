@@ -218,6 +218,13 @@ impl Server {
             while !shared.stop.load(Ordering::SeqCst) {
                 match listener.accept() {
                     Ok((stream, _)) => {
+                        // Windows hands the listener's non-blocking mode on
+                        // to accepted sockets (Linux does not): the session
+                        // would end at its first read, before the greeting
+                        // was answered (10053/10054 at the client's login).
+                        if stream.set_nonblocking(false).is_err() {
+                            continue;
+                        }
                         let state = shared.clone();
                         sessions.push(thread::spawn(move || {
                             let _ = state.serve(stream);

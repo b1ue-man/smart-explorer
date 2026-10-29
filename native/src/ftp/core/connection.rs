@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use suppaftp::types::FileType;
 use suppaftp::{FtpError, RustlsConnector, RustlsFtpStream, Status};
 
+use super::local_address::connect_until;
 use super::resolver::resolve_host;
 
 fn io_err<E: std::fmt::Display>(error: E) -> io::Error {
@@ -315,7 +316,10 @@ fn connect_addresses_with(
     let mut last_error = None;
     for &address in addresses.iter().take(FTP_MAX_CONNECT_ADDRESSES) {
         let timeout = deadline.remaining("TCP connect")?.min(per_attempt);
-        match connect(address, timeout) {
+        // A missing local address is no answer of this address: it is tried
+        // again within its attempt.
+        let attempt = Instant::now() + timeout;
+        match connect_until(attempt, |left| connect(address, left)) {
             Ok(stream) => return Ok(stream),
             Err(error) => last_error = Some(error),
         }
@@ -329,13 +333,19 @@ fn set_setup_timeouts(stream: &TcpStream, deadline: &SetupDeadline, stage: &str)
     stream.set_write_timeout(Some(timeout))
 }
 
+/// The data connection of a transfer. suppaftp calls this after it sent the
+/// transfer command (STOR, RETR, LIST), so the server already waits for it:
+/// a connect that finds no free local address is tried again within the
+/// connect time instead of leaving the command without its data connection.
 fn connect_data_stream(
     address: SocketAddr,
     connect_timeout: Duration,
     io_timeout: Duration,
 ) -> suppaftp::FtpResult<TcpStream> {
-    let stream =
-        TcpStream::connect_timeout(&address, connect_timeout).map_err(FtpError::ConnectionError)?;
+    let stream = connect_until(Instant::now() + connect_timeout, |left| {
+        TcpStream::connect_timeout(&address, left)
+    })
+    .map_err(FtpError::ConnectionError)?;
     keepalive(&stream).map_err(FtpError::ConnectionError)?;
     stream
         .set_read_timeout(Some(io_timeout))
