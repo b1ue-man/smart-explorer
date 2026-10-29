@@ -44,6 +44,8 @@ pub(crate) struct PipelineActor {
     work: Arc<work_control::WorkControl>,
     job: Option<tokio::task::JoinHandle<(Pipeline, WorkCompletion)>>,
     job_epoch: u64,
+    /// The snapshot the running job takes (`Some(max)`), `None` for a tick.
+    job_snapshot: Option<Option<FrameSize>>,
     /// Picture operations started so far (`work_started`).
     started: u64,
     pending: Pending,
@@ -107,6 +109,7 @@ impl PipelineActor {
             work,
             job: None,
             job_epoch: 0,
+            job_snapshot: None,
             started: 0,
             pending: Pending::default(),
             completion: None,
@@ -148,7 +151,8 @@ impl PipelineActor {
     fn interrupt(&mut self) {
         self.work.interrupt();
         self.blocked = true;
-        self.pending.snapshot = None;
+        // A snapshot the viewer asked for stays queued: it is of the session's
+        // current source, which an interrupt does not take away.
         self.pending.invalidate = true;
     }
     fn receipt(&mut self, receipt: Receipt) {
@@ -252,6 +256,7 @@ impl PipelineActor {
             return Ok(());
         };
         let snapshot = requested.or_else(|| self.pending.snapshot.take());
+        self.job_snapshot = snapshot;
         let connection = self.connection.clone();
         let epoch = self.work.epoch();
         self.job_epoch = epoch;

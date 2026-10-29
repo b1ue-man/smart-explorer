@@ -50,6 +50,15 @@ pub(crate) trait ScreenAuthority: Send + Sync {
 
     /// The names this host stored for the device and its room.
     fn stored_names(&self, principal: &ProvenPrincipal) -> (Option<String>, Option<String>);
+
+    /// Whether the grant of `principal` has reached its end at `now` while it
+    /// allowed something; the right is then gone because the grant ended,
+    /// not because the host narrowed or removed it. A session that finds its
+    /// right gone this way ends as `GrantExpired` whichever of its own check
+    /// and the node's expiry timer sees the end first.
+    fn grant_ended(&self, _principal: &ProvenPrincipal, _now: i64) -> bool {
+        false
+    }
 }
 
 /// What the host does with a session request.

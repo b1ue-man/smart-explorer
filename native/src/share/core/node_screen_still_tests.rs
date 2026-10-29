@@ -29,32 +29,41 @@ fn send(pair: &ScreenPair, session: &ViewerSession, frame: ViewerFrame) {
 }
 
 /// The picture of a `SNAPSHOT` the host answered: its size and its tile
-/// records (the video stream of the session is passed over).
+/// records (the video stream of the session is passed over). The other host
+/// frames are kept: a host that refuses the request names its `ERROR` in the
+/// failure message.
 fn still(pair: &ScreenPair, session: &mut ViewerSession) -> (FrameSize, Vec<FrameRecord>) {
     pair.viewer.0.block_on(async {
+        let mut frames = Vec::new();
         let collect = async {
             let mut records = Vec::new();
+            let mut host_open = true;
             loop {
-                match session.pictures.recv().await {
-                    Some(PictureEvent::Record { header, record, .. })
-                        if header.kind == StreamKind::Snapshot =>
-                    {
-                        let more = record.has_more();
-                        records.push(record);
-                        if !more {
-                            return Some((header.size, records));
+                tokio::select! {
+                    event = session.pictures.recv() => match event {
+                        Some(PictureEvent::Record { header, record, .. })
+                            if header.kind == StreamKind::Snapshot =>
+                        {
+                            let more = record.has_more();
+                            records.push(record);
+                            if !more {
+                                return Some((header.size, records));
+                            }
                         }
-                    }
-                    Some(_) => {}
-                    None => return None,
+                        Some(_) => {}
+                        None => return None,
+                    },
+                    frame = session.host.recv(), if host_open => match frame {
+                        Some(Ok(HostFrame::Stats(_) | HostFrame::Pong(_))) => {}
+                        Some(Ok(other)) => frames.push(format!("{other:?}")),
+                        Some(Err(error)) => frames.push(format!("stream: {error}")),
+                        None => host_open = false,
+                    },
                 }
             }
         };
-        tokio::time::timeout(WAIT, collect)
-            .await
-            .ok()
-            .flatten()
-            .expect("the host sends the still picture")
+        let shot = tokio::time::timeout(WAIT, collect).await.ok().flatten();
+        shot.unwrap_or_else(|| panic!("the host sends the still picture: {frames:#?}"))
     })
 }
 
