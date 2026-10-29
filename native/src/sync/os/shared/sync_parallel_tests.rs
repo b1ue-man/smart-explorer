@@ -45,11 +45,20 @@ fn mirror(
     }
 }
 
-/// Relative path → content of every file below `root`.
+/// Relative path → content of every file below `root`. The mirror keeps
+/// the version of every file it replaces in the destination's
+/// `.se-versions` archive (since b9f9b2ae, v0.5.170); that archive is the
+/// sync's own data, not part of the mirrored tree.
 fn tree(root: &Path) -> BTreeMap<String, Vec<u8>> {
     fn visit(root: &Path, dir: &Path, out: &mut BTreeMap<String, Vec<u8>>) {
         for entry in std::fs::read_dir(dir).unwrap() {
             let path = entry.unwrap().path();
+            if dir == root
+                && path.file_name().and_then(|name| name.to_str())
+                    == Some(crate::bisync::VERSIONS_DIR_NAME)
+            {
+                continue;
+            }
             let meta = std::fs::symlink_metadata(&path).unwrap();
             if meta.is_dir() {
                 visit(root, &path, out);
@@ -310,14 +319,22 @@ fn transfer_engine_task_sync_lists_destination_once_instead_of_stat_per_file() {
     assert!(first.errors.is_empty(), "{:?}", first.errors);
     assert_eq!(first.stats.copied, 35);
     let calls = &destination.calls;
-    // New folders are created once each and never listed; the root is
-    // listed once. Before, every file cost a `stat` and a `mkdir_all`.
-    assert_eq!(calls.mkdir_all.load(Ordering::SeqCst), 0);
-    assert_eq!(calls.create_dir.load(Ordering::SeqCst), 2);
+    // New folders are never listed; the root is listed once. Since the
+    // mirror copies through the guarded stages of the two-way sync
+    // (b9f9b2ae, v0.5.170), a stage's parent folder is created with
+    // `mkdir_all` (`apply_path_context::ensure_parent`): once per folder and
+    // pass, not once per file (copiers that start together may both create
+    // the same new folder). The same guard looks at each file's path before
+    // its stage and before its publication (links, replaced parents).
+    let folders = calls.mkdir_all.load(Ordering::SeqCst);
+    assert!(folders >= 3 && folders < files.len(), "{folders}");
     assert_eq!(calls.list.load(Ordering::SeqCst), 1);
     for rel in &files {
-        // Only the check right before publishing remains.
-        assert_eq!(calls.stats_of(&format!("{REMOTE_ROOT}/{rel}")), 1, "{rel}");
+        // The check right before publishing remains for every file.
+        assert!(
+            calls.stats_of(&format!("{REMOTE_ROOT}/{rel}")) >= 1,
+            "{rel}"
+        );
     }
 
     calls.stat.store(0, Ordering::SeqCst);

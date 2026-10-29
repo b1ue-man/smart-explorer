@@ -258,10 +258,26 @@ fn transfer_engine_task_sync_local_parent_swapped_for_link_blocks_the_copy() {
         false,
     );
 
-    assert!(result
-        .errors
-        .iter()
-        .any(|(path, _)| path.ends_with("new/only.txt")));
+    // The file is reported, as an error or, since the mirror copies through
+    // the guarded stages of the two-way sync (b9f9b2ae, v0.5.170), as a
+    // protected omission (a parent that changed into a link is never
+    // written through).
+    let omitted: Vec<String> = result
+        .omissions
+        .reported_paths()
+        .map(str::to_string)
+        .collect();
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|(path, _)| path.ends_with("new/only.txt"))
+            || omitted
+                .iter()
+                .any(|path| path == "new/only.txt" || path == "new"),
+        "{:?} {omitted:?}",
+        result.errors
+    );
     assert_eq!(result.stats.copied, 0);
     assert_eq!(files_in(victim.path()), 0);
     link_fixture::remove_directory(&b.path().join("new"));

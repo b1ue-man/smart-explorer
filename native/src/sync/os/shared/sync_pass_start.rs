@@ -65,6 +65,7 @@ pub(super) fn copy_pass_scoped(
         }),
         changed: Condvar::new(),
         streaming: AtomicU64::new(0),
+        paths: crate::bisync::apply_path_context::PathContext::new(),
     };
     {
         let mut guard = pass.lock();

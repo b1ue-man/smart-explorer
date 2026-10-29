@@ -140,6 +140,9 @@ pub(super) struct Pass<'a> {
     pub(super) changed: Condvar,
     /// Bytes of running copies, shown in progress before they complete.
     pub(super) streaming: AtomicU64,
+    /// Facts of this pass every copy shares (G4 MS1/MS6): a stage's parent
+    /// folder is created once per folder, not once per file.
+    pub(super) paths: std::sync::Arc<crate::bisync::apply_path_context::PathContext>,
 }
 
 impl Pass<'_> {
