@@ -47,6 +47,15 @@ fn sync_reliability_task_resume_temporary_about_and_invalid_grant_preserve_basel
         assert_eq!(state_baseline(seed.state.as_ref().unwrap()), seed.baseline);
         assert_eq!(f.registry_bytes(), records);
         fault.store(false, Ordering::SeqCst);
+        if invalid {
+            // invalid_grant is terminal until the user signs in again
+            // (AuthState::ReauthorizeRequired, cloud/core/auth_state.rs
+            // `provider`; cloud/os/coordinator.rs `refresh` refuses it,
+            // since b27d0549, v0.5.185). The renewed sign-in of the same
+            // account keeps its confirmed binding.
+            crate::cloud::store_refresh_token(crate::cloud::Provider::GDrive, "fixture-refresh")
+                .unwrap();
+        }
         let recovered = f.run(opts);
         assert_complete(&recovered);
         assert_eq!(recovered.state, seed.state);

@@ -158,6 +158,11 @@ fn sync_reliability_task_resume_concurrent_401_refreshes_once_and_principal_chan
         "only the OAuth refresh was sent"
     );
     principal.store(false, Ordering::SeqCst);
+    // A detected account change stays until the user signs in again
+    // (AuthState::IdentityConflict; cloud/os/coordinator.rs `refresh` refuses
+    // it, since b27d0549, v0.5.185). The renewed sign-in of the original
+    // account keeps its confirmed binding.
+    crate::cloud::store_refresh_token(crate::cloud::Provider::GDrive, "fixture-refresh").unwrap();
     let recovered = f.run(opts);
     assert_complete(&recovered);
     assert_eq!(recovered.state, seed.state);

@@ -116,6 +116,9 @@ fn transfer_engine_task_drive_create_dir_new_is_exclusive() {
 #[test]
 fn transfer_engine_task_drive_sized_stages_are_created_once_and_discarded_by_exact_id() {
     let (drive, server) = drive_server();
+    // A remembered folder hint is checked by its exact ID before use
+    // (resolution.rs `valid_cached_id`, since 1bee4b6a): the folder exists.
+    drive.insert("target", "Ziel", "root", FOLDER_MIME, b"");
     let backend = server.backend();
     backend
         .remember_path("Ziel", "target", Some(FOLDER_MIME))
@@ -126,11 +129,19 @@ fn transfer_engine_task_drive_sized_stages_are_created_once_and_discarded_by_exa
     writer.flush().unwrap();
     drop(writer);
     // One write request with a binary type and one check that the stage name
-    // is unique; no probe before it (the caller picked a random name).
+    // is unique; no probe before it (the caller picked a random name). The
+    // identity reads of the root alias and of the stage's folder (by exact
+    // ID, since 1bee4b6a) are not name probes and are left out here.
     let requests = server.requests();
     let calls: Vec<(&str, &str)> = requests
         .iter()
         .map(|request| (request.method.as_str(), request.path()))
+        .filter(|call| {
+            !matches!(
+                *call,
+                ("GET", "/drive/v3/files/root") | ("GET", "/drive/v3/files/target")
+            )
+        })
         .collect();
     assert_eq!(
         calls,
@@ -140,7 +151,11 @@ fn transfer_engine_task_drive_sized_stages_are_created_once_and_discarded_by_exa
             ("GET", "/drive/v3/files"),
         ]
     );
-    let (metadata, media) = multipart(&requests[1]);
+    let create = requests
+        .iter()
+        .find(|request| request.method == "POST")
+        .expect("the stage create went out");
+    let (metadata, media) = multipart(create);
     assert_eq!(media, b"abc");
     assert_eq!(metadata["mimeType"], "application/octet-stream");
     let stage_id = metadata["id"].as_str().unwrap().to_string();
@@ -252,6 +267,9 @@ fn transfer_engine_task_drive_downloads_resume_by_range_and_reuse_listed_types()
 #[test]
 fn transfer_engine_task_drive_copies_inside_drive_on_the_server() {
     let (drive, server) = drive_server();
+    // The destination folder exists: its remembered hint is checked by its
+    // exact ID before use (resolution.rs `valid_cached_id`, since 1bee4b6a).
+    drive.insert("target", "Ziel", "root", FOLDER_MIME, b"");
     drive.insert(
         "src-id",
         "Quelle.bin",

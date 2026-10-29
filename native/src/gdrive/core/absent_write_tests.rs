@@ -16,6 +16,13 @@ fn write_absent(backend: &dyn Backend, path: &str, content: &[u8]) -> io::Result
     writer.flush()
 }
 
+/// The existing folder "Ziel" (ID `target`) the new files go into. A
+/// remembered folder hint is checked by its exact ID before use
+/// (resolution.rs `valid_cached_id`, since 1bee4b6a), so it must exist.
+fn with_target(drive: &FakeDrive) {
+    drive.insert("target", "Ziel", "root", FOLDER_MIME, b"");
+}
+
 fn writes(requests: &[Request]) -> Vec<&Request> {
     requests
         .iter()
@@ -26,6 +33,7 @@ fn writes(requests: &[Request]) -> Vec<&Request> {
 #[test]
 fn speed_task_drive_absent_file_takes_one_write_request() {
     let (drive, server) = drive_server();
+    with_target(&drive);
     let backend = server.backend();
     backend
         .remember_path("Ziel", "target", Some(FOLDER_MIME))
@@ -66,6 +74,7 @@ fn writes_of(server: &Server) -> usize {
 #[test]
 fn speed_task_drive_absent_name_race_trashes_own_object_and_reports_taken() {
     let drive = Arc::new(FakeDrive::default());
+    with_target(&drive);
     let server = {
         let drive = Arc::clone(&drive);
         Server::start(move |request| {
@@ -116,6 +125,7 @@ fn speed_task_drive_absent_taken_before_create_is_never_shared() {
     // The caller's "absent" was stale: the name already exists. The create
     // still happens (no probe), the proof sees two objects and withdraws ours.
     let (drive, server) = drive_server();
+    with_target(&drive);
     drive.insert("old-id", "alt.txt", "target", "text/plain", b"old");
     let backend = server.backend();
     backend

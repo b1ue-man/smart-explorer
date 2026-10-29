@@ -241,14 +241,19 @@ fn remote_drive_task_startup_walk_is_root_only_and_background_batches_are_bounde
         .list_paths
         .lock()
         .map_err(|_| io::Error::other("listing trace poisoned"))?;
+    // The second batch loads exactly these five folders. A batch lists on
+    // `metadata_background_width()` workers at once (metadata_loading.rs),
+    // so the order within it is not defined.
+    let mut second = loaded[9..14].iter().map(String::as_str).collect::<Vec<_>>();
+    second.sort_unstable();
     assert_eq!(
-        loaded[9..14].iter().map(String::as_str).collect::<Vec<_>>(),
+        second,
         vec![
+            "/Directory00/Nested",
             "/Directory08",
             "/Directory09",
             "/Directory10",
-            "/Directory11",
-            "/Directory00/Nested"
+            "/Directory11"
         ]
     );
     Ok(())

@@ -389,8 +389,11 @@ pub(super) fn drive_server() -> (Arc<FakeDrive>, Server) {
     (drive, server)
 }
 
-/// A backend whose folder "Job" was created by the running transfer.
-pub(super) fn job_backend(server: &Server) -> GDriveBackend {
+/// A backend whose folder "Job" was created by the running transfer. The
+/// folder exists on the Drive too: a remembered folder hint is checked by
+/// its exact ID before use (resolution.rs `valid_cached_id`, since 1bee4b6a).
+pub(super) fn job_backend(drive: &FakeDrive, server: &Server) -> GDriveBackend {
+    drive.insert("job-folder", "Job", "root", FOLDER_MIME, b"");
     let backend = server.backend();
     backend
         .remember_path("Job", "job-folder", Some(FOLDER_MIME))
