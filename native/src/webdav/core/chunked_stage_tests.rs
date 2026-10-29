@@ -21,6 +21,8 @@ struct Cloud {
     refuse_uploads: bool,
     /// Every part PUT named the folder's destination and the total length.
     bad_part_headers: usize,
+    /// Parts longer than this are answered 413 (a web server's body limit).
+    max_part: Option<usize>,
 }
 
 fn header<'a>(seen: &'a Seen, name: &str) -> Option<&'a str> {
@@ -51,6 +53,9 @@ impl Cloud {
                 let Some((destination, parts)) = self.uploads.get_mut(folder) else {
                     return Answer::status(404);
                 };
+                if self.max_part.is_some_and(|max| seen.body.len() > max) {
+                    return Answer::status(413);
+                }
                 if header(seen, "destination") != Some(destination.as_str()) || total.is_none() {
                     self.bad_part_headers += 1;
                 }
@@ -246,4 +251,40 @@ fn speed_task_webdav_chunk_abort_removes_the_upload_folder() {
     let cloud = cloud.lock().unwrap();
     assert!(cloud.uploads.is_empty(), "both folders are gone");
     assert!(!cloud.files.contains_key(&stage));
+}
+
+#[test]
+fn speed_task_webdav_part_too_large_starts_again_with_smaller_parts() {
+    let (cloud, http) = cloud(false);
+    cloud.lock().unwrap().max_part = Some(16 * MIB as usize);
+    let backend = http.backend_at(ROOT);
+    let size = 30 * MIB;
+    let data = content(size);
+    let stage = format!("{ROOT}/c.bin.se-upload-0123456789abcdef");
+    let first = backend.open_segmented_stage(&stage, size).unwrap();
+    let first = first.expect("Nextcloud chunks");
+    let mut writer = first.segment(0, size).unwrap();
+    let written = data
+        .chunks(MIB as usize)
+        .try_for_each(|block| writer.write_all(block))
+        .and_then(|()| writer.flush());
+    let error = written.expect_err("one part of 30 MiB is refused");
+    assert!(
+        crate::vfs::congestion_of(&error).is_some(),
+        "not job-ending: {error}"
+    );
+    drop(writer);
+    first.abort();
+    // The file starts again: the server's cap is now 15 MiB.
+    let second = backend.open_segmented_stage(&stage, size).unwrap();
+    let second = second.expect("Nextcloud chunks");
+    let mut writer = second.segment(0, size).unwrap();
+    for block in data.chunks(MIB as usize) {
+        writer.write_all(block).unwrap();
+    }
+    writer.flush().unwrap();
+    drop(writer);
+    second.finish().unwrap();
+    let cloud = cloud.lock().unwrap();
+    assert!(cloud.files.get(&stage) == Some(&data), "byte for byte");
 }

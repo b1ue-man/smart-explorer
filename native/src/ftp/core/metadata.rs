@@ -3,7 +3,7 @@
 use super::core_impl::{basename, dir_meta, parent_dir, parse_list_line_unchecked};
 use super::errors::{command_path, map, reply_code, working_dir};
 use super::io_adapters::FtpConnection;
-use super::listing_detail::Detail;
+use super::listing_detail::{Detail, Helpers, NoHelpers};
 use crate::vfs::{MtimePrecision, OmissionReason, VfsListing, VfsMeta, VfsOmission};
 use std::io;
 use suppaftp::{RustlsFtpStream, Status};
@@ -132,8 +132,16 @@ pub(super) fn parse_mlsx(line: &str, queried: Option<&str>) -> io::Result<Option
     Ok(Some(meta))
 }
 
-pub(super) fn list(connection: &FtpConnection, folder: &str) -> io::Result<VfsListing> {
-    list_mode(connection, folder, false, Detail::Exact)
+/// The exact listing (sync, absence proofs): every LIST row of a regular
+/// file is refined by SIZE and MDTM, on the listing's connection and on the
+/// free or newly logged-in connections `helpers` hands out
+/// (listing_detail.rs; `NoHelpers` for the listing's connection alone).
+pub(super) fn list_with(
+    connection: &FtpConnection,
+    folder: &str,
+    helpers: Helpers<'_>,
+) -> io::Result<VfsListing> {
+    list_mode(connection, folder, false, Detail::Exact, helpers)
 }
 
 /// Names and kinds of the children, nothing more: for the promotion of a
@@ -142,13 +150,18 @@ pub(super) fn list(connection: &FtpConnection, folder: &str) -> io::Result<VfsLi
 /// Sizes and times of a LIST row stay as the row gives them, and the
 /// connection's observed time precision is left alone.
 pub(super) fn list_kinds(connection: &FtpConnection, folder: &str) -> io::Result<VfsListing> {
-    list_mode(connection, folder, false, Detail::Kinds)
+    list_mode(connection, folder, false, Detail::Kinds, &NoHelpers)
 }
 
 /// Old servers may refuse LIST -a. Browsing retains plain LIST support;
-/// sync and absence proofs require the stronger enumeration above.
-pub(super) fn list_browse(connection: &FtpConnection, folder: &str) -> io::Result<VfsListing> {
-    list_mode(connection, folder, true, Detail::Exact)
+/// sync and absence proofs require the stronger enumeration above. Probes
+/// as `list_with`.
+pub(super) fn list_browse_with(
+    connection: &FtpConnection,
+    folder: &str,
+    helpers: Helpers<'_>,
+) -> io::Result<VfsListing> {
+    list_mode(connection, folder, true, Detail::Exact, helpers)
 }
 
 fn list_mode(
@@ -156,6 +169,7 @@ fn list_mode(
     folder: &str,
     allow_plain: bool,
     detail: Detail,
+    helpers: Helpers<'_>,
 ) -> io::Result<VfsListing> {
     command_path(folder)?;
     let features = connection.features()?;
@@ -187,8 +201,7 @@ fn list_mode(
     let (mlsx, lines) = lines;
     let mut out = VfsListing::default();
     let mut names = std::collections::HashSet::new();
-    let mut regular_files = 0;
-    let mut all_regular_exact = true;
+    let mut kept = Vec::new();
     for line in lines {
         if !mlsx && line.starts_with("total ") {
             continue;
@@ -203,7 +216,7 @@ fn list_mode(
         } else {
             parse_list_line_unchecked(&line).map(Some)
         };
-        let mut entry = match parsed {
+        let entry = match parsed {
             Ok(None) => continue,
             Ok(Some(meta)) => meta,
             Err(error) => {
@@ -237,31 +250,49 @@ fn list_mode(
                 detail: "FTP child cannot be addressed by this path/control interface".into(),
             });
         } else {
-            if !mlsx && !entry.is_dir && !entry.is_symlink && !entry.special {
-                regular_files += 1;
-                if detail.refines_list_rows() {
-                    let path = format!("{}/{}", folder.trim_end_matches('/'), entry.name);
-                    match connection.with_stream_read(|stream| {
-                        super::metadata_probe::regular_file(stream, &path, &entry.name)
-                    }) {
-                        Ok(Some(exact)) => {
-                            entry.size = exact.size;
-                            entry.mtime_ms = exact.mtime_ms;
-                        }
-                        Ok(None) => all_regular_exact = false,
-                        Err(error) => {
-                            all_regular_exact = false;
-                            out.omitted.push(VfsOmission {
-                                rel: entry.name,
-                                reason: OmissionReason::Unreadable,
-                                detail: error.to_string(),
-                            });
-                            continue;
-                        }
-                    }
+            kept.push(entry);
+        }
+    }
+    let regular: Vec<usize> = (0..kept.len())
+        .filter(|&index| {
+            let entry = &kept[index];
+            !mlsx && !entry.is_dir && !entry.is_symlink && !entry.special
+        })
+        .collect();
+    let regular_files = regular.len();
+    let mut all_regular_exact = true;
+    let mut failed = vec![None; kept.len()];
+    if detail.refines_list_rows() && !regular.is_empty() {
+        let probes: Vec<(String, String)> = regular
+            .iter()
+            .map(|&index| {
+                let name = kept[index].name.clone();
+                (format!("{}/{}", folder.trim_end_matches('/'), name), name)
+            })
+            .collect();
+        let answers = super::listing_detail::refine(connection, &probes, helpers);
+        for (&index, answer) in regular.iter().zip(answers) {
+            match answer {
+                Ok(Some(exact)) => {
+                    kept[index].size = exact.size;
+                    kept[index].mtime_ms = exact.mtime_ms;
+                }
+                Ok(None) => all_regular_exact = false,
+                Err(error) => {
+                    all_regular_exact = false;
+                    failed[index] = Some(error.to_string());
                 }
             }
-            out.entries.push(entry);
+        }
+    }
+    for (entry, failure) in kept.into_iter().zip(failed) {
+        match failure {
+            Some(detail) => out.omitted.push(VfsOmission {
+                rel: entry.name,
+                reason: OmissionReason::Unreadable,
+                detail,
+            }),
+            None => out.entries.push(entry),
         }
     }
     if detail.records_precision() {
@@ -335,7 +366,11 @@ pub(super) fn stat(connection: &FtpConnection, path: &str) -> io::Result<VfsMeta
         return Ok(meta);
     }
     let parent = parent_dir(path);
-    let listed = match list(connection, &parent) {
+    // SIZE or MDTM just failed for `path`, so a probe of its row would fail
+    // as well: names and kinds of the parent are enough, without SIZE and
+    // MDTM for every other file in it (a missing name in a folder of 5000
+    // files cost 10000 round trips, suite run 2).
+    let listed = match list_kinds(connection, &parent) {
         Ok(listed) => listed,
         // The parent cannot be listed (pyftpdlib answers MLSD of a missing
         // directory with 501). When the parent is proven absent through its

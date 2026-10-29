@@ -1,6 +1,6 @@
 use super::core_impl::FtpBackend;
 use super::errors::{command_path, map, reply_code};
-use super::metadata::{list, read_time};
+use super::metadata::{list_with, read_time};
 use crate::vfs::{
     Backend, BackendExtensions, RecursiveDeleteFailure, RecursiveDeleteProgress,
     RecursiveDeleteReport, StageFinish, StageFinished, TargetLimits, VfsListing, VfsResult,
@@ -40,7 +40,7 @@ impl BackendExtensions for FtpBackend {
     }
     fn list_dir_tolerant(&self, path: &str) -> VfsResult<VfsListing> {
         self.pool.retire_idle();
-        list(self.pool.primary(), path)
+        list_with(self.pool.primary(), path, &self.pool)
     }
 
     fn target_limits(&self, _root: &str) -> TargetLimits {

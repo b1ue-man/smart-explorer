@@ -11,7 +11,8 @@
 //! first upload folder (`MKCOL` with `Destination`); a refusal is
 //! remembered and its files keep the single streamed `PUT`.
 use super::chunked_upload::{
-    part_name, part_number, pieces, remember_support, support, unit, upload_home, MIN_PART,
+    part_cap, part_name, part_number, pieces, remember_support, shrink_part_cap, support, unit,
+    upload_home, PartTooLarge, MIN_PART,
 };
 use super::core_impl::{request_err, WebdavBackend};
 use super::stream_put::{PutHeaders, StreamPut};
@@ -30,6 +31,11 @@ struct Parts {
 
 struct Shared {
     backend: WebdavBackend,
+    /// The server's upload folders (`namespace|home`): what it was seen to
+    /// take is remembered under this name (chunked_upload.rs).
+    key: String,
+    /// Two units: the shortest cap that keeps part numbers distinct.
+    floor: u64,
     /// Path of the upload folder (`.../uploads/<user>/se-<hex>`).
     folder: String,
     /// URL of the stage: every request of the upload names it.
@@ -61,6 +67,8 @@ impl Shared {
 pub(super) struct ChunkedStage {
     stage: String,
     unit: u64,
+    /// The longest part of this upload (`part_cap` when it was opened).
+    cap: u64,
     shared: Arc<Shared>,
 }
 
@@ -135,11 +143,15 @@ pub(super) fn open(
         // one asks again.
         Folder::Refused(_) | Folder::Failed(_) => return Ok(None),
     }
+    let floor = 2 * unit;
     Ok(Some(Box::new(ChunkedStage {
         stage: stage.to_string(),
         unit,
+        cap: part_cap(&key, floor),
         shared: Arc::new(Shared {
             backend: backend.clone(),
+            key,
+            floor,
             folder,
             destination,
             size,
@@ -201,7 +213,7 @@ impl SegmentedStage for ChunkedStage {
                 format!("Bereich {offset}+{len} passt nicht in den Chunk-Upload von {size} Bytes"),
             ));
         }
-        let pieces = pieces(offset, len);
+        let pieces = pieces(offset, len, self.cap);
         let numbers: Vec<u64> = pieces
             .iter()
             .map(|(start, _)| part_number(*start, self.unit))
@@ -307,7 +319,34 @@ impl PartWriter {
     fn fail(&mut self, error: io::Error) -> io::Error {
         self.failed = true;
         self.current = None;
-        error
+        self.too_large(error)
+    }
+
+    /// A part the server refused as too large (413): the server's cap is
+    /// halved and the range fails as congestion, so the engine starts the
+    /// file again at once with a new upload in smaller parts instead of
+    /// ending the job. A part already as short as `floor` allows stays the
+    /// refusal it is (the target takes nothing of that size).
+    fn too_large(&self, error: io::Error) -> io::Error {
+        let Some(refused) = error
+            .get_ref()
+            .and_then(|inner| inner.downcast_ref::<PartTooLarge>())
+        else {
+            return error;
+        };
+        let ((_, len), _) = self.pieces[self.index.min(self.pieces.len() - 1)];
+        match shrink_part_cap(&self.shared.key, len, self.shared.floor) {
+            Some(cap) => crate::vfs::congestion_error(
+                format!(
+                    "WebDAV-Server nimmt Teile von {len} Bytes nicht an ({refused}); die Datei beginnt neu mit Teilen bis {cap} Bytes"
+                ),
+                Some(std::time::Duration::ZERO),
+            ),
+            None => io::Error::new(
+                io::ErrorKind::QuotaExceeded,
+                format!("WebDAV-Server verweigert den Umfang des Uploads: {refused}"),
+            ),
+        }
     }
 }
 

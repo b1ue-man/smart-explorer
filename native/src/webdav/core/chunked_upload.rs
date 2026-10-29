@@ -30,6 +30,14 @@ pub(super) const MAX_PARTS: u64 = 10_000;
 const ENGINE_MIN_RANGE: u64 = 8 * 1024 * 1024;
 /// Remembered answers about chunked uploads; beyond this the map starts over.
 const MAX_REMEMBERED: usize = 1024;
+/// The longest part a server is first asked to take: the smallest request
+/// body limit of Nextcloud's own recommended web servers (nginx
+/// `client_max_body_size 512M`, admin manual 30 "NGINX configuration";
+/// Apache 2.4.54+ refuses more than 1 GiB by default, admin manual 30
+/// "Uploading big files", both checked 2026-10-29). Without a cap one part
+/// was a whole engine range, up to 30 s of data: 413 from Apache for a
+/// 2 GiB file (suite run 2, `speed_task_remote_nextcloud_large`).
+pub(super) const FIRST_PART_CAP: u64 = 512 * 1024 * 1024;
 
 /// The upload folder collection of the account whose files `path` lies in:
 /// `<prefix>/remote.php/dav/uploads/<user>` for a path below
@@ -63,10 +71,12 @@ pub(super) fn part_name(number: u64) -> String {
     format!("{number:05}")
 }
 
-/// One range as parts of at most `MAX_PART` bytes, nearly equal in length:
-/// `(offset, len)` each, together exactly the range.
-pub(super) fn pieces(offset: u64, len: u64) -> Vec<(u64, u64)> {
-    let count = len.div_ceil(MAX_PART).max(1);
+/// One range as parts of at most `cap` (and `MAX_PART`) bytes, nearly equal
+/// in length: `(offset, len)` each, together exactly the range. With more
+/// than one part each is longer than `cap / 2`, so a `cap` of at least two
+/// units keeps every part at least one unit long (distinct part numbers).
+pub(super) fn pieces(offset: u64, len: u64, cap: u64) -> Vec<(u64, u64)> {
+    let count = len.div_ceil(cap.clamp(1, MAX_PART)).max(1);
     let base = len / count;
     let mut pieces = Vec::with_capacity(count as usize);
     let mut start = offset;
@@ -80,6 +90,53 @@ pub(super) fn pieces(offset: u64, len: u64) -> Vec<(u64, u64)> {
         start += piece;
     }
     pieces
+}
+
+/// The server answered a part with 413 (Request Entity Too Large): the PUT
+/// of a numbered part in this client's own upload folder, nothing else.
+#[derive(Debug)]
+pub(super) struct PartTooLarge(pub(super) String);
+
+impl std::fmt::Display for PartTooLarge {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for PartTooLarge {}
+
+fn caps() -> MutexGuard<'static, HashMap<String, u64>> {
+    static CAPS: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
+    CAPS.get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+}
+
+/// The longest part the server behind `key` is asked to take now, never
+/// below `floor` (two units of the file, `pieces`).
+pub(super) fn part_cap(key: &str, floor: u64) -> u64 {
+    caps()
+        .get(key)
+        .copied()
+        .unwrap_or(FIRST_PART_CAP)
+        .max(floor)
+}
+
+/// The server behind `key` refused a part of `refused` bytes: from now on
+/// parts of at most half that. `None` when half would be below `floor`: the
+/// server takes no part this file can be cut into.
+pub(super) fn shrink_part_cap(key: &str, refused: u64, floor: u64) -> Option<u64> {
+    let half = refused / 2;
+    if half < floor {
+        return None;
+    }
+    let mut caps = caps();
+    if caps.len() >= MAX_REMEMBERED {
+        caps.clear();
+    }
+    let cap = caps.get(key).copied().unwrap_or(FIRST_PART_CAP).min(half);
+    caps.insert(key.to_string(), cap);
+    Some(cap)
 }
 
 fn remembered() -> MutexGuard<'static, HashMap<String, bool>> {
@@ -148,9 +205,9 @@ mod tests {
 
     #[test]
     fn speed_task_webdav_chunk_pieces_cover_the_range_within_limits() {
-        assert_eq!(pieces(8 * MIB, 8 * MIB), vec![(8 * MIB, 8 * MIB)]);
+        assert_eq!(pieces(8 * MIB, 8 * MIB, MAX_PART), vec![(8 * MIB, 8 * MIB)]);
         let len = 12_000_000_001;
-        let parts = pieces(5, len);
+        let parts = pieces(5, len, MAX_PART);
         assert_eq!(parts.len(), 3);
         assert_eq!(parts.iter().map(|part| part.1).sum::<u64>(), len);
         assert_eq!(parts[0].0, 5);
@@ -159,5 +216,36 @@ mod tests {
         }
         let within = |part: &(u64, u64)| part.1 <= MAX_PART && part.1 >= MIN_PART;
         assert!(parts.iter().all(within));
+    }
+
+    #[test]
+    fn speed_task_webdav_chunk_parts_stay_below_the_server_cap() {
+        let len = 2048 * MIB;
+        let parts = pieces(0, len, FIRST_PART_CAP);
+        assert_eq!(parts.len(), 4);
+        assert!(parts.iter().all(|part| part.1 <= FIRST_PART_CAP));
+        assert_eq!(parts.iter().map(|part| part.1).sum::<u64>(), len);
+        // Every part is longer than half the cap: distinct part numbers.
+        let parts = pieces(0, 21 * MIB, 10 * MIB);
+        assert!(parts.iter().all(|part| part.1 >= 5 * MIB), "{parts:?}");
+        let unit = unit(len).unwrap();
+        let numbers: Vec<u64> = parts.iter().map(|part| part_number(part.0, unit)).collect();
+        assert!(
+            numbers.windows(2).all(|pair| pair[0] < pair[1]),
+            "{numbers:?}"
+        );
+    }
+
+    #[test]
+    fn speed_task_webdav_chunk_cap_halves_after_413_down_to_two_units() {
+        let key = "speed_task_webdav_chunk_cap_halves_after_413";
+        let floor = 2 * MIN_PART;
+        assert_eq!(part_cap(key, floor), FIRST_PART_CAP);
+        assert_eq!(shrink_part_cap(key, 512 * MIB, floor), Some(256 * MIB));
+        assert_eq!(part_cap(key, floor), 256 * MIB);
+        // A second range refused at the old length does not halve again.
+        assert_eq!(shrink_part_cap(key, 512 * MIB, floor), Some(256 * MIB));
+        assert_eq!(shrink_part_cap(key, floor + 1, floor), None);
+        assert_eq!(part_cap(key, floor), 256 * MIB);
     }
 }

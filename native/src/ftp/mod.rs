@@ -8,8 +8,12 @@ mod data_finish;
 mod io_adapters;
 #[path = "core/listing_detail.rs"]
 mod listing_detail;
+#[path = "core/local_address.rs"]
+mod local_address;
 #[path = "core/name_cache.rs"]
 mod name_cache;
+#[path = "core/pair_listing.rs"]
+mod pair_listing;
 #[path = "core/pool.rs"]
 mod pool;
 #[path = "core/resolver.rs"]

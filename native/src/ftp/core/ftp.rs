@@ -23,10 +23,10 @@ use std::io::{self, Read, Write};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::connection::{connect_stream, parse_ftp_url, refusal_code};
+use super::connection::{connect_stream, parse_ftp_url};
 use super::io_adapters::{FtpConnection, FtpReconnect};
 use super::name_cache::{ListingScope, NameCache};
-use super::pool::{FtpPool, Leased};
+use super::pool::{transfer_err, FtpPool, Leased};
 use super::streams::{range_refused, BoundedFtpReader};
 use super::writer::FtpWriter;
 use suppaftp::list::ListParser;
@@ -155,15 +155,6 @@ pub fn backend_from_url(url: &str) -> io::Result<FtpBackend> {
     })
 }
 
-/// A pooled connection that had to log in again and was turned away: the
-/// server's connection limit, so the transfer backs off (plan K13).
-fn transfer_err(error: io::Error) -> io::Error {
-    match refusal_code(&error) {
-        Some(_) => crate::vfs::congestion_error(error.to_string(), None),
-        None => error,
-    }
-}
-
 impl FtpBackend {
     /// Keeps the folder listings of publications until the returned scope
     /// (the transfer job) ends (name_cache.rs, G3-04b).
@@ -245,7 +236,7 @@ impl Backend for FtpBackend {
         // Browsing is what follows a burst of transfers: close their idle
         // connections here instead of keeping them alive with NOOPs.
         self.pool.retire_idle();
-        let listing = super::metadata::list_browse(self.pool.primary(), path)?;
+        let listing = super::metadata::list_browse_with(self.pool.primary(), path, &self.pool)?;
         if !listing.omitted.is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -256,7 +247,7 @@ impl Backend for FtpBackend {
     }
 
     fn list_dir_for_sync(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
-        let listing = super::metadata::list(self.pool.primary(), path)?;
+        let listing = super::metadata::list_with(self.pool.primary(), path, &self.pool)?;
         if !listing.omitted.is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -279,7 +270,7 @@ impl Backend for FtpBackend {
     /// RETR on a pool connection of its own, so browsing and other
     /// transfers go on meanwhile.
     fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {
-        let lease = self.pool.lease()?;
+        let lease = self.pool.lease().map_err(transfer_err)?;
         let reader = lease.connection().open_reader(path).map_err(transfer_err)?;
         Ok(Box::new(Leased::new(reader, lease)))
     }
@@ -292,7 +283,7 @@ impl Backend for FtpBackend {
         offset: u64,
     ) -> VfsResult<Option<Box<dyn Read + Send>>> {
         let _ = id;
-        let lease = self.pool.lease()?;
+        let lease = self.pool.lease().map_err(transfer_err)?;
         let reader = lease
             .connection()
             .open_reader_at(path, offset)
@@ -325,7 +316,7 @@ impl Backend for FtpBackend {
         if len == 0 {
             return Ok(Some(Box::new(io::empty())));
         }
-        let Some(lease) = self.pool.lease_range()? else {
+        let Some(lease) = self.pool.lease_range().map_err(transfer_err)? else {
             return Ok(None);
         };
         match lease.connection().open_reader_range(path, offset) {

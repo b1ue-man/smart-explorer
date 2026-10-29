@@ -142,6 +142,11 @@ fn put(
         request.set("Authorization", auth)
     };
     let response = request.send(body).map_err(|error| {
+        // Too large for this server as one part: the chunked upload cuts
+        // smaller parts (chunked_stage.rs), it is no full or refusing target.
+        if headers.part && matches!(error, ureq::Error::Status(413, _)) {
+            return io::Error::other(super::chunked_upload::PartTooLarge(error.to_string()));
+        }
         if let Some(mapped) = overload_or_full(&error) {
             return mapped;
         }
