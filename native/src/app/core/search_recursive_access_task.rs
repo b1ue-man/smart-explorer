@@ -185,6 +185,23 @@ fn finish_scan(app: &mut App) {
 fn finish_transfers(app: &mut App) {
     assert!(app.error_msg.is_none(), "{:?}", app.error_msg);
     let deadline = Instant::now() + std::time::Duration::from_secs(30);
+    // A tree copy of selected folders below a layout base waits for the
+    // folder preview (`folder_conflict_ui::requires_preview`, since d0138b4a;
+    // `transfer_jobs::quick_admission` skips it only without a base). The GUI
+    // frame admits it (`frame_update` → `ui_folder_conflicts`); this loop is
+    // that frame.
+    let ctx = egui::Context::default();
+    while app.transfer_center.is_idle() && app.transfer_center.finished.is_empty() {
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            app.ui_folder_conflicts(ctx)
+        });
+        assert!(app.error_msg.is_none(), "{:?}", app.error_msg);
+        assert!(
+            Instant::now() < deadline,
+            "the folder admission never started the copy"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     while !app.transfer_center.is_idle() {
         app.drain_transfers();
         assert!(Instant::now() < deadline, "transfer never completed");

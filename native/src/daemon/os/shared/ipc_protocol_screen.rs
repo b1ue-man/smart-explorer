@@ -466,10 +466,13 @@ mod tests {
 
         // A family layout belongs to the actual v2 picture header across IPC.
         // Legacy v2 extensions still have no layout revision.
+        // Versioned limits stay within the 24-image budget (d577bab8).
+        use crate::screen::core::frame_budget::{FrameCapabilities, FrameContract, FRAME_PROTOCOL};
+        let limits = FrameCapabilities::legacy_resources(FrameSize::new(4096, 4096)).frames;
         let mut header = header;
-        header.frame_contract = Some(crate::screen::core::frame_budget::FrameContract {
-            version: crate::screen::core::frame_budget::FRAME_PROTOCOL,
-            limits: crate::screen::core::frame_budget::FrameLimits::LEGACY,
+        header.frame_contract = Some(FrameContract {
+            version: FRAME_PROTOCOL,
+            limits,
             hybrid_regions: true,
         });
         let body = encode_relay_record(&header, &record).unwrap();

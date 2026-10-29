@@ -133,6 +133,11 @@ fn perm_task_cli_grants_access_json_shape() {
         "capabilities": {"exec_commands": "allow", "exec_terminal": "ask"},
         "valid_until": NOW + 8 * 3_600,
         "expired": false,
+        // V2 grant fields of the view since c5d3e899 (`AccessGrantView`):
+        // a V1 grant without constraints.
+        "version": 1,
+        "constraints": {},
+        "legacy_reader_disables_grant": false,
     });
     let shown = output::target_value(&target, "alice", NOW);
     assert_eq!(

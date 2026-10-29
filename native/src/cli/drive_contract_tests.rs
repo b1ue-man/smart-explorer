@@ -216,9 +216,12 @@ fn drive_snapshot(
 }
 
 /// One snapshot against its fixed compact text, and the text read back.
+/// `capacity` follows the status since 7442afc0 (`MountSnapshot::capacity`,
+/// docs/oberflaechen/laufwerke.md: capacity in the mount snapshot JSON); it is
+/// `null` until the provider reported one.
 fn check(snapshot: &MountSnapshot, config: &str, status: &str, recovery: &str, retained: bool) {
     let wanted = format!(
-        "{{\"config\":{config},\"status\":{status},\"recovery\":{recovery},\"recovery_required\":{retained}}}"
+        "{{\"config\":{config},\"status\":{status},\"capacity\":null,\"recovery\":{recovery},\"recovery_required\":{retained}}}"
     );
     assert_eq!(serde_json::to_string(snapshot).unwrap(), wanted);
     let decoded: MountSnapshot = serde_json::from_str(&wanted).unwrap();

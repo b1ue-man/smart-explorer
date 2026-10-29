@@ -201,6 +201,8 @@ fn vault_task_cli_json_keys_exact() {
             "lock_on_screen_lock",
             "lock_on_sleep",
             "mounted",
+            // The stored open policy (1aea1216, `output::site_value`).
+            "open_policy",
             "remember_password",
             "site",
             "state",

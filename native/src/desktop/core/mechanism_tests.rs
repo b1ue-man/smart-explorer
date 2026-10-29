@@ -328,6 +328,8 @@ fn desktop_task_config_validation() {
             },
             "system_items": { "recycle_bin": true, "this_pc": false },
             "open_devices_with": "app",
+            // Folder tiles open with the app by default (1aea1216).
+            "open_folders_with": "app",
             "foreign_desktop_icons": "keep"
         })
     );

@@ -146,6 +146,7 @@ fn direct_target_is_built_only_from_the_grants_exact_identity_pins() {
     assert!(views[0].enabled);
 }
 
+// The warnings are German since c5d3e899 (`share_access_dialog_ui::exec_warning`).
 #[test]
 fn warning_names_full_user_execution_and_elevated_shell() {
     let root = ExecProviderStatus {
@@ -156,16 +157,25 @@ fn warning_names_full_user_execution_and_elevated_shell() {
         user_label: "root".into(),
     };
     let root_warning = exec_warning(&root);
-    assert_eq!(root_warning.full_access, "FULL root CODE EXECUTION");
-    assert_eq!(root_warning.elevated, Some("REMOTE ROOT SHELL"));
+    assert_eq!(
+        root_warning.full_access,
+        "Vollständige Befehlsausführung als root"
+    );
+    assert_eq!(root_warning.elevated, Some("Fernzugriff mit Rootrechten"));
 
     let admin = ExecProviderStatus {
         user_label: "Alice".into(),
         ..root
     };
     let admin_warning = exec_warning(&admin);
-    assert_eq!(admin_warning.full_access, "FULL Alice CODE EXECUTION");
-    assert_eq!(admin_warning.elevated, Some("REMOTE ADMINISTRATOR SHELL"));
+    assert_eq!(
+        admin_warning.full_access,
+        "Vollständige Befehlsausführung als Alice"
+    );
+    assert_eq!(
+        admin_warning.elevated,
+        Some("Fernzugriff mit Administratorrechten")
+    );
 }
 
 #[test]
@@ -241,13 +251,13 @@ fn luecken_task_exec_activation_warning_names_programs_account_and_elevation() {
         user_label: "root".into(),
     };
     let full = activation_warning(&root, None, &[]);
-    assert_eq!(full.full_access, "FULL root CODE EXECUTION");
-    assert_eq!(full.elevated, Some("REMOTE ROOT SHELL"));
+    assert_eq!(full.full_access, "Vollständige Befehlsausführung als root");
+    assert_eq!(full.elevated, Some("Fernzugriff mit Rootrechten"));
     let listed = activation_warning(&root, Some(""), &["uptime".into(), "df".into()]);
-    assert_eq!(listed.full_access, "root EXECUTION OF uptime, df");
-    assert_eq!(listed.elevated, Some("REMOTE ROOT SHELL"));
+    assert_eq!(listed.full_access, "Ausführung als root: uptime, df");
+    assert_eq!(listed.elevated, Some("Fernzugriff mit Rootrechten"));
     let account = activation_warning(&root, Some("deploy"), &["uptime".into()]);
-    assert_eq!(account.full_access, "deploy EXECUTION OF uptime");
+    assert_eq!(account.full_access, "Ausführung als deploy: uptime");
     assert_eq!(account.elevated, None);
 }
 

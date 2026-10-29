@@ -1,7 +1,7 @@
 //! Execute validated installation removal while retaining ownership and retry.
 use super::removal_inventory::{
-    exists, inventory, load_removal, remaining_managed_files, write_removal_record, RemovalFile,
-    RemovalRecord,
+    empty_lock, exists, inventory, load_removal, remaining_managed_files, write_removal_record,
+    RemovalFile, RemovalRecord,
 };
 use crate::mcp_launcher::{os, Installation};
 use std::path::Path;
@@ -171,7 +171,14 @@ pub(super) fn retire_mcp(root: &Path, record: Option<RemovalRecord>) -> Result<(
 
 fn verify_removal_file(root: &Path, file: &RemovalFile) -> Result<(), String> {
     os::validate_tree(root, &root.join(&file.path))?;
-    if crate::updater::file_sha256(&root.join(&file.path))? != file.sha256 {
+    // A lock file may be locked while it is verified (Windows refuses the
+    // read then); its recorded content is empty, so its length decides.
+    let sha256 = if file.path.ends_with(".lock") {
+        crate::mcp_launcher::installation::hash_bytes(&empty_lock(&root.join(&file.path))?)
+    } else {
+        crate::updater::file_sha256(&root.join(&file.path))?
+    };
+    if sha256 != file.sha256 {
         return Err(format!("uninstall_content_changed: {}", file.path));
     }
     Ok(())

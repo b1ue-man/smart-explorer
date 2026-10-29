@@ -178,6 +178,8 @@ fn desktop_task_cli_json_shapes() {
             "groups",
             "system_items",
             "open_devices_with",
+            // Added with folder tiles (1aea1216, `DesktopConfig::open_folders_with`).
+            "open_folders_with",
             "foreign_desktop_icons",
         ])
     );

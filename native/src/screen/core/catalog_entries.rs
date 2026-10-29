@@ -57,7 +57,13 @@ mod tests {
         assert_eq!(without, Capability::EXEC);
         let with = capability_catalog(&facts(true));
         let capabilities: Vec<Capability> = with.iter().map(|entry| entry.capability).collect();
-        assert_eq!(capabilities, Capability::ALL, "Exec first, then the screen");
+        // `Capability::ALL` also holds the context rights (app launch, login,
+        // TCP forward, c5d3e899); they need a target and have no catalog row.
+        let rows: Vec<Capability> = Capability::ALL
+            .into_iter()
+            .filter(|capability| !capability.requires_context())
+            .collect();
+        assert_eq!(capabilities, rows, "Exec first, then the screen");
         let view = &with[2];
         assert_eq!(
             (

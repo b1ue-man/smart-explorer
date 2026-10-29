@@ -206,10 +206,19 @@ fn einrichtung_task_ui_feed_projection_lists_services_and_addresses() {
     );
     assert!(!old.known && !old.control);
     assert_eq!(
-        service_url(SocketAddr::from((device, 443))).as_deref(),
+        service_url(SocketAddr::from((device, 443)), 443).as_deref(),
         Some("https://127.23.45.67:443")
     );
-    assert_eq!(service_url(SocketAddr::from((device, 22))), None);
+    assert_eq!(service_url(SocketAddr::from((device, 22)), 22), None);
+    // The web ports of `share::auto_forward::service_url`: no link for a
+    // database or VNC port of the 5000s.
+    for port in [5432, 5672, 5900] {
+        assert_eq!(service_url(SocketAddr::from((device, port)), port), None);
+    }
+    assert_eq!(
+        service_url(SocketAddr::from((device, 5173)), 5173).as_deref(),
+        Some("http://127.23.45.67:5173")
+    );
 }
 
 /// Design 4.5: the further forwarding needs no acknowledgement field and no

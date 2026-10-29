@@ -318,7 +318,13 @@ mod tests {
                 "se",
                 "sessions",
                 "screen",
-                "screen_input"
+                // Added by 1aea1216 and cf6f47e9 (docs/oberflaechen/fernzugriff.md).
+                "screen_window",
+                "screen_input",
+                "tcp_forward",
+                "apps",
+                "rdp",
+                "login"
             ]
         );
         assert!(INSTRUCTIONS.len() <= 2_048, "{}", INSTRUCTIONS.len());
@@ -362,7 +368,12 @@ mod tests {
                     | "se"
                     | "sessions"
                     | "screen"
+                    | "screen_window"
                     | "screen_input"
+                    | "tcp_forward"
+                    | "apps"
+                    | "rdp"
+                    | "login"
             );
             assert_eq!(
                 upfront,
