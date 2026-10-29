@@ -19,19 +19,21 @@ use super::pending_block;
 /// FILE_REMOTE_DEVICE in the volume's device characteristics.
 const REMOTE_DEVICE: u32 = 0x10;
 
-/// On a local volume, nothing but the unnamed data stream, no extended
-/// attributes and no security resource attributes: what `CopyFile2` would
-/// carry beyond bytes, attributes and times is absent. Any question that
-/// cannot be answered counts as "not plain".
-pub(super) fn plain_local_source(reader: &File) -> bool {
-    !remote_volume(reader).unwrap_or(true)
-        && only_data_stream(reader)
+/// Nothing but the unnamed data stream, no extended attributes and no
+/// security resource attributes: what `CopyFile2` would carry beyond bytes,
+/// attributes and times is absent. Any question that cannot be answered
+/// counts as "not plain". Whether the volume is local is asked apart, once
+/// per volume (`windows_volume_facts.rs`), not once per file.
+pub(super) fn plain_data_source(reader: &File) -> bool {
+    only_data_stream(reader)
         && ea_size(reader) == Some(0)
         && resource_attributes(reader) == Some(false)
 }
 
 /// Whether the volume of `file` is a network volume (a mapped drive keeps
-/// `CopyFile2`, which copies on the server where it can).
+/// `CopyFile2`, which copies on the server where it can). Asked of the
+/// handle (FileFsDeviceInformation); the copy asks it once per volume
+/// (`windows_volume_facts.rs`), the held rename once per stage.
 pub(super) fn remote_volume(file: &File) -> Option<bool> {
     let mut device = Box::new([0u32; 2]);
     let mut completion = Box::new(pending_block());
