@@ -743,7 +743,9 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   path. A move interrupted by a crash on the engine path shows up in the GUI recovery catalog, not
   in the `se` resume list.
 - **Local flows start wide unless the drive rotates.** Flash or unknown volumes start at twice the
-  cores within 8–16; a rotating drive keeps 2. Windows asks the volume for its seek penalty
+  cores within 8–16 (Windows four times); a drive reported as rotating starts at 8, the robocopy
+  `/MT` default, because virtual disks report rotation falsely and NCQ serves small files in parallel
+  (2026-10-29; before: 2). Windows asks the volume for its seek penalty
   (`IOCTL_STORAGE_QUERY_PROPERTY`); a volume spanning several disks or a refused query counts as
   unknown and starts wide (`native/src/transfer/os/windows.rs` `volume_is_rotational`, M7).
 - **Copy workers keep normal priority.** They no longer lower it, so on a saturated CPU they
