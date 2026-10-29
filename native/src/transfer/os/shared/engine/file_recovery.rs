@@ -10,9 +10,7 @@
 //! carried (`HostEvidence`) and then send no stat or identity request of
 //! their own.
 use super::file_evidence::{verify, HostEvidence, Proof};
-#[cfg(test)]
-use super::job_store::snapshot;
-use super::job_store::{endpoint, snapshot_checked, with_backend, JobRun};
+use super::job_store::{endpoint, snapshot, snapshot_checked, with_backend, JobRun};
 use super::queue::FileWork;
 use super::record_io::{read_record, write_record, RecordContext, RecordKind};
 use super::view::{JobView, Side};
