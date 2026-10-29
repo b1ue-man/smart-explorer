@@ -12,7 +12,7 @@ pub(crate) fn parallel_scan_allowed() -> bool {
     true
 }
 
-/// Lists `path`. The kind comes from the directory entry (`d_type`, no extra
+/// Lists `path` in inode order. The kind comes from the directory entry (`d_type`, no extra
 /// call where the file system supplies it); one `lstat` per entry supplies
 /// sizes and times (on Android's shared storage it is answered from the
 /// attribute cache that readdirplus filled).
@@ -23,7 +23,13 @@ pub(crate) fn parallel_scan_allowed() -> bool {
 pub(crate) fn read_directory(
     path: &Path,
 ) -> io::Result<impl Iterator<Item = io::Result<LocalEntry>>> {
-    Ok(std::fs::read_dir(path)?.map(|entry| {
+    use std::os::unix::fs::DirEntryExt;
+    // Entries in inode order before their one `lstat` each (coreutils `cp`,
+    // gnulib savedir SAVEDIR_SORT_FASTREAD): a cold tree is then read close
+    // to disk order instead of the directory's hash order.
+    let mut entries: Vec<io::Result<std::fs::DirEntry>> = std::fs::read_dir(path)?.collect();
+    entries.sort_by_key(|entry| entry.as_ref().map_or(0, |entry| entry.ino()));
+    Ok(entries.into_iter().map(|entry| {
         let entry = entry?;
         let contextualize =
             |error: io::Error| EntryError::wrap(entry.file_name(), &entry.path(), error);
