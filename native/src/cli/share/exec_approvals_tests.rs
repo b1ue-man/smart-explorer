@@ -116,6 +116,8 @@ fn perm_task_cli_approvals_roundtrip() {
             "fingerprint",
             "id",
             "relation",
+            // The exact proven policy source (c5d3e899, `ApprovalView::relation_id`).
+            "relation_id",
             "requested_at",
             "room",
             "surface"

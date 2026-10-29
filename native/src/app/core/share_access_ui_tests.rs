@@ -16,6 +16,17 @@ use crate::share::{DirectGrant, DirectGrantState, ExecGrant, ExecProviderStatus,
 use CapabilityDecision::{Allow, Ask, Off};
 
 const NOW: i64 = 1_760_000_000;
+/// The switch „Mit Rückfrage“ (`share_access_controls_ui::run_as`).
+const ASK: &str = "Jeden Start an diesem Gerät bestätigen lassen";
+/// The one confirmation when the change allows nothing
+/// (`AccessDraft::confirm_label`).
+const REVOKE: &str = "Befehle, Terminal und Bildschirmrechte entziehen";
+
+/// The one confirmation when the change allows something; it names the
+/// account (`AccessDraft::confirm_label`, c5d3e899).
+fn confirm(account: &str) -> String {
+    format!("Gewählte Befehls- und Bildschirmrechte als {account} erlauben")
+}
 
 pub(super) struct Harness {
     pub(super) ctx: egui::Context,
@@ -82,6 +93,85 @@ impl Harness {
         found
     }
 
+    /// The innermost clip of the drawn labels: the dialog's scroll area.
+    fn scroll_area(&self) -> Option<egui::Rect> {
+        self.capture
+            .labels
+            .iter()
+            .map(|(_, _, clip)| *clip)
+            .min_by(|a, b| a.area().total_cmp(&b.area()))
+    }
+
+    /// One wheel turn of `delta` points over the dialog's scroll area.
+    fn wheel<A>(&mut self, delta: f32, draw: &mut dyn FnMut(&egui::Context) -> Option<A>) {
+        let Some(area) = self.scroll_area() else {
+            return;
+        };
+        let wheel = egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, delta),
+            modifiers: egui::Modifiers::NONE,
+        };
+        let _ = self.frame(vec![egui::Event::PointerMoved(area.center()), wheel], draw);
+        let _ = self.settle(draw);
+    }
+
+    /// Scrolls the dialog to its top. The dialogs open at 340×420 inside a
+    /// scroll area (`dialog_geometry::window`), so their lower part, with the
+    /// one confirmation, is below the fold at first.
+    pub(super) fn scroll_top<A>(&mut self, draw: &mut dyn FnMut(&egui::Context) -> Option<A>) {
+        self.wheel(100_000.0, draw);
+    }
+
+    /// Scrolls from the top down until `found` holds; whether it did.
+    fn reveal<A>(
+        &mut self,
+        found: &dyn Fn(&Self) -> bool,
+        draw: &mut dyn FnMut(&egui::Context) -> Option<A>,
+    ) -> bool {
+        if found(self) {
+            return true;
+        }
+        self.scroll_top(draw);
+        for _ in 0..40 {
+            if found(self) {
+                return true;
+            }
+            self.wheel(-80.0, draw);
+        }
+        found(self)
+    }
+
+    /// Whether the dialog shows `label`, scrolled to it when needed.
+    pub(super) fn shows<A>(
+        &mut self,
+        label: &str,
+        draw: &mut dyn FnMut(&egui::Context) -> Option<A>,
+    ) -> bool {
+        self.reveal(&|h: &Self| h.capture.contains(label), draw)
+    }
+
+    /// Clicks the cell of the rights table in the row `row` and the column
+    /// `column` („Aus“, „Fragen“, „Erlauben“): its radio button has no text
+    /// of its own (`share_access_controls_ui::rights_table`).
+    pub(super) fn click_cell<A>(
+        &mut self,
+        row: &str,
+        column: &str,
+        draw: &mut dyn FnMut(&egui::Context) -> Option<A>,
+    ) -> Option<A> {
+        self.scroll_top(draw);
+        let row_at = self.targets(row).first().copied();
+        let column_at = self.targets(column).first().copied();
+        let (Some(y), Some(x)) = (row_at, column_at) else {
+            panic!(
+                "no visible cell {row:?}/{column:?}; labels: {:?}",
+                self.capture.labels
+            )
+        };
+        self.press(egui::pos2(x.x, y.y), draw)
+    }
+
     /// Clicks the `nth` visible `label`; what the surface asked for meanwhile.
     pub(super) fn click<A>(
         &mut self,
@@ -89,12 +179,21 @@ impl Harness {
         nth: usize,
         draw: &mut dyn FnMut(&egui::Context) -> Option<A>,
     ) -> Option<A> {
+        self.reveal(&|h: &Self| h.targets(label).len() > nth, draw);
         let pos = *self.targets(label).get(nth).unwrap_or_else(|| {
             panic!(
                 "no visible {label:?} #{nth}; labels: {:?}",
                 self.capture.labels
             )
         });
+        self.press(pos, draw)
+    }
+
+    fn press<A>(
+        &mut self,
+        pos: egui::Pos2,
+        draw: &mut dyn FnMut(&egui::Context) -> Option<A>,
+    ) -> Option<A> {
         let mut asked = None;
         for pressed in [true, false] {
             let button = egui::Event::PointerButton {
@@ -237,7 +336,9 @@ fn perm_task_gui_access_dialog_presets() {
         (Some(AccessPreset::RemoteAccount), &AccountProfile::Remote)
     );
     assert_eq!(exec_of(&draft), decisions(Allow, Allow));
-    let ask = "Mit Rückfrage: jeder Start wartet auf eine Bestätigung an diesem Gerät";
+    // „Mit Rückfrage“ is the checkbox of the card „Befehle ausführen“ since
+    // the dialog's two cards (`share_access_controls_ui::run_as`, 6b102d54).
+    let ask = ASK;
     h.click(ask, 0, &mut draw);
     let draft = access_dialog::current(&h.ctx).unwrap();
     assert_eq!(
@@ -263,14 +364,14 @@ fn perm_task_gui_access_dialog_presets() {
         &draft,
         AccessPreset::Programs.change(vec!["uptime".into()], true),
     );
-    assert!(h
-        .capture
-        .contains("Mit einer Programmliste gibt es kein Terminal."));
+    assert!(h.shows("Mit einer Programmliste gibt es kein Terminal.", &mut draw));
 
     // Without se-remote on this host the preset is not offered; offered but
     // not set up it is shown disabled with its reason.
     open(&h, &views[0], vec![option(AccountProfile::Own, true, None)]);
     h.settle(&mut draw);
+    h.scroll_top(&mut draw);
+    assert!(h.capture.contains("Volle Rechte als mein Konto (alice)"));
     assert!(!h
         .capture
         .contains("Eingeschränktes Fernzugriffskonto se-remote"));
@@ -287,7 +388,7 @@ fn perm_task_gui_access_dialog_presets() {
         access_dialog::current(&h.ctx).unwrap().account,
         AccountProfile::Own
     );
-    assert!(h.capture.contains(reason));
+    assert!(h.shows(reason, &mut draw));
 }
 
 #[test]
@@ -315,10 +416,12 @@ fn perm_task_gui_access_dialog_one_confirm() {
     assert!(labels.iter().any(
         |text| text.starts_with("laptop kann danach Programme, Shell-Befehle und ein Terminal")
     ));
+    // „Jeden Start … bestätigen lassen“ is the choice „Mit Rückfrage“, not a
+    // confirmation to tick before the button.
     assert!(!labels
         .iter()
-        .any(|text| text.contains("bestätige") || text.contains("bestaetige")));
-    let action = h.click("Als root erlauben", 0, &mut draw);
+        .any(|text| *text != ASK && (text.contains("bestätige") || text.contains("bestaetige"))));
+    let action = h.click(&confirm("root"), 0, &mut draw);
     let change = AccessPreset::FullOwn.change(Vec::new(), false);
     let revision = views[0].policy_revision;
     let key = views[0].target_key.clone();
@@ -345,14 +448,13 @@ fn perm_task_gui_access_dialog_one_confirm() {
     let mut draw = |ctx: &egui::Context| access_dialog::show(ctx, &root, &views, NOW);
     open(&h, &views[0], vec![option(AccountProfile::Own, true, None)]);
     h.settle(&mut draw);
-    assert!(h.capture.contains("Keine Änderung."));
-    assert_eq!(h.click("Als root erlauben", 0, &mut draw), None);
-    h.click("Aus", 0, &mut draw);
-    h.click("Aus", 1, &mut draw);
-    assert!(h.capture.contains(access_dialog::NARROWING));
-    let Some(DialogAction::Apply { change, .. }) = h.click("Zugriff entziehen", 0, &mut draw)
-    else {
-        panic!("„Zugriff entziehen“ asked for nothing");
+    assert!(h.shows("Keine Änderung.", &mut draw));
+    assert_eq!(h.click(&confirm("root"), 0, &mut draw), None);
+    h.click_cell("Befehle", "Aus", &mut draw);
+    h.click_cell("Terminal", "Aus", &mut draw);
+    assert!(h.shows(access_dialog::NARROWING, &mut draw));
+    let Some(DialogAction::Apply { change, .. }) = h.click(REVOKE, 0, &mut draw) else {
+        panic!("„{REVOKE}“ asked for nothing");
     };
     assert_eq!(
         (
@@ -368,8 +470,9 @@ fn perm_task_gui_access_dialog_one_confirm() {
     let mut draw = |ctx: &egui::Context| access_dialog::show(ctx, &unavailable, &views, NOW);
     open(&h, &views[0], vec![option(AccountProfile::Own, true, None)]);
     h.settle(&mut draw);
-    assert!(h
-        .capture
-        .contains("Befehle sind auf diesem Rechner nicht verfügbar: kein systemd"));
-    assert_eq!(h.click("Als alice erlauben", 0, &mut draw), None);
+    assert!(h.shows(
+        "Befehle sind auf diesem Rechner nicht verfügbar: kein systemd",
+        &mut draw
+    ));
+    assert_eq!(h.click(&confirm("alice"), 0, &mut draw), None);
 }

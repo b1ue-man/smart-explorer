@@ -234,6 +234,9 @@ fn screen_task_viewer_decode_gop_switch() {
         Ok::<(), io::Error>(())
     });
     let shared = Shared::new(false, 0);
+    // Records are admitted only after the host's answer whose frame contract
+    // they match (`DecodeState::record`, 8baeebbc); the tiles header carries none.
+    shared.update(|info| info.hello = Some(hello(CapabilityDecision::Allow)));
     let mut state = DecodeState::new(shared.clone(), decoder, send, false);
     let feed = |state: &mut DecodeState, gop_id, records: Vec<FrameRecord>| {
         for record in records {

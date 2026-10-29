@@ -249,6 +249,13 @@ fn batches_task_optical_confined_reader_uses_held_root_and_cancel() {
     fs::write(root.join("file.bin"), b"original").unwrap();
     let original = source(&root);
     let old_profile = test_profiles::register(&root, original.clone());
+    // The confined reader probes its handle, whose final path has the long
+    // names (`GetFinalPathNameByHandleW`); a temp folder may be spelled with
+    // 8.3 short names (`C:\Users\RUNNER~1\…`). The device is the same for
+    // both spellings.
+    #[cfg(windows)]
+    let _final_profile =
+        test_profiles::register(&fs::canonicalize(&root).unwrap(), original.clone());
     let text = root.to_string_lossy().replace('\\', "/");
     let backend = crate::vfs::LocalBackend::new(&text)
         .confined_local_root(&text)

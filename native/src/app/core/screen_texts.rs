@@ -42,10 +42,10 @@ pub(crate) fn state_text(state: SessionState, reason: Option<&str>) -> String {
         }
         SessionState::Starting => "Anzeige startet …".into(),
         SessionState::Streaming => String::new(),
+        // One literal: Android's `screen_state_secure_desktop` is this text
+        // word for word (`screen_task_android_strings_match_desktop_sources`).
         SessionState::SecureDesktop => {
-            "Windows zeigt den sicheren Desktop (Sperrbildschirm, Anmeldung oder UAC); den \
-             zeigt nur die Maschinenanmeldung: Geräte → dieses Gerät → „Was ich auf diesem \
-             Gerät nutze“ → Maschinenanmeldung"
+            "Windows zeigt den sicheren Desktop (Sperrbildschirm, Anmeldung oder UAC); den zeigt nur die Maschinenanmeldung: Geräte → dieses Gerät → „Was ich auf diesem Gerät nutze“ → Maschinenanmeldung"
                 .into()
         }
         SessionState::WindowMinimized => "Fenster ist minimiert".into(),

@@ -166,10 +166,11 @@ fn vault_task_gui_render_sidebar_unlock_compare() {
     });
     for text in [
         "TRESORE",
-        "Privat  ",
-        "Arbeit  ",
-        "Alt  ⏳",
-        "Fern  ⚠",
+        // Rows name their state in words since 3c0ee418 (no pictographs).
+        "Privat  (Gesperrt)",
+        "Arbeit  (Entsperrt)",
+        "Alt  (Wird gesperrt …)",
+        "Fern  (Nicht erreichbar)",
         "Dieser Ordner enthält einen Tresor.",
         "Tresor hinzufügen…",
         "Neuer Tresor…",

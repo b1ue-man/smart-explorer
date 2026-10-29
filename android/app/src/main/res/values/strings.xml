@@ -41,7 +41,7 @@
     <string name="screen_state_waiting_for_portal">Wartet auf die Auswahl im Systemdialog des Geräts …</string>
     <string name="screen_state_starting">Anzeige startet …</string>
     <string name="screen_state_streaming"></string>
-    <string name="screen_state_secure_desktop">Windows zeigt den sicheren Desktop – Anzeige und Eingabe sind durch Windows gesperrt</string>
+    <string name="screen_state_secure_desktop">Windows zeigt den sicheren Desktop (Sperrbildschirm, Anmeldung oder UAC); den zeigt nur die Maschinenanmeldung: Geräte → dieses Gerät → „Was ich auf diesem Gerät nutze“ → Maschinenanmeldung</string>
     <string name="screen_state_window_minimized">Fenster ist minimiert</string>
     <string name="screen_state_viewer_hidden">Diese Ansicht ist nicht sichtbar; die Bildübertragung pausiert</string>
     <string name="screen_state_host_locked">Das Gerät ist gesperrt</string>

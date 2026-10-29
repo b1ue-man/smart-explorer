@@ -222,9 +222,15 @@ fn desktop_task_vault_group_without_daemon_hidden() {
 
 #[test]
 fn surface_clipboard_text_names_files() {
+    // `parse_clip_text` keeps only paths absolute on this host; a Unix path
+    // has no drive on Windows.
+    #[cfg(windows)]
+    let folder = r"C:\Users\nutzer\Desktop";
+    #[cfg(not(windows))]
+    let folder = "/home/nutzer/Schreibtisch";
     let files = [
-        PathBuf::from("/home/nutzer/Schreibtisch/a.txt"),
-        PathBuf::from("/home/nutzer/Schreibtisch/b c.txt"),
+        PathBuf::from(folder).join("a.txt"),
+        PathBuf::from(folder).join("b c.txt"),
     ];
     let text = clip_text(&files, true);
     assert_eq!(parse_clip_text(&text), Some((files.to_vec(), true)));

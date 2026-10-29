@@ -35,7 +35,8 @@ fn screen_task_mcp_screen_tool_schema() {
     );
     assert_eq!(
         properties["action"]["enum"],
-        json!(["devices", "probe", "windows", "snapshot"])
+        // `families` since 1aea1216 (window-family selectors for `screen_window`).
+        json!(["devices", "probe", "windows", "families", "snapshot"])
     );
     for integer in ["max_edge", "max_bytes", "wait"] {
         assert_eq!(properties[integer]["type"], "integer", "{integer}");

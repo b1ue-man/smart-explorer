@@ -94,14 +94,17 @@ fn update_stop_watch_fires_once_and_ends_with_its_handle() {
     );
 }
 
-/// Erhaltungsfall F1: the updater helper is byte-identical to `da2646d2`
-/// (LF line endings); only the processes learn to honour the marker.
+/// Erhaltungsfall F1: the updater helper is byte-identical to the released
+/// `v0.5.188` (LF line endings); only the processes learn to honour the
+/// marker. The pin moved from `da2646d2` with the intended updater changes
+/// up to the release (16052ba5 with installer.rs and mcp.rs, 10988167,
+/// 7597ce12); this batch leaves the updater untouched.
 #[test]
 fn desktop_task_updater_helper_unchanged() {
-    const EXPECTED: [(&str, &str); 18] = [
+    const EXPECTED: [(&str, &str); 20] = [
         (
             "smart_explorer_updater.rs",
-            "b5684cd254a662b9f837fac2ae67a3a569d44dae31eaea7b91c5dbaec5493186",
+            "6f6621dd99f4b3ed9493b1137083d4054c22723a0f39a1f54be53efefe44a712",
         ),
         (
             "smart_explorer_updater/archive.rs",
@@ -109,7 +112,7 @@ fn desktop_task_updater_helper_unchanged() {
         ),
         (
             "smart_explorer_updater/args.rs",
-            "643279deb51f8253d593ee11510c04797e715a004962d8f1cb1039ae89db4c81",
+            "4ffbf65d145946fe5db1d9bd22a571f0514e5b75d12c8e54e5a2127b6a881e96",
         ),
         (
             "smart_explorer_updater/bookkeeping.rs",
@@ -118,6 +121,10 @@ fn desktop_task_updater_helper_unchanged() {
         (
             "smart_explorer_updater/hash.rs",
             "a7bdc6013383eafe115a9bd5ba5d4b396010ca3a781eaca7dd1b511ee4d98d84",
+        ),
+        (
+            "smart_explorer_updater/installer.rs",
+            "30b16569ea4cfa8a5bb1993fc96640b2c57d083cbfe65e2b3935f02ab2e2bbe3",
         ),
         (
             "smart_explorer_updater/instance.rs",
@@ -148,6 +155,10 @@ fn desktop_task_updater_helper_unchanged() {
             "2d5143edde328e97c8b1201ff94f61062e01133ba4f9037f9331c280d9eb35ee",
         ),
         (
+            "smart_explorer_updater/mcp.rs",
+            "54b5739ec8078bda225453abf47a0127c7e79aa1e2d4131e1a9651423e1521b5",
+        ),
+        (
             "smart_explorer_updater/parent.rs",
             "00997597960ebbe0b7a8c20f0f3dcd6a2fd3524a6dc02fb83a3023ed767e3579",
         ),
@@ -157,7 +168,7 @@ fn desktop_task_updater_helper_unchanged() {
         ),
         (
             "smart_explorer_updater/process.rs",
-            "dfed40c495f0cf8de2ff487346e64b447ed0010e1b550e0657cd3cda702af260",
+            "f24ff0e4245f4bfdc5b392e43f75ba1a20aa7a62c67ae398edfc76da38efa83c",
         ),
         (
             "smart_explorer_updater/replace.rs",

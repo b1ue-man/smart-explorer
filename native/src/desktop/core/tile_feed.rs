@@ -164,14 +164,14 @@ pub(crate) fn rdp_entries(rdp: Option<&RdpFeedSummary>) -> (Vec<RdpEntry>, Optio
     (entries, note)
 }
 
-/// `http://` for 80, 3000–3999, 5000–5999 and 8000–8999, `https://` for 443
-/// (design 4.3); other ports are copied as `address:port`.
-pub(crate) fn service_url(address: SocketAddr) -> Option<String> {
-    match address.port() {
-        443 => Some(format!("https://{address}")),
-        80 | 3000..=3999 | 5000..=5999 | 8000..=8999 => Some(format!("http://{address}")),
-        _ => None,
-    }
+/// The web link of a shared service at its `address` here; `device_port` is
+/// the service's port on the device, which decides whether it is a web
+/// service. One rule with the background service's mappings
+/// (`share::auto_forward::service_url`: 80, 443 as `https`, 3000–3999, 4200,
+/// 5000, 5001, 5173, 5174, 5500, 8000–8999); other ports (5432, 5672, 5900,
+/// …) are copied as `address:port`.
+pub(crate) fn service_url(address: SocketAddr, device_port: u16) -> Option<String> {
+    crate::share::auto_forward::service_url(address, device_port)
 }
 
 /// The facts of one device's feed as the background service holds them.
@@ -214,7 +214,7 @@ pub(crate) fn project_feed(
                 port: service.port,
                 process: service.process.clone(),
                 address,
-                url: address.and_then(service_url),
+                url: address.and_then(|address| service_url(address, service.port)),
             }
         })
         .collect();

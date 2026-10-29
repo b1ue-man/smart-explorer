@@ -195,7 +195,12 @@ fn perm_task_gui_room_all_members() {
     assert!(h.capture.contains(scope));
     // One confirmation: the same change for both, each at its revision.
     let planned = h
-        .click("Für 2 Mitglieder erlauben", 0, &mut draw)
+        // The confirmation names what it allows (c5d3e899, `access_room::show`).
+        .click(
+            "Gewählte Befehls- und Bildschirmrechte für 2 Mitglieder erlauben",
+            0,
+            &mut draw,
+        )
         .expect("nothing planned");
     let keys: Vec<&str> = planned.iter().map(|(key, _, _)| key.as_str()).collect();
     assert_eq!(keys, [members[0].key.as_str(), members[1].key.as_str()]);

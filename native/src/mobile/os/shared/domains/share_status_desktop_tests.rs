@@ -89,13 +89,16 @@ fn legacy_code(status: &ShareStatus) -> &'static str {
     }
 }
 
-/// The device object of v0.5.182, with its own formulas.
+/// The device object of v0.5.182, with its own formulas, plus the pinned
+/// identity fields `deviceId` and `publicKey` (c5d3e899, `device_json`).
 fn legacy_device_json(profiles: &ShareProfiles, contact: &DirectContact, lan: bool) -> Value {
     let target = PeerOpenTarget::Direct {
         contact_id: contact.id.clone(),
     };
     json!({
         "contactId": contact.id,
+        "deviceId": contact.remote_device_id,
+        "publicKey": contact.remote_public_key,
         "name": contact.display_name,
         "status": legacy_code(&contact.status),
         "statusText": contact.status.label(),
@@ -169,10 +172,12 @@ fn desktop_task_share_status_device_shape_unchanged() {
             "autoConnect",
             "autoOpen",
             "contactId",
+            "deviceId",
             "lan",
             "location",
             "name",
             "online",
+            "publicKey",
             "shareBack",
             "status",
             "statusText",

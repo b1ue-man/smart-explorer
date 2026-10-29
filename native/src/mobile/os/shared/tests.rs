@@ -184,15 +184,18 @@ fn android_task_local_fs_methods_create_rename_check_and_list() {
     )
     .expect("stat");
     assert_eq!(stat["isDir"], true);
-    let conflicts = call(
-        &fx.rt,
-        "fs.conflicts",
-        json!({ "sources": ["/elsewhere/bericht.txt", "/elsewhere/neu.txt"], "targetDir": root }),
-    )
-    .expect("conflicts");
+    // Since d0138b4a the check also previews folder conflicts, which reads
+    // every source (`transfer::folder_conflicts`); files raise no folder row.
+    let elsewhere = tempfile::tempdir().expect("source dir");
+    let source = |name: &str| text(&elsewhere.path().join(name));
+    std::fs::write(source("bericht.txt"), b"q").expect("write source");
+    std::fs::write(source("neu.txt"), b"q").expect("write source");
+    let sources = json!([source("bericht.txt"), source("neu.txt")]);
+    let args = json!({ "sources": sources, "targetDir": root });
+    let conflicts = call(&fx.rt, "fs.conflicts", args).expect("conflicts");
     assert_eq!(
         conflicts,
-        json!({ "names": ["bericht.txt"], "choosable": true })
+        json!({ "names": ["bericht.txt"], "choosable": true, "folders": [] })
     );
 }
 

@@ -61,6 +61,15 @@ fn rights_table(ui: &mut egui::Ui, draft: &mut AccessDraft) {
                 ui.end_row();
             }
         });
+    // The narrow rows name it under „Terminal“ (`capability_row`); the table
+    // names it once below, so the switched-off terminal is explained (C1).
+    if !draft.programs.is_empty() {
+        ui.label(
+            RichText::new("Mit einer Programmliste gibt es kein Terminal.")
+                .small()
+                .color(theme::muted(ui)),
+        );
+    }
 }
 
 fn run_as(ui: &mut egui::Ui, draft: &mut AccessDraft, own_label: &str, other_accounts: bool) {

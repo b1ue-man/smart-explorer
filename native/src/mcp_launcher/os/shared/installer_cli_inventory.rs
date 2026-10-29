@@ -106,7 +106,11 @@ pub(super) fn inventory(installation: &Installation) -> Result<RemovalRecord, St
             let metadata = format!("{relative}/{metadata}");
             if exists(&root.join(&metadata))? {
                 os::validate_tree(root, &root.join(&metadata))?;
-                let bytes = std::fs::read(root.join(&metadata)).map_err(|e| e.to_string())?;
+                let bytes = if category == "runtimes" {
+                    empty_lock(&root.join(&metadata))?
+                } else {
+                    std::fs::read(root.join(&metadata)).map_err(|e| e.to_string())?
+                };
                 if category == "runtimes" {
                     if !bytes.is_empty() {
                         return Err("uninstall_runtime_lock_content_changed".into());
@@ -140,7 +144,11 @@ pub(super) fn inventory(installation: &Installation) -> Result<RemovalRecord, St
             continue;
         }
         os::validate_tree(root, &entry.path())?;
-        let bytes = std::fs::read(entry.path()).map_err(|e| e.to_string())?;
+        let bytes = if name.ends_with(".lock") {
+            empty_lock(&entry.path())?
+        } else {
+            std::fs::read(entry.path()).map_err(|e| e.to_string())?
+        };
         if name == "installation.id" {
             if bytes != id.as_bytes() {
                 return Err("uninstall_installation_id_changed".into());
@@ -190,6 +198,21 @@ pub(super) fn inventory(installation: &Installation) -> Result<RemovalRecord, St
         manifest: installation.manifest.clone(),
         files,
         directories,
+    })
+}
+
+/// The content of a lock file without reading it: a lock file is empty by
+/// contract, and on Windows a read of a file whose byte 0 is locked
+/// (`os::lock`, held by this removal or by another owner) fails with
+/// ERROR_LOCK_VIOLATION (33). Its length is read from the metadata instead;
+/// a non-empty lock yields one placeholder byte, which every caller refuses
+/// as changed content.
+pub(super) fn empty_lock(path: &Path) -> Result<Vec<u8>, String> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+    Ok(if metadata.len() == 0 {
+        Vec::new()
+    } else {
+        vec![0]
     })
 }
 
