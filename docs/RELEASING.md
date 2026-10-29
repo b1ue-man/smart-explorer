@@ -492,7 +492,13 @@ WSL action, preflights the WSL tools, and invokes only
 staging, tagging, or publication. The Android APK is the one input prepared
 before it, by the `android-release-apk` job described in
 [Android APK](#android-apk-build-signing-and-feed) below; the wrapper receives
-it through `-AndroidApkDirectory` and stages it itself. This is the authoritative unattended path:
+it through `-AndroidApkDirectory` and stages it itself. On this WSL1 path the
+Linux desktop app links through gcc and rustc's LLD against the host glibc, and
+`native/publish-linux-feed-wsl.sh` packs its relative relocations as DT_RELR and
+folds identical functions (`-z pack-relative-relocs`, `--icf=all`): the release
+commit carries every feed payload as a git blob, and GitHub refuses blobs above
+100 MiB (GH001; v0.5.189 was rejected at 101.96 MiB). The Zig path (glibc 2.17
+baseline) has no DT_RELR and keeps the plain link. This is the authoritative unattended path:
 the initiating workstation only commits, pushes, dispatches, and monitors;
 compilation, packaging, and publication execute on GitHub-hosted runners.
 
