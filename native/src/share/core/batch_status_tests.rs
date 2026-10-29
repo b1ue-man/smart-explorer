@@ -110,7 +110,7 @@ fn speed_task_batch_status_unconfirmed_outcomes_never_refuse_a_new_batch() {
     for key in &running {
         table.begin(key, now).expect("finished records make room");
     }
-    assert!(table.finished_of.get(&principal("left")).is_none());
+    assert!(!table.finished_of.contains_key(&principal("left")));
     let refused = table.begin(&key("left"), now).unwrap_err();
     assert!(is_busy(&refused), "only running batches refuse: {refused}");
     for key in &running {
