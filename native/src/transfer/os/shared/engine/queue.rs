@@ -9,7 +9,17 @@
 //! and folder work only matters for empty folders and a move's cleanup.
 //! While discovery runs, a worker takes a folder only after it lingered
 //! without a file (or when the queue is half full), so the files found
-//! meanwhile create nested folders in one bulk request.
+//! meanwhile create nested folders in one bulk request. Where the target
+//! creates folders in bulk, a worker that comes for folder work takes all
+//! queued folders (up to one packet's worth) in one go, so they are created
+//! together with whatever the files ask for at the same time.
+//!
+//! For a target that takes packets, the first files wait for more company
+//! while discovery runs (until a packet's worth is queued, discovery ends or
+//! `GATHER` passed since the first file): a worker that is idle takes each
+//! file the instant it is found, which is faster than discovery on some
+//! systems, so without the wait a small tree would travel as single files
+//! on them and as one packet on the others.
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard};
@@ -23,6 +33,10 @@ const QUEUE_BYTES: usize = 16 * 1024 * 1024;
 /// Bookkeeping per queued entry beyond its strings (struct, deque slot).
 const ENTRY_OVERHEAD: usize = 96;
 const WAIT_SLICE: Duration = Duration::from_millis(100);
+/// How long the first files of a job for a packet target wait for more
+/// company (one worker linger: longer than a listing round trip on common
+/// links, short against anything a user sees).
+const GATHER: Duration = Duration::from_millis(250);
 /// Packets look this far into the queue for more small files; a bounded scan
 /// keeps taking a packet cheap even when the queue is long.
 const BATCH_SCAN: usize = 4096;
@@ -88,6 +102,8 @@ pub(crate) enum Work {
         source: String,
     },
     File(FileWork),
+    /// Folders `(rel, source)` taken together by one worker (see `pop`).
+    Dirs(Vec<(String, String)>),
     /// A ticket for one more helper of a split large file (`segments`): it
     /// asks a worker to take parts of the file `job` is transferring. Lives
     /// in the files lane; packets never take it.
@@ -100,6 +116,10 @@ impl Work {
     fn bytes(&self) -> usize {
         match self {
             Work::Dir { rel, source } => rel.len() + source.len() + ENTRY_OVERHEAD,
+            Work::Dirs(dirs) => dirs
+                .iter()
+                .map(|(rel, source)| rel.len() + source.len() + ENTRY_OVERHEAD)
+                .sum(),
             Work::File(file) => file.bytes(),
             Work::Segment { .. } => ENTRY_OVERHEAD,
         }
@@ -116,14 +136,48 @@ struct State {
     producing: bool,
     workers: usize,
     idle: usize,
+    /// Files per packet the job's target takes; 0: no packets, nothing waits.
+    gather_files: usize,
+    /// Until when the first files wait for more company; set by the first
+    /// file found.
+    gather_until: Option<Instant>,
 }
 
 impl State {
     fn lane(&mut self, work: &Work) -> &mut VecDeque<Work> {
         match work {
-            Work::Dir { .. } => &mut self.dirs,
+            Work::Dir { .. } | Work::Dirs(_) => &mut self.dirs,
             Work::File(_) | Work::Segment { .. } => &mut self.items,
         }
+    }
+
+    /// Whether the files wait now for more company: the target takes
+    /// packets, discovery still runs, less than a packet's worth is queued
+    /// and the first file was found less than `GATHER` ago.
+    fn gathering(&self, now: Instant) -> bool {
+        self.producing
+            && self.items.len() < self.gather_files
+            && self.gather_until.is_some_and(|until| now < until)
+    }
+
+    /// The next folder work: one folder, or, where `group` is set (the
+    /// target creates folders in bulk), all queued folders up to a packet's
+    /// worth at once, so no other worker takes a part of them and creates it
+    /// with a request of its own.
+    fn next_folders(&mut self, group: bool) -> Option<Work> {
+        if !group || self.gather_files < 2 || self.dirs.len() < 2 {
+            return self.dirs.pop_front();
+        }
+        let count = self.dirs.len().min(self.gather_files);
+        let dirs = self
+            .dirs
+            .drain(..count)
+            .filter_map(|work| match work {
+                Work::Dir { rel, source } => Some((rel, source)),
+                _ => None,
+            })
+            .collect();
+        Some(Work::Dirs(dirs))
     }
 }
 
@@ -142,10 +196,13 @@ pub(crate) struct WorkQueue {
 }
 
 impl WorkQueue {
-    pub(crate) fn new() -> Self {
+    /// A queue for a job whose target takes packets of `gather_files` files
+    /// (0: no packets).
+    pub(crate) fn new(gather_files: usize) -> Self {
         Self {
             state: Mutex::new(State {
                 producing: true,
+                gather_files,
                 ..State::default()
             }),
             changed: Condvar::new(),
@@ -176,6 +233,9 @@ impl WorkQueue {
             state = self.wait(state, WAIT_SLICE);
         }
         state.bytes = state.bytes.saturating_add(bytes);
+        if state.gather_files > 0 && state.gather_until.is_none() && matches!(work, Work::File(_)) {
+            state.gather_until = Some(Instant::now() + GATHER);
+        }
         state.lane(&work).push_back(work);
         drop(state);
         self.changed.notify_all();
@@ -199,8 +259,15 @@ impl WorkQueue {
     }
 
     /// Next work for a worker, waiting up to `linger` while the queue is
-    /// empty but discovery still runs. `None` ends the worker.
-    pub(crate) fn pop(&self, stop: &AtomicBool, linger: Duration) -> Option<Work> {
+    /// empty but discovery still runs. `None` ends the worker. Where
+    /// `group_dirs` is set, folder work comes as all queued folders at once
+    /// (`Work::Dirs`).
+    pub(crate) fn pop(
+        &self,
+        stop: &AtomicBool,
+        linger: Duration,
+        group_dirs: bool,
+    ) -> Option<Work> {
         let deadline = Instant::now() + linger;
         let mut state = self.lock();
         state.idle += 1;
@@ -209,24 +276,36 @@ impl WorkQueue {
                 break None;
             }
             let now = Instant::now();
+            // The first files of a packet job wait for more company, so a
+            // packet forms however fast discovery is compared to a worker.
+            let gathering = state.gathering(now);
             // A folder waits while discovery may still bring its files (at
             // most one linger, or until the queue is half full): its first
             // file then creates it with all its missing parents in one
             // request where the target creates folders in bulk.
             let folders_due = !state.producing || now >= deadline || state.bytes >= QUEUE_BYTES / 2;
-            let next = match state.items.pop_front() {
+            let file = if gathering {
+                None
+            } else {
+                state.items.pop_front()
+            };
+            let next = match file {
                 Some(work) => Some(work),
-                None if folders_due => state.dirs.pop_front(),
+                None if folders_due => state.next_folders(group_dirs),
                 None => None,
             };
             if let Some(work) = next {
                 state.bytes = state.bytes.saturating_sub(work.bytes());
                 break Some(work);
             }
-            if !state.producing || now >= deadline {
+            if !state.producing || (now >= deadline && !gathering) {
                 break None;
             }
-            state = self.wait(state, (deadline - now).min(WAIT_SLICE));
+            let until = match state.gather_until {
+                Some(until) if gathering => until,
+                _ => deadline,
+            };
+            state = self.wait(state, until.saturating_duration_since(now).min(WAIT_SLICE));
         };
         state.idle -= 1;
         drop(state);

@@ -220,7 +220,8 @@ impl<'a> FolderRegister<'a> {
         if rel.is_empty() {
             return Ok(false);
         }
-        {
+        let mut plan: Option<Option<bulk::Bulk<'_>>> = None;
+        let claimed = {
             let mut slots = lock(&self.slots);
             loop {
                 match slots.get(rel) {
@@ -239,13 +240,28 @@ impl<'a> FolderRegister<'a> {
                         };
                     }
                     Some(Slot::Refused { .. }) | None => {
+                        if plan.is_none() {
+                            // Looked at without the lock, then the slot is
+                            // looked at again.
+                            drop(slots);
+                            plan = Some(self.bulk_plan(rel));
+                            slots = lock(&self.slots);
+                            continue;
+                        }
                         slots.insert(rel.to_string(), Slot::Creating);
-                        break;
+                        // Where the target creates folders in bulk, the
+                        // free parents are claimed in the same step: no
+                        // other asker can claim a part of the run in
+                        // between, and the run is one request.
+                        break plan.take().flatten().map(|(backend, parents)| {
+                            let mine = &mut HashSet::new();
+                            (backend, bulk::claim_chain(&mut slots, &parents, mine))
+                        });
                     }
                 }
             }
-        }
-        let result = self.create(rel, cancel);
+        };
+        let result = self.create(rel, cancel, claimed);
         self.settle_slot(rel, &result);
         self.changed.notify_all();
         result
@@ -276,9 +292,14 @@ impl<'a> FolderRegister<'a> {
         }
     }
 
-    fn create(&self, rel: &str, cancel: &AtomicBool) -> Result<bool, FolderError> {
+    fn create(
+        &self,
+        rel: &str,
+        cancel: &AtomicBool,
+        bulk: Option<bulk::Bulk<'_>>,
+    ) -> Result<bool, FolderError> {
         // Missing nested levels in one request where the target can.
-        if let Some(result) = self.create_bulk(rel, cancel) {
+        if let Some(result) = self.create_bulk(rel, bulk, cancel) {
             return result;
         }
         let parent_created = match parent_rel(rel) {

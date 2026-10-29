@@ -15,6 +15,12 @@
 //! several chains, waits for nothing while it holds claims and gives a chain
 //! back (its folders are then created when their files ask) when the folder
 //! above it is still being created by someone else.
+//!
+//! Every asker takes all its claims in one step under the register's lock (a
+//! single creation: the folder and its free parents, `ensure_many`: all its
+//! chains). Two askers whose runs overlap therefore never split the overlap
+//! between them: the one that comes first creates it in one request and the
+//! other finds it claimed, however the threads interleave.
 use super::super::super::engine_names::parent_rel;
 use super::super::view::Side;
 use super::{lock, FolderError, FolderRegister, Slot};
@@ -28,21 +34,22 @@ use std::time::Instant;
 /// What one folder of a bulk creation ended with.
 type Settled = HashMap<String, Result<bool, FolderError>>;
 
+/// The bulk-capable backend of a creation and the parents of the folder (nearest
+/// first) its asker holds the `Creating` slots of already.
+pub(super) type Bulk<'r> = (&'r dyn Backend, Vec<String>);
+
 impl FolderRegister<'_> {
     /// `rel` (whose slot the caller holds as `Creating`) together with its
-    /// missing parents in one request; `None` where bulk creation does not
-    /// apply (local target, a planned top-level folder, no support).
+    /// claimed parents in one request; `None` where bulk creation does not
+    /// apply (`bulk_plan` found none: local target, a planned top-level
+    /// folder, no support).
     pub(super) fn create_bulk(
         &self,
         rel: &str,
+        bulk: Option<Bulk<'_>>,
         cancel: &AtomicBool,
     ) -> Option<Result<bool, FolderError>> {
-        let backend = self.bulk_backend()?;
-        if lock(&self.exclusive).contains_key(rel) {
-            return None;
-        }
-        let mut mine = HashSet::new();
-        let mut claimed = self.claim_chain(&self.ancestors(rel), &mut mine);
+        let (backend, mut claimed) = bulk?;
         claimed.push(rel.to_string());
         let mut settled = self.bulk(backend, claimed, cancel, Bases::Wait);
         let own = settled.remove(rel);
@@ -53,16 +60,33 @@ impl FolderRegister<'_> {
         Some(own.unwrap_or_else(|| Err(lost(rel))))
     }
 
+    /// How a creation of `rel` goes: the backend that creates folders in bulk
+    /// and the parents of `rel` (nearest first, up to a planned top-level
+    /// folder); `None` where bulk creation does not apply.
+    pub(super) fn bulk_plan(&self, rel: &str) -> Option<Bulk<'_>> {
+        let backend = self.bulk_backend()?;
+        if lock(&self.exclusive).contains_key(rel) {
+            return None;
+        }
+        Some((backend, self.ancestors(rel)))
+    }
+
+    /// Whether the target creates folders in bulk (`ensure_many` does
+    /// something).
+    pub(crate) fn bulk_capable(&self) -> bool {
+        self.bulk_backend().is_some()
+    }
+
     /// Creates the folders `rels` and their missing parents in as few
     /// requests as the target allows (for example the folders of a packet
     /// or of a listing, before their files ask for them). Folders already
     /// known to the register are left alone; a failure stays in its folder's
     /// slot for the files that ask for it. Without bulk support this does
     /// nothing: each folder is still created when its first file asks.
-    pub(crate) fn ensure_many(&self, rels: &[&str], cancel: &AtomicBool) {
-        let Some(backend) = self.bulk_backend() else {
-            return;
-        };
+    /// Returns the failure of the request that counts for the connection
+    /// (once; the folders' slots only keep it for later askers without).
+    pub(crate) fn ensure_many(&self, rels: &[&str], cancel: &AtomicBool) -> Option<FolderError> {
+        let backend = self.bulk_backend()?;
         let mut chains = Vec::new();
         let mut tops = HashSet::new();
         for rel in rels.iter().filter(|rel| !rel.is_empty()) {
@@ -84,16 +108,27 @@ impl FolderRegister<'_> {
         }
         let mut mine = HashSet::new();
         let mut claimed = Vec::new();
-        for chain in &chains {
-            claimed.extend(self.claim_chain(chain, &mut mine));
+        {
+            // All chains in one step: another asker claiming a part of them
+            // in between would split their run into more requests.
+            let mut slots = lock(&self.slots);
+            for chain in &chains {
+                claimed.extend(claim_chain(&mut slots, chain, &mut mine));
+            }
         }
         if claimed.is_empty() {
-            return;
+            return None;
         }
-        for (folder, result) in &self.bulk(backend, claimed, cancel, Bases::Peek) {
+        let settled = self.bulk(backend, claimed, cancel, Bases::Peek);
+        let connection = settled.values().find_map(|result| match result {
+            Err(error) if error.connection => Some(error.clone()),
+            _ => None,
+        });
+        for (folder, result) in &settled {
             self.settle_slot(folder, result);
         }
         self.changed.notify_all();
+        connection
     }
 
     /// The lasting state of folder `rel` without waiting: `None` while it is
@@ -132,33 +167,6 @@ impl FolderRegister<'_> {
             current = parent_rel(parent);
         }
         ancestors
-    }
-
-    /// Takes the `Creating` slots of `chain` (a folder and its parents,
-    /// nearest first) up to the first one that is not free: one this call
-    /// holds already (`mine`), or one another asker holds or knows. Claims
-    /// are always a contiguous run upwards and their creator only waits for
-    /// the folder above the run, so two askers never wait for each other.
-    fn claim_chain(&self, chain: &[String], mine: &mut HashSet<String>) -> Vec<String> {
-        let mut slots = lock(&self.slots);
-        let mut claimed = Vec::new();
-        for rel in chain {
-            if mine.contains(rel) {
-                break;
-            }
-            let free = match slots.get(rel) {
-                None => true,
-                Some(Slot::Refused { until, .. }) => Instant::now() >= *until,
-                Some(_) => false,
-            };
-            if !free {
-                break;
-            }
-            slots.insert(rel.clone(), Slot::Creating);
-            mine.insert(rel.clone());
-            claimed.push(rel.clone());
-        }
-        claimed
     }
 
     /// Creates the claimed folders, parents first, in one request (portions
@@ -261,6 +269,36 @@ impl FolderRegister<'_> {
         }
         settled
     }
+}
+
+/// Takes the `Creating` slots of `chain` (a folder and its parents,
+/// nearest first) up to the first one that is not free: one the caller holds
+/// already (`mine`), or one another asker holds or knows. Claims are always
+/// a contiguous run upwards and their creator only waits for the folder
+/// above the run, so two askers never wait for each other.
+pub(super) fn claim_chain(
+    slots: &mut HashMap<String, Slot>,
+    chain: &[String],
+    mine: &mut HashSet<String>,
+) -> Vec<String> {
+    let mut claimed = Vec::new();
+    for rel in chain {
+        if mine.contains(rel) {
+            break;
+        }
+        let free = match slots.get(rel) {
+            None => true,
+            Some(Slot::Refused { until, .. }) => Instant::now() >= *until,
+            Some(_) => false,
+        };
+        if !free {
+            break;
+        }
+        slots.insert(rel.clone(), Slot::Creating);
+        mine.insert(rel.clone());
+        claimed.push(rel.clone());
+    }
+    claimed
 }
 
 /// How `bulk` treats the parent of a claimed folder it does not create.

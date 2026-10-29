@@ -25,15 +25,24 @@ pub(super) fn run(engine: &Engine<'_>, _slot: WorkerSlot<'_>) {
     // dialog, Android, `se cp`/`se mv`, MCP): its workers keep the normal
     // priority (M20, 2026-10-28). Background sync does not run here.
     let mut buffer = vec![0u8; COPY_BUFFER];
-    while let Some(work) = engine.queue.pop(engine.stop_flag(), super::WORKER_LINGER) {
+    // Where the target creates folders in bulk, a worker that comes for
+    // folder work takes all queued folders at once (`ensure_many`).
+    while let Some(work) = engine.queue.pop(
+        engine.stop_flag(),
+        super::WORKER_LINGER,
+        engine.folders.bulk_capable(),
+    ) {
         match work {
-            Work::Dir { rel, source } => match engine.folders.ensure(&rel, engine.stop_flag()) {
-                // A move removes an emptied source folder only once its
-                // counterpart exists at the target.
-                Ok(_) if engine.is_move() => super::lock(&engine.moved_dirs).push((source, rel)),
-                Ok(_) => {}
-                Err(error) => folder_failed(engine, &engine.folders.path_of(&rel), error),
-            },
+            Work::Dir { rel, source } => folder_work(engine, rel, source),
+            Work::Dirs(dirs) => {
+                let rels: Vec<&str> = dirs.iter().map(|(rel, _)| rel.as_str()).collect();
+                if let Some(error) = engine.folders.ensure_many(&rels, engine.stop_flag()) {
+                    breaker(engine, &error.message);
+                }
+                for (rel, source) in dirs {
+                    folder_work(engine, rel, source);
+                }
+            }
             Work::File(file) => crate::source_media::with_cancellation(engine.stop_flag(), || {
                 match super::batch::members(engine, &file) {
                     Some(members) => super::batch::run(engine, file, members, &mut buffer),
@@ -42,6 +51,18 @@ pub(super) fn run(engine: &Engine<'_>, _slot: WorkerSlot<'_>) {
             }),
             Work::Segment { job } => super::segments::help(engine, job, &mut buffer),
         }
+    }
+}
+
+/// A folder of an unfiltered tree: created (or found) once, even when no
+/// file asks for it.
+fn folder_work(engine: &Engine<'_>, rel: String, source: String) {
+    match engine.folders.ensure(&rel, engine.stop_flag()) {
+        // A move removes an emptied source folder only once its
+        // counterpart exists at the target.
+        Ok(_) if engine.is_move() => super::lock(&engine.moved_dirs).push((source, rel)),
+        Ok(_) => {}
+        Err(error) => folder_failed(engine, &engine.folders.path_of(&rel), error),
     }
 }
 

@@ -35,7 +35,7 @@ pub(super) fn members(engine: &Engine<'_>, file: &FileWork) -> Option<Vec<FileWo
     if super::batch_remote_server::refused(engine) {
         return None;
     }
-    if file.retried || file.alone || !resume_allows(engine, file) || !packet_source(engine, file) {
+    if file.retried || file.alone || !resume_allows(engine, file) {
         return None;
     }
     let (target, small) = {
@@ -48,11 +48,20 @@ pub(super) fn members(engine: &Engine<'_>, file: &FileWork) -> Option<Vec<FileWo
     if file.size > small {
         return None;
     }
+    // The others are taken before the first member's medium is looked at (a
+    // probe can take long): a worker that starts meanwhile finds none of
+    // them and does not split the packet.
     let candidates = engine.queue.take_small(
         limits.max_files.saturating_sub(1),
         target.saturating_sub(file.size),
         small,
     );
+    if !packet_source(engine, file) {
+        for candidate in candidates.into_iter().rev() {
+            engine.queue.push_front(Work::File(candidate));
+        }
+        return None;
+    }
     admit(engine, candidates)
 }
 

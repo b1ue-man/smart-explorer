@@ -284,7 +284,7 @@ impl<'a> Engine<'a> {
             user_cancel: cancel,
             stop: AtomicBool::new(false),
             fatal: Mutex::new(None),
-            queue: WorkQueue::new(),
+            queue: WorkQueue::new(batch.map_or(0, |limits| limits.max_files)),
             stats: Stats::new(),
             // K20 of the vault plan: fields of a vault side are sealed.
             issues: issues::IssueLog::for_sides(
