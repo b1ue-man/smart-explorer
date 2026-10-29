@@ -105,8 +105,29 @@ impl Fixture {
         assert!(contains(&bisync::versions_dir(&self.pair), bytes), "discarded bytes have a durable backup");
     }
 
+    /// Drive writes of the scenario. A run also creates its pair's replica
+    /// marker on each side once (bisync/os/shared/replica.rs
+    /// `create_marker`, RV1 since dd0dccfb: a stage create and its
+    /// publication); those two requests name the marker and are not counted.
     pub fn mutation_count(&self) -> usize {
-        self.server.requests().iter().filter(|r| r.method != "GET").count()
+        let marker = bisync::REPLICA_MARKER_NAME.as_bytes();
+        self.server
+            .requests()
+            .iter()
+            .filter(|r| {
+                r.method != "GET" && !r.body.windows(marker.len()).any(|part| part == marker)
+            })
+            .count()
+    }
+
+    /// Entries of the local sync root besides the replica marker a run
+    /// creates there (bisync/os/shared/replica.rs, since dd0dccfb).
+    pub fn local_entries(&self) -> usize {
+        std::fs::read_dir(self.directory.path())
+            .unwrap()
+            .flatten()
+            .filter(|entry| entry.file_name() != bisync::REPLICA_MARKER_NAME)
+            .count()
     }
 }
 

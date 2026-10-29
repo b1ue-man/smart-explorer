@@ -68,7 +68,10 @@ impl NavigationBackend {
     fn new(race_children: bool) -> Arc<Self> {
         let alpha = directory("Alpha");
         let beta = directory("Beta");
-        let note = file("note.md", 12);
+        // The advertised size matches the content `open_read` serves
+        // ("remote contents"): a materialization rejects any other length
+        // (materialization.rs, since e5e6c305).
+        let note = file("note.md", 15);
         let alpha_note = file("alpha.txt", 5);
         let beta_note = file("beta.txt", 4);
         Arc::new(Self {
@@ -278,8 +281,8 @@ fn remote_drive_task_metadata_handle_downloads_only_on_first_data_access() -> io
     // Pure metadata traffic never transfers the file or allocates a spool.
     assert_eq!(backend.open_reads.load(Ordering::SeqCst), 0);
     assert_eq!(engine.stat_handle(handle)?.name, metadata.name);
-    assert_eq!(engine.stat_handle(handle)?.size, 12);
-    assert_eq!(engine.len(handle)?, 12);
+    assert_eq!(engine.stat_handle(handle)?.size, 15);
+    assert_eq!(engine.len(handle)?, 15);
     assert_eq!(engine.flush(handle)?, FlushOutcome::NoChanges);
     assert_eq!(backend.open_reads.load(Ordering::SeqCst), 0);
     assert_eq!(spool_file_count(&files)?, 0);

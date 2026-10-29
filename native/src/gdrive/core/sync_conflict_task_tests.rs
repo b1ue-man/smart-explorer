@@ -75,7 +75,7 @@ fn sync_conflict_task_unique_common_content_converges_without_alias_copies() {
     assert_eq!(out.stats.deleted, 2);
     assert_eq!(f.remote_content(), b"winner");
     assert_eq!(f.drive.named("root", FILE)[0]["id"], "b-good");
-    assert_eq!(std::fs::read_dir(f.directory.path()).unwrap().count(), 1);
+    assert_eq!(f.local_entries(), 1);
     f.assert_backed_up(b"loser!");
     let again = f.preview();
     assert!(again.actions.is_empty() && again.conflicts.is_empty());
@@ -204,10 +204,16 @@ fn sync_conflict_task_delete_policy_guard_and_filters_protect_variants() {
         max_delete: 1,
         ..Default::default()
     });
-    assert!(out
-        .errors
-        .iter()
-        .any(|(_, e)| e.contains("Sicherheitsstopp")));
+    // A safety stop is neither an error nor a cancel: the run reports it as
+    // `blocked` before the first change (bisync/core/run_types.rs
+    // `RunBlock`, FS3 since dd0dccfb).
+    assert!(
+        out.blocked
+            .as_ref()
+            .is_some_and(|block| block.message().contains("Sicherheitsstopp")),
+        "{:?}",
+        out.blocked
+    );
     assert_eq!(f.mutation_count(), 0);
     let out = f.run(BisyncOptions {
         delete: DeletePolicy::NoDelete,

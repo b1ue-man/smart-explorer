@@ -28,16 +28,19 @@ fn transfer_engine_task_drive_api_calls_share_one_pooled_connection() {
         .remember_path("a.txt", "file-id", Some("text/plain"))
         .unwrap();
     backend.remove_file_id("a.txt", Some("file-id")).unwrap();
-    // Reads, a folder create (probe, IDs, POST) and a trash PATCH share one
-    // TCP connection: one TLS handshake in production instead of nine.
-    assert_eq!(server.requests().len(), 9);
+    // Five reads, the root alias lookup (once per backend), a folder create
+    // (probe, IDs, POST), the exact-ID check before the trash and the trash
+    // PATCH share one TCP connection: one TLS handshake in production
+    // instead of eleven (root alias and exact-ID check since 1bee4b6a,
+    // `identity.rs` `actual_parent_id`, `trash.rs` `validate_trash_path`).
+    assert_eq!(server.requests().len(), 11);
     assert_eq!(server.connections(), 1);
 }
 
 #[test]
 fn transfer_engine_task_drive_fresh_files_take_one_write_request_each() {
     let (drive, server) = drive_server();
-    let backend = job_backend(&server);
+    let backend = job_backend(&drive, &server);
     let large = vec![7u8; 70_000];
     let contents: [&[u8]; 3] = [b"", b"abc", &large];
     for (index, content) in contents.iter().enumerate() {
@@ -75,16 +78,30 @@ fn transfer_engine_task_drive_fresh_files_take_one_write_request_each() {
             format!("{:x}", md5::compute(content))
         );
     }
-    // All three IDs came from one pooled generateIds call.
-    assert_eq!(requests.len(), contents.len() + 1);
+    // All three IDs came from one pooled generateIds call. The only other
+    // requests are reads: the root alias and the exact-ID check of the job's
+    // folder before each use (`valid_cached_id`, since 1bee4b6a); no probe
+    // of the folder's names.
     assert_eq!(count(&requests, "GET", "/drive/v3/files/generateIds"), 1);
+    let reads: Vec<&str> = requests
+        .iter()
+        .filter(|request| request.method == "GET")
+        .map(|request| request.path())
+        .filter(|path| *path != "/drive/v3/files/generateIds")
+        .collect();
+    assert!(
+        reads
+            .iter()
+            .all(|path| matches!(*path, "/drive/v3/files/root" | "/drive/v3/files/job-folder")),
+        "{reads:?}"
+    );
     assert!(backend.pending_upload_ids_guard().unwrap().is_empty());
 }
 
 #[test]
 fn transfer_engine_task_drive_large_fresh_files_stream_through_one_resumable_session() {
     let (drive, server) = drive_server();
-    let backend = job_backend(&server);
+    let backend = job_backend(&drive, &server);
     let chunk = super::resumable::CHUNK_SIZE;
     // Just above the multipart limit: one session, one PUT.
     let above = vec![3u8; 5_000_001];
@@ -151,7 +168,7 @@ fn transfer_engine_task_drive_rate_limits_reach_the_caller_as_congestion() {
             drive.answer(request)
         })
     };
-    let backend = job_backend(&server);
+    let backend = job_backend(&drive, &server);
     let refused = write_fresh(&backend, "Job/a.txt", b"abc").unwrap_err();
     let congestion = congestion_of(&refused).expect("a rate limit arrives as congestion");
     assert_eq!(congestion.retry_after, Some(Duration::from_secs(7)));
@@ -203,7 +220,7 @@ fn transfer_engine_task_drive_rate_limits_reach_the_caller_as_congestion() {
             drive.answer(request)
         })
     };
-    let backend = job_backend(&server);
+    let backend = job_backend(&drive, &server);
     let error = write_fresh(&backend, "Job/b.txt", b"abc").unwrap_err();
     assert!(congestion_of(&error).is_some());
     let requests = server.requests();
@@ -235,7 +252,7 @@ fn transfer_engine_task_drive_full_storage_and_daily_quota_are_permanent() {
             drive.answer(request)
         })
     };
-    let backend = job_backend(&server);
+    let backend = job_backend(&drive, &server);
     let full = write_fresh(&backend, "Job/a.txt", b"abc").unwrap_err();
     assert_eq!(full.kind(), io::ErrorKind::StorageFull);
     assert!(congestion_of(&full).is_none());
@@ -254,7 +271,7 @@ fn speed_task_drive_large_upload_sends_while_the_next_chunk_fills_byte_exact() {
     // the next one. The fake Drive asserts every chunk starts at the
     // confirmed offset; the stored object must be the exact bytes.
     let (drive, server) = drive_server();
-    let backend = job_backend(&server);
+    let backend = job_backend(&drive, &server);
     let chunk = super::resumable::CHUNK_SIZE;
     let content: Vec<u8> = (0..2 * chunk + 7)
         .map(|index| (index % 251) as u8 ^ (index / 4096) as u8)

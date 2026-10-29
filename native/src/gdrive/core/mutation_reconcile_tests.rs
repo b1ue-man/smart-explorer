@@ -12,7 +12,50 @@ struct Request {
     body: Vec<u8>,
 }
 
+/// The next request of the scenario. The root alias lookup, made once per
+/// backend before the first parent resolution (identity.rs
+/// `actual_parent_id`, since 1bee4b6a), is answered here with the ID
+/// "root", so the scripted steps see only the requests they are about.
 fn receive(listener: &TcpListener) -> (TcpStream, Request) {
+    loop {
+        let (mut stream, request) = receive_any(listener);
+        if request.method == "GET" && request.target.contains("/files/root?fields=id") {
+            reply(&mut stream, r#"{"id":"root"}"#);
+            continue;
+        }
+        return (stream, request);
+    }
+}
+
+/// A folder create probes the parent for the name first: a prior listing
+/// is no reservation against other Drive clients (metadata.rs `ensure_dir`,
+/// `find_folder_child`, since 1bee4b6a). Here the name is free.
+fn answer_free_name_probe(listener: &TcpListener) {
+    let (mut stream, request) = receive(listener);
+    assert_eq!(request.method, "GET");
+    assert!(request.target.contains("files?q="), "{}", request.target);
+    reply(&mut stream, r#"{"files":[]}"#);
+}
+
+/// The exact-ID check a trash makes before its PATCH (trash.rs
+/// `validate_trash_path`, since 1bee4b6a).
+fn answer_trash_identity(listener: &TcpListener) {
+    let (mut stream, request) = receive(listener);
+    assert_eq!(request.method, "GET");
+    assert!(
+        request
+            .target
+            .contains("/files/file-id?fields=id,name,mimeType"),
+        "{}",
+        request.target
+    );
+    reply(
+        &mut stream,
+        r#"{"id":"file-id","name":"gone.txt","mimeType":"text/plain","size":"1","md5Checksum":"abc","parents":["root"],"trashed":false}"#,
+    );
+}
+
+fn receive_any(listener: &TcpListener) -> (TcpStream, Request) {
     let (mut stream, _) = listener.accept().unwrap();
     let mut raw = Vec::new();
     while !raw.ends_with(b"\r\n\r\n") {
@@ -154,6 +197,7 @@ fn trash_commit_then_503_reconciles_exact_id_without_replaying_patch() {
     let (listener, base) = listener();
     let server = thread::spawn(move || {
         let mut methods = Vec::new();
+        answer_trash_identity(&listener);
         let (mut stream, request) = receive(&listener);
         methods.push(request.method.clone());
         assert_eq!(request.method, "PATCH");
@@ -196,6 +240,7 @@ fn trash_blackholed_ack_times_out_and_reconciles_without_replay() {
     let (release_tx, release_rx) = mpsc::channel();
     let server = thread::spawn(move || {
         let mut methods = Vec::new();
+        answer_trash_identity(&listener);
         let (stream, request) = receive(&listener);
         methods.push(request.method.clone());
         assert_eq!(request.method, "PATCH");
@@ -237,6 +282,7 @@ fn folder_create_commit_then_drop_uses_reserved_id_and_updates_parent_snapshot()
     let (listener, base) = listener();
     let server = thread::spawn(move || {
         let mut methods = Vec::new();
+        answer_free_name_probe(&listener);
         let (mut stream, request) = receive(&listener);
         methods.push(request.method.clone());
         assert_eq!(request.method, "GET");
@@ -293,6 +339,7 @@ fn ambiguous_folder_retry_reuses_the_reserved_id_and_never_generates_another() {
     let (listener, base) = listener();
     let server = thread::spawn(move || {
         let mut requests = Vec::new();
+        answer_free_name_probe(&listener);
 
         let (mut stream, request) = receive(&listener);
         requests.push((request.method.clone(), request.target.clone()));
@@ -370,6 +417,7 @@ fn pending_folder_reservation_survives_backend_restart_and_reconciles_without_po
     let (listener, base) = listener();
     let server = thread::spawn(move || {
         let mut methods = Vec::new();
+        answer_free_name_probe(&listener);
 
         let (mut stream, request) = receive(&listener);
         methods.push(request.method.clone());
@@ -405,7 +453,7 @@ fn pending_folder_reservation_survives_backend_restart_and_reconciles_without_po
     );
     first.listed_guard().unwrap().insert(String::new());
     assert!(first.ensure_dir("folder").is_err());
-    assert_eq!(std::fs::read_dir(storage.path()).unwrap().count(), 1);
+    assert_eq!(pending_records(storage.path()), 1);
     drop(first);
 
     let restarted = GDriveBackend::test_backend_with_pending_dir(
@@ -414,7 +462,17 @@ fn pending_folder_reservation_survives_backend_restart_and_reconciles_without_po
         storage.path().to_path_buf(),
     );
     assert_eq!(restarted.ensure_dir("folder").unwrap(), "durable-folder-id");
-    assert_eq!(std::fs::read_dir(storage.path()).unwrap().count(), 0);
+    assert_eq!(pending_records(storage.path()), 0);
     let methods = server.join().unwrap();
     assert_eq!(methods.iter().filter(|method| *method == "POST").count(), 1);
+}
+
+/// Folder journal generations in `storage`. The same directory also holds
+/// the folder-binding registry (`sync-bindings`, state.rs
+/// `test_backend_with_storage`, since 1bee4b6a), which is no pending record.
+fn pending_records(storage: &std::path::Path) -> usize {
+    std::fs::read_dir(storage)
+        .unwrap()
+        .filter(|entry| entry.as_ref().unwrap().file_name() != "sync-bindings")
+        .count()
 }
