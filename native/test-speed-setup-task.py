@@ -19,10 +19,11 @@ Jobs (--job):
               `speed_task_`, `einrichtung_task_`, `removable_media_task_`,
               `batch_handoff_task_`, the five tests the batch moved, and the
               directly affected modules; every compiled, not ignored test of
-              those prefixes must pass (the list comes from `--list`); a
-              failing test of the directly affected modules runs once more on
-              v0.5.188 (worktree, same runner) and counts against the batch
-              only when it passes there or does not exist there; tests that
+              those prefixes must pass (the list comes from `--list`); when
+              a test of the directly affected modules fails, v0.5.188 (worktree,
+              same runner) runs the same selection, and the failure counts
+              against the batch only when v0.5.188 passes that test or does not
+              have it; tests that
               need another suite's environment (ENV_SKIPS) are reported as
               not run here;
               (Windows) the FAT32/exFAT paste with `--nocapture`;
@@ -674,6 +675,7 @@ def stage_unit(results, log_root, executable, env):
         results.record("unit", "batch tests and the directly affected modules", False,
                        failure_detail(ran.output))
     stage_unit.affected_failures = failed if summary else []
+    stage_unit.selection = [*skips, *filters]
     for prefix in PREFIXES + ("moved tests",):
         if prefix == "moved tests":
             expected = [name for name in listed if leaf(name) in MOVED and name not in ignored]
@@ -696,13 +698,15 @@ def stage_unit(results, log_root, executable, env):
                    f"(cfg-gated, informational): {len(absent)}", True)
 
 
-def stage_baseline(results, log_root, env, failed):
-    """The failing tests of the directly affected modules once more on
-    v0.5.188 (its library test binary from a worktree, same runner, same
-    environment): a test that fails there too is reported as pre-existing;
-    every other failure, and a test v0.5.188 does not have, fails the check.
-    Runs last, because the baseline build shares the candidate's target
-    folder (the dependencies compile once)."""
+def stage_baseline(results, log_root, env, failed, selection):
+    """The same selection (filters, skips, one thread, same environment) once
+    more on v0.5.188, built from a worktree on the same runner, so tests
+    that disturb each other in one process are compared under the same
+    conditions: a failing test of the directly affected modules that fails
+    there too is reported as pre-existing; every other failure, and a test
+    v0.5.188 does not have, fails the check. Runs last, because the
+    baseline build shares the candidate's target folder (the dependencies
+    compile once)."""
     name = "directly affected modules: every failing test fails on v0.5.188 too"
     if not failed:
         return
@@ -717,11 +721,9 @@ def stage_baseline(results, log_root, env, failed):
         ensure(executable, f"{BASELINE_TAG} library test binary: {built.tail(2000)}")
         known = set(list_tests(executable, env=env))
         present = [test for test in failed if test in known]
-        outcomes = {}
-        for start in range(0, len(present), 40):  # Windows command-line length
-            ran = run([executable, "--exact", "--test-threads=1", *present[start:start + 40]],
-                      cwd=tree / "native", env=env, timeout=3 * 3600, log=log)
-            outcomes.update(test_outcomes(ran.output))
+        ran = run([executable, "--test-threads=1", *selection], cwd=tree / "native", env=env,
+                  timeout=4 * 3600, log=log)
+        outcomes = test_outcomes(ran.output)
         old = [test for test in present if outcomes.get(test) == "FAILED"]
         new = [test for test in failed if test not in old]
         (log_root / "pre-existing.txt").write_text("\n".join(old) + "\n", encoding="utf-8")
@@ -900,7 +902,8 @@ def job_functional(results, log_root):
         except Exception as error:  # noqa: BLE001
             results.record("transfer_task", "stage", False, f"{type(error).__name__}: {error}")
         try:
-            stage_baseline(results, log_root, env, getattr(stage_unit, "affected_failures", []))
+            stage_baseline(results, log_root, env, getattr(stage_unit, "affected_failures", []),
+                           getattr(stage_unit, "selection", []))
         except Exception as error:  # noqa: BLE001
             results.record("unit", "baseline comparison", False, f"{type(error).__name__}: {error}")
     finally:
