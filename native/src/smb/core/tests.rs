@@ -355,6 +355,23 @@ fn android_task_smb_operation_errors_map_to_io_kinds() {
         Command::Create
     )));
     assert!(!is_dead(&Error::Timeout) && is_suspect(&Error::Timeout));
+    // A request smb2 refused before the wire without waiting retires
+    // nothing and is congestion; a send that waited out the deadline is a
+    // stalled connection.
+    let unsent = Error::CreditStarvation {
+        needed: 18,
+        available: 15,
+        waited: std::time::Duration::ZERO,
+    };
+    assert!(!is_dead(&unsent) && !is_suspect(&unsent));
+    assert!(crate::vfs::congestion_of(&map(unsent, "Anlegen", "/s/f")).is_some());
+    let stalled = Error::CreditStarvation {
+        needed: 18,
+        available: 0,
+        waited: std::time::Duration::from_secs(30),
+    };
+    assert!(is_suspect(&stalled));
+    assert!(crate::vfs::congestion_of(&map(stalled, "Anlegen", "/s/f")).is_none());
     assert!(!is_dead(&protocol_error(
         NtStatus::OBJECT_NAME_NOT_FOUND,
         Command::Create

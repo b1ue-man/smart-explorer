@@ -18,6 +18,7 @@
 //! before it removes the stage, and the sizes must match exactly.
 use super::backend::SmbBackend;
 use super::batch_wire::{charge, packet_create, write_request, written};
+use super::credit_retry::funded;
 use super::errors;
 use super::listing::Attributes;
 use super::session::Generation;
@@ -193,7 +194,9 @@ impl CompoundStage {
             }
             ops.push(CompoundOp::new(Command::Close, &close, tree_id));
             let sent = async {
-                let mut frames = wire::frames(conn.execute_compound(&ops).await?, ops.len())?;
+                let (link, chain) = (&conn, &ops[..]);
+                let sent = funded(link, move || link.execute_compound(chain)).await?;
+                let mut frames = wire::frames(sent, ops.len())?;
                 if !data.is_empty() {
                     let count = written(&frames[0])?;
                     if count != data.len() {

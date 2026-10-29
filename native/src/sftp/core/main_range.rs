@@ -8,6 +8,7 @@ use super::io_adapters::{seek_start, Commit, SftpReader, SftpWriter};
 use super::io_err;
 use super::pool_writer::SizedWriter;
 use super::segmented_stage::HandleCheck;
+use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::protocol::OpenFlags;
 use std::io::{self, Read, Write};
 
@@ -32,8 +33,12 @@ impl Read for MainRange {
 impl SftpBackend {
     /// The main-session reader: used when no pool channel is available.
     pub(super) fn open_main_reader(&self, path: &str, start: u64) -> io::Result<SftpReader> {
-        let (generation, mut file) = self.safe_sftp_on(|generation| {
-            self.rt.block_on(generation.sftp().open(path.to_string()))
+        let (generation, (mut file, slot)) = self.safe_sftp_on(|generation| {
+            self.rt.block_on(async {
+                let slot = generation.handle_slot().await?;
+                let file = generation.sftp().open(path.to_string()).await?;
+                Ok::<_, SftpError>((file, slot))
+            })
         })?;
         self.rt.block_on(seek_start(&mut file, start))?;
         Ok(SftpReader {
@@ -45,6 +50,7 @@ impl SftpBackend {
             start,
             delivered: 0,
             retried: false,
+            slot: Some(slot),
         })
     }
 
@@ -55,9 +61,22 @@ impl SftpBackend {
         commit: Commit,
     ) -> io::Result<SftpWriter> {
         let generation = self.connection.current()?;
-        let file = self
+        // All slots held: congestion, the transfer backs off and comes again.
+        let slot = generation.try_handle_slot().ok_or_else(|| {
+            crate::vfs::congestion_error(
+                "Die SFTP-Hauptsitzung hält keine weiteren Dateien offen",
+                None,
+            )
+        })?;
+        let (file, slot) = self
             .rt
-            .block_on(generation.sftp().open_with_flags(path.to_string(), flags))
+            .block_on(async {
+                let file = generation
+                    .sftp()
+                    .open_with_flags(path.to_string(), flags)
+                    .await?;
+                Ok::<_, SftpError>((file, slot))
+            })
             .map_err(|error| {
                 self.connection.note_sftp_error(&generation, &error);
                 io_err(error)
@@ -68,6 +87,7 @@ impl SftpBackend {
             generation,
             file: Some(file),
             commit,
+            slot: Some(slot),
         })
     }
 

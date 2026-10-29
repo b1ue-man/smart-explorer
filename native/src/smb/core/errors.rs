@@ -83,12 +83,26 @@ pub(super) fn overloaded(error: &Error) -> bool {
     )
 }
 
-/// An operation error on `path`. Overload is congestion, so a transfer
-/// backs off instead of failing (plan K13).
+/// smb2 refused the request before the wire, without waiting: too few
+/// credits on hand while it saw nothing outstanding (credit_retry.rs). The
+/// request certainly did nothing, and the connection is not shown stalled.
+pub(super) fn refused_unsent(error: &Error) -> bool {
+    matches!(error, Error::CreditStarvation { waited, .. } if waited.is_zero())
+}
+
+/// An operation error on `path`. Overload, and a request refused for lack
+/// of credits before it was sent, are congestion, so a transfer backs off
+/// instead of failing (plan K13).
 pub(super) fn map(error: Error, action: &str, path: &str) -> io::Error {
     if overloaded(&error) {
         return crate::vfs::congestion_error(
             format!("SMB-Server ist ausgelastet: {path} ({action}, {error})"),
+            None,
+        );
+    }
+    if refused_unsent(&error) {
+        return crate::vfs::congestion_error(
+            format!("SMB-Credits gerade vergeben, nichts gesendet: {path} ({action}, {error})"),
             None,
         );
     }
@@ -198,7 +212,8 @@ pub(super) fn is_dead(error: &Error) -> bool {
 }
 
 /// A timeout does not prove the request never arrived: the connection is
-/// retired, but nothing is replayed.
+/// retired, but nothing is replayed. A request refused before the wire
+/// without waiting (`refused_unsent`) says nothing about the connection.
 pub(super) fn is_suspect(error: &Error) -> bool {
-    error.kind() == ErrorKind::TimedOut
+    error.kind() == ErrorKind::TimedOut && !refused_unsent(error)
 }

@@ -5,6 +5,7 @@
 //! name atomically. WRITEs are not flushed: a copy stage is not forced to
 //! stable storage before it is published (`engine/publish.rs`).
 use super::batch::{self, FileState, ReadResult, SmbWire, WireError, WireFuture};
+use super::credit_retry::funded;
 use super::errors;
 use super::replace;
 use super::session::{Generation, SmbSession};
@@ -150,7 +151,8 @@ impl TreeWire {
     fn fail(&self, error: smb2::Error, action: &str, path: &str, created: bool) -> WireError {
         self.generation.note(&error);
         WireError {
-            answered: error.status().is_some(),
+            // A request refused before the wire did nothing either.
+            answered: error.status().is_some() || errors::refused_unsent(&error),
             created,
             error: errors::map(error, action, path),
         }
@@ -195,11 +197,9 @@ impl SmbWire for TreeWire {
                 ops.push(CompoundOp::new(Command::Close, &close, tree_id));
             }
             let fail = |error: smb2::Error| self.fail(error, "Anlegen", stage, false);
-            let frames = wire::frames(
-                self.conn.execute_compound(&ops).await.map_err(fail)?,
-                ops.len(),
-            )
-            .map_err(fail)?;
+            let (conn, chain) = (&self.conn, &ops[..]);
+            let sent = funded(conn, move || conn.execute_compound(chain)).await;
+            let frames = wire::frames(sent.map_err(fail)?, ops.len()).map_err(fail)?;
             let id = wire::created(&frames[0]).map_err(fail)?.file_id;
             let mut next = 1;
             if !first.is_empty() {
@@ -238,15 +238,12 @@ impl SmbWire for TreeWire {
     ) -> WireFuture<'a, ()> {
         Box::pin(async move {
             let request = write_request(file.id, offset, data);
-            let sent = self
-                .conn
-                .execute_with_credits(
-                    Command::Write,
-                    &request,
-                    Some(self.tree.tree_id),
-                    charge(data.len()),
-                )
-                .await;
+            let (conn, tree_id) = (&self.conn, Some(self.tree.tree_id));
+            let (request, credits) = (&request, charge(data.len()));
+            let sent = funded(conn, move || {
+                conn.execute_with_credits(Command::Write, request, tree_id, credits)
+            })
+            .await;
             let count = sent.and_then(|frame| written(&frame));
             match count {
                 Ok(count) if count == data.len() => Ok(()),
@@ -312,11 +309,9 @@ impl SmbWire for TreeWire {
                 ops.push(CompoundOp::new(Command::Close, &close, tree_id));
             }
             let fail = |error: smb2::Error| self.fail(error, "Lesen", path, false);
-            let frames = wire::frames(
-                self.conn.execute_compound(&ops).await.map_err(fail)?,
-                ops.len(),
-            )
-            .map_err(fail)?;
+            let (conn, chain) = (&self.conn, &ops[..]);
+            let sent = funded(conn, move || conn.execute_compound(chain)).await;
+            let frames = wire::frames(sent.map_err(fail)?, ops.len()).map_err(fail)?;
             let response = wire::created(&frames[0]).map_err(fail)?;
             let id = response.file_id;
             let reparse = wire::attributes_of(&response).is_reparse_point();
@@ -354,15 +349,12 @@ impl SmbWire for TreeWire {
     ) -> WireFuture<'a, Vec<u8>> {
         Box::pin(async move {
             let request = read_request(file.id, offset, len);
-            let sent = self
-                .conn
-                .execute_with_credits(
-                    Command::Read,
-                    &request,
-                    Some(self.tree.tree_id),
-                    charge(len),
-                )
-                .await;
+            let (conn, tree_id) = (&self.conn, Some(self.tree.tree_id));
+            let (request, credits) = (&request, charge(len));
+            let sent = funded(conn, move || {
+                conn.execute_with_credits(Command::Read, request, tree_id, credits)
+            })
+            .await;
             let data = sent.and_then(|frame| read_data(&frame));
             data.map_err(|error| self.fail(error, "Lesen", "SMB-Datei", false))
         })

@@ -6,6 +6,7 @@
 use super::batch_ops::OPEN_HANDLES;
 use super::connection::{classify_sftp_error, SftpConnection, SftpGeneration};
 use super::copy_data::COPY_DATA;
+use super::handle_budget::BudgetSession;
 use super::io_err;
 use super::pool_growth::PoolHub;
 use super::posix_rename::POSIX_RENAME;
@@ -56,7 +57,8 @@ pub(super) fn handle_cap_of(open_handles: Option<u64>) -> usize {
 }
 
 pub(super) struct PoolChannel {
-    pub(super) session: Arc<RawSftpSession>,
+    /// OPEN and CLOSE keep the channel's handle budget (handle_budget.rs).
+    pub(super) session: Arc<BudgetSession>,
     pub(super) owner: Owner,
     hub: Arc<PoolHub>,
     packet_len: u64,
@@ -95,14 +97,15 @@ impl PoolChannel {
             .limits
             .and_then(|limits| limits.read_len)
             .map_or(fit, |read| read.min(fit));
+        let open_handles = setup.limits.and_then(|limits| limits.open_handles);
         Self {
-            session: Arc::new(setup.session),
+            session: Arc::new(BudgetSession::new(setup.session, open_handles)),
             owner,
             hub,
             packet_len,
             read_len,
             write_len: setup.limits.and_then(|limits| limits.write_len),
-            open_handles: setup.limits.and_then(|limits| limits.open_handles),
+            open_handles,
             fsync: setup.fsync,
             posix_rename: setup.posix_rename,
             copy_data: setup.copy_data,
@@ -179,12 +182,16 @@ impl PoolChannel {
         self.hub.note(bytes);
     }
 
+    /// No new lease and no new OPEN; a transfer waiting for a handle slot
+    /// on it stops waiting (congestion: the file goes again elsewhere).
     pub(super) fn mark_broken(&self) {
         self.broken.store(true, Ordering::Release);
+        self.session.retire();
     }
 
+    /// Broken, or retired by a handle the server named unusably.
     pub(super) fn is_broken(&self) -> bool {
-        self.broken.load(Ordering::Acquire)
+        self.broken.load(Ordering::Acquire) || self.session.is_retired()
     }
 
     pub(super) fn is_extra(&self) -> bool {

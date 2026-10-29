@@ -16,6 +16,10 @@
 //! waits for a lease to end. A range never fails for lack of a channel: it
 //! shares, waits or, with no channel at all, uses the main session
 //! (`lease_range`). A single stream without a channel uses the main session.
+//! However the leases share a channel, the handles open on it at once never
+//! exceed its budget (handle_budget.rs: at most 128, the slots whose handles
+//! russh-sftp can name back to OpenSSH's server); an OPEN beyond it waits
+//! for a CLOSE.
 //!
 //! One SSH connection carries one TCP stream, and on a long fat link its
 //! kernel buffer caps the rate however many channels it has. So the pool may
