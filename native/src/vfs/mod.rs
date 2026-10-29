@@ -174,6 +174,10 @@ pub use self::delete::{
 #[allow(unused_imports)]
 pub use self::dispatch::{backend_for, is_remote_root};
 pub use self::local::LocalBackend;
+/// Windows: refuses a new name Win32 would read as a stream or reject (the
+/// copy's own stages and handle renames check with it, A7).
+#[cfg(windows)]
+pub(crate) use self::local_platform::check_new_name as check_local_new_name;
 pub(crate) use self::local_platform::create_new_private as create_local_copy_stage;
 pub(crate) use self::local_platform::rename_no_replace as promote_local_copy;
 pub(crate) use self::local_platform::replace_file as replace_local_file;

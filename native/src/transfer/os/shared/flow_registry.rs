@@ -16,7 +16,8 @@ const FLOW_RETENTION: Duration = Duration::from_secs(15 * 60);
 /// several windows of round trips first.
 const PEER_START_LIMIT: usize = 8;
 /// A local volume that is flash or cannot be told (network share, FUSE,
-/// a Windows volume spanning several disks) starts at twice the cores, within these bounds (M7,
+/// a Windows volume spanning several disks) starts at `LOCAL_STARTS_PER_CORE` (Linux 2,
+/// Windows 4, A7) times the cores, within these bounds (M7,
 /// 2026-10-28): small files reach their steady rate at once and a large
 /// file gets the extra threads it plans for (`UNBUFFERED_EXTRAS` = 3 plus
 /// its own) from its first byte. A rotating disk keeps the general start of
@@ -123,7 +124,8 @@ const REMOTE_START: usize = 8;
 const SESSION_START: usize = 4;
 
 /// The start of a local volume's flow: `None` (general start) for a disk
-/// known to rotate, otherwise twice the cores within the local bounds.
+/// known to rotate, otherwise `LOCAL_STARTS_PER_CORE` times the cores within
+/// the local bounds.
 fn local_start(rotational: Option<bool>) -> Option<usize> {
     if rotational == Some(true) {
         return None;
@@ -131,7 +133,7 @@ fn local_start(rotational: Option<bool>) -> Option<usize> {
     let cores = std::thread::available_parallelism().map_or(1, usize::from);
     Some(
         cores
-            .saturating_mul(2)
+            .saturating_mul(crate::transfer::platform::LOCAL_STARTS_PER_CORE)
             .clamp(LOCAL_START_MIN, LOCAL_START_MAX),
     )
 }

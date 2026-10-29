@@ -14,7 +14,9 @@ use super::ops::{At, Meter, OpError, OpResult, Outcome};
 use super::queue::FileWork;
 use super::roots::RootPlan;
 use super::Engine;
-use crate::copy::{transfer_local_observed, LocalFailure, LocalOutcome, LocalRequest};
+use crate::copy::{
+    transfer_local_fresh, transfer_local_observed, LocalFailure, LocalOutcome, LocalRequest,
+};
 use crate::transfer::segments::SPLIT_FROM;
 use crate::types::Conflict;
 use std::path::{Path, PathBuf};
@@ -29,7 +31,16 @@ use plan::{DeviceKey, Drive, Memory, Plan, Ticket, Verdicts};
 /// are not measured (`plan::plan`).
 static VERDICTS: Verdicts = Verdicts::new();
 
-pub(super) fn copy_file(engine: &Engine<'_>, file: &FileWork, meter: &Meter<'_>) -> OpResult {
+/// `parent_created`: this job created the file's folder (nothing of anyone
+/// else can be inside), so a new copy under "skip" does not look at its
+/// destination first (A7); the no-replace publication still refuses a name
+/// taken meanwhile.
+pub(super) fn copy_file(
+    engine: &Engine<'_>,
+    file: &FileWork,
+    parent_created: bool,
+    meter: &Meter<'_>,
+) -> OpResult {
     let source = native(&file.source);
     let target = native(&engine.folders.path_of(&file.rel));
     let conflict = if engine.resume {
@@ -64,7 +75,8 @@ pub(super) fn copy_file(engine: &Engine<'_>, file: &FileWork, meter: &Meter<'_>)
     // One kernel call moves the bytes: source and target cannot be told
     // apart, so the whole call is booked to the target.
     let observer = super::file_recovery::LocalObserver::new(engine, file);
-    let result = meter.timed_target(|| run_transfer(&request, &mut progress, &observer));
+    let fresh = parent_created && !engine.resume;
+    let result = meter.timed_target(|| run_transfer(&request, fresh, &mut progress, &observer));
     extras.finish(&result);
     match result {
         Ok(LocalOutcome::Completed { bytes, target }) => {
@@ -105,11 +117,15 @@ pub(super) fn copy_file(engine: &Engine<'_>, file: &FileWork, meter: &Meter<'_>)
 
 fn run_transfer(
     request: &LocalRequest<'_>,
+    fresh: bool,
     progress: &mut dyn FnMut(u64),
     observer: &dyn crate::copy::PublicationObserver,
 ) -> Result<LocalOutcome, LocalFailure> {
     #[cfg(test)]
     extras_tests::record(request);
+    if fresh {
+        return transfer_local_fresh(request, progress, observer);
+    }
     transfer_local_observed(request, progress, observer)
 }
 

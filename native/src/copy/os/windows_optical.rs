@@ -15,7 +15,7 @@ struct BasicInfo {
 fn ticks(time: &FileTime) -> i64 {
     ((u64::from(time.high) << 32) | u64::from(time.low)) as i64
 }
-fn set_basic(file: &File, metadata: Option<&FileInformation>) -> io::Result<()> {
+pub(super) fn set_basic(file: &File, metadata: Option<&FileInformation>) -> io::Result<()> {
     let basic = match metadata {
         Some(metadata) => BasicInfo {
             creation: ticks(&metadata.creation_time),
@@ -87,12 +87,10 @@ fn copy_simple(
 ) -> io::Result<Option<(u64, File)>> {
     // The former CopyFile2 stage inherited the destination parent's DACL.
     // Ordinary create_new retains precisely that destination-rights boundary.
+    // Pinned like every Windows stage (`fast::create_stage`, A7): its
+    // publication renames this handle.
     let stage_path = crate::local_access::normalize_scan_root(stage);
-    let mut writer = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .open(&stage_path)?;
+    let mut writer = super::fast::create_stage(stage)?;
     let result = (|| {
         let Some(bytes) =
             crate::source_media::sequential_copy(&mut reader, &mut writer, cancel, progress)?

@@ -8,8 +8,11 @@ use std::path::Path;
 use super::imp::copy_flags::{is_unc, windows_copy_flags, WINDOWS_REQUEST_COMPRESSED_TRAFFIC};
 use super::imp::pipe_copy::{pipe_copy, PipeError, PipeSide};
 
+#[path = "windows_fast.rs"]
+mod fast;
 #[path = "windows_optical.rs"]
 mod windows_optical;
+pub(super) use fast::{commit_staged_held, copy_from_reader, handle_has_path, open_copy_source};
 
 #[path = "windows_identity.rs"]
 mod windows_identity;
@@ -135,6 +138,11 @@ pub(super) fn file_state(file: &File) -> io::Result<(FileIdentity, std::fs::Meta
 pub(super) fn path_state(
     path: &Path,
 ) -> io::Result<(FileIdentity, u64, Option<std::time::SystemTime>)> {
+    // One attribute-only open for a plain file (A7); links, folders, special
+    // files and refused opens take the checked way below.
+    if let Some(state) = fast::path_state(path) {
+        return Ok(state);
+    }
     let file = crate::local_access::open_regular(path, crate::local_access::FinalLink::Refuse)?;
     let (identity, metadata) = file_state(&file)?;
     Ok((identity, metadata.len(), metadata.modified().ok()))
@@ -276,7 +284,7 @@ fn copy_to_fresh(
     let Some(reported) = kernel_copy_file(source, stage, cancel, progress, size)? else {
         return Ok(None);
     };
-    let (file, length) = match open_staged(stage) {
+    let (file, length) = match fast::open_staged(stage) {
         Ok(staged) => staged,
         Err(error) => {
             // Not a plain file (a link copied from a swapped source): remove
@@ -467,27 +475,6 @@ fn hresult_error(result: i32) -> io::Error {
     } else {
         io::Error::other(format!("CopyFile2 schlug fehl (HRESULT 0x{code:08x})"))
     }
-}
-
-/// Opens the stage a kernel copy produced without following a reparse
-/// point, and accepts only a plain regular file (K12 identity check); with
-/// its length on disk.
-fn open_staged(stage: &Path) -> io::Result<(File, u64)> {
-    use std::os::windows::fs::OpenOptionsExt;
-    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(crate::local_access::normalize_scan_root(stage))?;
-    let metadata = file.metadata()?;
-    let class = crate::local_access::classify_open_file(&file)?;
-    if !metadata.is_file() || class.link_like || class.special {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Kopierstufe ist keine direkte reguläre Datei",
-        ));
-    }
-    Ok((file, metadata.len()))
 }
 
 pub(super) fn sync_parent(_path: &Path) -> io::Result<()> {

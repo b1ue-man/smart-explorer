@@ -61,10 +61,17 @@ pub(super) fn publish(
         restore_quarantine_if_any(quarantine.as_ref()).map_err(LocalFailure::Source)?;
         return Ok(LocalOutcome::Canceled);
     }
-    let identity = platform::file_identity(&staged.file).map_err(LocalFailure::Target);
-    let same = identity.and_then(|identity| {
-        platform::path_matches_identity(&staged.temp, identity).map_err(LocalFailure::Target)
-    });
+    // The stage path still names the copied object: asked of the handle's
+    // own name where the platform can (Windows, A7: no open), else by one
+    // look at the path.
+    let same = if platform::handle_has_path(&staged.file, &staged.temp) {
+        Ok(true)
+    } else {
+        let identity = platform::file_identity(&staged.file).map_err(LocalFailure::Target);
+        identity.and_then(|identity| {
+            platform::path_matches_identity(&staged.temp, identity).map_err(LocalFailure::Target)
+        })
+    };
     if !matches!(same, Ok(true)) {
         staged.discard().map_err(LocalFailure::Publish)?;
         let error = io::Error::new(
@@ -102,9 +109,11 @@ pub(super) fn publish(
                 error,
             )));
         }
-        let committed = platform::commit_staged(
+        // A pinned stage is renamed through its own handle (Windows, A7).
+        let committed = platform::commit_staged_held(
             &staged.temp,
             &target,
+            staged.pinned.then_some(&staged.file),
             conflict == Conflict::Overwrite,
             durable,
         );

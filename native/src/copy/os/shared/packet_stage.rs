@@ -45,16 +45,8 @@ pub(crate) fn stage_local_from(
         )));
     }
     let source = request.source;
-    let metadata = crate::local_access::symlink_metadata(source).map_err(LocalFailure::Source)?;
-    if crate::local_access::metadata_is_link_like(source, &metadata) || !metadata.is_file() {
-        return Err(LocalFailure::Source(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!(
-                "source is not a regular, non-link file: {}",
-                source.display()
-            ),
-        )));
-    }
+    // Opened once where the platform classifies the handle (Windows, A7).
+    let opened = super::checked_copy_source(source)?;
     if request.cancel.load(Ordering::Acquire) {
         return Ok(PacketStaging::Canceled);
     }
@@ -65,6 +57,7 @@ pub(crate) fn stage_local_from(
     // A new copy: no per-file disk sync, the destination's mode is not kept.
     match stage_copy(
         source,
+        opened,
         start,
         request.cancel,
         false,

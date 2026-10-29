@@ -190,7 +190,15 @@ fn first_names(engine: &Engine<'_>, files: Vec<FileWork>) -> Option<Vec<Member>>
             return None;
         }
         let requested = native(&engine.folders.path_of(&file.rel));
-        match crate::copy::packet_start(&requested, engine.view.conflict) {
+        // A folder this job created holds nothing of anyone else: the
+        // requested name is the first one without a look (A7); a name taken
+        // meanwhile still fails the no-replace publication.
+        let start = if fresh_folder(engine, &file) {
+            Ok(Some(requested.clone()))
+        } else {
+            crate::copy::packet_start(&requested, engine.view.conflict)
+        };
+        match start {
             // The single path reports a source that is no regular file
             // before it looks at the destination; so does the packet.
             Ok(None) if regular_source(&file) => finished(engine, Outcome::Skipped),
@@ -203,6 +211,21 @@ fn first_names(engine: &Engine<'_>, files: Vec<FileWork>) -> Option<Vec<Member>>
         }
     }
     Some(members)
+}
+
+/// Whether this job created the folder `file` goes into (the folder
+/// register answers from memory: `batch::run` made sure of every member's
+/// folder). Never while resuming, whose destinations may exist already.
+fn fresh_folder(engine: &Engine<'_>, file: &FileWork) -> bool {
+    if engine.resume {
+        return false;
+    }
+    parent_rel(&file.rel).is_some_and(|parent| {
+        engine
+            .folders
+            .ensure(parent, engine.stop_flag())
+            .unwrap_or(false)
+    })
 }
 
 fn regular_source(file: &FileWork) -> bool {

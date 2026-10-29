@@ -12,6 +12,13 @@ pub(crate) fn upload_is_link_like(path: &Path, metadata: &std::fs::Metadata) -> 
 }
 
 /// `\` separates path components on Windows; it is never part of a name.
+/// Local operations per core a flash volume's flow starts at (A7,
+/// 2026-10-29): a Windows file create, write, attribute set and rename
+/// waits in NTFS and the filter stack (Defender, indexer) more than it
+/// computes, so twice the cores left the four cores of the measured runner
+/// partly idle against `robocopy /MT:16`.
+pub(crate) const LOCAL_STARTS_PER_CORE: usize = 4;
+
 pub(crate) fn backslash_is_name_char() -> bool {
     false
 }

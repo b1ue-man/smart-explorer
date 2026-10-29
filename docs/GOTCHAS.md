@@ -768,6 +768,24 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   read (`engine/source.rs` `RemoteCheck::finish`).
 - **The worker announces no `lz4-v1` on the loopback hop.** An older GUI talking to a new worker
   sends uncompressed (Z-P8, `daemon/os/shared/backend_ranges.rs`).
+- **Windows copies small plain files without `CopyFile2` and holds the stage until it is
+  published.** Up to 1 MiB, on a local volume, a source without named streams, extended
+  attributes or security resource attributes is read through its open handle into a stage opened
+  with DELETE access and without `FILE_SHARE_DELETE`; the stage is renamed through that handle
+  (`NtSetInformationFile` `FileRenameInformation`, never replacing). Anything else, and every
+  failure of the handle copy, goes through `CopyFile2` as before (`copy/os/windows_fast*.rs`,
+  `windows_held_rename.rs`). While a published file is still held (until its receipt), another
+  process cannot delete or rename it. Local flows on Windows start at four per core.
+- **russh-sftp 2.3 can name only 128 open handles per SFTP stream.** It decodes handles as lossy
+  UTF-8, and OpenSSH names slot 128 and up with a byte >= 0x80; such a handle comes back damaged
+  and every request on it fails. Each stream therefore holds at most min(`limits@openssh.com`, 128)
+  handles; an OPEN waits for a CLOSE (`sftp/core/handle_budget.rs`).
+- **smb2 0.26 can refuse a request with `CreditStarvation { waited: 0 }` without sending it.** It
+  reserves credits before it marks a request outstanding; a second request in that gap fails at
+  once. That is overload and sent again, never a lost connection (`smb/core/credit_retry.rs`).
+- **The Share host forgets a packet's outcome once the client confirms it.** The client finishes
+  its side and drops its stream (QUIC stop code 0); either counts as confirmation. At the per-device
+  limit a new packet replaces that device's oldest finished record (`share/core/batch_status.rs`).
 
 ## Share / local network
 

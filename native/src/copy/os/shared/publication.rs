@@ -80,9 +80,13 @@ pub(super) fn before(
 }
 
 /// Whether `path` names the very object behind `file` now (one look at the
-/// path, no open on Linux; one attribute-only open on Windows). A missing
-/// path does not.
+/// path, no open on Linux; on Windows the handle's own name, else one
+/// attribute-only open). A missing path does not.
 pub(crate) fn path_names_handle(path: &Path, file: &File) -> io::Result<bool> {
+    // Windows answers from the handle's own name where it can (A7, no open).
+    if super::super::platform::handle_has_path(file, path) {
+        return Ok(true);
+    }
     let identity = super::super::platform::file_identity(file)?;
     super::super::platform::path_matches_identity(path, identity)
 }
