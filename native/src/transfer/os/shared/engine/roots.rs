@@ -273,6 +273,8 @@ fn plan_roots(
                         && view.target.is_local()
                         && view.filter.is_none();
                     if !whole_move {
+                        // Only a reservation this run makes is known empty.
+                        let fresh = reservations.saved_relative(&root.path).is_none();
                         match reservations.reserve(
                             view.target,
                             register.root(),
@@ -281,7 +283,13 @@ fn plan_roots(
                             policy == crate::transfer::FolderConflict::KeepBoth,
                             cancel,
                         ) {
-                            Ok(relative) => root.rel = relative,
+                            Ok(relative) => {
+                                // The reserved folder exists: the register
+                                // never creates it a second time, and its
+                                // folders below go into one bulk request.
+                                register.reserved(&relative, fresh);
+                                root.rel = relative;
+                            }
                             Err(error)
                                 if policy == crate::transfer::FolderConflict::Skip
                                     && error.kind() == std::io::ErrorKind::AlreadyExists =>
@@ -348,7 +356,12 @@ fn selected_directory(
             }
         }
     }
-    result.map_err(|error| format!("Quellordner „{path}“ prüfen: {error}"))
+    match result {
+        // A vanished entry is no folder to reserve: the walk reports it as
+        // that root's own error and the other roots still go.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        result => result.map_err(|error| format!("Quellordner „{path}“ prüfen: {error}")),
+    }
 }
 
 fn target_exists(side: Side<'_>, path: &str) -> Result<bool, String> {

@@ -230,12 +230,13 @@ fn transfer_engine_task_packet_download_into_a_full_target_ends_the_job() {
     let mut fake = Fake::new("packet-target-refuses");
     fake.batch = Some(PACKET);
     let (_fake, handle) = fake.handle();
-    let finished = run(job(
-        Endpoint::Remote(handle),
-        Endpoint::Local,
-        &dest,
-        &[&remote],
-    ));
+    let mut merging = job(Endpoint::Remote(handle), Endpoint::Local, &dest, &[&remote]);
+    // Into the existing read-only "Vault": the explicit "merge" decision;
+    // the default "keep both" would reserve a writable "Vault (2)" beside it
+    // (d0138b4a).
+    merging.folders =
+        crate::transfer::FolderConflictPolicy::new(crate::transfer::FolderConflict::Merge);
+    let finished = run(merging);
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).expect("restore");
     assert!(
         finished

@@ -33,8 +33,27 @@ pub(in crate::transfer::engine) fn with_backend<T>(
 }
 
 pub(in crate::transfer::engine) fn snapshot(side: Side<'_>, path: &str) -> SourceGuard {
-    with_backend(side, |backend| match backend.stat(path) {
-        Ok(meta) => SourceGuard {
+    snapshot_checked(side, path).unwrap_or_else(|_| SourceGuard {
+        path: path.to_string(),
+        directory: false,
+        link: false,
+        id: None,
+        object: None,
+        size: 0,
+        mtime_ms: 0,
+        verified: false,
+    })
+}
+
+/// `snapshot` that hands back the failed `stat` itself, so its caller can
+/// tell a passing overload (wait and repeat) from a source that is gone.
+pub(in crate::transfer::engine) fn snapshot_checked(
+    side: Side<'_>,
+    path: &str,
+) -> io::Result<SourceGuard> {
+    with_backend(side, |backend| {
+        let meta = backend.stat(path)?;
+        Ok(SourceGuard {
             path: path.to_string(),
             directory: meta.is_dir,
             link: meta.is_symlink,
@@ -49,17 +68,7 @@ pub(in crate::transfer::engine) fn snapshot(side: Side<'_>, path: &str) -> Sourc
             size: meta.size,
             mtime_ms: meta.mtime_ms,
             verified: true,
-        },
-        Err(_) => SourceGuard {
-            path: path.to_string(),
-            directory: false,
-            link: false,
-            id: None,
-            object: None,
-            size: 0,
-            mtime_ms: 0,
-            verified: false,
-        },
+        })
     })
 }
 

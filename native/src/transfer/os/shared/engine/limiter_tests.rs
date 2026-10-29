@@ -236,11 +236,15 @@ fn speed_task_progress_carries_limiter_fields() {
         !text.contains(&fwd(root.path())) && !text.contains("Vault"),
         "no path in the text: {text}"
     );
-    // the source's reads lead the resources; the waiting share grows on a
-    // loaded runner (suite run 6: 47 % source, 53 % waiting)
+    // the source's reads lead the resources; the waiting share grows with
+    // the workers queued for the source's two permits and with a loaded
+    // runner (suite run 6: 47 % source, 53 % waiting; speed-setup run
+    // 40774661103 with workers sized for small files since b67a2bf7: 36 %
+    // source, 64 % waiting), so the source is compared with the other
+    // resources, not with a fixed share
     let [source, target, cpu, wait] = last.limiter_shares;
     assert!(
-        source >= 40 && source > target && source > cpu,
+        source > 0 && source > target + cpu,
         "{:?}",
         last.limiter_shares
     );

@@ -10,7 +10,9 @@
 //! carried (`HostEvidence`) and then send no stat or identity request of
 //! their own.
 use super::file_evidence::{verify, HostEvidence, Proof};
-use super::job_store::{endpoint, snapshot, with_backend, JobRun};
+#[cfg(test)]
+use super::job_store::snapshot;
+use super::job_store::{endpoint, snapshot_checked, with_backend, JobRun};
 use super::queue::FileWork;
 use super::record_io::{read_record, write_record, RecordContext, RecordKind};
 use super::view::{JobView, Side};
@@ -91,7 +93,10 @@ fn source_guard(
     known: Option<&HostEvidence>,
 ) -> io::Result<SourceGuard> {
     let Some(evidence) = known else {
-        return Ok(snapshot(engine.view.source, &file.source));
+        // A failed stat keeps its own error: an overload of the source's
+        // peer (many files at once through the proxy) waits and repeats
+        // instead of ending the file as unconfirmed.
+        return snapshot_checked(engine.view.source, &file.source);
     };
     if evidence.path != file.source {
         return Err(failure("Hostbeleg der Quelle passt nicht zur Datei"));

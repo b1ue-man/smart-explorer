@@ -82,8 +82,13 @@ pub(in super::super) fn upload(
             }
             Some(EvidencePutOutcome::Failed(error)) => {
                 let (failure, mut attempt) = delivery.judge(0, OpError::target(error));
-                // The peer says it published nothing for this file.
-                if attempt == Attempt::MaybePublished && crate::vfs::unpublished_of(&failure.error)
+                // The peer says it published nothing for this file. A
+                // refusal as too busy (Share "Busy", `admit_now`) always
+                // comes before the commit: nothing was published, and the
+                // worker waits and sends again, as for packets (K13).
+                if attempt == Attempt::MaybePublished
+                    && (crate::vfs::unpublished_of(&failure.error)
+                        || crate::vfs::congestion_of(&failure.error).is_some())
                 {
                     attempt = Attempt::NotPublished;
                 }

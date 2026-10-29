@@ -17,7 +17,7 @@ mod catalog;
 mod validation;
 
 pub(crate) use catalog::{reopen_job, unconfirmed_jobs, CatalogState, RecoveryCatalog};
-pub(super) use validation::{endpoint, snapshot, with_backend};
+pub(super) use validation::{endpoint, snapshot, snapshot_checked, with_backend};
 use validation::{source_paths, verify_sources, verify_target};
 
 pub(super) struct JobRun {

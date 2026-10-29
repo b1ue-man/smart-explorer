@@ -156,11 +156,23 @@ fn report_failure(
 ) {
     progress.done = true;
     progress.discovering = false;
+    // A job canceled while it was prepared ends as canceled, as one
+    // canceled later does: its preparation stopping is no error of its own.
+    if cancel.load(Ordering::Acquire) {
+        report(TransferMsg::Done {
+            progress,
+            errors: Vec::new(),
+            canceled: true,
+            issues: Vec::new(),
+            roots: Vec::new(),
+        });
+        return;
+    }
     progress.errors = 1;
     report(TransferMsg::Done {
         progress,
         errors: vec![message.clone()],
-        canceled: cancel.load(Ordering::Acquire),
+        canceled: false,
         issues: vec![TransferIssue {
             path: String::new(),
             message,

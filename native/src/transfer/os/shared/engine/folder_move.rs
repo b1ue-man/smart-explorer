@@ -30,7 +30,7 @@ impl Reservations {
                 ));
             }
             if !saved.move_source {
-                let relative = Self::publish(&backend, root, &mut store, source, saved)?;
+                let relative = Self::publish(&backend, root, &mut store, source, saved, cancel)?;
                 return Ok((relative, false));
             }
             let target = join_rel(root, &saved.relative);

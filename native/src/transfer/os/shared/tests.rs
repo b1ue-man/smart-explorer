@@ -90,6 +90,11 @@ impl BulkLocalBackend {
 }
 
 impl Backend for BulkLocalBackend {
+    // Every productive backend reserves a selected folder atomically, which
+    // the engine requires under "keep both" (d0138b4a).
+    fn extensions(&self) -> Option<&dyn crate::vfs::BackendExtensions> {
+        Some(self)
+    }
     fn scheme(&self) -> Scheme {
         self.inner.scheme()
     }
@@ -158,6 +163,15 @@ impl Backend for BulkLocalBackend {
     fn put_tree(&self, src: &Path, root: &str) -> VfsResult<u64> {
         self.put_calls.fetch_add(1, Ordering::Relaxed);
         copy_tree_contents(src, Path::new(root))
+    }
+}
+
+impl crate::vfs::BackendExtensions for BulkLocalBackend {
+    fn directory_reservation_supported(&self, root: &str) -> bool {
+        crate::vfs::directory_reservation_supported(&self.inner, root)
+    }
+    fn create_dir_exclusive(&self, path: &str) -> VfsResult<()> {
+        crate::vfs::create_dir_exclusive(&self.inner, path)
     }
 }
 

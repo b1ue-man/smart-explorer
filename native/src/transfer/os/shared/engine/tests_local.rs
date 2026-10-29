@@ -201,6 +201,10 @@ fn transfer_engine_task_local_move_into_existing_folder_merges_and_prunes() {
     write(&dest.join("Vault/kept.txt"), b"kept");
     let mut transfer = job(Endpoint::Local, Endpoint::Local, &dest, &[&source]);
     transfer.mode = CopyMode::Move;
+    // Merging into an existing folder is the explicit "merge" decision; the
+    // default "keep both" moves the folder as a whole beside it (d0138b4a).
+    transfer.folders =
+        crate::transfer::FolderConflictPolicy::new(crate::transfer::FolderConflict::Merge);
     let finished = run(transfer);
     assert!(finished.issues.is_empty(), "{:?}", finished.issues);
     assert_eq!(finished.progress.files_done, 2, "file by file");

@@ -182,6 +182,12 @@ impl<'a> FolderRegister<'a> {
         lock(&self.exclusive).insert(planned.to_string(), wanted.to_string());
     }
 
+    /// `rel` exists as a selected folder this job reserved before the walk;
+    /// `created` when this run created it (nothing foreign can be inside).
+    pub(crate) fn reserved(&self, rel: &str, created: bool) {
+        lock(&self.slots).insert(rel.to_string(), Slot::Ready { created });
+    }
+
     /// A top-level entry `planned` was published as `actual`.
     pub(crate) fn record_alias(&self, planned: &str, actual: &str) {
         if planned != actual {

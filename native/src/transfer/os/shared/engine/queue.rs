@@ -7,6 +7,9 @@
 //! (the folder register), so a listing's folders never hold back the first
 //! files (twenty folders at 50 ms cost a second before any file otherwise),
 //! and folder work only matters for empty folders and a move's cleanup.
+//! While discovery runs, a worker takes a folder only after it lingered
+//! without a file (or when the queue is half full), so the files found
+//! meanwhile create nested folders in one bulk request.
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard};
@@ -205,11 +208,21 @@ impl WorkQueue {
             if stop.load(Ordering::Acquire) {
                 break None;
             }
-            if let Some(work) = state.items.pop_front().or_else(|| state.dirs.pop_front()) {
+            let now = Instant::now();
+            // A folder waits while discovery may still bring its files (at
+            // most one linger, or until the queue is half full): its first
+            // file then creates it with all its missing parents in one
+            // request where the target creates folders in bulk.
+            let folders_due = !state.producing || now >= deadline || state.bytes >= QUEUE_BYTES / 2;
+            let next = match state.items.pop_front() {
+                Some(work) => Some(work),
+                None if folders_due => state.dirs.pop_front(),
+                None => None,
+            };
+            if let Some(work) = next {
                 state.bytes = state.bytes.saturating_sub(work.bytes());
                 break Some(work);
             }
-            let now = Instant::now();
             if !state.producing || now >= deadline {
                 break None;
             }
