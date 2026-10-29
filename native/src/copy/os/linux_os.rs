@@ -69,10 +69,17 @@ pub(super) fn hard_link(source: &Path, target: &Path) -> io::Result<()> {
 mod linux_direct;
 #[path = "linux_direct_plan.rs"]
 mod linux_direct_plan;
+#[path = "linux_plain.rs"]
+mod linux_plain;
 #[path = "linux_probe.rs"]
 mod linux_probe;
+#[path = "linux_publish.rs"]
+mod linux_publish;
 #[path = "linux_range.rs"]
 mod linux_range;
+#[cfg(target_os = "linux")]
+#[path = "linux_sparse.rs"]
+mod linux_sparse;
 
 /// A large copy around the page cache onto a drive not known to be flash:
 /// measured direct requests (`linux_probe`) instead of `copy_handles`' fixed
@@ -279,12 +286,12 @@ pub(super) fn commit_staged(
     if overwrite {
         return crate::vfs::replace_local_file(staged, dest);
     }
-    crate::copy::publication_proof::preflight_no_replace(dest)?;
-    rename_no_replace(staged, dest)
+    linux_publish::publish_no_replace(staged, dest)
 }
 
 /// `commit_staged`; the held stage handle only matters on Windows, whose
-/// rename goes through it (A7). `renameat2(RENAME_NOREPLACE)` is one call.
+/// rename goes through it (A7). `renameat2(RENAME_NOREPLACE)` is one call
+/// (`linux_publish`).
 pub(super) fn commit_staged_held(
     staged: &Path,
     dest: &Path,
@@ -324,8 +331,7 @@ pub(super) fn move_file(src: &Path, dest: &Path, overwrite: bool) -> io::Result<
     if overwrite {
         return crate::vfs::replace_local_file(src, dest);
     }
-    crate::copy::publication_proof::preflight_no_replace(dest)?;
-    rename_no_replace(src, dest)
+    linux_publish::publish_no_replace(src, dest)
 }
 
 pub(super) fn is_cross_device(error: &io::Error) -> bool {
@@ -354,14 +360,15 @@ pub(super) fn copy_by_path(
 }
 
 /// Copies `reader` to the end into the exclusively created stage `writer`
-/// in the kernel (`std::io::copy` between two files uses copy_file_range,
-/// which reflinks on btrfs/xfs and copies server-side on NFS). With
-/// `parallel > 1` and a file of at least two shortest transfer parts, that
-/// many threads each copy one contiguous range at explicit offsets
-/// (`linux_range`); the engine asks for it with permits to spare on a drive
-/// known to be flash, or after a measured probe on the same device pair found
-/// that two threads help (`copy_probed`). A file of at least a quarter of the
-/// available memory on block devices goes around the page cache first
+/// in the kernel (`linux_plain`: `copy_file_range` for the known length, then
+/// `std::io::copy`, which reflinks on btrfs/xfs and copies server-side on
+/// NFS). A source with holes copies its data extents only (`linux_sparse`,
+/// Linux). With `parallel > 1` and a file of at least two shortest transfer
+/// parts, that many threads each copy one contiguous range at explicit
+/// offsets (`linux_range`); the engine asks for it with permits to spare on a
+/// drive known to be flash, or after a measured probe on the same device pair
+/// found that two threads help (`copy_probed`). A file of at least a quarter
+/// of the available memory on block devices goes around the page cache first
 /// (`linux_direct`: O_DIRECT, at most 4 threads); a file system that takes no
 /// direct I/O falls back to the ranges below before a byte has moved. Callers
 /// with `parallel == 1` (server copies, small files) never copy directly;
@@ -375,11 +382,17 @@ pub(super) fn copy_handles(
     progress: &mut dyn FnMut(u64),
     parallel: usize,
 ) -> io::Result<Option<u64>> {
-    use std::io::Read;
     if parallel > 1 {
         // Every thread needs at least one transfer part of its own.
-        let size = reader.metadata()?.len();
+        let facts = reader.metadata()?;
+        let size = facts.len();
         if size >= crate::transfer::segments::SPLIT_FROM {
+            // Holes stay holes: a sparse source never reaches the ranges.
+            match linux_plain::copy_sparse(reader, writer, &facts, parallel, cancel, progress)? {
+                linux_plain::Sparse::Copied(copied) => return Ok(Some(copied)),
+                linux_plain::Sparse::Canceled => return Ok(None),
+                linux_plain::Sparse::Dense => {}
+            }
             // Sparse until the ranges are in; a short source is an error.
             writer.set_len(size)?;
             match linux_direct::copy_whole(reader, writer, size, parallel, cancel, progress)? {
@@ -390,25 +403,7 @@ pub(super) fn copy_handles(
             return linux_range::copy_ranges(reader, writer, size, parallel, cancel, progress);
         }
     }
-    let mut copied = 0u64;
-    loop {
-        if cancel.load(std::sync::atomic::Ordering::Acquire) {
-            return Ok(None);
-        }
-        let mut chunk = Read::take(reader, KERNEL_CHUNK);
-        let moved = std::io::copy(&mut chunk, writer)?;
-        if moved == 0 {
-            return Ok(Some(copied));
-        }
-        copied = copied.saturating_add(moved);
-        progress(moved);
-        // `io::copy` only returns early at the end of the source: a short
-        // chunk is the last one, so the file needs no second round of
-        // `fstat`s and a zero-length probe call.
-        if moved < KERNEL_CHUNK {
-            return Ok(Some(copied));
-        }
-    }
+    linux_plain::copy_stream(reader, writer, cancel, progress)
 }
 
 /// Publish or move without replacing: `renameat2(RENAME_NOREPLACE)` with the
