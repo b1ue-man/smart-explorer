@@ -104,13 +104,11 @@ pub(super) fn run_actions_stoppable<'p>(
         .report
 }
 
-/// An action may run again after overload unless it keeps both versions and
-/// its failure may have come after a commit: a keep-both action publishes its
-/// conflict copy first, and repeating it after that copy was published would
-/// publish a second one. A failure before any commit published nothing, so
-/// it repeats like every other action; those capture and revalidate both
-/// sides against the plan, so a repeat after an unclear commit reports the
-/// drift instead of acting twice.
+/// An action may run again after overload only when its failure came before
+/// any commit: then nothing was published. After an attempted commit its
+/// outcome is uncertain (a keep-both action may have published its conflict
+/// copy, a copy its file), and an uncertain outcome is never silently
+/// repeated (b9f9b2ae); the next run's plan sees what is there.
 fn repeatable(action: &Action, error: &AttemptError) -> bool {
     let _ = action;
     error.before_commit()

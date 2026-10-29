@@ -37,7 +37,7 @@ mod apply_guard;
 #[path = "os/shared/apply_mirror.rs"]
 mod apply_mirror;
 #[path = "os/shared/apply_path_context.rs"]
-mod apply_path_context;
+pub(crate) mod apply_path_context;
 #[path = "os/shared/apply_pool.rs"]
 mod apply_pool;
 #[path = "os/shared/apply_reporting.rs"]

@@ -17,6 +17,12 @@ struct Counting {
 }
 
 impl Backend for Counting {
+    // Guarded stages finish, flush and confirm their namespace through the
+    // extensions of the local folder below (b9f9b2ae).
+    fn extensions(&self) -> Option<&dyn crate::vfs::BackendExtensions> {
+        Some(self)
+    }
+
     fn scheme(&self) -> Scheme {
         self.inner.scheme()
     }
@@ -41,6 +47,11 @@ impl Backend for Counting {
 
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
         self.inner.open_write(path)
+    }
+
+    // Sync stages are created exclusively (b9f9b2ae).
+    fn open_write_new(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
+        self.inner.open_write_new(path)
     }
 
     fn rename(&self, src: &str, dst: &str) -> VfsResult<()> {
@@ -73,6 +84,40 @@ impl Backend for Counting {
 
     fn mkdir_all(&self, path: &str) -> VfsResult<()> {
         self.inner.mkdir_all(path)
+    }
+}
+
+impl crate::vfs::BackendExtensions for Counting {
+    fn open_read_regular(&self, path: &str, id: Option<&str>) -> VfsResult<Box<dyn Read + Send>> {
+        crate::vfs::open_read_regular(&self.inner, path, id)
+    }
+
+    fn finish_stage(
+        &self,
+        path: &str,
+        finish: crate::vfs::StageFinish,
+    ) -> VfsResult<crate::vfs::StageFinished> {
+        crate::vfs::finish_stage(&self.inner, path, finish)
+    }
+
+    fn sync_filesystem(&self, root: &str) -> VfsResult<bool> {
+        crate::vfs::sync_filesystem(&self.inner, root)
+    }
+
+    fn confirm_namespace(&self, parent: &str) -> VfsResult<bool> {
+        crate::vfs::confirm_namespace(&self.inner, parent)
+    }
+
+    fn target_limits(&self, root: &str) -> crate::vfs::TargetLimits {
+        crate::vfs::target_limits(&self.inner, root)
+    }
+
+    fn unix_mode(&self, path: &str) -> VfsResult<Option<u32>> {
+        crate::vfs::unix_mode(&self.inner, path)
+    }
+
+    fn volume_identity(&self, root: &str) -> VfsResult<Option<crate::vfs::VolumeIdentity>> {
+        crate::vfs::volume_identity(&self.inner, root)
     }
 }
 
@@ -210,7 +255,7 @@ fn incremental_mirror_skips_target_tree_listing() {
 
     let endpoints = SyncEndpoints::new(&ca, &ra, &cb, &rb);
     let first = run_with_store_path(endpoints, opts, &cancel, &filter, &db);
-    assert!(first.errors.is_empty());
+    assert!(first.errors.is_empty(), "{:?}", first.errors);
     assert!(b.join("f.txt").exists());
 
     a_lists.store(0, Ordering::Relaxed);
@@ -287,7 +332,7 @@ fn incremental_drive_like_rename_deletes_old_target_path() {
 
     let endpoints = SyncEndpoints::new(&source, &ra, &target, &rb);
     let first = run_with_store_path(endpoints, opts, &cancel, &filter, &db);
-    assert!(first.errors.is_empty());
+    assert!(first.errors.is_empty(), "{:?}", first.errors);
     assert!(b.join("old.txt").exists());
 
     std::fs::rename(a.join("old.txt"), a.join("new.txt")).unwrap();

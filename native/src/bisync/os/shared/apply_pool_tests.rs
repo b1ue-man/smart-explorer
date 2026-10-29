@@ -299,9 +299,15 @@ fn transfer_engine_task_bisync_keep_both_repeats_overload_only_before_commit() {
         &keep,
         &super::AttemptError::commit_attempted(overload())
     ));
-    // Other actions revalidate both sides and may always repeat.
-    assert!(super::repeatable(
+    // No action repeats after a commit was attempted: its outcome is
+    // uncertain and is never silently repeated (b9f9b2ae); before any
+    // commit every action repeats.
+    assert!(!super::repeatable(
         &copy,
         &super::AttemptError::commit_attempted(overload())
+    ));
+    assert!(super::repeatable(
+        &copy,
+        &super::AttemptError::pre_commit(overload())
     ));
 }

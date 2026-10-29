@@ -70,7 +70,9 @@ impl Pass<'_> {
                 streamed.set(streamed.get().saturating_add(bytes));
                 self.streaming.fetch_add(bytes, Ordering::Relaxed);
             };
-            let result = self.confirm_and_copy(&task, &on_block);
+            let result = crate::bisync::apply_path_context::scoped(&self.paths, || {
+                self.confirm_and_copy(&task, &on_block)
+            });
             permits.finish(match &result {
                 Ok(Finished::Refused(_)) => OpOutcome::Failed,
                 Ok(_) => OpOutcome::Done,
@@ -164,6 +166,8 @@ impl Pass<'_> {
         if result.is_ok() {
             self.progress.touch();
         }
+        let at_destination =
+            matches!(&result, Err(failure) if self.destination_refused(task, &failure.error));
         let mut guard = self.lock();
         let state = &mut *guard;
         self.streaming.fetch_sub(streamed, Ordering::Relaxed);
@@ -181,7 +185,9 @@ impl Pass<'_> {
                 message,
             ),
             Err(failure) => {
-                if let Some(kind) = crate::bisync::apply_boundary::omitted(&failure.error) {
+                let omitted = crate::bisync::apply_boundary::omitted(&failure.error)
+                    .filter(|_| !at_destination);
+                if let Some(kind) = omitted {
                     state
                         .report
                         .omissions
@@ -207,6 +213,17 @@ impl Pass<'_> {
                 }
             }
         }
+    }
+
+    /// A refused or missing path that is not the source's: the source still
+    /// opens, so the destination refused the write (or lost its folder).
+    /// That is a failed copy, which blocks the mirror's delete pass, not an
+    /// unreadable or vanished source file (a protected omission).
+    fn destination_refused(&self, task: &FileTask, error: &io::Error) -> bool {
+        matches!(
+            error.kind(),
+            io::ErrorKind::PermissionDenied | io::ErrorKind::NotFound
+        ) && crate::vfs::open_read_regular(self.src, &task.source, task.meta.id.as_deref()).is_ok()
     }
 
     /// Runs `blocking` (a permit, a folder creation) counted as waiting, so

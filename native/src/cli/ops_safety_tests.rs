@@ -253,14 +253,13 @@ fn rename_fast_path_never_crosses_logical_backends() {
     )
     .unwrap();
 
+    // The copy fallback runs on the transfer engine (74a7e071), which
+    // publishes its stage itself; the source is never renamed across keys.
     let calls = backend.rename_calls();
-    assert_eq!(
-        calls.len(),
-        1,
-        "copy fallback should promote one staged file"
+    assert!(
+        calls.iter().all(|(from, _)| *from != src),
+        "source fast rename crossed backend keys: {calls:?}"
     );
-    assert_ne!(calls[0].0, src, "source fast rename crossed backend keys");
-    assert_eq!(calls[0].1, dst);
     assert!(!vfs_to_os(&src).exists());
     assert_eq!(fs::read(vfs_to_os(&dst)).unwrap(), b"copied");
 }
@@ -281,17 +280,13 @@ fn rename_fast_path_requires_compatible_handles_within_one_namespace() {
     )
     .unwrap();
 
+    // The copy fallback runs on the transfer engine (74a7e071), which
+    // publishes its stage itself; the source is never renamed across keys.
     let calls = backend.rename_calls();
-    assert_eq!(
-        calls.len(),
-        1,
-        "copy fallback should promote one staged file"
+    assert!(
+        calls.iter().all(|(from, _)| *from != src),
+        "source fast rename crossed incompatible handle keys: {calls:?}"
     );
-    assert_ne!(
-        calls[0].0, src,
-        "source fast rename crossed incompatible handle keys"
-    );
-    assert_eq!(calls[0].1, dst);
     assert!(!vfs_to_os(&src).exists());
     assert_eq!(fs::read(vfs_to_os(&dst)).unwrap(), b"copied");
 }

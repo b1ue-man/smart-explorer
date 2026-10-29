@@ -14,6 +14,11 @@ struct PlannedDedupe {
 }
 
 impl Backend for PlannedDedupe {
+    // Guarded stages finish, flush and confirm their namespace through the
+    // extensions of the local folder below (b9f9b2ae).
+    fn extensions(&self) -> Option<&dyn crate::vfs::BackendExtensions> {
+        Some(self)
+    }
     fn scheme(&self) -> Scheme {
         self.inner.scheme()
     }
@@ -35,6 +40,12 @@ impl Backend for PlannedDedupe {
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
         self.writes.fetch_add(1, Ordering::Relaxed);
         self.inner.open_write(path)
+    }
+    // Sync stages are created exclusively (b9f9b2ae): a backend without
+    // this writer is refused ("no atomic exclusive-create writer").
+    fn open_write_new(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
+        self.writes.fetch_add(1, Ordering::Relaxed);
+        self.inner.open_write_new(path)
     }
     fn rename(&self, source: &str, destination: &str) -> VfsResult<()> {
         self.inner.rename(source, destination)
@@ -64,7 +75,7 @@ impl Backend for PlannedDedupe {
     }
     fn plan_dedupe_recursive(
         &self,
-        _root: &str,
+        root: &str,
         _keep: &dyn Fn(&str) -> bool,
     ) -> VfsResult<Vec<DedupeCandidate>> {
         if self.fail_plan {
@@ -75,8 +86,11 @@ impl Backend for PlannedDedupe {
         }
         Ok((0..self.candidates)
             .map(|index| DedupeCandidate {
-                path: format!("/duplicate-{index}"),
-                id: Some(format!("id-{index}")),
+                // Candidates outside the sync root are refused.
+                path: format!("{}/duplicate-{index}", root.trim_end_matches('/')),
+                // A local folder has no duplicate names: each name is one
+                // object without a provider ID.
+                id: None,
             })
             .collect())
     }
@@ -86,10 +100,47 @@ impl Backend for PlannedDedupe {
     }
 }
 
+impl crate::vfs::BackendExtensions for PlannedDedupe {
+    fn open_read_regular(&self, path: &str, id: Option<&str>) -> VfsResult<Box<dyn Read + Send>> {
+        crate::vfs::open_read_regular(&self.inner, path, id)
+    }
+    fn finish_stage(
+        &self,
+        path: &str,
+        finish: crate::vfs::StageFinish,
+    ) -> VfsResult<crate::vfs::StageFinished> {
+        crate::vfs::finish_stage(&self.inner, path, finish)
+    }
+    fn sync_filesystem(&self, root: &str) -> VfsResult<bool> {
+        crate::vfs::sync_filesystem(&self.inner, root)
+    }
+    fn confirm_namespace(&self, parent: &str) -> VfsResult<bool> {
+        crate::vfs::confirm_namespace(&self.inner, parent)
+    }
+    fn target_limits(&self, root: &str) -> crate::vfs::TargetLimits {
+        crate::vfs::target_limits(&self.inner, root)
+    }
+    fn unix_mode(&self, path: &str) -> VfsResult<Option<u32>> {
+        crate::vfs::unix_mode(&self.inner, path)
+    }
+    fn volume_identity(&self, root: &str) -> VfsResult<Option<crate::vfs::VolumeIdentity>> {
+        crate::vfs::volume_identity(&self.inner, root)
+    }
+}
+
 fn run_guard_case(candidates: usize, fail_plan: bool) -> (Outcome, usize, usize) {
     let source_dir = tmp("dedupe_source");
     let destination_dir = tmp("dedupe_destination");
     std::fs::write(source_dir.join("new.txt"), b"new").unwrap();
+    // Each planned candidate is an observed destination file without a
+    // source counterpart; one outside the sync root is refused (b9f9b2ae).
+    for index in 0..candidates {
+        std::fs::write(
+            destination_dir.join(format!("duplicate-{index}")),
+            b"duplicate",
+        )
+        .unwrap();
+    }
     let source = LocalBackend::new(&fwd(&source_dir));
     let writes = Arc::new(AtomicUsize::new(0));
     let removals = Arc::new(AtomicUsize::new(0));
@@ -138,7 +189,9 @@ fn run_guard_case(candidates: usize, fail_plan: bool) -> (Outcome, usize, usize)
 #[test]
 fn duplicate_count_above_guard_mutates_nothing() {
     let (outcome, writes, removals) = run_guard_case(2, false);
-    assert!(!outcome.errors.is_empty());
+    // Above the guard the run stops for review before its first change
+    // (`Outcome::blocked`, FS3, dd0dccfb).
+    assert!(outcome.blocked.is_some(), "{:?}", outcome.errors);
     assert_eq!((writes, removals), (0, 0));
 }
 

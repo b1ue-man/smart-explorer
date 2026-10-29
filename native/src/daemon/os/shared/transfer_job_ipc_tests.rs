@@ -92,8 +92,13 @@ fn reply(client: &mut TcpStream) -> TransferIpcReply {
     }
 }
 
+/// A job id as the app makes it: the engine keeps a job's folder
+/// reservations under its id, which must be 64 hex digits
+/// (`folder_alias_store::AliasStore::open`, d0138b4a). `tag` only names the
+/// test in the code.
 fn id(tag: &str) -> String {
-    format!("worker-job-task-{tag}-{}", crate::transfer::new_job_id())
+    let _ = tag;
+    crate::transfer::new_job_id()
 }
 
 #[test]
