@@ -283,6 +283,43 @@ pub(super) fn commit_staged(
     rename_no_replace(staged, dest)
 }
 
+/// `commit_staged`; the held stage handle only matters on Windows, whose
+/// rename goes through it (A7). `renameat2(RENAME_NOREPLACE)` is one call.
+pub(super) fn commit_staged_held(
+    staged: &Path,
+    dest: &Path,
+    _held: Option<&File>,
+    overwrite: bool,
+    durable: bool,
+) -> io::Result<()> {
+    commit_staged(staged, dest, overwrite, durable)
+}
+
+/// Windows opens a copy's source once and classifies the handle (A7); here
+/// `local_access::open_regular` (one `lstat` and one `openat`) stays.
+pub(super) fn open_copy_source(_path: &Path) -> Option<File> {
+    None
+}
+
+/// Windows copies small plain files through the handles it holds (A7);
+/// here every copy fills its stage through `copy_handles`.
+pub(super) fn copy_from_reader(
+    _source: &Path,
+    _reader: &File,
+    _stage: &Path,
+    _cancel: &std::sync::atomic::AtomicBool,
+    _progress: &mut dyn FnMut(u64),
+    _known: Option<super::SourceFacts>,
+) -> Option<io::Result<Option<(u64, File)>>> {
+    None
+}
+
+/// Whether `path` names `file`, told without looking at the path: never
+/// here (one `lstat` is the look, `path_state`).
+pub(super) fn handle_has_path(_file: &File, _path: &Path) -> bool {
+    false
+}
+
 pub(super) fn move_file(src: &Path, dest: &Path, overwrite: bool) -> io::Result<()> {
     if overwrite {
         return crate::vfs::replace_local_file(src, dest);

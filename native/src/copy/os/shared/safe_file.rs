@@ -67,7 +67,7 @@ pub(crate) fn transfer_local(
     request: &LocalRequest<'_>,
     progress: &mut dyn FnMut(u64),
 ) -> Result<LocalOutcome, LocalFailure> {
-    transfer_local_inner(request, None, progress, None)
+    transfer_local_inner(request, Start::Look, progress, None)
 }
 
 /// The same local transfer with durable receipt hooks around publication.
@@ -76,7 +76,32 @@ pub(crate) fn transfer_local_observed(
     progress: &mut dyn FnMut(u64),
     observer: &dyn PublicationObserver,
 ) -> Result<LocalOutcome, LocalFailure> {
-    transfer_local_inner(request, None, progress, Some(observer))
+    transfer_local_inner(request, Start::Look, progress, Some(observer))
+}
+
+/// `transfer_local_observed` for a new copy under "skip" into a folder this
+/// job created (A7, 2026-10-29): nothing of anyone else can be inside, so
+/// the destination is not looked at first. A name taken meanwhile still
+/// fails the no-replace publication, which then skips the file, as the
+/// look would have.
+pub(crate) fn transfer_local_fresh(
+    request: &LocalRequest<'_>,
+    progress: &mut dyn FnMut(u64),
+    observer: &dyn PublicationObserver,
+) -> Result<LocalOutcome, LocalFailure> {
+    let fresh = request.mode == CopyMode::Copy && request.conflict == Conflict::Skip;
+    let start = if fresh { Start::Fresh } else { Start::Look };
+    transfer_local_inner(request, start, progress, Some(observer))
+}
+
+/// Where the first name of a transfer comes from.
+enum Start<'p> {
+    /// The conflict policy looks at the destination (`select_initial_target`).
+    Look,
+    /// The requested name, unlooked at: its folder is new (`transfer_local_fresh`).
+    Fresh,
+    /// Chosen before by the caller (`transfer_local_from`).
+    At(&'p Path),
 }
 
 /// A member of a local packet (M3): a new copy under "skip" or "keep both"
@@ -95,31 +120,30 @@ pub(crate) fn transfer_local_from(
             "only new copies under skip or keep both start at a chosen name",
         )));
     }
-    transfer_local_inner(request, Some(start), progress, Some(observer))
+    transfer_local_inner(request, Start::At(start), progress, Some(observer))
 }
 
 fn transfer_local_inner(
     request: &LocalRequest<'_>,
-    start: Option<&Path>,
+    start: Start<'_>,
     progress: &mut dyn FnMut(u64),
     observer: Option<&dyn PublicationObserver>,
 ) -> Result<LocalOutcome, LocalFailure> {
     let src = request.source;
-    let source_metadata =
-        crate::local_access::symlink_metadata(src).map_err(LocalFailure::Source)?;
-    if crate::local_access::metadata_is_link_like(src, &source_metadata)
-        || !source_metadata.is_file()
-    {
-        return Err(LocalFailure::Source(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("source is not a regular, non-link file: {}", src.display()),
-        )));
-    }
+    // A copy's source opened once where the platform can classify the
+    // handle (Windows, A7); a move's source is quarantined by name first.
+    let opened = if request.mode == CopyMode::Copy {
+        checked_copy_source(src)?
+    } else {
+        check_source(src)?;
+        None
+    };
     // Phase 1: the first name.
     let requested = request.target.to_path_buf();
     let mut target = match start {
-        Some(start) => start.to_path_buf(),
-        None => match select_initial_target(src, &requested, request.conflict)? {
+        Start::At(start) => start.to_path_buf(),
+        Start::Fresh => requested.clone(),
+        Start::Look => match select_initial_target(src, &requested, request.conflict)? {
             Some(target) => target,
             None => return Ok(LocalOutcome::Skipped),
         },
@@ -172,6 +196,7 @@ fn transfer_local_inner(
     durable_ranges_tests::saw(parallel.threads, durable);
     let staged = match stage_copy(
         &source_path,
+        opened,
         &target,
         request.cancel,
         durable,
@@ -201,6 +226,31 @@ fn transfer_local_inner(
         &mut quarantine,
         observer,
     )
+}
+
+/// The source of a transfer, checked to be a regular file that is no link:
+/// opened already where the platform classifies the handle itself
+/// (`open_copy_source`, Windows), else looked at (`None`; the stage opens it).
+pub(super) fn checked_copy_source(src: &Path) -> Result<Option<std::fs::File>, LocalFailure> {
+    if let Some(file) = platform::open_copy_source(src) {
+        return Ok(Some(file));
+    }
+    check_source(src).map(|()| None)
+}
+
+/// Refuses a source that is no regular file or a link, by one look at it.
+fn check_source(src: &Path) -> Result<(), LocalFailure> {
+    let source_metadata =
+        crate::local_access::symlink_metadata(src).map_err(LocalFailure::Source)?;
+    if crate::local_access::metadata_is_link_like(src, &source_metadata)
+        || !source_metadata.is_file()
+    {
+        return Err(LocalFailure::Source(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("source is not a regular, non-link file: {}", src.display()),
+        )));
+    }
+    Ok(())
 }
 
 /// The quarantined move source goes back where it was when the copy failed.

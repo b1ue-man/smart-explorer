@@ -193,6 +193,11 @@ impl crate::copy::PublicationObserver for LocalObserver<'_, '_> {
         )
     }
     fn after_publish_handle(&self, target: &Path, held: &File) -> io::Result<()> {
+        // Without a crash log there is nothing to record: not even the
+        // destination's text is built (A7).
+        if self.engine.job_record.is_none() {
+            return Ok(());
+        }
         after_checked(
             self.engine,
             self.file,

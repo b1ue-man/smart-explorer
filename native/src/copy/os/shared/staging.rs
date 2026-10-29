@@ -64,6 +64,10 @@ pub(super) struct Staged {
     pub(super) file: File,
     pub(super) bytes: u64,
     pub(super) snapshot: SourceSnapshot,
+    /// The stage handle may rename the stage and no other process can move
+    /// it (Windows stages a kernel or small-file copy made, A7): the
+    /// publication renames through it (`commit_staged_held`).
+    pub(super) pinned: bool,
 }
 
 impl Staged {
@@ -87,8 +91,12 @@ pub(super) struct Parallel<'a> {
 /// `durable` (moves, replacements) syncs the stage to disk once all bytes
 /// are in, whatever number of threads wrote them. `parallel` is what the
 /// copy may use, durable or not (M15); an optical source always gets one.
+/// `opened` is the source when the caller already opened it as a plain
+/// regular file (`open_copy_source`, A7); else it is opened here.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn stage_copy(
     source: &Path,
+    opened: Option<File>,
     target: &Path,
     cancel: &AtomicBool,
     durable: bool,
@@ -116,7 +124,13 @@ pub(super) fn stage_copy(
         probe: None,
     };
     let parallel = if optical.is_some() { &single } else { parallel };
-    let (reader, before) = open_regular_source(source)?;
+    let (reader, before) = match opened {
+        Some(reader) => {
+            let before = source_snapshot_file(&reader).map_err(LocalFailure::Source)?;
+            (reader, before)
+        }
+        None => open_regular_source(source)?,
+    };
     if !durable {
         if let Some(staged) = stage_by_path(
             source,
@@ -181,6 +195,7 @@ pub(super) fn stage_copy(
         file: writer,
         bytes: copied,
         snapshot: before,
+        pinned: false,
     }))
 }
 
@@ -197,50 +212,6 @@ fn copy_into(
         return platform::copy_probed(reader, writer, cancel, progress, parallel.threads, report);
     }
     platform::copy_handles(reader, writer, cancel, progress, parallel.threads)
-}
-
-/// Optical bytes use one bounded sequential loop on both desktop systems.
-/// Preserve the existing source/target error attribution while sharing the
-/// measured block parameter with Windows' metadata-preserving path.
-pub(super) fn copy_optical_handles(
-    reader: &File,
-    writer: &mut File,
-    cancel: &AtomicBool,
-    progress: &mut dyn FnMut(u64),
-) -> io::Result<Option<u64>> {
-    struct SourceReader<'a>(&'a File);
-    impl io::Read for SourceReader<'_> {
-        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-            io::Read::read(&mut self.0, buffer).map_err(|error| {
-                if error.kind() == io::ErrorKind::Interrupted {
-                    error
-                } else {
-                    io::Error::other(LocalFailure::Source(error))
-                }
-            })
-        }
-    }
-    struct TargetWriter<'a>(&'a mut File);
-    impl io::Write for TargetWriter<'_> {
-        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-            io::Write::write(self.0, bytes).map_err(|error| {
-                if error.kind() == io::ErrorKind::Interrupted {
-                    error
-                } else {
-                    io::Error::other(LocalFailure::Target(error))
-                }
-            })
-        }
-        fn flush(&mut self) -> io::Result<()> {
-            io::Write::flush(self.0).map_err(|error| io::Error::other(LocalFailure::Target(error)))
-        }
-    }
-    crate::source_media::sequential_copy(
-        &mut SourceReader(reader),
-        &mut TargetWriter(writer),
-        cancel,
-        progress,
-    )
 }
 
 /// Opens the source of a copy: a regular file (never a link, junction or
@@ -291,7 +262,26 @@ fn stage_by_path(
             size: before.len,
             optical,
         };
-        match platform::copy_by_path(source, &temp, cancel, progress, Some(known)) {
+        // A small plain source through the handles already held (Windows,
+        // A7), else, and after any failure of that way but a taken name or a
+        // full target, the kernel copy by path (`CopyFile2`, which keeps the
+        // file's times and attributes where the handle copy below would not).
+        let copied = match platform::copy_from_reader(
+            source,
+            reader,
+            &temp,
+            cancel,
+            progress,
+            Some(known),
+        ) {
+            Some(Err(error)) if !final_stage_error(&error) => {
+                drop(error);
+                platform::copy_by_path(source, &temp, cancel, progress, Some(known))
+            }
+            None => platform::copy_by_path(source, &temp, cancel, progress, Some(known)),
+            done => done,
+        };
+        match copied {
             None => return Ok(None),
             Some(Ok(None)) => return Ok(Some(None)),
             Some(Ok(Some((bytes, file)))) => {
@@ -307,6 +297,7 @@ fn stage_by_path(
                     file,
                     bytes,
                     snapshot: before.clone(),
+                    pinned: true,
                 })));
             }
             Some(Err(error)) if error.kind() == io::ErrorKind::AlreadyExists => continue,
@@ -320,11 +311,25 @@ fn stage_by_path(
             }
             Some(Err(error)) if optical => return Err(side_of(error)),
             // Protected sources (readable only through `local_access`) and
-            // file systems without the kernel path use the handles.
-            Some(Err(_)) => return Ok(None),
+            // file systems without the kernel path use the handles, from the
+            // first byte (a small-file copy may have read some already).
+            Some(Err(_)) => {
+                let mut reader = reader;
+                io::Seek::rewind(&mut reader).map_err(LocalFailure::Source)?;
+                return Ok(None);
+            }
         }
     }
     Ok(None)
+}
+
+/// Errors of a stage copy that end its attempt as they are: the stage name
+/// was taken (the next name follows) or the target is full.
+fn final_stage_error(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::AlreadyExists | io::ErrorKind::StorageFull | io::ErrorKind::QuotaExceeded
+    )
 }
 
 pub(super) fn unchanged(
@@ -344,7 +349,15 @@ pub(super) fn unchanged_state(
     before: &SourceSnapshot,
 ) -> Result<std::fs::Metadata, LocalFailure> {
     let (after, metadata) = file_state(reader).map_err(LocalFailure::Source)?;
-    if after != *before || source_snapshot_entry(source).map_err(LocalFailure::Source)? != *before {
+    if after != *before {
+        return Err(LocalFailure::Source(source_changed_error(source)));
+    }
+    // The handle's own name answers "does the path still name it" where the
+    // platform can tell (Windows, A7: no open); else one look at the path.
+    if platform::handle_has_path(reader, source) {
+        return Ok(metadata);
+    }
+    if source_snapshot_entry(source).map_err(LocalFailure::Source)? != *before {
         return Err(LocalFailure::Source(source_changed_error(source)));
     }
     Ok(metadata)
@@ -473,6 +486,10 @@ fn random_suffix(target: &Path, attempt: u32) -> u64 {
         .hash(&mut hasher);
     hasher.finish()
 }
+
+#[path = "staging_optical.rs"]
+mod optical;
+pub(super) use optical::copy_optical_handles;
 
 #[cfg(test)]
 #[path = "staging_tests.rs"]

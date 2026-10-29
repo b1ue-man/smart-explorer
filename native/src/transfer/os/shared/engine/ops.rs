@@ -289,7 +289,9 @@ pub(crate) fn transfer<'e>(
     }
     crate::source_media::with_cancellation(engine.stop_flag(), || {
         match (engine.view.source, engine.view.target) {
-            (Side::Local, Side::Local) => super::local::copy_file(engine, file, meter),
+            (Side::Local, Side::Local) => {
+                super::local::copy_file(engine, file, parent_created, meter)
+            }
             (Side::Local, Side::Remote(target)) => {
                 super::upload::upload(engine, target, file, parent_created, meter, buffer)
             }

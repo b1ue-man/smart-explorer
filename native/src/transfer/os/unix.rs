@@ -20,6 +20,10 @@ pub(crate) fn upload_is_link_like(_path: &Path, metadata: &std::fs::Metadata) ->
 }
 
 /// `\` is an ordinary character in Unix file names.
+/// Local operations per core a flash volume's flow starts at (M7): a Linux
+/// copy of a small file is a few system calls without waiting.
+pub(crate) const LOCAL_STARTS_PER_CORE: usize = 2;
+
 pub(crate) fn backslash_is_name_char() -> bool {
     true
 }
