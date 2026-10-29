@@ -37,6 +37,7 @@ use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use super::linux_direct::{release_buffer, Direct, Start};
+use super::linux_plain::{copy_sparse, Sparse};
 use super::linux_range::{copy_span_with, Hooks};
 use crate::transfer::segments::MIN_SEGMENT;
 
@@ -101,7 +102,15 @@ pub(in crate::copy) fn copy_probed(
     threads: usize,
     report: &dyn Fn(bool),
 ) -> io::Result<Option<u64>> {
-    let size = reader.metadata()?.len();
+    let facts = reader.metadata()?;
+    let size = facts.len();
+    // A source with holes copies its data extents only, on one thread
+    // (`linux_sparse`); a file that has none is measured as before.
+    match copy_sparse(reader, writer, &facts, 1, cancel, progress)? {
+        Sparse::Copied(copied) => return Ok(Some(copied)),
+        Sparse::Canceled => return Ok(None),
+        Sparse::Dense => {}
+    }
     let Some(section) = section_len(size).filter(|_| threads >= PROBE_THREADS) else {
         return super::copy_handles(reader, writer, cancel, progress, 1);
     };

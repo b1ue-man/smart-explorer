@@ -20,10 +20,17 @@ const PEER_START_LIMIT: usize = 8;
 /// Windows 4, A7) times the cores, within these bounds (M7,
 /// 2026-10-28): small files reach their steady rate at once and a large
 /// file gets the extra threads it plans for (`UNBUFFERED_EXTRAS` = 3 plus
-/// its own) from its first byte. A rotating disk keeps the general start of
-/// 2; the controller grows or shrinks every start from there.
+/// its own) from its first byte. A disk reported as rotating starts at
+/// `ROTATING_START`; the controller grows or shrinks every start from there.
 const LOCAL_START_MIN: usize = 8;
 const LOCAL_START_MAX: usize = 16;
+/// Start of a local volume reported as rotating. The flag lies on virtual
+/// disks (Linux virtio-blk reports `queue/rotational` = 1, Hyper-V and Azure
+/// disks report a seek penalty), and even a real hard disk gains from several
+/// outstanding requests on small files (command queueing). robocopy runs
+/// `/MT:8` by default whatever the medium (Microsoft Learn, robocopy,
+/// "/mt"); the flow controller still lowers the limit when the disk saturates.
+const ROTATING_START: usize = 8;
 
 struct Registry {
     flows: HashMap<String, (Arc<Flow>, Instant)>,
@@ -123,12 +130,12 @@ const REMOTE_START: usize = 8;
 /// quota there (G3-09).
 const SESSION_START: usize = 4;
 
-/// The start of a local volume's flow: `None` (general start) for a disk
-/// known to rotate, otherwise `LOCAL_STARTS_PER_CORE` times the cores within
-/// the local bounds.
+/// The start of a local volume's flow: `ROTATING_START` for a disk reported
+/// as rotating, otherwise `LOCAL_STARTS_PER_CORE` times the cores within the
+/// local bounds.
 fn local_start(rotational: Option<bool>) -> Option<usize> {
     if rotational == Some(true) {
-        return None;
+        return Some(ROTATING_START);
     }
     let cores = std::thread::available_parallelism().map_or(1, usize::from);
     Some(
@@ -175,8 +182,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn local_speed_task_local_flows_start_wide_except_on_rotating_disks() {
-        assert_eq!(local_start(Some(true)), None);
+    fn local_speed_task_local_flows_start_wide_and_rotating_disks_start_at_eight() {
+        assert_eq!(local_start(Some(true)), Some(ROTATING_START));
+        assert_eq!(ROTATING_START, 8);
         for rotational in [Some(false), None] {
             let start = local_start(rotational).expect("flash or unknown starts wide");
             assert!((LOCAL_START_MIN..=LOCAL_START_MAX).contains(&start));
