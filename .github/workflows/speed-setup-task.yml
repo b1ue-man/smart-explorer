@@ -173,6 +173,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
+          # The baseline comparison builds v0.5.188 from its tag in a git
+          # worktree (run 40825158076: "invalid reference: v0.5.188").
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Bind workflow and checkout to the requested candidate
