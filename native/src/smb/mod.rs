@@ -29,6 +29,8 @@ mod batch_wire;
 mod compound_put;
 #[path = "core/compound_read.rs"]
 mod compound_read;
+#[path = "core/credit_retry.rs"]
+mod credit_retry;
 #[path = "core/errors.rs"]
 mod errors;
 #[path = "core/extensions.rs"]

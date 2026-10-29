@@ -8,6 +8,7 @@ use super::copy_data::{
     copy_data_payload, copy_to_stage, next_range, range_answer, RangeAnswer, ServerCopy, COPY_DATA,
     FIRST_RANGE, MIN_RANGE,
 };
+use super::handle_budget::BudgetSession;
 use super::io_adapters::Commit;
 use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::client::RawSftpSession;
@@ -289,7 +290,7 @@ impl Handler for FakeServer {
 
 /// A client session on `server` after INIT (the client refuses answers
 /// before the VERSION reply), with that reply.
-fn connect(server: &FakeServer) -> (tokio::runtime::Runtime, Arc<RawSftpSession>, Version) {
+fn connect(server: &FakeServer) -> (tokio::runtime::Runtime, Arc<BudgetSession>, Version) {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .build()
@@ -302,7 +303,11 @@ fn connect(server: &FakeServer) -> (tokio::runtime::Runtime, Arc<RawSftpSession>
         let version = session.init().await.expect("VERSION");
         (session, version)
     });
-    (runtime, Arc::new(session), version)
+    (
+        runtime,
+        Arc::new(BudgetSession::new(session, None)),
+        version,
+    )
 }
 
 fn copy(server: &FakeServer, size: u64) -> io::Result<ServerCopy> {

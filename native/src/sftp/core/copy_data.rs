@@ -22,6 +22,7 @@
 //! a failing step after the copy or in the cleanup.
 use super::backend::SftpBackend;
 use super::channel_pool::{note_failure, open_failed};
+use super::handle_budget::BudgetSession;
 use super::io_err;
 use crate::vfs::VfsResult;
 use futures_util::future::{join, join_all};
@@ -148,15 +149,24 @@ fn failed(error: SftpError, note: Note<'_>) -> Failed {
 
 /// Copies `source` into the new stage `stage` on `session`'s server.
 pub(super) async fn copy_to_stage(
-    session: &Arc<RawSftpSession>,
+    session: &Arc<BudgetSession>,
     source: &str,
     stage: &str,
     size: u64,
     cancel: &AtomicBool,
     note: Note<'_>,
 ) -> io::Result<ServerCopy> {
+    // Source and stage are held together: both slots at once
+    // (handle_budget.rs), so chains never wait on each other's halves.
+    let mut slots = match session.reserve(2).await {
+        Ok(slots) => slots,
+        Err(error) => {
+            note(&error);
+            return Ok(ServerCopy::Stream);
+        }
+    };
     let read = match session
-        .open(source, OpenFlags::READ, FileAttributes::empty())
+        .open_reserved(&mut slots, source, OpenFlags::READ, FileAttributes::empty())
         .await
     {
         Ok(handle) => handle.handle,
@@ -166,7 +176,10 @@ pub(super) async fn copy_to_stage(
         }
     };
     let flags = OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::EXCLUDE;
-    let write = match session.open(stage, flags, FileAttributes::empty()).await {
+    let write = match session
+        .open_reserved(&mut slots, stage, flags, FileAttributes::empty())
+        .await
+    {
         Ok(handle) => handle.handle,
         Err(error) => {
             note(&error);
@@ -275,7 +288,7 @@ async fn stage_refused(
 
 /// Closes `handles`: all sent at once and awaited while the server
 /// answers, else only sent.
-async fn release(session: &Arc<RawSftpSession>, handles: Vec<String>, answering: bool) {
+async fn release(session: &Arc<BudgetSession>, handles: Vec<String>, answering: bool) {
     if answering {
         join_all(handles.into_iter().map(|handle| session.close(handle))).await;
         return;

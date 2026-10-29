@@ -1,4 +1,5 @@
 use super::config::SftpConfig;
+use super::handle_budget::REPRESENTABLE_HANDLES;
 use super::host_key::UnknownHostKey;
 use super::session::{connect_async, Client};
 #[path = "reconnect_gate.rs"]
@@ -13,6 +14,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::runtime::Runtime;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 const SFTP_CONNECT_DEADLINE: Duration = Duration::from_secs(30);
 const SFTP_METADATA_DEADLINE: Duration = Duration::from_secs(20);
@@ -29,6 +31,10 @@ pub(super) struct SftpTransport {
     /// The host key this connection showed and the trust store accepted;
     /// extra connections must show the same one.
     host_key: Option<UnknownHostKey>,
+    /// Handles the main session holds at once (handle_budget.rs): a file
+    /// or folder handle takes a slot from before its OPEN until its CLOSE
+    /// went out.
+    handles: Arc<Semaphore>,
 }
 
 pub(super) type SftpGeneration = Generation<SftpTransport>;
@@ -45,6 +51,25 @@ impl SftpGeneration {
     /// The accepted host key of this connection (algorithm and fingerprint).
     pub(super) fn host_key(&self) -> Option<&UnknownHostKey> {
         self.value().host_key.as_ref()
+    }
+
+    /// One handle slot of the main session; it waits while all are held.
+    /// The holder keeps it until the CLOSE of its handle was sent (a
+    /// dropped `File` sends it at once), so the server never holds more.
+    pub(super) async fn handle_slot(&self) -> Result<OwnedSemaphorePermit, SftpError> {
+        self.value()
+            .handles
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| SftpError::Limited("SFTP-Hauptsitzung geschlossen".to_string()))
+    }
+
+    /// One handle slot of the main session if one is free now. For a step
+    /// that may already hold another slot (a writer next to its source's
+    /// reader): waiting there could leave every holder waiting for a slot.
+    pub(super) fn try_handle_slot(&self) -> Option<OwnedSemaphorePermit> {
+        self.value().handles.clone().try_acquire_owned().ok()
     }
 }
 
@@ -184,6 +209,12 @@ fn runtime_workers() -> usize {
         .max(MIN_RUNTIME_WORKERS)
 }
 
+/// The main session's handle slots: russh-sftp cannot name a handle of slot
+/// 128 or later back to OpenSSH's server (handle_budget.rs).
+fn main_handles() -> Arc<Semaphore> {
+    Arc::new(Semaphore::new(REPRESENTABLE_HANDLES))
+}
+
 fn connect_transport(runtime: &Runtime, config: &SftpConfig) -> io::Result<SftpTransport> {
     let (session, sftp, host_key) =
         block_on_connect(runtime, SFTP_CONNECT_DEADLINE, connect_async(config))?;
@@ -191,6 +222,7 @@ fn connect_transport(runtime: &Runtime, config: &SftpConfig) -> io::Result<SftpT
         session,
         sftp: Arc::new(sftp),
         host_key,
+        handles: main_handles(),
     })
 }
 
@@ -209,6 +241,7 @@ fn connect_transport_until(
         session,
         sftp: Arc::new(sftp),
         host_key,
+        handles: main_handles(),
     })
 }
 

@@ -238,8 +238,11 @@ impl Backend for SftpBackend {
         // russh-sftp bounds each READDIR request. An advancing large listing
         // must not also fit the ordinary 20-s single-metadata budget.
         let (_, dir) = self.safe_sftp_on(|generation| {
-            self.rt
-                .block_on(generation.sftp().read_dir(path.to_string()))
+            self.rt.block_on(async {
+                // The folder handle holds a main-session slot (handle_budget.rs).
+                let _slot = generation.handle_slot().await?;
+                generation.sftp().read_dir(path.to_string()).await
+            })
         })?;
         let mut out = Vec::new();
         for e in dir {

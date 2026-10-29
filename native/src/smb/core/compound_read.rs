@@ -14,6 +14,7 @@
 //! `stat` (FILE_OPEN_REPARSE_POINT) answers.
 use super::backend::SmbBackend;
 use super::batch_wire::{charge, read_data, read_request};
+use super::credit_retry::funded;
 use super::reader::{read_chunk, SmbReader};
 use super::wire;
 use crate::vfs::VfsResult;
@@ -76,15 +77,12 @@ impl Handle {
         while position < end {
             let block = (end - position).min(self.chunk) as usize;
             let request = read_request(self.file_id, position, block);
-            let frame = self
-                .conn
-                .execute_with_credits(
-                    Command::Read,
-                    &request,
-                    Some(self.tree.tree_id),
-                    charge(block),
-                )
-                .await?;
+            let (conn, tree_id) = (&self.conn, Some(self.tree.tree_id));
+            let (request, credits) = (&request, charge(block));
+            let frame = funded(conn, move || {
+                conn.execute_with_credits(Command::Read, request, tree_id, credits)
+            })
+            .await?;
             // A racing truncation shows as END_OF_FILE: a short read.
             let data = read_data(&frame)?;
             if data.is_empty() {
@@ -158,7 +156,9 @@ pub(super) async fn open(
     if first.close {
         ops.push(CompoundOp::new(Command::Close, &close, tree_id));
     }
-    let frames = wire::frames(conn.execute_compound(&ops).await?, ops.len())?;
+    let (link, chain) = (&conn, &ops[..]);
+    let sent = funded(link, move || link.execute_compound(chain)).await?;
+    let frames = wire::frames(sent, ops.len())?;
     let response = wire::created(&frames[0])?;
     let id = response.file_id;
     let mut prefix = Vec::new();

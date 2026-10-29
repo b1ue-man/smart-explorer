@@ -1,9 +1,11 @@
 use super::connection::{SftpConnection, SftpGeneration};
 use super::io_err;
+use russh_sftp::client::error::Error as SftpError;
 use std::io::{self, Read, SeekFrom, Write};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::runtime::Runtime;
+use tokio::sync::OwnedSemaphorePermit;
 
 /// `std::io::Read` over a tokio async read half, driven by the backend's runtime
 /// (the protocol is request/response, so each call blocks one op — never nested
@@ -83,6 +85,9 @@ pub(super) struct SftpReader {
     pub(super) start: u64,
     pub(super) delivered: u64,
     pub(super) retried: bool,
+    /// The main session's handle slot of `file`; declared after it, so it
+    /// frees only once the dropped file sent its CLOSE.
+    pub(super) slot: Option<OwnedSemaphorePermit>,
 }
 
 /// Positions a freshly opened main-session file at `start` (no request: an
@@ -113,12 +118,17 @@ impl Read for SftpReader {
                     }
                     self.retried = true;
                     let generation = self.connection.current()?;
-                    let opened = self.rt.block_on(generation.sftp().open(self.path.clone()));
+                    let opened = self.rt.block_on(async {
+                        let slot = generation.handle_slot().await?;
+                        let file = generation.sftp().open(self.path.clone()).await?;
+                        Ok::<_, SftpError>((file, slot))
+                    });
                     match opened {
-                        Ok(mut file) => {
+                        Ok((mut file, slot)) => {
                             self.rt.block_on(seek_start(&mut file, self.start))?;
                             self.generation = generation;
                             self.file = file;
+                            self.slot = Some(slot);
                         }
                         Err(error) => {
                             self.connection.note_sftp_error(&generation, &error);
@@ -156,6 +166,8 @@ pub(super) struct SftpWriter {
     pub(super) generation: Arc<SftpGeneration>,
     pub(super) file: Option<russh_sftp::client::fs::File>,
     pub(super) commit: Commit,
+    /// The main session's handle slot of `file`, freed after its CLOSE.
+    pub(super) slot: Option<OwnedSemaphorePermit>,
 }
 
 impl Write for SftpWriter {
@@ -190,6 +202,9 @@ impl Write for SftpWriter {
             }
             file.shutdown().await
         });
+        // The CLOSE went out (answered or abandoned with the file).
+        drop(file);
+        drop(self.slot.take());
         if let Err(error) = &result {
             self.connection.note_io_error(&self.generation, error);
         }

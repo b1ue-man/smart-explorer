@@ -78,6 +78,8 @@ mod errors;
 mod exec;
 #[path = "core/extensions.rs"]
 mod extensions;
+#[path = "core/handle_budget.rs"]
+mod handle_budget;
 #[path = "core/host_key.rs"]
 mod host_key;
 #[path = "core/host_key_ops.rs"]
@@ -147,6 +149,9 @@ mod delete_speed_task_tests;
 #[cfg(test)]
 #[path = "core/extra_link_tests.rs"]
 mod extra_link_tests;
+#[cfg(test)]
+#[path = "core/handle_budget_tests.rs"]
+mod handle_budget_tests;
 #[cfg(test)]
 #[path = "core/link_tests.rs"]
 mod link_tests;
