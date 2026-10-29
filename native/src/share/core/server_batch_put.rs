@@ -8,11 +8,12 @@
 use std::io::{self, Write};
 use std::time::Duration;
 
-use iroh::endpoint::{RecvStream, SendStream};
+use iroh::endpoint::{RecvStream, SendStream, VarInt};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::share::core::eio;
 use crate::share::framing::{recv_data_frame, reply, reply_err, TAG_CTRL, TAG_DATA};
+use crate::share::fs_access::FsAccess;
 use crate::share::host_evidence::Scopes;
 use crate::share::io_deadline;
 use crate::share::server_transfer::STREAM_BUFFER_CHUNKS;
@@ -28,6 +29,9 @@ use stage::{discard, invalid, open_stage, presence, publish, Parents, Staged};
 /// A client finishes its side as soon as it holds the outcomes; one round
 /// trip even over a slow relay, with the margin of a control attempt (20 s).
 const DELIVERY_WAIT: Duration = Duration::from_secs(20);
+
+/// The stop code of a receive stream dropped without an explicit stop.
+const DROPPED_STREAM: VarInt = VarInt::from_u32(0);
 
 pub(super) struct PutBatchJob {
     pub(super) key: BatchKey,
@@ -112,7 +116,7 @@ pub(super) async fn serve<G: Send + 'static>(
             let status = FsBatchStatus::Done { outcomes };
             let outcome = reply(&mut send, FsResponse::Batch { status });
             io_deadline::run_for("Share batch outcome", stall, outcome).await?;
-            await_delivery(&mut recv, &key).await;
+            await_delivery(&send, &mut recv, &key).await;
             Ok(())
         }
         (PutResult::Aborted(_), Err(Stop::Transport(error))) => Err(error),
@@ -166,12 +170,23 @@ async fn forward_frames(
     }
 }
 
-/// Drops the outcome record once the client confirms it received it.
-async fn await_delivery(recv: &mut RecvStream, key: &BatchKey) {
+/// Drops the outcome record once the client confirms it received it: it
+/// finishes its side, and dropping its stream right after stops ours with
+/// code 0 (a client that gives up aborts with its own code instead, and
+/// keeps asking for the record). Both arrive together; either one counts.
+/// Missing them only kept records until their expiry, and a device whose
+/// confirmations kept getting lost this way was refused new batches.
+async fn await_delivery(send: &SendStream, recv: &mut RecvStream, key: &BatchKey) {
     let mut probe = [0u8; 1];
-    if let Ok(Ok(None)) =
-        crate::share::route_protocol::timeout_for(DELIVERY_WAIT, recv.read(&mut probe)).await
-    {
+    let stopped = send.stopped();
+    let confirmed = async {
+        tokio::select! {
+            biased;
+            read = recv.read(&mut probe) => matches!(read, Ok(None)),
+            stop = stopped => matches!(stop, Ok(Some(code)) if code == DROPPED_STREAM),
+        }
+    };
+    if let Ok(true) = crate::share::route_protocol::timeout_for(DELIVERY_WAIT, confirmed).await {
         batch_status::delivered(key);
     }
 }
@@ -224,6 +239,9 @@ struct Upload<'a> {
     writer: Option<Box<dyn Write + Send>>,
     /// Folders resolved while the entries arrive.
     parents: Parents,
+    /// Retained when the first stage opens, while the request is alive: it
+    /// removes this batch's stages after the client left (`discard`).
+    cleanup: Option<FsAccess>,
 }
 
 impl<'a> Upload<'a> {
@@ -235,6 +253,7 @@ impl<'a> Upload<'a> {
             written: 0,
             writer: None,
             parents: Parents::default(),
+            cleanup: None,
         }
     }
 
@@ -308,6 +327,9 @@ impl<'a> Upload<'a> {
         let Some(entry) = job.entries.get(index) else {
             return;
         };
+        if self.cleanup.is_none() {
+            self.cleanup = job.authority.retained_access();
+        }
         let parents = &mut self.parents;
         let opened = job
             .authority
@@ -340,7 +362,7 @@ impl<'a> Upload<'a> {
         *slot = match (state, flushed) {
             (EntryState::Writing(staged), Ok(())) => EntryState::Staged(staged),
             (EntryState::Writing(staged), Err(error)) => {
-                discard(&staged);
+                discard(&staged, self.cleanup.as_ref());
                 EntryState::Failed(error)
             }
             (other, _) => other,
@@ -352,7 +374,7 @@ impl<'a> Upload<'a> {
         drop(self.writer.take());
         if let Some(slot) = self.states.get_mut(self.current) {
             if let EntryState::Writing(staged) = std::mem::replace(slot, EntryState::Waiting) {
-                discard(&staged);
+                discard(&staged, self.cleanup.as_ref());
             }
             *slot = EntryState::Failed(error);
         }
@@ -363,7 +385,7 @@ impl<'a> Upload<'a> {
         drop(self.writer.take());
         for state in &self.states {
             if let EntryState::Writing(staged) | EntryState::Staged(staged) = state {
-                discard(staged);
+                discard(staged, self.cleanup.as_ref());
             }
         }
     }
@@ -374,6 +396,7 @@ impl<'a> Upload<'a> {
         let job = self.job;
         let mut parents = Parents::default();
         let mut scopes = job.evidence.then(Scopes::default);
+        let cleanup = self.cleanup;
         self.states
             .into_iter()
             .map(|state| match state {
@@ -384,7 +407,7 @@ impl<'a> Upload<'a> {
                     match published {
                         Ok((path, evidence)) => FsBatchOutcome::Published { path, evidence },
                         Err(error) => {
-                            discard(&staged);
+                            discard(&staged, cleanup.as_ref());
                             FsBatchOutcome::failed(&error)
                         }
                     }

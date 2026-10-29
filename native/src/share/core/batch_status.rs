@@ -3,11 +3,14 @@
 //! were published under which name, so nothing is ever retried blindly.
 //!
 //! Bounded on every axis a client could inflate: records per principal and
-//! in total (beyond them a new batch is answered `Busy`), and bytes, which
-//! count every record's key and bookkeeping, not only its outcome text.
+//! in total, and bytes, which count every record's key and bookkeeping, not
+//! only its outcome text. A finished record never stands in the way of a new
+//! batch: at a bound the oldest finished record (of the same principal at
+//! its own bound) gives way. Only batches still in progress, which the
+//! transfer admission already bounds, can make the table answer `Busy`.
 //! Records leave in expiry order from two ordered indexes, never through a
 //! scan of the whole table under its lock.
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
@@ -28,6 +31,10 @@ const PENDING_RETENTION: Duration = Duration::from_secs(70 * 60);
 
 /// Records one principal may hold: its admitted batches in flight (60) plus
 /// as many finished ones awaiting a status query after a lost connection.
+/// A principal at this bound loses its oldest finished record to a new
+/// batch; a record whose client never confirmed it (a client process that
+/// ended right after its last commit, so its stream end never arrived) must
+/// not refuse the next job of the same device.
 const MAX_RECORDS_PER_PRINCIPAL: usize = 2 * PRINCIPAL_TRANSFER_SLOTS;
 
 /// Records of all principals: every transfer the host admits at once (256)
@@ -81,6 +88,8 @@ struct Table {
     /// Committed or aborted batches, by expiry; also the eviction order.
     finished: BTreeMap<Slot, BatchKey>,
     per_principal: HashMap<PeerPrincipal, usize>,
+    /// Each principal's finished records by expiry (its eviction order).
+    finished_of: HashMap<PeerPrincipal, BTreeSet<Slot>>,
     bytes: usize,
     sequence: u64,
 }
@@ -125,13 +134,17 @@ impl Table {
             ));
         }
         let owned = self.per_principal.get(&key.principal).copied();
-        if owned.is_some_and(|owned| owned >= MAX_RECORDS_PER_PRINCIPAL) {
-            return Err(busy("zu viele offene Pakete dieses Geräts"));
+        if owned.is_some_and(|owned| owned >= MAX_RECORDS_PER_PRINCIPAL)
+            && !self.evict_oldest_finished_of(&key.principal)
+        {
+            // Every record of this device is a batch in progress: more than
+            // its transfer admission lets run at once.
+            return Err(busy("zu viele laufende Pakete dieses Geräts"));
         }
         let bytes = record_bytes(key, &FsBatchStatus::Pending);
         self.make_room(1, bytes);
         if self.records.len() >= MAX_RECORDS || self.bytes + bytes > MAX_STORED_BYTES {
-            return Err(busy("zu viele offene Pakete"));
+            return Err(busy("zu viele laufende Pakete"));
         }
         let slot = self.next_slot(now, PENDING_RETENTION);
         self.pending.insert(slot, key.clone());
@@ -158,6 +171,14 @@ impl Table {
             &mut self.finished
         };
         index.remove(&record.slot);
+        let previous = record.slot;
+        if let Some(slots) = self.finished_of.get_mut(&key.principal) {
+            slots.remove(&previous);
+        }
+        self.finished_of
+            .entry(key.principal.clone())
+            .or_default()
+            .insert(slot);
         self.bytes = self
             .bytes
             .saturating_sub(record.bytes)
@@ -226,8 +247,34 @@ impl Table {
         }
     }
 
+    /// Removes `principal`'s oldest finished record; false when it has none.
+    fn evict_oldest_finished_of(&mut self, principal: &PeerPrincipal) -> bool {
+        let Some(slot) = self
+            .finished_of
+            .get_mut(principal)
+            .and_then(BTreeSet::pop_first)
+        else {
+            return false;
+        };
+        let Some(key) = self.finished.remove(&slot) else {
+            return false;
+        };
+        if let Some(record) = self.records.remove(&key) {
+            self.forget(&key, &record);
+        }
+        true
+    }
+
     /// Counts of a record that left the map (its index entry is gone too).
     fn forget(&mut self, key: &BatchKey, record: &Record) {
+        if !matches!(record.status, FsBatchStatus::Pending) {
+            if let Some(slots) = self.finished_of.get_mut(&key.principal) {
+                slots.remove(&record.slot);
+                if slots.is_empty() {
+                    self.finished_of.remove(&key.principal);
+                }
+            }
+        }
         self.bytes = self.bytes.saturating_sub(record.bytes);
         if let Some(owned) = self.per_principal.get_mut(&key.principal) {
             *owned = owned.saturating_sub(1);

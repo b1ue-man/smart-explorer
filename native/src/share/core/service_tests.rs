@@ -142,11 +142,14 @@ fn local_commands_are_acknowledged_while_server_hello_is_stalled() {
         .expect("Refresh intent is acknowledged during handshake");
     assert!(started.elapsed() < Duration::from_secs(2));
     assert_eq!(service.auth.lock().unwrap().default_direct_exports, exports);
-    assert_eq!(service.auth.lock().unwrap().authorization_epoch, 1);
+    // Since 74af4e1a only a narrowing (a non-empty `RestrictionSet`) advances
+    // the epoch (`configuration_runtime::apply`); adding the connections
+    // root widens and keeps it.
+    assert_eq!(service.auth.lock().unwrap().authorization_epoch, 0);
     service
         .cmd(ShareCmd::SetDirectOnline { online: false })
         .expect("base authorization change is acknowledged");
-    assert_eq!(service.auth.lock().unwrap().authorization_epoch, 2);
+    assert_eq!(service.auth.lock().unwrap().authorization_epoch, 1);
     service
         .cmd(ShareCmd::Stop)
         .expect("Stop is acknowledged during handshake");

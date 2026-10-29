@@ -96,8 +96,14 @@ fn fixture() -> (Arc<Mutex<ShareAuthState>>, ProvenPrincipal) {
     policy
         .apply_access_change(
             &AccessGrantChange {
+                // Screen control is left out: since cf6f47e9 it steers the
+                // device and then includes app launches, logins and the own
+                // RDP port regardless of these constraints
+                // (`access_steering::includes_request`); the leases here are
+                // bound to the constraints alone.
                 capabilities: Capability::ALL
                     .into_iter()
+                    .filter(|capability| *capability != Capability::ScreenControl)
                     .map(|capability| (capability, CapabilityDecision::Allow))
                     .collect(),
                 constraints: Some(constraints(&state, &principal)),

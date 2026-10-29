@@ -53,6 +53,11 @@ impl BatchAuthority {
     pub(super) fn stream_access(&self) -> FsAccess {
         self.access.clone()
     }
+    /// This access without its stream marker (`FsAccess::retained_snapshot`),
+    /// taken while the request is alive; `None` once it ended.
+    pub(super) fn retained_access(&self) -> Option<FsAccess> {
+        self.access.retained_snapshot().ok()
+    }
     fn new(
         access: FsAccess,
         lease: Option<MountLeaseAuthorization>,

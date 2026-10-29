@@ -54,7 +54,10 @@ fn post_rotation_reconciliation_removes_every_stale_incoming_outbox() {
     assert!(profiles.direct_request(&pending.request_id).is_none());
     assert!(pending_envelopes(&profiles.direct_requests, 140).is_empty());
     assert!(profiles.direct_request_tombstones.is_empty());
-    assert_eq!(profiles.direct_grants[0].state, DirectGrantState::Ignored);
+    // Since 0d36bddd a rotation suspends an active grant for re-confirmation
+    // („neu bestätigen“, `invalidate_all_direct_grants`) instead of turning
+    // it into a user denial.
+    assert_eq!(profiles.direct_grants[0].state, DirectGrantState::Reconfirm);
     profiles.validate_direct_ledger().unwrap();
 }
 

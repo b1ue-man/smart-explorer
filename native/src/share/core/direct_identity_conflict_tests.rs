@@ -141,6 +141,11 @@ fn ci_remote_task_legacy_revoke_resolves_conflict_before_tracked_accept() {
         .record_verified_legacy_direct_request("local-lookup", &legacy, 110, policy)
         .unwrap();
     let selector = profiles.legacy_direct_requests[0].selector.clone();
+    // Under `Ask` (explicit since f1a7d0e6) a legacy request stays pending
+    // until the user accepts it; only an accepted one can be revoked.
+    profiles
+        .decide_legacy_direct_request(&selector, true, 110)
+        .unwrap();
     profiles
         .record_incoming_direct_request("local-lookup", tracked.clone(), 111)
         .unwrap();

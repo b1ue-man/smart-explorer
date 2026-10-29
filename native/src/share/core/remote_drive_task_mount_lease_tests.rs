@@ -212,10 +212,11 @@ fn remote_drive_task_peer_mount_lease_is_principal_root_config_and_epoch_bound()
         8,
     )?;
     assert_ne!(renewed.token, first.token);
-    assert_eq!(
-        only_error(leases.authorize(&first.token, &principal, &fixture.exports, 200, 8)).kind(),
-        io::ErrorKind::PermissionDenied
-    );
+    // Since 74af4e1a a lease ends only by an explicit revocation (the
+    // `RestrictionSet` of a narrowing, `release`, `clear`); a new epoch or a
+    // widened export alone keeps it valid („Export-/Rechtserweiterung …
+    // Lease … bleiben gültig“, H-DISPATCH acceptance).
+    leases.authorize(&first.token, &principal, &fixture.exports, 200, 8)?;
     leases.authorize(&renewed.token, &principal, &fixture.exports, 999, 8)?;
 
     let other_principal = self::principal("device-b");
@@ -227,10 +228,7 @@ fn remote_drive_task_peer_mount_lease_is_principal_root_config_and_epoch_bound()
 
     let mut changed_exports = fixture.exports.clone();
     changed_exports.include_connections = true;
-    assert_eq!(
-        only_error(leases.authorize(&renewed.token, &principal, &changed_exports, 999, 8)).kind(),
-        io::ErrorKind::PermissionDenied
-    );
+    leases.authorize(&renewed.token, &principal, &changed_exports, 999, 8)?;
     assert_eq!(
         only_error(renewed.lease.resolve("/Other/file.txt")).kind(),
         io::ErrorKind::PermissionDenied

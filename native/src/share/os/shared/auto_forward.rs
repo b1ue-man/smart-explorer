@@ -107,10 +107,13 @@ pub(crate) struct MappedService {
     pub(crate) last_error: Option<String>,
 }
 
-/// Design 4.3: a link for 80/443/8000–8999/3000–3999/5000–5999. Port 443
-/// carries TLS, so its link names `https`.
+/// A link only for web ports: 80, 443 (TLS: `https`), 3000–3999, 4200,
+/// 5000, 5001, 5173, 5174, 5500, 8000–8999; not 5432/5672/5900 and the like.
 pub(crate) fn service_url(address: SocketAddr, host_port: u16) -> Option<String> {
-    let web = matches!(host_port, 80 | 443 | 3000..=3999 | 5000..=5999 | 8000..=8999);
+    let web = matches!(
+        host_port,
+        80 | 443 | 3000..=3999 | 4200 | 5000 | 5001 | 5173 | 5174 | 5500 | 8000..=8999
+    );
     let scheme = if host_port == 443 { "https" } else { "http" };
     web.then(|| format!("{scheme}://{address}"))
 }

@@ -241,7 +241,11 @@ fn perm_task_new_client_old_host() {
                 .unwrap();
             let hello = recv_client_hello(&mut server_read).await.unwrap();
             // The features stay outside the proof that a host of 0.5.182 checks.
-            assert_eq!(hello.client_features, client_features());
+            // Since ed83a910 (v0.5.185) the handshake also asks for the route
+            // policy (`exec_client::handshake`); an old host ignores it.
+            let mut expected = client_features();
+            expected.push("route_policy_v1".to_string());
+            assert_eq!(hello.client_features, expected);
             assert!(verify_hmac(
                 SECRET,
                 &transcript(&host_hello, &hello),

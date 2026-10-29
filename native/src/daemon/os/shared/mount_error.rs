@@ -8,6 +8,10 @@ pub(super) fn encode(error: io::Error) -> io::Error {
     if error.to_string().starts_with(PREFIX) {
         error
     } else {
+        // Test builds name the stripped error in the captured output of a
+        // failing test; the error itself stays exactly as sanitized.
+        #[cfg(test)]
+        eprintln!("mount error sanitized: {:?}: {error}", error.kind());
         encoded(error.kind())
     }
 }

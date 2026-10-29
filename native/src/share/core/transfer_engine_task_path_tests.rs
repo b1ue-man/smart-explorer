@@ -79,11 +79,14 @@ fn transfer_engine_task_share_legacy_host_keeps_the_single_path() -> io::Result<
 
     // The single path: a sized stage, then stat plus no-replace rename.
     {
-        let mut writer = backend.open_write_copy_stage_sized("/A/legacy.txt.se-copy-test", 6)?;
+        // Only a name of the unique stage grammar gets a creator ticket
+        // (2c8062fe); `.se-copy-test` was never one.
+        let mut writer =
+            backend.open_write_copy_stage_sized("/A/legacy.txt.se-copy-00000000000000c3", 6)?;
         writer.write_all(b"legacy")?;
         writer.flush()?;
     }
-    backend.promote_copy_stage("/A/legacy.txt.se-copy-test", "/A/legacy.txt")?;
+    backend.promote_copy_stage("/A/legacy.txt.se-copy-00000000000000c3", "/A/legacy.txt")?;
     assert_eq!(fs::read(fixture.root_a.join("legacy.txt"))?, b"legacy");
     backend.create_dir_new("/A/neu")?;
     assert_eq!(
@@ -143,7 +146,10 @@ fn transfer_engine_task_share_single_path_saves_round_trips() -> io::Result<()> 
     backend.create_dir_new("/B/copies/fresh")?;
     assert!(fixture.root_b.join("copies").join("fresh").is_dir());
 
-    // Server copy into a private stage, published without replacing.
+    // Since ef73e71f a Share stage is never filled by a host-side CopyFile
+    // (it may replace its destination, so it cannot prove exclusive
+    // creation): `server_copy_to_stage` answers `None` and nothing is
+    // created; the engine streams the file into a stage it created itself.
     let payload = pattern(300 * 1024, 239);
     let size = payload.len() as u64;
     fs::write(fixture.root_b.join("source.bin"), &payload)?;
@@ -155,22 +161,26 @@ fn transfer_engine_task_share_single_path_saves_round_trips() -> io::Result<()> 
             size,
             &std::sync::atomic::AtomicBool::new(false)
         )?,
-        Some(size)
+        None
     );
+    assert!(!copies
+        .join("source.bin.se-upload-00000000000000a1")
+        .exists());
+
+    // An own stage, published without replacing.
+    for stage in [
+        "/B/copies/source.bin.se-upload-00000000000000a1",
+        "/B/copies/source.bin.se-upload-00000000000000b2",
+    ] {
+        let mut writer = backend.open_write_copy_stage_sized(stage, size)?;
+        writer.write_all(&payload)?;
+        writer.flush()?;
+    }
     backend.promote_copy_stage(
         "/B/copies/source.bin.se-upload-00000000000000a1",
         "/B/copies/source.bin",
     )?;
     assert_eq!(fs::read(copies.join("source.bin"))?, payload);
-    assert_eq!(
-        backend.server_copy_to_stage(
-            "/B/source.bin",
-            "/B/copies/source.bin.se-upload-00000000000000b2",
-            size,
-            &std::sync::atomic::AtomicBool::new(false)
-        )?,
-        Some(size)
-    );
     let taken = backend
         .promote_copy_stage(
             "/B/copies/source.bin.se-upload-00000000000000b2",

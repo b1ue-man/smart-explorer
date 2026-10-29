@@ -7,9 +7,18 @@ fn runtime() -> tokio::runtime::Runtime {
         .unwrap()
 }
 
+/// A device of its own: since 74af4e1a the slots belong to the device key
+/// (`PeerPrincipal::device_identity`, public key and node), shared by every
+/// relation alias, so a new device needs a key of its own.
 fn unique_principal() -> PeerPrincipal {
     let device = crate::share::core::random_hex_token::<8>().unwrap();
-    PeerPrincipal::new("direct", "relation", device, "public-key", "node")
+    PeerPrincipal::new(
+        "direct",
+        "relation",
+        device.clone(),
+        format!("public-key-{device}"),
+        format!("node-{device}"),
+    )
 }
 
 #[test]

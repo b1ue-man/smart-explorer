@@ -74,10 +74,7 @@ impl AccessLease {
             return Err(AccessRevocation::PermissionWithdrawn);
         }
         let access = grant.access_grant();
-        let end = earliest(
-            access.valid_until,
-            access.constraints.end_for(&request, now),
-        );
+        let end = lease_end(&access, &request, now);
         Ok(Self {
             principal: principal.clone(),
             request,
@@ -124,10 +121,7 @@ impl AccessLease {
         if decision.rank() < self.decision.rank() {
             return Err(AccessRevocation::DecisionNarrowed);
         }
-        let end = earliest(
-            access.valid_until,
-            access.constraints.end_for(&self.request, now),
-        );
+        let end = lease_end(&access, &self.request, now);
         if earlier(end, self.end) {
             return Err(AccessRevocation::EarlierDeadline);
         }
@@ -136,6 +130,23 @@ impl AccessLease {
         self.decision = decision;
         Ok(())
     }
+}
+/// The end of a lease for `request`: the grant's own end and, unless
+/// steering (screen control) includes the request regardless of its
+/// constraints, the constraint's end. A steered lease past a constraint end
+/// it does not depend on would otherwise stay alive with a deadline in the
+/// past, and the expiry loop would wake without pause.
+fn lease_end(
+    access: &crate::share::access_grant::AccessGrant,
+    request: &AccessRequest,
+    now: i64,
+) -> Option<i64> {
+    let steered = crate::share::access_steering::steers(access, now)
+        && crate::share::access_steering::includes_request(request);
+    let constrained = (!steered)
+        .then(|| access.constraints.end_for(request, now))
+        .flatten();
+    earliest(access.valid_until, constrained)
 }
 fn earliest(left: Option<i64>, right: Option<i64>) -> Option<i64> {
     match (left, right) {
