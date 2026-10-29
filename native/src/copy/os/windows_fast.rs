@@ -12,9 +12,16 @@
 //! and the simple attributes (named streams, extended attributes, security
 //! resource attributes, compressed, sparse, encrypted, reparse, offline,
 //! integrity or pinned state) on a local volume, larger than `FAST_MAX`, on
-//! a share or on an optical medium still goes through `CopyFile2`.
+//! a share, on an optical medium, or on a volume that clones blocks (ReFS,
+//! Dev Drive) while the stage lands on that same volume (only `CopyFile2`
+//! clones) still goes through `CopyFile2`.
 //! Timestamps and attributes are set as the optical path sets them
-//! (`windows_optical::set_basic`).
+//! (`windows_optical::set_basic`), the times being those `CopyFile2` gives
+//! its copy (`windows_time_rules.rs`). What belongs to a volume is asked once
+//! per volume (`windows_volume_facts.rs`). Source and stage are opened with
+//! FILE_FLAG_SEQUENTIAL_SCAN, a caching hint for what is read and written
+//! front to back (FastCopy `fastcopyw.cpp:468-487`), and an empty source is
+//! neither read nor written (FastCopy `fastcopyr.cpp:1046`).
 //!
 //! Every stage made here, and every stage `CopyFile2` made (`open_staged`),
 //! is held with DELETE access and shared without FILE_SHARE_DELETE: no other
@@ -33,8 +40,8 @@ use windows_sys::Win32::Storage::FileSystem::{
     FileAllocationInfo, FileDispositionInfo, FileNameInfo, GetFileInformationByHandleEx,
     SetFileInformationByHandle, DELETE, FILE_ATTRIBUTE_DEVICE, FILE_ATTRIBUTE_DIRECTORY,
     FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-    FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE,
-    FILE_SHARE_READ, FILE_SHARE_WRITE,
+    FILE_FLAG_SEQUENTIAL_SCAN, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_READ_ATTRIBUTES,
+    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
 };
 use windows_sys::Win32::System::IO::{IO_STATUS_BLOCK, IO_STATUS_BLOCK_0};
 
@@ -50,15 +57,19 @@ const FAST_MAX: u64 = 1024 * 1024;
 const CHUNK: usize = 256 * 1024;
 /// Attributes a stage can be given exactly: read-only, hidden, system,
 /// archive, normal, temporary, not content indexed. Everything else
-/// (offline, reparse, compressed, sparse, encrypted, integrity, pinned,
-/// recall states) keeps `CopyFile2`.
+/// (offline, reparse, compressed 0x800, sparse 0x200, encrypted 0x4000,
+/// integrity, pinned, recall states) keeps `CopyFile2`.
 const SIMPLE: u32 = 0x1 | 0x2 | 0x4 | 0x20 | 0x80 | 0x100 | 0x2000;
 
 #[path = "windows_fast_probe.rs"]
 mod probe;
 #[path = "windows_held_rename.rs"]
 mod rename;
-use probe::plain_local_source;
+#[path = "windows_time_rules.rs"]
+mod times;
+#[path = "windows_volume_facts.rs"]
+mod volume;
+use probe::plain_data_source;
 pub(crate) use rename::commit_staged_held;
 
 thread_local! {
@@ -83,7 +94,9 @@ pub(crate) fn open_copy_source(path: &Path) -> Option<File> {
     let file = OpenOptions::new()
         .access_mode(FILE_GENERIC_READ)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
-        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .custom_flags(
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN,
+        )
         .open(crate::local_access::normalize_scan_root(path))
         .ok()?;
     let information = information(&file).ok()?;
@@ -179,14 +192,30 @@ pub(crate) fn copy_from_reader(
         return None;
     }
     let information = information(reader).ok()?;
-    if information.attributes & !SIMPLE != 0 || !plain_local_source(reader) {
+    if information.attributes & !SIMPLE != 0 {
         return None;
     }
+    // Whether the volume is a network volume and whether it clones blocks is
+    // remembered per volume. A network volume keeps `CopyFile2`; so does a
+    // cloning volume that the stage will be on too: only `CopyFile2` clones
+    // (Microsoft Learn, Block Cloning), where this copy would write every
+    // byte. An empty file has no block to share. Everything is decided before
+    // the stage exists.
+    let serial = information.volume_serial_number;
+    let facts = volume::of(reader, serial)?;
+    if facts.remote
+        || (facts.block_clone && known.size > 0 && volume::stage_may_share(stage, serial))
+        || !plain_data_source(reader)
+    {
+        return None;
+    }
+    let rules = times::learned();
     Some(copy_into_stage(
         reader,
         &information,
         known.size,
         stage,
+        rules,
         cancel,
         progress,
     ))
@@ -202,6 +231,7 @@ pub(super) fn create_stage(stage: &Path) -> io::Result<File> {
         .create_new(true)
         .access_mode(FILE_GENERIC_READ | FILE_GENERIC_WRITE | DELETE)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .custom_flags(FILE_FLAG_SEQUENTIAL_SCAN)
         .open(crate::local_access::normalize_scan_root(stage))
 }
 
@@ -230,16 +260,22 @@ fn copy_into_stage(
     information: &FileInformation,
     size: u64,
     stage: &Path,
+    rules: times::Rules,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(u64),
 ) -> io::Result<Option<(u64, File)>> {
     let writer = create_stage(stage)?;
-    let result = fill(reader, &writer, size, cancel, progress).and_then(|copied| match copied {
-        Some(bytes) => {
-            super::windows_optical::set_basic(&writer, Some(information)).map(|()| Some(bytes))
-        }
-        None => Ok(None),
-    });
+    // Empty only when the observed size and the handle's length agree: a
+    // source that is not empty after all takes the loop, as before.
+    let empty = size == 0 && information.file_size_high == 0 && information.file_size_low == 0;
+    let carried = rules.carry(information);
+    let result =
+        fill(reader, &writer, size, empty, cancel, progress).and_then(|copied| match copied {
+            Some(bytes) => {
+                super::windows_optical::set_basic(&writer, Some(&carried)).map(|()| Some(bytes))
+            }
+            None => Ok(None),
+        });
     match result {
         Ok(Some(bytes)) => Ok(Some((bytes, writer))),
         other => {
@@ -252,14 +288,19 @@ fn copy_into_stage(
 
 /// Reads the observed size of the source from its start into the stage
 /// (less when it ends earlier, which the length check then reports). `None`
-/// when canceled.
+/// when canceled. An `empty` source is neither read nor written: the stage
+/// stays as created (its length is checked against the source like any).
 fn fill(
     reader: &File,
     writer: &File,
     size: u64,
+    empty: bool,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(u64),
 ) -> io::Result<Option<u64>> {
+    if empty {
+        return Ok((!cancel.load(Ordering::Acquire)).then_some(0));
+    }
     if size > CHUNK as u64 {
         allocate(writer, size);
     }

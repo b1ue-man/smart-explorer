@@ -14,7 +14,10 @@ pub(super) const PROBE_FROM: u64 = 16 * MIN_SEGMENT;
 /// A file at least this part of the available memory is copied around the
 /// page cache on Linux (`copy::linux_direct`, the rule of Windows'
 /// `COPY_FILE_NO_BUFFERING`, `copy_flags::NO_BUFFERING_DIVISOR`; both sides
-/// decide with the same divisor).
+/// decide with the same divisor). Windows' `COPY_FILE_NO_BUFFERING` has one
+/// more, fixed threshold of 256 MiB (`copy_flags::NO_BUFFERING_FROM`); it is
+/// not repeated here: the Windows copy has no ranges, so the engine's answer
+/// changes nothing there (`local::unbuffered_of`), and the Linux rule stays.
 pub(super) const UNBUFFERED_DIVISOR: u64 = 4;
 
 /// Extra threads of a file that is copied directly: the copy runs 4 threads

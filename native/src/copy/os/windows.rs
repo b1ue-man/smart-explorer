@@ -5,14 +5,17 @@ use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::AsRawHandle;
 use std::path::Path;
 
-use super::imp::copy_flags::{is_unc, windows_copy_flags, WINDOWS_REQUEST_COMPRESSED_TRAFFIC};
+use super::imp::copy_flags::is_unc;
 use super::imp::pipe_copy::{pipe_copy, PipeError, PipeSide};
 
 #[path = "windows_fast.rs"]
 mod fast;
+#[path = "windows_kernel_copy.rs"]
+mod kernel_copy;
 #[path = "windows_optical.rs"]
 mod windows_optical;
 pub(super) use fast::{commit_staged_held, copy_from_reader, handle_has_path, open_copy_source};
+use kernel_copy::kernel_copy_file;
 
 #[path = "windows_identity.rs"]
 mod windows_identity;
@@ -356,125 +359,8 @@ fn side_error(failure: PipeError) -> io::Error {
     }
 }
 
-struct CopyContext<'a> {
-    cancel: &'a std::sync::atomic::AtomicBool,
-    progress: &'a mut dyn FnMut(u64),
-    reported: u64,
-}
-
-extern "system" fn copy_progress(
-    message: *const windows_sys::Win32::Storage::FileSystem::COPYFILE2_MESSAGE,
-    context: *const c_void,
-) -> windows_sys::Win32::Storage::FileSystem::COPYFILE2_MESSAGE_ACTION {
-    use windows_sys::Win32::Storage::FileSystem::{
-        COPYFILE2_CALLBACK_CHUNK_FINISHED, COPYFILE2_PROGRESS_CANCEL, COPYFILE2_PROGRESS_CONTINUE,
-    };
-    if message.is_null() || context.is_null() {
-        return COPYFILE2_PROGRESS_CONTINUE;
-    }
-    // SAFETY: CopyFile2 calls back synchronously on the copying thread with
-    // the context pointer `kernel_copy_file` passed, which outlives the call.
-    let context = unsafe { &mut *(context as *mut CopyContext<'_>) };
-    if context.cancel.load(std::sync::atomic::Ordering::Acquire) {
-        return COPYFILE2_PROGRESS_CANCEL;
-    }
-    // SAFETY: `message` is valid for this callback; `Type` selects the union
-    // member, and only the chunk-finished member is read.
-    let total = unsafe {
-        let message = &*message;
-        if message.Type == COPYFILE2_CALLBACK_CHUNK_FINISHED {
-            Some(message.Info.ChunkFinished.uliTotalBytesTransferred)
-        } else {
-            None
-        }
-    };
-    if let Some(total) = total {
-        if total > context.reported {
-            (context.progress)(total - context.reported);
-            context.reported = total;
-        }
-    }
-    COPYFILE2_PROGRESS_CONTINUE
-}
-
-/// Copies `source` to the new name `stage` in the kernel (`CopyFile2`: SMB
-/// server offload, ReFS block cloning), failing instead of replacing an
-/// existing `stage`. `None` when canceled (the partial copy is removed).
-fn kernel_copy_file(
-    source: &Path,
-    stage: &Path,
-    cancel: &std::sync::atomic::AtomicBool,
-    progress: &mut dyn FnMut(u64),
-    size: Option<u64>,
-) -> io::Result<Option<u64>> {
-    use windows_sys::Win32::Storage::FileSystem::{CopyFile2, COPYFILE2_EXTENDED_PARAMETERS};
-    let source_wide = wide(&crate::local_access::normalize_scan_root(source));
-    let stage_wide = wide(&crate::local_access::normalize_scan_root(stage));
-    let flags = copy_flags(source, stage, size);
-    let mut context = CopyContext {
-        cancel,
-        progress,
-        reported: 0,
-    };
-    let routine: unsafe extern "system" fn(
-        *const windows_sys::Win32::Storage::FileSystem::COPYFILE2_MESSAGE,
-        *const c_void,
-    ) -> windows_sys::Win32::Storage::FileSystem::COPYFILE2_MESSAGE_ACTION = copy_progress;
-    let parameters = COPYFILE2_EXTENDED_PARAMETERS {
-        dwSize: std::mem::size_of::<COPYFILE2_EXTENDED_PARAMETERS>() as u32,
-        dwCopyFlags: flags,
-        pfCancel: std::ptr::null_mut(),
-        pProgressRoutine: Some(routine),
-        pvCallbackContext: &mut context as *mut CopyContext<'_> as *mut c_void,
-    };
-    // SAFETY: both paths are NUL-terminated wide strings and `parameters`
-    // (with the context it points to) lives until CopyFile2 returns.
-    let result = unsafe { CopyFile2(source_wide.as_ptr(), stage_wide.as_ptr(), &parameters) };
-    let reported = context.reported;
-    if result >= 0 {
-        return Ok(Some(reported));
-    }
-    let error = hresult_error(result);
-    if cancel.load(std::sync::atomic::Ordering::Acquire) {
-        // A name that was already taken (FAIL_IF_EXISTS) is never ours.
-        if error.kind() != io::ErrorKind::AlreadyExists {
-            let _ = std::fs::remove_file(crate::local_access::normalize_scan_root(stage));
-        }
-        return Ok(None);
-    }
-    Err(error)
-}
-
-/// The flags of one copy (`copy_flags.rs`): the size of the source (the
-/// caller's, else looked up), the memory to spare and whether a share is
-/// on either end.
-fn copy_flags(source: &Path, stage: &Path, size: Option<u64>) -> u32 {
-    let size = size.unwrap_or_else(|| {
-        std::fs::metadata(crate::local_access::normalize_scan_root(source))
-            .map(|metadata| metadata.len())
-            .unwrap_or(0)
-    });
-    let on_share = |path: &Path| path.to_str().is_some_and(is_unc);
-    windows_copy_flags(
-        size,
-        crate::transfer::available_memory(),
-        on_share(source) || on_share(stage),
-        WINDOWS_REQUEST_COMPRESSED_TRAFFIC,
-    )
-}
-
 fn wide(path: &Path) -> Vec<u16> {
     path.as_os_str().encode_wide().chain(Some(0)).collect()
-}
-
-/// A failed HRESULT as the Win32 error it wraps (`HRESULT_FROM_WIN32`).
-fn hresult_error(result: i32) -> io::Error {
-    let code = result as u32;
-    if code & 0xFFFF_0000 == 0x8007_0000 {
-        io::Error::from_raw_os_error((code & 0xFFFF) as i32)
-    } else {
-        io::Error::other(format!("CopyFile2 schlug fehl (HRESULT 0x{code:08x})"))
-    }
 }
 
 pub(super) fn sync_parent(_path: &Path) -> io::Result<()> {
