@@ -166,6 +166,17 @@ impl ScreenAuthority for NodeAuthority {
         allowed
     }
 
+    fn grant_ended(&self, principal: &ProvenPrincipal, now: i64) -> bool {
+        let Ok(state) = self.auth.lock() else {
+            return false;
+        };
+        // The same test as the expiry timer (`expired_restrictions`): a grant
+        // that allowed something and whose end has come.
+        principal_grant(&state, principal).is_some_and(|grant| {
+            grant.grants_any() && grant.valid_until().is_some_and(|end| end <= now)
+        })
+    }
+
     fn stored_names(&self, principal: &ProvenPrincipal) -> (Option<String>, Option<String>) {
         let Ok(state) = self.auth.lock() else {
             return (None, None);

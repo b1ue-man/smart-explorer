@@ -18,7 +18,9 @@ use super::{HostContext, CLOSE_GRACE};
 use crate::screen::core::authorize::log_event;
 use crate::screen::core::gop_stream::now_us;
 use crate::screen::core::host_metadata::{self, Fallback, Requests as MetadataRequests};
-use crate::screen::core::host_pipeline::{Pipeline, PipelineActor, Produced, WorkCompletion};
+use crate::screen::core::host_pipeline::{
+    Pipeline, PipelineActor, PipelineError, Produced, WorkCompletion,
+};
 use crate::screen::core::input_model::{InputEvent, PressedInputs};
 use crate::screen::core::registry::SessionHandle;
 use crate::screen::core::session_state::{EndReason, SessionState};
@@ -346,15 +348,7 @@ impl<'a> Session<'a> {
                 Ok(Produced::Paused(state)) => Some(state),
                 Ok(Produced::Idle | Produced::Dropped | Produced::Reset) => None,
                 Ok(Produced::Closed) => return Some((closed_reason(self.connection), None)),
-                Err(failure) => {
-                    return Some((
-                        EndReason::Failed,
-                        Some(ScreenWireError::new(
-                            failure.code,
-                            Some(failure.error.to_string()),
-                        )),
-                    ))
-                }
+                Err(failure) => return Some(self.failed(failure)),
             },
         };
         if completed && self.family.selected.is_some() {
@@ -386,6 +380,31 @@ impl<'a> Session<'a> {
         } else {
             None
         }
+    }
+
+    /// The ending of a session whose picture side failed. A capture that
+    /// stopped because its right is gone did not fail: a rights change or the
+    /// expiry timer may have signalled the stop already (its reason counts),
+    /// and a grant whose end has come ends as `GrantExpired` even when the
+    /// capture noticed that first (the timer of the node wakes up to a second
+    /// after the end, the capture check at the end itself).
+    fn failed(&self, failure: PipelineError) -> Ending {
+        if failure.error.kind() == io::ErrorKind::PermissionDenied {
+            if let Some(reason) = *self.handle.stop_signal().borrow() {
+                return (reason, None);
+            }
+            let now = crate::share::core_now_secs();
+            if self.context.authority.grant_ended(self.principal, now) {
+                return (EndReason::GrantExpired, None);
+            }
+        }
+        (
+            EndReason::Failed,
+            Some(ScreenWireError::new(
+                failure.code,
+                Some(failure.error.to_string()),
+            )),
+        )
     }
 
     async fn finish(mut self, (reason, error): Ending) {

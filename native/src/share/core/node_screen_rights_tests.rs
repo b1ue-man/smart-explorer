@@ -222,10 +222,20 @@ fn screen_task_grant_expired_closes_session() {
     assert_eq!(reason.as_deref(), Some("grant_expired"), "{frames:#?}");
     assert!(now_secs() >= end, "not before the end of the grant");
     session.close();
-    let ended_lines: Vec<Value> = audit_of(pair.viewer_id())
-        .into_iter()
-        .filter(|line| line["event"] == "session_ended")
-        .collect();
+    // The host logs `session_ended` right after it sent the last `STATE`;
+    // the viewer may be faster than that.
+    let ended_of = || -> Vec<Value> {
+        audit_of(pair.viewer_id())
+            .into_iter()
+            .filter(|line| line["event"] == "session_ended")
+            .collect()
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let mut ended_lines = ended_of();
+    while ended_lines.is_empty() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+        ended_lines = ended_of();
+    }
     assert!(
         ended_lines.iter().any(|line| line["reason"]
             .as_str()

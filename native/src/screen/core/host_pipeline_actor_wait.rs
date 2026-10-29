@@ -15,7 +15,8 @@ impl PipelineActor {
     ) {
         match output {
             Ok((pipeline, mut completion)) => {
-                if !self.work.current(self.job_epoch) {
+                let overtaken = !self.work.current(self.job_epoch);
+                if overtaken {
                     completion = match completion {
                         WorkCompletion::Tick(_) => WorkCompletion::Tick(Ok(Produced::Reset)),
                         WorkCompletion::Snapshot(_) => WorkCompletion::Snapshot(Err(
@@ -30,11 +31,21 @@ impl PipelineActor {
                     }
                     _ => false,
                 };
+                if cancelled && overtaken && !self.stopped && self.pending.snapshot.is_none() {
+                    // An interrupt (a route change, a key-frame request, a new
+                    // source or mode) overtook the snapshot the viewer asked
+                    // for. It runs again with the next picture operation; it
+                    // would otherwise end without a picture and without an
+                    // `ERROR`, and the viewer would wait for it for good.
+                    self.pending.snapshot = self.job_snapshot.take();
+                }
+                self.job_snapshot = None;
                 if !cancelled {
                     self.completion = Some(completion);
                 }
             }
             Err(error) => {
+                self.job_snapshot = None;
                 self.stopped = true;
                 self.blocked = true;
                 self.completion = Some(WorkCompletion::Tick(Err(PipelineError::capture(

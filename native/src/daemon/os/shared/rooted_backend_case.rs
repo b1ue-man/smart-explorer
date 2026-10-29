@@ -167,7 +167,13 @@ impl PathResolver<'_> {
                         append_component(&mut current, requested);
                         continue;
                     }
-                    None => return Err(not_found()),
+                    None => match self.staged_child(&current, requested)? {
+                        Some(metadata) => {
+                            append_component(&mut current, &metadata.name);
+                            Some((metadata, None))
+                        }
+                        None => return Err(not_found()),
+                    },
                 }
             };
             if let Some((metadata, _)) = &listed_metadata {
@@ -206,6 +212,30 @@ impl PathResolver<'_> {
             }
         }
         Ok((current, None))
+    }
+
+    /// A Share host keeps the app's own stages and parts out of its listings
+    /// (`host_list::hidden`), so one that exists is not among the children of
+    /// its folder. It is addressed by its literal name with a fresh `stat`:
+    /// the stage `<name>.se-mount-<16 hex>` of a mounted save is promoted or
+    /// renamed this way. Every other name still resolves through the listing.
+    fn staged_child(&self, parent: &str, requested: &str) -> io::Result<Option<VfsMeta>> {
+        if !self.project_peer_names || !crate::vfs::is_staging_name(requested) {
+            return Ok(None);
+        }
+        validate_child_name(requested)?;
+        let mut path = parent.to_string();
+        append_component(&mut path, requested);
+        match self.backend.stat(&path) {
+            Ok(mut metadata) => {
+                // The spelling asked for is the spelling used, as the helper
+                // created the stage with it.
+                metadata.name = requested.to_string();
+                Ok(Some(metadata))
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        }
     }
 
     fn child(
