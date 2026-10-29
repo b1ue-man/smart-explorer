@@ -348,10 +348,17 @@ fn transfer_engine_task_sync_lists_destination_once_instead_of_stat_per_file() {
     assert!(second.errors.is_empty(), "{:?}", second.errors);
     assert_eq!(second.stats.copied, 0);
     assert_eq!(second.stats.skipped, 35);
-    // One listing per folder and no `stat` per file: only the root check
-    // before the pass and one plain-folder check per listed folder.
+    // One listing per folder and no `stat` of any listed file. What remains
+    // are the folder checks of the guarded scan (b9f9b2ae, v0.5.170): the
+    // destination root before the pass, and per listed folder a plain-folder
+    // check plus the guard over the folder's own chain of parents. They follow
+    // the three folders, not the 35 files.
     assert_eq!(calls.list.load(Ordering::SeqCst), 3);
-    assert_eq!(calls.stat.load(Ordering::SeqCst), 4);
+    for rel in &files {
+        assert_eq!(calls.stats_of(&format!("{REMOTE_ROOT}/{rel}")), 0, "{rel}");
+    }
+    let folder_checks = calls.stat.load(Ordering::SeqCst);
+    assert!(folder_checks < files.len(), "{folder_checks}");
     assert_eq!(calls.mkdir_all.load(Ordering::SeqCst), 0);
 }
 

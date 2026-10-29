@@ -349,21 +349,23 @@ fn run(
     }));
 }
 
+/// `Ok(true)` when this call created the directory (it was absent and
+/// `create` was set), `Ok(false)` when it was already a plain directory.
 pub(super) fn require_plain_directory(
     backend: &dyn Backend,
     path: &str,
     create: bool,
-) -> io::Result<()> {
+) -> io::Result<bool> {
     if crate::bisync::snapshot_policy::own_path(backend, path) {
         return Err(crate::bisync::apply_boundary::protected(
             crate::bisync::OmissionKind::OwnFile,
         ));
     }
-    let metadata = match backend.stat(path) {
-        Ok(metadata) => metadata,
+    let (metadata, created) = match backend.stat(path) {
+        Ok(metadata) => (metadata, false),
         Err(error) if error.kind() == io::ErrorKind::NotFound && create => {
             backend.mkdir_all(path)?;
-            backend.stat(path)?
+            (backend.stat(path)?, true)
         }
         Err(error) => return Err(error),
     };
@@ -373,7 +375,7 @@ pub(super) fn require_plain_directory(
             format!("directory root is link-like or not a directory: {path}"),
         ));
     }
-    Ok(())
+    Ok(created)
 }
 
 #[cfg(test)]

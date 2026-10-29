@@ -341,7 +341,11 @@ fn incremental_drive_like_rename_deletes_old_target_path() {
         .unwrap()
         .insert("new.txt".into(), "file-id-1".into());
     *cursor.lock().unwrap() = "c2".into();
-    let meta = source.stat(&format!("{}/new.txt", ra)).unwrap();
+    let mut meta = source.stat(&format!("{}/new.txt", ra)).unwrap();
+    // A provider names the renamed file by its ID in the entry and in its
+    // metadata alike; an entry whose metadata carries another ID is rebuilt
+    // by a full scan (`FeedIndex::resolve`), which lists the target.
+    meta.id = Some("file-id-1".into());
     *changes.lock().unwrap() = vec![VfsChange {
         kind: ChangeKind::Upsert,
         rel: None,
