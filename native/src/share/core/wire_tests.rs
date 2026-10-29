@@ -229,6 +229,12 @@ fn review_task_every_request_is_classified_as_read_or_write() {
             "remove_dir",
             "remove_tree",
             "put_batch",
+            // `ranges_v1`: the host creates, fills and finishes its own stage
+            // file, so a peer without the right to write is refused
+            // (`server.rs`: `mutates_filesystem` before the dispatch).
+            "segmented_stage_open",
+            "stage_write_at",
+            "segmented_stage_finish",
             "create_dir",
             "create_dirs",
             "promote_no_replace",

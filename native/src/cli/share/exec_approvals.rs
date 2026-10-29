@@ -161,7 +161,11 @@ fn answer(
         .pending()?
         .into_iter()
         .find(|request| request.id.as_str() == id)
-        .ok_or_else(|| "Die Rückfrage ist nicht mehr offen.".to_string())?;
+        .ok_or_else(|| {
+            "Die Rückfrage ist nicht mehr offen; `se share exec approvals` lists the requests that \
+             are still open"
+                .to_string()
+        })?;
     if decision != ApprovalDecision::Deny
         && !crate::share::consent_launch::approval_context_complete(&request)
     {

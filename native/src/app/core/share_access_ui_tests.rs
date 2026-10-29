@@ -438,10 +438,22 @@ fn perm_task_gui_access_dialog_one_confirm() {
             revision
         })
     );
+    // The confirmation does not close the dialog by itself: the page closes it
+    // once the worker saved the change, and keeps it open with the error when
+    // the save failed (`share_exec_ui::run_dialog`, c5d3e899).
     assert!(
-        access_dialog::current(&h.ctx).is_none(),
-        "the dialog stays open"
+        access_dialog::current(&h.ctx).is_some(),
+        "the dialog closed before the change was saved"
     );
+    let save_failed = "Das Recht konnte nicht gespeichert werden.";
+    let mut failed = access_dialog::current(&h.ctx).unwrap();
+    failed.save_error = Some(save_failed.into());
+    access_dialog::open(&h.ctx, failed);
+    h.settle(&mut draw);
+    assert!(h.shows(save_failed, &mut draw));
+    access_dialog::close(&h.ctx);
+    assert!(access_dialog::current(&h.ctx).is_none());
+    assert_eq!(h.settle(&mut draw), None);
 
     // Taking a right away is the same one button, named after its effect.
     let views = vec![device(allowed())];

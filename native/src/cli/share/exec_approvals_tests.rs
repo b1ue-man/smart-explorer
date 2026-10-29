@@ -147,9 +147,11 @@ fn perm_task_cli_approvals_roundtrip() {
     // „Diesmal erlauben“ with the first characters of the id.
     let answer = run(&service, approve(&id[..8], false), true).unwrap();
     let answer: Value = serde_json::from_str(&answer).unwrap();
+    // The answer carries the request that was decided (c5d3e899): the host
+    // user sees which device, command and relation the decision was for.
     assert_eq!(
         answer,
-        json!({"id": id, "decision": "once", "decided": true})
+        json!({"id": id, "decision": "once", "decided": true, "request": entry})
     );
     assert_eq!(outcome(&mut first), ApprovalOutcome::Once);
     assert!(ApprovalService::pending(&service).is_empty());
@@ -159,8 +161,19 @@ fn perm_task_cli_approvals_roundtrip() {
     let mut third = ask(&service, "tablet", "df");
     let (phone, tablet) = (id_of(&service, "phone"), id_of(&service, "tablet"));
     let always = run(&service, approve(&phone, true), false).unwrap();
+    // The text answer shows the request line first (c5d3e899), then its own.
+    let always_lines: Vec<&str> = always.lines().collect();
+    assert_eq!(always_lines.len(), 2, "{always}");
+    assert!(
+        always_lines[0].starts_with(&format!("approval\t{phone}\tdevice=Name phone\t")),
+        "{always}"
+    );
+    assert!(
+        always_lines[0].contains("\tcommand=shell: uptime\t"),
+        "{always}"
+    );
     assert_eq!(
-        always.trim_end(),
+        always_lines[1],
         format!("approval\t{phone}\tdecision=always\tdecided=true")
     );
     assert_eq!(ApprovalService::pending(&service).len(), 1);
