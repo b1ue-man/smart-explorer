@@ -871,6 +871,15 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
 
 ## Updater
 
+- **Every feed payload must stay below 100 MiB.** The release commit carries
+  the payloads as git blobs, and GitHub refuses any blob above 100 MiB (GH001)
+  after the whole three-hour release build. v0.5.189 failed there: the Linux
+  app had grown to 101.96 MiB (v0.5.188: 98.33 MiB). Since then the WSL1
+  release link packs relative relocations as DT_RELR and folds identical
+  functions (`native/publish-linux-feed-wsl.sh`); the app already required
+  glibc 2.39, above DT_RELR's 2.36. The Windows app (90 MiB in v0.5.188) and
+  the Linux `se` (81 MiB) grow by a few MiB per batch as well; when one nears
+  the limit, a size measure is due before the release, not after it.
 - **An elevated setup owns what it creates by Administrators** (run as
   administrator, or UAC off: the elevated token's default owner). The
   installation check (`mcp_launcher/os/windows/security.rs::check`) therefore

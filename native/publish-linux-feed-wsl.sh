@@ -393,7 +393,20 @@ printf 'int main(void) { return 0; }\n' | \
   "$tool_dir/zigcc-musl" -x c - -o "$tool_dir/zig-warmup-musl"
 rm -f "$tool_dir/zig-warmup-gnu" "$tool_dir/zig-warmup-musl"
 
+# GitHub refuses every git blob above 100 MiB, and the release commit carries
+# this payload (v0.5.189: 101.96 MiB, push rejected with GH001). On the system
+# linker path (WSL1: gcc driving rustc's LLD, linked against the host glibc,
+# which the app already requires at 2.39) the relative relocations are packed
+# as DT_RELR (glibc >= 2.36; about 124,000 entries, 2.9 MiB in v0.5.188) and
+# LLD folds identical functions, the duplicate monomorphizations of the crates.
+# Neither changes the optimization of any code. The Zig path targets glibc
+# 2.17, which has no DT_RELR, and keeps the plain link.
+gui_rustflags=""
+if [ "$use_system_linkers" = "1" ]; then
+  gui_rustflags="-C link-arg=-Wl,-z,pack-relative-relocs -C link-arg=-Wl,--icf=all"
+fi
 echo "Building Linux desktop app for $linux_gui_target ..."
+CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="$gui_rustflags" \
 cargo build --locked --release \
   --target-dir "$linux_target_dir" \
   --target "$linux_gui_target" --bin smart_explorer
