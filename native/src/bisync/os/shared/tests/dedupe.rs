@@ -3,14 +3,24 @@ use super::{fwd, tmp};
 use crate::vfs::{Backend, DedupeCandidate, LocalBackend, Scheme, VfsMeta, VfsResult};
 use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 struct PlannedDedupe {
     inner: LocalBackend,
     candidates: usize,
     fail_plan: bool,
-    writes: Arc<AtomicUsize>,
+    /// Every path the destination was asked to write.
+    written: Arc<Mutex<Vec<String>>>,
     removals: Arc<AtomicUsize>,
+}
+
+impl PlannedDedupe {
+    fn record_write(&self, path: &str) {
+        self.written
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(path.to_string());
+    }
 }
 
 impl Backend for PlannedDedupe {
@@ -38,13 +48,13 @@ impl Backend for PlannedDedupe {
         self.inner.open_read(path)
     }
     fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
-        self.writes.fetch_add(1, Ordering::Relaxed);
+        self.record_write(path);
         self.inner.open_write(path)
     }
     // Sync stages are created exclusively (b9f9b2ae): a backend without
     // this writer is refused ("no atomic exclusive-create writer").
     fn open_write_new(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
-        self.writes.fetch_add(1, Ordering::Relaxed);
+        self.record_write(path);
         self.inner.open_write_new(path)
     }
     fn rename(&self, source: &str, destination: &str) -> VfsResult<()> {
@@ -128,7 +138,18 @@ impl crate::vfs::BackendExtensions for PlannedDedupe {
     }
 }
 
-fn run_guard_case(candidates: usize, fail_plan: bool) -> (Outcome, usize, usize) {
+/// One run against a destination holding `candidates` planted files that the
+/// source lacks, and what it did to that destination.
+struct GuardRun {
+    outcome: Outcome,
+    /// Every path the destination was asked to write.
+    written: Vec<String>,
+    removals: usize,
+    /// Planted destination files still present with their content.
+    intact: usize,
+}
+
+fn run_guard_case(candidates: usize, fail_plan: bool) -> GuardRun {
     let source_dir = tmp("dedupe_source");
     let destination_dir = tmp("dedupe_destination");
     std::fs::write(source_dir.join("new.txt"), b"new").unwrap();
@@ -142,13 +163,13 @@ fn run_guard_case(candidates: usize, fail_plan: bool) -> (Outcome, usize, usize)
         .unwrap();
     }
     let source = LocalBackend::new(&fwd(&source_dir));
-    let writes = Arc::new(AtomicUsize::new(0));
+    let written = Arc::new(Mutex::new(Vec::new()));
     let removals = Arc::new(AtomicUsize::new(0));
     let destination = PlannedDedupe {
         inner: LocalBackend::new(&fwd(&destination_dir)),
         candidates,
         fail_plan,
-        writes: writes.clone(),
+        written: written.clone(),
         removals: removals.clone(),
     };
     let cancel = AtomicBool::new(false);
@@ -169,6 +190,12 @@ fn run_guard_case(candidates: usize, fail_plan: bool) -> (Outcome, usize, usize)
         &cancel,
         &filter,
     );
+    let intact = (0..candidates)
+        .filter(|index| {
+            std::fs::read(destination_dir.join(format!("duplicate-{index}")))
+                .is_ok_and(|content| content == b"duplicate")
+        })
+        .count();
     let pair = pair_id_for(
         &source,
         &fwd(&source_dir),
@@ -179,34 +206,56 @@ fn run_guard_case(candidates: usize, fail_plan: bool) -> (Outcome, usize, usize)
     std::fs::remove_dir_all(versions_dir(&pair)).ok();
     std::fs::remove_dir_all(source_dir).ok();
     std::fs::remove_dir_all(destination_dir).ok();
-    (
+    let written = written
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    GuardRun {
         outcome,
-        writes.load(Ordering::Relaxed),
-        removals.load(Ordering::Relaxed),
-    )
+        written,
+        removals: removals.load(Ordering::Relaxed),
+        intact,
+    }
+}
+
+/// What a run that stops for review, or lost its duplicate preflight, may
+/// still create on the destination: the replica marker (written before any
+/// guard) and the source's new files, which are copied while the scan runs
+/// (b9585585, FS3 of 2026-10-28: only deletions and decisions that derive
+/// from absence wait for the complete scan). Whether such a copy started
+/// before the scan ended depends on timing, so the check is on the names, not
+/// on their number. No planted destination name is ever written.
+fn only_marker_and_new_files(written: &[String]) -> bool {
+    written.iter().all(|path| {
+        let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+        name.starts_with(crate::bisync::REPLICA_MARKER_NAME) || name.starts_with("new.txt.")
+    })
 }
 
 #[test]
 fn duplicate_count_above_guard_mutates_nothing() {
-    let (outcome, writes, removals) = run_guard_case(2, false);
-    // Above the guard the run stops for review before its first change
+    let run = run_guard_case(2, false);
+    // Above the guard the run stops for review before its first deletion
     // (`Outcome::blocked`, FS3, dd0dccfb).
-    assert!(outcome.blocked.is_some(), "{:?}", outcome.errors);
-    assert_eq!((writes, removals), (0, 0));
+    assert!(run.outcome.blocked.is_some(), "{:?}", run.outcome.errors);
+    assert_eq!(run.removals, 0);
+    assert_eq!(run.intact, 2, "a planted duplicate was touched");
+    assert!(only_marker_and_new_files(&run.written), "{:?}", run.written);
 }
 
 #[test]
 fn duplicate_preflight_error_mutates_nothing() {
-    let (outcome, writes, removals) = run_guard_case(0, true);
-    assert!(!outcome.errors.is_empty());
-    assert_eq!((writes, removals), (0, 0));
+    let run = run_guard_case(0, true);
+    assert!(!run.outcome.errors.is_empty());
+    assert_eq!(run.removals, 0);
+    assert!(only_marker_and_new_files(&run.written), "{:?}", run.written);
 }
 
 #[test]
 fn under_limit_plan_is_applied_before_copy() {
-    let (outcome, writes, removals) = run_guard_case(1, false);
-    assert!(outcome.errors.is_empty(), "{:?}", outcome.errors);
-    assert!(writes > 0);
-    assert_eq!(removals, 1);
-    assert_eq!(outcome.stats.deleted, 1);
+    let run = run_guard_case(1, false);
+    assert!(run.outcome.errors.is_empty(), "{:?}", run.outcome.errors);
+    assert!(!run.written.is_empty());
+    assert_eq!(run.removals, 1);
+    assert_eq!(run.outcome.stats.deleted, 1);
 }

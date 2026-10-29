@@ -249,12 +249,19 @@ fn destination_entries(pass: &Pass, task: &DirTask, dir: &str) -> Option<Destina
             }
             crate::bisync::apply_boundary::guard(pass.dst, pass.dst_root, &task.target_rel, false)?;
             if task.target == Target::Create {
-                require_plain_directory(pass.dst, dir, true)?;
+                let created = require_plain_directory(pass.dst, dir, true)?;
                 if !crate::bisync::apply_stage::namespace(pass.dst, dir)? {
                     return Err(io::Error::new(
                         io::ErrorKind::Unsupported,
                         "new mirror directory is not namespace-durable",
                     ));
+                }
+                if created {
+                    // Made just now by this call: nothing to list, which
+                    // would cost a round trip per new folder. New files are
+                    // still published create-only after a final check, so
+                    // content that appears meanwhile is never replaced.
+                    return Ok(VfsListing::complete(Vec::new()));
                 }
             } else {
                 require_plain_directory(pass.dst, dir, false)?;
