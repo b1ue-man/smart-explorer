@@ -124,6 +124,24 @@ pub(super) fn config_path() -> PathBuf {
     }
 }
 
+/// The `[Globals]` port of the xrdp configuration at `path`.
+pub(super) fn configured_port(path: &Path) -> Result<u16, String> {
+    ini(path)?
+        .get(&("Globals".into(), "port".into()))
+        .and_then(|value| parse_port(value))
+        .map(|(port, _)| port)
+        .ok_or_else(|| "xrdp_port_missing".into())
+}
+
+/// Whether a loopback TCP listener on `port` exists now.
+pub(super) fn loopback_listener(port: u16) -> Result<bool, String> {
+    const TCP_LISTEN: u8 = 0x0A;
+    let rows = crate::share::os_sockets::table().map_err(|e| format!("xrdp_listener: {e}"))?;
+    Ok(rows.iter().any(|row| {
+        row.state == TCP_LISTEN && row.local.port() == port && row.local.ip().is_loopback()
+    }))
+}
+
 /// Port and loopback-only flag of one `[Globals] port=` value. Forms of
 /// xrdp 0.9.24/0.10.3 (`xrdp/xrdp.ini.in`): `3389` and `tcp://:3389` listen
 /// on every interface, `tcp://.:3389` means 127.0.0.1:3389. Other socket

@@ -277,11 +277,15 @@ fn einrichtung_task_rdp_client_connects_from_its_own_process() {
             .spawn()
             .unwrap()
     } else {
+        // FreeRDP 3 ends `+auth-only` before connecting when no password
+        // is set ("auth-only, but no password set"); the test pair is fake.
         Command::new("xfreerdp3")
             .args([
                 format!("/v:{local}"),
                 "/cert:ignore".into(),
                 "+auth-only".into(),
+                "/u:se-task".into(),
+                "/p:se-task".into(),
             ])
             .spawn()
             .unwrap()

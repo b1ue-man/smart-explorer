@@ -301,10 +301,49 @@ fn configure_xrdp() -> Result<(), SetupState> {
             .map_err(|e| SetupState::Failed(format!("xrdp_config_write: {e}")))?;
     }
     systemctl(&["enable", "--now", "xrdp"])?;
-    if changed {
+    let port = super::xrdp::configured_port(&path).map_err(SetupState::Failed)?;
+    if changed || !listening(port)? {
         systemctl(&["restart", "xrdp"])?;
     }
-    Ok(())
+    wait_listening(port)
+}
+
+fn listening(port: u16) -> Result<bool, SetupState> {
+    super::xrdp::loopback_listener(port).map_err(SetupState::Failed)
+}
+
+/// xrdp forks before it binds: "done" only once its loopback listener
+/// exists. A freshly started xrdp either binds or ends itself (bind
+/// failure), so the wait has no fixed limit (user rule r7).
+fn wait_listening(port: u16) -> Result<(), SetupState> {
+    let missing = || SetupState::Failed("systemctl_missing".into());
+    let tool = find_tool(&["systemctl"]).ok_or_else(missing)?;
+    loop {
+        if listening(port)? {
+            return Ok(());
+        }
+        let output =
+            run_unbounded(&tool, &["is-active", "xrdp"], &[]).map_err(SetupState::Failed)?;
+        let state = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !matches!(state.as_str(), "active" | "activating" | "reloading") {
+            return Err(SetupState::Failed(format!(
+                "xrdp_not_listening: {state}: {}",
+                journal_tail()
+            )));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// The last line xrdp wrote to the journal (the reason it stopped).
+fn journal_tail() -> String {
+    let Some(journal) = find_tool(&["journalctl"]) else {
+        return String::new();
+    };
+    let args = ["-u", "xrdp", "-n", "20", "--no-pager", "-o", "cat"];
+    run_unbounded(&journal, &args, &[])
+        .map(|output| last_line(&output.stdout))
+        .unwrap_or_default()
 }
 
 /// Same directory, same permissions, atomic rename.

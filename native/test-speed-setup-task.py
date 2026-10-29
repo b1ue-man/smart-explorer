@@ -19,7 +19,12 @@ Jobs (--job):
               `speed_task_`, `einrichtung_task_`, `removable_media_task_`,
               `batch_handoff_task_`, the five tests the batch moved, and the
               directly affected modules; every compiled, not ignored test of
-              those prefixes must pass (the list comes from `--list`);
+              those prefixes must pass (the list comes from `--list`); a
+              failing test of the directly affected modules runs once more on
+              v0.5.188 (worktree, same runner) and counts against the batch
+              only when it passes there or does not exist there; tests that
+              need another suite's environment (ENV_SKIPS) are reported as
+              not run here;
               (Windows) the FAT32/exFAT paste with `--nocapture`;
               RDP clients: A4 sdl-freerdp3 first (Linux, Xvfb), A5 the native
               client owns its connection (xfreerdp3 / mstsc), V2 another
@@ -137,6 +142,22 @@ AFFECTED = ("transfer::", "copy::", "vfs::", "sync::", "bisync::", "syncjobs::",
 # The daemon's Windows analysis bridge needs the Windows remote suite's own
 # switch and isolated profile (as in test-transfer-engine-task.sh).
 UNIT_SKIPS = ("windows_analysis_task_tests",)
+# Tests of the affected modules that need an environment only another suite
+# builds. They are skipped here and reported as "not run here" with that
+# environment, never counted as passed (run 40774661103 showed each of them
+# panicking on the missing variable).
+_MANIFEST = "SE_SYNC_PROVIDER_MANIFEST, the real protocol fixtures of test-sync-reliability-task.py"
+ENV_SKIPS = (
+    ("sync_reliability_task_options_share_private_versions_restore_restart_and_noop", _MANIFEST),
+    ("sync_reliability_task_provider_matrix", _MANIFEST),
+    ("sync_reliability_task_old_jobs_crossremote_runs_normal_saved_connection_and_drive", _MANIFEST),
+    ("sync_reliability_task_provider_ftps_both_writers_confirm_bytes_after_tls_close", _MANIFEST),
+    ("sync_reliability_task_live_drive_notebook_ids_refresh_restart_backups_and_noop",
+     "SE_DRIVE_TEST_CLIENT_ID, the live Drive account of test-sync-reliability-task.py"),
+    ("review_task_s09_transport_", "SE_REVIEW_LAN_IP of review-task-native.py"),
+    ("batches_p13_linux_installed_cli_retirement_reexecs_only_with_its_bound_root",
+     "SE_SCREEN_TASK_WORKER, a candidate se binary (mcp_launcher, selected only through the filter `cli::`)"),
+)
 # Prepared-runner tests (ignored by default), per platform.
 RDP_CLIENT_TESTS = {
     "linux": ("einrichtung_task_sdl_freerdp_is_the_first_client",
@@ -284,9 +305,21 @@ def sudo_ok():
     return not WINDOWS and run(["sudo", "-n", "true"], timeout=30).ok
 
 
+def time_wait_count():
+    listed = run(["netstat", "-an", "-p", "tcp"], timeout=300)
+    return sum(1 for line in listed.stdout.splitlines() if "TIME_WAIT" in line)
+
+
 def drop_caches():
-    """Linux: every timed run starts with a cold page cache (sources and servers share the kernel)."""
-    if WINDOWS or not sudo_ok():
+    """Linux: every timed run starts with a cold page cache (sources and servers share the kernel).
+    Windows: every timed run starts with the loopback ports of the previous runs released; client
+    and FTP server share one host, and 5000 data connections per run left the dynamic port range
+    in TIME_WAIT (10048 for every tool in run 40771342971)."""
+    if WINDOWS:
+        while time_wait_count() > 1000:
+            time.sleep(5)
+        return
+    if not sudo_ok():
         return
     run(["sync"], timeout=600)
     run(["sudo", "-n", "sh", "-c", "echo 3 > /proc/sys/vm/drop_caches"], timeout=120)
@@ -618,13 +651,29 @@ def stage_unit(results, log_root, executable, env):
     ensure_listed = bool(listed)
     results.record("unit", "library test list", ensure_listed, "" if ensure_listed else "empty --list output")
     filters = [*PREFIXES, *MOVED, *AFFECTED]
-    skips = [argument for name in UNIT_SKIPS for argument in ("--skip", name)]
+    skipped = [*UNIT_SKIPS, *(name for name, _ in ENV_SKIPS)]
+    skips = [argument for name in skipped for argument in ("--skip", name)]
     ran = run([executable, "--test-threads=1", *skips, *filters], cwd=NATIVE, env=env, timeout=4 * 3600,
               log=log_root / "unit.log")
     outcomes = test_outcomes(ran.output)
     summary = [line for line in ran.output.splitlines() if line.startswith("test result:")]
-    results.record("unit", "batch tests and the directly affected modules", ran.ok,
-                   failure_detail(ran.output) if not ran.ok else "; ".join(summary))
+    for name, needs in ENV_SKIPS:
+        matching = [test for test in listed if name in leaf(test) and any(f in test for f in filters)]
+        if matching:
+            results.record("unit", f"not run here ({len(matching)} test(s) `{name}`): needs {needs}", True)
+    # A failure of the directly affected modules counts against this batch
+    # only when v0.5.188 passes the same test (`stage_baseline`); the batch's
+    # own prefixes must pass in every case (checks below).
+    batch = [test for test in listed
+             if any(prefix in leaf(test) for prefix in PREFIXES) or leaf(test) in MOVED]
+    failed = [test for test, state in outcomes.items() if state == "FAILED" and test not in batch]
+    if ran.ok:
+        results.record("unit", "batch tests and the directly affected modules", True, "; ".join(summary))
+    elif not summary or not any(state == "FAILED" for state in outcomes.values()):
+        # The test binary did not finish its run (crash, abort, time limit).
+        results.record("unit", "batch tests and the directly affected modules", False,
+                       failure_detail(ran.output))
+    stage_unit.affected_failures = failed if summary else []
     for prefix in PREFIXES + ("moved tests",):
         if prefix == "moved tests":
             expected = [name for name in listed if leaf(name) in MOVED and name not in ignored]
@@ -647,9 +696,54 @@ def stage_unit(results, log_root, executable, env):
                    f"(cfg-gated, informational): {len(absent)}", True)
 
 
+def stage_baseline(results, log_root, env, failed):
+    """The failing tests of the directly affected modules once more on
+    v0.5.188 (its library test binary from a worktree, same runner, same
+    environment): a test that fails there too is reported as pre-existing;
+    every other failure, and a test v0.5.188 does not have, fails the check.
+    Runs last, because the baseline build shares the candidate's target
+    folder (the dependencies compile once)."""
+    name = "directly affected modules: every failing test fails on v0.5.188 too"
+    if not failed:
+        return
+    log = log_root / "baseline.log"
+    tree = Path(tempfile.mkdtemp(prefix="se-baseline-")) / "src"
+    added = run(["git", "worktree", "add", "--detach", tree, BASELINE_TAG], cwd=ROOT, timeout=600, log=log)
+    try:
+        ensure(added.ok, f"worktree {BASELINE_TAG}: {added.tail(400)}")
+        build_env = dict(env, CARGO_TARGET_DIR=str(NATIVE / "target"))
+        executable, built = cargo_executable(["test", "--locked", "--lib"], "smart_explorer", log,
+                                             env=build_env, cwd=tree / "native")
+        ensure(executable, f"{BASELINE_TAG} library test binary: {built.tail(2000)}")
+        known = set(list_tests(executable, env=env))
+        present = [test for test in failed if test in known]
+        outcomes = {}
+        for start in range(0, len(present), 40):  # Windows command-line length
+            ran = run([executable, "--exact", "--test-threads=1", *present[start:start + 40]],
+                      cwd=tree / "native", env=env, timeout=3 * 3600, log=log)
+            outcomes.update(test_outcomes(ran.output))
+        old = [test for test in present if outcomes.get(test) == "FAILED"]
+        new = [test for test in failed if test not in old]
+        (log_root / "pre-existing.txt").write_text("\n".join(old) + "\n", encoding="utf-8")
+        detail = f"{len(old)} of {len(failed)} fail on {BASELINE_TAG} too (pre-existing.txt)"
+        if new:
+            detail += "; new: " + ", ".join(
+                f"{test}{'' if test in known else ' (absent in ' + BASELINE_TAG + ')'}" for test in new[:60])
+        results.record("unit", name, not new, detail)
+    finally:
+        run(["git", "worktree", "remove", "--force", str(tree)], cwd=ROOT, timeout=300)
+
+
 def stage_removable(results, log_root, executable, env):
     if not os.environ.get("SE_TASK_REMOVABLE_ROOTS"):
         return
+    # The unit stage already pasted into the same roots (prefix
+    # `removable_media_task_`); the case expects empty volumes.
+    for root in filter(None, os.environ["SE_TASK_REMOVABLE_ROOTS"].split(";")):
+        for entry in Path(root).iterdir():
+            if entry.name.upper() in ("SYSTEM VOLUME INFORMATION", "$RECYCLE.BIN"):
+                continue
+            remove(entry)
     ran = run([executable, "--test-threads=1", "--nocapture", "removable_media_task_"], cwd=NATIVE, env=env,
               timeout=3600, log=log_root / "removable.log")
     results.record("removable", "paste into the roots and a folder of FAT32 and exFAT",
@@ -670,11 +764,21 @@ def run_named(results, stage, executable, names, env, log, *, prefix=()):
 
 
 def stage_rdp_clients(results, log_root, executable, env):
-    names = RDP_CLIENT_TESTS[platform_key()]
+    names = list(RDP_CLIENT_TESTS[platform_key()])
     xvfb = None
     environment = dict(env)
     if not WINDOWS:
         environment.pop("WAYLAND_DISPLAY", None)
+        # actions/setup-python exports LD_LIBRARY_PATH; se refuses to vouch
+        # for a FreeRDP binary while a loader override is present (by design).
+        for variable in ("LD_LIBRARY_PATH", "LD_PRELOAD", "LD_AUDIT"):
+            environment.pop(variable, None)
+        sdl = "einrichtung_task_sdl_freerdp_is_the_first_client"
+        if sdl in names and not any(Path(folder, "sdl-freerdp3").is_file()
+                                    for folder in ("/usr/bin", "/usr/local/bin")):
+            names.remove(sdl)
+            results.record("rdp-clients", f"{sdl}: not run here: this runner's distribution has no package "
+                           "freerdp3-sdl (apt: \"Unable to locate package freerdp3-sdl\", Ubuntu 24.04)", True)
         if shutil.which("Xvfb"):
             xvfb = subprocess.Popen(["Xvfb", ":99", "-screen", "0", "1280x800x24", "-nolisten", "tcp"],
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -707,6 +811,10 @@ def stage_elevated(results, log_root, executable, env):
     prefix = ["sudo", "-n", "env", "DEBIAN_FRONTEND=noninteractive", f"PATH={os.environ.get('PATH', '')}",
               "HOME=/root", "RUST_BACKTRACE=1"]
     run_named(results, "elevated", executable, [H3], env, log_root / "elevated.log", prefix=prefix)
+    # Evidence of the service the step configured (state, last journal lines).
+    for command in (["systemctl", "status", "xrdp", "--no-pager"],
+                    ["journalctl", "-u", "xrdp", "-n", "60", "--no-pager"], ["ss", "-ltnp"]):
+        run(["sudo", "-n", *command], timeout=120, log=log_root / "elevated.log")
 
 
 def stage_transfer_task(results, log_root, work, env):
@@ -791,6 +899,10 @@ def job_functional(results, log_root):
             stage_transfer_task(results, log_root, work, env)
         except Exception as error:  # noqa: BLE001
             results.record("transfer_task", "stage", False, f"{type(error).__name__}: {error}")
+        try:
+            stage_baseline(results, log_root, env, getattr(stage_unit, "affected_failures", []))
+        except Exception as error:  # noqa: BLE001
+            results.record("unit", "baseline comparison", False, f"{type(error).__name__}: {error}")
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -1171,7 +1283,7 @@ def local_tools(bins, clients, mode):
                    lambda s, t: ["robocopy", s, t, "/E", "/MOVE", "/MT:16", "/NFL", "/NDL", "/NJH", "/NJS", "/NP",
                                  "/R:0", "/W:0"], ok=tuple(range(8)))]
              if WINDOWS else [Tool("mv", "reference", lambda s, t: ["mv", s, t])])
-    return tools + se_tools(bins, clients, lambda b, s, t: [b, "mv", s, t])
+    return tools + se_tools(bins, clients, lambda b, s, t: [b, "mv", "--recursive", s, t])
 
 
 def untimed_copy(source, target):
@@ -1663,7 +1775,13 @@ def part_remote_bench(ledger, work, args):
                      if "speed_task_remote_" in leaf(name)
                      and any(f"_{kind}_" in leaf(name) for kind in bench_kinds)]
             ledger.facts["transfer_task benchmarks"] = len(names)
-            run_benchmarks(ledger, bins.transfer_task, names, env, ledger.reps)
+            # The Nextcloud container (PHP, SQLite) moves about 5 MiB/s on the
+            # runner: one repetition of its cases took 38 min in run
+            # 40771342971, three no longer fit the job; they run once.
+            cloud = [name for name in names if "_nextcloud_" in leaf(name)]
+            run_benchmarks(ledger, bins.transfer_task, [name for name in names if name not in cloud], env,
+                           ledger.reps)
+            run_benchmarks(ledger, bins.transfer_task, cloud, env, 1)
             bench_rows(ledger, "loopback")
             # The cached FTP path needs MLST (KP3); vsftpd has none, pyftpdlib does.
             try:
