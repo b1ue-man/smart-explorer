@@ -9,12 +9,17 @@ use std::process::Command;
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// Only system modules load in the elevated script (as the uplink helper).
+/// A module's manifest lies in its folder or, as LocalAccounts on Windows
+/// 11 24H2 and Server 2025, in a version folder below it (suite run
+/// 40825158076: "no valid module file was found").
 const SYSTEM_MODULES: &str = "$env:PSModulePath=$PSHOME+'\\Modules'; \
     $PSModuleAutoLoadingPreference='None'; \
     foreach($module in @('Microsoft.PowerShell.Management','Microsoft.PowerShell.Security',\
     'Microsoft.PowerShell.Utility','CimCmdlets','Microsoft.PowerShell.LocalAccounts')) \
-    { Microsoft.PowerShell.Core\\Import-Module -Name ($PSHOME+'\\Modules\\'+$module+'\\'+$module+'.psd1') \
-    -ErrorAction Stop }; ";
+    { $dir=$PSHOME+'\\Modules\\'+$module; $file=$dir+'\\'+$module+'.psd1'; \
+    if (-not [IO.File]::Exists($file)) { $found=[IO.Directory]::GetFiles($dir,$module+'.psd1',\
+    [IO.SearchOption]::AllDirectories); [Array]::Sort($found); $file=$found[-1] }; \
+    Microsoft.PowerShell.Core\\Import-Module -Name $file -ErrorAction Stop }; ";
 const SETUP_SCRIPT: &str = include_str!("host_setup.ps1");
 /// The user whose session gets RDP access, the elevation state and the
 /// session of this process (session 0 = no interactive desktop for UAC).
