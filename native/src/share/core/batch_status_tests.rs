@@ -78,6 +78,48 @@ fn transfer_engine_task_batch_status_bounds_each_principal() {
     );
 }
 
+/// The measured failure (Share Direct up, medium, 2026-10-28): finished
+/// records a client never confirmed (its process ended right after its last
+/// commit) refused the next job of the same device with `Busy`.
+#[test]
+fn speed_task_batch_status_unconfirmed_outcomes_never_refuse_a_new_batch() {
+    let start = Instant::now();
+    let mut table = Table::default();
+    let mut finished = Vec::new();
+    for index in 0..(4 * MAX_RECORDS_PER_PRINCIPAL) {
+        let at = start + Duration::from_millis(index as u64);
+        let key = key("left");
+        table.begin(&key, at).expect("a finished record gives way");
+        table.finish(&key, done(8), at);
+        finished.push(key);
+    }
+    assert_eq!(
+        table.per_principal.get(&principal("left")),
+        Some(&MAX_RECORDS_PER_PRINCIPAL)
+    );
+    let now = start + Duration::from_secs(1);
+    assert!(
+        table.query(&finished[0], now).is_none(),
+        "the oldest finished record went first"
+    );
+    let newest = finished.last().unwrap();
+    assert!(table.query(newest, now).is_some(), "the newest stays");
+    let running: Vec<BatchKey> = (0..MAX_RECORDS_PER_PRINCIPAL)
+        .map(|_| key("left"))
+        .collect();
+    for key in &running {
+        table.begin(key, now).expect("finished records make room");
+    }
+    assert!(table.finished_of.get(&principal("left")).is_none());
+    let refused = table.begin(&key("left"), now).unwrap_err();
+    assert!(is_busy(&refused), "only running batches refuse: {refused}");
+    for key in &running {
+        table.delivered(key);
+    }
+    assert_eq!(table.bytes, 0);
+    assert!(table.records.is_empty() && table.per_principal.is_empty());
+}
+
 #[test]
 fn transfer_engine_task_batch_status_bounds_all_records() {
     let now = Instant::now();

@@ -51,6 +51,9 @@ impl Parents {
 /// A stage this batch created and still owns.
 pub(super) struct Staged {
     pub(super) stage: ResolvedTarget,
+    /// The stage in the peer namespace, to find it again after the request
+    /// ended (`discard`).
+    virtual_stage: String,
     /// Peer-namespace folder and name the entry asked for.
     pub(super) parent: String,
     pub(super) name: String,
@@ -65,7 +68,9 @@ pub(super) fn open_stage(
 ) -> io::Result<(Staged, Box<dyn Write + Send>)> {
     let (parent, name) = split_entry(&entry.path)?;
     // The client nonce in the name ties the stage to this batch (K18e).
-    let stage = parents.child(access, &parent, &format!("{name}.se-batch-{nonce}-{index}"))?;
+    let stage_name = format!("{name}.se-batch-{nonce}-{index}");
+    let stage = parents.child(access, &parent, &stage_name)?;
+    let virtual_stage = format!("{}/{stage_name}", parent.trim_end_matches('/'));
     let destination = parents.child(access, &parent, &name)?;
     access.require_same_backend(&stage, &destination)?;
     let writer = stage
@@ -74,6 +79,7 @@ pub(super) fn open_stage(
     Ok((
         Staged {
             stage,
+            virtual_stage,
             parent,
             name,
         },
@@ -129,10 +135,24 @@ pub(super) fn publish(
     ))
 }
 
-/// Removes an own, never published stage; a failure leaves it in place, as a
-/// single upload does.
-pub(super) fn discard(staged: &Staged) {
-    let _ = staged.stage.backend.discard_copy_stage(&staged.stage.path);
+/// Removes an own, never published stage. Once the request ended (the
+/// client stopped or reset its stream) its live authority refuses every
+/// operation, this cleanup included; `cleanup`, the authority retained while
+/// the request was alive (sharing, policy generation and rights still
+/// checked, only the stream no longer), then removes it. A failure of both
+/// leaves the stage in place, as a single upload does.
+pub(super) fn discard(staged: &Staged, cleanup: Option<&FsAccess>) {
+    if staged
+        .stage
+        .backend
+        .discard_copy_stage(&staged.stage.path)
+        .is_ok()
+    {
+        return;
+    }
+    if let Some(target) = cleanup.and_then(|access| access.resolve(&staged.virtual_stage).ok()) {
+        let _ = target.backend.discard_copy_stage(&target.path);
+    }
 }
 
 /// Peer-namespace folder and file name of an entry; the file must lie below

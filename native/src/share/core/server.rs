@@ -453,7 +453,10 @@ async fn handle_peer_stream(
         context,
         principal,
     };
+    // Biased: when the client's stop arrives together with the end of its
+    // request (a PutBatch confirming its outcome), the request sees it first.
     tokio::select! {
+        biased;
         result = fs_dispatch::serve(stream, req) => result,
         _ = stopped => Err(io::Error::new(io::ErrorKind::ConnectionAborted, "Share-Anfrage beendet")),
     }

@@ -241,8 +241,16 @@ impl PeerBackend {
             })
             .map(|()| None)
         };
-        if result.is_ok() {
-            ticket.release();
+        match &result {
+            Ok(_) => ticket.release(),
+            // The host answered that the destination is taken: a no-replace
+            // publication leaves the stage as it was, so it stays this
+            // backend's own for the next numbered name or its discard. Any
+            // other failure may have touched it and keeps it pending.
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                let _ = ticket.unmodified();
+            }
+            Err(_) => {}
         }
         result
     }

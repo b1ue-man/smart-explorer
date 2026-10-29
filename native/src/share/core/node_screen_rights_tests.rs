@@ -187,14 +187,39 @@ fn screen_task_grant_expired_closes_session() {
     let pair = ScreenPair::with_server(fixture::NO_RELAY, Allow, Off, Some(end)).unwrap();
     *pair.host.0.screen.audit.write().unwrap() = capture;
     let mut session = pair.open(&test_picture(SessionMode::View), |_| {}).unwrap();
-    let ended = wait_state(
-        &pair,
-        &mut session,
-        SessionState::Ended,
-        Duration::from_secs(20),
-    );
+    // Every other host frame is kept: a session that ends for another
+    // reason names its error frame in the failure message.
+    let (ended, frames) = pair.viewer.0.block_on(async {
+        let mut frames = Vec::new();
+        let wait = async {
+            loop {
+                tokio::select! {
+                    frame = session.host.recv() => match frame {
+                        Some(Ok(HostFrame::State(report)))
+                            if report.state == SessionState::Ended =>
+                        {
+                            return Some(report);
+                        }
+                        Some(Ok(HostFrame::Stats(_))) => {}
+                        Some(Ok(other)) => frames.push(format!("{other:?}")),
+                        Some(Err(error)) => {
+                            frames.push(format!("stream: {error}"));
+                            return None;
+                        }
+                        None => return None,
+                    },
+                    _ = session.pictures.recv() => {}
+                }
+            }
+        };
+        let ended = tokio::time::timeout(Duration::from_secs(20), wait)
+            .await
+            .ok()
+            .flatten();
+        (ended, frames)
+    });
     let reason = ended.and_then(|report| report.reason);
-    assert_eq!(reason.as_deref(), Some("grant_expired"));
+    assert_eq!(reason.as_deref(), Some("grant_expired"), "{frames:#?}");
     assert!(now_secs() >= end, "not before the end of the grant");
     session.close();
     let ended_lines: Vec<Value> = audit_of(pair.viewer_id())

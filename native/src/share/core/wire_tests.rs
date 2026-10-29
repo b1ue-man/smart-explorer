@@ -152,6 +152,9 @@ fn one_of_each() -> Vec<FsRequest> {
             path: path(),
             exclusive: false,
         },
+        FsRequest::CreateDirs(crate::share::wire::FsCreateDirs {
+            paths: vec![path()],
+        }),
         FsRequest::PromoteNoReplace {
             staged: path(),
             destination: path(),
@@ -201,7 +204,10 @@ fn op(request: &FsRequest) -> String {
 fn review_task_every_request_is_classified_as_read_or_write() {
     let requests = one_of_each();
     let ops: std::collections::BTreeSet<String> = requests.iter().map(op).collect();
-    assert_eq!(ops.len(), requests.len(), "one request of every kind");
+    // `Read` and `ReadAt` are listed twice on purpose (with and without LZ4,
+    // a resumed range); every kind has an op name of its own.
+    let kinds: std::collections::HashSet<_> = requests.iter().map(std::mem::discriminant).collect();
+    assert_eq!(ops.len(), kinds.len(), "one op name per request kind");
     let writes: Vec<String> = requests
         .iter()
         .filter(|request| request.mutates_filesystem())
@@ -224,6 +230,7 @@ fn review_task_every_request_is_classified_as_read_or_write() {
             "remove_tree",
             "put_batch",
             "create_dir",
+            "create_dirs",
             "promote_no_replace",
             "discard_stage",
             "recycle",

@@ -154,15 +154,32 @@ fn review_task_h_replace_only_confirmed_true_releases_own_stage() {
     assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidData);
     assert!(!released.get());
 
+    // Since 2c8062fe the creator ledger admits every name of the shared
+    // `vfs::is_unique_stage` grammar (`<file>.se-<purpose>-<16 lower hex>`,
+    // docs/refs/sync-task-runtime-2026-10-04.md); only names outside it are
+    // refused. Admission is not ownership: that still needs the writer ACK.
     let unmanaged = StageLedger::default();
     for path in [
         "/Docs/regular-file",
-        "/Docs/file.se-batch-0123456789abcdef",
-        "/Docs/file.se-peer-0123456789abcdef",
+        "/Docs/.se-upload-0123456789abcdef",
         "/Docs/file.se-upload-0123456789abcdeF",
+        "/Docs/file.se-upload-0123456789abcde",
+        "/Docs/file.se-Upload-0123456789abcdef",
     ] {
-        assert!(unmanaged.reserve(path, binding()).is_err());
+        assert!(unmanaged.reserve(path, binding()).is_err(), "{path}");
     }
+    let admitted = StageLedger::default();
+    let ticket = admitted
+        .reserve("/Docs/file.se-batch-0123456789abcdef", binding())
+        .unwrap();
+    assert!(admitted
+        .verify(
+            "/Docs/file.se-batch-0123456789abcdef",
+            &binding(),
+            &stage_meta()
+        )
+        .is_err());
+    ticket.release();
 
     // These engine stage purposes include the one that failed on both real Share hosts;
     // obtain ownership only after the acknowledged writer has closed.

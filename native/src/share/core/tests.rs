@@ -131,36 +131,54 @@ fn remote_drive_task_fs_error_wire_tolerates_future_error_kind() {
 fn recursive_delete_rejects_symlink_like_directory_child() {
     let be = RecordingBackend::new(
         [(
-            "/root",
+            "/root/tree",
             vec![
                 test_meta("escape", true, true),
                 test_meta("keep.txt", false, false),
             ],
         )],
-        [("/root/escape", test_meta("escape", true, true))],
+        [
+            ("/root/tree", test_meta("tree", true, false)),
+            ("/root/tree/escape", test_meta("escape", true, true)),
+            ("/root/tree/keep.txt", test_meta("keep.txt", false, false)),
+        ],
     );
 
-    assert!(fs::remove_dir_recursive(&be, "/root").is_err());
+    // Since 74af4e1a a link child is one namespace entry (`fs_delete`): it is
+    // removed itself and never followed into the subtree it points to.
+    fs::remove_dir_recursive(&be, "/root/tree").unwrap();
     let calls = be.calls();
-    assert!(calls.contains(&"list:/root".to_string()));
-    assert!(calls.contains(&"stat:/root/escape".to_string()));
-    assert!(!calls.contains(&"list:/root/escape".to_string()));
-    assert!(!calls.iter().any(|call| call.starts_with("dir:")));
-    assert!(!calls.iter().any(|call| call.starts_with("file:")));
+    assert!(calls.contains(&"list:/root/tree".to_string()));
+    assert!(calls.contains(&"stat:/root/tree/escape".to_string()));
+    assert!(!calls.contains(&"list:/root/tree/escape".to_string()));
+    assert!(calls.contains(&"dir:/root/tree/escape".to_string()));
+    assert!(!calls.iter().any(|call| call.contains("/root/tree/escape/")));
+    assert!(calls.contains(&"file:/root/tree/keep.txt".to_string()));
+    assert_eq!(calls.last().map(String::as_str), Some("dir:/root/tree"));
 }
 
 #[test]
 fn recursive_delete_removes_normal_local_tree() {
-    let root = temp_path("se-share-normal-recursive");
+    // Since 74af4e1a the exported root itself is never removed
+    // (`fs_delete_local::remove`); a folder below it is.
+    let base = temp_path("se-share-normal-recursive");
+    let root = base.join("tree");
     std::fs::create_dir_all(root.join("sub")).unwrap();
     std::fs::write(root.join("sub").join("child.txt"), b"child").unwrap();
     std::fs::write(root.join("top.txt"), b"top").unwrap();
 
-    let root_s = root.to_string_lossy().replace('\\', "/");
-    let be = LocalBackend::new(&root_s);
+    let base_s = base.to_string_lossy().replace('\\', "/");
+    let be = LocalBackend::new(&base_s);
 
-    fs::remove_dir_recursive(&be, &root_s).unwrap();
+    fs::remove_dir_recursive(&be, &format!("{base_s}/tree")).unwrap();
     assert!(!root.exists());
+    assert!(base.exists());
+    assert_eq!(
+        fs::remove_dir_recursive(&be, &base_s).unwrap_err().kind(),
+        io::ErrorKind::PermissionDenied,
+        "the exported root stays"
+    );
+    let _ = std::fs::remove_dir_all(base);
 }
 
 #[test]
