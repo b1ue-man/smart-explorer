@@ -585,7 +585,7 @@ Vertrauensstufe als die Sitzung des Hosts (Pivot ins fremde Netz).
 | `N/share/core/node_tcp.rs:78`, `node_tcp_link.rs:102,121,256-261`, `node_tcp.rs:284,310-313` | 20–30 s je Protokollschritt | behalten | gelten auf aktiver Route je Schritt (`route_protocol::run_until_active`), Toterkennung des Handshakes |
 | `N/share/core/node_tcp.rs:196-202` | 2 s Ablehnung senden | behalten | Höflichkeitsversand auf dem Fehlerpfad |
 | `N/share/os/shared/tcp_sockets.rs:14` | Zielverbindung/DNS 10 s | behalten | ein SYN ins Leere hinge sonst die OS-Vorgabe lang; Einrichtungsschritt, keine Sitzungsfrist |
-| `N/rdp/os/shared/process.rs:43-51` | Inventarwerkzeug 10 s | behalten | Schutz gegen hängende `grdctl`/`kreadconfig6`/PowerShell |
+| `N/rdp/os/shared/process.rs:43-51` | Inventarwerkzeug 10 s | ersetzen (Suite-Lauf 40774661103) | die PowerShell-Inventur brauchte auf einem kalten Windows-Rechner länger als 10 s und ließ H4 scheitern; das Werkzeug endet selbst (D-Bus- und CIM-Aufrufe haben eigene Protokollfristen), begrenzt bleibt nur die Ausgabe (128 KiB, darüber wird es beendet) |
 | `N/daemon/os/shared/apps_ipc_client.rs:173` | lokales IPC 30 s | behalten | Schutz gegen einen hängenden lokalen Dienst; kein Peerwarten |
 | `N/screen/core/icon_host.rs:76` | Metadaten 15 s | behalten für Einzelabruf, entfällt nach `SUBSCRIBE_FEED` | Feed nutzt QUIC-Toterkennung |
 | `N/rdp/os/shared/session_owners.rs:236`, `session.rs:149-171` | 1 s/100 ms Takt | behalten | Beobachtungstakt, keine Frist |

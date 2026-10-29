@@ -1,9 +1,9 @@
-//! Bounded read-only tool discovery/probes. No shell, stdin or credential output.
+//! Read-only tool discovery/probes with bounded output. No shell, stdin or
+//! credential output.
 use std::{
     io::Read,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    time::{Duration, Instant},
 };
 
 const OUTPUT_LIMIT: u64 = 128 * 1024;
@@ -33,34 +33,18 @@ pub(crate) fn capture_with_env(
         .stdout
         .take()
         .ok_or_else(|| "Probe stdout is unavailable".to_string())?;
-    let reader = std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        stdout
-            .take(OUTPUT_LIMIT + 1)
-            .read_to_end(&mut bytes)
-            .map(|_| bytes)
-    });
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break Ok(status),
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
-            Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                break Err("RDP inventory command exceeded ten seconds".into());
-            }
-            Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                break Err(format!("RDP inventory wait: {error}"));
-            }
-        }
-    }?;
-    let bytes = reader
-        .join()
-        .map_err(|_| "RDP inventory output reader failed".to_string())?
-        .map_err(|e| format!("RDP inventory output: {e}"))?;
+    // No fixed deadline (user rule r7): a cold PowerShell with its CIM
+    // queries needs well over ten seconds on some hosts. The read ends at
+    // EOF or after the output limit; a probe that writes more is ended.
+    let mut bytes = Vec::new();
+    let read = stdout.take(OUTPUT_LIMIT + 1).read_to_end(&mut bytes);
+    if read.is_err() || bytes.len() as u64 > OUTPUT_LIMIT {
+        let _ = child.kill();
+    }
+    let status = child
+        .wait()
+        .map_err(|error| format!("RDP inventory wait: {error}"))?;
+    read.map_err(|e| format!("RDP inventory output: {e}"))?;
     if !status.success() || bytes.len() as u64 > OUTPUT_LIMIT {
         return Err(format!(
             "RDP inventory command failed or exceeded its output limit: {}",

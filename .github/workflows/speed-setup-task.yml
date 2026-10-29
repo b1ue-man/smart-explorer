@@ -10,7 +10,8 @@ run-name: Connecting is the setup, fast transfers ${{ inputs.candidate_sha }}
 #               lines changed since v0.5.188) and rustfmt of the changed lines
 #   functional  every `speed_task_`, `einrichtung_task_`, `removable_media_task_`
 #               and `batch_handoff_task_` test plus the directly affected
-#               modules; the RDP client checks (A4 sdl-freerdp3, A5
+#               modules (a failure there is re-run on v0.5.188 and counts only
+#               when v0.5.188 passes it); the RDP client checks (A4 sdl-freerdp3, A5
 #               xfreerdp3/mstsc, other account) on a prepared runner; H3 (xrdp
 #               as root) and H4 (Windows RDP, elevated); the integration target
 #               `transfer_task` with the crash log against SFTP, FTP, SMB and
@@ -335,6 +336,18 @@ jobs:
           sudo -n apt-get update
           sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y \
             rsync lftp iperf3 openssh-client smbclient iproute2 curl openssl
+
+      - name: Widen the dynamic TCP port range (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 30
+        run: |
+          # Client and FTP server share one host; 5000 data connections per
+          # run otherwise exhaust the default 16384 ports (10048 for every
+          # tool in run 40771342971). The suite also waits for TIME_WAIT to
+          # drain before each timed run.
+          netsh int ipv4 set dynamicport tcp start=10000 num=55535
+          netsh int ipv4 show dynamicport tcp
 
       - name: Run the one task entrypoint (measure ${{ matrix.part }})
         shell: bash
