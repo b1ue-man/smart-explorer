@@ -150,7 +150,19 @@ impl Backend for Seg {
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
         self.fake.list_dir(path)
     }
+    /// A stage in memory is a regular file of its full size, as a
+    /// segmented stage on a server is; a job with a crash log records it
+    /// by `stat` before the publication (`file_evidence::validate_copy_target`).
     fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
+        let held = lock(&self.state.stages).get(path).cloned();
+        if let Some(data) = held {
+            let size = lock(&data).len() as u64;
+            return Ok(VfsMeta {
+                name: path.rsplit('/').next().unwrap_or(path).to_string(),
+                size,
+                ..VfsMeta::default()
+            });
+        }
         self.fake.stat(path)
     }
     fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {

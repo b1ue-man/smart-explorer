@@ -36,6 +36,10 @@ fn transfer_engine_task_move_keeps_empty_folders_the_target_refused() {
     write(&dest.join("Vault/empty"), b"a file, not a folder");
     let mut transfer = job(Endpoint::Local, Endpoint::Local, &dest, &[&source]);
     transfer.mode = CopyMode::Move;
+    // Merging into the existing "Vault" is the explicit "merge" decision;
+    // the default "keep both" moves the folder as a whole beside it (d0138b4a).
+    transfer.folders =
+        crate::transfer::FolderConflictPolicy::new(crate::transfer::FolderConflict::Merge);
     let finished = run(transfer);
     assert!(
         finished.has_issue("Ziel ist kein Ordner"),
@@ -178,12 +182,13 @@ fn transfer_engine_task_failing_folders_feed_the_breaker() {
     fake.faults.dir_fault = Some(io::ErrorKind::ConnectionRefused);
     let (_fake, handle) = fake.handle();
     let paths: Vec<&Path> = folders.iter().map(PathBuf::as_path).collect();
-    let finished = run(job(
-        Endpoint::Local,
-        Endpoint::Remote(handle),
-        &remote,
-        &paths,
-    ));
+    // Merged folders are created by the workers' folder register. A
+    // selected folder under "keep both" is reserved while the job is planned
+    // (`roots.rs`, d0138b4a), where a refusal ends the job with its own reason.
+    let mut merging = job(Endpoint::Local, Endpoint::Remote(handle), &remote, &paths);
+    merging.folders =
+        crate::transfer::FolderConflictPolicy::new(crate::transfer::FolderConflict::Merge);
+    let finished = run(merging);
     assert!(
         finished
             .issues
@@ -203,7 +208,12 @@ fn transfer_engine_task_lost_folder_answer_leaves_no_empty_twin() {
     write(&local.join("sub/b.txt"), b"beta");
     let remote = root.path().join("remote");
     fs::create_dir(&remote).expect("remote");
-    let fake = Fake::new("folder-answer-lost");
+    // The selected folder is reserved through a private stage, which a
+    // target with durable folder identities proves as its own after a lost
+    // answer (`folder_reservation::create_stage`). Without identities a lost
+    // answer leaves the name protected and the job ends (review B2).
+    let mut fake = Fake::new("folder-answer-lost");
+    fake.identity_proofs = true;
     fake.faults.dir_answer_lost.store(true, Ordering::SeqCst);
     let (_fake, handle) = fake.handle();
     let finished = run(job(
@@ -298,6 +308,15 @@ fn transfer_engine_task_overwrite_of_an_unreadable_destination_goes_on() {
     let finished = run(transfer);
     assert!(finished.issues.is_empty(), "{:?}", finished.issues);
     assert_eq!(finished.progress.files_done, 2);
-    assert_eq!(fs::read(dest.join("note.txt")).expect("replaced"), b"new");
+    // Replacing a private destination never makes it more readable
+    // (`copy::linux_os::copy_permissions`, cd8632d8): it stays mode 000.
+    let replaced = dest.join("note.txt");
+    let mode = fs::metadata(&replaced)
+        .expect("replaced")
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0, "{mode:o}");
+    fs::set_permissions(&replaced, fs::Permissions::from_mode(0o600)).expect("readable");
+    assert_eq!(fs::read(&replaced).expect("replaced"), b"new");
     assert_eq!(fs::read(dest.join("other.txt")).expect("copied"), b"other");
 }

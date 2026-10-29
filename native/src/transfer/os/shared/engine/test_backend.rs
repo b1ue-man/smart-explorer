@@ -197,8 +197,9 @@ impl Fake {
 }
 
 impl Backend for Fake {
+    // As every real backend: folder reservation; identities via `identity_proofs`.
     fn extensions(&self) -> Option<&dyn crate::vfs::BackendExtensions> {
-        (self.identity_proofs || self.evidence || self.bulk_dirs).then_some(self)
+        Some(self)
     }
     fn scheme(&self) -> Scheme {
         Scheme::Local
@@ -427,13 +428,30 @@ impl crate::vfs::BackendExtensions for Fake {
     fn directory_reservation_supported(&self, root: &str) -> bool {
         crate::vfs::directory_reservation_supported(&self.inner, root)
     }
+    /// Faults as for every exclusive creation; not counted in `dirs`.
     fn create_dir_exclusive(&self, path: &str) -> VfsResult<()> {
-        crate::vfs::create_dir_exclusive(&self.inner, path)
+        if let Some(refused) = self.faults.refuse_dir() {
+            return Err(refused);
+        }
+        crate::vfs::create_dir_exclusive(&self.inner, path)?;
+        if self.faults.dir_answer_lost.swap(false, Ordering::SeqCst) {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "fixture: created, answer lost",
+            ));
+        }
+        Ok(())
     }
     fn directory_identity(&self, path: &str) -> VfsResult<Option<String>> {
+        if !self.identity_proofs {
+            return Ok(None);
+        }
         crate::vfs::directory_identity(&self.inner, path)
     }
     fn file_identity(&self, path: &str) -> VfsResult<Option<String>> {
+        if !self.identity_proofs {
+            return Ok(None);
+        }
         self.counters.identities.fetch_add(1, Ordering::SeqCst);
         crate::vfs::file_identity(&self.inner, path)
     }

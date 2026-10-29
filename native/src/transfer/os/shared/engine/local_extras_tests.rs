@@ -414,7 +414,11 @@ fn speed_task_local_every_small_file_runs_on_one_thread() {
     let refs: Vec<&Path> = sources.iter().map(PathBuf::as_path).collect();
     let finished = run(job(Endpoint::Local, Endpoint::Local, &dest, &refs));
     assert!(finished.issues.is_empty(), "{:?}", finished.issues);
-    assert_eq!(registered.seen(), vec![1; 40]);
+    // Each copy, single or a packet of small files sharing one intent
+    // (ab294ed1, `local_packet.rs`), runs on its permit's one thread.
+    let seen = registered.seen();
+    assert!((1..=40).contains(&seen.len()), "{seen:?}");
+    assert!(seen.iter().all(|threads| *threads == 1), "{seen:?}");
     for index in 0..40 {
         let copy = std::fs::read(dest.join(format!("small-{index}.bin"))).expect("copy");
         assert_eq!(copy, vec![index as u8; 1024]);

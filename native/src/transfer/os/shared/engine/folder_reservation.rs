@@ -26,6 +26,59 @@ fn relative_child(parent: &str, name: &str) -> String {
     }
 }
 
+/// One exclusive folder creation. A peer that refuses it as too busy did
+/// nothing, so the refusal is waited out with the peer's own delay while
+/// `OVERLOAD_PATIENCE` allows, as every folder creation of a job (K13);
+/// any other answer is returned as it is.
+fn create_waiting(backend: &dyn Backend, path: &str, cancel: &AtomicBool) -> io::Result<()> {
+    use super::super::engine_policy::{is_back_pressure, overload_keeps_waiting, retry_delay};
+    let refused_since = std::time::Instant::now();
+    loop {
+        let error = match crate::vfs::create_dir_exclusive(backend, path) {
+            Ok(()) => return Ok(()),
+            Err(error) => error,
+        };
+        let overload = super::super::flow::classify_error(&error)
+            == super::super::flow_control::OpOutcome::Overload;
+        if !is_back_pressure(error.kind(), overload)
+            || !overload_keeps_waiting(refused_since.elapsed())
+        {
+            return Err(error);
+        }
+        let delay = retry_delay(
+            crate::vfs::congestion_of(&error).and_then(|congestion| congestion.retry_after),
+            super::jitter(),
+        );
+        if !super::sleep_unless(cancel, delay) {
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                super::super::cancel::CANCELED_ERROR,
+            ));
+        }
+    }
+}
+
+/// The private stage `stage` (named after a new job id, so nobody else
+/// creates it) after its creation: a lost answer is settled by the stage's
+/// identity, never by creating it again.
+fn create_stage(backend: &dyn Backend, stage: &str, cancel: &AtomicBool) -> io::Result<()> {
+    let Err(error) = create_waiting(backend, stage, cancel) else {
+        return Ok(());
+    };
+    let overload = super::super::flow::classify_error(&error)
+        == super::super::flow_control::OpOutcome::Overload;
+    if error.kind() == io::ErrorKind::AlreadyExists
+        || error.kind() == io::ErrorKind::Interrupted
+        || super::super::engine_policy::surely_not_done(error.kind(), overload)
+    {
+        return Err(error);
+    }
+    match crate::vfs::directory_identity(backend, stage) {
+        Ok(Some(_)) => Ok(()),
+        _ => Err(error),
+    }
+}
+
 impl Reservations {
     pub fn saved_move(&self, source: &str) -> bool {
         self.store
@@ -82,7 +135,7 @@ impl Reservations {
                     .move_root(root, source, &saved.wanted, false, cancel)
                     .map(|(_, moved)| Some(moved));
             }
-            Self::publish(backend, root, &mut store, source, saved)?;
+            Self::publish(backend, root, &mut store, source, saved, cancel)?;
             return Ok(Some(false));
         }
         if live && saved.published && saved.identity.is_none() && !saved.move_source {
@@ -94,7 +147,7 @@ impl Reservations {
                     ))
                 }
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                    crate::vfs::create_dir_exclusive(backend, &join_rel(root, relative))?
+                    create_waiting(backend, &join_rel(root, relative), cancel)?
                 }
                 Err(error) => return Err(error),
             }
@@ -152,7 +205,7 @@ impl Reservations {
                     "Gespeicherter Quellordner hat einen abweichenden Zielvertrag",
                 ));
             }
-            return Self::publish(backend, root, &mut store, source, saved);
+            return Self::publish(backend, root, &mut store, source, saved, cancel);
         }
         let parent = parent_rel(wanted).unwrap_or("");
         let parent_path = join_rel(root, parent);
@@ -200,7 +253,7 @@ impl Reservations {
             store.data.roots.insert(source.to_string(), saved.clone());
             store.save()?;
             if direct {
-                match crate::vfs::create_dir_exclusive(backend, &join_rel(root, &saved.relative)) {
+                match create_waiting(backend, &join_rel(root, &saved.relative), cancel) {
                     Ok(()) => {
                         saved.published = true;
                         store.data.roots.insert(source.to_string(), saved.clone());
@@ -222,7 +275,7 @@ impl Reservations {
                 }
             }
             let stage_path = join_rel(root, &saved.stage);
-            crate::vfs::create_dir_exclusive(backend, &stage_path)?;
+            create_stage(backend, &stage_path, cancel)?;
             saved.identity = crate::vfs::directory_identity(backend, &stage_path)?;
             if saved.identity.is_none() {
                 // This call created the empty stage; no target was published.
@@ -236,7 +289,7 @@ impl Reservations {
             }
             store.data.roots.insert(source.to_string(), saved.clone());
             store.save()?;
-            match Self::publish(backend, root, &mut store, source, saved.clone()) {
+            match Self::publish(backend, root, &mut store, source, saved.clone(), cancel) {
                 Ok(relative) => return Ok(relative),
                 Err(error) if error.kind() == io::ErrorKind::Unsupported => {
                     // A provider can expose an ID without atomic REBIND.
@@ -254,10 +307,7 @@ impl Reservations {
                     saved.identity = None;
                     store.data.roots.insert(source.to_string(), saved.clone());
                     store.save()?;
-                    match crate::vfs::create_dir_exclusive(
-                        backend,
-                        &join_rel(root, &saved.relative),
-                    ) {
+                    match create_waiting(backend, &join_rel(root, &saved.relative), cancel) {
                         Ok(()) => {
                             saved.published = true;
                             store.data.roots.insert(source.to_string(), saved.clone());
@@ -308,6 +358,7 @@ impl Reservations {
         store: &mut AliasStore,
         source: &str,
         mut saved: FolderAlias,
+        cancel: &AtomicBool,
     ) -> io::Result<String> {
         let target = join_rel(root, &saved.relative);
         if saved.move_source {
@@ -321,7 +372,7 @@ impl Reservations {
             }
             match backend.stat(&target) {
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                    crate::vfs::create_dir_exclusive(backend, &target)?;
+                    create_waiting(backend, &target, cancel)?;
                     saved.published = true;
                     store.data.roots.insert(source.to_string(), saved.clone()); store.save()?;
                     saved.identity = crate::vfs::directory_identity(backend, &target)?;
@@ -336,7 +387,7 @@ impl Reservations {
             let stage = join_rel(root, &saved.stage);
             match crate::vfs::directory_identity(backend, &stage) {
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                    crate::vfs::create_dir_exclusive(backend, &stage)?;
+                    create_stage(backend, &stage, cancel)?;
                     saved.identity = crate::vfs::directory_identity(backend, &stage)?;
                     store.data.roots.insert(source.to_string(), saved.clone());
                     store.save()?;
