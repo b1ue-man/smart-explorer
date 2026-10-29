@@ -34,13 +34,15 @@ pub(super) fn connect_until(
     mut connect: impl FnMut(Duration) -> io::Result<TcpStream>,
 ) -> io::Result<TcpStream> {
     let mut pause = SHORTAGE_PAUSE_MIN;
+    let mut shortage = None;
     loop {
         let left = deadline.saturating_duration_since(Instant::now());
         if left.is_zero() {
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "FTP connect timed out",
-            ));
+            // A pause that ran into the deadline returns the shortage it
+            // waited for, not a timeout the server never caused.
+            return Err(shortage.unwrap_or_else(|| {
+                io::Error::new(io::ErrorKind::TimedOut, "FTP connect timed out")
+            }));
         }
         match connect(left) {
             Err(error) if local_address_shortage(&error) => {
@@ -50,6 +52,7 @@ pub(super) fn connect_until(
                 }
                 thread::sleep(pause.min(left));
                 pause = (pause * 2).min(SHORTAGE_PAUSE_MAX);
+                shortage = Some(error);
             }
             other => return other,
         }
