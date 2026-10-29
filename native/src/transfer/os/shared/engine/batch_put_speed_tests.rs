@@ -2,14 +2,16 @@
 use super::super::test_backend::{job, run, write, Fake};
 use crate::transfer::Endpoint;
 use crate::vfs::{
-    unpublished_error, Backend, BackendHandle, BatchLimits, BatchPut, BatchPutOutcome, Scheme,
-    VfsMeta, VfsResult,
+    unpublished_error, Backend, BackendExtensions, BackendHandle, BatchLimits, BatchPut,
+    BatchPutOutcome, Scheme, VfsMeta, VfsResult,
 };
 use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-/// Forwards the listed methods to the wrapped fake remote.
+/// Forwards the listed methods to the wrapped fake remote. `extensions` is
+/// among them in both wrappers: like every real backend they reserve the
+/// selected folder exclusively, which the job asks for under keep-both.
 macro_rules! forward {
     ($($name:ident($($arg:ident: $ty:ty),*) -> $ret:ty;)*) => {
         $(fn $name(&self, $($arg: $ty),*) -> $ret { self.0.$name($($arg),*) })*
@@ -25,6 +27,7 @@ struct Refusing(Arc<Fake>, AtomicBool);
 impl Backend for Refusing {
     forward! {
         scheme() -> Scheme; root_display() -> String; namespace_identity() -> String;
+        extensions() -> Option<&dyn BackendExtensions>;
         list_dir(path: &str) -> VfsResult<Vec<VfsMeta>>; stat(path: &str) -> VfsResult<VfsMeta>;
         open_read(path: &str) -> VfsResult<Box<dyn Read + Send>>;
         open_write(path: &str) -> VfsResult<Box<dyn Write + Send>>;
@@ -104,6 +107,7 @@ struct SlowWire(Arc<Fake>);
 impl Backend for SlowWire {
     forward! {
         scheme() -> Scheme; root_display() -> String; namespace_identity() -> String;
+        extensions() -> Option<&dyn BackendExtensions>;
         list_dir(path: &str) -> VfsResult<Vec<VfsMeta>>; stat(path: &str) -> VfsResult<VfsMeta>;
         open_read(path: &str) -> VfsResult<Box<dyn Read + Send>>;
         open_write(path: &str) -> VfsResult<Box<dyn Write + Send>>;
