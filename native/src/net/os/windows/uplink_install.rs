@@ -7,9 +7,14 @@ use std::path::{Path, PathBuf};
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const PROGRAM: &str = include_str!("uplink_install.ps1");
 // No user PSModulePath/autoload code may run in a protected elevated helper.
+// A manifest may lie in a version folder below its module folder (Windows 11
+// 24H2, Server 2025).
 const SYSTEM_MODULES: &str = "$env:PSModulePath=$PSHOME+'\\Modules'; $PSModuleAutoLoadingPreference='None'; \
     foreach($module in @('Microsoft.PowerShell.Management','Microsoft.PowerShell.Security','Microsoft.PowerShell.Utility','ScheduledTasks')) \
-    { Microsoft.PowerShell.Core\\Import-Module -Name ($PSHOME+'\\Modules\\'+$module+'\\'+$module+'.psd1') -ErrorAction Stop }; ";
+    { $dir=$PSHOME+'\\Modules\\'+$module; $file=$dir+'\\'+$module+'.psd1'; \
+    if (-not [IO.File]::Exists($file)) { $found=[IO.Directory]::GetFiles($dir,$module+'.psd1',[IO.SearchOption]::AllDirectories); \
+    [Array]::Sort($found); $file=$found[-1] }; \
+    Microsoft.PowerShell.Core\\Import-Module -Name $file -ErrorAction Stop }; ";
 
 pub(crate) fn system_powershell() -> io::Result<PathBuf> {
     let mut buffer = vec![0u16; 32768];
