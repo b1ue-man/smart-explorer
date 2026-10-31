@@ -25,7 +25,7 @@ Jobs (--job):
              se-agent bundles from se-agent/ (native/build-agent-bundles.sh)
   behaviour  (Linux) equality and backward compatibility of the sync
              comparison and the recursive listing: v0.5.189 plus the two CLI
-             commits 1f004fd9 (`se sync compare`) and bc18587b (`se ls -R`)
+             commits bef433c4 (`se sync compare`) and db93d3a6 (`se ls -R`)
              next to the candidate, on generated trees (files, folders, hidden
              dot files, links, a FIFO, an unreadable folder, a mounted
              sub-tree) for local-local, local-SFTP (no agent), local-SSH with
@@ -69,7 +69,7 @@ ROOT = NATIVE.parent
 WINDOWS = os.name == "nt"
 EXE = ".exe" if WINDOWS else ""
 BASELINE_TAG = "v0.5.189"
-CLI_COMMITS = ("1f004fd9", "bc18587b")
+CLI_COMMITS = ("bef433c4", "db93d3a6")
 TEST_PREFIX = "abgleich_task_"
 BUNDLES = ("se-agent-x86_64-linux-musl", "se-agent-aarch64-linux-musl")
 AFFECTED = ("bisync::", "rscan::", "scanner::", "share::", "agent::", "agent_proto::", "transfer::", "copy::",

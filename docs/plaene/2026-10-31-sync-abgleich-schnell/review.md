@@ -2,6 +2,8 @@
 
 Gegenstand: `git diff 29310ace..ad100297 -- native/ android/ docs/ README.md` (Commits 1f004fd9,
 df715327, bc18587b, 6f3ae219, ad100297). Maßstab: `plan.md` (C1–C8, D), `bestand-datenwege.md`
+> Nachtrag 2026-10-31: Die Commits wurden danach auf den Release-Commit von v0.5.189 umgesetzt (Rebase); die hier genannten Kennungen entsprechen jetzt bef433c4 (`se sync compare`), db93d3a6 (`se ls -R`) und den folgenden Commits gleichen Titels auf main.
+
 (Abschnitt 11), `referenzen-abgleich.md` (M1–M6), `docs/oberflaechen/{INDEX,uebertragungen,einstellungen}.md`,
 `AGENTS.md`.
 

@@ -15,7 +15,7 @@ run-name: Sync comparison as fast as the storage analysis ${{ inputs.candidate_s
 #               bundles from se-agent/ first
 #   behaviour   Linux: equality and backward compatibility of `se sync compare`
 #               and `se ls -R` between v0.5.189 (plus the two CLI commits
-#               1f004fd9 and bc18587b) and the candidate on generated trees for
+#               bef433c4 and db93d3a6) and the candidate on generated trees for
 #               local-local, local-SFTP, local-SSH agent, local-Direct Share and
 #               Share-Share, also candidate client against a v0.5.189 far side
 #               and the reverse; then the merge rule `se cp --conflict update`
@@ -245,7 +245,7 @@ jobs:
           [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
           [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
           [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
-          for ref in v0.5.189 1f004fd9 bc18587b; do git rev-parse --verify "$ref^{commit}"; done
+          for ref in v0.5.189 bef433c4 db93d3a6; do git rev-parse --verify "$ref^{commit}"; done
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -321,7 +321,7 @@ jobs:
           [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
           [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
           [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
-          for ref in v0.5.189 1f004fd9 bc18587b; do git rev-parse --verify "$ref^{commit}"; done
+          for ref in v0.5.189 bef433c4 db93d3a6; do git rev-parse --verify "$ref^{commit}"; done
 
       - uses: dtolnay/rust-toolchain@stable
 
