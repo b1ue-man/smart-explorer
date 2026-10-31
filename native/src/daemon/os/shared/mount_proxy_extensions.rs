@@ -40,6 +40,12 @@ impl BackendExtensions for MountProxy {
         decode(vfs::content_digest(&*self.inner, path, cancel))
     }
 
+    /// The sync's MD5 formed next to the data, under the same gate.
+    fn content_md5(&self, path: &str, cancel: &AtomicBool) -> VfsResult<Option<String>> {
+        let _permit = self.gate.enter()?;
+        decode(vfs::content_md5(&*self.inner, path, cancel))
+    }
+
     fn capacity(&self, root: &str) -> VfsResult<crate::vfs::CapacitySnapshot> {
         {
             let _permit = self.gate.enter()?;

@@ -35,7 +35,9 @@ mod congestion;
 #[path = "core/content_digest.rs"]
 mod content_digest;
 pub use self::content_digest::{content_digest, ContentDigest};
-pub(crate) use self::content_digest::{digest_by_local_read, is_sha256_hex, sha256_exact};
+pub(crate) use self::content_digest::{
+    digest_by_local_read, is_md5_hex, is_sha256_hex, md5_exact, sha256_exact,
+};
 #[path = "os/shared/copy_transfer.rs"]
 mod copy_transfer;
 #[path = "core/core.rs"]

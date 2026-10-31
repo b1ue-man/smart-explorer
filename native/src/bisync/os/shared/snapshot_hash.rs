@@ -67,7 +67,13 @@ pub(super) fn hash_file_cached_hex(
     })
 }
 
-/// The MD5 of a file as 32 lowercase hex digits, read through `backend`.
+/// The MD5 of a file as 32 lowercase hex digits. A remote side that forms
+/// the MD5 where the file is stored (`vfs::content_md5`: FTP `HASH`/`XMD5`,
+/// SFTP by exec, WebDAV checksums, an agent next to the data) is asked
+/// first and moves no content; only a side without one is read through
+/// `backend`. Every caller of a remote side (incremental checksum
+/// observation, index commit, move finalization, own-write recognition)
+/// goes through here.
 fn md5_hex_file(backend: &dyn Backend, path: &str, cancel: &AtomicBool) -> io::Result<String> {
     use std::io::Read;
 
@@ -78,6 +84,12 @@ fn md5_hex_file(backend: &dyn Backend, path: &str, cancel: &AtomicBool) -> io::R
         "checksum file",
     )?;
     let metadata = captured.regular("checksum file")?;
+    if !backend.is_local() {
+        if let Some(hex) = crate::vfs::content_md5(backend, path, cancel)? {
+            super::apply_guard::revalidate(backend, path, &captured, "checksum file")?;
+            return Ok(hex);
+        }
+    }
     let mut reader = crate::vfs::open_read_regular(backend, path, metadata.id.as_deref())?;
     let mut context = md5::Context::new();
     let mut buffer = [0u8; 65_536];

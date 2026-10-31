@@ -204,6 +204,13 @@ impl BackendExtensions for GuardedBackend {
         self.read(path)?;
         Ok(digest)
     }
+    fn content_md5(&self, path: &str, cancel: &AtomicBool) -> VfsResult<Option<String>> {
+        self.read(path)?;
+        let md5 = vfs::content_md5(&*self.inner, path, cancel)?;
+        // Access revoked while hashing: the MD5 is not handed out.
+        self.read(path)?;
+        Ok(md5)
+    }
     fn supports_recycle(&self, path: &str) -> VfsResult<bool> {
         self.read(path)?;
         vfs::supports_recycle(&*self.inner, path)
@@ -327,7 +334,10 @@ mod reservation_compatibility_tests {
             io::ErrorKind::ReadOnlyFilesystem
         );
         assert_eq!(
-            readonly.rename_no_replace("/old", "/new").unwrap_err().kind(),
+            readonly
+                .rename_no_replace("/old", "/new")
+                .unwrap_err()
+                .kind(),
             io::ErrorKind::ReadOnlyFilesystem
         );
         assert_eq!(provider.strict.load(Ordering::SeqCst), 1);

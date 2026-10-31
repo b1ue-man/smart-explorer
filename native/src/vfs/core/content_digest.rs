@@ -108,6 +108,45 @@ pub(crate) fn sha256_exact(
     Ok(lower_hex(context.finish().as_ref()))
 }
 
+/// The MD5 (lowercase hex, the sync's content signature) of exactly
+/// `expected` bytes of `source`, as `sha256_exact` forms the SHA-256.
+pub(crate) fn md5_exact(
+    source: &mut dyn Read,
+    expected: u64,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(u64),
+) -> io::Result<String> {
+    let mut context = md5::Context::new();
+    let mut buffer = vec![0u8; HASH_CHUNK];
+    let mut total = 0u64;
+    loop {
+        check_cancel(cancel)?;
+        let count = match source.read(&mut buffer) {
+            Ok(count) => count,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        };
+        if count == 0 {
+            break;
+        }
+        total = total.saturating_add(count as u64);
+        if total > expected {
+            return Err(changed());
+        }
+        context.consume(&buffer[..count]);
+        progress(count as u64);
+    }
+    if total != expected {
+        return Err(changed());
+    }
+    Ok(lower_hex(&context.compute().0))
+}
+
+/// 32 lowercase hex digits.
+pub(crate) fn is_md5_hex(text: &str) -> bool {
+    text.len() == 32 && text.bytes().all(is_lower_hex_digit)
+}
+
 /// 64 lowercase hex digits.
 pub(crate) fn is_sha256_hex(text: &str) -> bool {
     text.len() == 64 && text.bytes().all(is_lower_hex_digit)

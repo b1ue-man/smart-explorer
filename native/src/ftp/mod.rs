@@ -33,6 +33,9 @@ mod writer;
 #[path = "core/abgleich_task_hash_tests.rs"]
 mod abgleich_task_hash_tests;
 #[cfg(test)]
+#[path = "core/abgleich_task_sync_hash_tests.rs"]
+mod abgleich_task_sync_hash_tests;
+#[cfg(test)]
 #[path = "core/data_overlap_server.rs"]
 mod data_overlap_server;
 #[cfg(test)]

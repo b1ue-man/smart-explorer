@@ -32,12 +32,17 @@ pub(in crate::share) fn run(
     cancel: Arc<AtomicBool>,
     progress: Progress,
 ) -> io::Result<()> {
-    if request.algo != Some(FsHashAlgo::Sha256) {
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "Einzeldatei-Prüfsumme gibt es nur als SHA-256",
-        ));
-    }
+    // SHA-256 (`hash_file_v1`) or the sync's MD5 (`hash_file_md5_v1`).
+    let md5 = match request.algo {
+        Some(FsHashAlgo::Sha256) => false,
+        Some(FsHashAlgo::Md5) => true,
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "Einzeldatei-Prüfsumme gibt es nur als SHA-256 oder MD5",
+            ))
+        }
+    };
     let parts = crate::share::fs::split_clean(&request.path)?;
     if parts.is_empty() || access.is_dynamic() && parts == ["Verbindungen"] {
         return Err(io::Error::new(
@@ -47,10 +52,17 @@ pub(in crate::share) fn run(
     }
     let target = access.resolve(&request.path)?;
     let entry = if target.backend.scheme() == Scheme::Local {
-        Some(local(&target, &cancel, &progress)?)
+        Some(local(&target, md5, &cancel, &progress)?)
+    } else if md5 {
+        // An exported connection that forms the MD5 next to its data; the
+        // size comes from its listing (no download either way).
+        match crate::vfs::content_md5(&*target.backend, &target.path, &cancel)? {
+            Some(md5) => Some(remote_entry(md5, target.backend.stat(&target.path)?.size)),
+            None => None,
+        }
     } else {
         let digest = crate::vfs::content_digest(&*target.backend, &target.path, &cancel)?;
-        digest.map(remote_entry)
+        digest.map(|digest: ContentDigest| remote_entry(digest.sha256, digest.size))
     };
     let count = u64::from(entry.is_some());
     if let Some(entry) = entry {
@@ -78,20 +90,22 @@ pub(in crate::share) fn run(
     )
 }
 
-/// An exported connection that hashes next to its own data.
-fn remote_entry(digest: ContentDigest) -> FsHashEntry {
+/// An exported connection that hashes next to its own data: its digest (the
+/// SHA-256 or the MD5 asked for) of the file of `size` bytes.
+fn remote_entry(digest: String, size: u64) -> FsHashEntry {
     FsHashEntry {
         rel: String::new(),
         is_dir: false,
-        size: digest.size,
+        size,
         mtime_ms: 0,
-        digest: Some(digest.sha256),
+        digest: Some(digest),
         meta: None,
     }
 }
 
 fn local(
     target: &ResolvedTarget,
+    md5: bool,
     cancel: &AtomicBool,
     progress: &Progress,
 ) -> io::Result<FsHashEntry> {
@@ -114,7 +128,11 @@ fn local(
     let mut count = |bytes: u64| {
         progress.bytes.fetch_add(bytes, Ordering::Relaxed);
     };
-    let sha256 = crate::vfs::sha256_exact(&mut reader, before.len(), cancel, &mut count)?;
+    let digest = if md5 {
+        crate::vfs::md5_exact(&mut reader, before.len(), cancel, &mut count)?
+    } else {
+        crate::vfs::sha256_exact(&mut reader, before.len(), cancel, &mut count)?
+    };
     let after = file.metadata()?;
     if after.len() != before.len() || after.modified().ok() != before.modified().ok() {
         return Err(io::Error::new(
@@ -131,7 +149,7 @@ fn local(
             .ok()
             .map(crate::local_access::system_time_ms)
             .unwrap_or(0),
-        digest: Some(sha256),
+        digest: Some(digest),
         meta: None,
     })
 }

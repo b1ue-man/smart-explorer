@@ -188,6 +188,11 @@ impl BackendExtensions for PeerBackend {
     ) -> io::Result<Option<crate::vfs::ContentDigest>> {
         super::peer_content_digest::digest(self, path, cancel)
     }
+    /// The sync's MD5 formed on the host (`hash_file_md5_v1`), so a
+    /// single-file check of the checksum mode downloads nothing.
+    fn content_md5(&self, path: &str, cancel: &AtomicBool) -> io::Result<Option<String>> {
+        super::peer_content_digest::md5(self, path, cancel)
+    }
     fn supports_recycle(&self, path: &str) -> io::Result<bool> {
         Ok(peer_stream::features(self, path)?.remote_trash_v1)
     }

@@ -41,6 +41,11 @@ pub(crate) struct FsHostFeatures {
     /// on the host, answered as one entry with an empty `rel`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub(crate) hash_file_v1: bool,
+    /// `HashWalk { single_file }` with `FsHashAlgo::Md5`: the sync's MD5 of
+    /// one regular file formed on the host (or by an exported connection
+    /// next to its data), so no single-file check downloads it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) hash_file_md5_v1: bool,
     /// `ListDirBatch`: folder listings in portions.
     #[serde(default, skip_serializing_if = "is_false")]
     pub(crate) list_batches_v1: bool,
@@ -90,6 +95,7 @@ impl FsHostFeatures {
             hash_walk_keys_v1: true,
             hash_walk_filter_v1: true,
             hash_file_v1: true,
+            hash_file_md5_v1: true,
             list_batches_v1: true,
             remote_trash_v1: crate::analytics::host_recycle_available(),
             stage_finish_v1: true,
@@ -119,6 +125,7 @@ impl FsHostFeatures {
             (self.hash_walk_keys_v1, "hash_walk_keys_v1"),
             (self.hash_walk_filter_v1, "hash_walk_filter_v1"),
             (self.hash_file_v1, "hash_file_v1"),
+            (self.hash_file_md5_v1, "hash_file_md5_v1"),
             (self.list_batches_v1, "list_batches_v1"),
             (self.remote_trash_v1, "remote_trash_v1"),
             (self.stage_finish_v1, "stage_finish_v1"),

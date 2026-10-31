@@ -60,6 +60,18 @@ impl BackendExtensions for RootedBackend {
         Ok(digest)
     }
 
+    /// The sync's MD5, under the same gate, path resolution and lock check as
+    /// `content_digest`.
+    fn content_md5(&self, path: &str, cancel: &AtomicBool) -> VfsResult<Option<String>> {
+        let md5 = {
+            let _operation = self.operation.read()?;
+            let path = self.checked_existing(path)?;
+            vfs::content_md5(&*self.inner, &path, cancel).map_err(sanitize_error)?
+        };
+        let _operation = self.operation.read()?;
+        Ok(md5)
+    }
+
     fn capacity(&self, root: &str) -> VfsResult<vfs::CapacitySnapshot> {
         let _operation = self.operation.read()?;
         let path = self.checked_existing(root)?;

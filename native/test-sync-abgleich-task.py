@@ -1753,7 +1753,9 @@ class Handler(FTPHandler):
             self.respond("501 unsupported algorithm")
 
     def digest(self, line, name):
-        path = self.fs.ftp2fs(line)
+        # pyftpdlib already turned the argument of a command with `perm` into the file system path
+        # (`FTPHandler.pre_process_command`); converting it again would name a path below the root.
+        path = line
         if not os.path.isfile(path):
             self.respond("550 not a regular file")
             return None
@@ -1771,7 +1773,7 @@ class Handler(FTPHandler):
     def ftp_HASH(self, line):
         found = self.digest(line, self.hash_name)
         if found:
-            self.respond("213 %s 0-%d %s %s" % (self.hash_name, found[1] - 1, found[0], line))
+            self.respond("213 %s 0-%d %s %s" % (self.hash_name, found[1] - 1, found[0], self.fs.fs2ftp(line)))
 
     def ftp_XMD5(self, line):
         found = self.digest(line, "MD5")
