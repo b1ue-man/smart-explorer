@@ -368,6 +368,8 @@ EVIDENCE_TESTS = (
     "abgleich_task_host_patterns_of_a_whole_job_mean_what_its_set_means",
     "abgleich_task_agent_walk_hashes_and_sends_nothing_the_filter_leaves_out",
     "abgleich_task_agent_fresh_walk_never_answers_from_the_digest_cache",
+    # A local side forms its folder keys in its one snapshot walk, equal to the agent's (review 3 G6).
+    "abgleich_task_local_side_keys_come_from_its_one_walk_and_equal_the_agents",
 )
 
 
