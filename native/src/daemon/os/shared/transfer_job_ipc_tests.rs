@@ -288,3 +288,54 @@ fn worker_job_task_wire_round_trips_and_keeps_only_logged_jobs_alive() {
     assert!(!of(true, None).survives_client);
     assert_eq!(of(false, None).conflict, 2);
 }
+
+#[test]
+fn abgleich_task_update_rule_travels_as_code_three_and_needs_a_worker_that_knows_it() {
+    let items = JobItems::Pairs(Vec::new());
+    let plain = FolderConflictPolicy::new(FolderConflict::Merge);
+    let merging = FolderConflictPolicy::new(FolderConflict::KeepBoth).with_merge_update();
+    let view = |conflict: Conflict, folders: &FolderConflictPolicy| {
+        let wire = JobWire::of(
+            &crate::transfer::JobView {
+                id: None,
+                recoverable: false,
+                recovery: crate::transfer::RecoveryMode::New,
+                source: crate::transfer::Side::Local,
+                target: crate::transfer::Side::Local,
+                target_dir: "/to",
+                items: &items,
+                layout: Layout::Tree,
+                filter: None,
+                conflict,
+                folders,
+                mode: crate::types::CopyMode::Copy,
+                source_label: "Quelle",
+                target_label: "Ziel",
+                resume: None,
+            },
+            EndpointWire::Local,
+            EndpointWire::Local,
+        );
+        let line = serde_json::to_string(&wire).expect("encoded");
+        serde_json::from_str::<JobWire>(&line).expect("decoded")
+    };
+    let update = view(Conflict::Update, &plain);
+    assert_eq!(update.conflict, 3);
+    assert_eq!(update.decoded().expect("decoded").0, Conflict::Update);
+    assert!(update.needs_update_rule());
+    let merged = view(Conflict::Rename, &merging);
+    assert_eq!(merged.conflict, 0, "an older worker would keep both");
+    assert!(merged.folders.merge_update);
+    assert!(merged.needs_update_rule());
+    let old = view(Conflict::Skip, &plain);
+    assert!(!old.needs_update_rule(), "other jobs go to any worker");
+    assert!(
+        !serde_json::to_string(&old.folders)
+            .expect("encoded")
+            .contains("merge_update"),
+        "the folder policy of an ordinary job is byte-identical to before"
+    );
+    let mut unknown = old;
+    unknown.conflict = 4;
+    assert!(unknown.decoded().is_err());
+}

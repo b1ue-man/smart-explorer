@@ -16,6 +16,7 @@ mod engine_copy_tests;
 mod entry_kind;
 mod exec;
 mod exec_ssh;
+mod file_rule;
 mod host_key_prompt;
 mod integration;
 mod licenses;
@@ -60,6 +61,7 @@ mod tree_preflight_tests;
 mod tree_remove;
 mod tree_spool;
 mod update;
+mod update_copy;
 mod vault;
 
 use clap::{Args, CommandFactory, Parser, Subcommand};
@@ -236,6 +238,13 @@ struct CopyArgs {
     recursive: bool,
     #[arg(short, long, help = "Allow overwriting an existing destination")]
     force: bool,
+    #[arg(
+        long,
+        value_enum,
+        conflicts_with_all = ["force", "resume_job"],
+        help = "Same-named files: update = insert missing files, replace older ones by newer ones (by modification time), skip equal ones, keep a newer destination, keep both when the time is equal and the size differs"
+    )]
+    conflict: Option<file_rule::FileRule>,
     #[arg(long, help = "Print rate and limiting resource to stderr when done")]
     stats: bool,
     #[arg(
@@ -261,6 +270,13 @@ struct MoveArgs {
     recursive: bool,
     #[arg(short, long, help = "Allow overwriting an existing destination")]
     force: bool,
+    #[arg(
+        long,
+        value_enum,
+        conflicts_with_all = ["force", "resume_job"],
+        help = "Same-named files, local paths only: update = insert missing files, replace older ones by newer ones (by modification time), skip equal ones (they stay at the source), keep a newer destination, keep both when the time is equal and the size differs"
+    )]
+    conflict: Option<file_rule::FileRule>,
     #[arg(
         long,
         value_enum,
@@ -376,6 +392,17 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
         Command::Get(args) | Command::Put(args) | Command::Cp(args) => {
             let src = target::resolve(&args.src)?;
             let dst = target::resolve(&args.dst)?;
+            if args.conflict.is_some() {
+                update_copy::run_cli(
+                    &src,
+                    &dst,
+                    args.recursive,
+                    crate::types::CopyMode::Copy,
+                    args.folder_conflict.map(Into::into),
+                    args.stats,
+                )?;
+                return Ok(0);
+            }
             ops::copy_with_folder_stats(
                 &src,
                 &dst,
@@ -390,6 +417,17 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
         Command::Mv(args) => {
             let src = target::resolve(&args.src)?;
             let dst = target::resolve(&args.dst)?;
+            if args.conflict.is_some() {
+                update_copy::run_cli(
+                    &src,
+                    &dst,
+                    args.recursive,
+                    crate::types::CopyMode::Move,
+                    args.folder_conflict.map(Into::into),
+                    false,
+                )?;
+                return Ok(0);
+            }
             ops::move_with_folders(
                 &src,
                 &dst,

@@ -206,5 +206,6 @@ pub(in crate::cli) fn move_observed_in_job(
         destination: receipt.destination().to_string(),
         omitted: receipt.omissions(),
         kept,
+        update: None,
     })
 }

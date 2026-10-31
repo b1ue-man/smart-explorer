@@ -205,3 +205,28 @@ fn speed_task_transfer_rows_limiter_hidden_while_ramping() {
         Some("Wartet auf Nachschub (Quelle liefert nicht schnell genug)".to_string());
     assert!(limiter_line(&ramping).is_some());
 }
+
+#[test]
+fn abgleich_task_tally_and_notice_name_the_decisions_of_the_file_rule() {
+    let mut progress = progress((10, 10), (100, 100));
+    progress.skipped = 5;
+    progress.skipped_equal = 3;
+    progress.kept_newer = 2;
+    progress.replaced = 4;
+    progress.kept_both = 1;
+    let line = tally_line(&progress).expect("a line");
+    assert_eq!(
+        line,
+        "ersetzt: 4 · gleich übersprungen: 3 · Ziel neuer behalten: 2 · Konflikt doppelt behalten: 1"
+    );
+    let plain = {
+        let mut other = progress.clone();
+        other.skipped = 3;
+        other.skipped_equal = 0;
+        other.kept_newer = 0;
+        other.replaced = 0;
+        other.kept_both = 0;
+        tally_line(&other).expect("a line")
+    };
+    assert_eq!(plain, "übersprungen: 3");
+}

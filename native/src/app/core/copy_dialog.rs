@@ -65,7 +65,18 @@ impl App {
                         "überschreiben",
                     );
                     ui.radio_value(&mut self.copy_conflict, Conflict::Skip, "überspringen");
+                    ui.radio_value(
+                        &mut self.copy_conflict,
+                        Conflict::Update,
+                        "neuere ersetzen ältere",
+                    );
                 });
+                if self.copy_conflict == Conflict::Update {
+                    ui.colored_label(
+                        theme::muted(ui),
+                        "Fehlende werden eingefügt, Neuere ersetzen Ältere nach „zuletzt geändert“, Gleiche werden übersprungen.",
+                    );
+                }
                 ui.label("Bei vorhandenen Quellordnern folgt eine eigene Auswahl: Beide behalten, Zusammenführen oder Überspringen.");
                 ui.colored_label(
                     theme::muted(ui),

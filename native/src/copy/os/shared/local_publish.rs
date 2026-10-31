@@ -136,7 +136,9 @@ pub(super) fn publish(
                     restore_quarantine_if_any(quarantine.as_ref()).map_err(LocalFailure::Source)?;
                     return Ok(LocalOutcome::Skipped);
                 }
-                Conflict::Rename => match next_name(&requested, races) {
+                // `Update` never reaches this layer (the engine decides it per
+                // file); were it to, keeping both destroys nothing.
+                Conflict::Rename | Conflict::Update => match next_name(&requested, races) {
                     Ok(next) => target = next,
                     Err(error) => {
                         staged.discard().map_err(LocalFailure::Publish)?;
@@ -201,7 +203,7 @@ pub(crate) fn packet_start(
             Some(_) => Ok(None),
             None => Ok(Some(requested.to_path_buf())),
         },
-        Conflict::Rename => unique_path(requested)
+        Conflict::Rename | Conflict::Update => unique_path(requested)
             .map(Some)
             .map_err(LocalFailure::Target),
         Conflict::Overwrite => Err(LocalFailure::Target(io::Error::new(

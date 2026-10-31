@@ -170,7 +170,7 @@ pub(super) fn try_move(
                     restore_quarantine_if_any(quarantine.as_ref()).map_err(LocalFailure::Source)?;
                     return Ok(Some(LocalOutcome::Skipped));
                 }
-                Conflict::Rename => {
+                Conflict::Rename | Conflict::Update => {
                     *target = match next_name(requested, races) {
                         Ok(next) => next,
                         Err(error) => {

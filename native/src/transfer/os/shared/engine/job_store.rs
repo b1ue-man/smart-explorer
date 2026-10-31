@@ -63,10 +63,11 @@ fn contract(view: &JobView<'_>, target_root: &str, id: &str) -> io::Result<JobRe
         layout: view.layout,
         filter: view.filter.map(StoredFilter::of),
         file_policy: match view.conflict {
-            Conflict::Rename => 0,
+            Conflict::Rename | Conflict::Update => 0,
             Conflict::Overwrite => 1,
             Conflict::Skip => 2,
         },
+        file_update: view.conflict == Conflict::Update,
         folders: view.folders.clone(),
         moving: view.mode == CopyMode::Move,
         guards: Vec::new(),

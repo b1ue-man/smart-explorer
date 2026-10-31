@@ -119,6 +119,7 @@ pub(super) fn transfer_tree(
             })
             .collect(),
         kept,
+        update: None,
     }))
 }
 

@@ -275,6 +275,27 @@ mod tests {
     }
 
     #[test]
+    fn abgleich_task_completion_offers_the_file_rule_for_copy_and_move() {
+        for command in ["cp", "mv", "get", "put"] {
+            let candidates = clap_complete::engine::complete(
+                &mut Cli::command(),
+                ["se", command, "a", "b", "--conflict", ""]
+                    .map(std::ffi::OsString::from)
+                    .to_vec(),
+                5,
+                None,
+            )
+            .unwrap();
+            assert!(
+                candidates
+                    .iter()
+                    .any(|candidate| candidate.get_value() == "update"),
+                "{command}: {candidates:?}"
+            );
+        }
+    }
+
+    #[test]
     fn dynamic_engine_completes_exec_management_without_prior_ids() {
         for (words, index, expected) in [
             (vec!["se", "ex"], 1, "exec"),

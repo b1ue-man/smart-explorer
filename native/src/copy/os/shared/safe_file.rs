@@ -277,7 +277,7 @@ fn select_initial_target(
     target: &Path,
     conflict: Conflict,
 ) -> Result<Option<PathBuf>, LocalFailure> {
-    if conflict == Conflict::Rename {
+    if matches!(conflict, Conflict::Rename | Conflict::Update) {
         return Ok(Some(target.to_path_buf()));
     }
     let Some(metadata) = metadata_if_exists(target).map_err(LocalFailure::Target)? else {

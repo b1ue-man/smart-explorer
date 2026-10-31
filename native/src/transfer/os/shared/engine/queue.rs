@@ -64,6 +64,14 @@ pub(crate) struct FileWork {
     /// A one-request publication under the planned name found it taken
     /// (G3-08b): this file takes the staged path, which numbers the name.
     pub absent_refused: bool,
+    /// The conflict policy the file rule "neuere ersetzen ältere" decided for
+    /// this file (`update.rs`): `Rename` where the target is missing or
+    /// the files conflict, `Overwrite` where a newer source replaces. `None`:
+    /// the job's own policy applies.
+    pub conflict: Option<crate::types::Conflict>,
+    /// The file replaces an existing target; the provider id of that target
+    /// when the listing gave one (duplicate-capable providers bind by it).
+    pub replacing: Option<Option<String>>,
 }
 
 impl FileWork {
@@ -81,6 +89,8 @@ impl FileWork {
             alone: false,
             overloaded_since: None,
             absent_refused: false,
+            conflict: None,
+            replacing: None,
         }
     }
 

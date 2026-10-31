@@ -124,6 +124,13 @@ pub enum Conflict {
     Skip,
     Overwrite,
     Rename,
+    /// Same-named files by modification time: a missing one is inserted,
+    /// a newer source replaces the older target, equal ones are skipped, a
+    /// newer target is kept and a same-time file of another size is kept
+    /// beside its counterpart (`transfer::update_rule`, `engine/update.rs`).
+    /// Callers below the engine see only the three concrete policies: the
+    /// engine decides it per file before any copy primitive runs.
+    Update,
 }
 
 #[derive(Clone, Debug)]

@@ -44,13 +44,15 @@ pub(super) fn copy_file(
     let source = native(&file.source);
     let target = native(&engine.folders.path_of(&file.rel));
     let conflict = if engine.resume {
-        if let Some(outcome) = super::download::existing(engine, &target, file.size)? {
+        if let Some(outcome) =
+            super::download::existing(engine, &target, file.size, Conflict::Skip)?
+        {
             return Ok(outcome);
         }
         // Created meanwhile: left alone, never replaced (K8).
         Conflict::Skip
     } else {
-        engine.view.conflict
+        engine.conflict_of(file)
     };
     // Permits the flows have to spare turn into threads of this one copy
     // (large file, nothing else waiting, a drive that is flash or measured to

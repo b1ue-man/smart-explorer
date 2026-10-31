@@ -1,18 +1,31 @@
 # Übertragungsentscheidungen und gezieltes Lesen
 
-Quellstand: 2026-10-26, laufender B2-Kandidat. Gemeinsame Remote-Suite und
+Quellstand: 2026-10-26, laufender B2-Kandidat; ergänzt 2026-10-31 um die Dateiregel
+„Neuere ersetzen ältere“ (Paket D4 des Plans `docs/plaene/2026-10-31-sync-abgleich-schnell/`,
+nicht gebaut, nicht getestet). Gemeinsame Remote-Suite und
 Veröffentlichung stehen aus. Abkürzungen: `N/` = `native/src/`, `A/` =
 `android/app/src/main/java/app/smartexplorer/android/`.
 
 | Fähigkeit | Desktop und se Desktop | Android und Bridge | CLI und MCP | Gemeinsamer Vertrag |
 |---|---|---|---|---|
 | Obersten ausgewählten Ordnerkonflikt entscheiden | `N/app/core/folder_conflict_ui.rs:118` und `transfer_route.rs`; Vorschau mit einzelnen Entscheidungen und Anwendung auf verbleibende Ordner | `A/ui/files/FileDialogs.kt:224`, `FileActions.kt:211`; `FilesApi.transfer` übergibt `folderConflict` und `folderConflicts` (`A/api/FilesApi.kt:265`) | `--folder-conflict` bei Kopieren/Verschieben (`N/cli/mod.rs`); MCP-Transferadapter verwendet dieselbe Policy | `transfer/core/folder_alias.rs` und `engine/folder_alias_store.rs`: exklusiv reservierter Alias bleibt durch Kinder, Fortschritt und Wiederanlauf stabil. Ordner- und Dateikonflikte bleiben getrennt. |
+| Dateiregel „Neuere ersetzen ältere“ (fehlende einfügen, neuere ersetzen ältere nach Änderungszeit, gleiche überspringen, neueres Ziel behalten, gleiche Zeit und andere Größe: beide behalten) | Einfügen/Ziehen/„Herunterladen nach…“ setzen sie für die Dateien zusammengeführter Ordner als Vorgabe (`N/app/core/transfer_route.rs:127`, Hinweis im Dialog `folder_conflict_ui.rs:157`); Kopierdialog: Wahl „neuere ersetzen ältere“ (`copy_dialog.rs:68`); Vorschau „Zielordner entscheiden“ zählt neu, neuer, gleich, Ziel neuer, Konflikt (`folder_conflict_ui.rs:171`); Übertragungsfenster nennt ersetzt, gleich übersprungen, Ziel neuer behalten, Konflikt doppelt behalten (`transfer_rows.rs:159`, `:211`) | Dialog „Name vorhanden“/„Zielordner“: Hinweis „Dateien in zusammengeführten Ordnern: neuere ersetzen ältere“ und die fünf Zählwerte (`A/ui/files/FileDialogs.kt:293`), Wahl „Neuere ersetzen ältere“ für Namen oberster Ebene (`:314`); `FileActions.kt:238` sendet `mergeFiles: "update"`, die Schlussmeldung nennt die Entscheidungen (`:245`); Bridge: `fs.transfer` `conflict: "update"` für jede Seitenkombination und `mergeFiles` (`N/mobile/os/shared/transfer.rs:89`, `:111`), Vorschau `newerFiles`, `equalFiles`, `targetNewerFiles`, `conflictFiles` (`fs_edit.rs:149`), Ergebnis `replaced`, `skippedEqual`, `keptNewer`, `keptBoth` (`drive.rs:45`) | `se cp|get|put|mv --conflict update` (nicht mit `--force`, `--resume-job` oder einer anderen `--folder-conflict` als merge; `mv` nur lokal; `N/cli/mod.rs:228`, `cli/update_copy.rs:49`); Zeile `se: update: …` auf stderr; Shell-Vervollständigung aus der Option; MCP `copy`/`move` mit `file_conflict: "update"` und Ergebnisfeld `update` (`cli/mcp/catalog.rs:228`, `transfer_tools.rs:37`) | `Conflict::Update` (`N/types/core/types.rs:133`), reine Regel `transfer/core/update_rule.rs`, Entscheidung je Datei vor jedem Kopierweg (`engine/update.rs:166`); `FolderConflictPolicy::merge_update`; gespeicherte Aufträge: `JobRecord::file_update` bei `file_policy` 0 (ältere Versionen behalten beide); Worker-Dienst: Code 3 und Fähigkeit `transfer-update-v1`, sonst läuft der Auftrag im eigenen Prozess (`daemon/os/shared/transfer_job_wire.rs:26`); Beschreibung und Grenzen: `docs/TRANSFER_ENGINE.md`, Abschnitt „Dateiregel“. |
 | Gespeicherte Übertragung wieder aufnehmen | Übertragungsfenster mit Quellen-/Zielbindung (`N/app/core/transfer_recovery_ui.rs:12`), einschließlich gespeicherter CLI-Jobs (`:69`) | Mobile Jobs verwenden denselben recoveryfähigen Enginevertrag (`N/mobile/os/shared/transfer.rs:189`); dieser Bestand belegt keinen zusätzlichen allgemeinen mobilen Recoverykatalog | `--resume-job` bindet Quelle, Ziel und Entscheidungen an die gespeicherte Job-ID (`N/cli/folder_conflict.rs:127`, `transfer_recovery.rs:33`); MCP erreicht den CLI-Vertrag über `se` | Bestätigte Publikation, Inkarnation und Cleanup bleiben getrennte Belege; unsicherer Ausgang wird nicht als erfolgreicher Dateiaustausch fortgeschrieben. |
 | Physisches optisches Medium lesen | Kopieren, Browser, Vorschau, Suche und Index verwenden die gemeinsame Quelle | Kein eigener Disc-Hostadapter für Android; normale Remoteübertragung bewahrt die Quellidentität | Bestehende Dateioperationen, keine neue Rawdevice-Schnittstelle | `N/source_media/` und Copy-/VFS-Adapter serialisieren Leser desselben tatsächlich identifizierten optischen Geräts; unabhängige Geräte bleiben unabhängig. |
 | Nach Rechteerteilung gesperrte Teilbäume neu lesen | Windows-Zustimmungsweg startet begrenzte Teilscans; Explorer und Analyse übernehmen nur Ergebnisse ihrer aktuellen Generation (`N/app/core/partial_scan.rs:26`) | Mobile Scans melden Fehler/Unvollständigkeit (`N/mobile/os/shared/scan.rs:138`); die Windows-Zustimmungsaktion wird dort nicht angeboten | Kein neuer Windows-Zustimmungsdialog im Terminal; ausdrücklicher normaler Scan bleibt vorhanden | `scanner/os/denied_roots.rs`, `scanner/os/retry.rs`, `analytics/core/partial_merge.rs`: unberührte Einträge und geschützte Auslassungen bleiben erhalten. |
 
 Desktop und Android bieten für ausgewählte Ordner „Beide behalten“ als Vorgabe,
-„Zusammenführen“ und „Überspringen“. Die CLI bewahrt dagegen den ausdrücklich
+„Zusammenführen“ und „Überspringen“. Wählt die Person „Zusammenführen“, gilt für die
+Dateien in diesem Ordner die Dateiregel „Neuere ersetzen ältere“; gleichnamige Dateien auf
+oberster Ebene der Einfügung behalten ihre bisherige Regel (beide behalten, im Kopierdialog
+die gewählte). Unterschied nach Ziel: lokale Ziele ersetzen über die bisherige Überschreib-
+Veröffentlichung; entfernte Ziele ersetzen über eine dauerhafte Stufe und
+`promote_staged_to_id`, und wo ein Ziel das nicht kann, bleiben beide Dateien erhalten.
+Damit die Regel nach einer Kopie stimmt, trägt jede Datei, die die Engine kopiert oder ersetzt, die
+Änderungszeit ihrer Quelle (lokal Linux/Android auf der Stufe, Download auf der Teildatei, entfernte
+Ziele über `finish_stage`; Windows lokal wie bisher über `CopyFile2`). Ausnahme: Pakete an Share- und
+Agent-Gegenstellen haben im Drahtformat keinen Platz für eine Zeit; Dateien der Regel gehen dorthin
+einzeln, andere Pakete behalten die Zeit der Gegenstelle (Grenzen in `docs/TRANSFER_ENGINE.md`). Die CLI bewahrt dagegen den ausdrücklich
 getippten Zielordner als Standard. Ein Backend ohne belegte exklusive
 Ordnerreservierung meldet die Einschränkung; ein unsicherer Keep-both-Ausgang
 wird nicht als erfolgreiche Reservierung ausgegeben.

@@ -162,3 +162,33 @@ fn transfer_engine_task_parent_dir_keeps_roots() {
     assert_eq!(parent_dir("//server/share/x"), "//server/share");
     assert_eq!(parent_dir("name"), "");
 }
+
+#[test]
+fn abgleich_task_paste_merges_files_by_age_but_the_dialog_keeps_its_choice() {
+    let selection = local_roots(&["/data/a.txt", "/data/folder"]);
+    let local = TransferPlace::local();
+    let pasted = paste_job(&selection, &local, "/copy", CopyMode::Copy).expect("paste");
+    assert!(
+        pasted.folders.merge_update,
+        "files of merged folders follow neuere ersetzen ältere"
+    );
+    assert_eq!(
+        pasted.conflict,
+        Conflict::Rename,
+        "files selected on their own keep both"
+    );
+    for conflict in [
+        Conflict::Rename,
+        Conflict::Overwrite,
+        Conflict::Skip,
+        Conflict::Update,
+    ] {
+        let dialog =
+            dialog_job(&selection, "/copy", true, conflict, CopyMode::Copy).expect("dialog");
+        assert_eq!(dialog.conflict, conflict, "the explicit choice is kept");
+        assert!(
+            !dialog.folders.merge_update,
+            "an explicit choice is not overridden"
+        );
+    }
+}

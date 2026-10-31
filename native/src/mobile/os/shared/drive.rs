@@ -28,18 +28,30 @@ pub(crate) struct Outcome {
     pub errors: u64,
     pub omitted: u64,
     pub canceled: bool,
+    /// Decisions of the file rule "neuere ersetzen ältere": replaced older
+    /// targets, skipped equal files, kept newer targets, same-time files of
+    /// another size kept beside their counterpart (all 0 without the rule).
+    pub rule: [u64; 4],
 }
 
 impl Outcome {
     pub(crate) fn into_result(self, ctx: &TaskCtx) -> Result<Value, ApiError> {
+        let [replaced, skipped_equal, kept_newer, kept_both] = self.rule;
         let summary = json!({
             "files": self.files,
             "bytes": self.bytes,
             "errors": self.errors,
             "omitted": self.omitted,
+            "replaced": replaced,
+            "skippedEqual": skipped_equal,
+            "keptNewer": kept_newer,
+            "keptBoth": kept_both,
         });
         if self.omitted > 0 {
             ctx.message(TRASH_OMITTED);
+        }
+        if let Some(text) = rule_text(self.rule) {
+            ctx.message(&text);
         }
         if self.canceled || ctx.cancelled() {
             ctx.set_failure_result(summary);
@@ -54,6 +66,27 @@ impl Outcome {
         }
         Ok(summary)
     }
+}
+
+/// The decisions of the file rule as one line (`transfer::update_summary`).
+pub(crate) fn rule_text(rule: [u64; 4]) -> Option<String> {
+    let [replaced, skipped_equal, kept_newer, kept_both] = rule;
+    let mut progress = TransferProgress::new(crate::transfer::TransferKind::Local, "", 0, 0);
+    progress.replaced = replaced;
+    progress.skipped_equal = skipped_equal;
+    progress.kept_newer = kept_newer;
+    progress.kept_both = kept_both;
+    crate::transfer::update_summary(&progress)
+}
+
+/// The rule's counters of a progress value.
+fn rule_of(progress: &TransferProgress) -> [u64; 4] {
+    [
+        progress.replaced,
+        progress.skipped_equal,
+        progress.kept_newer,
+        progress.kept_both,
+    ]
 }
 
 /// Whole entries from `source` into `target_dir` of `target`, each under its
@@ -210,6 +243,7 @@ pub(crate) fn drain_transfer(ctx: &TaskCtx, mut active: ActiveTransfer) -> Outco
                     errors: progress.errors.max(listed),
                     omitted: progress.omitted,
                     canceled,
+                    rule: rule_of(&progress),
                 };
             }
             Err(RecvTimeoutError::Timeout) => {}
@@ -224,6 +258,7 @@ pub(crate) fn drain_transfer(ctx: &TaskCtx, mut active: ActiveTransfer) -> Outco
                     errors: last.errors.saturating_add(1),
                     omitted: last.omitted,
                     canceled: active.canceling(),
+                    rule: rule_of(&last),
                 };
             }
         }
@@ -265,6 +300,7 @@ pub(crate) fn drain_copy(ctx: &TaskCtx, handle: CopyHandle, rx: Receiver<CopyMsg
                     errors: progress.errors.max(errors.len() as u64),
                     omitted: 0,
                     canceled: progress.canceled,
+                    rule: [0; 4],
                 };
             }
             Err(RecvTimeoutError::Timeout) => {}
@@ -276,6 +312,7 @@ pub(crate) fn drain_copy(ctx: &TaskCtx, handle: CopyHandle, rx: Receiver<CopyMsg
                     errors: 1,
                     omitted: 0,
                     canceled: handle.cancel.load(Ordering::Relaxed),
+                    rule: [0; 4],
                 };
             }
         }

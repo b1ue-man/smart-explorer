@@ -12,6 +12,7 @@
 //! lost connection is reported, never answered by running the job again.
 use super::ipc_protocol::transfer::{
     EndpointWire, JobWire, TransferIpcReply, TransferIpcRequest, TRANSFER_JOBS_V1,
+    TRANSFER_UPDATE_V1,
 };
 use super::ipc_protocol::{
     read_response, set_stream_timeout, write_request, IpcRequest, IpcResponse,
@@ -103,7 +104,7 @@ pub(crate) fn run_transfer_in_worker(
     let Some((address, token)) = worker() else {
         return false;
     };
-    if !offers_jobs(address, &token) {
+    if !offers_jobs(address, &token, job.needs_update_rule()) {
         return false;
     }
     match start(address, &token, job) {
@@ -149,12 +150,14 @@ fn ask(
     Ok((stream, response))
 }
 
-/// Whether the worker announces the job service (its hello).
-fn offers_jobs(address: SocketAddr, token: &str) -> bool {
+/// Whether the worker announces the job service (its hello) and, for a job
+/// that uses the file rule "neuere ersetzen ältere", knows that rule.
+fn offers_jobs(address: SocketAddr, token: &str, update_rule: bool) -> bool {
     matches!(
         ask(address, token, TransferIpcRequest::Hello, Duration::from_secs(5)),
         Ok((_, IpcResponse::Transfer(TransferIpcReply::Hello { capabilities })))
             if capabilities.iter().any(|label| label == TRANSFER_JOBS_V1)
+                && (!update_rule || capabilities.iter().any(|label| label == TRANSFER_UPDATE_V1))
     )
 }
 

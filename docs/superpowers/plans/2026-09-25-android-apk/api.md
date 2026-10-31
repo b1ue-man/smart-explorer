@@ -216,14 +216,20 @@ wenn sein Token dem der Installation entspricht (`fromIntent`).
 - `fs.checkName {parent, name}` → `{problem:String?, exists:Boolean}`
 - `fs.mkdir {parent, name}` → `Entry` · `fs.newFile {parent, name}` → `Entry`
 - `fs.rename {location, newName}` → `Entry`
+- `fs.folderPreview` zählt je Ordner `newFiles`, `collidingFiles` (Summe der folgenden vier),
+  `newerFiles`, `equalFiles`, `targetNewerFiles`, `conflictFiles`
 - `fs.conflicts {sources:[location], targetDir}` → `{names:[String], choosable:Boolean}` (Namen, die im
   Ziel existieren; `choosable` nur bei lokal→lokal – Remote-Übertragungen nummerieren belegte Namen
   immer wie am Desktop, „Name (2).ext“)
-- `fs.transfer {sources:[location], targetDir, mode:"copy|move", conflict:"skip|replace|keepBoth",
-  filter:Filter?, baseDir:String?}` → `{taskId}`
+- `fs.transfer {sources:[location], targetDir, mode:"copy|move", conflict:"skip|replace|keepBoth|update",
+  filter:Filter?, baseDir:String?, folderConflict?, folderConflicts?, mergeFiles?:"update|keepBoth"}`
+  → `{taskId}`; `result = {files, bytes, errors, omitted, replaced, skippedEqual, keptNewer, keptBoth}`
+  (die letzten vier zählen die Entscheidungen der Dateiregel „neuere ersetzen ältere“)
+  (`update` gilt für jede Seitenkombination, auch Remote; `mergeFiles:"update"`: die Dateien eines
+  Ordners mit Entscheidung `merge` folgen der Regel, ohne die Angabe (ältere Apps) der Regel `conflict`)
   (mit `filter` + `baseDir`: nur passende Dateien mit Pfaden relativ zu `baseDir`, wie Desktop;
   `move` nur lokal→lokal, sonst Fehler `unsupported` „Verschieben von/zu Remote wird nicht
-  unterstützt“ wie am Desktop; `conflict` wirkt nur lokal→lokal)
+  unterstützt“ wie am Desktop; `conflict` wirkt außer `update` nur lokal→lokal)
 - `fs.delete {locations:[location], permanent:Boolean}` → `{taskId}` (nicht permanent = Papierkorb;
   Orte ohne Papierkorb → `unsupported`, Kotlin fragt dann „Endgültig löschen?“)
 - `fs.properties {locations:[location]}` → `{taskId}`; `result = {items, files, dirs, bytes,

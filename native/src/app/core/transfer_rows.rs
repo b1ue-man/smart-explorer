@@ -153,10 +153,17 @@ pub(in crate::app) fn activity_line(progress: &TransferProgress) -> Option<Strin
     }
 }
 
-/// "übersprungen: 3 · ausgelassen: 1 · Fehler: 2"
+/// "übersprungen: 3 · ausgelassen: 1 · Fehler: 2"; the decisions of the file
+/// rule "neuere ersetzen ältere" are named separately ("gleich übersprungen:
+/// 40 · Ziel neuer behalten: 2 · Konflikt doppelt behalten: 1 · ersetzt: 4").
 pub(in crate::app) fn tally_line(progress: &TransferProgress) -> Option<String> {
+    let by_rule = progress.skipped_equal + progress.kept_newer;
     let parts: Vec<String> = [
-        ("übersprungen", progress.skipped),
+        ("ersetzt", progress.replaced),
+        ("gleich übersprungen", progress.skipped_equal),
+        ("Ziel neuer behalten", progress.kept_newer),
+        ("Konflikt doppelt behalten", progress.kept_both),
+        ("übersprungen", progress.skipped.saturating_sub(by_rule)),
         ("ausgelassen", progress.omitted),
         ("Fehler", progress.errors),
     ]
@@ -200,6 +207,10 @@ pub(in crate::app) fn completion_notice(entry: &FinishedEntry) -> String {
         format!(", {} übersprungen", group_digits(progress.skipped))
     } else {
         String::new()
+    };
+    let skipped = match crate::transfer::update_summary(progress) {
+        Some(rule) => format!("{skipped} ({rule})"),
+        None => skipped,
     };
     if entry.canceled {
         return format!(

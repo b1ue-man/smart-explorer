@@ -193,5 +193,6 @@ pub(in crate::cli) fn copy_observed_in_job(
         destination: receipt.destination().to_string(),
         omitted: receipt.omissions(),
         kept: Vec::new(),
+        update: None,
     })
 }

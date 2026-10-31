@@ -5,6 +5,7 @@ import app.smartexplorer.android.api.EditInfo
 import app.smartexplorer.android.api.FetchResult
 import app.smartexplorer.android.api.FilesApi
 import app.smartexplorer.android.api.MaterializeResult
+import app.smartexplorer.android.api.TransferResult
 import app.smartexplorer.android.api.UploadConflict
 import app.smartexplorer.android.core.CoreException
 import app.smartexplorer.android.core.Entry
@@ -232,13 +233,18 @@ private suspend fun FilesViewModel.transferNow(request: TransferRequest, conflic
         filter = request.filter,
         baseDir = request.baseDir,
         folderConflicts = folders,
+        // Files of a merged folder: missing ones are inserted, newer ones replace older ones,
+        // equal ones are skipped. Same-named files of the top level follow [conflict].
+        mergeFiles = "update",
     )
     if (request.clearsClip && clip?.let { current ->
         current.move && current.sources == request.sources && current.filter == request.filter && current.baseDir == request.baseDir
     } == true) clip = null
     val task = FilesApi.awaitTask(taskId)
     val verb = if (request.move) "Verschoben" else "Kopiert"
-    reportTask(task, "$verb: ${elements(request.sources.size)}", transferFailure(request))
+    val rule = FilesApi.resultOf(task, TransferResult.serializer())?.ruleText()
+    val done = "$verb: ${elements(request.sources.size)}" + (rule?.let { " ($it)" } ?: "")
+    reportTask(task, done, transferFailure(request))
     refreshAfterChange()
 }
 

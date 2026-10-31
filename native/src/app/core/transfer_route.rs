@@ -120,21 +120,26 @@ impl TransferSelection {
 }
 
 /// Paste, drop and "Herunterladen nach…": occupied names become "Name (2)",
-/// selected folders keep both by default; nothing is replaced.
+/// selected folders keep both by default; nothing is replaced there. The
+/// files of a folder the person merges ("Zusammenführen" in the folder
+/// decision) follow "neuere ersetzen ältere": missing ones are inserted,
+/// newer ones replace older ones, equal ones are skipped.
 pub(in crate::app) fn paste_job(
     selection: &TransferSelection,
     target: &TransferPlace,
     target_dir: &str,
     mode: CopyMode,
 ) -> Result<TransferJob, String> {
-    build_job(
+    let mut job = build_job(
         selection,
         target,
         target_dir,
         Layout::Tree,
         Conflict::Rename,
         mode,
-    )
+    )?;
+    job.folders.merge_update = true;
+    Ok(job)
 }
 
 /// "Kopieren/Verschieben nach…" into a local folder with the dialog's

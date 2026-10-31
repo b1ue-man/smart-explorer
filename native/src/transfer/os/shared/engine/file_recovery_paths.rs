@@ -80,6 +80,7 @@ mod tests {
             layout: Layout::Tree,
             filter: None,
             file_policy: 0,
+            file_update: false,
             folders: FolderConflictPolicy::new(FolderConflict::KeepBoth),
             moving: false,
             guards: Vec::new(),

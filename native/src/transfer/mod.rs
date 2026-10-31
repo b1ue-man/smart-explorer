@@ -89,6 +89,8 @@ mod temp;
 mod temp_delete;
 #[path = "core/types.rs"]
 mod types;
+#[path = "core/update_rule.rs"]
+pub(crate) mod update_rule;
 #[path = "os/shared/upload_pairs.rs"]
 mod upload_pairs;
 #[path = "os/shared/upload_plan.rs"]
@@ -177,6 +179,7 @@ pub use temp::{
 pub(crate) use temp::{session_marker_path, session_tag, write_session_marker};
 pub(crate) use temp_delete::{remove_owned_tree, remove_owned_tree_controlled};
 pub use types::{ResolvedRoot, TransferIssue, TransferKind, TransferMsg, TransferProgress};
+pub use update_rule::summary as update_summary;
 pub use upload_pairs::upload_pairs_progress;
 pub use upload_reader::upload_reader_progress;
 pub use uploads::{upload_file, upload_paths_progress};

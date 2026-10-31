@@ -118,6 +118,9 @@ pub(super) struct Fake {
     pub bulk_dirs: bool,
     /// Takes a single file as a packet of one like a `single_put_v1` host.
     pub single_put: bool,
+    /// Stores the source's time on a stage like a peer or server that takes
+    /// `finish_stage`; off, the time of the copy stays (older tests).
+    pub carries_time: bool,
     pub batch_ambiguous: bool,
     pub read_delay: Duration,
     pub extra: Option<Vec<u8>>,
@@ -146,6 +149,7 @@ impl Fake {
             evidence: false,
             bulk_dirs: false,
             single_put: false,
+            carries_time: false,
             batch_ambiguous: false,
             read_delay: Duration::ZERO,
             extra: None,
@@ -457,6 +461,24 @@ impl crate::vfs::BackendExtensions for Fake {
     }
     fn single_put(&self) -> bool {
         self.single_put
+    }
+    fn finish_stage(
+        &self,
+        stage: &str,
+        finish: crate::vfs::StageFinish,
+    ) -> VfsResult<crate::vfs::StageFinished> {
+        let Some(ms) = finish.mtime_ms.filter(|_| self.carries_time) else {
+            return Ok(crate::vfs::StageFinished::default());
+        };
+        let time = std::time::UNIX_EPOCH + Duration::from_millis(u64::try_from(ms).unwrap_or(0));
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(stage)?
+            .set_modified(time)?;
+        Ok(crate::vfs::StageFinished {
+            mtime_applied: true,
+            durable: false,
+        })
     }
     fn transfer_evidence(&self, _path: &str) -> bool {
         self.evidence

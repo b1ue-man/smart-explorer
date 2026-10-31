@@ -235,6 +235,7 @@ fn batches_task_transfer_compat_move_without_hardlinks_preserves_conflicts() {
                 assert!(!source.exists());
                 assert_eq!(fs::read(&target).unwrap(), b"ours");
             }
+            Conflict::Update => unreachable!("not in the list above"),
         }
     }
 }

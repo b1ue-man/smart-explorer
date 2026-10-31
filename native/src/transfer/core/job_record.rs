@@ -130,7 +130,13 @@ pub struct JobRecord {
     pub items: JobItems,
     pub layout: Layout,
     pub filter: Option<StoredFilter>,
+    /// 0 rename, 1 overwrite, 2 skip. The file rule "neuere ersetzen ältere"
+    /// is stored as 0 with `file_update`, so a version that predates it
+    /// reopens such a job as "keep both" and never replaces anything.
     pub file_policy: u8,
+    /// `Conflict::Update`; false for every record written before the rule.
+    #[serde(default)]
+    pub file_update: bool,
     pub folders: FolderConflictPolicy,
     pub moving: bool,
     pub guards: Vec<SourceGuard>,
@@ -169,10 +175,11 @@ impl JobRecord {
                 .as_ref()
                 .map(StoredFilter::restore)
                 .transpose()?,
-            conflict: match self.file_policy {
-                0 => Conflict::Rename,
-                1 => Conflict::Overwrite,
-                2 => Conflict::Skip,
+            conflict: match (self.file_policy, self.file_update) {
+                (0, true) => Conflict::Update,
+                (0, false) => Conflict::Rename,
+                (1, false) => Conflict::Overwrite,
+                (2, false) => Conflict::Skip,
                 _ => return Err("Gespeicherte Dateikonfliktregel ist unbekannt".into()),
             },
             folders: self.folders.clone(),

@@ -160,7 +160,7 @@ fn stage(
     let request = LocalRequest {
         source: &source,
         target: &member.requested,
-        conflict: engine.view.conflict,
+        conflict: engine.conflict_of(&member.file),
         mode: CopyMode::Copy,
         cancel: engine.stop_flag(),
         parallel: 1,

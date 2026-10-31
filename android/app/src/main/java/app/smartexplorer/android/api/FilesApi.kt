@@ -75,6 +75,11 @@ data class FolderCollision(
     val existing: Boolean = true,
     val newFiles: Long = 0,
     val collidingFiles: Long = 0,
+    /** Of the same-named files: source newer (replaces), equal (skipped), target newer (kept), same time other size (both kept). */
+    val newerFiles: Long = 0,
+    val equalFiles: Long = 0,
+    val targetNewerFiles: Long = 0,
+    val conflictFiles: Long = 0,
     val samples: List<String> = emptyList(),
     val omitted: Long = 0,
     val omittedPaths: List<String> = emptyList(),
@@ -113,6 +118,34 @@ data class PropertiesResult(
     val btimeMs: Long? = null,
     val location: String? = null,
 )
+
+/**
+ * Result of the `fs.transfer` task. The last four count the decisions of the file rule "neuere
+ * ersetzen ältere": older targets replaced, equal files skipped, newer targets kept, same-time files
+ * of another size kept beside their counterpart.
+ */
+@Serializable
+data class TransferResult(
+    val files: Long = 0,
+    val bytes: Long = 0,
+    val errors: Long = 0,
+    val omitted: Long = 0,
+    val replaced: Long = 0,
+    val skippedEqual: Long = 0,
+    val keptNewer: Long = 0,
+    val keptBoth: Long = 0,
+) {
+    /** The decisions as one line, `null` when the rule decided nothing. */
+    fun ruleText(): String? {
+        val parts = buildList {
+            if (replaced > 0) add("$replaced neuere ersetzt")
+            if (skippedEqual > 0) add("$skippedEqual gleiche übersprungen")
+            if (keptNewer > 0) add("$keptNewer Ziel neuer behalten")
+            if (keptBoth > 0) add("$keptBoth als Konflikt doppelt behalten")
+        }
+        return parts.takeIf { it.isNotEmpty() }?.joinToString(", ")
+    }
+}
 
 /** Result of a failed `fs.uploadEdit` task: the remote file changed since opening ([conflict]). */
 @Serializable
@@ -252,8 +285,11 @@ object FilesApi {
     )
 
     /**
-     * [mode] `copy|move`, [conflict] `skip|replace|keepBoth` (only local→local). With [filter] and
-     * [baseDir] only matching files are copied, with paths relative to [baseDir] (desktop rule).
+     * [mode] `copy|move`, [conflict] `skip|replace|keepBoth` (only local→local) or `update` ("neuere
+     * ersetzen ältere", every combination). With [filter] and [baseDir] only matching files are
+     * copied, with paths relative to [baseDir] (desktop rule). [mergeFiles] `update`: the files of
+     * a folder decided as `merge` follow "neuere ersetzen ältere"; `keepBoth` (older behaviour):
+     * they follow [conflict].
      */
     suspend fun transfer(
         sources: List<String>,
@@ -264,6 +300,7 @@ object FilesApi {
         baseDir: String? = null,
         folderConflict: String = "keep-both",
         folderConflicts: Map<String, String> = emptyMap(),
+        mergeFiles: String = "keepBoth",
     ): String = taskId(
         "fs.transfer",
         buildJsonObject {
@@ -275,6 +312,7 @@ object FilesApi {
             put("baseDir", baseDir)
             put("folderConflict", folderConflict)
             put("folderConflicts", buildJsonObject { folderConflicts.forEach { (source, choice) -> put(source, choice) } })
+            put("mergeFiles", mergeFiles)
         },
     )
 

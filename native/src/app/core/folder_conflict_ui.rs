@@ -84,8 +84,10 @@ impl Admission {
                     }
                     ui.radio_value(&mut self.choice, FolderConflict::Merge, "Zusammenführen");
                     if let Some(job) = &self.job {
-                        let files = match job.conflict { crate::types::Conflict::Rename => "beide behalten", crate::types::Conflict::Overwrite => "überschreiben", crate::types::Conflict::Skip => "überspringen" };
-                        ui.label(format!("Gleichnamige Dateien beim Zusammenführen: {files}"));
+                        ui.label(format!(
+                            "Gleichnamige Dateien beim Zusammenführen: {}",
+                            merge_rule(job)
+                        ));
                     }
                     ui.radio_value(&mut self.choice, FolderConflict::Skip, "Überspringen");
                     ui.checkbox(&mut self.all, "Für alle verbleibenden Ordner übernehmen");
@@ -93,7 +95,7 @@ impl Admission {
                         ui.label("Mindestens ein verbleibender Ordner verlangt ausdrücklich Zusammenführen oder Überspringen.");
                     }
                     ui.separator();
-                    ui.label(format!("Zusammenführen: bisher {} neue und {} gleichnamige Dateien", folder.new_files, folder.colliding_files));
+                    ui.label(count_text(folder));
                     for sample in &folder.samples { ui.label(sample); }
                     if !folder.complete {
                         ui.label(format!("{}; {} geschützte oder nicht lesbare Bereiche", if folder.counted { "Zählung unvollständig" } else { "Zählung läuft" }, folder.omitted));
@@ -149,6 +151,32 @@ impl Admission {
         }
         None
     }
+}
+
+/// What happens to a same-named file of a merged folder, as the dialog says it.
+fn merge_rule(job: &TransferJob) -> &'static str {
+    use crate::types::Conflict;
+    if job.folders.merge_update {
+        return "neuere ersetzen ältere, Gleiche werden übersprungen, ein neueres Ziel bleibt, bei gleicher Zeit und anderer Größe bleiben beide";
+    }
+    match job.conflict {
+        Conflict::Rename => "beide behalten",
+        Conflict::Overwrite => "überschreiben",
+        Conflict::Skip => "überspringen",
+        Conflict::Update => "neuere ersetzen ältere, Gleiche werden übersprungen, ein neueres Ziel bleibt, bei gleicher Zeit und anderer Größe bleiben beide",
+    }
+}
+
+/// The counts of the preview of one folder, as one line.
+fn count_text(folder: &crate::transfer::FolderConflictPreview) -> String {
+    format!(
+        "Zusammenführen: bisher {} neu, {} neuer (ersetzen), {} gleich (übersprungen), {} Ziel neuer (bleibt), {} Konflikt (beide behalten)",
+        folder.new_files,
+        folder.newer_files,
+        folder.equal_files,
+        folder.target_newer_files,
+        folder.conflict_files
+    )
 }
 
 pub(in crate::app) fn requires_preview(job: &TransferJob) -> bool {

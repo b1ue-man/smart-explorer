@@ -19,6 +19,10 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+#[path = "roots_probe.rs"]
+mod probe;
+use probe::{selected_directory, target_exists};
+
 /// A selected entry (for pairs: their top-level name) and its planned
 /// destination relative to the target folder.
 #[derive(Clone, Debug)]
@@ -315,7 +319,11 @@ fn plan_roots(
             {
                 entry.planned = root.rel.clone();
             }
-        } else if !view.target.is_local() && !root.rel.contains('/') && view.resume.is_none() {
+        } else if !view.target.is_local()
+            && !root.rel.contains('/')
+            && view.resume.is_none()
+            && view.conflict != crate::types::Conflict::Update
+        {
             root.rel = claim(register, &root.rel)?;
             if let Some(entry) = plan
                 .roots
@@ -330,50 +338,6 @@ fn plan_roots(
     plan.walk_roots = kept;
     plan._reservations = reservations;
     Ok(plan)
-}
-
-fn selected_directory(
-    side: Side<'_>,
-    path: &str,
-    gate: Option<&crate::transfer::AccessGate>,
-) -> Result<bool, String> {
-    let inspect = || match side {
-        Side::Local => crate::local_access::symlink_metadata(&native(path)).map(|meta| {
-            meta.is_dir() && !crate::local_access::metadata_is_link_like(&native(path), &meta)
-        }),
-        Side::Remote(backend) => backend
-            .stat(path)
-            .map(|meta| meta.is_dir && !meta.is_symlink),
-    };
-    let mut result = inspect();
-    if result
-        .as_ref()
-        .is_err_and(|error| error.kind() == std::io::ErrorKind::PermissionDenied)
-    {
-        if let Some(gate) = gate {
-            if gate.request() == crate::transfer::AccessAnswer::Granted {
-                result = inspect();
-            }
-        }
-    }
-    match result {
-        // A vanished entry is no folder to reserve: the walk reports it as
-        // that root's own error and the other roots still go.
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        result => result.map_err(|error| format!("Quellordner „{path}“ prüfen: {error}")),
-    }
-}
-
-fn target_exists(side: Side<'_>, path: &str) -> Result<bool, String> {
-    let result = match side {
-        Side::Local => crate::local_access::symlink_metadata(&native(path)).map(|_| ()),
-        Side::Remote(backend) => backend.stat(path).map(|_| ()),
-    };
-    match result {
-        Ok(()) => Ok(true),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(format!("Zielordner „{path}“ prüfen: {error}")),
-    }
 }
 
 fn plan_pairs(
@@ -415,7 +379,8 @@ fn plan_pairs(
                     Some(rel) => first_component(rel).to_string(),
                     None if view.target.is_local()
                         || pair.rel.contains('/')
-                        || view.resume.is_some() =>
+                        || view.resume.is_some()
+                        || view.conflict == crate::types::Conflict::Update =>
                     {
                         first.clone()
                     }
