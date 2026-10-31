@@ -150,7 +150,7 @@ impl SftpBackend {
     }
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(super) struct CapturedExec {
     pub(super) stdout: Vec<u8>,
     pub(super) stderr: Vec<u8>,

@@ -221,12 +221,12 @@ fn abgleich_task_code_preset_gives_exactly_its_rights_on_connect() {
         .set_code_rights(Some(RightsPreset::ReadWrite.rights()))
         .unwrap();
     request(&mut profiles, "a", DirectRequestPolicy::Ask, true);
-    let target = target(&profiles, "a");
-    assert!(profiles.pending_rights_of(&target).is_none());
+    let first = target(&profiles, "a");
+    assert!(profiles.pending_rights_of(&first).is_none());
     let RightsTarget::Direct {
         device_id,
         public_key,
-    } = &target
+    } = &first
     else {
         unreachable!()
     };

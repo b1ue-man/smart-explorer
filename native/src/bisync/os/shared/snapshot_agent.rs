@@ -31,6 +31,7 @@ use super::snapshot_dir::WalkContext;
 use super::snapshot_hash::HashMode;
 use super::snapshot_host_stream::Stream;
 use super::snapshot_host_walk::Collector;
+use super::snapshot_pair_side::Walker;
 use super::types::{BisyncOptions, Tree};
 use crate::vfs::{HashWalkItem, HashWalkRequest, KeyedWalk, KeyedWalkItem};
 use std::io;

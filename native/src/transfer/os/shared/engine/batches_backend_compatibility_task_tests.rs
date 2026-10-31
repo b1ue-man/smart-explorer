@@ -350,7 +350,7 @@ fn batches_task_transfer_compat_missing_only_remote_pairs_keep_literal_names_and
         &target,
         &[],
     );
-    candidate.items = JobItems::Pairs(vec![
+    candidate.items = crate::transfer::JobItems::Pairs(vec![
         crate::transfer::PairItem::new(fwd(&source.join("a#%.bin")), "literal/a#%.bin"),
         crate::transfer::PairItem::new(fwd(&source.join("b.bin")), "literal/b.bin"),
     ]);

@@ -80,7 +80,7 @@ impl KeyEmit<String> for Recorded {
 }
 
 /// Root with file `f` and folders `a` (holding `a/g`) and `b` (empty).
-fn walk(tree: &KeyTree<String>, out: &mut Recorded) -> io::Result<()> {
+fn walk(tree: &KeyTree<String>, out: &mut impl KeyEmit<String>) -> io::Result<()> {
     let mut root = RunKeys::new("");
     root.entry(
         shape("f", EntryKind::File, 1, 1),
