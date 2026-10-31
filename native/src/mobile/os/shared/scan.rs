@@ -69,7 +69,10 @@ impl Drop for FinishOnDrop<'_> {
 
 #[derive(Default)]
 struct ScanData {
-    entries: Vec<FileEntry>,
+    /// Shared with the views that read them: a batch that arrives while a view
+    /// still holds the entries copies them once (`Arc::make_mut`), so no view
+    /// builds its tree under the lock.
+    entries: Arc<Vec<FileEntry>>,
     revision: u64,
     matches: u64,
     scanned: u64,
@@ -77,14 +80,75 @@ struct ScanData {
     issues: Vec<(String, String)>,
     /// The issues already listed, so each one appears once.
     issue_keys: HashSet<(String, String)>,
-    tree: Option<(u64, SortSpec, TreeRows)>,
+    tree: Option<(u64, SortSpec, Arc<TreeRows>)>,
     last_view: Option<(u64, String)>,
+}
+
+/// What one `scan.view` answer is made from, copied out of the lock.
+struct Snapshot {
+    revision: u64,
+    matches: u64,
+    scanned: u64,
+    truncated: bool,
+    issues: usize,
+    /// The caller already holds this revision for this window.
+    unchanged: bool,
+    entries: Arc<Vec<FileEntry>>,
+    /// The cached tree, when it belongs to this revision and sort.
+    tree: Option<Arc<TreeRows>>,
 }
 
 impl ScanSession {
     fn finished(&self) -> bool {
         self.finished.load(Ordering::Acquire)
     }
+
+    /// The state one answer is made from, taken in constant time under the lock:
+    /// the entries are shared, the cached tree is shared when it matches.
+    fn snapshot(&self, sort: SortSpec, view_key: &str, since: Option<i64>) -> Snapshot {
+        let mut data = lock(&self.data);
+        let revision = data.revision;
+        let unchanged = since == Some(revision as i64)
+            && data
+                .last_view
+                .as_ref()
+                .is_some_and(|(seen, key)| *seen == revision && key == view_key);
+        data.last_view = Some((revision, view_key.to_string()));
+        let tree = match &data.tree {
+            Some((cached, cached_sort, tree)) if *cached == revision && *cached_sort == sort => {
+                Some(Arc::clone(tree))
+            }
+            _ => None,
+        };
+        Snapshot {
+            revision,
+            matches: data.matches,
+            scanned: data.scanned,
+            truncated: data.truncated,
+            issues: data.issues.len(),
+            unchanged,
+            entries: Arc::clone(&data.entries),
+            tree,
+        }
+    }
+
+    /// Keeps `tree` as the cached tree unless a tree of a newer revision is kept.
+    fn keep_tree(&self, revision: u64, sort: SortSpec, tree: Arc<TreeRows>) {
+        let mut data = lock(&self.data);
+        if data
+            .tree
+            .as_ref()
+            .is_none_or(|(kept, _, _)| *kept <= revision)
+        {
+            data.tree = Some((revision, sort, tree));
+        }
+    }
+}
+
+/// Appends one batch of scan results; every batch is a new revision.
+fn push_entries(data: &mut ScanData, batch: Vec<FileEntry>) {
+    Arc::make_mut(&mut data.entries).extend(batch);
+    data.revision += 1;
 }
 
 pub(crate) fn handle(rt: &Runtime, method: &str, args: &Value) -> Option<Result<Value, ApiError>> {
@@ -176,8 +240,7 @@ fn run_scan(rt: &Runtime, ctx: &TaskCtx, session: &ScanSession) -> Result<Value,
                     .iter()
                     .filter(|entry| entry.depth > 0 && compiled.matches(entry, &root))
                     .count() as u64;
-                data.entries.extend(batch);
-                data.revision += 1;
+                push_entries(&mut data, batch);
             }
             ScanMessage::Progress(progress) => data.scanned = progress.scanned,
             // Android reports the existing bounded issue list. The retained
@@ -255,38 +318,48 @@ fn view(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     let offset = u64_or(args, "offset", 0) as usize;
     let limit = view_limit(args);
     let since = opt_i64(args, "sinceRevision");
-    let view_key = format!("{sort:?}|{offset}|{limit}|{:?}", sorted(&collapsed));
-    let mut data = lock(&session.data);
-    let revision = data.revision;
-    let counters = json!({
-        "revision": revision,
-        "matches": data.matches,
-        "scanned": data.scanned,
-        "truncated": data.truncated,
-        "issues": data.issues.len(),
-    });
-    let unchanged = since == Some(revision as i64)
-        && data.last_view.as_ref() == Some(&(revision, view_key.clone()));
-    let fresh = matches!(&data.tree, Some((cached, cached_sort, _)) if *cached == revision && *cached_sort == sort);
-    if !fresh {
-        let tree = tree_rows(&data.entries, &session.base.path, &session.filter, sort);
-        data.tree = Some((revision, sort, tree));
-    }
-    data.last_view = Some((revision, view_key));
-    let data = &*data;
-    let Some((_, _, tree)) = data.tree.as_ref() else {
-        return Err(ApiError::internal("Baumansicht fehlt"));
+    Ok(view_answer(
+        &session, sort, &collapsed, offset, limit, since,
+    ))
+}
+
+/// The `scan.view` answer for one window. The lock is held only for the
+/// snapshot; the tree (when no cached one matches) and the rows are built from
+/// the snapshot, so the scan consumer is not kept waiting.
+fn view_answer(
+    session: &ScanSession,
+    sort: SortSpec,
+    collapsed: &HashSet<String>,
+    offset: usize,
+    limit: usize,
+    since: Option<i64>,
+) -> Value {
+    let view_key = format!("{sort:?}|{offset}|{limit}|{:?}", sorted(collapsed));
+    let snapshot = session.snapshot(sort, &view_key, since);
+    let tree = match &snapshot.tree {
+        Some(tree) => Arc::clone(tree),
+        None => {
+            let tree = Arc::new(tree_rows(
+                &snapshot.entries,
+                &session.base.path,
+                &session.filter,
+                sort,
+            ));
+            session.keep_tree(snapshot.revision, sort, Arc::clone(&tree));
+            tree
+        }
     };
+    let entries: &[FileEntry] = &snapshot.entries;
     let is_collapsed = |entry: &FileEntry| collapsed.contains(&session.base.at(&entry.path));
-    let visible = visible_rows(tree, &data.entries, &is_collapsed);
-    let rows: Vec<Value> = if unchanged {
+    let visible = visible_rows(&tree, entries, &is_collapsed);
+    let rows: Vec<Value> = if snapshot.unchanged {
         Vec::new()
     } else {
         window(&visible, offset, limit)
             .iter()
             .map(|&position| {
                 let (index, depth) = tree.rows[position];
-                let entry = &data.entries[index];
+                let entry = &entries[index];
                 entry_json(
                     &session.base,
                     entry,
@@ -299,11 +372,17 @@ fn view(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
             })
             .collect()
     };
-    let mut result = counters;
-    result["unchanged"] = json!(unchanged);
+    let mut result = json!({
+        "revision": snapshot.revision,
+        "matches": snapshot.matches,
+        "scanned": snapshot.scanned,
+        "truncated": snapshot.truncated,
+        "issues": snapshot.issues,
+    });
+    result["unchanged"] = json!(snapshot.unchanged);
     result["entries"] = Value::Array(rows);
     result["visibleTotal"] = json!(visible.len());
-    Ok(result)
+    result
 }
 
 fn sorted(set: &HashSet<String>) -> Vec<&String> {
@@ -333,3 +412,7 @@ fn issues(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
 #[cfg(test)]
 #[path = "scan_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "scan_view_tests.rs"]
+mod view_tests;

@@ -1,9 +1,11 @@
-use super::core::{ext_of, ms_since_unix};
-use super::platform::{get_attrs, is_link_like, path_text};
 use crate::types::FileEntry;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+
+#[path = "collect_driver.rs"]
+mod driver;
+#[path = "collect_listing.rs"]
+mod listing;
 
 const MAX_COLLECTED_ENTRIES: usize = 1_000_000;
 const MAX_COLLECTED_NAME_BYTES: usize = 128 * 1024 * 1024;
@@ -34,16 +36,65 @@ impl CollectOutcome {
     }
 }
 
+/// The budgets of one collection. Production uses `Limits::PRODUCTION`; the
+/// tests use smaller ones on small trees.
+#[derive(Clone, Copy, Debug)]
+struct Limits {
+    entries: usize,
+    name_bytes: usize,
+    depth: u32,
+    issues: usize,
+}
+
+impl Limits {
+    const PRODUCTION: Limits = Limits {
+        entries: MAX_COLLECTED_ENTRIES,
+        name_bytes: MAX_COLLECTED_NAME_BYTES,
+        depth: MAX_COLLECTED_DEPTH,
+        issues: MAX_COLLECT_ISSUES,
+    };
+}
+
+/// The consented read grant of an explicit copy (`local_access` in production).
+trait ReadGrant {
+    fn can_request(&self, requested: &str) -> bool;
+    fn request(&self, requested: &str) -> Result<bool, String>;
+}
+
+struct PlatformGrant;
+
+impl ReadGrant for PlatformGrant {
+    fn can_request(&self, requested: &str) -> bool {
+        crate::local_access::can_request_access(requested)
+    }
+
+    fn request(&self, requested: &str) -> Result<bool, String> {
+        crate::local_access::request_access(requested)
+    }
+}
+
 /// Collect a copy-selection subtree with explicit cancellation, bounded memory,
 /// and all-or-nothing completeness reporting. Callers must not apply a move
 /// from `entries` unless `is_complete()` is true.
+///
+/// Folders are listed by listing threads ahead of the walk. The walk takes the
+/// listings in its own order, so the entries, the issues and the budgets are
+/// those of a walk that lists every folder itself.
 pub fn collect_recursive(
     root: &Path,
     follow_symlinks: bool,
     start_depth: u32,
     cancel: &AtomicBool,
 ) -> CollectOutcome {
-    collect(root, follow_symlinks, start_depth, cancel, false)
+    collect(
+        root,
+        follow_symlinks,
+        start_depth,
+        cancel,
+        None,
+        Limits::PRODUCTION,
+        listing::threads(),
+    )
 }
 
 /// Explicit copy preparation may request one scoped read grant. Background
@@ -54,286 +105,51 @@ pub fn collect_recursive_with_access(
     start_depth: u32,
     cancel: &AtomicBool,
 ) -> CollectOutcome {
-    collect(root, follow_symlinks, start_depth, cancel, true)
+    let grant: &dyn ReadGrant = &PlatformGrant;
+    collect(
+        root,
+        follow_symlinks,
+        start_depth,
+        cancel,
+        Some(grant),
+        Limits::PRODUCTION,
+        listing::threads(),
+    )
 }
 
+/// `collect_recursive` with the budgets, the grant and the number of listing
+/// threads given (the tests choose them; 0 threads read every folder in the walk).
 fn collect(
     root: &Path,
     follow_symlinks: bool,
     start_depth: u32,
     cancel: &AtomicBool,
-    mut may_request: bool,
+    grant: Option<&dyn ReadGrant>,
+    limits: Limits,
+    threads: usize,
 ) -> CollectOutcome {
-    let normalized = crate::local_access::normalize_scan_root(root);
-    let root = normalized.as_path();
-    let mut outcome = CollectOutcome {
-        entries: Vec::with_capacity(1024),
-        ..CollectOutcome::default()
-    };
-    let root_link_metadata =
-        match crate::source_media::acquire(root, crate::source_media::Priority::Foreground, cancel)
-            .and_then(|_guard| crate::local_access::symlink_metadata(root))
-        {
-            Ok(metadata) => metadata,
-            Err(error) => {
-                push_issue(&mut outcome, root, error.to_string());
-                return outcome;
-            }
-        };
-    let root_is_link = is_link_like(&root_link_metadata);
-    let root_metadata = if root_is_link && follow_symlinks {
-        match crate::source_media::acquire(root, crate::source_media::Priority::Foreground, cancel)
-            .and_then(|_guard| std::fs::metadata(root))
-        {
-            Ok(metadata) => metadata,
-            Err(error) => {
-                push_issue(&mut outcome, root, error.to_string());
-                return outcome;
-            }
-        }
+    // A listing thread does not inherit this thread's impersonation token, so a
+    // walk that runs under one reads on its own thread only.
+    let threads = if crate::local_access::parallel_scan_allowed() {
+        threads
     } else {
-        root_link_metadata
+        0
     };
-    if !root_metadata.is_dir() || (root_is_link && !follow_symlinks) {
-        push_issue(
-            &mut outcome,
+    listing::run(threads, follow_symlinks, cancel, |listers| {
+        driver::walk(
             root,
-            "copy expansion root is not a traversable directory".to_string(),
-        );
-        return outcome;
-    }
-
-    let optical = match crate::source_media::probe(root) {
-        Ok(source) => source,
-        Err(error) => {
-            push_issue(&mut outcome, root, error.to_string());
-            return outcome;
-        }
-    };
-    let mut name_bytes = 0usize;
-    // A pending folder carries the device of the folder it was entered from; the
-    // root has none and takes its own device when it is taken.
-    let mut stack: Vec<(
-        std::path::PathBuf,
-        u32,
-        u32,
-        Option<crate::source_media::WalkDevice>,
-    )> = vec![(root.to_path_buf(), start_depth, 0u32, None)];
-    while let Some((directory, depth, relative_depth, parent)) = stack.pop() {
-        if cancel.load(Ordering::Relaxed) {
-            outcome.canceled = true;
-            break;
-        }
-        if optical.as_ref().is_some_and(|expected| {
-            !crate::source_media::probe(root).is_ok_and(|source| source.as_ref() == Some(expected))
-        }) {
-            push_issue(
-                &mut outcome,
-                root,
-                "optical medium changed during copy expansion".into(),
-            );
-            break;
-        }
-        if relative_depth > MAX_COLLECTED_DEPTH {
-            push_issue(
-                &mut outcome,
-                &directory,
-                format!("copy expansion exceeds {MAX_COLLECTED_DEPTH} levels"),
-            );
-            break;
-        }
-        let read_directory = || {
-            let device = match &parent {
-                Some(parent) => parent.child(&directory, follow_symlinks),
-                None => crate::source_media::WalkDevice::root(&directory),
-            }?;
-            crate::source_media::GuardedIterator::with_device(
-                &directory,
-                device.protected_source(),
-                crate::source_media::Priority::Foreground,
-                cancel,
-                || crate::local_access::read_directory(&directory),
-            )
-            .map(|read| (device, read))
-        };
-        let mut listing = read_directory();
-        if may_request
-            && listing
-                .as_ref()
-                .is_err_and(|error| error.kind() == std::io::ErrorKind::PermissionDenied)
-        {
-            may_request = false;
-            let requested = crate::local_access::display_path(root);
-            if crate::local_access::can_request_access(&requested) {
-                match crate::local_access::request_access(&requested) {
-                    Ok(true) => listing = read_directory(),
-                    Ok(false) => {
-                        outcome.canceled = true;
-                        return outcome;
-                    }
-                    Err(error) => {
-                        push_issue(&mut outcome, &directory, error);
-                        return outcome;
-                    }
-                }
-            }
-        }
-        let (device, read) = match listing {
-            Ok(pair) => pair,
-            Err(error) => {
-                push_issue(&mut outcome, &directory, error.to_string());
-                continue;
-            }
-        };
-        let parent = match path_text(&directory) {
-            Some(parent) => Arc::<str>::from(parent),
-            None => {
-                push_issue(
-                    &mut outcome,
-                    &directory,
-                    "path is not valid Unicode".to_string(),
-                );
-                continue;
-            }
-        };
-        for entry in read {
-            if cancel.load(Ordering::Relaxed) {
-                outcome.canceled = true;
-                break;
-            }
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(error) => {
-                    push_issue(&mut outcome, &directory, error.to_string());
-                    continue;
-                }
-            };
-            if entry
-                .name
-                .to_str()
-                .is_some_and(crate::apptrash::excluded_name)
-            {
-                outcome.omitted = outcome.omitted.saturating_add(1);
-                continue;
-            }
-            let path = directory.join(&entry.name);
-            if entry.unreachable {
-                push_issue(
-                    &mut outcome,
-                    &path,
-                    "Name ist kein darstellbarer Dateipfad".into(),
-                );
-                continue;
-            }
-            let is_symlink =
-                entry.is_link_like || entry.kind == crate::local_access::EntryKind::Link;
-            let (is_dir, hidden, system, size, mtime_ms, btime_ms) =
-                if is_symlink && follow_symlinks {
-                    let metadata = match crate::source_media::acquire(
-                        &path,
-                        crate::source_media::Priority::Foreground,
-                        cancel,
-                    )
-                    .and_then(|_guard| std::fs::metadata(&path))
-                    {
-                        Ok(metadata) => metadata,
-                        Err(error) => {
-                            push_issue(&mut outcome, &path, error.to_string());
-                            continue;
-                        }
-                    };
-                    let (hidden, system) = get_attrs(&metadata);
-                    (
-                        metadata.is_dir(),
-                        hidden,
-                        system,
-                        metadata.len(),
-                        metadata.modified().map(ms_since_unix).unwrap_or(0),
-                        metadata.created().map(ms_since_unix).unwrap_or(0),
-                    )
-                } else {
-                    (
-                        entry.is_dir,
-                        entry.hidden,
-                        entry.system,
-                        entry.size,
-                        entry.mtime_ms,
-                        entry.btime_ms,
-                    )
-                };
-            let name = match entry.name.into_string() {
-                Ok(name) => name,
-                Err(_) => {
-                    push_issue(&mut outcome, &path, "filename is not valid Unicode".into());
-                    continue;
-                }
-            };
-            let path_text = match path_text(&path) {
-                Some(path) => path,
-                None => {
-                    push_issue(&mut outcome, &path, "path is not valid Unicode".to_string());
-                    continue;
-                }
-            };
-            name_bytes = name_bytes
-                .saturating_add(name.len())
-                .saturating_add(path_text.len());
-            if outcome.entries.len() >= MAX_COLLECTED_ENTRIES
-                || name_bytes > MAX_COLLECTED_NAME_BYTES
-            {
-                push_issue(
-                    &mut outcome,
-                    &path,
-                    format!(
-                        "copy expansion exceeds its limit of {MAX_COLLECTED_ENTRIES} entries or {} MiB of names",
-                        MAX_COLLECTED_NAME_BYTES / (1024 * 1024)
-                    ),
-                );
-                return outcome;
-            }
-            let extension = ext_of(&name, is_dir);
-            outcome.entries.push(FileEntry {
-                path: Arc::from(path_text.as_str()),
-                parent: parent.clone(),
-                name: Arc::from(name.as_str()),
-                ext: Arc::from(extension.as_str()),
-                size: if is_dir { 0 } else { size },
-                mtime_ms,
-                btime_ms,
-                is_dir,
-                is_symlink,
-                hidden,
-                system,
-                depth,
-                id: None,
-            });
-            if is_dir && (!is_symlink || follow_symlinks) {
-                stack.push((
-                    path,
-                    depth.saturating_add(1),
-                    relative_depth.saturating_add(1),
-                    Some(device.clone()),
-                ));
-            }
-        }
-        if outcome.canceled {
-            break;
-        }
-    }
-    if optical.as_ref().is_some_and(|expected| {
-        !crate::source_media::probe(root).is_ok_and(|source| source.as_ref() == Some(expected))
-    }) {
-        push_issue(
-            &mut outcome,
-            root,
-            "optical medium changed during copy expansion".into(),
-        );
-    }
-    outcome
+            follow_symlinks,
+            start_depth,
+            cancel,
+            grant,
+            limits,
+            listers,
+        )
+    })
 }
 
-fn push_issue(outcome: &mut CollectOutcome, path: &Path, detail: String) {
-    if outcome.issues.len() < MAX_COLLECT_ISSUES {
+fn push_issue(outcome: &mut CollectOutcome, path: &Path, detail: String, limit: usize) {
+    if outcome.issues.len() < limit {
         outcome.issues.push(CollectIssue {
             path: path.to_string_lossy().into_owned(),
             detail,
@@ -346,3 +162,7 @@ fn push_issue(outcome: &mut CollectOutcome, path: &Path, detail: String) {
 #[cfg(test)]
 #[path = "shared_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "collect_order_tests.rs"]
+mod order_tests;
