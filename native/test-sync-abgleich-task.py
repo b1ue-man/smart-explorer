@@ -2818,7 +2818,10 @@ def main():
         else:
             job_measure(results, log_root, args)
     except Exception as error:  # noqa: BLE001 - the report is written in every case
-        results.record(args.job, "job", False, f"{type(error).__name__}: {error}")
+        import traceback
+        trace = traceback.format_exc()
+        print(trace, flush=True)
+        results.record(args.job, "job", False, f"{type(error).__name__}: {error}; {trace[-1500:]}")
     finally:
         if args.job in ("fmt", "functional"):
             speed.write_functional_summary(results, log_root, f"sync-abgleich: {title[args.job]}")
