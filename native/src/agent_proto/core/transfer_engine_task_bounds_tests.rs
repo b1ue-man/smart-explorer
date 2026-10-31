@@ -183,6 +183,7 @@ fn transfer_engine_task_uploads_carry_only_their_free_frames() {
         path: "/x".into(),
         size: 0,
         nonce: 1,
+        mtime_ms: None,
     }];
     let batch = session.open(3, &Frame::BatchPut { entries });
     let inbound = batch.inbound.expect("batch uploads receive frames");
@@ -214,6 +215,7 @@ fn transfer_engine_task_batch_headers_above_the_file_limit_are_refused() {
         path: "/a".into(),
         size: 0,
         nonce: 0,
+        mtime_ms: None,
     };
     let full = Frame::BatchPut {
         entries: vec![entry.clone(); BATCH_MAX_FILES],

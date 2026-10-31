@@ -10,6 +10,7 @@ pub(super) fn put(path: &str, size: u64) -> BatchPut {
     BatchPut {
         path: path.into(),
         size,
+        mtime_ms: None,
     }
 }
 

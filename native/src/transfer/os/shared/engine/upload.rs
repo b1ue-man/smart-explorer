@@ -32,8 +32,15 @@ pub(super) fn upload(
     }
     // A peer that takes a single file as a packet of one publishes it in
     // one round trip (Z-P4); the classic path below otherwise. That
-    // publication only creates: a replacement takes the classic path.
-    if file.replacing.is_none() && file.conflict.is_none() {
+    // publication only creates (numbered when the name is taken): a
+    // replacement takes the classic path, and a new file of the file rule
+    // only where the packet carries its time.
+    let creates = match file.conflict {
+        None => true,
+        Some(crate::types::Conflict::Rename) => super::update::packets_keep_time(engine),
+        Some(_) => false,
+    };
+    if file.replacing.is_none() && creates {
         if let Some(result) =
             super::batch_put::one::upload(engine, target, file, &mut source, meter)
         {

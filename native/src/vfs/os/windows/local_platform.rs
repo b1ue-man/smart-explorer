@@ -207,6 +207,19 @@ pub(crate) fn mount_boundary(_path: &Path) -> std::io::Result<Option<super::Moun
     Ok(None)
 }
 
+/// `mount_boundary` for the folders of one walk (no boundaries here).
+pub(crate) struct MountBoundaries;
+
+impl MountBoundaries {
+    pub(crate) fn new(_root: std::path::PathBuf) -> Self {
+        Self
+    }
+
+    pub(crate) fn boundary(&self, path: &Path) -> std::io::Result<Option<super::MountKind>> {
+        mount_boundary(path)
+    }
+}
+
 pub(crate) fn remove_file_like(path: &Path) -> std::io::Result<()> {
     const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
     let metadata = std::fs::symlink_metadata(path)?;

@@ -46,6 +46,8 @@ mod local_platform;
 mod node_codec;
 #[path = "core/ops_types.rs"]
 mod ops_types;
+#[path = "os/shared/ordered_walk.rs"]
+mod ordered_walk;
 #[path = "os/shared/promotion.rs"]
 mod promotion;
 #[path = "os/shared/put_tree.rs"]
@@ -97,6 +99,8 @@ mod tree_remove;
 mod types;
 #[path = "core/vault_error.rs"]
 mod vault_error;
+#[path = "os/shared/walk_hashed.rs"]
+mod walk_hashed;
 #[path = "os/shared/write_new.rs"]
 mod write_new;
 
@@ -120,6 +124,9 @@ pub use fs::{is_pseudo_dir, list_local, stat_local, walk_local, WalkCounter};
 pub(crate) use local_platform::available_space;
 pub use node_codec::{TreeDecodeBudget, TREE_BUDGET_ERROR};
 pub use ops_types::{digest, omission, query, UNSUPPORTED_EXTENSION};
+pub(crate) use ordered_walk::{
+    run as ordered_walk, walk_threads, Local as WalkLocal, Output as WalkOutput,
+};
 pub(crate) use promotion::validate_destination_root;
 pub(crate) use put_tree::{BufferedTree, BufferedTreeReceiver, TreeManifestValidator};
 pub(crate) use range_journal::Journal;
@@ -143,8 +150,8 @@ pub use types::{
     HASH_WALK_LINK_BOUNDARY, HASH_WALK_SERVER_VERSION, PROTO_VERSION, TRANSFER_FRAME_BACKLOG,
 };
 pub use types::{
-    WireChange, WireDuplicateGroup, WireDuplicateItem, WireDuplicateSummary, WireOmission,
-    WireReclaimProgress, WireTargetLimits,
+    WireChange, WireDuplicateGroup, WireDuplicateItem, WireDuplicateSummary, WireHashEntry,
+    WireHashMeta, WireOmission, WireReclaimProgress, WireTargetLimits,
 };
 pub(crate) use vault_error::{
     parse_vault_error, vault_error_message, VaultWireError, VAULT_LOCKED_WIRE,

@@ -86,6 +86,7 @@ fn remote_entry(digest: ContentDigest) -> FsHashEntry {
         size: digest.size,
         mtime_ms: 0,
         digest: Some(digest.sha256),
+        meta: None,
     }
 }
 
@@ -131,5 +132,6 @@ fn local(
             .map(crate::local_access::system_time_ms)
             .unwrap_or(0),
         digest: Some(sha256),
+        meta: None,
     })
 }

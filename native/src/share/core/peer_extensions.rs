@@ -206,6 +206,9 @@ impl BackendExtensions for PeerBackend {
     fn single_put(&self) -> bool {
         self.single_put_offered()
     }
+    fn batch_put_times(&self) -> bool {
+        self.batch_times_offered()
+    }
     fn transfer_evidence(&self, _path: &str) -> bool {
         self.evidence_offered()
     }

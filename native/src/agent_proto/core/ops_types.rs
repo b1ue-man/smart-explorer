@@ -47,6 +47,32 @@ pub mod digest {
     pub const SHA256: u8 = 2;
 }
 
+/// The listing attributes of one `WalkHashed3` entry (`walk-meta-v1`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WireHashMeta {
+    pub hidden: bool,
+    pub system: bool,
+    /// Creation time (Unix ms); 0 = not known.
+    pub btime_ms: i64,
+    pub is_symlink: bool,
+    pub special: bool,
+}
+
+/// One entry of a `HashPart` (`walk-meta-v1`): a folder, a regular file and,
+/// when the walk asked for `meta`, a link or special file.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WireHashEntry {
+    /// Path relative to the walk root.
+    pub rel: String,
+    pub is_dir: bool,
+    pub size: u64,
+    pub mtime_ms: i64,
+    /// Lowercase hex digest of the requested algorithm (regular files only).
+    pub digest: Option<String>,
+    /// Present exactly when the walk asked for `meta`.
+    pub meta: Option<WireHashMeta>,
+}
+
 /// One existing entry a listing or walk had to leave out.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WireOmission {

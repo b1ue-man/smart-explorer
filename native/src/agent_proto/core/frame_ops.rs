@@ -259,7 +259,7 @@ pub(in super::super) fn decode(tag: u8, r: &mut Reader) -> io::Result<Option<Fra
 }
 
 /// A one-byte code of at most `max`.
-fn code(r: &mut Reader, max: u8) -> io::Result<u8> {
+pub(super) fn code(r: &mut Reader, max: u8) -> io::Result<u8> {
     let value = r.u8()?;
     if value > max {
         return Err(bad("extension frame code out of range"));
@@ -268,7 +268,7 @@ fn code(r: &mut Reader, max: u8) -> io::Result<u8> {
 }
 
 /// An element count no larger than the remaining bytes can hold.
-fn counted(r: &mut Reader, min_record: usize) -> io::Result<usize> {
+pub(super) fn counted(r: &mut Reader, min_record: usize) -> io::Result<usize> {
     let count = r.u32()? as usize;
     if count > r.remaining() / min_record.max(1) {
         return Err(bad("element count exceeds the remaining frame bytes"));
@@ -281,13 +281,13 @@ fn sum(mut left: usize, right: usize) -> io::Result<usize> {
     Ok(left)
 }
 
-fn put_omission(b: &mut Vec<u8>, omission: &WireOmission) {
+pub(super) fn put_omission(b: &mut Vec<u8>, omission: &WireOmission) {
     put_str(b, &omission.rel);
     b.push(omission.reason);
     put_str(b, &omission.detail);
 }
 
-fn get_omission(r: &mut Reader) -> io::Result<WireOmission> {
+pub(super) fn get_omission(r: &mut Reader) -> io::Result<WireOmission> {
     Ok(WireOmission {
         rel: r.string()?,
         reason: code(r, 4)?,
@@ -295,7 +295,7 @@ fn get_omission(r: &mut Reader) -> io::Result<WireOmission> {
     })
 }
 
-fn omission_len(omission: &WireOmission) -> io::Result<usize> {
+pub(super) fn omission_len(omission: &WireOmission) -> io::Result<usize> {
     sum(
         string_len(&omission.rel)?,
         string_len(&omission.detail)? + 1,

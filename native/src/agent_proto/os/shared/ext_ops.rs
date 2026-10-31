@@ -7,11 +7,11 @@
 //! change subscriptions belong to the app's backends; the agent answers them
 //! with `UNSUPPORTED_EXTENSION`.
 use std::io::{self, Read};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, UNIX_EPOCH};
 
-use super::fs::{is_pseudo_dir, systemtime_ms};
+use super::fs::systemtime_ms;
 use super::ops_types::{digest, omission, query};
 use super::session::{emit, Sink};
 use super::{Frame, WireMeta, WireOmission, CHUNK};
@@ -121,7 +121,8 @@ fn meta(name: String, path: &Path, metadata: &std::fs::Metadata) -> WireMeta {
 
 /// `WalkHashed2`: every folder and regular file of at least `min_bytes`
 /// (with its MD5 when asked), links, special files and unreadable entries as
-/// `HashOmitted`, then `End`. A failure at the root fails the walk.
+/// `HashOmitted`, then `End` (`walk_hashed.rs`, on the host's threads). A
+/// failure at the root fails the walk. SHA-256 takes one regular file.
 pub(crate) fn handle_walk_hashed2(
     sink: &Sink,
     id: u64,
@@ -133,131 +134,29 @@ pub(crate) fn handle_walk_hashed2(
     if algorithm == digest::SHA256 {
         return walk_file_sha256(sink, id, root, cancel);
     }
-    if !matches!(algorithm, digest::NONE | digest::MD5) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "unbekannter Hashalgorithmus",
-        ));
+    let form = super::walk_hashed::Form::Single;
+    super::walk_hashed::walk(sink, id, root, algorithm, min_bytes, form, cancel)
+}
+
+/// `WalkHashed3` (`walk-meta-v1`): the walk of `WalkHashed2` in `HashPart`s;
+/// with `meta` every entry carries its listing attributes and links and
+/// special files are entries. A folder walk with SHA-256 stays unsupported.
+pub(crate) fn handle_walk_hashed3(
+    sink: &Sink,
+    id: u64,
+    root: &str,
+    (algorithm, min_bytes, meta): (u8, u64, bool),
+    cancel: &AtomicBool,
+) -> io::Result<()> {
+    if algorithm == digest::SHA256 {
+        return emit(
+            sink,
+            id,
+            &Frame::Err(super::UNSUPPORTED_EXTENSION.to_string()),
+        );
     }
-    let base = Path::new(root);
-    let metadata = std::fs::symlink_metadata(base)?;
-    if super::local_platform::metadata_is_link_like(base, &metadata) || !metadata.is_dir() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("Wurzel ist kein Ordner: {root}"),
-        ));
-    }
-    let mut stack: Vec<(PathBuf, String)> = vec![(base.to_path_buf(), String::new())];
-    while let Some((dir, rel_dir)) = stack.pop() {
-        if cancel.load(Ordering::Relaxed) {
-            return Err(canceled("agent hash walk"));
-        }
-        // Re-check queued children: a link inserted after the parent's
-        // listing is an omission, never a directory traversal outside it.
-        let current = match std::fs::symlink_metadata(&dir) {
-            Ok(current) => current,
-            Err(error) if rel_dir.is_empty() => return Err(error),
-            Err(error) => {
-                emit_omission(sink, id, rel_dir, failure_reason(&error), error.to_string())?;
-                continue;
-            }
-        };
-        if super::local_platform::metadata_is_link_like(&dir, &current) {
-            emit_omission(sink, id, rel_dir, omission::LINK, "Verknüpfung")?;
-            continue;
-        }
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(entries) => entries,
-            Err(error) if rel_dir.is_empty() => return Err(error),
-            Err(error) => {
-                emit_omission(sink, id, rel_dir, failure_reason(&error), error.to_string())?;
-                continue;
-            }
-        };
-        for entry in entries {
-            if cancel.load(Ordering::Relaxed) {
-                return Err(canceled("agent hash walk"));
-            }
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(error) => {
-                    // The enumeration of this folder broke off: the rest of
-                    // it is unknown, never absent.
-                    emit_omission(
-                        sink,
-                        id,
-                        rel_dir.clone(),
-                        omission::UNREADABLE,
-                        error.to_string(),
-                    )?;
-                    break;
-                }
-            };
-            let path = entry.path();
-            let name = entry.file_name().to_string_lossy().into_owned();
-            let rel = if rel_dir.is_empty() {
-                name.clone()
-            } else {
-                format!("{rel_dir}/{name}")
-            };
-            if entry.file_name().to_str().is_none() {
-                emit_omission(
-                    sink,
-                    id,
-                    rel,
-                    omission::UNREPRESENTABLE,
-                    "Name ist kein gültiges UTF-8",
-                )?;
-                continue;
-            }
-            let metadata = match std::fs::symlink_metadata(&path) {
-                Ok(metadata) => metadata,
-                Err(error) => {
-                    emit_omission(sink, id, rel, failure_reason(&error), error.to_string())?;
-                    continue;
-                }
-            };
-            let (link, special) = super::local_platform::metadata_class(&path, &metadata);
-            if link {
-                emit_omission(sink, id, rel, omission::LINK, "Verknüpfung")?;
-                continue;
-            }
-            let mtime_ms = metadata.modified().ok().map(systemtime_ms).unwrap_or(0);
-            if metadata.is_dir() {
-                if path.to_str().is_some_and(is_pseudo_dir) {
-                    continue;
-                }
-                emit(sink, id, &entry_frame(rel.clone(), true, 0, mtime_ms, None))?;
-                stack.push((path, rel));
-                continue;
-            }
-            if special || !metadata.is_file() {
-                emit_omission(sink, id, rel, omission::SPECIAL, "Pipe, Socket oder Gerät")?;
-                continue;
-            }
-            if metadata.len() < min_bytes {
-                continue;
-            }
-            let md5 = if algorithm == digest::MD5 {
-                match md5_file(&path, metadata.len(), cancel) {
-                    Ok(md5) => Some(md5),
-                    Err(error) if error.kind() == io::ErrorKind::Interrupted => return Err(error),
-                    Err(error) => {
-                        emit_omission(sink, id, rel, failure_reason(&error), error.to_string())?;
-                        continue;
-                    }
-                }
-            } else {
-                None
-            };
-            emit(
-                sink,
-                id,
-                &entry_frame(rel, false, metadata.len(), mtime_ms, md5),
-            )?;
-        }
-    }
-    emit(sink, id, &Frame::End)
+    let form = super::walk_hashed::Form::Parts { meta };
+    super::walk_hashed::walk(sink, id, root, algorithm, min_bytes, form, cancel)
 }
 
 fn entry_frame(rel: String, is_dir: bool, size: u64, mtime_ms: i64, md5: Option<String>) -> Frame {
@@ -268,16 +167,6 @@ fn entry_frame(rel: String, is_dir: bool, size: u64, mtime_ms: i64, md5: Option<
         mtime_ms,
         md5,
     }
-}
-
-fn emit_omission(
-    sink: &Sink,
-    id: u64,
-    rel: String,
-    reason: u8,
-    detail: impl Into<String>,
-) -> io::Result<()> {
-    emit(sink, id, &Frame::HashOmitted(omitted(rel, reason, detail)))
 }
 
 /// `WalkHashed2` with SHA-256 (`query::FILE_DIGEST`): a regular-file root is
@@ -401,7 +290,7 @@ pub(crate) fn finish_stage(
     })
 }
 
-fn set_mtime(file: &std::fs::File, ms: i64) -> io::Result<()> {
+pub(super) fn set_mtime(file: &std::fs::File, ms: i64) -> io::Result<()> {
     let magnitude = Duration::from_millis(ms.unsigned_abs());
     let time = if ms >= 0 {
         UNIX_EPOCH.checked_add(magnitude)

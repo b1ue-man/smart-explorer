@@ -77,10 +77,16 @@ fn service_version(backend: &BackendHandle) -> String {
     } else {
         ""
     };
+    // Packet entries keep their time where the peer sets it.
+    let times = if batch && crate::vfs::batch_put_times(&**backend) {
+        ".batch-mtime-v1"
+    } else {
+        ""
+    };
     // `range-v1` only for a backend that reads ranges: the frames behind it
     // are forwarded to it (`backend_ranges`).
     format!(
-        "{}{}.capacity-v1.folder-reservation-v1.file-identity-v1{single} worker",
+        "{}{}.capacity-v1.folder-reservation-v1.file-identity-v1{single}{times} worker",
         agent_proto::server_version_with(batch, slots),
         backend_ranges::labels(backend)
     )
@@ -410,13 +416,9 @@ fn dispatch_backend(
             answer(stages.finish(&stage).map(|()| Frame::Ok))
         }
         Frame::ListTolerant(path) => super::backend_ops::list_tolerant(sink, id, &backend, &path),
-        Frame::WalkHashed2 {
-            root,
-            algorithm,
-            min_bytes,
-        } => super::backend_hash::walk_hashed2(
-            sink, id, &backend, &root, algorithm, min_bytes, cancel,
-        ),
+        walk @ (Frame::WalkHashed2 { .. } | Frame::WalkHashed3 { .. }) => {
+            super::backend_hash::serve(sink, id, &backend, walk, cancel)
+        }
         Frame::FindDuplicates { root, min_bytes } => {
             super::backend_ops::find_duplicates(sink, id, &backend, &root, min_bytes, cancel)
         }

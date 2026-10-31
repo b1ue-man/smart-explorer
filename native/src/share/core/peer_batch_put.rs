@@ -87,11 +87,13 @@ impl PeerBackend {
         let limits = self.batch_limits_required()?;
         let lease = self.mount_lease_token()?;
         let evidence = prepare.is_some();
+        let times = self.batch_times_offered();
         let wire: Vec<FsBatchPut> = entries
             .iter()
             .map(|entry| FsBatchPut {
                 path: entry.path.clone(),
                 size: entry.size,
+                mtime_ms: entry.mtime_ms.filter(|_| times),
             })
             .collect();
         let envelope = put_header(

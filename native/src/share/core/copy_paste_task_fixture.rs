@@ -246,6 +246,8 @@ impl CopyPastePeerFixture {
     }
 }
 
+#[path = "abgleich_task_hash_walk_tests.rs"]
+mod abgleich_task_hash_walk_tests;
 #[path = "analysis_request_id_task_tests.rs"]
 mod analysis_request_id_task_tests;
 #[path = "content_digest_task_tests.rs"]

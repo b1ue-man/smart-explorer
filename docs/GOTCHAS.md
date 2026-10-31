@@ -213,6 +213,57 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   tab in around the `ui_table` call, then swapping back. Any new per-view state
   must decide: per-tab (add to `TabState` + `swap_with_tab`) or global.
 
+## Recursive view (Ctrl+R): walks, scan drain, view rebuild
+
+- **Remote root, no depth limit, no filter: one request for the whole tree.**
+  `rscan/os/shared/hash_walk_view.rs` calls `vfs::hash_walk` with
+  `meta: true`. The rows are meant to equal the folder walk's rows (the last
+  point below names the two fields that depend on the storing side): links and special files
+  are rows and are not walked into, hidden flags and birth times come from the
+  request, folders arrive before their content, the 512-folder depth limit and
+  the scan budget apply. It falls back to the folder walk when the storing side
+  answers `Ok(false)`, fails before its first row, or sends an entry without
+  metadata before its first row. A failure after rows is the scan error; the
+  rows stay.
+- **Filtered views (retention) and depth-limited views keep the folder walk.**
+  Placing a retained entry needs the chain of every pruned ancestor folder. One
+  stream would have to keep that chain for the whole tree, while the scan budget
+  counts emitted entries only.
+- **Folder walk: work stealing, no level barrier** (`rscan/os/shared/parallel.rs`).
+  Listing threads take the next queued folder as soon as they are free. Only the
+  driver thread validates, budgets and emits. Width stays
+  `backend.parallelism()` clamped to 2..=16. The former barrier held each block
+  of folders until its slowest listing finished. Test:
+  `abgleich_task_folder_walk_does_not_wait_for_a_slow_sibling`.
+- **An entry the storing side cannot read** is a failed path of its own; the other
+  rows of its folder stay (whole-tree walk only). The folder walk still drops a
+  folder whose strict `list_dir` fails: a tolerant listing would change how Drive
+  duplicate names appear, so that change is not made here.
+- **Local recursive view** (`scanner/os/walk.rs`) is fork-join without a level
+  barrier. It was not changed by this work.
+- **GUI drain** (`app/os/shared/platform_helpers.rs`): one frame takes the
+  waiting scan messages for at most `SCAN_DRAIN_BUDGET` (4 ms) per channel
+  (was: 64 messages per call). Messages left over are taken by the next frame,
+  which `frame_update.rs` requests at once (`scan_messages_waiting`).
+- **GUI view rebuild during a scan** (`app/core/view_selection.rs`): the next
+  rebuild waits `max(50 ms, 10 × cost of the last rebuild)`, so rebuilds take
+  about a tenth of the frame time whatever the tree size (was: fixed 150 ms).
+  The cost is one process-wide value (`LAST_VIEW_REBUILD_NANOS`) used for timing
+  only. It is not view state, so it is not per tab.
+- **Android scan bridge** (`mobile/os/shared/scan.rs`): the consumer is its own
+  thread without frame pacing, so the 64-message limit does not exist there and
+  the desktop backlog does not occur. Open: `scan.view` rebuilds the tree while
+  holding the lock the consumer needs. Not changed, because the client poll rate
+  is not in this repository.
+- **Row parity with the storing side:** with `meta = true` a folder entry carries
+  the size its listing reports (agent `metadata.len()`, Share the listing size;
+  without `meta` it stays 0), and `hidden` follows the listing's rule (agent: dot
+  names, `agent/core/metadata.rs` with `dot_hidden`; Share: the host attribute).
+  One field differs: the agent walk reports the creation time from
+  `metadata.created()`, the agent listing reports 0. The Share listing and the
+  hash walk both omit the protected names of `host_list::hidden` (app trash,
+  engine and staging names), so they agree there.
+
 ## Windows remote-drive integration
 
 ### Dokany remote-drive boundary
@@ -788,6 +839,68 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
 - **The Share host forgets a packet's outcome once the client confirms it.** The client finishes
   its side and drops its stream (QUIC stop code 0); either counts as confirmation. At the per-device
   limit a new packet replaces that device's oldest finished record (`share/core/batch_status.rs`).
+
+## Sync compare: walks next to the data (source state 2026-10-31, not built, not released)
+
+- **Contract (`vfs/core/extension_types.rs`).** `HashWalkRequest.meta` asks for
+  `HashWalkEntry.meta = Some(HashWalkMeta { hidden, system, btime_ms,
+  is_symlink, special })` on every entry; links and special files then come as
+  entries (`is_dir = false`, size and time of the entry itself, never left out
+  by `min_bytes`) instead of omissions, and a folder carries the size its
+  listing reports (agent: `metadata.len()`, Share: the listing's size). Without
+  `meta` folders stay size 0. Unreadable, vanished and unrepresentable entries
+  stay omissions. Every folder is sent before the entries below it. A side
+  without the capability answers `Ok(false)` before sending anything:
+  Share capability `hash_walk_meta_v1` (`FsHashWalk.meta`, `FsHashEntry.meta`),
+  agent label `walk-meta-v1` (`Frame::WalkHashed3` tag 79 answered by
+  `Frame::HashPart` tag 80, charged by credit). Older peers and clients keep
+  `hash_walk_v1` / `WalkHashed2` unchanged; `PROTO_VERSION` stays 12 (labels
+  negotiate, the agent cache key is the bundle hash).
+- **Walks on the storing side run in parallel without level barriers**
+  (`agent_proto/os/shared/ordered_walk.rs`, used by the agent's
+  `walk_hashed.rs` and the Share host's `host_hash_walk_local.rs`). Threads:
+  `std::thread::available_parallelism()` when the walk starts. A thread hands
+  folders to an idle one only after it sent what it produced, which keeps
+  folders ahead of their content. Without a requested algorithm the Share host
+  opens no file: size and time come from the handle-bound listing, as in the
+  folder-by-folder walk (a file without read permission is an entry, as there).
+- **Hidden on SSH agents:** listings and walks mark names with a leading dot as
+  hidden, as SFTP does (`agent/core/metadata.rs`, `dot_hidden`); the
+  background service still passes no hidden flag of its backend.
+- **Background service:** `WalkHashed3` relays only the served backend's own
+  walk (a Share host); without one it answers unsupported, so the client lists
+  folders itself in parallel. `WalkHashed2` keeps the service's own sequential
+  walk for older clients.
+- **Sync snapshot (`bisync/os/shared/snapshot_agent.rs`,
+  `snapshot_host_walk.rs`).** A remote side with a walk next to the data uses
+  it also with `cross_mounts = false` (the folder walk never tested mount
+  boundaries on remote sides, `snapshot_policy.rs`) and with
+  `include_hidden = false` when the side offers `meta`. The streamed entries are
+  regrouped into folder listings and checked by the same `scan_listing` as the
+  folder walk, with child paths joined locally, so tree, folders, filtered
+  files, omissions and duplicates follow the folder walk's rules. `NativeOnly`
+  hashing and duplicate-name providers keep the folder walk; the
+  `sync-links-v1` legacy walk is used only across mounts with hidden entries.
+  Known edge differences to the folder walk: a folder the Share host cannot
+  open is an omission without a `dirs` entry; host errors other than
+  "not found" become `Unreadable` omissions instead of failing the run; an
+  omission for the root itself fails the run.
+- **Folder walk:** `sync_child_path` (one request per entry on Share hosts with
+  `literal_children_v1`) is asked only for entries the filters keep; excluded
+  entries use the literal join for their protection checks.
+- **Packets keep source times** (`vfs::BatchPut::mtime_ms`, `vfs::batch_put_times`): Share
+  `batch_put_mtime_v1` (`FsBatchPut.mtime_ms`, set on the stage before publishing), agent label
+  `batch-mtime-v1` (a `BatchPut` with times travels as tag 81; tag 35 stays for batches without
+  times), the worker announces the label only for a peer that sets times. Older peers are never
+  sent a time. Details: `docs/TRANSFER_ENGINE.md`, Dateiregel, Grenzen.
+- **Local sync walk:** `snapshot_policy::LocalFacts` is built once per local
+  side: own app folders (no environment read per entry), volume root, mount
+  boundaries (`vfs::LocalMountBoundaries`: canonical root once, mount table read
+  again only after `/proc/self/mountinfo` reports a change by `POLLPRI`, so a
+  folder mounted during the walk is still found) and the nested-mount memory
+  (`snapshot_mounts::NestedMounts`: loaded once, no `stat` and no process-wide
+  lock per folder). Quick mirror and other callers of `protected` keep the
+  former per-call path.
 
 ## Share / local network
 

@@ -131,6 +131,7 @@ mod volume;
 
 pub use self::error_classes::{is_target_refusal, omission_reason};
 pub use self::extension_calls::confirm_namespace;
+pub use self::extension_calls::default_sync_child_path as literal_child_path;
 pub use self::extension_calls::{
     change_signal, change_signal_mode, find_duplicates, finish_stage, hash_walk, list_dir_tolerant,
     mtime_precision, open_read_regular, open_write_copy_stage_timed, previous_state_identities,
@@ -139,17 +140,19 @@ pub use self::extension_calls::{
     target_limits, unix_mode, version_archive_policy, volume_identity,
 };
 pub use self::extension_types::{
-    ChangeNotice, ChangeSignalMode, ChangeSubscription, HashWalkEntry, HashWalkItem,
+    ChangeNotice, ChangeSignalMode, ChangeSubscription, HashWalkEntry, HashWalkItem, HashWalkMeta,
     HashWalkRequest, MtimePrecision, NameIssue, NameLimit, OmissionReason, RecycleExpectation,
     RecycleOutcome, StageDurability, StageFinish, StageFinished, TargetLimits, VfsListing,
     VfsOmission,
 };
 pub use self::extensions::{BackendExtensions, VersionArchivePolicy};
-pub use self::local_extensions::{local_mount_boundary, local_volume_identity};
+pub use self::local_extensions::{
+    local_mount_boundary, local_volume_identity, LocalMountBoundaries,
+};
 pub use self::staging_names::is_staging_name;
 pub(crate) use self::staging_names::{fit_stage_name, is_unique_stage, split_stage_name};
 pub use self::transfer_evidence::{
-    create_dirs, host_batch_limits, open_read_evidence, open_write_absent,
+    batch_put_times, create_dirs, host_batch_limits, open_read_evidence, open_write_absent,
     promote_copy_stage_evidence, put_batch_evidence, server_copy_batch, single_put,
     supports_create_dirs, take_stage_evidence, transfer_evidence, transfer_scope,
     EvidencePutOutcome, FileEvidence, PreparePut, StageEvidence,

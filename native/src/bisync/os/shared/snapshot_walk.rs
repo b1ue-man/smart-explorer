@@ -17,7 +17,8 @@ use super::snapshot_dir::{scan_listing, Listed, WalkContext};
 use super::sync_overload::under_permits;
 use super::types::Tree;
 
-const MAX_WALK_DEPTH: usize = 512;
+/// Folders deeper than this fail the walk.
+pub(super) const MAX_WALK_DEPTH: usize = 512;
 /// The coordinator looks at the flow at least this often (its limit moves
 /// while other jobs use the connection).
 const COORDINATOR_SLICE: Duration = Duration::from_millis(50);
@@ -82,9 +83,14 @@ fn list_plain_directory(ctx: &WalkContext<'_>, path: &str) -> io::Result<crate::
         }));
     }
     if path != ctx.root {
-        if let Some(kind) =
-            super::snapshot_policy::protected(be, ctx.root, path, &metadata, ctx.opts.cross_mounts)?
-        {
+        if let Some(kind) = super::snapshot_policy::protected_in(
+            be,
+            ctx.root,
+            path,
+            &metadata,
+            ctx.opts.cross_mounts,
+            ctx.local.as_ref(),
+        )? {
             return Err(super::apply_boundary::protected(kind));
         }
     }
@@ -323,20 +329,7 @@ impl TreeWalk<'_> {
             }
             Err(error) => return Err(error),
         };
-        for omission in listing.omitted {
-            let rel = match super::sync_relative_path::validate_component(&omission.rel) {
-                Ok(()) => super::snapshot_dir::literal_child(dir_rel, &omission.rel),
-                Err(error) if dir_rel.is_empty() => return Err(error),
-                Err(_) => dir_rel.to_string(),
-            };
-            let filtered = self.context.filter.ignored(&rel, true);
-            super::snapshot_dir::record_omission(
-                self.context,
-                &rel,
-                omission.reason.into(),
-                !filtered,
-            );
-        }
+        super::snapshot_dir::record_listing_omissions(self.context, dir_rel, listing.omitted)?;
         let listed = scan_listing(self.context, dir, dir_rel, listing.entries)?;
         // Only a complete listing: a stopped walk may return part of one.
         if let Some(observer) = self.context.listed {
@@ -359,31 +352,37 @@ impl TreeWalk<'_> {
     }
 
     fn merge(&self, listed: Listed, depth: usize) {
-        let Listed { mut files, dirs } = listed;
+        let Listed { files, dirs } = listed;
         if !files.is_empty() {
-            files.sort_by(|left, right| {
-                left.0
-                    .cmp(&right.0)
-                    .then_with(|| right.1.mtime_ms.cmp(&left.1.mtime_ms))
-                    .then_with(|| left.2.cmp(&right.2))
-            });
             let mut out = self
                 .out
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let mut prior_rel: Option<String> = None;
-            for (rel, sig, _) in files {
-                if prior_rel.as_deref() != Some(&rel) {
-                    out.insert(rel.clone(), sig);
-                    prior_rel = Some(rel);
-                }
-            }
+            merge_files(&mut out, files);
         }
         if !dirs.is_empty() {
             self.lock()
                 .queue
                 .extend(dirs.into_iter().map(|(dir, rel)| (dir, rel, depth + 1)));
             self.changed.notify_all();
+        }
+    }
+}
+
+/// The files of one listed folder into the tree: of equal names (an
+/// ID-addressed provider) the newest, then the smallest id, as always.
+pub(super) fn merge_files(out: &mut Tree, mut files: Vec<(String, super::types::Sig, String)>) {
+    files.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| right.1.mtime_ms.cmp(&left.1.mtime_ms))
+            .then_with(|| left.2.cmp(&right.2))
+    });
+    let mut prior_rel: Option<String> = None;
+    for (rel, sig, _) in files {
+        if prior_rel.as_deref() != Some(&rel) {
+            out.insert(rel.clone(), sig);
+            prior_rel = Some(rel);
         }
     }
 }

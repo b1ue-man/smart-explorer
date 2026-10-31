@@ -280,7 +280,14 @@ impl Frame {
                                 Some(frame) => frame,
                                 None => match frame_encode::folder_frames::decode(t, &mut r)? {
                                     Some(frame) => frame,
-                                    None => return Err(bad(&format!("unknown frame tag {t}"))),
+                                    None => {
+                                        match frame_encode::walk_meta_frames::decode(t, &mut r)? {
+                                            Some(frame) => frame,
+                                            None => {
+                                                return Err(bad(&format!("unknown frame tag {t}")))
+                                            }
+                                        }
+                                    }
                                 },
                             },
                         },

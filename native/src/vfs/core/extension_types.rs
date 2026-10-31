@@ -222,21 +222,56 @@ pub struct HashWalkRequest {
     /// Regular files smaller than this are left out (duplicate search); a
     /// sync walk passes 0, since a missing file would read as absent.
     pub min_bytes: u64,
+    /// Every entry carries `HashWalkMeta`, and links and special files come
+    /// as entries (`is_dir = false`, size and time of the entry itself, never
+    /// below `min_bytes` left out) instead of omissions. A side without this
+    /// capability (Share `hash_walk_meta_v1`, agent `walk-meta-v1`) answers
+    /// `Ok(false)` before sending anything.
+    pub meta: bool,
 }
 
-/// One folder or regular file of a hash walk (path relative to its root).
+/// The listing attributes of one hash-walk entry (`HashWalkRequest::meta`),
+/// as a tolerant listing of its folder reports them (`VfsMeta`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HashWalkMeta {
+    pub hidden: bool,
+    pub system: bool,
+    /// Creation time (Unix ms); 0 = not known.
+    pub btime_ms: i64,
+    /// Symlink, junction or name-surrogate reparse point (never followed).
+    pub is_symlink: bool,
+    /// FIFO, socket or device: no data stream.
+    pub special: bool,
+}
+
+/// One entry of a hash walk (path relative to its root): a folder, a
+/// regular file and, with `HashWalkRequest::meta`, a link or special file.
+/// Every folder comes before the entries below it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HashWalkEntry {
     pub rel: String,
     pub is_dir: bool,
     pub size: u64,
     pub mtime_ms: i64,
-    /// Lowercase hex digest of the requested algorithm (files only).
+    /// Lowercase hex digest of the requested algorithm (regular files only).
     pub digest: Option<String>,
+    /// `Some` exactly when the request asked for `meta`.
+    pub meta: Option<HashWalkMeta>,
 }
 
-/// One streamed hash-walk item: an entry or an omission (links, special
-/// files, unreadable or vanished entries, unrepresentable names).
+impl HashWalkEntry {
+    /// A regular file (neither folder, link nor special file).
+    pub fn is_regular(&self) -> bool {
+        !self.is_dir
+            && self
+                .meta
+                .is_none_or(|meta| !meta.is_symlink && !meta.special)
+    }
+}
+
+/// One streamed hash-walk item: an entry or an omission (unreadable or
+/// vanished entries, unrepresentable names and, without `meta`, links and
+/// special files).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HashWalkItem {
     Entry(HashWalkEntry),

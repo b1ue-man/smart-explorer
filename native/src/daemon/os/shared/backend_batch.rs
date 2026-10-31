@@ -267,6 +267,7 @@ pub(super) fn handle_put_batch_backend(
         .map(|entry| BatchPut {
             path: entry.path.clone(),
             size: entry.size,
+            mtime_ms: entry.mtime_ms,
         })
         .collect();
     let sizes: Vec<u64> = entries.iter().map(|entry| entry.size).collect();

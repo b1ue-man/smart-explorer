@@ -1,4 +1,5 @@
-//! Wire layout of the transfer-engine frames (tags 34..=44): flow-control
+//! Wire layout of the transfer-engine frames (tags 34..=44, and 81 for a
+//! `BatchPut` whose entries carry times, `batch-mtime-v1`): flow-control
 //! credit, batches and the stage/directory unit operations, plus the folder
 //! deletion request `RemoveTree` (tag 62, `ext-v1`; the other extension
 //! frames live in `frame_ops.rs`). Kept apart from the original frame set so
@@ -10,7 +11,8 @@ use super::super::super::batch_limits::{BATCH_MAX_FILES, ITEM_PATH_MAX, ITEM_TEX
 use super::super::super::types::{BatchEntry, BatchItem, Frame};
 use super::super::{bad, Reader};
 use super::{
-    add_len, optional_string_len, put_bool, put_opt_str, put_str, put_u32, put_u64, string_len,
+    add_len, optional_string_len, put_bool, put_i64, put_opt_str, put_str, put_u32, put_u64,
+    string_len,
 };
 
 /// Smallest encoded batch entry: path length prefix, size and nonce.
@@ -53,12 +55,19 @@ pub(in super::super) fn encode(frame: &Frame, b: &mut Vec<u8>) -> bool {
             put_u64(b, *bytes);
         }
         Frame::BatchPut { entries } => {
-            b.push(35);
+            let timed = timed(entries);
+            b.push(if timed { 81 } else { 35 });
             put_u32(b, entries.len() as u32);
             for entry in entries {
                 put_str(b, &entry.path);
                 put_u64(b, entry.size);
                 put_u64(b, entry.nonce);
+                if timed {
+                    put_bool(b, entry.mtime_ms.is_some());
+                    if let Some(mtime_ms) = entry.mtime_ms {
+                        put_i64(b, mtime_ms);
+                    }
+                }
             }
         }
         Frame::BatchGet { items } => {
@@ -125,17 +134,26 @@ pub(in super::super) fn encode(frame: &Frame, b: &mut Vec<u8>) -> bool {
 pub(in super::super) fn decode(tag: u8, r: &mut Reader) -> io::Result<Option<Frame>> {
     Ok(Some(match tag {
         34 => Frame::Credit { bytes: r.u64()? },
-        35 => {
+        tag @ (35 | 81) => {
             let count = batch_count(r)?;
             if count > r.remaining() / MIN_BATCH_ENTRY_BYTES {
                 return Err(bad("batch entry count exceeds the remaining frame bytes"));
             }
             let mut entries = Vec::with_capacity(count);
             for _ in 0..count {
+                let path = r.string()?;
+                let size = r.u64()?;
+                let nonce = r.u64()?;
+                let mtime_ms = if tag == 81 && r.bool()? {
+                    Some(r.i64()?)
+                } else {
+                    None
+                };
                 entries.push(BatchEntry {
-                    path: r.string()?,
-                    size: r.u64()?,
-                    nonce: r.u64()?,
+                    path,
+                    size,
+                    nonce,
+                    mtime_ms,
                 });
             }
             Frame::BatchPut { entries }
@@ -222,12 +240,21 @@ fn entries_len(entries: &[BatchEntry]) -> io::Result<usize> {
     if entries.len() > BATCH_MAX_FILES {
         return Err(bad("batch exceeds its file limit"));
     }
+    let timed = timed(entries);
     let mut length = 4;
     for entry in entries {
         add_len(&mut length, string_len(&entry.path)?)?;
         add_len(&mut length, 16)?;
+        if timed {
+            add_len(&mut length, if entry.mtime_ms.is_some() { 9 } else { 1 })?;
+        }
     }
     Ok(length)
+}
+
+/// A batch upload with any time travels as tag 81 (`batch-mtime-v1`).
+fn timed(entries: &[BatchEntry]) -> bool {
+    entries.iter().any(|entry| entry.mtime_ms.is_some())
 }
 
 fn items_len(items: &[BatchItem]) -> io::Result<usize> {

@@ -27,6 +27,7 @@ fn screen_metadata_runtime_task_share_file_walk_returns_one_item() -> io::Result
         algo: Some(FsHashAlgo::Sha256),
         min_bytes: 0,
         single_file: true,
+        meta: false,
     });
     let mut items: Vec<FsHashEntry> = Vec::new();
     let mut holes = 0usize;
@@ -97,6 +98,7 @@ fn screen_metadata_runtime_task_share_file_walk_wire_stays_compatible() {
         algo: Some(FsHashAlgo::Md5),
         min_bytes: 0,
         single_file: false,
+        meta: false,
     };
     let encoded = serde_json::to_string(&folder_walk).unwrap();
     assert!(!encoded.contains("single_file"), "{encoded}");

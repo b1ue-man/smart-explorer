@@ -48,6 +48,8 @@ pub(in super::super) fn upload(
     let entries = [BatchPut {
         path: engine.folders.path_of(&file.rel),
         size,
+        // The source's time, where the peer sets it (`publish_time.rs`).
+        mtime_ms: (file.mtime_ms > 0).then_some(file.mtime_ms),
     }];
     let evidenced = crate::vfs::transfer_evidence(target, engine.folders.root());
     if !evidenced {

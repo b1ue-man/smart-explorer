@@ -256,6 +256,7 @@ fn review_task_backends_without_extensions_get_safe_fallbacks() {
     let request = HashWalkRequest {
         algorithm: None,
         min_bytes: 0,
+        meta: false,
     };
     assert!(!hash_walk(&backend, "/", request, tx, &AtomicBool::new(false)).unwrap());
     let expected = RecycleExpectation {

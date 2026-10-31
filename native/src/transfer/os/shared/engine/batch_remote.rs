@@ -221,6 +221,8 @@ fn send(
         .map(|(file, data)| BatchPut {
             path: engine.folders.path_of(&file.rel),
             size: data.len() as u64,
+            // The source's time, where the peer sets it (`publish_time.rs`).
+            mtime_ms: (file.mtime_ms > 0).then_some(file.mtime_ms),
         })
         .collect();
     let evidenced = crate::vfs::transfer_evidence(target, engine.folders.root());

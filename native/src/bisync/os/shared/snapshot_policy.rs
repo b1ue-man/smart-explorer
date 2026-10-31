@@ -70,9 +70,57 @@ pub(crate) fn protected(
     meta: &VfsMeta,
     cross_mounts: bool,
 ) -> std::io::Result<Option<OmissionKind>> {
+    protected_in(backend, root, path, meta, cross_mounts, None)
+}
+
+/// The facts of one local walk that do not change from folder to folder:
+/// the application's own folders, whether the root is a volume root, the
+/// mount boundaries below it and its remembered nested mounts. A snapshot
+/// walk builds them once (`snapshot.rs`) instead of reading the environment
+/// per entry and the mount table, the canonical parent and the mount memory
+/// per folder; the answers are those of `protected` without them.
+pub(crate) struct LocalFacts {
+    own: Prefixes,
+    volume_root: std::sync::OnceLock<bool>,
+    mounts: crate::vfs::LocalMountBoundaries,
+    nested: super::snapshot_mounts::NestedMounts,
+}
+
+impl LocalFacts {
+    pub(crate) fn new(backend: &dyn Backend, root: &str) -> Self {
+        Self {
+            own: own_prefixes(),
+            volume_root: std::sync::OnceLock::new(),
+            mounts: crate::vfs::LocalMountBoundaries::new(root),
+            nested: super::snapshot_mounts::NestedMounts::new(backend, root),
+        }
+    }
+
+    fn own_path(&self, path: &str) -> bool {
+        let path = std::path::Path::new(path);
+        self.own
+            .iter()
+            .any(|prefix| !prefix.as_os_str().is_empty() && path.starts_with(prefix))
+    }
+}
+
+/// `protected`, with the facts of the walk where it has them.
+pub(crate) fn protected_in(
+    backend: &dyn Backend,
+    root: &str,
+    path: &str,
+    meta: &VfsMeta,
+    cross_mounts: bool,
+    facts: Option<&LocalFacts>,
+) -> std::io::Result<Option<OmissionKind>> {
+    let local = backend.is_local();
+    let own = match facts {
+        Some(facts) if local => facts.own_path(path),
+        _ => own_path(backend, path),
+    };
     if is_engine_name(&meta.name)
         || crate::vfs::is_staging_name(&meta.name)
-        || own_path(backend, path)
+        || own
         || crate::apptrash::excluded_name(&meta.name)
         || crate::apptrash::hidden_app_folders_in(path.rsplit_once('/').map_or("", |p| p.0))
     {
@@ -87,23 +135,36 @@ pub(crate) fn protected(
     let rel = rel_of(path, root);
     if meta.is_dir
         && !rel.contains('/')
-        && volume_root(backend, root)
         && matches!(
             meta.name.as_str(),
             "lost+found" | "System Volume Information" | "$RECYCLE.BIN"
         )
+        && match facts {
+            Some(facts) => *facts.volume_root.get_or_init(|| volume_root(backend, root)),
+            None => volume_root(backend, root),
+        }
     {
         return Ok(Some(OmissionKind::SystemFolder));
     }
-    if meta.is_dir && backend.is_local() {
+    if meta.is_dir && local {
         return super::apply_path_context::mount_omission(
             backend,
             root,
             path,
             cross_mounts,
             || {
-                let mounted = crate::vfs::local_mount_boundary(path)?.is_some();
-                let missing = super::snapshot_mounts::missing(backend, root, path, mounted)?;
+                let (mounted, missing) = match facts {
+                    Some(facts) => {
+                        let mounted = facts.mounts.boundary(path)?.is_some();
+                        (mounted, facts.nested.missing(backend, path, mounted)?)
+                    }
+                    None => {
+                        let mounted = crate::vfs::local_mount_boundary(path)?.is_some();
+                        let missing =
+                            super::snapshot_mounts::missing(backend, root, path, mounted)?;
+                        (mounted, missing)
+                    }
+                };
                 Ok((missing || (mounted && !cross_mounts)).then_some(OmissionKind::Mount))
             },
         );

@@ -62,6 +62,7 @@ pub(super) fn scan_backend_hash_walk(
     let request = HashWalkRequest {
         algorithm: Some(HashAlgorithm::Md5),
         min_bytes,
+        meta: false,
     };
     let mut acc = BackendAcc::new();
     let outcome = std::thread::scope(|scope| {

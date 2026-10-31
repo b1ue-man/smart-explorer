@@ -179,6 +179,7 @@ fn transfer_engine_task_share_batch_status_resolves_a_lost_reply() -> io::Result
             entries: vec![FsBatchPut {
                 path: path.to_string(),
                 size,
+                mtime_ms: None,
             }],
             evidence: false,
         },

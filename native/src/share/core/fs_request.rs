@@ -83,7 +83,8 @@ pub(crate) struct FsDuplicateSearch {
 
 /// `hash_walk_v1`: every folder and regular file below `path` with size and
 /// time, the content hash (`algo`) of every file of at least `min_bytes`,
-/// and every omission (links, special, unreadable, vanished entries).
+/// and every omission (links, special, unreadable, vanished entries). Every
+/// folder comes before the entries below it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct FsHashWalk {
     pub(crate) path: String,
@@ -98,6 +99,11 @@ pub(crate) struct FsHashWalk {
     /// offer `hash_file_v1`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub(crate) single_file: bool,
+    /// `hash_walk_meta_v1`: every entry carries its listing attributes, and
+    /// links and special files come as entries instead of omissions. Sent
+    /// only to hosts that offer `hash_walk_meta_v1`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) meta: bool,
 }
 
 /// `list_batches_v1`: the folder `path` in name order and in bounded

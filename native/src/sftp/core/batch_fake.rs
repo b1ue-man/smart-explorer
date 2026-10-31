@@ -382,6 +382,7 @@ pub(super) fn entries(count: usize, size: usize) -> (Vec<BatchPut>, Vec<u8>) {
         .map(|index| BatchPut {
             path: format!("d/f{index:02}.txt"),
             size: size as u64,
+            mtime_ms: None,
         })
         .collect();
     let data = (0..count).flat_map(|index| payload(index, size)).collect();
@@ -394,6 +395,7 @@ pub(super) fn named(paths: &[&str], size: usize) -> (Vec<BatchPut>, Vec<u8>) {
         .map(|path| BatchPut {
             path: path.to_string(),
             size: size as u64,
+            mtime_ms: None,
         })
         .collect();
     let data = (0..paths.len())

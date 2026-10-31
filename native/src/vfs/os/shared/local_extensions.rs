@@ -140,6 +140,25 @@ pub fn local_mount_boundary(path: &str) -> io::Result<Option<MountKind>> {
     local_platform::mount_boundary(&local_platform::to_os(path))
 }
 
+/// `local_mount_boundary` for the folders one walk reaches below `root`
+/// without following links: the canonical root and the mount table are
+/// established once, and the table is read again only after the system
+/// reported a change of mounts, so a folder mounted during the walk is
+/// still found.
+pub struct LocalMountBoundaries(local_platform::MountBoundaries);
+
+impl LocalMountBoundaries {
+    pub fn new(root: &str) -> Self {
+        Self(local_platform::MountBoundaries::new(local_platform::to_os(
+            root,
+        )))
+    }
+
+    pub fn boundary(&self, path: &str) -> io::Result<Option<MountKind>> {
+        self.0.boundary(&local_platform::to_os(path))
+    }
+}
+
 fn confined_parent(
     path: &str,
 ) -> io::Result<(crate::local_access::ConfinedDirectory, std::ffi::OsString)> {

@@ -240,9 +240,12 @@ pub trait BackendExtensions: Backend {
     }
 
     /// Walk `root` on the storing host and stream every folder, regular file
-    /// (with digest when requested) and omission into `tx`. `Ok(false)` only
-    /// for "unsupported" before any item; a later failure (transport, host,
-    /// cancel) is an error, so a partial walk is never taken as complete.
+    /// (with digest when requested) and omission into `tx`, every folder
+    /// before the entries below it. With `request.meta` every entry carries
+    /// `HashWalkMeta` and links and special files are entries; a side
+    /// without that answers `Ok(false)` before sending anything. `Ok(false)`
+    /// only for "unsupported" before any item; a later failure (transport,
+    /// host, cancel) is an error, so a partial walk is never taken as complete.
     fn hash_walk(
         &self,
         root: &str,
@@ -337,6 +340,14 @@ pub trait BackendExtensions: Backend {
     /// answer is resolved by the peer's outcome registry, never by sending
     /// again. Wrappers that rewrite paths keep `false`.
     fn single_put(&self) -> bool {
+        false
+    }
+
+    /// Whether `put_batch` (and a packet of one) gives every published file
+    /// the `BatchPut::mtime_ms` it names before publishing it (Share
+    /// `batch_put_mtime_v1`, agent `batch-mtime-v1`). `false`: the time is
+    /// ignored and the file keeps the time of its upload.
+    fn batch_put_times(&self) -> bool {
         false
     }
 

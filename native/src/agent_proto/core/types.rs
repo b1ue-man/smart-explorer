@@ -17,8 +17,8 @@ pub fn has_link_aware_hash(version: &str) -> bool {
 }
 
 pub use super::ops_types::{
-    WireChange, WireDuplicateGroup, WireDuplicateItem, WireDuplicateSummary, WireOmission,
-    WireReclaimProgress, WireTargetLimits,
+    WireChange, WireDuplicateGroup, WireDuplicateItem, WireDuplicateSummary, WireHashEntry,
+    WireHashMeta, WireOmission, WireReclaimProgress, WireTargetLimits,
 };
 
 /// Payload chunk size for streamed byte transfers.
@@ -58,6 +58,10 @@ pub struct BatchEntry {
     pub path: String,
     pub size: u64,
     pub nonce: u64,
+    /// `batch-mtime-v1`: the time (Unix ms) the published file carries. A
+    /// batch with a time travels as tag 81 and goes only to a server that
+    /// announced the label.
+    pub mtime_ms: Option<i64>,
 }
 
 /// One file of a batch download. `id` is forwarded to ID-addressed backends
@@ -270,6 +274,21 @@ pub enum Frame {
     },
     /// A link, special file or unreadable entry of a `WalkHashed2`.
     HashOmitted(WireOmission),
+    /// `WalkHashed2` in portions (`walk-meta-v1`): `HashPart`*, then `End`.
+    /// With `meta`, every entry carries its listing attributes and links and
+    /// special files come as entries instead of omissions. Every folder
+    /// comes before the entries below it.
+    WalkHashed3 {
+        root: String,
+        algorithm: u8,
+        min_bytes: u64,
+        meta: bool,
+    },
+    /// A portion of a `WalkHashed3`.
+    HashPart {
+        entries: Vec<WireHashEntry>,
+        omitted: Vec<WireOmission>,
+    },
     /// Duplicate search on the storing host (`ext-v1`): `DupProgress`*,
     /// `DupGroup`*, one `DupSummary`, then `End`.
     FindDuplicates {

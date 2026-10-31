@@ -194,24 +194,12 @@ pub(super) fn walk_snapshot_observed(
         ));
     }
     super::apply_boundary::guard(be, root, "", opts.cross_mounts)?;
-    if let Some(snapshot) = super::snapshot_agent::walk_snapshot_via_agent(
-        be, root, cancel, filter, hash, opts, fold_case,
-    )? {
-        super::run_log::note(
-            "Scan",
-            &format!(
-                "{root} vom Gegenstellen-Agenten gelesen: {} Dateien",
-                snapshot.tree.len()
-            ),
-        );
-        return Ok(snapshot);
-    }
     let omissions = Mutex::new(super::omissions::SyncOmissions::new(fold_case));
     let duplicates = Mutex::new(super::snapshot_duplicates::DuplicateGroups::new());
     let filtered = Mutex::new(Tree::new());
     let dirs = Mutex::new(DirSet::new());
     let flow = (!be.is_local()).then(|| flow_for(be, root));
-    let context = WalkContext {
+    let mut context = WalkContext {
         be,
         root,
         cancel,
@@ -231,19 +219,41 @@ pub(super) fn walk_snapshot_observed(
         progress: Progress::default(),
         log: super::run_log::current(),
         listed,
+        host_listed: true,
+        local: be
+            .is_local()
+            .then(|| super::snapshot_policy::LocalFacts::new(be, root)),
     };
     let started = std::time::Instant::now();
-    let tree = walk_tree(&context, flow, be.parallelism().max(1))?;
-    if let Some(log) = &context.log {
-        log.line(
-            "Scan",
-            &format!(
-                "{root} vollständig gelesen: {} Dateien in {:.1} s",
-                tree.len(),
-                started.elapsed().as_secs_f64()
-            ),
-        );
-    }
+    let tree = match super::snapshot_agent::walk_snapshot_via_agent(&context)? {
+        Some(tree) => {
+            super::run_log::note(
+                "Scan",
+                &format!(
+                    "{root} vom Gegenstellen-Agenten gelesen: {} Dateien in {:.1} s",
+                    tree.len(),
+                    started.elapsed().as_secs_f64()
+                ),
+            );
+            tree
+        }
+        None => {
+            context.host_listed = false;
+            let tree = walk_tree(&context, flow, be.parallelism().max(1))?;
+            if let Some(log) = &context.log {
+                log.line(
+                    "Scan",
+                    &format!(
+                        "{root} vollständig gelesen: {} Dateien in {:.1} s",
+                        tree.len(),
+                        started.elapsed().as_secs_f64()
+                    ),
+                );
+            }
+            tree
+        }
+    };
+    drop(context);
     Ok(Snapshot {
         tree,
         filtered: filtered.into_inner().unwrap_or_else(|e| e.into_inner()),
@@ -251,6 +261,46 @@ pub(super) fn walk_snapshot_observed(
         omissions: omissions.into_inner().unwrap_or_else(|e| e.into_inner()),
         duplicates: duplicates.into_inner().unwrap_or_else(|e| e.into_inner()),
     })
+}
+
+/// `f` with the context of a walk of `root` that keeps its omissions,
+/// filtered files and folders to itself (single-side callers).
+pub(super) fn with_walk_context<T>(
+    be: &dyn Backend,
+    root: &str,
+    cancel: &AtomicBool,
+    filter: &WalkFilter,
+    hash: HashMode,
+    opts: BisyncOptions,
+    f: impl FnOnce(&WalkContext<'_>) -> io::Result<T>,
+) -> io::Result<T> {
+    let omissions = Mutex::new(super::omissions::SyncOmissions::new(false));
+    let filtered = Mutex::new(Tree::new());
+    let dirs = Mutex::new(DirSet::new());
+    let context = WalkContext {
+        be,
+        root,
+        cancel,
+        filter,
+        hash,
+        prev: None,
+        allow_duplicate_files: false,
+        omissions: Some(&omissions),
+        duplicates: None,
+        filtered: Some(&filtered),
+        dirs: Some(&dirs),
+        opts,
+        limits: super::SyncLimits::for_memory(crate::transfer::physical_memory()),
+        nodes: AtomicU64::new(0),
+        text_bytes: AtomicU64::new(0),
+        reads: None,
+        progress: Progress::default(),
+        log: None,
+        listed: None,
+        host_listed: true,
+        local: None,
+    };
+    f(&context)
 }
 
 #[cfg(test)]

@@ -14,10 +14,13 @@
 //! selected folder whose decision is "Zusammenführen". A file selected on its
 //! own keeps the job's policy there.
 //!
-//! A file of the rule that goes to a remote target travels alone, not in a
-//! packet: its stage gets the source's time before it is published
-//! (`publish_time.rs`), which the packet wire formats cannot carry, and a
-//! copy with the time of the copy would read as newer than its own source.
+//! A new file of the rule that goes to a remote target travels in a packet
+//! only where the target's packets carry each file's time
+//! (`vfs::batch_put_times`: Share `batch_put_mtime_v1`, agent
+//! `batch-mtime-v1`); otherwise it travels alone, so its stage gets the
+//! source's time before it is published (`publish_time.rs`). A copy with the
+//! time of the copy would read as newer than its own source. A replacement
+//! always travels alone (packets only publish new names).
 //!
 //! The target is looked at once per file: a local target with one `stat`, a
 //! remote target with one listing per folder (kept while the job runs, within
@@ -178,7 +181,7 @@ pub(super) fn settle(engine: &Engine<'_>, file: &mut FileWork) -> Result<Settled
     let case = match found {
         Found::Absent => {
             file.conflict = Some(Conflict::Rename);
-            file.alone |= !engine.view.target.is_local();
+            file.alone |= !packets_keep_time(engine);
             return Ok(Settled::Go);
         }
         Found::Other => Case::Conflict,
@@ -215,10 +218,20 @@ pub(super) fn settle(engine: &Engine<'_>, file: &mut FileWork) -> Result<Settled
             );
             engine.stats.decided(Decision::Both);
             file.conflict = Some(Conflict::Rename);
-            file.alone |= !engine.view.target.is_local();
+            file.alone |= !packets_keep_time(engine);
             Settled::Go
         }
     })
+}
+
+/// Whether a new file may go in a packet without losing its source's time:
+/// a local target (its packets publish stages the engine timed) or a remote
+/// one whose packets carry the time.
+pub(super) fn packets_keep_time(engine: &Engine<'_>) -> bool {
+    match engine.view.target {
+        Side::Local => true,
+        Side::Remote(target) => crate::vfs::batch_put_times(target),
+    }
 }
 
 /// A file the rule leaves alone: counted as handled so the progress ends at

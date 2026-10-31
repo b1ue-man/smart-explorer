@@ -31,6 +31,7 @@ fn transfer_engine_task_share_oversized_frames_are_refused() -> io::Result<()> {
         entries: vec![FsBatchPut {
             path: "/A/huge.bin".into(),
             size: oversized.len() as u64,
+            mtime_ms: None,
         }],
         evidence: false,
     });

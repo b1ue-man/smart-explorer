@@ -171,14 +171,17 @@ fn transfer_engine_task_agent_batches_number_taken_names_and_refuse_links() {
         BatchPut {
             path: fwd(&dst.join("a.txt")),
             size: 5,
+            mtime_ms: None,
         },
         BatchPut {
             path: fwd(&dst.join("taken.txt")),
             size: 3,
+            mtime_ms: None,
         },
         BatchPut {
             path: fwd(&dst.join("empty")),
             size: 0,
+            mtime_ms: None,
         },
     ];
     let mut data: &[u8] = b"alphanew";
@@ -204,6 +207,7 @@ fn transfer_engine_task_agent_batches_number_taken_names_and_refuse_links() {
     let evil = [BatchPut {
         path: fwd(&root.join("linkdir").join("evil.txt")),
         size: 1,
+        mtime_ms: None,
     }];
     let mut data: &[u8] = b"e";
     let outcomes = served.backend.put_batch(&evil, &mut data).unwrap();
@@ -271,6 +275,7 @@ fn transfer_engine_task_agent_batch_source_failure_discards_only_that_entry() {
         .map(|(name, size)| BatchPut {
             path: fwd(&root.join(name)),
             size: *size,
+            mtime_ms: None,
         })
         .collect();
     let mut data = FailingReader {

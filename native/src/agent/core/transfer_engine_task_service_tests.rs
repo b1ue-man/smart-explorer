@@ -134,6 +134,7 @@ fn transfer_engine_task_service_forwards_batches_split_by_peer_limits() {
         .map(|(name, size)| BatchPut {
             path: fwd(&root.join(name)),
             size: *size,
+            mtime_ms: None,
         })
         .collect();
     let mut data: &[u8] = b"xyyzzz";

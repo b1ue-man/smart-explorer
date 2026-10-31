@@ -23,7 +23,8 @@ pub(super) fn walk(
     tx: crossbeam_channel::Sender<HashWalkItem>,
     cancel: &AtomicBool,
 ) -> io::Result<bool> {
-    if !peer_stream::features(backend, root)?.hash_walk_v1 {
+    let features = peer_stream::features(backend, root)?;
+    if !features.hash_walk_v1 || (request.meta && !features.hash_walk_meta_v1) {
         return Ok(false);
     }
     let endpoint = backend.current_endpoint()?;
@@ -37,6 +38,7 @@ pub(super) fn walk(
             HashAlgorithm::Sha256 => FsHashAlgo::Sha256,
         }),
         single_file: false,
+        meta: request.meta,
     });
     let result = backend.node.block_on_route(opened.generation, async {
         io_deadline::run(
@@ -54,9 +56,15 @@ pub(super) fn walk(
                     message: FsHashWalkMessage::Batch { entries, omitted },
                 } => {
                     for entry in entries {
+                        let regular = entry.is_regular();
                         if !peer_stream::relative(&entry.rel)
-                            || entry.is_dir && entry.digest.is_some()
-                            || !entry.is_dir && entry.size < request.min_bytes
+                            || entry.meta.is_some() != request.meta
+                            || entry.meta.is_some_and(|meta| {
+                                entry.is_dir && (meta.is_symlink || meta.special)
+                                    || meta.is_symlink && meta.special
+                            })
+                            || !regular && entry.digest.is_some()
+                            || regular && entry.size < request.min_bytes
                         {
                             return Err(peer_stream::invalid("Ungültiger Hash-Walk-Eintrag"));
                         }
@@ -64,7 +72,7 @@ pub(super) fn walk(
                             request
                                 .algorithm
                                 .map(|algo| if algo == HashAlgorithm::Md5 { 32 } else { 64 });
-                        if !entry.is_dir
+                        if regular
                             && match (digits, entry.digest.as_ref()) {
                                 (None, None) => false,
                                 (Some(n), Some(hash)) => {
