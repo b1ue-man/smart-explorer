@@ -207,7 +207,7 @@ pub(super) async fn serve(stream: FsStream, req: FsRequest) -> io::Result<()> {
                 recv,
                 &context,
                 (path, WriteMode::Replace, lz4, None),
-                access,
+                (access, None),
                 authorization,
             )
             .await
@@ -217,13 +217,14 @@ pub(super) async fn serve(stream: FsStream, req: FsRequest) -> io::Result<()> {
             lz4,
             evidence,
             probe,
+            mtime_ms,
         } => {
             write(
                 send,
                 recv,
                 &context,
                 (path, WriteMode::Create, lz4, evidence.then_some(probe)),
-                access,
+                (access, mtime_ms),
                 authorization,
             )
             .await

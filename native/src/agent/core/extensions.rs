@@ -16,7 +16,7 @@ use super::ext_wire::{
     apply_progress, durability_to_wire, group_from_wire, is_unsupported, limits_from_wire,
     omission_from_wire, report_from_wire, unsupported,
 };
-use super::metadata::wire_to_vfs;
+use super::metadata::{hash_entry_to_vfs, wire_to_vfs};
 use crate::agent_proto::{query, Frame};
 use crate::vfs::{
     self as vfs, Backend, BackendExtensions, ChangeNotice, ChangeSignalMode, ChangeSubscription,
@@ -187,6 +187,28 @@ impl BackendExtensions for AgentBackend {
         }
         let mut listing = VfsListing::default();
         let never = AtomicBool::new(false);
+        if self.features().service && self.features().list_meta {
+            // The served backend's hidden and system flags and creation
+            // times, as its own listing reports them (`list-meta-v1`).
+            stream(
+                &self.pool,
+                Frame::ListMeta(path.to_string()),
+                &never,
+                |frame| match frame {
+                    Frame::HashPart { entries, omitted } => {
+                        for entry in entries {
+                            listing.entries.push(hash_entry_to_vfs(entry)?);
+                        }
+                        listing
+                            .omitted
+                            .extend(omitted.into_iter().map(omission_from_wire));
+                        Ok(())
+                    }
+                    other => Err(unexpected("attribute listing", &other)),
+                },
+            )?;
+            return Ok(listing);
+        }
         let dots = !self.features().service;
         stream(
             &self.pool,
@@ -206,6 +228,21 @@ impl BackendExtensions for AgentBackend {
             },
         )?;
         Ok(listing)
+    }
+
+    /// The time travels with the stage (`stage-mtime-v1`, `stage_time.rs`).
+    fn open_write_copy_stage_timed(
+        &self,
+        path: &str,
+        size: u64,
+        mtime_ms: i64,
+    ) -> VfsResult<Box<dyn std::io::Write + Send>> {
+        super::stage_time::open(self, path, size, mtime_ms)
+    }
+
+    /// What the agent read from a timed stage at its commit.
+    fn take_stage_evidence(&self, stage: &str) -> Option<vfs::StageEvidence> {
+        self.pool.stage_reports().take(stage)
     }
 
     fn finish_stage(&self, stage: &str, finish: StageFinish) -> VfsResult<StageFinished> {

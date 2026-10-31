@@ -5,12 +5,22 @@
 //! fail the walk; with `meta` (`WalkHashed3`) links and special files come as
 //! entries with their listing attributes instead. A failure at the root
 //! fails the walk. Every folder is sent before the entries below it.
+//! Pseudo filesystems (`is_pseudo_dir`) are a row, as their parent's listing
+//! shows them, followed by an omission of the same path: their content is
+//! never walked.
 //!
 //! `WalkHashed2` answers one `HashEntry`/`HashOmitted` frame per item, as
-//! before; `WalkHashed3` answers `HashPart`s.
+//! before; `WalkHashed3` answers `HashPart`s, whose items keep the order they
+//! were produced in (a part never holds an entry after an omission, the
+//! client forwards the entries of a part before its omissions). With `meta`
+//! the items of one folder (its entries and omissions, and the omission of
+//! the folder itself) form one unbroken run after the folder's own entry:
+//! a folder that fills more than one part holds the walk's run lock until
+//! its last part is sent, so no other thread's part comes in between.
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, MutexGuard};
 
 use super::fs::{is_pseudo_dir, systemtime_ms};
 use super::ops_types::{digest, omission};
@@ -36,9 +46,27 @@ struct Out<'a> {
     entries: Vec<WireHashEntry>,
     omitted: Vec<WireOmission>,
     bytes: usize,
+    /// Shared by every thread of the walk; every part is sent under it.
+    run: &'a Mutex<()>,
+    /// Held from a part sent in the middle of a folder (`meta`) until that
+    /// folder's last part is out.
+    held: Option<MutexGuard<'a, ()>>,
 }
 
-impl Out<'_> {
+impl<'a> Out<'a> {
+    fn new(sink: &'a Sink, id: u64, form: Form, run: &'a Mutex<()>) -> Self {
+        Self {
+            sink,
+            id,
+            form,
+            entries: Vec::new(),
+            omitted: Vec::new(),
+            bytes: 0,
+            run,
+            held: None,
+        }
+    }
+
     fn meta(&self) -> bool {
         self.form == Form::Parts { meta: true }
     }
@@ -56,6 +84,10 @@ impl Out<'_> {
                     md5: entry.digest,
                 },
             );
+        }
+        // The client forwards a part's entries before its omissions.
+        if !self.omitted.is_empty() {
+            self.send_within()?;
         }
         self.bytes += entry.rel.len() + entry.digest.as_ref().map_or(0, String::len) + 40;
         self.entries.push(entry);
@@ -78,14 +110,29 @@ impl Out<'_> {
 
     fn full(&mut self) -> io::Result<()> {
         if self.bytes >= PART_BYTES {
-            self.flush()?;
+            self.send_within()?;
         }
         Ok(())
     }
-}
 
-impl WalkOutput for Out<'_> {
-    fn flush(&mut self) -> io::Result<()> {
+    /// Sends a part while the current folder is not done yet; with `meta`
+    /// the run lock stays held until `end_folder`.
+    fn send_within(&mut self) -> io::Result<()> {
+        if self.meta() && self.held.is_none() {
+            self.held = Some(lock(self.run));
+        }
+        self.send_part()
+    }
+
+    /// The current folder is done: a run lock held for it is released.
+    fn end_folder(&mut self) -> io::Result<()> {
+        if self.held.is_some() {
+            return WalkOutput::flush(self);
+        }
+        Ok(())
+    }
+
+    fn send_part(&mut self) -> io::Result<()> {
         self.bytes = 0;
         if self.entries.is_empty() && self.omitted.is_empty() {
             return Ok(());
@@ -98,6 +145,25 @@ impl WalkOutput for Out<'_> {
                 omitted: std::mem::take(&mut self.omitted),
             },
         )
+    }
+}
+
+fn lock(run: &Mutex<()>) -> MutexGuard<'_, ()> {
+    run.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+impl WalkOutput for Out<'_> {
+    /// Called between folders: sends the buffered parts under the run lock.
+    fn flush(&mut self) -> io::Result<()> {
+        let result = if self.held.is_some() || (self.entries.is_empty() && self.omitted.is_empty())
+        {
+            self.send_part()
+        } else {
+            let _run = lock(self.run);
+            self.send_part()
+        };
+        self.held = None;
+        result
     }
 }
 
@@ -143,19 +209,16 @@ pub(super) fn walk(
         min_bytes,
         cancel,
     };
+    let run = Mutex::new(());
     super::ordered_walk(
         vec![(base.to_path_buf(), String::new())],
         super::walk_threads(),
         cancel,
-        || Out {
-            sink,
-            id,
-            form,
-            entries: Vec::new(),
-            omitted: Vec::new(),
-            bytes: 0,
+        || Out::new(sink, id, form, &run),
+        |(dir, rel), local, out| {
+            walk.folder(&dir, &rel, local, out)?;
+            out.end_folder()
         },
-        |(dir, rel), local, out| walk.folder(&dir, &rel, local, out),
     )?;
     emit(sink, id, &Frame::End)
 }
@@ -263,12 +326,18 @@ impl Walk<'_> {
             return out.omit(rel, omission::LINK, "Verknüpfung");
         }
         if metadata.is_dir() {
-            if path.to_str().is_some_and(is_pseudo_dir) {
-                return Ok(());
-            }
             // With attributes a folder has the size its listing reports.
             let size = if meta.is_some() { metadata.len() } else { 0 };
             out.entry(plain(true, size, None))?;
+            if path.to_str().is_some_and(is_pseudo_dir) {
+                // A row as in the folder's listing; its content (kernel and
+                // device state, no files) is never walked.
+                return out.omit(
+                    rel,
+                    omission::UNREADABLE,
+                    "Pseudo-Dateisystem: Inhalt wird nicht durchlaufen",
+                );
+            }
             local.push((path, rel));
             return Ok(());
         }

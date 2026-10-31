@@ -82,6 +82,7 @@ fn one_of_each() -> Vec<FsRequest> {
             lz4: true,
             evidence: false,
             probe: None,
+            mtime_ms: None,
         },
         FsRequest::WriteDone,
         FsRequest::MkdirAll { path: path() },

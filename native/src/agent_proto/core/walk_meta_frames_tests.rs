@@ -109,3 +109,17 @@ fn abgleich_task_batch_put_times_travel_as_tag_81() {
     assert_eq!(bytes[8], 81);
     assert_eq!(roundtrip(timed.clone()), timed);
 }
+
+#[test]
+fn abgleich_task_list_meta_travels_as_tag_82_behind_its_label() {
+    let request = Frame::ListMeta("/srv/daten".into());
+    assert_eq!(roundtrip(request.clone()), request);
+    let bytes = request.encode(9).unwrap();
+    assert_eq!(bytes[8], 82, "tag after the request id");
+    let service = crate::agent_proto::ServerFeatures::parse(
+        "0.5.190+ext-v1.walk-meta-v1.list-meta-v1 worker",
+    );
+    assert!(service.list_meta && service.service);
+    let older = crate::agent_proto::ServerFeatures::parse("0.5.189+ext-v1 worker");
+    assert!(!older.list_meta);
+}

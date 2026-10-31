@@ -133,6 +133,19 @@ pub enum Frame {
     Write(String),
     /// Begin writing a new file; final promotion fails if `path` already exists.
     WriteNew(String),
+    /// `WriteNew` of a stage that gets `mtime_ms` (Unix ms) before it is
+    /// closed (`stage-mtime-v1`): `Data`* `End` -> `StageWritten`.
+    WriteNewTimed {
+        path: String,
+        mtime_ms: i64,
+    },
+    /// The committed stage of a `WriteNewTimed` as the server reads it: its
+    /// size, time and file identity (`None` where it has none).
+    StageWritten {
+        size: u64,
+        mtime_ms: i64,
+        object: Option<String>,
+    },
     /// A chunk of a byte stream.
     Data(Vec<u8>),
     Copy {
@@ -284,7 +297,11 @@ pub enum Frame {
         min_bytes: u64,
         meta: bool,
     },
-    /// A portion of a `WalkHashed3`.
+    /// A tolerant listing with the listing attributes of every entry
+    /// (`list-meta-v1`, background service): `HashPart`s, whose entries carry
+    /// the entry name as `rel` and always their attributes, then `End`.
+    ListMeta(String),
+    /// A portion of a `WalkHashed3` or of a `ListMeta`.
     HashPart {
         entries: Vec<WireHashEntry>,
         omitted: Vec<WireOmission>,

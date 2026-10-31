@@ -57,6 +57,7 @@ fn transfer_engine_task_share_oversized_frames_are_refused() -> io::Result<()> {
         lz4: false,
         evidence: false,
         probe: None,
+        mtime_ms: None,
     });
     let ready = peer.node.block_on(async {
         send_ctrl(&mut write.send, &open).await?;
@@ -117,6 +118,7 @@ fn transfer_engine_task_share_stalled_client_frees_its_slot() -> io::Result<()> 
         lz4: false,
         evidence: false,
         probe: None,
+        mtime_ms: None,
     });
     let ready = peer.node.block_on(async {
         send_ctrl(&mut writing.send, &open).await?;

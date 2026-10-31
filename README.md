@@ -71,8 +71,10 @@ Bestehende Schreibrechte und schreibgeschützte Quellen gelten weiterhin.
 **Versteckte Dateien auf SSH-Agent-Seiten:** Auf einer direkten SSH-Agent-Verbindung ohne
 Hintergrunddienst gelten Namen mit führendem Punkt als versteckt, wie bei SFTP. Ein Sync-Setup
 mit `include_hidden = false` lässt solche Dateien und Ordner auf der Agent-Seite aus; bisher
-blieben sie dort erhalten. Über den Hintergrunddienst gilt diese Punkt-Regel nicht; die Wirkung
-von `include_hidden = false` auf Agent-Seiten ist dort nicht vollständig geprüft.
+blieben sie dort erhalten. Seiten über den Hintergrunddienst tragen im Sync-Ordnerweg das
+Versteckt-Merkmal des bedienten Backends (`list-meta-v1`); ein Setup mit `include_hidden = false`
+lässt versteckte Einträge dort jetzt ebenfalls aus. Explorer-Listen über den Dienst zeigen das
+Merkmal weiterhin nicht.
 
 Verknüpfungen und Junctions **innerhalb** eines Sync-Ordners werden mit einem
 sichtbaren Hinweis ausgelassen; die übrigen Dateien werden weiter synchronisiert.

@@ -301,6 +301,16 @@ impl PeerBackend {
         &self,
         path: &str,
     ) -> io::Result<Box<dyn std::io::Write + Send>> {
+        self.open_owned_writer_timed(path, None)
+    }
+
+    /// `open_owned_writer`; `mtime_ms`: the source time the host gives the
+    /// stage at its commit (`stage_mtime_v1`), reported in its evidence.
+    pub(in crate::share) fn open_owned_writer_timed(
+        &self,
+        path: &str,
+        mtime_ms: Option<i64>,
+    ) -> io::Result<Box<dyn std::io::Write + Send>> {
         let ticket = self.reserve_stage(path)?;
         // `evidence_v1`: the commit reports the stage and whether the file
         // it is meant for exists, so publishing it asks for neither.
@@ -310,6 +320,8 @@ impl PeerBackend {
             lz4: self.lz4_offered(),
             evidence: report.is_some(),
             probe: report.as_ref().and_then(|report| report.destination()),
+            // Only with evidence: it tells the client the time was stored.
+            mtime_ms: mtime_ms.filter(|_| report.is_some() && self.stage_times_offered()),
         };
         let slot = report.as_ref().map(|report| report.slot.clone());
         let opened = self.open_writer_reporting(request, "peer exclusive write open", slot);

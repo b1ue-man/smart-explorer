@@ -18,6 +18,13 @@ pub const LABEL_EXT: &str = "ext-v1";
 /// `WalkHashed3` and `HashPart`: hash walks in portions, on request with the
 /// listing attributes of every entry (links and special files as entries).
 pub const LABEL_WALK_META: &str = "walk-meta-v1";
+/// `ListMeta`: tolerant listings with the listing attributes of every entry
+/// (hidden, system, creation time), announced by the background service only.
+pub const LABEL_LIST_META: &str = "list-meta-v1";
+/// `WriteNewTimed`: a new stage gets the source time before it is closed and
+/// is answered with what the server read back (`StageWritten`). The SSH
+/// agent only; the background service keeps `FinishStage`.
+pub const LABEL_STAGE_MTIME: &str = "stage-mtime-v1";
 pub const LABEL_FOLDER_RESERVATION: &str = "folder-reservation-v1";
 /// Explicit stable file-object identities; never inferred from Stat metadata.
 pub const LABEL_FILE_IDENTITY: &str = "file-identity-v1";
@@ -47,7 +54,7 @@ pub fn lz4_switched_off() -> bool {
 
 /// The version text the SSH agent of this build announces: the labels of the
 /// service (`server_version_with`) plus `folder-reservation-v1`,
-/// `file-identity-v1`, with batches `batch-mtime-v1`, `range-v1`
+/// `file-identity-v1`, `stage-mtime-v1`, with batches `batch-mtime-v1`, `range-v1`
 /// and, unless switched off for a test, `lz4-v1`. Each host advertises only
 /// the handlers it actually connects.
 pub fn server_version(batch: bool) -> String {
@@ -58,6 +65,8 @@ pub fn server_version(batch: bool) -> String {
     version.push_str(LABEL_FOLDER_RESERVATION);
     version.push('.');
     version.push_str(LABEL_FILE_IDENTITY);
+    version.push('.');
+    version.push_str(LABEL_STAGE_MTIME);
     if batch {
         version.push('.');
         version.push_str(LABEL_BATCH_MTIME);
@@ -106,6 +115,10 @@ pub struct ServerFeatures {
     pub extensions: bool,
     /// `WalkHashed3` (`walk-meta-v1`).
     pub walk_meta: bool,
+    /// `ListMeta` (`list-meta-v1`).
+    pub list_meta: bool,
+    /// `WriteNewTimed` (`stage-mtime-v1`).
+    pub stage_mtime: bool,
     /// `BatchPut` entries with times (`batch-mtime-v1`).
     pub batch_mtime: bool,
     pub capacity: bool,
@@ -140,6 +153,8 @@ impl ServerFeatures {
                 LABEL_STAGE => features.stage = true,
                 LABEL_EXT => features.extensions = true,
                 LABEL_WALK_META => features.walk_meta = true,
+                LABEL_LIST_META => features.list_meta = true,
+                LABEL_STAGE_MTIME => features.stage_mtime = true,
                 LABEL_BATCH_MTIME => features.batch_mtime = true,
                 LABEL_FOLDER_RESERVATION => features.folder_reservation = true,
                 LABEL_FILE_IDENTITY => features.file_identity = true,

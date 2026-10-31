@@ -238,7 +238,15 @@ fn dispatch(context: &RequestContext, id: u64, req: Frame) -> io::Result<()> {
             None => emit(sink, id, &Frame::Err("write: no inbound channel".into())),
         },
         Frame::WriteNew(p) => match inbound {
-            Some(rx) => handle_write_new(sink, id, &p, &Lz4Inbound(rx), cancel),
+            Some(rx) => handle_write_new(sink, id, &p, &Lz4Inbound(rx), cancel, None),
+            None => emit(
+                sink,
+                id,
+                &Frame::Err("write-new: no inbound channel".into()),
+            ),
+        },
+        Frame::WriteNewTimed { path: p, mtime_ms } => match inbound {
+            Some(rx) => handle_write_new(sink, id, &p, &Lz4Inbound(rx), cancel, Some(mtime_ms)),
             None => emit(
                 sink,
                 id,

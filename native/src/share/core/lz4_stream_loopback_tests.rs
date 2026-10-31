@@ -38,6 +38,7 @@ fn upload(
         lz4,
         evidence: false,
         probe: None,
+        mtime_ms: None,
     });
     let ready = peer.node.block_on(io_deadline::run("test open", async {
         send_ctrl(&mut opened.send, &open).await?;

@@ -3,7 +3,7 @@
 //! those parts before presenting the report. No extra wire fields are needed.
 use std::io;
 
-use super::{Frame, WireDuplicateGroup, WireMeta, WireOmission};
+use super::{Frame, WireDuplicateGroup, WireHashEntry, WireMeta, WireOmission};
 
 const PART_BYTES: usize = 1024 * 1024;
 
@@ -55,6 +55,57 @@ pub(crate) fn emit_listing_parts(
             entries: part_entries,
             omitted: part_omissions,
         })?;
+    }
+    Ok(())
+}
+
+/// A `ListMeta` reply: the entries, then the omissions, in `HashPart`s.
+pub(crate) fn emit_meta_listing_parts(
+    entries: impl IntoIterator<Item = WireHashEntry>,
+    omissions: impl IntoIterator<Item = WireOmission>,
+    mut emit: impl FnMut(Frame) -> io::Result<()>,
+) -> io::Result<()> {
+    let mut part_entries = Vec::new();
+    let mut part_omissions = Vec::new();
+    let mut bytes = 17usize;
+    let mut send = |entries: &mut Vec<WireHashEntry>, omitted: &mut Vec<WireOmission>| {
+        emit(Frame::HashPart {
+            entries: std::mem::take(entries),
+            omitted: std::mem::take(omitted),
+        })
+    };
+    for entry in entries {
+        // Name, flags, size, time, creation time and the optional digest.
+        let size = 30usize.saturating_add(entry.rel.len()).saturating_add(
+            entry
+                .digest
+                .as_ref()
+                .map_or(0, |hash| 4usize.saturating_add(hash.len())),
+        );
+        check_item_size(size, 17)?;
+        if bytes.saturating_add(size) > PART_BYTES && !part_entries.is_empty() {
+            send(&mut part_entries, &mut part_omissions)?;
+            bytes = 17;
+        }
+        bytes = bytes.saturating_add(size);
+        part_entries.push(entry);
+    }
+    for omitted in omissions {
+        let size = 9usize
+            .saturating_add(omitted.rel.len())
+            .saturating_add(omitted.detail.len());
+        check_item_size(size, 17)?;
+        if bytes.saturating_add(size) > PART_BYTES
+            && (!part_entries.is_empty() || !part_omissions.is_empty())
+        {
+            send(&mut part_entries, &mut part_omissions)?;
+            bytes = 17;
+        }
+        bytes = bytes.saturating_add(size);
+        part_omissions.push(omitted);
+    }
+    if !part_entries.is_empty() || !part_omissions.is_empty() {
+        send(&mut part_entries, &mut part_omissions)?;
     }
     Ok(())
 }

@@ -251,3 +251,62 @@ fn abgleich_task_agent_batch_put_sets_the_named_time() {
         b"de"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn abgleich_task_agent_meta_walk_sends_each_folder_as_one_run() {
+    let directory = tempfile::tempdir().unwrap();
+    crate::agent::walk_runs_check::run_tree(directory.path());
+    let root = directory.path().to_string_lossy().into_owned();
+    let backend = real_agent();
+    let (ran, items) = walk(&backend, &root, request(true));
+    assert!(ran);
+    // Root, `big`, 40 folders and their 40 inner folders: one run each.
+    let runs = crate::agent::walk_runs_check::assert_folder_runs(&items);
+    assert_eq!(runs, 2 + 40 * 2);
+    let omitted = items
+        .iter()
+        .filter(|item| matches!(item, HashWalkItem::Omitted(_)))
+        .count();
+    assert_eq!(omitted, 5 + 40);
+    let entries = items.len() - omitted;
+    assert_eq!(entries, 1 + 3000 + 40 * (1 + 1 + 3));
+}
+
+/// W5: a stage written with the source's time (`stage-mtime-v1`) carries it
+/// when committed, and the commit's report is the stage's evidence (size,
+/// time, the identity `FileIdentity` names), so publishing needs neither a
+/// `FinishStage` nor a `Stat` of its own.
+#[test]
+fn abgleich_task_agent_stage_carries_the_source_time_with_its_write() {
+    const TIME: i64 = 1_500_000_000_000;
+    let directory = tempfile::tempdir().unwrap();
+    let backend = real_agent();
+    assert!(backend.features().stage_mtime);
+    let stage = directory
+        .path()
+        .join("timed.txt.se-upload-00000000000000aa")
+        .to_string_lossy()
+        .into_owned();
+    let mut writer = vfs::open_write_copy_stage_timed(&backend, &stage, 3, TIME).unwrap();
+    writer.write_all(b"abc").unwrap();
+    writer.flush().unwrap();
+    drop(writer);
+    let evidence = vfs::take_stage_evidence(&backend, &stage).expect("the commit's report");
+    assert_eq!(evidence.stage.path, stage);
+    assert_eq!((evidence.stage.size, evidence.stage.mtime_ms), (3, TIME));
+    assert_eq!(
+        evidence.stage.object,
+        vfs::file_identity(&backend, &stage).unwrap()
+    );
+    let modified = std::fs::metadata(&stage).unwrap().modified().unwrap();
+    let millis = modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
+    assert_eq!(millis, TIME as u128);
+    assert!(
+        vfs::take_stage_evidence(&backend, &stage).is_none(),
+        "taken once"
+    );
+}

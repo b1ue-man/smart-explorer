@@ -77,6 +77,14 @@ impl MountBoundaries {
 
     /// Reads the table (and on first use the canonical root) again; errors
     /// are never kept, so the next question tries again.
+    ///
+    /// No answer comes from an older table after a reported change: a change
+    /// is reported only by `changed`, which polls under the read lock, so it
+    /// is either reported before this write lock is taken (and then in the
+    /// text read below) or after the new table is in place (and then makes
+    /// the next question read again). Pending events are consumed and the
+    /// mark is cleared before the text is read, never after it, so a change
+    /// between the read and the release is never cleared unseen.
     fn reload(&self, rel: &Path) -> io::Result<(PathBuf, Arc<Vec<Mount>>)> {
         let mut table = self
             .table
@@ -91,6 +99,11 @@ impl MountBoundaries {
                 mounts: Arc::new(Vec::new()),
             },
         };
+        if let Some(watch) = state.watch.as_ref() {
+            // Covered by the read below; a later change is reported anew.
+            poll_changed(watch);
+        }
+        self.stale.store(false, Ordering::Release);
         let text = match state.watch.as_mut() {
             Some(watch) => {
                 let mut text = Vec::new();
@@ -101,7 +114,6 @@ impl MountBoundaries {
             None => std::fs::read(MOUNTINFO)?,
         };
         state.mounts = Arc::new(mountinfo::parse(&text));
-        self.stale.store(false, Ordering::Release);
         let answer = (state.canonical_root.join(rel), state.mounts.clone());
         *table = Some(state);
         Ok(answer)
@@ -122,19 +134,24 @@ impl MountBoundaries {
         if self.stale.load(Ordering::Acquire) {
             return true;
         }
-        let mut target = libc::pollfd {
-            fd: watch.as_raw_fd(),
-            events: libc::POLLPRI,
-            revents: 0,
-        };
-        // SAFETY: one valid pollfd for the duration of the call; no waiting.
-        // The kernel reports a namespace change once per open file.
-        let ready = unsafe { libc::poll(&mut target, 1, 0) };
-        let changed =
-            ready < 0 || target.revents & (libc::POLLPRI | libc::POLLERR | libc::POLLNVAL) != 0;
+        let changed = poll_changed(watch);
         if changed {
             self.stale.store(true, Ordering::Release);
         }
         changed
     }
+}
+
+/// Whether the kernel reported a change of the mount namespace on `watch`
+/// since the last poll (the report is consumed), or it cannot be told.
+fn poll_changed(watch: &File) -> bool {
+    let mut target = libc::pollfd {
+        fd: watch.as_raw_fd(),
+        events: libc::POLLPRI,
+        revents: 0,
+    };
+    // SAFETY: one valid pollfd for the duration of the call; no waiting.
+    // The kernel reports a namespace change once per open file.
+    let ready = unsafe { libc::poll(&mut target, 1, 0) };
+    ready < 0 || target.revents & (libc::POLLPRI | libc::POLLERR | libc::POLLNVAL) != 0
 }

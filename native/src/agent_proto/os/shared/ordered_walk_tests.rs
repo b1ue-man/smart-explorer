@@ -117,3 +117,52 @@ fn abgleich_task_walk_threads_follow_the_host() {
     let expected = std::thread::available_parallelism().map_or(1, |n| n.get());
     assert_eq!(walk_threads(), expected);
 }
+
+/// G15: after one thread fails, a thread with its own pending folders stops
+/// after the folder it is reading instead of reading them to the end.
+#[test]
+fn abgleich_task_ordered_walk_stops_every_thread_after_an_error() {
+    use std::sync::atomic::AtomicUsize;
+    use std::time::{Duration, Instant};
+    const CHAIN: usize = 1000;
+    let cancel = AtomicBool::new(false);
+    let failed = AtomicBool::new(false);
+    let chain_folders = AtomicUsize::new(0);
+    // `None` fails; `Some(n)` reads one folder of a chain and keeps the next
+    // one to itself. The first taker gets the chain (`pop` takes the last).
+    let error = run(
+        vec![None, Some(0usize)],
+        2,
+        &cancel,
+        || Collect {
+            pending: Vec::new(),
+            sent: Arc::new(Mutex::new(Vec::new())),
+        },
+        |job: Option<usize>, local, _out: &mut Collect| {
+            let Some(index) = job else {
+                failed.store(true, Ordering::SeqCst);
+                return Err(io::Error::other("failing folder"));
+            };
+            if index == 0 {
+                // Hold the first chain folder until the other thread failed
+                // and that failure reached the pool.
+                let started = Instant::now();
+                while !failed.load(Ordering::SeqCst) && started.elapsed() < Duration::from_secs(10)
+                {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            chain_folders.fetch_add(1, Ordering::SeqCst);
+            if index + 1 < CHAIN {
+                local.push(Some(index + 1));
+            }
+            Ok(())
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.to_string(), "failing folder");
+    assert!(failed.load(Ordering::SeqCst), "the failing folder was read");
+    // Only the folder in progress when the error came was read.
+    assert_eq!(chain_folders.load(Ordering::SeqCst), 1);
+}

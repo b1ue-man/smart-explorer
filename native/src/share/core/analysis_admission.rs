@@ -55,8 +55,12 @@ pub(super) fn host() -> Arc<Admission> {
         Arc::new(Admission {
             state: Mutex::new(State::default()),
             changed: Notify::new(),
+            // Concurrent host jobs as before 2026-10-31: the cores divided by
+            // the threads one job was counted with then (`host_job_share`),
+            // not by the analysis' current thread count (every core on the
+            // desktop), which would admit one job only.
             workers: (std::thread::available_parallelism().map_or(2, |cores| cores.get())
-                / crate::analytics::local_scan_threads())
+                / super::host_job_share::host_job_share())
             .clamp(1, 2),
         })
     })

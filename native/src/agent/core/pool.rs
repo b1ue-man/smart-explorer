@@ -65,6 +65,8 @@ pub(super) struct AgentPool {
     opener: Option<AgentReconnect>,
     growth: Mutex<Growth>,
     features: ServerFeatures,
+    /// Committed timed stages and what the server read from them.
+    stages: super::stage_time::StageReports,
 }
 
 impl AgentPool {
@@ -93,7 +95,13 @@ impl AgentPool {
             opener,
             growth: Mutex::new(Growth::default()),
             features,
+            stages: Default::default(),
         })
+    }
+
+    /// The reports of this connection's timed stages (`stage_time.rs`).
+    pub(super) fn stage_reports(&self) -> super::stage_time::StageReports {
+        self.stages.clone()
     }
 
     pub(super) fn features(&self) -> ServerFeatures {

@@ -65,6 +65,7 @@ pub(crate) fn is_upload(request: &Frame) -> bool {
         request,
         Frame::Write(_)
             | Frame::WriteNew(_)
+            | Frame::WriteNewTimed { .. }
             | Frame::PutTree(_)
             | Frame::BatchPut { .. }
             | Frame::WriteAt { .. }

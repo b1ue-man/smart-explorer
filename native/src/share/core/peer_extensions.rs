@@ -68,6 +68,22 @@ impl BackendExtensions for PeerBackend {
     fn list_dir_tolerant(&self, path: &str) -> io::Result<VfsListing> {
         super::peer_list_batch::list(self, path)
     }
+    /// The stage's time travels with its WriteNew (`stage_mtime_v1`): the
+    /// host sets it at the commit and reports it in the stage's evidence, so
+    /// publishing sends no `FinishStage` (`publish_time.rs`). An older host
+    /// gets the plain sized stage, and `FinishStage` after it.
+    fn open_write_copy_stage_timed(
+        &self,
+        path: &str,
+        size: u64,
+        mtime_ms: i64,
+    ) -> io::Result<Box<dyn std::io::Write + Send>> {
+        if mtime_ms <= 0 || !self.stage_times_offered() {
+            return self.open_write_copy_stage_sized(path, size);
+        }
+        let writer = self.open_owned_writer_timed(path, Some(mtime_ms))?;
+        Ok(super::peer_transfer::sized_writer(writer, size))
+    }
     fn finish_stage(&self, stage: &str, finish: StageFinish) -> io::Result<StageFinished> {
         let ticket = self.verify_owned_stage(stage)?;
         if !peer_stream::features(self, stage)?.stage_finish_v1 {

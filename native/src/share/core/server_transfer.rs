@@ -40,6 +40,8 @@ pub(super) struct WriteTarget {
     /// `evidence_v1` WriteNew: the commit answers `Written`, naming whether
     /// the inner path (a sibling of the new file) existed.
     pub(super) evidence: Option<Option<String>>,
+    /// `stage_mtime_v1` WriteNew: the time the new stage gets at its commit.
+    pub(super) mtime_ms: Option<i64>,
 }
 
 /// The `slot` (transfer admission) stays held until the worker ends; a
@@ -216,6 +218,7 @@ fn write_worker(
                 // Unpacking the blocks happens before the worker (`write_file`).
                 lz4: _,
                 evidence,
+                mtime_ms,
             },
         access,
         abandoned,
@@ -292,6 +295,9 @@ fn write_worker(
                         crate::vfs::promote_staged_replace(&*target.backend, &staging, &target.path)
                             .map(|()| None)
                     } else {
+                        if let Some(mtime_ms) = mtime_ms {
+                            stage_time(&target, mtime_ms);
+                        }
                         let probe = |probe: &Option<String>| {
                             written(&access, &path, &target, probe.as_deref())
                         };
@@ -314,6 +320,23 @@ fn write_worker(
     }
     let _ = done.send(result);
     Ok(())
+}
+
+/// Gives the closed new stage `target` the source's time before its evidence
+/// is read (`stage_mtime_v1`), as `FinishStage` would: only a stage name, no
+/// durability asked. A failure is no write failure: the evidence then shows
+/// the stage's own time and the client sends `FinishStage` as before.
+fn stage_time(target: &super::fs::ResolvedTarget, mtime_ms: i64) {
+    let name = target.path.rsplit(['/', '\\']).next().unwrap_or_default();
+    if !crate::vfs::is_staging_name(name) {
+        return;
+    }
+    let finish = crate::vfs::StageFinish {
+        mtime_ms: Some(mtime_ms),
+        mode: None,
+        durability: crate::vfs::StageDurability::NotRequired,
+    };
+    let _ = crate::vfs::finish_stage(&*target.backend, &target.path, finish);
 }
 
 /// The evidence of the closed new file `path` (`target`) and whether the

@@ -87,6 +87,11 @@ pub(crate) struct FsTransferCapabilities {
     /// host that offers this; older hosts keep the time of the upload.
     #[serde(default, skip_serializing_if = "is_false")]
     pub(crate) batch_put_mtime_v1: bool,
+    /// `stage_mtime_v1`: a WriteNew's `mtime_ms` is set on the new stage at
+    /// its commit, before the stage's evidence is read. A client sends it
+    /// only to a host that offers this; older hosts get `FinishStage`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) stage_mtime_v1: bool,
 }
 
 impl FsTransferCapabilities {
@@ -104,6 +109,7 @@ impl FsTransferCapabilities {
             single_put_v1: true,
             bulk_connections_v1: true,
             batch_put_mtime_v1: true,
+            stage_mtime_v1: true,
         }
     }
 

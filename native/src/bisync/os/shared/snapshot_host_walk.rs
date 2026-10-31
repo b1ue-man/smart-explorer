@@ -1,5 +1,6 @@
-//! One snapshot side from a walk next to the data (`snapshot_agent.rs`).
-//! The streamed entries are grouped into the listings of their folders and
+//! One snapshot side from a walk next to the data without listing
+//! attributes (`snapshot_agent.rs`; with them `snapshot_host_stream.rs`
+//! checks each folder while the walk runs). The streamed entries are grouped into the listings of their folders and
 //! then checked folder by folder with `scan_listing`, exactly as the walk
 //! over separate listings checks them (filters, hidden entries, protected
 //! names, links, special files, budget, duplicate names, early copies), so
@@ -70,7 +71,7 @@ impl<'c, 'a> Collector<'c, 'a> {
     fn parent(&mut self, rel: &str) -> io::Result<Option<(String, String)>> {
         crate::agent_proto::ValidatedRelativePath::parse(rel)?;
         let (parent, name) = rel.rsplit_once('/').unwrap_or(("", rel));
-        if self.dropped.contains(parent) {
+        if self.below_dropped(parent) {
             return Ok(None);
         }
         if !self.folders.contains_key(parent) {
@@ -83,6 +84,24 @@ impl<'c, 'a> Collector<'c, 'a> {
             return Err(invalid("agent walk exceeds its collection budget"));
         }
         Ok(Some((parent.to_string(), name.to_string())))
+    }
+
+    /// Whether `folder` or a folder above it is dropped (the subfolders of a
+    /// dropped folder are never recorded themselves).
+    fn below_dropped(&self, folder: &str) -> bool {
+        if self.dropped.is_empty() {
+            return false;
+        }
+        let mut rest = folder;
+        loop {
+            if self.dropped.contains(rest) {
+                return true;
+            }
+            match rest.rfind('/') {
+                Some(index) => rest = &rest[..index],
+                None => return false,
+            }
+        }
     }
 
     fn folder(&mut self, parent: &str) -> io::Result<&mut Folder> {
@@ -138,7 +157,7 @@ impl<'c, 'a> Collector<'c, 'a> {
     }
 
     fn omission(&mut self, omission: VfsOmission) -> io::Result<()> {
-        if self.dropped.contains(&omission.rel) {
+        if self.below_dropped(&omission.rel) {
             return Ok(());
         }
         if let Some(folder) = self.folders.get_mut(&omission.rel) {
