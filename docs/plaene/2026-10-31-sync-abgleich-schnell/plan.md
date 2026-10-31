@@ -193,3 +193,16 @@ Verbleibende Punkte mit Grund:
 |---|---|
 | Sommerzeit-Regel für exFAT | Quellstelle: exFAT-Spezifikation 7.4.10 (UTC-Abstand je Zeitstempel einschließlich Sommerzeit); `vfs/core/review_task_contract_tests.rs` hält das fest. |
 | Prüfsummen-Signatur bleibt MD5 | Garantie: `Sig.hash` steht in jeder gespeicherten Basis; ein Wechsel auf SHA-256 läse jede Basis als geändert. Die MD5 kommt am Ort der Datei (`vfs::content_md5`, umgesetzt für SFTP ohne Agent, FTP, WebDAV; Host-Durchlauf bei Share und Agent). |
+
+## F — Kompakter Verbindungs- und Freigabeablauf (2026-10-31)
+
+Nutzernachricht N6 (wörtlich): „noch eine ergänzung die mir grad einfällt. ich beschwer mich ja immer wieder übers menü weil umständlifh, aber inzwischen ist es an sich ok. was am mejsten hilft glaube ich ist ein kompakter connection flow, man verbinded n neues gerät über code oder direkt oder n raum, dann in nem kompakten menü die berechtigungen einstellen lassenm ordner, schreibrecht, code execution und desktop sehen ind steuern, rdp setup wenn notwendig. das sind die wichtigsten an die ich gerade denken kann. wenn ich was vergessen habe ergänze es noch. und erst navhdem das bestätigt wurde werden berechtigungen gegeben vorher istbes eine verbindung ohne berechtigungen. abbruch löscht die verbindung nicht, aber sie bekommt such keine berechtigungen. das selbe fürs freiheben, wenn man code wählt gleixh was vibt man frei. da solltr es auch presets geben bei beiden seiten wie alles, files lesen schreiben, nur lesen. files und code exec.“
+
+| ID | Ergebnis | Quelle |
+|----|----------|--------|
+| E12 | nach jedem Verbinden eines neuen Geräts (Code, direkt, Raum; Beispiele) ein kompaktes Menü der Berechtigungen: Ordner, Schreibrecht, Codeausführung, Desktop sehen und steuern, RDP-Einrichtung bei Bedarf, ergänzt um jede weitere Berechtigung, die eine Verbindung tragen kann (Bestand: bestand-verbinden.md) | N6 |
+| E13 | Berechtigungen gelten erst nach Bestätigung; vorher Verbindung ohne Berechtigungen; Abbruch behält die Verbindung ohne Berechtigungen | N6 |
+| E14 | beim Freigeben per Code wählt man im selben Schritt, was freigegeben wird | N6 |
+| E15 | Voreinstellungen auf beiden Seiten (Beispiele: alles; Dateien lesen und schreiben; nur lesen; Dateien und Codeausführung) | N6 |
+
+Zu erhalten: Grundsatz vom 2026-10-28 „Verbinden ist die Einrichtung“ (RDP, Fenster, Programme, TCP richten sich aus dem einen Recht selbst ein); jede Oberfläche (docs/oberflaechen/share-exec.md). Tiefe: 3 (neuer Bedienweg und Rechte-Vertrag über Desktop, Android, CLI, MCP, Bridge). Nächster Schritt: Bestand (bestand-verbinden.md), dann Entwurf F-C/F-D.
