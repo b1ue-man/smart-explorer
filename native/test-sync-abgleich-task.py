@@ -265,16 +265,87 @@ def declared_tests(folders):
     return found
 
 
-def gated_elsewhere(path, number):
-    """True when the test is cfg-gated to the platform this runner is not."""
-    lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
-    gates = " ".join(line for line in lines[max(0, number - 12):number + 1] if "cfg(" in line)
-    head = " ".join(line for line in lines[:40] if line.startswith("#![cfg("))
-    hint = str(path).lower()
+def attribute_block(lines, number):
+    """The attribute and comment lines directly above line `number` (the declaration they belong to)."""
+    block, index = [], number - 1
+    while index >= 0 and lines[index].strip().startswith(("#", "//")):
+        block.append(lines[index])
+        index -= 1
+    return block
+
+
+def enclosing_modules(lines, number):
+    """The attribute blocks of the inline modules (`mod name {`) that enclose line `number`."""
+    blocks, indent = [], len(lines[number]) - len(lines[number].lstrip())
+    for index in range(number - 1, -1, -1):
+        line = lines[index]
+        own = len(line) - len(line.lstrip())
+        if own < indent and re.match(r"\s*(pub(\([^)]*\))?\s+)?mod\s+\w+\s*\{", line):
+            blocks.extend(attribute_block(lines, index))
+            indent = own
+    return blocks
+
+
+_INCLUDERS = None
+
+
+def includers():
+    """{resolved test file: [(including file, line of its `#[path]`)]} over the native sources."""
+    global _INCLUDERS
+    if _INCLUDERS is None:
+        _INCLUDERS = {}
+        for source in sorted((NATIVE / "src").rglob("*.rs")):
+            lines = source.read_text(encoding="utf-8", errors="replace").splitlines()
+            for number, line in enumerate(lines):
+                match = re.match(r'\s*#\[path\s*=\s*"([^"]+)"\]', line)
+                if match:
+                    target = (source.parent / match.group(1)).resolve()
+                    _INCLUDERS.setdefault(target, []).append((source, number))
+    return _INCLUDERS
+
+
+def excluded_here(texts):
+    """True when cfg texts keep code off this runner's platform; `not(x)` counts for the other platform."""
+    text = " ".join(line for line in texts if "cfg(" in line)
+    negated = re.findall(r"not\(\s*([^()]*?)\s*\)", text)
+    positive = re.sub(r"not\(\s*[^()]*?\s*\)", " ", text)
+    unix_word = r'\bunix\b|target_os\s*=\s*"(linux|android|macos)"'
+    windows_word = r'\bwindows\b|target_os\s*=\s*"windows"'
     if WINDOWS:
-        return bool(re.search(r"unix|not\(windows\)|target_os\s*=\s*\"(linux|android|macos)\"", gates + head)) \
-            or "linux" in hint or "unix" in hint
-    return bool(re.search(r"(?<!not\()windows", gates + head)) or "windows" in hint
+        return bool(re.search(unix_word, positive)) or any(re.search(windows_word, n) for n in negated)
+    return bool(re.search(windows_word, positive)) or any(re.search(r"\bunix\b", n) for n in negated)
+
+
+def file_excluded_here(path, depth=0):
+    """True when file `path` is not compiled on this runner's platform: its `#![cfg(...)]` head keeps it
+    off, or it is included with `#[path]` and every one of those declarations is kept off (by its own
+    attributes, an inline module around it, or the including file)."""
+    lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
+    if excluded_here([line for line in lines[:40] if line.startswith("#![cfg(")]):
+        return True
+    including = includers().get(Path(path).resolve(), [])
+    if not including or depth >= 8:
+        return False
+    for source, number in including:
+        outer = source.read_text(encoding="utf-8", errors="replace").splitlines()
+        declaration = number
+        while declaration + 1 < len(outer) and outer[declaration].strip().startswith("#"):
+            declaration += 1
+        texts = attribute_block(outer, declaration) + enclosing_modules(outer, number)
+        if not excluded_here(texts) and not file_excluded_here(source, depth + 1):
+            return False
+    return True
+
+
+def gated_elsewhere(path, number):
+    """True when the test is cfg-gated to the platform this runner is not: by the attributes of the test,
+    of the inline modules around it, of its file, or of the `#[path]` declarations that include the file."""
+    lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
+    hint = str(path).lower()
+    if any(word in hint for word in (("linux", "unix") if WINDOWS else ("windows",))):
+        return True
+    return excluded_here(attribute_block(lines, number) + enclosing_modules(lines, number)) \
+        or file_excluded_here(path)
 
 
 # Library tests that carry the claims the command line cannot reach (WebDAV is connected over HTTPS with the
@@ -332,7 +403,7 @@ def stage_listing(results, listed, ignored):
     absent = [name for name in EVIDENCE_TESTS if name not in leafs
               and (name not in declared or not gated_elsewhere(*declared[name]))]
     results.record(stage, f"the {len(EVIDENCE_TESTS)} library tests for WebDAV, FTP, SFTP, Drive, the key phases "
-                   "and the FAT hour shift are in the test list", not absent, "missing: " + ", ".join(absent))
+                   "the FAT hour shift, the host filter and the fresh reads are in the test list", not absent, "missing: " + ", ".join(absent))
     plain = sorted(name for name in listed if TEST_PREFIX in leaf(name) and name not in ignored)
     results.record(stage, f"{len(plain)} plain `{TEST_PREFIX}` tests are listed", bool(plain), "")
     return declared
