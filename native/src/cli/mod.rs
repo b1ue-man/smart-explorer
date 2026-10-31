@@ -25,6 +25,7 @@ mod links_task_backends;
 #[cfg(test)]
 mod links_task_tests;
 mod login;
+mod ls_recursive;
 mod mcp;
 mod ops;
 #[cfg(test)]
@@ -162,8 +163,8 @@ enum Command {
         about = "Lizenztexte aller eingebetteten Rust-Crates ausgeben (--json: Übersicht mit SHA-256 und Crate-Liste)"
     )]
     Licenses(LicensesArgs),
-    #[command(about = "List a directory")]
-    Ls(PathArg),
+    #[command(about = "List a directory (--recursive: the whole tree, like the recursive view)")]
+    Ls(LsArgs),
     #[command(about = "Show file or directory metadata")]
     Stat(PathArg),
     #[command(about = "Print a remote or local file")]
@@ -205,6 +206,24 @@ enum Command {
 struct PathArg {
     #[arg(help = "Target path, endpoint, or @label:/path shorthand")]
     target: String,
+}
+
+#[derive(Args)]
+struct LsArgs {
+    #[arg(help = "Target path, endpoint, or @label:/path shorthand")]
+    target: String,
+    #[arg(
+        long,
+        short = 'R',
+        help = "List every entry below the folder with size, time and relative path"
+    )]
+    recursive: bool,
+    #[arg(
+        long,
+        requires = "recursive",
+        help = "Print the recursive listing as JSON"
+    )]
+    json: bool,
 }
 
 #[derive(Args)]
@@ -338,6 +357,9 @@ fn run_inner(cli: Cli) -> Result<i32, String> {
         Command::Licenses(args) => Ok(licenses::run(args.json)),
         Command::Ls(args) => {
             let t = target::resolve(&args.target)?;
+            if args.recursive {
+                return ls_recursive::list(&t, args.json);
+            }
             ops::list(&t)?;
             Ok(0)
         }
