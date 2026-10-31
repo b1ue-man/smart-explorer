@@ -14,7 +14,7 @@ use super::batch_ops::{
 };
 use crate::transfer::engine_names::next_numbered;
 use crate::vfs::{congestion_of, unpublished_error, BatchPut, BatchPutOutcome, VfsResult};
-use futures_util::future::{join, join_all, FutureExt, LocalBoxFuture};
+use futures_util::future::{join3, join_all, FutureExt, LocalBoxFuture};
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use std::io::{self, Read};
 
@@ -65,7 +65,7 @@ pub(super) async fn put_all(
         }
         match read_member(data, entry.size) {
             Ok(bytes) => {
-                running.push(member(wire, index, &entry.path, bytes).boxed_local());
+                running.push(member(wire, index, &entry.path, bytes, entry.mtime_ms).boxed_local());
                 // Its first request goes out now, not after the packet is read.
                 if let Some(Some((first, outcome))) = running.next().now_or_never() {
                     done[first] = Some(outcome);
@@ -134,17 +134,24 @@ async fn member(
     index: usize,
     destination: &str,
     bytes: Vec<u8>,
+    mtime_ms: Option<i64>,
 ) -> (usize, BatchPutOutcome) {
-    (index, put_member(wire, destination, bytes).await)
+    (index, put_member(wire, destination, bytes, mtime_ms).await)
 }
 
-/// One file: stage, write, close, publish.
-async fn put_member(wire: &dyn BatchWire, destination: &str, bytes: Vec<u8>) -> BatchPutOutcome {
+/// One file: stage, write, close, publish. `mtime_ms`: the time the file
+/// should carry, set on its handle behind the WRITEs.
+async fn put_member(
+    wire: &dyn BatchWire,
+    destination: &str,
+    bytes: Vec<u8>,
+    mtime_ms: Option<i64>,
+) -> BatchPutOutcome {
     let (stage, handle) = match open_stage(wire, destination).await {
         Ok(opened) => opened,
         Err(error) => return BatchPutOutcome::Failed(error),
     };
-    if let Err(failure) = stage_written(wire, &handle, &bytes).await {
+    if let Err(failure) = stage_written(wire, &handle, &bytes, mtime_ms).await {
         let _ = wire.remove(&stage).await;
         return BatchPutOutcome::Failed(judged(failure, &stage));
     }
@@ -153,14 +160,28 @@ async fn put_member(wire: &dyn BatchWire, destination: &str, bytes: Vec<u8>) -> 
 
 /// All WRITEs and the CLOSE behind them at once (G3-06a): the server
 /// handles one handle's requests in order, so CLOSE follows every WRITE
-/// without waiting for their answers. The handle is closed either way; the
-/// first failure in request order is the result.
+/// without waiting for their answers. With `mtime_ms` the FSETSTAT of the
+/// file's time goes between them (the three requests are sent in that order),
+/// so the packet's file carries the source's time at no round trip of its
+/// own; a refused time leaves the time of the upload and fails nothing. The
+/// handle is closed either way; the first failure in request order is the
+/// result.
 pub(super) async fn stage_written(
     wire: &dyn BatchWire,
     handle: &str,
     bytes: &[u8],
+    mtime_ms: Option<i64>,
 ) -> Result<(), WireError> {
-    let (written, closed) = join(write_all(wire, handle, bytes), wire.close(handle)).await;
+    let seconds = mtime_ms
+        .filter(|ms| *ms > 0)
+        .and_then(super::stage_finish::seconds);
+    let stamp = async {
+        if let Some(seconds) = seconds {
+            let _ = wire.set_mtime(handle, seconds).await;
+        }
+    };
+    let (written, (), closed) =
+        join3(write_all(wire, handle, bytes), stamp, wire.close(handle)).await;
     written.and(closed)
 }
 

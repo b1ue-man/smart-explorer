@@ -13,6 +13,11 @@
 //! from the open to `flush`, where the engine discards the stage by name and
 //! would remove a file that is not this client's.
 //!
+//! A stage of the engine also carries its source's time (`time`, FILETIME):
+//! a SET_INFO of LastWriteTime goes in the same compound right before the
+//! CLOSE, so the CLOSE's attributes (the stage's evidence) already show it and
+//! no request of its own follows.
+//!
 //! Like the streaming writer (io.rs `Commit::Unsynced`): no FLUSH, the
 //! WRITE answer must confirm every byte, a failed commit or a writer dropped
 //! before it removes the stage, and the sizes must match exactly.
@@ -86,6 +91,8 @@ pub(super) struct CompoundStage {
     _reservation: MemoryReservation,
     state: State,
     report: Option<StageReport>,
+    /// FILETIME the stage gets before it is closed (`None`: the time of the upload).
+    time: Option<u64>,
 }
 
 /// The stage writer for `path` of `size` bytes, created now; `Ok(None)` when
@@ -95,6 +102,7 @@ pub(super) fn open(
     backend: &SmbBackend,
     path: &str,
     size: u64,
+    time: Option<u64>,
 ) -> VfsResult<Option<Box<dyn Write + Send>>> {
     let target = super::url::entry_path(path)?;
     let (generation, tree) = backend.session.target(&target.share)?;
@@ -129,6 +137,7 @@ pub(super) fn open(
         _reservation: reservation,
         state: State::Open,
         report: StageReport::for_stage(path, &backend.written),
+        time,
     })))
 }
 
@@ -172,18 +181,21 @@ impl CompoundStage {
             .as_ref()
             .map(|report| report.destination_rel.clone());
         let data = std::mem::take(&mut self.data);
+        let stamp = self
+            .time
+            .map(|ticks| wire::set_file_info(4, id, super::stage_finish::basic_info(ticks)));
         let (compound, destination) = self.rt.block_on(async {
             let write = write_request(id, 0, &data);
             let close = CloseRequest {
                 flags: SMB2_CLOSE_FLAG_POSTQUERY_ATTRIB,
-                file_id: if data.is_empty() {
+                file_id: if data.is_empty() && stamp.is_none() {
                     id
                 } else {
                     FileId::SENTINEL
                 },
             };
             let tree_id = Some(tree.tree_id);
-            let mut ops = Vec::with_capacity(2);
+            let mut ops = Vec::with_capacity(3);
             if !data.is_empty() {
                 ops.push(CompoundOp {
                     command: Command::Write,
@@ -191,6 +203,11 @@ impl CompoundStage {
                     tree_id,
                     credit_charge: charge(data.len()),
                 });
+            }
+            // A refused SET_INFO leaves the time of the upload (no failure of
+            // its own); the CLOSE after it decides.
+            if let Some(stamp) = &stamp {
+                ops.push(CompoundOp::new(Command::SetInfo, stamp, tree_id));
             }
             ops.push(CompoundOp::new(Command::Close, &close, tree_id));
             let sent = async {

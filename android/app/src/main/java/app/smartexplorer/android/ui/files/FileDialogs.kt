@@ -289,12 +289,16 @@ internal fun ConflictDialog(
                     CheckLine("Überspringen", choice == "skip") { choice = "skip" }
                     CheckLine("Für alle verbleibenden Ordner", all) { all = !all }
                     if (all && choice == "keep-both" && !keepBothAllowed) Text("Mindestens ein verbleibender Ordner verlangt ausdrücklich Zusammenführen oder Überspringen.")
-                    Text(
-                        "Zusammenführen: bisher ${folder.newFiles} neu, ${folder.newerFiles} neuer (ersetzen), " +
-                            "${folder.equalFiles} gleich (übersprungen), ${folder.targetNewerFiles} Ziel neuer (bleibt), " +
-                            "${folder.conflictFiles} Konflikt (beide behalten)",
-                    )
-                    Text("Dateien in zusammengeführten Ordnern: neuere ersetzen ältere, Gleiche werden übersprungen.")
+                    if (folder.rule) {
+                        Text(
+                            "Zusammenführen: bisher ${folder.newFiles} neu, ${folder.newerFiles} neuer (ersetzen), " +
+                                "${folder.equalFiles} gleich (übersprungen), ${folder.targetNewerFiles} Ziel neuer (bleibt), " +
+                                "${folder.conflictFiles} Konflikt (beide behalten)",
+                        )
+                        Text("Dateien in zusammengeführten Ordnern: neuere ersetzen ältere, Gleiche werden übersprungen.")
+                    } else {
+                        Text("Zusammenführen: bisher ${folder.newFiles} neue und ${folder.collidingFiles} gleichnamige Dateien")
+                    }
                     folder.samples.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
                     if (!folder.counted) Text(previewError ?: previewProgress ?: "Zählung läuft im Hintergrund; Übernehmen bleibt möglich.")
                     else if (!folder.complete) Text("Unvollständig: ${folder.omitted} geschützte oder nicht lesbare Bereiche")
@@ -306,13 +310,20 @@ internal fun ConflictDialog(
                 } else if (!revoked) {
                     Text("Im Ziel gibt es schon: $shown")
                 }
-                if (choosable && !revoked) {
+                if (!revoked) {
+                    // "Neuere ersetzen ältere" is offered for every combination of sides, the bridge
+                    // accepts it for all; replacing and skipping only apply to local-to-local copies.
                     Text("Gleichnamige Dateien${if (folder != null) " oberster Ebene" else ""}:")
-                    CheckLine("Beide behalten", fileChoice == "keepBoth") { fileChoice = "keepBoth" }
-                    CheckLine("Ersetzen", fileChoice == "replace") { fileChoice = "replace" }
-                    CheckLine("Überspringen", fileChoice == "skip") { fileChoice = "skip" }
+                    CheckLine(
+                        if (choosable) "Beide behalten" else "Beide behalten (nummeriert)",
+                        fileChoice == "keepBoth",
+                    ) { fileChoice = "keepBoth" }
+                    if (choosable) {
+                        CheckLine("Ersetzen", fileChoice == "replace") { fileChoice = "replace" }
+                        CheckLine("Überspringen", fileChoice == "skip") { fileChoice = "skip" }
+                    }
                     CheckLine("Neuere ersetzen ältere", fileChoice == "update") { fileChoice = "update" }
-                } else if (!revoked) Text("Gleichnamige Dateien werden nummeriert.")
+                }
             }
         },
         confirmButton = {

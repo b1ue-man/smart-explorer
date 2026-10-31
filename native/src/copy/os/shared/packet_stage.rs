@@ -111,6 +111,8 @@ impl PacketStage {
                 durable: false,
                 cancel,
                 original: &self.original,
+                // Packet members are new names only: nothing is replaced.
+                decided: None,
             },
             &mut races,
             &mut quarantine,

@@ -20,12 +20,13 @@ use super::move_guard::{
 use super::path_guard::prepare_target_parent;
 use super::publication::PublicationObserver;
 use super::staging::{stage_copy, LocalFailure, Parallel};
+use crate::transfer::update_rule::Replacing;
 
 #[path = "direct_move.rs"]
 mod direct_move;
 #[path = "local_publish.rs"]
 mod local_publish;
-pub(crate) use local_publish::packet_start;
+pub(crate) use local_publish::{packet_start, still_decided as target_still_decided};
 #[path = "packet_stage.rs"]
 mod packet_stage;
 pub(crate) use packet_stage::{stage_local_from, PacketStage, PacketStaging};
@@ -67,7 +68,7 @@ pub(crate) fn transfer_local(
     request: &LocalRequest<'_>,
     progress: &mut dyn FnMut(u64),
 ) -> Result<LocalOutcome, LocalFailure> {
-    transfer_local_inner(request, Start::Look, progress, None)
+    transfer_local_inner(request, Start::Look, progress, None, None)
 }
 
 /// The same local transfer with durable receipt hooks around publication.
@@ -76,7 +77,28 @@ pub(crate) fn transfer_local_observed(
     progress: &mut dyn FnMut(u64),
     observer: &dyn PublicationObserver,
 ) -> Result<LocalOutcome, LocalFailure> {
-    transfer_local_inner(request, Start::Look, progress, Some(observer))
+    transfer_local_inner(request, Start::Look, progress, Some(observer), None)
+}
+
+/// `transfer_local_observed` for a replacement the file rule decided
+/// (`request.conflict` is `Overwrite`): right before the stage replaces the
+/// target, the target's size and time are compared with what the decision
+/// saw (`decided`). A target saved meanwhile is not replaced; the copy is
+/// published beside it under the next free name instead (the returned
+/// `target` then differs from `request.target`), so nothing is lost.
+pub(crate) fn transfer_local_replacing(
+    request: &LocalRequest<'_>,
+    decided: &Replacing,
+    progress: &mut dyn FnMut(u64),
+    observer: &dyn PublicationObserver,
+) -> Result<LocalOutcome, LocalFailure> {
+    transfer_local_inner(
+        request,
+        Start::Look,
+        progress,
+        Some(observer),
+        Some(decided),
+    )
 }
 
 /// `transfer_local_observed` for a new copy under "skip" into a folder this
@@ -91,7 +113,7 @@ pub(crate) fn transfer_local_fresh(
 ) -> Result<LocalOutcome, LocalFailure> {
     let fresh = request.mode == CopyMode::Copy && request.conflict == Conflict::Skip;
     let start = if fresh { Start::Fresh } else { Start::Look };
-    transfer_local_inner(request, start, progress, Some(observer))
+    transfer_local_inner(request, start, progress, Some(observer), None)
 }
 
 /// Where the first name of a transfer comes from.
@@ -120,7 +142,7 @@ pub(crate) fn transfer_local_from(
             "only new copies under skip or keep both start at a chosen name",
         )));
     }
-    transfer_local_inner(request, Start::At(start), progress, Some(observer))
+    transfer_local_inner(request, Start::At(start), progress, Some(observer), None)
 }
 
 fn transfer_local_inner(
@@ -128,6 +150,7 @@ fn transfer_local_inner(
     start: Start<'_>,
     progress: &mut dyn FnMut(u64),
     observer: Option<&dyn PublicationObserver>,
+    decided: Option<&Replacing>,
 ) -> Result<LocalOutcome, LocalFailure> {
     let src = request.source;
     // A copy's source opened once where the platform can classify the
@@ -177,6 +200,7 @@ fn transfer_local_inner(
             &mut races,
             &mut quarantine,
             observer,
+            decided,
         )? {
             return Ok(outcome);
         }
@@ -221,6 +245,7 @@ fn transfer_local_inner(
             durable,
             cancel: request.cancel,
             original: src,
+            decided,
         },
         &mut races,
         &mut quarantine,
@@ -406,6 +431,9 @@ pub(super) fn transfer_file(
     }
 }
 
+#[cfg(test)]
+#[path = "abgleich_task_replace_tests.rs"]
+mod abgleich_task_replace_tests;
 #[cfg(test)]
 #[path = "durable_ranges_tests.rs"]
 mod durable_ranges_tests;

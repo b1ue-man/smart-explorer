@@ -63,6 +63,9 @@ mod url;
 mod wire;
 
 #[cfg(test)]
+#[path = "core/abgleich_task_batch_time_tests.rs"]
+mod abgleich_task_batch_time_tests;
+#[cfg(test)]
 #[path = "core/batch_fake.rs"]
 mod batch_fake;
 #[cfg(test)]

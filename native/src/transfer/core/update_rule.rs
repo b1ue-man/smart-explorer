@@ -7,7 +7,14 @@
 //! - the source is newer by more than the window: it replaces the target;
 //! - the target is newer by more than the window: the target stays ("Ziel
 //!   neuer");
-//! - times within the window but different sizes: a conflict, both are kept.
+//! - times within the window but different sizes: a conflict, both are kept;
+//! - a time that one side does not know (0): nothing orders the two files and
+//!   equal sizes do not prove equal contents, so it is a conflict and both
+//!   are kept (nothing is skipped, nothing is replaced).
+//!
+//! A replacement is bound to the target it was decided against: right before
+//! it is published the target's size and time are compared with that stamp
+//! again (`Replacing::holds`), and a target that changed meanwhile keeps both.
 //!
 //! A file that is missing at the target is inserted; that case needs no
 //! comparison and is decided by the engine (`engine/update.rs`).
@@ -34,8 +41,8 @@ pub(crate) enum Case {
     SourceNewer,
     /// The target is newer by more than the window: kept.
     TargetNewer,
-    /// Same time within the window, other size (or a time that cannot be
-    /// compared and another size): both are kept.
+    /// Same time within the window and another size, or a time that one side
+    /// does not know: both are kept.
     Conflict,
 }
 
@@ -50,9 +57,10 @@ pub(crate) fn window_ms(source: MtimePrecision, target: MtimePrecision) -> u64 {
 pub(crate) fn classify(source: Stamp, target: Stamp, window_ms: u64) -> Case {
     let comparable = source.mtime_ms != 0 && target.mtime_ms != 0;
     if !comparable {
-        // No time to order them by: the size is all there is. Equal sizes
-        // count as the same file, other sizes are kept side by side.
-        return same_or_conflict(source, target);
+        // No time to order them by, and equal sizes do not make equal files:
+        // a changed source of the same size must still reach the target, or
+        // be kept beside it. Keeping both destroys nothing.
+        return Case::Conflict;
     }
     let delta = i128::from(source.mtime_ms) - i128::from(target.mtime_ms);
     if delta.unsigned_abs() <= u128::from(window_ms) {
@@ -61,6 +69,35 @@ pub(crate) fn classify(source: Stamp, target: Stamp, window_ms: u64) -> Case {
         Case::SourceNewer
     } else {
         Case::TargetNewer
+    }
+}
+
+/// Whether a target still holds what the decision saw: the same size and a
+/// time within the window of the stamp. A time that is unknown on either side
+/// proves nothing and does not hold.
+pub(crate) fn unchanged(decided: Stamp, now: Stamp, window_ms: u64) -> bool {
+    if decided.size != now.size || decided.mtime_ms == 0 || now.mtime_ms == 0 {
+        return false;
+    }
+    let delta = i128::from(decided.mtime_ms) - i128::from(now.mtime_ms);
+    delta.unsigned_abs() <= u128::from(window_ms)
+}
+
+/// The existing target a file replaces, as the rule saw it when it decided:
+/// the provider id of duplicate-capable providers (`None` elsewhere), its
+/// size and time, and the window the times were compared with.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Replacing {
+    pub id: Option<String>,
+    pub stamp: Stamp,
+    pub window_ms: u64,
+}
+
+impl Replacing {
+    /// Whether `now` (the target looked at right before publishing) is still
+    /// the file that was decided against.
+    pub(crate) fn holds(&self, now: Stamp) -> bool {
+        unchanged(self.stamp, now, self.window_ms)
     }
 }
 

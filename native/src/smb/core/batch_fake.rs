@@ -90,6 +90,8 @@ pub(super) struct Fake {
     pub(super) files: RefCell<BTreeMap<String, Vec<u8>>>,
     pub(super) handles: RefCell<HashMap<u64, String>>,
     pub(super) log: RefCell<Vec<String>>,
+    /// The FILETIME each stage was given by its compound (see `create_write_close_new`).
+    pub(super) times: RefCell<BTreeMap<String, u64>>,
     pub(super) faults: RefCell<Faults>,
     pub(super) max_write: usize,
     pub(super) max_read: usize,
@@ -105,6 +107,7 @@ impl Fake {
             files: RefCell::new(BTreeMap::new()),
             handles: RefCell::new(HashMap::new()),
             log: RefCell::new(Vec::new()),
+            times: RefCell::new(BTreeMap::new()),
             faults: RefCell::new(Faults::default()),
             max_write,
             max_read,
@@ -154,6 +157,7 @@ impl SmbWire for Fake {
         stage: &'a str,
         data: &'a [u8],
         first_block: usize,
+        time: Option<u64>,
     ) -> WireFuture<'a, FileState> {
         Box::pin(async move {
             self.wait(0).await;
@@ -169,6 +173,9 @@ impl SmbWire for Fake {
             self.note(format!("create {stage} {first_block}"));
             let mut file = self.handle(stage, self.files.borrow().len() as u64);
             file.closed = first_block == data.len();
+            if let Some(ticks) = time.filter(|_| file.closed) {
+                self.times.borrow_mut().insert(stage.to_string(), ticks);
+            }
             Ok(file)
         })
     }
@@ -194,10 +201,16 @@ impl SmbWire for Fake {
         })
     }
 
-    fn close<'a>(&'a self, _file: &'a FileState) -> WireFuture<'a, ()> {
+    fn close<'a>(&'a self, file: &'a FileState, time: Option<u64>) -> WireFuture<'a, ()> {
         Box::pin(async move {
             self.wait(0).await;
             self.note("close".to_string());
+            if let Some(ticks) = time {
+                let path = self.handles.borrow().get(&file.id.persistent).cloned();
+                if let Some(path) = path {
+                    self.times.borrow_mut().insert(path, ticks);
+                }
+            }
             Ok(())
         })
     }
@@ -220,6 +233,9 @@ impl SmbWire for Fake {
             }
             let content = files.remove(from).unwrap_or_default();
             files.insert(to.to_string(), content);
+            if let Some(ticks) = self.times.borrow_mut().remove(from) {
+                self.times.borrow_mut().insert(to.to_string(), ticks);
+            }
             Ok(())
         })
     }

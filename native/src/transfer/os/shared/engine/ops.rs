@@ -287,8 +287,10 @@ pub(crate) fn transfer<'e>(
     if let Some(outcome) = super::file_recovery::resume(engine, file)? {
         return Ok(outcome);
     }
-    // A file the batch path left undecided is decided here (`update.rs`).
-    if super::update::settle(engine, file)? == super::update::Settled::Skipped {
+    // A file the batch path left undecided is decided here (`update.rs`),
+    // also one whose receipt gave no result: the rule decides it, not the
+    // job's policy keeping both.
+    if super::update::settle_recovered(engine, file)? == super::update::Settled::Skipped {
         return Ok(Outcome::Skipped);
     }
     let file: &FileWork = file;

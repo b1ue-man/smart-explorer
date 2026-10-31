@@ -81,6 +81,8 @@ pub(super) enum Op {
     Open,
     Write,
     Close,
+    /// FSETSTAT of a handle's time.
+    SetTime,
     Rename,
     Remove,
     Exists,
@@ -113,6 +115,8 @@ pub(super) struct Fs {
     pub(super) open_max: usize,
     pub(super) requests: Vec<(Op, String)>,
     faults: Vec<(Op, String, Fault)>,
+    /// The time (Unix seconds) each name was given by FSETSTAT.
+    pub(super) times: BTreeMap<String, u32>,
 }
 
 impl Fs {
@@ -210,6 +214,11 @@ impl FakeWire {
             .map(|node| node.data.clone())
     }
 
+    /// The time FSETSTAT gave `path` (it follows the file through renames).
+    pub(super) fn time_of(&self, path: &str) -> Option<u32> {
+        self.fs.borrow().times.get(path).copied()
+    }
+
     pub(super) fn stages(&self) -> Vec<String> {
         let fs = self.fs.borrow();
         fs.nodes
@@ -301,11 +310,22 @@ impl BatchWire for FakeWire {
         })
     }
 
+    fn set_mtime(&self, handle: &str, seconds: u32) -> WireFuture<'_, ()> {
+        let name = self.path_of(handle);
+        self.call(Op::SetTime, name.clone(), move |fs| {
+            fs.times.insert(name, seconds);
+            Ok(())
+        })
+    }
+
     fn rename(&self, from: &str, to: &str) -> WireFuture<'_, ()> {
         let (from, to) = (from.to_string(), to.to_string());
         self.call(Op::Rename, from.clone(), move |fs| {
             if fs.nodes.contains_key(&to) {
                 return Err(status(io::ErrorKind::Other, "Failure"));
+            }
+            if let Some(seconds) = fs.times.remove(&from) {
+                fs.times.insert(to.clone(), seconds);
             }
             let node = fs
                 .nodes

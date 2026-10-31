@@ -95,7 +95,9 @@ impl Admission {
                         ui.label("Mindestens ein verbleibender Ordner verlangt ausdrücklich Zusammenführen oder Überspringen.");
                     }
                     ui.separator();
-                    ui.label(count_text(folder));
+                    if let Some(job) = &self.job {
+                        ui.label(count_text(job, folder));
+                    }
                     for sample in &folder.samples { ui.label(sample); }
                     if !folder.complete {
                         ui.label(format!("{}; {} geschützte oder nicht lesbare Bereiche", if folder.counted { "Zählung unvollständig" } else { "Zählung läuft" }, folder.omitted));
@@ -167,8 +169,17 @@ fn merge_rule(job: &TransferJob) -> &'static str {
     }
 }
 
-/// The counts of the preview of one folder, as one line.
-fn count_text(folder: &crate::transfer::FolderConflictPreview) -> String {
+/// The counts of the preview of one folder, as one line. The five counts of
+/// the file rule are shown only for a job that applies it
+/// (`TransferJob::applies_update_rule`); else the folder shows what the job's
+/// own file policy acts on: new and same-named files, as before the rule.
+fn count_text(job: &TransferJob, folder: &crate::transfer::FolderConflictPreview) -> String {
+    if !job.applies_update_rule() {
+        return format!(
+            "Zusammenführen: bisher {} neue und {} gleichnamige Dateien",
+            folder.new_files, folder.colliding_files
+        );
+    }
     format!(
         "Zusammenführen: bisher {} neu, {} neuer (ersetzen), {} gleich (übersprungen), {} Ziel neuer (bleibt), {} Konflikt (beide behalten)",
         folder.new_files,

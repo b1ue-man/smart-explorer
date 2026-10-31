@@ -104,7 +104,7 @@ async fn stage_all(wire: &dyn BatchWire, entries: &[BatchPut], data: &mut dyn Re
         }
         match read_member(data, entry.size) {
             Ok(bytes) => {
-                let member = stage_member(wire, &entry.path, bytes);
+                let member = stage_member(wire, &entry.path, bytes, entry.mtime_ms);
                 running.push(async move { (index, member.await) }.boxed_local());
                 // Its first request goes out now, not after the packet is read.
                 if let Some(Some((at, staged))) = running.next().now_or_never() {
@@ -140,13 +140,18 @@ fn store(done: &mut [Option<Staged>], index: usize, staged: Staged) {
 }
 
 /// Stage, WRITEs and CLOSE, with the LSTAT of the destination behind them.
-async fn stage_member(wire: &dyn BatchWire, destination: &str, bytes: Vec<u8>) -> Staged {
+async fn stage_member(
+    wire: &dyn BatchWire,
+    destination: &str,
+    bytes: Vec<u8>,
+    mtime_ms: Option<i64>,
+) -> Staged {
     let (stage, handle) = match open_stage(wire, destination).await {
         Ok(opened) => opened,
         Err(error) => return Staged::Failed(error),
     };
     let (written, existed) = join(
-        stage_written(wire, &handle, &bytes),
+        stage_written(wire, &handle, &bytes, mtime_ms),
         wire.exists(destination),
     )
     .await;

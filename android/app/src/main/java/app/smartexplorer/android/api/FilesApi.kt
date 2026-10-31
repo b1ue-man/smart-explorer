@@ -75,6 +75,12 @@ data class FolderCollision(
     val existing: Boolean = true,
     val newFiles: Long = 0,
     val collidingFiles: Long = 0,
+    /**
+     * True when the previewed job applies the file rule "neuere ersetzen ältere" to the files of
+     * merged folders: only then do the four counts below say what the transfer will do. Absent
+     * (older bridge): false, the folder shows new and same-named files only.
+     */
+    val rule: Boolean = false,
     /** Of the same-named files: source newer (replaces), equal (skipped), target newer (kept), same time other size (both kept). */
     val newerFiles: Long = 0,
     val equalFiles: Long = 0,
@@ -272,6 +278,9 @@ object FilesApi {
                 put("targetDir", targetDir)
                 put("filter", filterJson(filter))
                 put("baseDir", baseDir)
+                // The preview is of the job the transfer will start: its merged folders follow
+                // "neuere ersetzen ältere" (FileActions.transferNow), so the counts are the rule's.
+                put("mergeFiles", "update")
             },
         )
 
@@ -281,6 +290,7 @@ object FilesApi {
             put("targetDir", targetDir)
             put("filter", filterJson(filter))
             put("baseDir", baseDir)
+            put("mergeFiles", "update")
         },
     )
 

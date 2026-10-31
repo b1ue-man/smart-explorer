@@ -32,6 +32,17 @@ pub(super) trait BatchWire {
     fn open_new(&self, path: &str) -> WireFuture<'_, String>;
     fn write(&self, handle: &str, offset: u64, data: Vec<u8>) -> WireFuture<'_, ()>;
     fn close(&self, handle: &str) -> WireFuture<'_, ()>;
+    /// FSETSTAT of the open handle's access and modification time (Unix
+    /// seconds); a wire without it leaves the time of the upload.
+    fn set_mtime(&self, handle: &str, seconds: u32) -> WireFuture<'_, ()> {
+        let _ = (handle, seconds);
+        Box::pin(async {
+            Err(WireError {
+                error: io::Error::new(io::ErrorKind::Unsupported, "FSETSTAT nicht verfügbar"),
+                answered: true,
+            })
+        })
+    }
     /// SFTP v3 RENAME, which refuses an existing target.
     fn rename(&self, from: &str, to: &str) -> WireFuture<'_, ()>;
     fn remove(&self, path: &str) -> WireFuture<'_, ()>;
@@ -219,6 +230,21 @@ impl BatchWire for ChannelWire {
             closed
                 .map(|_| ())
                 .map_err(|error| self.failed(error, false))
+        })
+    }
+
+    fn set_mtime(&self, handle: &str, seconds: u32) -> WireFuture<'_, ()> {
+        let handle = handle.to_string();
+        Box::pin(async move {
+            let mut attrs = FileAttributes::empty();
+            attrs.atime = Some(seconds);
+            attrs.mtime = Some(seconds);
+            let set = self.channel.session.fsetstat(handle, attrs).await;
+            // A refused time is no failing channel: the file keeps its upload time.
+            set.map(|_| ()).map_err(|error| WireError {
+                answered: matches!(error, SftpError::Status(_) | SftpError::Limited(_)),
+                error: io_err(error),
+            })
         })
     }
 

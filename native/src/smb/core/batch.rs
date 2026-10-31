@@ -72,11 +72,16 @@ pub(super) struct ReadResult {
 pub(super) trait SmbWire {
     /// CREATE(FileCreate) of `stage` + WRITE of `data[..first_block]`, plus
     /// CLOSE when that is all of `data`; no FLUSH.
+    /// `time`: the FILETIME the stage should carry (`BatchPut::mtime_ms`), set
+    /// by a SET_INFO of the same compound before the CLOSE when the whole file
+    /// goes in the first block. A refused SET_INFO only leaves the time of the
+    /// upload, which is no failure.
     fn create_write_close_new<'a>(
         &'a self,
         stage: &'a str,
         data: &'a [u8],
         first_block: usize,
+        time: Option<u64>,
     ) -> WireFuture<'a, FileState>;
     fn write_more<'a>(
         &'a self,
@@ -84,7 +89,9 @@ pub(super) trait SmbWire {
         offset: u64,
         data: &'a [u8],
     ) -> WireFuture<'a, ()>;
-    fn close<'a>(&'a self, file: &'a FileState) -> WireFuture<'a, ()>;
+    /// CLOSE of a handle the first compound left open; with `time` a SET_INFO
+    /// of LastWriteTime goes in the same compound right before it.
+    fn close<'a>(&'a self, file: &'a FileState, time: Option<u64>) -> WireFuture<'a, ()>;
     /// The compound `CREATE(DELETE) + SET_INFO(rename, no replace) + CLOSE`.
     fn rename_no_replace<'a>(&'a self, from: &'a str, to: &'a str) -> WireFuture<'a, ()>;
     fn remove<'a>(&'a self, path: &'a str) -> WireFuture<'a, ()>;
@@ -172,13 +179,18 @@ async fn put_member<W: SmbWire + ?Sized>(
     wire: &W,
     destination: &str,
     bytes: Vec<u8>,
+    mtime_ms: Option<i64>,
 ) -> BatchPutOutcome {
+    let time = mtime_ms.and_then(super::stage_finish::filetime);
     let max_write = wire.max_write().max(1);
     let block = bytes.len().min(max_write);
     let mut opened = None;
     for _ in 0..STAGE_ATTEMPTS {
         let stage = stage_name(destination);
-        match wire.create_write_close_new(&stage, &bytes, block).await {
+        match wire
+            .create_write_close_new(&stage, &bytes, block, time)
+            .await
+        {
             Ok(file) => {
                 opened = Some((stage, file));
                 break;
@@ -204,10 +216,10 @@ async fn put_member<W: SmbWire + ?Sized>(
         }
         let failed = join_all(writes).await.into_iter().find_map(Result::err);
         let closed = match failed {
-            None => wire.close(&file).await.err(),
+            None => wire.close(&file, time).await.err(),
             Some(error) => {
                 if error.answered {
-                    let _ = wire.close(&file).await;
+                    let _ = wire.close(&file, None).await;
                 }
                 Some(error)
             }
@@ -286,7 +298,10 @@ pub(super) async fn put_all<W: SmbWire + ?Sized>(
         match read {
             Ok(bytes) => {
                 let destination = entry.path.as_str();
-                running.push(async move { (index, put_member(wire, destination, bytes).await) });
+                let mtime_ms = entry.mtime_ms;
+                running.push(async move {
+                    (index, put_member(wire, destination, bytes, mtime_ms).await)
+                });
                 collect(&mut running, &mut results).await;
             }
             Err(error) => {
@@ -352,7 +367,7 @@ async fn fetch<W: SmbWire + ?Sized>(wire: &W, item: &BatchGet) -> Fetched {
                 }
             }
         }
-        let _ = wire.close(&file).await;
+        let _ = wire.close(&file, None).await;
     }
     if let Some(error) = failure {
         return Fetched::Failed(error);

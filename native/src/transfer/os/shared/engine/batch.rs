@@ -71,6 +71,8 @@ pub(super) fn members(engine: &Engine<'_>, file: &FileWork) -> Option<Vec<FileWo
 fn admit(engine: &Engine<'_>, candidates: Vec<FileWork>) -> Option<Vec<FileWork>> {
     let mut more = Vec::with_capacity(candidates.len());
     let mut single = Vec::new();
+    // The new folders of the candidates in one request, not one per candidate.
+    super::update::ensure_parents(engine, &candidates);
     // The first SSD member does not authorize any later member's medium.
     // Probe after releasing the queue mutex; optical/probe-error entries go
     // back as single files before any packet reader can acquire their permit.

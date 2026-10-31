@@ -5,7 +5,10 @@ use super::record_io::{
 use super::view::{JobView, Side};
 use crate::transfer::job_record::{JobRecord, SourceGuard, StoredEndpoint, StoredFilter};
 use crate::transfer::{Endpoint, JobItems, TransferJob};
-use crate::types::{Conflict, CopyMode};
+use crate::types::CopyMode;
+// The recovery tests below reach it through their `use super::*`.
+#[cfg(test)]
+use crate::types::Conflict;
 use crate::vfs::{Backend, LocalBackend};
 use std::io;
 use std::path::PathBuf;
@@ -51,6 +54,8 @@ fn contract(view: &JobView<'_>, target_root: &str, id: &str) -> io::Result<JobRe
     let paths = source_paths(view.items);
     let vault_locations =
         record_io::record_locations(view.source, view.target, &paths, target_root)?;
+    let (file_policy, file_update, file_choice) =
+        crate::transfer::file_rule(view.conflict, view.folders.merge_update);
     Ok(JobRecord {
         version: 1,
         id: id.to_string(),
@@ -62,12 +67,9 @@ fn contract(view: &JobView<'_>, target_root: &str, id: &str) -> io::Result<JobRe
         items: view.items.clone(),
         layout: view.layout,
         filter: view.filter.map(StoredFilter::of),
-        file_policy: match view.conflict {
-            Conflict::Rename | Conflict::Update => 0,
-            Conflict::Overwrite => 1,
-            Conflict::Skip => 2,
-        },
-        file_update: view.conflict == Conflict::Update,
+        file_policy,
+        file_update,
+        file_choice,
         folders: view.folders.clone(),
         moving: view.mode == CopyMode::Move,
         guards: Vec::new(),
@@ -357,6 +359,9 @@ impl JobRun {
     }
 }
 
+#[cfg(test)]
+#[path = "abgleich_task_resume_tests.rs"]
+mod abgleich_task_resume_tests;
 #[cfg(test)]
 #[path = "file_recovery_tests.rs"]
 mod file_recovery_tests;

@@ -26,6 +26,20 @@ class AbgleichTaskRuleShapesTest {
     }
 
     @Test
+    fun abgleichTaskFolderPreviewSaysWhetherTheCountsAreTheRulesOwn() {
+        val ruled = Core.json.decodeFromString(
+            FolderCollision.serializer(),
+            """{"source":"/a","relative":"a","rule":true,"newFiles":3,"newerFiles":4}""",
+        )
+        assertEquals(true, ruled.rule)
+        val plain = Core.json.decodeFromString(
+            FolderCollision.serializer(),
+            """{"source":"/a","relative":"a","newFiles":3,"collidingFiles":10}""",
+        )
+        assertEquals(false, plain.rule)
+    }
+
+    @Test
     fun abgleichTaskOlderBridgeAnswersWithoutTheNewCountsStillDecode() {
         val folder = Core.json.decodeFromString(
             FolderCollision.serializer(),

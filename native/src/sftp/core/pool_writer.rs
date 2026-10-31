@@ -34,6 +34,9 @@ use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
 use tokio::task::JoinHandle;
 
+#[path = "pool_writer_stamp.rs"]
+mod stamp;
+
 type WriteTask = JoinHandle<(Result<Status, SftpError>, Instant)>;
 type CloseTask = JoinHandle<Result<Status, SftpError>>;
 type StatTask = JoinHandle<Result<Attrs, SftpError>>;
@@ -74,6 +77,8 @@ pub(super) struct PoolWriter {
     state: WriteState,
     /// A copy stage reports what the server answered at its commit.
     report: Option<StageReport>,
+    /// Unix seconds the stage gets at its commit (`pool_writer_stamp.rs`).
+    mtime: Option<u32>,
 }
 
 /// The length check of a sized stage: `Err` names what arrived.
@@ -179,6 +184,7 @@ impl PoolWriter {
             return self.close_now();
         };
         check_length(self.expected, self.accepted)?;
+        let stamp = self.send_stamp();
         let probes = self.send_probes();
         let syncs = commit.syncs(self.channel.fsync);
         let close = (!syncs).then(|| self.send_close());
@@ -193,6 +199,7 @@ impl PoolWriter {
             }
         }
         self.channel.learn(self.pipeline.depth(), self.fastest);
+        stamp.into_iter().for_each(|task| self.await_stamp(task));
         if let Some(probes) = probes {
             self.record(probes);
         }
@@ -464,6 +471,7 @@ impl SftpBackend {
             commit,
             state: WriteState::Open,
             report: None,
+            mtime: None,
         }))
     }
 
@@ -475,6 +483,7 @@ impl SftpBackend {
         stage: &str,
         size: u64,
         commit: Commit,
+        mtime: Option<u32>,
     ) -> io::Result<Option<PoolWriter>> {
         let opened = self.open_pool_writer(
             stage,
@@ -484,7 +493,7 @@ impl SftpBackend {
         )?;
         Ok(opened.map(|mut writer| {
             writer.report = StageReport::for_stage(stage, &self.written);
-            writer
+            writer.with_mtime(mtime)
         }))
     }
 }
