@@ -290,7 +290,9 @@ _INCLUDERS = None
 
 
 def includers():
-    """{resolved test file: [(including file, line of its `#[path]`)]} over the native sources."""
+    """{resolved source file: [(including file, line of its declaration)]} over the native sources: a
+    `#[path = "..."]` declaration (relative to the including file's folder), or a plain `mod name;`
+    (`name.rs` or `name/mod.rs` beside a `mod.rs`/`lib.rs`/`main.rs`, else in the folder of the file's stem)."""
     global _INCLUDERS
     if _INCLUDERS is None:
         _INCLUDERS = {}
@@ -301,6 +303,15 @@ def includers():
                 if match:
                     target = (source.parent / match.group(1)).resolve()
                     _INCLUDERS.setdefault(target, []).append((source, number))
+                    continue
+                plain = re.match(r"\s*(pub(\([^)]*\))?\s+)?mod\s+(\w+)\s*;", line)
+                if not plain or any("#[path" in above for above in attribute_block(lines, number)):
+                    continue
+                base = source.parent if source.name in ("mod.rs", "lib.rs", "main.rs") \
+                    else source.parent / source.stem
+                for candidate in (base / f"{plain.group(3)}.rs", base / plain.group(3) / "mod.rs"):
+                    if candidate.is_file():
+                        _INCLUDERS.setdefault(candidate.resolve(), []).append((source, number))
     return _INCLUDERS
 
 
