@@ -21,6 +21,19 @@ pub enum OmissionReason {
     Unrepresentable,
 }
 
+impl OmissionReason {
+    /// The wire code of `agent_proto::omission` (folder keys hash it).
+    pub fn code(self) -> u8 {
+        match self {
+            OmissionReason::Link => 0,
+            OmissionReason::Special => 1,
+            OmissionReason::Unreadable => 2,
+            OmissionReason::Vanished => 3,
+            OmissionReason::Unrepresentable => 4,
+        }
+    }
+}
+
 /// One existing entry a listing or walk had to leave out.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VfsOmission {
@@ -276,6 +289,26 @@ impl HashWalkEntry {
 pub enum HashWalkItem {
     Entry(HashWalkEntry),
     Omitted(VfsOmission),
+}
+
+/// One streamed item of a keyed hash walk (`hash_walk_keyed`): an item of
+/// a folder's run, or the key of a folder (`agent_proto::folder_key`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum KeyedWalkItem {
+    /// The run of the folder `rel` begins: the items up to the next mark are
+    /// its own (entries and omissions of its children, its own failure).
+    Run {
+        rel: String,
+    },
+    Item(HashWalkItem),
+    /// `same = false`: the folder `rel` and everything below it were sent;
+    /// `same = true`: its subtree is the one the caller holds under `key`
+    /// and was not sent.
+    Key {
+        rel: String,
+        key: [u8; 32],
+        same: bool,
+    },
 }
 
 /// The content a recycle request expects at its path (from a duplicate

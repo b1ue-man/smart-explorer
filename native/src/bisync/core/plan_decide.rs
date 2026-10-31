@@ -107,7 +107,7 @@ pub(super) fn decide(seen: &Observed, ctx: &PlanContext<'_>) -> Decision {
     if !a_changed && !b_changed {
         return Decision::Nothing;
     }
-    if same_entry(seen.a, seen.b, ctx.times.cross(), opts, Against::OtherSide) {
+    if same_entry(seen.a, seen.b, ctx.times.across(), opts, Against::OtherSide) {
         return if seen.a.is_none() {
             Decision::Forget
         } else {
@@ -241,7 +241,7 @@ fn decide_move(seen: &Observed, source: PairSide, ctx: &PlanContext<'_>) -> Opti
         });
     };
     let dst = seen.sig(destination)?;
-    if same_file(src, dst, ctx.times.cross(), &ctx.opts, Against::OtherSide)
+    if same_file(src, dst, ctx.times.across(), &ctx.opts, Against::OtherSide)
         || seen.matches_baseline(ctx)
     {
         return Some(Decision::Act(Step::FinalizeMove { from: source }));
@@ -259,7 +259,7 @@ fn decide_mirror(seen: &Observed, source: PairSide, ctx: &PlanContext<'_>) -> De
         (Some(_), None) => Decision::Act(Step::Copy { from: source }),
         (None, Some(_)) => Decision::Act(Step::Delete { side: destination }),
         (Some(src), Some(dst)) => {
-            if same_file(src, dst, ctx.times.cross(), &ctx.opts, Against::OtherSide) {
+            if same_file(src, dst, ctx.times.across(), &ctx.opts, Against::OtherSide) {
                 return Decision::Record;
             }
             if seen.matches_baseline(ctx) {

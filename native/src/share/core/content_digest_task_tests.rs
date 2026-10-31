@@ -28,6 +28,7 @@ fn screen_metadata_runtime_task_share_file_walk_returns_one_item() -> io::Result
         min_bytes: 0,
         single_file: true,
         meta: false,
+        ..Default::default()
     });
     let mut items: Vec<FsHashEntry> = Vec::new();
     let mut holes = 0usize;
@@ -40,6 +41,7 @@ fn screen_metadata_runtime_task_share_file_walk_returns_one_item() -> io::Result
                 Ok(None)
             }
             FsHashWalkMessage::Done { entries, omitted } => Ok(Some((entries, omitted))),
+            other => Err(io::Error::other(format!("unexpected message {other:?}"))),
         },
         other => Err(io::Error::other(format!("unexpected reply {other:?}"))),
     })?;
@@ -99,6 +101,7 @@ fn screen_metadata_runtime_task_share_file_walk_wire_stays_compatible() {
         min_bytes: 0,
         single_file: false,
         meta: false,
+        ..Default::default()
     };
     let encoded = serde_json::to_string(&folder_walk).unwrap();
     assert!(!encoded.contains("single_file"), "{encoded}");

@@ -28,6 +28,35 @@ pub(crate) fn md5_hex_to_u64(hex: &str) -> u64 {
 }
 
 pub(crate) fn hash_file(backend: &dyn Backend, path: &str, cancel: &AtomicBool) -> io::Result<u64> {
+    md5_hex_file(backend, path, cancel).map(|hex| md5_hex_to_u64(&hex))
+}
+
+/// `hash_file` of a local side through the digest cache of this device
+/// (`agent_proto::hash_cache`, E9): a file whose status is unchanged since
+/// its digest was taken (and not racy) is not read again.
+pub(crate) fn hash_file_cached(
+    backend: &dyn Backend,
+    path: &str,
+    cancel: &AtomicBool,
+) -> io::Result<u64> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) if backend.is_local() && metadata.is_file() => metadata,
+        _ => return hash_file(backend, path, cancel),
+    };
+    crate::agent_proto::hash_cache::configure_once(|| {
+        (!cfg!(test)).then(crate::support_dirs::app_data_dir)
+    });
+    crate::agent_proto::hash_cache::digest(
+        &metadata,
+        crate::agent_proto::digest::MD5,
+        || md5_hex_file(backend, path, cancel),
+        || std::fs::symlink_metadata(path),
+    )
+    .map(|hex| md5_hex_to_u64(&hex))
+}
+
+/// The MD5 of a file as 32 lowercase hex digits, read through `backend`.
+fn md5_hex_file(backend: &dyn Backend, path: &str, cancel: &AtomicBool) -> io::Result<String> {
     use std::io::Read;
 
     let captured = super::apply_guard::capture(
@@ -61,7 +90,7 @@ pub(crate) fn hash_file(backend: &dyn Backend, path: &str, cancel: &AtomicBool) 
         return Err(super::apply_guard::drift("checksum stream length changed"));
     }
     super::apply_guard::revalidate(backend, path, &captured, "checksum file")?;
-    Ok(md5_to_u64(&context.compute().0))
+    Ok(format!("{:x}", context.compute()))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -71,7 +100,10 @@ pub enum HashMode {
     /// Hash when needed, but reuse a prior nonzero hash for unchanged metadata.
     Full,
     /// Checksum mode: require a current nonzero hash and never reuse a previous
-    /// size+mtime result as proof of unchanged content.
+    /// size+mtime result as proof of unchanged content. The digest cache of
+    /// the storing device (`agent_proto::hash_cache`) is no such reuse: it
+    /// answers only while device, inode, size, modification and change time
+    /// (ns) are unchanged and not racy, a status no write keeps.
     FullFresh,
 }
 

@@ -392,6 +392,21 @@ fn dispatch(context: &RequestContext, id: u64, req: Frame) -> io::Result<()> {
             (algorithm, min_bytes, meta),
             cancel,
         ),
+        Frame::WalkKeyed {
+            root,
+            algorithm,
+            min_bytes,
+            known,
+        } => super::walk_keyed::handle_walk_keyed(
+            sink,
+            id,
+            &root,
+            (algorithm, min_bytes, known.as_slice()),
+            cancel,
+        ),
+        Frame::ListDirMeta(path) => super::meta_list::handle_list_dir_meta(sink, id, &path),
+        Frame::StatMeta(path) => super::meta_list::handle_stat_meta(sink, id, &path),
+        Frame::ListMeta(path) => super::meta_list::handle_list_meta(sink, id, &path, cancel),
         Frame::FinishStage {
             stage,
             mtime_ms,

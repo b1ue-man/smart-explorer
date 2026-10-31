@@ -24,9 +24,8 @@ use crate::{
     },
     vfs::Scheme,
 };
-use sha2::{Digest, Sha256};
 use std::{
-    io::{self, Read},
+    io,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex, MutexGuard,
@@ -34,6 +33,10 @@ use std::{
 };
 use tokio::sync::mpsc;
 
+#[path = "host_hash_walk_digest.rs"]
+mod digest;
+#[path = "host_hash_walk_keys.rs"]
+mod keys;
 #[path = "host_hash_walk_local.rs"]
 mod local;
 
@@ -51,6 +54,8 @@ pub(super) struct Shared<'a> {
     omitted: AtomicU64,
     /// Every batch is sent under it (see the module head).
     run: Mutex<()>,
+    /// `keys`: the folder runs go through the walk's key tree (`keys.rs`).
+    keys: Option<crate::agent_proto::KeyTree<keys::Item>>,
 }
 
 impl Shared<'_> {
@@ -72,47 +77,6 @@ impl Shared<'_> {
     pub(super) fn meta(&self, meta: impl FnOnce() -> FsHashMeta) -> Option<FsHashMeta> {
         self.request.meta.then(meta)
     }
-
-    pub(super) fn digest(&self, mut read: impl Read, expected: u64) -> io::Result<Option<String>> {
-        if self.request.algo.is_none() {
-            return Ok(None);
-        }
-        let mut sha = Sha256::new();
-        let mut md5 = md5::Context::new();
-        let mut buffer = vec![0; 1024 * 1024];
-        let mut size = 0u64;
-        loop {
-            self.check()?;
-            let n = match read.read(&mut buffer) {
-                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                result => result?,
-            };
-            if n == 0 {
-                break;
-            }
-            size = size.saturating_add(n as u64);
-            if size > expected {
-                break;
-            }
-            match self.request.algo {
-                Some(FsHashAlgo::Sha256) => sha.update(&buffer[..n]),
-                Some(FsHashAlgo::Md5) => md5.consume(&buffer[..n]),
-                _ => {}
-            }
-            self.progress.bytes.fetch_add(n as u64, Ordering::Relaxed);
-        }
-        if size != expected {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Dateigröße hat sich beim Lesen geändert",
-            ));
-        }
-        Ok(Some(match self.request.algo {
-            Some(FsHashAlgo::Sha256) => format!("{:x}", sha.finalize()),
-            Some(FsHashAlgo::Md5) => format!("{:x}", md5.compute()),
-            _ => return Ok(None),
-        }))
-    }
 }
 
 /// The items one thread produced and has not sent yet.
@@ -124,6 +88,8 @@ pub(super) struct Batch<'s, 'a> {
     /// Held from a batch sent in the middle of a folder (`meta`) until that
     /// folder's last batch is out.
     held: Option<MutexGuard<'s, ()>>,
+    /// The run of the current folder of a keyed walk.
+    run: Option<crate::agent_proto::RunKeys<keys::Item>>,
 }
 
 impl<'s, 'a> Batch<'s, 'a> {
@@ -134,7 +100,16 @@ impl<'s, 'a> Batch<'s, 'a> {
             omitted: Vec::new(),
             bytes: 0,
             held: None,
+            run: None,
         }
+    }
+
+    /// The folder `rel` starts (keyed walks track every folder's run).
+    pub(super) fn begin_folder(&mut self, rel: &str) -> io::Result<()> {
+        if self.shared.keys.is_some() {
+            return keys::begin(self, rel);
+        }
+        Ok(())
     }
 
     pub(super) fn shared(&self) -> &'s Shared<'a> {
@@ -143,6 +118,9 @@ impl<'s, 'a> Batch<'s, 'a> {
 
     pub(super) fn add(&mut self, entry: Result<FsHashEntry, FsOmission>) -> io::Result<()> {
         self.shared.check()?;
+        if self.shared.keys.is_some() {
+            return keys::add(self, entry);
+        }
         let cost = match &entry {
             Ok(entry) => entry.wire_bytes(),
             Err(hole) => hole.wire_bytes(),
@@ -205,6 +183,9 @@ impl<'s, 'a> Batch<'s, 'a> {
 
     /// The current folder is done: a run lock held for it is released.
     pub(super) fn end_folder(&mut self) -> io::Result<()> {
+        if self.shared.keys.is_some() {
+            return keys::end(self);
+        }
         if self.held.is_some() {
             return self.send();
         }
@@ -249,6 +230,11 @@ impl crate::agent_proto::WalkOutput for Batch<'_, '_> {
     }
 }
 
+/// The app's digest cache folder (none in tests).
+fn host_hash_cache_folder() -> Option<std::path::PathBuf> {
+    (!cfg!(test)).then(crate::support_dirs::app_data_dir)
+}
+
 pub(super) fn child_rel(rel: &str, name: &str) -> String {
     if rel.is_empty() {
         name.into()
@@ -273,6 +259,9 @@ pub(in crate::share) fn run(
             "Hashalgorithmus nicht unterstützt",
         ));
     }
+    if request.algo.is_some() {
+        crate::agent_proto::hash_cache::configure_once(host_hash_cache_folder);
+    }
     let shared = Shared {
         request: &request,
         cancel: &cancel,
@@ -281,10 +270,20 @@ pub(in crate::share) fn run(
         entries: AtomicU64::new(0),
         omitted: AtomicU64::new(0),
         run: Mutex::new(()),
+        keys: keys::tree(&request)?,
     };
     let mut batch = Batch::new(&shared);
     visit(&mut batch, &request.path, &access, "")?;
     batch.send()?;
+    if request.algo.is_some() {
+        crate::agent_proto::hash_cache::flush();
+    }
+    if shared.keys.as_ref().is_some_and(|tree| !tree.complete()) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Walk endete vor dem letzten Ordner",
+        ));
+    }
     host_stream::emit(
         &tx,
         &cancel,
@@ -301,6 +300,7 @@ fn visit(batch: &mut Batch<'_, '_>, path: &str, access: &FsAccess, rel: &str) ->
     let parts = crate::share::fs::split_clean(path)?;
     if access.is_dynamic() && (parts.is_empty() || parts == ["Verbindungen"]) {
         // The container's entries first, then their content (one run each).
+        batch.begin_folder(rel)?;
         let mut children = Vec::new();
         for entry in access.list_dir(path)? {
             crate::vfs::validate_child_name(&entry.name)?;
@@ -326,6 +326,7 @@ fn visit(batch: &mut Batch<'_, '_>, path: &str, access: &FsAccess, rel: &str) ->
     let target = match access.resolve(path) {
         Ok(target) => target,
         Err(error) => {
+            batch.begin_folder(rel)?;
             batch.failed(rel, error)?;
             return batch.end_folder();
         }
@@ -333,6 +334,7 @@ fn visit(batch: &mut Batch<'_, '_>, path: &str, access: &FsAccess, rel: &str) ->
     if target.backend.scheme() == Scheme::Local {
         let physical = crate::share::storage_roots::local_path(&target)?;
         if crate::share::storage_roots::is_private(&physical) {
+            batch.begin_folder(rel)?;
             batch.hole(
                 rel,
                 FsOmissionReason::Unreadable,
@@ -347,6 +349,7 @@ fn visit(batch: &mut Batch<'_, '_>, path: &str, access: &FsAccess, rel: &str) ->
                 local::walk(batch.shared(), handle, physical, rel)
             }
             Err(e) => {
+                batch.begin_folder(rel)?;
                 batch.failed(rel, e)?;
                 batch.end_folder()
             }
@@ -365,6 +368,7 @@ fn remote(
     rel: &str,
     depth: usize,
 ) -> io::Result<()> {
+    batch.begin_folder(rel)?;
     let subfolders = remote_folder(batch, backend, path, rel, depth)?;
     batch.end_folder()?;
     for (full, child) in subfolders {

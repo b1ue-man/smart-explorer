@@ -7,9 +7,9 @@ use std::time::Duration;
 use super::super::extension_calls as calls;
 use super::super::{
     BackendExtensions, ChangeNotice, ChangeSignalMode, ChangeSubscription, HashWalkItem,
-    HashWalkRequest, RecursiveDeleteFailure, RecursiveDeleteProgress, RecursiveDeleteReport,
-    RecycleExpectation, RecycleOutcome, StageFinish, StageFinished, TargetLimits, VfsListing,
-    VfsMeta, VfsResult, VolumeIdentity,
+    HashWalkRequest, KeyedWalkItem, RecursiveDeleteFailure, RecursiveDeleteProgress,
+    RecursiveDeleteReport, RecycleExpectation, RecycleOutcome, StageFinish, StageFinished,
+    TargetLimits, VfsListing, VfsMeta, VfsResult, VolumeIdentity,
 };
 use super::CachingBackend;
 
@@ -150,6 +150,21 @@ impl BackendExtensions for CachingBackend {
         calls::hash_walk(&*self.inner, root, request, tx, cancel)
     }
 
+    fn content_md5(&self, path: &str, cancel: &AtomicBool) -> VfsResult<Option<String>> {
+        crate::vfs::content_md5(&*self.inner, path, cancel)
+    }
+
+    fn hash_walk_keyed(
+        &self,
+        root: &str,
+        request: HashWalkRequest,
+        known: &[[u8; 16]],
+        tx: crossbeam_channel::Sender<KeyedWalkItem>,
+        cancel: &AtomicBool,
+    ) -> VfsResult<bool> {
+        calls::hash_walk_keyed(&*self.inner, root, request, known, tx, cancel)
+    }
+
     fn content_digest(
         &self,
         path: &str,
@@ -214,6 +229,29 @@ impl BackendExtensions for CachingBackend {
     fn open_write_absent(&self, path: &str, size: u64) -> VfsResult<Option<Box<dyn Write + Send>>> {
         self.invalidate(path);
         let writer = crate::vfs::open_write_absent(&*self.inner, path, size);
+        self.invalidate(path);
+        Ok(writer?.map(|writer| self.wrap_writer(writer, path)))
+    }
+
+    fn open_write_fresh_timed(
+        &self,
+        path: &str,
+        size: u64,
+        mtime_ms: i64,
+    ) -> VfsResult<Option<Box<dyn Write + Send>>> {
+        self.invalidate(path);
+        let writer = crate::vfs::open_write_fresh_timed(&*self.inner, path, size, mtime_ms)?;
+        Ok(writer.map(|writer| self.wrap_writer(writer, path)))
+    }
+
+    fn open_write_absent_timed(
+        &self,
+        path: &str,
+        size: u64,
+        mtime_ms: i64,
+    ) -> VfsResult<Option<Box<dyn Write + Send>>> {
+        self.invalidate(path);
+        let writer = crate::vfs::open_write_absent_timed(&*self.inner, path, size, mtime_ms);
         self.invalidate(path);
         Ok(writer?.map(|writer| self.wrap_writer(writer, path)))
     }

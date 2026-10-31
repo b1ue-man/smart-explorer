@@ -20,6 +20,8 @@ pub(super) mod frame_ops;
 pub(in super::super) mod lz4_frames;
 #[path = "range_frames.rs"]
 pub(super) mod range_frames;
+#[path = "walk_key_frames.rs"]
+pub(super) mod walk_key_frames;
 #[path = "walk_meta_frames.rs"]
 pub(super) mod walk_meta_frames;
 
@@ -220,6 +222,7 @@ pub(super) fn encode(frame: &Frame, req_id: u64, with_length: bool) -> io::Resul
                 && !range_frames::encode(other, &mut b)
                 && !lz4_frames::encode(other, &mut b)
                 && !walk_meta_frames::encode(other, &mut b)
+                && !walk_key_frames::encode(other, &mut b)
             {
                 return Err(bad("frame has no wire encoding"));
             }
@@ -380,6 +383,7 @@ fn encoded_len(frame: &Frame) -> io::Result<usize> {
             .or_else(|| range_frames::payload_len(other))
             .or_else(|| lz4_frames::payload_len(other))
             .or_else(|| walk_meta_frames::payload_len(other))
+            .or_else(|| walk_key_frames::payload_len(other))
         {
             Some(extra) => add_len(&mut length, extra?)?,
             None => return Err(bad("frame has no wire encoding")),

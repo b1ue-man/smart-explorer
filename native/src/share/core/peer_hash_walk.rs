@@ -8,7 +8,7 @@ use super::{
 };
 use crate::{
     analytics::HashAlgorithm,
-    vfs::{HashWalkItem, HashWalkRequest},
+    vfs::{HashWalkItem, HashWalkRequest, KeyedWalkItem},
 };
 use std::{
     io,
@@ -16,11 +16,49 @@ use std::{
     time::Duration,
 };
 
+/// Known key prefixes one request carries: its base64 text stays well below
+/// the request frame limit (`framing::MAX_REQUEST_CTRL_FRAME`, 256 KiB).
+const KNOWN_KEYS: usize = 10 * 1024;
+
 pub(super) fn walk(
     backend: &PeerBackend,
     root: &str,
     request: HashWalkRequest,
     tx: crossbeam_channel::Sender<HashWalkItem>,
+    cancel: &AtomicBool,
+) -> io::Result<bool> {
+    let plain = |item: KeyedWalkItem| match item {
+        KeyedWalkItem::Item(item) => Ok(item),
+        _ => Err(peer_stream::invalid("Unerwarteter Ordnerschlüssel")),
+    };
+    walk_with(backend, root, request, None, tx, plain, cancel)
+}
+
+/// `hash_walk_keys_v1`: the walk with listing attributes and folder keys;
+/// `Ok(false)` before sending when the host does not offer it.
+pub(super) fn walk_keyed(
+    backend: &PeerBackend,
+    root: &str,
+    request: HashWalkRequest,
+    known: &[[u8; 16]],
+    tx: crossbeam_channel::Sender<KeyedWalkItem>,
+    cancel: &AtomicBool,
+) -> io::Result<bool> {
+    if !request.meta || !peer_stream::features(backend, root)?.hash_walk_keys_v1 {
+        return Ok(false);
+    }
+    // The client puts the keys covering most first.
+    let known = &known[..known.len().min(KNOWN_KEYS)];
+    walk_with(backend, root, request, Some(known), tx, Ok, cancel)
+}
+
+fn walk_with<T: Send>(
+    backend: &PeerBackend,
+    root: &str,
+    request: HashWalkRequest,
+    known: Option<&[[u8; 16]]>,
+    tx: crossbeam_channel::Sender<T>,
+    wrap: impl Fn(KeyedWalkItem) -> io::Result<T>,
     cancel: &AtomicBool,
 ) -> io::Result<bool> {
     let features = peer_stream::features(backend, root)?;
@@ -39,6 +77,10 @@ pub(super) fn walk(
         }),
         single_file: false,
         meta: request.meta,
+        keys: known.is_some(),
+        known: known.map_or_else(String::new, |known| {
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, known.concat())
+        }),
     });
     let result = backend.node.block_on_route(opened.generation, async {
         io_deadline::run(
@@ -88,7 +130,8 @@ pub(super) fn walk(
                                 "Hash des angeforderten Algorithmus fehlt oder ist ungültig",
                             ));
                         }
-                        publish(&tx, cancel, entry.into()).await?;
+                        let item = wrap(KeyedWalkItem::Item(entry.into()))?;
+                        publish(&tx, cancel, item).await?;
                         totals.0 = totals
                             .0
                             .checked_add(1)
@@ -104,12 +147,31 @@ pub(super) fn walk(
                                 "Auslassung außerhalb der Walk-Wurzel",
                             ));
                         }
-                        publish(&tx, cancel, HashWalkItem::Omitted(hole.into())).await?;
+                        let item = wrap(KeyedWalkItem::Item(HashWalkItem::Omitted(hole.into())))?;
+                        publish(&tx, cancel, item).await?;
                         totals.1 = totals
                             .1
                             .checked_add(1)
                             .ok_or_else(|| peer_stream::invalid("Walk-Zählerüberlauf"))?;
                     }
+                }
+                FsResponse::HashWalk {
+                    message: FsHashWalkMessage::Run { rel },
+                } => {
+                    if !(rel.is_empty() || peer_stream::relative(&rel)) {
+                        return Err(peer_stream::invalid("Ungültiger Ordnerlauf"));
+                    }
+                    let item = wrap(KeyedWalkItem::Run { rel })?;
+                    publish(&tx, cancel, item).await?;
+                }
+                FsResponse::HashWalk {
+                    message: FsHashWalkMessage::Key { rel, key, same },
+                } => {
+                    let key = folder_key(&key)
+                        .filter(|_| rel.is_empty() || peer_stream::relative(&rel))
+                        .ok_or_else(|| peer_stream::invalid("Ungültiger Ordnerschlüssel"))?;
+                    let item = wrap(KeyedWalkItem::Key { rel, key, same })?;
+                    publish(&tx, cancel, item).await?;
                 }
                 FsResponse::HashWalk {
                     message: FsHashWalkMessage::Done { entries, omitted },
@@ -137,10 +199,22 @@ pub(super) fn walk(
     }
     result
 }
-async fn publish(
-    tx: &crossbeam_channel::Sender<HashWalkItem>,
+/// 64 lowercase hex digits as a folder key.
+fn folder_key(hex: &str) -> Option<[u8; 32]> {
+    if !crate::vfs::is_sha256_hex(hex) {
+        return None;
+    }
+    let mut key = [0u8; 32];
+    for (index, slot) in key.iter_mut().enumerate() {
+        *slot = u8::from_str_radix(hex.get(index * 2..index * 2 + 2)?, 16).ok()?;
+    }
+    Some(key)
+}
+
+async fn publish<T>(
+    tx: &crossbeam_channel::Sender<T>,
     cancel: &AtomicBool,
-    mut item: HashWalkItem,
+    mut item: T,
 ) -> io::Result<()> {
     loop {
         if cancel.load(Ordering::Relaxed) {

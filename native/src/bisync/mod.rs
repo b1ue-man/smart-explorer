@@ -89,6 +89,10 @@ mod engine_change_feed;
 #[cfg(test)]
 #[path = "os/shared/engine_provider_task_tests.rs"]
 mod engine_provider_task_tests;
+#[path = "os/shared/folder_key_cache.rs"]
+mod folder_key_cache;
+#[path = "os/shared/folder_key_file.rs"]
+mod folder_key_file;
 #[path = "core/guards.rs"]
 mod guards;
 #[path = "os/shared/incremental.rs"]
@@ -190,6 +194,8 @@ mod snapshot_hash;
 mod snapshot_host_stream;
 #[path = "os/shared/snapshot_host_walk.rs"]
 mod snapshot_host_walk;
+#[path = "os/shared/snapshot_keyed.rs"]
+mod snapshot_keyed;
 #[path = "os/shared/snapshot_mounts.rs"]
 mod snapshot_mounts;
 #[path = "os/shared/snapshot_pair.rs"]

@@ -13,9 +13,11 @@
 //! Only the folder in progress is held, never the whole tree. Items below a
 //! folder `scan_listing` does not enter (filters, hidden, own or system
 //! folders) or below a folder that failed are dropped as they arrive and
-//! never counted. Folders without items (empty ones, ones that could not be
-//! opened) are checked when the walk ends. An item outside this order fails
-//! the side, so a misordered walk can never become a snapshot.
+//! never counted. A folder that could not be opened is checked as soon as
+//! its failure arrives; an empty folder as soon as the next run mark of a
+//! keyed walk arrives (`run_mark`, `snapshot_keyed.rs`), otherwise when the
+//! walk ends. An item outside this order fails the side, so a misordered
+//! walk can never become a snapshot.
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::sync::atomic::Ordering;
@@ -161,10 +163,14 @@ impl<'c, 'a> Stream<'c, 'a> {
                 return Ok(());
             }
         }
-        // A folder that failed before its own run began.
+        // A folder that failed before its own run began: nothing of it
+        // follows, so it is checked now (W8).
         if let Some(expected) = self.expected.get_mut(&omission.rel) {
-            expected.failure.get_or_insert(omission);
-            return Ok(());
+            expected.failure.get_or_insert(omission.clone());
+            if self.run.as_ref().is_some_and(|run| run.rel == omission.rel) {
+                return Ok(());
+            }
+            return self.finish(Run::new(omission.rel, true));
         }
         if self.never_read.contains(&omission.rel) {
             return Ok(());
@@ -192,6 +198,14 @@ impl<'c, 'a> Stream<'c, 'a> {
             }),
         }
         Ok(())
+    }
+
+    /// The run of `rel` begins (a keyed walk marks every run,
+    /// `snapshot_keyed.rs`): the run in progress ends and is checked, and an
+    /// empty run is complete as soon as the next mark arrives (W8).
+    pub(super) fn run_mark(&mut self, rel: &str) -> io::Result<()> {
+        self.received = self.received.saturating_add(1);
+        self.run_of(rel).map(|_| ())
     }
 
     /// The run of `folder`, `None` below a folder that is never read. An
@@ -272,10 +286,22 @@ impl<'c, 'a> Stream<'c, 'a> {
         for (path, child) in listed.dirs {
             let name = split(&child).1.to_string();
             dirs.remove(&name);
+            // A subfolder that could not be opened has no run: checked now
+            // as its own run would be (W8).
+            if let Some(failure) = child_failures.remove(&name) {
+                if expected.depth + 1 > MAX_WALK_DEPTH {
+                    return Err(invalid(&format!(
+                        "sync tree exceeds {MAX_WALK_DEPTH} levels"
+                    )));
+                }
+                record_omission(ctx, &child, failure.reason.into(), true);
+                self.never_read.insert(child);
+                continue;
+            }
             let next = Expected {
                 path,
                 depth: expected.depth + 1,
-                failure: child_failures.remove(&name),
+                failure: None,
             };
             if self.expected.insert(child, next).is_some() {
                 return Err(invalid("agent returned duplicate sync paths"));

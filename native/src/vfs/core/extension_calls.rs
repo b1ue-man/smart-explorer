@@ -8,8 +8,8 @@ use std::time::Duration;
 use super::delete::{RecursiveDeleteFailure, RecursiveDeleteProgress, RecursiveDeleteReport};
 use super::extension_types::{
     ChangeNotice, ChangeSignalMode, ChangeSubscription, HashWalkItem, HashWalkRequest,
-    MtimePrecision, RecycleExpectation, RecycleOutcome, StageFinish, StageFinished, TargetLimits,
-    VfsListing,
+    KeyedWalkItem, MtimePrecision, RecycleExpectation, RecycleOutcome, StageFinish, StageFinished,
+    TargetLimits, VfsListing,
 };
 use super::extensions::VersionArchivePolicy;
 use super::{Backend, VfsMeta, VfsResult, VolumeIdentity};
@@ -260,6 +260,44 @@ pub fn hash_walk<B: Backend + ?Sized>(
 ) -> VfsResult<bool> {
     match backend.extensions() {
         Some(extensions) => extensions.hash_walk(root, request, tx, cancel),
+        None => Ok(false),
+    }
+}
+
+/// The MD5 of `path` formed where it is stored
+/// (`BackendExtensions::content_md5`); anything but 32 hex digits is refused.
+pub fn content_md5<B: Backend + ?Sized>(
+    backend: &B,
+    path: &str,
+    cancel: &AtomicBool,
+) -> VfsResult<Option<String>> {
+    let Some(extensions) = backend.extensions() else {
+        return Ok(None);
+    };
+    match extensions.content_md5(path, cancel)? {
+        Some(hex) if hex.len() == 32 && hex.bytes().all(|b| b.is_ascii_hexdigit()) => {
+            Ok(Some(hex.to_ascii_lowercase()))
+        }
+        Some(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "content MD5 is no 32-digit hex text",
+        )),
+        None => Ok(None),
+    }
+}
+
+/// Host-side hash walk with folder keys (`BackendExtensions::hash_walk_keyed`);
+/// `Ok(false)` = unsupported before any item.
+pub fn hash_walk_keyed<B: Backend + ?Sized>(
+    backend: &B,
+    root: &str,
+    request: HashWalkRequest,
+    known: &[[u8; 16]],
+    tx: crossbeam_channel::Sender<KeyedWalkItem>,
+    cancel: &AtomicBool,
+) -> VfsResult<bool> {
+    match backend.extensions() {
+        Some(extensions) => extensions.hash_walk_keyed(root, request, known, tx, cancel),
         None => Ok(false),
     }
 }

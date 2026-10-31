@@ -91,6 +91,37 @@ pub fn open_write_absent<B: Backend + ?Sized>(
     }
 }
 
+/// `Backend::open_write_fresh` with the source time in the create request
+/// where the backend takes it (`BackendExtensions::open_write_fresh_timed`),
+/// otherwise the untimed writer (the caller sets the time as before).
+pub fn open_write_fresh_timed<B: Backend + ?Sized>(
+    backend: &B,
+    path: &str,
+    size: u64,
+    mtime_ms: i64,
+) -> VfsResult<Option<Box<dyn std::io::Write + Send>>> {
+    if let Some(extensions) = backend.extensions() {
+        if let Some(writer) = extensions.open_write_fresh_timed(path, size, mtime_ms)? {
+            return Ok(Some(writer));
+        }
+    }
+    backend.open_write_fresh(path, size)
+}
+
+/// `open_write_absent` with the source time in the create request
+/// (`BackendExtensions::open_write_absent_timed`).
+pub fn open_write_absent_timed<B: Backend + ?Sized>(
+    backend: &B,
+    path: &str,
+    size: u64,
+    mtime_ms: i64,
+) -> VfsResult<Option<Box<dyn std::io::Write + Send>>> {
+    match backend.extensions() {
+        Some(extensions) => extensions.open_write_absent_timed(path, size, mtime_ms),
+        None => Ok(None),
+    }
+}
+
 /// Server-side copies of a packet (`BackendExtensions::server_copy_batch`):
 /// one answer per `(source, stage, size)` item, in order; `Ok(None)` for
 /// every item without the extension, and then nothing was sent.

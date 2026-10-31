@@ -12,7 +12,9 @@ use super::super::backend::AgentBackend;
 use super::super::ext_stream::{is_unsupported_error, stream, unexpected, CANCEL_POLL};
 use super::super::ext_wire::{algorithm_to_wire, omission_from_wire};
 use crate::agent_proto::{Frame, WireHashEntry};
-use crate::vfs::{HashWalkEntry, HashWalkItem, HashWalkMeta, HashWalkRequest, VfsResult};
+use crate::vfs::{
+    HashWalkEntry, HashWalkItem, HashWalkMeta, HashWalkRequest, KeyedWalkItem, VfsResult,
+};
 
 pub(super) fn walk(
     backend: &AgentBackend,
@@ -94,6 +96,73 @@ pub(super) fn walk(
             Ok(())
         }
         other => Err(unexpected("hash walk", &other)),
+    });
+    match result {
+        Ok(()) => Ok(true),
+        Err(error) if items == 0 && is_unsupported_error(&error) => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+/// `WalkKeyed` (`walk-keys-v1`): the walk with listing attributes whose
+/// folders carry keys; `Ok(false)` without the label, before sending.
+pub(super) fn walk_keyed(
+    backend: &AgentBackend,
+    root: &str,
+    request: HashWalkRequest,
+    known: &[[u8; 16]],
+    tx: Sender<KeyedWalkItem>,
+    cancel: &AtomicBool,
+) -> VfsResult<bool> {
+    let features = backend.features();
+    if !features.extensions || !features.walk_keys || !request.meta {
+        return Ok(false);
+    }
+    let frame = Frame::WalkKeyed {
+        root: root.to_string(),
+        algorithm: algorithm_to_wire(request.algorithm),
+        min_bytes: request.min_bytes,
+        // The client puts the keys covering most first.
+        known: known[..known.len().min(crate::agent_proto::MAX_KNOWN_KEYS)].concat(),
+    };
+    let mut items = 0u64;
+    let mut forward = |item: KeyedWalkItem| -> io::Result<()> {
+        items += 1;
+        let mut pending = item;
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "agent hash walk canceled",
+                ));
+            }
+            match tx.send_timeout(pending, CANCEL_POLL) {
+                Ok(()) => return Ok(()),
+                Err(crossbeam_channel::SendTimeoutError::Timeout(item)) => pending = item,
+                Err(crossbeam_channel::SendTimeoutError::Disconnected(_)) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::BrokenPipe,
+                        "hash-walk receiver closed",
+                    ))
+                }
+            }
+        }
+    };
+    let result = stream(&backend.pool, frame, cancel, |frame| match frame {
+        Frame::HashPart { entries, omitted } => {
+            for entry in entries {
+                let entry = entry_from_wire(entry, true)?;
+                forward(KeyedWalkItem::Item(HashWalkItem::Entry(entry)))?;
+            }
+            for omitted in omitted {
+                let omitted = omission_from_wire(omitted);
+                forward(KeyedWalkItem::Item(HashWalkItem::Omitted(omitted)))?;
+            }
+            Ok(())
+        }
+        Frame::FolderRun(rel) => forward(KeyedWalkItem::Run { rel }),
+        Frame::FolderKey { rel, key, same } => forward(KeyedWalkItem::Key { rel, key, same }),
+        other => Err(unexpected("keyed hash walk", &other)),
     });
     match result {
         Ok(()) => Ok(true),

@@ -174,6 +174,7 @@ fn one_of_each() -> Vec<FsRequest> {
             min_bytes: 0,
             single_file: false,
             meta: false,
+            ..Default::default()
         }),
         FsRequest::ListDirBatch(FsListBatch {
             path: path(),

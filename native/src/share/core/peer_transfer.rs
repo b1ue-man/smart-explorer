@@ -414,7 +414,10 @@ pub(super) fn copy_error(error: &io::Error) -> io::Error {
 
 /// A stage writer that commits only when exactly `size` bytes came (sized
 /// copy stages, W1); dropping it before `flush` aborts the upload.
-pub(super) fn sized_writer(inner: Box<dyn Write + Send>, size: u64) -> Box<dyn Write + Send> {
+pub(in crate::share) fn sized_writer(
+    inner: Box<dyn Write + Send>,
+    size: u64,
+) -> Box<dyn Write + Send> {
     Box::new(SizedWriter {
         inner,
         expected: size,

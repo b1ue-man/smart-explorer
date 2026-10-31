@@ -1,0 +1,78 @@
+//! The frames of the keyed walk and of the attribute listing and status
+//! (`walk-keys-v1`, `meta-list-v1`) travel unchanged; known keys must be
+//! whole 16-byte prefixes within their bound.
+use crate::agent_proto::Frame;
+
+fn roundtrip(frame: Frame) -> Frame {
+    let bytes = frame.encode(11).unwrap();
+    assert_eq!(bytes.len(), frame.wire_len().unwrap());
+    let (id, decoded) = Frame::decode(&bytes).unwrap();
+    assert_eq!(id, 11);
+    decoded
+}
+
+#[test]
+fn abgleich_task_walk_key_frames_round_trip() {
+    let mut known = vec![3u8; 32];
+    known[16] = 9;
+    for frame in [
+        Frame::WalkKeyed {
+            root: "/srv/data".into(),
+            algorithm: 1,
+            min_bytes: 0,
+            known: known.clone(),
+        },
+        Frame::WalkKeyed {
+            root: "/".into(),
+            algorithm: 0,
+            min_bytes: 5,
+            known: Vec::new(),
+        },
+        Frame::FolderKey {
+            rel: "a/b".into(),
+            key: [0xab; 32],
+            same: true,
+        },
+        Frame::FolderKey {
+            rel: String::new(),
+            key: [1; 32],
+            same: false,
+        },
+        Frame::FolderRun("a/ä b".into()),
+        Frame::ListDirMeta("/home/u".into()),
+        Frame::StatMeta("/home/u/.x".into()),
+    ] {
+        assert_eq!(roundtrip(frame.clone()), frame);
+    }
+}
+
+#[test]
+fn abgleich_task_walk_key_frames_refuse_partial_known_keys() {
+    let frame = Frame::WalkKeyed {
+        root: "/".into(),
+        algorithm: 0,
+        min_bytes: 0,
+        known: vec![1; 17],
+    };
+    assert!(frame.encode(1).is_err());
+    let mut bytes = Frame::WalkKeyed {
+        root: "/".into(),
+        algorithm: 0,
+        min_bytes: 0,
+        known: vec![1; 16],
+    }
+    .encode(1)
+    .unwrap();
+    // A mark byte other than 0/1 is refused.
+    let mark = Frame::FolderKey {
+        rel: "r".into(),
+        key: [0; 32],
+        same: false,
+    };
+    let mut encoded = mark.encode(2).unwrap();
+    *encoded.last_mut().unwrap() = 7;
+    assert!(Frame::decode(&encoded).is_err());
+    // Cutting the known keys to 15 bytes leaves a frame that cannot decode.
+    bytes.truncate(bytes.len() - 1);
+    assert!(Frame::decode(&bytes).is_err());
+}

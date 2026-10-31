@@ -190,18 +190,21 @@ fn walk_file_sha256(sink: &Sink, id: u64, root: &str, cancel: &AtomicBool) -> io
             format!("Wurzel ist keine reguläre Datei: {root}"),
         ));
     }
-    let mut context = super::sha256::Sha256::new();
-    read_regular_exact(path, metadata.len(), cancel, &mut |chunk| {
-        context.update(chunk)
-    })?;
+    let sha256 = super::hash_cache::digest(
+        &metadata,
+        digest::SHA256,
+        || {
+            let mut context = super::sha256::Sha256::new();
+            read_regular_exact(path, metadata.len(), cancel, &mut |chunk| {
+                context.update(chunk)
+            })?;
+            Ok(context.finish_hex())
+        },
+        || std::fs::symlink_metadata(path),
+    )?;
+    super::hash_cache::flush();
     let mtime_ms = metadata.modified().ok().map(systemtime_ms).unwrap_or(0);
-    let entry = entry_frame(
-        String::new(),
-        false,
-        metadata.len(),
-        mtime_ms,
-        Some(context.finish_hex()),
-    );
+    let entry = entry_frame(String::new(), false, metadata.len(), mtime_ms, Some(sha256));
     emit(sink, id, &entry)?;
     emit(sink, id, &Frame::End)
 }

@@ -29,6 +29,8 @@ pub(crate) mod ext_wire;
 mod extensions;
 #[path = "core/lanes.rs"]
 mod lanes;
+#[path = "core/meta_list.rs"]
+mod meta_list;
 #[path = "core/metadata.rs"]
 mod metadata;
 #[path = "core/mux.rs"]
@@ -62,6 +64,9 @@ pub use backend::AgentBackend;
 pub use deploy::{artifact_for, deploy_over_sftp, remove_from_sftp, AgentArtifact};
 pub(crate) use metadata::{vfs_to_hash_entry, vfs_to_wire};
 
+#[cfg(all(test, unix))]
+#[path = "core/abgleich_task_keys_tests.rs"]
+mod abgleich_task_keys_tests;
 #[cfg(test)]
 #[path = "core/abgleich_task_walk_tests.rs"]
 mod abgleich_task_walk_tests;

@@ -104,6 +104,12 @@ pub(crate) struct FsHashWalk {
     /// only to hosts that offer `hash_walk_meta_v1`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub(crate) meta: bool,
+    /// `hash_walk_keys_v1` (with `meta`): folder keys (`FsHashWalkMessage::Key`);
+    /// `known` = base64 of concatenated 16-byte key prefixes the client holds.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) keys: bool,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub(crate) known: String,
 }
 
 /// `list_batches_v1`: the folder `path` in name order and in bounded

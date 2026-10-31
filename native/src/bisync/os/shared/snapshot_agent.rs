@@ -11,6 +11,10 @@
 //! them is asked without attributes where hidden entries count anyway; its
 //! items are collected and checked after the walk (`snapshot_host_walk.rs`).
 //!
+//! A side with folder keys (`snapshot_keyed.rs`) is asked for them first:
+//! folders whose key this or the other side of the pair stored come as one
+//! mark each and are replayed from the stored keys.
+//!
 //! The walk over listings does not test mount boundaries on a remote side
 //! either (`snapshot_policy::protected` only for local sides), so this walk
 //! serves `cross_mounts = false` as well. Hidden entries without a leading
@@ -22,7 +26,7 @@ use super::snapshot_hash::HashMode;
 use super::snapshot_host_stream::Stream;
 use super::snapshot_host_walk::Collector;
 use super::types::{BisyncOptions, Tree};
-use crate::vfs::{HashWalkItem, HashWalkRequest};
+use crate::vfs::{HashWalkItem, HashWalkRequest, KeyedWalkItem};
 use std::io;
 
 /// The tree of `ctx.root` (the context collects folders, filtered files and
@@ -39,6 +43,33 @@ pub(super) fn walk_snapshot_via_agent(ctx: &WalkContext<'_>) -> io::Result<Optio
     super::transfer_stream::check(ctx.cancel)?;
     let want_hash = ctx.hash == HashMode::FullFresh;
     let algorithm = want_hash.then_some(crate::analytics::HashAlgorithm::Md5);
+    if let Some(files) = &ctx.key_files {
+        let request = HashWalkRequest {
+            algorithm,
+            min_bytes: 0,
+            meta: true,
+        };
+        let keyed = super::snapshot_keyed::walk(ctx, files, |take, known| {
+            stream(
+                |item: KeyedWalkItem| take(item),
+                |sender| {
+                    crate::vfs::hash_walk_keyed(
+                        backend, ctx.root, request, known, sender, ctx.cancel,
+                    )
+                },
+            )
+        })?;
+        if let Some(keyed) = keyed {
+            super::run_log::note(
+                "Scan",
+                &format!(
+                    "{}: {} Ordner gleich ihrem Ordnerschlüssel (nicht übertragen), {} Ordner übertragen",
+                    ctx.root, keyed.reused, keyed.sent
+                ),
+            );
+            return Ok(Some(keyed.tree));
+        }
+    }
     let mut streamed = Stream::new(ctx);
     let with_meta = stream(
         |item| streamed.item(item),
@@ -139,9 +170,9 @@ pub(super) fn walk_snapshot_via_agent(ctx: &WalkContext<'_>) -> io::Result<Optio
 
 /// Runs `walk` on its own thread and hands every item to `take`; the first
 /// item it refuses stops the walk (its receiver goes away).
-fn stream(
-    mut take: impl FnMut(HashWalkItem) -> io::Result<()>,
-    walk: impl FnOnce(crossbeam_channel::Sender<HashWalkItem>) -> io::Result<bool> + Send,
+fn stream<T: Send>(
+    mut take: impl FnMut(T) -> io::Result<()>,
+    walk: impl FnOnce(crossbeam_channel::Sender<T>) -> io::Result<bool> + Send,
 ) -> io::Result<bool> {
     let (sender, receiver) = crossbeam_channel::bounded(1024);
     let mut failure = None;

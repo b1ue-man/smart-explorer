@@ -30,6 +30,9 @@ pub(crate) struct FsHostFeatures {
     /// special files as entries.
     #[serde(default, skip_serializing_if = "is_false")]
     pub(crate) hash_walk_meta_v1: bool,
+    /// `HashWalk { keys }`: folder keys, and known folders as one mark.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) hash_walk_keys_v1: bool,
     /// `HashWalk { single_file }`: the SHA-256 of one regular file computed
     /// on the host, answered as one entry with an empty `rel`.
     #[serde(default, skip_serializing_if = "is_false")]
@@ -80,6 +83,7 @@ impl FsHostFeatures {
             duplicate_search_v1: true,
             hash_walk_v1: true,
             hash_walk_meta_v1: true,
+            hash_walk_keys_v1: true,
             hash_file_v1: true,
             list_batches_v1: true,
             remote_trash_v1: crate::analytics::host_recycle_available(),
@@ -107,6 +111,7 @@ impl FsHostFeatures {
             (self.duplicate_search_v1, "duplicate_search_v1"),
             (self.hash_walk_v1, "hash_walk_v1"),
             (self.hash_walk_meta_v1, "hash_walk_meta_v1"),
+            (self.hash_walk_keys_v1, "hash_walk_keys_v1"),
             (self.hash_file_v1, "hash_file_v1"),
             (self.list_batches_v1, "list_batches_v1"),
             (self.remote_trash_v1, "remote_trash_v1"),

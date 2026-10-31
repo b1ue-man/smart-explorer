@@ -227,7 +227,7 @@ impl Backend for GDriveBackend {
     }
 
     fn open_write_fresh(&self, path: &str, size: u64) -> VfsResult<Option<Box<dyn Write + Send>>> {
-        super::sized_writer::open_fresh(self, path, size).map(Some)
+        super::sized_writer::open_fresh(self, path, size, None).map(Some)
     }
 
     fn open_read_at(

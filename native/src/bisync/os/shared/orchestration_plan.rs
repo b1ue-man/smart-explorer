@@ -1,6 +1,6 @@
 //! Planning against Backend facts, with cheap on-demand content comparison,
 //! followed by the rule stage of the job kind (`plan_rules`).
-use std::io::{self, Read};
+use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::compare::TimeRules;
@@ -151,29 +151,13 @@ fn hash_checked(
             "Server-Prüfsumme nicht verfügbar",
         ));
     }
-    let mut reader = crate::vfs::open_read_regular(backend, path, before.id.as_deref())?;
-    let mut digest = md5::Context::new();
-    let mut bytes = 0u64;
-    let mut buffer = [0u8; 65_536];
-    loop {
-        if cancel.load(Ordering::Acquire) {
-            return Err(io::Error::new(
-                io::ErrorKind::Interrupted,
-                "Prüfsummenvergleich abgebrochen",
-            ));
-        }
-        let read = reader.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        bytes = bytes.saturating_add(read as u64);
-        digest.consume(&buffer[..read]);
-    }
+    // Read here or answered by this device's digest cache (E9).
+    let hash = super::snapshot_hash::hash_file_cached(backend, path, cancel)?;
     let after = backend.stat(path)?;
     if after.is_dir
         || after.is_symlink
         || after.special
-        || bytes != planned.size
+        || after.size != planned.size
         || after.size != before.size
         || after.mtime_ms != before.mtime_ms
         || after.id != before.id
@@ -183,7 +167,7 @@ fn hash_checked(
             "Datei beim Prüfsummenvergleich geändert",
         ));
     }
-    Ok(super::snapshot_hash::md5_to_u64(&digest.compute().0))
+    Ok(hash)
 }
 
 /// Every independent guard is checked, even if an earlier guard is confirmed.

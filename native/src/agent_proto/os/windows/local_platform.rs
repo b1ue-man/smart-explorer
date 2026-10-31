@@ -281,3 +281,9 @@ pub(crate) fn rename_no_replace(source: &Path, destination: &Path) -> io::Result
 
 #[path = "folder_reservation.rs"]
 pub(crate) mod folder_reservation;
+
+/// The digest cache keys on a status change time (`hash_cache.rs`), which
+/// `std::fs::Metadata` does not give on Windows: no stamp, no cached digest.
+pub(crate) fn change_stamp(_metadata: &std::fs::Metadata) -> Option<[i128; 5]> {
+    None
+}

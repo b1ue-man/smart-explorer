@@ -7,6 +7,21 @@ use std::{
 };
 
 impl BackendExtensions for GuardedBackend {
+    /// The served backend's timed one-step writer (`open_write_fresh` with
+    /// the source time in its create request), behind the same write check.
+    fn open_write_fresh_timed(
+        &self,
+        path: &str,
+        size: u64,
+        mtime_ms: i64,
+    ) -> VfsResult<Option<Box<dyn Write + Send>>> {
+        self.write(path)?;
+        Ok(
+            vfs::open_write_fresh_timed(&*self.inner, path, size, mtime_ms)?
+                .map(|writer| self.writer(writer)),
+        )
+    }
+
     fn directory_reservation_supported(&self, root: &str) -> bool {
         if self.read(root).is_err() {
             return false;

@@ -252,9 +252,11 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   only. It is not view state, so it is not per tab.
 - **Android scan bridge** (`mobile/os/shared/scan.rs`): the consumer is its own
   thread without frame pacing, so the 64-message limit does not exist there and
-  the desktop backlog does not occur. Open: `scan.view` rebuilds the tree while
-  holding the lock the consumer needs. Not changed, because the client poll rate
-  is not in this repository.
+  the desktop backlog does not occur. `scan.view` takes its snapshot under the
+  lock in constant time (the entries are shared by `Arc`; a batch that arrives
+  while a view holds them copies them once) and builds the tree and the window
+  without the lock. The answer keys `revision`, `unchanged` and `visibleTotal`
+  are unchanged.
 - **Row parity with the storing side:** with `meta = true` a folder entry carries
   the size its listing reports (agent `metadata.len()`, Share the listing size;
   without `meta` it stays 0), and `hidden` follows the listing's rule (agent: dot
@@ -898,10 +900,15 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   `Frame::ListMeta` (tag 82, answered by `HashPart`s with the entry name as
   `rel` and every attribute, then `End`) and gets `hidden`, `system` and the
   creation time as the served backend lists them. Older services keep
-  `ListTolerant` without those flags. Not covered: `list_dir` and `stat`
-  through the service still carry `hidden = false` (`Frame::Dir`/`Meta` have
-  no field for it, and their single-reply path with the metadata timeout has
-  no attribute-carrying reply frame).
+  `ListTolerant` without those flags. `list_dir` and `stat` (Explorer lists)
+  go through `Frame::ListDirMeta` (tag 87) and `Frame::StatMeta` (tag 88),
+  label `meta-list-v1`, answered by `HashPart`s with every attribute, then
+  `End` (`agent/core/meta_list.rs`, service `backend_hash.rs`); the SSH agent
+  of this build answers them too, plus `ListMeta`, with dot names hidden and
+  creation times from `metadata.created()` (`agent_proto/os/shared/meta_list.rs`).
+  Older servers keep `ListDir`/`Stat` (no `hidden` on the service, no
+  creation time on the agent). These replies stream (`ext_stream::stream`),
+  not through the single-reply metadata call with its 20 s timeout.
 - **Background service:** `WalkHashed3` relays only the served backend's own
   walk (a Share host); without one it answers unsupported, so the client lists
   folders itself in parallel. `WalkHashed2` keeps the service's own sequential
@@ -916,9 +923,11 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   progress, `ctx.listed` and the early copies advance during the walk, only
   the folder in progress is held, and items below folders `scan_listing` does
   not enter (filters, hidden, own and system folders) or below failed folders
-  are dropped without counting against `walk_entries` (review W8, G2). Folders
-  without items (empty, not opened) are checked when the walk ends; an item
-  outside its folder's run fails the side. A side without `meta` is asked
+  are dropped without counting against `walk_entries` (review W8, G2). A folder
+  that could not be opened is checked as soon as its failure is known; an
+  empty folder at the next run mark of a keyed walk, otherwise when the walk
+  ends; an item outside its folder's run fails the side. A side with folder
+  keys is asked with keys first (`snapshot_keyed.rs`, below). A side without `meta` is asked
   without it only where hidden entries count anyway (`include_hidden = true`);
   its items are regrouped and checked after the walk, as before. Child paths
   are joined locally, so tree, folders, filtered files, omissions and
@@ -963,6 +972,60 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   (`apptrash::hidden_app_folders_in`) are asked once per listed folder
   (`snapshot_policy::AppParents`), not per entry. Quick mirror and other
   callers of `protected` keep the former per-call path.
+
+- **Folder keys (E10, `agent_proto/core/folder_key.rs`).** A key is the
+  SHA-256 over a canonical form of exactly what `snapshot_host_stream` takes
+  from a folder's items (exact name, kind, for files size, time in ms and
+  digest, hidden, omissions with reason code, the folder's own failure) plus
+  the keys of its walked subfolders (folder entries without an omission of
+  the same name). Folder size/time, creation time, the system flag and
+  omission texts are not in it; the client therefore reduces sent items to
+  the same fields (`Part::item`) before the check, so a sent and a replayed
+  folder reach the snapshot identically. Do not add a field to that check
+  without adding it to the key (and bumping `se-folder-run-v1`).
+- **Keyed walk on the wire.** Agent `walk-keys-v1`: `WalkKeyed` (85, known =
+  concatenated 16-byte key prefixes, at most 262 144) answered by
+  `FolderRun` (89) before every run, `HashPart`s, `FolderKey` (86, `same` =
+  subtree not sent) and `End`. Share `hash_walk_keys_v1`: `FsHashWalk.keys`
+  (needs `meta`), `known` as base64 (at most 10 240 prefixes so the request
+  stays below the 256 KiB control frame), messages `Run`, `Batch`, `Key`,
+  `Done` (totals count what was sent). The service relays it only to a backend
+  with its own keyed walk and answers unsupported otherwise. A run is always
+  sent whole after its mark; a key follows when everything below it was sent.
+  Emission happens under the key tree's lock, so a key never overtakes a run
+  of its subtree. Runs held back for a possible `same` stay below 32 MiB; the
+  oldest held chain is sent beyond that (less saving, same result).
+- **Stored folder keys are content-addressed** (`folder-keys/<side>.sefk`,
+  `bisync/os/shared/folder_key_file.rs`): a record is valid for every folder
+  with its key, so nothing goes stale and a moved folder is found again. Each
+  record is checked against its key when the file is read. The file is
+  replaced only after a complete keyed walk whose sent folders all match the
+  keys the host named; otherwise it is left as it was. Both sides' files are
+  offered as known, so a side equal to what the other side stored (after a
+  copy) sends nothing either. The first walk of a side without stored keys
+  sends everything (reading the other side first would serialize the walks).
+- **W8 with run marks:** an empty folder is checked when the next run mark
+  arrives; a folder that could not be opened when its parent's run ends (or
+  when its own failure arrives), not when the walk ends.
+- **Digest cache next to the data (E9, `agent_proto/os/shared/hash_cache.rs`).**
+  Key: device and inode plus size, modification and status-change time in
+  ns, per algorithm. Racy rule (Git `racy-git`): a stored digest counts only
+  when both times lie more than 2 s before the moment it was taken, so a file
+  written within that slack is hashed again. Windows has no change time in
+  `std::fs::Metadata`: nothing is cached there. The agent stores
+  `hash-cache-v1.bin` in `$XDG_CACHE_HOME/se-agent` (or `~/.cache/se-agent`;
+  a confined `--serve-root` agent may not write it, which only costs the
+  reuse), the app in its data folder; tests never write it unless a test
+  configures a folder. Checksum mode keeps its guarantee: no write keeps that
+  status.
+- **Daylight saving in the sync comparison:** `TimeRules::across` applies the
+  one-hour rule when either side is FAT (`MtimePrecision::local_time_shifts`),
+  whatever the other side's precision (before: only when the coarser common
+  precision was FAT's), through `transfer::time_window::dst_shift_equal`.
+  exFAT stays without it (its times carry a UTC offset, exFAT spec 7.4.10).
+- **SSH agent digests:** an agent that cannot answer `FILE_DIGEST` hands
+  `content_digest` (and `content_md5`) to its SSH connection, whose server
+  hashes through an exec request; the service answers only for its backend.
 
 ## Share / local network
 

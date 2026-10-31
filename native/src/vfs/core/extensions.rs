@@ -9,7 +9,8 @@ use std::time::Duration;
 use super::delete::{RecursiveDeleteFailure, RecursiveDeleteProgress, RecursiveDeleteReport};
 use super::extension_types::{
     ChangeNotice, ChangeSignalMode, ChangeSubscription, HashWalkItem, HashWalkRequest,
-    RecycleExpectation, RecycleOutcome, StageFinish, StageFinished, TargetLimits, VfsListing,
+    KeyedWalkItem, RecycleExpectation, RecycleOutcome, StageFinish, StageFinished, TargetLimits,
+    VfsListing,
 };
 use super::transfer_evidence::{EvidencePutOutcome, FileEvidence, PreparePut, StageEvidence};
 use super::{Backend, BatchPut, VfsMeta, VfsResult, VolumeIdentity};
@@ -257,6 +258,23 @@ pub trait BackendExtensions: Backend {
         Ok(false)
     }
 
+    /// `hash_walk` with `request.meta` whose folders carry keys
+    /// (`agent_proto::folder_key`, agent `walk-keys-v1`, Share
+    /// `hash_walk_keys_v1`): every folder's run, then its end mark with its
+    /// key; a folder whose key prefix is in `known` comes as one `same` mark
+    /// instead of its subtree. `Ok(false)` only before any item.
+    fn hash_walk_keyed(
+        &self,
+        root: &str,
+        request: HashWalkRequest,
+        known: &[[u8; 16]],
+        tx: crossbeam_channel::Sender<KeyedWalkItem>,
+        cancel: &AtomicBool,
+    ) -> VfsResult<bool> {
+        let _ = (root, request, known, tx, cancel);
+        Ok(false)
+    }
+
     /// SHA-256 of the regular file `path`, computed on the device that stores
     /// it (call it through `vfs::content_digest`). `Ok(None)` = not possible
     /// without moving the content over the network; the default for every
@@ -365,6 +383,42 @@ pub trait BackendExtensions: Backend {
     fn open_write_absent(&self, path: &str, size: u64) -> VfsResult<Option<Box<dyn Write + Send>>> {
         let _ = (path, size);
         Ok(None)
+    }
+
+    /// The MD5 (32 lowercase hex digits) of the regular file `path`, formed
+    /// on the device that stores it, for the sync's checksum signature (call
+    /// it through `vfs::content_md5`). `Ok(None)` = not possible without
+    /// moving the content; the default.
+    fn content_md5(&self, path: &str, cancel: &AtomicBool) -> VfsResult<Option<String>> {
+        let _ = (path, cancel);
+        Ok(None)
+    }
+
+    /// `Backend::open_write_fresh` whose file carries the source time
+    /// `mtime_ms` (Unix ms, `<= 0` unknown) from its creation on, where the
+    /// create request takes it (Drive `modifiedTime`). `Ok(None)` = no timed
+    /// variant here: `vfs::open_write_fresh_timed` opens the untimed writer.
+    fn open_write_fresh_timed(
+        &self,
+        path: &str,
+        size: u64,
+        mtime_ms: i64,
+    ) -> VfsResult<Option<Box<dyn Write + Send>>> {
+        let _ = (path, size, mtime_ms);
+        Ok(None)
+    }
+
+    /// `open_write_absent` whose file carries the source time `mtime_ms`
+    /// (Unix ms, `<= 0` unknown) from its creation on, where the create
+    /// request takes it (Drive); otherwise the untimed writer.
+    fn open_write_absent_timed(
+        &self,
+        path: &str,
+        size: u64,
+        mtime_ms: i64,
+    ) -> VfsResult<Option<Box<dyn Write + Send>>> {
+        let _ = mtime_ms;
+        self.open_write_absent(path, size)
     }
 
     /// Several server-side copies within this namespace at once, for a

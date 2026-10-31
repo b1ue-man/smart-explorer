@@ -1,13 +1,12 @@
 //! When two observations of one file count as the same (FS2, Y46/Y47/Y52):
 //! content hashes where both have one, otherwise size plus modification time
-//! at the precision the sides store times with, the job's tolerance and – on
-//! FAT, which stores local time – exactly one hour apart after a
-//! daylight-saving change.
+//! at the precision the sides store times with, the job's tolerance and – when
+//! either side is FAT, which stores local time – exactly one hour apart after
+//! a daylight-saving change (exFAT keeps a UTC offset with its times and is
+//! no such side, `MtimePrecision::local_time_shifts`).
 use crate::vfs::MtimePrecision;
 
 use super::types::{BisyncOptions, CompareMode, PairSide, Sig};
-
-const HOUR_MS: u64 = 3_600_000;
 
 /// The time precision of both sides of a pair (`vfs::mtime_precision`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,10 +27,38 @@ impl TimeRules {
         self.a.coarser(self.b)
     }
 
+    /// The comparison between the two sides: their common precision, and
+    /// the daylight-saving rule when either side stores local time (FAT),
+    /// whatever the other side's precision.
+    pub fn across(&self) -> TimeCompare {
+        TimeCompare {
+            precision: self.cross(),
+            local_shift: self.a.local_time_shifts() || self.b.local_time_shifts(),
+        }
+    }
+
     pub fn side(&self, side: PairSide) -> MtimePrecision {
         match side {
             PairSide::A => self.a,
             PairSide::B => self.b,
+        }
+    }
+}
+
+/// How two times are compared: at `precision`, and with `local_shift` an
+/// exact hour apart (within one step) also counts as the same (FAT).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TimeCompare {
+    pub precision: MtimePrecision,
+    pub local_shift: bool,
+}
+
+impl From<MtimePrecision> for TimeCompare {
+    /// One side with its own record: the rule of that side's precision.
+    fn from(precision: MtimePrecision) -> Self {
+        Self {
+            precision,
+            local_shift: precision.local_time_shifts(),
         }
     }
 }
@@ -47,24 +74,33 @@ pub(super) enum Against {
 /// Two Unix-millisecond times are the same instant at `precision`, within the
 /// job's window, or (FAT) exactly one hour apart. Never overflows (Y52).
 pub(super) fn same_time(a_ms: i64, b_ms: i64, precision: MtimePrecision, window_ms: i64) -> bool {
+    same_time_as(a_ms, b_ms, precision.into(), window_ms)
+}
+
+/// `same_time` with the daylight-saving rule of `times`: a side with local
+/// time (FAT) reports an untouched file exactly one hour off after a clock
+/// change (`transfer::time_window::dst_shift_equal`, within one step of the
+/// common precision). Sizes are compared before (`same_file`).
+pub(super) fn same_time_as(a_ms: i64, b_ms: i64, times: TimeCompare, window_ms: i64) -> bool {
     let distance = a_ms.abs_diff(b_ms);
     let window = u64::try_from(window_ms).unwrap_or(0);
-    if distance <= window || precision.same_instant(a_ms, b_ms) {
+    if distance <= window || times.precision.same_instant(a_ms, b_ms) {
         return true;
     }
-    if !precision.local_time_shifts() {
-        return false;
-    }
-    let shifted = distance.abs_diff(HOUR_MS);
-    let step = precision.step_ms().unwrap_or(1).max(1);
-    shifted <= step
+    let step = times.precision.step_ms().unwrap_or(1).max(1);
+    times.local_shift
+        && crate::transfer::time_window::dst_shift_equal(
+            a_ms,
+            b_ms,
+            i64::try_from(step).unwrap_or(i64::MAX),
+        )
 }
 
 /// Two signatures describe the same file content.
 pub(super) fn same_file(
     x: Sig,
     y: Sig,
-    precision: MtimePrecision,
+    times: impl Into<TimeCompare>,
     opts: &BisyncOptions,
     _against: Against,
 ) -> bool {
@@ -80,7 +116,7 @@ pub(super) fn same_file(
         // checksum run upgrades it with authoritative action signatures.
         CompareMode::Checksum => false,
         CompareMode::MtimeSize => {
-            same_time(x.mtime_ms, y.mtime_ms, precision, opts.modify_window_ms)
+            same_time_as(x.mtime_ms, y.mtime_ms, times.into(), opts.modify_window_ms)
         }
     }
 }
@@ -89,13 +125,13 @@ pub(super) fn same_file(
 pub(super) fn same_entry(
     x: Option<Sig>,
     y: Option<Sig>,
-    precision: MtimePrecision,
+    times: impl Into<TimeCompare>,
     opts: &BisyncOptions,
     against: Against,
 ) -> bool {
     match (x, y) {
         (None, None) => true,
-        (Some(x), Some(y)) => same_file(x, y, precision, opts, against),
+        (Some(x), Some(y)) => same_file(x, y, times, opts, against),
         _ => false,
     }
 }
@@ -113,3 +149,7 @@ pub(super) fn worth_hashing(x: Option<Sig>, y: Option<Sig>, opts: &BisyncOptions
         _ => false,
     }
 }
+
+#[cfg(test)]
+#[path = "abgleich_task_compare_tests.rs"]
+mod abgleich_task_tests;

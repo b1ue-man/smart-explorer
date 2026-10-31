@@ -133,17 +133,18 @@ pub use self::error_classes::{is_target_refusal, omission_reason};
 pub use self::extension_calls::confirm_namespace;
 pub use self::extension_calls::default_sync_child_path as literal_child_path;
 pub use self::extension_calls::{
-    change_signal, change_signal_mode, find_duplicates, finish_stage, hash_walk, list_dir_tolerant,
-    mtime_precision, open_read_regular, open_write_copy_stage_timed, previous_state_identities,
-    recycle, remove_tree, replace_staged_reversible, supports_duplicate_search, supports_hash_walk,
-    supports_recycle, supports_remove_tree, sync_child_path, sync_filesystem, sync_path, sync_stat,
-    target_limits, unix_mode, version_archive_policy, volume_identity,
+    change_signal, change_signal_mode, content_md5, find_duplicates, finish_stage, hash_walk,
+    hash_walk_keyed, list_dir_tolerant, mtime_precision, open_read_regular,
+    open_write_copy_stage_timed, previous_state_identities, recycle, remove_tree,
+    replace_staged_reversible, supports_duplicate_search, supports_hash_walk, supports_recycle,
+    supports_remove_tree, sync_child_path, sync_filesystem, sync_path, sync_stat, target_limits,
+    unix_mode, version_archive_policy, volume_identity,
 };
 pub use self::extension_types::{
     ChangeNotice, ChangeSignalMode, ChangeSubscription, HashWalkEntry, HashWalkItem, HashWalkMeta,
-    HashWalkRequest, MtimePrecision, NameIssue, NameLimit, OmissionReason, RecycleExpectation,
-    RecycleOutcome, StageDurability, StageFinish, StageFinished, TargetLimits, VfsListing,
-    VfsOmission,
+    HashWalkRequest, KeyedWalkItem, MtimePrecision, NameIssue, NameLimit, OmissionReason,
+    RecycleExpectation, RecycleOutcome, StageDurability, StageFinish, StageFinished, TargetLimits,
+    VfsListing, VfsOmission,
 };
 pub use self::extensions::{BackendExtensions, VersionArchivePolicy};
 pub use self::local_extensions::{
@@ -153,9 +154,9 @@ pub use self::staging_names::is_staging_name;
 pub(crate) use self::staging_names::{fit_stage_name, is_unique_stage, split_stage_name};
 pub use self::transfer_evidence::{
     batch_put_times, create_dirs, host_batch_limits, open_read_evidence, open_write_absent,
-    promote_copy_stage_evidence, put_batch_evidence, server_copy_batch, single_put,
-    supports_create_dirs, take_stage_evidence, transfer_evidence, transfer_scope,
-    EvidencePutOutcome, FileEvidence, PreparePut, StageEvidence,
+    open_write_absent_timed, open_write_fresh_timed, promote_copy_stage_evidence,
+    put_batch_evidence, server_copy_batch, single_put, supports_create_dirs, take_stage_evidence,
+    transfer_evidence, transfer_scope, EvidencePutOutcome, FileEvidence, PreparePut, StageEvidence,
 };
 pub use self::tree_remove_listed::{remove_tree_listed, TREE_LEAF_PORTION};
 pub use self::tree_remove_pipelined::remove_leaves_pipelined;

@@ -21,6 +21,12 @@ pub const LABEL_WALK_META: &str = "walk-meta-v1";
 /// `ListMeta`: tolerant listings with the listing attributes of every entry
 /// (hidden, system, creation time), announced by the background service only.
 pub const LABEL_LIST_META: &str = "list-meta-v1";
+/// `WalkKeyed` with folder keys and `FolderKey` marks (`folder_key.rs`).
+pub const LABEL_WALK_KEYS: &str = "walk-keys-v1";
+/// `ListDirMeta` and `StatMeta`: listing and status with every listing
+/// attribute (hidden, system, creation time); the SSH agent also answers
+/// `ListMeta` under it.
+pub const LABEL_META_LIST: &str = "meta-list-v1";
 /// `WriteNewTimed`: a new stage gets the source time before it is closed and
 /// is answered with what the server read back (`StageWritten`). The SSH
 /// agent only; the background service keeps `FinishStage`.
@@ -67,6 +73,10 @@ pub fn server_version(batch: bool) -> String {
     version.push_str(LABEL_FILE_IDENTITY);
     version.push('.');
     version.push_str(LABEL_STAGE_MTIME);
+    version.push('.');
+    version.push_str(LABEL_WALK_KEYS);
+    version.push('.');
+    version.push_str(LABEL_META_LIST);
     if batch {
         version.push('.');
         version.push_str(LABEL_BATCH_MTIME);
@@ -117,6 +127,10 @@ pub struct ServerFeatures {
     pub walk_meta: bool,
     /// `ListMeta` (`list-meta-v1`).
     pub list_meta: bool,
+    /// `WalkKeyed` (`walk-keys-v1`).
+    pub walk_keys: bool,
+    /// `ListDirMeta`, `StatMeta` (`meta-list-v1`).
+    pub meta_list: bool,
     /// `WriteNewTimed` (`stage-mtime-v1`).
     pub stage_mtime: bool,
     /// `BatchPut` entries with times (`batch-mtime-v1`).
@@ -154,6 +168,8 @@ impl ServerFeatures {
                 LABEL_EXT => features.extensions = true,
                 LABEL_WALK_META => features.walk_meta = true,
                 LABEL_LIST_META => features.list_meta = true,
+                LABEL_WALK_KEYS => features.walk_keys = true,
+                LABEL_META_LIST => features.meta_list = true,
                 LABEL_STAGE_MTIME => features.stage_mtime = true,
                 LABEL_BATCH_MTIME => features.batch_mtime = true,
                 LABEL_FOLDER_RESERVATION => features.folder_reservation = true,

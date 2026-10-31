@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use super::omissions::OmissionKind;
 use super::omissions::SyncOmissions;
 use super::snapshot::WalkFilter;
-use super::snapshot_hash::{hash_file, md5_hex_to_u64, md5_to_u64, HashMode};
+use super::snapshot_hash::{hash_file_cached, md5_hex_to_u64, md5_to_u64, HashMode};
 use super::snapshot_types::DirSet;
 use super::sync_overload::{under_permits, Progress};
 use super::types::{Sig, Tree};
@@ -52,6 +52,9 @@ pub(super) struct WalkContext<'a> {
     pub(super) host_listed: bool,
     /// The facts of a local walk established once (`snapshot_policy`).
     pub(super) local: Option<super::snapshot_policy::LocalFacts>,
+    /// A remote side's folder key files (`snapshot_keyed.rs`); `None` reads
+    /// without folder keys.
+    pub(super) key_files: Option<super::snapshot_keyed::KeyFiles>,
 }
 
 /// What one folder contributes to the snapshot.
@@ -288,7 +291,18 @@ fn content_hash(ctx: &WalkContext<'_>, path: &str, listed: &VfsMeta) -> io::Resu
             "listed checksum file identity changed",
         ));
     }
-    let result = if let Some((flow, job)) = &ctx.reads {
+    // The MD5 formed where the file is stored, where the side offers one
+    // (`vfs::content_md5`, E9): no download for it.
+    let stored = if ctx.be.is_local() {
+        None
+    } else {
+        crate::vfs::content_md5(ctx.be, path, ctx.cancel)?
+            .map(|hex| md5_hex_to_u64(&hex))
+            .filter(|hash| *hash != 0)
+    };
+    let result = if let Some(hash) = stored {
+        hash
+    } else if let Some((flow, job)) = &ctx.reads {
         under_permits(
             ctx.cancel,
             &ctx.progress,
@@ -297,7 +311,7 @@ fn content_hash(ctx: &WalkContext<'_>, path: &str, listed: &VfsMeta) -> io::Resu
         )
         .unwrap_or_else(|| Err(canceled()))?
     } else {
-        hash_file(ctx.be, path, ctx.cancel)?
+        hash_file_cached(ctx.be, path, ctx.cancel)?
     };
     super::apply_guard::revalidate(ctx.be, path, &observed, "listed checksum file")?;
     Ok(result)

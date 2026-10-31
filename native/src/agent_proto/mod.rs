@@ -32,16 +32,22 @@ mod extension_parts;
 mod features;
 #[path = "os/shared/file_identity.rs"]
 mod file_identity;
+#[path = "core/folder_key.rs"]
+mod folder_key;
 #[path = "os/shared/fs.rs"]
 mod fs;
 #[path = "os/shared/hash.rs"]
 mod hash;
+#[path = "os/shared/hash_cache.rs"]
+pub(crate) mod hash_cache;
 #[cfg(not(windows))]
 #[path = "os/linux_os/local_platform.rs"]
 mod local_platform;
 #[cfg(windows)]
 #[path = "os/windows/local_platform.rs"]
 mod local_platform;
+#[path = "os/shared/meta_list.rs"]
+mod meta_list;
 #[path = "core/node_codec.rs"]
 mod node_codec;
 #[path = "core/ops_types.rs"]
@@ -101,6 +107,8 @@ mod types;
 mod vault_error;
 #[path = "os/shared/walk_hashed.rs"]
 mod walk_hashed;
+#[path = "os/shared/walk_keyed.rs"]
+mod walk_keyed;
 #[path = "os/shared/write_new.rs"]
 mod write_new;
 
@@ -121,6 +129,10 @@ pub(crate) use extension_parts::{
 pub use features::{
     lz4_switched_off, server_version, server_version_with, service_slots, ServerFeatures,
     LABEL_BATCH, LABEL_CREDIT, LABEL_LZ4, LABEL_RANGE, LABEL_STAGE,
+};
+pub(crate) use folder_key::{
+    entry_part, failure_part, folder_key, known_prefix, omission_part, parse_known, run_digest,
+    EntryKind, FolderKey, KeyEmit, KeyTree, KnownKey, RunKeys, MAX_KNOWN_KEYS,
 };
 pub use fs::{is_pseudo_dir, list_local, stat_local, walk_local, WalkCounter};
 pub(crate) use local_platform::available_space;

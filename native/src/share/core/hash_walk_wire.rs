@@ -1,5 +1,6 @@
 //! Messages of a host-side hash walk (`hash_walk_v1`, `FsResponse::HashWalk`;
-//! listing attributes with `hash_walk_meta_v1`).
+//! listing attributes with `hash_walk_meta_v1`, folder keys with
+//! `hash_walk_keys_v1`).
 use serde::{Deserialize, Serialize};
 
 use super::list_batch_wire::FsOmission;
@@ -31,6 +32,19 @@ pub(crate) enum FsHashWalkMessage {
     Done {
         entries: u64,
         omitted: u64,
+    },
+    /// `hash_walk_keys_v1`: the run of the folder `rel` begins (every item
+    /// up to the next `Run` or `Key` is one of it).
+    Run {
+        rel: String,
+    },
+    /// `hash_walk_keys_v1`: the key of the folder `rel` (64 lowercase hex
+    /// digits); `same`: its subtree is the known one and was not sent.
+    Key {
+        rel: String,
+        key: String,
+        #[serde(default, skip_serializing_if = "is_false")]
+        same: bool,
     },
 }
 

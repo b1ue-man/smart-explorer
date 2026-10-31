@@ -32,7 +32,7 @@ mod peer_stage_ranges;
 #[path = "peer_stages.rs"]
 pub(super) mod peer_stages;
 #[path = "peer_transfer.rs"]
-mod peer_transfer;
+pub(super) mod peer_transfer;
 
 pub struct PeerBackend {
     pub(super) endpoint_source: PeerEndpointSource,

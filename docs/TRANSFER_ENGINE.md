@@ -676,6 +676,42 @@ Auftrag läuft dann im eigenen Prozess (`transfer_job_client.rs:155`).
 - `se mv --conflict update` und der MCP `move` mit `file_conflict: update` nur lokal; gleiche Dateien
   bleiben in der Quelle, der Quellordner bleibt dann stehen.
 
+## Sync: Ordnerschlüssel, Prüfschlüssel und Zeitvergleich (Quellstand 2026-10-31, nicht gebaut, nicht veröffentlicht)
+
+Plan: `docs/plaene/2026-10-31-sync-abgleich-schnell/plan.md` Abschnitt E (E8–E11, Validierung mit
+Primärquellen). Oberflächen und Einstellungen bleiben unverändert; „Vergleichen“ und Sync-Läufe nutzen
+den Weg selbst, das Lauf-Protokoll nennt je Seite „… Ordner gleich ihrem Ordnerschlüssel (nicht
+übertragen), … Ordner übertragen“.
+
+- **Ordnerschlüssel (E10).** Share-Host, se-agent und der Hintergrunddienst (wenn sein Backend einen
+  eigenen Durchlauf hat) bilden beim Durchlauf für jeden Ordner einen SHA-256-Schlüssel über die
+  Angaben, die der Vergleich aus ihm nimmt, und die Schlüssel seiner Unterordner
+  (`native/src/agent_proto/core/folder_key.rs`). Der Client bietet die Schlüssel an, die diese und die
+  andere Seite des Paars beim letzten Durchlauf gespeichert haben; ein Ordner mit bekanntem Schlüssel
+  kommt als eine Marke statt seines Teilbaums, seine Einträge kommen aus der gespeicherten Datei
+  (`native/src/bisync/os/shared/snapshot_keyed.rs`). Unveränderte Seite: eine Marke für die Wurzel,
+  keine Auflistung, kein Eintrag über die Verbindung. Geänderte Datei: nur die Ordner auf ihrem Pfad.
+  Der Schnappschuss, und damit Aktionen, Konflikte, Auslassungen, Basis und Löschschutz, ist derselbe
+  wie ohne Schlüssel. Ältere Gegenstellen: bisheriger Durchlauf. Lokale Seiten: kein Schlüssel (keine
+  Verbindung, deren Übertragung er ersparen könnte).
+- **Prüfschlüssel ohne Dateiübertragung (E9).** Im Prüfsummen-Modus rechnet die Seite mit der Datei die
+  MD5 im Durchlauf (Share-Host, se-agent); vor jedem Download in `snapshot_dir::content_hash` fragt der
+  Sync `vfs::content_md5` der Seite. Ein persistenter Hash-Cache auf der Seite der Datei (se-agent,
+  Share-Host, lokale Seite) erspart das erneute Lesen unveränderter Dateien: Schlüssel Gerät, Inode,
+  Größe, Änderungs- und Statusänderungszeit (ns); kein Treffer, solange eine der Zeiten nicht mehr als
+  2 s vor dem Erfassungszeitpunkt liegt (Git „racy-git“); höchstens 500 000 Einträge; unter Windows kein
+  Cache (keine Statusänderungszeit). Ein SSH-Agent ohne eigene Datei-Prüfsumme gibt `content_digest` an
+  seine SSH-Verbindung weiter (Exec-Befehl, siehe Tabelle oben). Grenze: SFTP ohne Agent, FTP und WebDAV
+  ohne MD5 in der Auflistung laden im Prüfsummen-Modus weiter, weil die Sync-Signatur eine MD5 ist und
+  diese Server SHA-256 liefern (`vfs::content_md5` ist der Anschluss für eine MD5 am Ort der Datei).
+- **Sommerzeit.** Ist eine Seite FAT (Ortszeit), gelten gleiche Größen mit genau einer Stunde Abstand
+  (± ein Schritt der gemeinsamen Genauigkeit) als gleich, unabhängig von der Genauigkeit der anderen
+  Seite (`bisync/core/compare.rs`, `transfer::time_window::dst_shift_equal`). exFAT speichert einen
+  UTC-Abstand (exFAT-Spezifikation 7.4.10) und bleibt ohne diese Regel.
+- **Explorer-Listen über den Dienst und den Agenten** tragen `hidden` wie das bediente Backend bzw. nach
+  Punktnamen und die Erstellzeit (`meta-list-v1`: `ListDirMeta`, `StatMeta`); ältere Gegenstellen wie
+  bisher.
+
 ## Was erhalten bleibt
 
 Stufen + Veröffentlichen ohne Ersetzen, keine halbfertigen Dateien unter dem Zielnamen,

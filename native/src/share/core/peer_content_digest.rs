@@ -31,6 +31,7 @@ pub(super) fn digest(
         min_bytes: 0,
         single_file: true,
         meta: false,
+        ..Default::default()
     });
     let mut found: Option<ContentDigest> = None;
     peer_stream::call(backend, request, cancel, |response| match response {

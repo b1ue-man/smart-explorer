@@ -20,7 +20,7 @@ use super::metadata::{hash_entry_to_vfs, wire_to_vfs};
 use crate::agent_proto::{query, Frame};
 use crate::vfs::{
     self as vfs, Backend, BackendExtensions, ChangeNotice, ChangeSignalMode, ChangeSubscription,
-    HashWalkItem, HashWalkRequest, RecursiveDeleteFailure, RecursiveDeleteProgress,
+    HashWalkItem, HashWalkRequest, KeyedWalkItem, RecursiveDeleteFailure, RecursiveDeleteProgress,
     RecursiveDeleteReport, RecycleExpectation, RecycleOutcome, StageFinish, StageFinished,
     TargetLimits, VfsListing, VfsResult, VolumeIdentity,
 };
@@ -187,9 +187,11 @@ impl BackendExtensions for AgentBackend {
         }
         let mut listing = VfsListing::default();
         let never = AtomicBool::new(false);
-        if self.features().service && self.features().list_meta {
+        let features = self.features();
+        if features.service && features.list_meta || features.meta_list {
             // The served backend's hidden and system flags and creation
-            // times, as its own listing reports them (`list-meta-v1`).
+            // times, as its own listing reports them (`list-meta-v1`); an
+            // SSH agent's dot names and creation times (`meta-list-v1`).
             stream(
                 &self.pool,
                 Frame::ListMeta(path.to_string()),
@@ -378,13 +380,43 @@ impl BackendExtensions for AgentBackend {
         hash_walk::walk(self, root, request, tx, cancel)
     }
 
-    /// Hashed by the agent next to the data; never through the SFTP fallback.
+    fn hash_walk_keyed(
+        &self,
+        root: &str,
+        request: HashWalkRequest,
+        known: &[[u8; 16]],
+        tx: Sender<KeyedWalkItem>,
+        cancel: &AtomicBool,
+    ) -> VfsResult<bool> {
+        hash_walk::walk_keyed(self, root, request, known, tx, cancel)
+    }
+
+    /// Hashed by the agent next to the data. An SSH agent that cannot hash
+    /// (older agent without `FILE_DIGEST`) hands the request to its SSH
+    /// connection, whose server hashes through an exec request
+    /// (`sftp/core/digest_exec.rs`); neither path moves the content. The
+    /// background service answers for its own backend only.
     fn content_digest(
         &self,
         path: &str,
         cancel: &AtomicBool,
     ) -> VfsResult<Option<vfs::ContentDigest>> {
-        content_digest::file_digest(self, path, cancel)
+        if let Some(digest) = content_digest::file_digest(self, path, cancel)? {
+            return Ok(Some(digest));
+        }
+        if self.features().service {
+            return Ok(None);
+        }
+        vfs::content_digest(&*self.inner, path, cancel)
+    }
+
+    /// An SSH agent's connection forms the MD5 where it can; the agent's
+    /// own walk carries MD5s for whole trees (`walk_hashed.rs`).
+    fn content_md5(&self, path: &str, cancel: &AtomicBool) -> VfsResult<Option<String>> {
+        if self.features().service {
+            return Ok(None);
+        }
+        vfs::content_md5(&*self.inner, path, cancel)
     }
 
     fn supports_recycle(&self, path: &str) -> VfsResult<bool> {

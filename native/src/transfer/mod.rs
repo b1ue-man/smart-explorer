@@ -18,8 +18,6 @@ mod clipboard_parallel;
 pub(crate) mod compress_policy;
 #[path = "os/shared/copy_commit.rs"]
 mod copy_commit;
-#[path = "core/creation_time.rs"]
-pub(crate) mod creation_time;
 #[path = "os/shared/download_file.rs"]
 mod download_file;
 #[path = "os/shared/downloads.rs"]

@@ -82,7 +82,7 @@ impl BackendExtensions for PeerBackend {
             return self.open_write_copy_stage_sized(path, size);
         }
         let writer = self.open_owned_writer_timed(path, Some(mtime_ms))?;
-        Ok(super::peer_transfer::sized_writer(writer, size))
+        Ok(super::backend::peer_transfer::sized_writer(writer, size))
     }
     fn finish_stage(&self, stage: &str, finish: StageFinish) -> io::Result<StageFinished> {
         let ticket = self.verify_owned_stage(stage)?;
@@ -167,6 +167,19 @@ impl BackendExtensions for PeerBackend {
             return Err(io::ErrorKind::Interrupted.into());
         }
         super::peer_hash_walk::walk(self, root, request, tx, cancel)
+    }
+    fn hash_walk_keyed(
+        &self,
+        root: &str,
+        request: HashWalkRequest,
+        known: &[[u8; 16]],
+        tx: crossbeam_channel::Sender<crate::vfs::KeyedWalkItem>,
+        cancel: &AtomicBool,
+    ) -> io::Result<bool> {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(io::ErrorKind::Interrupted.into());
+        }
+        super::peer_hash_walk::walk_keyed(self, root, request, known, tx, cancel)
     }
     fn content_digest(
         &self,

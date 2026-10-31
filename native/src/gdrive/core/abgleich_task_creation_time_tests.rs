@@ -1,10 +1,10 @@
-//! A file written in one step (`open_write_fresh`, `open_write_absent`) has
-//! the source's time from its creation on: the create request carries
-//! `modifiedTime` (the engine offers it while it opens the writer), also for
-//! files in folders the transfer created itself.
+//! A file written in one step (`open_write_fresh_timed`,
+//! `open_write_absent_timed`) has the source's time from its creation on: the
+//! create request carries `modifiedTime` (the engine opens the writer with
+//! it), also for files in folders the transfer created itself.
 use super::absent_engine_task_tests::{drive_with_target, upload};
 use super::task_drive::{drive_server, job_backend, write_fresh};
-use crate::transfer::creation_time::CreationTime;
+use crate::vfs::BackendExtensions;
 use serde_json::Value;
 use std::io::Write;
 use std::time::{Duration, SystemTime};
@@ -25,13 +25,15 @@ fn set_source_time(path: &std::path::Path) {
 }
 
 #[test]
-fn abgleich_task_drive_fresh_writer_creates_with_the_offered_time() {
+fn abgleich_task_drive_fresh_writer_creates_with_the_given_time() {
     let (drive, server) = drive_server();
     let backend = job_backend(&drive, &server);
-    {
-        let _offer = CreationTime::offer(SOURCE_SECONDS as i64 * 1000);
-        write_fresh(&backend, "Job/mit.txt", b"abc").unwrap();
-    }
+    let mut timed = backend
+        .open_write_fresh_timed("Job/mit.txt", 3, SOURCE_SECONDS as i64 * 1000)
+        .unwrap()
+        .expect("Drive offers the timed one-step writer");
+    timed.write_all(b"abc").unwrap();
+    timed.flush().unwrap();
     write_fresh(&backend, "Job/ohne.txt", b"abc").unwrap();
     let with = drive.named("job-folder", "mit.txt");
     let without = drive.named("job-folder", "ohne.txt");
@@ -39,7 +41,7 @@ fn abgleich_task_drive_fresh_writer_creates_with_the_offered_time() {
     assert_eq!(
         modified(&without[0]),
         DEFAULT_TIME,
-        "no offer, no time: the provider's own"
+        "untimed writer: the provider's own time"
     );
     let creates = server
         .requests()
@@ -50,14 +52,16 @@ fn abgleich_task_drive_fresh_writer_creates_with_the_offered_time() {
 }
 
 #[test]
-fn abgleich_task_drive_absent_writer_creates_with_the_offered_time() {
+fn abgleich_task_drive_absent_writer_creates_with_the_given_time() {
     let (drive, server, backend) = drive_with_target(|_, _| {});
-    let mut writer = {
-        let _offer = CreationTime::offer(SOURCE_SECONDS as i64 * 1000);
-        crate::vfs::open_write_absent(&backend, "Ziel/neu.txt", 3)
-            .unwrap()
-            .expect("Drive offers the one-step writer")
-    };
+    let mut writer = crate::vfs::open_write_absent_timed(
+        &backend,
+        "Ziel/neu.txt",
+        3,
+        SOURCE_SECONDS as i64 * 1000,
+    )
+    .unwrap()
+    .expect("Drive offers the one-step writer");
     writer.write_all(b"abc").unwrap();
     writer.flush().unwrap();
     let named = drive.named("target", "neu.txt");

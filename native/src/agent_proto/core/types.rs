@@ -301,6 +301,33 @@ pub enum Frame {
     /// (`list-meta-v1`, background service): `HashPart`s, whose entries carry
     /// the entry name as `rel` and always their attributes, then `End`.
     ListMeta(String),
+    /// `WalkHashed3` with `meta` and folder keys (`walk-keys-v1`,
+    /// `folder_key.rs`): `HashPart`s and `FolderKey` marks, then `End`.
+    /// `known`: concatenated 16-byte prefixes of keys the client holds; a
+    /// folder with such a key is answered by one `same` mark instead of its
+    /// subtree.
+    WalkKeyed {
+        root: String,
+        algorithm: u8,
+        min_bytes: u64,
+        known: Vec<u8>,
+    },
+    /// The key of a folder of a `WalkKeyed`: `same = false` after the folder
+    /// and everything below it were sent, `same = true` instead of them.
+    FolderKey {
+        rel: String,
+        key: [u8; 32],
+        same: bool,
+    },
+    /// The run of the folder (path relative to the walk root) of a
+    /// `WalkKeyed` begins: every `HashPart` up to the next mark is of it.
+    FolderRun(String),
+    /// `list_dir` with every listing attribute (`meta-list-v1`): `HashPart`s
+    /// whose entries carry the name as `rel`, then `End`.
+    ListDirMeta(String),
+    /// `stat` with every listing attribute (`meta-list-v1`): one `HashPart`
+    /// with one entry named as the path's last component, then `End`.
+    StatMeta(String),
     /// A portion of a `WalkHashed3` or of a `ListMeta`.
     HashPart {
         entries: Vec<WireHashEntry>,

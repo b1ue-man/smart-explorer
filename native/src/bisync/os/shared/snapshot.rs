@@ -169,11 +169,14 @@ pub(super) fn walk_snapshot_with_options(
         fold_case,
         opts,
         None,
+        None,
     )
 }
 
 /// `walk_snapshot_with_options` that tells `listed` about every folder it
-/// listed completely (G4 MS14: copies during the scan).
+/// listed completely (G4 MS14: copies during the scan). `peer` is the other
+/// side of the pair: its folder keys are offered to this side's walk too
+/// (`snapshot_keyed.rs`).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn walk_snapshot_observed(
     be: &dyn Backend,
@@ -186,6 +189,7 @@ pub(super) fn walk_snapshot_observed(
     fold_case: bool,
     opts: BisyncOptions,
     listed: Option<&dyn super::early_copy::FolderListed>,
+    peer: Option<(&dyn Backend, &str)>,
 ) -> io::Result<Snapshot> {
     if cancel.load(Ordering::Acquire) {
         return Err(io::Error::new(
@@ -223,6 +227,10 @@ pub(super) fn walk_snapshot_observed(
         local: be
             .is_local()
             .then(|| super::snapshot_policy::LocalFacts::new(be, root)),
+        key_files: (!be.is_local()).then(|| {
+            let algorithm = (hash == HashMode::FullFresh).then_some("md5");
+            super::snapshot_keyed::KeyFiles::of(be, root, peer, algorithm)
+        }),
     };
     let started = std::time::Instant::now();
     let tree = match super::snapshot_agent::walk_snapshot_via_agent(&context)? {
@@ -254,6 +262,9 @@ pub(super) fn walk_snapshot_observed(
         }
     };
     drop(context);
+    if be.is_local() && hash != HashMode::None {
+        crate::agent_proto::hash_cache::flush();
+    }
     Ok(Snapshot {
         tree,
         filtered: filtered.into_inner().unwrap_or_else(|e| e.into_inner()),
@@ -299,6 +310,7 @@ pub(super) fn with_walk_context<T>(
         listed: None,
         host_listed: true,
         local: None,
+        key_files: None,
     };
     f(&context)
 }

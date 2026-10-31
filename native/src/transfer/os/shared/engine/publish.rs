@@ -65,12 +65,10 @@ pub(crate) fn open(
 ) -> Result<Destination, OpError> {
     let path = engine.folders.path_of(&file.rel);
     // The one-step writers below create the file without a stage, so a
-    // provider that takes the time in its create request (Drive) reads the
-    // source's time from this offer while the writer is opened.
-    let _creation_time = crate::transfer::creation_time::CreationTime::offer(file.mtime_ms);
+    // provider that takes the time in its create request (Drive) gets the
+    // source's time with the open itself.
     if let Some(size) = size.filter(|_| parent_created && !engine.resume) {
-        if let Some(writer) = target
-            .open_write_fresh(&path, size)
+        if let Some(writer) = crate::vfs::open_write_fresh_timed(target, &path, size, file.mtime_ms)
             .map_err(OpError::target)?
         {
             return Ok(Destination::Fresh { path, writer });
@@ -81,7 +79,7 @@ pub(crate) fn open(
         && !file.absent_refused
         && engine.conflict_of(file) == crate::types::Conflict::Rename;
     if let Some(size) = size.filter(|_| one_request) {
-        match crate::vfs::open_write_absent(target, &path, size) {
+        match crate::vfs::open_write_absent_timed(target, &path, size, file.mtime_ms) {
             Ok(Some(writer)) => return Ok(Destination::Absent { path, writer }),
             // Not offered, or the name is taken already: the staged path
             // below numbers it.

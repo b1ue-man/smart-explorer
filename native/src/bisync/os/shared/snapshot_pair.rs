@@ -122,7 +122,8 @@ pub(super) fn read_pair_with(
                  hash: HashMode,
                  prev: &Tree,
                  duplicates: bool,
-                 listed: Option<&dyn FolderListed>|
+                 listed: Option<&dyn FolderListed>,
+                 peer: (&dyn Backend, &str)|
      -> SideRead {
         let _current = super::run_log::enter(log.clone());
         let walked = std::panic::catch_unwind(AssertUnwindSafe(|| {
@@ -137,6 +138,7 @@ pub(super) fn read_pair_with(
                 fold_case,
                 opts,
                 listed,
+                Some(peer),
             )
         }));
         let failure = match walked {
@@ -151,12 +153,30 @@ pub(super) fn read_pair_with(
         let side_a = std::thread::Builder::new()
             .name("sync-read-a".to_string())
             .spawn_scoped(scope, move || {
-                read(SIDE_A, a, root_a, hash_a, prev_a, duplicates_a, listed_a)
+                read(
+                    SIDE_A,
+                    a,
+                    root_a,
+                    hash_a,
+                    prev_a,
+                    duplicates_a,
+                    listed_a,
+                    (b, root_b),
+                )
             });
         let side_b = std::thread::Builder::new()
             .name("sync-read-b".to_string())
             .spawn_scoped(scope, move || {
-                read(SIDE_B, b, root_b, hash_b, prev_b, duplicates_b, listed_b)
+                read(
+                    SIDE_B,
+                    b,
+                    root_b,
+                    hash_b,
+                    prev_b,
+                    duplicates_b,
+                    listed_b,
+                    (a, root_a),
+                )
             });
         for (side, spawned) in [(SIDE_A, side_a.is_ok()), (SIDE_B, side_b.is_ok())] {
             if !spawned {

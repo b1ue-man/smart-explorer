@@ -5,8 +5,8 @@
 //! creates its private object the same way. Both stream instead of spooling to
 //! a temporary file while the transfer memory budget allows.
 //! Both one-step writers put the source's time into the create request
-//! (`modifiedTime`) when the engine offered it while opening them
-//! (`transfer::creation_time`).
+//! (`modifiedTime`) when they are opened with one (`open_write_fresh_timed`,
+//! `open_write_absent_timed`).
 //! `open_absent` (G3-08b) creates a new file under its final name in an
 //! existing folder the same way, then proves the name leads to it alone
 //! (absent_write.rs).
@@ -39,13 +39,14 @@ pub(super) fn open_fresh(
     backend: &GDriveBackend,
     path: &str,
     size: u64,
+    mtime_ms: Option<i64>,
 ) -> VfsResult<Box<dyn Write + Send>> {
     Ok(Box::new(SizedWriter::open(
         backend,
         path,
         size,
         Purpose::Fresh,
-        crate::transfer::creation_time::offered(),
+        mtime_ms,
     )?))
 }
 
@@ -53,13 +54,14 @@ pub(super) fn open_absent(
     backend: &GDriveBackend,
     path: &str,
     size: u64,
+    mtime_ms: Option<i64>,
 ) -> VfsResult<Box<dyn Write + Send>> {
     Ok(Box::new(SizedWriter::open(
         backend,
         path,
         size,
         Purpose::Absent,
-        crate::transfer::creation_time::offered(),
+        mtime_ms,
     )?))
 }
 

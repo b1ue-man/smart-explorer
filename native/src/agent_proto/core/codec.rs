@@ -283,9 +283,16 @@ impl Frame {
                                     None => {
                                         match frame_encode::walk_meta_frames::decode(t, &mut r)? {
                                             Some(frame) => frame,
-                                            None => {
-                                                return Err(bad(&format!("unknown frame tag {t}")))
-                                            }
+                                            None => match frame_encode::walk_key_frames::decode(
+                                                t, &mut r,
+                                            )? {
+                                                Some(frame) => frame,
+                                                None => {
+                                                    return Err(bad(&format!(
+                                                        "unknown frame tag {t}"
+                                                    )))
+                                                }
+                                            },
                                         }
                                     }
                                 },

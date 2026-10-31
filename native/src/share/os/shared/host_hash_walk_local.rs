@@ -44,6 +44,7 @@ fn folder(
     local: &mut crate::agent_proto::WalkLocal<Job>,
     batch: &mut Batch<'_, '_>,
 ) -> io::Result<()> {
+    batch.begin_folder(&rel)?;
     batch.shared().check()?;
     if depth > MAX_DEPTH {
         return batch.hole(
@@ -176,7 +177,24 @@ fn file(
             "Datei nach der Auflistung geändert",
         ));
     }
-    let digest = shared.digest(&file, entry.size)?;
+    // The host's digest cache (`agent_proto::hash_cache`): an unchanged file
+    // is not read again.
+    let code = match shared.request.algo {
+        Some(crate::share::wire::FsHashAlgo::Md5) => crate::agent_proto::digest::MD5,
+        Some(crate::share::wire::FsHashAlgo::Sha256) => crate::agent_proto::digest::SHA256,
+        _ => return shared.digest(&file, entry.size),
+    };
+    let digest = crate::agent_proto::hash_cache::digest(
+        &before,
+        code,
+        || {
+            shared
+                .digest(&file, entry.size)?
+                .ok_or_else(|| io::Error::other("Prüfsumme fehlt"))
+        },
+        || file.metadata(),
+    )
+    .map(Some)?;
     let after = file.metadata()?;
     if before.len() != after.len() || before.modified().ok() != after.modified().ok() {
         return Err(io::Error::new(

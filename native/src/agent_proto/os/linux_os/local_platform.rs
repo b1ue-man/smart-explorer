@@ -310,3 +310,16 @@ mod tests {
 
 #[path = "folder_reservation.rs"]
 pub(crate) mod folder_reservation;
+
+/// The status of a file the digest cache keys on (`hash_cache.rs`): device,
+/// inode, size, modification and status-change time in nanoseconds. Every
+/// write changes the change time, and no call sets it back.
+pub(crate) fn change_stamp(metadata: &std::fs::Metadata) -> Option<[i128; 5]> {
+    Some([
+        i128::from(metadata.dev()),
+        i128::from(metadata.ino()),
+        i128::from(metadata.size()),
+        i128::from(metadata.mtime()) * 1_000_000_000 + i128::from(metadata.mtime_nsec()),
+        i128::from(metadata.ctime()) * 1_000_000_000 + i128::from(metadata.ctime_nsec()),
+    ])
+}

@@ -58,7 +58,16 @@ impl Sha256 {
     }
 
     /// The digest as 64 lowercase hex digits.
-    pub(crate) fn finish_hex(mut self) -> String {
+    pub(crate) fn finish_hex(self) -> String {
+        let mut out = String::with_capacity(64);
+        for byte in self.finish() {
+            out.push_str(&format!("{byte:02x}"));
+        }
+        out
+    }
+
+    /// The 32 digest bytes.
+    pub(crate) fn finish(mut self) -> [u8; 32] {
         let bit_len = self.len.wrapping_mul(8);
         let mut pad = [0u8; 64];
         pad[0] = 0x80;
@@ -69,11 +78,9 @@ impl Sha256 {
         };
         self.update(&pad[..pad_len]);
         self.update(&bit_len.to_be_bytes());
-        let mut out = String::with_capacity(64);
-        for word in self.state {
-            for byte in word.to_be_bytes() {
-                out.push_str(&format!("{byte:02x}"));
-            }
+        let mut out = [0u8; 32];
+        for (slot, word) in out.chunks_exact_mut(4).zip(self.state) {
+            slot.copy_from_slice(&word.to_be_bytes());
         }
         out
     }

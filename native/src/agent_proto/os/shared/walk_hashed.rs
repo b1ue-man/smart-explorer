@@ -22,9 +22,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
+use super::folder_key::KeyTree;
 use super::fs::{is_pseudo_dir, systemtime_ms};
 use super::ops_types::{digest, omission};
 use super::session::{emit, Sink};
+use super::walk_keyed::{Keyed, WireItem};
 use super::{Frame, WalkLocal, WalkOutput, WireHashEntry, WireHashMeta, WireOmission};
 
 /// Estimated encoded bytes after which a `HashPart` is sent.
@@ -51,10 +53,18 @@ struct Out<'a> {
     /// Held from a part sent in the middle of a folder (`meta`) until that
     /// folder's last part is out.
     held: Option<MutexGuard<'a, ()>>,
+    /// `WalkKeyed`: the folder runs go through the walk's key tree.
+    keyed: Option<Keyed<'a>>,
 }
 
 impl<'a> Out<'a> {
-    fn new(sink: &'a Sink, id: u64, form: Form, run: &'a Mutex<()>) -> Self {
+    fn new(
+        sink: &'a Sink,
+        id: u64,
+        form: Form,
+        run: &'a Mutex<()>,
+        keys: Option<&'a KeyTree<WireItem>>,
+    ) -> Self {
         Self {
             sink,
             id,
@@ -64,6 +74,7 @@ impl<'a> Out<'a> {
             bytes: 0,
             run,
             held: None,
+            keyed: keys.map(Keyed::new),
         }
     }
 
@@ -71,7 +82,18 @@ impl<'a> Out<'a> {
         self.form == Form::Parts { meta: true }
     }
 
+    /// The folder `rel` starts (keyed walks track every folder's run).
+    fn begin(&mut self, rel: &str) -> io::Result<()> {
+        match &mut self.keyed {
+            Some(keyed) => keyed.begin(rel),
+            None => Ok(()),
+        }
+    }
+
     fn entry(&mut self, entry: WireHashEntry) -> io::Result<()> {
+        if let Some(keyed) = &mut self.keyed {
+            return keyed.entry(entry);
+        }
         if self.form == Form::Single {
             return emit(
                 self.sink,
@@ -100,6 +122,9 @@ impl<'a> Out<'a> {
             reason,
             detail: detail.into(),
         };
+        if let Some(keyed) = &mut self.keyed {
+            return keyed.omit(omission);
+        }
         if self.form == Form::Single {
             return emit(self.sink, self.id, &Frame::HashOmitted(omission));
         }
@@ -126,6 +151,9 @@ impl<'a> Out<'a> {
 
     /// The current folder is done: a run lock held for it is released.
     fn end_folder(&mut self) -> io::Result<()> {
+        if let Some(keyed) = &mut self.keyed {
+            return keyed.end(self.sink, self.id);
+        }
         if self.held.is_some() {
             return WalkOutput::flush(self);
         }
@@ -190,6 +218,41 @@ pub(super) fn walk(
     form: Form,
     cancel: &AtomicBool,
 ) -> io::Result<()> {
+    run_walk(sink, id, root, (algorithm, min_bytes), form, None, cancel)?;
+    emit(sink, id, &Frame::End)
+}
+
+/// The walk of `WalkHashed3` with `meta` whose folder runs go through `keys`
+/// (`walk_keyed.rs`); the caller sends `End`.
+pub(super) fn walk_keyed(
+    sink: &Sink,
+    id: u64,
+    root: &str,
+    (algorithm, min_bytes): (u8, u64),
+    keys: &KeyTree<WireItem>,
+    cancel: &AtomicBool,
+) -> io::Result<()> {
+    let form = Form::Parts { meta: true };
+    run_walk(
+        sink,
+        id,
+        root,
+        (algorithm, min_bytes),
+        form,
+        Some(keys),
+        cancel,
+    )
+}
+
+fn run_walk(
+    sink: &Sink,
+    id: u64,
+    root: &str,
+    (algorithm, min_bytes): (u8, u64),
+    form: Form,
+    keys: Option<&KeyTree<WireItem>>,
+    cancel: &AtomicBool,
+) -> io::Result<()> {
     if !matches!(algorithm, digest::NONE | digest::MD5) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -210,17 +273,21 @@ pub(super) fn walk(
         cancel,
     };
     let run = Mutex::new(());
-    super::ordered_walk(
+    let walked = super::ordered_walk(
         vec![(base.to_path_buf(), String::new())],
         super::walk_threads(),
         cancel,
-        || Out::new(sink, id, form, &run),
+        || Out::new(sink, id, form, &run, keys),
         |(dir, rel), local, out| {
+            out.begin(&rel)?;
             walk.folder(&dir, &rel, local, out)?;
             out.end_folder()
         },
-    )?;
-    emit(sink, id, &Frame::End)
+    );
+    if algorithm == digest::MD5 {
+        super::hash_cache::flush();
+    }
+    walked
 }
 
 struct Walk<'a> {
@@ -351,7 +418,13 @@ impl Walk<'_> {
             return Ok(());
         }
         let md5 = if self.algorithm == digest::MD5 {
-            match super::ext_ops::md5_file(&path, metadata.len(), self.cancel) {
+            let digest = super::hash_cache::digest(
+                &metadata,
+                digest::MD5,
+                || super::ext_ops::md5_file(&path, metadata.len(), self.cancel),
+                || std::fs::symlink_metadata(&path),
+            );
+            match digest {
                 Ok(md5) => Some(md5),
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => return Err(error),
                 Err(error) => return out.omit(rel, failure_reason(&error), error.to_string()),
