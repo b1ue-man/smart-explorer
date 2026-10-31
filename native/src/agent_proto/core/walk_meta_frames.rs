@@ -1,5 +1,9 @@
 //! Wire layout of the hash walk in portions (`walk-meta-v1`, tags 79..=80):
-//! `WalkHashed3` and its `HashPart`s. Same little-endian, length-prefixed
+//! `WalkHashed3` and its `HashPart`s, and of the attribute listing of the
+//! background service (`list-meta-v1`, tag 82: `ListMeta`, answered by
+//! `HashPart`s) and the timed stage write of the SSH agent
+//! (`stage-mtime-v1`, tag 83: `WriteNewTimed`, answered by tag 84:
+//! `StageWritten`). Same little-endian, length-prefixed
 //! rules as the other frames; a server without the label answers the
 //! unknown tag with an error, so a client sends it only after the label.
 //!
@@ -31,6 +35,11 @@ const MIN_OMISSION_BYTES: usize = 9;
 pub(in super::super) fn payload_len(frame: &Frame) -> Option<io::Result<usize>> {
     Some(match frame {
         Frame::WalkHashed3 { root, .. } => super::string_len(root).and_then(|len| sum(len, 10)),
+        Frame::ListMeta(path) => super::string_len(path),
+        Frame::WriteNewTimed { path, .. } => super::string_len(path).and_then(|len| sum(len, 8)),
+        Frame::StageWritten { object, .. } => {
+            optional_string_len(object).and_then(|len| sum(len, 16))
+        }
         Frame::HashPart { entries, omitted } => part_len(entries, omitted),
         _ => return None,
     })
@@ -50,6 +59,25 @@ pub(in super::super) fn encode(frame: &Frame, b: &mut Vec<u8>) -> bool {
             b.push(*algorithm);
             put_u64(b, *min_bytes);
             b.push(if *meta { WALK_META } else { 0 });
+        }
+        Frame::ListMeta(path) => {
+            b.push(82);
+            put_str(b, path);
+        }
+        Frame::WriteNewTimed { path, mtime_ms } => {
+            b.push(83);
+            put_str(b, path);
+            put_i64(b, *mtime_ms);
+        }
+        Frame::StageWritten {
+            size,
+            mtime_ms,
+            object,
+        } => {
+            b.push(84);
+            put_u64(b, *size);
+            put_i64(b, *mtime_ms);
+            put_opt_str(b, object);
         }
         Frame::HashPart { entries, omitted } => {
             b.push(80);
@@ -93,6 +121,16 @@ pub(in super::super) fn decode(tag: u8, r: &mut Reader) -> io::Result<Option<Fra
             }
             Frame::HashPart { entries, omitted }
         }
+        82 => Frame::ListMeta(r.string()?),
+        83 => Frame::WriteNewTimed {
+            path: r.string()?,
+            mtime_ms: r.i64()?,
+        },
+        84 => Frame::StageWritten {
+            size: r.u64()?,
+            mtime_ms: r.i64()?,
+            object: r.opt_str()?,
+        },
         _ => return Ok(None),
     }))
 }

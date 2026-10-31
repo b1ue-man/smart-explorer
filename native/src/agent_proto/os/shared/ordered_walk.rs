@@ -52,6 +52,9 @@ struct Pool<J> {
     changed: Condvar,
     /// `State::idle`, readable without the lock after every folder.
     idle: AtomicUsize,
+    /// Set by the first error: every thread stops after its current folder
+    /// instead of reading its own pending folders to the end.
+    stopped: AtomicBool,
 }
 
 impl<J> Pool<J> {
@@ -67,6 +70,7 @@ impl<J> Pool<J> {
             state.error = Some(error);
         }
         state.done = true;
+        self.stopped.store(true, Ordering::Relaxed);
         drop(state);
         self.changed.notify_all();
     }
@@ -139,8 +143,9 @@ impl<J> Drop for Enlisted<'_, J> {
 
 /// Walks from `roots` on `threads` threads. `work` reads one folder, puts its
 /// entries into the thread's output and pushes the folders below it; the
-/// first error (or a cancel) ends the walk and is returned. Each thread's
-/// output comes from `output` and is flushed before the thread waits or ends.
+/// first error (or a cancel) ends the walk and is returned; every thread then
+/// stops after the folder it is reading. Each thread's output comes from
+/// `output` and is flushed before the thread waits or ends.
 pub(crate) fn run<J, O, M, W>(
     roots: Vec<J>,
     threads: usize,
@@ -164,6 +169,7 @@ where
         }),
         changed: Condvar::new(),
         idle: AtomicUsize::new(0),
+        stopped: AtomicBool::new(false),
     };
     let worker = || {
         let _enlisted = Enlisted { pool: &pool };
@@ -173,6 +179,11 @@ where
         };
         let mut busy = false;
         loop {
+            // Another thread failed: its error ends the walk, so nothing this
+            // thread still holds is read or sent.
+            if pool.stopped.load(Ordering::Relaxed) {
+                break;
+            }
             let job = match local.pending.pop() {
                 Some(job) => job,
                 None => {

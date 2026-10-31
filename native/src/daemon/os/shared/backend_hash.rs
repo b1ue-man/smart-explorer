@@ -1,6 +1,6 @@
 //! `WalkHashed2` (`ext-v1`) and `WalkHashed3` (`walk-meta-v1`, in portions
 //! and on request with listing attributes) for the backend the service
-//! serves. A backend that walks next to its data (a Share host with
+//! serves, and its tolerant listing with attributes (`ListMeta`). A backend that walks next to its data (a Share host with
 //! `hash_walk_v1`, and `hash_walk_meta_v1` for attributes) streams its own
 //! items; every other one is walked here: tolerant listings, links, special
 //! files and unreadable entries as omissions (with attributes: links and
@@ -15,7 +15,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use ring::digest::{Context, SHA256};
 
 use crate::agent::ext_wire::{algorithm_from_wire, omission_to_wire};
-use crate::agent_proto::{Frame, WireHashEntry, WireHashMeta, WireOmission, CHUNK};
+use crate::agent::vfs_to_hash_entry;
+use crate::agent_proto::{emit_meta_listing_parts, Frame, WireHashEntry, WireHashMeta};
+use crate::agent_proto::{WireOmission, CHUNK};
 use crate::analytics::HashAlgorithm;
 use crate::vfs::{
     self as vfs, BackendHandle, HashWalkItem, HashWalkRequest, OmissionReason, VfsOmission,
@@ -54,7 +56,10 @@ fn rel_join(parent: &str, name: &str) -> String {
 const PART_BYTES: usize = 256 * 1024;
 
 /// Sends the items of one walk: one frame each (`WalkHashed2`) or in
-/// `HashPart`s (`WalkHashed3`).
+/// `HashPart`s (`WalkHashed3`) that keep the order of the relayed walk: the
+/// client forwards a part's entries before its omissions, so a part never
+/// holds an entry after an omission (the folder runs of a `meta` walk reach
+/// the client as the storing host sent them).
 struct Items<'a> {
     sink: &'a Sink,
     id: u64,
@@ -89,6 +94,9 @@ impl<'a> Items<'a> {
                 HashWalkItem::Omitted(omitted) => Frame::HashOmitted(omission_to_wire(omitted)),
             };
             return emit(self.sink, self.id, &frame);
+        }
+        if matches!(item, HashWalkItem::Entry(_)) && !self.omitted.is_empty() {
+            self.flush()?;
         }
         match item {
             HashWalkItem::Entry(entry) => {
@@ -136,7 +144,7 @@ impl<'a> Items<'a> {
     }
 }
 
-/// `WalkHashed2` or `WalkHashed3` of the served backend.
+/// `WalkHashed2`, `WalkHashed3` or `ListMeta` of the served backend.
 pub(super) fn serve(
     sink: &Sink,
     id: u64,
@@ -163,6 +171,15 @@ pub(super) fn serve(
             (algorithm, min_bytes, meta),
             cancel,
         ),
+        // The listing as the served backend reports it, hidden and system
+        // flags and creation times included (`list-meta-v1`).
+        Frame::ListMeta(path) => {
+            let listing = vfs::list_dir_tolerant(&**backend, &path)?;
+            let entries = listing.entries.into_iter().map(vfs_to_hash_entry);
+            let omitted = listing.omitted.into_iter().map(omission_to_wire);
+            emit_meta_listing_parts(entries, omitted, |part| emit(sink, id, &part))?;
+            emit(sink, id, &Frame::End)
+        }
         other => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("no hash walk request: {other:?}"),

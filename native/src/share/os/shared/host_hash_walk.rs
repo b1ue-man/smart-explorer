@@ -2,6 +2,15 @@
 //! Local roots are walked on the host's threads (`host_hash_walk_local.rs`);
 //! every folder reaches the stream before the entries below it. Files are
 //! opened only for a requested digest: size and time come from the listing.
+//!
+//! The items keep the order they were produced in: a batch never holds an
+//! entry after an omission (the client forwards a batch's entries before
+//! its omissions). With `meta` (`hash_walk_meta_v1`) the items of one folder
+//! (its entries and omissions, and the omission of the folder itself) form
+//! one unbroken run after the folder's own entry: every folder is read whole
+//! before the next one starts, and a folder that fills more than one batch
+//! holds the walk's run lock until its last batch is sent, so no other
+//! thread's batch comes in between.
 use crate::{
     analytics::Progress,
     share::{
@@ -20,7 +29,7 @@ use std::{
     io::{self, Read},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc,
+        Arc, Mutex, MutexGuard,
     },
 };
 use tokio::sync::mpsc;
@@ -40,9 +49,17 @@ pub(super) struct Shared<'a> {
     pub(super) progress: &'a Progress,
     entries: AtomicU64,
     omitted: AtomicU64,
+    /// Every batch is sent under it (see the module head).
+    run: Mutex<()>,
 }
 
 impl Shared<'_> {
+    fn lock_run(&self) -> MutexGuard<'_, ()> {
+        self.run
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     pub(super) fn check(&self) -> io::Result<()> {
         if self.cancel.load(Ordering::Relaxed) {
             Err(io::ErrorKind::Interrupted.into())
@@ -104,6 +121,9 @@ pub(super) struct Batch<'s, 'a> {
     entries: Vec<FsHashEntry>,
     omitted: Vec<FsOmission>,
     bytes: usize,
+    /// Held from a batch sent in the middle of a folder (`meta`) until that
+    /// folder's last batch is out.
+    held: Option<MutexGuard<'s, ()>>,
 }
 
 impl<'s, 'a> Batch<'s, 'a> {
@@ -113,6 +133,7 @@ impl<'s, 'a> Batch<'s, 'a> {
             entries: Vec::new(),
             omitted: Vec::new(),
             bytes: 0,
+            held: None,
         }
     }
 
@@ -133,8 +154,9 @@ impl<'s, 'a> Batch<'s, 'a> {
                 "Prüfsummenpfad überschreitet das Drahtformat",
             ));
         }
-        if self.bytes + cost > LIST_BATCH_MAX_BYTES {
-            self.send()?;
+        let entry_after_omission = entry.is_ok() && !self.omitted.is_empty();
+        if entry_after_omission || self.bytes + cost > LIST_BATCH_MAX_BYTES {
+            self.send_within()?;
         }
         self.bytes += cost;
         match entry {
@@ -172,7 +194,38 @@ impl<'s, 'a> Batch<'s, 'a> {
         self.hole(rel, reason, error.to_string())
     }
 
+    /// Sends a batch while the current folder is not done yet; with `meta`
+    /// the run lock stays held until `end_folder`.
+    fn send_within(&mut self) -> io::Result<()> {
+        if self.shared.request.meta && self.held.is_none() {
+            self.held = Some(self.shared.lock_run());
+        }
+        self.emit()
+    }
+
+    /// The current folder is done: a run lock held for it is released.
+    pub(super) fn end_folder(&mut self) -> io::Result<()> {
+        if self.held.is_some() {
+            return self.send();
+        }
+        Ok(())
+    }
+
+    /// Sends what is buffered, between folders.
     pub(super) fn send(&mut self) -> io::Result<()> {
+        let result = if self.held.is_some() || (self.entries.is_empty() && self.omitted.is_empty())
+        {
+            self.emit()
+        } else {
+            let shared = self.shared;
+            let _run = shared.lock_run();
+            self.emit()
+        };
+        self.held = None;
+        result
+    }
+
+    fn emit(&mut self) -> io::Result<()> {
         self.bytes = 0;
         if self.entries.is_empty() && self.omitted.is_empty() {
             return Ok(());
@@ -227,6 +280,7 @@ pub(in crate::share) fn run(
         progress: &p,
         entries: AtomicU64::new(0),
         omitted: AtomicU64::new(0),
+        run: Mutex::new(()),
     };
     let mut batch = Batch::new(&shared);
     visit(&mut batch, &request.path, &access, "")?;
@@ -246,6 +300,8 @@ pub(in crate::share) fn run(
 fn visit(batch: &mut Batch<'_, '_>, path: &str, access: &FsAccess, rel: &str) -> io::Result<()> {
     let parts = crate::share::fs::split_clean(path)?;
     if access.is_dynamic() && (parts.is_empty() || parts == ["Verbindungen"]) {
+        // The container's entries first, then their content (one run each).
+        let mut children = Vec::new();
         for entry in access.list_dir(path)? {
             crate::vfs::validate_child_name(&entry.name)?;
             let child = child_rel(rel, &entry.name);
@@ -256,27 +312,33 @@ fn visit(batch: &mut Batch<'_, '_>, path: &str, access: &FsAccess, rel: &str) ->
                 meta,
                 ..FsHashEntry::default()
             }))?;
-            visit(
-                batch,
-                &format!("{}/{}", path.trim_end_matches('/'), entry.name),
-                access,
-                &child,
-            )?;
+            children.push((
+                format!("{}/{}", path.trim_end_matches('/'), entry.name),
+                child,
+            ));
+        }
+        batch.end_folder()?;
+        for (child_path, child) in children {
+            visit(batch, &child_path, access, &child)?;
         }
         return Ok(());
     }
     let target = match access.resolve(path) {
         Ok(target) => target,
-        Err(error) => return batch.failed(rel, error),
+        Err(error) => {
+            batch.failed(rel, error)?;
+            return batch.end_folder();
+        }
     };
     if target.backend.scheme() == Scheme::Local {
         let physical = crate::share::storage_roots::local_path(&target)?;
         if crate::share::storage_roots::is_private(&physical) {
-            return batch.hole(
+            batch.hole(
                 rel,
                 FsOmissionReason::Unreadable,
                 "Interner Host-Speicher ist geschützt",
-            );
+            )?;
+            return batch.end_folder();
         }
         match crate::share::storage_roots::open_local(&target) {
             Ok(handle) => {
@@ -284,7 +346,10 @@ fn visit(batch: &mut Batch<'_, '_>, path: &str, access: &FsAccess, rel: &str) ->
                 batch.send()?;
                 local::walk(batch.shared(), handle, physical, rel)
             }
-            Err(e) => batch.failed(rel, e),
+            Err(e) => {
+                batch.failed(rel, e)?;
+                batch.end_folder()
+            }
         }
     } else {
         remote(batch, &*target.backend, &target.path, rel, 0)
@@ -292,7 +357,7 @@ fn visit(batch: &mut Batch<'_, '_>, path: &str, access: &FsAccess, rel: &str) ->
 }
 
 /// An exported connection's folder, one listing after the other (its own
-/// connection bounds the pace).
+/// connection bounds the pace): the folder's items, then its subfolders.
 fn remote(
     batch: &mut Batch<'_, '_>,
     backend: &dyn crate::vfs::Backend,
@@ -300,17 +365,39 @@ fn remote(
     rel: &str,
     depth: usize,
 ) -> io::Result<()> {
+    let subfolders = remote_folder(batch, backend, path, rel, depth)?;
+    batch.end_folder()?;
+    for (full, child) in subfolders {
+        remote(batch, backend, &full, &child, depth + 1)?;
+    }
+    Ok(())
+}
+
+/// The items of one folder of an exported connection; returns its
+/// subfolders (path, rel) to walk next.
+fn remote_folder(
+    batch: &mut Batch<'_, '_>,
+    backend: &dyn crate::vfs::Backend,
+    path: &str,
+    rel: &str,
+    depth: usize,
+) -> io::Result<Vec<(String, String)>> {
+    let mut subfolders = Vec::new();
     batch.shared().check()?;
     if depth > MAX_DEPTH {
-        return batch.hole(
+        batch.hole(
             rel,
             FsOmissionReason::Unreadable,
             "Verzeichnistiefe überschreitet den sicheren Walk-Stack",
-        );
+        )?;
+        return Ok(subfolders);
     }
     let listing = match crate::vfs::list_dir_tolerant(backend, path) {
         Ok(listing) => listing,
-        Err(error) => return batch.failed(rel, error),
+        Err(error) => {
+            batch.failed(rel, error)?;
+            return Ok(subfolders);
+        }
     };
     for hole in listing.omitted {
         batch.hole(&child_rel(rel, &hole.rel), hole.reason.into(), hole.detail)?;
@@ -372,7 +459,7 @@ fn remote(
                 meta,
                 ..FsHashEntry::default()
             }))?;
-            remote(batch, backend, &full, &child, depth + 1)?;
+            subfolders.push((full, child));
         } else if entry.size >= batch.shared().request.min_bytes {
             let digest = if batch.shared().request.algo.is_none() {
                 Ok(None)
@@ -400,5 +487,5 @@ fn remote(
             }
         }
     }
-    Ok(())
+    Ok(subfolders)
 }

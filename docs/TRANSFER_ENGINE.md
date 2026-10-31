@@ -629,12 +629,15 @@ Auftrag läuft dann im eigenen Prozess (`transfer_job_client.rs:155`).
   `packets_keep_time`, `upload.rs`); nur an **Gegenstellen ohne die Fähigkeit** (ältere Share-Hosts und
   Agenten) gehen sie einzeln – das bleibt die Grenze –, und dort behalten andere Paket-Uploads die Zeit
   der Gegenstelle wie zuvor. Eine Ersetzung geht immer allein.
+- **Share-Host und SSH-Agent tragen die Zeit im Schreibschritt** auch für Dateien, die nicht in ein Paket
+  gehen: Share `stage_mtime_v1` (`WriteNew.mtime_ms`, der Host setzt sie beim Abschluss vor dem Stufenbeleg,
+  `share/core/server_transfer.rs`), Agent `stage-mtime-v1` (`WriteNewTimed`, Antwort `StageWritten` mit
+  Größe, Zeit und Dateikennung als Stufenbeleg); ältere Gegenstellen und der Hintergrunddienst behalten
+  `finish_stage`.
 - **Wo das Protokoll die Zeit nur mit einer eigenen Anfrage setzen lässt**, folgt `finish_stage` nach dem
-  Schreiben (Rundreisen mehr je Datei gegenüber v0.5.189): Share-Host und SSH-Agent für Dateien, die nicht
-  in ein Paket gehen (`WriteNew` und der Stufenabschluss tragen keine Zeit; sie zu tragen verlangt eine
-  Erweiterung des Drahtformats und der Host-/Agentenseite – offen), FTP (`MFMT`), SMB-Stufen größer als ein
-  WRITE, SFTP ohne Pool-Kanal und Ersetzungen (dauerhafte Stufe). Der Stufenbeleg der Gegenstelle entfällt
-  dort, wenn das Setzen die Zeit änderte.
+  Schreiben (Rundreisen mehr je Datei gegenüber v0.5.189): FTP (`MFMT`), SMB-Stufen größer als ein WRITE,
+  SFTP ohne Pool-Kanal, Share-Hosts und Agenten ohne `stage_mtime_v1`/`stage-mtime-v1` und Ersetzungen
+  (dauerhafte Stufe). Der Stufenbeleg der Gegenstelle entfällt dort, wenn das Setzen die Zeit änderte.
   Ein Ziel, das die Zeit nicht speichern kann, behält seine eigene (kein Fehler des Eintrags). Eine
   Drive-Datei in einem vom Auftrag angelegten Ordner hat weiter keinen Platz für eine Zeit.
 - Ein Ziel, das keine Zeit speichern kann (`finish_stage` meldet `mtime_applied: false`), behält

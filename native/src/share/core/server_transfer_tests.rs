@@ -19,6 +19,7 @@ fn create_job(root: &std::path::Path, abandoned: bool) -> WriteJob {
             authorization: None,
             lz4: false,
             evidence: None,
+            mtime_ms: None,
         },
         access: export(root),
         abandoned: Arc::new(AtomicBool::new(abandoned)),

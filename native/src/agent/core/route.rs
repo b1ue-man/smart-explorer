@@ -65,6 +65,7 @@ fn ends_request(frame: &Frame) -> bool {
             | Frame::Copied(_)
             | Frame::Answer(_)
             | Frame::StageDone { .. }
+            | Frame::StageWritten { .. }
             | Frame::Limits(_)
             | Frame::CapacityData(_)
             | Frame::DirectoryIdentityValue(_)

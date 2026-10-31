@@ -233,6 +233,11 @@ pub(crate) enum FsRequest {
         evidence: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         probe: Option<String>,
+        /// `stage_mtime_v1`: the source time (Unix ms) the host gives the new
+        /// stage at its commit, before it reads the stage's evidence, so no
+        /// `FinishStage` of its own follows. Sent only to a host offering it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mtime_ms: Option<i64>,
     },
     WriteDone,
     MkdirAll {

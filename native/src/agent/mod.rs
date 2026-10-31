@@ -41,6 +41,8 @@ mod route;
 mod search;
 #[path = "core/segmented_stage.rs"]
 mod segmented_stage;
+#[path = "core/stage_time.rs"]
+mod stage_time;
 #[path = "core/stream.rs"]
 mod stream;
 #[path = "core/transfer.rs"]
@@ -51,11 +53,14 @@ mod transport;
 mod tree_remove;
 #[path = "core/walk.rs"]
 mod walk;
+#[cfg(all(test, unix))]
+#[path = "core/walk_runs_check.rs"]
+pub(crate) mod walk_runs_check;
 
 pub use backend::AgentBackend;
 #[allow(unused_imports)]
 pub use deploy::{artifact_for, deploy_over_sftp, remove_from_sftp, AgentArtifact};
-pub(crate) use metadata::vfs_to_wire;
+pub(crate) use metadata::{vfs_to_hash_entry, vfs_to_wire};
 
 #[cfg(test)]
 #[path = "core/abgleich_task_walk_tests.rs"]

@@ -84,9 +84,9 @@ fn service_version(backend: &BackendHandle) -> String {
         ""
     };
     // `range-v1` only for a backend that reads ranges: the frames behind it
-    // are forwarded to it (`backend_ranges`).
+    // are forwarded to it (`backend_ranges`); `list-meta-v1`: `ListMeta`.
     format!(
-        "{}{}.capacity-v1.folder-reservation-v1.file-identity-v1{single}{times} worker",
+        "{}{}.capacity-v1.folder-reservation-v1.file-identity-v1.list-meta-v1{single}{times} worker",
         agent_proto::server_version_with(batch, slots),
         backend_ranges::labels(backend)
     )
@@ -416,7 +416,7 @@ fn dispatch_backend(
             answer(stages.finish(&stage).map(|()| Frame::Ok))
         }
         Frame::ListTolerant(path) => super::backend_ops::list_tolerant(sink, id, &backend, &path),
-        walk @ (Frame::WalkHashed2 { .. } | Frame::WalkHashed3 { .. }) => {
+        walk @ (Frame::WalkHashed2 { .. } | Frame::WalkHashed3 { .. } | Frame::ListMeta(_)) => {
             super::backend_hash::serve(sink, id, &backend, walk, cancel)
         }
         Frame::FindDuplicates { root, min_bytes } => {

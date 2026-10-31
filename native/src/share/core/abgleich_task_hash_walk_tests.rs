@@ -217,3 +217,99 @@ fn abgleich_task_share_wire_stays_additive() {
         .names()
         .contains(&"hash_walk_meta_v1"));
 }
+
+/// The host's walk with attributes sends each folder as one unbroken run,
+/// also across threads and for a folder that fills several batches, with
+/// entries and omissions (names that are no UTF-8) alternating.
+#[cfg(unix)]
+#[test]
+fn abgleich_task_share_host_meta_walk_sends_each_folder_as_one_run() -> io::Result<()> {
+    let fixture = CopyPastePeerFixture::for_transfer_engine_task()?;
+    crate::agent::walk_runs_check::run_tree(&fixture.root_a);
+    let (ran, items) = walk(&fixture, plain(true))?;
+    assert!(ran);
+    let runs = crate::agent::walk_runs_check::assert_folder_runs(&items);
+    assert_eq!(runs, 2 + 40 * 2);
+    let omitted = items
+        .iter()
+        .filter(|item| matches!(item, HashWalkItem::Omitted(_)))
+        .count();
+    assert_eq!(omitted, 5 + 40);
+    assert_eq!(items.len() - omitted, 1 + 3000 + 40 * (1 + 1 + 3));
+    Ok(())
+}
+
+/// W6: a subfolder the host cannot open is its entry, then an omission of
+/// the same path, as the folder walk shows its row and then its failure.
+#[cfg(unix)]
+#[test]
+fn abgleich_task_share_host_walk_rows_an_unopenable_folder() -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = CopyPastePeerFixture::for_transfer_engine_task()?;
+    let locked = fixture.root_a.join("locked");
+    fs::create_dir(&locked)?;
+    fs::write(locked.join("inside.txt"), b"x")?;
+    fs::write(fixture.root_a.join("a.txt"), b"abc")?;
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000))?;
+    // A process that may read every folder (root) cannot show the failure.
+    let readable = fs::read_dir(&locked).is_ok();
+    let walked = (|| -> io::Result<()> {
+        if readable {
+            return Ok(());
+        }
+        for meta in [true, false] {
+            let (ran, items) = walk(&fixture, plain(meta))?;
+            assert!(ran);
+            let entry = items
+                .iter()
+                .position(|item| {
+                    matches!(item, HashWalkItem::Entry(entry) if entry.rel == "locked" && entry.is_dir)
+                })
+                .expect("the folder's row");
+            let omission = items
+                .iter()
+                .position(|item| {
+                    matches!(item, HashWalkItem::Omitted(hole)
+                        if hole.rel == "locked" && hole.reason == OmissionReason::Unreadable)
+                })
+                .expect("the folder's failure");
+            assert!(entry < omission, "row before failure (meta = {meta})");
+            assert!(!items.iter().any(|item| match item {
+                HashWalkItem::Entry(entry) => entry.rel.starts_with("locked/"),
+                HashWalkItem::Omitted(hole) => hole.rel.starts_with("locked/"),
+            }));
+            if meta {
+                crate::agent::walk_runs_check::assert_folder_runs(&items);
+            }
+        }
+        Ok(())
+    })();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755))?;
+    walked
+}
+
+/// W5: a stage written with the source's time (`stage_mtime_v1`) gets it at
+/// its commit, before the host reads its evidence, so the evidence shows it
+/// and publishing sends no `FinishStage`.
+#[test]
+fn abgleich_task_share_stage_carries_the_source_time_with_its_write() -> io::Result<()> {
+    use std::io::Write;
+    const TIME: i64 = 1_500_000_000_000;
+    let fixture = CopyPastePeerFixture::for_transfer_engine_task()?;
+    let peer = &*fixture.peer;
+    let name = "timed.txt.se-upload-00000000000000aa";
+    let stage = format!("/A/{name}");
+    let mut writer = vfs::open_write_copy_stage_timed(peer, &stage, 3, TIME)?;
+    writer.write_all(b"abc")?;
+    writer.flush()?;
+    drop(writer);
+    let evidence = vfs::take_stage_evidence(peer, &stage).expect("the host's evidence");
+    assert_eq!((evidence.stage.size, evidence.stage.mtime_ms), (3, TIME));
+    let modified = fs::metadata(fixture.root_a.join(name))?.modified()?;
+    let millis = modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(io::Error::other)?
+        .as_millis();
+    assert_eq!(millis, TIME as u128);
+    Ok(())
+}

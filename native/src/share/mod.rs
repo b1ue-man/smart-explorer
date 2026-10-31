@@ -244,6 +244,12 @@ mod fs_response;
 mod handshake_limits;
 #[path = "core/host_evidence.rs"]
 mod host_evidence;
+#[cfg(target_os = "android")]
+#[path = "os/android/host_job_share.rs"]
+mod host_job_share;
+#[cfg(not(target_os = "android"))]
+#[path = "os/shared/host_job_share.rs"]
+mod host_job_share;
 #[path = "core/host_requests.rs"]
 mod host_requests;
 #[path = "core/identity.rs"]

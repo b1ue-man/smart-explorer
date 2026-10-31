@@ -1,7 +1,10 @@
 //! The local part of a host hash walk: handle-confined folders read on as
 //! many threads as the host offers (`agent_proto::ordered_walk`). Size and
 //! time come from the listing of the opened parent; a file is opened only to
-//! hash it. The entries and omissions are those of the former serial walk.
+//! hash it. The entries and omissions are those of the former serial walk,
+//! except that a subfolder is an entry before it is opened: a subfolder that
+//! cannot be opened or is refused is that entry followed by an omission of
+//! the same path, as the folder walk shows its row and then its failure.
 use super::{child_rel, Batch, Shared, MAX_DEPTH};
 use crate::{
     local_access::{DirectoryHandle, EntryKind, LocalEntry},
@@ -28,7 +31,10 @@ pub(super) fn walk(
         crate::agent_proto::walk_threads(),
         shared.cancel,
         || Batch::new(shared),
-        |job: Job, local, batch| folder(job, &excluded, local, batch),
+        |job: Job, local, batch| {
+            folder(job, &excluded, local, batch)?;
+            batch.end_folder()
+        },
     )
 }
 
@@ -100,24 +106,21 @@ fn folder(
             continue;
         }
         if entry.kind == EntryKind::Directory {
-            match directory.open_child(&entry.name) {
-                Ok(handle) => {
-                    if let Err(error) = crate::share::fs::ensure_local_share_handle_allowed(&handle)
-                    {
-                        batch.failed(&child, error)?;
-                        continue;
-                    }
-                    batch.add(Ok(FsHashEntry {
-                        rel: child.clone(),
-                        is_dir: true,
-                        // With attributes: the size the folder's listing reports.
-                        size: if meta.is_some() { entry.size } else { 0 },
-                        mtime_ms: entry.mtime_ms,
-                        meta,
-                        ..FsHashEntry::default()
-                    }))?;
-                    local.push((handle, physical.join(&entry.name), child, depth + 1));
-                }
+            // The row of the listing first; opening it decides its content.
+            batch.add(Ok(FsHashEntry {
+                rel: child.clone(),
+                is_dir: true,
+                // With attributes: the size the folder's listing reports.
+                size: if meta.is_some() { entry.size } else { 0 },
+                mtime_ms: entry.mtime_ms,
+                meta,
+                ..FsHashEntry::default()
+            }))?;
+            let opened = directory.open_child(&entry.name).and_then(|handle| {
+                crate::share::fs::ensure_local_share_handle_allowed(&handle).map(|()| handle)
+            });
+            match opened {
+                Ok(handle) => local.push((handle, physical.join(&entry.name), child, depth + 1)),
                 Err(error) => batch.failed(&child, error)?,
             }
         } else if entry.size >= batch.shared().request.min_bytes {

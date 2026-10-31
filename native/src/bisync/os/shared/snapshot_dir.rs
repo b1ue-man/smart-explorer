@@ -77,6 +77,7 @@ pub(super) fn scan_listing(
         dirs: Vec::new(),
     };
     let mut child_names: HashMap<String, (bool, HashSet<String>)> = HashMap::new();
+    let mut app_parents = super::snapshot_policy::AppParents::default();
     for m in entries {
         if ctx.cancel.load(Ordering::Relaxed) {
             break; // stop promptly mid-directory (esp. when hashing)
@@ -155,13 +156,14 @@ pub(super) fn scan_listing(
             ));
         }
         let facts = ctx.local.as_ref();
-        match super::snapshot_policy::protected_in(
+        match super::snapshot_policy::protected_listed(
             ctx.be,
             ctx.root,
             &p,
             &m,
             ctx.opts.cross_mounts,
             facts,
+            &mut app_parents,
         ) {
             Ok(Some(kind)) => {
                 record_omission(ctx, &rel, kind, !excluded && kind.reported_by_default());

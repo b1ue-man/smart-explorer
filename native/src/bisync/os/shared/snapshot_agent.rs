@@ -1,16 +1,25 @@
 //! A remote snapshot side from one walk next to the data (Share host
 //! `hash_walk_v1`, agent or service `ext-v1`): one request instead of a
 //! status and a listing per folder. The items are checked as the walk over
-//! listings checks them (`snapshot_host_walk.rs`), so the result is the same.
+//! listings checks them, so the result is the same.
+//!
+//! A side that sends listing attributes (`HashWalkRequest::meta`: Share
+//! `hash_walk_meta_v1`, agent and service `walk-meta-v1`) is asked for them
+//! always: its walk sends every folder as one unbroken run, so each folder
+//! is checked as soon as it is complete (`snapshot_host_stream.rs`: progress
+//! and early copies during the walk, one folder in memory). A side without
+//! them is asked without attributes where hidden entries count anyway; its
+//! items are collected and checked after the walk (`snapshot_host_walk.rs`).
 //!
 //! The walk over listings does not test mount boundaries on a remote side
 //! either (`snapshot_policy::protected` only for local sides), so this walk
 //! serves `cross_mounts = false` as well. Hidden entries without a leading
-//! dot need the listing attributes (`HashWalkRequest::meta`); a side without
-//! them reads its listings instead. A free provider hash (`NativeOnly`)
-//! comes only with a listing, so that mode reads the listings as well.
+//! dot need the listing attributes; a side without them reads its listings
+//! instead. A free provider hash (`NativeOnly`) comes only with a listing,
+//! so that mode reads the listings as well.
 use super::snapshot_dir::WalkContext;
 use super::snapshot_hash::HashMode;
+use super::snapshot_host_stream::Stream;
 use super::snapshot_host_walk::Collector;
 use super::types::{BisyncOptions, Tree};
 use crate::vfs::{HashWalkItem, HashWalkRequest};
@@ -29,15 +38,47 @@ pub(super) fn walk_snapshot_via_agent(ctx: &WalkContext<'_>) -> io::Result<Optio
     }
     super::transfer_stream::check(ctx.cancel)?;
     let want_hash = ctx.hash == HashMode::FullFresh;
+    let algorithm = want_hash.then_some(crate::analytics::HashAlgorithm::Md5);
+    let mut streamed = Stream::new(ctx);
+    let with_meta = stream(
+        |item| streamed.item(item),
+        |sender| {
+            let request = HashWalkRequest {
+                algorithm,
+                min_bytes: 0,
+                meta: true,
+            };
+            crate::vfs::hash_walk(backend, ctx.root, request, sender, ctx.cancel)
+        },
+    );
+    match with_meta {
+        Ok(true) => {
+            super::transfer_stream::check(ctx.cancel)?;
+            return streamed.finish_tree().map(Some);
+        }
+        Ok(false) if !streamed.is_empty() => {
+            return Err(invalid("hash walk refused after emitting entries"))
+        }
+        Ok(false) => {}
+        Err(error) if error.to_string() == crate::agent_proto::HASH_WALK_LINK_BOUNDARY => {
+            return Ok(None)
+        }
+        Err(error) => return Err(error),
+    }
+    // Without attributes hidden entries cannot be told apart.
+    if !ctx.filter.include_hidden {
+        return Ok(None);
+    }
     let request = HashWalkRequest {
-        algorithm: want_hash.then_some(crate::analytics::HashAlgorithm::Md5),
+        algorithm,
         min_bytes: 0,
-        meta: !ctx.filter.include_hidden,
+        meta: false,
     };
     let mut collector = Collector::new(ctx);
-    let primary = stream(&mut collector, |sender| {
-        crate::vfs::hash_walk(backend, ctx.root, request, sender, ctx.cancel)
-    });
+    let primary = stream(
+        |item| collector.item(item),
+        |sender| crate::vfs::hash_walk(backend, ctx.root, request, sender, ctx.cancel),
+    );
     let primary = match primary {
         Ok(ran) => ran,
         Err(error) if error.to_string() == crate::agent_proto::HASH_WALK_LINK_BOUNDARY => {
@@ -55,30 +96,33 @@ pub(super) fn walk_snapshot_via_agent(ctx: &WalkContext<'_>) -> io::Result<Optio
         if !(ctx.opts.cross_mounts && ctx.filter.include_hidden) {
             return Ok(None);
         }
-        let legacy = stream(&mut collector, |sender| {
-            let (hits, received) = crossbeam_channel::bounded::<crate::vfs::HashHit>(1024);
-            std::thread::scope(|scope| {
-                let worker =
-                    scope.spawn(|| backend.walk_hashed(ctx.root, want_hash, hits, ctx.cancel));
-                for hit in received.iter() {
-                    let item = HashWalkItem::Entry(crate::vfs::HashWalkEntry {
-                        rel: hit.rel,
-                        is_dir: hit.is_dir,
-                        size: hit.size,
-                        mtime_ms: hit.mtime_ms,
-                        digest: hit.md5,
-                        meta: None,
-                    });
-                    if sender.send(item).is_err() {
-                        break;
+        let legacy = stream(
+            |item| collector.item(item),
+            |sender| {
+                let (hits, received) = crossbeam_channel::bounded::<crate::vfs::HashHit>(1024);
+                std::thread::scope(|scope| {
+                    let worker =
+                        scope.spawn(|| backend.walk_hashed(ctx.root, want_hash, hits, ctx.cancel));
+                    for hit in received.iter() {
+                        let item = HashWalkItem::Entry(crate::vfs::HashWalkEntry {
+                            rel: hit.rel,
+                            is_dir: hit.is_dir,
+                            size: hit.size,
+                            mtime_ms: hit.mtime_ms,
+                            digest: hit.md5,
+                            meta: None,
+                        });
+                        if sender.send(item).is_err() {
+                            break;
+                        }
                     }
-                }
-                drop(received);
-                worker
-                    .join()
-                    .unwrap_or_else(|_| Err(io::Error::other("legacy hash walk worker panicked")))
-            })
-        });
+                    drop(received);
+                    worker.join().unwrap_or_else(|_| {
+                        Err(io::Error::other("legacy hash walk worker panicked"))
+                    })
+                })
+            },
+        );
         match legacy {
             Ok(false) if collector.is_empty() => return Ok(None),
             Ok(false) => return Err(invalid("legacy hash walk refused after emitting entries")),
@@ -93,10 +137,10 @@ pub(super) fn walk_snapshot_via_agent(ctx: &WalkContext<'_>) -> io::Result<Optio
     collector.replay().map(Some)
 }
 
-/// Runs `walk` on its own thread and hands every item to `collector`; the
-/// first item it refuses stops the walk (its receiver goes away).
+/// Runs `walk` on its own thread and hands every item to `take`; the first
+/// item it refuses stops the walk (its receiver goes away).
 fn stream(
-    collector: &mut Collector<'_, '_>,
+    mut take: impl FnMut(HashWalkItem) -> io::Result<()>,
     walk: impl FnOnce(crossbeam_channel::Sender<HashWalkItem>) -> io::Result<bool> + Send,
 ) -> io::Result<bool> {
     let (sender, receiver) = crossbeam_channel::bounded(1024);
@@ -104,7 +148,7 @@ fn stream(
     let walked = std::thread::scope(|scope| {
         let worker = scope.spawn(move || walk(sender));
         for item in receiver.iter() {
-            if let Err(error) = collector.item(item) {
+            if let Err(error) = take(item) {
                 failure = Some(error);
                 break;
             }

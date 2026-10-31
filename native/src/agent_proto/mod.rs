@@ -115,7 +115,9 @@ pub use credit::{
     busy_message, charged, credit_cost, parse_busy, window_target, RecvWindow, SendCredit,
     StreamCount, CREDIT_CONNECTION_BUDGET, CREDIT_INITIAL, CREDIT_REQUEST_LIMIT, CREDIT_WINDOW_MAX,
 };
-pub(crate) use extension_parts::{append_duplicate_part, emit_duplicate_parts, emit_listing_parts};
+pub(crate) use extension_parts::{
+    append_duplicate_part, emit_duplicate_parts, emit_listing_parts, emit_meta_listing_parts,
+};
 pub use features::{
     lz4_switched_off, server_version, server_version_with, service_slots, ServerFeatures,
     LABEL_BATCH, LABEL_CREDIT, LABEL_LZ4, LABEL_RANGE, LABEL_STAGE,

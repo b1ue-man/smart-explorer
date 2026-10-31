@@ -104,6 +104,27 @@ impl LocalFacts {
     }
 }
 
+/// Whether a folder holds other apps' private storage
+/// (`apptrash::hidden_app_folders_in`), asked once per folder: the entries of
+/// one listing share their parent, so only a new parent is asked again.
+#[derive(Default)]
+pub(crate) struct AppParents {
+    last: Option<(String, bool)>,
+}
+
+impl AppParents {
+    fn hidden_app_folder(&mut self, parent: &str) -> bool {
+        match &self.last {
+            Some((known, hidden)) if known == parent => *hidden,
+            _ => {
+                let hidden = crate::apptrash::hidden_app_folders_in(parent);
+                self.last = Some((parent.to_string(), hidden));
+                hidden
+            }
+        }
+    }
+}
+
 /// `protected`, with the facts of the walk where it has them.
 pub(crate) fn protected_in(
     backend: &dyn Backend,
@@ -112,6 +133,21 @@ pub(crate) fn protected_in(
     meta: &VfsMeta,
     cross_mounts: bool,
     facts: Option<&LocalFacts>,
+) -> std::io::Result<Option<OmissionKind>> {
+    let mut parents = AppParents::default();
+    protected_listed(backend, root, path, meta, cross_mounts, facts, &mut parents)
+}
+
+/// `protected_in` for the entries of one listing: `parents` keeps the answer
+/// for their common parent folder.
+pub(crate) fn protected_listed(
+    backend: &dyn Backend,
+    root: &str,
+    path: &str,
+    meta: &VfsMeta,
+    cross_mounts: bool,
+    facts: Option<&LocalFacts>,
+    parents: &mut AppParents,
 ) -> std::io::Result<Option<OmissionKind>> {
     let local = backend.is_local();
     let own = match facts {
@@ -122,7 +158,7 @@ pub(crate) fn protected_in(
         || crate::vfs::is_staging_name(&meta.name)
         || own
         || crate::apptrash::excluded_name(&meta.name)
-        || crate::apptrash::hidden_app_folders_in(path.rsplit_once('/').map_or("", |p| p.0))
+        || parents.hidden_app_folder(path.rsplit_once('/').map_or("", |p| p.0))
     {
         return Ok(Some(OmissionKind::OwnFile));
     }

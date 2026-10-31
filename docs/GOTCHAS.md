@@ -849,8 +849,19 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   by `min_bytes`) instead of omissions, and a folder carries the size its
   listing reports (agent: `metadata.len()`, Share: the listing's size). Without
   `meta` folders stay size 0. Unreadable, vanished and unrepresentable entries
-  stay omissions. Every folder is sent before the entries below it. A side
-  without the capability answers `Ok(false)` before sending anything:
+  stay omissions. Every folder is sent before the entries below it. With
+  `meta` the items of one folder P (its entries and omissions, and the
+  omission of P itself) also form one unbroken run after P's entry, across
+  several `HashPart`s/batches if needed, with no item of another folder in
+  between (review W8/G2). Senders keep the produced order on the wire: a
+  part/batch never holds an entry after an omission (clients forward a part's
+  entries before its omissions); a parallel walker that sends a folder in
+  several parts holds the walk's run lock until that folder's last part
+  (`walk_hashed.rs` `Out`, `host_hash_walk.rs` `Batch`); the Share host's
+  serial walk of exported connections and of dynamic containers lists a
+  folder whole before its subfolders; the background service re-packs a
+  relayed walk under the same rule (`daemon/os/shared/backend_hash.rs` `Items`).
+  A side without the capability answers `Ok(false)` before sending anything:
   Share capability `hash_walk_meta_v1` (`FsHashWalk.meta`, `FsHashEntry.meta`),
   agent label `walk-meta-v1` (`Frame::WalkHashed3` tag 79 answered by
   `Frame::HashPart` tag 80, charged by credit). Older peers and clients keep
@@ -861,30 +872,63 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   `walk_hashed.rs` and the Share host's `host_hash_walk_local.rs`). Threads:
   `std::thread::available_parallelism()` when the walk starts. A thread hands
   folders to an idle one only after it sent what it produced, which keeps
-  folders ahead of their content. Without a requested algorithm the Share host
-  opens no file: size and time come from the handle-bound listing, as in the
-  folder-by-folder walk (a file without read permission is an entry, as there).
+  folders ahead of their content. After one thread's error every thread stops
+  after the folder it is reading (test
+  `abgleich_task_ordered_walk_stops_every_thread_after_an_error`). Without a
+  requested algorithm the Share host opens no file: size and time come from
+  the handle-bound listing, as in the folder-by-folder walk (a file without
+  read permission is an entry, as there). A subfolder is sent as an entry
+  before it is opened; one that cannot be opened or is refused
+  (`ensure_local_share_handle_allowed`) follows as an omission of the same
+  path, as the folder walk shows the row and then the failure (review W6).
+- **Pseudo filesystems on SSH agents** (`agent_proto::is_pseudo_dir`: `/proc`,
+  `/sys`, `/dev`, `/run` and below): the agent walk sends their row, as the
+  folder's listing shows it, followed by an `Unreadable` omission of the same
+  path ("Pseudo-Dateisystem: Inhalt wird nicht durchlaufen"); their content is
+  never walked (review G17). Remaining difference to the folder walk
+  (`ListDir`): that one lists their content (kernel and device entries). The
+  recursive view therefore shows the folder with a failure note and no
+  children, and a sync side keeps such a folder as an omitted subtree (never
+  read as deleted) instead of comparing its pseudo files.
 - **Hidden on SSH agents:** listings and walks mark names with a leading dot as
-  hidden, as SFTP does (`agent/core/metadata.rs`, `dot_hidden`); the
-  background service still passes no hidden flag of its backend.
+  hidden, as SFTP does (`agent/core/metadata.rs`, `dot_hidden`).
+- **Hidden through the background service (review G5):** the service
+  announces `list-meta-v1`; the client's tolerant listing
+  (`list_dir_tolerant`, used by the sync walk over listings) then asks
+  `Frame::ListMeta` (tag 82, answered by `HashPart`s with the entry name as
+  `rel` and every attribute, then `End`) and gets `hidden`, `system` and the
+  creation time as the served backend lists them. Older services keep
+  `ListTolerant` without those flags. Not covered: `list_dir` and `stat`
+  through the service still carry `hidden = false` (`Frame::Dir`/`Meta` have
+  no field for it, and their single-reply path with the metadata timeout has
+  no attribute-carrying reply frame).
 - **Background service:** `WalkHashed3` relays only the served backend's own
   walk (a Share host); without one it answers unsupported, so the client lists
   folders itself in parallel. `WalkHashed2` keeps the service's own sequential
   walk for older clients.
 - **Sync snapshot (`bisync/os/shared/snapshot_agent.rs`,
-  `snapshot_host_walk.rs`).** A remote side with a walk next to the data uses
-  it also with `cross_mounts = false` (the folder walk never tested mount
-  boundaries on remote sides, `snapshot_policy.rs`) and with
-  `include_hidden = false` when the side offers `meta`. The streamed entries are
-  regrouped into folder listings and checked by the same `scan_listing` as the
-  folder walk, with child paths joined locally, so tree, folders, filtered
-  files, omissions and duplicates follow the folder walk's rules. `NativeOnly`
-  hashing and duplicate-name providers keep the folder walk; the
-  `sync-links-v1` legacy walk is used only across mounts with hidden entries.
-  Known edge differences to the folder walk: a folder the Share host cannot
-  open is an omission without a `dirs` entry; host errors other than
-  "not found" become `Unreadable` omissions instead of failing the run; an
-  omission for the root itself fails the run.
+  `snapshot_host_stream.rs`, `snapshot_host_walk.rs`).** A remote side with a
+  walk next to the data uses it also with `cross_mounts = false` (the folder
+  walk never tested mount boundaries on remote sides, `snapshot_policy.rs`).
+  It is always asked with `meta` first (also with `include_hidden = true`):
+  then each folder is checked by the same `scan_listing` as the folder walk as
+  soon as its run ends (the next folder's item arrives), so the side's
+  progress, `ctx.listed` and the early copies advance during the walk, only
+  the folder in progress is held, and items below folders `scan_listing` does
+  not enter (filters, hidden, own and system folders) or below failed folders
+  are dropped without counting against `walk_entries` (review W8, G2). Folders
+  without items (empty, not opened) are checked when the walk ends; an item
+  outside its folder's run fails the side. A side without `meta` is asked
+  without it only where hidden entries count anyway (`include_hidden = true`);
+  its items are regrouped and checked after the walk, as before. Child paths
+  are joined locally, so tree, folders, filtered files, omissions and
+  duplicates follow the folder walk's rules. `NativeOnly` hashing and
+  duplicate-name providers keep the folder walk; the `sync-links-v1` legacy
+  walk is used only across mounts with hidden entries. Known edge differences
+  to the folder walk: host errors other than "not found" become `Unreadable`
+  omissions instead of failing the run; an omission for the root itself fails
+  the run. A folder the Share host cannot open is now in `dirs` with its
+  omission, as in the folder walk.
 - **Folder walk:** `sync_child_path` (one request per entry on Share hosts with
   `literal_children_v1`) is asked only for entries the filters keep; excluded
   entries use the literal join for their protection checks.
@@ -893,14 +937,32 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   `batch-mtime-v1` (a `BatchPut` with times travels as tag 81; tag 35 stays for batches without
   times), the worker announces the label only for a peer that sets times. Older peers are never
   sent a time. Details: `docs/TRANSFER_ENGINE.md`, Dateiregel, Grenzen.
+- **Single stages keep source times without a request of their own (review W5):** a stage that
+  is no replacement goes through `open_write_copy_stage_timed` also on Share hosts and SSH
+  agents (`publish_time::at_upload`). Share `stage_mtime_v1`: `WriteNew.mtime_ms`, set by the
+  host at the commit before it reads the stage's `evidence_v1` report
+  (`share/core/server_transfer.rs` `stage_time`). Agent `stage-mtime-v1` (agent only, not the
+  background service): `Frame::WriteNewTimed` (tag 83) sets the time on the open stage and the
+  commit answers `Frame::StageWritten` (tag 84: size, time, file identity read through the open
+  handle), kept as the stage's evidence (`agent/core/stage_time.rs`). The evidence shows the
+  time, so `publish_time::carry` sends no `FinishStage` and the evidence stays the stage's
+  receipt (no `Stat`/`FileIdentity` for the recovery record). Older hosts and agents, the
+  service, replacements (made durable by `FinishStage` anyway) and ranged stages keep
+  `FinishStage`.
 - **Local sync walk:** `snapshot_policy::LocalFacts` is built once per local
   side: own app folders (no environment read per entry), volume root, mount
   boundaries (`vfs::LocalMountBoundaries`: canonical root once, mount table read
   again only after `/proc/self/mountinfo` reports a change by `POLLPRI`, so a
-  folder mounted during the walk is still found) and the nested-mount memory
+  folder mounted during the walk is still found; a reported change is never
+  answered from the old table, because `reload` consumes pending reports and
+  clears the mark under the write lock before it reads the table; a device
+  change at the entry would miss bind mounts, which stay on their parent's
+  device) and the nested-mount memory
   (`snapshot_mounts::NestedMounts`: loaded once, no `stat` and no process-wide
-  lock per folder). Quick mirror and other callers of `protected` keep the
-  former per-call path.
+  lock per folder). Other apps' private folders
+  (`apptrash::hidden_app_folders_in`) are asked once per listed folder
+  (`snapshot_policy::AppParents`), not per entry. Quick mirror and other
+  callers of `protected` keep the former per-call path.
 
 ## Share / local network
 
