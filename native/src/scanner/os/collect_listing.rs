@@ -79,11 +79,15 @@ pub(super) fn open<'a>(
 #[cfg(test)]
 pub(super) static INJECTED: Mutex<Vec<(PathBuf, io::ErrorKind)>> = Mutex::new(Vec::new());
 
+/// Compared in the form the walk opens folders in (`normalize_scan_root`:
+/// `\\?\C:\...` on Windows, unchanged elsewhere), whatever form the test
+/// named the folder in.
 #[cfg(test)]
 fn injected(directory: &Path) -> Option<io::Error> {
+    let opened = crate::local_access::normalize_scan_root(directory);
     lock(&INJECTED)
         .iter()
-        .find(|(path, _)| path == directory)
+        .find(|(path, _)| crate::local_access::normalize_scan_root(path) == opened)
         .map(|(_, kind)| io::Error::from(*kind))
 }
 
