@@ -1,8 +1,11 @@
 //! `se sync`: the saved sync setups of the desktop window "Sync-Setups" and
 //! of the Android sync page — list, show, add, edit (every field of the
 //! desktop editor), remove, enable/disable, the live log and its detail
-//! level. Drafts go through the shared `JobEditor`, so defaults, validation
-//! and messages are the GUI's; the files are the GUI's job files.
+//! level, and `compare` (the button "Vergleichen"). Drafts go through the
+//! shared `JobEditor`, so defaults, validation and messages are the GUI's;
+//! the files are the GUI's job files.
+#[path = "sync_jobs/compare.rs"]
+mod compare;
 #[path = "sync_jobs/options.rs"]
 mod options;
 #[path = "sync_jobs/output.rs"]
@@ -30,6 +33,7 @@ Examples:
   se sync edit Docs --trigger realtime --rt-debounce-secs 10 --rt-poll-secs 300
   se sync edit Docs --ignore '**/*.tmp' --ignore 'node_modules/**'
   se sync show Docs --json
+  se sync compare Docs
   se sync disable Docs
   se sync log Docs --verbose true
   se sync remove Docs";
@@ -62,6 +66,10 @@ enum Command {
     Disable(JobArgs),
     #[command(about = "Print the live log of a setup and set its detail level")]
     Log(LogArgs),
+    #[command(
+        about = "Compare both sides of a setup and print what a run would do, changing nothing"
+    )]
+    Compare(JobOutputArgs),
 }
 
 #[derive(Args)]
@@ -159,6 +167,10 @@ pub(super) fn run(args: SyncArgs) -> Result<i32, String> {
         Command::Enable(args) => set_enabled(&args.job, true),
         Command::Disable(args) => set_enabled(&args.job, false),
         Command::Log(args) => log(args),
+        Command::Compare(args) => {
+            let job = find_job(&args.job.job)?;
+            compare::compare(&job, now_secs(), args.json)
+        }
     }
 }
 

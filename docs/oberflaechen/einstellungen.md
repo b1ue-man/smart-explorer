@@ -152,7 +152,8 @@ Ausgeliefert in v0.5.182 am 2026-10-16 (Nachweis: Suite `luecken-task.yml`, Lauf
 | Aktivieren/Deaktivieren, Entfernen | `se sync enable/disable/remove JOB`; Entfernen und Bearbeiten lehnen einen laufenden Job ab wie Android (`N/cli/sync_jobs.rs:149-158`, `:229-240`, `:279-289`) | = | = | geschlossen |
 | Protokoll und Detailprotokoll | `se sync log JOB [--from N] [--verbose true\|false] [--json]` (`N/cli/sync_jobs.rs:242-275`) | = | = | geschlossen |
 | Auswahl eines Jobs | Id, exakter Name, Id-Präfix ≥ 4; Vervollständigung (`N/cli/sync_jobs.rs:300-343`) | – | – | geschlossen |
-| Jetzt ausführen, Vergleichen, Versionen wiederherstellen, Konflikte lösen, Sicherheitsstopp bestätigen | – | = | = | offen: Aktionen, keine Einstellungen; ein CLI-Lauf braucht Abbruch mit Strg+C, Fortschritt und Konfliktdialog (eigener Auftrag, in `status.txt` des Stapels genannt) |
+| Vergleichen | `se sync compare JOB [--json]`: liest beide Seiten mit Optionen und Filtern des Setups und gibt Dateizahlen, Aktionen je Art, Konflikte, Auslassungen und eine Sperre aus, ohne etwas zu ändern (`N/cli/sync_jobs/compare.rs`, derselbe Aufruf `bisync::preview_with` wie `N/app/core/preview_core.rs`); Tresor-Syncs verweisen auf `se vault compare`; MCP über das Werkzeug `se` | Knopf „Vergleichen“ (`N/app/core/menus_sync_jobs.rs:135`) | Probelauf über `sync.run` (`N/mobile/os/shared/domains/sync_run.rs:230-241`) | geschlossen (2026-10-31, CLI fehlte) |
+| Jetzt ausführen, Versionen wiederherstellen, Konflikte lösen, Sicherheitsstopp bestätigen | – | = | = | offen: Aktionen, keine Einstellungen; ein CLI-Lauf braucht Abbruch mit Strg+C, Fortschritt und Konfliktdialog (eigener Auftrag, in `status.txt` des Stapels genannt) |
 
 ### Hintergrunddienst
 
