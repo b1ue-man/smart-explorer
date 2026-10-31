@@ -45,6 +45,8 @@ mod requests_legacy;
 mod requests_policy;
 #[path = "share/requests_support.rs"]
 mod requests_support;
+#[path = "share/rights_args.rs"]
+mod rights_args;
 #[path = "share/rooms.rs"]
 mod rooms;
 #[path = "share/status.rs"]

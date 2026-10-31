@@ -69,14 +69,18 @@ pub(super) fn decide(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     } else {
         DirectDecisionKind::Rejected
     };
+    // F1: `preset`/`rights` give the device exactly these rights with the
+    // acceptance; without them the Direct code's rights or „Rechte offen“.
+    let rights = super::share_rights::rights_arg(args, None)?.filter(|_| accept);
     let identity = identity()?;
-    crate::share::decide_direct_request(
+    crate::share::decide_direct_request_with_rights(
         default_home(),
         &identity,
         &id,
         &view.fingerprint,
         decision,
         None,
+        rights.as_ref(),
     )
     .map_err(|error| {
         ApiError::new(

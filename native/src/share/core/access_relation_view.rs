@@ -121,7 +121,9 @@ pub(crate) fn device_access_view(
                 changed_at: direct.exec.changed_at,
                 grant: AccessGrantView::new(&direct.exec.access_grant(), own_label, now),
                 programs: direct.exec.programs.clone(),
-                exports: state.default_direct_exports.clone(),
+                exports: state
+                    .default_direct_exports
+                    .visible_to(&direct.device_id, &direct.public_key),
                 may_write: direct.write,
             },
             &direct.exec,

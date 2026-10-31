@@ -22,11 +22,12 @@ pub(super) struct DiscoverySignalRuntime {
     pub(super) port: Box<dyn DiscoveryExchangePort>,
 }
 
-/// Duration and PIN opt-in of one publish command (FC2).
-#[derive(Clone, Copy)]
+/// Duration and PIN opt-in of one publish command (FC2), and the rights a
+/// device pairing with the offer gets (F5).
 struct OfferLimits {
     duration_secs: u64,
     allow_weak_pin: bool,
+    rights: Option<super::connection_rights::ConnectionRights>,
 }
 
 pub(super) struct DiscoveryCommandOutcome {
@@ -70,6 +71,7 @@ impl DiscoverySignalRuntime {
                 pin,
                 duration_secs,
                 allow_weak_pin,
+                rights,
             } => DiscoveryCommandOutcome::result(
                 self.prepare_offer(
                     target,
@@ -78,6 +80,7 @@ impl DiscoverySignalRuntime {
                     OfferLimits {
                         duration_secs,
                         allow_weak_pin,
+                        rights,
                     },
                     events,
                 )
@@ -122,6 +125,7 @@ impl DiscoverySignalRuntime {
                 pin,
                 duration_secs,
                 allow_weak_pin,
+                rights,
             } => match self.prepare_offer(
                 target,
                 display_alias,
@@ -129,6 +133,7 @@ impl DiscoverySignalRuntime {
                 OfferLimits {
                     duration_secs,
                     allow_weak_pin,
+                    rights,
                 },
                 events,
             ) {
@@ -261,6 +266,9 @@ impl DiscoverySignalRuntime {
         events: &crossbeam_channel::Sender<ShareEvent>,
     ) -> io::Result<DiscoveryOfferHandle> {
         let duration_secs = limits.duration_secs;
+        if let Some(rights) = &limits.rights {
+            rights.validate().map_err(eio)?;
+        }
         if duration_secs == 0 {
             return Err(eio("Discovery-Gesamtdauer muss groesser als null sein"));
         }
@@ -313,6 +321,7 @@ impl DiscoverySignalRuntime {
             self.port.remove_offer(&offer_id);
             return Err(eio("Discovery-Crypto-Port lieferte inkompatible Metadaten"));
         }
+        self.port.set_offer_rights(&offer_id, limits.rights);
         let unix_duration = i64::try_from(duration_secs).unwrap_or(i64::MAX);
         let discoverable_until = now_secs().saturating_add(unix_duration);
         self.state.offers.insert(

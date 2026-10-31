@@ -3,6 +3,8 @@ use std::collections::{HashMap, HashSet};
 mod exchange_port_helpers;
 #[path = "discovery_exchange_port_state.rs"]
 mod exchange_port_state;
+#[path = "discovery_offer_rights.rs"]
+mod offer_rights;
 #[cfg(test)]
 #[path = "discovery_exchange_port_tests.rs"]
 mod review_task_tests;
@@ -14,6 +16,7 @@ use exchange_port_helpers::{
 };
 use exchange_port_state::{ExchangeState, PreparedOfferState, UsedIdTracker};
 
+use super::connection_rights::ConnectionRights;
 use super::direct_reciprocal::DirectReciprocalPeer;
 use super::discovery_bundle::{ConnectorApplicationBundle, PublisherApplicationBundle};
 use super::discovery_domain::{
@@ -46,6 +49,7 @@ pub(crate) struct DiscoveryExchangePortImpl {
     /// Connector exchanges whose user chose "Auch meine Freigaben für dieses
     /// Gerät öffnen"; all others install the publisher one way (FC1/S21).
     share_back: HashSet<String>,
+    offer_rights: offer_rights::OfferRights,
 }
 
 impl DiscoveryExchangePortImpl {
@@ -61,6 +65,7 @@ impl DiscoveryExchangePortImpl {
             used_offer_ids: UsedIdTracker::default(),
             used_exchange_ids: UsedIdTracker::default(),
             share_back: HashSet::new(),
+            offer_rights: Default::default(),
         }
     }
 
@@ -107,6 +112,7 @@ impl DiscoveryExchangePortImpl {
         packet_kind: PairingPacketKind,
         payload: Vec<u8>,
         connector_origin: PairingOrigin,
+        offer_rights: Option<ConnectionRights>,
     ) -> Result<(Option<ExchangeState>, Option<DiscoveryPortAction>), DiscoveryPortError> {
         match state {
             ExchangeState::ConnectorAwaitingKe2(state) => {
@@ -203,7 +209,11 @@ impl DiscoveryExchangePortImpl {
                             .map_err(protocol_error)?;
                         let commit = self
                             .relation_store
-                            .persist_direct(&peer, PairingOrigin::UserPairing)
+                            .persist_direct_with_rights(
+                                &peer,
+                                PairingOrigin::UserPairing,
+                                offer_rights.as_ref(),
+                            )
                             .map_err(persistence_error)?;
                         let completion = commit.outcome().clone();
                         Ok((
@@ -306,7 +316,12 @@ impl DiscoveryExchangePort for DiscoveryExchangePortImpl {
         })
     }
 
+    fn set_offer_rights(&mut self, offer_id: &str, rights: Option<ConnectionRights>) {
+        self.offer_rights.set(offer_id, rights);
+    }
+
     fn remove_offer(&mut self, offer_id: &str) {
+        self.offer_rights.remove_offer(offer_id);
         self.offers.remove(offer_id);
         self.exchanges
             .retain(|_, state| !state.is_publisher_offer(offer_id));
@@ -401,6 +416,7 @@ impl DiscoveryExchangePort for DiscoveryExchangePortImpl {
             exchange_id.to_string(),
             ExchangeState::PublisherAwaitingKe3 { state, target },
         );
+        self.offer_rights.start(offer_id.as_str(), exchange_id);
         Ok(send_packet(PairingPacketKind::OpaqueKe2, ke2.into_bytes()))
     }
 
@@ -420,7 +436,9 @@ impl DiscoveryExchangePort for DiscoveryExchangePortImpl {
             PairingOrigin::UserPairingOneWay
         };
         let failed = state.failed_after_persistence();
-        let (next, action) = match self.advance_exchange(state, kind, payload, connector_origin) {
+        let rights = self.offer_rights.of_exchange(exchange_id);
+        let advanced = self.advance_exchange(state, kind, payload, connector_origin, rights);
+        let (next, action) = match advanced {
             Ok(next) => next,
             Err(error) => {
                 if let Some(failed) = failed {
@@ -465,6 +483,7 @@ impl DiscoveryExchangePort for DiscoveryExchangePortImpl {
     fn cancel_exchange(&mut self, exchange_id: &str) {
         self.exchanges.remove(exchange_id);
         self.share_back.remove(exchange_id);
+        self.offer_rights.end_exchange(exchange_id);
     }
 
     fn take_persisted_outcome(&mut self, exchange_id: &str) -> Option<DiscoveryRelationOutcome> {

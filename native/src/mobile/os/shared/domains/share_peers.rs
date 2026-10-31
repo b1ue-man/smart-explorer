@@ -112,10 +112,17 @@ pub(super) fn readmit(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
 pub(super) fn create_room(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     let name = str_arg(args, "name")?.trim().to_string();
     let code = ShareProfiles::new_room_code().map_err(internal)?;
-    let (profiles, profile_id) =
-        ShareProfiles::add_room_from_code_persisted(default_home(), &code, &name)
-            .map_err(internal)?;
-    committed(profiles);
+    let rights = super::share_rights::rights_arg(args, None)?;
+    let (_, profile_id) = ShareProfiles::add_room_from_code_persisted(default_home(), &code, &name)
+        .map_err(internal)?;
+    // F5: the rights chosen with the room, or it waits for them (F1).
+    let finished = crate::share::connection_rights_actions::finish_room_creation(
+        default_home(),
+        &profile_id,
+        rights.as_ref(),
+    )
+    .map_err(internal)?;
+    committed(finished.profiles);
     reconfigure(rt);
     Ok(json!({ "profileId": profile_id, "code": code }))
 }

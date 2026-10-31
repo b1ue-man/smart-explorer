@@ -13,6 +13,8 @@ mod grants_exec;
 mod grants_readmit;
 #[path = "grants_removed.rs"]
 mod grants_removed;
+#[path = "grants_rights.rs"]
+pub(super) mod grants_rights;
 #[path = "grants_write.rs"]
 mod grants_write;
 
@@ -31,7 +33,9 @@ pub(super) struct GrantsArgs {
 enum GrantsCommand {
     #[command(about = "List local direct authorization grants and linked requests")]
     List,
-    #[command(about = "Set the write right of one existing contact authorization")]
+    #[command(
+        about = "Set the rights of one device: --write/--read-only, or a --preset and the single options"
+    )]
     Set(grants_write::WriteArgs),
     #[command(about = "Revoke an authorization; auto-selects the only active grant")]
     Revoke(RevokeArgs),
@@ -53,6 +57,8 @@ enum GrantsCommand {
         about = "Show or set one device's access (account, commands, terminal, confirmation, end), or every admitted room member's"
     )]
     Access(grants_access::AccessArgs),
+    #[command(flatten)]
+    Rights(grants_rights::RightsCommand),
 }
 
 #[derive(Args)]
@@ -97,6 +103,7 @@ pub(super) fn run(args: GrantsArgs) -> Result<(), String> {
         Some(GrantsCommand::Removed(command)) => grants_removed::removed(command, args.json),
         Some(GrantsCommand::Exec(command)) => grants_exec::run(command, args.json),
         Some(GrantsCommand::Access(command)) => grants_access::run(command, args.json),
+        Some(GrantsCommand::Rights(command)) => grants_rights::run(command, args.json),
     }
 }
 
@@ -122,6 +129,7 @@ pub(super) fn values(profiles: &crate::share::ShareProfiles) -> Vec<serde_json::
                 "grant_state": grant_state_code(&grant.state),
                 "updated_at": grant.updated_at,
                 "write": grant.write,
+                "rights": grants_rights::grant_rights_value(profiles, grant),
                 "authorization": {
                     "state": if grant.state == crate::share::DirectGrantState::Accepted {
                         "active"

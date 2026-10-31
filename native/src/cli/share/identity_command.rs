@@ -39,6 +39,12 @@ pub(super) struct IdentityArgs {
         help = "Confirm --rotate-code without a prompt"
     )]
     yes: bool,
+    // Rights of devices that connect with this direct code, chosen in advance (F5)
+    #[command(flatten)]
+    code_rights: super::rights_args::RightsArgs,
+    /// Devices that connect with this direct code get no rights in advance; they wait for a confirmation
+    #[arg(long, conflicts_with_all = ["preset", "folders", "all_folders", "no_folders", "write", "read_only", "commands", "terminal", "screen_view", "screen_control", "duration", "no_expiry", "account"])]
+    clear_code_rights: bool,
 }
 
 pub(super) fn run(args: IdentityArgs) -> Result<(), String> {
@@ -60,6 +66,13 @@ pub(super) fn run(args: IdentityArgs) -> Result<(), String> {
     } else {
         load_with_repair_hint()?
     };
+    let code_rights = if args.clear_code_rights {
+        clear_code_rights()?
+    } else if args.code_rights.given() {
+        store_code_rights(&args.code_rights)?
+    } else {
+        super::checked_profiles()?.code_rights
+    };
     let direct_code = identity.direct_code();
     if args.json {
         println!(
@@ -70,6 +83,7 @@ pub(super) fn run(args: IdentityArgs) -> Result<(), String> {
                 "fingerprint": identity.fingerprint,
                 "node_id": identity.node_id,
                 "direct_code": direct_code,
+                "code_rights": code_rights.as_ref().map(super::rights_args::rights_value),
             }))
             .map_err(|error| error.to_string())?
         );
@@ -79,8 +93,44 @@ pub(super) fn run(args: IdentityArgs) -> Result<(), String> {
         println!("fingerprint\t{}", identity.fingerprint);
         println!("node_id\t{}", identity.node_id);
         println!("direct_code\t{direct_code}");
+        println!("{}", code_rights_line(code_rights.as_ref()));
     }
     Ok(())
+}
+
+/// Stores the rights of `args` as the Direct code's rights (F5/F6), on top
+/// of the current ones; returns them.
+pub(super) fn store_code_rights(
+    args: &super::rights_args::RightsArgs,
+) -> Result<Option<crate::share::connection_rights::ConnectionRights>, String> {
+    let profiles = super::checked_profiles()?;
+    let roots = &profiles.default_direct_exports.roots;
+    let now = crate::share::core_now_secs();
+    let rights = args.rights(profiles.code_rights.clone(), roots, now)?;
+    let change = crate::share::connection_rights_actions::set_code_rights(
+        Some(super::default_home()),
+        rights,
+    )?;
+    Ok(change.profiles.code_rights)
+}
+
+fn clear_code_rights() -> Result<Option<crate::share::connection_rights::ConnectionRights>, String>
+{
+    crate::share::connection_rights_actions::set_code_rights(Some(super::default_home()), None)
+        .map(|change| change.profiles.code_rights)
+}
+
+/// `code_rights<TAB>SUMMARY`, or `code_rights<TAB>none (devices wait for a confirmation)`.
+pub(super) fn code_rights_line(
+    rights: Option<&crate::share::connection_rights::ConnectionRights>,
+) -> String {
+    match rights {
+        Some(rights) => format!("code_rights\t{}", rights.summary()),
+        None => {
+            "code_rights\tnone chosen (devices connect without rights and wait for a confirmation)"
+                .into()
+        }
+    }
 }
 
 pub(super) fn load_with_repair_hint() -> Result<crate::share::ShareIdentity, String> {

@@ -6,6 +6,9 @@ pub(crate) use access_modules::*;
 #[path = "einrichtung_modules.rs"]
 mod einrichtung_modules;
 pub(crate) use einrichtung_modules::*;
+#[path = "verbinden_modules.rs"]
+mod verbinden_modules;
+pub(crate) use verbinden_modules::*;
 #[path = "core/auth_penalty.rs"]
 mod auth_penalty;
 #[path = "core/authorization_policy.rs"]

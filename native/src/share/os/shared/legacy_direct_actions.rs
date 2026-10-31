@@ -10,6 +10,29 @@ pub fn decide_legacy_direct_request(
     expected_fingerprint: &str,
     accepted: bool,
 ) -> Result<LegacyDirectRequestEntry, String> {
+    decide_legacy_direct_request_with_rights(
+        default_home,
+        identity,
+        selector,
+        expected_fingerprint,
+        accepted,
+        None,
+    )
+}
+
+/// `decide_legacy_direct_request`; an acceptance with `rights` gives the
+/// device exactly these rights in the same transaction (F1/F3).
+pub fn decide_legacy_direct_request_with_rights(
+    default_home: Option<String>,
+    identity: &ShareIdentity,
+    selector: &str,
+    expected_fingerprint: &str,
+    accepted: bool,
+    rights: Option<&crate::share::connection_rights::ConnectionRights>,
+) -> Result<LegacyDirectRequestEntry, String> {
+    if let Some(rights) = rights {
+        crate::share::connection_rights_actions::validate_rights_for_this_host(rights)?;
+    }
     ShareIdentity::with_current_locked(identity.device_name.clone(), |current| {
         super::identity_store::with_matching_identity_generation(identity, current, |locked| {
             decide_legacy_direct_request_locked(
@@ -18,6 +41,7 @@ pub fn decide_legacy_direct_request(
                 selector,
                 expected_fingerprint,
                 accepted,
+                rights,
             )
         })
     })
@@ -29,6 +53,7 @@ fn decide_legacy_direct_request_locked(
     selector: &str,
     expected_fingerprint: &str,
     accepted: bool,
+    rights: Option<&crate::share::connection_rights::ConnectionRights>,
 ) -> Result<LegacyDirectRequestEntry, String> {
     let now = super::core::now_secs();
     let profiles = ShareProfiles::load_checked(default_home.clone())?;
@@ -56,7 +81,16 @@ fn decide_legacy_direct_request_locked(
             return Err(format!("legacy request changed concurrently: {selector}"));
         }
         current.verify_for_local_identity(identity, now)?;
-        candidate.decide_legacy_direct_request(selector, accepted, now)
+        candidate.decide_legacy_direct_request(selector, accepted, now)?;
+        if let (true, Some(rights)) = (accepted, rights) {
+            candidate.apply_direct_connection_rights(
+                &expected.peer.device_id,
+                &expected.peer.public_key,
+                rights,
+                now,
+            )?;
+        }
+        Ok(())
     })?;
     committed
         .legacy_direct_request(selector)

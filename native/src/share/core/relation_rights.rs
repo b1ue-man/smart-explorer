@@ -36,8 +36,8 @@ pub(crate) fn authorization_restrictions(
 /// Result of authorizing one incoming filesystem stream.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SessionAuthorization {
-    /// Exports this relation sees (Direct: `default_direct_exports`, room:
-    /// `room.exports`).
+    /// Exports this relation sees (Direct: the device's folders of
+    /// `default_direct_exports`, room: `room.exports`).
     pub(crate) exports: ShareExportConfig,
     /// Write right of the relation (Direct `DirectGrant.write`, room
     /// `RoomPolicy.members_may_write`). A writing request is allowed only for
@@ -46,9 +46,11 @@ pub(crate) struct SessionAuthorization {
 }
 
 impl SessionAuthorization {
+    /// `exports` are all Direct exports; the session sees only the folders
+    /// of this grant's device (F2, `ShareExportConfig::visible_to`).
     pub(crate) fn direct(exports: ShareExportConfig, grant: &DirectGrant) -> Self {
         Self {
-            exports,
+            exports: exports.visible_to(&grant.device_id, &grant.public_key),
             may_write: grant.write,
         }
     }
@@ -327,6 +329,15 @@ fn room_differs_beyond_runtime(before: &RoomProfile, after: &RoomProfile) -> boo
             .members
             .iter()
             .any(|member| !after.members.contains(member))
+        // F5: a member recorded with the room's member access needs the
+        // configuration that carries it (a runtime update never grants).
+        || after.members.iter().any(|member| {
+            member.exec.grants_any()
+                && !before
+                    .members
+                    .iter()
+                    .any(|known| known.device_id == member.device_id)
+        })
 }
 
 #[cfg(test)]

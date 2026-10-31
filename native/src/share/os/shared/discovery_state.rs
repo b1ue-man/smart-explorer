@@ -149,6 +149,11 @@ pub enum DiscoveryUiAction {
     Revoke {
         exchange_id: String,
     },
+    /// `Publish` with the rights a Direct device pairing with it gets (F5).
+    PublishWithRights {
+        publish: Box<DiscoveryUiAction>,
+        rights: crate::share::connection_rights::ConnectionRights,
+    },
 }
 
 pub struct DiscoveryUiState {

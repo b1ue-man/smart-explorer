@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use super::super::exec_policy::ExecGrant;
 use super::super::types::{PeerPresence, RoomMember, RoomProfile, ShareStatus};
+use crate::share::access_grant::AccessGrantChange;
 
 /// Room-wide rights and admission policy (contract V5, FC1, B15).
 ///
@@ -22,6 +23,12 @@ pub struct RoomPolicy {
     /// block in this room (hint: „Raum neu anlegen empfohlen“).
     #[serde(default)]
     pub confirm_new_members: bool,
+    /// F5 (plan 2026-10-31): commands, terminal and screen of the rights
+    /// chosen for this room; every admitted member that allows nothing yet
+    /// gets them when the daemon records it (`apply_member_access`). Empty
+    /// in older rooms and in rooms without such a choice.
+    #[serde(default, skip_serializing_if = "AccessGrantChange::is_empty")]
+    pub member_access: AccessGrantChange,
 }
 
 impl RoomPolicy {
@@ -30,6 +37,7 @@ impl RoomPolicy {
         Self {
             members_may_write: false,
             confirm_new_members: false,
+            member_access: AccessGrantChange::default(),
         }
     }
 
@@ -38,6 +46,7 @@ impl RoomPolicy {
         Self {
             members_may_write: true,
             confirm_new_members: false,
+            member_access: AccessGrantChange::default(),
         }
     }
 }
@@ -145,6 +154,7 @@ impl RoomProfile {
         if member.exec.grants_any() {
             member.exec.disable_without_decision(member.exec.changed_at);
         }
+        self.apply_member_access(device_id, crate::share::core_now_secs());
         true
     }
 }

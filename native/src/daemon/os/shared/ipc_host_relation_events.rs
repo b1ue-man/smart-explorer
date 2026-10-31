@@ -110,7 +110,7 @@ pub(super) fn apply(
             room.last_seen = Some(now);
             for presence in members {
                 if presence.device_id != local_device_id {
-                    room.upsert_member_from_presence(presence.clone(), now);
+                    record_member(room, presence, now);
                 }
             }
             RelationEvent::changed(true)
@@ -124,7 +124,7 @@ pub(super) fn apply(
                     .rooms
                     .iter_mut()
                     .find(|room| room.room_id == *room_id)
-                    .map(|room| room.upsert_member_from_presence(presence.clone(), now))
+                    .map(|room| record_member(room, presence, now))
                     .is_some();
             RelationEvent::changed(changed)
         }
@@ -235,4 +235,19 @@ fn apply_legacy_decision(
     contact.status = ShareStatus::Available;
     contact.last_error = None;
     true
+}
+
+/// Records a verified member; a member admitted for the first time gets
+/// the room's member access (F5, plan 2026-10-31), persisted here before
+/// the configuration carries it to the worker.
+fn record_member(
+    room: &mut crate::share::RoomProfile,
+    presence: &crate::share::PeerPresence,
+    now: i64,
+) -> crate::share::MemberUpsert {
+    let upsert = room.upsert_member_from_presence(presence.clone(), now);
+    if upsert == crate::share::MemberUpsert::Added {
+        room.apply_member_access(&presence.device_id, now);
+    }
+    upsert
 }

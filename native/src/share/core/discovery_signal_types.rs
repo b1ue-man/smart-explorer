@@ -163,6 +163,10 @@ pub enum DiscoveryCommand {
         /// The user chose "Unsichere PIN erlauben" for a short or trivial PIN.
         #[serde(default)]
         allow_weak_pin: bool,
+        /// F5 (plan 2026-10-31): the rights a Direct device that pairs with
+        /// this offer gets; `None` (older clients): it waits for them.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rights: Option<super::connection_rights::ConnectionRights>,
     },
     StopPublishing {
         offer_id: String,
@@ -198,6 +202,7 @@ impl std::fmt::Debug for DiscoveryCommand {
                 display_alias,
                 duration_secs,
                 allow_weak_pin,
+                rights,
                 ..
             } => formatter
                 .debug_struct("Publish")
@@ -206,6 +211,7 @@ impl std::fmt::Debug for DiscoveryCommand {
                 .field("pin", &"[REDACTED]")
                 .field("duration_secs", duration_secs)
                 .field("allow_weak_pin", allow_weak_pin)
+                .field("rights", rights)
                 .finish(),
             Self::StopPublishing { offer_id } => formatter
                 .debug_struct("StopPublishing")

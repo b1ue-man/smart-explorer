@@ -2,7 +2,8 @@ use std::fmt;
 
 use super::direct_reciprocal::{DirectReciprocalError, DirectReciprocalPeer};
 use super::direct_reciprocal_persistence::{
-    persist_reciprocal_direct_peer, DirectReciprocalPersistenceError,
+    persist_reciprocal_direct_peer, persist_reciprocal_direct_peer_with,
+    DirectReciprocalPersistenceError, DirectReciprocalPersistenceResult,
 };
 use super::discovery_relation_store::{
     canonical_direct_outcome, DiscoveryRelationOutcome, RelationStore, RelationStoreCommit,
@@ -60,13 +61,19 @@ impl RelationStore for SystemRelationStore {
         peer: &DirectReciprocalPeer,
         origin: PairingOrigin,
     ) -> Result<RelationStoreCommit, RelationStoreError> {
-        let result = persist_reciprocal_direct_peer(self.default_home.clone(), peer, origin)
-            .map_err(map_direct_error)?;
-        let changed = result.outcome().changed();
-        let contact_id = result.outcome().contact_id().to_string();
-        let (profiles, _) = result.into_parts();
-        let outcome = canonical_direct_outcome(&profiles, contact_id)?;
-        Ok(RelationStoreCommit::new(profiles, outcome, changed))
+        let result = persist_reciprocal_direct_peer(self.default_home.clone(), peer, origin);
+        direct_commit(result.map_err(map_direct_error)?)
+    }
+
+    fn persist_direct_with_rights(
+        &mut self,
+        peer: &DirectReciprocalPeer,
+        origin: PairingOrigin,
+        rights: Option<&crate::share::connection_rights::ConnectionRights>,
+    ) -> Result<RelationStoreCommit, RelationStoreError> {
+        let home = self.default_home.clone();
+        let result = persist_reciprocal_direct_peer_with(home, peer, origin, rights);
+        direct_commit(result.map_err(map_direct_error)?)
     }
 
     fn persist_room(
@@ -118,4 +125,15 @@ fn map_direct_error(error: DirectReciprocalPersistenceError) -> RelationStoreErr
             RelationStoreError::Persistence(error)
         }
     }
+}
+
+/// The relation-store commit of one persisted reciprocal Direct peer.
+fn direct_commit(
+    result: DirectReciprocalPersistenceResult,
+) -> Result<RelationStoreCommit, RelationStoreError> {
+    let changed = result.outcome().changed();
+    let contact_id = result.outcome().contact_id().to_string();
+    let (profiles, _) = result.into_parts();
+    let outcome = canonical_direct_outcome(&profiles, contact_id)?;
+    Ok(RelationStoreCommit::new(profiles, outcome, changed))
 }

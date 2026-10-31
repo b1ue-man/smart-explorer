@@ -141,6 +141,17 @@ pub fn persist_reciprocal_direct_peer(
     peer: &DirectReciprocalPeer,
     origin: PairingOrigin,
 ) -> Result<DirectReciprocalPersistenceResult, DirectReciprocalPersistenceError> {
+    persist_reciprocal_direct_peer_with(default_home, peer, origin, None)
+}
+
+/// `persist_reciprocal_direct_peer` with the rights chosen in advance for a
+/// grant it creates (the publisher's PIN offer, F5); `None`: the grant waits.
+pub fn persist_reciprocal_direct_peer_with(
+    default_home: Option<String>,
+    peer: &DirectReciprocalPeer,
+    origin: PairingOrigin,
+    rights: Option<&crate::share::connection_rights::ConnectionRights>,
+) -> Result<DirectReciprocalPersistenceResult, DirectReciprocalPersistenceError> {
     let generated_contact_id = random_token(10).map_err(|error| {
         DirectReciprocalPersistenceError::Persistence(format!(
             "secure Direct contact id generation failed: {error}"
@@ -201,7 +212,13 @@ pub fn persist_reciprocal_direct_peer(
                 return Err(TRANSACTION_ABORTED.to_string());
             }
             let mut candidate = profiles.clone();
-            match candidate.apply_reciprocal_direct_peer(peer, &generated_contact_id, now, origin) {
+            match candidate.apply_reciprocal_direct_peer_with(
+                peer,
+                &generated_contact_id,
+                now,
+                origin,
+                rights,
+            ) {
                 Ok(outcome) => {
                     *profiles = candidate;
                     applied = outcome;

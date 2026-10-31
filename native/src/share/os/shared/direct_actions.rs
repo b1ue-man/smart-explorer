@@ -105,6 +105,33 @@ pub fn decide_direct_request(
     decision: DirectDecisionKind,
     message: Option<String>,
 ) -> Result<DirectRequestEntry, String> {
+    decide_direct_request_with_rights(
+        default_home,
+        identity,
+        request_id,
+        expected_fingerprint,
+        decision,
+        message,
+        None,
+    )
+}
+
+/// `decide_direct_request`; an acceptance with `rights` gives the requester
+/// exactly these rights in the same transaction (F1/F3: the user confirmed
+/// them while accepting). Without them the Direct code's rights or „Rechte
+/// offen“ apply.
+pub fn decide_direct_request_with_rights(
+    default_home: Option<String>,
+    identity: &ShareIdentity,
+    request_id: &DirectRequestId,
+    expected_fingerprint: &str,
+    decision: DirectDecisionKind,
+    message: Option<String>,
+    rights: Option<&crate::share::connection_rights::ConnectionRights>,
+) -> Result<DirectRequestEntry, String> {
+    if let Some(rights) = rights {
+        crate::share::connection_rights_actions::validate_rights_for_this_host(rights)?;
+    }
     ShareIdentity::with_current_locked(identity.device_name.clone(), |current| {
         super::identity_store::with_matching_identity_generation(identity, current, |locked| {
             decide_direct_request_locked(
@@ -114,6 +141,7 @@ pub fn decide_direct_request(
                 expected_fingerprint,
                 decision,
                 message,
+                rights,
             )
         })
     })
@@ -126,6 +154,7 @@ fn decide_direct_request_locked(
     expected_fingerprint: &str,
     decision: DirectDecisionKind,
     message: Option<String>,
+    rights: Option<&crate::share::connection_rights::ConnectionRights>,
 ) -> Result<DirectRequestEntry, String> {
     let now = super::core::now_secs();
     let profiles = ShareProfiles::load_checked(default_home.clone())?;
@@ -172,6 +201,15 @@ fn decide_direct_request_locked(
         candidate
             .record_direct_decision(signed.clone(), now)
             .map_err(|error| error.to_string())?;
+        if let (DirectDecisionKind::Accepted, Some(rights)) = (decision, rights) {
+            let requester = &expected_request.requester;
+            candidate.apply_direct_connection_rights(
+                &requester.device_id,
+                &requester.public_key,
+                rights,
+                now,
+            )?;
+        }
         Ok(())
     })?;
     committed

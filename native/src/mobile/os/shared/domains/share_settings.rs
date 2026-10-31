@@ -229,6 +229,13 @@ pub(super) fn discoverable(args: &Value) -> Result<Value, ApiError> {
         )));
     }
     check_pin(&pin)?;
+    // F5: what the paired Direct device gets; rooms carry their own rights.
+    let rights = super::share_rights::rights_arg(args, None)?;
+    if rights.is_some() && target_key != "direct" {
+        return Err(invalid(
+            "Die Rechte eines Raums gelten für den Raum: share.confirmRights mit target room.",
+        ));
+    }
     if !allow_weak_pin {
         if let Some(problem) = crate::share::discovery_pin_strength(pin.as_bytes()).problem() {
             return Err(ApiError::new("weak_pin", problem));
@@ -264,12 +271,19 @@ pub(super) fn discoverable(args: &Value) -> Result<Value, ApiError> {
             "Dieses Ziel ist bereits suchbar – zuerst beenden.",
         ));
     }
-    run_action(DiscoveryUiAction::Publish {
+    let publish = DiscoveryUiAction::Publish {
         target,
         display_alias: alias,
         pin: DiscoveryPin::new(pin),
         duration_secs: minutes.saturating_mul(60),
         allow_weak_pin,
+    };
+    run_action(match rights {
+        Some(rights) => DiscoveryUiAction::PublishWithRights {
+            publish: Box::new(publish),
+            rights,
+        },
+        None => publish,
     });
     Ok(json!({}))
 }

@@ -24,6 +24,14 @@ use crate::share::access_grant::{AccessGrantChange, AccessGrantView, CapabilityD
 use crate::share::exec_helper_protocol::AccountChoices;
 use crate::share::{ExecGrantTarget, ExecId};
 
+#[path = "access_ipc_rights.rs"]
+mod rights;
+#[allow(unused_imports)] // The GUI packages G2/G3 call these (plan 2026-10-31).
+pub(crate) use rights::{
+    cancel_connection_rights, confirm_connection_rights, pending_connection_rights, rights_presets,
+    set_code_rights,
+};
+
 /// How long a client waits for an answer (`always` writes the journal).
 const ACCESS_TIMEOUT: Duration = Duration::from_secs(20);
 /// How often a client reads the notice of its waiting start.
@@ -101,6 +109,7 @@ impl ShareHost {
             AccessIpcRequest::ExecNotice { exec_id } => Ok(AccessIpcReply::ExecNotice {
                 notice: self.exec_notice(&exec_id),
             }),
+            request => self.rights_reply(request),
         }
     }
 

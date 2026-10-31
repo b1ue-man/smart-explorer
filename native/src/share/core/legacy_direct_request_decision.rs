@@ -1,6 +1,7 @@
 //! Automatic decisions for authenticated legacy Direct requests (FC5) and the
 //! grant they install. A request from a device without a grant waits for the
 //! user unless the device policy is `AutoAccept`.
+use super::connection_rights::RightsOrigin;
 use super::direct_protocol::DirectPeerIdentity;
 use super::direct_relation::NEW_DIRECT_GRANT_WRITE;
 use super::exec_policy::ExecGrant;
@@ -174,6 +175,7 @@ pub(super) fn set_exact_grant(
         .iter_mut()
         .find(|grant| grant.device_id == peer.device_id)
     {
+        let mut new_key = false;
         if !exact_grant(grant, peer) {
             if !accepted {
                 profiles.withdraw_direct_key(peer, now);
@@ -190,6 +192,7 @@ pub(super) fn set_exact_grant(
             grant.public_key = peer.public_key.clone();
             grant.fingerprint = peer.fingerprint.clone();
             grant.node_id = peer.node_id.clone();
+            new_key = true;
         }
         if state != DirectGrantState::Accepted || grant.state != DirectGrantState::Accepted {
             // Every change of the base authorization ends Exec (B04).
@@ -198,6 +201,15 @@ pub(super) fn set_exact_grant(
         grant.device_name = peer.device_name.clone();
         grant.state = state;
         grant.updated_at = now;
+        if new_key {
+            // F1: the device's new key is a new connection without rights.
+            profiles.settle_new_direct_grant(
+                &peer.device_id,
+                RightsOrigin::IdentityReplaced,
+                None,
+                now,
+            );
+        }
         if !accepted {
             profiles.withdraw_direct_key(peer, now);
         }
@@ -214,6 +226,9 @@ pub(super) fn set_exact_grant(
         exec: ExecGrant::default(),
         write: NEW_DIRECT_GRANT_WRITE,
     });
+    // F1: an accepted request (by the user or automatically) connects
+    // without rights unless the Direct code carries rights chosen in advance.
+    profiles.settle_new_direct_grant(&peer.device_id, RightsOrigin::Request, None, now);
     if !accepted {
         profiles.withdraw_direct_key(peer, now);
     }

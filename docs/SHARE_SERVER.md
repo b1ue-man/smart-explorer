@@ -153,9 +153,13 @@ sends the commit packet that claims persistence. The connecting device opens
 its own exports only with the explicit **Auch meine Freigaben für dieses Gerät
 öffnen** choice (`shareBack` in the API). For a Room offer, the joining peer
 persists the publisher's current Room material; the publisher already owns that
-Room and does not create a synthetic Direct relation. Neither flow requires a
-second click or approval on the publishing side. Cancel and expiry terminate
-only the affected offer or exchange.
+Room and does not create a synthetic Direct relation. Since 2026-10-31 a new
+connection carries no rights until they are confirmed: an offer published with
+rights (preset or single rights, `se share discoverable --preset …`) grants
+exactly those, which counts as confirmation in advance; without them the
+publishing side keeps the connection with open rights until it confirms or
+cancels them in the compact rights menu (`se share grants confirm|cancel`).
+Cancel and expiry terminate only the affected offer or exchange.
 
 The server allows four concurrent exchanges per offer, with at most one from
 each proven connector key (or source address for a legacy connector). Twelve

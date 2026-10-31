@@ -536,9 +536,31 @@ Identitäts- oder Relation-Konflikte sowie zuvor ignorierte, abgelehnte,
 widerrufene oder gelöschte Beziehungen bleiben dabei fail-closed und werden
 nicht automatisch überschrieben.
 
-Neue **Direkt-Freigaben** (für die eigenen, angenommenen Geräte) sind lesbar
-**und beschreibbar**, und neu angenommene Geräte haben Schreibrecht – das ist
-der Zweck von Direct Share. Neue **Raum-Freigaben** sind zunächst nur lesbar,
+**Rechte beim Verbinden (Quellstand 2026-10-31, noch nicht veröffentlicht):**
+Eine neue Verbindung – Annahme einer Anfrage, automatische Annahme, PIN-Kopplung
+auf beiden Seiten, Rückfreigabe, erstellter oder beigetretener Raum – hat zuerst
+**keine Rechte** (keine Ordner, kein Schreiben, keine Befehle, kein Terminal, kein
+Bildschirm) und steht als „Rechte offen“ in `se share status` und `se share grants
+pending`. `se share grants confirm GERÄT --preset NAME` setzt genau die gewählten
+Rechte, `se share grants cancel GERÄT` behält die Verbindung ohne Rechte. Die
+Voreinstellungen (`se share grants presets`) sind `none` (Keine Rechte),
+`read-only` (Nur lesen), `read-write` (Dateien lesen und schreiben), `files-exec`
+(Dateien und Codeausführung) und `all` (Alles, dazu Desktop sehen und steuern);
+die Schalter `--folder`, `--all-folders`, `--no-folders`, `--with-connections`,
+`--write`, `--read-only`, `--commands`, `--terminal`, `--screen-view`,
+`--screen-control` (je `off|ask|allow`), `--for`, `--no-expiry` und `--as` ändern
+einzelne Teile. Dieselben Optionen wählen die Rechte schon beim Freigeben: `se
+share request accept --preset NAME`, `se share identity --preset NAME` (Geräte mit
+dem eigenen Direkt-Code, auch bei `se share request policy auto-accept --preset
+NAME`), `se share discoverable --preset NAME` (das Gerät, das sich mit dem Angebot
+koppelt) und `se share room create --preset NAME`. Mit `--folder` sieht ein Gerät
+nur diese Direkt-Ordner, auch in der Dateizugriffsprüfung. Bestehende Geräte und
+Räume behalten ihre bisherigen Rechte; ein Gerät ohne Ordnerauswahl sieht weiter
+alle Direkt-Ordner.
+
+Neue **Direkt-Freigaben** (Ordner) sind lesbar **und beschreibbar**; ein Gerät
+schreibt dort, sobald seine Rechte das Schreiben enthalten (vor dem 2026-10-31
+bekamen neu angenommene Geräte das Schreibrecht sofort). Neue **Raum-Freigaben** sind zunächst nur lesbar,
 und Raum-Mitglieder schreiben erst nach ausdrücklicher Erlaubnis. Schreibzugriff
 braucht immer sowohl die Freigabe am Ordner als auch das Schreibrecht des Geräts
 oder Raums. `se share exports set ORDNER --write` und `se share grants set GERÄT

@@ -110,10 +110,15 @@ fn merge_members(
                     || !member.node_id.is_empty() && member.node_id == updated_member.node_id
             }) {
                 if let Some(presence) = &updated_member.presence {
-                    current.upsert_member_from_presence(
-                        presence.clone(),
-                        updated_member.last_seen.unwrap_or_default(),
-                    );
+                    let seen = updated_member.last_seen.unwrap_or_default();
+                    let upsert = current.upsert_member_from_presence(presence.clone(), seen);
+                    // F5: the room's member access, stored before it applies.
+                    if upsert == crate::share::MemberUpsert::Added {
+                        current.apply_member_access(
+                            &presence.device_id,
+                            crate::share::core_now_secs(),
+                        );
+                    }
                 }
             }
             continue;

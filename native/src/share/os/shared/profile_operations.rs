@@ -139,6 +139,12 @@ impl ShareProfiles {
                 exports: super::export_config::ShareExportConfig::default(),
                 policy: crate::share::RoomPolicy::new_room(),
             });
+            // F1: the joined room exists without rights until confirmed.
+            profiles.mark_room_rights_pending(
+                &generated_id,
+                crate::share::connection_rights::RightsOrigin::RoomJoined,
+                super::core::now_secs(),
+            );
             Ok(())
         });
         let profiles = match result {

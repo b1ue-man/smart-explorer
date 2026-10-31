@@ -105,6 +105,17 @@ pub trait RelationStore: Send {
         origin: PairingOrigin,
     ) -> Result<RelationStoreCommit, RelationStoreError>;
 
+    /// `persist_direct` of the publishing side with the rights chosen for
+    /// the offer (F5); a store without them installs the grant waiting.
+    fn persist_direct_with_rights(
+        &mut self,
+        peer: &DirectReciprocalPeer,
+        origin: PairingOrigin,
+        _rights: Option<&super::connection_rights::ConnectionRights>,
+    ) -> Result<RelationStoreCommit, RelationStoreError> {
+        self.persist_direct(peer, origin)
+    }
+
     fn persist_room(
         &mut self,
         material: &RoomRelationMaterial,
@@ -320,10 +331,20 @@ impl RelationStore for InMemoryRelationStore {
         peer: &DirectReciprocalPeer,
         origin: PairingOrigin,
     ) -> Result<RelationStoreCommit, RelationStoreError> {
+        self.persist_direct_with_rights(peer, origin, None)
+    }
+
+    fn persist_direct_with_rights(
+        &mut self,
+        peer: &DirectReciprocalPeer,
+        origin: PairingOrigin,
+        rights: Option<&super::connection_rights::ConnectionRights>,
+    ) -> Result<RelationStoreCommit, RelationStoreError> {
         let generated_id = self.next_available_id("direct")?;
         let mut candidate = self.profiles.clone();
+        let now = super::core::now_secs();
         let applied = candidate
-            .apply_reciprocal_direct_peer(peer, &generated_id, super::core::now_secs(), origin)
+            .apply_reciprocal_direct_peer_with(peer, &generated_id, now, origin, rights)
             .map_err(map_direct_domain_error)?;
         let (contact_id, changed) = match applied {
             DirectReciprocalApply::Changed { contact_id } => (contact_id, true),

@@ -114,6 +114,52 @@ pub(super) fn room_candidates_from(profiles: &ShareProfiles) -> Vec<CompletionCa
         .collect()
 }
 
+/// Values of `--folder` (plan 2026-10-31, F2): the Direct exports by label,
+/// each with its path and access.
+pub(super) fn folder_candidates() -> Vec<CompletionCandidate> {
+    profiles()
+        .map(|profiles| folder_candidates_from(&profiles))
+        .unwrap_or_default()
+}
+
+pub(super) fn folder_candidates_from(profiles: &ShareProfiles) -> Vec<CompletionCandidate> {
+    let roots = &profiles.default_direct_exports.roots;
+    roots
+        .iter()
+        .map(|root| {
+            let access = if root.access.allows_write() {
+                "read-write"
+            } else {
+                "read-only"
+            };
+            candidate(&root.label, format!("{} · {access}", root.path))
+        })
+        .collect()
+}
+
+/// Devices of `se share grants confirm|cancel`: the Direct grants whose
+/// rights wait for a confirmation („Rechte offen“).
+pub(super) fn pending_rights_candidates() -> Vec<CompletionCandidate> {
+    profiles()
+        .map(|profiles| pending_rights_candidates_from(&profiles))
+        .unwrap_or_default()
+}
+
+pub(super) fn pending_rights_candidates_from(profiles: &ShareProfiles) -> Vec<CompletionCandidate> {
+    use crate::share::connection_rights::RightsTarget;
+    profiles
+        .pending_rights_views()
+        .into_iter()
+        .filter_map(|view| match view.target {
+            RightsTarget::Direct { device_id, .. } => Some(candidate(
+                &device_id,
+                format!("{} · Rechte offen · {}", view.name, view.origin.key()),
+            )),
+            RightsTarget::Room { .. } => None,
+        })
+        .collect()
+}
+
 /// Values of `--as`: the account list of the running worker ("Ausführen
 /// als", D.2.4); without a worker the own account, `se-remote` and every
 /// account a grant of this host names already.

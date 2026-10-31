@@ -664,7 +664,9 @@ Request {requestId, contactId:String?, name, stateText, canAccept, canReject, ca
 - `share.setOnline {online}` → `{}` (`auto_connect`)
 - `share.setName {name}` → `{}`
 - `share.suggestPin {}` → `{pin}` (sechs zufällige, nicht triviale ASCII-Ziffern)
-- `share.discoverable {target:"direct"|<roomProfileId>, alias, pin, minutes, allowWeakPin:Boolean=false}` → `{}` ·
+- `share.discoverable {target:"direct"|<roomProfileId>, alias, pin, minutes, allowWeakPin:Boolean=false,
+  preset:String?, rights:Rights?}` → `{}` (`preset`/`rights` nur für `target:"direct"`: die Rechte des
+  Geräts, das sich mit diesem Angebot koppelt, §5.1; bei einem Raum `invalid`) ·
   `share.stopDiscoverable {offerId}` → `{}`
   (1–30 Minuten; PIN kürzer als sechs Unicode-Zeichen, periodische Wiederholung, einfache Ziffernfolge
   oder häufige PIN liefert ohne Opt-in `weak_pin`. Leere PIN bleibt auch mit Opt-in `invalid`.
@@ -685,11 +687,14 @@ Request {requestId, contactId:String?, name, stateText, canAccept, canReject, ca
   und den retrybaren Weg (Hinzufügen wiederholen oder `setShareBack`), statt Erfolg zu behaupten.
 - `share.removeDevice {contactId}` → `{removedFavorites:Int, orphanedJobs:[String]}`
 - `share.readmit {deviceId}` → `{}`
-- `share.createRoom {name}` → `{profileId, code}` · `share.joinRoom {code, name}` → `{profileId}` ·
+- `share.createRoom {name, preset:String?, rights:Rights?}` → `{profileId, code}` (ohne Rechte wartet der
+  Raum mit `pendingRights` „Rechte offen“, §5.1) · `share.joinRoom {code, name}` → `{profileId}` (der
+  beigetretene Raum gibt nichts frei und wartet ebenso) ·
   `share.roomCode {profileId}` → `{code:String?}` · `share.leaveRoom {profileId}` → `{}` ·
   `share.removeRoom {profileId}` → `{removedFavorites:Int, orphanedJobs:[String]}`
-- `share.requestAccess {contactId, message:String?}` → `{}` · `share.decide {requestId, accept:Boolean}`
-  → `{}` · `share.retry {requestId}` → `{}` · `share.deleteRequest {requestId}` → `{}`
+- `share.requestAccess {contactId, message:String?}` → `{}` · `share.decide {requestId, accept:Boolean,
+  preset:String?, rights:Rights?}` → `{}` (Annahme mit Rechten setzt genau diese in derselben Transaktion;
+  ohne sie gelten die Code-Rechte oder „Rechte offen“, §5.1) · `share.retry {requestId}` → `{}` · `share.deleteRequest {requestId}` → `{}`
 - `share.addExport {scope:"direct"|<profileId>, path, label:String?}` → `{}` ·
   `share.removeExport {scope, path}` → `{}` (neue Rootanlage muss ein vorhandenes lokales Verzeichnis sein
   und ist RO; Entfernen nutzt den exakten gespeicherten Pfad)
@@ -732,10 +737,12 @@ Request {requestId, contactId:String?, name, stateText, canAccept, canReject, ca
   action:"admit|block|allow"}` → `{persisted:true,changed:Boolean}`: eindeutige volle Mitgliedspins
   erneut im neuesten Profil prüfen; Pending bewusst zulassen, Identität sperren oder wieder zulassen.
   Namensähnlichkeit genügt nicht. Wiederzulassen aktiviert keine Befehle.
-- `share.policy {}` → `{requests:"Ask|AutoAccept",warning:String?}` aus dem vorhandenen privaten
-  Gerätepräferenzstore; fehlende/kaputte Datei wirkt als Ask mit Hinweis.
-- `share.setPolicy {requests:"Ask|AutoAccept"}` → `{requests,persisted:true}`: ausdrücklicher Opt-in
-  für AutoAccept, keine neue Policydatei und keine Löschung der Withdraw-/Legacy-Historie.
+- `share.policy {}` → `{requests:"Ask|AutoAccept",warning:String?,codeRights:Rights?}` aus dem vorhandenen
+  privaten Gerätepräferenzstore; fehlende/kaputte Datei wirkt als Ask mit Hinweis.
+- `share.setPolicy {requests:"Ask|AutoAccept", preset:String?, rights:Rights?}` → `{requests,persisted:true}`:
+  ausdrücklicher Opt-in für AutoAccept, keine neue Policydatei und keine Löschung der Withdraw-/Legacy-
+  Historie. `preset`/`rights` setzen die Code-Rechte (§5.1), die die automatische Annahme vergibt; ohne
+  Code-Rechte nimmt sie ohne Rechte an und das Gerät wartet („Rechte offen“).
 - `share.exec {location, command, shell:Boolean, timeoutSecs:Int}` → `{taskId}`;
   `result = {stdout, stderr, exitCode:Int?, timedOut, truncated}` (`daemon::exec_share`, Ausgabe ≤ 1 MiB;
   `shell:false` trennt an Leerraum, Anführungszeichen gruppieren, ein Backslash ist wörtlich außer vor
@@ -795,6 +802,55 @@ Request {requestId, contactId:String?, name, stateText, canAccept, canReject, ca
   - `share.setLanPresence {enabled:Boolean}` → `{enabled}`
   - `share.renewCode {}` → `{directCode, warning:String?}` (Worker kurz gestoppt, Direkt-Freigaben pausieren, Exec aus)
 Nicht auf Android: LAN-Uplink, Anfragen im Altformat, Exec als anderes Konto.
+
+### 5.1 Rechte beim Verbinden (Plan 2026-10-31 §F, F1–F7, Paket G1)
+Grundsatz: Jede neue Verbindung (Annahme einer Direkt-Anfrage, automatische Annahme, PIN-Kopplung auf
+beiden Seiten, „Auch meine Freigaben öffnen“, Hintergrund-Reparatur, Gerät mit neuem Schlüssel, wieder
+erlaubte Freigabe ohne Rechte, erstellter und beigetretener Raum) entsteht **ohne jedes Recht** und steht
+in `pendingRights` („Rechte offen“). `share.confirmRights` setzt die gewählten Rechte in einer
+Profiltransaktion; `share.cancelRights` behält die Verbindung ohne Rechte. Vorher gewählte Rechte am
+Direkt-Code (`codeRights`), am PIN-Angebot (`share.discoverable`) oder am Raum (`share.createRoom`) sind die
+Bestätigung im Voraus. Bestehende Freigaben und Räume behalten ihre Rechte; alte Datensätze werden
+unverändert gelesen (Freigabe ohne Ordnerauswahl sieht alle Direkt-Ordner).
+```text
+Rights {folders:{kind:"none"|"all"|"selected", paths:[String]?, connections:Boolean?}, write:Boolean,
+  commands:"off|ask|allow", terminal:"off|ask|allow", screenView:"off|ask|allow",
+  screenControl:"off|ask|allow", validUntil:Long?, account:"own"|"remote"|"account:NAME",
+  preset:String?, summary:String}        // preset/summary nur in Antworten
+RightsTarget {kind:"direct", deviceId, publicKey} | {kind:"room", profileId}
+PendingRights {target:RightsTarget, origin:"request|pairing|share_back|repair|identity_replaced|
+  readmitted|room_created|room_joined", since:Long (Unix-Sekunden), name, rights:Rights}
+```
+Voreinstellungen (Schlüssel, Name, Inhalt; auf allen Oberflächen gleich):
+`none` „Keine Rechte“ (nichts) · `read-only` „Nur lesen“ (alle Direkt-Ordner, kein Schreiben) ·
+`read-write` „Dateien lesen und schreiben“ (alle Direkt-Ordner, Schreiben inkl. Löschen/Papierkorb) ·
+`files-exec` „Dateien und Codeausführung“ (wie `read-write`, dazu Befehle und Terminal `allow` als eigenes
+Konto) · `all` „Alles“ (wie `files-exec`, dazu Desktop sehen und steuern `allow`; Steuern schließt
+Programme, Anmeldung, lokale Dienste und den eigenen RDP-Dienst des Hosts ein).
+Eingabe: `preset` füllt die Schalter, jedes Feld in `rights` ändert sie; ohne `preset` ist die Grundlage
+bei `confirmRights` die aktuelle Rechte der Verbindung, bei `setCodeRights` die aktuellen Code-Rechte,
+sonst „Keine Rechte“. `folders.paths` sind exakte `path`-Werte aus `exports.direct` (für Räume auch aus
+`exports.rooms`); ein anderer Pfad ist `conflict`. Ein Ordner hinzuzufügen geht zuerst über
+`share.addExport`. Für Räume: `folders` sind die Raumfreigaben (`all` = Kopie der Direkt-Ordner),
+`write` ist `membersMayWrite`, Befehle/Terminal/Bildschirm gelten für alle zugelassenen Mitglieder und für
+später zugelassene.
+- `share.rightsPresets {}` → `{presets:[{key, label, description, rights:Rights}]}`
+- `share.pendingRights {}` → `{pendingRights:[PendingRights], codeRights:Rights?}` (ebenso in
+  `share.status` als `pendingRights` und `codeRights`)
+- `share.confirmRights {target:RightsTarget, preset:String?, rights:Rights?}` →
+  `{changed:Boolean, persisted:true, pendingRights, codeRights}`; ohne `preset` und `rights` `invalid`;
+  andere Identität oder nicht aktive Freigabe `conflict`; ein anderes Konto als das App-Konto ist auf
+  Android `conflict` (Hostprüfung wie `setAccess`)
+- `share.cancelRights {target:RightsTarget}` → `{changed:Boolean, persisted:true, pendingRights, codeRights}`
+- `share.setCodeRights {preset:String?, rights:Rights?, clear:Boolean=false}` → gleiche Form; `clear:true`
+  entfernt die Code-Rechte (Geräte warten dann ohne Rechte)
+
+Daemon-IPC (`IpcRequest::Access`, `daemon/os/shared/ipc_protocol_access.rs`): `rights_presets`,
+`pending_rights`, `confirm_rights {target, rights}`, `cancel_rights {target}`, `set_code_rights {rights?}`;
+Antworten `rights_presets {presets}` und `rights {pending, code_rights, changed}` (Rust-Formen
+`ConnectionRights`, `RightsTarget`, `PendingRightsView`, snake_case). CLI: `se share grants presets|pending|
+confirm|cancel`, `--preset` und Einzelschalter an `se share request accept`, `se share request policy
+auto-accept`, `se share discoverable`, `se share identity`, `se share room create`, `se share grants set`.
 
 FC1-Kompatibilität: Persistente Legacy-Roots ohne `access` behalten RW, alte Grants ohne `write` true,
 alte Raumpolicy ihr bisheriges Schreibrecht. Neue Roots/Konten sind RO, neue Grants/Räume ohne Schreiben,

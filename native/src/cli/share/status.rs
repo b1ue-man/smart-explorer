@@ -89,7 +89,7 @@ fn json_value(
         .iter()
         .map(|entry| lifecycle_output::request_value(entry, profiles))
         .collect::<Vec<_>>();
-    serde_json::json!({
+    let mut value = serde_json::json!({
         "worker": {
             "reachable": worker_error.is_none(),
             "running": worker_error.is_none().then_some(snapshot.running),
@@ -127,7 +127,14 @@ fn json_value(
             "last_error": setup.last_error,
             "lines": setup.lines(),
         })),
-    })
+    });
+    // F1 „Rechte offen“ and the Direct code's rights (plan 2026-10-31).
+    value["rights_pending"] = grants::grants_rights::pending_value(profiles);
+    value["code_rights"] = serde_json::json!(profiles
+        .code_rights
+        .as_ref()
+        .map(super::rights_args::rights_value));
+    value
 }
 
 fn print_text(
@@ -136,6 +143,9 @@ fn print_text(
     profiles: &crate::share::ShareProfiles,
 ) {
     println!("worker_reachable\t{}", worker_error.is_none());
+    for line in grants::grants_rights::pending_lines(profiles) {
+        println!("{line}");
+    }
     println!(
         "running\t{}",
         worker_error.map_or_else(|| snapshot.running.to_string(), |_| "unknown".into())

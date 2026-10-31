@@ -277,7 +277,11 @@ pub(super) fn policy() -> Result<Value, ApiError> {
     let result = crate::share::DirectRequestPolicy::load();
     let warning = result.as_ref().err().cloned();
     let requests = result.unwrap_or_default();
-    Ok(json!({"requests": requests, "warning": warning}))
+    let code_rights = ShareProfiles::load_checked(default_home())
+        .ok()
+        .and_then(|profiles| profiles.code_rights);
+    let code_rights = code_rights.as_ref().map(super::share_rights::rights_json);
+    Ok(json!({"requests": requests, "warning": warning, "codeRights": code_rights}))
 }
 
 pub(super) fn set_policy(args: &Value) -> Result<Value, ApiError> {
@@ -286,6 +290,14 @@ pub(super) fn set_policy(args: &Value) -> Result<Value, ApiError> {
         "AutoAccept" => crate::share::DirectRequestPolicy::AutoAccept,
         _ => return Err(invalid("requests muss Ask oder AutoAccept sein.")),
     };
+    // F6: `preset`/`rights` are the rights automatic acceptance gives.
+    let base = ShareProfiles::load_checked(default_home())
+        .ok()
+        .and_then(|profiles| profiles.code_rights);
+    if let Some(rights) = super::share_rights::rights_arg(args, base)? {
+        crate::share::connection_rights_actions::set_code_rights(default_home(), Some(rights))
+            .map_err(error)?;
+    }
     requests.save().map_err(error)?;
     wake();
     Ok(json!({"requests": requests, "persisted": true}))

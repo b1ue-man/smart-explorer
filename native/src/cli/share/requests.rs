@@ -31,7 +31,9 @@ enum RequestCommand {
     List,
     #[command(about = "Show one durable request by any selector emitted by request list")]
     Show(ShowArgs),
-    #[command(about = "Accept an eligible incoming request; conflicts are excluded")]
+    #[command(
+        about = "Accept an eligible incoming request (conflicts are excluded); --preset and the rights options set the device's rights in the same step"
+    )]
     Accept(AcceptDecisionArgs),
     #[command(about = "Reject a pending incoming request; auto-selects the only one")]
     Reject(DecisionArgs),
@@ -60,16 +62,22 @@ struct AcceptDecisionArgs {
     fingerprint: Option<String>,
     #[arg(long, help = "Optional signed decision message")]
     message: Option<String>,
+    // Rights the device gets with this acceptance (F1: without them it
+    // gets the Direct code's rights or none and waits for confirmation)
+    #[command(flatten)]
+    rights: super::rights_args::RightsArgs,
 }
 
-impl From<AcceptDecisionArgs> for DecisionArgs {
-    fn from(value: AcceptDecisionArgs) -> Self {
-        Self {
-            selector: value.selector,
-            fingerprint: value.fingerprint,
-            message: value.message,
-        }
-    }
+/// The decision of an acceptance with the rights it confirms.
+fn accept_args(value: AcceptDecisionArgs) -> Result<DecisionArgs, String> {
+    let roots = super::checked_profiles()?.default_direct_exports.roots;
+    let now = crate::share::core_now_secs();
+    Ok(DecisionArgs {
+        selector: value.selector,
+        fingerprint: value.fingerprint,
+        message: value.message,
+        rights: value.rights.rights(None, &roots, now)?,
+    })
 }
 
 #[derive(Args)]
@@ -97,6 +105,8 @@ struct DecisionArgs {
     fingerprint: Option<String>,
     #[arg(long, help = "Optional signed decision message")]
     message: Option<String>,
+    #[arg(skip)]
+    rights: Option<crate::share::connection_rights::ConnectionRights>,
 }
 
 #[derive(Args)]
@@ -125,7 +135,7 @@ pub(super) fn run(args: RequestArgs) -> Result<(), String> {
         Some(RequestCommand::List) => list(args.json),
         Some(RequestCommand::Show(command)) => show(command.selector.as_deref(), args.json),
         Some(RequestCommand::Accept(command)) => decide(
-            command.into(),
+            accept_args(command)?,
             crate::share::DirectDecisionKind::Accepted,
             args.json,
         ),
@@ -255,13 +265,14 @@ fn decide(
         &request_id,
     )?;
     let identity = super::identity_command::load_with_repair_hint()?;
-    let persisted = crate::share::decide_direct_request(
+    let persisted = crate::share::decide_direct_request_with_rights(
         Some(super::default_home()),
         &identity,
         &request_id,
         expected_fingerprint,
         decision,
         args.message,
+        args.rights.as_ref(),
     )?;
     let worker = worker_refresh();
     let committed = super::checked_profiles()?;
@@ -421,12 +432,13 @@ fn answer_legacy(
         &request.selector,
     )?;
     let identity = super::identity_command::load_with_repair_hint()?;
-    let persisted = crate::share::decide_legacy_direct_request(
+    let persisted = crate::share::decide_legacy_direct_request_with_rights(
         Some(super::default_home()),
         &identity,
         &request.selector,
         &request.peer.fingerprint,
         accepted,
+        args.rights.as_ref(),
     )?;
     let worker = worker_refresh();
     let committed = super::checked_profiles()?;

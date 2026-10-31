@@ -10,6 +10,8 @@ use crate::daemon::ipc_host::exec_grant_journal::ExecGrantPersistResult;
 use crate::share::access_approval::{ApprovalDecision, ApprovalView};
 use crate::share::access_catalog::HelperStatus;
 use crate::share::access_grant::{AccessGrantChange, AccessGrantView};
+use crate::share::connection_rights::{ConnectionRights, PresetView, RightsTarget};
+use crate::share::connection_rights_apply::PendingRightsView;
 use crate::share::exec_access_view::{ExecAccessView, ExecApprovalPending};
 use crate::share::{ExecGrantTarget, ExecId};
 
@@ -48,6 +50,24 @@ pub(crate) enum AccessIpcRequest {
     Accounts,
     /// What the host of the outgoing start `exec_id` told beside its events.
     ExecNotice { exec_id: ExecId },
+    /// F4 (plan 2026-10-31): the rights presets in menu order.
+    RightsPresets,
+    /// F1: the connections whose rights wait („Rechte offen“) and the rights
+    /// of the Direct code.
+    PendingRights,
+    /// F1 „Bestätigen“: exactly `rights` for `target`, one transaction.
+    ConfirmRights {
+        target: RightsTarget,
+        rights: ConnectionRights,
+    },
+    /// F1 „Abbrechen“: the connection stays without rights.
+    CancelRights { target: RightsTarget },
+    /// F5/F6: the rights of devices connecting with the Direct code;
+    /// `None` lets them wait without rights.
+    SetCodeRights {
+        #[serde(default)]
+        rights: Option<ConnectionRights>,
+    },
 }
 
 /// The replies of `AccessIpcRequest`, in the same order.
@@ -74,6 +94,17 @@ pub(crate) enum AccessIpcReply {
     },
     ExecNotice {
         notice: Option<ExecNoticeView>,
+    },
+    RightsPresets {
+        presets: Vec<PresetView>,
+    },
+    /// Reply of `PendingRights`, and of every rights change (`changed`
+    /// tells whether it changed anything; `false` for `PendingRights`).
+    Rights {
+        pending: Vec<PendingRightsView>,
+        code_rights: Option<ConnectionRights>,
+        #[serde(default)]
+        changed: bool,
     },
 }
 

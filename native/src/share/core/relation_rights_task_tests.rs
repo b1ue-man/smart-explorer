@@ -167,8 +167,9 @@ fn review_task_one_way_pairing_and_repair_never_create_share_back_grant() {
     assert!(profiles.direct_grants.is_empty());
     profiles.set_contact_share_back("c", true, 3).unwrap();
     assert_eq!(profiles.direct_grants.len(), 1);
-    // A new Direct grant may write (default since 2026-10-09).
-    assert!(profiles.direct_grants[0].write);
+    // F1 (2026-10-31): a new Direct grant has no right and waits for one.
+    assert!(!profiles.direct_grants[0].write);
+    assert_eq!(profiles.pending_rights.len(), 1);
     profiles.direct_grants[0].state = DirectGrantState::Reconfirm;
     profiles
         .apply_reciprocal_direct_peer(&peer, "unused", 4, PairingOrigin::AutomaticRepair)

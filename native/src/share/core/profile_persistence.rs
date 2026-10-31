@@ -119,6 +119,7 @@ impl ShareProfiles {
         let mut candidate = self.clone();
         candidate.reconcile_legacy_grants(super::core::now_secs());
         candidate.recompute_all_identity_conflicts();
+        candidate.prune_connection_rights_records();
         candidate
             .validate_direct_ledger()
             .map_err(|error| format!("Share-Profile sind beschaedigt: {error}"))?;
@@ -282,6 +283,12 @@ impl ShareProfiles {
             exports: super::export_config::ShareExportConfig::default(),
             policy: super::room_relation::RoomPolicy::new_room(),
         });
+        // F1: the room exists without rights until they are confirmed.
+        candidate.mark_room_rights_pending(
+            &id,
+            super::connection_rights::RightsOrigin::RoomJoined,
+            super::core::now_secs(),
+        );
         if let Err(error) = candidate.save_with(storage) {
             return Err(cleanup_new_secret(error, storage, &account));
         }

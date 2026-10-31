@@ -132,7 +132,20 @@ pub fn dispatch_discovery_ui_action(
     action: DiscoveryUiAction,
     repaint: DiscoveryRepaint,
 ) {
+    let (action, rights) = match action {
+        DiscoveryUiAction::PublishWithRights { publish, rights } => {
+            let checked = super::connection_rights_actions::validate_rights_for_this_host(&rights);
+            if let Err(error) = checked {
+                return state.command_error(error);
+            }
+            (*publish, Some(rights))
+        }
+        action => (action, None),
+    };
     let prepared = match action {
+        DiscoveryUiAction::PublishWithRights { .. } => {
+            return state.command_error("Ungültige Freigabe-Aktion".into());
+        }
         DiscoveryUiAction::Publish {
             target,
             display_alias,
@@ -185,6 +198,7 @@ pub fn dispatch_discovery_ui_action(
                     pin,
                     duration_secs,
                     allow_weak_pin,
+                    rights,
                 }),
             )
         }

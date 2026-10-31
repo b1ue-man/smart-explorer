@@ -1,3 +1,4 @@
+use super::connection_rights::RightsOrigin;
 use super::direct_ledger::DirectRequestDirection;
 use super::direct_protocol::{DirectDecisionKind, SignedDirectDecision};
 use super::direct_relation::NEW_DIRECT_GRANT_WRITE;
@@ -78,6 +79,7 @@ impl ShareProfiles {
             DirectGrantState::Ignored
         };
         let mut matched_device = false;
+        let mut new_connection = None;
         if let Some(grant) = self
             .direct_grants
             .iter_mut()
@@ -92,9 +94,10 @@ impl ShareProfiles {
             if !identity_changed || may_replace_inactive {
                 if identity_changed {
                     // A re-admitted identity is a new grant: Exec ends, write
-                    // takes the default of a new Direct grant.
+                    // takes the default of a new Direct grant (F1: none).
                     grant.exec.reset_for_identity_change(decision.decided_at);
                     grant.write = NEW_DIRECT_GRANT_WRITE;
+                    new_connection = Some(RightsOrigin::IdentityReplaced);
                 } else if decision.decision != DirectDecisionKind::Accepted
                     || grant.state != DirectGrantState::Accepted
                 {
@@ -134,6 +137,11 @@ impl ShareProfiles {
                 exec,
                 write: NEW_DIRECT_GRANT_WRITE,
             });
+            new_connection = Some(RightsOrigin::Request);
+        }
+        if let Some(origin) = new_connection {
+            // F1: no right until confirmed, or the Direct code's rights.
+            self.settle_new_direct_grant(&device_id, origin, None, decision.decided_at);
         }
         self.recompute_identity_conflicts_for_device(&device_id);
         if decision.decision != DirectDecisionKind::Accepted {

@@ -132,6 +132,15 @@ pub(crate) trait DiscoveryExchangePort: Send {
 
     fn remove_offer(&mut self, offer_id: &str);
 
+    /// F5: the rights a Direct device that pairs with `offer_id` gets on
+    /// this (publishing) device; `None`: it waits for confirmation.
+    fn set_offer_rights(
+        &mut self,
+        _offer_id: &str,
+        _rights: Option<super::connection_rights::ConnectionRights>,
+    ) {
+    }
+
     /// Revalidates the live publication target immediately before renewal.
     fn revalidate_offer(&mut self, offer_id: &str) -> Result<(), DiscoveryPortError>;
 

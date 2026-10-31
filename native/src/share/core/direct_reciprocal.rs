@@ -213,6 +213,20 @@ impl ShareProfiles {
         now: i64,
         origin: PairingOrigin,
     ) -> Result<DirectReciprocalApply, DirectReciprocalError> {
+        self.apply_reciprocal_direct_peer_with(peer, new_contact_id, now, origin, None)
+    }
+
+    /// `apply_reciprocal_direct_peer` with the rights chosen in advance for
+    /// the peer (the PIN offer of this device, F5). A grant created here has
+    /// exactly these rights; without them it waits for confirmation (F1).
+    pub(crate) fn apply_reciprocal_direct_peer_with(
+        &mut self,
+        peer: &DirectReciprocalPeer,
+        new_contact_id: &str,
+        now: i64,
+        origin: PairingOrigin,
+        advance: Option<&super::connection_rights::ConnectionRights>,
+    ) -> Result<DirectReciprocalApply, DirectReciprocalError> {
         let identity = peer.identity();
         let material = peer.material();
         // A removed device stays out until the user pairs it again; the
@@ -399,6 +413,12 @@ impl ShareProfiles {
                 exec: Default::default(),
                 write: super::direct_relation::NEW_DIRECT_GRANT_WRITE,
             });
+            let rights_origin = if origin == PairingOrigin::AutomaticRepair {
+                super::connection_rights::RightsOrigin::Repair
+            } else {
+                super::connection_rights::RightsOrigin::Pairing
+            };
+            self.settle_new_direct_grant(&identity.device_id, rights_origin, advance, now);
             changed = true;
         }
 

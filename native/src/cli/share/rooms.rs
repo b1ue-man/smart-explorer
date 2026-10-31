@@ -19,10 +19,14 @@ pub(super) struct RoomArgs {
 
 #[derive(Subcommand)]
 enum RoomCommand {
-    #[command(about = "Create a Share room and print its invite code")]
+    #[command(
+        about = "Create a Share room and print its invite code; --preset sets what members may do"
+    )]
     Create {
         #[arg(long, default_value = "", help = "Local room display name")]
         name: String,
+        #[command(flatten)]
+        rights: super::rights_args::RightsArgs,
     },
     #[command(about = "List saved rooms with state, rights and members (default)")]
     List,
@@ -85,7 +89,7 @@ enum MemberAction {
 pub(super) fn run(args: RoomArgs) -> Result<(), String> {
     let json = args.json;
     match args.command.unwrap_or(RoomCommand::List) {
-        RoomCommand::Create { name } => create(&name),
+        RoomCommand::Create { name, rights } => create(&name, &rights),
         RoomCommand::List => list(json),
         RoomCommand::Join { code, name } => join(&code, &name),
         RoomCommand::Leave(selector) => leave(&selector.room),
@@ -109,11 +113,19 @@ pub(super) fn run(args: RoomArgs) -> Result<(), String> {
     }
 }
 
-fn create(name: &str) -> Result<(), String> {
+fn create(name: &str, rights: &super::rights_args::RightsArgs) -> Result<(), String> {
+    let roots = super::checked_profiles()?.default_direct_exports.roots;
+    let rights = rights.rights(None, &roots, crate::share::core_now_secs())?;
     let code = ShareProfiles::new_room_code()?;
     let (_profiles, id) =
         ShareProfiles::add_room_from_code_persisted(Some(super::default_home()), &code, name)?;
+    // F5: the rights chosen here, or the room waits for them (F1).
+    let home = Some(super::default_home());
+    crate::share::connection_rights_actions::finish_room_creation(home, &id, rights.as_ref())?;
     println!("room_id\t{id}");
+    let summary = rights.as_ref().map(|rights| rights.summary());
+    let open = "none chosen (confirm with `se share grants confirm --room ID --preset NAME`)";
+    println!("room_rights\t{}", summary.as_deref().unwrap_or(open));
     println!("room_code\t{code}");
     println!("worker\t{}", super::refresh_note().trim_start_matches("; "));
     Ok(())

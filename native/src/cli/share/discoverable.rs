@@ -42,7 +42,9 @@ with a random six-digit PIN that is printed:
 PINs shorter than 6 characters or easy to guess need --allow-weak-pin. --pin is
 visible in the process list; --pin-stdin or --pin-prompt keep the PIN out of it.
 `list` shows the running offers with their end time; `stop` ends one (by id or
-unique id prefix) or all of them.";
+unique id prefix) or all of them. --preset and the rights options choose what
+the paired device may do here (see `se share grants presets`); without them it
+connects without rights and waits for `se share grants confirm`.";
 
 #[derive(Args)]
 #[command(args_conflicts_with_subcommands = true, long_about = DISCOVERABLE_HELP)]
@@ -107,6 +109,9 @@ struct PublishArgs {
     allow_weak_pin: bool,
     #[arg(long, help = "Print machine-readable JSON")]
     json: bool,
+    // Rights the device that pairs gets here (F5); without them it waits for a confirmation
+    #[command(flatten)]
+    rights: super::rights_args::RightsArgs,
 }
 
 #[derive(Args)]
@@ -152,6 +157,16 @@ fn publish(args: PublishArgs) -> Result<(), String> {
         }
     };
     let display_alias = validate_name(args.name.as_deref().unwrap_or(&default_name))?;
+    if args.room.is_some() && args.rights.given() {
+        return Err("a room's rights belong to the room: `se share grants confirm --room ROOM --preset NAME`".into());
+    }
+    let roots = &profiles.default_direct_exports.roots;
+    let rights = args
+        .rights
+        .rights(None, roots, crate::share::core_now_secs())?;
+    if let Some(rights) = &rights {
+        crate::share::connection_rights_actions::validate_rights_for_this_host(rights)?;
+    }
     let duration_secs = duration_secs(args.minutes)?;
     let snapshot = crate::daemon::share_worker_snapshot()?;
     if !snapshot.running {
@@ -189,6 +204,7 @@ fn publish(args: PublishArgs) -> Result<(), String> {
         pin: DiscoveryPin::new(pin),
         duration_secs,
         allow_weak_pin: args.allow_weak_pin,
+        rights,
     });
     let offer = match crate::daemon::share_command(command) {
         Ok(ShareCommandReply::DiscoveryOffer { offer }) => offer,

@@ -3,8 +3,8 @@ pub use lan_permission::{lan_firewall_repair_available, request_lan_firewall_rep
 pub use lan_permission_job::{poll_lan_firewall_repair, start_lan_firewall_repair};
 
 pub use self::direct_actions::{
-    decide_direct_request, delete_direct_request_history, queue_direct_request_for_contact,
-    retry_direct_request_now, DirectRequestAction,
+    decide_direct_request, decide_direct_request_with_rights, delete_direct_request_history,
+    queue_direct_request_for_contact, retry_direct_request_now, DirectRequestAction,
 };
 pub use self::direct_ledger::{
     DirectEnvelopeKind, DirectLedgerError, DirectRelayOutcome, DirectRequestDirection,
@@ -77,8 +77,9 @@ pub use self::lan_status::{
 };
 pub(crate) use self::legacy_direct_actions::mark_legacy_answer_attempt;
 pub use self::legacy_direct_actions::{
-    decide_legacy_direct_request, delete_legacy_direct_request, reconcile_legacy_identity,
-    refresh_legacy_request_expiry, retry_legacy_direct_answer, revoke_legacy_direct_request,
+    decide_legacy_direct_request, decide_legacy_direct_request_with_rights,
+    delete_legacy_direct_request, reconcile_legacy_identity, refresh_legacy_request_expiry,
+    retry_legacy_direct_answer, revoke_legacy_direct_request,
 };
 pub use self::legacy_direct_request::{
     LegacyDirectAnswer, LegacyDirectDecisionDelivery, LegacyDirectDecisionSource,

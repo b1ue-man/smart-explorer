@@ -4,6 +4,10 @@
 //! RV1 keep their meaning (read-write, all saved connections).
 use serde::{Deserialize, Serialize};
 
+#[path = "export_device_folders.rs"]
+mod device_folders;
+pub use device_folders::DeviceFolders;
+
 /// What peers may do inside one export. A write also needs the peer's own
 /// write right (V5).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -107,6 +111,11 @@ pub struct ShareExportConfig {
     /// Saved connections exported one by one (RV1).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shared_connections: Vec<SharedConnection>,
+    /// F2 (Direct scope only, plan 2026-10-31): the folders each Direct
+    /// device sees. A device without an entry sees every export (grants
+    /// persisted before F2 keep that meaning); rooms leave it empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub device_folders: Vec<DeviceFolders>,
 }
 
 impl ShareExportConfig {
@@ -254,6 +263,7 @@ mod tests {
                 account: "sftp://u@nas:22/".into(),
                 access: ExportAccess::ReadOnly,
             }],
+            device_folders: Vec::new(),
         };
         let encoded = serde_json::to_string(&config).unwrap();
         let legacy: LegacyConfig = serde_json::from_str(&encoded).expect("older version");

@@ -69,7 +69,15 @@ pub(crate) fn authorization_restrictions(
                 DirectGrantState::Accepted if exec_restricted(&grant.exec, &new.exec) => {
                     Some(RestrictionReason::ExecRevoked)
                 }
-                DirectGrantState::Accepted => None,
+                // F2: the device's own folder selection narrowed.
+                DirectGrantState::Accepted => exports_restriction(
+                    &current
+                        .default_direct_exports
+                        .visible_to(&grant.device_id, &grant.public_key),
+                    &candidate
+                        .default_direct_exports
+                        .visible_to(&new.device_id, &new.public_key),
+                ),
             },
         };
         if let Some(reason) = reason {

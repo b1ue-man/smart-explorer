@@ -79,6 +79,8 @@ mod share_policy;
 mod share_power;
 #[path = "share_requests.rs"]
 mod share_requests;
+#[path = "share_rights.rs"]
+mod share_rights;
 #[path = "share_settings.rs"]
 mod share_settings;
 #[path = "share_state.rs"]
@@ -302,6 +304,11 @@ fn share_method(rt: &Runtime, method: &str, args: &Value) -> Option<Result<Value
         "share.setDirectOnline" => share_device_settings::set_direct_online(args),
         "share.setLanPresence" => share_device_settings::set_lan_presence(rt, args),
         "share.renewCode" => share_device_settings::renew_code(rt),
+        "share.rightsPresets" => share_rights::presets(),
+        "share.pendingRights" => share_rights::pending(),
+        "share.confirmRights" => share_rights::confirm(rt, args),
+        "share.cancelRights" => share_rights::cancel(rt, args),
+        "share.setCodeRights" => share_rights::set_code_rights(rt, args),
         _ => return None,
     })
 }

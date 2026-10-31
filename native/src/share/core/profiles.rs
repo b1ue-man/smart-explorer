@@ -66,6 +66,15 @@ pub struct ShareProfiles {
     pub removed_direct_peers: Vec<RemovedDirectPeer>,
     #[serde(default)]
     pub rooms: Vec<RoomProfile>,
+    /// F1 „Rechte offen“ (plan 2026-10-31): connections that exist without
+    /// rights until the user confirms or cancels. Absent in older profiles.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_rights: Vec<crate::share::connection_rights::PendingRights>,
+    /// F5/F6: the rights chosen in advance for devices that connect with
+    /// this device's Direct code (also the automatic acceptance). `None`:
+    /// such devices connect without rights and wait for confirmation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_rights: Option<crate::share::connection_rights::ConnectionRights>,
 }
 
 impl Default for ShareProfiles {
@@ -84,6 +93,8 @@ impl Default for ShareProfiles {
             legacy_direct_request_tombstones: Vec::new(),
             removed_direct_peers: Vec::new(),
             rooms: Vec::new(),
+            pending_rights: Vec::new(),
+            code_rights: None,
         }
     }
 }
@@ -147,6 +158,13 @@ impl ShareProfiles {
                 exec: ExecGrant::default(),
                 write: super::direct_relation::NEW_DIRECT_GRANT_WRITE,
             });
+            // F1: a new grant has no right until confirmed.
+            self.settle_new_direct_grant(
+                &presence.device_id,
+                super::connection_rights::RightsOrigin::Request,
+                None,
+                now,
+            );
         }
         if withdrawn {
             self.withdraw_direct_key(

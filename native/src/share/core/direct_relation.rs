@@ -39,11 +39,12 @@ pub(crate) fn legacy_relation_write() -> bool {
     true
 }
 
-/// „Darf schreiben“ of a Direct grant created or re-admitted from now on:
-/// on. Writing between one's own accepted devices is the purpose of Direct
-/// Share (user decision 2026-10-09, revising the FC1 default); the export's
-/// own „Nur lesen“ and an explicit per-device „Nur lesen“ still apply.
-pub(crate) const NEW_DIRECT_GRANT_WRITE: bool = true;
+/// „Darf schreiben“ of a Direct grant created or given a new key from now
+/// on: off. F1 (user decision 2026-10-31, replacing the 2026-10-09 default
+/// „on“): a new connection has no right until the user confirms the rights
+/// (`connection_rights_apply.rs`), which also set the write right. Grants
+/// persisted earlier keep their value (`legacy_relation_write`).
+pub(crate) const NEW_DIRECT_GRANT_WRITE: bool = false;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum DirectGrantState {
@@ -73,8 +74,8 @@ pub struct DirectGrant {
     #[serde(default)]
     pub exec: ExecGrant,
     /// FC1 „Darf schreiben“: the peer may write where an export is
-    /// read-write. New grants start with it (`NEW_DIRECT_GRANT_WRITE`);
-    /// grants persisted before V5 keep it; an explicit choice is kept.
+    /// read-write. New grants start without it (`NEW_DIRECT_GRANT_WRITE`,
+    /// F1); grants persisted before V5 keep it; an explicit choice is kept.
     #[serde(default = "legacy_relation_write")]
     pub write: bool,
 }
@@ -315,14 +316,21 @@ impl ShareProfiles {
         }
         self.readmit_removed_direct_identity(&identity);
         self.recompute_identity_conflicts_for_device(device_id);
+        // F1: a grant that never had rights waits for them again.
+        self.mark_rights_pending_if_rightless(
+            device_id,
+            super::connection_rights::RightsOrigin::Readmitted,
+            now,
+        );
         Ok(true)
     }
 
     /// FC1 „Auch meine Freigaben für dieses Gerät öffnen“ for a contact. With
     /// `share_back` on, an accepted grant of the contact's known device is
-    /// created now (read-only unless „Darf schreiben“) and the reciprocal
-    /// repair may create it later; off keeps an existing grant (revoking it is
-    /// a separate action). Returns whether anything changed.
+    /// created now without any right, waiting for the user's confirmation
+    /// (F1, „Rechte offen“), and the reciprocal repair may create it later;
+    /// off keeps an existing grant (revoking it is a separate action).
+    /// Returns whether anything changed.
     pub fn set_contact_share_back(
         &mut self,
         contact_id: &str,
@@ -381,6 +389,12 @@ impl ShareProfiles {
                     exec: ExecGrant::default(),
                     write: NEW_DIRECT_GRANT_WRITE,
                 });
+                self.settle_new_direct_grant(
+                    &identity.device_id,
+                    super::connection_rights::RightsOrigin::ShareBack,
+                    None,
+                    now,
+                );
                 changed = true;
             }
         }
