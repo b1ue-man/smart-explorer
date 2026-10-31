@@ -208,6 +208,11 @@ fn abgleich_task_keyed_walk_sends_only_what_changed_and_equals_the_full_walk() {
         assert_eq!(second_walk.sent, 0);
         assert_eq!(second_walk.reused, 22);
     }
+    // The loop ended in the checksum mode, whose keys carry digests: the
+    // walk below compares in the size-and-time mode, so its keys are stored
+    // first (keys of another mode are never equal, they only cost a resend).
+    let (_, keyed) = read(&backend, &root, Some(&side), HashMode::None);
+    keyed.unwrap();
     // One file changes: its folders are sent, every other one is a mark.
     let changed = a.join("d3").join("inner").join("f1.txt");
     std::fs::write(&changed, b"neu und anders").unwrap();

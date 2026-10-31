@@ -1006,7 +1006,7 @@ SHARE_BINARY = {"old/old": ("old", "old"), "new/new": ("new", "new"), "new/old":
 
 
 def replace_roots(text, roots):
-    for root in sorted(roots, key=len, reverse=True):
+    for root in sorted((str(root) for root in roots), key=len, reverse=True):
         for form in {str(root), Path(root).as_posix()}:
             text = text.replace(form, "<R>")
     return text
