@@ -26,7 +26,7 @@ use super::snapshot_hash::HashMode;
 use super::snapshot_host_stream::Stream;
 use super::snapshot_host_walk::Collector;
 use super::types::{BisyncOptions, Tree};
-use crate::vfs::{HashWalkItem, HashWalkRequest, KeyedWalkItem};
+use crate::vfs::{HashWalkItem, HashWalkRequest, KeyedWalk, KeyedWalkItem};
 use std::io;
 
 /// The tree of `ctx.root` (the context collects folders, filtered files and
@@ -49,16 +49,18 @@ pub(super) fn walk_snapshot_via_agent(ctx: &WalkContext<'_>) -> io::Result<Optio
             min_bytes: 0,
             meta: true,
         };
-        let keyed = super::snapshot_keyed::walk(ctx, files, |take, known| {
-            stream(
-                |item: KeyedWalkItem| take(item),
-                |sender| {
-                    crate::vfs::hash_walk_keyed(
-                        backend, ctx.root, request, known, sender, ctx.cancel,
-                    )
-                },
-            )
-        })?;
+        let walker = HostWalker { ctx, request };
+        // The pair's key phases first (no stored keys yet), then the walk
+        // with the stored keys of both sides as known.
+        let mut keyed = None;
+        if let Some((pair, side)) = ctx.pair.filter(|(pair, side)| pair.takes_part(*side)) {
+            keyed = super::snapshot_pair_side::walk_remote(ctx, (pair, side), files, &walker)?;
+        }
+        if keyed.is_none() {
+            keyed = super::snapshot_keyed::walk(ctx, files, |take, known| {
+                walker.walk(KeyedWalk::Marks { known }, take)
+            })?;
+        }
         if let Some(keyed) = keyed {
             super::run_log::note(
                 "Scan",
@@ -166,6 +168,25 @@ pub(super) fn walk_snapshot_via_agent(ctx: &WalkContext<'_>) -> io::Result<Optio
     }
     super::transfer_stream::check(ctx.cancel)?;
     collector.replay().map(Some)
+}
+
+/// The keyed walks of a remote side next to its data.
+struct HostWalker<'c, 'a> {
+    ctx: &'c WalkContext<'a>,
+    request: HashWalkRequest,
+}
+
+impl super::snapshot_pair_side::Walker for HostWalker<'_, '_> {
+    fn walk(
+        &self,
+        walk: KeyedWalk<'_>,
+        take: &mut dyn FnMut(KeyedWalkItem) -> io::Result<()>,
+    ) -> io::Result<bool> {
+        let (ctx, request) = (self.ctx, self.request);
+        stream(take, |sender| {
+            crate::vfs::hash_walk_keyed(ctx.be, ctx.root, request, walk, sender, ctx.cancel)
+        })
+    }
 }
 
 /// Runs `walk` on its own thread and hands every item to `take`; the first

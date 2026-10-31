@@ -311,10 +311,20 @@ mod tests {
 #[path = "folder_reservation.rs"]
 pub(crate) mod folder_reservation;
 
+/// The status of the open file the digest cache keys on (`hash_cache.rs`).
+pub(crate) fn file_stamp(file: &std::fs::File) -> Option<[i128; 5]> {
+    change_stamp(&file.metadata().ok()?)
+}
+
+/// The status of `path` itself (never a link's target).
+pub(crate) fn path_stamp(path: &Path) -> Option<[i128; 5]> {
+    change_stamp(&std::fs::symlink_metadata(path).ok()?)
+}
+
 /// The status of a file the digest cache keys on (`hash_cache.rs`): device,
 /// inode, size, modification and status-change time in nanoseconds. Every
 /// write changes the change time, and no call sets it back.
-pub(crate) fn change_stamp(metadata: &std::fs::Metadata) -> Option<[i128; 5]> {
+fn change_stamp(metadata: &std::fs::Metadata) -> Option<[i128; 5]> {
     Some([
         i128::from(metadata.dev()),
         i128::from(metadata.ino()),

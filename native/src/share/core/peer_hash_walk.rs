@@ -8,7 +8,7 @@ use super::{
 };
 use crate::{
     analytics::HashAlgorithm,
-    vfs::{HashWalkItem, HashWalkRequest, KeyedWalkItem},
+    vfs::{HashWalkItem, HashWalkRequest, KeyedWalk, KeyedWalkItem},
 };
 use std::{
     io,
@@ -34,29 +34,77 @@ pub(super) fn walk(
     walk_with(backend, root, request, None, tx, plain, cancel)
 }
 
-/// `hash_walk_keys_v1`: the walk with listing attributes and folder keys;
-/// `Ok(false)` before sending when the host does not offer it.
+/// `hash_walk_keys_v1`: the walk with listing attributes and folder keys
+/// as `walk` asks; `Ok(false)` before sending when the host does not offer
+/// it. Named folders go in requests of at most `RUN_FOLDERS_BYTES` path
+/// text (the request frame holds 256 KiB).
 pub(super) fn walk_keyed(
     backend: &PeerBackend,
     root: &str,
     request: HashWalkRequest,
-    known: &[[u8; 16]],
+    walk: KeyedWalk<'_>,
     tx: crossbeam_channel::Sender<KeyedWalkItem>,
     cancel: &AtomicBool,
 ) -> io::Result<bool> {
     if !request.meta || !peer_stream::features(backend, root)?.hash_walk_keys_v1 {
         return Ok(false);
     }
-    // The client puts the keys covering most first.
-    let known = &known[..known.len().min(KNOWN_KEYS)];
-    walk_with(backend, root, request, Some(known), tx, Ok, cancel)
+    let requests = match walk {
+        KeyedWalk::Marks { known } => {
+            // The client puts the keys covering most first.
+            let known = &known[..known.len().min(KNOWN_KEYS)];
+            vec![Keyed {
+                known: base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    known.concat(),
+                ),
+                ..Keyed::default()
+            }]
+        }
+        KeyedWalk::KeysOnly => vec![Keyed {
+            keys_only: true,
+            ..Keyed::default()
+        }],
+        KeyedWalk::Runs { folders } => {
+            let mut portions: Vec<Keyed> = Vec::new();
+            let mut bytes = usize::MAX;
+            for folder in folders {
+                if bytes.saturating_add(folder.len() + 8) > RUN_FOLDERS_BYTES {
+                    portions.push(Keyed::default());
+                    bytes = 0;
+                }
+                bytes += folder.len() + 8;
+                if let Some(portion) = portions.last_mut() {
+                    portion.folders.push(folder.clone());
+                }
+            }
+            portions
+        }
+    };
+    for keyed in requests {
+        if !walk_with(backend, root, request, Some(keyed), tx.clone(), Ok, cancel)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Path text of one request naming folders.
+const RUN_FOLDERS_BYTES: usize = 160 * 1024;
+
+/// The keyed fields of one request.
+#[derive(Default)]
+struct Keyed {
+    known: String,
+    keys_only: bool,
+    folders: Vec<String>,
 }
 
 fn walk_with<T: Send>(
     backend: &PeerBackend,
     root: &str,
     request: HashWalkRequest,
-    known: Option<&[[u8; 16]]>,
+    keyed: Option<Keyed>,
     tx: crossbeam_channel::Sender<T>,
     wrap: impl Fn(KeyedWalkItem) -> io::Result<T>,
     cancel: &AtomicBool,
@@ -77,10 +125,10 @@ fn walk_with<T: Send>(
         }),
         single_file: false,
         meta: request.meta,
-        keys: known.is_some(),
-        known: known.map_or_else(String::new, |known| {
-            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, known.concat())
-        }),
+        keys: keyed.is_some(),
+        known: keyed.as_ref().map_or_else(String::new, |k| k.known.clone()),
+        keys_only: keyed.as_ref().is_some_and(|k| k.keys_only),
+        folders: keyed.map_or_else(Vec::new, |k| k.folders),
     });
     let result = backend.node.block_on_route(opened.generation, async {
         io_deadline::run(

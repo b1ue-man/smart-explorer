@@ -17,7 +17,7 @@ use std::{io, path::PathBuf, sync::atomic::Ordering};
 
 /// One folder still to read: its handle, its host path (for the excluded
 /// storage roots), its path below the walk root and its depth.
-type Job = (DirectoryHandle, PathBuf, String, usize);
+pub(super) type Job = (DirectoryHandle, PathBuf, String, usize);
 
 pub(super) fn walk(
     shared: &Shared<'_>,
@@ -33,6 +33,26 @@ pub(super) fn walk(
         || Batch::new(shared),
         |job: Job, local, batch| {
             folder(job, &excluded, local, batch)?;
+            batch.end_folder()
+        },
+    )
+}
+
+/// The runs of named folders (`host_hash_walk_runs.rs`): each read as the
+/// walk reads it, without going below it.
+pub(super) fn walk_folders(shared: &Shared<'_>, jobs: Vec<Job>) -> io::Result<()> {
+    if jobs.is_empty() {
+        return Ok(());
+    }
+    let excluded = crate::share::storage_roots::excluded();
+    crate::agent_proto::ordered_walk(
+        jobs,
+        crate::agent_proto::walk_threads(),
+        shared.cancel,
+        || Batch::new(shared),
+        |job: Job, _, batch| {
+            let mut detached = crate::agent_proto::WalkLocal::detached();
+            folder(job, &excluded, &mut detached, batch)?;
             batch.end_folder()
         },
     )
@@ -185,14 +205,14 @@ fn file(
         _ => return shared.digest(&file, entry.size),
     };
     let digest = crate::agent_proto::hash_cache::digest(
-        &before,
+        crate::agent_proto::file_stamp(&file),
         code,
         || {
             shared
                 .digest(&file, entry.size)?
                 .ok_or_else(|| io::Error::other("Prüfsumme fehlt"))
         },
-        || file.metadata(),
+        || crate::agent_proto::file_stamp(&file),
     )
     .map(Some)?;
     let after = file.metadata()?;

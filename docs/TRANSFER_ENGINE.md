@@ -707,18 +707,20 @@ den Weg selbst, das Lauf-Protokoll nennt je Seite „… Ordner gleich ihrem Ord
   (`native/src/bisync/os/shared/snapshot_keyed.rs`). Unveränderte Seite: eine Marke für die Wurzel,
   keine Auflistung, kein Eintrag über die Verbindung. Geänderte Datei: nur die Ordner auf ihrem Pfad.
   Der Schnappschuss, und damit Aktionen, Konflikte, Auslassungen, Basis und Löschschutz, ist derselbe
-  wie ohne Schlüssel. Ältere Gegenstellen: bisheriger Durchlauf. Lokale Seiten: kein Schlüssel (keine
-  Verbindung, deren Übertragung er ersparen könnte).
+  wie ohne Schlüssel. Ältere Gegenstellen: bisheriger Durchlauf. Erstvergleich ohne gespeicherte
+  Schlüssel: beide Seiten senden zuerst nur ihre Schlüssel, gleichzeitig; danach jede Seite nur die
+  Läufe der Ordner, deren Inhalt noch niemand hält, jeden ungleichen Inhalt einmal
+  (`snapshot_pair_keys.rs`). Eine lokale Seite bildet ihre Schlüssel im eigenen Prozess; gleiche Ordner
+  der entfernten Gegenseite kommen dann gar nicht über die Verbindung.
 - **Prüfschlüssel ohne Dateiübertragung (E9).** Im Prüfsummen-Modus rechnet die Seite mit der Datei die
   MD5 im Durchlauf (Share-Host, se-agent); vor jedem Download in `snapshot_dir::content_hash` fragt der
   Sync `vfs::content_md5` der Seite. Ein persistenter Hash-Cache auf der Seite der Datei (se-agent,
   Share-Host, lokale Seite) erspart das erneute Lesen unveränderter Dateien: Schlüssel Gerät, Inode,
   Größe, Änderungs- und Statusänderungszeit (ns); kein Treffer, solange eine der Zeiten nicht mehr als
-  2 s vor dem Erfassungszeitpunkt liegt (Git „racy-git“); höchstens 500 000 Einträge; unter Windows kein
-  Cache (keine Statusänderungszeit). Ein SSH-Agent ohne eigene Datei-Prüfsumme gibt `content_digest` an
-  seine SSH-Verbindung weiter (Exec-Befehl, siehe Tabelle oben). Grenze: SFTP ohne Agent, FTP und WebDAV
-  ohne MD5 in der Auflistung laden im Prüfsummen-Modus weiter, weil die Sync-Signatur eine MD5 ist und
-  diese Server SHA-256 liefern (`vfs::content_md5` ist der Anschluss für eine MD5 am Ort der Datei).
+  2 s vor dem Erfassungszeitpunkt liegt (Git „racy-git“); höchstens 500 000 Einträge; unter Windows aus
+  `GetFileInformationByHandleEx` (`FileIdInfo`, `FileBasicInfo.ChangeTime`). Ein SSH-Agent ohne eigene Datei-Prüfsumme gibt `content_digest` an
+  seine SSH-Verbindung weiter (Exec-Befehl, siehe Tabelle oben). SFTP ohne Agent, FTP und WebDAV liefern die MD5 am Ort der Datei über
+  `vfs::content_md5` (Block „MD5 am Ort der Datei“ oben), bevor `snapshot_dir::content_hash` lädt.
 - **Sommerzeit.** Ist eine Seite FAT (Ortszeit), gelten gleiche Größen mit genau einer Stunde Abstand
   (± ein Schritt der gemeinsamen Genauigkeit) als gleich, unabhängig von der Genauigkeit der anderen
   Seite (`bisync/core/compare.rs`, `transfer::time_window::dst_shift_equal`). exFAT speichert einen

@@ -22,11 +22,10 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
-use super::folder_key::KeyTree;
 use super::fs::{is_pseudo_dir, systemtime_ms};
 use super::ops_types::{digest, omission};
 use super::session::{emit, Sink};
-use super::walk_keyed::{Keyed, WireItem};
+use super::walk_keyed::{Keyed, KeyedSetup};
 use super::{Frame, WalkLocal, WalkOutput, WireHashEntry, WireHashMeta, WireOmission};
 
 /// Estimated encoded bytes after which a `HashPart` is sent.
@@ -63,7 +62,7 @@ impl<'a> Out<'a> {
         id: u64,
         form: Form,
         run: &'a Mutex<()>,
-        keys: Option<&'a KeyTree<WireItem>>,
+        keys: Option<KeyedSetup<'a>>,
     ) -> Self {
         Self {
             sink,
@@ -218,31 +217,48 @@ pub(super) fn walk(
     form: Form,
     cancel: &AtomicBool,
 ) -> io::Result<()> {
-    run_walk(sink, id, root, (algorithm, min_bytes), form, None, cancel)?;
+    let setup = (None, vec![(PathBuf::from(root), String::new())], true);
+    run_walk(sink, id, root, (algorithm, min_bytes), form, setup, cancel)?;
     emit(sink, id, &Frame::End)
 }
 
-/// The walk of `WalkHashed3` with `meta` whose folder runs go through `keys`
-/// (`walk_keyed.rs`); the caller sends `End`.
+/// The walk of `WalkHashed3` with `meta` whose folder runs go through
+/// `keys` (`walk_keyed.rs`): of the whole tree, or with `folders` only those
+/// folders (paths below `root`), each without its subfolders. The caller
+/// sends `End`.
 pub(super) fn walk_keyed(
     sink: &Sink,
     id: u64,
     root: &str,
-    (algorithm, min_bytes): (u8, u64),
-    keys: &KeyTree<WireItem>,
+    (algorithm, min_bytes, folders): (u8, u64, Option<&[String]>),
+    keys: KeyedSetup<'_>,
     cancel: &AtomicBool,
 ) -> io::Result<()> {
     let form = Form::Parts { meta: true };
-    run_walk(
-        sink,
-        id,
-        root,
-        (algorithm, min_bytes),
-        form,
-        Some(keys),
-        cancel,
-    )
+    let roots = match folders {
+        None => vec![(PathBuf::from(root), String::new())],
+        Some(folders) => {
+            let mut roots = Vec::with_capacity(folders.len());
+            for rel in folders {
+                let path = if rel.is_empty() {
+                    PathBuf::from(root)
+                } else {
+                    super::ValidatedRelativePath::parse(rel)?;
+                    Path::new(root).join(rel)
+                };
+                roots.push((path, rel.clone()));
+            }
+            roots
+        }
+    };
+    let deeper = folders.is_none();
+    let setup = (Some(keys), roots, deeper);
+    run_walk(sink, id, root, (algorithm, min_bytes), form, setup, cancel)
 }
+
+/// Walk setup: the key tree (if any), the first folders and whether the
+/// walk goes below them.
+type Setup<'a> = (Option<KeyedSetup<'a>>, Vec<(PathBuf, String)>, bool);
 
 fn run_walk(
     sink: &Sink,
@@ -250,7 +266,7 @@ fn run_walk(
     root: &str,
     (algorithm, min_bytes): (u8, u64),
     form: Form,
-    keys: Option<&KeyTree<WireItem>>,
+    (keys, roots, deeper): Setup<'_>,
     cancel: &AtomicBool,
 ) -> io::Result<()> {
     if !matches!(algorithm, digest::NONE | digest::MD5) {
@@ -274,13 +290,17 @@ fn run_walk(
     };
     let run = Mutex::new(());
     let walked = super::ordered_walk(
-        vec![(base.to_path_buf(), String::new())],
+        roots,
         super::walk_threads(),
         cancel,
         || Out::new(sink, id, form, &run, keys),
         |(dir, rel), local, out| {
             out.begin(&rel)?;
-            walk.folder(&dir, &rel, local, out)?;
+            if deeper {
+                walk.folder(&dir, &rel, local, out)?;
+            } else {
+                walk.folder(&dir, &rel, &mut WalkLocal::detached(), out)?;
+            }
             out.end_folder()
         },
     );
@@ -419,10 +439,10 @@ impl Walk<'_> {
         }
         let md5 = if self.algorithm == digest::MD5 {
             let digest = super::hash_cache::digest(
-                &metadata,
+                super::local_platform::path_stamp(&path),
                 digest::MD5,
                 || super::ext_ops::md5_file(&path, metadata.len(), self.cancel),
-                || std::fs::symlink_metadata(&path),
+                || super::local_platform::path_stamp(&path),
             );
             match digest {
                 Ok(md5) => Some(md5),

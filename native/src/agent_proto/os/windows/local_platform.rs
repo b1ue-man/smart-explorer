@@ -282,8 +282,70 @@ pub(crate) fn rename_no_replace(source: &Path, destination: &Path) -> io::Result
 #[path = "folder_reservation.rs"]
 pub(crate) mod folder_reservation;
 
-/// The digest cache keys on a status change time (`hash_cache.rs`), which
-/// `std::fs::Metadata` does not give on Windows: no stamp, no cached digest.
-pub(crate) fn change_stamp(_metadata: &std::fs::Metadata) -> Option<[i128; 5]> {
-    None
+/// The status of the open file the digest cache keys on (`hash_cache.rs`):
+/// volume serial, 128-bit file ID (`FileIdInfo`), size, last write and
+/// change time (`FileBasicInfo`, `FILE_BASIC_INFO.ChangeTime`) in Unix
+/// nanoseconds. Every write moves the change time, and no call sets it.
+pub(crate) fn file_stamp(file: &std::fs::File) -> Option<[i128; 5]> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileBasicInfo, FileIdInfo, GetFileInformationByHandleEx, FILE_BASIC_INFO, FILE_ID_INFO,
+    };
+    let mut basic: FILE_BASIC_INFO = unsafe { std::mem::zeroed() };
+    // SAFETY: the handle is open for the call; the buffer has the size given.
+    let ok = unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle(),
+            FileBasicInfo,
+            (&mut basic as *mut FILE_BASIC_INFO).cast(),
+            std::mem::size_of::<FILE_BASIC_INFO>() as u32,
+        )
+    };
+    if ok == 0 {
+        return None;
+    }
+    let mut id: FILE_ID_INFO = unsafe { std::mem::zeroed() };
+    // SAFETY: as above.
+    let ok = unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle(),
+            FileIdInfo,
+            (&mut id as *mut FILE_ID_INFO).cast(),
+            std::mem::size_of::<FILE_ID_INFO>() as u32,
+        )
+    };
+    let index = u128::from_le_bytes(id.FileId.Identifier);
+    if ok == 0 || index == 0 || index == u128::MAX {
+        return None;
+    }
+    let size = file.metadata().ok()?.len();
+    Some([
+        i128::from(id.VolumeSerialNumber),
+        index as i128,
+        i128::from(size),
+        unix_ns(basic.LastWriteTime),
+        unix_ns(basic.ChangeTime),
+    ])
+}
+
+/// The status of `path` itself: opened for attributes only, a link as the
+/// link (`FILE_FLAG_OPEN_REPARSE_POINT`).
+pub(crate) fn path_stamp(path: &Path) -> Option<[i128; 5]> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+    let file = std::fs::OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .ok()?;
+    file_stamp(&file)
+}
+
+/// 100-ns ticks since 1601 as nanoseconds since 1970.
+fn unix_ns(ticks: i64) -> i128 {
+    (i128::from(ticks) - 116_444_736_000_000_000) * 100
 }

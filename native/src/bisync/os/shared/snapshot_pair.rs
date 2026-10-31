@@ -116,6 +116,12 @@ pub(super) fn read_pair_with(
     });
     let listed_a = observer_a.as_ref().map(|side| side as &dyn FolderListed);
     let listed_b = observer_b.as_ref().map(|side| side as &dyn FolderListed);
+    // Both sides' folder keys, compared before entries are fetched.
+    let pairs = super::snapshot_pair_keys::PairKeys::new([
+        super::snapshot_pair_keys::side_setup(a, root_a, hash_a),
+        super::snapshot_pair_keys::side_setup(b, root_b, hash_b),
+    ]);
+    let pairs = pairs.as_ref();
     let read = &|side: u8,
                  backend: &dyn Backend,
                  root: &str,
@@ -138,7 +144,7 @@ pub(super) fn read_pair_with(
                 fold_case,
                 opts,
                 listed,
-                Some(peer),
+                (Some(peer), pairs.map(|pair| (pair, usize::from(side - 1)))),
             )
         }));
         let failure = match walked {

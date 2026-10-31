@@ -3,11 +3,19 @@
 //! (`folder_key.rs`): every folder's run as `HashPart`s, then its `FolderKey`
 //! end mark once its subtree is sent, or one `same` mark instead of a
 //! subtree whose key the client named as known. The items and their order
-//! inside a run are those of `WalkHashed3`.
+//! inside a run are those of `WalkHashed3`. With `keys_only` the walk sends
+//! only every folder's key; `ListRuns` sends the runs of named folders only
+//! (the two phases of a pair comparison, `bisync::snapshot_pair_keys`).
+//! `local_keyed` runs the same walk in this process for a local sync side
+//! and collects runs and keys instead of sending them.
+use std::collections::HashSet;
 use std::io;
 use std::sync::atomic::AtomicBool;
+use std::sync::Mutex;
 
-use super::folder_key::{entry_part, parse_known, EntryKind, FolderKey, KeyEmit, KeyTree, RunKeys};
+use super::folder_key::{
+    entry_part, parse_known, EntryKind, FolderKey, KeyEmit, KeyTree, Mode, RunKeys,
+};
 use super::ops_types::digest;
 use super::session::{emit, Sink};
 use super::{Frame, WireHashEntry, WireOmission};
@@ -16,7 +24,7 @@ use super::{Frame, WireHashEntry, WireOmission};
 const PART_BYTES: usize = 256 * 1024;
 
 /// One item of a keyed run.
-pub(super) enum WireItem {
+pub(crate) enum WireItem {
     Entry(WireHashEntry),
     Omitted(WireOmission),
 }
@@ -32,15 +40,42 @@ impl WireItem {
     }
 }
 
+/// The runs and keys a walk in this process decided (`local_keyed`).
+#[derive(Default)]
+pub(crate) struct Collected {
+    pub(crate) runs: Vec<(String, Vec<WireItem>)>,
+    pub(crate) keys: Vec<(String, FolderKey)>,
+}
+
+impl KeyEmit<WireItem> for Collected {
+    fn run(&mut self, rel: &str, items: Vec<WireItem>) -> io::Result<()> {
+        self.runs.push((rel.to_string(), items));
+        Ok(())
+    }
+
+    fn key(&mut self, rel: &str, key: &FolderKey, _same: bool) -> io::Result<()> {
+        self.keys.push((rel.to_string(), *key));
+        Ok(())
+    }
+}
+
+/// Where the runs of a keyed walk go: the walk's key tree, and a collector
+/// when the walk runs in this process.
+#[derive(Clone, Copy)]
+pub(super) struct KeyedSetup<'a> {
+    pub(super) tree: &'a KeyTree<WireItem>,
+    pub(super) collect: Option<&'a Mutex<Collected>>,
+}
+
 /// The keyed state of one walking thread: the run of its current folder.
 pub(super) struct Keyed<'a> {
-    tree: &'a KeyTree<WireItem>,
+    setup: KeyedSetup<'a>,
     run: Option<RunKeys<WireItem>>,
 }
 
 impl<'a> Keyed<'a> {
-    pub(super) fn new(tree: &'a KeyTree<WireItem>) -> Self {
-        Self { tree, run: None }
+    pub(super) fn new(setup: KeyedSetup<'a>) -> Self {
+        Self { setup, run: None }
     }
 
     /// The folder `rel` starts.
@@ -99,7 +134,13 @@ impl<'a> Keyed<'a> {
             .run
             .take()
             .ok_or_else(|| invalid("keyed walk ended a folder it never began"))?;
-        self.tree.finish_run(run, &mut Parts { sink, id })
+        match self.setup.collect {
+            Some(collect) => {
+                let mut collected = collect.lock().unwrap_or_else(|p| p.into_inner());
+                self.setup.tree.finish_run(run, &mut *collected)
+            }
+            None => self.setup.tree.finish_run(run, &mut Parts { sink, id }),
+        }
     }
 }
 
@@ -168,7 +209,7 @@ pub(crate) fn handle_walk_keyed(
     sink: &Sink,
     id: u64,
     root: &str,
-    (algorithm, min_bytes, known): (u8, u64, &[u8]),
+    (algorithm, min_bytes, known, keys_only): (u8, u64, &[u8], bool),
     cancel: &AtomicBool,
 ) -> io::Result<()> {
     if !matches!(algorithm, digest::NONE | digest::MD5) {
@@ -178,12 +219,76 @@ pub(crate) fn handle_walk_keyed(
             &Frame::Err(super::UNSUPPORTED_EXTENSION.to_string()),
         );
     }
-    let tree = KeyTree::new("", parse_known(known)?);
-    super::walk_hashed::walk_keyed(sink, id, root, (algorithm, min_bytes), &tree, cancel)?;
+    let mode = if keys_only {
+        Mode::KeysOnly
+    } else {
+        Mode::Marks
+    };
+    let tree = KeyTree::with_mode("", parse_known(known)?, mode);
+    let setup = KeyedSetup {
+        tree: &tree,
+        collect: None,
+    };
+    let walk = (algorithm, min_bytes, None);
+    super::walk_hashed::walk_keyed(sink, id, root, walk, setup, cancel)?;
     if !tree.complete() {
         return Err(invalid("keyed walk ended before every folder was complete"));
     }
     emit(sink, id, &Frame::End)
+}
+
+/// `ListRuns`: the runs of `folders` below `root`, each without its
+/// subfolders, then `End`.
+pub(crate) fn handle_list_runs(
+    sink: &Sink,
+    id: u64,
+    root: &str,
+    (algorithm, folders): (u8, &[String]),
+    cancel: &AtomicBool,
+) -> io::Result<()> {
+    if !matches!(algorithm, digest::NONE | digest::MD5) {
+        return emit(
+            sink,
+            id,
+            &Frame::Err(super::UNSUPPORTED_EXTENSION.to_string()),
+        );
+    }
+    let mut unique = HashSet::new();
+    let folders: Vec<String> = folders
+        .iter()
+        .filter(|rel| unique.insert(rel.as_str()))
+        .cloned()
+        .collect();
+    let tree = KeyTree::with_mode("", HashSet::new(), Mode::RunsOnly);
+    let setup = KeyedSetup {
+        tree: &tree,
+        collect: None,
+    };
+    let walk = (algorithm, 0, Some(folders.as_slice()));
+    super::walk_hashed::walk_keyed(sink, id, root, walk, setup, cancel)?;
+    emit(sink, id, &Frame::End)
+}
+
+/// The runs and keys of the local tree `root`, read by the walk the agent
+/// runs next to its data, in this process (a local sync side: its keys let
+/// the remote other side leave equal folders out).
+pub(crate) fn local_keyed(root: &str, algorithm: u8, cancel: &AtomicBool) -> io::Result<Collected> {
+    let tree = KeyTree::new("", HashSet::new());
+    let collect = Mutex::new(Collected::default());
+    let setup = KeyedSetup {
+        tree: &tree,
+        collect: Some(&collect),
+    };
+    let sink: Sink = std::sync::Arc::new(Mutex::new(
+        Box::new(io::sink()) as Box<dyn std::io::Write + Send>
+    ));
+    super::walk_hashed::walk_keyed(&sink, 0, root, (algorithm, 0, None), setup, cancel)?;
+    if !tree.complete() {
+        return Err(invalid(
+            "local keyed walk ended before every folder was complete",
+        ));
+    }
+    Ok(collect.into_inner().unwrap_or_else(|p| p.into_inner()))
 }
 
 fn invalid(message: &str) -> io::Error {

@@ -172,14 +172,14 @@ impl BackendExtensions for PeerBackend {
         &self,
         root: &str,
         request: HashWalkRequest,
-        known: &[[u8; 16]],
+        walk: crate::vfs::KeyedWalk<'_>,
         tx: crossbeam_channel::Sender<crate::vfs::KeyedWalkItem>,
         cancel: &AtomicBool,
     ) -> io::Result<bool> {
         if cancel.load(Ordering::Relaxed) {
             return Err(io::ErrorKind::Interrupted.into());
         }
-        super::peer_hash_walk::walk_keyed(self, root, request, known, tx, cancel)
+        super::peer_hash_walk::walk_keyed(self, root, request, walk, tx, cancel)
     }
     fn content_digest(
         &self,

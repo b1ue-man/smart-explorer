@@ -291,6 +291,19 @@ pub enum HashWalkItem {
     Omitted(VfsOmission),
 }
 
+/// What a keyed hash walk sends (`hash_walk_keyed`).
+#[derive(Clone, Copy, Debug)]
+pub enum KeyedWalk<'a> {
+    /// Every folder's run and key; a folder whose key prefix is in `known`
+    /// comes as one `same` mark instead of its subtree.
+    Marks { known: &'a [[u8; 16]] },
+    /// Only every folder's key (the first phase of a pair comparison).
+    KeysOnly,
+    /// The runs of these folders (paths below the root, `""` the root),
+    /// each without its subfolders, and no keys.
+    Runs { folders: &'a [String] },
+}
+
 /// One streamed item of a keyed hash walk (`hash_walk_keyed`): an item of
 /// a folder's run, or the key of a folder (`agent_proto::folder_key`).
 #[derive(Clone, Debug, PartialEq, Eq)]

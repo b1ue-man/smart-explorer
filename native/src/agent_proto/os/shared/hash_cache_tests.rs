@@ -22,20 +22,18 @@ fn old_file(dir: &Path, name: &str, content: &[u8]) -> PathBuf {
 }
 
 fn digest_of(path: &Path, calls: &AtomicUsize) -> String {
-    let metadata = std::fs::symlink_metadata(path).unwrap();
     digest(
-        &metadata,
+        super::super::local_platform::path_stamp(path),
         crate::agent_proto::digest::MD5,
         || {
             calls.fetch_add(1, Ordering::SeqCst);
             Ok(format!("{}", std::fs::read(path)?.len()))
         },
-        || std::fs::symlink_metadata(path),
+        || super::super::local_platform::path_stamp(path),
     )
     .unwrap()
 }
 
-#[cfg(unix)]
 #[test]
 fn abgleich_task_hash_cache_reuses_an_unchanged_file_after_a_restart() {
     let _turn = turn();
@@ -67,7 +65,6 @@ fn abgleich_task_hash_cache_reuses_an_unchanged_file_after_a_restart() {
     configure(None);
 }
 
-#[cfg(unix)]
 #[test]
 fn abgleich_task_hash_cache_reads_a_changed_file_again() {
     let _turn = turn();
@@ -87,7 +84,6 @@ fn abgleich_task_hash_cache_reads_a_changed_file_again() {
     assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
 
-#[cfg(unix)]
 #[test]
 fn abgleich_task_hash_cache_never_answers_a_racy_file() {
     let _turn = turn();
@@ -102,4 +98,30 @@ fn abgleich_task_hash_cache_never_answers_a_racy_file() {
         digest_of(&path, &calls);
     }
     assert_eq!(calls.load(Ordering::SeqCst), 3);
+}
+
+/// Windows: the stamp is volume serial, 128-bit file ID, size, last write
+/// and change time (`GetFileInformationByHandleEx`), so the cache works
+/// there too, and a write moves it even when the old times are set back.
+#[cfg(windows)]
+#[test]
+fn abgleich_task_hash_cache_windows_stamp_follows_every_write() {
+    let data = tempfile::tempdir().unwrap();
+    let path = old_file(data.path(), "w.bin", b"abc");
+    let before = super::super::local_platform::path_stamp(&path).expect("NTFS has file IDs");
+    let opened = std::fs::File::open(&path).unwrap();
+    assert_eq!(
+        super::super::local_platform::file_stamp(&opened),
+        Some(before)
+    );
+    drop(opened);
+    std::thread::sleep(Duration::from_millis(50));
+    std::fs::write(&path, b"xyz").unwrap();
+    let file = std::fs::File::options().write(true).open(&path).unwrap();
+    file.set_modified(SystemTime::now() - Duration::from_secs(3_600))
+        .unwrap();
+    drop(file);
+    let after = super::super::local_platform::path_stamp(&path).unwrap();
+    assert_eq!(before[0..3], after[0..3], "same volume, file and size");
+    assert_ne!(before[4], after[4], "the change time moved");
 }

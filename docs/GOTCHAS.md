@@ -993,7 +993,8 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   with its own keyed walk and answers unsupported otherwise. A run is always
   sent whole after its mark; a key follows when everything below it was sent.
   Emission happens under the key tree's lock, so a key never overtakes a run
-  of its subtree. Runs held back for a possible `same` stay below 32 MiB; the
+  of its subtree. The GUI's IPC path to the service forwards keyed walks and
+  `content_md5` to the worker (`ipc_backend_extensions.rs`). Runs held back for a possible `same` stay below 32 MiB; the
   oldest held chain is sent beyond that (less saving, same result).
 - **Stored folder keys are content-addressed** (`folder-keys/<side>.sefk`,
   `bisync/os/shared/folder_key_file.rs`): a record is valid for every folder
@@ -1002,8 +1003,22 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   replaced only after a complete keyed walk whose sent folders all match the
   keys the host named; otherwise it is left as it was. Both sides' files are
   offered as known, so a side equal to what the other side stored (after a
-  copy) sends nothing either. The first walk of a side without stored keys
-  sends everything (reading the other side first would serialize the walks).
+  copy) sends nothing either.
+- **Pair key phases (`snapshot_pair_keys.rs`, `snapshot_pair_side.rs`)** run
+  when a remote side taking part has no stored keys yet: phase 1 keys only on
+  both sides at once (agent `WalkKeyed` option byte 1, Share
+  `FsHashWalk.keys_only`); the plan names per remote side the folders no
+  stored, local or other-side record covers, each distinct key once, on the
+  side with fewer so far; phase 2 only those runs (agent `ListRuns` tag 90,
+  Share `FsHashWalk.folders`, at most 160 KiB of paths per Share request and
+  8 MiB per agent frame), again at once. A side replays only when its whole
+  tree is held; otherwise (a folder changed between the phases, a failed
+  fetch) it takes the walk with known keys. Waits watch the pair's stop flag;
+  a side that does not take part is declined up front, and every side's walk
+  declines what it did not submit when it ends. A local side reads keys and
+  runs with the agent's walk in this process (`agent_proto::local_keyed`, dot
+  names hidden as on the agent) beside its own walk; on Windows a remote side
+  that marks hidden files by attribute then differs only in those folders.
 - **W8 with run marks:** an empty folder is checked when the next run mark
   arrives; a folder that could not be opened when its parent's run ends (or
   when its own failure arrives), not when the walk ends.
@@ -1011,8 +1026,10 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   Key: device and inode plus size, modification and status-change time in
   ns, per algorithm. Racy rule (Git `racy-git`): a stored digest counts only
   when both times lie more than 2 s before the moment it was taken, so a file
-  written within that slack is hashed again. Windows has no change time in
-  `std::fs::Metadata`: nothing is cached there. The agent stores
+  written within that slack is hashed again. Windows: the stamp comes from
+  `GetFileInformationByHandleEx` (`FileIdInfo`: volume serial and 128-bit
+  file ID, `FileBasicInfo`: `LastWriteTime`, `ChangeTime`; a file without an
+  ID is not cached). The agent stores
   `hash-cache-v1.bin` in `$XDG_CACHE_HOME/se-agent` (or `~/.cache/se-agent`;
   a confined `--serve-root` agent may not write it, which only costs the
   reuse), the app in its data folder; tests never write it unless a test

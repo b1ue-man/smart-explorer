@@ -191,7 +191,7 @@ fn walk_file_sha256(sink: &Sink, id: u64, root: &str, cancel: &AtomicBool) -> io
         ));
     }
     let sha256 = super::hash_cache::digest(
-        &metadata,
+        super::local_platform::path_stamp(path),
         digest::SHA256,
         || {
             let mut context = super::sha256::Sha256::new();
@@ -200,7 +200,7 @@ fn walk_file_sha256(sink: &Sink, id: u64, root: &str, cancel: &AtomicBool) -> io
             })?;
             Ok(context.finish_hex())
         },
-        || std::fs::symlink_metadata(path),
+        || super::local_platform::path_stamp(path),
     )?;
     super::hash_cache::flush();
     let mtime_ms = metadata.modified().ok().map(systemtime_ms).unwrap_or(0);

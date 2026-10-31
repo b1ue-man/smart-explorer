@@ -41,8 +41,15 @@ fn keyed(backend: &AgentBackend, root: &str, known: &[[u8; 16]]) -> (bool, Vec<K
         meta: true,
     };
     let (tx, rx) = crossbeam_channel::unbounded();
-    let ran =
-        vfs::hash_walk_keyed(backend, root, request, known, tx, &AtomicBool::new(false)).unwrap();
+    let ran = vfs::hash_walk_keyed(
+        backend,
+        root,
+        request,
+        vfs::KeyedWalk::Marks { known },
+        tx,
+        &AtomicBool::new(false),
+    )
+    .unwrap();
     (ran, rx.try_iter().collect())
 }
 

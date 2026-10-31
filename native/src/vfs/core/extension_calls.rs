@@ -292,12 +292,12 @@ pub fn hash_walk_keyed<B: Backend + ?Sized>(
     backend: &B,
     root: &str,
     request: HashWalkRequest,
-    known: &[[u8; 16]],
+    walk: super::extension_types::KeyedWalk<'_>,
     tx: crossbeam_channel::Sender<KeyedWalkItem>,
     cancel: &AtomicBool,
 ) -> VfsResult<bool> {
     match backend.extensions() {
-        Some(extensions) => extensions.hash_walk_keyed(root, request, known, tx, cancel),
+        Some(extensions) => extensions.hash_walk_keyed(root, request, walk, tx, cancel),
         None => Ok(false),
     }
 }

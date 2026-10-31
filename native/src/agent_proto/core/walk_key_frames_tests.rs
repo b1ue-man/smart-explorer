@@ -21,12 +21,19 @@ fn abgleich_task_walk_key_frames_round_trip() {
             algorithm: 1,
             min_bytes: 0,
             known: known.clone(),
+            keys_only: false,
         },
         Frame::WalkKeyed {
             root: "/".into(),
             algorithm: 0,
             min_bytes: 5,
             known: Vec::new(),
+            keys_only: true,
+        },
+        Frame::ListRuns {
+            root: "/srv".into(),
+            algorithm: 1,
+            folders: vec![String::new(), "a/b".into(), "ä".into()],
         },
         Frame::FolderKey {
             rel: "a/b".into(),
@@ -53,6 +60,7 @@ fn abgleich_task_walk_key_frames_refuse_partial_known_keys() {
         algorithm: 0,
         min_bytes: 0,
         known: vec![1; 17],
+        keys_only: false,
     };
     assert!(frame.encode(1).is_err());
     let mut bytes = Frame::WalkKeyed {
@@ -60,6 +68,7 @@ fn abgleich_task_walk_key_frames_refuse_partial_known_keys() {
         algorithm: 0,
         min_bytes: 0,
         known: vec![1; 16],
+        keys_only: false,
     }
     .encode(1)
     .unwrap();
@@ -72,7 +81,8 @@ fn abgleich_task_walk_key_frames_refuse_partial_known_keys() {
     let mut encoded = mark.encode(2).unwrap();
     *encoded.last_mut().unwrap() = 7;
     assert!(Frame::decode(&encoded).is_err());
-    // Cutting the known keys to 15 bytes leaves a frame that cannot decode.
-    bytes.truncate(bytes.len() - 1);
+    // Cutting the option byte and one key byte leaves a frame that cannot
+    // decode.
+    bytes.truncate(bytes.len() - 2);
     assert!(Frame::decode(&bytes).is_err());
 }

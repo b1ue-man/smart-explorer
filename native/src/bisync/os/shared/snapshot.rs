@@ -169,9 +169,16 @@ pub(super) fn walk_snapshot_with_options(
         fold_case,
         opts,
         None,
-        None,
+        (None, None),
     )
 }
+
+/// The other side of a pair (its folder keys are offered to this side's
+/// walk) and the pair's key phases with this side's index.
+pub(super) type PairSide<'p> = (
+    Option<(&'p dyn Backend, &'p str)>,
+    Option<(&'p super::snapshot_pair_keys::PairKeys, usize)>,
+);
 
 /// `walk_snapshot_with_options` that tells `listed` about every folder it
 /// listed completely (G4 MS14: copies during the scan). `peer` is the other
@@ -189,7 +196,7 @@ pub(super) fn walk_snapshot_observed(
     fold_case: bool,
     opts: BisyncOptions,
     listed: Option<&dyn super::early_copy::FolderListed>,
-    peer: Option<(&dyn Backend, &str)>,
+    (peer, pair): PairSide<'_>,
 ) -> io::Result<Snapshot> {
     if cancel.load(Ordering::Acquire) {
         return Err(io::Error::new(
@@ -231,6 +238,7 @@ pub(super) fn walk_snapshot_observed(
             let algorithm = (hash == HashMode::FullFresh).then_some("md5");
             super::snapshot_keyed::KeyFiles::of(be, root, peer, algorithm)
         }),
+        pair,
     };
     let started = std::time::Instant::now();
     let tree = match super::snapshot_agent::walk_snapshot_via_agent(&context)? {
@@ -247,7 +255,9 @@ pub(super) fn walk_snapshot_observed(
         }
         None => {
             context.host_listed = false;
-            let tree = walk_tree(&context, flow, be.parallelism().max(1))?;
+            let tree = with_local_keys(&context, || {
+                walk_tree(&context, flow, be.parallelism().max(1))
+            })?;
             if let Some(log) = &context.log {
                 log.line(
                     "Scan",
@@ -261,6 +271,9 @@ pub(super) fn walk_snapshot_observed(
             tree
         }
     };
+    if let Some((pair, side)) = pair {
+        pair.finish(side);
+    }
     drop(context);
     if be.is_local() && hash != HashMode::None {
         crate::agent_proto::hash_cache::flush();
@@ -272,6 +285,34 @@ pub(super) fn walk_snapshot_observed(
         omissions: omissions.into_inner().unwrap_or_else(|e| e.into_inner()),
         duplicates: duplicates.into_inner().unwrap_or_else(|e| e.into_inner()),
     })
+}
+
+/// `walk` of a local side; when the pair's key phases want this side's
+/// keys, they are read on another thread meanwhile
+/// (`snapshot_pair_side::provide_local`).
+fn with_local_keys(
+    context: &WalkContext<'_>,
+    walk: impl FnOnce() -> io::Result<Tree>,
+) -> io::Result<Tree> {
+    let local =
+        context.be.is_local() && matches!(context.hash, HashMode::None | HashMode::FullFresh);
+    match context
+        .pair
+        .filter(|(pair, side)| local && pair.takes_part(*side))
+    {
+        Some(pair) => std::thread::scope(|scope| {
+            let md5 = context.hash == HashMode::FullFresh;
+            let (root, cancel) = (context.root, context.cancel);
+            let keys = scope
+                .spawn(move || super::snapshot_pair_side::provide_local(pair, root, md5, cancel));
+            let tree = walk();
+            if keys.join().is_err() {
+                pair.0.finish(pair.1);
+            }
+            tree
+        }),
+        None => walk(),
+    }
 }
 
 /// `f` with the context of a walk of `root` that keeps its omissions,
@@ -311,6 +352,7 @@ pub(super) fn with_walk_context<T>(
         host_listed: true,
         local: None,
         key_files: None,
+        pair: None,
     };
     f(&context)
 }

@@ -261,17 +261,16 @@ pub trait BackendExtensions: Backend {
     /// `hash_walk` with `request.meta` whose folders carry keys
     /// (`agent_proto::folder_key`, agent `walk-keys-v1`, Share
     /// `hash_walk_keys_v1`): every folder's run, then its end mark with its
-    /// key; a folder whose key prefix is in `known` comes as one `same` mark
-    /// instead of its subtree. `Ok(false)` only before any item.
+    /// key, as `walk` asks (`KeyedWalk`). `Ok(false)` only before any item.
     fn hash_walk_keyed(
         &self,
         root: &str,
         request: HashWalkRequest,
-        known: &[[u8; 16]],
+        walk: super::extension_types::KeyedWalk<'_>,
         tx: crossbeam_channel::Sender<KeyedWalkItem>,
         cancel: &AtomicBool,
     ) -> VfsResult<bool> {
-        let _ = (root, request, known, tx, cancel);
+        let _ = (root, request, walk, tx, cancel);
         Ok(false)
     }
 

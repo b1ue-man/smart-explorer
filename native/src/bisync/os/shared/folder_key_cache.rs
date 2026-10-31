@@ -268,6 +268,25 @@ impl FolderCache {
             .collect()
     }
 
+    /// Every key whose whole subtree `caches` hold.
+    pub(super) fn complete_keys(caches: &[&FolderCache]) -> HashSet<FolderKey> {
+        let mut size: HashMap<FolderKey, u64> = HashMap::new();
+        for cache in caches {
+            for key in cache.records.keys() {
+                subtree_size(*key, caches, &mut size);
+            }
+        }
+        size.into_iter()
+            .filter(|(_, count)| *count > 0)
+            .map(|(key, _)| key)
+            .collect()
+    }
+
+    /// Whether `caches` hold the whole subtree of `key`.
+    pub(super) fn holds(caches: &[&FolderCache], key: FolderKey) -> bool {
+        subtree_size(key, caches, &mut HashMap::new()) > 0
+    }
+
     /// The runs of `key` and everything below it, at `rel`, top down: a
     /// run mark for every folder, then each of its items. Returns the number
     /// of folders.

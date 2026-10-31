@@ -24,7 +24,14 @@ fn keyed(
     };
     let (tx, rx) = crossbeam_channel::unbounded();
     let cancel = AtomicBool::new(false);
-    let ran = vfs::hash_walk_keyed(&*fixture.peer, "/A", request, known, tx, &cancel)?;
+    let ran = vfs::hash_walk_keyed(
+        &*fixture.peer,
+        "/A",
+        request,
+        vfs::KeyedWalk::Marks { known },
+        tx,
+        &cancel,
+    )?;
     Ok((ran, rx.try_iter().collect()))
 }
 

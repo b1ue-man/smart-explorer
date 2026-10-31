@@ -110,6 +110,11 @@ pub(crate) struct FsHashWalk {
     pub(crate) keys: bool,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub(crate) known: String,
+    /// With `keys`: only every folder's key, or only the runs of `folders`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) keys_only: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) folders: Vec<String>,
 }
 
 /// `list_batches_v1`: the folder `path` in name order and in bounded

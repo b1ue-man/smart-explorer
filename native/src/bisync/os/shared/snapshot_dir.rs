@@ -55,6 +55,8 @@ pub(super) struct WalkContext<'a> {
     /// A remote side's folder key files (`snapshot_keyed.rs`); `None` reads
     /// without folder keys.
     pub(super) key_files: Option<super::snapshot_keyed::KeyFiles>,
+    /// The pair's key phases and this side's index (`snapshot_pair_keys.rs`).
+    pub(super) pair: Option<(&'a super::snapshot_pair_keys::PairKeys, usize)>,
 }
 
 /// What one folder contributes to the snapshot.

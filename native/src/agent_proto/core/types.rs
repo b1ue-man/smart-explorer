@@ -311,6 +311,17 @@ pub enum Frame {
         algorithm: u8,
         min_bytes: u64,
         known: Vec<u8>,
+        /// `keys_only`: no run, only every folder's `FolderKey` (the first
+        /// phase of a pair comparison).
+        keys_only: bool,
+    },
+    /// The runs of the named folders (paths relative to `root`) of a keyed
+    /// walk, each after its `FolderRun` mark, without their subfolders
+    /// (`walk-keys-v1`): `FolderRun`, `HashPart`s, then `End`.
+    ListRuns {
+        root: String,
+        algorithm: u8,
+        folders: Vec<String>,
     },
     /// The key of a folder of a `WalkKeyed`: `same = false` after the folder
     /// and everything below it were sent, `same = true` instead of them.

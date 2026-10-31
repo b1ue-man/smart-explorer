@@ -13,7 +13,7 @@ use super::super::ext_stream::{is_unsupported_error, stream, unexpected, CANCEL_
 use super::super::ext_wire::{algorithm_to_wire, omission_from_wire};
 use crate::agent_proto::{Frame, WireHashEntry};
 use crate::vfs::{
-    HashWalkEntry, HashWalkItem, HashWalkMeta, HashWalkRequest, KeyedWalkItem, VfsResult,
+    HashWalkEntry, HashWalkItem, HashWalkMeta, HashWalkRequest, KeyedWalk, KeyedWalkItem, VfsResult,
 };
 
 pub(super) fn walk(
@@ -110,7 +110,7 @@ pub(super) fn walk_keyed(
     backend: &AgentBackend,
     root: &str,
     request: HashWalkRequest,
-    known: &[[u8; 16]],
+    walk: KeyedWalk<'_>,
     tx: Sender<KeyedWalkItem>,
     cancel: &AtomicBool,
 ) -> VfsResult<bool> {
@@ -118,12 +118,32 @@ pub(super) fn walk_keyed(
     if !features.extensions || !features.walk_keys || !request.meta {
         return Ok(false);
     }
-    let frame = Frame::WalkKeyed {
-        root: root.to_string(),
-        algorithm: algorithm_to_wire(request.algorithm),
-        min_bytes: request.min_bytes,
-        // The client puts the keys covering most first.
-        known: known[..known.len().min(crate::agent_proto::MAX_KNOWN_KEYS)].concat(),
+    let algorithm = algorithm_to_wire(request.algorithm);
+    let frames = match walk {
+        KeyedWalk::Marks { known } => vec![Frame::WalkKeyed {
+            root: root.to_string(),
+            algorithm,
+            min_bytes: request.min_bytes,
+            // The client puts the keys covering most first.
+            known: known[..known.len().min(crate::agent_proto::MAX_KNOWN_KEYS)].concat(),
+            keys_only: false,
+        }],
+        KeyedWalk::KeysOnly => vec![Frame::WalkKeyed {
+            root: root.to_string(),
+            algorithm,
+            min_bytes: request.min_bytes,
+            known: Vec::new(),
+            keys_only: true,
+        }],
+        // Portions of at most `RUN_FOLDERS_BYTES` path text each.
+        KeyedWalk::Runs { folders } => run_portions(folders)
+            .into_iter()
+            .map(|folders| Frame::ListRuns {
+                root: root.to_string(),
+                algorithm,
+                folders,
+            })
+            .collect(),
     };
     let mut items = 0u64;
     let mut forward = |item: KeyedWalkItem| -> io::Result<()> {
@@ -148,27 +168,50 @@ pub(super) fn walk_keyed(
             }
         }
     };
-    let result = stream(&backend.pool, frame, cancel, |frame| match frame {
-        Frame::HashPart { entries, omitted } => {
-            for entry in entries {
-                let entry = entry_from_wire(entry, true)?;
-                forward(KeyedWalkItem::Item(HashWalkItem::Entry(entry)))?;
+    for frame in frames {
+        let result = stream(&backend.pool, frame, cancel, |frame| match frame {
+            Frame::HashPart { entries, omitted } => {
+                for entry in entries {
+                    let entry = entry_from_wire(entry, true)?;
+                    forward(KeyedWalkItem::Item(HashWalkItem::Entry(entry)))?;
+                }
+                for omitted in omitted {
+                    let omitted = omission_from_wire(omitted);
+                    forward(KeyedWalkItem::Item(HashWalkItem::Omitted(omitted)))?;
+                }
+                Ok(())
             }
-            for omitted in omitted {
-                let omitted = omission_from_wire(omitted);
-                forward(KeyedWalkItem::Item(HashWalkItem::Omitted(omitted)))?;
-            }
-            Ok(())
+            Frame::FolderRun(rel) => forward(KeyedWalkItem::Run { rel }),
+            Frame::FolderKey { rel, key, same } => forward(KeyedWalkItem::Key { rel, key, same }),
+            other => Err(unexpected("keyed hash walk", &other)),
+        });
+        match result {
+            Ok(()) => {}
+            Err(error) if items == 0 && is_unsupported_error(&error) => return Ok(false),
+            Err(error) => return Err(error),
         }
-        Frame::FolderRun(rel) => forward(KeyedWalkItem::Run { rel }),
-        Frame::FolderKey { rel, key, same } => forward(KeyedWalkItem::Key { rel, key, same }),
-        other => Err(unexpected("keyed hash walk", &other)),
-    });
-    match result {
-        Ok(()) => Ok(true),
-        Err(error) if items == 0 && is_unsupported_error(&error) => Ok(false),
-        Err(error) => Err(error),
     }
+    Ok(true)
+}
+
+/// Path text one `ListRuns` carries at most.
+const RUN_FOLDERS_BYTES: usize = 8 * 1024 * 1024;
+
+/// `folders` in portions of at most `RUN_FOLDERS_BYTES` path text.
+fn run_portions(folders: &[String]) -> Vec<Vec<String>> {
+    let mut portions: Vec<Vec<String>> = Vec::new();
+    let mut bytes = usize::MAX;
+    for folder in folders {
+        if bytes.saturating_add(folder.len() + 4) > RUN_FOLDERS_BYTES {
+            portions.push(Vec::new());
+            bytes = 0;
+        }
+        bytes += folder.len() + 4;
+        if let Some(portion) = portions.last_mut() {
+            portion.push(folder.clone());
+        }
+    }
+    portions
 }
 
 /// An entry of a `HashPart`; its attributes must be there exactly when the

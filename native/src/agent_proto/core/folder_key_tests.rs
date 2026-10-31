@@ -2,6 +2,7 @@
 //! folder's items in any order, and the key tree sends a known subtree as
 //! one mark, every other folder as its run (parent first) with its key.
 use super::*;
+use std::collections::HashMap;
 
 fn file(name: &str, size: u64, mtime_ms: i64) -> Vec<u8> {
     entry_part(name, EntryKind::File, size, mtime_ms, None, false)

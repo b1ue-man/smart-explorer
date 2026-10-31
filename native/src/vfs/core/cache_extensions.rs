@@ -158,11 +158,11 @@ impl BackendExtensions for CachingBackend {
         &self,
         root: &str,
         request: HashWalkRequest,
-        known: &[[u8; 16]],
+        walk: crate::vfs::KeyedWalk<'_>,
         tx: crossbeam_channel::Sender<KeyedWalkItem>,
         cancel: &AtomicBool,
     ) -> VfsResult<bool> {
-        calls::hash_walk_keyed(&*self.inner, root, request, known, tx, cancel)
+        calls::hash_walk_keyed(&*self.inner, root, request, walk, tx, cancel)
     }
 
     fn content_digest(

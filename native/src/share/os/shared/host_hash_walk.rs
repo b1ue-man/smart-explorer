@@ -39,6 +39,8 @@ mod digest;
 mod keys;
 #[path = "host_hash_walk_local.rs"]
 mod local;
+#[path = "host_hash_walk_runs.rs"]
+mod runs;
 
 /// Walks deeper than this report the folder as unreadable.
 pub(super) const MAX_DEPTH: usize = 2048;
@@ -181,6 +183,11 @@ impl<'s, 'a> Batch<'s, 'a> {
         self.emit()
     }
 
+    /// A folder begun here is read on another thread (`runs.rs`).
+    pub(super) fn abandon_folder(&mut self) {
+        self.run = None;
+    }
+
     /// The current folder is done: a run lock held for it is released.
     pub(super) fn end_folder(&mut self) -> io::Result<()> {
         if self.shared.keys.is_some() {
@@ -230,11 +237,6 @@ impl crate::agent_proto::WalkOutput for Batch<'_, '_> {
     }
 }
 
-/// The app's digest cache folder (none in tests).
-fn host_hash_cache_folder() -> Option<std::path::PathBuf> {
-    (!cfg!(test)).then(crate::support_dirs::app_data_dir)
-}
-
 pub(super) fn child_rel(rel: &str, name: &str) -> String {
     if rel.is_empty() {
         name.into()
@@ -260,7 +262,7 @@ pub(in crate::share) fn run(
         ));
     }
     if request.algo.is_some() {
-        crate::agent_proto::hash_cache::configure_once(host_hash_cache_folder);
+        crate::agent_proto::hash_cache::configure_once(digest::cache_folder);
     }
     let shared = Shared {
         request: &request,
@@ -273,7 +275,7 @@ pub(in crate::share) fn run(
         keys: keys::tree(&request)?,
     };
     let mut batch = Batch::new(&shared);
-    visit(&mut batch, &request.path, &access, "")?;
+    runs::visit(&mut batch, &request, &access)?;
     batch.send()?;
     if request.algo.is_some() {
         crate::agent_proto::hash_cache::flush();

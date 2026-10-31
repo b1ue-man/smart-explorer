@@ -1,4 +1,5 @@
-//! `WalkKeyed` (`walk-keys-v1`) for the backend the service serves: relayed
+//! `WalkKeyed` and `ListRuns` (`walk-keys-v1`) for the backend the service
+//! serves: relayed
 //! to the backend's own keyed walk next to its data (a Share host with
 //! `hash_walk_keys_v1`), runs as `HashPart`s and every folder key as a
 //! `FolderKey` frame in the order the host sent them. A backend without one
@@ -13,14 +14,32 @@ use crate::vfs::{self as vfs, BackendHandle, HashWalkRequest, KeyedWalkItem};
 use super::super::backend_server::emit;
 use super::{canceled, Items, Sink};
 
+/// What the client asked: a keyed walk, or the runs of named folders.
+pub(super) enum Relayed<'a> {
+    Walk {
+        min_bytes: u64,
+        known: &'a [u8],
+        keys_only: bool,
+    },
+    Runs(&'a [String]),
+}
+
 pub(super) fn serve(
     sink: &Sink,
     id: u64,
     backend: &BackendHandle,
-    root: &str,
-    (algorithm, min_bytes, known): (u8, u64, &[u8]),
+    (root, algorithm): (&str, u8),
+    relayed: Relayed<'_>,
     cancel: &AtomicBool,
 ) -> io::Result<()> {
+    let (min_bytes, known, keys_only, folders) = match relayed {
+        Relayed::Walk {
+            min_bytes,
+            known,
+            keys_only,
+        } => (min_bytes, known, keys_only, None),
+        Relayed::Runs(folders) => (0, &[][..], false, Some(folders)),
+    };
     if known.len() % 16 != 0 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -35,6 +54,11 @@ pub(super) fn serve(
             prefix
         })
         .collect();
+    let walk = match (folders, keys_only) {
+        (Some(folders), _) => vfs::KeyedWalk::Runs { folders },
+        (None, true) => vfs::KeyedWalk::KeysOnly,
+        (None, false) => vfs::KeyedWalk::Marks { known: &known },
+    };
     let request = HashWalkRequest {
         algorithm: algorithm_from_wire(algorithm),
         min_bytes,
@@ -46,7 +70,7 @@ pub(super) fn serve(
     let mut forwarded = Ok(());
     let walked = std::thread::scope(|scope| {
         let walker =
-            scope.spawn(|| vfs::hash_walk_keyed(&**backend, root, request, &known, tx, &stop));
+            scope.spawn(|| vfs::hash_walk_keyed(&**backend, root, request, walk, tx, &stop));
         loop {
             if cancel.load(Ordering::Relaxed) {
                 stop.store(true, Ordering::Relaxed);

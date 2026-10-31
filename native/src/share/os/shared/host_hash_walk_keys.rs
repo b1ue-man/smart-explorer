@@ -10,7 +10,7 @@ use std::io;
 use std::sync::atomic::Ordering;
 
 use super::{Batch, Shared};
-use crate::agent_proto::{entry_part, EntryKind, FolderKey, KeyEmit, KeyTree, RunKeys};
+use crate::agent_proto::{entry_part, EntryKind, FolderKey, KeyEmit, KeyMode, KeyTree, RunKeys};
 use crate::share::{
     fs_response::{FsHashEntry, FsHashWalkMessage, FsOmission, LIST_BATCH_MAX_BYTES},
     host_stream,
@@ -37,10 +37,15 @@ pub(super) fn tree(request: &crate::share::wire::FsHashWalk) -> io::Result<Optio
         request.known.as_bytes(),
     )
     .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "bekannte Schlüssel ungültig"))?;
-    Ok(Some(KeyTree::new(
-        "",
-        crate::agent_proto::parse_known(&known)?,
-    )))
+    let mode = if !request.folders.is_empty() {
+        KeyMode::RunsOnly
+    } else if request.keys_only {
+        KeyMode::KeysOnly
+    } else {
+        KeyMode::Marks
+    };
+    let known = crate::agent_proto::parse_known(&known)?;
+    Ok(Some(KeyTree::with_mode("", known, mode)))
 }
 
 fn cost(item: &Item) -> usize {

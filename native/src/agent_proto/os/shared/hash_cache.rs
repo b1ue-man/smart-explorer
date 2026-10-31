@@ -1,8 +1,8 @@
 //! Persistent digest cache on the side that stores the files (E9): the SSH
 //! agent, a Share host and a local sync side keep the digests they computed,
-//! keyed by the file's status (`local_platform::change_stamp`: device,
-//! inode, size, modification and status-change time in nanoseconds) and the
-//! algorithm. A digest is used again only while that status is unchanged.
+//! keyed by the file's status (`local_platform::file_stamp`: device and
+//! inode, or volume serial and 128-bit file ID on Windows, size,
+//! modification and status-change time in nanoseconds) and the algorithm. A digest is used again only while that status is unchanged.
 //!
 //! Racy timestamps (Git, `Documentation/technical/racy-git.txt`): a file
 //! changed within the time granularity of the moment its digest was taken
@@ -12,8 +12,8 @@
 //! again each time until the file is old enough.
 //!
 //! The file holds at most `MAX_ENTRIES` digests, the most recently used
-//! first; a side without a change time (Windows: `std::fs::Metadata` has
-//! none) caches nothing. A cache that cannot be read or written costs only
+//! first; a file without a stamp (a file system without file IDs) is not
+//! cached. A cache that cannot be read or written costs only
 //! the reuse, never a result. The agent keeps its file in its cache folder
 //! (`$XDG_CACHE_HOME/se-agent` or `~/.cache/se-agent`), the app in its data
 //! folder (`configure`).
@@ -120,16 +120,17 @@ fn with_cache<T>(f: impl FnOnce(&mut Cache) -> T) -> T {
 }
 
 /// The digest (`algorithm`: `ops_types::digest` code) of the regular file
-/// whose current status is `metadata`: the stored one while the status is
-/// unchanged and not racy, else `compute()`, stored when the file kept its
-/// status (`after` is read once the digest was computed).
+/// whose current status is `stamp` (`local_platform::file_stamp` or
+/// `path_stamp`): the stored one while the status is unchanged and not racy,
+/// else `compute()`, stored when the file kept its status (`after` is read
+/// once the digest was computed).
 pub(crate) fn digest(
-    metadata: &std::fs::Metadata,
+    stamp: Option<[i128; 5]>,
     algorithm: u8,
     compute: impl FnOnce() -> io::Result<String>,
-    after: impl FnOnce() -> io::Result<std::fs::Metadata>,
+    after: impl FnOnce() -> Option<[i128; 5]>,
 ) -> io::Result<String> {
-    let Some(stamp) = super::local_platform::change_stamp(metadata) else {
+    let Some(stamp) = stamp else {
         return compute();
     };
     let key = (stamp[0], stamp[1], algorithm);
@@ -151,10 +152,7 @@ pub(crate) fn digest(
     }
     let recorded_ns = now_ns();
     let digest = compute()?;
-    let unchanged = after()
-        .ok()
-        .and_then(|after| super::local_platform::change_stamp(&after))
-        .is_some_and(|after| after == stamp);
+    let unchanged = after().is_some_and(|after| after == stamp);
     if unchanged {
         with_cache(|cache| {
             cache.clock += 1;

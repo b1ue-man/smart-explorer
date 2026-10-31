@@ -86,6 +86,7 @@ fn read(
         host_listed: true,
         local: None,
         key_files: None,
+        pair: None,
     };
     let (tree, keyed) = match files {
         None => (
@@ -104,7 +105,14 @@ fn read(
             };
             let keyed = walk(&ctx, files, |take, known| {
                 let (tx, rx) = crossbeam_channel::unbounded();
-                let ran = vfs::hash_walk_keyed(backend, root, request, known, tx, &cancel)?;
+                let ran = vfs::hash_walk_keyed(
+                    backend,
+                    root,
+                    request,
+                    vfs::KeyedWalk::Marks { known },
+                    tx,
+                    &cancel,
+                )?;
                 for item in rx.try_iter() {
                     if matches!(item, KeyedWalkItem::Item(_)) {
                         sent_items += 1;
@@ -330,6 +338,7 @@ fn abgleich_task_run_marks_check_empty_and_unopened_folders_at_once() {
         host_listed: true,
         local: None,
         key_files: None,
+        pair: None,
     };
     let mut stream = super::super::snapshot_host_stream::Stream::new(&ctx);
     stream.run_mark("").unwrap();

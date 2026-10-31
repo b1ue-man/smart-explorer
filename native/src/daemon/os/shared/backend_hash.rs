@@ -154,6 +154,7 @@ pub(super) fn serves(frame: &Frame) -> bool {
         Frame::WalkHashed2 { .. }
             | Frame::WalkHashed3 { .. }
             | Frame::WalkKeyed { .. }
+            | Frame::ListRuns { .. }
             | Frame::ListMeta(_)
             | Frame::ListDirMeta(_)
             | Frame::StatMeta(_)
@@ -193,16 +194,24 @@ pub(super) fn serve(
             algorithm,
             min_bytes,
             known,
+            keys_only,
         } => {
             check_algorithm(algorithm)?;
-            keyed::serve(
-                sink,
-                id,
-                backend,
-                &root,
-                (algorithm, min_bytes, known.as_slice()),
-                cancel,
-            )
+            let relayed = keyed::Relayed::Walk {
+                min_bytes,
+                known: &known,
+                keys_only,
+            };
+            keyed::serve(sink, id, backend, (&root, algorithm), relayed, cancel)
+        }
+        Frame::ListRuns {
+            root,
+            algorithm,
+            folders,
+        } => {
+            check_algorithm(algorithm)?;
+            let relayed = keyed::Relayed::Runs(&folders);
+            keyed::serve(sink, id, backend, (&root, algorithm), relayed, cancel)
         }
         // `list_dir` and `stat` as the served backend reports them, hidden
         // and system flags and creation times included (`meta-list-v1`).

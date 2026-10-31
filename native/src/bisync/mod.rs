@@ -200,6 +200,10 @@ mod snapshot_keyed;
 mod snapshot_mounts;
 #[path = "os/shared/snapshot_pair.rs"]
 mod snapshot_pair;
+#[path = "os/shared/snapshot_pair_keys.rs"]
+mod snapshot_pair_keys;
+#[path = "os/shared/snapshot_pair_side.rs"]
+mod snapshot_pair_side;
 #[path = "os/shared/snapshot_policy.rs"]
 pub(crate) mod snapshot_policy;
 #[path = "core/snapshot_types.rs"]

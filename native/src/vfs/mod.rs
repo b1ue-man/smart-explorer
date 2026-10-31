@@ -142,9 +142,9 @@ pub use self::extension_calls::{
 };
 pub use self::extension_types::{
     ChangeNotice, ChangeSignalMode, ChangeSubscription, HashWalkEntry, HashWalkItem, HashWalkMeta,
-    HashWalkRequest, KeyedWalkItem, MtimePrecision, NameIssue, NameLimit, OmissionReason,
-    RecycleExpectation, RecycleOutcome, StageDurability, StageFinish, StageFinished, TargetLimits,
-    VfsListing, VfsOmission,
+    HashWalkRequest, KeyedWalk, KeyedWalkItem, MtimePrecision, NameIssue, NameLimit,
+    OmissionReason, RecycleExpectation, RecycleOutcome, StageDurability, StageFinish,
+    StageFinished, TargetLimits, VfsListing, VfsOmission,
 };
 pub use self::extensions::{BackendExtensions, VersionArchivePolicy};
 pub use self::local_extensions::{

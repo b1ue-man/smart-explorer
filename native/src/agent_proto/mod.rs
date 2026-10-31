@@ -109,6 +109,7 @@ mod vault_error;
 mod walk_hashed;
 #[path = "os/shared/walk_keyed.rs"]
 mod walk_keyed;
+pub(crate) use walk_keyed::{local_keyed, Collected as LocalKeyed, WireItem as KeyedWireItem};
 #[path = "os/shared/write_new.rs"]
 mod write_new;
 
@@ -132,10 +133,11 @@ pub use features::{
 };
 pub(crate) use folder_key::{
     entry_part, failure_part, folder_key, known_prefix, omission_part, parse_known, run_digest,
-    EntryKind, FolderKey, KeyEmit, KeyTree, KnownKey, RunKeys, MAX_KNOWN_KEYS,
+    EntryKind, FolderKey, KeyEmit, KeyTree, KnownKey, Mode as KeyMode, RunKeys, MAX_KNOWN_KEYS,
 };
 pub use fs::{is_pseudo_dir, list_local, stat_local, walk_local, WalkCounter};
 pub(crate) use local_platform::available_space;
+pub(crate) use local_platform::{file_stamp, path_stamp};
 pub use node_codec::{TreeDecodeBudget, TREE_BUDGET_ERROR};
 pub use ops_types::{digest, omission, query, UNSUPPORTED_EXTENSION};
 pub(crate) use ordered_walk::{

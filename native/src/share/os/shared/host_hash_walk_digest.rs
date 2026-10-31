@@ -50,3 +50,8 @@ impl Shared<'_> {
         }))
     }
 }
+
+/// The app's digest cache folder (none in tests).
+pub(super) fn cache_folder() -> Option<std::path::PathBuf> {
+    (!cfg!(test)).then(crate::support_dirs::app_data_dir)
+}

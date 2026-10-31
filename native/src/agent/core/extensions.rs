@@ -384,11 +384,11 @@ impl BackendExtensions for AgentBackend {
         &self,
         root: &str,
         request: HashWalkRequest,
-        known: &[[u8; 16]],
+        walk: vfs::KeyedWalk<'_>,
         tx: Sender<KeyedWalkItem>,
         cancel: &AtomicBool,
     ) -> VfsResult<bool> {
-        hash_walk::walk_keyed(self, root, request, known, tx, cancel)
+        hash_walk::walk_keyed(self, root, request, walk, tx, cancel)
     }
 
     /// Hashed by the agent next to the data. An SSH agent that cannot hash

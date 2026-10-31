@@ -1,6 +1,7 @@
 //! Wire layout of the keyed walk and the attribute listing and status
-//! (tags 85..=89): `WalkKeyed` (`walk-keys-v1`) answered by `FolderRun`
-//! marks, `HashPart`s and `FolderKey` marks, `ListDirMeta` and `StatMeta` (`meta-list-v1`) answered
+//! (tags 85..=90): `WalkKeyed` (`walk-keys-v1`) answered by `FolderRun`
+//! marks, `HashPart`s and `FolderKey` marks, `ListRuns` (90) answered by
+//! `FolderRun` marks and `HashPart`s, `ListDirMeta` and `StatMeta` (`meta-list-v1`) answered
 //! by `HashPart`s. Same little-endian, length-prefixed rules as the other
 //! frames; a server without the label answers the unknown tag with an
 //! error, so a client sends it only after the label.
@@ -13,6 +14,10 @@ use super::{add_len, put_bytes, put_str, put_u64};
 /// Known key prefixes one request may carry.
 const MAX_KNOWN_BYTES: usize = 16 * super::super::super::folder_key::MAX_KNOWN_KEYS;
 const MARK_SAME: u8 = 1;
+/// `WalkKeyed` option byte: keys only.
+const KEYS_ONLY: u8 = 1;
+/// Folders one `ListRuns` may name.
+const MAX_RUN_FOLDERS: usize = 1 << 20;
 
 /// Encoded body length after the request id and tag, `None` for other frames.
 pub(in super::super) fn payload_len(frame: &Frame) -> Option<io::Result<usize>> {
@@ -22,8 +27,19 @@ pub(in super::super) fn payload_len(frame: &Frame) -> Option<io::Result<usize>> 
                 return Err(bad("known folder keys out of bounds"));
             }
             let mut length = super::string_len(root)?;
-            add_len(&mut length, 9)?;
+            add_len(&mut length, 10)?;
             add_len(&mut length, 4 + known.len())?;
+            Ok(length)
+        })(),
+        Frame::ListRuns { root, folders, .. } => (|| {
+            if folders.len() > MAX_RUN_FOLDERS {
+                return Err(bad("too many folders for one run listing"));
+            }
+            let mut length = super::string_len(root)?;
+            add_len(&mut length, 5)?;
+            for folder in folders {
+                add_len(&mut length, super::string_len(folder)?)?;
+            }
             Ok(length)
         })(),
         Frame::FolderKey { rel, .. } => super::string_len(rel).and_then(|len| {
@@ -46,12 +62,27 @@ pub(in super::super) fn encode(frame: &Frame, b: &mut Vec<u8>) -> bool {
             algorithm,
             min_bytes,
             known,
+            keys_only,
         } => {
             b.push(85);
             put_str(b, root);
             b.push(*algorithm);
             put_u64(b, *min_bytes);
             put_bytes(b, known);
+            b.push(if *keys_only { KEYS_ONLY } else { 0 });
+        }
+        Frame::ListRuns {
+            root,
+            algorithm,
+            folders,
+        } => {
+            b.push(90);
+            put_str(b, root);
+            b.push(*algorithm);
+            b.extend_from_slice(&(folders.len() as u32).to_le_bytes());
+            for folder in folders {
+                put_str(b, folder);
+            }
         }
         Frame::FolderKey { rel, key, same } => {
             b.push(86);
@@ -87,11 +118,34 @@ pub(in super::super) fn decode(tag: u8, r: &mut Reader) -> io::Result<Option<Fra
             if known.len() > MAX_KNOWN_BYTES || known.len() % 16 != 0 {
                 return Err(bad("known folder keys out of bounds"));
             }
+            let keys_only = match r.u8()? {
+                0 => false,
+                KEYS_ONLY => true,
+                _ => return Err(bad("unknown keyed walk option")),
+            };
             Frame::WalkKeyed {
                 root,
                 algorithm,
                 min_bytes,
                 known,
+                keys_only,
+            }
+        }
+        90 => {
+            let root = r.string()?;
+            let algorithm = r.u8()?;
+            let count = r.u32()? as usize;
+            if count > MAX_RUN_FOLDERS || count > r.remaining() / 4 {
+                return Err(bad("too many folders for one run listing"));
+            }
+            let mut folders = Vec::with_capacity(count);
+            for _ in 0..count {
+                folders.push(r.string()?);
+            }
+            Frame::ListRuns {
+                root,
+                algorithm,
+                folders,
             }
         }
         86 => {

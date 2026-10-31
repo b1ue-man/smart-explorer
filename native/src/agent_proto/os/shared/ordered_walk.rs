@@ -32,6 +32,14 @@ pub(crate) struct Local<J> {
 }
 
 impl<J> Local<J> {
+    /// Folders found by a reader that walks no deeper (a listing of named
+    /// folders): whatever is pushed is dropped with it.
+    pub(crate) fn detached() -> Self {
+        Self {
+            pending: Vec::new(),
+        }
+    }
+
     /// A folder below an entry this thread already put into its output.
     pub(crate) fn push(&mut self, job: J) {
         self.pending.push(job);

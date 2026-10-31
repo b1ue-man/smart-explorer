@@ -8,8 +8,8 @@ use std::time::Duration;
 use super::ipc_client::UnavailableBackend;
 use crate::vfs::{
     self as vfs, BackendExtensions, ChangeNotice, ChangeSignalMode, ChangeSubscription,
-    HashWalkItem, HashWalkRequest, RecycleExpectation, RecycleOutcome, StageFinish, StageFinished,
-    TargetLimits, VfsListing, VfsMeta, VfsResult, VolumeIdentity,
+    HashWalkItem, HashWalkRequest, KeyedWalk, KeyedWalkItem, RecycleExpectation, RecycleOutcome,
+    StageFinish, StageFinished, TargetLimits, VfsListing, VfsMeta, VfsResult, VolumeIdentity,
 };
 
 impl BackendExtensions for UnavailableBackend {
@@ -127,6 +127,22 @@ impl BackendExtensions for UnavailableBackend {
         cancel: &AtomicBool,
     ) -> VfsResult<bool> {
         vfs::hash_walk(&*self.live_backend()?, root, request, tx, cancel)
+    }
+
+    /// The worker's keyed walk (`walk-keys-v1`), relayed by its connection.
+    fn hash_walk_keyed(
+        &self,
+        root: &str,
+        request: HashWalkRequest,
+        walk: KeyedWalk<'_>,
+        tx: crossbeam_channel::Sender<KeyedWalkItem>,
+        cancel: &AtomicBool,
+    ) -> VfsResult<bool> {
+        vfs::hash_walk_keyed(&*self.live_backend()?, root, request, walk, tx, cancel)
+    }
+
+    fn content_md5(&self, path: &str, cancel: &AtomicBool) -> VfsResult<Option<String>> {
+        vfs::content_md5(&*self.live_backend()?, path, cancel)
     }
 
     fn supports_recycle(&self, path: &str) -> VfsResult<bool> {

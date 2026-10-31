@@ -39,18 +39,18 @@ pub(crate) fn hash_file_cached(
     path: &str,
     cancel: &AtomicBool,
 ) -> io::Result<u64> {
-    let metadata = match std::fs::symlink_metadata(path) {
-        Ok(metadata) if backend.is_local() && metadata.is_file() => metadata,
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if backend.is_local() && metadata.is_file() => {}
         _ => return hash_file(backend, path, cancel),
-    };
+    }
     crate::agent_proto::hash_cache::configure_once(|| {
         (!cfg!(test)).then(crate::support_dirs::app_data_dir)
     });
     crate::agent_proto::hash_cache::digest(
-        &metadata,
+        crate::agent_proto::path_stamp(std::path::Path::new(path)),
         crate::agent_proto::digest::MD5,
         || md5_hex_file(backend, path, cancel),
-        || std::fs::symlink_metadata(path),
+        || crate::agent_proto::path_stamp(std::path::Path::new(path)),
     )
     .map(|hex| md5_hex_to_u64(&hex))
 }
