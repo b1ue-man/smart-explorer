@@ -81,6 +81,7 @@ mod tests {
             filter: None,
             file_policy: 0,
             file_update: false,
+            file_choice: None,
             folders: FolderConflictPolicy::new(FolderConflict::KeepBoth),
             moving: false,
             guards: Vec::new(),

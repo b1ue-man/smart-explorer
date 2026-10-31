@@ -84,7 +84,7 @@ impl SmbBackend {
     ) -> VfsResult<Box<dyn Write + Send>> {
         // An engine stage that fits one WRITE commits in one compound.
         if let Some(size) = expected.filter(|_| exclusive && commit == Commit::Unsynced) {
-            if let Some(writer) = super::compound_put::open(self, path, size)? {
+            if let Some(writer) = super::compound_put::open(self, path, size, None)? {
                 return Ok(writer);
             }
         }

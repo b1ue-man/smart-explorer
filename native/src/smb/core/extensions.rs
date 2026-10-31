@@ -49,6 +49,27 @@ impl BackendExtensions for SmbBackend {
             })
     }
 
+    /// Packets carry each file's time in their compounds (batch.rs).
+    fn batch_put_times(&self) -> bool {
+        true
+    }
+
+    /// An engine stage that fits one WRITE carries the source's time in its
+    /// commit compound (compound_put.rs); a larger one is streamed and gets
+    /// the time with `finish_stage`.
+    fn open_write_copy_stage_timed(
+        &self,
+        path: &str,
+        size: u64,
+        mtime_ms: i64,
+    ) -> VfsResult<Box<dyn std::io::Write + Send>> {
+        let time = stage_finish::filetime(mtime_ms);
+        if let Some(writer) = super::compound_put::open(self, path, size, time)? {
+            return Ok(writer);
+        }
+        self.open_write_copy_stage_unsynced(path, size)
+    }
+
     fn finish_stage(&self, stage: &str, finish: StageFinish) -> VfsResult<StageFinished> {
         let metadata = self.stat(stage)?;
         if metadata.is_dir || metadata.is_symlink || metadata.special {

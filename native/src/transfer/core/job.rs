@@ -159,6 +159,15 @@ pub struct TransferJob {
 }
 
 impl TransferJob {
+    /// Whether the job applies the file rule "neuere ersetzen ältere" to the
+    /// files of merged folders: the job asks for it (`folders.merge_update`)
+    /// or its file policy is the rule. Only then do the counts of the folder
+    /// preview (newer, equal, target newer, conflict) say what the job will
+    /// do; else same-named files follow the job's file policy.
+    pub fn applies_update_rule(&self) -> bool {
+        self.folders.merge_update || self.conflict == Conflict::Update
+    }
+
     pub fn kind(&self) -> TransferKind {
         match (&self.source, &self.target, self.mode) {
             (Endpoint::Local, Endpoint::Local, CopyMode::Move) => TransferKind::Move,

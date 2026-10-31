@@ -57,12 +57,41 @@ fn abgleich_task_rule_same_time_other_size_is_a_conflict() {
 }
 
 #[test]
-fn abgleich_task_rule_unknown_time_falls_back_to_the_size() {
-    assert_eq!(classify(stamp(7, 0), stamp(7, 123_000), 2_000), Case::Equal);
-    assert_eq!(classify(stamp(7, 123_000), stamp(7, 0), 2_000), Case::Equal);
+fn abgleich_task_rule_unknown_time_is_a_conflict_whatever_the_size() {
+    // Equal sizes do not prove equal contents without a time: nothing is
+    // skipped (a changed source of the same size must still arrive).
+    assert_eq!(
+        classify(stamp(7, 0), stamp(7, 123_000), 2_000),
+        Case::Conflict
+    );
+    assert_eq!(
+        classify(stamp(7, 123_000), stamp(7, 0), 2_000),
+        Case::Conflict
+    );
+    assert_eq!(classify(stamp(7, 0), stamp(7, 0), 2_000), Case::Conflict);
     assert_eq!(
         classify(stamp(7, 0), stamp(8, 123_000), 2_000),
         Case::Conflict
+    );
+}
+
+#[test]
+fn abgleich_task_replacing_holds_only_for_the_target_that_was_decided_against() {
+    let replacing = Replacing {
+        id: None,
+        stamp: stamp(10, 1_000_000),
+        window_ms: 2_000,
+    };
+    assert!(replacing.holds(stamp(10, 1_000_000)));
+    assert!(replacing.holds(stamp(10, 1_002_000)), "within the window");
+    assert!(
+        !replacing.holds(stamp(10, 1_002_001)),
+        "saved again meanwhile: newer than what the decision saw"
+    );
+    assert!(!replacing.holds(stamp(11, 1_000_000)), "another size");
+    assert!(
+        !replacing.holds(stamp(10, 0)),
+        "an unknown time proves nothing"
     );
 }
 

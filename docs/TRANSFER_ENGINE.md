@@ -500,7 +500,9 @@ Entscheidung `transfer/core/update_rule.rs:50`):
 | Ziel um mehr als das Fenster neuer (jede Größe) | Ziel bleibt, „Ziel neuer“ |
 | Zeit im Fenster, andere Größe | Konflikt: beide behalten (`Name (2)`) |
 | Ordner, Link, Sonderdatei oder mehrere Einträge unter dem Namen | beide behalten |
-| Zeit einer Seite unbekannt (0) | gleiche Größe: gleich; andere Größe: Konflikt |
+| Zeit einer Seite unbekannt (0) | Konflikt, beide behalten – auch bei gleicher Größe (Größe allein beweist keine Gleichheit; eine geänderte Quelle gleicher Größe muss ankommen oder daneben liegen) |
+| Ziel inzwischen anders als bei der Entscheidung (Größe oder Zeit außerhalb des Fensters, jetzt Ordner oder Link) | beide behalten, siehe „Ersetzen“ |
+| Name, den der Host beim Auflisten ausgelassen hat (nicht lesbar, nicht darstellbar) | beide behalten; die übrigen Dateien des Ordners laufen normal |
 
 Das **Fenster** ist die gröbere Zeitauflösung beider Seiten (`vfs::mtime_precision` je Seite: lokale
 Dateisystemprofile, SFTP/FTP/WebDAV nach Protokoll); weiß eine Seite ihre Auflösung nicht, zählt sie
@@ -518,43 +520,81 @@ und der Kopierdialog mit ausdrücklicher Wahl behalten ihre Regel.
 (`engine/update.rs:166`, aufgerufen im Worker vor der Paketbildung `worker.rs:52`, für Paketkandidaten
 `batch.rs:82` und für Einzeldateien nach der Belegprüfung `ops.rs:291`) und speichert das Ergebnis in
 der Datei (`FileWork::conflict`): „einfügen“ und „Konflikt“ laufen als `Rename`, „ersetzen“ als
-`Overwrite`, gleiche und neuere Ziele werden gezählt und nicht übertragen. Darunter sieht jeder Weg
+`Overwrite`, gleiche und neuere Ziele werden gezählt und nicht übertragen. Eine Datei, für die ein
+gespeicherter Auftrag einen Beleg schrieb, entscheidet zuerst der Beleg (`file_recovery::resume`); gibt er
+kein Ergebnis, entscheidet danach die Regel (`update::settle_recovered`, `ops.rs`), nicht die
+Auftragsregel „beide behalten“. Die neuen Elternordner der Paketkandidaten werden gesammelt angelegt
+(`update::ensure_parents` → `FolderRegister::ensure_many`, `batch.rs` `admit`), nicht je Kandidat. Darunter sieht jeder Weg
 nur die bekannten Regeln und behält deren Schutz: lokal und Download ersetzen über Stufe,
 `replace_file_atomic` und Haltepunkt wie das Überschreiben bisher (`local.rs:55`, `download.rs:316`);
 lokale Pakete nehmen nur neue Namen, eine Ersetzung geht allein (`batch.rs:82`).
 
-**Das Ziel wird gelesen:** lokal mit einem `stat`, entfernt mit einer Auflistung je Zielordner, im
-Auftrag gehalten, begrenzt auf 16 MiB Namen (`update.rs:301`); in einem Ordner, den der Auftrag selbst
-anlegte, gar nicht. Ein Ziel, das nicht gelesen werden kann, lässt die Datei allein laufen, wo der
+**Das Ziel wird gelesen:** lokal mit einem `stat`, entfernt mit einer **toleranten** Auflistung je
+Zielordner (`vfs::list_dir_tolerant`), im Auftrag gehalten, begrenzt auf 16 MiB Namen
+(`engine/update_listing.rs`); in einem Ordner, den der Auftrag selbst anlegte, gar nicht. Ein Name, den der
+Host als Auslassung meldet (Share-Host: nicht lesbar, nicht darstellbar), gilt als vorhanden und
+unbekannt: die Datei dieses Namens behält beide, die übrigen Dateien des Ordners laufen wie sonst. Ein Ziel, das nicht gelesen werden kann, lässt die Datei allein laufen, wo der
 gewöhnliche Weg den Fehler meldet und wiederholt.
 
 **Änderungszeit der Kopie:** Jede Datei, die die Engine kopiert oder ersetzt, trägt die Änderungszeit
-ihrer Quelle, gesetzt vor der Veröffentlichung auf Stufe oder Teildatei (kein Name zeigt je eine falsche
-Zeit; Rechteprüfung und No-Replace-Veröffentlichung bleiben). Windows lokal: `CopyFile2` (`copy/os/
+ihrer Quelle (Entscheidung des Koordinators 2026-10-31, `plan.md` C7: ohne sie ersetzte ein
+Zusammenführen zurück jede Kopie; Windows `CopyFile2` tat es schon), gesetzt vor der Veröffentlichung auf
+Stufe oder Teildatei (kein Name zeigt je eine falsche Zeit; Rechteprüfung und No-Replace-Veröffentlichung
+bleiben). Das kostet **keine Rundreise je Datei gegenüber v0.5.189**, wo das Protokoll die Zeit in einem
+ohnehin gesendeten Schritt tragen kann (Reihenfolge der Wege unten); nur wo es keinen solchen Schritt gibt,
+folgt eine eigene Anfrage (Grenzen). Windows lokal: `CopyFile2` (`copy/os/
 windows_time_rules.rs`, unverändert). Linux und Android lokal, lokale Pakete und Serverkopien: auf dem
 offenen Stufenhandle neben den Rechten (`copy/os/linux_os.rs:239`, `File::set_modified`; ein Dateisystem,
 das sie ablehnt, behält die Kopierzeit, kein Fehler). Download und Download-Pakete: auf der fertigen
 Teildatei vor dem Schließen (`engine/download.rs:109`, `:318`). Entfernte Ziele über Stufen (Upload,
-Remote–Remote, Serverkopie, Bereiche, Stufen der Remote–Remote-Pakete): `vfs::finish_stage` mit
-`StageFinish::mtime_ms` vor `publish::publish` (`engine/publish_time.rs:30`); WebDAV und Drive
-nehmen die Zeit schon beim Hochladen (`open_write_copy_stage_timed`, `publish_time.rs:22`). Was ein
-Peer vorher über die Stufe gemeldet hat, wird nach dem Setzen verworfen (die Belege lesen die Stufe
-dann selbst). Ersetzungen machen die Stufe dabei zusätzlich dauerhaft (`StageDurability::Now`);
-scheitert das, wird die Stufe verworfen und die Datei gemeldet.
+Remote–Remote, Serverkopie, Bereiche, Stufen der Remote–Remote-Pakete), in dieser Reihenfolge
+(`engine/publish_time.rs`):
+1. im Schreibschritt der Stufe, ohne Anfrage: WebDAV (`X-OC-Mtime`) und Drive (`modifiedTime`) beim
+   Hochladen (`open_write_copy_stage_timed`); SFTP als `FSETSTAT` auf dem offenen Handle, gepipelinet hinter
+   dem letzten WRITE und vor FSTAT und CLOSE (`sftp/core/pool_writer_stamp.rs`); SMB als SET_INFO im
+   Abschluss-Compound einer Stufe, die in ein WRITE passt (`smb/core/compound_put.rs`). Der FSTAT/das CLOSE
+   dahinter melden die Zeit schon als Stufenbeleg; der Beleg zeigt der Engine, dass die Stufe die Zeit trägt
+   (`written_with_time`), und bleibt gültig (Empfänger-Belege ohne eigene Anfrage);
+2. in Paketen im Paket selbst (`BatchPut::mtime_ms`): Share (`batch_put_mtime_v1`), Agent
+   (`batch-mtime-v1`), SFTP (`FSETSTAT` hinter den WRITEs, vor dem CLOSE jeder Datei,
+   `sftp/core/batch_put.rs`) und SMB (SET_INFO im Compound CREATE+WRITE+CLOSE, `smb/core/batch.rs`);
+3. sonst `vfs::finish_stage` mit `StageFinish::mtime_ms` vor `publish::publish` (eigene Anfrage[n]). Was ein
+   Peer vorher über die Stufe gemeldet hat, wird dann verworfen, wenn das Setzen die Zeit änderte (die
+   Belege lesen die Stufe selbst). Ersetzungen machen die Stufe dabei zusätzlich dauerhaft
+   (`StageDurability::Now`, deshalb immer dieser Weg); scheitert das, wird die Stufe verworfen und die Datei
+   gemeldet.
 
-**Ersetzen auf entfernten Zielen:** neu. Die Datei geht in eine dauerhafte Stufe
+**Ersetzen:** neu. Die Entscheidung „Quelle neuer“ merkt sich, was sie vom Ziel sah (`Replacing`:
+Größe, Zeit, Fenster, Objekt-ID des Anbieters). **Unmittelbar vor der Veröffentlichung, die das
+vorhandene Ziel ersetzt, wird das Ziel noch einmal gegen diesen Stand verglichen** (Größe gleich, Zeit
+im Fenster, noch eine reguläre Datei); weicht es ab – jemand hat es inzwischen neu gespeichert –, wird
+nicht ersetzt, sondern beides behalten. Entfernt: ein `stat` des Ziels in `still_decided` (`engine/publish_replace.rs`) vor
+`promote_staged_to_id` (auch für Ziele ohne Objekt-ID wie SFTP, SMB, FTP, WebDAV, Direct Share, SSH-Agent,
+deren Promotion allein `None == None` verglich); die Datei geht in eine dauerhafte Stufe
 (`open_write_copy_stage_sized`) und wird mit `promote_staged_to_id` an das gesehene Objekt gebunden
-veröffentlicht (`publish.rs:304`). Kann das Ziel das nicht (`Unsupported`), hat sich die Datei
-geändert (`InvalidData`) oder ist verschwunden (`NotFound`), bleibt beides: die Stufe wird unter
-`Name (2)` veröffentlicht, im Protokoll steht der Grund, gezählt als „doppelt behalten“, nicht als
-ersetzt (`publish.rs:423`, `Stats::replace_refused`). Namen oberster Ebene werden unter der Regel nicht
+veröffentlicht (`publish.rs`). Lokal: `copy::transfer_local_replacing` vergleicht das Ziel in
+`local_publish::publish` (und in `direct_move::try_move` bei Verschieben mit Ersetzen) unmittelbar vor
+dem Ersetzen; Download: `download::publish_local_known` vor `replace_file_atomic`. Kann das Ziel das nicht
+(`Unsupported`, auch ein nicht lesbares Ziel), hat sich die Datei geändert (`InvalidData`) oder ist
+verschwunden (`NotFound`), bleibt beides: die Stufe wird unter `Name (2)` veröffentlicht, im Protokoll
+steht der Grund, gezählt als „doppelt behalten“, nicht als ersetzt (`publish.rs`,
+`Stats::replace_refused`). Das Fenster zwischen diesem Vergleich und dem Umbenennen bleibt (ein Aufruf
+des Anbieters, nicht atomar, außer wo die Objekt-ID bindet: Drive, Tresor). Namen oberster Ebene werden unter der Regel nicht
 vorab nummeriert (`roots.rs:325`, `roots.rs:383`), damit ein belegter Name verglichen werden kann.
 
-**Vorschau „Zielordner entscheiden“** (`engine/selection_count.rs:103`): zählt neu, neuer, gleich,
+**Vorschau „Zielordner entscheiden“** (`engine/selection_count.rs`): zählt neu, neuer, gleich,
 Ziel neuer und Konflikt (`FolderConflictPreview::{new,newer,equal,target_newer,conflict}_files`;
-`colliding_files` bleibt die Summe der gleichnamigen). Das Ziel wird je Ordner einmal aufgelistet, nicht
-je Datei mit `stat`; die Ordner werden von so vielen Fäden gezählt, wie die langsamere Seite zulässt
-(`Backend::parallelism`); Meldungen kommen nur vom aufrufenden Faden.
+`colliding_files` bleibt die Summe der gleichnamigen). Das Ziel wird je Ordner einmal **tolerant**
+aufgelistet (`vfs::list_dir_tolerant`), nicht je Datei mit `stat`; ein ausgelassener Name zählt als
+Konflikt, die übrigen Dateien des Ordners werden gezählt; die Ordner werden von so vielen Fäden gezählt,
+wie die langsamere Seite zulässt (`Backend::parallelism`); Meldungen kommen nur vom aufrufenden Faden.
+Die fünf Zählwerte beschreiben die Regel und erscheinen nur, wenn der Auftrag sie anwendet
+(`TransferJob::applies_update_rule`: `merge_update` oder Dateiregel `Update`): Desktop
+(`app/core/folder_conflict_ui.rs`), Android (`fs.conflicts`/`fs.folderPreview`: Feld `rule`, Dialog
+`FileDialogs.kt`; die Vorschau bekommt dasselbe `mergeFiles: "update"` wie die Übertragung). Sonst
+zeigen beide „neue und gleichnamige Dateien“ wie vor der Regel; die Auftragsregel (überschreiben,
+beide behalten, überspringen) gilt dann weiter. Ohne bekannte Zeit einer Seite zählt eine gleichnamige
+Datei als Konflikt, nicht als gleich (dieselbe `classify` wie die Engine).
 
 **Meldungen nach dem Lauf:** `TransferProgress::{replaced, skipped_equal, kept_newer, kept_both}`
 (Standardwert 0 beim Lesen älterer Meldungen); Übertragungsfenster (`app/core/transfer_rows.rs:159`,
@@ -564,8 +604,12 @@ zählen als bearbeitet, damit der Fortschritt sein Ende erreicht.
 
 **Gespeicherte Aufträge und ältere Versionen:** `JobRecord::file_update` (`#[serde(default)]`) hält die
 Regel, `file_policy` bleibt dabei 0 – eine ältere Version öffnet den Auftrag als „beide behalten“ und
-ersetzt nie etwas (`job_record.rs:139`, `job_store.rs:70`). `merge_update` wird nur geschrieben, wenn
-es gesetzt ist. Zwischen App und Worker: Dateiregelcode 3 und die Fähigkeit `transfer-update-v1`
+ersetzt nie etwas. Dasselbe gilt für Aufträge mit `folders.merge_update`, die eine ältere Version nicht
+liest: `file_policy` ist dann **immer 0** und die Wahl der obersten Ebene (beide behalten, überschreiben,
+überspringen, Regel) steht im eigenen Feld `JobRecord::file_choice` (0–3, `#[serde(default)]`, nur mit
+`merge_update` geschrieben); die neue Version liest beide Formen (`job_record.rs` `file_rule`,
+`stored_conflict`). Eine ältere Version setzt einen solchen Auftrag also nie als „überschreiben“ oder
+„überspringen“ der zusammengeführten Ordner fort. `merge_update` wird nur geschrieben, wenn es gesetzt ist. Zwischen App und Worker: Dateiregelcode 3 und die Fähigkeit `transfer-update-v1`
 (`daemon/os/shared/transfer_job_wire.rs:26`); ein Worker ohne sie bekommt den Auftrag nicht, der
 Auftrag läuft dann im eigenen Prozess (`transfer_job_client.rs:155`).
 
@@ -577,9 +621,20 @@ Auftrag läuft dann im eigenen Prozess (`transfer_job_client.rs:155`).
   `share/core/server_batch_stage.rs`), der SSH-Agent mit `set_modified` (Etikett `batch-mtime-v1`,
   `BatchPut` mit Zeiten als Tag 81, `agent_proto/os/shared/batch_put.rs`), der Worker meldet das
   Etikett nur für einen Peer, der die Zeit setzt (`backend_server.rs`). Abfrage: `vfs::batch_put_times`.
-  Neue Dateien der Regel gehen dann wieder in Pakete und Ein-Datei-Pakete (`update.rs`
-  `packets_keep_time`, `upload.rs`); nur an Gegenstellen ohne die Fähigkeit gehen sie einzeln, und dort
-  behalten andere Paket-Uploads die Zeit der Gegenstelle wie zuvor. Eine Ersetzung geht immer allein.
+  **SFTP und SMB tragen die Zeit im Paket** (immer, Fähigkeit `batch_put_times`): SFTP als `FSETSTAT`
+  auf dem offenen Handle zwischen den WRITEs und dem CLOSE jeder Datei (`stage_written`, drei Anfragen in
+  dieser Reihenfolge gesendet, keine Rundreise mehr), SMB als SET_INFO im Compound
+  CREATE+WRITE(+SET_INFO)+CLOSE; passt eine SMB-Datei nicht in den ersten Block, geht SET_INFO+CLOSE in einem
+  Compound. Neue Dateien der Regel gehen damit wieder in Pakete und Ein-Datei-Pakete (`update.rs`
+  `packets_keep_time`, `upload.rs`); nur an **Gegenstellen ohne die Fähigkeit** (ältere Share-Hosts und
+  Agenten) gehen sie einzeln – das bleibt die Grenze –, und dort behalten andere Paket-Uploads die Zeit
+  der Gegenstelle wie zuvor. Eine Ersetzung geht immer allein.
+- **Wo das Protokoll die Zeit nur mit einer eigenen Anfrage setzen lässt**, folgt `finish_stage` nach dem
+  Schreiben (Rundreisen mehr je Datei gegenüber v0.5.189): Share-Host und SSH-Agent für Dateien, die nicht
+  in ein Paket gehen (`WriteNew` und der Stufenabschluss tragen keine Zeit; sie zu tragen verlangt eine
+  Erweiterung des Drahtformats und der Host-/Agentenseite – offen), FTP (`MFMT`), SMB-Stufen größer als ein
+  WRITE, SFTP ohne Pool-Kanal und Ersetzungen (dauerhafte Stufe). Der Stufenbeleg der Gegenstelle entfällt
+  dort, wenn das Setzen die Zeit änderte.
   Ein Ziel, das die Zeit nicht speichern kann, behält seine eigene (kein Fehler des Eintrags). Eine
   Drive-Datei in einem vom Auftrag angelegten Ordner hat weiter keinen Platz für eine Zeit.
 - Ein Ziel, das keine Zeit speichern kann (`finish_stage` meldet `mtime_applied: false`), behält

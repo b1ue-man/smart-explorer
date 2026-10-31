@@ -15,9 +15,11 @@ use super::queue::FileWork;
 use super::roots::RootPlan;
 use super::Engine;
 use crate::copy::{
-    transfer_local_fresh, transfer_local_observed, LocalFailure, LocalOutcome, LocalRequest,
+    transfer_local_fresh, transfer_local_observed, transfer_local_replacing, LocalFailure,
+    LocalOutcome, LocalRequest,
 };
 use crate::transfer::segments::SPLIT_FROM;
+use crate::transfer::update_rule::Replacing;
 use crate::types::Conflict;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -78,14 +80,33 @@ pub(super) fn copy_file(
     // apart, so the whole call is booked to the target.
     let observer = super::file_recovery::LocalObserver::new(engine, file);
     let fresh = parent_created && !engine.resume;
-    let result = meter.timed_target(|| run_transfer(&request, fresh, &mut progress, &observer));
+    // A replacement the file rule decided is checked against the target it
+    // saw right before it is published (`copy::transfer_local_replacing`).
+    let decided = file
+        .replacing
+        .as_ref()
+        .filter(|_| conflict == Conflict::Overwrite && !engine.resume);
+    let result =
+        meter.timed_target(|| run_transfer(&request, decided, fresh, &mut progress, &observer));
     extras.finish(&result);
     match result {
-        Ok(LocalOutcome::Completed { bytes, target }) => {
+        Ok(LocalOutcome::Completed {
+            bytes,
+            target: published,
+        }) => {
             // A rename moves the bytes without streaming them.
             meter.credit(bytes.saturating_sub(meter.moved()));
+            if decided.is_some() && published != target {
+                // The target was saved again after the decision: the copy
+                // was published beside it, nothing was replaced.
+                engine.stats.replace_refused();
+                engine.issues.note(
+                    &file.source,
+                    "Ersetzen nicht möglich (Ziel hat sich seit der Entscheidung geändert) – beide behalten",
+                );
+            }
             if parent_rel(&file.rel).is_none() {
-                if let Some(name) = target.file_name() {
+                if let Some(name) = published.file_name() {
                     engine
                         .folders
                         .record_alias(&file.rel, &name.to_string_lossy());
@@ -119,12 +140,16 @@ pub(super) fn copy_file(
 
 fn run_transfer(
     request: &LocalRequest<'_>,
+    decided: Option<&Replacing>,
     fresh: bool,
     progress: &mut dyn FnMut(u64),
     observer: &dyn crate::copy::PublicationObserver,
 ) -> Result<LocalOutcome, LocalFailure> {
     #[cfg(test)]
     extras_tests::record(request);
+    if let Some(decided) = decided {
+        return transfer_local_replacing(request, decided, progress, observer);
+    }
     if fresh {
         return transfer_local_fresh(request, progress, observer);
     }

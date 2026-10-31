@@ -158,14 +158,18 @@ impl SftpBackend {
 
     /// A copy stage on a pool channel reports what the server answered at
     /// its commit (stage_evidence.rs); on the main session it does not.
-    fn stage_writer(
+    /// `mtime`: Unix seconds the stage gets at its commit when a pool channel
+    /// writes it (pool_writer_stamp.rs); the main-session writer keeps the
+    /// time of the upload, and the engine then finishes the stage itself.
+    pub(super) fn stage_writer(
         &self,
         path: &str,
         size: u64,
         commit: Commit,
+        mtime: Option<u32>,
     ) -> VfsResult<Box<dyn Write + Send>> {
         if let Some(writer) = self
-            .open_pool_stage_writer(path, size, commit)
+            .open_pool_stage_writer(path, size, commit, mtime)
             .map_err(|error| self.target_error(path, error))?
         {
             return Ok(self.target_writer(path, Box::new(writer)));
@@ -330,7 +334,7 @@ impl Backend for SftpBackend {
         path: &str,
         size: u64,
     ) -> VfsResult<Box<dyn Write + Send>> {
-        self.stage_writer(path, size, Commit::Durable)
+        self.stage_writer(path, size, Commit::Durable, None)
     }
 
     /// The sized stage committed without `fsync@openssh.com`: all
@@ -340,7 +344,7 @@ impl Backend for SftpBackend {
         path: &str,
         size: u64,
     ) -> VfsResult<Box<dyn Write + Send>> {
-        self.stage_writer(path, size, Commit::Unsynced)
+        self.stage_writer(path, size, Commit::Unsynced, None)
     }
 
     /// Inside one server the server copies itself (`copy-data`,

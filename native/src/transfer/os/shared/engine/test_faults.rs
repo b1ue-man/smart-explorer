@@ -33,6 +33,13 @@ pub(super) struct Faults {
     /// failed with this kind.
     pub failed_after_publish: Mutex<Option<io::ErrorKind>>,
     pub before_first_entry: Mutex<Option<EntryHook>>,
+    /// Names the tolerant listing reports as omissions (not readable).
+    pub omit_names: Vec<String>,
+    /// Listings report no modification time (a backend that has none).
+    pub unknown_times: bool,
+    /// Runs with the path of the next private stage that is opened, before
+    /// the stage exists (a test saves the replaced file again meanwhile).
+    pub on_stage: Mutex<Option<EntryHook>>,
     /// The first item of the next download packet grows before it is read
     /// (its path is kept in `grown`).
     pub grow_first_item: AtomicBool,
@@ -98,6 +105,24 @@ pub(super) fn rewrite_same_length(path: &str) -> io::Result<()> {
 }
 
 impl Fake {
+    /// `list_dir_tolerant`: the folder with `Faults::omit_names` reported as
+    /// omissions instead of entries.
+    pub(super) fn tolerant_listing(&self, path: &str) -> VfsResult<crate::vfs::VfsListing> {
+        let mut listing = crate::vfs::VfsListing::default();
+        for entry in self.list_dir(path)? {
+            if self.faults.omit_names.contains(&entry.name) {
+                listing.omitted.push(crate::vfs::VfsOmission {
+                    rel: entry.name,
+                    reason: crate::vfs::OmissionReason::Unreadable,
+                    detail: "fixture: not readable".to_string(),
+                });
+            } else {
+                listing.entries.push(entry);
+            }
+        }
+        Ok(listing)
+    }
+
     pub(super) fn fake_put_batch(
         &self,
         entries: &[BatchPut],

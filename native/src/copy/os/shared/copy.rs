@@ -47,8 +47,9 @@ pub(crate) use publication::{
 };
 pub(crate) use recovery::{discard_transfer_stage, recover_transfer_quarantine};
 pub(crate) use safe_file::{
-    packet_start, stage_local_from, transfer_local, transfer_local_fresh, transfer_local_from,
-    transfer_local_observed, LocalOutcome, LocalRequest, PacketStage, PacketStaging,
+    packet_start, stage_local_from, target_still_decided, transfer_local, transfer_local_fresh,
+    transfer_local_from, transfer_local_observed, transfer_local_replacing, LocalOutcome,
+    LocalRequest, PacketStage, PacketStaging,
 };
 pub(crate) use server_copy::copy_to_new_file;
 pub(crate) use staging::LocalFailure;

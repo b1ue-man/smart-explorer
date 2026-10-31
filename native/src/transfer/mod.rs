@@ -52,7 +52,7 @@ mod hints;
 mod job;
 #[path = "core/job_record.rs"]
 mod job_record;
-pub(crate) use job_record::{JobRecord, StoredEndpoint, StoredFilter};
+pub(crate) use job_record::{file_rule, JobRecord, StoredEndpoint, StoredFilter};
 #[path = "os/shared/lane.rs"]
 mod lane;
 #[path = "core/limiter.rs"]

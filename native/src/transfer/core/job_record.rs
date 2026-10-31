@@ -132,11 +132,23 @@ pub struct JobRecord {
     pub filter: Option<StoredFilter>,
     /// 0 rename, 1 overwrite, 2 skip. The file rule "neuere ersetzen ältere"
     /// is stored as 0 with `file_update`, so a version that predates it
-    /// reopens such a job as "keep both" and never replaces anything.
+    /// reopens such a job as "keep both" and never replaces anything. A job
+    /// whose folders merge under the rule (`folders.merge_update`) stores 0
+    /// too and keeps the real choice of the top level in `file_choice`: a
+    /// version that predates the rule does not read `merge_update`, and with
+    /// the real 1 ("overwrite") or 2 ("skip") in `file_policy` it would
+    /// overwrite or skip every file of the merged folders, newer targets
+    /// included.
     pub file_policy: u8,
     /// `Conflict::Update`; false for every record written before the rule.
     #[serde(default)]
     pub file_update: bool,
+    /// With `folders.merge_update` only: the job's own file policy (0 keep
+    /// both, 1 overwrite, 2 skip, 3 newer replaces older; `file_rule`).
+    /// Absent in every record written before the rule and in every record
+    /// without `merge_update`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_choice: Option<u8>,
     pub folders: FolderConflictPolicy,
     pub moving: bool,
     pub guards: Vec<SourceGuard>,
@@ -147,7 +159,53 @@ pub struct JobRecord {
     pub file_journal: bool,
 }
 
+/// The three stored fields of a job's file policy: `file_policy`,
+/// `file_update` and `file_choice` (see `JobRecord`). Every record written by
+/// this version goes through here, so an older version always reads
+/// "keep both" from a job that uses the rule anywhere.
+pub fn file_rule(conflict: Conflict, merge_update: bool) -> (u8, bool, Option<u8>) {
+    if merge_update {
+        let choice = match conflict {
+            Conflict::Rename => 0,
+            Conflict::Overwrite => 1,
+            Conflict::Skip => 2,
+            Conflict::Update => 3,
+        };
+        return (0, false, Some(choice));
+    }
+    match conflict {
+        Conflict::Rename => (0, false, None),
+        Conflict::Overwrite => (1, false, None),
+        Conflict::Skip => (2, false, None),
+        Conflict::Update => (0, true, None),
+    }
+}
+
 impl JobRecord {
+    /// The file policy the record stores (the inverse of `file_rule`).
+    fn stored_conflict(&self) -> Result<Conflict, String> {
+        let unknown = || "Gespeicherte Dateikonfliktregel ist unbekannt".to_string();
+        if let Some(choice) = self.file_choice {
+            if self.file_policy != 0 || self.file_update || !self.folders.merge_update {
+                return Err(unknown());
+            }
+            return match choice {
+                0 => Ok(Conflict::Rename),
+                1 => Ok(Conflict::Overwrite),
+                2 => Ok(Conflict::Skip),
+                3 => Ok(Conflict::Update),
+                _ => Err(unknown()),
+            };
+        }
+        match (self.file_policy, self.file_update) {
+            (0, true) => Ok(Conflict::Update),
+            (0, false) => Ok(Conflict::Rename),
+            (1, false) => Ok(Conflict::Overwrite),
+            (2, false) => Ok(Conflict::Skip),
+            _ => Err(unknown()),
+        }
+    }
+
     pub fn bind(&self, source: Endpoint, target: Endpoint) -> Result<TransferJob, String> {
         if self.version != 1
             || StoredEndpoint::of(&source) != self.source
@@ -175,13 +233,7 @@ impl JobRecord {
                 .as_ref()
                 .map(StoredFilter::restore)
                 .transpose()?,
-            conflict: match (self.file_policy, self.file_update) {
-                (0, true) => Conflict::Update,
-                (0, false) => Conflict::Rename,
-                (1, false) => Conflict::Overwrite,
-                (2, false) => Conflict::Skip,
-                _ => return Err("Gespeicherte Dateikonfliktregel ist unbekannt".into()),
-            },
+            conflict: self.stored_conflict()?,
             folders: self.folders.clone(),
             mode: if self.moving {
                 CopyMode::Move

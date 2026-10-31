@@ -3,10 +3,18 @@
 //! (newer, equal, target newer, conflict; `update_rule`). It never mutates
 //! either side.
 //!
-//! The target is read once per folder with one listing, not with a `stat` per
-//! file, and the folders are counted in parallel by as many threads as the
-//! slower side takes (`Backend::parallelism`). Only the calling thread
-//! reports, at the engine's progress interval.
+//! The target is read once per folder with one tolerant listing
+//! (`vfs::list_dir_tolerant`), not with a `stat` per file, and the folders are
+//! counted in parallel by as many threads as the slower side takes
+//! (`Backend::parallelism`). A name the target cannot list is present but
+//! unknown: a source file of that name counts as a conflict (both are kept),
+//! and the other files of the folder are counted as usual. Only the calling
+//! thread reports, at the engine's progress interval.
+//!
+//! The five counts describe the file rule "neuere ersetzen ältere"; the
+//! surfaces show them only for a job that applies the rule
+//! (`TransferJob::applies_update_rule`), else the files count as new or
+//! same-named like before the rule.
 use super::super::lock;
 use crate::transfer::engine_names::{join_rel, name_problem};
 use crate::transfer::entries::{
@@ -15,7 +23,7 @@ use crate::transfer::entries::{
 use crate::transfer::update_rule::{classify, Case, Stamp};
 use crate::transfer::{Endpoint, FolderConflictPreview, TransferJob};
 use crate::vfs::{Backend, LocalBackend, VfsMeta};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::Duration;
@@ -83,20 +91,36 @@ enum Target {
     Listed {
         folded: bool,
         names: HashMap<String, Vec<VfsMeta>>,
+        /// Names the target listed as omissions (folded like `names`).
+        omitted: HashSet<String>,
     },
 }
 
 impl Target {
-    fn find(&self, name: &str) -> Option<&[VfsMeta]> {
-        let Self::Listed { folded, names } = self else {
-            return None;
-        };
-        let key = if *folded {
+    fn key(folded: bool, name: &str) -> String {
+        if folded {
             name.to_lowercase()
         } else {
             name.to_string()
+        }
+    }
+
+    fn find(&self, name: &str) -> Option<&[VfsMeta]> {
+        let Self::Listed { folded, names, .. } = self else {
+            return None;
         };
-        names.get(&key).map(Vec::as_slice)
+        names.get(&Self::key(*folded, name)).map(Vec::as_slice)
+    }
+
+    /// The target lists `name` as an entry it cannot describe.
+    fn omits(&self, name: &str) -> bool {
+        let Self::Listed {
+            folded, omitted, ..
+        } = self
+        else {
+            return false;
+        };
+        omitted.contains(&Self::key(*folded, name))
     }
 }
 
@@ -240,23 +264,31 @@ fn read_target(context: &Context<'_>, node: &Node) -> Target {
         return Target::Absent;
     }
     let dir = join_rel(context.target_dir, &node.relative);
-    match context.target.list_dir(&dir) {
-        Ok(entries) => {
+    match crate::vfs::list_dir_tolerant(context.target, &dir) {
+        Ok(listed) => {
             let folded = if context.target_local {
                 cfg!(windows)
             } else {
                 !context.target.case_sensitive_paths(&dir)
             };
-            let mut names: HashMap<String, Vec<VfsMeta>> = HashMap::with_capacity(entries.len());
-            for entry in entries {
-                let key = if folded {
-                    entry.name.to_lowercase()
-                } else {
-                    entry.name.clone()
-                };
-                names.entry(key).or_default().push(entry);
+            let omitted = listed
+                .omitted
+                .iter()
+                .map(|omission| Target::key(folded, &omission.rel))
+                .collect();
+            let mut names: HashMap<String, Vec<VfsMeta>> =
+                HashMap::with_capacity(listed.entries.len());
+            for entry in listed.entries {
+                names
+                    .entry(Target::key(folded, &entry.name))
+                    .or_default()
+                    .push(entry);
             }
-            Target::Listed { folded, names }
+            Target::Listed {
+                folded,
+                names,
+                omitted,
+            }
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Target::Absent,
         Err(_) => Target::Unreadable,
@@ -346,10 +378,14 @@ fn child(node: &Node, target: &Target, path: String, relative: String, entry: &V
     let target_absent = match target {
         Target::Absent => true,
         Target::Unreadable => false,
-        Target::Listed { .. } => !matches!(
-            target.find(&entry.name),
-            Some([existing]) if existing.is_dir && !existing.is_symlink
-        ),
+        // A name the target cannot list may be the folder: not known absent.
+        Target::Listed { .. } => {
+            !target.omits(&entry.name)
+                && !matches!(
+                    target.find(&entry.name),
+                    Some([existing]) if existing.is_dir && !existing.is_symlink
+                )
+        }
     };
     Node {
         path,
@@ -373,12 +409,18 @@ fn count_file(
         found.incomplete = true;
         return;
     }
-    let Some(existing) = target.find(&entry.name) else {
-        found.new += 1;
-        return;
+    let omitted = target.omits(&entry.name);
+    let existing: &[VfsMeta] = match target.find(&entry.name) {
+        Some(existing) => existing,
+        // Present but unknown: not new, not comparable; both are kept.
+        None if omitted => &[],
+        None => {
+            found.new += 1;
+            return;
+        }
     };
     let case = match existing {
-        [one] if !one.is_dir && !one.is_symlink && !one.special => classify(
+        [one] if !omitted && !one.is_dir && !one.is_symlink && !one.special => classify(
             Stamp {
                 size: entry.size,
                 mtime_ms: entry.mtime_ms,

@@ -68,6 +68,12 @@ Verbindungen, Share-Geräte und offene Ordner-Tabs an. Gleiche Ordnernamen auf
 verschiedenen Geräten bleiben getrennt; Setups aus Tabs behalten ihre Remote-Adresse.
 Bestehende Schreibrechte und schreibgeschützte Quellen gelten weiterhin.
 
+**Versteckte Dateien auf SSH-Agent-Seiten:** Auf einer direkten SSH-Agent-Verbindung ohne
+Hintergrunddienst gelten Namen mit führendem Punkt als versteckt, wie bei SFTP. Ein Sync-Setup
+mit `include_hidden = false` lässt solche Dateien und Ordner auf der Agent-Seite aus; bisher
+blieben sie dort erhalten. Über den Hintergrunddienst gilt diese Punkt-Regel nicht; die Wirkung
+von `include_hidden = false` auf Agent-Seiten ist dort nicht vollständig geprüft.
+
 Verknüpfungen und Junctions **innerhalb** eines Sync-Ordners werden mit einem
 sichtbaren Hinweis ausgelassen; die übrigen Dateien werden weiter synchronisiert.
 Der entsprechende Pfad auf der Gegenseite und sein bisheriger Sync-Stand bleiben
@@ -706,13 +712,16 @@ Plattenverschlüsselung. Beispiele: `se doctor --json`, `se connections list`,
 `se cp|get|put|mv ... --conflict update` (und im MCP `copy`/`move` mit `file_conflict: "update"`)
 fügt fehlende Dateien ein, ersetzt ältere durch neuere nach der Änderungszeit, überspringt gleiche
 (gleiche Größe, Zeit innerhalb der gröberen Zeitauflösung beider Seiten, unbekannt: 2 s), behält ein
-neueres Ziel und behält bei gleicher Zeit und anderer Größe beide. Ein vorhandener Zielordner wird
+neueres Ziel und behält bei gleicher Zeit und anderer Größe beide; kennt eine Seite die Zeit nicht,
+gilt auch gleiche Größe als Konflikt (beide behalten). Wurde das Ziel zwischen Entscheidung und
+Ersetzen neu gespeichert, wird es nicht ersetzt, sondern beides behalten. Ein vorhandener Zielordner wird
 zusammengeführt; die Option schließt `--force`, `--resume-job` und eine andere `--folder-conflict`
 als `merge` aus; `mv` arbeitet nur lokal. Die Zeile `se: update: …` auf stderr nennt die
 Entscheidungen. In der App gilt dieselbe Regel für die Dateien eines Ordners, für den beim Einfügen
 „Zusammenführen“ gewählt wird (Desktop und Android), und als Wahl im Kopierdialog und im
-Android-Namenskonflikt; die Vorschau „Zielordner entscheiden“ zählt neu, neuer, gleich, Ziel
-neuer und Konflikt. Beschreibung und Grenzen: `docs/TRANSFER_ENGINE.md`, Abschnitt „Dateiregel“.
+Android-Namenskonflikt (dort für jede Seitenkombination); die Vorschau „Zielordner entscheiden“
+zählt neu, neuer, gleich, Ziel neuer und Konflikt, sobald der Auftrag die Regel anwendet, sonst neue und
+gleichnamige Dateien. Beschreibung und Grenzen: `docs/TRANSFER_ENGINE.md`, Abschnitt „Dateiregel“.
 **Links (ab 0.5.177):** `se search` meldet Links (`l`) und FIFOs/Sockets/Geräte
 (`s`) über ihren Namen und betritt Links nie; `--dirs` nimmt Ordner zusätzlich
 auf. `se cp -r`/`se mv -r` überspringen Links und Sonderdateien innerhalb eines

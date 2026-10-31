@@ -7,7 +7,9 @@ use super::super::move_guard::{
 };
 use super::super::publication::{self, PublicationObserver};
 use super::super::staging::LocalFailure;
+use super::local_publish::still_decided;
 use super::{metadata_if_exists, next_name, LocalOutcome, LocalRequest};
+use crate::transfer::update_rule::Replacing;
 use crate::types::Conflict;
 use std::{
     io,
@@ -23,6 +25,7 @@ pub(super) fn try_move(
     races: &mut usize,
     quarantine: &mut Option<QuarantinedSource>,
     observer: Option<&dyn PublicationObserver>,
+    decided: Option<&Replacing>,
 ) -> Result<Option<LocalOutcome>, LocalFailure> {
     // Retain a hardlink where available. Filesystems such as FAT/exFAT can
     // still rename the held quarantine itself without copying its contents.
@@ -87,13 +90,18 @@ pub(super) fn try_move(
             restore_quarantine_if_any(quarantine.as_ref()).map_err(LocalFailure::Source)?;
             return Ok(Some(LocalOutcome::Canceled));
         }
+        // A replacement the file rule decided is bound to the target it saw:
+        // one look right before the rename may replace it. A target saved
+        // again meanwhile is kept and the file is numbered like "keep both".
+        let conflict = match (request.conflict, decided) {
+            (Conflict::Overwrite, Some(decided)) if !still_decided(target, decided) => {
+                Conflict::Rename
+            }
+            (conflict, _) => conflict,
+        };
         let rename = || {
             crate::copy::publication_proof::preflight_direct_move(&live, target).and_then(|()| {
-                platform::move_file(
-                    rename_source,
-                    target,
-                    request.conflict == Conflict::Overwrite,
-                )
+                platform::move_file(rename_source, target, conflict == Conflict::Overwrite)
             })
         };
         // Tests answer like another volume (EXDEV) without renaming.
@@ -164,7 +172,7 @@ pub(super) fn try_move(
                 }));
             }
             Err(error) if platform::is_cross_device(&error) => return Ok(None),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => match request.conflict {
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => match conflict {
                 Conflict::Skip => {
                     drop(live);
                     restore_quarantine_if_any(quarantine.as_ref()).map_err(LocalFailure::Source)?;

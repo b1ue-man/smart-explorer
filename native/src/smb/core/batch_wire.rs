@@ -9,6 +9,7 @@ use super::credit_retry::funded;
 use super::errors;
 use super::replace;
 use super::session::{Generation, SmbSession};
+use super::stage_finish;
 use super::url::{entry_path, rename_paths};
 use super::wire::{self, DeleteKind, FILE_NON_DIRECTORY_FILE, FILE_OPEN_REPARSE_POINT};
 use crate::vfs::{BatchGet, BatchPut, BatchPutOutcome, BatchSink, VfsResult};
@@ -174,6 +175,7 @@ impl SmbWire for TreeWire {
         stage: &'a str,
         data: &'a [u8],
         first_block: usize,
+        time: Option<u64>,
     ) -> WireFuture<'a, FileState> {
         Box::pin(async move {
             let target = entry_path(stage).map_err(Self::refused)?;
@@ -182,6 +184,11 @@ impl SmbWire for TreeWire {
             let first = &data[..first_block.min(data.len())];
             let whole = first.len() == data.len();
             let write = write_request(FileId::SENTINEL, 0, first);
+            // The source's time rides in this compound, right before the
+            // CLOSE (related to the CREATE's handle): no round trip of its own.
+            let stamp = time.filter(|_| whole).map(|ticks| {
+                wire::set_file_info(4, FileId::SENTINEL, stage_finish::basic_info(ticks))
+            });
             let close = wire::related_close();
             let tree_id = Some(self.tree.tree_id);
             let mut ops = vec![CompoundOp::new(Command::Create, &create, tree_id)];
@@ -192,6 +199,9 @@ impl SmbWire for TreeWire {
                     tree_id,
                     credit_charge: charge(first.len()),
                 });
+            }
+            if let Some(stamp) = &stamp {
+                ops.push(CompoundOp::new(Command::SetInfo, stamp, tree_id));
             }
             if whole {
                 ops.push(CompoundOp::new(Command::Close, &close, tree_id));
@@ -220,6 +230,10 @@ impl SmbWire for TreeWire {
                 }
                 count.map_err(|error| self.fail(error, "Schreiben", stage, true))?;
                 next = 2;
+            }
+            // A refused SET_INFO leaves the time of the upload: no failure.
+            if stamp.is_some() {
+                next += 1;
             }
             if whole && frames[next].header.status != NtStatus::SUCCESS {
                 wire::close_quietly(&self.conn, &self.tree, id).await;
@@ -260,8 +274,27 @@ impl SmbWire for TreeWire {
         })
     }
 
-    fn close<'a>(&'a self, file: &'a FileState) -> WireFuture<'a, ()> {
+    fn close<'a>(&'a self, file: &'a FileState, time: Option<u64>) -> WireFuture<'a, ()> {
         Box::pin(async move {
+            if let Some(ticks) = time {
+                // SET_INFO of the time and the CLOSE in one compound.
+                let set = wire::set_file_info(4, file.id, stage_finish::basic_info(ticks));
+                let close = wire::related_close();
+                let tree_id = Some(self.tree.tree_id);
+                let ops = [
+                    CompoundOp::new(Command::SetInfo, &set, tree_id),
+                    CompoundOp::new(Command::Close, &close, tree_id),
+                ];
+                let fail = |error: smb2::Error| self.fail(error, "Schließen", "SMB-Datei", true);
+                let (conn, chain) = (&self.conn, &ops[..]);
+                let sent = funded(conn, move || conn.execute_compound(chain)).await;
+                let frames = wire::frames(sent.map_err(fail)?, ops.len()).map_err(fail)?;
+                if frames[1].header.status != NtStatus::SUCCESS {
+                    let error = wire::protocol(frames[1].header.status, Command::Close);
+                    return Err(fail(error));
+                }
+                return Ok(());
+            }
             let mut conn = self.conn.clone();
             let closed = self.tree.close_handle(&mut conn, file.id).await;
             closed.map_err(|error| self.fail(error, "Schließen", "SMB-Datei", true))

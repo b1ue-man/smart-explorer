@@ -15,6 +15,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+#[path = "test_backend_counters.rs"]
+mod counters;
+pub(super) use counters::{Counters, Ranges, ReadFault};
 #[path = "test_backend_evidence.rs"]
 mod evidence;
 #[path = "test_backend_evidence_tests.rs"]
@@ -46,54 +49,6 @@ pub(super) fn write(path: &Path, bytes: &[u8]) {
     std::fs::write(path, bytes).expect("fixture file");
 }
 
-/// A read that fails: before any byte, or after `after` bytes.
-#[derive(Clone, Copy, Debug)]
-pub(super) struct ReadFault {
-    pub after: Option<usize>,
-    pub kind: io::ErrorKind,
-}
-
-#[derive(Default)]
-pub(super) struct Counters {
-    pub opens: AtomicUsize,
-    pub opens_at: AtomicUsize,
-    pub stages: AtomicUsize,
-    pub promotes: AtomicUsize,
-    pub server_copies: AtomicUsize,
-    pub put_batches: AtomicUsize,
-    pub get_batches: AtomicUsize,
-    pub active: AtomicUsize,
-    pub max_active: AtomicUsize,
-    pub reads_open: AtomicUsize,
-    pub writes_open: AtomicUsize,
-    pub overlap: AtomicBool,
-    pub opened: Mutex<Vec<String>>,
-    pub batched: Mutex<Vec<String>>,
-    /// Requests the engine asked of the fake per kind (`stat`,
-    /// `file_identity`, single folder creations, bulk folder creations).
-    pub stats: AtomicUsize,
-    pub identities: AtomicUsize,
-    pub dirs: AtomicUsize,
-    pub bulk_dirs: AtomicUsize,
-}
-
-/// Range reads of the fake: what it offers and what was asked of it.
-#[derive(Default)]
-pub(super) struct Ranges {
-    pub supported: bool,
-    /// Claims to read ranges but answers every request with `Ok(None)` (a
-    /// server that ignores `Range`).
-    pub ignored: bool,
-    /// The range starting here fails once, after that many bytes.
-    pub fail_once: Mutex<Option<(u64, usize, io::ErrorKind)>>,
-    /// Every answer ends this many bytes early (the source shrank).
-    pub short_by: u64,
-    /// `(offset, len)` of every request, in arrival order.
-    pub requests: Mutex<Vec<(u64, u64)>>,
-    /// Requests answered with `Ok(None)`.
-    pub refused: AtomicUsize,
-}
-
 /// A remote connection over a local folder.
 pub(super) struct Fake {
     pub(super) inner: LocalBackend,
@@ -121,6 +76,9 @@ pub(super) struct Fake {
     /// Stores the source's time on a stage like a peer or server that takes
     /// `finish_stage`; off, the time of the copy stays (older tests).
     pub carries_time: bool,
+    /// Replaces a file in one step like a provider with an atomic rename
+    /// (`promote_staged`); off, a replacement is refused (older tests).
+    pub replaces: bool,
     pub batch_ambiguous: bool,
     pub read_delay: Duration,
     pub extra: Option<Vec<u8>>,
@@ -150,6 +108,7 @@ impl Fake {
             bulk_dirs: false,
             single_put: false,
             carries_time: false,
+            replaces: false,
             batch_ambiguous: false,
             read_delay: Duration::ZERO,
             extra: None,
@@ -192,6 +151,9 @@ impl Fake {
     }
 
     fn with_md5(&self, dir: &str, mut meta: VfsMeta) -> VfsMeta {
+        if self.faults.unknown_times {
+            meta.mtime_ms = 0;
+        }
         let path = format!("{}/{}", dir.trim_end_matches('/'), meta.name);
         if let Some(md5) = self.md5.get(&path) {
             meta.content_md5 = Some(md5.clone());
@@ -294,6 +256,9 @@ impl Backend for Fake {
     }
     fn open_write_new(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
         self.counters.stages.fetch_add(1, Ordering::SeqCst);
+        if let Some(hook) = self.faults.on_stage.lock().expect("hook").take() {
+            hook(path);
+        }
         if let Some(refused) = self.faults.refuse_stage() {
             return Err(refused);
         }
@@ -329,6 +294,9 @@ impl Backend for Fake {
             ));
         }
         Ok(())
+    }
+    fn rename_overwrites(&self) -> bool {
+        self.replaces
     }
     fn server_copy_to_stage(
         &self,
@@ -461,6 +429,9 @@ impl crate::vfs::BackendExtensions for Fake {
     }
     fn single_put(&self) -> bool {
         self.single_put
+    }
+    fn list_dir_tolerant(&self, path: &str) -> VfsResult<crate::vfs::VfsListing> {
+        self.tolerant_listing(path)
     }
     fn finish_stage(
         &self,

@@ -12,6 +12,10 @@ use super::Engine;
 use crate::vfs::Backend;
 use std::io::{self, Write};
 
+#[path = "publish_replace.rs"]
+mod replace;
+use replace::{replacement_refused, still_decided};
+
 /// A 64-bit random name only collides with a foreign file created under that
 /// exact name; a few attempts are pure caution.
 const STAGE_ATTEMPTS: usize = 8;
@@ -107,8 +111,9 @@ pub(crate) fn open_stage(
 
 /// `open_stage`; `durable`: the stage replaces an existing file, so it is
 /// not the unsynced stage of a copy that keeps its source. `mtime_ms`: the
-/// source's time (0 = unknown) for providers that take it only while
-/// uploading (`publish_time::at_upload`).
+/// source's time (0 = unknown) for providers that take it with the upload
+/// (`publish_time::at_upload`: WebDAV, Drive and, for stages that are not
+/// replacements, SFTP).
 pub(crate) fn open_stage_for(
     target: &dyn Backend,
     destination: &str,
@@ -120,7 +125,7 @@ pub(crate) fn open_stage_for(
     for _ in 0..STAGE_ATTEMPTS {
         let stage = stage_name(destination);
         let opened = match size {
-            Some(size) if super::publish_time::at_upload(target, mtime_ms) => {
+            Some(size) if super::publish_time::at_upload(target, mtime_ms, durable) => {
                 crate::vfs::open_write_copy_stage_timed(target, &stage, size, mtime_ms)
             }
             Some(size) if durable => target.open_write_copy_stage_sized(&stage, size),
@@ -289,25 +294,32 @@ pub(crate) fn publish(
     path: String,
 ) -> Result<Outcome, OpError> {
     let top_level = parent_rel(&file.rel).is_none();
+    // What a peer reported about the stage when the write was committed.
+    let known = crate::vfs::take_stage_evidence(target, stage);
     // The stage gets the source's time before anything is recorded or
-    // published; evidence the peer gave about the stage is then out of date.
-    let timed = match super::publish_time::carry(engine, target, file, stage) {
+    // published, unless its writer stored it (`publish_time.rs`); evidence
+    // the peer gave about the stage is out of date when a request of its own
+    // changed the stage.
+    let timed = match super::publish_time::carry(engine, target, file, stage, known.as_ref()) {
         Ok(applied) => applied,
         Err(error) => {
             discard(engine, target, stage);
             return Err(error);
         }
     };
-    // The file rule "neuere ersetzen ältere" replaces an older target in one
-    // server-side step bound to the object it saw; a target that cannot, or
-    // that changed, keeps both below (`replacement_refused`).
+    // The file rule "neuere ersetzen ältere" replaces an older target only if
+    // it still is the file the decision saw: right before the replacement the
+    // target's size and time are compared with that stamp (`still_decided`),
+    // and the provider binds the replacement to the object id it saw
+    // (`promote_staged_to_id`). A target that changed meanwhile, or one that
+    // cannot be replaced like that, keeps both below (`replacement_refused`).
     let mut replacing = file.replacing.is_some() && !engine.resume;
     let mut destination = path;
     let mut names = next_numbered(base_name(&destination));
     // A peer with transfer evidence reported the stage when the write was
     // committed, and whether the file it is meant for existed then: the
     // receipt needs no request of its own (a numbered name is asked about).
-    let known = crate::vfs::take_stage_evidence(target, stage).filter(|_| !timed);
+    let known = known.filter(|_| !timed);
     let stage_known = known
         .as_ref()
         .map(|known| super::batch_put::host_evidence(known.stage.clone()));
@@ -334,9 +346,10 @@ pub(crate) fn publish(
             return Err(OpError::target(error));
         }
         let promoted = if replacing {
-            let id = file.replacing.as_ref().and_then(|id| id.as_deref());
-            target
-                .promote_staged_to_id(stage, &destination, id)
+            let decided = file.replacing.as_ref();
+            let id = decided.and_then(|decided| decided.id.as_deref());
+            still_decided(target, &destination, decided)
+                .and_then(|()| target.promote_staged_to_id(stage, &destination, id))
                 .map(|()| None)
         } else {
             crate::vfs::promote_copy_stage_evidence(target, stage, &destination)
@@ -416,15 +429,6 @@ pub(crate) fn publish(
             }
         }
     }
-}
-
-/// A replacement the target cannot do or that found the old file changed or
-/// gone: nothing was published, the stage is published beside the old file.
-fn replacement_refused(error: &io::Error) -> bool {
-    matches!(
-        error.kind(),
-        io::ErrorKind::Unsupported | io::ErrorKind::InvalidData | io::ErrorKind::NotFound
-    )
 }
 
 /// Resume (K8): an existing file of the same size counts as transferred,

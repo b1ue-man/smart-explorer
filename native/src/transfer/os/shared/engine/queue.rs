@@ -69,9 +69,11 @@ pub(crate) struct FileWork {
     /// the files conflict, `Overwrite` where a newer source replaces. `None`:
     /// the job's own policy applies.
     pub conflict: Option<crate::types::Conflict>,
-    /// The file replaces an existing target; the provider id of that target
-    /// when the listing gave one (duplicate-capable providers bind by it).
-    pub replacing: Option<Option<String>>,
+    /// The file replaces an existing target: what the rule saw of it (size,
+    /// time, and the provider id when the listing gave one; duplicate-capable
+    /// providers bind by it). The target is compared with it once more right
+    /// before it is replaced.
+    pub replacing: Option<crate::transfer::update_rule::Replacing>,
 }
 
 impl FileWork {

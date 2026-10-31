@@ -146,6 +146,30 @@ impl BackendExtensions for SftpBackend {
         })
     }
 
+    /// Packets give each file the time its entry names: an `FSETSTAT` on the
+    /// open handle behind the WRITEs, before the CLOSE (batch_put.rs).
+    fn batch_put_times(&self) -> bool {
+        true
+    }
+
+    /// The unsynced copy stage that also gets the source's time at its
+    /// commit, set on the open handle behind the last WRITE
+    /// (pool_writer_stamp.rs). Without a pool channel the main-session writer
+    /// keeps the time of the upload and the engine finishes the stage itself.
+    fn open_write_copy_stage_timed(
+        &self,
+        path: &str,
+        size: u64,
+        mtime_ms: i64,
+    ) -> VfsResult<Box<dyn Write + Send>> {
+        self.stage_writer(
+            path,
+            size,
+            super::io_adapters::Commit::Unsynced,
+            super::stage_finish::seconds(mtime_ms),
+        )
+    }
+
     /// Packets report the destinations before and the files after their
     /// publication (batch_put_evidence.rs, G3-03).
     fn transfer_evidence(&self, _path: &str) -> bool {

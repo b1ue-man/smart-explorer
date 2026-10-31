@@ -314,9 +314,24 @@ pub(super) fn publish_local_known(
 ) -> OpResult {
     let known = known.as_ref();
     let conflict = engine.conflict_of(file);
-    let overwrite = conflict == Conflict::Overwrite && !engine.resume;
+    let mut overwrite = conflict == Conflict::Overwrite && !engine.resume;
     part.carry_time(file.mtime_ms);
     part.close(overwrite)?;
+    // A replacement the file rule decided is bound to the target it saw: one
+    // look right before the part may replace it. A target saved again
+    // meanwhile is kept and the download is numbered like "keep both".
+    if overwrite {
+        if let Some(decided) = file.replacing.as_ref() {
+            if !crate::copy::target_still_decided(destination, decided) {
+                engine.stats.replace_refused();
+                engine.issues.note(
+                    &file.source,
+                    "Ersetzen nicht möglich (Ziel hat sich seit der Entscheidung geändert) – beide behalten",
+                );
+                overwrite = false;
+            }
+        }
+    }
     if overwrite {
         refuse_folder_or_link(destination)?;
         let staged = crate::copy::native_path_text(&part.path).map_err(OpError::target)?;

@@ -17,17 +17,21 @@
 //! A new file of the rule that goes to a remote target travels in a packet
 //! only where the target's packets carry each file's time
 //! (`vfs::batch_put_times`: Share `batch_put_mtime_v1`, agent
-//! `batch-mtime-v1`); otherwise it travels alone, so its stage gets the
-//! source's time before it is published (`publish_time.rs`). A copy with the
-//! time of the copy would read as newer than its own source. A replacement
-//! always travels alone (packets only publish new names).
+//! `batch-mtime-v1`, SFTP and SMB always); otherwise it travels alone, so its
+//! stage gets the source's time before it is published (`publish_time.rs`). A
+//! copy with the time of the copy would read as newer than its own source. A
+//! replacement always travels alone (packets only publish new names).
 //!
 //! The target is looked at once per file: a local target with one `stat`, a
-//! remote target with one listing per folder (kept while the job runs, within
-//! a byte budget), and not at all in a folder this job created.
+//! remote target with one tolerant listing per folder (`update_listing.rs`,
+//! kept while the job runs, within a byte budget), and not at all in a folder
+//! this job created. The decision to replace remembers what it saw
+//! (`Replacing`: size, time, provider id); the publication compares the
+//! target with it once more right before it replaces (`publish.rs`,
+//! `download.rs`, the local copy), so a target saved meanwhile keeps both.
+//! A time one side does not know decides nothing: both are kept.
 use super::super::engine_names::{base_name, parent_path, parent_rel};
-use super::super::flow::{classify_error, Flow};
-use super::super::flow_control::OpOutcome;
+use super::super::flow::Flow;
 use super::super::walk_listers::native;
 use super::ops::OpError;
 use super::queue::FileWork;
@@ -35,19 +39,16 @@ use super::roots::RootPlan;
 use super::stats::Decision;
 use super::view::{JobView, Side};
 use super::Engine;
-use crate::transfer::update_rule::{classify, window_ms, Case, Stamp};
+use crate::transfer::update_rule::{classify, window_ms, Case, Replacing, Stamp};
 use crate::transfer::{FolderConflict, RecoveryMode};
 use crate::types::Conflict;
-use crate::vfs::{Backend, LocalBackend, VfsMeta};
-use std::collections::{HashMap, VecDeque};
+use crate::vfs::LocalBackend;
 use std::io;
 use std::sync::{Arc, Mutex, OnceLock};
 
-/// Names of remote folders kept at once: the same 16 MiB of path text the
-/// work queue holds, so a job that merges a huge tree stays bounded.
-const LISTING_BYTES: usize = 16 * 1024 * 1024;
-/// Bookkeeping per listed entry beyond its name.
-const ENTRY_OVERHEAD: usize = 64;
+#[path = "update_listing.rs"]
+mod listings;
+use listings::{listing, Listings};
 
 /// What the rule did with one file.
 #[derive(Debug, PartialEq, Eq)]
@@ -60,26 +61,11 @@ pub(super) enum Settled {
 }
 
 /// What the target holds under a file's name.
-enum Found {
+pub(super) enum Found {
     Absent,
     /// A folder, link, special file or several entries of that name.
     Other,
     File(Stamp, Option<String>),
-}
-
-struct Listing {
-    case_sensitive: bool,
-    entries: HashMap<String, Vec<VfsMeta>>,
-}
-
-type Failure = (io::ErrorKind, String);
-type Slot = Arc<OnceLock<Result<Arc<Listing>, Failure>>>;
-
-#[derive(Default)]
-struct Listings {
-    slots: HashMap<String, Slot>,
-    order: VecDeque<(String, usize)>,
-    bytes: usize,
 }
 
 /// Per-job state of the rule.
@@ -138,7 +124,7 @@ impl Engine<'_> {
     }
 
     /// The flow a listing of the remote target takes its permit from.
-    fn target_flow(&self) -> &Arc<Flow> {
+    pub(super) fn target_flow(&self) -> &Arc<Flow> {
         match (self.view.source, self.view.target) {
             (Side::Remote(_), Side::Remote(_)) => {
                 self.op_flows.1.as_ref().unwrap_or(&self.op_flows.0)
@@ -167,14 +153,25 @@ pub(super) fn window_of(view: &JobView<'_>) -> u64 {
 /// `Err` is a failed look at the target: the file stays undecided and goes
 /// alone, where the ordinary path surfaces and retries the failure.
 pub(super) fn settle(engine: &Engine<'_>, file: &mut FileWork) -> Result<Settled, OpError> {
-    if file.conflict.is_some() || engine.resume || !engine.follows_update(file) {
-        return Ok(Settled::Go);
-    }
     // A stored job that wrote a receipt for this file decides it from the
-    // receipt first (`file_recovery::resume`).
+    // receipt first (`file_recovery::resume`); the rule decides it only when
+    // the receipt left it open (`settle_recovered`).
     if engine.view.recovery == RecoveryMode::Resume
         && super::file_recovery::has_receipt(engine, file)
     {
+        return Ok(Settled::Go);
+    }
+    settle_recovered(engine, file)
+}
+
+/// `settle` for a file whose receipt (if any) gave no result
+/// (`file_recovery::resume` answered `None`): the rule decides it instead of
+/// the job's policy keeping both.
+pub(super) fn settle_recovered(
+    engine: &Engine<'_>,
+    file: &mut FileWork,
+) -> Result<Settled, OpError> {
+    if file.conflict.is_some() || engine.resume || !engine.follows_update(file) {
         return Ok(Settled::Go);
     }
     let found = look(engine, file).map_err(OpError::target)?;
@@ -190,9 +187,14 @@ pub(super) fn settle(engine: &Engine<'_>, file: &mut FileWork) -> Result<Settled
                 size: file.size,
                 mtime_ms: file.mtime_ms,
             };
-            let case = classify(source, target, engine.update_window());
+            let window = engine.update_window();
+            let case = classify(source, target, window);
             if case == Case::SourceNewer {
-                file.replacing = Some(id);
+                file.replacing = Some(Replacing {
+                    id,
+                    stamp: target,
+                    window_ms: window,
+                });
             }
             case
         }
@@ -231,6 +233,22 @@ pub(super) fn packets_keep_time(engine: &Engine<'_>) -> bool {
     match engine.view.target {
         Side::Local => true,
         Side::Remote(target) => crate::vfs::batch_put_times(target),
+    }
+}
+
+/// The new folders of `candidates` that follow the rule, created in one
+/// request where the target creates folders in bulk (`ensure_many`) before
+/// each candidate's `settle` asks for its own parent one by one.
+pub(super) fn ensure_parents(engine: &Engine<'_>, candidates: &[FileWork]) {
+    let mut parents: Vec<&str> = candidates
+        .iter()
+        .filter(|file| file.conflict.is_none() && !engine.resume && engine.follows_update(file))
+        .filter_map(|file| parent_rel(&file.rel))
+        .collect();
+    parents.sort_unstable();
+    parents.dedup();
+    if !parents.is_empty() {
+        engine.folders.ensure_many(&parents, engine.stop_flag());
     }
 }
 
@@ -285,121 +303,9 @@ fn look_local(path: &str) -> io::Result<Found> {
     }
 }
 
-impl Listing {
-    fn find(&self, name: &str) -> Found {
-        let key = fold(name, self.case_sensitive);
-        match self.entries.get(&key).map(Vec::as_slice) {
-            None | Some([]) => Found::Absent,
-            Some([entry]) if !entry.is_dir && !entry.is_symlink && !entry.special => Found::File(
-                Stamp {
-                    size: entry.size,
-                    mtime_ms: entry.mtime_ms,
-                },
-                entry.id.clone(),
-            ),
-            Some(_) => Found::Other,
-        }
-    }
-}
-
-fn fold(name: &str, case_sensitive: bool) -> String {
-    if case_sensitive {
-        name.to_string()
-    } else {
-        name.to_lowercase()
-    }
-}
-
-/// The listing of the remote folder `dir`, read once while the job runs.
-fn listing(engine: &Engine<'_>, target: &dyn Backend, dir: &str) -> io::Result<Arc<Listing>> {
-    let slot = {
-        let mut listings = super::lock(&engine.update.listings);
-        listings
-            .slots
-            .entry(dir.to_string())
-            .or_insert_with(|| Arc::new(OnceLock::new()))
-            .clone()
-    };
-    let result = slot.get_or_init(|| {
-        let read = read_listing(engine, target, dir);
-        if let Ok(listing) = &read {
-            keep(engine, dir, listing);
-        }
-        read
-    });
-    match result {
-        Ok(listing) => Ok(listing.clone()),
-        Err((kind, message)) => {
-            // A failed listing is not kept: the next file asks again.
-            let mut listings = super::lock(&engine.update.listings);
-            if listings
-                .slots
-                .get(dir)
-                .is_some_and(|current| Arc::ptr_eq(current, &slot))
-            {
-                listings.slots.remove(dir);
-            }
-            Err(io::Error::new(*kind, message.clone()))
-        }
-    }
-}
-
-fn read_listing(
-    engine: &Engine<'_>,
-    target: &dyn Backend,
-    dir: &str,
-) -> Result<Arc<Listing>, Failure> {
-    let Some(permit) = engine.target_flow().acquire_meta(engine.stop_flag()) else {
-        return Err((
-            io::ErrorKind::Interrupted,
-            super::super::cancel::CANCELED_ERROR.to_string(),
-        ));
-    };
-    let listed = target.list_dir(dir);
-    permit.finish(match &listed {
-        Ok(_) => OpOutcome::Done,
-        Err(error) => classify_error(error),
-    });
-    let entries = match listed {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
-        Err(error) => {
-            return Err((error.kind(), format!("Zielordner „{dir}“ lesen: {error}")));
-        }
-    };
-    let case_sensitive = target.case_sensitive_paths(dir);
-    let mut by_name: HashMap<String, Vec<VfsMeta>> = HashMap::with_capacity(entries.len());
-    for entry in entries {
-        by_name
-            .entry(fold(&entry.name, case_sensitive))
-            .or_default()
-            .push(entry);
-    }
-    Ok(Arc::new(Listing {
-        case_sensitive,
-        entries: by_name,
-    }))
-}
-
-/// Accounts a new listing and drops the oldest ones beyond the budget.
-fn keep(engine: &Engine<'_>, dir: &str, listing: &Listing) {
-    let bytes: usize = listing
-        .entries
-        .keys()
-        .map(|name| name.len() + ENTRY_OVERHEAD)
-        .sum();
-    let mut listings = super::lock(&engine.update.listings);
-    listings.order.push_back((dir.to_string(), bytes));
-    listings.bytes += bytes;
-    while listings.bytes > LISTING_BYTES && listings.order.len() > 1 {
-        let Some((oldest, size)) = listings.order.pop_front() else {
-            break;
-        };
-        listings.slots.remove(&oldest);
-        listings.bytes = listings.bytes.saturating_sub(size);
-    }
-}
-
+#[cfg(test)]
+#[path = "abgleich_task_replace_tests.rs"]
+mod replace_tests;
 #[cfg(test)]
 #[path = "update_tests.rs"]
 mod tests;

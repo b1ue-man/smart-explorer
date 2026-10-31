@@ -9,6 +9,7 @@
 //! name before the packet's one intent record (`packet_start`), so a member
 //! whose requested name is free is covered by that record and one that must
 //! be numbered gets its own intent when it publishes.
+use crate::transfer::update_rule::{Replacing, Stamp};
 use crate::types::Conflict;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -37,6 +38,31 @@ pub(super) struct Publication<'r> {
     pub cancel: &'r AtomicBool,
     /// The source as the job named it (the quarantine's original name).
     pub original: &'r Path,
+    /// A replacement the file rule decided: what it saw of the target. The
+    /// target is compared with it right before the stage replaces it; a
+    /// target that changed meanwhile is kept and the copy is numbered.
+    pub decided: Option<&'r Replacing>,
+}
+
+/// Whether the file at `target` still is what the rule decided to replace
+/// (a regular file of the stamp's size and time); a missing target is no
+/// replacement but a plain no-replace publication.
+pub(crate) fn still_decided(target: &Path, decided: &Replacing) -> bool {
+    match metadata_if_exists(target) {
+        Ok(None) => true,
+        Ok(Some(now)) => {
+            now.is_file()
+                && !crate::local_access::metadata_is_link_like(target, &now)
+                && decided.holds(Stamp {
+                    size: now.len(),
+                    mtime_ms: now
+                        .modified()
+                        .map(crate::local_access::system_time_ms)
+                        .unwrap_or(0),
+                })
+        }
+        Err(_) => false,
+    }
 }
 
 /// Publishes `publication`; `quarantine` is a move's secured source, given
@@ -51,10 +77,11 @@ pub(super) fn publish(
         staged,
         requested,
         mut target,
-        conflict,
+        mut conflict,
         durable,
         cancel,
         original,
+        decided,
     } = publication;
     if cancel.load(Ordering::Acquire) {
         staged.discard().map_err(LocalFailure::Publish)?;
@@ -93,6 +120,16 @@ pub(super) fn publish(
         }
     }
 
+    // A replacement the file rule decided is bound to the target it saw: one
+    // look right before the stage may replace it. A target that was saved
+    // again meanwhile is kept, and the copy is numbered like "keep both".
+    if conflict == Conflict::Overwrite {
+        if let Some(decided) = decided {
+            if !still_decided(&target, decided) {
+                conflict = Conflict::Rename;
+            }
+        }
+    }
     loop {
         if let Err(error) = publication::before(observer, &staged.temp, &target, &staged.file) {
             publication::preparation_failed(

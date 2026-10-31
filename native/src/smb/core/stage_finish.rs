@@ -16,6 +16,14 @@ pub(super) fn filetime(ms: i64) -> Option<u64> {
     (ticks > 0 && ticks <= i128::from(i64::MAX)).then(|| ticks as u64)
 }
 
+/// FileBasicInformation that changes LastWriteTime only (every other field
+/// zero = unchanged), as a related SET_INFO of a packet compound sends it.
+pub(super) fn basic_info(ticks: u64) -> Vec<u8> {
+    let mut bytes = vec![0u8; 40];
+    bytes[16..24].copy_from_slice(&ticks.to_le_bytes());
+    bytes
+}
+
 pub(super) async fn set_mtime(
     conn: &Connection,
     tree: &Tree,

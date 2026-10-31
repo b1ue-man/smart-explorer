@@ -131,12 +131,19 @@ pub(crate) fn conflicts(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     let job = super::transfer::preview_job(rt, args)?;
     let stop = std::sync::atomic::AtomicBool::new(false);
     let folders = crate::transfer::folder_conflicts(&job, &stop)?;
-    Ok(json!({ "names": names, "choosable": all_local, "folders": folder_rows(args, &folders)? }))
+    let rule = job.applies_update_rule();
+    Ok(
+        json!({ "names": names, "choosable": all_local, "folders": folder_rows(args, &folders, rule)? }),
+    )
 }
 
+/// `rule`: the previewed job applies the file rule "neuere ersetzen ältere"
+/// to merged folders (`TransferJob::applies_update_rule`); only then do the
+/// four counts of newer, equal, target newer and conflict say what it will do.
 fn folder_rows(
     args: &Value,
     folders: &[crate::transfer::FolderConflictPreview],
+    rule: bool,
 ) -> Result<Vec<Value>, ApiError> {
     let sources = nonempty_list(args, "sources")?;
     folders.iter().map(|folder| {
@@ -145,7 +152,7 @@ fn folder_rows(
             (loc.path == folder.source).then_some(value.clone())
         }).ok_or_else(|| ApiError::invalid("Vorschauquelle gehört nicht zur Auswahl"))?;
         Ok(json!({ "source": source, "relative": folder.relative, "keepBoth": folder.keep_both, "keepBothSupported": folder.keep_both_supported, "existing": folder.existing,
-            "newFiles": folder.new_files, "collidingFiles": folder.colliding_files,
+            "rule": rule, "newFiles": folder.new_files, "collidingFiles": folder.colliding_files,
             "newerFiles": folder.newer_files, "equalFiles": folder.equal_files,
             "targetNewerFiles": folder.target_newer_files, "conflictFiles": folder.conflict_files,
             "samples": folder.samples, "omitted": folder.omitted, "omittedPaths": folder.omitted_paths, "note": folder.note, "complete": folder.complete, "counted": folder.counted }))
@@ -155,6 +162,7 @@ fn folder_rows(
 /// A cancellable background count; the first conflict check remains fast.
 pub(crate) fn folder_preview(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     let job = super::transfer::preview_job(rt, args)?;
+    let rule = job.applies_update_rule();
     let args = args.clone();
     let id = rt.spawn_task(
         "folder-preview",
@@ -172,19 +180,27 @@ pub(crate) fn folder_preview(rt: &Runtime, args: &Value) -> Result<Value, ApiErr
                     return Err(ApiError::internal(error));
                 }
                 if state.ready && state.folders.iter().all(|folder| folder.counted) {
-                    return Ok(json!({ "folders": folder_rows(&args, &state.folders)? }));
+                    return Ok(json!({ "folders": folder_rows(&args, &state.folders, rule)? }));
                 }
                 let total = |count: fn(&crate::transfer::FolderConflictPreview) -> u64| -> u64 {
                     state.folders.iter().map(count).sum()
                 };
-                ctx.message(&format!(
-                    "Bisher {} neu, {} neuer, {} gleich, {} Ziel neuer, {} Konflikt",
-                    total(|folder| folder.new_files),
-                    total(|folder| folder.newer_files),
-                    total(|folder| folder.equal_files),
-                    total(|folder| folder.target_newer_files),
-                    total(|folder| folder.conflict_files),
-                ));
+                ctx.message(&if rule {
+                    format!(
+                        "Bisher {} neu, {} neuer, {} gleich, {} Ziel neuer, {} Konflikt",
+                        total(|folder| folder.new_files),
+                        total(|folder| folder.newer_files),
+                        total(|folder| folder.equal_files),
+                        total(|folder| folder.target_newer_files),
+                        total(|folder| folder.conflict_files),
+                    )
+                } else {
+                    format!(
+                        "Bisher {} neu, {} gleichnamig",
+                        total(|folder| folder.new_files),
+                        total(|folder| folder.colliding_files),
+                    )
+                });
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
         },
