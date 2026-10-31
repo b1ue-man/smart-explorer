@@ -40,6 +40,11 @@ fn main() {
                 );
                 std::process::exit(1);
             }
+            // The confinement allows the root only: a cache folder outside it
+            // cannot be written (or read), so the digests stay in memory.
+            if !support_dirs::cache_is_inside(std::path::Path::new(&root)) {
+                agent_proto::hash_cache::configure(None);
+            }
             serve();
         }
         "--serve" | "" => serve(),

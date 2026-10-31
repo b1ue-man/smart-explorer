@@ -297,8 +297,15 @@ pub(crate) mod folder_reservation;
 /// The status of the open file the digest cache keys on (`hash_cache.rs`):
 /// volume serial, 128-bit file ID (`FileIdInfo`), size, last write and
 /// change time (`FileBasicInfo`, `FILE_BASIC_INFO.ChangeTime`) in Unix
-/// nanoseconds. Every write moves the change time, and no call sets it. A
-/// volume that is not NTFS or ReFS has none (`file_ids.rs`).
+/// nanoseconds. Every write moves the change time, as does a rename or an
+/// attribute change. A program that holds the file with `FILE_WRITE_ATTRIBUTES`
+/// can set it, though: `FILE_BASIC_INFO` is also the input of
+/// `SetFileInformationByHandle(FileBasicInfo)`, which takes a `ChangeTime`
+/// (assumption: NTFS keeps the value given). So the change time shows every
+/// ordinary change and proves nothing against a program that sets it back on
+/// purpose; the same is true of the other stamps of every file system. A
+/// volume that is not NTFS or ReFS, and a network volume, has no stamp
+/// (`file_ids.rs`).
 pub(crate) fn file_stamp(file: &std::fs::File) -> Option<[i128; 5]> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{

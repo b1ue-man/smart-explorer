@@ -1055,24 +1055,60 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   FUSE, SMB/CIFS, 9p, vboxsf, ISO 9660 and UDF do not (the Linux FAT driver
   invents inode numbers when it reads a directory, so after a remount another
   file can carry a stored number; `os/linux_os/file_ids.rs`); Windows only
-  NTFS and ReFS (`GetVolumeInformationByHandleW`, `os/windows/file_ids.rs`),
-  whose stamp comes from `GetFileInformationByHandleEx` (`FileIdInfo`: volume
-  serial and 128-bit file ID, `FileBasicInfo`: `LastWriteTime`, `ChangeTime`).
-  `path_stamp` has none for a link or a non-regular file. The folder is
-  `support_dirs::app_data_dir()` (the unconfigured default too, so no app
-  walk can land in the agent's folder); the standalone `se-agent` supplies
-  its own `support_dirs` (`se-agent/src/support_dirs.rs`: `$XDG_CACHE_HOME/
-  se-agent` or `~/.cache/se-agent`; a confined `--serve-root` agent may not
-  write it, which only costs the reuse); tests never write it unless a test
-  configures a folder. The checksum compare mode reads fresh on a local side
+  local NTFS and ReFS (`GetVolumeInformationByHandleW`, and the volume of the
+  handle must not be a network volume: `NtQueryVolumeInformationFile` with
+  `FileFsDeviceInformation`, `FILE_REMOTE_DEVICE` 0x10 or `FILE_WEBDAV_FS`
+  0x2000 in `Characteristics`; Samba names its exports "NTFS" by default, so
+  the name over SMB proves nothing; `os/windows/file_ids.rs`), whose stamp
+  comes from `GetFileInformationByHandleEx` (`FileIdInfo`: volume serial and
+  128-bit file ID, `FileBasicInfo`: `LastWriteTime`, `ChangeTime`).
+  `ChangeTime` moves with every write, rename and attribute change, but
+  `FILE_BASIC_INFO` is also the input of `SetFileInformationByHandle`, so a
+  program with `FILE_WRITE_ATTRIBUTES` can set it back (assumption: NTFS keeps
+  the value given); the stamp shows every ordinary change, not a deliberate
+  reset. `path_stamp` has none for a link or a non-regular file. The folder is
+  `support_dirs::app_data_dir()` (the unconfigured default too); the
+  standalone `se-agent` supplies its own `support_dirs`
+  (`se-agent/src/support_dirs.rs`: `$XDG_CACHE_HOME/se-agent` or
+  `~/.cache/se-agent`); tests never write it unless a test configures a
+  folder. The folder that holds the cache file is a protected omission of the
+  agent's own walks (`walk_kept_out.rs`, `hash_cache::is_cache_folder`: a row
+  plus an omission with `omission::UNREADABLE`, content not walked), because
+  the file changes at the end of every walk and its absence on the other side
+  must never read as a deletion (the home folder of a server synced over SSH
+  with hidden files contains `~/.cache/se-agent`). A `--serve-root` agent
+  (Landlock) whose cache folder lies outside the root keeps its digests in
+  memory only (`main.rs` calls `hash_cache::configure(None)` after the
+  confinement); any process that is refused twice in a row with
+  `PermissionDenied` stops writing and encoding for good
+  (`CONFIRMED_DENIALS`; a `clear` that wrote the folder ends the stop). The checksum compare mode reads fresh on a local side
   (`digest_fresh`) and stores what it read; a remote host answers from its
   cache while the stamp is unchanged (what no write keeps; silent bit rot
   without a status change is not seen there until `se doctor
-  --clear-hash-cache`). Writes: digests are collected and written together,
-  built under the lock and written outside it (`flush` at most every 30 s,
-  `flush_now` at the end of a walk, connection or sync). One file read per
-  run: `RunDigests` (single flight by path, size, time) between the key phase
-  and the snapshot walk of a local side.
+  --clear-hash-cache`). Memory: at most `MAX_RESIDENT` (`MAX_ENTRIES` 500 000
+  plus `TRIM_SLACK`, one sixteenth) digests at any moment, also in the middle
+  of a walk that writes only at its end; above that the least recently used
+  (`used` moves on every hit and store) leave, down to `MAX_ENTRIES`; the
+  slack spreads the pass over the entries (a trim) over 31 250 additions. File
+  (format `SEHC\x03`): header with the generation, then blocks (tag, record
+  count, payload length, FNV-1a checksum; at most 4096 records per block). A
+  write appends the digests added since the last write as new blocks under the
+  file lock (`file::append_if_generation`: the generation on disk must still
+  be the one the process loaded, whatever follows the last whole block is cut
+  off first); the whole file is rewritten from memory (atomic replace) only
+  for the first write, after a damaged block, and when appending would take
+  it above `MAX_BLOCKS` or `MAX_RESIDENT` records. A reader takes whole blocks
+  with a fitting checksum and stops at the first one that is not, so a write
+  that broke off leaves no half state; hits change the order of use in memory
+  only. A record is 130 bytes (MD5) or 162 bytes (SHA-256) in the file. Writes
+  are collected and written together, built under the cache's lock and written
+  outside it (`flush` at most every 30 s, `flush_now` at the end of a walk,
+  connection or sync). One file read per run: `RunDigests` (single flight by
+  path, size, time) between the key phase and the snapshot walk of a local
+  side. The summary of the clear names the account ("Prüfsummen-Cache dieses
+  Kontos", "Hintergrunddienst dieses Kontos"): a worker under another account
+  keeps its own digests in its own app data folder and is neither reached nor
+  claimed.
 - **`se-agent` and `KeyTally`:** the standalone agent has no serde and no
   `apptrash`; `KeyTally` and `name_is_unusual` live in
   `agent_proto/core/key_tally.rs` (std only, trash name as a constant that

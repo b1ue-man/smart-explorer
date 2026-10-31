@@ -146,7 +146,7 @@ impl App {
         ui.label("Gespeicherte Dateiprüfsummen des Abgleichs. Nach dem Leeren liest der nächste Abgleich die Dateien neu.");
         if ui
             .button("Prüfsummen-Cache leeren")
-            .on_hover_text("Leert den Cache dieser App und des Hintergrunddienstes. Ein Dienst, der nicht erreichbar ist, wird genannt.")
+            .on_hover_text("Leert den Cache dieser App und des Hintergrunddienstes dieses Kontos. Ein Dienst, der nicht erreichbar ist, wird genannt.")
             .clicked()
         {
             let report = crate::daemon::clear_hash_cache();

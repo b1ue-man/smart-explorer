@@ -26,7 +26,9 @@ pub enum ClearStep {
     Cleared,
     /// The worker runs in this process (Android): this process's clear covers it.
     SameProcess,
-    /// No worker runs, so no digest is held in memory elsewhere.
+    /// No worker of this account runs (none answers on the IPC address of
+    /// this account's app data folder). A worker under another account has
+    /// its own app data folder and is neither reached nor named by this.
     NotRunning,
     /// The process could not be asked; the text is the reason.
     NotReached(String),
@@ -35,7 +37,7 @@ pub enum ClearStep {
 }
 
 /// The result of `clear_hash_cache`: this process (`app`) and the background
-/// worker of the app data folder (`worker`).
+/// worker of this account's app data folder (`worker`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HashCacheClearReport {
     pub app: ClearStep,
@@ -72,12 +74,17 @@ impl ClearStep {
 }
 
 impl HashCacheClearReport {
-    /// True when every process that holds digests was cleared (or runs no worker).
+    /// True when this process and the worker of this account were cleared (or
+    /// no such worker runs). It says nothing about a worker of another
+    /// account, which keeps its own digests in its own app data folder.
     pub fn complete(&self) -> bool {
         self.app.cleared() && self.worker.cleared()
     }
 
-    /// One sentence for users (German): what was cleared and what was not.
+    /// One sentence for users (German): what was cleared and what was not,
+    /// always for this account: the sentence names "dieses Kontos" for the
+    /// cache and for the background service, so it claims nothing about a
+    /// service under another account.
     pub fn summary(&self) -> String {
         let outcome = if self.complete() {
             "geleert"
@@ -85,7 +92,7 @@ impl HashCacheClearReport {
             "nicht vollständig geleert"
         };
         format!(
-            "Prüfsummen-Cache {outcome}: diese App {}; Hintergrunddienst {}",
+            "Prüfsummen-Cache dieses Kontos {outcome}: diese App {}; Hintergrunddienst dieses Kontos {}",
             self.app.text(),
             self.worker.text()
         )
@@ -107,10 +114,11 @@ impl HashCacheClearReport {
     }
 }
 
-/// Clears the device's file digests: this process first, then the background
-/// worker of the app data folder. A worker that runs under another account has
-/// its own app data folder, whose IPC address this app cannot read: this clear
-/// neither reaches nor names it.
+/// Clears the file digests of this account: this process first, then the
+/// background worker of the app data folder. A worker that runs under another
+/// account has its own app data folder, whose IPC address this app cannot
+/// read: this clear neither reaches nor claims it (`summary` says "dieses
+/// Kontos").
 pub fn clear_hash_cache() -> HashCacheClearReport {
     let app = match clear_folder(&crate::support_dirs::app_data_dir()) {
         Ok(()) => ClearStep::Cleared,

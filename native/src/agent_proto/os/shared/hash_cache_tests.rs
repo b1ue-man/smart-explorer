@@ -329,6 +329,12 @@ fn abgleich_task_hash_cache_a_file_of_another_format_names_no_generation() {
     std::fs::write(folder.path().join(FILE_NAME), old).unwrap();
     assert_eq!(file::generation_on_disk(folder.path()), file::NO_GENERATION);
     assert!(file::generation_in(b"SEHC\x01").is_none());
+    // The format with a generation but without blocks (digests in a row):
+    // a reader of the block format must not take its records for blocks.
+    let mut unframed = b"SEHC\x02".to_vec();
+    unframed.extend_from_slice(&[7u8; 16]);
+    unframed.extend_from_slice(&[0u8; 64]);
+    assert!(file::generation_in(&unframed).is_none());
 }
 
 #[test]

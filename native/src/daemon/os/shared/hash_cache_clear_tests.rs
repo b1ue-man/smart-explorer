@@ -19,7 +19,7 @@ fn abgleich_task_clear_is_complete_only_when_no_reached_process_failed() {
     assert!(!unreached.complete());
     assert!(unreached
         .summary()
-        .contains("Hintergrunddienst nicht erreichbar: Verbindung abgelehnt"));
+        .contains("Hintergrunddienst dieses Kontos nicht erreichbar: Verbindung abgelehnt"));
     let failed = report(
         ClearStep::Failed("Schreibfehler".into()),
         ClearStep::Cleared,
@@ -30,7 +30,35 @@ fn abgleich_task_clear_is_complete_only_when_no_reached_process_failed() {
         .contains("diese App nicht geleert: Schreibfehler"));
     assert!(failed
         .summary()
-        .starts_with("Prüfsummen-Cache nicht vollständig geleert"));
+        .starts_with("Prüfsummen-Cache dieses Kontos nicht vollständig geleert"));
+}
+
+#[test]
+fn abgleich_task_clear_summary_names_the_account_for_every_outcome() {
+    // Nothing in the sentence speaks for a service of another account: with
+    // no service of this account running it says exactly that.
+    assert_eq!(
+        report(ClearStep::Cleared, ClearStep::NotRunning).summary(),
+        "Prüfsummen-Cache dieses Kontos geleert: diese App geleert; \
+         Hintergrunddienst dieses Kontos läuft nicht"
+    );
+    for worker in [
+        ClearStep::Cleared,
+        ClearStep::SameProcess,
+        ClearStep::NotRunning,
+        ClearStep::NotReached("x".into()),
+        ClearStep::Failed("x".into()),
+    ] {
+        let summary = report(ClearStep::Cleared, worker).summary();
+        assert!(
+            summary.contains("Prüfsummen-Cache dieses Kontos"),
+            "{summary}"
+        );
+        assert!(
+            summary.contains("Hintergrunddienst dieses Kontos"),
+            "{summary}"
+        );
+    }
 }
 
 #[test]
