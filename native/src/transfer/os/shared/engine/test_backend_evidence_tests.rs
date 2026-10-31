@@ -132,9 +132,14 @@ fn speed_task_evidence_upload_without_capability_keeps_its_requests() {
     let few = upload(24, false);
     let many = upload(96, false);
     // Today's sequence: a presence stat before and a stat plus an identity
-    // after every member (a file alone costs more, never less).
-    assert!(many.stats >= few.stats + 2 * 72, "{few:?} {many:?}");
-    assert!(many.identities >= few.identities + 72, "{few:?} {many:?}");
+    // after every member (a file alone costs more, never less). Counted per
+    // member: the requests outside the members (the target folder's own
+    // checks) are not part of the claim and differ by one between runs on
+    // Windows (24 files: 50 stats, 25 identities; 96 files: 193 and 96).
+    for (members, seen) in [(24, &few), (96, &many)] {
+        assert!(seen.stats >= 2 * members, "{few:?} {many:?}");
+        assert!(seen.identities >= members, "{few:?} {many:?}");
+    }
     assert_eq!(many.bulk_dirs, 0, "{many:?}");
     assert_eq!(many.dirs, FOLDERS, "{many:?}");
 }
