@@ -31,16 +31,20 @@ fn write(path: &Path, bytes: &[u8], seconds: u64) {
 fn abgleich_task_cli_update_decides_each_same_named_file() {
     let root = tempfile::tempdir().unwrap();
     let (src, dst) = (root.path().join("src"), root.path().join("dst"));
+    // As `cp -r`: an existing destination folder receives the source folder
+    // under its name (`cli/transfer.rs`, `transfer_plan_as`), so the merge
+    // meets the files already in `dst/src`.
+    let into = dst.join("src");
     write(&src.join("new.txt"), b"new", 5_000);
     write(&src.join("sub/deep.txt"), b"deep", 5_000);
     write(&src.join("up.txt"), b"newer content", 6_000);
     write(&src.join("same.txt"), b"same", 5_000);
     write(&src.join("keep.txt"), b"from source", 1_000);
     write(&src.join("clash.txt"), b"abc", 2_000);
-    write(&dst.join("up.txt"), b"old", 1_000);
-    write(&dst.join("same.txt"), b"same", 5_000);
-    write(&dst.join("keep.txt"), b"destination is newer", 9_000);
-    write(&dst.join("clash.txt"), b"abcde", 2_000);
+    write(&into.join("up.txt"), b"old", 1_000);
+    write(&into.join("same.txt"), b"same", 5_000);
+    write(&into.join("keep.txt"), b"destination is newer", 9_000);
+    write(&into.join("clash.txt"), b"abcde", 2_000);
 
     let outcome = run(
         &local(&src),
@@ -52,16 +56,16 @@ fn abgleich_task_cli_update_decides_each_same_named_file() {
     )
     .expect("update copy");
 
-    assert_eq!(fs::read(dst.join("new.txt")).unwrap(), b"new");
-    assert_eq!(fs::read(dst.join("sub/deep.txt")).unwrap(), b"deep");
-    assert_eq!(fs::read(dst.join("up.txt")).unwrap(), b"newer content");
-    assert_eq!(fs::read(dst.join("same.txt")).unwrap(), b"same");
+    assert_eq!(fs::read(into.join("new.txt")).unwrap(), b"new");
+    assert_eq!(fs::read(into.join("sub/deep.txt")).unwrap(), b"deep");
+    assert_eq!(fs::read(into.join("up.txt")).unwrap(), b"newer content");
+    assert_eq!(fs::read(into.join("same.txt")).unwrap(), b"same");
     assert_eq!(
-        fs::read(dst.join("keep.txt")).unwrap(),
+        fs::read(into.join("keep.txt")).unwrap(),
         b"destination is newer"
     );
-    assert_eq!(fs::read(dst.join("clash.txt")).unwrap(), b"abcde");
-    assert_eq!(fs::read(dst.join("clash (2).txt")).unwrap(), b"abc");
+    assert_eq!(fs::read(into.join("clash.txt")).unwrap(), b"abcde");
+    assert_eq!(fs::read(into.join("clash (2).txt")).unwrap(), b"abc");
     let counts = outcome.update.expect("the rule's decisions");
     assert_eq!(
         (
@@ -112,9 +116,11 @@ fn abgleich_task_cli_update_of_one_file_and_a_second_run_changes_nothing() {
 fn abgleich_task_cli_update_move_keeps_equal_sources_and_refuses_remote_moves() {
     let root = tempfile::tempdir().unwrap();
     let (src, dst) = (root.path().join("src"), root.path().join("dst"));
+    // The moved folder lands in `dst/src` (`transfer_plan_as`).
+    let into = dst.join("src");
     write(&src.join("moves.txt"), b"moved", 5_000);
     write(&src.join("stays.txt"), b"same", 5_000);
-    write(&dst.join("stays.txt"), b"same", 5_000);
+    write(&into.join("stays.txt"), b"same", 5_000);
     let outcome = run(
         &local(&src),
         &local(&dst),
@@ -124,7 +130,7 @@ fn abgleich_task_cli_update_move_keeps_equal_sources_and_refuses_remote_moves() 
         None,
     )
     .expect("update move");
-    assert_eq!(fs::read(dst.join("moves.txt")).unwrap(), b"moved");
+    assert_eq!(fs::read(into.join("moves.txt")).unwrap(), b"moved");
     assert!(
         !src.join("moves.txt").exists(),
         "a moved file leaves the source"

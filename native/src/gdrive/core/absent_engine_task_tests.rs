@@ -50,11 +50,20 @@ pub(super) fn drive_with_target(
 /// Uploads `source` into the Drive folder "Ziel" ("keep both") through the
 /// engine, on this thread, to its terminal message.
 pub(super) fn upload(backend: GDriveBackend, source: &Path) -> Finished {
+    upload_with(backend, source, FolderConflict::KeepBoth)
+}
+
+/// `upload` with the folder policy `folders` for a selected folder.
+pub(super) fn upload_with(
+    backend: GDriveBackend,
+    source: &Path,
+    folders: FolderConflict,
+) -> Finished {
     let job = TransferJob {
         id: crate::transfer::new_job_id(),
         recoverable: false,
         recovery: RecoveryMode::New,
-        folders: FolderConflictPolicy::new(FolderConflict::KeepBoth),
+        folders: FolderConflictPolicy::new(folders),
         source: Endpoint::Local,
         target: Endpoint::Remote(Arc::new(backend)),
         target_dir: "Ziel".to_string(),

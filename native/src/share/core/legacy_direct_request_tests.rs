@@ -350,7 +350,11 @@ fn corrupt_evidence_and_future_schema_fail_closed_while_v6_defaults_empty() {
     assert_eq!(migrated.schema_version, 8);
     assert!(migrated.removed_direct_peers.is_empty());
 
-    storage.raw = Some(r#"{"schema_version":9}"#.into());
+    // Schema 9 is the profile with rights records (`profiles.rs`,
+    // `RIGHTS_SHARE_PROFILE_VERSION`, review 2 W9): the first future one is
+    // the schema after it.
+    let future = super::profiles::RIGHTS_SHARE_PROFILE_VERSION + 1;
+    storage.raw = Some(format!(r#"{{"schema_version":{future}}}"#));
     assert!(ShareProfiles::load_checked_with(None, &mut storage).is_err());
 }
 

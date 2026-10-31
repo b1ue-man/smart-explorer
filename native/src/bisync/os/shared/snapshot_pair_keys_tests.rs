@@ -15,27 +15,17 @@ use super::super::sync_overload::Progress;
 use super::super::types::{BisyncOptions, Tree};
 use super::{PairKeys, SideSetup};
 use crate::agent::AgentBackend;
-use crate::vfs::{self as vfs, Backend, BackendHandle, HashWalkRequest, KeyedWalk, KeyedWalkItem};
-use std::io::{self, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use crate::vfs::{self as vfs, Backend, HashWalkRequest, KeyedWalk, KeyedWalkItem};
+use std::io;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 
+/// A client of a real agent server, seen as a remote side
+/// (`abgleich_task_agent_fixture.rs`).
 fn agent() -> AgentBackend {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    std::thread::spawn(move || {
-        let (socket, _) = listener.accept().unwrap();
-        let read = socket.try_clone().unwrap();
-        let _ = crate::agent_proto::serve(read, socket);
-    });
-    let client = TcpStream::connect(address).unwrap();
-    let read: Box<dyn Read + Send> = Box::new(client.try_clone().unwrap());
-    let write: Box<dyn Write + Send> = Box::new(client);
-    let inner: BackendHandle = Arc::new(vfs::LocalBackend::new("/"));
-    AgentBackend::from_streams(read, write, inner).unwrap()
+    super::super::abgleich_task_agent_fixture::remote_agent()
 }
 
 /// A walker that counts the items (not the keys) crossing the connection.

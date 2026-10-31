@@ -2,7 +2,7 @@
 //! `open_write_absent_timed`) has the source's time from its creation on: the
 //! create request carries `modifiedTime` (the engine opens the writer with
 //! it), also for files in folders the transfer created itself.
-use super::absent_engine_task_tests::{drive_with_target, upload};
+use super::absent_engine_task_tests::{drive_with_target, upload, upload_with};
 use super::task_drive::{drive_server, job_backend, write_fresh};
 use crate::vfs::BackendExtensions;
 use serde_json::Value;
@@ -86,7 +86,11 @@ fn abgleich_task_drive_engine_upload_keeps_the_source_time_in_a_new_folder() {
     std::fs::write(&file, b"abc").unwrap();
     set_source_time(&file);
     let (drive, _server, backend) = drive_with_target(|_, _| {});
-    let finished = upload(backend, &folder);
+    // A selected folder kept beside an existing one needs a reservation
+    // Drive cannot make (`gdrive/core/folder_reservation.rs`, the engine's
+    // `roots.rs` refuses the job); merging, the default folder policy,
+    // creates the folder as the transfer goes.
+    let finished = upload_with(backend, &folder, crate::transfer::FolderConflict::Merge);
     assert!(finished.errors.is_empty(), "{:?}", finished.errors);
     assert_eq!(finished.progress.files_done, 1);
     let created = drive.named("target", "ordner");

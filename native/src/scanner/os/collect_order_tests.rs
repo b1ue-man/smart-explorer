@@ -58,6 +58,22 @@ fn fixture(label: &str) -> Tree {
     tree
 }
 
+/// Opens every folder below `dir` once, as a walk does. On NTFS a folder's
+/// times in its parent's listing (what the walk reports) catch up with the
+/// files created in it only once the folder itself is opened again; without
+/// this the first walk of a fresh tree can report older folder times than
+/// the walks after it.
+fn settle(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            settle(&entry.path());
+        }
+    }
+}
+
 /// The walk of `root` with the given listing threads, budgets and grant.
 fn walk_with(
     root: &Path,
@@ -65,6 +81,7 @@ fn walk_with(
     limits: Limits,
     grant: Option<&dyn ReadGrant>,
 ) -> CollectOutcome {
+    settle(root);
     let cancel = AtomicBool::new(false);
     collect(root, false, 1, &cancel, grant, limits, threads)
 }
@@ -144,7 +161,7 @@ impl ReadGrant for Grant {
 /// One walk of a fixture whose `b` and `d/d05` cannot be opened until the grant
 /// lifts them. Returns what the caller sees and the requests the walk made.
 fn access_walk(root: &Path, threads: usize, answer: Result<bool, String>) -> (Seen, Vec<String>) {
-    let blocked = [root.join("b"), root.join("d/d05")];
+    let blocked = [root.join("b"), root.join("d").join("d05")];
     let _denied: Vec<Denied> = blocked
         .iter()
         .map(|folder| Denied::new(folder, ErrorKind::PermissionDenied))
@@ -177,8 +194,8 @@ fn abgleich_task_listing_threads_keep_the_serial_order_and_entries() {
 fn abgleich_task_listing_threads_report_the_same_failures_in_the_same_order() {
     let tree = fixture("failures");
     let _denied = [
-        Denied::new(&tree.0.join("a/sub"), ErrorKind::PermissionDenied),
-        Denied::new(&tree.0.join("d/d05"), ErrorKind::Other),
+        Denied::new(&tree.0.join("a").join("sub"), ErrorKind::PermissionDenied),
+        Denied::new(&tree.0.join("d").join("d05"), ErrorKind::Other),
     ];
     let serial = seen(&walk_with(&tree.0, 0, Limits::PRODUCTION, None));
     assert_eq!(serial.1.len(), 2, "both failing folders are reported");
@@ -199,8 +216,8 @@ fn abgleich_task_listing_threads_report_the_same_failures_in_the_same_order() {
 fn abgleich_task_listing_threads_keep_the_budgets_and_their_messages() {
     let tree = fixture("budgets");
     let _denied = [
-        Denied::new(&tree.0.join("a/sub"), ErrorKind::PermissionDenied),
-        Denied::new(&tree.0.join("d/d05"), ErrorKind::Other),
+        Denied::new(&tree.0.join("a").join("sub"), ErrorKind::PermissionDenied),
+        Denied::new(&tree.0.join("d").join("d05"), ErrorKind::Other),
     ];
     let limits = [
         Limits {

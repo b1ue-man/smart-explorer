@@ -66,12 +66,17 @@ fn totals(finished: &Finished) -> [u64; 5] {
     ]
 }
 
+/// The issues of a run in `root` (its own temporary folder), each path
+/// relative to that folder so two runs compare.
 #[cfg(unix)]
-fn issues(finished: &Finished) -> Vec<(String, String)> {
+fn issues(finished: &Finished, root: &str) -> Vec<(String, String)> {
     let mut issues: Vec<(String, String)> = finished
         .issues
         .iter()
-        .map(|issue| (issue.path.clone(), issue.message.clone()))
+        .map(|issue| {
+            let path = issue.path.strip_prefix(root).unwrap_or(&issue.path);
+            (path.to_string(), issue.message.clone())
+        })
         .collect();
     issues.sort();
     issues
@@ -183,9 +188,9 @@ fn abgleich_task_an_omission_or_unknown_time_takes_the_listing_with_its_message(
             file(&base.join("u/zero.txt"), b"zero", 0);
             file(&base.join("ok/f.txt"), b"fine", 5_000);
         }
-        between(&source, &dest, keyed, None)
+        (between(&source, &dest, keyed, None), fwd(root.path()))
     };
-    let (keyed, plain) = (run_with(true), run_with(false));
+    let ((keyed, keyed_root), (plain, plain_root)) = (run_with(true), run_with(false));
     assert!(
         keyed
             .finished
@@ -195,7 +200,10 @@ fn abgleich_task_an_omission_or_unknown_time_takes_the_listing_with_its_message(
         "the link is reported with its path: {:?}",
         keyed.finished.issues
     );
-    assert_eq!(issues(&keyed.finished), issues(&plain.finished));
+    assert_eq!(
+        issues(&keyed.finished, &keyed_root),
+        issues(&plain.finished, &plain_root)
+    );
     assert_eq!(totals(&keyed.finished), totals(&plain.finished));
     assert_eq!(counts(&keyed.finished), counts(&plain.finished));
     assert_eq!(keyed.finished.progress.kept_both, 1, "zero.txt keeps both");

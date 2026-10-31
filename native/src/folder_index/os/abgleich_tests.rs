@@ -57,13 +57,15 @@ fn tree(label: &str) -> (Tree, BTreeSet<String>) {
     (tree, folders)
 }
 
-/// Every folder of `index` below `root`, relative to it.
+/// Every folder of `index` below `root`, relative to it. The index keeps
+/// forward slashes (on Windows `C:/…`), so the root is compared that way.
 fn relative_folders(index: &FolderIndex, root: &str) -> BTreeSet<String> {
+    let root = root.replace('\\', "/");
     index
         .iter()
         .map(|path| {
             let path: &str = path;
-            path.strip_prefix(root)
+            path.strip_prefix(root.as_str())
                 .unwrap_or(path)
                 .trim_start_matches('/')
                 .to_string()

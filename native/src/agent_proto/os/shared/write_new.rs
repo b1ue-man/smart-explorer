@@ -99,7 +99,9 @@ fn written(file: &std::fs::File, mtime_ms: Option<i64>) -> io::Result<Frame> {
     }
     let metadata = file.metadata()?;
     let object = match super::local_platform::stable_handle_identity(file) {
-        Ok(identity) => Some(identity),
+        // As `FileIdentity` names it, so the client's evidence equals what
+        // `vfs::file_identity` reads for the same file.
+        Ok(identity) => Some(super::file_identity::tagged(&identity)),
         Err(error) if error.kind() == io::ErrorKind::Unsupported => None,
         Err(error) => return Err(error),
     };

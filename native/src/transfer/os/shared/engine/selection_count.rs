@@ -251,6 +251,11 @@ fn count_folder(context: &Context<'_>, node: &Node) -> Found {
     let mut found = Found::default();
     if let Some(tally) = settled_by_key(context, node) {
         found.equal = tally.files;
+        // Its file names are not read (that is the point of the key): the
+        // folder itself stands for its same-named files among the samples.
+        if tally.files > 0 && !node.relative.is_empty() {
+            found.samples.push(format!("{}/", node.relative));
+        }
         return found;
     }
     let listed = match crate::vfs::list_dir_tolerant(context.source, &node.path) {

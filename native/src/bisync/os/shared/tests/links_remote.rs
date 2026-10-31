@@ -360,8 +360,13 @@ fn abgleich_task_remote_host_walk_snapshot_equals_the_folder_walk() {
             max_size: 1000,
             ..WalkFilter::basic(include_hidden, &globs)
         };
-        // The default job: no walk across mounts.
-        let opts = BisyncOptions::default();
+        // The default job: no walk across mounts (`SyncJob::new`,
+        // `syncjobs/core/types.rs`); the engine's own `BisyncOptions`
+        // default walks across them (`bisync/core/types.rs`).
+        let opts = BisyncOptions {
+            cross_mounts: false,
+            ..BisyncOptions::default()
+        };
         assert!(!opts.cross_mounts);
         let read = |backend: &dyn Backend| {
             side_facts(

@@ -13,27 +13,16 @@ use super::super::sync_overload::Progress;
 use super::super::types::{Baseline, BisyncOptions, Sig, Tree};
 use super::{walk, KeyFiles, KeyedTree};
 use crate::agent::AgentBackend;
-use crate::vfs::{self as vfs, BackendHandle, HashWalkRequest, KeyedWalkItem, LocalBackend};
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use crate::vfs::{self as vfs, HashWalkRequest, KeyedWalkItem};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 
+/// A client of a real agent server, seen as a remote side
+/// (`abgleich_task_agent_fixture.rs`).
 fn agent() -> AgentBackend {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    std::thread::spawn(move || {
-        let (socket, _) = listener.accept().unwrap();
-        let read = socket.try_clone().unwrap();
-        let _ = crate::agent_proto::serve(read, socket);
-    });
-    let client = TcpStream::connect(address).unwrap();
-    let read: Box<dyn Read + Send> = Box::new(client.try_clone().unwrap());
-    let write: Box<dyn Write + Send> = Box::new(client);
-    let inner: BackendHandle = Arc::new(LocalBackend::new("/"));
-    AgentBackend::from_streams(read, write, inner).unwrap()
+    super::super::abgleich_task_agent_fixture::remote_agent()
 }
 
 /// What one side's walk gave.

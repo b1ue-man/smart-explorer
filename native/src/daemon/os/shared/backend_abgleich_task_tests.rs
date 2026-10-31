@@ -49,8 +49,18 @@ fn abgleich_task_service_listing_carries_the_served_hidden_flag() {
             .unwrap()
             .hidden
     );
-    let status = backend.stat(&format!("{root}/.versteckt")).unwrap();
-    assert_eq!(status.hidden, expected);
+    // `stat` carries what the served backend's own `stat` reports: on Linux
+    // a local `stat` has no hidden attribute (`vfs/os/shared/local.rs`,
+    // `meta_to_vfs` through `local_platform::local_attrs`), the dot-name rule
+    // belongs to the listing (`local_access`); on Windows both read the
+    // attribute.
+    let path = format!("{root}/.versteckt");
+    let served_status = LocalBackend::new(&root).stat(&path).unwrap();
+    let status = backend.stat(&path).unwrap();
+    assert_eq!(
+        status.hidden, served_status.hidden,
+        "as the served backend reports it"
+    );
     assert_eq!(status.size, 1);
     // No keyed walk behind the service: unsupported, nothing sent.
     let (tx, rx) = crossbeam_channel::unbounded();

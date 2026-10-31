@@ -152,9 +152,10 @@ fn abgleich_task_only_the_protected_subtree_takes_the_device_guard() {
     );
 }
 
-/// The rows of a copy expansion below `root`, as paths relative to it.
+/// The rows of a copy expansion below `root`, as paths relative to it. The
+/// entries carry forward slashes (on Windows `C:/…`), so the root does too.
 fn expansion_rows(root: &Path, entries: &[FileEntry]) -> BTreeSet<String> {
-    let root_text = root.to_string_lossy().into_owned();
+    let root_text = root.to_string_lossy().replace('\\', "/");
     entries
         .iter()
         .map(|entry| {

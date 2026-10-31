@@ -10,6 +10,13 @@ use crate::share::{
     DirectGrant, DirectGrantState, DirectPeerIdentity, ExecGrant, SharedRoot, DIRECT_EXPORT_SCOPE,
 };
 
+/// A source file as these checks read it: a Windows checkout has CRLF line
+/// ends (no `.gitattributes` rule fixes `*.rs`), the patterns below are
+/// written with `\n`.
+fn source(text: &str) -> String {
+    text.replace("\r\n", "\n")
+}
+
 fn identity() -> ShareIdentity {
     let iroh_secret = iroh::SecretKey::from_bytes(&[1; 32]);
     let local = DirectPeerIdentity::from_secret("local-device", "Local", &iroh_secret);
@@ -157,7 +164,7 @@ fn abgleich_task_narrowing_step_goes_to_the_worker_first_and_a_widening_does_not
 
 #[test]
 fn abgleich_task_the_source_sends_narrowing_first_and_masks_before_the_retry_gate() {
-    let journal = include_str!("exec_grant_journal.rs");
+    let journal = source(include_str!("exec_grant_journal.rs"));
     let first = journal
         .find("rights::apply_narrowing_first(")
         .expect("execute_locked narrows at the worker first");
@@ -171,7 +178,7 @@ fn abgleich_task_the_source_sends_narrowing_first_and_masks_before_the_retry_gat
 
     // The worker is started and configured only with the masked copy, so a
     // waiting narrowing never waits for the retry gate of the drain.
-    let service = include_str!("ipc_host_service.rs");
+    let service = source(include_str!("ipc_host_service.rs"));
     let configure = &service[service
         .find("pub(in crate::daemon) fn configure_service(")
         .expect("configure_service")..];
@@ -186,11 +193,13 @@ fn abgleich_task_the_source_sends_narrowing_first_and_masks_before_the_retry_gat
 
 #[test]
 fn abgleich_task_every_surface_cancel_goes_through_the_same_action_and_the_ipc_through_the_lock() {
-    let ipc = include_str!("access_ipc_rights.rs");
+    let ipc = source(include_str!("access_ipc_rights.rs"));
     assert!(ipc.contains("self.cancel_rights_journaled(&target)"));
     assert!(!ipc.contains("actions::cancel_connection_rights("));
 
-    let actions = include_str!("../../../share/os/shared/connection_rights_actions.rs");
+    let actions = source(include_str!(
+        "../../../share/os/shared/connection_rights_actions.rs"
+    ));
     let start = actions
         .find("pub fn cancel_connection_rights(")
         .expect("the action");
@@ -204,12 +213,17 @@ fn abgleich_task_every_surface_cancel_goes_through_the_same_action_and_the_ipc_t
     for (surface, text) in [
         (
             "app",
-            include_str!("../../../app/core/share_rights_core.rs"),
+            source(include_str!("../../../app/core/share_rights_core.rs")),
         ),
-        ("cli", include_str!("../../../cli/share/grants_rights.rs")),
+        (
+            "cli",
+            source(include_str!("../../../cli/share/grants_rights.rs")),
+        ),
         (
             "bridge",
-            include_str!("../../../mobile/os/shared/domains/share_rights.rs"),
+            source(include_str!(
+                "../../../mobile/os/shared/domains/share_rights.rs"
+            )),
         ),
     ] {
         assert!(

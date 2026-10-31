@@ -32,6 +32,9 @@ pub(crate) trait KeyEmit<I> {
 
 struct Node<I> {
     pending: usize,
+    /// Subfolders it lists to be walked whose run has not come yet: a run
+    /// is taken only once, and only for such a subfolder.
+    waiting: HashSet<String>,
     run: [u8; 32],
     children: Vec<(String, FolderKey)>,
     items: Option<Vec<I>>,
@@ -47,6 +50,8 @@ struct State<I> {
     /// entry whose run went out since is skipped when it comes up.
     held: VecDeque<String>,
     buffered: usize,
+    /// The root's run came (a second one is refused).
+    root_started: bool,
     root_done: bool,
 }
 
@@ -82,6 +87,7 @@ impl<I> KeyTree<I> {
                 nodes: HashMap::new(),
                 held: VecDeque::new(),
                 buffered: 0,
+                root_started: false,
                 root_done: false,
             }),
         }
@@ -123,12 +129,14 @@ impl<I> KeyTree<I> {
             let _order = self.lock();
             return emit.run(&rel, items);
         }
-        let walked = dirs
+        let waiting: HashSet<String> = dirs
             .into_iter()
             .filter(|name| !unopened.contains(name))
-            .count();
+            .collect();
+        let walked = waiting.len();
         let node = Node {
             pending: walked,
+            waiting,
             run: run_digest(parts),
             children: Vec::new(),
             items: (self.mode == Mode::Marks).then_some(items),
@@ -137,6 +145,24 @@ impl<I> KeyTree<I> {
             tally,
         };
         let mut state = self.lock();
+        // Every run but the root's belongs to a subfolder its parent listed
+        // to be walked and that has not come before; a folder read twice or
+        // one its parent reported as not opened would give a wrong key.
+        match self.parent_of(&rel) {
+            None if state.root_started => return Err(invalid("walk read one folder twice")),
+            None => state.root_started = true,
+            Some(parent) => {
+                let listed = state
+                    .nodes
+                    .get_mut(parent)
+                    .is_some_and(|parent| parent.waiting.remove(name_in(&rel)));
+                if !listed {
+                    return Err(invalid(
+                        "walk read a folder twice or one its parent did not walk",
+                    ));
+                }
+            }
+        }
         if state.nodes.insert(rel.clone(), node).is_some() {
             return Err(invalid("walk read one folder twice"));
         }

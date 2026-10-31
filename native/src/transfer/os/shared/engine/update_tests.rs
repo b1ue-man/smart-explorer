@@ -406,6 +406,9 @@ fn abgleich_task_update_rule_takes_an_hour_apart_on_a_local_time_target_as_equal
         let mut limited = Limited::new("local-time-target");
         limited.precision = precision;
         limited.device_digest = device_digest;
+        // A target that replaces atomically: the cases that replace would
+        // otherwise keep both (`publish.rs`, a refused replacement).
+        limited.replaces = true;
         let mut transfer = job(
             Endpoint::Local,
             Endpoint::Remote(Arc::new(limited)),

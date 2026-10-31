@@ -31,5 +31,12 @@ pub(crate) fn identity(path: &str) -> io::Result<Option<String>> {
             "File object changed during identity query",
         ));
     }
-    Ok(Some(format!("agent-local-file-v2:{identity}")))
+    Ok(Some(tagged(&identity)))
+}
+
+/// The text a reply carries for the handle identity `identity` (from
+/// `stable_handle_identity`): `FileIdentity` and the `StageWritten` of a
+/// timed stage name one file object the same way.
+pub(crate) fn tagged(identity: &str) -> String {
+    format!("agent-local-file-v2:{identity}")
 }

@@ -38,6 +38,17 @@ impl StageReports {
     }
 }
 
+/// The file object the host named `id` as `vfs::file_identity` gives it for
+/// the connection's `namespace` (`FileIdentity` in `folder_reservation.rs`,
+/// and the `StageWritten` of a timed stage here).
+pub(super) fn host_object(namespace: &str, id: &str) -> String {
+    format!(
+        "agent-file:{}:{namespace}:{}:{id}",
+        namespace.len(),
+        id.len()
+    )
+}
+
 /// `open_write_copy_stage_timed` of an agent connection.
 pub(super) fn open(
     backend: &AgentBackend,
@@ -51,11 +62,15 @@ pub(super) fn open(
     }
     let reports = backend.pool.stage_reports();
     let stage = path.to_string();
+    let namespace = backend.namespace_identity();
     let report: super::stream::StageReport = Box::new(move |size, mtime_ms, object| {
         reports.put(StageEvidence {
             stage: FileEvidence {
                 path: stage,
-                object,
+                // As `vfs::file_identity` names it.
+                object: object
+                    .filter(|id| !id.is_empty())
+                    .map(|id| host_object(&namespace, &id)),
                 id: None,
                 size,
                 mtime_ms,

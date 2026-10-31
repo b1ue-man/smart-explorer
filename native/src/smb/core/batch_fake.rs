@@ -233,8 +233,11 @@ impl SmbWire for Fake {
             }
             let content = files.remove(from).unwrap_or_default();
             files.insert(to.to_string(), content);
-            if let Some(ticks) = self.times.borrow_mut().remove(from) {
-                self.times.borrow_mut().insert(to.to_string(), ticks);
+            // One borrow at a time: the scrutinee's borrow of an `if let`
+            // would live through its block.
+            let mut times = self.times.borrow_mut();
+            if let Some(ticks) = times.remove(from) {
+                times.insert(to.to_string(), ticks);
             }
             Ok(())
         })

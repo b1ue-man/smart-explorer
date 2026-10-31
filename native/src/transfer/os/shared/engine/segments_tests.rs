@@ -126,6 +126,12 @@ fn speed_task_segments_single_permit_owner_does_all_ranges() {
     let fixture = Fixture::new(40 * MIB);
     let mut fake = ranged("single");
     fake.ceiling = Some(1);
+    // Every read takes 3 ms, as in the assembling test: the part sizer
+    // (`transfer/core/segments.rs`, `next_len`: 10 x set-up x rate) then
+    // learns about 10 reads of `COPY_BUFFER` (2.5 MiB) and keeps the
+    // shortest part (`MIN_SEGMENT`, 8 MiB) on every machine. Without it a
+    // set-up of 1 ms at local disk speed asks for parts above 8 MiB.
+    fake.read_delay = Duration::from_millis(3);
     let (fake, handle) = fake.handle();
     let finished = run_within(fixture.job(&handle), LIMIT);
     assert!(finished.issues.is_empty(), "{:?}", finished.issues);
@@ -140,6 +146,12 @@ fn speed_task_segments_retry_resumes_at_prefix() {
     let fixture = Fixture::new(40 * MIB);
     let mut fake = ranged("retry");
     fake.ceiling = Some(1);
+    // Every read takes 3 ms, as in the assembling test: the part sizer
+    // (`transfer/core/segments.rs`, `next_len`: 10 x set-up x rate) then
+    // learns about 10 reads of `COPY_BUFFER` (2.5 MiB) and keeps the
+    // shortest part (`MIN_SEGMENT`, 8 MiB) on every machine. Without it a
+    // set-up of 1 ms at local disk speed asks for parts above 8 MiB.
+    fake.read_delay = Duration::from_millis(3);
     fake.ranges.fail_once =
         std::sync::Mutex::new(Some((mib(16), MIB, io::ErrorKind::ConnectionReset)));
     let (fake, handle) = fake.handle();

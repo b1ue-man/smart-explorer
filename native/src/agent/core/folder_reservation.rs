@@ -74,13 +74,9 @@ pub(super) fn file_identity(backend: &AgentBackend, path: &str) -> io::Result<Op
     match reply {
         Frame::FileIdentityValue(identity) => {
             let namespace = backend.namespace_identity();
-            Ok(identity.filter(|id| !id.is_empty()).map(|id| {
-                format!(
-                    "agent-file:{}:{namespace}:{}:{id}",
-                    namespace.len(),
-                    id.len()
-                )
-            }))
+            Ok(identity
+                .filter(|id| !id.is_empty())
+                .map(|id| crate::agent::stage_time::host_object(&namespace, &id)))
         }
         Frame::Err(message) => Err(error(message)),
         frame => Err(unexpected("file identity", &frame)),

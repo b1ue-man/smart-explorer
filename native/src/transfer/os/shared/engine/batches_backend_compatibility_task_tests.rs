@@ -32,6 +32,10 @@ pub(super) struct Limited {
     pub digests: AtomicUsize,
     /// The time resolution the target reports (`target_limits`).
     pub precision: crate::vfs::MtimePrecision,
+    /// `rename` replaces an existing file atomically (`rename_overwrites`):
+    /// only then may the file rule replace an older target; without it the
+    /// replacement is refused and both are kept (`vfs/core/promotion.rs`).
+    pub replaces: bool,
 }
 impl Limited {
     pub fn new(label: &str) -> Self {
@@ -51,6 +55,7 @@ impl Limited {
             device_digest: false,
             digests: AtomicUsize::new(0),
             precision: crate::vfs::MtimePrecision::Unknown,
+            replaces: false,
         }
     }
 }
@@ -109,6 +114,9 @@ impl Backend for Limited {
     }
     fn rename(&self, source: &str, destination: &str) -> io::Result<()> {
         self.inner.rename(source, destination)
+    }
+    fn rename_overwrites(&self) -> bool {
+        self.replaces
     }
     fn rename_no_replace(&self, source: &str, destination: &str) -> io::Result<()> {
         self.inner.rename_no_replace(source, destination)
