@@ -272,9 +272,9 @@ def gated_elsewhere(path, number):
     head = " ".join(line for line in lines[:40] if line.startswith("#![cfg("))
     hint = str(path).lower()
     if WINDOWS:
-        return bool(re.search(r"unix|target_os\s*=\s*\"(linux|android|macos)\"", gates + head)) \
+        return bool(re.search(r"unix|not\(windows\)|target_os\s*=\s*\"(linux|android|macos)\"", gates + head)) \
             or "linux" in hint or "unix" in hint
-    return bool(re.search(r"windows", gates + head)) or "windows" in hint
+    return bool(re.search(r"(?<!not\()windows", gates + head)) or "windows" in hint
 
 
 # Library tests that carry the claims the command line cannot reach (WebDAV is connected over HTTPS with the
@@ -292,6 +292,11 @@ EVIDENCE_TESTS = (
     "abgleich_task_first_comparison_sends_keys_then_only_unequal_folders",
     "abgleich_task_local_side_keys_spare_the_remote_side_equal_folders",
     "abgleich_task_fat_hour_with_content_keys_follows_the_keys",
+    # The filter on the side with the files leaves out no more than the client's globset (deletion safety).
+    "abgleich_task_host_patterns_mean_what_globset_means",
+    "abgleich_task_host_patterns_of_a_whole_job_mean_what_its_set_means",
+    "abgleich_task_agent_walk_hashes_and_sends_nothing_the_filter_leaves_out",
+    "abgleich_task_agent_fresh_walk_never_answers_from_the_digest_cache",
 )
 
 
