@@ -29,3 +29,7 @@ pub use denied_roots::{retry_contains, DeniedRoots, ScanVisits};
 #[path = "os/retry.rs"]
 mod retry;
 pub(crate) use retry::open_retry_root;
+
+#[cfg(test)]
+#[path = "os/abgleich_tests.rs"]
+mod abgleich_tests;

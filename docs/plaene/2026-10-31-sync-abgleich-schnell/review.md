@@ -273,3 +273,22 @@ Geprüft und ohne Befund:
 - `se sync compare`: dieselben Schritte wie `N/app/core/preview_core.rs:24-53`; Text- und JSON-Ausgabe,
   Tresor-Jobs verweisen auf vorhandenes `se vault compare`.
 - Dateigrößenregel: alle übrigen geänderten oder neuen Rust-Dateien unter 500 Zeilen und 50 KiB.
+
+## Richtigstellung bei der Behebung
+
+Stand der Behebung: Arbeitsbaum nach `aebf5436` (noch nicht committet). Die Angaben unten sind aus dem Code gelesen; ausgeführt wurde nichts (Projektregel). Der ursprüngliche Text oben bleibt unverändert; die Zeilenangaben „Ausgangsstand“ beziehen sich auf `ad100297`, wie im Review.
+
+### W7 (Richtigstellung)
+
+- Der Medienwächter wurde im Ausgangsstand nicht nur je Ordner, sondern auch je Eintrag aufgerufen. Je Ordner: `N/scanner/os/walk.rs:89-96` (`GuardedIterator::new`). Je Eintrag: `N/source_media/reader.rs:150` (`GuardedIterator::next` ruft `acquire` auf, also `probe`). Diese Eintragsprüfung fehlte im Befund.
+- Auf Windows kostet jede `probe` einen 64-KiB-Puffer (`N/source_media/os/windows.rs:30`) sowie `GetVolumePathNameW` und `GetDriveTypeW`. Auf Linux kostet jede `probe` ein `lstat` des Ordnerpfads und eine Sperre des Zwischenspeichers (`N/source_media/probe_cache.rs`).
+- Die Fadenobergrenze `.min(4)` (`N/scanner/os/shared.rs:433-436`) führte Commit `44539036` ein. Im Repository steht dafür keine Begründung; die Treffer in `docs/` sind Plandokumente, die den Wert nur zitieren.
+- Behebung: Die Geräteermittlung liegt in `N/source_media/walk_device.rs` (neu). Die Wurzel wird einmal geprüft. Ein Ordner übernimmt den Gerätewert seines Elternordners, solange die Gerätekennung gleich bleibt; Linux liest sie je Ordner mit einem `lstat`, Windows braucht keinen Systemaufruf. Eine Probe erfolgt nur bei Gerätewechsel. Ungeschützte Geräte: keine Sperre, keine Probe. Geschützte Geräte: dieselben Prüf- und Sperrschritte wie vorher. Die Prüfung des Wurzelgeräts je Ordner (`N/scanner/os/shared.rs:159-175`, `media_current`) bleibt bestehen; sie gehört zur Garantie.
+- Erweiterung nach Auftrag: Dieselbe Stelle wird auch im Ordnerindex (`N/folder_index/os/walk.rs`, Ausgangsstand `:68-79` und `:98`) und in der Auswahl-Erfassung für rekursive Kopien (`N/scanner/os/collect.rs`) genutzt. Die Auswahl-Erfassung bleibt seriell: Die Reihenfolge ihrer Einträge geht in die Zwischenablage ein (`N/app/os/shared/clipboard_lifecycle.rs:283`, Schleife über `collected.entries`), die erste Meldung (`issues.first()`) und die Meldungsgrenze von 100 hängen von der Reihenfolge ab, und die Zugriffsanfrage erfolgt einmal beim ersten fehlgeschlagenen Ordner.
+
+### G14 (Richtigstellung)
+
+- Die Prämisse, relative Pfade tieferer Ebenen enthielten `\`, trifft nicht zu. `path_text` (`N/scanner/os/windows.rs:24-27`) ersetzt jeden `\` durch `/`, bevor der Scanner einen Pfad in einen Eintrag schreibt (`N/scanner/os/walk.rs:211` im Ausgangsstand). Die Ausgabe enthielt deshalb keine Backslashes.
+- Die offene Annahme ist beantwortet: Der Scanner kanonisiert die Wurzel. `run_scan` ruft `normalize_scan_root` auf (`N/scanner/os/shared.rs:258` im Ausgangsstand). Unter Windows entsteht dabei die Form `\\?\C:\…` (`N/local_access/os/windows/paths.rs:22`). `display_path` (`paths.rs:135-144`) entfernt den Präfix wieder für den gemeldeten Wurzeltext.
+- Der volle Pfad erscheint deshalb nicht durch die Kanonisierung. Der tatsächliche Fehler lag in der CLI: `N/cli/ls_recursive.rs:32` (Ausgangsstand) leitete die Wurzel aus dem Argument ab (`trim_end_matches`), also aus einem anderen Text als dem des Scanners. Die Zuordnung `strip_prefix` (`:74-80` im Ausgangsstand) schlug dann in drei Fällen fehl, und `relative` gab den vollen Pfad aus: bei einem relativen Ziel (zum Beispiel `.`, das `normalize_scan_root` absolut macht), bei einem Kleinbuchstaben im Laufwerk (`paths.rs:53` setzt nur den Laufwerksbuchstaben groß) und bei einem Argument in der Form `\\?\…` oder `//?/…`. Im Normalfall (zum Beispiel `C:/data`) lieferte die CLI die relativen Pfade richtig.
+- Behebung: Die CLI übernimmt den Wurzeltext aus dem ersten Eintrag der Tiefe 0 (`N/cli/ls_recursive.rs:43-45`, neue Fassung) und trennt nur an den Grenzen eines Pfads (`relative`, `:84`). Unter Windows wird `\` in der relativen Angabe durch `/` ersetzt.

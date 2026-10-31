@@ -11,6 +11,8 @@ use std::{
 struct Profiles {
     paths: BTreeMap<PathBuf, Source>,
     readers: BTreeMap<String, (usize, usize, usize)>,
+    /// Folders whose probes are counted, with the count so far.
+    watched: BTreeMap<PathBuf, usize>,
 }
 fn profiles() -> &'static Mutex<Profiles> {
     static PROFILES: OnceLock<Mutex<Profiles>> = OnceLock::new();
@@ -81,4 +83,49 @@ pub(crate) fn acquisitions(device: &str) -> usize {
         .readers
         .get(device)
         .map_or(0, |(_, _, count)| *count)
+}
+
+/// The registered root that gives `path` its synthetic device, if any.
+pub(super) fn root_of(path: &Path) -> Option<PathBuf> {
+    let path = crate::local_access::normalize_scan_root(path);
+    profiles()
+        .lock()
+        .unwrap()
+        .paths
+        .keys()
+        .filter(|root| path.starts_with(root))
+        .max_by_key(|root| root.components().count())
+        .cloned()
+}
+
+/// Counts the probes of paths below one folder while it lives.
+pub(crate) struct ProbeWatch(PathBuf);
+pub(crate) fn watch_probes(root: &Path) -> ProbeWatch {
+    let root = crate::local_access::normalize_scan_root(root);
+    profiles().lock().unwrap().watched.insert(root.clone(), 0);
+    ProbeWatch(root)
+}
+impl ProbeWatch {
+    pub(crate) fn count(&self) -> usize {
+        profiles()
+            .lock()
+            .unwrap()
+            .watched
+            .get(&self.0)
+            .copied()
+            .unwrap_or(0)
+    }
+}
+impl Drop for ProbeWatch {
+    fn drop(&mut self) {
+        profiles().lock().unwrap().watched.remove(&self.0);
+    }
+}
+pub(super) fn count_probe(path: &Path) {
+    let path = crate::local_access::normalize_scan_root(path);
+    for (root, count) in profiles().lock().unwrap().watched.iter_mut() {
+        if path.starts_with(root) {
+            *count += 1;
+        }
+    }
 }

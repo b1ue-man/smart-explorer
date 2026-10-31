@@ -21,6 +21,8 @@ const FLUSH_INTERVAL_MS: u128 = 60;
 pub(super) struct PendingDir {
     pub(super) path: PathBuf,
     pub(super) lineage: Option<Arc<Lineage>>,
+    /// The device of the folder this one was entered from; `None` for the root.
+    pub(super) parent: Option<crate::source_media::WalkDevice>,
 }
 
 /// Walk directories in parallel while enforcing one shared memory/depth budget
@@ -86,16 +88,30 @@ fn list_directory(
     depth: u32,
     visits: &mut Option<ScanVisits>,
 ) -> Vec<PendingDir> {
-    let listing = crate::source_media::GuardedIterator::new(&dir.path,
-        crate::source_media::Priority::Foreground, &scanner.cancel, || -> std::io::Result<Box<dyn Iterator<Item = std::io::Result<crate::local_access::LocalEntry>>>> {
-        match &scanner.confined {
-            Some((base, handle)) => super::retry::read_confined(base, handle, &dir.path),
-            None => crate::local_access::read_directory(&dir.path).map(|entries|
-                Box::new(entries) as Box<dyn Iterator<Item = std::io::Result<crate::local_access::LocalEntry>>>),
-        }
+    // The folder's device decides whether its listing takes the optical device
+    // lock: a folder on no protected device takes neither lock nor probe.
+    let device = match dir.parent.as_ref() {
+        Some(parent) => parent.child(&dir.path, scanner.opts.follow_symlinks),
+        None => crate::source_media::WalkDevice::root(&dir.path),
+    };
+    let listing = device.and_then(|device| {
+        crate::source_media::GuardedIterator::with_device(
+            &dir.path,
+            device.protected_source(),
+            crate::source_media::Priority::Foreground,
+            &scanner.cancel,
+            || -> std::io::Result<Box<dyn Iterator<Item = std::io::Result<crate::local_access::LocalEntry>>>> {
+                match &scanner.confined {
+                    Some((base, handle)) => super::retry::read_confined(base, handle, &dir.path),
+                    None => crate::local_access::read_directory(&dir.path).map(|entries|
+                        Box::new(entries) as Box<dyn Iterator<Item = std::io::Result<crate::local_access::LocalEntry>>>),
+                }
+            },
+        )
+        .map(|read| (device, read))
     });
-    let read = match listing {
-        Ok(read) => read,
+    let (device, read) = match listing {
+        Ok(pair) => pair,
         Err(error) => {
             record_denial(scanner, &dir.path.to_string_lossy(), &error);
             fail(
@@ -267,6 +283,7 @@ fn list_directory(
                     subdirs.push(PendingDir {
                         path,
                         lineage: None,
+                        parent: Some(device.clone()),
                     });
                 }
             }
@@ -281,7 +298,11 @@ fn list_directory(
                     // otherwise the children inherit it as a pending ancestor.
                     let lineage =
                         (!keep).then(|| Lineage::pending(file_entry, dir.lineage.clone()));
-                    subdirs.push(PendingDir { path, lineage });
+                    subdirs.push(PendingDir {
+                        path,
+                        lineage,
+                        parent: Some(device.clone()),
+                    });
                 }
             }
         }
@@ -307,6 +328,17 @@ fn list_directory(
         return Vec::new();
     }
     subdirs
+}
+
+/// Workers of a local recursive scan: every core available at run time, as the
+/// default pool of the local sync walk (rayon) has them.
+pub(super) fn scan_threads() -> usize {
+    scan_threads_for(std::thread::available_parallelism())
+}
+
+/// The count `available_parallelism` reports; one thread when it cannot tell.
+pub(super) fn scan_threads_for(available: std::io::Result<std::num::NonZeroUsize>) -> usize {
+    available.map_or(1, std::num::NonZeroUsize::get)
 }
 
 fn record_denial(scanner: &Scanner, path: &str, error: &std::io::Error) {

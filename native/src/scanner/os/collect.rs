@@ -111,8 +111,15 @@ fn collect(
         }
     };
     let mut name_bytes = 0usize;
-    let mut stack = vec![(root.to_path_buf(), start_depth, 0u32)];
-    while let Some((directory, depth, relative_depth)) = stack.pop() {
+    // A pending folder carries the device of the folder it was entered from; the
+    // root has none and takes its own device when it is taken.
+    let mut stack: Vec<(
+        std::path::PathBuf,
+        u32,
+        u32,
+        Option<crate::source_media::WalkDevice>,
+    )> = vec![(root.to_path_buf(), start_depth, 0u32, None)];
+    while let Some((directory, depth, relative_depth, parent)) = stack.pop() {
         if cancel.load(Ordering::Relaxed) {
             outcome.canceled = true;
             break;
@@ -136,12 +143,18 @@ fn collect(
             break;
         }
         let read_directory = || {
-            crate::source_media::GuardedIterator::new(
+            let device = match &parent {
+                Some(parent) => parent.child(&directory, follow_symlinks),
+                None => crate::source_media::WalkDevice::root(&directory),
+            }?;
+            crate::source_media::GuardedIterator::with_device(
                 &directory,
+                device.protected_source(),
                 crate::source_media::Priority::Foreground,
                 cancel,
                 || crate::local_access::read_directory(&directory),
             )
+            .map(|read| (device, read))
         };
         let mut listing = read_directory();
         if may_request
@@ -165,8 +178,8 @@ fn collect(
                 }
             }
         }
-        let read = match listing {
-            Ok(read) => read,
+        let (device, read) = match listing {
+            Ok(pair) => pair,
             Err(error) => {
                 push_issue(&mut outcome, &directory, error.to_string());
                 continue;
@@ -299,6 +312,7 @@ fn collect(
                     path,
                     depth.saturating_add(1),
                     relative_depth.saturating_add(1),
+                    Some(device.clone()),
                 ));
             }
         }

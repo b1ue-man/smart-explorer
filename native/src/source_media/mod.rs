@@ -13,6 +13,7 @@ mod platform;
 mod probe_cache;
 mod reader;
 mod status;
+mod walk_device;
 
 pub use permit::{
     acquire, acquire_current, acquire_file, acquire_file_current, acquire_regular_file,
@@ -21,6 +22,7 @@ pub use permit::{
 pub use reader::{guard_file_reader, guard_reader, GuardedIterator};
 pub use status::{snapshots, ReadMode, Status};
 use std::{io, path::Path};
+pub use walk_device::WalkDevice;
 
 /// Device identity excludes mount aliases and media identity. Different discs in
 /// the same drive must still contend on the same device lock.
@@ -34,6 +36,8 @@ pub struct Source {
 /// OS evidence only. UDF/ISO filesystem names never classify a physical drive.
 /// This may contact the mounted filesystem and belongs on a worker thread.
 pub fn probe(path: &Path) -> io::Result<Option<Source>> {
+    #[cfg(test)]
+    test_profiles::count_probe(path);
     #[cfg(test)]
     if let Some(source) = test_profiles::probe(path) {
         return Ok(Some(source));

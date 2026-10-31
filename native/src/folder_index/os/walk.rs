@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use super::super::model::{FolderIndex, IndexMsg, MAX_INDEX_DEPTH};
 use super::super::platform::{is_plain_directory, should_skip_meta, skip_unreadable_directory};
+use crate::source_media::{Guard, GuardedIterator, Priority, WalkDevice};
 
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(200);
 
@@ -26,7 +27,9 @@ pub(super) fn build_index_excluding(
     }
 
     let mut index = FolderIndex::new();
-    let mut stack = Vec::new();
+    // A pending folder carries the device of the folder it was entered from; a
+    // root has none and takes its own device when it is taken.
+    let mut stack: Vec<(PathBuf, usize, Option<WalkDevice>)> = Vec::new();
     let mut media = Vec::new();
     let mut last_progress = Instant::now();
     for root in roots {
@@ -34,40 +37,56 @@ pub(super) fn build_index_excluding(
             continue;
         }
         check_canceled(cancel)?;
-        let _guard = media_guard(&root, cancel)?;
+        let device = root_device(&root, cancel)?;
+        let _guard = device_guard(&device, &root, cancel)?;
         require_plain_directory(&root, "index root")?;
-        if let Some(guard) = &_guard {
-            media.push((root.clone(), guard.source().clone()));
+        if let Some(source) = device.protected_source() {
+            media.push((root.clone(), source));
         }
         let normalized = normalized_path(&root)?;
         if insert_path(&mut index, normalized)? {
-            let source = _guard.as_ref().map(|guard| guard.source().clone());
-            stack.push((root.clone(), 0usize, root, source));
+            stack.push((root, 0usize, None));
         }
     }
 
-    while let Some((dir, depth, root, source)) = stack.pop() {
+    while let Some((dir, depth, parent)) = stack.pop() {
         if excluded.iter().any(|excluded| dir.starts_with(excluded)) {
             continue;
         }
         check_canceled(cancel)?;
-        if let Some(source) = &source {
-            if crate::source_media::probe(&root)
+        let device = match &parent {
+            Some(parent) => parent.child(&dir, false),
+            None => WalkDevice::root(&dir),
+        };
+        let device = match device {
+            Ok(device) => device,
+            Err(error) if depth > 0 && skip_unreadable_directory(&error) => continue,
+            Err(error) => {
+                return Err(WalkStop::Failed(format!(
+                    "cannot read {}: {error}",
+                    dir.display()
+                )))
+            }
+        };
+        let protected = device.protected_source();
+        if let Some(source) = &protected {
+            if crate::source_media::probe(&dir)
                 .map_err(|error| WalkStop::Failed(error.to_string()))?
                 .as_ref()
                 != Some(source)
             {
                 return Err(WalkStop::Failed(format!(
                     "optical medium changed at {}",
-                    root.display()
+                    dir.display()
                 )));
             }
         }
         emit_progress(tx, &index, &dir, &mut last_progress, false)?;
 
-        let entries = match crate::source_media::GuardedIterator::new(
+        let entries = match GuardedIterator::with_device(
             &dir,
-            crate::source_media::Priority::Background,
+            protected,
+            Priority::Background,
             cancel,
             || {
                 require_plain_directory(&dir, "queued directory").map_err(|stop| match stop {
@@ -95,7 +114,7 @@ pub(super) fn build_index_excluding(
                 WalkStop::Failed(format!("cannot enumerate {}: {error}", dir.display()))
             })?;
             let path = entry.path();
-            let _guard = media_guard(&dir, cancel)?;
+            let _guard = device_guard(&device, &dir, cancel)?;
             let metadata = match std::fs::symlink_metadata(&path) {
                 Ok(metadata) => metadata,
                 Err(error) if skip_unreadable_directory(&error) => continue,
@@ -131,7 +150,7 @@ pub(super) fn build_index_excluding(
             }
             let normalized = normalized_path(&path)?;
             if insert_path(&mut index, normalized)? {
-                stack.push((path, child_depth, root.clone(), source.clone()));
+                stack.push((path, child_depth, Some(device.clone())));
             }
             emit_progress(tx, &index, &dir, &mut last_progress, false)?;
         }
@@ -208,17 +227,30 @@ fn emit_progress(
     .map_err(|_| WalkStop::ReceiverClosed)
 }
 
-fn media_guard(
+/// The device of a root, taken once: the root's guard and its own check follow it.
+fn root_device(path: &Path, cancel: &AtomicBool) -> Result<WalkDevice, WalkStop> {
+    WalkDevice::root(path).map_err(|error| device_error(path, error, cancel))
+}
+
+/// The device lock of one step in a folder: taken on a protected device only.
+fn device_guard(
+    device: &WalkDevice,
     path: &Path,
     cancel: &AtomicBool,
-) -> Result<Option<crate::source_media::Guard>, WalkStop> {
-    crate::source_media::acquire(path, crate::source_media::Priority::Background, cancel).map_err(
-        |error| {
-            if cancel.load(Ordering::Acquire) {
-                WalkStop::Canceled
-            } else {
-                WalkStop::Failed(format!("cannot read {}: {error}", path.display()))
-            }
-        },
-    )
+) -> Result<Option<Guard>, WalkStop> {
+    device
+        .guard(path, Priority::Background, cancel)
+        .map_err(|error| device_error(path, error, cancel))
 }
+
+fn device_error(path: &Path, error: io::Error, cancel: &AtomicBool) -> WalkStop {
+    if cancel.load(Ordering::Acquire) {
+        WalkStop::Canceled
+    } else {
+        WalkStop::Failed(format!("cannot read {}: {error}", path.display()))
+    }
+}
+
+#[cfg(test)]
+#[path = "abgleich_tests.rs"]
+mod abgleich_tests;
