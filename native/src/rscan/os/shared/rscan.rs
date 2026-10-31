@@ -4,6 +4,8 @@
 
 #[path = "budget.rs"]
 mod budget;
+#[path = "hash_walk_view.rs"]
+mod hash_walk_view;
 #[path = "parallel.rs"]
 mod parallel;
 #[path = "search.rs"]
@@ -90,6 +92,9 @@ fn run(
     truncated: Arc<AtomicBool>,
 ) {
     let start = Instant::now();
+    // One request for the whole tree only without a depth limit and without
+    // retention (see `hash_walk_view`).
+    let whole_tree = max_depth.is_none() && retention.is_none();
     let mut state = WalkState::new(tx, cancel, truncated, retention, start);
 
     match backend.stat(&root) {
@@ -132,6 +137,10 @@ fn run(
         }
     }
 
+    if whole_tree && hash_walk_view::walk_in_one_request(&backend, &root, &mut state) {
+        state.finish();
+        return;
+    }
     if max_depth.is_none() && backend.parallelism() > 1 {
         parallel::run(backend, root, state);
         return;
@@ -188,3 +197,11 @@ pub(super) fn report_spawn_failure(
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests_abgleich_fixture.rs"]
+mod tests_abgleich_fixture;
+
+#[cfg(test)]
+#[path = "tests_abgleich.rs"]
+mod tests_abgleich;

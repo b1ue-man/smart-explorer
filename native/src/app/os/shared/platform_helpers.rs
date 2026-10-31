@@ -1,4 +1,5 @@
 use super::super::prelude::*;
+use std::time::Duration;
 
 pub(in crate::app) use crate::filter::tree::ClipboardVirtualFile;
 
@@ -7,6 +8,12 @@ pub(in crate::app) enum ClipboardEffect {
     Copy,
     Move,
 }
+
+/// Time one frame may spend taking the messages of one scan channel. A fast
+/// scan is never held back by a fixed message count: what is still waiting
+/// after the budget is taken by the next frame, which is requested at once
+/// (`frame_update`). Taking a message is an append, so the budget is seldom used up.
+pub(in crate::app) const SCAN_DRAIN_BUDGET: Duration = Duration::from_millis(4);
 
 pub(in crate::app) fn drain_scan_channel(
     rx: &Receiver<ScanMessage>,
@@ -33,9 +40,34 @@ pub(in crate::app) fn drain_scan_channel_with_denied(
     error_msg: &mut Option<String>,
     denied: &mut crate::scanner::DeniedRoots,
 ) -> (bool, bool) {
+    drain_scan_channel_within(
+        rx,
+        entries,
+        progress,
+        failed_paths,
+        error_msg,
+        denied,
+        SCAN_DRAIN_BUDGET,
+    )
+}
+
+/// Takes the scan messages waiting in `rx` for at most `budget`. Returns
+/// whether entries arrived and whether the scan is done. Messages still
+/// waiting are taken by the next call; `frame_update` requests that frame at
+/// once.
+pub(in crate::app) fn drain_scan_channel_within(
+    rx: &Receiver<ScanMessage>,
+    entries: &mut Vec<FileEntry>,
+    progress: &mut ScanProgress,
+    failed_paths: &mut Vec<(String, String)>,
+    error_msg: &mut Option<String>,
+    denied: &mut crate::scanner::DeniedRoots,
+    budget: Duration,
+) -> (bool, bool) {
+    let deadline = Instant::now() + budget;
     let mut new_entries: Vec<FileEntry> = Vec::new();
     let mut got_done = false;
-    for _ in 0..64 {
+    while Instant::now() < deadline {
         match rx.try_recv() {
             Ok(ScanMessage::Entries(mut chunk)) => new_entries.append(&mut chunk),
             Ok(ScanMessage::Progress(p)) => *progress = p,
@@ -170,3 +202,95 @@ pub(in crate::app) const DEFAULT_DIRS_FIRST: bool = true;
 
 /// Per-location `dirs_first` overrides (`dir_sort.tsv`) live in `crate::connect`.
 pub(in crate::app) use crate::connect::{load_dir_sort, save_dir_sort};
+
+#[cfg(test)]
+mod tests {
+    use super::drain_scan_channel_within;
+    use crate::scanner::{DeniedRoots, ScanMessage};
+    use crate::types::{FileEntry, ScanProgress};
+    use crossbeam_channel::unbounded;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    fn row(index: usize) -> FileEntry {
+        let name = format!("f{index}");
+        FileEntry {
+            path: Arc::from(format!("/r/{name}").as_str()),
+            parent: Arc::from("/r"),
+            name: Arc::from(name.as_str()),
+            ext: Arc::from(""),
+            size: 1,
+            mtime_ms: 0,
+            btime_ms: 0,
+            is_dir: false,
+            is_symlink: false,
+            hidden: false,
+            system: false,
+            depth: 1,
+            id: None,
+        }
+    }
+
+    fn progress() -> ScanProgress {
+        ScanProgress {
+            permission_denied: 0,
+            scanned: 0,
+            bytes: 0,
+            errors: 0,
+            elapsed_ms: 0,
+            current_path: String::new(),
+        }
+    }
+
+    #[test]
+    fn abgleich_task_scan_drain_takes_every_waiting_message_within_its_budget() {
+        let (tx, rx) = unbounded();
+        for index in 0..200 {
+            tx.send(ScanMessage::Entries(vec![row(index)])).unwrap();
+        }
+        let mut entries = Vec::new();
+        let mut scan_progress = progress();
+        let mut failed = Vec::new();
+        let mut error = None;
+        let mut denied = DeniedRoots::default();
+        let (got_entries, got_done) = drain_scan_channel_within(
+            &rx,
+            &mut entries,
+            &mut scan_progress,
+            &mut failed,
+            &mut error,
+            &mut denied,
+            Duration::from_secs(60),
+        );
+        assert!(got_entries);
+        assert!(!got_done);
+        assert_eq!(entries.len(), 200, "no fixed count of messages per frame");
+        assert!(rx.is_empty());
+    }
+
+    #[test]
+    fn abgleich_task_scan_drain_leaves_the_rest_when_the_budget_is_used_up() {
+        let (tx, rx) = unbounded();
+        for index in 0..3 {
+            tx.send(ScanMessage::Entries(vec![row(index)])).unwrap();
+        }
+        let mut entries = Vec::new();
+        let mut scan_progress = progress();
+        let mut failed = Vec::new();
+        let mut error = None;
+        let mut denied = DeniedRoots::default();
+        let (got_entries, got_done) = drain_scan_channel_within(
+            &rx,
+            &mut entries,
+            &mut scan_progress,
+            &mut failed,
+            &mut error,
+            &mut denied,
+            Duration::ZERO,
+        );
+        assert!(!got_entries);
+        assert!(!got_done);
+        assert!(entries.is_empty());
+        assert!(!rx.is_empty(), "the next frame takes the waiting messages");
+    }
+}
