@@ -110,6 +110,23 @@ impl App {
         self.open_share_page(TAB_ROOMS, page)
     }
 
+    /// Shows the window on the page of the pinned device `(device_id,
+    /// public_key)`: its rights, program list and TCP rules.
+    pub(crate) fn open_share_device_page(&mut self, device_id: &str, public_key: &str) -> bool {
+        let page = SharePage::Device {
+            device_id: device_id.to_string(),
+            public_key: public_key.to_string(),
+        };
+        self.open_share_page(TAB_DEVICES, Some(page))
+    }
+
+    /// Shows the window on the tab „Freigaben“ for the Direct folders.
+    pub(crate) fn open_share_exports_page(&mut self) {
+        self.share_export_scope = 0;
+        self.share_export_target_id.clear();
+        self.open_share_page(TAB_EXPORTS, None);
+    }
+
     fn open_share_page(&mut self, tab: usize, page: Option<SharePage>) -> bool {
         self.show_share = true;
         self.share_tab = tab;

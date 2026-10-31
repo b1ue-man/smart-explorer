@@ -55,6 +55,7 @@ impl App {
     pub(in crate::app) fn ui_status(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         crate::app::host_key_ui::window(self, &ctx);
+        crate::app::share_rights_ui::window(self, &ctx);
         let sel_bytes = self.selection_bytes();
         let progress = self.progress.clone();
         let transfers: Vec<(usize, TransferProgress, String, bool)> = self

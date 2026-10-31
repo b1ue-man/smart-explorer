@@ -37,6 +37,12 @@ pub(super) fn publisher_ui(
             }),
     };
     let allow_weak_pin = state.allow_weak_pin;
+    // F5: the rights of the device that pairs with this offer, chosen here.
+    let offer_rights = crate::app::share_rights_choice_ui::offer_choice(
+        ui,
+        matches!(target, DiscoveryPublishTarget::Direct),
+        active.is_some(),
+    );
     ui.horizontal_wrapped(|ui| {
         ui.label("Dauer:");
         ui.add(
@@ -90,12 +96,19 @@ pub(super) fn publisher_ui(
             )
             .clicked()
         {
-            actions.push(DiscoveryUiAction::Publish {
+            let publish = DiscoveryUiAction::Publish {
                 target: target.clone(),
                 display_alias: display_alias.to_string(),
                 pin: crate::share::DiscoveryPin::new(pin.take()),
                 duration_secs,
                 allow_weak_pin,
+            };
+            actions.push(match offer_rights {
+                Some(rights) => DiscoveryUiAction::PublishWithRights {
+                    publish: Box::new(publish),
+                    rights,
+                },
+                None => publish,
             });
             state.allow_weak_pin = false;
         }

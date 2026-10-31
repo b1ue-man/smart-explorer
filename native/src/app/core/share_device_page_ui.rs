@@ -12,6 +12,7 @@ use crate::app::device_page_layout as layout;
 
 #[path = "share_device_connection_ui.rs"]
 mod connection;
+use crate::app::share_rights_choice_ui as rights_ui;
 use connection::{connection_card, header};
 
 pub(super) fn ui(app: &mut App, ui: &mut egui::Ui) {
@@ -76,20 +77,6 @@ fn has_contact(profiles: &crate::share::ShareProfiles, grant: &crate::share::Dir
     })
 }
 
-/// „Darf schreiben · Befehle: erlaubt · …“ of an authorization.
-fn rights_line(app: &App, ui: &mut egui::Ui, grant: &crate::share::DirectGrant) -> String {
-    let mut parts = vec![if grant.write {
-        "Darf schreiben".to_string()
-    } else {
-        "Nur lesen".to_string()
-    }];
-    let key = crate::app::share_exec_ui::direct_target_key(&grant.device_id, &grant.fingerprint);
-    if let Some(access) = crate::app::share_exec_ui::exec_summary(app, ui, &key) {
-        parts.push(access);
-    }
-    parts.join(" · ")
-}
-
 /// One device row: name, status, a muted second line, buttons on the right.
 fn device_row(
     ui: &mut egui::Ui,
@@ -119,6 +106,7 @@ fn overview(app: &mut App, ui: &mut egui::Ui) {
     let removed = app.share_profiles.removed_direct_peers.len();
     let mut next = None;
     let mut open_target = None;
+    let mut open_rights = None;
     if requests > 0 {
         ui.horizontal_wrapped(|ui| {
             ui.colored_label(
@@ -152,11 +140,13 @@ fn overview(app: &mut App, ui: &mut egui::Ui) {
     let contact_rights: Vec<Option<String>> = profiles
         .direct_contacts
         .iter()
-        .map(|contact| grant_of(profiles, contact).map(|grant| rights_line(app, ui, grant)))
+        .map(|contact| {
+            grant_of(profiles, contact).map(|grant| rights_ui::list_line(app, ui, grant))
+        })
         .collect();
     let grant_rights: Vec<String> = unlinked
         .iter()
-        .map(|grant| rights_line(app, ui, grant))
+        .map(|grant| rights_ui::list_line(app, ui, grant))
         .collect();
     layout::card(ui, "Meine Geräte", None, |ui| {
         if profiles.direct_contacts.is_empty() && unlinked.is_empty() {
@@ -173,6 +163,11 @@ fn overview(app: &mut App, ui: &mut egui::Ui) {
                 .clone()
                 .unwrap_or_else(|| contact.access_state.label().to_string());
             device_row(ui, &contact.display_name, Some(status), &detail, |ui| {
+                if let Some(target) = grant_of(profiles, contact)
+                    .and_then(|grant| rights_ui::open_button(ui, profiles, grant))
+                {
+                    open_rights = Some(target);
+                }
                 if ui.button("Einstellungen").clicked() {
                     next = Some((TAB_DEVICES, SharePage::Contact(contact.id.clone())));
                 }
@@ -186,6 +181,9 @@ fn overview(app: &mut App, ui: &mut egui::Ui) {
         for (grant, rights) in unlinked.iter().zip(&grant_rights) {
             let detail = format!("Nur Zugriff auf meine Freigaben · {rights}");
             device_row(ui, &grant.device_name, None, &detail, |ui| {
+                if let Some(target) = rights_ui::open_button(ui, profiles, grant) {
+                    open_rights = Some(target);
+                }
                 if ui.button("Einstellungen").clicked() {
                     next = Some((TAB_DEVICES, SharePage::Grant(grant.device_id.clone())));
                 }
@@ -235,6 +233,9 @@ fn overview(app: &mut App, ui: &mut egui::Ui) {
     if let Some(target) = open_target {
         app.open_share_target(target);
     }
+    if let Some(target) = open_rights {
+        rights_ui::open_for_target(app, ui.ctx(), &target);
+    }
 }
 
 fn contact_page(app: &mut App, ui: &mut egui::Ui, contact_id: &str) {
@@ -261,6 +262,9 @@ fn contact_page(app: &mut App, ui: &mut egui::Ui, contact_id: &str) {
         .clone()
         .zip(contact.remote_public_key.clone());
     let grant = grant_of(&app.share_profiles, &contact).cloned();
+    if let Some((device, key)) = &identity {
+        rights_ui::device_card(app, ui, device, key);
+    }
     layout::card(ui, "Was dieses Gerät bei mir darf", None, |ui| {
         let mut share_back = contact.relation.share_back;
         if ui
@@ -328,6 +332,7 @@ fn grant_page(app: &mut App, ui: &mut egui::Ui, device_id: &str) {
         RichText::new("Dieses Gerät hat Zugriff auf meine Freigaben, ist aber nicht in meiner Geräteliste gespeichert.")
             .color(theme::muted(ui)),
     );
+    rights_ui::device_card(app, ui, &grant.device_id, &grant.public_key);
     layout::card(ui, "Was dieses Gerät bei mir darf", None, |ui| {
         grant_rights(app, ui, &grant);
     });

@@ -58,6 +58,9 @@ fn overview(app: &mut App, ui: &mut egui::Ui) {
                     format!("{pending} warten auf Zulassung"),
                 );
             }
+            if crate::app::share_rights_choice_ui::room_open(&app.share_profiles, &room.id) {
+                ui.colored_label(theme::warning(ui), "Rechte offen");
+            }
             if ui.button("Details").clicked() {
                 next = Some(SharePage::Room(room.id.clone()));
             }
@@ -86,6 +89,7 @@ fn room_page(app: &mut App, ui: &mut egui::Ui, profile_id: &str) {
         pages_ui::back(ui);
         return;
     }
+    crate::app::share_rights_choice_ui::room_card(app, ui, &room.id);
     pages_ui::heading(ui, "RAUM");
     ui.label(format!(
         "Status: {}",

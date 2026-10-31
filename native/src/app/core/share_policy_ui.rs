@@ -33,9 +33,13 @@ impl App {
             );
         });
         if chosen == crate::share::DirectRequestPolicy::AutoAccept {
+            ui.label("Rechte der Geräte, die automatisch angenommen werden:");
+            crate::app::share_rights_choice_ui::code_row(self, ui);
             ui.colored_label(
                 theme::warning(ui),
-                "Geraete mit deinem Direkt-Code koennen Zugriff auf deine Freigaben erhalten, ohne dass du jede Anfrage bestaetigst. Schreibrecht und Befehle werden dadurch nicht erlaubt. Entfernte Identitaeten bleiben gesperrt.",
+                crate::app::share_rights_model::auto_accept_text(
+                    self.share_profiles.code_rights.as_ref(),
+                ),
             );
         }
         if chosen != current {

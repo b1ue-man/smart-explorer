@@ -277,6 +277,18 @@ mod share_rdp_ui;
 #[cfg(test)]
 #[path = "core/share_remote_task_tests.rs"]
 mod share_remote_task_tests;
+#[path = "core/share_rights_choice_ui.rs"]
+mod share_rights_choice_ui;
+#[path = "core/share_rights_core.rs"]
+mod share_rights_core;
+#[path = "core/share_rights_model.rs"]
+mod share_rights_model;
+#[path = "core/share_rights_more_ui.rs"]
+mod share_rights_more_ui;
+#[path = "core/share_rights_rows_ui.rs"]
+mod share_rights_rows_ui;
+#[path = "core/share_rights_ui.rs"]
+mod share_rights_ui;
 #[path = "core/share_routes_ui.rs"]
 mod share_routes_ui;
 #[path = "core/share_tcp_ui.rs"]

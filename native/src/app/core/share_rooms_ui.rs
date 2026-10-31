@@ -28,6 +28,8 @@ impl App {
                         .small()
                         .color(theme::muted(ui)),
                 );
+                let preset = crate::app::share_rights_choice_ui::room_create_choice(ui);
+                let mut create_finished = None;
                 ui.horizontal_wrapped(|ui| {
                     ui.add(
                         egui::TextEdit::singleline(&mut self.share_room_create_name_input)
@@ -47,10 +49,12 @@ impl App {
                             &self.share_room_draft_code,
                             &self.share_room_create_name_input,
                         ) {
-                            Ok((profiles, _)) => {
+                            Ok((profiles, id)) => {
                                 self.share_profiles = profiles;
                                 self.generate_room_draft_code();
                                 let _ = self.configure_share_service();
+                                // F5: the rights chosen above, else the window opens.
+                                create_finished = Some(id);
                             }
                             Err(e) => self.error_msg = Some(e),
                         }
@@ -59,6 +63,10 @@ impl App {
                         self.share_room_create_name_input.clear();
                     }
                 });
+                if let Some(id) = create_finished {
+                    crate::app::share_rights_choice_ui::finish_room(self, ui.ctx(), &id, preset);
+                    crate::app::share_rights_choice_ui::reset_room_create_choice(ui);
+                }
             });
         ui.separator();
         egui::CollapsingHeader::new("Raum per Code beitreten")

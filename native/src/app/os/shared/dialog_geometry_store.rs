@@ -151,6 +151,7 @@ const KEYS: &[&str] = &[
     "settings_ui.0",
     "share_access_dialog_ui.0",
     "share_access_room_ui.0",
+    "share_rights_ui.0",
     "share_screen_codec_ui.0",
     "share_screen_codec_ui.1",
     "share_window_ui.0",
