@@ -832,12 +832,20 @@ class SshBox:
         speed.SECRETS.add(self.password)
         self.name = f"se-abgleich-ssh-{os.getpid()}"
         self.port = None
+        # {host address: port} of the two published ports (SSH_HOSTS).
+        self.ports = {}
         self.data.mkdir(parents=True)
+
+    def endpoint(self, agent):
+        """(host, port) of the plain SFTP (False) or the agent connection (True)."""
+        host = SSH_HOSTS[agent]
+        return host, self.ports[host]
 
     def start(self):
         log = self.log_root / "ssh-box.log"
         run(["docker", "rm", "-f", self.name], timeout=120)
-        started = run(["docker", "run", "-d", "--name", self.name, "-p", "127.0.0.1::2222",
+        started = run(["docker", "run", "-d", "--name", self.name,
+                       *(item for host in SSH_HOSTS.values() for item in ("-p", f"{host}::2222")),
                        "-e", f"PUID={os.getuid()}", "-e", f"PGID={os.getgid()}", "-e", "PASSWORD_ACCESS=true",
                        "-e", f"USER_NAME={self.user}", "-e", f"USER_PASSWORD={self.password}",
                        "-v", f"{self.home}:/config", "lscr.io/linuxserver/openssh-server:latest"],
@@ -859,8 +867,9 @@ class SshBox:
 
     def wait(self):
         mapped = run(["docker", "port", self.name, "2222/tcp"], timeout=60).stdout.strip().splitlines()
-        ensure(mapped, "docker port gave no mapping")
-        port = int(mapped[0].rsplit(":", 1)[1])
+        self.ports = {line.rsplit(":", 1)[0]: int(line.rsplit(":", 1)[1]) for line in mapped if ":" in line}
+        ensure(set(SSH_HOSTS.values()) <= set(self.ports), f"docker port gave {mapped}")
+        port = self.ports[SSH_HOSTS[False]]
         ensure(speed.wait_tcp(port, b"SSH-", 120), "the OpenSSH container did not answer")
         time.sleep(2)
         return port
@@ -873,9 +882,10 @@ class SshBox:
 
 
 # `se connections add` keeps one saved connection per host, port, user and root (a second label for the
-# same endpoint replaces the first, in v0.5.189 as in the candidate): the plain SFTP and the agent
-# connection to one SSH account therefore name the host differently, and each name's key is confirmed.
-SSH_HOSTS = {False: "127.0.0.1", True: "localhost"}
+# same endpoint replaces the first, in v0.5.189 as in the candidate): the SSH container publishes its port
+# on two loopback addresses (all of 127/8 is the loopback on Linux), the plain SFTP connection uses the
+# first and the agent connection the second, and each address's host key is confirmed.
+SSH_HOSTS = {False: "127.0.0.1", True: "127.0.0.2"}
 
 
 def add_saved(binary, env, kind, port, user, password, root, label, log, agent=False, trust_client=None,
@@ -1227,9 +1237,10 @@ def stage_ssh(ctx, trees, client_of):
             client = client_of(variant)
             problem = None
             for label, agent in (("sftp", False), ("agent", True)):
-                problem = problem or add_saved(binary, client.env, "sftp", box.port, box.user, box.password,
+                host, port = box.endpoint(agent)
+                problem = problem or add_saved(binary, client.env, "sftp", port, box.user, box.password,
                                                "/config/data", label, log, agent=agent, trust_client=client,
-                                               host=SSH_HOSTS[agent])
+                                               host=host)
             if problem:
                 results.record("equality", f"{variant}: saved SSH connections work", False, problem)
                 continue
@@ -2829,9 +2840,10 @@ def job_measure(results, log_root, args):
             for label, binary in tools.items():
                 problem = None
                 for conn, agent in (("sftp", False), ("agent", True)):
-                    problem = problem or add_saved(binary, envs[label], "sftp", box.port, box.user, box.password,
+                    host, port = box.endpoint(agent)
+                    problem = problem or add_saved(binary, envs[label], "sftp", port, box.user, box.password,
                                                    "/config/data", conn, log_root / "measure-connections.log",
-                                                   agent=agent, trust_client=clients[label], host=SSH_HOSTS[agent])
+                                                   agent=agent, trust_client=clients[label], host=host)
                 results.record("measure", f"{label}: saved SSH connections work", problem is None, problem or "")
                 connected = connected and problem is None
             if connected:
