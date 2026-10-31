@@ -101,13 +101,19 @@ data class ShareExports(
     val rooms: Map<String, List<ShareExport>> = emptyMap(),
 )
 
-/** Own running offer; [target] is `direct` or a room profile id. */
+/**
+ * Own running offer; [target] is `direct` or a room profile id. [rights] are the rights a device
+ * gets that pairs with the offer, as the worker holds them (so they are right after a restart of
+ * the app too); `null`: the device connects without rights and waits for its confirmation, and a
+ * room's rights are the room's own.
+ */
 @Serializable
 data class DiscoveryOffer(
     val offerId: String,
     val target: String = SHARE_DIRECT,
     val alias: String = "",
     val untilMs: Long = 0,
+    val rights: Rights? = null,
 )
 
 /** A device or room that is discoverable right now; [kind] `direct|room`. */

@@ -19,6 +19,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.smartexplorer.android.R
 import app.smartexplorer.android.api.RightsPresetInfo
+import app.smartexplorer.android.api.SHARE_DIRECT
 import app.smartexplorer.android.api.ShareStatus
 import app.smartexplorer.android.api.ShareServerInfo
 import app.smartexplorer.android.ui.common.SeIcon
@@ -109,6 +110,11 @@ internal fun ThisDeviceCard(
                 Text(
                     "Suchbar als „${offer.alias}“ – noch %d:%02d".format(left / 60, left % 60),
                     style = MaterialTheme.typography.bodyMedium,
+                    modifier = inset,
+                )
+                Text(
+                    offerRightsText(offer.rights, room = offer.target != SHARE_DIRECT),
+                    style = MaterialTheme.typography.bodySmall,
                     modifier = inset,
                 )
                 OutlinedButton(onClick = { actions.stopDiscoverable(offer.offerId) }, modifier = inset) { Text("Suchbar beenden") }

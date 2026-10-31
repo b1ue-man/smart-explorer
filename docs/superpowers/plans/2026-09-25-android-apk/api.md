@@ -636,7 +636,7 @@ ShareStatus {running, connected, relayUrl:String?, lastError:String?, server:Str
   writeGrants:[{deviceId,name,publicKey,nodeId,fingerprint,state:"Accepted|Ignored|Reconfirm",
                 write:Boolean,active:Boolean,canSetWrite:Boolean}],
   autoHomeMigrations:[{scope,path}],
-  discovery:{offer:{offerId, target, alias, untilMs}?, advertisements:[{discoveryId, kind:"direct|room",
+  discovery:{offer:{offerId, target, alias, untilMs, rights:Rights?}?, advertisements:[{discoveryId, kind:"direct|room",
              alias, expiresMs, compatible:Boolean}], exchange:{exchangeId, state:"running|done|failed|canceled",
              message:String?}?},
   removedDevices:[{deviceId, name}], notices:[String]}
@@ -842,6 +842,10 @@ später zugelassene.
   andere Identität oder nicht aktive Freigabe `conflict`; ein anderes Konto als das App-Konto ist auf
   Android `conflict` (Hostprüfung wie `setAccess`)
 - `share.cancelRights {target:RightsTarget}` → `{changed:Boolean, persisted:true, pendingRights, codeRights}`
+- `share.status` → `discovery.offer.rights`: die Rechte, die ein Gerät erhält, das sich mit dem laufenden
+  PIN-Angebot koppelt, so wie der Share-Worker sie hält (also auch nach einem Neustart der App richtig);
+  `null`: das Gerät verbindet ohne Rechte und wartet auf „Bestätigen“; bei einem Raum immer `null`, es gelten
+  die Rechte des Raums. Ein Stand ohne das Feld liest Kotlin als `null` (`DiscoveryOffer.rights`).
 - `share.setCodeRights {preset:String?, rights:Rights?, clear:Boolean=false}` → gleiche Form; `clear:true`
   entfernt die Code-Rechte (Geräte warten dann ohne Rechte)
 

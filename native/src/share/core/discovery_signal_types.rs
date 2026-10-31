@@ -276,6 +276,13 @@ pub enum DiscoveryEvent {
         display_alias: String,
         discoverable_until: i64,
     },
+    /// The rights a device gets that pairs with the offer (`None`: it waits
+    /// for them). Sent once per offer, right after `OfferPrepared`, so the
+    /// daemon's offer list names them for every surface (plan 2026-10-31 F5).
+    OfferRights {
+        offer_id: String,
+        rights: Option<super::connection_rights::ConnectionRights>,
+    },
     OfferStopped {
         offer_id: String,
         reason: DiscoveryOfferStopReason,

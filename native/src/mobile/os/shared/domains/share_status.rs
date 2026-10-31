@@ -194,15 +194,20 @@ fn discovery_json(input: &StatusInput<'_>) -> Value {
             let key = target_key(&offer.target);
             let alias = match &offer.target {
                 DiscoveryPublishTarget::Room { room_name, .. } => room_name.clone(),
-                DiscoveryPublishTarget::Direct => {
-                    input.offer_aliases.get(&key).cloned().unwrap_or_default()
-                }
+                DiscoveryPublishTarget::Direct => input
+                    .offer_aliases
+                    .get(&key)
+                    .cloned()
+                    .unwrap_or_else(|| offer.alias.clone()),
             };
             json!({
                 "offerId": offer.offer_id,
                 "target": key,
                 "alias": alias,
                 "untilMs": offer.expires_at.saturating_mul(1000),
+                // What a device pairing with the offer gets, as the worker
+                // reports it (plan 2026-10-31 F5); null: it waits.
+                "rights": offer.rights.as_ref().map(super::share_rights::rights_json),
             })
         });
     let advertisements: Vec<Value> = discovery
@@ -330,3 +335,7 @@ pub(super) fn open_incoming(profiles: &ShareProfiles, now_secs: i64) -> Vec<Stri
 #[cfg(test)]
 #[path = "share_status_desktop_tests.rs"]
 mod desktop_tests;
+
+#[cfg(test)]
+#[path = "share_status_rights_tests.rs"]
+mod abgleich_task_tests;

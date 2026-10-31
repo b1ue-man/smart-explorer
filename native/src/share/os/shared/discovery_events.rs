@@ -313,6 +313,9 @@ pub fn apply_share_discovery_event(
             discoverable_until,
             DiscoveryOfferPhase::Published,
         ),
+        crate::share::DiscoveryEvent::OfferRights { offer_id, rights } => {
+            state.set_offer_rights(&offer_id, rights)
+        }
         crate::share::DiscoveryEvent::OfferStopped { offer_id, reason } => {
             let status = match reason {
                 crate::share::DiscoveryOfferStopReason::Requested => "Sichtbarkeit beendet",
@@ -421,7 +424,7 @@ fn map_kind(kind: crate::share::DiscoveryKind) -> DiscoveryUiKind {
     }
 }
 
-fn map_publish_target(
+pub(super) fn map_publish_target(
     target: crate::share::DiscoveryPublishTarget,
     display_alias: String,
 ) -> DiscoveryPublishTarget {
@@ -477,6 +480,7 @@ mod tests {
             display_alias: "Team".into(),
             discoverable_until: i64::MAX,
             published: true,
+            rights: None,
         };
         state.retain_live_offers(std::slice::from_ref(&kept));
         let ids: Vec<_> = state

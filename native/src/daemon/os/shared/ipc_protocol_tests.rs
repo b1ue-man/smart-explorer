@@ -276,6 +276,7 @@ fn cli_task_snapshot_offers_default_and_share_command_reply_roundtrips() {
         display_alias: "Team".into(),
         discoverable_until: 42,
         published: true,
+        rights: None,
     };
     let response = IpcResponse::ShareCommand {
         reply: super::ShareCommandReply::DiscoveryOffer {

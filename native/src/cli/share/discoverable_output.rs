@@ -17,18 +17,32 @@ pub(super) fn offer_value(
         "discoverable_until": offer.discoverable_until,
         "discoverable_until_local": local_time(offer.discoverable_until),
         "remaining_secs": remaining_secs(offer, now),
+        "rights": offer.rights.as_ref().map(super::rights_args::rights_value),
+        "rights_summary": rights_summary(offer),
     })
+}
+
+/// What a device pairing with the offer gets: the summary of its rights, or
+/// that it waits for the confirmation (plan 2026-10-31 F1, F5).
+pub(super) fn rights_summary(offer: &OwnDiscoveryOffer) -> String {
+    match (&offer.rights, &offer.target) {
+        (Some(rights), _) => rights.summary(),
+        (None, DiscoveryPublishTarget::Direct) => "waits for confirmation".to_string(),
+        // A room's rights are the room's own (`se share grants confirm --room`).
+        (None, DiscoveryPublishTarget::Room { .. }) => "set with the room".to_string(),
+    }
 }
 
 pub(super) fn offer_text(offer: &OwnDiscoveryOffer, profiles: &ShareProfiles, now: i64) -> String {
     format!(
-        "discoverable\t{}\tstate={}\ttarget={}\tname={}\tuntil={}\tremaining={}",
+        "discoverable\t{}\tstate={}\ttarget={}\tname={}\tuntil={}\tremaining={}\trights={}",
         offer.offer_id,
         state_code(offer),
         target_text(&offer.target, profiles),
         clean(&offer.display_alias),
         local_time(offer.discoverable_until),
         remaining(remaining_secs(offer, now)),
+        clean(&rights_summary(offer)),
     )
 }
 
@@ -145,11 +159,12 @@ mod tests {
             display_alias: "Lap\ttop".into(),
             discoverable_until: 1_299,
             published: true,
+            rights: None,
         };
         let text = offer_text(&direct, &profiles, 1_000);
         assert!(text
             .starts_with("discoverable\to1\tstate=published\ttarget=direct\tname=Lap top\tuntil="));
-        assert!(text.ends_with("\tremaining=4m59s"));
+        assert!(text.ends_with("\tremaining=4m59s\trights=waits for confirmation"));
 
         let room = OwnDiscoveryOffer {
             offer_id: "o2".into(),
@@ -159,8 +174,10 @@ mod tests {
             display_alias: "Team".into(),
             discoverable_until: 5_000,
             published: false,
+            rights: None,
         };
         assert!(offer_text(&room, &profiles, 1_000).contains("\ttarget=room:Team\t"));
+        assert!(offer_text(&room, &profiles, 1_000).ends_with("\trights=set with the room"));
         let value = offer_value(&room, &profiles, 1_000);
         assert_eq!(value["state"], "prepared");
         assert_eq!(value["target"]["kind"], "room");
@@ -177,3 +194,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "discoverable_output_rights_tests.rs"]
+mod abgleich_task_tests;

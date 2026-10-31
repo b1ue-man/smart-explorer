@@ -1,6 +1,8 @@
 //! Discovery (PIN pairing) client state: own offers, advertised entries,
 //! pending commands and key exchanges, without any UI.
 
+#[path = "discovery_live_offers.rs"]
+mod live_offers;
 #[path = "discovery_pairing_ui.rs"]
 mod pairing_ui;
 
@@ -83,6 +85,12 @@ pub struct ActiveDiscoveryOffer {
     pub target: DiscoveryPublishTarget,
     pub expires_at: i64,
     pub phase: DiscoveryOfferPhase,
+    /// What a device pairing with this offer gets (plan 2026-10-31 F5), as
+    /// the worker reports it; `None`: it connects without rights.
+    pub rights: Option<crate::share::connection_rights::ConnectionRights>,
+    /// The name the offer is published under, when the worker named it (an
+    /// offer taken up after a restart of the interface); empty otherwise.
+    pub alias: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -268,12 +276,15 @@ impl DiscoveryUiState {
                 existing.offer_id = offer_id;
                 existing.expires_at = expires_at;
                 existing.phase = phase;
+                existing.rights = None;
             } else {
                 self.active_offers.push(ActiveDiscoveryOffer {
                     offer_id,
                     target: target.clone(),
                     expires_at,
                     phase,
+                    rights: None,
+                    alias: String::new(),
                 });
             }
         }
@@ -330,17 +341,6 @@ impl DiscoveryUiState {
         self.active_offers
             .retain(|offer| offer.offer_id != offer_id);
         self.status = Some("Sichtbarkeit beendet".to_string());
-    }
-
-    /// Drops offers the Share worker no longer runs, for example after the
-    /// daemon was handed over to a new version that cannot know them.
-    pub fn retain_live_offers(&mut self, live: &[crate::share::OwnDiscoveryOffer]) {
-        let before = self.active_offers.len();
-        self.active_offers
-            .retain(|offer| live.iter().any(|live| live.offer_id == offer.offer_id));
-        if self.active_offers.len() < before {
-            self.status = Some(WORKER_STOPPED_STATUS.to_string());
-        }
     }
 
     pub fn connect_started(&mut self, discovery_id: &str) -> bool {

@@ -271,6 +271,7 @@ mod tests {
             display_alias: "Laptop".into(),
             discoverable_until: 1_900_000_000,
             published: true,
+            rights: None,
         }
     }
 

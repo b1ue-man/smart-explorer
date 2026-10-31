@@ -321,6 +321,7 @@ impl DiscoverySignalRuntime {
             self.port.remove_offer(&offer_id);
             return Err(eio("Discovery-Crypto-Port lieferte inkompatible Metadaten"));
         }
+        let announced_rights = limits.rights.clone();
         self.port.set_offer_rights(&offer_id, limits.rights);
         let unix_duration = i64::try_from(duration_secs).unwrap_or(i64::MAX);
         let discoverable_until = now_secs().saturating_add(unix_duration);
@@ -350,6 +351,13 @@ impl DiscoverySignalRuntime {
                 target,
                 display_alias,
                 discoverable_until,
+            },
+        );
+        send_discovery_event(
+            events,
+            DiscoveryEvent::OfferRights {
+                offer_id: offer_id.clone(),
+                rights: announced_rights,
             },
         );
         Ok(DiscoveryOfferHandle { offer_id })

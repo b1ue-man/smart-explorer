@@ -301,15 +301,25 @@ pub(in crate::app) fn store_code_rights(app: &mut App, rights: Option<Connection
 }
 
 /// The preset a new PIN offer hands to the device that pairs with it (F5):
-/// the buttons while no offer is visible, the choice as text while one is.
-/// `None`: no rights in advance (the device waits). Only Direct offers
-/// carry rights; a room's rights are set with the room.
+/// the buttons while no offer is visible, the rights the running offer
+/// really carries (as the worker reports them, also after the window was
+/// restarted) as text while one is. `None`: no rights in advance (the
+/// device waits). Only Direct offers carry rights; a room's rights are set
+/// with the room.
 pub(in crate::app) fn offer_choice(
     ui: &mut egui::Ui,
     direct: bool,
-    visible: bool,
+    active: Option<&crate::share::discovery_state::ActiveDiscoveryOffer>,
 ) -> Option<ConnectionRights> {
     if !direct {
+        return None;
+    }
+    if let Some(offer) = active {
+        ui.label(
+            RichText::new(offer.rights_sentence())
+                .small()
+                .color(theme::muted(ui)),
+        );
         return None;
     }
     let id = egui::Id::new("share_offer_rights_preset");
@@ -326,22 +336,16 @@ pub(in crate::app) fn offer_choice(
                 .to_string()
         }
     };
-    if visible {
-        ui.label(RichText::new(text).small().color(theme::muted(ui)));
-    } else {
-        ui.label(
-            RichText::new("Rechte für das Gerät, das verbindet")
-                .small()
-                .color(theme::muted(ui)),
-        );
-        if let Some(choice) =
-            preset_buttons(ui, stored, Some(("Danach festlegen", stored.is_none())))
-        {
-            ui.data_mut(|data| data.insert_temp(id, choice));
-            return choice.map(RightsPreset::rights);
-        }
-        ui.label(RichText::new(text).small().color(theme::muted(ui)));
+    ui.label(
+        RichText::new("Rechte für das Gerät, das verbindet")
+            .small()
+            .color(theme::muted(ui)),
+    );
+    if let Some(choice) = preset_buttons(ui, stored, Some(("Danach festlegen", stored.is_none()))) {
+        ui.data_mut(|data| data.insert_temp(id, choice));
+        return choice.map(RightsPreset::rights);
     }
+    ui.label(RichText::new(text).small().color(theme::muted(ui)));
     stored.map(RightsPreset::rights)
 }
 

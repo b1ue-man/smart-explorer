@@ -3,7 +3,7 @@ package app.smartexplorer.android.ui.share
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import app.smartexplorer.android.api.RightsTarget
 import app.smartexplorer.android.api.ShareRightsApi
@@ -26,7 +26,14 @@ internal fun RightsSheetHost(
     val status = vm.status
     val provider = vm.access?.execProvider
     val offered = OfferedRights.from(provider, status?.execProvider)
-    var draft by remember(request.key, offered) { mutableStateOf(RightsDraft.fromSeed(request.seed, request.known, offered)) }
+    // The draft survives a configuration change (rotation); a new request or another set of
+    // offered rights starts again from the seed.
+    var draft by rememberSaveable(
+        request.key,
+        offered,
+        stateSaver = RIGHTS_DRAFT_SAVER,
+        key = "rights-draft/${request.key}",
+    ) { mutableStateOf(RightsDraft.fromSeed(request.seed, request.known, offered)) }
     val action = rememberShareAction()
     val name = request.name.ifBlank { if (request.target.isRoom) "Raum" else "Gerät" }
     RightsSheet(

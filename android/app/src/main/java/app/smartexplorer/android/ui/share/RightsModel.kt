@@ -451,6 +451,18 @@ internal fun codeRightsText(codeRights: Rights?): String = when {
     else -> "Dieser Code vergibt sofort: ${rightsSummary(codeRights)}."
 }
 
+/**
+ * What a device that pairs with the running PIN offer gets (the offer's `rights`, plan 2026-10-31
+ * F5): the rights the worker holds, or that it waits for the confirmation. A room's offer carries
+ * none; the room's own rights apply.
+ */
+internal fun offerRightsText(rights: Rights?, room: Boolean = false): String = when {
+    room -> "Die Rechte der Mitglieder legt der Raum fest."
+    rights == null -> "Das Gerät, das mit dieser PIN verbindet, wartet ohne Rechte; du legst sie danach fest."
+    !grantsAnything(rights) -> "Das Gerät, das mit dieser PIN verbindet, wird ohne Rechte verbunden."
+    else -> "Das Gerät, das mit dieser PIN verbindet, erhält: ${rightsSummary(rights)}."
+}
+
 /** The sentence of a request policy hint: whether new devices are accepted automatically and with which rights. */
 internal fun requestPolicyHint(requests: String?, codeRights: Rights?): String = when (requests) {
     "AutoAccept" ->

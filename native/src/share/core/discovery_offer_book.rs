@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
+use super::connection_rights::ConnectionRights;
 use super::discovery_signal_types::{
     DiscoveryEvent, DiscoveryOfferStopReason, DiscoveryPublishTarget,
 };
@@ -23,6 +24,11 @@ pub struct OwnDiscoveryOffer {
     pub discoverable_until: i64,
     /// The Share server confirmed the current publication lease.
     pub published: bool,
+    /// The rights a device gets that pairs with this offer (plan 2026-10-31
+    /// F5), as the worker holds them. `None`: the device connects without
+    /// rights and waits for its confirmation (F1). Rooms never carry any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rights: Option<ConnectionRights>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -34,6 +40,8 @@ pub enum OfferLookup {
 #[derive(Debug, Default)]
 pub struct DiscoveryOfferBook {
     active: BTreeMap<String, OwnDiscoveryOffer>,
+    /// Rights announced before their offer was seen (kept until it is).
+    early_rights: BTreeMap<String, ConnectionRights>,
     ended: VecDeque<(String, DiscoveryOfferStopReason)>,
 }
 
@@ -52,6 +60,9 @@ impl DiscoveryOfferBook {
                 display_alias,
                 discoverable_until,
             } => self.upsert(offer_id, target, display_alias, *discoverable_until, true),
+            DiscoveryEvent::OfferRights { offer_id, rights } => {
+                self.set_rights(offer_id, rights.clone())
+            }
             DiscoveryEvent::OfferStopped { offer_id, reason } => self.end(offer_id, *reason),
             DiscoveryEvent::DiscoveryList { .. }
             | DiscoveryEvent::ExchangeStarted { .. }
@@ -117,6 +128,11 @@ impl DiscoveryOfferBook {
         discoverable_until: i64,
         published: bool,
     ) {
+        // A lease renewal or lapse rewrites the offer; its rights stay.
+        let rights = match self.active.get(offer_id) {
+            Some(known) => known.rights.clone(),
+            None => self.early_rights.remove(offer_id),
+        };
         self.active.insert(
             offer_id.to_string(),
             OwnDiscoveryOffer {
@@ -125,12 +141,28 @@ impl DiscoveryOfferBook {
                 display_alias: display_alias.to_string(),
                 discoverable_until,
                 published,
+                rights,
             },
         );
     }
 
+    fn set_rights(&mut self, offer_id: &str, rights: Option<ConnectionRights>) {
+        match self.active.get_mut(offer_id) {
+            Some(offer) => offer.rights = rights,
+            None => match rights {
+                Some(rights) => {
+                    self.early_rights.insert(offer_id.to_string(), rights);
+                }
+                None => {
+                    self.early_rights.remove(offer_id);
+                }
+            },
+        }
+    }
+
     fn end(&mut self, offer_id: &str, reason: DiscoveryOfferStopReason) {
         self.active.remove(offer_id);
+        self.early_rights.remove(offer_id);
         self.ended.retain(|(ended, _)| ended != offer_id);
         self.ended.push_back((offer_id.to_string(), reason));
         while self.ended.len() > RECENTLY_ENDED_CAPACITY {
@@ -138,6 +170,10 @@ impl DiscoveryOfferBook {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "discovery_offer_rights_snapshot_tests.rs"]
+mod abgleich_task_tests;
 
 #[cfg(test)]
 mod tests {

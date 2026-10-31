@@ -41,7 +41,7 @@ pub(super) fn publisher_ui(
     let offer_rights = crate::app::share_rights_choice_ui::offer_choice(
         ui,
         matches!(target, DiscoveryPublishTarget::Direct),
-        active.is_some(),
+        active.as_ref(),
     );
     ui.horizontal_wrapped(|ui| {
         ui.label("Dauer:");
