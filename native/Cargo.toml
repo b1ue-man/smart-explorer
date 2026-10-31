@@ -412,6 +412,9 @@ rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem
 # from build.rs. Both dependencies already occur in Cargo.lock.
 serde_json = "1"
 sha2 = "0.10"
+# Deflates the embedded agent bundles and license file (build.rs); the same
+# pure-Rust flate2 as the program's, already in Cargo.lock.
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 # Private P27 relay fixture only. Production Iroh features remain unchanged;

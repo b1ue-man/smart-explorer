@@ -3,7 +3,7 @@ use super::transport::AgentReconnect;
 use crate::agent_proto;
 use crate::vfs::{Backend, BackendHandle};
 use std::io::{self, Read, Write};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 /// A bundled agent binary for one server target. The integrity hash is computed
 /// from `bytes` at deploy time.
@@ -11,19 +11,41 @@ pub struct AgentArtifact {
     pub bytes: &'static [u8],
 }
 
-/// Select the bundled agent for a server's `uname -sm`.
+/// Select the bundled agent for a server's `uname -sm`. The bundles of
+/// `native/agent-bin` are embedded deflated (`native/build.rs`); the one a
+/// server needs is inflated on its first deploy and kept for the process.
 pub fn artifact_for(uname_sm: &str) -> Option<AgentArtifact> {
+    static X86_64: OnceLock<Vec<u8>> = OnceLock::new();
+    static AARCH64: OnceLock<Vec<u8>> = OnceLock::new();
     let mut it = uname_sm.split_whitespace();
     let os = it.next().unwrap_or("");
     let arch = it.next().unwrap_or("");
     let bytes: &'static [u8] = match (os, arch) {
-        ("Linux", "x86_64") => include_bytes!("../../../agent-bin/se-agent-x86_64-linux-musl"),
-        ("Linux", "aarch64") | ("Linux", "arm64") => {
-            include_bytes!("../../../agent-bin/se-agent-aarch64-linux-musl")
-        }
+        ("Linux", "x86_64") => X86_64.get_or_init(|| {
+            inflate(include_bytes!(concat!(
+                env!("OUT_DIR"),
+                "/se-agent-x86_64-linux-musl.deflate"
+            )))
+        }),
+        ("Linux", "aarch64") | ("Linux", "arm64") => AARCH64.get_or_init(|| {
+            inflate(include_bytes!(concat!(
+                env!("OUT_DIR"),
+                "/se-agent-aarch64-linux-musl.deflate"
+            )))
+        }),
         _ => return None,
     };
     Some(AgentArtifact { bytes })
+}
+
+/// The bundle of a deflated embedding; `native/build.rs` proved its round
+/// trip before embedding it.
+fn inflate(packed: &[u8]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    flate2::read::DeflateDecoder::new(packed)
+        .read_to_end(&mut bytes)
+        .expect("native/build.rs proved the embedded agent bundle inflates");
+    bytes
 }
 
 pub(super) fn sha256_hex(bytes: &[u8]) -> String {

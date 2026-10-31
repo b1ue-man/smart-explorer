@@ -1212,7 +1212,13 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   functions (`native/publish-linux-feed-wsl.sh`); the app already required
   glibc 2.39, above DT_RELR's 2.36. The Windows app (90 MiB in v0.5.188) and
   the Linux `se` (81 MiB) grow by a few MiB per batch as well; when one nears
-  the limit, a size measure is due before the release, not after it.
+  the limit, a size measure is due before the release, not after it. The
+  task suite estimates it (job `measure`, stage `size`: v0.5.189's payload
+  plus the growth of the release `se`). On 2026-10-31 the Linux app came to
+  98.4 MiB by that estimate; since then `native/build.rs` embeds the two
+  se-agent bundles and the license file deflated (1.66 MB to 0.81 MB and
+  0.62 MB to 0.05 MB), and the programs inflate them on first use
+  (`agent/core/deploy.rs`, `licenses/mod.rs`): 1.4 MB less in every program.
 - **An elevated setup owns what it creates by Administrators** (run as
   administrator, or UAC off: the elevated token's default owner). The
   installation check (`mcp_launcher/os/windows/security.rs::check`) therefore

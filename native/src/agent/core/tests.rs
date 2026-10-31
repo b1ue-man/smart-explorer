@@ -72,6 +72,30 @@ fn walk_tree_surfaces_remote_and_disconnected_transport_errors() {
     server.join().unwrap();
 }
 
+/// The bundles are embedded deflated (`native/build.rs`): what the deploy
+/// inflates is exactly the file of `native/agent-bin`.
+#[test]
+fn abgleich_task_embedded_agent_bundles_inflate_to_the_files() {
+    for (uname, file) in [
+        ("Linux x86_64", "se-agent-x86_64-linux-musl"),
+        ("Linux aarch64", "se-agent-aarch64-linux-musl"),
+    ] {
+        let on_disk = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("agent-bin")
+                .join(file),
+        )
+        .unwrap();
+        let embedded = artifact_for(uname).expect("bundled");
+        assert!(embedded.bytes == on_disk.as_slice(), "{file}");
+        // Inflated once: a second selection hands out the same bytes.
+        assert!(std::ptr::eq(
+            embedded.bytes,
+            artifact_for(uname).unwrap().bytes
+        ));
+    }
+}
+
 #[test]
 fn artifact_selection_and_quoting() {
     let a = artifact_for("Linux x86_64").expect("x86_64 bundled");

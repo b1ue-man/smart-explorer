@@ -27,12 +27,15 @@ pub(crate) const CRATES_HEADING: &str = "Crates by manifest (name version licens
 /// Heading that follows the crate list.
 pub(crate) const TEXTS_HEADING: &str = "License texts";
 
+/// The file as `native/build.rs` embeds it: deflated (about a twelfth of
+/// its size), inflated once on first use.
 #[cfg(se_crate_licenses)]
-const EMBEDDED: Option<&str> = Some(include_str!(
-    "../../../third-party/rust-crates/THIRD-PARTY-LICENSES.txt"
-));
+const EMBEDDED: Option<&[u8]> = Some(include_bytes!(concat!(
+    env!("OUT_DIR"),
+    "/THIRD-PARTY-LICENSES.txt.deflate"
+)));
 #[cfg(not(se_crate_licenses))]
-const EMBEDDED: Option<&str> = None;
+const EMBEDDED: Option<&[u8]> = None;
 
 /// One crate line of the file: `name version license-expression`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -44,7 +47,19 @@ pub(crate) struct CrateLicense {
 
 /// The embedded file, `None` in a development build without it.
 pub(crate) fn text() -> Option<&'static str> {
-    EMBEDDED
+    static TEXT: OnceLock<Option<String>> = OnceLock::new();
+    TEXT.get_or_init(|| EMBEDDED.map(inflate_text)).as_deref()
+}
+
+/// The text of the deflated file; `native/build.rs` proved its round trip
+/// and that it is UTF-8 before embedding it.
+fn inflate_text(packed: &[u8]) -> String {
+    use std::io::Read;
+    let mut text = String::new();
+    flate2::read::DeflateDecoder::new(packed)
+        .read_to_string(&mut text)
+        .expect("native/build.rs proved the embedded license file inflates to UTF-8");
+    text
 }
 
 /// Every crate of the file once (the union of all manifests), ordered by
