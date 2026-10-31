@@ -12,6 +12,8 @@ mod batch_remote;
 mod batch_remote_server;
 #[cfg(test)]
 mod batches_backend_compatibility_task_tests;
+#[cfg(test)]
+mod batches_backend_webdav_compatibility_task_tests;
 mod bottleneck;
 mod discovery;
 mod dispatch;

@@ -31,6 +31,8 @@ pub struct SftpBackend {
     pub(super) written: WrittenStages,
     /// Whether this server answers the hash command (digest_command.rs).
     pub(super) digest_gate: Arc<super::digest_command::DigestGate>,
+    /// The same for the MD5 command (its tool may exist without SHA-256's).
+    pub(super) md5_gate: Arc<super::digest_command::DigestGate>,
     root: String,
     /// Read by `url()` (UI display), consumed in the connect-UI step.
     #[allow(dead_code)]
@@ -68,6 +70,7 @@ impl SftpBackend {
             stage_folders: Arc::new(Mutex::new(HashMap::new())),
             written: WrittenStages::default(),
             digest_gate: Arc::default(),
+            md5_gate: Arc::default(),
             root,
             url,
         })

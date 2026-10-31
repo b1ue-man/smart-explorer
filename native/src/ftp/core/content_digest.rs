@@ -8,6 +8,11 @@
 //! - `XSHA256 <path>` (ProFTPD mod_digest and servers that copied it) when FEAT
 //!   lists `XSHA256`: the reply carries the digest as one 64-digit token.
 //!
+//! `content_md5` (the sync signature, `vfs::content_md5`) asks the same way for
+//! the MD5: `HASH` after `OPTS HASH MD5` when FEAT lists `MD5` in `HASH`
+//! (reply `213 MD5 <start>-<end> <hex> <path>`), else `XMD5 <path>` when FEAT
+//! lists `XMD5` (reply `250`, `251` or `213` with one 32-digit token).
+//!
 //! A server without either command, a refusal (500, 501, 502, 504, 550, 556 or
 //! any other reply that is not the success reply), an algorithm other than the
 //! one asked for or a hashed range that is not the whole file answer
@@ -21,7 +26,7 @@ use super::connection::FTP_IO_TIMEOUT;
 use super::core_impl::FtpBackend;
 use super::errors::{command_path, map};
 use super::metadata::Features;
-use crate::vfs::{is_sha256_hex, Backend, ContentDigest, VfsResult};
+use crate::vfs::{Backend, ContentDigest, VfsResult};
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -30,20 +35,60 @@ use suppaftp::{FtpError, RustlsFtpStream, Status};
 /// A host that hashes slower than this is not worth waiting for.
 const SLOWEST_HASHING: u64 = 8 * 1024 * 1024;
 
+/// What the server is asked to form.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Algorithm {
+    Sha256,
+    Md5,
+}
+
+impl Algorithm {
+    /// The name `OPTS HASH` and the `HASH` reply use.
+    fn name(self) -> &'static str {
+        match self {
+            Self::Sha256 => "SHA-256",
+            Self::Md5 => "MD5",
+        }
+    }
+
+    /// The vendor command that answers with the bare digest.
+    fn bare_command(self) -> &'static str {
+        match self {
+            Self::Sha256 => "XSHA256",
+            Self::Md5 => "XMD5",
+        }
+    }
+
+    /// Whether `text` is a digest of this algorithm in lowercase hex.
+    fn is_hex(self, text: &str) -> bool {
+        let digits = match self {
+            Self::Sha256 => 64,
+            Self::Md5 => 32,
+        };
+        text.len() == digits && text.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    }
+}
+
 /// How the server hashes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Method {
     Hash,
-    XSha256,
+    /// `XSHA256` / `XMD5`.
+    Bare,
 }
 
 impl Method {
-    /// `HASH` before `XSHA256`; `None` when FEAT offers neither.
-    pub(super) fn of(features: Features) -> Option<Self> {
-        if features.hash_sha256 {
+    /// `HASH` before the vendor command; `None` when FEAT offers neither for
+    /// `algorithm`.
+    pub(super) fn of(features: Features, algorithm: Algorithm) -> Option<Self> {
+        let (hash, bare) = match algorithm {
+            Algorithm::Sha256 => (features.hash_sha256, features.xsha256),
+            Algorithm::Md5 => (features.hash_md5, features.xmd5),
+        };
+        if hash {
             Some(Self::Hash)
-        } else if features.xsha256 {
-            Some(Self::XSha256)
+        } else if bare {
+            Some(Self::Bare)
         } else {
             None
         }
@@ -58,9 +103,15 @@ pub(super) fn wait_for(size: u64) -> Duration {
 /// The digest of `reply` to `HASH`, when it is the SHA-256 of exactly the
 /// `size` bytes of the file. The draft's examples show an inclusive end
 /// (`0-255` for 256 bytes); servers that name the size itself are accepted too.
+#[cfg(test)]
 pub(super) fn parse_hash_reply(reply: &str, size: u64) -> Option<String> {
+    parse_hash_reply_for(reply, size, Algorithm::Sha256)
+}
+
+/// `parse_hash_reply` for `algorithm`.
+pub(super) fn parse_hash_reply_for(reply: &str, size: u64, algorithm: Algorithm) -> Option<String> {
     let mut words = reply.split_whitespace();
-    if words.next()? != "213" || !words.next()?.eq_ignore_ascii_case("SHA-256") {
+    if words.next()? != "213" || !words.next()?.eq_ignore_ascii_case(algorithm.name()) {
         return None;
     }
     let (start, end) = words.next()?.split_once('-')?;
@@ -69,18 +120,25 @@ pub(super) fn parse_hash_reply(reply: &str, size: u64) -> Option<String> {
         return None;
     }
     let hex = words.next()?.to_ascii_lowercase();
-    is_sha256_hex(&hex).then_some(hex)
+    algorithm.is_hex(&hex).then_some(hex)
 }
 
 /// The digest of `reply` to `XSHA256`: the one 64-digit token after the code.
+#[cfg(test)]
 pub(super) fn parse_bare_reply(reply: &str) -> Option<String> {
+    parse_bare_reply_for(reply, Algorithm::Sha256)
+}
+
+/// The digest of `reply` to `XSHA256` or `XMD5`: the one token of the
+/// algorithm's length after the code (`251` is the code of `XMD5`).
+pub(super) fn parse_bare_reply_for(reply: &str, algorithm: Algorithm) -> Option<String> {
     let mut words = reply.split_whitespace();
-    if !matches!(words.next()?, "213" | "250") {
+    if !matches!(words.next()?, "213" | "250" | "251") {
         return None;
     }
     let mut tokens = words
         .map(str::to_ascii_lowercase)
-        .filter(|word| is_sha256_hex(word));
+        .filter(|word| algorithm.is_hex(word));
     let hex = tokens.next()?;
     tokens.next().is_none().then_some(hex)
 }
@@ -88,21 +146,25 @@ pub(super) fn parse_bare_reply(reply: &str) -> Option<String> {
 fn ask(
     stream: &mut RustlsFtpStream,
     method: Method,
+    algorithm: Algorithm,
     path: &str,
     size: u64,
 ) -> io::Result<Option<String>> {
     let reply = match method {
         Method::Hash => {
-            match stream.custom_command("OPTS HASH SHA-256", &[Status::CommandOk]) {
+            let select = format!("OPTS HASH {}", algorithm.name());
+            match stream.custom_command(select, &[Status::CommandOk]) {
                 Ok(_) => {}
                 Err(FtpError::UnexpectedResponse(_)) => return Ok(None),
                 Err(error) => return Err(map(error)),
             }
             stream.custom_command(format!("HASH {path}"), &[Status::File])
         }
-        Method::XSha256 => stream.custom_command(
-            format!("XSHA256 {path}"),
-            &[Status::File, Status::RequestedFileActionOk],
+        // 251 has no name in `Status`; it arrives as `Unknown` and the reply
+        // parser looks at the code itself.
+        Method::Bare => stream.custom_command(
+            format!("{} {path}", algorithm.bare_command()),
+            &[Status::File, Status::RequestedFileActionOk, Status::Unknown],
         ),
     };
     let response = match reply {
@@ -114,8 +176,8 @@ fn ask(
     };
     let text = String::from_utf8_lossy(&response.body);
     Ok(match method {
-        Method::Hash => parse_hash_reply(&text, size),
-        Method::XSha256 => parse_bare_reply(&text),
+        Method::Hash => parse_hash_reply_for(&text, size, algorithm),
+        Method::Bare => parse_bare_reply_for(&text, algorithm),
     })
 }
 
@@ -123,11 +185,12 @@ fn ask(
 fn ask_waiting(
     stream: &mut RustlsFtpStream,
     method: Method,
+    algorithm: Algorithm,
     path: &str,
     size: u64,
 ) -> io::Result<Option<String>> {
     stream.get_ref().set_read_timeout(Some(wait_for(size)))?;
-    let answer = ask(stream, method, path, size);
+    let answer = ask(stream, method, algorithm, path, size);
     let restored = stream.get_ref().set_read_timeout(Some(FTP_IO_TIMEOUT));
     let answer = answer?;
     restored?;
@@ -141,6 +204,30 @@ impl FtpBackend {
         path: &str,
         cancel: &AtomicBool,
     ) -> VfsResult<Option<ContentDigest>> {
+        Ok(self
+            .hashed_by_server(path, cancel, Algorithm::Sha256)?
+            .map(|(sha256, size)| ContentDigest { sha256, size }))
+    }
+
+    /// `BackendExtensions::content_md5` for this server.
+    pub(super) fn md5_by_command(
+        &self,
+        path: &str,
+        cancel: &AtomicBool,
+    ) -> VfsResult<Option<String>> {
+        Ok(self
+            .hashed_by_server(path, cancel, Algorithm::Md5)?
+            .map(|(md5, _)| md5))
+    }
+
+    /// The lowercase hex digest of `algorithm` and the size of the file the
+    /// server hashed; `Ok(None)` when it offers no way or refuses.
+    fn hashed_by_server(
+        &self,
+        path: &str,
+        cancel: &AtomicBool,
+        algorithm: Algorithm,
+    ) -> VfsResult<Option<(String, u64)>> {
         command_path(path)?;
         check_cancel(cancel)?;
         let before = self.stat(path)?;
@@ -157,12 +244,13 @@ impl FtpBackend {
             Ok(lease) => lease.connection(),
             Err(_) => self.pool.primary(),
         };
-        let Some(method) = Method::of(connection.features()?) else {
+        let Some(method) = Method::of(connection.features()?, algorithm) else {
             return Ok(None);
         };
-        let hex = connection
-            .with_stream_mutation(|stream| ask_waiting(stream, method, path, before.size))?;
-        let Some(sha256) = hex else {
+        let hex = connection.with_stream_mutation(|stream| {
+            ask_waiting(stream, method, algorithm, path, before.size)
+        })?;
+        let Some(hex) = hex else {
             return Ok(None);
         };
         check_cancel(cancel)?;
@@ -178,10 +266,7 @@ impl FtpBackend {
                 "file changed while its content digest was computed",
             ));
         }
-        Ok(Some(ContentDigest {
-            sha256,
-            size: before.size,
-        }))
+        Ok(Some((hex, before.size)))
     }
 }
 

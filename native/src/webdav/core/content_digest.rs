@@ -13,8 +13,13 @@
 //! `file_evidence::on_device` in `transfer/os/shared/engine/file_evidence.rs`). A server without the property, or without a
 //! SHA-256 entry (MD5 and SHA1 do not fit the SHA-256 contract of
 //! `vfs::content_digest`), answers `Ok(None)`.
+//!
+//! `content_md5` (the sync signature) reads the `MD5:` entry of the same
+//! property from the same one PROPFIND; the value is the uploader's claim
+//! here too, exactly as the MD5 the listings already carry. No MD5 entry
+//! answers `Ok(None)` and the caller keeps its way (hashing the content).
 use super::core_impl::WebdavBackend;
-use super::multistatus::successful_props;
+use super::multistatus::{extract_md5, successful_props};
 use crate::vfs::{is_sha256_hex, ContentDigest, VfsResult};
 use std::io;
 
@@ -31,6 +36,23 @@ pub(super) fn sha256_token(text: &str) -> Option<String> {
 
 /// The SHA-256 and the size of the resource a Depth-0 answer describes.
 pub(super) fn from_propfind(xml: &str) -> VfsResult<Option<ContentDigest>> {
+    Ok(checksum_of(xml, sha256_token)?.map(|(size, sha256)| ContentDigest { sha256, size }))
+}
+
+/// The lowercase MD5 the Depth-0 answer reports for the regular file.
+pub(super) fn md5_from_propfind(xml: &str) -> VfsResult<Option<String>> {
+    Ok(checksum_of(xml, |text| {
+        extract_md5(text).map(|hex| hex.to_ascii_lowercase())
+    })?
+    .map(|(_, md5)| md5))
+}
+
+/// The size and the checksum `pick` takes from the `oc:checksums` text of
+/// the one resource a Depth-0 answer describes.
+fn checksum_of(
+    xml: &str,
+    pick: impl Fn(&str) -> Option<String>,
+) -> VfsResult<Option<(u64, String)>> {
     let invalid = |detail: &str| io::Error::new(io::ErrorKind::InvalidData, detail.to_string());
     let doc = roxmltree::Document::parse(xml).map_err(|error| invalid(&error.to_string()))?;
     let mut responses = doc
@@ -61,16 +83,21 @@ pub(super) fn from_propfind(xml: &str) -> VfsResult<Option<ContentDigest>> {
     else {
         return Ok(None);
     };
-    let sha256 = find("checksums").and_then(|node| {
+    let found = find("checksums").and_then(|node| {
         node.descendants()
-            .find_map(|node| node.text().and_then(sha256_token))
+            .find_map(|node| node.text().and_then(&pick))
     });
-    Ok(sha256.map(|sha256| ContentDigest { sha256, size }))
+    Ok(found.map(|value| (size, value)))
 }
 
 impl WebdavBackend {
     /// `BackendExtensions::content_digest`: one PROPFIND.
     pub(super) fn digest_from_checksums(&self, path: &str) -> VfsResult<Option<ContentDigest>> {
         from_propfind(&self.propfind(path, "0")?)
+    }
+
+    /// `BackendExtensions::content_md5`: the same one PROPFIND.
+    pub(super) fn md5_from_checksums(&self, path: &str) -> VfsResult<Option<String>> {
+        md5_from_propfind(&self.propfind(path, "0")?)
     }
 }

@@ -62,6 +62,18 @@ impl BackendExtensions for WebdavBackend {
         self.digest_from_checksums(path)
     }
 
+    /// The MD5 the server stores in `oc:checksums`, from one PROPFIND
+    /// (content_digest.rs); `Ok(None)` for a server without one.
+    fn content_md5(&self, path: &str, cancel: &AtomicBool) -> VfsResult<Option<String>> {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "content MD5 canceled",
+            ));
+        }
+        self.md5_from_checksums(path)
+    }
+
     fn target_limits(&self, _root: &str) -> TargetLimits {
         TargetLimits {
             mtime_precision: MtimePrecision::Seconds,

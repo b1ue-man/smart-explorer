@@ -17,6 +17,10 @@ pub(super) struct Features {
     pub(super) hash_sha256: bool,
     /// `XSHA256` (ProFTPD mod_digest and servers that copied it).
     pub(super) xsha256: bool,
+    /// `HASH` lists MD5 (the sync signature, content_digest.rs).
+    pub(super) hash_md5: bool,
+    /// `XMD5` (Serv-U, CuteFTP, ProFTPD mod_digest).
+    pub(super) xmd5: bool,
 }
 
 impl FtpConnection {
@@ -36,8 +40,10 @@ impl FtpConnection {
                     mlst: has("MLST"),
                     mlsd: has("MLST") || has("MLSD"),
                     mfmt: has("MFMT"),
-                    hash_sha256: hash_offers_sha256(&features),
+                    hash_sha256: hash_offers(&features, "SHA-256"),
                     xsha256: has("XSHA256"),
+                    hash_md5: hash_offers(&features, "MD5"),
+                    xmd5: has("XMD5"),
                 })
             }
             Err(error) if matches!(reply_code(&error), Some(500 | 502 | 504)) => {
@@ -62,7 +68,7 @@ impl FtpConnection {
 
 /// The FEAT line of the draft is `HASH SHA-256;SHA-512;SHA-1*;MD5`; the
 /// asterisk marks the algorithm selected at the moment.
-fn hash_offers_sha256(features: &suppaftp::types::Features) -> bool {
+fn hash_offers(features: &suppaftp::types::Features, wanted: &str) -> bool {
     features
         .iter()
         .filter(|(name, _)| name.eq_ignore_ascii_case("HASH"))
@@ -72,7 +78,7 @@ fn hash_offers_sha256(features: &suppaftp::types::Features) -> bool {
             algorithm
                 .trim()
                 .trim_end_matches('*')
-                .eq_ignore_ascii_case("SHA-256")
+                .eq_ignore_ascii_case(wanted)
         })
 }
 

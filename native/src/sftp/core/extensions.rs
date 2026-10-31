@@ -157,6 +157,13 @@ impl BackendExtensions for SftpBackend {
         self.digest_by_command(path, cancel)
     }
 
+    /// MD5 computed by the SSH server itself (`md5sum` or `md5 -q`,
+    /// digest_command.rs); `Ok(None)` where the account may run no commands
+    /// or the host has neither tool.
+    fn content_md5(&self, path: &str, cancel: &AtomicBool) -> VfsResult<Option<String>> {
+        self.md5_by_command(path, cancel)
+    }
+
     /// Packets give each file the time its entry names: an `FSETSTAT` on the
     /// open handle behind the WRITEs, before the CLOSE (batch_put.rs).
     fn batch_put_times(&self) -> bool {

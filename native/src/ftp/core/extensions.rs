@@ -102,6 +102,12 @@ impl BackendExtensions for FtpBackend {
         self.digest_by_command(path, cancel)
     }
 
+    /// MD5 computed by the server through `HASH` or `XMD5`
+    /// (content_digest.rs); `Ok(None)` for a server without either.
+    fn content_md5(&self, path: &str, cancel: &AtomicBool) -> VfsResult<Option<String>> {
+        self.md5_by_command(path, cancel)
+    }
+
     /// Every folder: one names-and-types listing per folder and one DELE per
     /// entry, without the generic walk's stats (tree_remove.rs).
     fn supports_remove_tree(&self, _path: &str) -> VfsResult<bool> {

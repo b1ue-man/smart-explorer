@@ -1,9 +1,9 @@
 //! `content_digest` over WebDAV: the SHA-256 that ownCloud and Nextcloud
 //! report in `oc:checksums` comes back from one PROPFIND, the file is not
 //! read (no GET), and a server without a SHA-256 entry answers `Ok(None)`.
-use super::super::content_digest::{from_propfind, sha256_token};
+use super::super::content_digest::{from_propfind, md5_from_propfind, sha256_token};
 use super::request_count_server::{lock, Server};
-use crate::vfs::content_digest;
+use crate::vfs::{content_digest, content_md5};
 use std::sync::atomic::AtomicBool;
 
 const HEX: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
@@ -74,4 +74,58 @@ fn abgleich_task_webdav_digest_of_a_collection_is_refused() {
         from_propfind(xml).unwrap_err().kind(),
         std::io::ErrorKind::InvalidInput
     );
+}
+
+const MD5: &str = "5d41402abc4b2a76b9719d911017c592";
+
+#[test]
+fn abgleich_task_webdav_md5_comes_from_the_checksum_property_without_a_download() {
+    let server = Server::start();
+    let backend = server.backend();
+    put(
+        &server,
+        "/a.bin",
+        Some(&format!(
+            "SHA1:da39a3ee5e6b4b0d3255bfef95601890afd80709 MD5:{} SHA256:{HEX}",
+            MD5.to_ascii_uppercase()
+        )),
+    );
+    let asked = server.dav.count("PROPFIND");
+    let found = content_md5(&backend, "/a.bin", &AtomicBool::new(false))
+        .unwrap()
+        .expect("the server stores an MD5");
+    assert_eq!(found, MD5, "lowercase hex");
+    assert_eq!(server.dav.count("GET"), 0, "the content was not read");
+    assert_eq!(server.dav.count("PUT"), 0);
+    assert_eq!(server.dav.count("PROPFIND"), asked + 1, "one question");
+}
+
+#[test]
+fn abgleich_task_webdav_md5_needs_an_md5_entry() {
+    let server = Server::start();
+    let backend = server.backend();
+    put(&server, "/sha.bin", Some(&format!("SHA256:{HEX}")));
+    put(&server, "/short.bin", Some("MD5:abc"));
+    put(&server, "/none.bin", None);
+    for path in ["/sha.bin", "/short.bin", "/none.bin"] {
+        let found = content_md5(&backend, path, &AtomicBool::new(false)).unwrap();
+        assert_eq!(found, None, "{path}");
+    }
+    assert_eq!(server.dav.count("GET"), 0);
+}
+
+#[test]
+fn abgleich_task_webdav_md5_of_a_collection_is_refused_and_a_cancel_asks_nothing() {
+    let xml = r#"<?xml version="1.0"?><d:multistatus xmlns:d="DAV:"><d:response><d:href>/x/</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>"#;
+    assert_eq!(
+        md5_from_propfind(xml).unwrap_err().kind(),
+        std::io::ErrorKind::InvalidInput
+    );
+    let server = Server::start();
+    let backend = server.backend();
+    put(&server, "/a.bin", Some(&format!("MD5:{MD5}")));
+    let before = server.dav.count("PROPFIND");
+    let error = content_md5(&backend, "/a.bin", &AtomicBool::new(true)).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+    assert_eq!(server.dav.count("PROPFIND"), before);
 }
