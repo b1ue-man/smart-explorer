@@ -517,6 +517,37 @@ def build_variants(ctx, release, hybrids):
         ctx.facts[f"agent bundle of {label}"] = ctx.bundle_sha.get(label, "unknown")[:16]
 
 
+# GitHub refuses a git blob above 100 MiB (GH001), and the complete release commits every feed payload
+# (docs/GOTCHAS.md, "Every feed payload must stay below 100 MiB"). The growth of the release `se` from
+# v0.5.189 (with the two CLI commits) to the candidate, built here with the same toolchain, estimates the
+# growth of the release payloads before the three-hour release build would find it.
+GITHUB_BLOB_LIMIT = 100 * 1024 * 1024
+PAYLOADS = ("smart_explorer.exe", "se.exe") if WINDOWS else ("smart_explorer", "se")
+
+
+def stage_size(ctx):
+    new, old = ctx.bins.get("new"), ctx.bins.get("old")
+    if not (new and old):
+        return
+    growth = new.stat().st_size - old.stat().st_size
+    ctx.facts["release se growth over v0.5.189"] = f"{growth / 2**20:+.2f} MiB ({growth:+d} bytes)"
+    for payload in PAYLOADS:
+        sized = subprocess.run(["git", "cat-file", "-s", f"{BASELINE_TAG}:release-native/update-feed/{payload}"],
+                               cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        ensure(sized.returncode == 0, f"git cat-file -s {payload}: {sized.stderr[:300]}")
+        released = int(sized.stdout.strip())
+        projected = released + growth
+        margin = GITHUB_BLOB_LIMIT - projected
+        ctx.facts[f"{payload} projected"] = (f"{projected / 2**20:.2f} MiB (v0.5.189 {released / 2**20:.2f} MiB, "
+                                             f"{margin / 2**20:.2f} MiB below the limit)")
+        ctx.results.record("size", f"{payload}: v0.5.189 size plus the growth of the release se stays below "
+                           "GitHub's 100 MiB blob limit (estimate)", margin > 0,
+                           f"projected {projected} bytes, limit {GITHUB_BLOB_LIMIT}")
+        if 0 < margin < 2 * 2**20:
+            note(ctx.notes, f"{payload}: less than 2 MiB below the 100 MiB limit by this estimate; a size "
+                 "measure is due before the release")
+
+
 def drop_worktrees(ctx):
     for tree in ctx.trees:
         run(["git", "worktree", "remove", "--force", str(tree)], cwd=ROOT, timeout=300)
@@ -2554,6 +2585,7 @@ def job_measure(results, log_root, args):
         build_variants(ctx, release=True, hybrids=False)
         if not (ctx.bins.get("old") and ctx.bins.get("new")):
             return
+        stage_size(ctx)
         tools = {OLD_LABEL: ctx.bins["old"], NEW_LABEL: ctx.bins["new"]}
         for label in tools:
             clients[label] = ai.Client(work, "se-" + slug(label))

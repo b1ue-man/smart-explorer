@@ -69,7 +69,7 @@ full endpoints, local paths, or saved-connection shorthand:
 
 | CLI command | Routed to | Local | Remote (SFTP/FTP/WebDAV/Drive) | Peer via Share-Server |
 |---|---|---|---|---|
-| `se doctor [--json]` | bounded, non-mutating checks of app-data, credentials, profiles, server config, and daemon heartbeat | ✅ | ✅ corruption and backend errors produce exit 1 | ✅ configuration health without starting Share |
+| `se doctor [--json] [--clear-hash-cache]` | bounded checks of app-data, credentials, profiles, server config, and daemon heartbeat; they change nothing, except that `--clear-hash-cache` first forgets every digest stored in this device's hash cache (the next comparison reads the files again) | ✅ | ✅ corruption and backend errors produce exit 1 | ✅ configuration health without starting Share |
 | `se connections list` | checked credential metadata + `ShareProfiles::load_checked()` | n/a | ✅ saved remotes | ✅ saved Share contacts/rooms |
 | `se connections add` / `remove` | transactional metadata + platform credential store | n/a | ✅ SFTP/FTP/FTPS/WebDAV/UNC setup and removal | n/a |
 | `se connections trust-host-key` / `forget-host-key` | SFTP host-key pin store (`known_hosts_sftp.txt`); the presented key is probed first and pinned only when its fingerprint is the one confirmed (`--fingerprint`, `--replace` for a different recorded key) | n/a | ✅ SFTP only; an unknown key is never stored silently, `@revoked` in OpenSSH's files refuses even a pinned key | n/a |
