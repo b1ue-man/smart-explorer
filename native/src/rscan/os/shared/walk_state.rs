@@ -94,6 +94,27 @@ impl WalkState {
         self.record_failure(directory, format!("list_dir: {}", error.to_string()));
     }
 
+    /// A failure of one entry of a whole-tree walk; the entry's detail is
+    /// reported as given (no `list_dir:` prefix).
+    pub(super) fn omitted_path(&mut self, path: &str, detail: String) {
+        self.errors = self.errors.saturating_add(1);
+        self.record_failure(path, detail);
+    }
+
+    /// One visited entry, counted for the progress whether it is kept or not.
+    pub(super) fn count_entry(&mut self, is_dir: bool, size: u64) {
+        self.scanned = self.scanned.saturating_add(1);
+        if !is_dir {
+            self.bytes = self.bytes.saturating_add(size);
+        }
+    }
+
+    /// The scan is incomplete by a bound (the folder depth limit) while the
+    /// other folders are still read.
+    pub(super) fn mark_truncated(&self) {
+        self.truncated.store(true, Ordering::Relaxed);
+    }
+
     /// Validate, count, retain and emit one directory listing; push the
     /// subdirectories to descend into onto `next`.
     pub(super) fn process_listing(
@@ -148,10 +169,7 @@ impl WalkState {
                 depth,
                 id: metadata.id.as_deref().map(Arc::from),
             };
-            self.scanned = self.scanned.saturating_add(1);
-            if !is_dir {
-                self.bytes = self.bytes.saturating_add(size);
-            }
+            self.count_entry(is_dir, size);
             let child_depth = depth.saturating_add(1);
             match self.retention.clone() {
                 None => {
@@ -188,7 +206,7 @@ impl WalkState {
         true
     }
 
-    fn emit(&mut self, entry: FileEntry) -> bool {
+    pub(super) fn emit(&mut self, entry: FileEntry) -> bool {
         let retained_text =
             retained_text_bytes(&entry.parent, &entry.path, &entry.name, &entry.ext);
         if let Err(limit) = self.budget.claim(retained_text, entry.depth) {

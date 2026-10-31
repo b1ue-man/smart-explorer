@@ -144,14 +144,22 @@ impl App {
             self.open_start_request(request);
         }
 
-        // Throttled view rebuild while a scan streams entries in
-        if self.view_dirty
-            && (!self.scan_running || self.last_view_recompute.elapsed().as_millis() >= 150)
-        {
+        // Throttled view rebuild while a scan streams entries in: the next
+        // rebuild waits for the gap that the cost of the last one sets (see
+        // `view_selection::view_rebuild_gap`), so rebuilds keep to a small share
+        // of the frame time whatever the size of the tree.
+        let gap = super::view_selection::view_rebuild_gap();
+        if self.view_dirty && (!self.scan_running || self.last_view_recompute.elapsed() >= gap) {
             self.recompute_view();
         }
         if self.view_dirty {
-            ctx.request_repaint_after(std::time::Duration::from_millis(150));
+            let wait = gap.saturating_sub(self.last_view_recompute.elapsed());
+            ctx.request_repaint_after(wait.max(std::time::Duration::from_millis(1)));
+        }
+        // Scan messages still waiting after this frame's time budget: the next
+        // frame takes them at once instead of after the usual repaint pause.
+        if self.scan_messages_waiting() {
+            ctx.request_repaint();
         }
 
         // Debounced folder search (80 ms after last keystroke)
@@ -191,6 +199,16 @@ impl App {
                 ctx.request_repaint_after(std::time::Duration::from_millis(500));
             }
         }
+    }
+
+    /// Whether the active tab's scan channel or a background tab's scan channel
+    /// still holds messages.
+    fn scan_messages_waiting(&self) -> bool {
+        self.scan_rx.as_ref().is_some_and(|rx| !rx.is_empty())
+            || self
+                .tabs
+                .iter()
+                .any(|tab| tab.scan_rx.as_ref().is_some_and(|rx| !rx.is_empty()))
     }
 
     pub(in crate::app) fn update_repaint(&mut self, ctx: &egui::Context) {

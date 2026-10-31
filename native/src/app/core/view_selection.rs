@@ -1,8 +1,38 @@
 use super::prelude::*;
 use super::*;
+use std::time::Duration;
+
+/// Cost of the last view rebuild in nanoseconds, stored by `recompute_view`.
+static LAST_VIEW_REBUILD_NANOS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// A rebuild during a running scan waits this many times the cost of the last
+/// one: rebuilds then take about a tenth of the time, whatever the size of the tree.
+const VIEW_REBUILD_GAP_FACTOR: u32 = 10;
+/// Floor of that gap, so that cheap rebuilds do not run on every frame.
+const VIEW_REBUILD_MIN_GAP: Duration = Duration::from_millis(50);
+
+/// The gap a rebuild of the view during a running scan waits after the last
+/// rebuild, from the measured cost of that rebuild.
+pub(in crate::app) fn view_rebuild_gap() -> Duration {
+    view_rebuild_gap_for(Duration::from_nanos(
+        LAST_VIEW_REBUILD_NANOS.load(std::sync::atomic::Ordering::Relaxed),
+    ))
+}
+
+/// The gap that follows a rebuild which took `cost`.
+pub(in crate::app) fn view_rebuild_gap_for(cost: Duration) -> Duration {
+    VIEW_REBUILD_MIN_GAP.max(cost.saturating_mul(VIEW_REBUILD_GAP_FACTOR))
+}
 
 impl App {
+    /// Rebuilds the view rows and records how long the rebuild took.
     pub(in crate::app) fn recompute_view(&mut self) {
+        let started = Instant::now();
+        self.rebuild_view_rows();
+        let cost = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        LAST_VIEW_REBUILD_NANOS.store(cost, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn rebuild_view_rows(&mut self) {
         let prefix = self.root_prefix();
         let cf = CompiledFilter::compile(&self.filter);
         let key = self.sort_key;
@@ -132,5 +162,24 @@ impl App {
             (Some(e), None) => e.is_dir,
             _ => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{view_rebuild_gap_for, VIEW_REBUILD_MIN_GAP};
+    use std::time::Duration;
+
+    #[test]
+    fn abgleich_task_view_rebuild_gap_follows_the_measured_cost() {
+        assert_eq!(view_rebuild_gap_for(Duration::ZERO), VIEW_REBUILD_MIN_GAP);
+        assert_eq!(
+            view_rebuild_gap_for(Duration::from_millis(4)),
+            Duration::from_millis(50)
+        );
+        assert_eq!(
+            view_rebuild_gap_for(Duration::from_millis(40)),
+            Duration::from_millis(400)
+        );
     }
 }
