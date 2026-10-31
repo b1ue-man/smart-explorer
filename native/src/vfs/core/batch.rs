@@ -16,6 +16,11 @@ pub struct BatchLimits {
 pub struct BatchPut {
     pub path: String,
     pub size: u64,
+    /// Modification time (Unix ms) the published file should carry. Applied
+    /// before publication only where the backend reports
+    /// `vfs::batch_put_times` (Share `batch_put_mtime_v1`, agent
+    /// `batch-mtime-v1`); every other backend ignores it.
+    pub mtime_ms: Option<i64>,
 }
 
 /// Result of one `put_batch` entry.

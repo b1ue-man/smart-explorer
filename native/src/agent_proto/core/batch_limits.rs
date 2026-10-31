@@ -45,9 +45,11 @@ pub fn clip_text(mut text: String) -> String {
     text
 }
 
-/// Encoded header bytes of one upload entry (path, size, nonce).
+/// Encoded header bytes of one upload entry (path, size, nonce and, with
+/// `batch-mtime-v1`, its time).
 pub fn put_entry_len(entry: &BatchEntry) -> usize {
-    entry.path.len().saturating_add(20)
+    let time = if entry.mtime_ms.is_some() { 9 } else { 0 };
+    entry.path.len().saturating_add(20).saturating_add(time)
 }
 
 /// Encoded header bytes of one download item (path, optional id, size).

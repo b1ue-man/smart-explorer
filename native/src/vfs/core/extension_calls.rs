@@ -22,7 +22,9 @@ pub fn version_archive_policy<B: Backend + ?Sized>(backend: &B) -> VersionArchiv
     }
 }
 
-pub(super) fn default_sync_child_path(parent: &str, literal_name: &str) -> VfsResult<String> {
+/// The child path every backend without its own encoding uses: `parent`
+/// and one literal component, without asking the backend.
+pub fn default_sync_child_path(parent: &str, literal_name: &str) -> VfsResult<String> {
     if literal_name.is_empty()
         || matches!(literal_name, "." | "..")
         || literal_name.contains('/')

@@ -8,9 +8,12 @@
 //! (`at_upload`); every other target through `vfs::finish_stage`. A target
 //! that cannot store a time keeps its own, which is no failure: the rule
 //! compares as it did. Packets that publish without a stage on the client
-//! (`put_batch` of a Share or agent peer, a single-file packet, a Drive file
-//! in a folder this job created) have no place for a time in their wire
-//! format and keep the time of the peer.
+//! (`put_batch` of a Share or agent peer, a single-file packet) name each
+//! file's time in the packet (`BatchPut::mtime_ms`); the peer sets it before
+//! publishing where it reports `vfs::batch_put_times`, and older peers keep
+//! the time of the upload. A Drive file in a folder this job created
+//! (written without a stage) has no place for a time and keeps the
+//! provider's.
 use super::ops::OpError;
 use super::queue::FileWork;
 use super::Engine;

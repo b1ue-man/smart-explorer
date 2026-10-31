@@ -220,17 +220,19 @@ fn sync_links_task_regular_agent_tree_keeps_fast_hash_path_and_filters() {
     builder.add(globset::Glob::new("ignored").unwrap());
     builder.add(globset::Glob::new(".hidden/**").unwrap());
     let globs = builder.build().unwrap();
-    assert!(
-        snapshot_agent::walk_hashed_via_agent(
-            &endpoint.backend,
-            &root,
-            &AtomicBool::new(false),
-            &WalkFilter::basic(false, &globs),
-            HashMode::FullFresh,
-        )
-        .unwrap()
-        .is_none(),
-        "hidden filtering requires the metadata fallback"
+    // Hidden filtering rides on the agent's listing attributes (`walk-meta-v1`).
+    let hidden_out = snapshot_agent::walk_hashed_via_agent(
+        &endpoint.backend,
+        &root,
+        &AtomicBool::new(false),
+        &WalkFilter::basic(false, &globs),
+        HashMode::FullFresh,
+    )
+    .unwrap()
+    .expect("an agent with listing attributes keeps the fast path");
+    assert_eq!(
+        hidden_out.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["node_modules/entry.txt"]
     );
     let tree = snapshot_agent::walk_hashed_via_agent(
         &endpoint.backend,
@@ -297,4 +299,102 @@ fn sync_links_task_legacy_peer_uses_metadata_instead_of_silently_incomplete_hash
     ));
     assert!(!agent_proto::has_link_aware_hash("0.5.161+sync-links-v10"));
     link_fixture::remove_directory(&directory.path().join("node_modules"));
+}
+
+/// Tree, folders, filtered files and omissions of one side.
+#[cfg(unix)]
+type SideFacts = (
+    Vec<String>,
+    Vec<String>,
+    Vec<String>,
+    Vec<(String, super::super::OmissionKind, bool)>,
+);
+
+#[cfg(unix)]
+fn side_facts(snapshot: snapshot::Snapshot) -> SideFacts {
+    (
+        snapshot.tree.keys().cloned().collect(),
+        snapshot.dirs.into_iter().collect(),
+        snapshot.filtered.keys().cloned().collect(),
+        snapshot
+            .omissions
+            .paths()
+            .map(|(path, kind, reported)| (path.to_string(), kind, reported))
+            .collect(),
+    )
+}
+
+// Unix: there both sides mark dot names hidden (Windows local listings
+// use the hidden attribute instead).
+#[cfg(unix)]
+#[test]
+fn abgleich_task_remote_host_walk_snapshot_equals_the_folder_walk() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path();
+    for (file, bytes) in [
+        ("keep/a.txt", 3usize),
+        ("keep/big.bin", 2000),
+        (".dot/x.txt", 1),
+        (".hidden.txt", 1),
+        ("skip/y.txt", 1),
+        ("sub/deep/z.txt", 4),
+        ("node_modules/m.txt", 2),
+    ] {
+        let target = path.join(file);
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(target, vec![b'x'; bytes]).unwrap();
+    }
+    link_fixture::directory(&path.join("keep"), &path.join("link"));
+    let fifo = std::ffi::CString::new(path.join("sub/fifo").to_string_lossy().as_bytes()).unwrap();
+    // SAFETY: a valid NUL-terminated path; creates one FIFO node.
+    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+    let root = fwd(path);
+    let endpoint = Endpoint::remote(&root);
+    let local = LocalBackend::new(&root);
+    let mut builder = globset::GlobSetBuilder::new();
+    builder.add(globset::Glob::new("skip").unwrap());
+    let globs = builder.build().unwrap();
+    let cancel = AtomicBool::new(false);
+    for include_hidden in [false, true] {
+        let filter = WalkFilter {
+            max_size: 1000,
+            ..WalkFilter::basic(include_hidden, &globs)
+        };
+        // The default job: no walk across mounts.
+        let opts = BisyncOptions::default();
+        assert!(!opts.cross_mounts);
+        let read = |backend: &dyn Backend| {
+            side_facts(
+                snapshot::walk_snapshot_with_options(
+                    backend,
+                    &root,
+                    &cancel,
+                    &filter,
+                    HashMode::None,
+                    None,
+                    false,
+                    false,
+                    opts,
+                )
+                .unwrap(),
+            )
+        };
+        let folder_walk = read(&local);
+        let host_walk = read(&endpoint.backend);
+        assert_eq!(host_walk, folder_walk, "include_hidden = {include_hidden}");
+        assert!(folder_walk.0.contains(&"keep/a.txt".to_string()));
+        assert!(folder_walk.2.contains(&"keep/big.bin".to_string()));
+        // The agent served this side with one walk next to the data.
+        let tree = snapshot_agent::walk_hashed_via_agent(
+            &endpoint.backend,
+            &root,
+            &cancel,
+            &filter,
+            HashMode::None,
+        )
+        .unwrap()
+        .expect("one walk next to the data");
+        assert_eq!(tree.keys().cloned().collect::<Vec<_>>(), folder_walk.0);
+    }
+    link_fixture::remove_directory(&path.join("link"));
 }

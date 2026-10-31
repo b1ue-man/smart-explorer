@@ -8,10 +8,16 @@ pub const LABEL_LINKS: &str = "sync-links-v1";
 pub const LABEL_CREDIT: &str = "credit-v1";
 /// `BatchPut` / `BatchGet`.
 pub const LABEL_BATCH: &str = "batch-v1";
+/// `BatchPut` entries carry the time the published file gets (tag 81); a
+/// client sends times only to a server that announced this label.
+pub const LABEL_BATCH_MTIME: &str = "batch-mtime-v1";
 /// `CopyToStage`, `CreateDir`, `DiscardStage`.
 pub const LABEL_STAGE: &str = "stage-v1";
 /// The extension frames (`ListTolerant` … `Watch`, `ops_types`).
 pub const LABEL_EXT: &str = "ext-v1";
+/// `WalkHashed3` and `HashPart`: hash walks in portions, on request with the
+/// listing attributes of every entry (links and special files as entries).
+pub const LABEL_WALK_META: &str = "walk-meta-v1";
 pub const LABEL_FOLDER_RESERVATION: &str = "folder-reservation-v1";
 /// Explicit stable file-object identities; never inferred from Stat metadata.
 pub const LABEL_FILE_IDENTITY: &str = "file-identity-v1";
@@ -41,7 +47,7 @@ pub fn lz4_switched_off() -> bool {
 
 /// The version text the SSH agent of this build announces: the labels of the
 /// service (`server_version_with`) plus `folder-reservation-v1`,
-/// `file-identity-v1`, `range-v1`
+/// `file-identity-v1`, with batches `batch-mtime-v1`, `range-v1`
 /// and, unless switched off for a test, `lz4-v1`. Each host advertises only
 /// the handlers it actually connects.
 pub fn server_version(batch: bool) -> String {
@@ -52,6 +58,10 @@ pub fn server_version(batch: bool) -> String {
     version.push_str(LABEL_FOLDER_RESERVATION);
     version.push('.');
     version.push_str(LABEL_FILE_IDENTITY);
+    if batch {
+        version.push('.');
+        version.push_str(LABEL_BATCH_MTIME);
+    }
     if !lz4_switched_off() {
         version.push('.');
         version.push_str(LABEL_LZ4);
@@ -64,7 +74,7 @@ pub fn server_version(batch: bool) -> String {
 pub fn server_version_with(batch: bool, slots: usize) -> String {
     let slots = slots.clamp(1, CREDIT_REQUEST_LIMIT);
     let mut version = format!(
-        "{}+{LABEL_LINKS}.{LABEL_CREDIT}.{LABEL_STAGE}.{LABEL_EXT}.{LABEL_SLOTS}{slots}",
+        "{}+{LABEL_LINKS}.{LABEL_CREDIT}.{LABEL_STAGE}.{LABEL_EXT}.{LABEL_WALK_META}.{LABEL_SLOTS}{slots}",
         env!("CARGO_PKG_VERSION")
     );
     if batch {
@@ -94,6 +104,10 @@ pub struct ServerFeatures {
     pub stage: bool,
     /// The extension frames of `ops_types` (`ext-v1`).
     pub extensions: bool,
+    /// `WalkHashed3` (`walk-meta-v1`).
+    pub walk_meta: bool,
+    /// `BatchPut` entries with times (`batch-mtime-v1`).
+    pub batch_mtime: bool,
     pub capacity: bool,
     pub folder_reservation: bool,
     pub file_identity: bool,
@@ -125,6 +139,8 @@ impl ServerFeatures {
                 LABEL_BATCH => features.batch = true,
                 LABEL_STAGE => features.stage = true,
                 LABEL_EXT => features.extensions = true,
+                LABEL_WALK_META => features.walk_meta = true,
+                LABEL_BATCH_MTIME => features.batch_mtime = true,
                 LABEL_FOLDER_RESERVATION => features.folder_reservation = true,
                 LABEL_FILE_IDENTITY => features.file_identity = true,
                 LABEL_CAPACITY => features.capacity = true,

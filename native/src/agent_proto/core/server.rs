@@ -372,6 +372,18 @@ fn dispatch(context: &RequestContext, id: u64, req: Frame) -> io::Result<()> {
             algorithm,
             min_bytes,
         } => super::ext_ops::handle_walk_hashed2(sink, id, &root, algorithm, min_bytes, cancel),
+        Frame::WalkHashed3 {
+            root,
+            algorithm,
+            min_bytes,
+            meta,
+        } => super::ext_ops::handle_walk_hashed3(
+            sink,
+            id,
+            &root,
+            (algorithm, min_bytes, meta),
+            cancel,
+        ),
         Frame::FinishStage {
             stage,
             mtime_ms,

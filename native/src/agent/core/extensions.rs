@@ -13,14 +13,14 @@ use super::agent_error::agent_error;
 use super::backend::AgentBackend;
 use super::ext_stream::{is_unsupported_error, stream, unexpected, CANCEL_POLL};
 use super::ext_wire::{
-    algorithm_to_wire, apply_progress, durability_to_wire, group_from_wire, is_unsupported,
-    limits_from_wire, omission_from_wire, report_from_wire, unsupported,
+    apply_progress, durability_to_wire, group_from_wire, is_unsupported, limits_from_wire,
+    omission_from_wire, report_from_wire, unsupported,
 };
 use super::metadata::wire_to_vfs;
 use crate::agent_proto::{query, Frame};
 use crate::vfs::{
     self as vfs, Backend, BackendExtensions, ChangeNotice, ChangeSignalMode, ChangeSubscription,
-    HashWalkEntry, HashWalkItem, HashWalkRequest, RecursiveDeleteFailure, RecursiveDeleteProgress,
+    HashWalkItem, HashWalkRequest, RecursiveDeleteFailure, RecursiveDeleteProgress,
     RecursiveDeleteReport, RecycleExpectation, RecycleOutcome, StageFinish, StageFinished,
     TargetLimits, VfsListing, VfsResult, VolumeIdentity,
 };
@@ -29,6 +29,8 @@ use crate::vfs::{
 mod content_digest;
 #[path = "folder_reservation.rs"]
 mod folder_reservation;
+#[path = "hash_walk.rs"]
+mod hash_walk;
 #[path = "extensions_watch.rs"]
 mod watch;
 
@@ -155,6 +157,13 @@ impl BackendExtensions for AgentBackend {
         self.version().contains(".single-put-v1")
     }
 
+    /// Packet entries keep their time (`batch-mtime-v1`: the SSH agent, or
+    /// the worker for a peer that sets it).
+    fn batch_put_times(&self) -> bool {
+        let features = self.features();
+        features.batch_mtime && features.batches()
+    }
+
     fn previous_state_identities(&self) -> VfsResult<Vec<String>> {
         crate::vfs::previous_state_identities(&*self.inner)
     }
@@ -178,13 +187,16 @@ impl BackendExtensions for AgentBackend {
         }
         let mut listing = VfsListing::default();
         let never = AtomicBool::new(false);
+        let dots = !self.features().service;
         stream(
             &self.pool,
             Frame::ListTolerant(path.to_string()),
             &never,
             |frame| match frame {
                 Frame::DirPart { entries, omitted } => {
-                    listing.entries.extend(entries.into_iter().map(wire_to_vfs));
+                    listing
+                        .entries
+                        .extend(entries.into_iter().map(|m| wire_to_vfs(m, dots)));
                     listing
                         .omitted
                         .extend(omitted.into_iter().map(omission_from_wire));
@@ -326,61 +338,7 @@ impl BackendExtensions for AgentBackend {
         tx: Sender<HashWalkItem>,
         cancel: &AtomicBool,
     ) -> VfsResult<bool> {
-        if !self.features().extensions {
-            return Ok(false);
-        }
-        let mut items = 0u64;
-        let frame = Frame::WalkHashed2 {
-            root: root.to_string(),
-            algorithm: algorithm_to_wire(request.algorithm),
-            min_bytes: request.min_bytes,
-        };
-        let receiver_gone = || {
-            if cancel.load(Ordering::Relaxed) {
-                io::Error::new(io::ErrorKind::Interrupted, "agent hash walk canceled")
-            } else {
-                io::Error::new(io::ErrorKind::BrokenPipe, "hash-walk receiver closed")
-            }
-        };
-        let result = stream(&self.pool, frame, cancel, |frame| {
-            let item = match frame {
-                Frame::HashEntry {
-                    rel,
-                    is_dir,
-                    size,
-                    mtime_ms,
-                    md5,
-                } => HashWalkItem::Entry(HashWalkEntry {
-                    rel,
-                    is_dir,
-                    size,
-                    mtime_ms,
-                    digest: md5,
-                }),
-                Frame::HashOmitted(omitted) => HashWalkItem::Omitted(omission_from_wire(omitted)),
-                other => return Err(unexpected("hash walk", &other)),
-            };
-            items += 1;
-            // A full downstream queue must not hide a cancel from the host.
-            let mut pending = item;
-            loop {
-                if cancel.load(Ordering::Relaxed) {
-                    return Err(receiver_gone());
-                }
-                match tx.send_timeout(pending, CANCEL_POLL) {
-                    Ok(()) => return Ok(()),
-                    Err(crossbeam_channel::SendTimeoutError::Timeout(item)) => pending = item,
-                    Err(crossbeam_channel::SendTimeoutError::Disconnected(_)) => {
-                        return Err(receiver_gone())
-                    }
-                }
-            }
-        });
-        match result {
-            Ok(()) => Ok(true),
-            Err(error) if items == 0 && is_unsupported_error(&error) => Ok(false),
-            Err(error) => Err(error),
-        }
+        hash_walk::walk(self, root, request, tx, cancel)
     }
 
     /// Hashed by the agent next to the data; never through the SFTP fallback.

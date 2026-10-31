@@ -46,6 +46,12 @@ pub(super) struct WalkContext<'a> {
     pub(super) log: Option<std::sync::Arc<super::run_log::RunLog>>,
     /// Told about every folder listed completely (G4 MS14).
     pub(super) listed: Option<&'a dyn super::early_copy::FolderListed>,
+    /// The listings come from a walk next to the data
+    /// (`snapshot_host_walk.rs`): child paths are joined here, and digests
+    /// arrive as the listing's MD5, so nothing is asked of the backend.
+    pub(super) host_listed: bool,
+    /// The facts of a local walk established once (`snapshot_policy`).
+    pub(super) local: Option<super::snapshot_policy::LocalFacts>,
 }
 
 /// What one folder contributes to the snapshot.
@@ -117,7 +123,17 @@ pub(super) fn scan_listing(
             ));
         }
         let rel = literal_child(dir_rel, &m.name);
-        let p = match crate::vfs::sync_child_path(ctx.be, dir, &m.name) {
+        let excluded = (!ctx.filter.include_hidden && m.hidden)
+            || ctx.filter.ignored(&rel, m.is_dir || m.is_symlink);
+        // Only an entry the filters keep needs the backend's own spelling of
+        // its path (a request per entry on a Share host); the protection
+        // checks of an excluded one look only at its parent and its depth.
+        let child = if excluded || ctx.host_listed {
+            crate::vfs::literal_child_path(dir, &m.name)
+        } else {
+            crate::vfs::sync_child_path(ctx.be, dir, &m.name)
+        };
+        let p = match child {
             Ok(path) => path,
             Err(error) => {
                 if let Some(kind) = super::apply_boundary::omitted(&error) {
@@ -138,9 +154,15 @@ pub(super) fn scan_listing(
                 "sync tree exceeds its bounded collection budget",
             ));
         }
-        let excluded = (!ctx.filter.include_hidden && m.hidden)
-            || ctx.filter.ignored(&rel, m.is_dir || m.is_symlink);
-        match super::snapshot_policy::protected(ctx.be, ctx.root, &p, &m, ctx.opts.cross_mounts) {
+        let facts = ctx.local.as_ref();
+        match super::snapshot_policy::protected_in(
+            ctx.be,
+            ctx.root,
+            &p,
+            &m,
+            ctx.opts.cross_mounts,
+            facts,
+        ) {
             Ok(Some(kind)) => {
                 record_omission(ctx, &rel, kind, !excluded && kind.reported_by_default());
                 continue;
@@ -317,6 +339,24 @@ fn hash_streamed(
 
 fn canceled() -> io::Error {
     io::Error::new(io::ErrorKind::Interrupted, "checksum walk canceled")
+}
+
+/// The omissions of one folder's listing, as every walk registers them.
+pub(super) fn record_listing_omissions(
+    ctx: &WalkContext<'_>,
+    dir_rel: &str,
+    omitted: Vec<crate::vfs::VfsOmission>,
+) -> io::Result<()> {
+    for omission in omitted {
+        let rel = match super::sync_relative_path::validate_component(&omission.rel) {
+            Ok(()) => literal_child(dir_rel, &omission.rel),
+            Err(error) if dir_rel.is_empty() => return Err(error),
+            Err(_) => dir_rel.to_string(),
+        };
+        let filtered = ctx.filter.ignored(&rel, true);
+        record_omission(ctx, &rel, omission.reason.into(), !filtered);
+    }
+    Ok(())
 }
 
 pub(super) fn record_omission(

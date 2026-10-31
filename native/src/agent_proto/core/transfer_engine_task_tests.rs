@@ -20,11 +20,13 @@ fn new_frames() -> Vec<Frame> {
                     path: "/a/ä.txt".into(),
                     size: 0,
                     nonce: u64::MAX,
+                    mtime_ms: None,
                 },
                 BatchEntry {
                     path: "/b".into(),
                     size: 7,
                     nonce: 1,
+                    mtime_ms: None,
                 },
             ],
         },
@@ -269,6 +271,7 @@ fn transfer_engine_task_batch_headers_split_by_encoded_size() {
         path: "p".repeat(1000),
         size: 1,
         nonce: 0,
+        mtime_ms: None,
     };
     let frame = Frame::BatchPut {
         entries: vec![entry.clone(), entry.clone()],
@@ -328,6 +331,7 @@ fn transfer_engine_task_canceled_batch_upload_leaves_no_stage_behind() {
         path: destination.to_string_lossy().into_owned(),
         size: 10,
         nonce: 7,
+        mtime_ms: None,
     }];
     write_frame(&mut client, 3, &Frame::BatchPut { entries }).unwrap();
     write_frame(&mut client, 3, &Frame::Data(b"half".to_vec())).unwrap();

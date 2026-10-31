@@ -1,5 +1,5 @@
 use super::agent_error::agent_error;
-use super::metadata::wire_to_vfs;
+use super::metadata::{wire_to_vfs, wires_to_vfs};
 use super::pool::AgentPool;
 #[cfg(test)]
 use super::transport::HeartbeatPolicy;
@@ -157,7 +157,7 @@ impl Backend for AgentBackend {
 
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
         match self.metadata_call(Frame::ListDir(path.to_string()))? {
-            Frame::Dir(v) => Ok(v.into_iter().map(wire_to_vfs).collect()),
+            Frame::Dir(v) => Ok(wires_to_vfs(v, !self.features().service)),
             Frame::Err(e) => Err(agent_error(e)),
             other => Err(unexpected("directory", &other)),
         }
@@ -165,7 +165,7 @@ impl Backend for AgentBackend {
 
     fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
         match self.metadata_call(Frame::Stat(path.to_string()))? {
-            Frame::Meta(m) => Ok(wire_to_vfs(m)),
+            Frame::Meta(m) => Ok(wire_to_vfs(m, !self.features().service)),
             Frame::Err(e) => Err(agent_error(e)),
             other => Err(unexpected("metadata", &other)),
         }

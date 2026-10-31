@@ -267,10 +267,12 @@ fn speed_task_sftp_batch_put_empty_file_sends_no_write() {
         BatchPut {
             path: "d/empty.txt".to_string(),
             size: 0,
+            mtime_ms: None,
         },
         BatchPut {
             path: "d/full.txt".to_string(),
             size: 10,
+            mtime_ms: None,
         },
     ];
     let outcomes = put(&sim, &wire, &list, payload(1, 10));

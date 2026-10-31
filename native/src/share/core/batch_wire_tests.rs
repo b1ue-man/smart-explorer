@@ -34,10 +34,12 @@ fn transfer_engine_task_batch_frames_round_trip() {
                 FsBatchPut {
                     path: "/A/eins.txt".into(),
                     size: 3,
+                    mtime_ms: None,
                 },
                 FsBatchPut {
                     path: "/A/Gr\u{fc}\u{df}e \"x\".txt".into(),
                     size: 0,
+                    mtime_ms: None,
                 },
             ],
             evidence: true,
@@ -223,6 +225,7 @@ fn transfer_engine_task_batch_split_follows_encoded_header() {
         .map(|index| FsBatchPut {
             path: format!("/A/{index:04}-{}", "\u{e4}".repeat(1500)),
             size: 1,
+            mtime_ms: None,
         })
         .collect();
     let parts = plan_batches(envelope, &measured(&entries), 256, BATCH_MAX_BYTES);
@@ -247,6 +250,7 @@ fn transfer_engine_task_batch_split_follows_encoded_header() {
         .map(|index| FsBatchPut {
             path: format!("/A/{index}"),
             size: 1,
+            mtime_ms: None,
         })
         .collect();
     assert_eq!(
@@ -294,6 +298,7 @@ fn transfer_engine_task_host_enforces_batch_bounds() {
     let entry = |size| FsBatchPut {
         path: "/A/x".into(),
         size,
+        mtime_ms: None,
     };
     assert!(validate_put(NONCE, &[entry(1)]).is_ok());
     assert!(validate_put(&"f".repeat(64), &[entry(1)]).is_ok());

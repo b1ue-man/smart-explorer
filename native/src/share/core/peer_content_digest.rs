@@ -30,6 +30,7 @@ pub(super) fn digest(
         algo: Some(FsHashAlgo::Sha256),
         min_bytes: 0,
         single_file: true,
+        meta: false,
     });
     let mut found: Option<ContentDigest> = None;
     peer_stream::call(backend, request, cancel, |response| match response {

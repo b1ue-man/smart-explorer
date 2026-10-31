@@ -58,6 +58,9 @@ pub use deploy::{artifact_for, deploy_over_sftp, remove_from_sftp, AgentArtifact
 pub(crate) use metadata::vfs_to_wire;
 
 #[cfg(test)]
+#[path = "core/abgleich_task_walk_tests.rs"]
+mod abgleich_task_walk_tests;
+#[cfg(test)]
 #[path = "core/delete_speed_task_tests.rs"]
 mod delete_speed_task_tests;
 #[cfg(test)]

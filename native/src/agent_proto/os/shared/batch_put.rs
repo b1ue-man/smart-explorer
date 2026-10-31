@@ -103,8 +103,13 @@ impl EntryStage {
             .write_all(data)
     }
 
-    /// Publish without replacing (new file: no fsync, like new local copies).
-    fn publish(mut self, destination: &str) -> io::Result<String> {
+    /// Publish without replacing (new file: no fsync, like new local copies),
+    /// with the time the client named (`batch-mtime-v1`). A filesystem that
+    /// cannot keep it keeps its own, which is no failure of the entry.
+    fn publish(mut self, destination: &str, mtime_ms: Option<i64>) -> io::Result<String> {
+        if let (Some(mtime_ms), Some(file)) = (mtime_ms, self.file.as_ref()) {
+            let _ = super::ext_ops::set_mtime(file, mtime_ms);
+        }
         drop(self.file.take());
         let path = Path::new(destination);
         let name = path
@@ -183,7 +188,7 @@ fn receive_entry(
                     None if received != entry.size => {
                         return Err(invalid("Paket-Eintrag endete vor seiner Länge"));
                     }
-                    None => stage.and_then(|stage| stage.publish(&entry.path)),
+                    None => stage.and_then(|stage| stage.publish(&entry.path, entry.mtime_ms)),
                 });
             }
             _ => return Err(invalid("unerwarteter Frame in einem Paket-Eintrag")),

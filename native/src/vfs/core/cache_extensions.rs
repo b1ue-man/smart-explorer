@@ -205,6 +205,10 @@ impl BackendExtensions for CachingBackend {
         crate::vfs::single_put(&*self.inner)
     }
 
+    fn batch_put_times(&self) -> bool {
+        crate::vfs::batch_put_times(&*self.inner)
+    }
+
     /// A published file lands under `path`; the cache forgets it before and
     /// after, and once more when the writer is flushed or dropped.
     fn open_write_absent(&self, path: &str, size: u64) -> VfsResult<Option<Box<dyn Write + Send>>> {

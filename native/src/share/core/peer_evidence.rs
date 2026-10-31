@@ -180,6 +180,13 @@ impl PeerBackend {
         caps.v1 && caps.single_put_v1 && caps.evidence_v1 && caps.batch_max_files > 0
     }
 
+    /// The host gives each PutBatch entry its `mtime_ms` before publishing it
+    /// (`batch_put_mtime_v1`).
+    pub(in crate::share) fn batch_times_offered(&self) -> bool {
+        let caps = self.transfer_caps();
+        caps.v1 && caps.batch_put_mtime_v1 && caps.batch_max_files > 0
+    }
+
     /// The WriteNew of an owned stage asks for its evidence and whether its
     /// destination exists; `None` for a host without `evidence_v1`.
     pub(in crate::share) fn written_report(&self, stage: &str) -> Option<WrittenReport> {

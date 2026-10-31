@@ -306,6 +306,7 @@ pub(super) fn entries(count: usize, size: usize) -> (Vec<BatchPut>, Cursor<Vec<u
             BatchPut {
                 path: format!("/share/dir/file{index}.bin"),
                 size: size as u64,
+                mtime_ms: None,
             }
         })
         .collect();

@@ -71,6 +71,8 @@ pub(super) fn upload(
         .map(|(file, source)| BatchPut {
             path: engine.folders.path_of(&file.rel),
             size: source.length(),
+            // The source's time, where the peer sets it (`publish_time.rs`).
+            mtime_ms: (file.mtime_ms > 0).then_some(file.mtime_ms),
         })
         .collect();
     let meter = Meter::new(&permits, &engine.stats);

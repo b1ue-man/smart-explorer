@@ -3,7 +3,7 @@ use super::version_manifest::{invalid, token};
 use crate::vfs::Backend;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock, RwLock};
 use std::time::SystemTime;
 
 #[derive(Default)]
@@ -85,4 +85,73 @@ pub(super) fn missing(
     cache.stamp = stamp()?;
     cache.loaded = true;
     Ok(false)
+}
+
+/// The remembered nested mounts of one walk's root, loaded on first use
+/// (one read of the memory per walk instead of a status per folder) and
+/// extended by what this walk records. `missing` answers as the function of
+/// the same name; only a new mount point goes through the shared memory.
+pub(super) struct NestedMounts {
+    key: String,
+    root: String,
+    known: RwLock<Option<BTreeSet<String>>>,
+}
+
+impl NestedMounts {
+    pub(super) fn new(backend: &dyn Backend, root: &str) -> Self {
+        let root = root.trim_end_matches('/').to_string();
+        Self {
+            key: token(&format!("{}:{root}", backend.state_identity())),
+            root,
+            known: RwLock::new(None),
+        }
+    }
+
+    pub(super) fn missing(
+        &self,
+        backend: &dyn Backend,
+        path_text: &str,
+        mounted: bool,
+    ) -> io::Result<bool> {
+        let rel = path_text
+            .strip_prefix(self.root.as_str())
+            .and_then(|suffix| suffix.strip_prefix('/'))
+            .ok_or_else(|| invalid("nested mount is outside its sync root"))?;
+        if rel.is_empty() {
+            return Ok(false);
+        }
+        let remembered = {
+            let known = self
+                .known
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            known.as_ref().map(|paths| paths.contains(rel))
+        };
+        let remembered = match remembered {
+            Some(remembered) => remembered,
+            None => {
+                // Errors are not kept: the next folder reads again.
+                let paths = load()?.remove(&self.key).unwrap_or_default();
+                let remembered = paths.contains(rel);
+                *self
+                    .known
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(paths);
+                remembered
+            }
+        };
+        if !mounted || remembered {
+            return Ok(!mounted && remembered);
+        }
+        missing(backend, &self.root, path_text, true)?;
+        if let Some(paths) = self
+            .known
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_mut()
+        {
+            paths.insert(rel.to_string());
+        }
+        Ok(false)
+    }
 }

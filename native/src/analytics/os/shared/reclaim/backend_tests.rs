@@ -219,6 +219,7 @@ fn hit(rel: &str, size: u64, md5: &str) -> HashWalkItem {
         size,
         mtime_ms: 1,
         digest: Some(md5.into()),
+        meta: None,
     })
 }
 

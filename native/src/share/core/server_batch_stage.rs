@@ -57,6 +57,8 @@ pub(super) struct Staged {
     /// Peer-namespace folder and name the entry asked for.
     pub(super) parent: String,
     pub(super) name: String,
+    /// The time the published file carries (`batch_put_mtime_v1`).
+    mtime_ms: Option<i64>,
 }
 
 pub(super) fn open_stage(
@@ -82,6 +84,7 @@ pub(super) fn open_stage(
             virtual_stage,
             parent,
             name,
+            mtime_ms: entry.mtime_ms,
         },
         writer,
     ))
@@ -109,6 +112,15 @@ pub(super) fn publish(
     staged: &Staged,
     scopes: Option<&mut Scopes>,
 ) -> io::Result<(String, Option<FsFileEvidence>)> {
+    if let Some(mtime_ms) = staged.mtime_ms {
+        // As the engine's own stages: a target that cannot keep the time
+        // keeps its own, which is no failure of the entry.
+        let finish = crate::vfs::StageFinish {
+            mtime_ms: Some(mtime_ms),
+            ..crate::vfs::StageFinish::default()
+        };
+        let _ = crate::vfs::finish_stage(&*staged.stage.backend, &staged.stage.path, finish);
+    }
     for index in 1..=REMOTE_UNIQUE_ATTEMPTS {
         let name = numbered_remote_name(&staged.name, index);
         let path = format!("{}/{}", staged.parent, name);

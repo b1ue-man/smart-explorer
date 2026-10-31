@@ -1,6 +1,8 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+#[path = "mount_boundaries.rs"]
+mod mount_boundaries;
 #[path = "mountinfo.rs"]
 mod mountinfo;
 #[path = "namespace_flush.rs"]
@@ -16,6 +18,7 @@ mod stage;
 #[path = "volume_id.rs"]
 mod volume_id;
 
+pub(crate) use mount_boundaries::MountBoundaries;
 pub(crate) use namespace_flush::confirm_namespace;
 pub(crate) use stage::open_stage;
 

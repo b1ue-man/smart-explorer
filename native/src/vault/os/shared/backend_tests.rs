@@ -422,6 +422,7 @@ fn vault_task_backend_capabilities_never_exceed_inner() {
         &[BatchPut {
             path: "/a".into(),
             size: 0,
+            mtime_ms: None,
         }],
         &mut io::empty(),
     );

@@ -69,6 +69,14 @@ pub fn single_put<B: Backend + ?Sized>(backend: &B) -> bool {
         .is_some_and(|extensions| extensions.single_put())
 }
 
+/// Whether `backend`'s packets carry each file's modification time
+/// (`BackendExtensions::batch_put_times`).
+pub fn batch_put_times<B: Backend + ?Sized>(backend: &B) -> bool {
+    backend
+        .extensions()
+        .is_some_and(|extensions| extensions.batch_put_times())
+}
+
 /// A writer that publishes a new file under its final name in one write
 /// request (`BackendExtensions::open_write_absent`); `Ok(None)` without the
 /// extension, and then nothing was sent.

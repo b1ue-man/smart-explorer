@@ -570,13 +570,18 @@ es gesetzt ist. Zwischen App und Worker: Dateiregelcode 3 und die Fähigkeit `tr
 Auftrag läuft dann im eigenen Prozess (`transfer_job_client.rs:155`).
 
 **Grenzen (nicht gemessen, nicht gebaut):**
-- **Pakete an entfernte Ziele tragen die Änderungszeit nicht**: `put_batch` (Share, Agent), das
-  Ein-Datei-Paket und eine Drive-Datei in einem vom Auftrag angelegten Ordner veröffentlichen ohne
-  Stufe des Clients, und ihr Drahtformat hat keinen Platz für eine Zeit (`BatchPut` trägt nur Pfad
-  und Größe, `vfs/core/batch.rs`; das Format gehört `share/` und `agent_proto/`). Dateien der Regel
-  gehen deshalb einzeln (`update.rs`), alle anderen Uploads in Paketen behalten die Zeit der Gegenstelle.
-  Ein Zusammenführen zurück kann eine so hochgeladene, unveränderte Datei als „neuer“ ersetzen, bis
-  das Format eine Zeit trägt (Abhängigkeit für den Agenten, der `vfs/core` und die Drahtformate schreibt).
+- **Pakete an entfernte Ziele tragen die Änderungszeit, wo die Gegenstelle sie setzt** (Quellstand
+  2026-10-31, nicht gebaut): `vfs::BatchPut::mtime_ms` nennt je Datei die Quellzeit (`batch_put.rs`,
+  `batch_put_one.rs`, `batch_remote.rs`); der Share-Host setzt sie mit `finish_stage` auf die Stufe vor
+  der Veröffentlichung (Fähigkeit `batch_put_mtime_v1`, Feld `FsBatchPut.mtime_ms`,
+  `share/core/server_batch_stage.rs`), der SSH-Agent mit `set_modified` (Etikett `batch-mtime-v1`,
+  `BatchPut` mit Zeiten als Tag 81, `agent_proto/os/shared/batch_put.rs`), der Worker meldet das
+  Etikett nur für einen Peer, der die Zeit setzt (`backend_server.rs`). Abfrage: `vfs::batch_put_times`.
+  Neue Dateien der Regel gehen dann wieder in Pakete und Ein-Datei-Pakete (`update.rs`
+  `packets_keep_time`, `upload.rs`); nur an Gegenstellen ohne die Fähigkeit gehen sie einzeln, und dort
+  behalten andere Paket-Uploads die Zeit der Gegenstelle wie zuvor. Eine Ersetzung geht immer allein.
+  Ein Ziel, das die Zeit nicht speichern kann, behält seine eigene (kein Fehler des Eintrags). Eine
+  Drive-Datei in einem vom Auftrag angelegten Ordner hat weiter keinen Platz für eine Zeit.
 - Ein Ziel, das keine Zeit speichern kann (`finish_stage` meldet `mtime_applied: false`), behält
   seine eigene; die Regel vergleicht dann wie zuvor.
 - Ein Konflikt (gleiche Zeit, andere Größe) legt bei jedem Lauf eine weitere nummerierte Kopie an.

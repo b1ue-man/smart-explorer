@@ -19,7 +19,7 @@ pub(crate) use self::duplicate_wire::{
     FsDuplicateFile, FsDuplicateGroup, FsDuplicateMessage, FsDuplicateProgress, FsDuplicateSummary,
     GROUP_PORTION_BYTES,
 };
-pub(crate) use self::hash_walk_wire::{FsHashEntry, FsHashWalkMessage};
+pub(crate) use self::hash_walk_wire::{FsHashEntry, FsHashMeta, FsHashWalkMessage};
 pub(crate) use self::list_batch_wire::{
     FsOmission, FsOmissionReason, LIST_BATCH_MAX_BYTES, LIST_BATCH_MAX_ENTRIES, META_JSON_BYTES,
     STREAM_FRAME_LIMIT,

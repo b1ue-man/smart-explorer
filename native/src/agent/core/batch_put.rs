@@ -130,6 +130,8 @@ impl AgentBackend {
             ));
         }
         let base = nonce_base()?;
+        // Times only to a server that sets them (`batch-mtime-v1`).
+        let times = self.features().batch_mtime;
         let wire: Vec<BatchEntry> = entries
             .iter()
             .enumerate()
@@ -137,6 +139,7 @@ impl AgentBackend {
                 path: entry.path.clone(),
                 size: entry.size,
                 nonce: base.wrapping_add(index as u64),
+                mtime_ms: entry.mtime_ms.filter(|_| times),
             })
             .collect();
         let header: Vec<usize> = wire.iter().map(put_entry_len).collect();

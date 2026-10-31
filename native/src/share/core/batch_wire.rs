@@ -82,6 +82,11 @@ pub(crate) struct FsTransferCapabilities {
     /// admission stays per device. A client without it keeps one.
     #[serde(default, skip_serializing_if = "is_false")]
     pub(crate) bulk_connections_v1: bool,
+    /// `batch_put_mtime_v1`: a PutBatch entry's `mtime_ms` is set on its
+    /// stage before the stage is published. A client sends it only to a
+    /// host that offers this; older hosts keep the time of the upload.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) batch_put_mtime_v1: bool,
 }
 
 impl FsTransferCapabilities {
@@ -98,6 +103,7 @@ impl FsTransferCapabilities {
             create_dirs_v1: true,
             single_put_v1: true,
             bulk_connections_v1: true,
+            batch_put_mtime_v1: true,
         }
     }
 
@@ -111,6 +117,9 @@ impl FsTransferCapabilities {
 pub(crate) struct FsBatchPut {
     pub(crate) path: String,
     pub(crate) size: u64,
+    /// `batch_put_mtime_v1`: the time (Unix ms) the published file carries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) mtime_ms: Option<i64>,
 }
 
 /// One file of a GetBatch; `id` addresses one of several equal names on ID

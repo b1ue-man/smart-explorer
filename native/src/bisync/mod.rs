@@ -186,6 +186,8 @@ mod snapshot_dir;
 mod snapshot_duplicates;
 #[path = "os/shared/snapshot_hash.rs"]
 mod snapshot_hash;
+#[path = "os/shared/snapshot_host_walk.rs"]
+mod snapshot_host_walk;
 #[path = "os/shared/snapshot_mounts.rs"]
 mod snapshot_mounts;
 #[path = "os/shared/snapshot_pair.rs"]
