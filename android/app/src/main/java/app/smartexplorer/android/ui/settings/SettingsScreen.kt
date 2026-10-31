@@ -160,7 +160,10 @@ fun SettingsScreen(
                             }
                             // DRV-M8: the documents provider for other apps.
                             SettingsItem.Documents -> DocumentsProviderSection()
-                            SettingsItem.Storage -> StorageAccessSettings()
+                            SettingsItem.Storage -> {
+                                StorageAccessSettings()
+                                HashCacheClearSettings()
+                            }
                             // DSK-M9: the se launcher (U35-13).
                             SettingsItem.Launcher -> LauncherSettings()
                             SettingsItem.Updates -> UpdateSettings()

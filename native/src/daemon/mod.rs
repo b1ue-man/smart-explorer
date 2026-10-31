@@ -83,6 +83,9 @@ pub(crate) use discovery_pairing_client::{list_discoveries, start_discovery_pair
 pub(crate) use discovery_pairing_protocol::{
     DiscoveryPairingError, DiscoveryPairingReply, DiscoveryPairingStatus,
 };
+#[path = "os/shared/hash_cache_clear.rs"]
+mod hash_cache_clear;
+pub use hash_cache_clear::clear_hash_cache;
 #[path = "os/shared/ipc_client.rs"]
 mod ipc_client;
 #[path = "os/shared/ipc_host.rs"]

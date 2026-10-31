@@ -125,6 +125,11 @@ pub(super) enum IpcRequest {
     RefreshShare {
         token: String,
     },
+    /// Forgets the digests the worker holds (its memory and its cache file):
+    /// the app's clear and `se doctor --clear-hash-cache`.
+    HashCacheClear {
+        token: String,
+    },
     ShareCommand {
         token: String,
         cmd: crate::share::ShareCmd,
@@ -291,6 +296,7 @@ impl IpcRequest {
             | Self::RuntimeHello { token, .. }
             | Self::Ping { token }
             | Self::RefreshShare { token }
+            | Self::HashCacheClear { token }
             | Self::ShareCommand { token, .. }
             | Self::MutateExecGrant { token, .. }
             | Self::DrainShareEvents { token }

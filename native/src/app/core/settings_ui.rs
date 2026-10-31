@@ -118,6 +118,7 @@ impl App {
                             ui.label("Gespeicherte Sync-Setups, Zeitpläne und laufende Synchronisationen.");
                             if ui.button("Sync-Setups verwalten …").clicked() { self.show_sync_jobs = true; }
                             for job in &self.sync_jobs { ui.label(&job.name); }
+                            self.ui_settings_hash_cache(ui);
                         }
                         SettingsPage::Vaults => self.ui_settings_vaults(ui),
                         SettingsPage::Drives => {
@@ -135,6 +136,26 @@ impl App {
             });
         super::licenses_ui::show_licenses_window(ctx);
         self.settings.open = open;
+    }
+
+    /// Forgets the device's file digests of the sync compare (the same clear
+    /// as `se doctor --clear-hash-cache` and the Android settings); a process
+    /// that could not be reached is named in the message.
+    fn ui_settings_hash_cache(&mut self, ui: &mut egui::Ui) {
+        ui.separator();
+        ui.label("Gespeicherte Dateiprüfsummen des Abgleichs. Nach dem Leeren liest der nächste Abgleich die Dateien neu.");
+        if ui
+            .button("Prüfsummen-Cache leeren")
+            .on_hover_text("Leert den Cache dieser App und des Hintergrunddienstes. Ein Dienst, der nicht erreichbar ist, wird genannt.")
+            .clicked()
+        {
+            let report = crate::daemon::clear_hash_cache();
+            if report.complete() {
+                self.notice = Some((report.summary(), std::time::Instant::now()));
+            } else {
+                self.error_msg = Some(report.summary());
+            }
+        }
     }
 
     fn ui_settings_vaults(&mut self, ui: &mut egui::Ui) {

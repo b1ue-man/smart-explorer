@@ -2,26 +2,8 @@
 //! agent, a Share host and a local sync side keep the digests they computed,
 //! keyed by the file's status (`local_platform::file_stamp`: device and
 //! inode, or volume serial and 128-bit file ID on Windows, size,
-//! modification and status-change time in nanoseconds) and the algorithm. A digest is used again only while that status is unchanged.
-//!
-//! Racy timestamps (Git, `Documentation/technical/racy-git.txt`): a file
-//! changed within the time granularity of the moment its digest was taken
-//! can change again with the same times. So a digest counts only when the
-//! file's modification and change times lie more than `RACY_SLACK` before
-//! the moment the digest was taken (`recorded_ns`); otherwise it is computed
-//! again each time until the file is old enough.
-//!
-//! The file holds at most `MAX_ENTRIES` digests, the most recently used
-//! first; a file without a stamp (a file system without file IDs) is not
-//! cached. A cache that cannot be read or written costs only
-//! the reuse, never a result. The agent keeps its file in its cache folder
-//! (`$XDG_CACHE_HOME/se-agent` or `~/.cache/se-agent`), the app in its data
-//! folder (`configure`).
-//! Persistent digest cache on the side that stores the files (E9): the SSH
-//! agent, a Share host and a local sync side keep the digests they computed,
-//! keyed by the file's status (`local_platform::file_stamp`: device and
-//! inode, or volume serial and 128-bit file ID on Windows, size,
-//! modification and status-change time in nanoseconds) and the algorithm. A digest is used again only while that status is unchanged.
+//! modification and status-change time in nanoseconds) and the algorithm. A
+//! digest is used again only while that status is unchanged and not racy.
 //!
 //! Racy timestamps (Git, `Documentation/technical/racy-git.txt`): a file
 //! changed within the time granularity of the moment its digest was taken
@@ -37,33 +19,47 @@
 //! never takes a stored digest, and stores the one it read.
 //!
 //! The file holds at most `MAX_ENTRIES` digests, the most recently used
-//! first. A cache that cannot be read or written costs only the reuse, never
-//! a result. New digests are collected in memory and written together
-//! (`flush`: at most every `FLUSH_INTERVAL`; `flush_now`: at the end of a
-//! walk or a connection), as one atomic replacement of the file that is
-//! built under the lock and written outside it, so no thread waits for a
-//! write. The cache lives in the app's data folder
-//! (`support_dirs::app_data_dir`, on Android the host's) or, in the
-//! standalone agent, in its cache folder (`$XDG_CACHE_HOME/se-agent` or
-//! `~/.cache/se-agent`, `se-agent/src/support_dirs.rs`). `clear` forgets
-//! every digest (`se doctor --clear-hash-cache`).
+//! first, and the generation of the file (`hash_cache_file.rs`). A cache that
+//! cannot be read or written costs only the reuse, never a result. New
+//! digests are collected in memory and written together (`flush`: at most
+//! every `FLUSH_INTERVAL`; `flush_now`: at the end of a walk or a connection),
+//! as one atomic replacement of the file that is built under the lock and
+//! written outside it, so no thread waits for a write. The cache lives in the
+//! app's data folder (`support_dirs::app_data_dir`, on Android the host's) or,
+//! in the standalone agent, in its cache folder (`$XDG_CACHE_HOME/se-agent` or
+//! `~/.cache/se-agent`, `se-agent/src/support_dirs.rs`).
+//!
+//! `clear` forgets every digest of this process and gives the file a new
+//! generation, so a writer that still holds an older generation drops its
+//! digests instead of writing them back (`write_pending`). A process the app
+//! cannot reach (another command, a second instance) sees the new generation
+//! within `GENERATION_CHECK` and forgets its digests then
+//! (`forget_if_cleared`); it never writes them back. The app clears a running
+//! background worker through its IPC at once (`daemon::clear_hash_cache`,
+//! `se doctor --clear-hash-cache`).
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const MAGIC: &[u8] = b"SEHC\x01";
+#[path = "hash_cache_file.rs"]
+mod file;
+use file::{FILE_NAME, MAGIC, NO_GENERATION};
+
 /// Digests kept (about 100 bytes each in the file).
 const MAX_ENTRIES: usize = 500_000;
 /// Times closer than this to the moment of hashing are "racy" (two seconds
 /// cover the coarsest common time granularity, FAT).
 const RACY_SLACK_NS: i128 = 2_000_000_000;
-const FILE_NAME: &str = "hash-cache-v1.bin";
 /// New digests are written at most this often by `flush`.
 const FLUSH_INTERVAL: Duration = Duration::from_secs(30);
 /// How long `flush_now` waits for a write of another thread.
 const WRITE_WAIT: Duration = Duration::from_secs(5);
+/// How often a process looks whether another process cleared the file: a
+/// clear reaches a process the app cannot ask (another command, a second
+/// instance) within this time. Each look reads the file's 21-byte header.
+const GENERATION_CHECK: Duration = Duration::from_secs(1);
 
 struct Entry {
     stamp: [i128; 5],
@@ -80,8 +76,12 @@ struct Cache {
     /// Digests were added since the last write (`rev` counts the additions).
     dirty: bool,
     rev: u64,
+    /// The generation of the file the digests belong to (`NO_GENERATION`: none).
+    generation: u128,
     /// A thread is writing the file (outside the lock).
     writing: bool,
+    /// When the file's generation was last compared with `generation`.
+    generation_checked: Option<Instant>,
     last_write: Option<Instant>,
     clock: u64,
     entries: HashMap<(i128, i128, u8), Entry>,
@@ -149,11 +149,39 @@ fn with_cache<T>(f: impl FnOnce(&mut Cache) -> T) -> T {
     });
     if !cache.loaded {
         cache.loaded = true;
+        cache.generation_checked = Some(Instant::now());
         if let Some(folder) = cache.folder.clone() {
             load(cache, &folder.join(FILE_NAME));
         }
+    } else {
+        forget_if_cleared(cache);
     }
     f(cache)
+}
+
+/// Forgets the digests of this process when another process cleared the
+/// file since they were loaded (the file names another generation), and
+/// reads the file again. Looks at most every `GENERATION_CHECK`, and not
+/// while this process writes the file (its first write gives it a new
+/// generation before the file has it).
+fn forget_if_cleared(cache: &mut Cache) {
+    let Some(folder) = cache.folder.clone() else {
+        return;
+    };
+    let due = cache
+        .generation_checked
+        .is_none_or(|checked| checked.elapsed() >= GENERATION_CHECK);
+    if !due || cache.writing {
+        return;
+    }
+    cache.generation_checked = Some(Instant::now());
+    if file::generation_on_disk(&folder) == cache.generation {
+        return;
+    }
+    cache.entries.clear();
+    cache.dirty = false;
+    cache.rev += 1;
+    load(cache, &folder.join(FILE_NAME));
 }
 
 /// The digest (`algorithm`: `ops_types::digest` code) of the regular file
@@ -248,23 +276,35 @@ pub(crate) fn flush_now() {
     write_pending(true);
 }
 
-/// Forgets every digest: in this process and in the cache file of `folder`.
+/// Forgets every digest of this process and gives the cache file of `folder`
+/// a new generation without digests (`file::clear_file`). A background worker
+/// keeps its own memory: it is cleared through its IPC.
 pub(crate) fn clear(folder: &Path) -> io::Result<()> {
+    let generation = file::clear_file(folder)?;
     if let Some(cache) = lock().as_mut() {
         cache.entries.clear();
         cache.dirty = false;
         cache.rev += 1;
+        if cache.folder.as_deref() == Some(folder) {
+            cache.generation = generation;
+            cache.loaded = true;
+        } else {
+            // Another folder's cache: its own file is read again when used.
+            cache.generation = NO_GENERATION;
+            cache.loaded = false;
+        }
     }
-    match std::fs::remove_file(folder.join(FILE_NAME)) {
-        Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
-        _ => Ok(()),
-    }
+    Ok(())
 }
 
 /// The file contents of the cache and what they stand for, built under the
 /// lock; the write itself runs outside it.
 struct Pending {
     folder: PathBuf,
+    /// The generation the file must still name when this write lands.
+    expected: u128,
+    /// The generation written into `bytes`.
+    written: u128,
     bytes: Vec<u8>,
     rev: u64,
 }
@@ -299,10 +339,16 @@ fn take_pending(force: bool) -> Option<Pending> {
             cache.entries.retain(|_, entry| entry.used >= oldest_kept);
         }
         cache.writing = true;
+        let expected = cache.generation;
+        if expected == NO_GENERATION {
+            cache.generation = file::new_generation();
+        }
         return Some(Pending {
+            folder,
+            expected,
+            written: cache.generation,
             bytes: encode(cache),
             rev: cache.rev,
-            folder,
         });
     }
 }
@@ -311,27 +357,53 @@ fn write_pending(force: bool) {
     let Some(pending) = take_pending(force) else {
         return;
     };
-    let result = save(&pending.folder, &pending.bytes);
+    let outcome = file::replace_if_generation(&pending.folder, pending.expected, &pending.bytes);
     let mut guard = lock();
-    if let Some(cache) = guard.as_mut() {
-        cache.writing = false;
-        if result.is_ok() && cache.folder.as_deref() == Some(pending.folder.as_path()) {
+    let Some(cache) = guard.as_mut() else {
+        return;
+    };
+    cache.writing = false;
+    if cache.folder.as_deref() != Some(pending.folder.as_path()) {
+        return;
+    }
+    match outcome {
+        Ok(file::Replaced::Written) => {
             cache.last_write = Some(Instant::now());
             // Digests added meanwhile stay dirty for the next write.
             if cache.rev == pending.rev {
                 cache.dirty = false;
             }
         }
+        Ok(file::Replaced::Stale) => {
+            // Another process cleared the file since this one loaded it: the
+            // digests held here are forgotten, and the file is read again on
+            // the next use.
+            cache.entries.clear();
+            cache.dirty = false;
+            cache.generation = NO_GENERATION;
+            cache.loaded = false;
+        }
+        Err(_) => {
+            // The file keeps its generation; the digests stay dirty.
+            if cache.generation == pending.written {
+                cache.generation = pending.expected;
+            }
+        }
     }
 }
 
 fn load(cache: &mut Cache, path: &Path) {
+    cache.generation = NO_GENERATION;
     let Ok(bytes) = std::fs::read(path) else {
         return;
     };
-    let Some(mut input) = bytes.strip_prefix(MAGIC) else {
+    let Some(generation) = file::generation_in(&bytes) else {
         return;
     };
+    let Some(mut input) = bytes.get(file::HEADER_LEN..) else {
+        return;
+    };
+    cache.generation = generation;
     let mut read = |count: usize| -> Option<Vec<u8>> {
         if input.len() < count {
             return None;
@@ -377,12 +449,14 @@ fn load(cache: &mut Cache, path: &Path) {
     }
 }
 
-/// The file contents: the most recently used digest last, so a file read
-/// back in order ends with the newest.
+/// The file contents: the header (magic and generation), then the most
+/// recently used digest last, so a file read back in order ends with the
+/// newest.
 fn encode(cache: &Cache) -> Vec<u8> {
     let mut entries: Vec<(&(i128, i128, u8), &Entry)> = cache.entries.iter().collect();
     entries.sort_unstable_by_key(|(_, entry)| entry.used);
     let mut out = MAGIC.to_vec();
+    out.extend_from_slice(&cache.generation.to_be_bytes());
     out.reserve(entries.len() * 130);
     for ((_, _, algorithm), entry) in entries {
         if entry.digest.len() > 255 {
@@ -397,20 +471,6 @@ fn encode(cache: &Cache) -> Vec<u8> {
         out.extend_from_slice(entry.digest.as_bytes());
     }
     out
-}
-
-/// Replaces the cache file atomically (a staged file renamed over it).
-fn save(folder: &Path, bytes: &[u8]) -> io::Result<()> {
-    std::fs::create_dir_all(folder)?;
-    let path = folder.join(FILE_NAME);
-    let staged = folder.join(format!("{FILE_NAME}.{}.tmp", std::process::id()));
-    if let Err(error) =
-        std::fs::write(&staged, bytes).and_then(|()| std::fs::rename(&staged, &path))
-    {
-        let _ = std::fs::remove_file(&staged);
-        return Err(error);
-    }
-    Ok(())
 }
 
 #[cfg(test)]

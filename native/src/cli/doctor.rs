@@ -10,9 +10,10 @@ pub(super) struct DoctorArgs {
     json: bool,
     #[arg(
         long,
-        help = "Forget every file digest this device keeps (hash-cache-v1.bin in the app data \
-                folder): the next read of a file is a fresh one. A Share host or sync that is \
-                running keeps its digests in memory until it restarts"
+        help = "Forget every file digest this device keeps: this process, the cache file \
+                (hash-cache-v1.bin in the app data folder) and the background worker, which \
+                is asked through its IPC. The next read of a file is a fresh one. Exit code 1 \
+                when a running process could not be cleared"
     )]
     clear_hash_cache: bool,
 }
@@ -137,24 +138,21 @@ pub(super) fn doctor_value() -> Result<(serde_json::Value, bool), String> {
     Ok((report.json(), report.exit_code() == 0))
 }
 
-/// Forgets the digests of the device's hash cache (`--clear-hash-cache`).
-fn clear_hash_cache() -> Result<(), String> {
-    let folder = crate::support_dirs::app_data_dir();
-    crate::agent_proto::hash_cache::clear(&folder)
-        .map_err(|error| format!("hash cache in {} not cleared: {error}", folder.display()))
-}
-
+/// Forgets the digests of the device's hash cache first (`--clear-hash-cache`):
+/// the output names each step, and a step that did not clear sets exit code 1.
 pub(super) fn run(args: DoctorArgs) -> Result<i32, String> {
-    if args.clear_hash_cache {
-        clear_hash_cache()?;
-    }
+    let cleared = args.clear_hash_cache.then(crate::daemon::clear_hash_cache);
     let report = Report::collect()?;
-    let exit_code = report.exit_code();
+    let exit_code = match &cleared {
+        Some(clear) if !clear.complete() => 1,
+        _ => report.exit_code(),
+    };
 
     if args.json {
         let mut value = report.json();
-        if args.clear_hash_cache {
-            value["hash_cache_cleared"] = serde_json::Value::Bool(true);
+        if let Some(clear) = &cleared {
+            value["hash_cache_cleared"] = serde_json::Value::Bool(clear.complete());
+            value["hash_cache"] = clear.json();
         }
         println!(
             "{}",
@@ -162,8 +160,16 @@ pub(super) fn run(args: DoctorArgs) -> Result<i32, String> {
         );
         return Ok(exit_code);
     }
-    if args.clear_hash_cache {
-        println!("hash_cache\tcleared");
+    if let Some(clear) = &cleared {
+        println!(
+            "hash_cache\t{}\t{}",
+            if clear.complete() {
+                "cleared"
+            } else {
+                "not_cleared"
+            },
+            clear.summary()
+        );
     }
 
     println!("version\t{}", env!("CARGO_PKG_VERSION"));

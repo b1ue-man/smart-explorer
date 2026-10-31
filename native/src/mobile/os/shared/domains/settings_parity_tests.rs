@@ -113,3 +113,31 @@ fn luecken_task_bg_set_cadence_keeps_the_desktop_range() {
     }
     assert!(set_cadence(&json!({})).is_err());
 }
+
+/// The bridge method `sync.clearHashCache` runs through the dispatcher the
+/// app calls, and answers with the steps of the clear. A detached runtime does
+/// not redirect the app data folder (`support_dirs::set_host` is set by `init`
+/// only), so this clears the cache of the machine that runs the test; a cleared
+/// cache costs only the next reads.
+#[test]
+fn abgleich_task_bridge_sync_clear_hash_cache_answers_through_the_dispatcher() {
+    let dir = tempfile::tempdir().expect("fixture dir");
+    let config = json!({
+        "filesDir": dir.path().join("files"),
+        "cacheDir": dir.path().join("cache"),
+        "startDaemon": false,
+    });
+    for name in ["files", "cache"] {
+        std::fs::create_dir_all(dir.path().join(name)).expect("fixture dir");
+    }
+    let settings = crate::mobile::HostSettings::parse(&config.to_string()).expect("settings");
+    let rt = crate::mobile::Runtime::detached(settings);
+    let answer = crate::mobile::dispatch::dispatch(&rt, "sync.clearHashCache", &json!({}))
+        .expect("sync.clearHashCache is a bridge method");
+    assert!(answer["summary"]
+        .as_str()
+        .is_some_and(|text| text.starts_with("Prüfsummen-Cache")));
+    assert!(answer["cleared"].is_boolean());
+    assert!(answer["steps"]["app"]["state"].is_string());
+    assert!(answer["steps"]["worker"]["state"].is_string());
+}

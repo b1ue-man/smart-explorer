@@ -22,3 +22,15 @@ fn abgleich_task_instructions_name_connection_rights_as_trust() {
     }
     assert!(INSTRUCTIONS.len() <= 2_048, "{}", INSTRUCTIONS.len());
 }
+
+/// The `se` tool runs `se <args>` through the same parser as the terminal:
+/// the clear of the hash cache is reachable from it.
+#[test]
+fn abgleich_task_the_se_tool_reaches_the_hash_cache_clear() {
+    use clap::Parser;
+    let parsed = crate::cli::Cli::try_parse_from(["se", "doctor", "--clear-hash-cache", "--json"]);
+    assert!(
+        parsed.is_ok(),
+        "se doctor --clear-hash-cache is a known command"
+    );
+}

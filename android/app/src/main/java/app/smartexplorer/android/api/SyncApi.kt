@@ -275,13 +275,30 @@ data class HostStateArgs(
     val screenOn: Boolean = true,
 )
 
+/**
+ * `sync.clearHashCache` (api.md §4.7): [cleared] is true when every process that holds file digests
+ * was cleared; [summary] names what was and what was not cleared (German, shown to the user).
+ */
+@Serializable
+data class HashCacheClear(
+    val cleared: Boolean = false,
+    val summary: String = "",
+)
+
 object SyncApi {
     /** Task kind of `bg.catchUp` runs; they never keep the task service alive. */
     const val KIND_CATCH_UP = "catchup"
 
+    /** Bridge method of [clearHashCache]; `native/src/mobile/os/shared/domains/mod.rs` routes it. */
+    const val CLEAR_HASH_CACHE_METHOD = "sync.clearHashCache"
+
     suspend fun options(): SyncOptions = Core.request<SyncOptions>("sync.options")
 
     suspend fun jobs(): List<SyncJob> = Core.request<List<SyncJob>>("sync.jobs")
+
+    /** Forgets this device's file digests of the sync compare, in the app and in its background worker. */
+    suspend fun clearHashCache(): HashCacheClear =
+        Core.request<HashCacheClear>(CLEAR_HASH_CACHE_METHOD)
 
     /** Desktop validation; field name → message (empty = valid). */
     suspend fun validate(job: SyncJob): Map<String, String> =

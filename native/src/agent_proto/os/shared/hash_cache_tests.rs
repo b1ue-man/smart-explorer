@@ -211,7 +211,7 @@ fn abgleich_task_hash_cache_threads_do_not_wait_for_a_write() {
             .recv_timeout(Duration::from_secs(5))
             .expect("a hashing thread waited for the write");
     });
-    save(&pending.folder, &pending.bytes).unwrap();
+    file::replace_if_generation(&pending.folder, pending.expected, &pending.bytes).unwrap();
     assert!(folder.path().join(FILE_NAME).exists());
     configure(None);
 }
@@ -227,9 +227,21 @@ fn abgleich_task_hash_cache_clear_forgets_memory_and_file() {
     let calls = AtomicUsize::new(0);
     digest_of(&path, &calls);
     flush_now();
-    assert!(folder.path().join(FILE_NAME).exists());
+    let before = file::generation_on_disk(folder.path());
+    assert_ne!(before, file::NO_GENERATION);
     clear(folder.path()).unwrap();
-    assert!(!folder.path().join(FILE_NAME).exists());
+    let after = file::generation_on_disk(folder.path());
+    assert!(
+        after != file::NO_GENERATION && after != before,
+        "the file names a new generation"
+    );
+    assert_eq!(
+        std::fs::metadata(folder.path().join(FILE_NAME))
+            .unwrap()
+            .len(),
+        file::HEADER_LEN as u64,
+        "the file holds no digest"
+    );
     digest_of(&path, &calls);
     assert_eq!(calls.load(Ordering::SeqCst), 2, "read again after clearing");
     // Clearing an empty folder is no error.
@@ -261,4 +273,87 @@ fn abgleich_task_hash_cache_windows_stamp_follows_every_write() {
     let after = super::super::local_platform::path_stamp(&path).unwrap();
     assert_eq!(before[0..3], after[0..3], "same volume, file and size");
     assert_ne!(before[4], after[4], "the change time moved");
+}
+
+#[test]
+fn abgleich_task_hash_cache_clear_file_names_a_new_generation_without_digests() {
+    let folder = tempfile::tempdir().unwrap();
+    let first = file::clear_file(folder.path()).unwrap();
+    let second = file::clear_file(folder.path()).unwrap();
+    assert_ne!(first, file::NO_GENERATION);
+    assert_ne!(first, second);
+    assert_eq!(file::generation_on_disk(folder.path()), second);
+    assert_eq!(
+        std::fs::metadata(folder.path().join(FILE_NAME))
+            .unwrap()
+            .len(),
+        file::HEADER_LEN as u64
+    );
+}
+
+#[test]
+fn abgleich_task_hash_cache_a_process_that_predates_a_clear_never_writes_its_digests_back() {
+    let _turn = turn();
+    let folder = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    configure(Some(folder.path().to_path_buf()));
+    let path = old_file(data.path(), "stale.bin", b"abc");
+    std::thread::sleep(Duration::from_millis(2_100));
+    let calls = AtomicUsize::new(0);
+    digest_of(&path, &calls);
+    // Another process clears the file while this one holds the digest in
+    // memory and has not written it yet.
+    let other = file::clear_file(folder.path()).unwrap();
+    flush_now();
+    assert_eq!(file::generation_on_disk(folder.path()), other);
+    assert_eq!(
+        std::fs::metadata(folder.path().join(FILE_NAME))
+            .unwrap()
+            .len(),
+        file::HEADER_LEN as u64,
+        "the forgotten digest was not written back"
+    );
+    digest_of(&path, &calls);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "read again after the clear"
+    );
+    configure(None);
+}
+
+#[test]
+fn abgleich_task_hash_cache_a_file_of_another_format_names_no_generation() {
+    let folder = tempfile::tempdir().unwrap();
+    // The format before the generation header: its digests are not trusted.
+    let mut old = b"SEHC\x01".to_vec();
+    old.extend_from_slice(&[0u8; 64]);
+    std::fs::write(folder.path().join(FILE_NAME), old).unwrap();
+    assert_eq!(file::generation_on_disk(folder.path()), file::NO_GENERATION);
+    assert!(file::generation_in(b"SEHC\x01").is_none());
+}
+
+#[test]
+fn abgleich_task_hash_cache_a_process_the_clear_cannot_reach_forgets_within_the_check() {
+    let _turn = turn();
+    let folder = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    configure(Some(folder.path().to_path_buf()));
+    let path = old_file(data.path(), "unreached.bin", b"abc");
+    std::thread::sleep(Duration::from_millis(2_100));
+    let calls = AtomicUsize::new(0);
+    digest_of(&path, &calls);
+    digest_of(&path, &calls);
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "answered from memory");
+    // Another process clears the file; this one is never asked and never
+    // writes in between.
+    file::clear_file(folder.path()).unwrap();
+    std::thread::sleep(GENERATION_CHECK + Duration::from_millis(100));
+    digest_of(&path, &calls);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "the digest held before the clear is not used after the check"
+    );
+    configure(None);
 }

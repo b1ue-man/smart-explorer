@@ -12,7 +12,7 @@ Abkürzungen: `N/` = `native/src/`, `A/` = `android/app/src/main/java/app/smarte
 | Desktop | Fenster „Einstellungen“ mit den Seiten Darstellung, Verbindungen, Updates, Suche & Daten, Integration (`N/app/core/settings_ui.rs:5-13`, `:36-43`); Sidebar „Verbindungen“ (`N/app/core/sidebar.rs:16-90`); Dialog „Neue Verbindung“ (`N/app/core/dialogs.rs:129-326`); Fenster „Sync-Setups“ und Editor (`N/app/core/menus_sync_jobs.rs`, `N/app/core/job_editor_ui.rs`); Laufwerke (`N/app/core/mount_ui.rs`, `mount_ui_draft.rs`) | egui, Windows und Linux |
 | Android | „Mehr → Einstellungen“ (`A/ui/settings/SettingsScreen.kt:55-110`), Verbindungen (`A/ui/connections/`), Sync (`A/ui/sync/`) | Compose |
 | Bridge | JSON-Methoden `sync.*`, `bg.*`, `conn.*`, `gdrive.*`, `update.*` (`N/mobile/os/shared/domains/mod.rs:104-155`, `:227-228`), Kotlin `A/api/SyncApi.kt`, `A/api/ConnApi.kt`, `A/api/UpdateApi.kt` | Vertrag `docs/superpowers/plans/2026-09-25-android-apk/api.md` |
-| IPC | Keine Einstellung dieses Bereichs läuft über die Loopback-IPC: Worker-Steuerung liest Steuerdateien im Sync-Datenordner (`N/daemon/os/shared/state.rs:36-110`), Sync-Setups liegen in `sync/jobs/*.conf` (`N/syncjobs/mod.rs:1-11`), Verbindungen im Verbindungsspeicher (`N/creds/core/types.rs:121-139`) | – |
+| IPC | Nur „Prüfsummen-Cache leeren“ läuft über die Loopback-IPC (Befehl `hash_cache_clear`, `N/daemon/os/shared/hash_cache_clear.rs:136`, Annahme `N/daemon/os/shared/ipc.rs:118`). Die übrigen Einstellungen dieses Bereichs nicht: Worker-Steuerung liest Steuerdateien im Sync-Datenordner (`N/daemon/os/shared/state.rs:36-110`), Sync-Setups liegen in `sync/jobs/*.conf` (`N/syncjobs/mod.rs:1-11`), Verbindungen im Verbindungsspeicher (`N/creds/core/types.rs:121-139`) | – |
 | MCP | `se mcp`: `status`, `connections`, `se` (`N/cli/mcp/catalog.rs:64-69`, `:176-182`); `se` führt jeden CLI-Befehl aus (`N/cli/mcp/cli_tool.rs:1-6`), daher gilt für MCP die CLI-Spalte | – |
 | Doku | `README.md` (Terminal-Abschnitte ab Zeile 601, Updates ab 933), `docs/AI_AGENT_PLUGIN.md`, `docs/CLOUD_SETUP.md`, `docs/SYNC_FEATURES.md` | – |
 
@@ -198,6 +198,12 @@ Die Tresor-Einstellungen gehören zu jedem Tresor. Vollständige Matrix und Bele
 | Beim Öffnen einhängen | Ausnahme: keine CLI-Option belegt | Eigenschaften → Laufwerk, Kontrollkästchen „Beim Öffnen einhängen“ | Ausnahme: kein Laufwerk auf Android | `N/app/core/vault_settings_pages_ui.rs:219`; `N/app/core/vault_ui_settings.rs:1-4` (Datei `<app data>/vaults/ui.json`) |
 | Tresor-Sync (Ziel, Zeitplan, Übertragung) | `se vault sync add` (`--with`, `--name`) | „Synchronisieren…“ | „Synchronisieren“ | `N/cli/vault.rs:80`; `N/cli/vault/sync.rs:66`; `N/app/core/vault_sync_editor_ui.rs:41`; `A/ui/vaults/VaultSyncSheet.kt:43` |
 | Wiederherstellungsschlüssel | nicht angeboten | Informationstext | Informationstext | `N/vault/os/shared/manage.rs:27` |
+
+### Prüfsummen-Cache
+
+| Einstellung | CLI | Desktop | Android | Ergebnis |
+|---|---|---|---|---|
+| Prüfsummen-Cache leeren (gespeicherte Dateiprüfsummen des Abgleichs vergessen) | `se doctor --clear-hash-cache` (`N/cli/doctor.rs:18`, `:144`; Zeile `hash_cache` mit `cleared` oder `not_cleared`, JSON `hash_cache`, Exit-Code 1 bei nicht geleertem Schritt) | Knopf „Prüfsummen-Cache leeren“ auf der Seite Sync (`N/app/core/settings_ui.rs:121`, `:144`, `:148`) | Bereich Speicher, Eintrag „Prüfsummen-Cache leeren“ (`A/ui/settings/SettingsScreen.kt:165`, `A/ui/settings/HashCacheSettings.kt:23`), `SyncApi.clearHashCache` (`A/api/SyncApi.kt:300`), Bridge `sync.clearHashCache` (`N/mobile/os/shared/domains/mod.rs:212`, `sync_hash_cache.rs:8`) | geschlossen. Geleert werden diese App (Speicher und Cache-Datei mit neuer Generation, `N/agent_proto/os/shared/hash_cache.rs`), der Hintergrunddienst über die IPC (`N/daemon/os/shared/hash_cache_clear.rs:114`, `:136`) und auf Android der Dienst im selben Prozess. Ein nicht erreichbarer Dienst wird mit dem Grund genannt. Ein Worker unter einem anderen Konto mit eigenem Datenordner liegt außerhalb dieser Reichweite und wird weder geleert noch genannt. MCP über das Werkzeug `se` (`N/cli/mcp/catalog.rs:184`, Beispiel `doctor --clear-hash-cache --json`) |
 
 ### Offene Punkte nach dem Stapel
 

@@ -89,6 +89,8 @@ mod share_state;
 mod share_status;
 #[path = "sync_conflicts.rs"]
 mod sync_conflicts;
+#[path = "sync_hash_cache.rs"]
+mod sync_hash_cache;
 #[path = "sync_jobs.rs"]
 mod sync_jobs;
 #[path = "sync_log.rs"]
@@ -207,6 +209,7 @@ fn sync_method(rt: &Runtime, method: &str, args: &Value) -> Option<Result<Value,
         "sync.mergeApply" => sync_merge::apply(rt, args),
         "sync.mergeKeepBoth" => sync_merge::keep_both(rt, args),
         "sync.mergeRetry" => sync_merge::retry(rt, args),
+        "sync.clearHashCache" => sync_hash_cache::clear(),
         _ => return None,
     })
 }
