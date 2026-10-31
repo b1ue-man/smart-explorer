@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Button
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
@@ -16,6 +17,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.smartexplorer.android.R
@@ -57,8 +59,12 @@ private fun RequestCard(request: ShareRequestInfo, incoming: Boolean, actions: R
             val line = listOfNotNull(request.stateText.takeIf { it.isNotBlank() }, Format.dateTime(request.timeMs).takeIf { request.timeMs > 0 })
             if (line.isNotEmpty()) Text(line.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
             request.message?.takeIf { it.isNotBlank() }?.let { Text("„$it“", style = MaterialTheme.typography.bodyMedium) }
+            // Like the desktop: the fingerprint to compare before accepting (the accept dialog asks for it).
+            if (incoming) request.fingerprint?.takeIf { it.isNotBlank() }?.let {
+                SelectionContainer { Text("Fingerabdruck: $it", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace) }
+            }
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (request.canAccept) Button(onClick = { actions.decide(request, true) }) { Text("Annehmen") }
+                if (request.canAccept) Button(onClick = { actions.decide(request, true) }) { Text("Annehmen …") }
                 if (request.canReject) OutlinedButton(onClick = { actions.decide(request, false) }) { Text("Ablehnen") }
                 if (request.canRetry) OutlinedButton(onClick = { actions.retry(request) }) { Text("Erneut senden") }
                 if (request.canDelete) TextButton(onClick = { actions.delete(request) }) { Text("Löschen") }

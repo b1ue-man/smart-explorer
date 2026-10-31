@@ -151,6 +151,9 @@ fn request_json(profiles: &ShareProfiles, view: &RequestView) -> Value {
         "requestId": view.request_id.as_str(),
         "contactId": entry.and_then(|entry| entry.contact_id.clone()),
         "name": view.peer_name,
+        // The phone shows and compares it before accepting, like the desktop.
+        "fingerprint": view.fingerprint,
+        "deviceId": view.peer_device_id,
         "stateText": state_text,
         "canAccept": view.can_accept,
         "canReject": view.can_decide,

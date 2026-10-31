@@ -28,6 +28,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import app.smartexplorer.android.api.RightsPresetInfo
+import app.smartexplorer.android.api.RightsSelection
 import app.smartexplorer.android.api.SHARE_DIRECT
 import app.smartexplorer.android.api.ShareStatus
 import app.smartexplorer.android.api.ShareSecurityApi
@@ -120,9 +122,9 @@ internal fun CodeDialog(
                 )
                 if (showShareBack) {
                     ShareChoice("Auch meine Freigaben für dieses Gerät öffnen", shareBack, action?.saving != true) { shareBack = it }
-                    Text("Ohne diese Wahl entsteht kein neuer Zugriff auf deine Freigaben. Vorhandene bewusste Rechte bleiben erhalten.")
+                    Text("Ohne diese Wahl entsteht kein neuer Zugriff auf deine Freigaben. Vorhandene bewusste Rechte bleiben erhalten. Mit der Wahl öffnet sich danach das Menü „Rechte für …“; bis du bestätigst, hat das Gerät keine Rechte.")
                 } else {
-                    Text("Der Raum startet ohne eigene Freigaben. Freigaben und Rechte wählst du danach ausdrücklich.")
+                    Text("Der Raum startet ohne eigene Freigaben. Danach öffnet sich das Menü „Rechte für <Raum>“, in dem du Freigaben und Rechte ausdrücklich wählst.")
                 }
                 action?.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
@@ -144,9 +146,11 @@ internal fun CodeDialog(
 @Composable
 internal fun DiscoverableDialog(
     status: ShareStatus,
-    onStart: (target: String, alias: String, pin: String, minutes: Int, allowWeakPin: Boolean) -> Unit,
+    onStart: (target: String, alias: String, pin: String, minutes: Int, allowWeakPin: Boolean, rights: RightsSelection?) -> Unit,
     onDismiss: () -> Unit,
     action: ShareActionState,
+    presets: List<RightsPresetInfo> = RightsPresets.builtIn(),
+    offered: OfferedRights = OfferedRights(),
 ) {
     val coroutineScope = rememberCoroutineScope()
     var target by rememberSaveable { mutableStateOf(SHARE_DIRECT) }
@@ -157,6 +161,8 @@ internal fun DiscoverableDialog(
     var pinError by remember { mutableStateOf<String?>(null) }
     var suggesting by remember { mutableStateOf(false) }
     var minutes by rememberSaveable { mutableStateOf(5) }
+    // The rights the device that pairs with this offer gets (Direct only; a room has its own, F5).
+    var rightsPreset by rememberSaveable { mutableStateOf<String?>(null) }
     val weak = pin.isNotEmpty() && isWeakPin(pin)
     fun suggest() {
         if (suggesting) return
@@ -222,12 +228,26 @@ internal fun DiscoverableDialog(
                     }
                 }
                 Text("Endet nach der ersten erfolgreichen Kopplung oder nach fünf Fehlversuchen; höchstens 30 Minuten.")
+                if (target == SHARE_DIRECT) {
+                    Text("Rechte des koppelnden Geräts", style = MaterialTheme.typography.labelLarge)
+                    RightsPresetChips(presets, rightsPreset, onSelect = { rightsPreset = it }, noneLabel = "Danach festlegen", enabled = !action.saving)
+                    Text(
+                        presets.firstOrNull { it.key == rightsPreset }?.let { "Das Gerät erhält sofort: ${rightsSummary(it.rights)}. ${it.description}" }
+                            ?: "Das Gerät wird nach der Kopplung ohne Rechte verbunden; du legst sie danach im Menü „Rechte für <Gerät>“ fest.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                } else {
+                    Text("Das Angebot für einen Raum vergibt keine Rechte; sie legst du am Raum fest.", style = MaterialTheme.typography.bodySmall)
+                }
                 action.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
         },
         confirmButton = {
             TextButton(
-                onClick = { onStart(target, alias.trim(), pin, minutes, allowWeakPin) },
+                onClick = {
+                    val rights = if (target == SHARE_DIRECT) presetSelection(rightsPreset, presets, offered, System.currentTimeMillis() / 1000) else null
+                    onStart(target, alias.trim(), pin, minutes, allowWeakPin, rights)
+                },
                 enabled = pin.isNotEmpty() && alias.isNotBlank() && (!weak || allowWeakPin) && !action.saving && !suggesting,
             ) { Text(if (action.saving) "Starte …" else if (action.error != null) "Erneut versuchen" else "Starten") }
         },

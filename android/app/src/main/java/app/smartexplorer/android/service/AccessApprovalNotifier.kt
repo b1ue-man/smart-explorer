@@ -307,6 +307,8 @@ object AccessApprovalNotifier {
             return
         }
         val visible = startedActivities > 0
+        // A connection that arose in the background and waits for its rights (plan §F, F1).
+        RightsPendingNotifier.refresh(context, visible)
         for (approval in list) {
             if (approval.id in reported) continue
             val delivery = deliverApproval(

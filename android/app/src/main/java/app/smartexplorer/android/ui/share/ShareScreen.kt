@@ -31,6 +31,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.smartexplorer.android.R
 import app.smartexplorer.android.api.ScreenApi
+import app.smartexplorer.android.api.RightsTarget
 import app.smartexplorer.android.api.ScreenDevice
 import app.smartexplorer.android.api.ShareApi
 import app.smartexplorer.android.api.ShareSettingsApi
@@ -222,6 +223,25 @@ fun ShareScreen(
         }
     }
     vm.roomCode?.let { RoomCodeDialog(it, onDismiss = { vm.roomCode = null }) }
+    // The compact rights menu: for every connection that waits for its rights, and for „Rechte einstellen“.
+    // A new room's code is shown first; the menu follows once it is closed.
+    val rightsRequest = if (vm.roomCode == null) vm.rightsSheet() else null
+    rightsRequest?.let { request ->
+        key(request.key) {
+            RightsSheetHost(
+                request,
+                vm,
+                onAddFolder = { scope -> dialog = ShareDialog.AddExport(scope) },
+                onMore = { more ->
+                    // The settings page replaces the menu; an open confirmation stays „Rechte offen“.
+                    vm.dismissRights(more)
+                    if (dialog !is ShareDialog.DeviceSettings) {
+                        dialog = ShareDialog.DeviceSettings(more.name, deviceId = more.target.deviceId, publicKey = more.target.publicKey)
+                    }
+                },
+            )
+        }
+    }
     vm.removal?.let { RemovalReportDialog(it, onDismiss = { vm.removal = null }) }
     if (showTransfers) TransfersSheet(onDismiss = { showTransfers = false })
     screenGrid?.let { grid -> ScreenTilesScreen(grid.roomId, onClose = { screenGrid = null }) }
@@ -294,18 +314,19 @@ private fun ShareBlockContent(block: ShareBlock, vm: ShareViewModel, status: Sha
                     },
                     renewCode = { open(ShareDialog.RenewCode) },
                     setLanPresence = { enabled -> vm.act("LAN-Einstellung nicht gespeichert") { ShareSettingsApi.setLanPresence(enabled) } },
+                    setCodeRights = { key ->
+                        val offered = OfferedRights.from(vm.access?.execProvider, status.execProvider)
+                        vm.setCodeRights(presetSelection(key, vm.rightsPresets, offered, System.currentTimeMillis() / 1000))
+                    },
                 ),
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 serverInfo = vm.serverInfo,
+                presets = vm.rightsPresets,
             )
         }
         ShareBlock.Policy -> {
             val policy = vm.requestPolicy
-            HintLine(when (policy?.requests) {
-                "AutoAccept" -> "Neue Zugriffsanfragen werden automatisch angenommen."
-                "Ask" -> "Neue Zugriffsanfragen warten auf deine Zustimmung."
-                else -> "Anfrageeinstellung noch nicht geladen."
-            })
+            HintLine(requestPolicyHint(policy?.requests, status?.codeRights ?: policy?.codeRights))
             policy?.warning?.let { HintLine(it) }
             TextButton(onClick = { policy?.let { open(ShareDialog.RequestPolicy(it)) } }, enabled = policy != null) {
                 Text(if (policy?.requests == "AutoAccept") "Immer fragen…" else "Automatisches Annehmen erlauben…")
@@ -313,10 +334,10 @@ private fun ShareBlockContent(block: ShareBlock, vm: ShareViewModel, status: Sha
         }
         ShareBlock.Pairings -> UnconfirmedPairingsSection(vm.unconfirmed, open)
         ShareBlock.Devices -> {
-            DevicesSection(status?.devices.orEmpty(), peerActions(vm, screens, open))
+            DevicesSection(status?.devices.orEmpty(), status?.pendingRights.orEmpty(), peerActions(vm, screens, open))
             DeviceRightsIndex(status, open)
         }
-        ShareBlock.Rooms -> RoomsSection(status?.rooms.orEmpty(), peerActions(vm, screens, open))
+        ShareBlock.Rooms -> RoomsSection(status?.rooms.orEmpty(), status?.pendingRights.orEmpty(), peerActions(vm, screens, open))
         // Wraps instead of scrolling sideways, so no button hides behind the screen edge.
         ShareBlock.Buttons -> FlowRow(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
@@ -333,7 +354,9 @@ private fun ShareBlockContent(block: ShareBlock, vm: ShareViewModel, status: Sha
                 status,
                 RequestActions(
                     decide = { request, accept ->
-                        vm.act(if (accept) "Nicht angenommen" else "Nicht abgelehnt") { ShareApi.decide(request.requestId, accept) }
+                        // Accepting shows the fingerprint and the rights first (F1); rejecting is direct.
+                        if (accept) open(ShareDialog.AcceptRequest(request))
+                        else vm.act("Nicht abgelehnt") { ShareApi.decide(request.requestId, false) }
                     },
                     retry = { request -> vm.act("Nicht erneut gesendet", "Erneut gesendet") { ShareApi.retry(request.requestId) } },
                     delete = { request -> vm.act("Nicht gelöscht") { ShareApi.deleteRequest(request.requestId) } },
@@ -402,5 +425,10 @@ private fun peerActions(vm: ShareViewModel, screens: ScreenLinks, open: (ShareDi
     renameRoom = { room -> open(ShareDialog.RenameRoom(room)) },
     rejoinRoom = { room -> vm.act("Nicht beigetreten", "Raum „${room.name}“ wird wieder beigetreten") { ShareSettingsApi.rejoinRoom(room.profileId) } },
     resetMemberTrust = { room, member -> open(ShareDialog.ResetMemberTrust(room, member)) },
+    rights = { device ->
+        rightsTargetOf(device)?.let { vm.openRightsFor(it, device.name) }
+            ?: Snackbars.show("Die Geräteidentität ist noch nicht bestätigt; Rechte gibt es erst danach.")
+    },
+    roomRights = { room -> vm.openRightsFor(RightsTarget.room(room.profileId), room.name) },
     screens = screens,
 )

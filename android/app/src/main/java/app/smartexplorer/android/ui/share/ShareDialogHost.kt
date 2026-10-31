@@ -31,6 +31,9 @@ internal sealed interface ShareDialog {
 
     data object AddDirect : ShareDialog
 
+    /** „Annehmen“ of a request: fingerprint comparison and the rights it gets. */
+    data class AcceptRequest(val request: app.smartexplorer.android.api.ShareRequestInfo) : ShareDialog
+
     data class RequestAccess(val contactId: String, val name: String) : ShareDialog
 
     data class RemoveDevice(val contactId: String, val name: String) : ShareDialog
@@ -145,30 +148,18 @@ internal fun ShareDialogHost(
             } else {
                 DiscoverableDialog(
                     status,
-                    onStart = { target, alias, pin, minutes, allowWeakPin ->
-                        action.submit(vm, "Nicht suchbar", onDismiss) { ShareApi.discoverable(target, alias, pin, minutes, allowWeakPin) }
+                    onStart = { target, alias, pin, minutes, allowWeakPin, rights ->
+                        action.submit(vm, "Nicht suchbar", onDismiss) { ShareApi.discoverable(target, alias, pin, minutes, allowWeakPin, rights) }
                     },
                     onDismiss = onDismiss,
                     action = action,
+                    presets = vm.rightsPresets,
+                    offered = OfferedRights.from(vm.access?.execProvider, status.execProvider),
                 )
             }
         }
         ShareDialog.Connect -> ConnectDeviceDialog(vm, onDismiss)
-        ShareDialog.CreateRoom -> TextInputDialog(
-            title = "Raum erstellen",
-            label = "Name des Raums",
-            initial = "",
-            confirmLabel = "Erstellen",
-            onConfirm = { name ->
-                action.submit(vm, "Raum nicht erstellt", onDismiss) {
-                    val created = ShareApi.createRoom(name)
-                    vm.roomCode = RoomCodeView(name, created.code)
-                }
-            },
-            onDismiss = onDismiss,
-            hint = "Der Raum startet ohne eigene Freigaben und ohne Schreibrecht für Mitglieder.",
-            action = action,
-        )
+        ShareDialog.CreateRoom -> CreateRoomDialog(vm, onDismiss)
         ShareDialog.JoinRoom -> CodeDialog(
             title = "Raum beitreten",
             codeLabel = "Raum-Code",
@@ -192,6 +183,7 @@ internal fun ShareDialogHost(
             showShareBack = true,
             action = action,
         )
+        is ShareDialog.AcceptRequest -> AcceptRequestDialog(dialog.request, vm, onDismiss)
         is ShareDialog.RequestAccess -> TextInputDialog(
             title = "Zugriff anfragen",
             label = "Nachricht (optional)",
@@ -259,7 +251,8 @@ internal fun ShareDialogHost(
         is ShareDialog.ConfirmExport -> if (dialog.scope == SHARE_DIRECT) {
             ShareConfirmAction(
                 title = "Ordner für deine Geräte freigeben?",
-                message = "${dialog.path}\n\nDeine angenommenen Geräte dürfen hier lesen und schreiben. „Nur lesen“ wählst du anschließend unter Rechte.",
+                message = "${dialog.path}\n\nDeine angenommenen Geräte dürfen hier lesen und schreiben, soweit ihre Rechte Ordner und Schreiben enthalten. " +
+                    "Geräte mit Ordnerauswahl sehen den Ordner erst, wenn du ihn in ihren Rechten wählst. „Nur lesen“ wählst du anschließend unter Rechte.",
                 confirm = "Freigeben",
                 failure = "Ordner nicht freigegeben",
                 vm = vm,

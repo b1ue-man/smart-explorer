@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.smartexplorer.android.R
+import app.smartexplorer.android.api.RightsPresetInfo
 import app.smartexplorer.android.api.ShareStatus
 import app.smartexplorer.android.api.ShareServerInfo
 import app.smartexplorer.android.ui.common.SeIcon
@@ -36,6 +37,8 @@ internal class DeviceCardActions(
     /** „Code erneuern…“ (asks first). */
     val renewCode: () -> Unit,
     val setLanPresence: (Boolean) -> Unit,
+    /** The preset key the Direct code gives from now on; `null` removes the code's rights (the device waits). */
+    val setCodeRights: (String?) -> Unit = {},
 )
 
 /**
@@ -44,7 +47,14 @@ internal class DeviceCardActions(
  * the Direct code for "Direct-Code hinzufügen" on other devices.
  */
 @Composable
-internal fun ThisDeviceCard(status: ShareStatus, nowMs: Long, actions: DeviceCardActions, modifier: Modifier = Modifier, serverInfo: ShareServerInfo? = null) {
+internal fun ThisDeviceCard(
+    status: ShareStatus,
+    nowMs: Long,
+    actions: DeviceCardActions,
+    modifier: Modifier = Modifier,
+    serverInfo: ShareServerInfo? = null,
+    presets: List<RightsPresetInfo> = RightsPresets.builtIn(),
+) {
     val identity = status.identity
     Card(modifier.fillMaxWidth()) {
         Column(Modifier.padding(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -120,6 +130,7 @@ internal fun ThisDeviceCard(status: ShareStatus, nowMs: Long, actions: DeviceCar
                 TextButton(onClick = { actions.setDirectOnline(false) }) { Text("Nicht erreichbar") }
                 TextButton(onClick = actions.renewCode) { Text("Code erneuern…") }
             }
+            CodeRightsLine(status.codeRights, presets, enabled = true, onSelect = actions.setCodeRights, modifier = inset)
             if (identity.fingerprint.isNotBlank()) {
                 Text(
                     "Fingerabdruck: ${identity.fingerprint}",

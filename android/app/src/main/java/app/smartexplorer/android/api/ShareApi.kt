@@ -77,6 +77,12 @@ data class ShareRequestInfo(
     val canDelete: Boolean = false,
     val message: String? = null,
     val timeMs: Long = 0,
+    /**
+     * Fingerprint and device id of the asking device, to compare before accepting (like the
+     * desktop). `null` from a bridge that does not name them: the dialog then says so.
+     */
+    val fingerprint: String? = null,
+    val deviceId: String? = null,
 )
 
 /** A local folder this device offers. */
@@ -182,6 +188,10 @@ data class ShareStatus(
     val connectionExports: ShareConnectionExports = ShareConnectionExports(),
     val writeGrants: List<ShareWriteGrant>? = null,
     val autoHomeMigrations: List<ShareHomeMigration> = emptyList(),
+    /** Connections that wait for their rights („Rechte offen“, api.md §5.1). */
+    val pendingRights: List<PendingRights> = emptyList(),
+    /** The rights of the Direct code; `null`: a device that connects waits for a confirmation. */
+    val codeRights: Rights? = null,
 )
 
 /** `share.createRoom` */
@@ -200,6 +210,30 @@ data class ExecResult(
 
 /** Discovery target and export scope for "all Direct devices" (otherwise a room profile id). */
 const val SHARE_DIRECT = "direct"
+
+/** Arguments of `share.discoverable`. */
+internal fun discoverableArgs(target: String, alias: String, pin: String, minutes: Int, allowWeakPin: Boolean, rights: RightsSelection?): JsonObject =
+    buildJsonObject {
+        put("target", target)
+        put("alias", alias)
+        put("pin", pin)
+        put("minutes", minutes)
+        put("allowWeakPin", allowWeakPin)
+        rights?.addTo(this)
+    }
+
+/** Arguments of `share.decide`; the rights only count for an acceptance. */
+internal fun decideArgs(requestId: String, accept: Boolean, rights: RightsSelection?): JsonObject = buildJsonObject {
+    put("requestId", requestId)
+    put("accept", accept)
+    if (accept) rights?.addTo(this)
+}
+
+/** Arguments of `share.createRoom`. */
+internal fun createRoomArgs(name: String, rights: RightsSelection?): JsonObject = buildJsonObject {
+    put("name", name)
+    rights?.addTo(this)
+}
 
 /** Suspending wrappers for api.md §5; every call throws [CoreException] on errors. */
 object ShareApi {
@@ -245,17 +279,12 @@ object ShareApi {
     suspend fun discoverable(target: String, alias: String, pin: String, minutes: Int) =
         discoverable(target, alias, pin, minutes, allowWeakPin = false)
 
-    suspend fun discoverable(target: String, alias: String, pin: String, minutes: Int, allowWeakPin: Boolean) {
-        Core.call(
-            "share.discoverable",
-            buildJsonObject {
-                put("target", target)
-                put("alias", alias)
-                put("pin", pin)
-                put("minutes", minutes)
-                put("allowWeakPin", allowWeakPin)
-            },
-        )
+    /**
+     * [rights] (only for `direct`) are the rights of the device that pairs with this offer, chosen
+     * in advance; without them it waits for a confirmation („Rechte offen“).
+     */
+    suspend fun discoverable(target: String, alias: String, pin: String, minutes: Int, allowWeakPin: Boolean, rights: RightsSelection? = null) {
+        Core.call("share.discoverable", discoverableArgs(target, alias, pin, minutes, allowWeakPin, rights))
     }
 
     suspend fun stopDiscoverable(offerId: String) {
@@ -303,8 +332,9 @@ object ShareApi {
         Core.call("share.readmit", buildJsonObject { put("deviceId", deviceId) })
     }
 
-    suspend fun createRoom(name: String): RoomCreated =
-        Core.request<RoomCreated>("share.createRoom", buildJsonObject { put("name", name) })
+    /** [rights] are what the room gives its members; without them the room waits for a confirmation. */
+    suspend fun createRoom(name: String, rights: RightsSelection? = null): RoomCreated =
+        Core.request<RoomCreated>("share.createRoom", createRoomArgs(name, rights))
 
     /** Returns the new room's profile id. */
     suspend fun joinRoom(code: String, name: String): String = Core.request<ProfileRef>(
@@ -336,14 +366,12 @@ object ShareApi {
         )
     }
 
-    suspend fun decide(requestId: String, accept: Boolean) {
-        Core.call(
-            "share.decide",
-            buildJsonObject {
-                put("requestId", requestId)
-                put("accept", accept)
-            },
-        )
+    /**
+     * [rights] (with [accept]) give the device exactly these rights with the acceptance; without
+     * them the Direct code's rights apply, or the device waits for a confirmation.
+     */
+    suspend fun decide(requestId: String, accept: Boolean, rights: RightsSelection? = null) {
+        Core.call("share.decide", decideArgs(requestId, accept, rights))
     }
 
     suspend fun retry(requestId: String) {

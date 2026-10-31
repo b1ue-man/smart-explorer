@@ -25,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import app.smartexplorer.android.api.RightsTarget
 import app.smartexplorer.android.api.ShareApi
 import app.smartexplorer.android.api.ShareStatus
 import app.smartexplorer.android.core.CoreException
@@ -106,6 +107,19 @@ internal fun DeviceSettingsPage(selector: ShareDialog.DeviceSettings, vm: ShareV
                         }
                     }
                 }
+                item {
+                    val target = if (deviceId != null && publicKey != null) RightsTarget.direct(deviceId, publicKey) else null
+                    val waiting = pendingFor(target, status?.pendingRights.orEmpty())
+                    SectionHeader("Rechte dieser Verbindung")
+                    HintLine(
+                        if (waiting != null) "Rechte offen (${originText(waiting.origin)}): bis zur Bestätigung hat dieses Gerät keine Rechte."
+                        else "Ein Menü für Ordner, Schreiben, Befehle, Terminal und Desktop sehen und steuern.",
+                    )
+                    TextButton(
+                        onClick = { target?.let { vm.openRightsFor(it, device?.name?.ifBlank { null } ?: selector.name) } },
+                        enabled = target != null,
+                    ) { Text(if (waiting != null) "Rechte festlegen …" else "Rechte einstellen …") }
+                }
                 if (device != null) item {
                     SectionHeader("Verbindung und Rückfreigabe")
                     FlowRow(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -161,7 +175,7 @@ internal fun DeviceSettingsPage(selector: ShareDialog.DeviceSettings, vm: ShareV
                     requests.forEach { request ->
                         Text(request.stateText, Modifier.padding(horizontal = 16.dp))
                         FlowRow {
-                            if (request.canAccept) TextButton(onClick = { vm.act("Anfrage nicht angenommen", onResult = { if (it == null) reload++ }) { ShareApi.decide(request.requestId, true) } }) { Text("Annehmen") }
+                            if (request.canAccept) TextButton(onClick = { open(ShareDialog.AcceptRequest(request)) }) { Text("Annehmen …") }
                             if (request.canReject) TextButton(onClick = { vm.act("Anfrage nicht abgelehnt", onResult = { if (it == null) reload++ }) { ShareApi.decide(request.requestId, false) } }) { Text("Ablehnen") }
                         }
                     }

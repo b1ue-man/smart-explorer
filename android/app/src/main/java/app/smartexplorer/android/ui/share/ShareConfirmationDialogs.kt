@@ -3,7 +3,12 @@ package app.smartexplorer.android.ui.share
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import app.smartexplorer.android.api.SharePolicyApi
+import app.smartexplorer.android.api.ShareRightsApi
 import app.smartexplorer.android.api.ShareRoom
 import app.smartexplorer.android.api.ShareMember
 import app.smartexplorer.android.api.ShareRequestPolicy
@@ -74,19 +79,60 @@ internal fun RoomMemberDialog(room: ShareRoom, member: ShareMember, decision: St
     }
 }
 
+/**
+ * „Automatisch annehmen erlauben…“ / „Immer fragen…“. Turning automatic acceptance on chooses the
+ * rights a device gets with it (the Direct code's rights, F6); „Beim Verbinden fragen“ gives none
+ * and the device waits for the rights sheet. Texts name what happens.
+ */
 @Composable
 internal fun RequestPolicyDialog(policy: ShareRequestPolicy, vm: ShareViewModel, onDismiss: () -> Unit) {
-    val automatic = policy.requests != "AutoAccept"
-    ShareConfirmAction(
-        title = if (automatic) "Anfragen automatisch annehmen?" else "Jede Anfrage bestätigen?",
-        message = if (automatic) "Geräte mit deinem Direct-Code können Zugriff auf deine Freigaben erhalten, ohne dass du jede Anfrage bestätigst. " +
-            "Schreibrecht und Befehle werden dadurch nicht erlaubt. Entfernte Identitäten bleiben gesperrt."
-        else "Neue Geräte warten auf deine ausdrückliche Zustimmung. Vorhandene bewusste Freigaben bleiben erhalten.",
-        confirm = if (automatic) "Automatisch annehmen" else "Immer fragen",
-        failure = "Anfrageeinstellung nicht gespeichert",
-        vm = vm,
+    val turningOn = policy.requests != "AutoAccept"
+    val action = rememberShareAction()
+    val presets = vm.rightsPresets
+    val offered = OfferedRights.from(vm.access?.execProvider, vm.status?.execProvider)
+    val current = vm.status?.codeRights ?: policy.codeRights
+    var chosen by remember { mutableStateOf(current?.let { RightsPresets.matching(it, presets)?.key }) }
+    var touched by remember { mutableStateOf(false) }
+    val shown = if (touched) presets.firstOrNull { it.key == chosen }?.rights else current
+    ShareActionDialog(
+        title = if (turningOn) "Anfragen automatisch annehmen?" else "Jede Anfrage bestätigen?",
+        state = action,
         onDismiss = onDismiss,
-    ) { SharePolicyApi.setPolicy(if (automatic) "AutoAccept" else "Ask") }
+        confirmLabel = if (turningOn) "Automatisch annehmen" else "Immer fragen",
+        onConfirm = {
+            val selection = if (turningOn && touched) presetSelection(chosen, presets, offered, System.currentTimeMillis() / 1000) else null
+            val clear = turningOn && touched && selection == null && current != null
+            action.submit(vm, "Anfrageeinstellung nicht gespeichert", onDismiss) {
+                SharePolicyApi.setPolicy(if (turningOn) "AutoAccept" else "Ask", selection)
+                if (clear) ShareRightsApi.clearCodeRights()
+            }
+        },
+    ) {
+        if (turningOn) {
+            Text(
+                "Geräte, die sich mit deinem Direct-Code melden, werden ohne deine Bestätigung angenommen. " +
+                    "Sie erhalten genau die Rechte, die du hier wählst. Entfernte Identitäten bleiben gesperrt.",
+            )
+            RightsPresetChips(
+                presets,
+                chosen,
+                onSelect = {
+                    chosen = it
+                    touched = true
+                },
+                noneLabel = "Beim Verbinden fragen",
+                enabled = !action.saving,
+                noneSelected = if (touched) chosen == null else current == null,
+            )
+            Text(codeRightsText(shown))
+            Text(
+                "Diese Wahl gilt auch für den Direct-Code selbst (Zeile „Rechte für Geräte, die mit deinem Direct-Code verbinden“).",
+                style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+            )
+        } else {
+            Text("Neue Geräte warten auf deine ausdrückliche Zustimmung. Vorhandene bewusste Freigaben bleiben erhalten. Die Rechte des Direct-Codes bleiben gespeichert.")
+        }
+    }
 }
 
 @Composable

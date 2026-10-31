@@ -16,7 +16,10 @@ import app.smartexplorer.android.api.ExecTarget
 import app.smartexplorer.android.api.FilesApi
 import app.smartexplorer.android.api.ShareAccessApi
 import app.smartexplorer.android.api.ShareApi
+import app.smartexplorer.android.api.RightsPresetInfo
+import app.smartexplorer.android.api.RightsSelection
 import app.smartexplorer.android.api.ShareExecApi
+import app.smartexplorer.android.api.ShareRightsApi
 import app.smartexplorer.android.api.ShareStatus
 import app.smartexplorer.android.api.SharePolicyApi
 import app.smartexplorer.android.api.ShareRequestPolicy
@@ -76,6 +79,42 @@ internal class ShareViewModel : ViewModel() {
     var roomCode by mutableStateOf<RoomCodeView?>(null)
     var removal by mutableStateOf<RemovalReport?>(null)
 
+    /** The presets of the bridge (`share.rightsPresets`); the built-in ones until they are loaded. */
+    var rightsPresets by mutableStateOf<List<RightsPresetInfo>>(RightsPresets.builtIn())
+        private set
+    private var rightsPresetsLoaded = false
+
+    /** The rights sheet a menu opened („Rechte einstellen“); an open confirmation opens its own ([rightsSheet]). */
+    var rightsRequest by mutableStateOf<RightsRequest?>(null)
+        private set
+
+    /** Open confirmations the user put off or finished in this session; they do not reopen the sheet by themselves. */
+    private var postponed by mutableStateOf<Set<String>>(emptySet())
+
+    /** The rights sheet to show now: the one a menu opened, else the next connection that waits for its rights. */
+    fun rightsSheet(): RightsRequest? = resolveRightsSheet(rightsRequest, status?.pendingRights.orEmpty(), postponed)
+
+    fun openRights(request: RightsRequest) {
+        rightsRequest = request
+    }
+
+    /** The sheet of [key] ended with „Bestätigen“ or „Abbrechen“; it does not reopen from a stale status. */
+    fun finishRights(key: String) {
+        postponed = postponed + key
+        rightsRequest = null
+    }
+
+    /** The sheet was swiped away: the question is put off, the connection stays „Rechte offen“. */
+    fun dismissRights(request: RightsRequest) {
+        if (request.pending) postponed = postponed + request.key
+        rightsRequest = null
+    }
+
+    /** Sets the rights the Direct code (and automatic acceptance) gives; `null` removes them (the device then waits). */
+    fun setCodeRights(selection: RightsSelection?) = act("Rechte des Direct-Codes nicht gespeichert") {
+        if (selection == null) ShareRightsApi.clearCodeRights() else ShareRightsApi.setCodeRights(selection)
+    }
+
     // StateFlows are conflated: a burst of `share` events leads to at most one extra load, and
     // `share.watch` is sent in order with only the latest wish.
     private val reloadTicks = MutableStateFlow(0L)
@@ -101,6 +140,8 @@ internal class ShareViewModel : ViewModel() {
     /** Page visible (started and composed) → the core polls the Share worker every 300 ms. */
     fun setVisible(visible: Boolean) {
         watchWanted.value = visible
+        // The rights sheet announces new connections itself while this page is visible.
+        app.smartexplorer.android.service.RightsPendingNotifier.shareVisible = visible
     }
 
     /**
@@ -225,6 +266,9 @@ internal class ShareViewModel : ViewModel() {
             val current = ShareApi.status()
             loadPolicyAndSecurity(current)
             status = current
+            val waiting = current.pendingRights.map { it.target.key }.toSet()
+            if (postponed.any { it !in waiting }) postponed = postponed.filter { it in waiting }.toSet()
+            loadRightsPresets()
             loadError = null
             access = loadAccess()
             execJobs = if (current.running) loadExecJobs() else null
@@ -253,6 +297,17 @@ internal class ShareViewModel : ViewModel() {
             // If the pairing query succeeded, unrelated server/policy errors do not undo that fact.
             pairingsKnown = pairingLoaded
             securityError = "Share-Sicherheit nicht geladen: ${e.message ?: e.kind}"
+        }
+    }
+
+    /** The presets once; a failure (older bridge) keeps the built-in ones. */
+    private suspend fun loadRightsPresets() {
+        if (rightsPresetsLoaded) return
+        try {
+            rightsPresets = RightsPresets.of(ShareRightsApi.presets())
+            rightsPresetsLoaded = true
+        } catch (e: CoreException) {
+            Log.w(TAG, "share.rightsPresets failed: ${e.kind}: ${e.message}")
         }
     }
 

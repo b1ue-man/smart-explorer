@@ -55,11 +55,22 @@ data class ShareConnections(
 )
 
 @Serializable
-data class ShareRequestPolicy(val requests: String = "Ask", val warning: String? = null)
+data class ShareRequestPolicy(
+    val requests: String = "Ask",
+    val warning: String? = null,
+    /** The rights of the Direct code, also given by automatic acceptance; `null`: the device waits. */
+    val codeRights: Rights? = null,
+)
 
 /** Persisted is the profile commit, not a synchronous transport/session barrier. */
 @Serializable
 private data class PolicySaved(val persisted: Boolean, val changed: Boolean = false)
+
+/** Arguments of `share.setPolicy`. */
+internal fun setPolicyArgs(requests: String, rights: RightsSelection?): JsonObject = buildJsonObject {
+    put("requests", requests)
+    rights?.addTo(this)
+}
 
 /** FC1 mutations preserve stored path/account bytes and every unrelated permission. */
 object SharePolicyApi {
@@ -69,8 +80,12 @@ object SharePolicyApi {
 
     suspend fun policy(): ShareRequestPolicy = Core.request("share.policy")
 
-    suspend fun setPolicy(requests: String) {
-        save("share.setPolicy", buildJsonObject { put("requests", requests) })
+    /**
+     * [rights] set the rights automatic acceptance gives (the Direct code's rights); without them
+     * a device accepted automatically waits for a confirmation unless code rights are stored.
+     */
+    suspend fun setPolicy(requests: String, rights: RightsSelection? = null) {
+        save("share.setPolicy", setPolicyArgs(requests, rights))
     }
 
     suspend fun allowGrantAgain(grant: ShareWriteGrant) {

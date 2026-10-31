@@ -38,6 +38,9 @@ object Notifications {
     const val ID_UPDATE = 1004
     const val ID_SHARE_REQUEST = 1005
 
+    /** One notification for all connections that wait for their rights (RightsPendingNotifier). */
+    const val ID_RIGHTS_PENDING = 1006
+
     /** One id per running command of another device, from [ID_EXEC_FIRST] on. */
     const val ID_EXEC_FIRST = 1100
     const val EXEC_ID_COUNT = 50

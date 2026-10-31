@@ -184,9 +184,9 @@ internal fun ConnectDeviceDialog(vm: ShareViewModel, onDismiss: () -> Unit) {
                         )
                         if (target.kind == SHARE_DIRECT) {
                             ShareChoice("Auch meine Freigaben für dieses Gerät öffnen", shareBack, !unconfirmedEnd && !checkingResult) { shareBack = it }
-                            Text("Ohne diese Wahl entsteht kein neuer Zugriff auf deine Freigaben. Vorhandene bewusste Rechte bleiben erhalten.")
+                            Text("Ohne diese Wahl entsteht kein neuer Zugriff auf deine Freigaben. Vorhandene bewusste Rechte bleiben erhalten. Mit der Wahl öffnet sich nach dem Koppeln das Menü „Rechte für …“; bis du bestätigst, hat das Gerät keine Rechte.")
                         } else {
-                            Text("Raumbeitritt legt keine eigenen Freigaben an.")
+                            Text("Raumbeitritt legt keine eigenen Freigaben an. Danach öffnet sich das Menü „Rechte für <Raum>“, in dem du festlegst, was du dem Raum gibst.")
                         }
                     }
                     else -> AdvertList(

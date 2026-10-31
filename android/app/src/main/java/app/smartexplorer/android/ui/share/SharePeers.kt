@@ -11,6 +11,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -22,6 +23,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.smartexplorer.android.R
+import app.smartexplorer.android.api.PendingRights
+import app.smartexplorer.android.api.RightsTarget
 import app.smartexplorer.android.api.ShareDevice
 import app.smartexplorer.android.api.ShareMember
 import app.smartexplorer.android.api.ScreenDevice
@@ -66,6 +69,10 @@ internal class PeerActions(
     val renameRoom: (ShareRoom) -> Unit,
     val rejoinRoom: (ShareRoom) -> Unit,
     val resetMemberTrust: (ShareRoom, ShareMember) -> Unit,
+    /** „Rechte einstellen…“ / „Rechte festlegen…“: the compact rights menu of a Direct device. */
+    val rights: (ShareDevice) -> Unit,
+    /** The same for a room. */
+    val roomRights: (ShareRoom) -> Unit,
     val screens: ScreenLinks,
 )
 
@@ -81,30 +88,35 @@ private fun screenEntries(screen: ScreenDevice?, screens: ScreenLinks): List<Pai
 
 /** Section "Geräte": Direct devices; tap opens the device's files. */
 @Composable
-internal fun DevicesSection(devices: List<ShareDevice>, actions: PeerActions) {
+internal fun DevicesSection(devices: List<ShareDevice>, pending: List<PendingRights>, actions: PeerActions) {
     SectionHeader("Geräte")
     if (devices.isEmpty()) {
         HintLine("Noch keine Geräte. „Gerät verbinden“ koppelt per PIN, „Direct-Code hinzufügen“ per Code.")
         return
     }
-    devices.forEach { device -> DeviceRow(device, actions) }
+    devices.forEach { device -> DeviceRow(device, pendingFor(rightsTargetOf(device), pending) != null, actions) }
 }
 
 @Composable
-private fun DeviceRow(device: ShareDevice, actions: PeerActions) {
+private fun DeviceRow(device: ShareDevice, rightsOpen: Boolean, actions: PeerActions) {
     val name = device.name.ifBlank { "Gerät" }
     val target = PeerTarget(name, device.location)
     val status = buildString {
         append(device.statusText.ifBlank { statusLabel(device.status) })
         if (device.lan) append(" · LAN")
         append(if (device.shareBack) " · Rückfreigabe an" else " · Keine neue Rückfreigabe")
-        device.write?.let { append(if (it) " · Schreibrecht" else " · Nur lesen") }
+        if (rightsOpen) append(" · Rechte offen") else device.write?.let { append(if (it) " · Schreibrecht" else " · Nur lesen") }
         if (!device.autoConnect) append(" · Verbindet nicht automatisch")
         if (device.autoOpen) append(" · Öffnet automatisch")
     }
     ListItem(
         headlineContent = { Text(name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-        supportingContent = { Text(status, maxLines = 3, overflow = TextOverflow.Ellipsis) },
+        supportingContent = {
+            Column {
+                Text(status, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                if (rightsOpen) TextButton(onClick = { actions.rights(device) }) { Text("Rechte festlegen …") }
+            }
+        },
         leadingContent = {
             SeIcon(
                 R.drawable.ic_device,
@@ -120,6 +132,7 @@ private fun DeviceRow(device: ShareDevice, actions: PeerActions) {
                     "Datei senden" to { actions.sendFiles(target) },
                     "Befehl ausführen" to { actions.exec(target) },
                 ) + screen + listOf(
+                    (if (rightsOpen) "Rechte festlegen…" else "Rechte einstellen…") to { actions.rights(device) },
                     "Zugriff anfragen" to { actions.requestAccess(device) },
                     "Eigene Freigaben…" to { actions.shareBack(device) },
                     "Geräteeinstellungen…" to { actions.connection(device) },
@@ -133,17 +146,17 @@ private fun DeviceRow(device: ShareDevice, actions: PeerActions) {
 
 /** Section "Räume": name, members; tap opens the room, the arrow shows its members. */
 @Composable
-internal fun RoomsSection(rooms: List<ShareRoom>, actions: PeerActions) {
+internal fun RoomsSection(rooms: List<ShareRoom>, pending: List<PendingRights>, actions: PeerActions) {
     SectionHeader("Räume")
     if (rooms.isEmpty()) {
         HintLine("Noch keine Räume. Ein Raum verbindet mehrere Geräte über einen gemeinsamen Code.")
         return
     }
-    rooms.forEach { room -> RoomBlock(room, actions) }
+    rooms.forEach { room -> RoomBlock(room, pendingFor(RightsTarget.room(room.profileId), pending) != null, actions) }
 }
 
 @Composable
-private fun RoomBlock(room: ShareRoom, actions: PeerActions) {
+private fun RoomBlock(room: ShareRoom, rightsOpen: Boolean, actions: PeerActions) {
     var expanded by rememberSaveable(room.profileId) { mutableStateOf(false) }
     val name = room.name.ifBlank { "Raum" }
     val members = room.members.size
@@ -154,8 +167,11 @@ private fun RoomBlock(room: ShareRoom, actions: PeerActions) {
             val state = if (room.autoJoin) statusLabel(room.status) else "Verlassen"
             val pending = room.members.count { it.admission == "Pending" }
             val rights = room.policy?.let { if (it.membersMayWrite) "Mitglieder dürfen schreiben" else "Mitglieder nur lesend" } ?: "Rechte unbekannt"
-            Text("$state · $members ${if (members == 1) "Mitglied" else "Mitglieder"}" +
-                (if (pending > 0) " · $pending warten auf Zustimmung" else "") + "\n$rights")
+            Column {
+                Text("$state · $members ${if (members == 1) "Mitglied" else "Mitglieder"}" +
+                    (if (pending > 0) " · $pending warten auf Zustimmung" else "") + "\n" + if (rightsOpen) "Rechte offen" else rights)
+                if (rightsOpen) TextButton(onClick = { actions.roomRights(room) }) { Text("Rechte festlegen …") }
+            }
         },
         leadingContent = { SeIcon(R.drawable.ic_room, contentDescription = null) },
         trailingContent = {
@@ -173,6 +189,7 @@ private fun RoomBlock(room: ShareRoom, actions: PeerActions) {
                     buildList<Pair<String, () -> Unit>> {
                         add("Code anzeigen" to { actions.showRoomCode(room) })
                         if (room.autoJoin && members > 0) add(roomScreens to { actions.screens.openRoom(room.profileId) })
+                        add((if (rightsOpen) "Rechte festlegen…" else "Rechte einstellen…") to { actions.roomRights(room) })
                         add("Rechte und Bestätigung…" to { actions.roomPolicy(room) })
                         add("Umbenennen…" to { actions.renameRoom(room) })
                         if (room.autoJoin) add("Verlassen" to { actions.leaveRoom(room) }) else add("Wieder beitreten" to { actions.rejoinRoom(room) })
