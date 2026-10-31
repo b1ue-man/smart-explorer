@@ -1,6 +1,6 @@
 # Sync-Abgleich so schnell wie die Speicheranalyse (2026-10-31)
 
-Stand: A–D fertig; Umsetzung D1–D4 als nächster Schritt.
+Stand: A–D umgesetzt; Nachtrag E (N4, N5) in Umsetzung.
 
 ## A — Erstplan aus dem Nutzerauftrag
 
@@ -112,3 +112,41 @@ Messplan (Analyse-Regel): Wege lokal–lokal (ein Laufwerk, zwei Verzeichnisse),
 - Aktiver Stand: C1–C7 gewählt; Umsetzung D1–D4.
 - Nächster Schritt: Ausarbeiten – D1–D4 umsetzen, D5 Suite, Wirkung durch Messung belegen; Rückkehrpunkt: Bewertung an K1–K6 nach dem Suite-Lauf.
 - Status: aktiv.
+
+
+## E — Nachtrag nach dem ersten Abschluss (2026-10-31)
+
+Nutzernachrichten (wörtlich):
+- N4: „du hast noch offene punkte also bist nicht fertig. meine operation die mit einem hash gemacht werden kann der lokal erstellt werden kann darf einen filetransfer verlangen.“ (eigene Lesart: „meine“ = „keine“)
+- N5: „und natürlich wie immer, so schnell wie möglich heist so wenig wie möglichm wenn n hash von nem ordner gleich ist, fertig. ordner ist gleich. das nehme ich zumindest leihenhaft an validiere“
+
+Ergebnisse:
+| ID | Ergebnis | Quelle |
+|----|----------|--------|
+| E8 | jeder bisher als offen/zurückgestellt geführte Punkt ist umgesetzt oder trägt einen zulässigen Grund (Quellstelle, Messung, Regel, Garantie, Nutzervorgabe) | N4 |
+| E9 | keine Operation, deren Prüfschlüssel die Seite mit der Datei selbst bilden kann, überträgt die Datei (Prüfsummen-Vergleich im Sync, Überprüfen nach Kopien, Zusammenführen, Duplikate) | N4 |
+| E10 | Ordner-Prüfschlüssel: gleicher Schlüssel beider Seiten → Ordner gleich, kein Abstieg, keine Auflistung über die Verbindung; nur ungleiche Ordner werden weiter verglichen | N5 |
+| E11 | Validierung der Annahme „gleicher Ordner-Hash = gleicher Ordner“ mit Primärquellen | N5 |
+
+Validierung (E11, Stand vor der Umsetzung): gilt in Richtung „gleich ⇒ gleich“, wenn der Schlüssel aus einer kollisionsresistenten Hashfunktion über eine kanonische Darstellung aller verglichenen Angaben entsteht (Name in der Faltung des Paars, Art, Größe, Zeit auf die gröbere Genauigkeit beider Seiten gerundet, im Prüfsummen-Modus der Inhalts-Hash, Filter, Mount-Grenze, Auslassungen) – das Verfahren von Git-Bäumen und dem Merkle-Abgleich in Dynamo/Cassandra (Primärquellen ergänzt das Umsetzungspaket). Die Umkehrung gilt nicht (gerundete Zeiten an Rundungsgrenzen, Sommerzeit, Faltung): ein ungleicher Schlüssel führt nur zum Abstieg und zum bisherigen Vergleich. Im Zwei-Richtungs-Sync zählt zusätzlich der Schlüssel der Basis: A = B = Basis → Teilbaum unverändert, aus der Basis übernommen; A = B ≠ Basis → Einträge einer Seite für die Basis.
+
+Offene Punkte aus Plan, Berichten und Review (E8), mit Entscheidung:
+| Punkt | Entscheidung |
+|---|---|
+| Zwei-Richtungs-Folgeläufe ohne Vollerfassung (C8) | umsetzen über E10 mit Basis-Ordnerschlüsseln: unveränderte Teilbäume ohne Auflistung über die Verbindung |
+| persistenter Hash-Cache (C8) | umsetzen auf der Seite der Datei (Share-Host, se-agent, lokal), Schlüssel Dateikennung + Größe + Zeit, Regel gegen „racy“ Zeitstempel (Git) |
+| Sommerzeit FAT/exFAT (C7) | umsetzen: Seiten mit Ortszeit-Dateisystem vergleichen eine Abweichung von genau einer Stunde (± Fenster) bei gleicher Größe als gleich |
+| G5 Rest (Explorer-Listen über den Dienst ohne `hidden`) | umsetzen: Frames mit Merkmal hinter Fähigkeit |
+| W8 Rest (leere und nicht geöffnete Ordner erst am Ende) | umsetzen: Ordner-Ende-Marke im `meta`-Strom |
+| Agent-Listing ohne Erstellzeit | umsetzen hinter Fähigkeit |
+| Kopierauswahl seriell (collect.rs) | umsetzen: geordnete Pipeline (parallel listen, in bisheriger Reihenfolge verarbeiten) |
+| Android `scan.view` hält die Sperre beim Baumaufbau | umsetzen |
+| Drive-Einschritt-Uploads ohne Zeit | umsetzen (`modifiedTime` beim Anlegen) |
+| MFMT bei FTP (eigene Anfrage) | bleibt: Protokoll (RFC 3659 bietet keine Zeit im STOR) |
+| Fenster zwischen Prüfung und Umbenennen ohne Objekt-ID | bleibt: Protokoll (SFTP/SMB/FTP/WebDAV-Rename ohne Vorbedingung) |
+| Host-Zulassung „ein Auftrag je Gerät“ (G7) | bleibt: Garantie (Schutz des Hosts) |
+| share/mod.rs > 500 Zeilen | bleibt: Regel (AGENTS.md verlangt das Herauslösen nur vor neuer bedeutsamer Logik; dort stehen nur Moduldeklarationen) |
+| Prüfschlüssel bei SMB-Zielen | bleibt Übertragung: Protokoll (SMB 2/3 kennt keine serverseitige Prüfsumme) |
+| Prüfschlüssel verschlüsselter Tresor-Inhalte | bleibt Übertragung: Garantie (der Host hat keinen Schlüssel für den Klartext) |
+
+Pakete: F4 (opus) Ordnerschlüssel und Basis-Schlüssel im Sync, Hash-Cache auf Share-Host/Agent/lokal, Hash im Sync über die Gegenseite statt Download, Ordner-Ende-Marke, G5-Rest, Agent-Erstellzeit; F5 (sonnet) Prüfschlüssel ohne Übertragung bei SFTP ohne Agent, FTP, WebDAV, Drive und beim Überprüfen nach Kopien, Sommerzeit-Regel, Drive-Zeit beim Anlegen; F6 (haiku) geordnete Kopierauswahl, Android-Sperre; danach F7 Zusammenführen mit Ordnerschlüsseln und Erweiterung der Suite.
