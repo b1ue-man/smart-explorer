@@ -18,10 +18,72 @@
 //! property from the same one PROPFIND; the value is the uploader's claim
 //! here too, exactly as the MD5 the listings already carry. No MD5 entry
 //! answers `Ok(None)` and the caller keeps its way (hashing the content).
+//!
+//! A server that does not report the property (Apache `mod_dav`, nginx, IIS
+//! answer it in a 404 propstat or not at all) never will for another file of
+//! the same connection either, and the listings read the same property: so
+//! each connection remembers, per algorithm, whether its answers carry it
+//! (`ChecksumMemory`). Once a listing with files or the first Depth-0 answer
+//! showed none, `content_md5`/`content_digest` answer `Ok(None)` without a
+//! request; a later listing or answer that carries one makes the connection
+//! ask again.
 use super::core_impl::WebdavBackend;
 use super::multistatus::{extract_md5, successful_props};
-use crate::vfs::{is_sha256_hex, ContentDigest, VfsResult};
+use crate::vfs::{is_sha256_hex, ContentDigest, VfsMeta, VfsResult};
 use std::io;
+use std::sync::atomic::{AtomicU8, Ordering};
+
+const UNKNOWN: u8 = 0;
+const ABSENT: u8 = 1;
+const PRESENT: u8 = 2;
+
+/// What this connection's answers showed about `oc:checksums`, per
+/// algorithm. "Present" stays once seen; "absent" holds until an answer
+/// carries a checksum.
+#[derive(Default, Debug)]
+pub(super) struct ChecksumMemory {
+    md5: AtomicU8,
+    sha256: AtomicU8,
+}
+
+impl ChecksumMemory {
+    /// Whether answers of this connection carried no MD5 so far.
+    pub(super) fn md5_absent(&self) -> bool {
+        self.md5.load(Ordering::Relaxed) == ABSENT
+    }
+
+    /// Whether answers of this connection carried no SHA-256 so far.
+    pub(super) fn sha256_absent(&self) -> bool {
+        self.sha256.load(Ordering::Relaxed) == ABSENT
+    }
+
+    pub(super) fn note_md5(&self, found: bool) {
+        note(&self.md5, found);
+    }
+
+    pub(super) fn note_sha256(&self, found: bool) {
+        note(&self.sha256, found);
+    }
+
+    /// A listing: its files' MD5s come from the same property. A listing
+    /// without files says nothing.
+    pub(super) fn note_listing(&self, entries: &[VfsMeta]) {
+        let mut files = entries.iter().filter(|entry| !entry.is_dir).peekable();
+        if files.peek().is_none() {
+            return;
+        }
+        let found = files.any(|entry| entry.content_md5.is_some());
+        self.note_md5(found);
+    }
+}
+
+fn note(state: &AtomicU8, found: bool) {
+    if found {
+        state.store(PRESENT, Ordering::Relaxed);
+    } else {
+        let _ = state.compare_exchange(UNKNOWN, ABSENT, Ordering::Relaxed, Ordering::Relaxed);
+    }
+}
 
 /// The lowercase hex SHA-256 among the `ALGORITHM:value` tokens of one
 /// `oc:checksums` text; `SHA256` and `SHA-256` both name the algorithm.
@@ -91,13 +153,25 @@ fn checksum_of(
 }
 
 impl WebdavBackend {
-    /// `BackendExtensions::content_digest`: one PROPFIND.
+    /// `BackendExtensions::content_digest`: one PROPFIND, none where this
+    /// connection's answers carried no SHA-256.
     pub(super) fn digest_from_checksums(&self, path: &str) -> VfsResult<Option<ContentDigest>> {
-        from_propfind(&self.propfind(path, "0")?)
+        if self.checksums.sha256_absent() {
+            return Ok(None);
+        }
+        let found = from_propfind(&self.propfind(path, "0")?)?;
+        self.checksums.note_sha256(found.is_some());
+        Ok(found)
     }
 
-    /// `BackendExtensions::content_md5`: the same one PROPFIND.
+    /// `BackendExtensions::content_md5`: the same one PROPFIND, none where
+    /// this connection's answers carried no MD5.
     pub(super) fn md5_from_checksums(&self, path: &str) -> VfsResult<Option<String>> {
-        md5_from_propfind(&self.propfind(path, "0")?)
+        if self.checksums.md5_absent() {
+            return Ok(None);
+        }
+        let found = md5_from_propfind(&self.propfind(path, "0")?)?;
+        self.checksums.note_md5(found.is_some());
+        Ok(found)
     }
 }

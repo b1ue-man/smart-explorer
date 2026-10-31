@@ -4,9 +4,10 @@
 //! checked without a network; one test runs the exec request over a real SSH
 //! exchange against the in-process server of extra_link_tests.rs.
 use super::digest_command::{
-    command_for_algorithm, hash_by, interpret_for, Algorithm, DigestGate, Reply,
+    command_line, hash_by, interpret_for, stdin_for, Algorithm, DigestGate, Reply, MARKER,
+    MD5_SCRIPT,
 };
-use super::digest_exec::capture;
+use super::digest_exec::{capture, feed};
 use super::exec::CapturedExec;
 use super::extra_link_tests::{ExecScript, Sshd};
 use super::known_hosts;
@@ -27,6 +28,10 @@ fn captured(status: Option<u32>, stdout: &str) -> CapturedExec {
     }
 }
 
+fn ok_line(size: u64, digest: &str) -> String {
+    format!("{MARKER} ok {size} {digest}\n")
+}
+
 fn file(size: u64, mtime_ms: i64) -> VfsMeta {
     VfsMeta {
         size,
@@ -37,69 +42,64 @@ fn file(size: u64, mtime_ms: i64) -> VfsMeta {
 }
 
 #[test]
-fn abgleich_task_sftp_md5_script_is_fixed_quoted_and_free_of_openssl() {
-    let command = command_for_algorithm(Algorithm::Md5, "-rf /; echo $HOME 'x'");
-    assert!(command.starts_with("sh -c '"), "{command}");
+fn abgleich_task_sftp_md5_script_is_fixed_and_free_of_openssl() {
+    let command = command_line(Algorithm::Md5);
+    assert_eq!(command, format!("sh -c '{MD5_SCRIPT}'"));
+    assert!(MD5_SCRIPT.contains("h=md5sum"), "{MD5_SCRIPT}");
+    assert!(MD5_SCRIPT.contains("h=\"md5 -q\""), "{MD5_SCRIPT}");
+    assert!(MD5_SCRIPT.contains("$($h <\"$f\")"), "{MD5_SCRIPT}");
+    assert!(!MD5_SCRIPT.contains("openssl"), "{MD5_SCRIPT}");
     assert!(
-        command.ends_with(" sh '-rf /; echo $HOME '\\''x'\\'''"),
-        "the path travels as one quoted word: {command}"
-    );
-    let script = command
-        .strip_suffix(" sh '-rf /; echo $HOME '\\''x'\\'''")
-        .unwrap();
-    let script = script
-        .strip_prefix("sh -c '")
-        .unwrap()
-        .strip_suffix('\'')
-        .unwrap();
-    assert!(!script.contains('\''), "no quote inside the quoted script");
-    assert!(!script.contains('!'), "nothing a csh would read as history");
-    assert!(script.contains("md5sum <\"$f\""), "{script}");
-    assert!(script.contains("md5 -q <\"$f\""), "{script}");
-    assert!(!script.contains("openssl"), "{script}");
-    assert!(
-        !script.contains("sha"),
+        !MD5_SCRIPT.contains("sha"),
         "the MD5 script asks for no SHA tool"
     );
-    assert_ne!(
-        command,
-        command_for_algorithm(Algorithm::Sha256, "-rf /; echo $HOME 'x'")
-    );
+    assert_ne!(command, command_line(Algorithm::Sha256));
 }
 
 #[test]
 fn abgleich_task_sftp_md5_reads_md5sum_and_bsd_output() {
-    for text in [
-        format!("{MD5}  -\n"),
-        format!("\\{MD5}  -\n"),
-        format!("{}  -\n", MD5.to_ascii_uppercase()),
-        format!("{MD5}\n"),
+    for digest in [
+        format!("{MD5} -"),
+        format!("\\{MD5} -"),
+        MD5.to_ascii_uppercase(),
+        MD5.to_string(),
     ] {
         assert_eq!(
-            interpret_for(&captured(Some(0), &text), Algorithm::Md5),
-            Reply::Digest(MD5.into()),
-            "{text:?}"
+            interpret_for(&captured(Some(0), &ok_line(5, &digest)), Algorithm::Md5),
+            Reply::Digest {
+                hex: MD5.into(),
+                size: 5
+            },
+            "{digest:?}"
         );
     }
     // A SHA-256 line is no MD5 and the other way round.
     assert_eq!(
-        interpret_for(&captured(Some(0), &format!("{SHA}  -\n")), Algorithm::Md5),
+        interpret_for(&captured(Some(0), &ok_line(5, SHA)), Algorithm::Md5),
+        Reply::Unavailable
+    );
+    assert_eq!(
+        interpret_for(&captured(Some(0), &ok_line(5, MD5)), Algorithm::Sha256),
         Reply::Unavailable
     );
     assert_eq!(
         interpret_for(
-            &captured(Some(0), &format!("{MD5}  -\n")),
-            Algorithm::Sha256
+            &captured(Some(0), &format!("{MARKER} notool\n")),
+            Algorithm::Md5
         ),
         Reply::Unavailable
     );
     assert_eq!(
-        interpret_for(&captured(Some(127), ""), Algorithm::Md5),
-        Reply::Unavailable
+        interpret_for(
+            &captured(Some(0), &format!("{MARKER} none\n")),
+            Algorithm::Md5
+        ),
+        Reply::NotRegular
     );
     assert_eq!(
         interpret_for(&captured(Some(3), ""), Algorithm::Md5),
-        Reply::NotRegular
+        Reply::Unavailable,
+        "an exit status without the marker proves nothing"
     );
 }
 
@@ -112,17 +112,18 @@ fn abgleich_task_sftp_md5_flow_asks_the_server_and_checks_size_and_time() {
         Algorithm::Md5,
         "/data/it's.bin",
         || Ok(file(42, 5_000)),
-        |command, _| {
-            sent.borrow_mut().push(command.to_string());
-            Ok(Some(captured(Some(0), &format!("{MD5}  -\n"))))
+        |command, stdin, _| {
+            sent.borrow_mut()
+                .push((command.to_string(), stdin.to_vec()));
+            Ok(Some(captured(Some(0), &ok_line(42, &format!("{MD5} -")))))
         },
     )
     .unwrap();
     assert_eq!(found, Some((MD5.to_string(), 42)));
     let sent = sent.into_inner();
     assert_eq!(sent.len(), 1);
-    assert!(sent[0].contains("md5sum"), "{}", sent[0]);
-    assert!(sent[0].ends_with(" sh '/data/it'\\''s.bin'"), "{}", sent[0]);
+    assert_eq!(sent[0].0, command_line(Algorithm::Md5));
+    assert_eq!(sent[0].1, b"P/data/it's.bin".to_vec());
 
     let reads = std::cell::Cell::new(0);
     let changed = hash_by(
@@ -133,7 +134,7 @@ fn abgleich_task_sftp_md5_flow_asks_the_server_and_checks_size_and_time() {
             reads.set(reads.get() + 1);
             Ok(file(10, if reads.get() == 1 { 1_000 } else { 2_000 }))
         },
-        |_, _| Ok(Some(captured(Some(0), MD5))),
+        |_, _, _| Ok(Some(captured(Some(0), &ok_line(10, MD5)))),
     );
     assert_eq!(changed.unwrap_err().kind(), io::ErrorKind::InvalidData);
 }
@@ -147,7 +148,7 @@ fn abgleich_task_sftp_md5_without_a_tool_leaves_the_content_to_the_caller() {
         Algorithm::Md5,
         "/f",
         || Ok(file(1, 1)),
-        |_, _| Ok(Some(captured(Some(127), ""))),
+        |_, _, _| Ok(Some(captured(Some(0), &format!("{MARKER} notool\n")))),
     );
     assert_eq!(none.unwrap(), None);
     assert!(
@@ -160,7 +161,7 @@ fn abgleich_task_sftp_md5_without_a_tool_leaves_the_content_to_the_caller() {
         Algorithm::Md5,
         "/f",
         || panic!("a closed gate looks at nothing"),
-        |_, _| panic!("a closed gate sends nothing"),
+        |_, _, _| panic!("a closed gate sends nothing"),
     );
     assert_eq!(again.unwrap(), None);
     let busy = DigestGate::default();
@@ -169,7 +170,7 @@ fn abgleich_task_sftp_md5_without_a_tool_leaves_the_content_to_the_caller() {
         Algorithm::Md5,
         "/f",
         || Ok(file(1, 1)),
-        |_, _| Ok(None),
+        |_, _, _| Ok(None),
     );
     assert_eq!(result.unwrap(), None);
     assert!(!busy.closed());
@@ -179,34 +180,33 @@ fn abgleich_task_sftp_md5_without_a_tool_leaves_the_content_to_the_caller() {
 fn abgleich_task_sftp_md5_comes_back_over_ssh_as_text_not_content() {
     let sshd = Sshd::start();
     known_hosts::pin("127.0.0.1", sshd.port, &sshd.fingerprint, true).expect("pin");
-    *sshd.script.lock().unwrap() = ExecScript::Output {
-        stdout: format!("{MD5}  -\n"),
+    *sshd.script.lock().unwrap() = ExecScript::UntilEof {
+        stdout: ok_line(9, &format!("{MD5} -")),
         status: 0,
     };
     let (_handle, _method, mut channel) = sshd
         .extra(sshd.main_key(&sshd.fingerprint))
         .expect("logged in");
+    let stdin = stdin_for("/srv/it's here.bin").expect("sendable");
     sshd.runtime
-        .block_on(channel.exec(
-            true,
-            command_for_algorithm(Algorithm::Md5, "/srv/it's here.bin").into_bytes(),
-        ))
+        .block_on(channel.exec(true, command_line(Algorithm::Md5).into_bytes()))
         .expect("exec request sent");
     let cancel = AtomicBool::new(false);
     let result = sshd
         .runtime
-        .block_on(capture(&mut channel, Duration::from_secs(20), &cancel))
+        .block_on(async {
+            feed(&channel, &stdin).await;
+            capture(&mut channel, Duration::from_secs(20), &cancel).await
+        })
         .expect("the command ended");
     assert_eq!(
         interpret_for(&result, Algorithm::Md5),
-        Reply::Digest(MD5.into())
+        Reply::Digest {
+            hex: MD5.into(),
+            size: 9
+        }
     );
     let commands = sshd.log.commands.lock().unwrap().clone();
-    assert_eq!(commands.len(), 1);
-    assert!(commands[0].contains("md5sum"), "{}", commands[0]);
-    assert!(
-        commands[0].ends_with(" sh '/srv/it'\\''s here.bin'"),
-        "{}",
-        commands[0]
-    );
+    assert_eq!(commands, vec![command_line(Algorithm::Md5)]);
+    assert_eq!(*sshd.log.stdin.lock().unwrap(), stdin);
 }

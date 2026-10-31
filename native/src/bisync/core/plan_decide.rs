@@ -3,7 +3,7 @@
 //! size and time policies (Y41), finishing a verified move (Y59), mirrors in
 //! sync by their baseline (FS2) and reading equal-size files before they
 //! become conflicts or copies (FS1).
-use super::compare::{same_entry, same_file, worth_hashing, Against};
+use super::compare::{hour_apart, same_entry, same_file, worth_hashing, Against};
 use super::plan_types::PlanContext;
 use super::types::{ConflictMode, DeletePolicy, Direction, PairSide, Sig};
 
@@ -113,6 +113,13 @@ pub(super) fn decide(seen: &Observed, ctx: &PlanContext<'_>) -> Decision {
         } else {
             Decision::Record
         };
+    }
+    // An hour apart where a side stores local time: the clock change moved the
+    // times, so both keys decide before anything is copied.
+    if ctx.can_hash
+        && matches!((seen.a, seen.b), (Some(a), Some(b)) if hour_apart(a, b, ctx.times.across(), opts))
+    {
+        return Decision::Verify;
     }
     match (a_changed, b_changed) {
         (true, false) => propagate(seen, PairSide::A, ctx),

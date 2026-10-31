@@ -137,18 +137,19 @@ fn abgleich_task_summary_names_counts_only() {
 }
 
 #[test]
-fn abgleich_task_rule_local_time_side_equal_size_one_hour_apart_is_equal() {
+fn abgleich_task_rule_local_time_hour_apart_is_equal_only_with_equal_contents() {
     let hour = 3_600_000;
     let source = stamp(10, 1_700_000_000_000 + hour);
     let target = stamp(10, 1_700_000_000_000);
     assert_eq!(classify(source, target, 2_000), Case::SourceNewer);
+    let proven = || Some(true);
     assert_eq!(
-        classify_local_time(source, target, 2_000, true),
+        classify_local_time(source, target, 2_000, true, proven),
         Case::Equal,
         "a clock change moved the stored time of the FAT side"
     );
     assert_eq!(
-        classify_local_time(target, source, 2_000, true),
+        classify_local_time(target, source, 2_000, true, proven),
         Case::Equal,
         "either direction"
     );
@@ -157,34 +158,66 @@ fn abgleich_task_rule_local_time_side_equal_size_one_hour_apart_is_equal() {
             stamp(10, 1_700_000_000_000 + hour + 2_000),
             target,
             2_000,
-            true
+            true,
+            proven
         ),
         Case::Equal,
         "the window is added to the hour"
     );
+    // Other contents, or no digest on a side: an hour newer is newer.
+    for proof in [Some(false), None] {
+        assert_eq!(
+            classify_local_time(source, target, 2_000, true, || proof),
+            Case::SourceNewer,
+            "{proof:?}"
+        );
+        assert_eq!(
+            classify_local_time(target, source, 2_000, true, || proof),
+            Case::TargetNewer,
+            "{proof:?}"
+        );
+    }
 }
 
 #[test]
 fn abgleich_task_rule_local_time_keeps_every_other_decision() {
     let hour = 3_600_000;
     let base = 1_700_000_000_000;
+    let never = || -> Option<bool> { panic!("no proof is asked outside the hour") };
     assert_eq!(
-        classify_local_time(stamp(11, base + hour), stamp(10, base), 2_000, true),
+        classify_local_time(stamp(11, base + hour), stamp(10, base), 2_000, true, never),
         Case::SourceNewer,
         "another size is no shift"
     );
     assert_eq!(
-        classify_local_time(stamp(10, base + 2 * hour), stamp(10, base), 2_000, true),
+        classify_local_time(
+            stamp(10, base + 2 * hour),
+            stamp(10, base),
+            2_000,
+            true,
+            never
+        ),
         Case::SourceNewer,
         "two hours are no shift"
     );
     assert_eq!(
-        classify_local_time(stamp(10, base), stamp(10, base + hour + 5_000), 2_000, true),
+        classify_local_time(
+            stamp(10, base),
+            stamp(10, base + hour + 5_000),
+            2_000,
+            true,
+            never
+        ),
         Case::TargetNewer
     );
     assert_eq!(
-        classify_local_time(stamp(10, 0), stamp(10, base), 2_000, true),
+        classify_local_time(stamp(10, 0), stamp(10, base), 2_000, true, never),
         Case::Conflict,
         "an unknown time still decides nothing"
+    );
+    assert_eq!(
+        classify_local_time(stamp(10, base + hour), stamp(10, base), 2_000, false, never),
+        Case::SourceNewer,
+        "no local-time side: no proof is asked"
     );
 }

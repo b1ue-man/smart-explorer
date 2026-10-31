@@ -64,6 +64,7 @@ impl WebdavBackend {
             write_agent,
             identity,
             hashes_observed: Arc::new(AtomicBool::new(false)),
+            checksums: Arc::default(),
             stage_times: Arc::new(Mutex::new(HashMap::new())),
         };
         // Validate credentials / reachability up front.

@@ -29,7 +29,8 @@
 //! (`Replacing`: size, time, provider id); the publication compares the
 //! target with it once more right before it replaces (`publish.rs`,
 //! `download.rs`, the local copy), so a target saved meanwhile keeps both.
-//! A time one side does not know decides nothing: both are kept.
+//! A time one side does not know decides nothing: both are kept. The FAT
+//! hour needs both files hashed where they are stored (`hour_proof`).
 //!
 //! Before a folder's files are looked at one by one, its key can settle them
 //! (`update_keys.rs`): a source folder with the key of the same-named folder
@@ -48,12 +49,14 @@
 use super::super::engine_names::{base_name, parent_path, parent_rel};
 use super::super::flow::Flow;
 use super::super::walk_listers::native;
+use super::job_store::with_backend;
 use super::ops::OpError;
 use super::queue::FileWork;
 use super::roots::RootPlan;
 use super::stats::Decision;
 use super::view::{JobView, Side};
 use super::Engine;
+use crate::transfer::time_window::{same_content_where_stored, Stored};
 use crate::transfer::update_rule::{classify_local_time, window_ms, Case, Replacing, Stamp};
 use crate::transfer::{FolderConflict, Layout, RecoveryMode};
 use crate::types::Conflict;
@@ -329,7 +332,11 @@ pub(super) fn settle_recovered(
                 mtime_ms: file.mtime_ms,
             };
             let window = engine.update_window();
-            let case = classify_local_time(source, target, window, engine.update_local_time());
+            let target_path = engine.folders.path_of(&file.rel);
+            let case =
+                classify_local_time(source, target, window, engine.update_local_time(), || {
+                    hour_proof(engine, &file.source, &target_path)
+                });
             if case == Case::SourceNewer {
                 file.replacing = Some(Replacing {
                     id,
@@ -364,6 +371,17 @@ pub(super) fn settle_recovered(
             file.alone |= !packets_keep_time(engine);
             Settled::Go
         }
+    })
+}
+
+/// The proof the FAT hour needs: both files hashed where they are stored
+/// (`time_window::same_content_where_stored`); `None` where a side cannot.
+fn hour_proof(engine: &Engine<'_>, source: &str, target: &str) -> Option<bool> {
+    with_backend(engine.view.source, |from| {
+        with_backend(engine.view.target, |to| {
+            let (from, to) = (Stored::new(from, source), Stored::new(to, target));
+            same_content_where_stored(from, to, engine.stop_flag())
+        })
     })
 }
 

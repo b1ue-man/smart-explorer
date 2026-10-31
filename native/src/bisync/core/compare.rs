@@ -1,9 +1,18 @@
 //! When two observations of one file count as the same (FS2, Y46/Y47/Y52):
 //! content hashes where both have one, otherwise size plus modification time
-//! at the precision the sides store times with, the job's tolerance and – when
-//! either side is FAT, which stores local time – exactly one hour apart after
-//! a daylight-saving change (exFAT keeps a UTC offset with its times and is
-//! no such side, `MtimePrecision::local_time_shifts`).
+//! at the precision the sides store times with and the job's tolerance.
+//!
+//! The daylight-saving rule (either side FAT, which stores local time; exFAT
+//! keeps a UTC offset with its times and is no such side,
+//! `MtimePrecision::local_time_shifts`): equal sizes exactly one hour apart
+//! after a clock change are the same file only when the contents are shown
+//! equal by content keys both observations carry (`Sig::hash`, formed where
+//! each file is stored: local hashing, the listing's server MD5, the host's
+//! hash walk). Without them the hour is a time like any other: an hour newer
+//! is newer, and a FAT side an hour off its own record has changed.
+//! `hour_apart` names the pairs whose keys would decide (`worth_hashing`
+//! holds for them), so the planner can have both sides hashed where they are
+//! stored instead of copying (`Decision::Verify`).
 use crate::vfs::MtimePrecision;
 
 use super::types::{BisyncOptions, CompareMode, PairSide, Sig};
@@ -71,22 +80,30 @@ pub(super) enum Against {
     Baseline,
 }
 
-/// Two Unix-millisecond times are the same instant at `precision`, within the
-/// job's window, or (FAT) exactly one hour apart. Never overflows (Y52).
+/// Two Unix-millisecond times are compatible: the same instant at
+/// `precision`, within the job's window, or (FAT) exactly one hour apart.
+/// A time question only: whether the files are the same decides `same_file`.
+/// Never overflows (Y52).
 pub(super) fn same_time(a_ms: i64, b_ms: i64, precision: MtimePrecision, window_ms: i64) -> bool {
     same_time_as(a_ms, b_ms, precision.into(), window_ms)
 }
 
-/// `same_time` with the daylight-saving rule of `times`: a side with local
+/// `same_time` with the daylight-saving shift of `times`: a side with local
 /// time (FAT) reports an untouched file exactly one hour off after a clock
 /// change (`transfer::time_window::dst_shift_equal`, within one step of the
-/// common precision). Sizes are compared before (`same_file`).
+/// common precision).
 pub(super) fn same_time_as(a_ms: i64, b_ms: i64, times: TimeCompare, window_ms: i64) -> bool {
-    let distance = a_ms.abs_diff(b_ms);
+    same_instant(a_ms, b_ms, times.precision, window_ms) || shifted_hour(a_ms, b_ms, times)
+}
+
+/// The same instant at `precision` or within the job's window.
+fn same_instant(a_ms: i64, b_ms: i64, precision: MtimePrecision, window_ms: i64) -> bool {
     let window = u64::try_from(window_ms).unwrap_or(0);
-    if distance <= window || times.precision.same_instant(a_ms, b_ms) {
-        return true;
-    }
+    a_ms.abs_diff(b_ms) <= window || precision.same_instant(a_ms, b_ms)
+}
+
+/// Exactly one hour apart (within one step) where a side stores local time.
+fn shifted_hour(a_ms: i64, b_ms: i64, times: TimeCompare) -> bool {
     let step = times.precision.step_ms().unwrap_or(1).max(1);
     times.local_shift
         && crate::transfer::time_window::dst_shift_equal(
@@ -94,6 +111,29 @@ pub(super) fn same_time_as(a_ms: i64, b_ms: i64, times: TimeCompare, window_ms: 
             b_ms,
             i64::try_from(step).unwrap_or(i64::MAX),
         )
+}
+
+/// Equal sizes exactly one hour apart where a side stores local time, and a
+/// content key missing on a side: only keys formed where the files are
+/// stored can show the clock change (then `same_file` takes them as equal);
+/// until then the times decide as without the rule.
+pub(super) fn hour_apart(
+    x: Sig,
+    y: Sig,
+    times: impl Into<TimeCompare>,
+    opts: &BisyncOptions,
+) -> bool {
+    let times: TimeCompare = times.into();
+    opts.compare == CompareMode::MtimeSize
+        && x.size == y.size
+        && (x.hash == 0 || y.hash == 0)
+        && !same_instant(
+            x.mtime_ms,
+            y.mtime_ms,
+            times.precision,
+            opts.modify_window_ms,
+        )
+        && shifted_hour(x.mtime_ms, y.mtime_ms, times)
 }
 
 /// Two signatures describe the same file content.
@@ -115,8 +155,15 @@ pub(super) fn same_file(
         // A checksum comparison cannot certify an unhashed record; the first
         // checksum run upgrades it with authoritative action signatures.
         CompareMode::Checksum => false,
+        // Without content keys an hour apart is an hour apart, also on FAT.
         CompareMode::MtimeSize => {
-            same_time_as(x.mtime_ms, y.mtime_ms, times.into(), opts.modify_window_ms)
+            let times: TimeCompare = times.into();
+            same_instant(
+                x.mtime_ms,
+                y.mtime_ms,
+                times.precision,
+                opts.modify_window_ms,
+            )
         }
     }
 }
@@ -138,7 +185,8 @@ pub(super) fn same_entry(
 
 /// Both exist with equal size, but neither content nor time decides: reading
 /// both could prove them equal (FS1: equal files without a record converge
-/// instead of becoming conflicts or copies).
+/// instead of becoming conflicts or copies). Holds for every `hour_apart`
+/// pair, whose clock change only content keys can show.
 pub(super) fn worth_hashing(x: Option<Sig>, y: Option<Sig>, opts: &BisyncOptions) -> bool {
     match (x, y) {
         (Some(x), Some(y)) => {

@@ -10,7 +10,11 @@
 //! - times within the window but different sizes: a conflict, both are kept;
 //! - a side that stores local time (FAT) and a distance of exactly one hour
 //!   (plus or minus the window) at equal size: equal, skipped (a clock
-//!   change moved the stored time, not the file; `time_window.rs`);
+//!   change moved the stored time, not the file; `time_window.rs`), but only
+//!   when digests that both sides form where they store the file show the
+//!   same content (`time_window::same_content_where_stored`); without that
+//!   proof, or with other contents, the hour counts like any other time (an
+//!   hour newer replaces, an hour older stays);
 //! - a time that one side does not know (0): nothing orders the two files and
 //!   equal sizes do not prove equal contents, so it is a conflict and both
 //!   are kept (nothing is skipped, nothing is replaced).
@@ -59,17 +63,20 @@ pub(crate) fn window_ms(source: MtimePrecision, target: MtimePrecision) -> u64 {
 
 /// Compares a source file with its same-named target.
 pub(crate) fn classify(source: Stamp, target: Stamp, window_ms: u64) -> Case {
-    classify_local_time(source, target, window_ms, false)
+    classify_local_time(source, target, window_ms, false, || None)
 }
 
 /// `classify` where `local_time` says that a side stores local time
 /// (`MtimePrecision::local_time_shifts`): files of equal size whose times are
-/// exactly one hour apart (within the window) are equal.
+/// exactly one hour apart (within the window) are equal when `same_content`
+/// (asked only then) proves the contents equal; `Some(false)` or `None` (no
+/// proof possible) leave the times to decide.
 pub(crate) fn classify_local_time(
     source: Stamp,
     target: Stamp,
     window_ms: u64,
     local_time: bool,
+    same_content: impl FnOnce() -> Option<bool>,
 ) -> Case {
     let comparable = source.mtime_ms != 0 && target.mtime_ms != 0;
     if !comparable {
@@ -88,6 +95,7 @@ pub(crate) fn classify_local_time(
             target.mtime_ms,
             i64::try_from(window_ms).unwrap_or(i64::MAX),
         )
+        && same_content() == Some(true)
     {
         Case::Equal
     } else if delta > 0 {

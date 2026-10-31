@@ -187,11 +187,25 @@ nach Kopien, Eigentumsprüfung beim Fortsetzen) die SHA-256 als Antwort, ohne di
 
 | Backend | Weg | Voraussetzung, sonst `Ok(None)` und der bisherige Weg | Quelle |
 |---|---|---|---|
-| SFTP ohne Agent | Exec-Anfrage auf einem zusätzlichen Sitzungskanal der Verbindung: `sh -c '<fester Text>' sh '<Pfad>'` mit `sha256sum`, `shasum -a 256` oder `sha256 -q`; der Pfad ist nur `$1`, einfach gequotet, die Datei wird über eine Umleitung gelesen; Größe und Zeit per SFTP vor und nach dem Befehl müssen gleich sein (`sftp/core/digest_command.rs`, `digest_exec.rs`); Wartezeit 60 s plus 1 s je 8 MiB (langsamer lohnt sich gegenüber dem Laden nicht), Abbruch sendet TERM | das Konto darf Befehle ausführen, der Host hat ein SHA-256-Werkzeug; abgelehnte Anfrage, Exit 126/127 oder eine Antwort ohne Prüfschlüssel schließen den Weg für die Verbindung, drei andere Fehlschläge in Folge ebenfalls | RFC 4254 Abschnitt 6.5 (exec), 6.9 (signal) |
+| SFTP ohne Agent | Exec-Anfrage auf einem zusätzlichen Sitzungskanal der Verbindung mit der festen Befehlszeile `sh -c '<fester Text>'` (gleich für jede Datei, ohne Pfad, Namen oder sonst ein Byte von Nutzer oder Dateisystem) mit `sha256sum`, `shasum -a 256` oder `sha256 -q`; der Pfad geht danach über die Standardeingabe des Kanals (`P`, die Bytes des Pfads, dann EOF), das Skript liest ihn mit `$(cat; echo x)`, die Datei über eine Umleitung; jede Antwort ist eine Zeile mit einer Marke, die das Skript erst zur Laufzeit zusammensetzt (`se-digest-v1 ok <Größe> <hex>`, `none`, `notool`, `fail`); Größe und Zeit per SFTP vor und nach dem Befehl müssen gleich sein und die vom Skript gelesene Größe gleich der SFTP-Größe (`sftp/core/digest_command.rs`, `digest_exec.rs`); Wartezeit 60 s plus 1 s je 8 MiB (langsamer lohnt sich gegenüber dem Laden nicht), Abbruch sendet TERM | das Konto darf Befehle ausführen, seine Login-Shell führt den Text als POSIX-sh aus, der Host hat ein SHA-256-Werkzeug. Eine abgelehnte Anfrage, eine Antwort ohne Marke (Windows-OpenSSH mit cmd.exe oder PowerShell, eingeschränkte Shells, erzwungene Befehle), `notool`, `none` bei per SFTP unveränderter Datei oder eine andere Größe des Skripts schließen den Weg für die Verbindung (`Ok(None)`, Download wie bisher); drei `fail`, Zeitabläufe oder Statusfehler in Folge ebenfalls. „Datei geändert“ bedeutet nur eine per SFTP vorher/nachher abweichende Größe, Zeit oder Art. Ein Konto mit `ForceCommand internal-sftp` endet sofort: OpenSSH antwortet auf exec mit „This service allows sftp connections only.“ und Status 1 (`session.c`), ein SFTP-Server am Kanal liest `P/…` als Paketlänge über 256 KiB und endet mit 11 bzw. bei EOF mit 0 (`sftp-server.c` `process`) | RFC 4254 Abschnitt 5.3 (EOF), 6.5 (exec), 6.9 (signal); Quotierung siehe unten |
 | FTP/FTPS | `OPTS HASH SHA-256`, dann `HASH <Pfad>` (Antwort `213 SHA-256 0-<Ende> <hex> <Pfad>`), sonst `XSHA256 <Pfad>` (Antwort `213`/`250` mit einem 64-stelligen Token); keine Datenverbindung, die Lesezeit der Steuerverbindung wird auf die Wartezeit gehoben und danach zurückgesetzt; Größe und Zeit vorher/nachher (`ftp/core/content_digest.rs`) | FEAT nennt `HASH` mit `SHA-256` bzw. `XSHA256`; Algorithmus, Bereich (ganze Datei, Ende gleich Größe oder Größe − 1) und Antwortcode müssen stimmen; eine Ablehnung gibt `Ok(None)`. Ein laufender Befehl lässt sich auf der Steuerverbindung nicht abbrechen (RFC 959 kennt `ABOR` nur für Datenverbindungen), er ist durch die Wartezeit begrenzt. Antwortcode von `XSHA256` bei echten Servern: nicht gemessen (213, 250 und 251 werden angenommen) | draft-bryan-ftpext-hash-02; ProFTPD mod_digest |
 | WebDAV, Nextcloud, ownCloud | eine PROPFIND-Anfrage, `oc:checksums` mit `SHA256:<hex>`; Größe aus derselben Antwort (`webdav/core/content_digest.rs`) | der Server speichert eine SHA-256 (Nextcloud-Entwicklerhandbuch: MD5, SHA1, SHA256, SHA3-256, Adler32 als Typen); MD5 und SHA1 passen nicht zum SHA-256-Vertrag. Der Wert ist, was ein Hochladender mitsandte (bei einfachem `PUT` ungeprüft gespeichert); diese Engine sendet ihn nie. Deshalb stützt die Engine ihre Belege (Eigentum, Überprüfen) nicht darauf: `file_evidence::on_device` lässt WebDAV aus, sie liest zurück wie zuvor | Nextcloud Developer Manual, „Basic file and folder operations“ |
 | Google Drive | `files.get` mit `fields=sha256Checksum` auf der genauen ID (`gdrive/core/content_digest.rs`) | Datei mit gespeichertem Inhalt; für Docs-Editors-Dateien und Verknüpfungen fehlt das Feld (`Ok(None)`); „if available“: ist es noch nicht berechnet, liest die Engine zurück | Drive API v3, `files` |
 | SMB | bleibt bei Übertragung | SMB 2/3 kennt keine serverseitige Prüfsumme des Dateiinhalts (kein Befehl in MS-SMB2; `FSCTL_SRV_COPYCHUNK` kopiert, hasht nicht) | MS-SMB2 |
+
+Warum die feste Befehlszeile in jeder Login-Shell gleich gelesen wird (sshd startet
+`<Login-Shell> -c <Text>`, OpenSSH `session.c` `do_child`; geprüft 2026-10-31): der Text zwischen den
+einfachen Anführungszeichen enthält kein `'`, kein `\`, kein `!`, keinen Zeilenumbruch. POSIX-sh, bash,
+dash, ksh: einfache Anführungszeichen erhalten jedes Zeichen wörtlich (POSIX.1-2024 XCU 2.2.2
+„Single-Quotes“). zsh: ebenso, nur `RC_QUOTES` ändert `''` (zsh-Handbuch 6.9 „Quoting“). fish: in
+einfachen Anführungszeichen sind nur `\'` und `\\` Escapes (fish-Dokumentation „Quotes“) – daran
+scheiterte die frühere Fassung mit dem Pfad als `'\''`-gequotetem Wort (Name `a\'; id; #`). tcsh/csh:
+einfache Anführungszeichen verhindern jede Ersetzung außer der History-Ersetzung `!` (tcsh(1) 6.24,
+„Lexical structure“). Eine Shell, die den Text anders liest, kann die Marke nicht ausgeben, weil sie
+nicht im Text steht (`a=se-; m=${a}digest-v1`). Windows-OpenSSH startet standardmäßig cmd.exe, wahlweise
+PowerShell (`HKLM\SOFTWARE\OpenSSH` `DefaultShell`, Microsoft Learn „OpenSSH Server configuration for
+Windows“): dort kommt keine Marke, der Weg schließt sich. Ein Test führt den Text mit jeder auf dem
+Runner vorhandenen Shell aus (`sftp/core/abgleich_task_digest_shell_tests.rs`).
 
 Überprüfen nach Kopien und Eigentumsprüfung (`engine/file_evidence.rs` `current`, `on_device`) fragen
 zuerst `vfs::content_digest` der Seite, auf der die Datei liegt, und lesen nur zurück, wenn sie keinen
@@ -208,9 +222,9 @@ sein (`vfs::content_md5` lehnt anderes mit `InvalidData` ab).
 
 | Backend | Weg | Voraussetzung, sonst `Ok(None)` und der bisherige Weg | Quelle |
 |---|---|---|---|
-| SFTP ohne Agent | derselbe Exec-Weg wie bei SHA-256 mit einem zweiten festen Text (`MD5_SCRIPT`): `md5sum` (GNU coreutils, busybox) oder `md5 -q` (BSD, macOS), Pfad nur als einfach gequotetes `$1`, Datei über eine Umleitung; kein `openssl`, kein weiteres Werkzeug; Größe und Zeit per SFTP vor und nach dem Befehl müssen gleich sein (`sftp/core/digest_command.rs` `hash_by`, `Algorithm::Md5`) | das Konto darf Befehle ausführen, der Host hat `md5sum` oder `md5`; die Sperre „Weg geschlossen“ gilt je Algorithmus (ein Host ohne `sha256sum` mit `md5sum` bleibt für MD5 offen); abgelehnte Anfrage, Exit 126/127 oder Antwort ohne 32-stellige MD5 schließen den MD5-Weg der Verbindung, drei andere Fehlschläge in Folge ebenfalls | RFC 4254 Abschnitt 6.5 |
+| SFTP ohne Agent | derselbe Exec-Weg wie bei SHA-256 mit einem zweiten festen Text (`MD5_SCRIPT`): `md5sum` (GNU coreutils, busybox) oder `md5 -q` (BSD, macOS), Pfad über die Standardeingabe, Datei über eine Umleitung, Antwortzeile mit Marke; kein `openssl`, kein weiteres Werkzeug; Größe und Zeit per SFTP vor und nach dem Befehl müssen gleich sein (`sftp/core/digest_command.rs` `hash_by`, `Algorithm::Md5`) | das Konto darf Befehle ausführen, die Login-Shell führt den Text als POSIX-sh aus, der Host hat `md5sum` oder `md5`; die Sperre „Weg geschlossen“ gilt je Algorithmus (ein Host ohne `sha256sum` mit `md5sum` bleibt für MD5 offen); dieselben Gründe wie bei SHA-256 schließen den MD5-Weg der Verbindung | RFC 4254 Abschnitt 5.3, 6.5 |
 | FTP/FTPS | `OPTS HASH MD5`, dann `HASH <Pfad>` (Antwort `213 MD5 0-<Ende> <hex> <Pfad>`), sonst `XMD5 <Pfad>` (Antwort `251`, `250` oder `213` mit genau einem 32-stelligen Token); keine Datenverbindung, Lesezeit wie bei SHA-256; Größe und Zeit vorher/nachher (`ftp/core/content_digest.rs`, `Algorithm::Md5`) | FEAT nennt `HASH` mit `MD5` bzw. `XMD5`; Algorithmus, Bereich (ganze Datei) und Antwortcode müssen stimmen; Ablehnung gibt `Ok(None)`. Antwortcode von `XMD5` bei echten Servern: nicht gemessen und an keiner Quelle geprüft (251, 250 und 213 werden angenommen) | draft-bryan-ftpext-hash-02 |
-| WebDAV, Nextcloud, ownCloud | eine PROPFIND-Anfrage (Tiefe 0), `oc:checksums` mit `MD5:<hex>` (`webdav/core/content_digest.rs` `md5_from_propfind`) | der Server nennt eine MD5; der Wert ist wie bei SHA-256 die Angabe, die ein Hochladender mitsandte, und derselbe Wert, den die Auflistungen schon tragen; diese Engine sendet ihn nie. Ohne MD5-Eintrag: `Ok(None)` | Nextcloud Developer Manual, „Basic file and folder operations“ |
+| WebDAV, Nextcloud, ownCloud | eine PROPFIND-Anfrage (Tiefe 0), `oc:checksums` mit `MD5:<hex>` (`webdav/core/content_digest.rs` `md5_from_propfind`) | der Server nennt eine MD5; der Wert ist wie bei SHA-256 die Angabe, die ein Hochladender mitsandte, und derselbe Wert, den die Auflistungen schon tragen; diese Engine sendet ihn nie. Ohne MD5-Eintrag: `Ok(None)`. Je Verbindung gemerkt (`ChecksumMemory`, je Algorithmus): zeigte eine Auflistung mit Dateien keine MD5 oder die erste Tiefe-0-Antwort keine MD5 bzw. SHA-256, gibt die Verbindung `Ok(None)` ohne weitere PROPFIND (Apache `mod_dav`, nginx, IIS); eine spätere Auflistung oder Antwort mit Prüfsumme öffnet den Weg wieder | Nextcloud Developer Manual, „Basic file and folder operations“ |
 | Google Drive | die MD5 steht schon in der Auflistung (`md5Checksum`, `gdrive/core/backend.rs`, `provides_content_hash`); kein eigener Aufruf nötig | – | Drive API v3, `files` |
 | SMB | bleibt bei Übertragung | SMB 2/3 kennt keine serverseitige Prüfsumme des Dateiinhalts | MS-SMB2 |
 
@@ -529,7 +543,8 @@ Entscheidung `transfer/core/update_rule.rs:50`):
 |---|---|
 | fehlt | eingefügt |
 | gleiche Größe, Zeitabstand höchstens das Fenster | gleich, übersprungen |
-| gleiche Größe, Zeitabstand genau eine Stunde (± Fenster) und eine Seite speichert Ortszeit (FAT, `MtimePrecision::local_time_shifts`) | gleich, übersprungen (Sommerzeitumstellung, `transfer/core/time_window.rs` `dst_shift_equal`; die Vorschau zählt ebenso; Stand 2026-10-31) |
+| gleiche Größe, Zeitabstand genau eine Stunde (± Fenster), eine Seite speichert Ortszeit (FAT, `MtimePrecision::local_time_shifts`) und beide Seiten zeigen mit am Ort der Datei gebildeten Prüfschlüsseln denselben Inhalt | gleich, übersprungen (Sommerzeitumstellung, `transfer/core/time_window.rs` `dst_shift_equal`, `hour_proof.rs` `same_content_where_stored`; die Vorschau zählt ebenso; Stand 2026-10-31) |
+| wie zuvor, aber anderer Inhalt oder eine Seite kann am Ort der Datei keinen Prüfschlüssel bilden | die Zeit entscheidet wie ohne Regel: eine Stunde neuer ersetzt, eine Stunde älter bleibt |
 | Quelle um mehr als das Fenster neuer (jede Größe) | ersetzt das Ziel |
 | Ziel um mehr als das Fenster neuer (jede Größe) | Ziel bleibt, „Ziel neuer“ |
 | Zeit im Fenster, andere Größe | Konflikt: beide behalten (`Name (2)`) |
@@ -744,11 +759,14 @@ Auftrag läuft dann im eigenen Prozess (`transfer_job_client.rs:155`).
 - Ein Konflikt (gleiche Zeit, andere Größe) legt bei jedem Lauf eine weitere nummerierte Kopie an.
 - Sommerzeit (seit 2026-10-31): speichert eine Seite Ortszeit (laut `fs_profile` FAT/VFAT, Zeitauflösung zwei
   Sekunden; exFAT meldet zehn Millisekunden und zählt nicht dazu), gelten Dateien gleicher Größe mit einem
-  Zeitabstand von genau 3600 s ± Fenster als gleich (`classify_local_time`, `engine/update.rs` `local_time_of`,
-  Vorschau `selection_count.rs`). Ungleiche Größen und andere Abstände entscheiden wie zuvor; beide
-  Dateien einer Stundenabweichung mit anderem Inhalt gleicher Größe gelten damit als gleich (Größe plus Zeit, nie
-  Inhalt).
-- Gleichheit ist Größe plus Zeit im Fenster, nie Inhalt. Mit Ordnerschlüsseln ist sie Größe plus Zeit in Millisekunden
+  Zeitabstand von genau 3600 s ± Fenster nur dann als gleich, wenn beide Seiten am Ort der Datei denselben
+  Prüfschlüssel bilden (`classify_local_time` mit `time_window::same_content_where_stored`: SHA-256 über
+  `vfs::content_digest`, sonst MD5 über `vfs::content_md5` auf beiden Seiten; lokal gehasht, entfernt vom
+  Server, se-agent, Share-Host, FTP `HASH` oder Drive; WebDAV-`oc:checksums` ist die Angabe eines Hochladenden
+  und zählt nicht; zuerst die entfernte Seite, damit eine Seite ohne Prüfschlüssel die lokale nicht lesen
+  lässt). Ohne Prüfschlüssel oder bei anderem Inhalt gilt die Zeit wie ohne Regel (eine Stunde neuer ersetzt).
+  Gefragt wird nur in diesem Fall (`engine/update.rs` `hour_proof`, Vorschau `selection_count.rs` `hour_proof`).
+- Gleichheit ist Größe plus Zeit im Fenster; nur die Stunde der Sommerzeit verlangt zusätzlich gleichen Inhalt. Mit Ordnerschlüsseln ist sie Größe plus Zeit in Millisekunden
   (strenger, nie anders).
 - Ordnerschlüssel: ein Quellordner mit gleichem Schlüssel und sauberer Zählung (keine Auslassung, keine Datei
   mit Zeit 0) wird weder am Ziel noch an der Quelle aufgelistet; Dateizahl und Bytes für den Fortschritt kommen
@@ -789,14 +807,44 @@ den Weg selbst, das Lauf-Protokoll nennt je Seite „… Ordner gleich ihrem Ord
   Sync `vfs::content_md5` der Seite. Ein persistenter Hash-Cache auf der Seite der Datei (se-agent,
   Share-Host, lokale Seite) erspart das erneute Lesen unveränderter Dateien: Schlüssel Gerät, Inode,
   Größe, Änderungs- und Statusänderungszeit (ns); kein Treffer, solange eine der Zeiten nicht mehr als
-  2 s vor dem Erfassungszeitpunkt liegt (Git „racy-git“); höchstens 500 000 Einträge; unter Windows aus
-  `GetFileInformationByHandleEx` (`FileIdInfo`, `FileBasicInfo.ChangeTime`). Ein SSH-Agent ohne eigene Datei-Prüfsumme gibt `content_digest` an
+  2 s vor dem Erfassungszeitpunkt liegt (Git „racy-git“); höchstens 500 000 Einträge. Er gilt nur auf
+  Dateisystemen mit dauerhaften Datei-Kennungen: nicht FAT/vfat/msdos/exFAT, FUSE, SMB/CIFS, 9p,
+  VirtualBox-Ordner und optischen Medien unter Linux (`statfs`-Typ, `agent_proto/os/linux_os/file_ids.rs`),
+  unter Windows nur NTFS und ReFS (`GetVolumeInformationByHandleW`, `os/windows/file_ids.rs`); dort wird
+  jedes Mal gelesen. Unter Windows kommen Stempel aus `GetFileInformationByHandleEx` (`FileIdInfo`,
+  `FileBasicInfo.ChangeTime`). Der Ordner ist `support_dirs::app_data_dir()` (Android: der des Hosts);
+  der eigenständige se-agent nutzt `$XDG_CACHE_HOME/se-agent` bzw. `~/.cache/se-agent`.
+  *Frisch prüfen:* Im Prüfsummen-Modus liest eine lokale Seite jede Datei neu (`LocalReads::fresh`,
+  `hash_cache::digest_fresh`: der gespeicherte Wert wird nicht genommen, der gelesene gespeichert); auch
+  der Vergleich vor dem Überschreiben (`orchestration_plan::hash_checked`) liest frisch. Ein entfernter
+  Host (se-agent, Share-Host) antwortet weiter aus seinem Cache, solange der Stempel gleich ist; die
+  Anfrage trägt noch kein „frisch“-Kennzeichen (offen: es braucht ein Feld in `HashWalkRequest`, in den
+  Rahmen `WalkHashed3`/`WalkKeyed`/`ListRuns` und in `FsHashWalk`, deren Aufrufer und Gegenstücke in
+  `daemon/`, `rscan/`, `analytics/` und `share/core/` liegen). `se doctor --clear-hash-cache`
+  vergisst alle Prüfsummen dieses Geräts (Datei und Prozessspeicher des Aufrufs; ein laufender
+  Share-Host oder Sync behält seinen Speicher bis zum Neustart).
+  *Schreiben:* neue Prüfsummen werden im Speicher gesammelt und gemeinsam geschrieben
+  (`hash_cache::flush`: höchstens alle 30 s; `flush_now`: am Ende eines Durchlaufs, einer Verbindung
+  oder eines Syncs), als atomarer Ersatz der Datei, die unter der Sperre gebildet und außerhalb der Sperre
+  geschrieben wird; kein Faden wartet auf das Schreiben.
+  *Einmal lesen:* Schlüsselphase und Schnappschuss einer lokalen Seite laufen gleichzeitig; ein Lauf
+  teilt die gelesenen Prüfsummen (`RunDigests`, Pfad, Größe, Zeit): wer zuerst fragt, liest, der andere
+  wartet und nimmt das Ergebnis. Entfernte Seiten hashen auf dem Host auch Dateien, die die Filter
+  des Sync-Jobs ausschließen (die Anfrage trägt die Filter nicht, `GlobSet` gibt seine Muster nicht
+  preis; der Host-Cache macht es nur beim ersten Mal teuer). Ein SSH-Agent ohne eigene Datei-Prüfsumme gibt `content_digest` an
   seine SSH-Verbindung weiter (Exec-Befehl, siehe Tabelle oben). SFTP ohne Agent, FTP und WebDAV liefern die MD5 am Ort der Datei über
   `vfs::content_md5` (Block „MD5 am Ort der Datei“ oben), bevor `snapshot_dir::content_hash` lädt.
 - **Sommerzeit.** Ist eine Seite FAT (Ortszeit), gelten gleiche Größen mit genau einer Stunde Abstand
-  (± ein Schritt der gemeinsamen Genauigkeit) als gleich, unabhängig von der Genauigkeit der anderen
-  Seite (`bisync/core/compare.rs`, `transfer::time_window::dst_shift_equal`). exFAT speichert einen
-  UTC-Abstand (exFAT-Spezifikation 7.4.10) und bleibt ohne diese Regel.
+  (± ein Schritt der gemeinsamen Genauigkeit) nur dann als gleich, wenn beide Beobachtungen einen am Ort
+  der Datei gebildeten Prüfschlüssel tragen (`Sig::hash`: lokal gehasht, Server-MD5 der Auflistung,
+  Hash-Durchlauf des Hosts) und dieser gleich ist (`bisync/core/compare.rs` `same_file`). Ohne Prüfschlüssel
+  gilt die Stunde wie jeder Zeitabstand: eine Stunde neuer ist neuer, und eine FAT-Seite eine Stunde neben
+  ihrer eigenen Basis gilt als geändert. `compare::hour_apart` benennt diese Paare (für sie gilt
+  `worth_hashing`); der Planer prüft sie dort mit `Decision::Verify` (beide Seiten am Ort hashen), wo er
+  `worth_hashing` fragt (beidseitig geändert, Spiegeln, Verschieben). Offen: im Zweig „nur eine Seite
+  geändert“ (`bisync/core/plan_decide.rs` `decide`, `propagate`) fragt der Planer noch nicht nach
+  `hour_apart` und kopiert. exFAT speichert einen UTC-Abstand (exFAT-Spezifikation 7.4.10) und bleibt ohne
+  diese Regel.
 - **Explorer-Listen über den Dienst und den Agenten** tragen `hidden` wie das bediente Backend bzw. nach
   Punktnamen und die Erstellzeit (`meta-list-v1`: `ListDirMeta`, `StatMeta`); ältere Gegenstellen wie
   bisher.

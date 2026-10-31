@@ -50,7 +50,8 @@ Jobs (--job):
              line, named library tests instead); (3) `se cp --conflict
              update` of an unchanged folder onto an equal target moves no
              content and reports every file equal, and on a FAT volume files
-             of equal size with times exactly one hour apart count as equal
+             of equal size and equal content with times exactly one hour
+             apart count as equal (other content: the times decide)
              Connection flow (plan 2026-10-31 section F), Linux only, five
              candidate instances (stage "rights") and two v0.5.189/candidate
              instances on one development Share server, checked by the other
@@ -290,7 +291,7 @@ EVIDENCE_TESTS = (
     "abgleich_task_keyed_walk_sends_only_what_changed_and_equals_the_full_walk",
     "abgleich_task_first_comparison_sends_keys_then_only_unequal_folders",
     "abgleich_task_local_side_keys_spare_the_remote_side_equal_folders",
-    "abgleich_task_fat_side_takes_an_hour_shift_as_equal",
+    "abgleich_task_fat_hour_with_content_keys_follows_the_keys",
 )
 
 
@@ -1654,7 +1655,8 @@ def stage_sum_ftp(ctx, trees, client_of):
 
 def stage_fat(ctx, binary, env):
     """Summer time: on a FAT volume (times in local time) files of equal size whose times differ by exactly
-    one hour count as equal; two hours or another size decide as before (plan C7, E: Sommerzeit)."""
+    one hour count as equal when both sides' digests show the same content; with other content, two hours
+    or another size the times decide as before (plan C7, E: Sommerzeit, W10 of the second review)."""
     stage = "merge"
     results = ctx.results
     if WINDOWS or not sudo_ok():
@@ -1683,8 +1685,11 @@ def stage_fat(ctx, binary, env):
     try:
         src_data, dst_data = b"S" * 24, b"D" * 24
         # name: (destination time, destination bytes, expected: equal / replace / keep)
-        cases = {"same.txt": (BASE, dst_data, "equal"), "plus_hour.txt": (BASE + 3600, dst_data, "equal"),
-                 "minus_hour.txt": (BASE - 3600, dst_data, "equal"),
+        cases = {"same.txt": (BASE, dst_data, "equal"),
+                 "plus_hour_same.txt": (BASE + 3600, src_data, "equal"),
+                 "minus_hour_same.txt": (BASE - 3600, src_data, "equal"),
+                 "plus_hour.txt": (BASE + 3600, dst_data, "keep"),
+                 "minus_hour.txt": (BASE - 3600, dst_data, "replace"),
                  "two_hours.txt": (BASE - 7200, dst_data, "replace"),
                  "hour_other_size.txt": (BASE + 3600, b"D" * 40, "keep")}
         src_tree, dst_tree = work / "src" / "tree", mount_point / "tree"
@@ -1708,11 +1713,12 @@ def stage_fat(ctx, binary, env):
             if got[2] != sha(want_data) or abs(got[1] - want_time) > 2:
                 problems.append(f"{relative}: expected {kind}, found size {got[0]} and time {got[1] - want_time} s "
                                 "off the expected one")
-        results.record(stage, "FAT volume: one hour apart and equal size is equal (kept, not replaced), two hours "
-                       "older is replaced, one hour newer with another size stays", not problems, "; ".join(problems))
+        results.record(stage, "FAT volume: one hour apart with equal size and content is equal (kept, not "
+                       "replaced), one hour apart with other content follows the times, two hours older is replaced, "
+                       "one hour newer with another size stays", not problems, "; ".join(problems))
         counts = update_counts(ran.stderr)
-        expected = {"gleiche übersprungen": 3, "neuere ersetzt": 1, "Ziel neuer behalten": 1}
-        results.record(stage, "FAT volume: the notice counts 3 equal skipped, 1 replaced, 1 newer destination",
+        expected = {"gleiche übersprungen": 3, "neuere ersetzt": 2, "Ziel neuer behalten": 2}
+        results.record(stage, "FAT volume: the notice counts 3 equal skipped, 2 replaced, 2 newer destination",
                        counts == expected, f"counted {counts}; stderr: {ran.stderr[-400:]}")
         results.record(stage, "FAT volume: the source folder is unchanged", snapshot(src_tree) == before_src, "")
     finally:

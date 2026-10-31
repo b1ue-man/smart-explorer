@@ -90,7 +90,9 @@ fn abgleich_task_preview_counts_a_wide_tree_exactly_and_without_target_folders()
 }
 
 /// The preview counts like the engine decides: equal sizes one hour apart on a
-/// target that stores local time are equal, not newer or older.
+/// target that stores local time are equal when both sides, hashing where
+/// the files are, show the same bytes; other bytes or no digest at the
+/// target leave the hour to decide (newer or older).
 #[test]
 fn abgleich_task_preview_counts_an_hour_apart_on_a_local_time_target_as_equal() {
     use super::super::super::batches_backend_compatibility_task_tests::Limited;
@@ -104,12 +106,16 @@ fn abgleich_task_preview_counts_an_hour_apart_on_a_local_time_target_as_equal() 
     file(&dest.join("src/later.txt"), b"AAAA", 1_700_000_000);
     file(&dest.join("src/earlier.txt"), b"BBBB", 1_700_000_000);
     file(&dest.join("src/other.txt"), b"CCCC", 1_700_000_000);
-    for (precision, equal, newer, older) in [
-        (MtimePrecision::TwoSeconds, 2, 1, 0),
-        (MtimePrecision::Seconds, 0, 2, 1),
+    file(&source.join("changed.txt"), b"DDDD", 1_700_000_000 + 3_600);
+    file(&dest.join("src/changed.txt"), b"EEEE", 1_700_000_000);
+    for (precision, device_digest, equal, newer, older) in [
+        (MtimePrecision::TwoSeconds, true, 2, 2, 0),
+        (MtimePrecision::TwoSeconds, false, 0, 3, 1),
+        (MtimePrecision::Seconds, true, 0, 3, 1),
     ] {
         let mut limited = Limited::new("preview-local-time");
         limited.precision = precision;
+        limited.device_digest = device_digest;
         let transfer = job(
             Endpoint::Local,
             Endpoint::Remote(std::sync::Arc::new(limited)),
@@ -128,7 +134,7 @@ fn abgleich_task_preview_counts_an_hour_apart_on_a_local_time_target_as_equal() 
                 folder.target_newer_files
             ),
             (equal, newer, older),
-            "{precision:?}"
+            "{precision:?} digest={device_digest}"
         );
     }
 }

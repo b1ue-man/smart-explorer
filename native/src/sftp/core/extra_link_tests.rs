@@ -34,8 +34,12 @@ pub(super) enum ExecScript {
     Reject,
     /// Print `stdout`, exit with `status`, close.
     Output { stdout: String, status: u32 },
-    /// Accept and never answer; a TERM signal is logged.
+    /// Accept and never answer, not even after EOF; a TERM signal is logged.
     Hang,
+    /// Accept, read standard input until the client's EOF, then print
+    /// `stdout`, exit with `status` and close (a command that reads its
+    /// input first: the hash script, an SFTP server a forced command runs).
+    UntilEof { stdout: String, status: u32 },
 }
 
 /// The commands the server received and the signals it saw.
@@ -43,6 +47,8 @@ pub(super) enum ExecScript {
 pub(super) struct ExecLog {
     pub(super) commands: Mutex<Vec<String>>,
     pub(super) signals: Mutex<Vec<String>>,
+    /// Every byte the client sent on standard input.
+    pub(super) stdin: Mutex<Vec<u8>>,
 }
 
 #[derive(Clone)]
@@ -50,6 +56,8 @@ struct FakeSshd {
     passwords: Arc<AtomicUsize>,
     script: Arc<Mutex<ExecScript>>,
     log: Arc<ExecLog>,
+    /// Channels waiting for EOF and what they answer then.
+    waiting: Arc<Mutex<Vec<(russh::ChannelId, String, u32)>>>,
 }
 
 impl server::Handler for FakeSshd {
@@ -96,6 +104,39 @@ impl server::Handler for FakeSshd {
                 session.close(channel)?;
             }
             ExecScript::Hang => session.channel_success(channel)?,
+            ExecScript::UntilEof { stdout, status } => {
+                session.channel_success(channel)?;
+                self.waiting.lock().unwrap().push((channel, stdout, status));
+            }
+        }
+        Ok(())
+    }
+
+    async fn data(
+        &mut self,
+        _channel: russh::ChannelId,
+        data: &[u8],
+        _session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        self.log.stdin.lock().unwrap().extend_from_slice(data);
+        Ok(())
+    }
+
+    async fn channel_eof(
+        &mut self,
+        channel: russh::ChannelId,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        let answer = {
+            let mut waiting = self.waiting.lock().unwrap();
+            let found = waiting.iter().position(|(id, _, _)| *id == channel);
+            found.map(|index| waiting.remove(index))
+        };
+        if let Some((_, stdout, status)) = answer {
+            session.data(channel, stdout.into_bytes())?;
+            session.exit_status_request(channel, status)?;
+            session.eof(channel)?;
+            session.close(channel)?;
         }
         Ok(())
     }
@@ -147,6 +188,7 @@ impl Sshd {
             passwords: passwords.clone(),
             script: script.clone(),
             log: log.clone(),
+            waiting: Arc::new(Mutex::new(Vec::new())),
         };
         drop(runtime.spawn(async move {
             while let Ok((socket, _)) = listener.accept().await {

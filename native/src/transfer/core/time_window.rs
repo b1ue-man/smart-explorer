@@ -2,8 +2,15 @@
 //! `MtimePrecision::local_time_shifts`). Such a volume reports every time
 //! shifted by exactly one hour after a clock change, so a file that was not
 //! touched appears one hour newer or older than its copy on a UTC-based side.
-//! Callers use it only when a side keeps local time (`fs_profile`) and only
-//! together with equal sizes; it decides nothing for any other pair.
+//! Callers use it only when a side keeps local time (`fs_profile`), only
+//! together with equal sizes, and only when the contents are proven equal by
+//! digests each side forms where it stores the file (`hour_proof.rs`):
+//! without that proof an hour newer is newer. It decides nothing for any
+//! other pair.
+
+#[path = "hour_proof.rs"]
+mod hour_proof;
+pub(crate) use hour_proof::{same_content_where_stored, Stored};
 
 /// One hour in milliseconds.
 pub(crate) const HOUR_MS: i64 = 3_600_000;

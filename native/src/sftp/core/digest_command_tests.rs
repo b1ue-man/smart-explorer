@@ -12,6 +12,11 @@ fn captured(status: Option<u32>, stdout: &str, stderr: &str) -> CapturedExec {
     }
 }
 
+/// What the script prints for a file of `size` bytes and `digest`.
+fn ok_line(size: u64, digest: &str) -> String {
+    format!("{MARKER} ok {size} {digest}\n")
+}
+
 fn file(size: u64, mtime_ms: i64) -> VfsMeta {
     VfsMeta {
         is_dir: false,
@@ -29,74 +34,163 @@ fn file(size: u64, mtime_ms: i64) -> VfsMeta {
 }
 
 #[test]
-fn abgleich_task_sftp_digest_path_is_one_single_quoted_word() {
-    assert_eq!(sh_quote("/a/b"), "'/a/b'");
-    assert_eq!(sh_quote("a'b; rm -rf /"), "'a'\\''b; rm -rf /'");
-    assert_eq!(sh_quote("$(id)`id`\"x\""), "'$(id)`id`\"x\"'");
-    let command = command_for("-rf /; echo $HOME 'x'");
-    assert!(command.starts_with("sh -c '"), "{command}");
-    assert!(
-        command.ends_with(" sh '-rf /; echo $HOME '\\''x'\\'''"),
-        "{command}"
-    );
-    assert!(!SCRIPT.contains('\''), "no quote inside the quoted script");
-    assert!(!SCRIPT.contains('!'), "nothing a csh would read as history");
-    assert!(
-        SCRIPT.contains("<\"$f\""),
-        "the file is read through a redirect"
-    );
-}
-
-#[test]
-fn abgleich_task_sftp_digest_refuses_paths_that_are_no_single_word() {
-    assert!(sendable("/home/a b/c"));
-    assert!(sendable("-x"));
-    assert!(!sendable(""));
-    assert!(!sendable("a\nb"));
-    assert!(!sendable("a\rb"));
-    assert!(!sendable("a\0b"));
-}
-
-#[test]
-fn abgleich_task_sftp_digest_reads_sha256sum_shasum_and_bsd_output() {
-    for text in [
-        format!("{HASH}  -\n"),
-        format!("\\{HASH}  -\n"),
-        format!("{}  -\n", HASH.to_ascii_uppercase()),
-        format!("{HASH}\n"),
-    ] {
-        assert_eq!(
-            interpret(&captured(Some(0), &text, "")),
-            Reply::Digest(HASH.into()),
-            "{text:?}"
+fn abgleich_task_sftp_digest_command_line_is_fixed_text_without_any_path() {
+    let command = command_for();
+    assert_eq!(command, format!("sh -c '{SCRIPT}'"));
+    for script in [SCRIPT, MD5_SCRIPT] {
+        for forbidden in ['\'', '\\', '!', '\n', '\r', '\0'] {
+            assert!(
+                !script.contains(forbidden),
+                "{forbidden:?}: no login shell may read anything into it"
+            );
+        }
+        assert!(!script.contains(MARKER), "the marker is built at run time");
+        assert!(script.contains("$(cat; echo x)"), "the path comes on stdin");
+        assert!(
+            script.contains("<\"$f\""),
+            "the file is read through a redirect"
         );
     }
+    // The same text for every path: nothing of the path is in it.
+    assert_eq!(command_line(Algorithm::Sha256), command);
+    assert_ne!(command_line(Algorithm::Md5), command);
 }
 
 #[test]
-fn abgleich_task_sftp_digest_exit_codes_mean_what_the_script_says() {
-    assert_eq!(interpret(&captured(Some(3), "", "")), Reply::NotRegular);
-    assert_eq!(interpret(&captured(Some(127), "", "")), Reply::Unavailable);
-    assert_eq!(interpret(&captured(Some(126), "", "")), Reply::Unavailable);
-    // Success without a digest: a shell that took the command for something
-    // else (forced command, Windows shell).
+fn abgleich_task_sftp_digest_path_goes_to_stdin_byte_for_byte() {
+    for path in [
+        "/a/b",
+        "/srv/it's.bin",
+        "/srv/a\\'; id >/tmp/x; #",
+        "/srv/$(id)`id`$HOME",
+        "/srv/with space",
+        "/srv/line\nbreak\n",
+        "/srv/cr\rhere",
+        "-rf /",
+    ] {
+        let mut expected = vec![STDIN_PREFIX];
+        expected.extend_from_slice(path.as_bytes());
+        assert_eq!(stdin_for(path), Some(expected), "{path:?}");
+    }
+    assert_eq!(stdin_for(""), None);
+    assert_eq!(stdin_for("a\0b"), None, "no shell variable holds a NUL");
+}
+
+#[test]
+fn abgleich_task_sftp_digest_reads_the_marker_line_of_each_tool() {
+    for digest in [
+        format!("{HASH} -"),
+        format!("\\{HASH} -"),
+        HASH.to_ascii_uppercase(),
+        HASH.to_string(),
+    ] {
+        assert_eq!(
+            interpret(&captured(Some(0), &ok_line(42, &digest), "")),
+            Reply::Digest {
+                hex: HASH.into(),
+                size: 42
+            },
+            "{digest:?}"
+        );
+    }
+    // A login shell that prints something first (a .bashrc greeting).
+    let greeted = format!("Welcome\n{}", ok_line(7, HASH));
     assert_eq!(
-        interpret(&captured(Some(0), "SSH-2.0 banner\n", "")),
+        interpret(&captured(Some(0), &greeted, "")),
+        Reply::Digest {
+            hex: HASH.into(),
+            size: 7
+        }
+    );
+}
+
+#[test]
+fn abgleich_task_sftp_digest_answers_mean_what_the_script_says() {
+    let line = |word: &str| format!("{MARKER} {word}\n");
+    assert_eq!(
+        interpret(&captured(Some(0), &line("none"), "")),
+        Reply::NotRegular
+    );
+    assert_eq!(
+        interpret(&captured(Some(0), &line("notool"), "")),
         Reply::Unavailable
     );
-    assert_eq!(interpret(&captured(Some(0), "", "")), Reply::Unavailable);
     assert!(matches!(
-        interpret(&captured(Some(1), "", "Permission denied")),
+        interpret(&captured(Some(0), &line("fail"), "Permission denied")),
         Reply::Failed(text) if text.contains("Permission denied")
     ));
+    // Marker present but no digest of this algorithm.
+    assert_eq!(
+        interpret(&captured(Some(0), &ok_line(1, "xyz"), "")),
+        Reply::Unavailable
+    );
+    // Marker present, but the shell ended badly afterwards.
+    assert!(matches!(
+        interpret(&captured(Some(1), &ok_line(1, HASH), "")),
+        Reply::Failed(_)
+    ));
+    let mut signaled = captured(None, &ok_line(1, HASH), "");
+    signaled.exit_signal = Some("KILL".into());
+    assert!(matches!(interpret(&signaled), Reply::Failed(_)));
     assert!(matches!(
         interpret(&captured(None, "", "")),
         Reply::Failed(_)
     ));
-    let mut signaled = captured(None, "", "");
-    signaled.exit_signal = Some("KILL".into());
-    assert!(matches!(interpret(&signaled), Reply::Failed(_)));
-    let mut cut = captured(Some(0), HASH, "");
+}
+
+/// Shells that do not run the text as POSIX sh print no marker, whatever
+/// their exit status: the connection cannot hash, nothing changed.
+#[test]
+fn abgleich_task_sftp_digest_without_marker_is_unavailable_never_changed() {
+    let replies = [
+        // cmd.exe without sh in PATH.
+        captured(
+            Some(9009),
+            "",
+            "'sh' is not recognized as an internal or external command,",
+        ),
+        // cmd.exe split at `||`, the rest ran `exit 3`-like fragments.
+        captured(Some(3), "\"$m\" none\r\n", ""),
+        captured(Some(1), "", "The system cannot find the path specified."),
+        // PowerShell without sh.
+        captured(
+            Some(1),
+            "",
+            "sh : The term 'sh' is not recognized as the name of a cmdlet",
+        ),
+        // A forced command that echoes the original command.
+        captured(Some(0), &format!("{}\n", command_for()), ""),
+        // A banner, then success.
+        captured(Some(0), "SSH-2.0 banner\n", ""),
+        // An SFTP server that took the input for a packet (status 11) or
+        // read EOF (status 0), and OpenSSH's "sftp connections only".
+        captured(Some(11), "", ""),
+        captured(Some(0), "", ""),
+        captured(Some(1), "This service allows sftp connections only.\n", ""),
+        // Exit statuses the old script used.
+        captured(Some(127), "", ""),
+        captured(Some(126), "", ""),
+    ];
+    for reply in replies {
+        assert_eq!(interpret(&reply), Reply::Unavailable, "{:?}", reply.stdout);
+        let gate = DigestGate::default();
+        let result = digest_by(
+            &gate,
+            "/f",
+            || Ok(file(1, 1)),
+            |_, _, _| {
+                Ok(Some(CapturedExec {
+                    stdout: reply.stdout.clone(),
+                    stderr: reply.stderr.clone(),
+                    exit_status: reply.exit_status,
+                    ..CapturedExec::default()
+                }))
+            },
+        );
+        assert_eq!(result.unwrap(), None, "the caller moves the content");
+        assert!(gate.closed(), "not asked again on this connection");
+    }
+    let mut cut = captured(Some(0), "x", "");
     cut.stdout_truncated = true;
     assert_eq!(interpret(&cut), Reply::Unavailable);
 }
@@ -118,9 +212,14 @@ fn abgleich_task_sftp_digest_flow_asks_the_server_not_the_content() {
         &gate,
         "/data/it's.bin",
         || Ok(file(42, 5_000)),
-        |command, wait| {
-            sent.borrow_mut().push((command.to_string(), wait));
-            Ok(Some(captured(Some(0), &format!("{HASH}  -\n"), "")))
+        |command, stdin, wait| {
+            sent.borrow_mut()
+                .push((command.to_string(), stdin.to_vec(), wait));
+            Ok(Some(captured(
+                Some(0),
+                &ok_line(42, &format!("{HASH} -")),
+                "",
+            )))
         },
     )
     .unwrap()
@@ -129,12 +228,9 @@ fn abgleich_task_sftp_digest_flow_asks_the_server_not_the_content() {
     assert_eq!(digest.size, 42, "the size the SFTP attributes showed");
     let sent = sent.into_inner();
     assert_eq!(sent.len(), 1);
-    assert!(
-        sent[0].0.ends_with(" sh '/data/it'\\''s.bin'"),
-        "{}",
-        sent[0].0
-    );
-    assert_eq!(sent[0].1, wait_for(42));
+    assert_eq!(sent[0].0, command_for(), "the fixed command line");
+    assert_eq!(sent[0].1, b"P/data/it's.bin".to_vec());
+    assert_eq!(sent[0].2, wait_for(42));
 }
 
 #[test]
@@ -148,7 +244,7 @@ fn abgleich_task_sftp_digest_flow_detects_a_file_that_changed_while_hashed() {
             reads.set(reads.get() + 1);
             Ok(file(10, if reads.get() == 1 { 1_000 } else { 2_000 }))
         },
-        |_, _| Ok(Some(captured(Some(0), HASH, ""))),
+        |_, _, _| Ok(Some(captured(Some(0), &ok_line(10, HASH), ""))),
     );
     assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidData);
     let resized = Cell::new(0);
@@ -159,16 +255,48 @@ fn abgleich_task_sftp_digest_flow_detects_a_file_that_changed_while_hashed() {
             resized.set(resized.get() + 1);
             Ok(file(10 + resized.get(), 1_000))
         },
-        |_, _| Ok(Some(captured(Some(0), HASH, ""))),
+        |_, _, _| Ok(Some(captured(Some(0), &ok_line(11, HASH), ""))),
     );
     assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidData);
+    // The script saw no regular file and SFTP shows another time: changed.
+    let moved_reads = Cell::new(0);
     let gone = digest_by(
         &gate,
         "/f",
-        || Ok(file(10, 1_000)),
-        |_, _| Ok(Some(captured(Some(3), "", ""))),
+        || {
+            moved_reads.set(moved_reads.get() + 1);
+            Ok(file(10, if moved_reads.get() == 1 { 1_000 } else { 9_000 }))
+        },
+        |_, _, _| Ok(Some(captured(Some(0), &format!("{MARKER} none\n"), ""))),
     );
     assert_eq!(gone.unwrap_err().kind(), io::ErrorKind::InvalidData);
+    assert!(!gate.closed());
+}
+
+/// Only SFTP attributes that differ mean "changed": a shell that sees no
+/// regular file or another size under the path while SFTP shows the same
+/// file sees another file system (another root), so it cannot hash here.
+#[test]
+fn abgleich_task_sftp_digest_other_view_of_the_shell_is_unavailable() {
+    let not_regular = DigestGate::default();
+    let result = digest_by(
+        &not_regular,
+        "/f",
+        || Ok(file(10, 1_000)),
+        |_, _, _| Ok(Some(captured(Some(0), &format!("{MARKER} none\n"), ""))),
+    );
+    assert_eq!(result.unwrap(), None);
+    assert!(not_regular.closed());
+
+    let other_size = DigestGate::default();
+    let result = digest_by(
+        &other_size,
+        "/f",
+        || Ok(file(10, 1_000)),
+        |_, _, _| Ok(Some(captured(Some(0), &ok_line(99, HASH), ""))),
+    );
+    assert_eq!(result.unwrap(), None, "no digest of another file");
+    assert!(other_size.closed());
 }
 
 #[test]
@@ -187,10 +315,17 @@ fn abgleich_task_sftp_digest_flow_refuses_folders_and_links_before_any_command()
             &gate,
             "/x",
             || Ok(meta.clone()),
-            |_, _| panic!("no command for a non-regular entry"),
+            |_, _, _| panic!("no command for a non-regular entry"),
         );
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidInput);
     }
+    let result = digest_by(
+        &gate,
+        "/a\0b",
+        || panic!("a path with NUL is not looked at"),
+        |_, _, _| panic!("a path with NUL is not sent"),
+    );
+    assert_eq!(result.unwrap(), None);
 }
 
 #[test]
@@ -200,7 +335,7 @@ fn abgleich_task_sftp_digest_flow_without_commands_leaves_the_content_to_the_cal
         &rejected,
         "/f",
         || Ok(file(1, 1)),
-        |_, _| {
+        |_, _, _| {
             Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "exec rejected",
@@ -216,7 +351,7 @@ fn abgleich_task_sftp_digest_flow_without_commands_leaves_the_content_to_the_cal
         &rejected,
         "/f",
         || panic!("a closed gate looks at nothing"),
-        |_, _| panic!("a closed gate sends nothing"),
+        |_, _, _| panic!("a closed gate sends nothing"),
     );
     assert_eq!(again.unwrap(), None);
 
@@ -225,13 +360,13 @@ fn abgleich_task_sftp_digest_flow_without_commands_leaves_the_content_to_the_cal
         &no_tool,
         "/f",
         || Ok(file(1, 1)),
-        |_, _| Ok(Some(captured(Some(127), "", ""))),
+        |_, _, _| Ok(Some(captured(Some(0), &format!("{MARKER} notool\n"), ""))),
     );
     assert_eq!(result.unwrap(), None);
     assert!(no_tool.closed());
 
     let busy = DigestGate::default();
-    let result = digest_by(&busy, "/f", || Ok(file(1, 1)), |_, _| Ok(None));
+    let result = digest_by(&busy, "/f", || Ok(file(1, 1)), |_, _, _| Ok(None));
     assert_eq!(result.unwrap(), None);
     assert!(!busy.closed(), "a full session limit is passing");
 }
@@ -244,7 +379,13 @@ fn abgleich_task_sftp_digest_flow_gives_up_after_three_failures_in_a_row() {
             gate,
             "/f",
             || Ok(file(1, 1)),
-            |_, _| Ok(Some(captured(Some(1), "", "Permission denied"))),
+            |_, _, _| {
+                Ok(Some(captured(
+                    Some(0),
+                    &format!("{MARKER} fail\n"),
+                    "Permission denied",
+                )))
+            },
         )
         .unwrap()
     };
@@ -256,7 +397,7 @@ fn abgleich_task_sftp_digest_flow_gives_up_after_three_failures_in_a_row() {
         &gate,
         "/f",
         || Ok(file(1, 1)),
-        |_, _| Ok(Some(captured(Some(0), HASH, ""))),
+        |_, _, _| Ok(Some(captured(Some(0), &ok_line(1, HASH), ""))),
     );
     assert!(ok.unwrap().is_some());
     assert_eq!(fail(&gate), None);
@@ -270,7 +411,7 @@ fn abgleich_task_sftp_digest_flow_gives_up_after_three_failures_in_a_row() {
         &slow,
         "/f",
         || Ok(file(1, 1)),
-        |_, _| Err(io::Error::new(io::ErrorKind::TimedOut, "slow")),
+        |_, _, _| Err(io::Error::new(io::ErrorKind::TimedOut, "slow")),
     );
     assert_eq!(
         timed_out.unwrap(),
@@ -278,3 +419,7 @@ fn abgleich_task_sftp_digest_flow_gives_up_after_three_failures_in_a_row() {
         "the caller moves the content instead"
     );
 }
+
+#[cfg(unix)]
+#[path = "abgleich_task_digest_shell_tests.rs"]
+mod shell_tests;

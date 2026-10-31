@@ -19,6 +19,11 @@
 //! not listed too: the key walk's tally gives the count, and no sample names
 //! come from it.
 //!
+//! Equal sizes exactly one hour apart where a side stores local time (FAT)
+//! count as equal only when both files, hashed where they are stored, hold
+//! the same bytes (`time_window::same_content_where_stored`), as the engine
+//! decides them.
+//!
 //! The five counts describe the file rule "neuere ersetzen ältere"; the
 //! surfaces show them only for a job that applies the rule
 //! (`TransferJob::applies_update_rule`), else the files count as new or
@@ -29,6 +34,7 @@ use crate::transfer::engine_names::{join_rel, name_problem};
 use crate::transfer::entries::{
     compile_remote_filter, remote_file_entry, RemoteFilterCtx, TransferCollectionBudget,
 };
+use crate::transfer::time_window::{same_content_where_stored, Stored};
 use crate::transfer::update_rule::{classify_local_time, Case, Stamp};
 use crate::transfer::{Endpoint, FolderConflictPreview, TransferJob};
 use crate::vfs::{Backend, LocalBackend, VfsMeta};
@@ -398,6 +404,7 @@ fn count_file(
             },
             context.window,
             context.local_time,
+            || hour_proof(context, source, &relative, &one.name),
         ),
         // A folder, link or several entries under that name: not the same
         // file, both are kept.
@@ -412,6 +419,18 @@ fn count_file(
     if found.samples.len() < SHOWN {
         found.samples.push(relative);
     }
+}
+
+/// The proof the FAT hour needs, as the engine asks it (`update.rs`): both
+/// files hashed where they are stored; `None` where a side cannot.
+fn hour_proof(context: &Context<'_>, source: &str, relative: &str, name: &str) -> Option<bool> {
+    let parent = relative.rsplit_once('/').map_or("", |(parent, _)| parent);
+    let target = join_rel(&join_rel(context.target_dir, parent), name);
+    same_content_where_stored(
+        Stored::new(context.source, source),
+        Stored::new(context.target, &target),
+        context.cancel,
+    )
 }
 
 #[cfg(test)]

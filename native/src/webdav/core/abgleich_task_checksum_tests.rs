@@ -129,3 +129,88 @@ fn abgleich_task_webdav_md5_of_a_collection_is_refused_and_a_cancel_asks_nothing
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
     assert_eq!(server.dav.count("PROPFIND"), before);
 }
+
+/// A server without `oc:checksums` (Apache `mod_dav`, nginx, IIS): the first
+/// answer shows none, so the connection asks no more PROPFIND for a MD5 or
+/// a SHA-256 it cannot give; a server that carries them is asked each time.
+#[test]
+fn abgleich_task_webdav_without_checksums_asks_once_per_connection() {
+    let server = Server::start();
+    let backend = server.backend();
+    for name in ["/a.bin", "/b.bin", "/c.bin"] {
+        put(&server, name, None);
+    }
+    let cancel = AtomicBool::new(false);
+    let before = server.dav.count("PROPFIND");
+    for name in ["/a.bin", "/b.bin", "/c.bin"] {
+        assert_eq!(content_md5(&backend, name, &cancel).unwrap(), None);
+        assert_eq!(content_digest(&backend, name, &cancel).unwrap(), None);
+    }
+    assert_eq!(
+        server.dav.count("PROPFIND"),
+        before + 2,
+        "one answer per algorithm, then no more questions"
+    );
+    assert_eq!(server.dav.count("GET"), 0);
+
+    // Another connection to a server that carries them asks every file.
+    let carrying = Server::start();
+    let backend = carrying.backend();
+    for name in ["/a.bin", "/b.bin"] {
+        put(&carrying, name, Some(&format!("MD5:{MD5} SHA256:{HEX}")));
+    }
+    let before = carrying.dav.count("PROPFIND");
+    for name in ["/a.bin", "/b.bin"] {
+        assert_eq!(
+            content_md5(&backend, name, &cancel).unwrap().as_deref(),
+            Some(MD5)
+        );
+    }
+    assert_eq!(carrying.dav.count("PROPFIND"), before + 2);
+}
+
+/// What a listing showed decides too: files without a MD5 in the listing
+/// mean the Depth-0 answer has none either; a later listing or answer with
+/// one makes the connection ask again.
+#[test]
+fn abgleich_task_webdav_listing_without_md5_spares_the_question() {
+    use super::super::content_digest::ChecksumMemory;
+    use crate::vfs::VfsMeta;
+    let file = |md5: Option<&str>| VfsMeta {
+        name: "f".into(),
+        size: 5,
+        content_md5: md5.map(str::to_string),
+        ..VfsMeta::default()
+    };
+    let folder = VfsMeta {
+        name: "d".into(),
+        is_dir: true,
+        ..VfsMeta::default()
+    };
+    let memory = ChecksumMemory::default();
+    memory.note_listing(&[folder.clone()]);
+    assert!(!memory.md5_absent(), "a listing of folders says nothing");
+    memory.note_listing(&[folder.clone(), file(None)]);
+    assert!(memory.md5_absent());
+    assert!(!memory.sha256_absent(), "each algorithm on its own");
+    memory.note_listing(&[file(None), file(Some(MD5))]);
+    assert!(!memory.md5_absent(), "a MD5 seen: ask again");
+    memory.note_listing(&[file(None)]);
+    memory.note_md5(false);
+    assert!(!memory.md5_absent(), "once seen it stays");
+
+    let server = Server::start();
+    let backend = server.backend();
+    put(&server, "/a.bin", Some(&format!("MD5:{MD5}")));
+    backend.checksums.note_listing(&[file(None)]);
+    let before = server.dav.count("PROPFIND");
+    let cancel = AtomicBool::new(false);
+    assert_eq!(content_md5(&backend, "/a.bin", &cancel).unwrap(), None);
+    assert_eq!(server.dav.count("PROPFIND"), before, "no request");
+    backend.checksums.note_listing(&[file(Some(MD5))]);
+    assert_eq!(
+        content_md5(&backend, "/a.bin", &cancel).unwrap().as_deref(),
+        Some(MD5)
+    );
+    assert_eq!(server.dav.count("PROPFIND"), before + 1);
+}

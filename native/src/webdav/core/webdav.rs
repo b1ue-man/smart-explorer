@@ -110,6 +110,8 @@ pub struct WebdavBackend {
     url: String,
     identity: String,
     pub(super) hashes_observed: Arc<AtomicBool>,
+    /// Whether this connection's answers carry `oc:checksums` (content_digest.rs).
+    pub(super) checksums: Arc<super::content_digest::ChecksumMemory>,
     pub(super) stage_times: Arc<Mutex<HashMap<String, (i64, Option<String>)>>>,
 }
 
@@ -256,6 +258,7 @@ impl Backend for WebdavBackend {
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
         let xml = self.propfind(path, "1")?;
         let entries = parse_multistatus(&xml, path)?;
+        self.checksums.note_listing(&entries);
         if entries.iter().any(|entry| entry.content_md5.is_some()) {
             self.hashes_observed.store(true, Ordering::Relaxed);
         }

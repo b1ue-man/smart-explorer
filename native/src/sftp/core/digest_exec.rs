@@ -1,7 +1,11 @@
 //! One exec request whose output is awaited for a bounded time and can be
-//! canceled: the hash command of `digest_command.rs`. A cancel sends the
-//! RFC 4254 section 6.9 signal `TERM` and closes the channel; running past
-//! the wait closes it too (the server ends the command with its channel).
+//! canceled: the hash command of `digest_command.rs`. Right after the
+//! request its standard input gets the path and then EOF (RFC 4254 section
+//! 5.3 `SSH_MSG_CHANNEL_EOF`), so a command that reads input (the script, or
+//! an SFTP server a forced command put there) never waits for more. A cancel
+//! sends the RFC 4254 section 6.9 signal `TERM` and closes the channel;
+//! running past the wait closes it too (the server ends the command with its
+//! channel).
 use super::backend::SftpBackend;
 use super::exec::{absorb, CapturedExec, ChannelOpen};
 use russh::{client, Sig};
@@ -12,11 +16,13 @@ use std::time::{Duration, Instant};
 /// How often a waiting call looks at its cancel flag.
 const POLL: Duration = Duration::from_millis(200);
 
-/// Runs `command` on a new session channel of the connection and returns what
-/// it printed. `Ok(None)`: the server refused one more channel.
+/// Runs `command` on a new session channel of the connection, sends `stdin`
+/// and EOF, and returns what it printed. `Ok(None)`: the server refused one
+/// more channel.
 pub(super) fn run(
     backend: &SftpBackend,
     command: &str,
+    stdin: &[u8],
     wait: Duration,
     cancel: &AtomicBool,
 ) -> io::Result<Option<CapturedExec>> {
@@ -28,7 +34,10 @@ pub(super) fn run(
         ChannelOpen::Refused(_) => return Ok(None),
     };
     backend.request_exec(&generation, &channel, true, command)?;
-    let captured = backend.rt.block_on(capture(&mut channel, wait, cancel));
+    let captured = backend.rt.block_on(async {
+        feed(&channel, stdin).await;
+        capture(&mut channel, wait, cancel).await
+    });
     if generation.session().is_closed() {
         backend.connection.mark_stale(&generation);
         return Err(io::Error::new(
@@ -37,6 +46,14 @@ pub(super) fn run(
         ));
     }
     captured.map(Some)
+}
+
+/// Sends `stdin` and EOF. A failed send is not reported here: the channel's
+/// own messages (a rejected request, a close) tell `capture` what happened.
+pub(super) async fn feed(channel: &russh::Channel<client::Msg>, stdin: &[u8]) {
+    if channel.data(stdin).await.is_ok() {
+        let _ = channel.eof().await;
+    }
 }
 
 /// Collects the channel until it ends, `wait` has passed or `cancel` is set.

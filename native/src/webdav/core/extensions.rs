@@ -36,6 +36,7 @@ impl BackendExtensions for WebdavBackend {
 
     fn list_dir_tolerant(&self, path: &str) -> VfsResult<VfsListing> {
         let listing = parse_multistatus_tolerant(&self.propfind(path, "1")?, path)?;
+        self.checksums.note_listing(&listing.entries);
         if listing
             .entries
             .iter()
