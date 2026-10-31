@@ -181,12 +181,13 @@ pub(super) fn serve(
             algorithm,
             min_bytes,
             meta,
+            scope,
         } => walk_hashed3(
             sink,
             id,
             backend,
             &root,
-            (algorithm, min_bytes, meta),
+            (algorithm, min_bytes, meta, scope),
             cancel,
         ),
         Frame::WalkKeyed {
@@ -195,6 +196,7 @@ pub(super) fn serve(
             min_bytes,
             known,
             keys_only,
+            scope,
         } => {
             check_algorithm(algorithm)?;
             let relayed = keyed::Relayed::Walk {
@@ -202,16 +204,19 @@ pub(super) fn serve(
                 known: &known,
                 keys_only,
             };
-            keyed::serve(sink, id, backend, (&root, algorithm), relayed, cancel)
+            let walk = (root.as_str(), algorithm, scope);
+            keyed::serve(sink, id, backend, walk, relayed, cancel)
         }
         Frame::ListRuns {
             root,
             algorithm,
             folders,
+            scope,
         } => {
             check_algorithm(algorithm)?;
             let relayed = keyed::Relayed::Runs(&folders);
-            keyed::serve(sink, id, backend, (&root, algorithm), relayed, cancel)
+            let walk = (root.as_str(), algorithm, scope);
+            keyed::serve(sink, id, backend, walk, relayed, cancel)
         }
         // `list_dir` and `stat` as the served backend reports them, hidden
         // and system flags and creation times included (`meta-list-v1`).
@@ -262,6 +267,8 @@ fn walk_hashed2(
         algorithm: algorithm_from_wire(algorithm),
         min_bytes,
         meta: false,
+        fresh: false,
+        filter: None,
     };
     walk(
         &mut Items::new(sink, id, false),
@@ -273,13 +280,14 @@ fn walk_hashed2(
 }
 
 /// `WalkHashed3`: the backend's own walk (without the one-file digest) in
-/// portions; `meta` asks for listing attributes.
+/// portions; `meta` asks for listing attributes, `scope` for fresh digests
+/// and the job's filter (`walk-filter-v1`), passed on to the backend.
 fn walk_hashed3(
     sink: &Sink,
     id: u64,
     backend: &BackendHandle,
     root: &str,
-    (algorithm, min_bytes, meta): (u8, u64, bool),
+    (algorithm, min_bytes, meta, scope): (u8, u64, bool, crate::agent_proto::WalkScope),
     cancel: &AtomicBool,
 ) -> io::Result<()> {
     check_algorithm(algorithm)?;
@@ -287,6 +295,8 @@ fn walk_hashed3(
         algorithm: algorithm_from_wire(algorithm),
         min_bytes,
         meta,
+        fresh: scope.fresh,
+        filter: scope.filter.map(std::sync::Arc::new),
     };
     walk(
         &mut Items::new(sink, id, true),
@@ -323,7 +333,9 @@ fn walk(
     request: HashWalkRequest,
     cancel: &AtomicBool,
 ) -> io::Result<()> {
-    if vfs::supports_hash_walk(&**backend, root)? && relay(items, backend, root, request, cancel)? {
+    if vfs::supports_hash_walk(&**backend, root)?
+        && relay(items, backend, root, request.clone(), cancel)?
+    {
         items.flush()?;
         return emit(items.sink, items.id, &Frame::End);
     }

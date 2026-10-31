@@ -16,6 +16,7 @@ fn abgleich_task_walk_meta_frames_round_trip() {
             algorithm: 1,
             min_bytes: 9,
             meta,
+            scope: Default::default(),
         };
         assert_eq!(roundtrip(request.clone()), request);
     }
@@ -80,10 +81,12 @@ fn abgleich_task_walk_meta_frames_refuse_unknown_bits() {
         algorithm: 0,
         min_bytes: 0,
         meta: true,
+        scope: Default::default(),
     }
     .encode(1)
     .unwrap();
-    *request.last_mut().unwrap() = 2;
+    // Bits 1 and 2 are the scope's (`walk-filter-v1`); 8 is unknown.
+    *request.last_mut().unwrap() = 8;
     assert!(Frame::decode(&request).is_err());
 }
 

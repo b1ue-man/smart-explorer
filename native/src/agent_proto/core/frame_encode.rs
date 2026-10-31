@@ -24,6 +24,8 @@ pub(super) mod range_frames;
 pub(super) mod walk_key_frames;
 #[path = "walk_meta_frames.rs"]
 pub(super) mod walk_meta_frames;
+#[path = "walk_scope_frames.rs"]
+mod walk_scope_frames;
 
 impl Frame {
     pub fn encode(&self, req_id: u64) -> io::Result<Vec<u8>> {

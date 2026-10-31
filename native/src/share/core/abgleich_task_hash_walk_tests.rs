@@ -27,6 +27,8 @@ fn plain(meta: bool) -> HashWalkRequest {
         algorithm: None,
         min_bytes: 0,
         meta,
+        fresh: false,
+        filter: None,
     }
 }
 
@@ -311,5 +313,99 @@ fn abgleich_task_share_stage_carries_the_source_time_with_its_write() -> io::Res
         .map_err(io::Error::other)?
         .as_millis();
     assert_eq!(millis, TIME as u128);
+    Ok(())
+}
+
+/// A request with the job's filter (`hash_walk_filter_v1`): `**/*.tmp` and
+/// `cache/` as globset writes them.
+fn filtered(fresh: bool, with_filter: bool) -> HashWalkRequest {
+    let regex = |glob: &str| globset::Glob::new(glob).unwrap().regex().to_string();
+    let filter = crate::agent_proto::WalkFilterSpec {
+        patterns: vec![regex("**/*.tmp"), regex("cache/")],
+        backslash_separates: std::path::is_separator('\\'),
+        ..Default::default()
+    };
+    HashWalkRequest {
+        algorithm: Some(crate::analytics::HashAlgorithm::Md5),
+        min_bytes: 0,
+        meta: true,
+        fresh,
+        filter: with_filter.then(|| std::sync::Arc::new(filter)),
+    }
+}
+
+fn entries(items: Vec<HashWalkItem>) -> HashMap<String, vfs::HashWalkEntry> {
+    items
+        .into_iter()
+        .filter_map(|item| match item {
+            HashWalkItem::Entry(entry) => Some((entry.rel.clone(), entry)),
+            HashWalkItem::Omitted(_) => None,
+        })
+        .collect()
+}
+
+const ABC_MD5: &str = "900150983cd24fb0d6963f7d28e17f72";
+
+#[test]
+fn abgleich_task_share_host_hashes_and_enters_nothing_the_filter_leaves_out() -> io::Result<()> {
+    let fixture = CopyPastePeerFixture::for_transfer_engine_task()?;
+    let root = &fixture.root_a;
+    fs::write(root.join("keep.txt"), b"abc")?;
+    fs::write(root.join("skip.tmp"), b"tmp")?;
+    fs::create_dir_all(root.join("cache").join("deep"))?;
+    fs::write(root.join("cache").join("inner.txt"), b"x")?;
+    fs::write(root.join("cache").join("deep").join("more.txt"), b"y")?;
+    assert!(crate::share::wire::FsHostFeatures::host().hash_walk_filter_v1);
+    let (ran, items) = walk(&fixture, filtered(false, true))?;
+    assert!(ran);
+    let with_filter = entries(items);
+    assert_eq!(with_filter["keep.txt"].digest.as_deref(), Some(ABC_MD5));
+    // Left out: an entry without a digest (never opened on the host).
+    assert_eq!(with_filter["skip.tmp"].digest, None);
+    // A folder left out is its entry; the host never opens it.
+    assert!(with_filter["cache"].is_dir);
+    assert!(!with_filter.keys().any(|rel| rel.starts_with("cache/")));
+    let (ran, items) = walk(&fixture, filtered(false, false))?;
+    assert!(ran);
+    let without = entries(items);
+    assert_eq!(
+        without["skip.tmp"].digest.as_deref(),
+        Some("fa816edb83e95bf0c8da580bdfd491ef")
+    );
+    assert!(without.contains_key("cache/inner.txt"));
+    assert!(without.contains_key("cache/deep/more.txt"));
+    Ok(())
+}
+
+#[test]
+fn abgleich_task_share_host_fresh_walk_never_answers_from_the_digest_cache() -> io::Result<()> {
+    let _turn = crate::agent_proto::hash_cache::test_turn();
+    let fixture = CopyPastePeerFixture::for_transfer_engine_task()?;
+    let path = fixture.root_a.join("keep.txt");
+    fs::write(&path, b"abc")?;
+    let file = fs::File::options().write(true).open(&path)?;
+    file.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(3_600))?;
+    drop(file);
+    // The status-change time must lie outside the racy slack of the cache.
+    std::thread::sleep(std::time::Duration::from_millis(2_100));
+    let wrong = "0123456789abcdef0123456789abcdef".to_string();
+    let stamp = || crate::agent_proto::path_stamp(&path);
+    // A wrong digest stored for the unchanged file (as a stale cache would).
+    let md5 = crate::agent_proto::digest::MD5;
+    let _ = crate::agent_proto::hash_cache::digest(stamp(), md5, || Ok(wrong.clone()), stamp);
+    let (_, items) = walk(&fixture, filtered(false, false))?;
+    let cached = entries(items)["keep.txt"].digest.clone();
+    assert!(
+        cached.as_deref() == Some(ABC_MD5) || cached.as_deref() == Some(wrong.as_str()),
+        "{cached:?}"
+    );
+    let (ran, items) = walk(&fixture, filtered(true, false))?;
+    assert!(ran);
+    let read = entries(items)["keep.txt"].digest.clone();
+    assert_eq!(
+        read.as_deref(),
+        Some(ABC_MD5),
+        "the checksum mode reads the file"
+    );
     Ok(())
 }

@@ -53,6 +53,8 @@ impl Walker for Counting<'_> {
             algorithm: None,
             min_bytes: 0,
             meta: true,
+            fresh: false,
+            filter: None,
         };
         let (tx, rx) = crossbeam_channel::unbounded();
         let cancel = AtomicBool::new(false);
@@ -257,7 +259,9 @@ fn abgleich_task_local_side_keys_spare_the_remote_side_equal_folders() {
         };
         let own = files(cache.path(), if changed { "b2" } else { "b1" });
         let (keyed, walked) = std::thread::scope(|scope| {
-            scope.spawn(|| provide_local((&pair, 0), &root_a, false, &AtomicBool::new(false)));
+            scope.spawn(|| {
+                provide_local((&pair, 0), &root_a, (false, None), &AtomicBool::new(false))
+            });
             side(&remote, &root_b, Some((&pair, 1)), |ctx| {
                 walk_remote(ctx, (&pair, 1), &own, &walker).unwrap()
             })

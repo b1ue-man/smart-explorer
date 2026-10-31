@@ -18,7 +18,7 @@ pub(super) fn compare(job: &SyncJob, now_secs: i64, json_out: bool) -> Result<i3
     }
     job.validate()
         .map_err(|error| format!("invalid setup {}: {error}", job.id))?;
-    let globs = job.checked_glob_set()?;
+    let ignore = job.checked_ignore()?;
     let (min_size, max_size, after, before) = job.checked_filter_bounds(now_secs)?;
     let options = job.checked_opts(true)?;
     let (a, root_a) =
@@ -27,7 +27,8 @@ pub(super) fn compare(job: &SyncJob, now_secs: i64, json_out: bool) -> Result<i3
         crate::connect::resolve_endpoint(&job.target).map_err(|error| error.to_string())?;
     let filter = crate::bisync::WalkFilter {
         include_hidden: job.include_hidden,
-        ignore: &globs,
+        ignore: &ignore.globs,
+        host_ignore: &ignore.host,
         min_size,
         max_size,
         after_mtime_ms: after,

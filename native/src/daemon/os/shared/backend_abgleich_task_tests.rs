@@ -58,6 +58,8 @@ fn abgleich_task_service_listing_carries_the_served_hidden_flag() {
         algorithm: None,
         min_bytes: 0,
         meta: true,
+        fresh: false,
+        filter: None,
     };
     let ran = vfs::hash_walk_keyed(
         &backend,
@@ -86,6 +88,8 @@ fn keyed(
         algorithm: None,
         min_bytes: 0,
         meta: true,
+        fresh: false,
+        filter: None,
     };
     let ran =
         vfs::hash_walk_keyed(backend, root, request, walk, tx, &AtomicBool::new(false)).unwrap();

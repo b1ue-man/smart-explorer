@@ -257,6 +257,8 @@ fn review_task_backends_without_extensions_get_safe_fallbacks() {
         algorithm: None,
         min_bytes: 0,
         meta: false,
+        fresh: false,
+        filter: None,
     };
     assert!(!hash_walk(&backend, "/", request, tx, &AtomicBool::new(false)).unwrap());
     let expected = RecycleExpectation {

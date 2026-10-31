@@ -18,6 +18,11 @@ use super::types::{Baseline, BisyncOptions, Tree};
 pub struct WalkFilter<'a> {
     pub include_hidden: bool,
     pub ignore: &'a globset::GlobSet,
+    /// The patterns of `ignore` a walk next to the data evaluates with the
+    /// same meaning (`syncjobs::JobIgnore::host`, compiled together with
+    /// `ignore`; empty = the walk applies no pattern). Only ever a subset of
+    /// `ignore`: such a walk never leaves out more than this device does.
+    pub host_ignore: &'a [String],
     /// Only include files with `min_size <= size <= max_size` (bytes; 0 = off).
     pub min_size: u64,
     pub max_size: u64,
@@ -38,11 +43,28 @@ impl<'a> WalkFilter<'a> {
         WalkFilter {
             include_hidden,
             ignore,
+            host_ignore: &[],
             min_size: 0,
             max_size: 0,
             after_mtime_ms: 0,
             before_mtime_ms: 0,
         }
+    }
+
+    /// The filter a walk next to the data applies for this one
+    /// (`agent_proto::walk_filter`); `None` when it would leave nothing out.
+    pub(super) fn host_spec(&self) -> Option<std::sync::Arc<crate::agent_proto::WalkFilterSpec>> {
+        let spec = crate::agent_proto::WalkFilterSpec {
+            skip_hidden: !self.include_hidden,
+            patterns: self.host_ignore.to_vec(),
+            // As globset's candidate path on this device.
+            backslash_separates: std::path::is_separator('\\'),
+            min_size: self.min_size,
+            max_size: self.max_size,
+            after_mtime_ms: self.after_mtime_ms,
+            before_mtime_ms: self.before_mtime_ms,
+        };
+        (!spec.is_empty()).then(|| std::sync::Arc::new(spec))
     }
 
     /// Does a file of this size/mtime pass the size & age bounds?
@@ -303,8 +325,12 @@ fn with_local_keys(
         Some(pair) => std::thread::scope(|scope| {
             let md5 = context.hash == HashMode::FullFresh;
             let (root, cancel) = (context.root, context.cancel);
-            let keys = scope
-                .spawn(move || super::snapshot_pair_side::provide_local(pair, root, md5, cancel));
+            // The filter the remote side's walk applies, so equal filtered
+            // folders get equal keys on both sides.
+            let filter = context.filter.host_spec();
+            let keys = scope.spawn(move || {
+                super::snapshot_pair_side::provide_local(pair, root, (md5, filter), cancel)
+            });
             let tree = walk();
             if keys.join().is_err() {
                 pair.0.finish(pair.1);

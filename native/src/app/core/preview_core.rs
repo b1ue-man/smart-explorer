@@ -29,7 +29,7 @@ impl App {
                     let job = fresh;
                     job.validate()
                         .map_err(|error| format!("Ungültiges Setup: {error}"))?;
-                    let gs = job.checked_glob_set()?;
+                    let ignore = job.checked_ignore()?;
                     let (mn, mx, af, bf) = job.checked_filter_bounds(now)?;
                     let opts = job.checked_opts(true)?;
                     let (a, ra) =
@@ -42,7 +42,8 @@ impl App {
                     }
                     let f = crate::bisync::WalkFilter {
                         include_hidden: job.include_hidden,
-                        ignore: &gs,
+                        ignore: &ignore.globs,
+                        host_ignore: &ignore.host,
                         min_size: mn,
                         max_size: mx,
                         after_mtime_ms: af,

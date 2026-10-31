@@ -36,6 +36,28 @@ impl SyncJob {
     pub fn checked_glob_set_for(&self, case_insensitive: bool) -> Result<globset::GlobSet, String> {
         compile_patterns(&self.ignore, case_insensitive)
     }
+
+    /// `checked_glob_set` with the patterns a walk next to the data applies
+    /// with the same meaning (`JobIgnore::host`).
+    pub fn checked_ignore(&self) -> Result<JobIgnore, String> {
+        compile_with_host(&self.ignore, false)
+    }
+
+    /// `checked_glob_set_for` with the patterns a walk next to the data
+    /// applies with the same meaning (`JobIgnore::host`).
+    pub fn checked_ignore_for(&self, case_insensitive: bool) -> Result<JobIgnore, String> {
+        compile_with_host(&self.ignore, case_insensitive)
+    }
+}
+
+/// The ignore patterns of a job compiled for this device (`globs`) and, from
+/// the same compiled globs, the patterns a walk next to the data evaluates
+/// with exactly their meaning (`host`: each glob's regular expression as
+/// globset formed it, those `agent_proto::host_patterns` accepts). Pass both
+/// to one `bisync::WalkFilter` (`ignore`, `host_ignore`).
+pub struct JobIgnore {
+    pub globs: globset::GlobSet,
+    pub host: Vec<String>,
 }
 
 fn validate_identity(job: &SyncJob) -> Result<(), String> {
@@ -179,12 +201,29 @@ fn compile_patterns(
     patterns: &[String],
     case_insensitive: bool,
 ) -> Result<globset::GlobSet, String> {
+    compile_globs(patterns, case_insensitive).map(|(globs, _)| globs)
+}
+
+fn compile_with_host(patterns: &[String], case_insensitive: bool) -> Result<JobIgnore, String> {
+    let (globs, regexes) = compile_globs(patterns, case_insensitive)?;
+    Ok(JobIgnore {
+        globs,
+        host: crate::agent_proto::host_patterns(regexes),
+    })
+}
+
+/// The set of `patterns` and the regular expression of each compiled glob.
+fn compile_globs(
+    patterns: &[String],
+    case_insensitive: bool,
+) -> Result<(globset::GlobSet, Vec<String>), String> {
     if patterns.len() > MAX_IGNORE_PATTERNS {
         return Err(format!(
             "ignore contains more than {MAX_IGNORE_PATTERNS} patterns"
         ));
     }
     let mut builder = globset::GlobSetBuilder::new();
+    let mut regexes = Vec::with_capacity(patterns.len());
     for (index, raw) in patterns.iter().enumerate() {
         let pattern = raw.trim();
         if pattern.is_empty() {
@@ -205,12 +244,18 @@ fn compile_patterns(
                     index + 1
                 )
             })?;
+        regexes.push(glob.regex().to_string());
         builder.add(glob);
     }
-    builder
+    let globs = builder
         .build()
-        .map_err(|error| format!("ignore patterns could not be compiled: {error}"))
+        .map_err(|error| format!("ignore patterns could not be compiled: {error}"))?;
+    Ok((globs, regexes))
 }
+
+#[cfg(test)]
+#[path = "abgleich_task_host_ignore_tests.rs"]
+mod host_ignore_tests;
 
 #[cfg(test)]
 mod tests {

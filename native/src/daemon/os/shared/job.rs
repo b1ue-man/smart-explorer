@@ -181,10 +181,9 @@ fn attempt(
     if cancel.load(Ordering::Acquire) {
         return cleanup(job, cancelled(), cancel);
     }
-    // Syntax was checked before hooks. Actual matching uses the same pair
-    // case policy as the engine, including a case-insensitive remote target.
+    // Syntax was checked before hooks; matching takes the engine's pair case policy.
     prepared.ignore = match job
-        .checked_glob_set_for(crate::bisync::pair_key_policy(&*a, &root_a, &*b, &root_b).fold_case)
+        .checked_ignore_for(crate::bisync::pair_key_policy(&*a, &root_a, &*b, &root_b).fold_case)
     {
         Ok(ignore) => ignore,
         Err(error) => return cleanup(job, failed(FailureKind::Config, error), cancel),
@@ -192,7 +191,8 @@ fn attempt(
     let (min_size, max_size, after, before) = prepared.bounds;
     let filter = crate::bisync::WalkFilter {
         include_hidden: job.include_hidden,
-        ignore: &prepared.ignore,
+        ignore: &prepared.ignore.globs,
+        host_ignore: &prepared.ignore.host,
         min_size,
         max_size,
         after_mtime_ms: after,
@@ -431,7 +431,7 @@ pub(super) fn persist(
 
 struct PreparedJob {
     opts: crate::bisync::BisyncOptions,
-    ignore: globset::GlobSet,
+    ignore: crate::syncjobs::JobIgnore,
     bounds: (u64, u64, i64, i64),
 }
 
@@ -440,7 +440,7 @@ impl PreparedJob {
         job.validate()?;
         Ok(Self {
             opts: job.checked_opts(false)?,
-            ignore: job.checked_glob_set()?,
+            ignore: job.checked_ignore()?,
             bounds: job.checked_filter_bounds(now)?,
         })
     }

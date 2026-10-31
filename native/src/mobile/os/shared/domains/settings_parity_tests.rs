@@ -121,6 +121,7 @@ fn luecken_task_bg_set_cadence_keeps_the_desktop_range() {
 /// cache costs only the next reads.
 #[test]
 fn abgleich_task_bridge_sync_clear_hash_cache_answers_through_the_dispatcher() {
+    let _turn = crate::agent_proto::hash_cache::test_turn();
     let dir = tempfile::tempdir().expect("fixture dir");
     let config = json!({
         "filesDir": dir.path().join("files"),

@@ -77,6 +77,7 @@ pub use results::{load_results, mark_run, record_result, JobResult};
 #[allow(unused_imports)]
 pub use schedule::within_window;
 pub use types::{SyncJob, Trigger, CURRENT_CONFIG_VERSION};
+pub use validation::JobIgnore;
 #[allow(unused_imports)] // vault sync (VLT-M7) and its surfaces (U26, U29, U31)
 pub use vault_job::{vault_store_side, JobKind, VAULT_JOB_NEEDS_VAULT_SYNC};
 #[allow(unused_imports)] // vault sync (VLT-M7) and its surfaces (U26, U29, U31)

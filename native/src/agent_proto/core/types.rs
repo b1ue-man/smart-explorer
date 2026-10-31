@@ -296,6 +296,9 @@ pub enum Frame {
         algorithm: u8,
         min_bytes: u64,
         meta: bool,
+        /// `walk-filter-v1`: fresh digests and the job's filter
+        /// (`walk_filter.rs`); the default without the label.
+        scope: super::walk_filter::WalkScope,
     },
     /// A tolerant listing with the listing attributes of every entry
     /// (`list-meta-v1`, background service): `HashPart`s, whose entries carry
@@ -314,6 +317,8 @@ pub enum Frame {
         /// `keys_only`: no run, only every folder's `FolderKey` (the first
         /// phase of a pair comparison).
         keys_only: bool,
+        /// As in `WalkHashed3`.
+        scope: super::walk_filter::WalkScope,
     },
     /// The runs of the named folders (paths relative to `root`) of a keyed
     /// walk, each after its `FolderRun` mark, without their subfolders
@@ -322,6 +327,8 @@ pub enum Frame {
         root: String,
         algorithm: u8,
         folders: Vec<String>,
+        /// As in `WalkHashed3`.
+        scope: super::walk_filter::WalkScope,
     },
     /// The key of a folder of a `WalkKeyed`: `same = false` after the folder
     /// and everything below it were sent, `same = true` instead of them.

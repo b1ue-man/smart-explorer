@@ -7,6 +7,9 @@
 //! rules as the other frames; a server without the label answers the
 //! unknown tag with an error, so a client sends it only after the label.
 //!
+//! `WalkHashed3` options: `WALK_META`, and the scope bits of
+//! `walk_scope_frames.rs` (`walk-filter-v1`) with the filter after them.
+//!
 //! `HashPart` entry: `rel`, a flag byte (`ENTRY_*`), size, time, the optional
 //! digest and, with `ENTRY_META`, the creation time.
 use std::io;
@@ -34,7 +37,9 @@ const MIN_OMISSION_BYTES: usize = 9;
 /// Encoded body length after the request id and tag, `None` for other frames.
 pub(in super::super) fn payload_len(frame: &Frame) -> Option<io::Result<usize>> {
     Some(match frame {
-        Frame::WalkHashed3 { root, .. } => super::string_len(root).and_then(|len| sum(len, 10)),
+        Frame::WalkHashed3 { root, scope, .. } => super::string_len(root)
+            .and_then(|len| sum(len, 10))
+            .and_then(|len| sum(len, super::walk_scope_frames::len(scope)?)),
         Frame::ListMeta(path) => super::string_len(path),
         Frame::WriteNewTimed { path, .. } => super::string_len(path).and_then(|len| sum(len, 8)),
         Frame::StageWritten { object, .. } => {
@@ -53,12 +58,15 @@ pub(in super::super) fn encode(frame: &Frame, b: &mut Vec<u8>) -> bool {
             algorithm,
             min_bytes,
             meta,
+            scope,
         } => {
             b.push(79);
             put_str(b, root);
             b.push(*algorithm);
             put_u64(b, *min_bytes);
-            b.push(if *meta { WALK_META } else { 0 });
+            let options = if *meta { WALK_META } else { 0 };
+            b.push(options | super::walk_scope_frames::bits(scope));
+            super::walk_scope_frames::put(b, scope);
         }
         Frame::ListMeta(path) => {
             b.push(82);
@@ -98,16 +106,23 @@ pub(in super::super) fn encode(frame: &Frame, b: &mut Vec<u8>) -> bool {
 /// Decode a frame of this set; `None` for an unknown tag.
 pub(in super::super) fn decode(tag: u8, r: &mut Reader) -> io::Result<Option<Frame>> {
     Ok(Some(match tag {
-        79 => Frame::WalkHashed3 {
-            root: r.string()?,
-            algorithm: code(r, 2)?,
-            min_bytes: r.u64()?,
-            meta: match r.u8()? {
-                0 => false,
-                WALK_META => true,
-                _ => return Err(bad("unknown hash walk options")),
-            },
-        },
+        79 => {
+            let root = r.string()?;
+            let algorithm = code(r, 2)?;
+            let min_bytes = r.u64()?;
+            let options = r.u8()?;
+            if options & !(WALK_META | super::walk_scope_frames::SCOPE_BITS) != 0 {
+                return Err(bad("unknown hash walk options"));
+            }
+            let scope = super::walk_scope_frames::take(options, r)?;
+            Frame::WalkHashed3 {
+                root,
+                algorithm,
+                min_bytes,
+                meta: options & WALK_META != 0,
+                scope,
+            }
+        }
         80 => {
             let count = counted(r, MIN_ENTRY_BYTES)?;
             let mut entries = Vec::with_capacity(count);

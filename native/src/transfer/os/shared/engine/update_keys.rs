@@ -231,6 +231,8 @@ fn remote_keys(
         algorithm: None,
         min_bytes: 0,
         meta: true,
+        fresh: false,
+        filter: None,
     };
     let (tx, rx) = crossbeam_channel::unbounded();
     let stop = AtomicBool::new(false);

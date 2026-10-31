@@ -1,8 +1,11 @@
 //! Stream host hashes with channel backpressure and cancellation; never return partial success.
+//! A host with `hash_walk_filter_v1` gets the request's scope (fresh digests,
+//! the job's filter with `meta`); a regular file its filter leaves out then
+//! comes without a digest.
 use super::{
     backend::PeerBackend,
     framing,
-    fs_response::FsHashWalkMessage,
+    fs_response::{FsHashWalkMessage, FsWalkFilter, FsWalkScope},
     io_deadline, peer_stream,
     wire::{Ctrl, FsHashAlgo, FsHashWalk, FsRequest, FsResponse},
 };
@@ -82,7 +85,15 @@ pub(super) fn walk_keyed(
         }
     };
     for keyed in requests {
-        if !walk_with(backend, root, request, Some(keyed), tx.clone(), Ok, cancel)? {
+        if !walk_with(
+            backend,
+            root,
+            request.clone(),
+            Some(keyed),
+            tx.clone(),
+            Ok,
+            cancel,
+        )? {
             return Ok(false);
         }
     }
@@ -116,6 +127,16 @@ fn walk_with<T: Send>(
     let endpoint = backend.current_endpoint()?;
     let mut opened = backend.node.open_stream(&endpoint, &backend.identity)?;
     let lease = backend.mount_lease_token()?;
+    let scope = features.hash_walk_filter_v1.then(|| FsWalkScope {
+        fresh: request.fresh,
+        filter: request
+            .filter
+            .as_deref()
+            .filter(|_| request.meta)
+            .map(FsWalkFilter::bounded),
+    });
+    // A file the host's filter leaves out comes without a digest.
+    let filtered = scope.as_ref().is_some_and(|scope| scope.filter.is_some());
     let req = FsRequest::HashWalk(FsHashWalk {
         path: root.into(),
         min_bytes: request.min_bytes,
@@ -125,6 +146,7 @@ fn walk_with<T: Send>(
         }),
         single_file: false,
         meta: request.meta,
+        scope,
         keys: keyed.is_some(),
         known: keyed.as_ref().map_or_else(String::new, |k| k.known.clone()),
         keys_only: keyed.as_ref().is_some_and(|k| k.keys_only),
@@ -165,6 +187,7 @@ fn walk_with<T: Send>(
                         if regular
                             && match (digits, entry.digest.as_ref()) {
                                 (None, None) => false,
+                                (Some(_), None) => !filtered,
                                 (Some(n), Some(hash)) => {
                                     hash.len() != n
                                         || !hash.bytes().all(|b| {

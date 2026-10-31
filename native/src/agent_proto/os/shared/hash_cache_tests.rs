@@ -5,11 +5,9 @@ use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-/// The cache is one per process: these tests take turns.
-static TURN: Mutex<()> = Mutex::new(());
-
+/// The cache is one per process: these tests take turns (`test_turn`).
 fn turn() -> MutexGuard<'static, ()> {
-    TURN.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    test_turn()
 }
 
 fn old_file(dir: &Path, name: &str, content: &[u8]) -> PathBuf {

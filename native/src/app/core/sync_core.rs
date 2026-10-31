@@ -173,12 +173,18 @@ impl App {
             return;
         }
         let mut glob_builder = globset::GlobSetBuilder::new();
+        // The regular expression of every glob, for the walk next to the data
+        // (`bisync::WalkFilter::host_ignore`).
+        let mut regexes = Vec::new();
         for pattern in ignore.iter().map(|pattern| pattern.trim()) {
             if pattern.is_empty() {
                 continue;
             }
             match globset::Glob::new(pattern) {
-                Ok(glob) => glob_builder.add(glob),
+                Ok(glob) => {
+                    regexes.push(glob.regex().to_string());
+                    glob_builder.add(glob)
+                }
                 Err(error) => {
                     self.error_msg =
                         Some(format!("Ungültiges Ausschlussmuster '{pattern}': {error}"));
@@ -186,6 +192,7 @@ impl App {
                 }
             };
         }
+        let host_ignore = crate::agent_proto::host_patterns(regexes);
         let ignore = match glob_builder.build() {
             Ok(globs) => globs,
             Err(error) => {
@@ -218,6 +225,7 @@ impl App {
                 let f = crate::bisync::WalkFilter {
                     include_hidden,
                     ignore: &ignore,
+                    host_ignore: &host_ignore,
                     min_size: bounds.0,
                     max_size: bounds.1,
                     after_mtime_ms: bounds.2,

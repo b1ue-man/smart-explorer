@@ -11,7 +11,10 @@
 //! - folder, link, special file: kind, name, hidden;
 //! - omission of a child: name and reason code (`ops_types::omission`);
 //! - the folder's own failure (could not be read to its end): reason code;
-//! - every subfolder that was walked: its name and its key.
+//! - every subfolder that was walked: its name and its key. A folder the
+//!   walk's filter leaves out (`walk_filter.rs`) is an entry of its parent's
+//!   run and has no key: its parent's key holds no key for it, so a key of a
+//!   walk that entered it never equals one of a walk that did not.
 //!
 //! Beside its key, a `Mode::KeysOnly` walk reports what each folder's subtree
 //! holds (`KeyTally`: files, bytes, omissions, files of unknown time,
@@ -279,6 +282,13 @@ impl<I> RunKeys<I> {
         self.unopened.insert(name.to_string());
         self.omit_one();
         self.push(omission_part(name, reason), item, cost);
+    }
+
+    /// The folder entry `name` (already added) is not walked: the walk's
+    /// filter leaves its content out (`walk_filter.rs`). The run's part names
+    /// it; no subfolder key follows for it.
+    pub(crate) fn skip_dir(&mut self, name: &str) {
+        self.unopened.insert(name.to_string());
     }
 
     /// The folder itself failed.

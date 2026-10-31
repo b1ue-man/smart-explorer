@@ -25,7 +25,7 @@ use std::sync::{Mutex, MutexGuard};
 use super::fs::{is_pseudo_dir, systemtime_ms};
 use super::ops_types::{digest, omission};
 use super::session::{emit, Sink};
-use super::walk_keyed::{Keyed, KeyedSetup};
+use super::walk_keyed::{Keyed, KeyedSetup, Scope};
 use super::{Frame, WalkLocal, WalkOutput, WireHashEntry, WireHashMeta, WireOmission};
 
 /// Estimated encoded bytes after which a `HashPart` is sent.
@@ -113,6 +113,15 @@ impl<'a> Out<'a> {
         self.bytes += entry.rel.len() + entry.digest.as_ref().map_or(0, String::len) + 40;
         self.entries.push(entry);
         self.full()
+    }
+
+    /// A folder the filter leaves out (`walk_filter.rs`): its entry, never
+    /// its content.
+    fn skipped_dir(&mut self, entry: WireHashEntry) -> io::Result<()> {
+        match &mut self.keyed {
+            Some(keyed) => keyed.skipped_dir(entry),
+            None => self.entry(entry),
+        }
     }
 
     fn omit(&mut self, rel: String, reason: u8, detail: impl Into<String>) -> io::Result<()> {
@@ -207,18 +216,20 @@ fn canceled() -> io::Error {
     io::Error::new(io::ErrorKind::Interrupted, "agent hash walk canceled")
 }
 
-/// The walk of `root` (`digest::NONE` or `digest::MD5`), then `End`.
+/// The walk of `root` (`digest::NONE` or `digest::MD5`) as `scope` reads
+/// and filters it, then `End`.
 pub(super) fn walk(
     sink: &Sink,
     id: u64,
     root: &str,
-    algorithm: u8,
-    min_bytes: u64,
+    (algorithm, min_bytes): (u8, u64),
     form: Form,
+    scope: Scope<'_>,
     cancel: &AtomicBool,
 ) -> io::Result<()> {
-    let setup = (None, vec![(PathBuf::from(root), String::new())], true);
-    run_walk(sink, id, root, (algorithm, min_bytes), form, setup, cancel)?;
+    let roots = vec![(PathBuf::from(root), String::new())];
+    let setup = (None, roots, true, scope);
+    run_walk(sink, id, (root, algorithm, min_bytes), form, setup, cancel)?;
     emit(sink, id, &Frame::End)
 }
 
@@ -252,21 +263,29 @@ pub(super) fn walk_keyed(
         }
     };
     let deeper = folders.is_none();
-    let setup = (Some(keys), roots, deeper);
-    run_walk(sink, id, root, (algorithm, min_bytes), form, setup, cancel)
+    let scope = Scope {
+        reads: keys.reads,
+        filter: keys.filter,
+    };
+    let setup = (Some(keys), roots, deeper, scope);
+    run_walk(sink, id, (root, algorithm, min_bytes), form, setup, cancel)
 }
 
-/// Walk setup: the key tree (if any), the first folders and whether the
-/// walk goes below them.
-type Setup<'a> = (Option<KeyedSetup<'a>>, Vec<(PathBuf, String)>, bool);
+/// Walk setup: the key tree (if any), the first folders, whether the walk
+/// goes below them, and how it reads and filters.
+type Setup<'a> = (
+    Option<KeyedSetup<'a>>,
+    Vec<(PathBuf, String)>,
+    bool,
+    Scope<'a>,
+);
 
 fn run_walk(
     sink: &Sink,
     id: u64,
-    root: &str,
-    (algorithm, min_bytes): (u8, u64),
+    (root, algorithm, min_bytes): (&str, u8, u64),
     form: Form,
-    (keys, roots, deeper): Setup<'_>,
+    (keys, roots, deeper, scope): Setup<'_>,
     cancel: &AtomicBool,
 ) -> io::Result<()> {
     if !matches!(algorithm, digest::NONE | digest::MD5) {
@@ -289,7 +308,9 @@ fn run_walk(
         cancel,
         // A walk collecting in this process serves a local sync side.
         local: keys.is_some_and(|keys| keys.collect.is_some()),
-        reads: keys.map(|keys| keys.reads).unwrap_or_default(),
+        reads: scope.reads,
+        // Only entries with attributes carry the `hidden` the client filters.
+        filter: scope.filter.filter(|_| form == Form::Parts { meta: true }),
     };
     let run = Mutex::new(());
     let walked = super::ordered_walk(
@@ -322,6 +343,9 @@ struct Walk<'a> {
     local: bool,
     /// How file contents are read (a fresh read, the run's digests).
     reads: super::LocalReads<'a>,
+    /// The job's filter (`walk_filter.rs`): no digest for a file it leaves
+    /// out, no walk into a folder it leaves out.
+    filter: Option<&'a super::HostFilter>,
 }
 
 impl Walk<'_> {
@@ -429,6 +453,9 @@ impl Walk<'_> {
         if metadata.is_dir() {
             // With attributes a folder has the size its listing reports.
             let size = if meta.is_some() { metadata.len() } else { 0 };
+            if self.filter.is_some_and(|f| f.leaves_out_dir(&rel, hidden)) {
+                return out.skipped_dir(plain(true, size, None));
+            }
             out.entry(plain(true, size, None))?;
             if path.to_str().is_some_and(is_pseudo_dir) {
                 // A row as in the folder's listing; its content (kernel and
@@ -451,7 +478,10 @@ impl Walk<'_> {
         if metadata.len() < self.min_bytes {
             return Ok(());
         }
-        let md5 = if self.algorithm == digest::MD5 {
+        let left_out = self
+            .filter
+            .is_some_and(|f| f.leaves_out_file(&rel, hidden, metadata.len(), mtime_ms));
+        let md5 = if self.algorithm == digest::MD5 && !left_out {
             let digest = super::md5_cached(&path, &metadata, self.reads, self.cancel, || {
                 super::ext_ops::md5_file(&path, metadata.len(), self.cancel)
             });

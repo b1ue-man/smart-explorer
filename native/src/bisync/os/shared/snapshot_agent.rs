@@ -15,6 +15,12 @@
 //! folders whose key this or the other side of the pair stored come as one
 //! mark each and are replayed from the stored keys.
 //!
+//! Every request carries the job's filter and, in the checksum mode, asks
+//! for digests read from the files now (`HashWalkRequest::fresh`,
+//! `filter`): a side that applies the filter sends files it leaves out
+//! without a digest and does not enter folders it leaves out, which the
+//! check here leaves out as well (`agent_proto::walk_filter`).
+//!
 //! The walk over listings does not test mount boundaries on a remote side
 //! either (`snapshot_policy::protected` only for local sides), so this walk
 //! serves `cross_mounts = false` as well. Hidden entries without a leading
@@ -43,12 +49,16 @@ pub(super) fn walk_snapshot_via_agent(ctx: &WalkContext<'_>) -> io::Result<Optio
     super::transfer_stream::check(ctx.cancel)?;
     let want_hash = ctx.hash == HashMode::FullFresh;
     let algorithm = want_hash.then_some(crate::analytics::HashAlgorithm::Md5);
+    // The checksum mode asks for digests read now; the filter is the job's.
+    let meta_request = HashWalkRequest {
+        algorithm,
+        min_bytes: 0,
+        meta: true,
+        fresh: want_hash,
+        filter: ctx.filter.host_spec(),
+    };
     if let Some(files) = &ctx.key_files {
-        let request = HashWalkRequest {
-            algorithm,
-            min_bytes: 0,
-            meta: true,
-        };
+        let request = meta_request.clone();
         let walker = HostWalker { ctx, request };
         // The pair's key phases first (no stored keys yet), then the walk
         // with the stored keys of both sides as known.
@@ -75,14 +85,7 @@ pub(super) fn walk_snapshot_via_agent(ctx: &WalkContext<'_>) -> io::Result<Optio
     let mut streamed = Stream::new(ctx);
     let with_meta = stream(
         |item| streamed.item(item),
-        |sender| {
-            let request = HashWalkRequest {
-                algorithm,
-                min_bytes: 0,
-                meta: true,
-            };
-            crate::vfs::hash_walk(backend, ctx.root, request, sender, ctx.cancel)
-        },
+        |sender| crate::vfs::hash_walk(backend, ctx.root, meta_request, sender, ctx.cancel),
     );
     match with_meta {
         Ok(true) => {
@@ -106,6 +109,8 @@ pub(super) fn walk_snapshot_via_agent(ctx: &WalkContext<'_>) -> io::Result<Optio
         algorithm,
         min_bytes: 0,
         meta: false,
+        fresh: want_hash,
+        filter: None,
     };
     let mut collector = Collector::new(ctx);
     let primary = stream(
@@ -182,7 +187,7 @@ impl super::snapshot_pair_side::Walker for HostWalker<'_, '_> {
         walk: KeyedWalk<'_>,
         take: &mut dyn FnMut(KeyedWalkItem) -> io::Result<()>,
     ) -> io::Result<bool> {
-        let (ctx, request) = (self.ctx, self.request);
+        let (ctx, request) = (self.ctx, self.request.clone());
         stream(take, |sender| {
             crate::vfs::hash_walk_keyed(ctx.be, ctx.root, request, walk, sender, ctx.cancel)
         })
@@ -238,3 +243,7 @@ pub(super) fn walk_hashed_via_agent(
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
+
+#[cfg(all(test, unix))]
+#[path = "abgleich_task_walk_filter_tests.rs"]
+mod walk_filter_tests;

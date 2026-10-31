@@ -34,21 +34,30 @@ impl Fixture {
     pub fn new(local: Option<&[u8]>, files: &[(&str, &[u8])]) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().to_string_lossy().replace('\\', "/");
-        if let Some(bytes) = local { std::fs::write(directory.path().join(FILE), bytes).unwrap(); }
+        if let Some(bytes) = local {
+            std::fs::write(directory.path().join(FILE), bytes).unwrap();
+        }
         let drive = Arc::new(FakeDrive::default());
-        for (id, bytes) in files { drive.insert(id, FILE, "root", MIME, bytes); }
+        for (id, bytes) in files {
+            drive.insert(id, FILE, "root", MIME, bytes);
+        }
         let faults = Arc::new(Faults::default());
         let server = {
             let (drive, faults) = (drive.clone(), faults.clone());
             Server::start(move |request| {
-                if request.query("alt").as_deref() == Some("media") && faults.deny_read.load(Ordering::Acquire) {
+                if request.query("alt").as_deref() == Some("media")
+                    && faults.deny_read.load(Ordering::Acquire)
+                {
                     return drive_error(403, "insufficientFilePermissions", "reading denied");
                 }
-                if request.method == "PATCH" && request.path().starts_with("/upload/")
-                    && faults.deny_replace.load(Ordering::Acquire) {
+                if request.method == "PATCH"
+                    && request.path().starts_with("/upload/")
+                    && faults.deny_replace.load(Ordering::Acquire)
+                {
                     return drive_error(403, "insufficientFilePermissions", "replacement denied");
                 }
-                let trash = request.method == "PATCH" && request.body.windows(7).any(|b| b == b"trashed");
+                let trash =
+                    request.method == "PATCH" && request.body.windows(7).any(|b| b == b"trashed");
                 if trash && faults.deny_trash.load(Ordering::Acquire) {
                     return drive_error(403, "insufficientFilePermissions", "trash denied");
                 }
@@ -62,7 +71,16 @@ impl Fixture {
         let remote = server.backend();
         let local = LocalBackend::new(&root);
         let pair = bisync::pair_id_for(&local, &root, &remote, "/");
-        Self { drive, server, faults, local, root, remote, pair, directory }
+        Self {
+            drive,
+            server,
+            faults,
+            local,
+            root,
+            remote,
+            pair,
+            directory,
+        }
     }
 
     pub fn preview(&self) -> bisync::Preview {
@@ -70,12 +88,27 @@ impl Fixture {
     }
 
     pub fn preview_with(&self, opts: BisyncOptions, filter: &WalkFilter<'_>) -> bisync::Preview {
-        bisync::preview(&self.local, &self.root, &self.remote, "/", opts, &AtomicBool::new(false), filter)
+        bisync::preview(
+            &self.local,
+            &self.root,
+            &self.remote,
+            "/",
+            opts,
+            &AtomicBool::new(false),
+            filter,
+        )
     }
 
     pub fn run(&self, opts: BisyncOptions) -> bisync::Outcome {
-        bisync::run(&self.local, &self.root, &self.remote, "/", opts, &AtomicBool::new(false),
-            &filter(&bisync::empty_globset()))
+        bisync::run(
+            &self.local,
+            &self.root,
+            &self.remote,
+            "/",
+            opts,
+            &AtomicBool::new(false),
+            &filter(&bisync::empty_globset()),
+        )
     }
 
     pub fn conflict(&self) -> Conflict {
@@ -85,24 +118,49 @@ impl Fixture {
         preview.conflicts.remove(0)
     }
 
-    pub fn resolve(&self, conflict: &Conflict, keep_a: bool, id: Option<&str>, cancel: &AtomicBool,
-        progress: impl FnMut(ResolvePhase)) -> io::Result<(Option<bisync::Sig>, Option<bisync::Sig>)> {
-        bisync::resolve_variant_checked(&self.local, &self.root, &self.remote, "/", conflict,
-            keep_a, id, &self.pair, cancel, progress)
+    pub fn resolve(
+        &self,
+        conflict: &Conflict,
+        keep_a: bool,
+        id: Option<&str>,
+        cancel: &AtomicBool,
+        progress: impl FnMut(ResolvePhase),
+    ) -> io::Result<(Option<bisync::Sig>, Option<bisync::Sig>)> {
+        bisync::resolve_variant_checked(
+            &self.local,
+            &self.root,
+            &self.remote,
+            "/",
+            conflict,
+            keep_a,
+            id,
+            &self.pair,
+            cancel,
+            progress,
+        )
     }
 
     pub fn remote_content(&self) -> Vec<u8> {
         let files = self.drive.named("root", FILE);
         assert_eq!(files.len(), 1, "exactly one live remote file");
         let mut content = Vec::new();
-        self.remote.open_read_id(FILE, files[0]["id"].as_str()).unwrap().read_to_end(&mut content).unwrap();
+        self.remote
+            .open_read_id(FILE, files[0]["id"].as_str())
+            .unwrap()
+            .read_to_end(&mut content)
+            .unwrap();
         content
     }
 
-    pub fn local_content(&self) -> Vec<u8> { std::fs::read(self.directory.path().join(FILE)).unwrap() }
+    pub fn local_content(&self) -> Vec<u8> {
+        std::fs::read(self.directory.path().join(FILE)).unwrap()
+    }
 
     pub fn assert_backed_up(&self, bytes: &[u8]) {
-        assert!(contains(&bisync::versions_dir(&self.pair), bytes), "discarded bytes have a durable backup");
+        assert!(
+            contains(&bisync::versions_dir(&self.pair), bytes),
+            "discarded bytes have a durable backup"
+        );
     }
 
     /// Drive writes of the scenario. A run also creates its pair's replica
@@ -132,15 +190,27 @@ impl Fixture {
 }
 
 pub(super) fn filter(ignore: &globset::GlobSet) -> WalkFilter<'_> {
-    WalkFilter { include_hidden: true, ignore, min_size: 0, max_size: 0,
-        after_mtime_ms: 0, before_mtime_ms: 0 }
+    WalkFilter {
+        include_hidden: true,
+        ignore,
+        host_ignore: &[],
+        min_size: 0,
+        max_size: 0,
+        after_mtime_ms: 0,
+        before_mtime_ms: 0,
+    }
 }
 
 fn contains(root: &Path, expected: &[u8]) -> bool {
-    let Ok(entries) = std::fs::read_dir(root) else { return false; };
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return false;
+    };
     entries.flatten().any(|entry| {
         let path = entry.path();
-        if path.is_dir() { contains(&path, expected) }
-        else { std::fs::read(path).ok().as_deref() == Some(expected) }
+        if path.is_dir() {
+            contains(&path, expected)
+        } else {
+            std::fs::read(path).ok().as_deref() == Some(expected)
+        }
     })
 }

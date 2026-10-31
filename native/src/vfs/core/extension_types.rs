@@ -228,7 +228,7 @@ pub struct StageFinished {
 }
 
 /// What one host-side hash walk (`hash_walk`) returns.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct HashWalkRequest {
     /// Digest of every included regular file; `None` = size and time only.
     pub algorithm: Option<crate::analytics::HashAlgorithm>,
@@ -241,6 +241,17 @@ pub struct HashWalkRequest {
     /// capability (Share `hash_walk_meta_v1`, agent `walk-meta-v1`) answers
     /// `Ok(false)` before sending anything.
     pub meta: bool,
+    /// Every digest is read from the file now (the checksum compare mode of
+    /// a sync): the host's digest cache is not asked. A side without the
+    /// capability (Share `hash_walk_filter_v1`, agent `walk-filter-v1`)
+    /// answers from its cache.
+    pub fresh: bool,
+    /// The sync job's filter, for a walk with `meta` (`agent_proto::
+    /// walk_filter`): a side with the capability forms no digest for a file
+    /// it leaves out and does not enter a folder it leaves out, and still
+    /// sends both as entries; a side without it walks unfiltered. The caller
+    /// filters what arrives either way.
+    pub filter: Option<std::sync::Arc<crate::agent_proto::WalkFilterSpec>>,
 }
 
 /// The listing attributes of one hash-walk entry (`HashWalkRequest::meta`),

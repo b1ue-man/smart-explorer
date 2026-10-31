@@ -1,9 +1,11 @@
 //! Messages of a host-side hash walk (`hash_walk_v1`, `FsResponse::HashWalk`;
 //! listing attributes with `hash_walk_meta_v1`, folder keys with
-//! `hash_walk_keys_v1`).
+//! `hash_walk_keys_v1`, fresh digests and the job's filter with
+//! `hash_walk_filter_v1`).
 use serde::{Deserialize, Serialize};
 
 use super::list_batch_wire::FsOmission;
+use crate::agent_proto::WalkFilterSpec;
 use crate::vfs::{HashWalkEntry, HashWalkItem, HashWalkMeta, KeyTally};
 
 fn is_false(value: &bool) -> bool {
@@ -99,6 +101,82 @@ impl FsHashEntry {
             && self
                 .meta
                 .is_none_or(|meta| !meta.is_symlink && !meta.special)
+    }
+}
+
+/// `hash_walk_filter_v1` (`FsHashWalk::scope`): digests read from the files
+/// now, and the sync job's filter (`agent_proto::walk_filter`).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct FsWalkScope {
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) fresh: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) filter: Option<FsWalkFilter>,
+}
+
+/// The filter of a walk (`agent_proto::WalkFilterSpec`).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct FsWalkFilter {
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) skip_hidden: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) patterns: Vec<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) backslash_separates: bool,
+    #[serde(default)]
+    pub(crate) min_size: u64,
+    #[serde(default)]
+    pub(crate) max_size: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(crate) after_mtime_ms: i64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(crate) before_mtime_ms: i64,
+}
+
+/// JSON text the patterns of one walk request take at most: with the
+/// largest known-key text (`peer_hash_walk::KNOWN_KEYS`, about 214 KiB) or
+/// folder list (160 KiB) the request stays below the request frame limit
+/// (`framing::MAX_REQUEST_CTRL_FRAME`, 256 KiB).
+const FILTER_PATTERN_JSON: usize = 16 * 1024;
+
+impl FsWalkFilter {
+    /// `spec` with its patterns, in order, as far as they fit
+    /// `FILTER_PATTERN_JSON`; a pattern left out is applied by the client
+    /// alone (the host then leaves out less, never more).
+    pub(crate) fn bounded(spec: &WalkFilterSpec) -> Self {
+        let mut used = 0usize;
+        let mut patterns = Vec::new();
+        for pattern in &spec.patterns {
+            let cost = serde_json::to_string(pattern).map_or(usize::MAX, |text| text.len() + 1);
+            if used.saturating_add(cost) > FILTER_PATTERN_JSON {
+                break;
+            }
+            used += cost;
+            patterns.push(pattern.clone());
+        }
+        Self {
+            skip_hidden: spec.skip_hidden,
+            patterns,
+            backslash_separates: spec.backslash_separates,
+            min_size: spec.min_size,
+            max_size: spec.max_size,
+            after_mtime_ms: spec.after_mtime_ms,
+            before_mtime_ms: spec.before_mtime_ms,
+        }
+    }
+}
+
+impl From<FsWalkFilter> for WalkFilterSpec {
+    fn from(filter: FsWalkFilter) -> Self {
+        Self {
+            skip_hidden: filter.skip_hidden,
+            patterns: filter.patterns,
+            backslash_separates: filter.backslash_separates,
+            min_size: filter.min_size,
+            max_size: filter.max_size,
+            after_mtime_ms: filter.after_mtime_ms,
+            before_mtime_ms: filter.before_mtime_ms,
+        }
     }
 }
 

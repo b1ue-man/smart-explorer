@@ -5,6 +5,9 @@
 //! one place.
 #![allow(dead_code, unused_imports)]
 
+#[cfg(test)]
+#[path = "core/abgleich_task_walk_filter_tests.rs"]
+mod abgleich_task_walk_filter_tests;
 #[path = "os/shared/batch_get.rs"]
 mod batch_get;
 #[path = "core/batch_limits.rs"]
@@ -111,6 +114,8 @@ mod tree_remove;
 mod types;
 #[path = "core/vault_error.rs"]
 mod vault_error;
+#[path = "core/walk_filter.rs"]
+mod walk_filter;
 #[path = "os/shared/walk_hashed.rs"]
 mod walk_hashed;
 #[path = "os/shared/walk_keyed.rs"]
@@ -118,6 +123,8 @@ mod walk_keyed;
 pub(crate) use walk_keyed::{
     local_keyed, local_keyed_reading, Collected as LocalKeyed, WireItem as KeyedWireItem,
 };
+#[path = "core/walk_pattern.rs"]
+mod walk_pattern;
 #[path = "os/shared/write_new.rs"]
 mod write_new;
 
@@ -184,4 +191,7 @@ pub use types::{
 };
 pub(crate) use vault_error::{
     parse_vault_error, vault_error_message, VaultWireError, VAULT_LOCKED_WIRE,
+};
+pub use walk_filter::{
+    host_patterns, HostFilter, WalkFilterSpec, WalkScope, MAX_FILTER_PATTERNS, MAX_FILTER_TEXT,
 };

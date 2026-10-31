@@ -135,20 +135,23 @@ pub(crate) fn handle_walk_hashed2(
         return walk_file_sha256(sink, id, root, cancel);
     }
     let form = super::walk_hashed::Form::Single;
-    super::walk_hashed::walk(sink, id, root, algorithm, min_bytes, form, cancel)
+    let scope = super::walk_keyed::Scope::default();
+    super::walk_hashed::walk(sink, id, root, (algorithm, min_bytes), form, scope, cancel)
 }
 
 /// `WalkHashed3` (`walk-meta-v1`): the walk of `WalkHashed2` in `HashPart`s;
 /// with `meta` every entry carries its listing attributes and links and
-/// special files are entries. A folder walk with SHA-256 stays unsupported.
+/// special files are entries. A folder walk with SHA-256 stays unsupported,
+/// as does a filter this walk cannot apply (`walk-filter-v1`).
 pub(crate) fn handle_walk_hashed3(
     sink: &Sink,
     id: u64,
     root: &str,
-    (algorithm, min_bytes, meta): (u8, u64, bool),
+    (algorithm, min_bytes, meta, scope): (u8, u64, bool, &super::WalkScope),
     cancel: &AtomicBool,
 ) -> io::Result<()> {
-    if algorithm == digest::SHA256 {
+    let filter = super::walk_keyed::request_filter(scope);
+    if algorithm == digest::SHA256 || filter.is_none() {
         return emit(
             sink,
             id,
@@ -156,7 +159,14 @@ pub(crate) fn handle_walk_hashed3(
         );
     }
     let form = super::walk_hashed::Form::Parts { meta };
-    super::walk_hashed::walk(sink, id, root, algorithm, min_bytes, form, cancel)
+    let scope = super::walk_keyed::Scope {
+        reads: super::LocalReads {
+            fresh: scope.fresh,
+            run: None,
+        },
+        filter: filter.as_ref().and_then(Option::as_ref),
+    };
+    super::walk_hashed::walk(sink, id, root, (algorithm, min_bytes), form, scope, cancel)
 }
 
 fn entry_frame(rel: String, is_dir: bool, size: u64, mtime_ms: i64, md5: Option<String>) -> Frame {

@@ -39,6 +39,8 @@ fn keyed(backend: &AgentBackend, root: &str, known: &[[u8; 16]]) -> (bool, Vec<K
         algorithm: None,
         min_bytes: 0,
         meta: true,
+        fresh: false,
+        filter: None,
     };
     let (tx, rx) = crossbeam_channel::unbounded();
     let ran = vfs::hash_walk_keyed(
@@ -156,6 +158,8 @@ fn abgleich_task_agent_keys_only_walk_counts_each_subtree() {
         algorithm: None,
         min_bytes: 0,
         meta: true,
+        fresh: false,
+        filter: None,
     };
     let (tx, rx) = crossbeam_channel::unbounded();
     let ran = vfs::hash_walk_keyed(

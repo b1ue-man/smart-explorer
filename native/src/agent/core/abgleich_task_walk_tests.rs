@@ -69,6 +69,8 @@ fn request(meta: bool) -> HashWalkRequest {
         algorithm: None,
         min_bytes: 0,
         meta,
+        fresh: false,
+        filter: None,
     }
 }
 

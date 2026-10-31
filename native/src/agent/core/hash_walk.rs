@@ -2,7 +2,10 @@
 //! or background service of this version) answers `WalkHashed3` in
 //! portions and, on request, with the listing attributes of every entry;
 //! an older server with `ext-v1` answers `WalkHashed2` one frame per item and
-//! never gets a request for attributes (`Ok(false)` without sending).
+//! never gets a request for attributes (`Ok(false)` without sending). A
+//! server with `walk-filter-v1` gets the request's scope (fresh digests and
+//! the job's filter, `agent_proto::walk_filter`); any other server walks
+//! without it, which the caller's own filter covers.
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -11,7 +14,7 @@ use crossbeam_channel::Sender;
 use super::super::backend::AgentBackend;
 use super::super::ext_stream::{is_unsupported_error, stream, unexpected, CANCEL_POLL};
 use super::super::ext_wire::{algorithm_to_wire, omission_from_wire};
-use crate::agent_proto::{Frame, WireHashEntry};
+use crate::agent_proto::{Frame, ServerFeatures, WalkScope, WireHashEntry};
 use crate::vfs::{
     HashWalkEntry, HashWalkItem, HashWalkMeta, HashWalkRequest, KeyedWalk, KeyedWalkItem, VfsResult,
 };
@@ -35,6 +38,7 @@ pub(super) fn walk(
             algorithm,
             min_bytes: request.min_bytes,
             meta: request.meta,
+            scope: scope_of(&request, &features),
         }
     } else {
         Frame::WalkHashed2 {
@@ -119,6 +123,7 @@ pub(super) fn walk_keyed(
         return Ok(false);
     }
     let algorithm = algorithm_to_wire(request.algorithm);
+    let scope = scope_of(&request, &features);
     let frames = match walk {
         KeyedWalk::Marks { known } => vec![Frame::WalkKeyed {
             root: root.to_string(),
@@ -127,6 +132,7 @@ pub(super) fn walk_keyed(
             // The client puts the keys covering most first.
             known: known[..known.len().min(crate::agent_proto::MAX_KNOWN_KEYS)].concat(),
             keys_only: false,
+            scope,
         }],
         KeyedWalk::KeysOnly => vec![Frame::WalkKeyed {
             root: root.to_string(),
@@ -134,6 +140,7 @@ pub(super) fn walk_keyed(
             min_bytes: request.min_bytes,
             known: Vec::new(),
             keys_only: true,
+            scope,
         }],
         // Portions of at most `RUN_FOLDERS_BYTES` path text each.
         KeyedWalk::Runs { folders } => run_portions(folders)
@@ -142,6 +149,7 @@ pub(super) fn walk_keyed(
                 root: root.to_string(),
                 algorithm,
                 folders,
+                scope: scope.clone(),
             })
             .collect(),
     };
@@ -202,6 +210,18 @@ pub(super) fn walk_keyed(
         }
     }
     Ok(true)
+}
+
+/// The scope a server with `walk-filter-v1` gets; the filter only with
+/// listing attributes (the `hidden` it applies is theirs).
+fn scope_of(request: &HashWalkRequest, features: &ServerFeatures) -> WalkScope {
+    if !features.walk_filter {
+        return WalkScope::default();
+    }
+    WalkScope {
+        fresh: request.fresh,
+        filter: request.filter.as_deref().filter(|_| request.meta).cloned(),
+    }
 }
 
 /// Path text one `ListRuns` carries at most.

@@ -284,11 +284,12 @@ fn execute(
                 job_id: Some(id.into()),
                 baseline: Default::default(),
             });
-            let glob = job.checked_glob_set()?;
+            let ignore = job.checked_ignore()?;
             let bounds = job.checked_filter_bounds(now_secs_i64())?;
             let filter = crate::bisync::WalkFilter {
                 include_hidden: job.include_hidden,
-                ignore: &glob,
+                ignore: &ignore.globs,
+                host_ignore: &ignore.host,
                 min_size: bounds.0,
                 max_size: bounds.1,
                 after_mtime_ms: bounds.2,

@@ -83,8 +83,8 @@ pub(crate) struct FsDuplicateSearch {
 
 /// `hash_walk_v1`: every folder and regular file below `path` with size and
 /// time, the content hash (`algo`) of every file of at least `min_bytes`,
-/// and every omission (links, special, unreadable, vanished entries). Every
-/// folder comes before the entries below it.
+/// and every omission (links, special, unreadable, vanished entries), each
+/// folder before its entries; later fields go only to hosts offering them.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct FsHashWalk {
     pub(crate) path: String,
@@ -93,17 +93,17 @@ pub(crate) struct FsHashWalk {
     pub(crate) algo: Option<FsHashAlgo>,
     #[serde(default)]
     pub(crate) min_bytes: u64,
-    /// `hash_file_v1`: `path` is one regular file; the host answers its
-    /// SHA-256 as one entry with an empty `rel`, or no entry when it can hash
-    /// it only by reading it over a network itself. Sent only to hosts that
-    /// offer `hash_file_v1`.
+    /// `hash_file_v1`: `path` is one regular file, answered as one entry with
+    /// its SHA-256, or none when the host could hash it only over a network.
     #[serde(default, skip_serializing_if = "is_false")]
     pub(crate) single_file: bool,
     /// `hash_walk_meta_v1`: every entry carries its listing attributes, and
-    /// links and special files come as entries instead of omissions. Sent
-    /// only to hosts that offer `hash_walk_meta_v1`.
+    /// links and special files come as entries instead of omissions.
     #[serde(default, skip_serializing_if = "is_false")]
     pub(crate) meta: bool,
+    /// `hash_walk_filter_v1`: fresh digests, the job's filter (with `meta`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) scope: Option<crate::share::fs_response::FsWalkScope>,
     /// `hash_walk_keys_v1` (with `meta`): folder keys (`FsHashWalkMessage::Key`);
     /// `known` = base64 of concatenated 16-byte key prefixes the client holds.
     #[serde(default, skip_serializing_if = "is_false")]

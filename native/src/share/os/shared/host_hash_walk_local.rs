@@ -5,6 +5,8 @@
 //! except that a subfolder is an entry before it is opened: a subfolder that
 //! cannot be opened or is refused is that entry followed by an omission of
 //! the same path, as the folder walk shows its row and then its failure.
+//! The walk's filter (`agent_proto::walk_filter`) leaves a file without its
+//! digest (never opened) and a folder unopened; both stay entries.
 use super::{child_rel, Batch, Shared, MAX_DEPTH};
 use crate::{
     local_access::{DirectoryHandle, EntryKind, LocalEntry},
@@ -126,9 +128,10 @@ fn folder(
             }
             continue;
         }
+        let filter = batch.shared().filter();
         if entry.kind == EntryKind::Directory {
             // The row of the listing first; opening it decides its content.
-            batch.add(Ok(FsHashEntry {
+            let row = FsHashEntry {
                 rel: child.clone(),
                 is_dir: true,
                 // With attributes: the size the folder's listing reports.
@@ -136,7 +139,12 @@ fn folder(
                 mtime_ms: entry.mtime_ms,
                 meta,
                 ..FsHashEntry::default()
-            }))?;
+            };
+            if filter.is_some_and(|f| f.leaves_out_dir(&child, entry.hidden)) {
+                batch.skipped_dir(row)?;
+                continue;
+            }
+            batch.add(Ok(row))?;
             let opened = directory.open_child(&entry.name).and_then(|handle| {
                 crate::share::fs::ensure_local_share_handle_allowed(&handle).map(|()| handle)
             });
@@ -145,7 +153,15 @@ fn folder(
                 Err(error) => batch.failed(&child, error)?,
             }
         } else if entry.size >= batch.shared().request.min_bytes {
-            match file(&directory, &entry, batch.shared()) {
+            let left_out = filter.is_some_and(|f| {
+                f.leaves_out_file(&child, entry.hidden, entry.size, entry.mtime_ms)
+            });
+            let digest = if left_out {
+                Ok(None)
+            } else {
+                file(&directory, &entry, batch.shared())
+            };
+            match digest {
                 Ok(digest) => {
                     batch
                         .shared()
@@ -198,22 +214,24 @@ fn file(
         ));
     }
     // The host's digest cache (`agent_proto::hash_cache`): an unchanged file
-    // is not read again.
+    // is not read again, unless the request reads fresh (the checksum compare
+    // mode): then the file is read and the digest read is stored.
     let code = match shared.request.algo {
         Some(crate::share::wire::FsHashAlgo::Md5) => crate::agent_proto::digest::MD5,
         Some(crate::share::wire::FsHashAlgo::Sha256) => crate::agent_proto::digest::SHA256,
         _ => return shared.digest(&file, entry.size),
     };
-    let digest = crate::agent_proto::hash_cache::digest(
-        crate::agent_proto::file_stamp(&file),
-        code,
-        || {
-            shared
-                .digest(&file, entry.size)?
-                .ok_or_else(|| io::Error::other("Prüfsumme fehlt"))
-        },
-        || crate::agent_proto::file_stamp(&file),
-    )
+    let read = || {
+        shared
+            .digest(&file, entry.size)?
+            .ok_or_else(|| io::Error::other("Prüfsumme fehlt"))
+    };
+    let stamp = || crate::agent_proto::file_stamp(&file);
+    let digest = if shared.fresh {
+        crate::agent_proto::hash_cache::digest_fresh(stamp(), code, read, stamp)
+    } else {
+        crate::agent_proto::hash_cache::digest(stamp(), code, read, stamp)
+    }
     .map(Some)?;
     let after = file.metadata()?;
     if before.len() != after.len() || before.modified().ok() != after.modified().ok() {

@@ -1030,6 +1030,22 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
 - **W8 with run marks:** an empty folder is checked when the next run mark
   arrives; a folder that could not be opened when its parent's run ends (or
   when its own failure arrives), not when the walk ends.
+- **The job filter next to the data depends on globset's regex text**
+  (`agent_proto/core/walk_pattern.rs`, `walk_filter.rs`; agent/service
+  `walk-filter-v1`, Share `hash_walk_filter_v1`). The client sends each ignore
+  pattern as the regular expression globset 0.4.18 forms (`Glob::regex`), and
+  the side with the files reads only the constructs globset writes, with the
+  byte semantics of `regex-automata` 0.4 / `regex-syntax` 0.8 (`.` any byte,
+  ASCII-only `(?i)`, fold before negate). An upgrade of `globset`,
+  `regex-syntax` or `regex-automata` can change that text or that meaning:
+  run `syncjobs/core/abgleich_task_host_ignore_tests.rs` (verdicts against
+  globset in both case rules); a changed meaning needs a new label, never a
+  changed `walk-filter-v1`. A pattern the reader refuses is only applied by
+  the client, so a refusal costs speed, never a result. A filtered walk still
+  sends every entry it leaves out (files without digest, folders without
+  content): the planner needs filtered files (`SideSnapshot::filtered`,
+  `plan_filter.rs`, folder protection in `plan_dirs.rs`), so dropping them
+  would turn them into deletions.
 - **Digest cache next to the data (E9, `agent_proto/os/shared/hash_cache.rs`).**
   Key: device and inode plus size, modification and status-change time in
   ns, per algorithm. Racy rule (Git `racy-git`): a stored digest counts only

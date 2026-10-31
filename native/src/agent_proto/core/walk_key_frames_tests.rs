@@ -22,6 +22,7 @@ fn abgleich_task_walk_key_frames_round_trip() {
             min_bytes: 0,
             known: known.clone(),
             keys_only: false,
+            scope: Default::default(),
         },
         Frame::WalkKeyed {
             root: "/".into(),
@@ -29,11 +30,13 @@ fn abgleich_task_walk_key_frames_round_trip() {
             min_bytes: 5,
             known: Vec::new(),
             keys_only: true,
+            scope: Default::default(),
         },
         Frame::ListRuns {
             root: "/srv".into(),
             algorithm: 1,
             folders: vec![String::new(), "a/b".into(), "ä".into()],
+            scope: Default::default(),
         },
         Frame::FolderKey {
             rel: "a/b".into(),
@@ -69,6 +72,7 @@ fn abgleich_task_walk_key_frames_refuse_partial_known_keys() {
         min_bytes: 0,
         known: vec![1; 17],
         keys_only: false,
+        scope: Default::default(),
     };
     assert!(frame.encode(1).is_err());
     let mut bytes = Frame::WalkKeyed {
@@ -77,6 +81,7 @@ fn abgleich_task_walk_key_frames_refuse_partial_known_keys() {
         min_bytes: 0,
         known: vec![1; 16],
         keys_only: false,
+        scope: Default::default(),
     }
     .encode(1)
     .unwrap();

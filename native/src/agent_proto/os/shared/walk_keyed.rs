@@ -19,7 +19,7 @@ use super::folder_key::{
 use super::key_tally::KeyTally;
 use super::ops_types::digest;
 use super::session::{emit, Sink};
-use super::{Frame, LocalReads, WireHashEntry, WireOmission};
+use super::{Frame, HostFilter, LocalReads, WalkScope, WireHashEntry, WireOmission};
 
 /// Estimated encoded bytes after which a `HashPart` of a run is sent.
 const PART_BYTES: usize = 256 * 1024;
@@ -79,6 +79,21 @@ pub(super) struct KeyedSetup<'a> {
     pub(super) collect: Option<&'a Mutex<Collected>>,
     /// How a walk in this process reads file contents (`local_keyed`).
     pub(super) reads: LocalReads<'a>,
+    /// The job's filter (`walk_filter.rs`).
+    pub(super) filter: Option<&'a HostFilter>,
+}
+
+/// How a walk reads file contents and which filter it applies.
+#[derive(Clone, Copy, Default)]
+pub(super) struct Scope<'a> {
+    pub(super) reads: LocalReads<'a>,
+    pub(super) filter: Option<&'a HostFilter>,
+}
+
+/// The compiled filter of a request's `scope`; `None` when the walk cannot
+/// apply it (answered as an unsupported extension, before any item).
+pub(super) fn request_filter(scope: &WalkScope) -> Option<Option<HostFilter>> {
+    super::walk_filter::compiled(scope).ok()
 }
 
 /// The keyed state of one walking thread: the run of its current folder.
@@ -108,6 +123,16 @@ impl<'a> Keyed<'a> {
     }
 
     pub(super) fn entry(&mut self, entry: WireHashEntry) -> io::Result<()> {
+        self.entry_walked(entry, true)
+    }
+
+    /// A folder entry whose content the walk leaves out (its filter): the
+    /// folder's key covers it without a key of its own (`RunKeys::skip_dir`).
+    pub(super) fn skipped_dir(&mut self, entry: WireHashEntry) -> io::Result<()> {
+        self.entry_walked(entry, false)
+    }
+
+    fn entry_walked(&mut self, entry: WireHashEntry, walked: bool) -> io::Result<()> {
         let run = self.current()?;
         let name = run
             .name_of(&entry.rel)?
@@ -132,6 +157,9 @@ impl<'a> Keyed<'a> {
         let item = WireItem::Entry(entry);
         let cost = item.cost();
         run.entry(shape, part, item, cost);
+        if !walked {
+            run.skip_dir(&name);
+        }
         Ok(())
     }
 
@@ -231,15 +259,18 @@ impl Parts<'_> {
     }
 }
 
-/// `WalkKeyed` of `root` (`digest::NONE` or `digest::MD5`), then `End`.
+/// `WalkKeyed` of `root` (`digest::NONE` or `digest::MD5`) as `scope` reads
+/// and filters it, then `End`.
 pub(crate) fn handle_walk_keyed(
     sink: &Sink,
     id: u64,
     root: &str,
     (algorithm, min_bytes, known, keys_only): (u8, u64, &[u8], bool),
+    scope: &WalkScope,
     cancel: &AtomicBool,
 ) -> io::Result<()> {
-    if !matches!(algorithm, digest::NONE | digest::MD5) {
+    let filter = request_filter(scope);
+    if !matches!(algorithm, digest::NONE | digest::MD5) || filter.is_none() {
         return emit(
             sink,
             id,
@@ -255,7 +286,11 @@ pub(crate) fn handle_walk_keyed(
     let setup = KeyedSetup {
         tree: &tree,
         collect: None,
-        reads: LocalReads::default(),
+        reads: LocalReads {
+            fresh: scope.fresh,
+            run: None,
+        },
+        filter: filter.as_ref().and_then(Option::as_ref),
     };
     let walk = (algorithm, min_bytes, None);
     super::walk_hashed::walk_keyed(sink, id, root, walk, setup, cancel)?;
@@ -272,9 +307,11 @@ pub(crate) fn handle_list_runs(
     id: u64,
     root: &str,
     (algorithm, folders): (u8, &[String]),
+    scope: &WalkScope,
     cancel: &AtomicBool,
 ) -> io::Result<()> {
-    if !matches!(algorithm, digest::NONE | digest::MD5) {
+    let filter = request_filter(scope);
+    if !matches!(algorithm, digest::NONE | digest::MD5) || filter.is_none() {
         return emit(
             sink,
             id,
@@ -291,7 +328,11 @@ pub(crate) fn handle_list_runs(
     let setup = KeyedSetup {
         tree: &tree,
         collect: None,
-        reads: LocalReads::default(),
+        reads: LocalReads {
+            fresh: scope.fresh,
+            run: None,
+        },
+        filter: filter.as_ref().and_then(Option::as_ref),
     };
     let walk = (algorithm, 0, Some(folders.as_slice()));
     super::walk_hashed::walk_keyed(sink, id, root, walk, setup, cancel)?;
@@ -302,19 +343,22 @@ pub(crate) fn handle_list_runs(
 /// runs next to its data, in this process (a local sync side: its keys let
 /// the remote other side leave equal folders out).
 pub(crate) fn local_keyed(root: &str, algorithm: u8, cancel: &AtomicBool) -> io::Result<Collected> {
-    local_keyed_reading(root, algorithm, LocalReads::default(), cancel)
+    local_keyed_reading(root, algorithm, (LocalReads::default(), None), cancel)
 }
 
 /// `local_keyed` with the way file contents are read: a fresh read (the
 /// checksum compare mode) and the digests of the run, shared with the side's
-/// own snapshot walk so no file is read twice.
+/// own snapshot walk so no file is read twice; and with the job's filter, as
+/// the walk of the remote side applies it (equal filtered folders get equal
+/// keys on both sides).
 pub(crate) fn local_keyed_reading(
     root: &str,
     algorithm: u8,
-    reads: LocalReads<'_>,
+    (reads, filter): (LocalReads<'_>, Option<&HostFilter>),
     cancel: &AtomicBool,
 ) -> io::Result<Collected> {
-    collect_local(root, algorithm, Mode::Marks, reads, cancel)
+    let scope = Scope { reads, filter };
+    collect_local(root, algorithm, Mode::Marks, scope, cancel)
 }
 
 impl Collected {
@@ -328,8 +372,7 @@ impl Collected {
         algorithm: u8,
         cancel: &AtomicBool,
     ) -> io::Result<Vec<(String, FolderKey, KeyTally)>> {
-        let reads = LocalReads::default();
-        let collected = collect_local(root, algorithm, Mode::KeysOnly, reads, cancel)?;
+        let collected = collect_local(root, algorithm, Mode::KeysOnly, Scope::default(), cancel)?;
         let mut tallies: std::collections::HashMap<String, KeyTally> =
             collected.tallies.into_iter().collect();
         collected
@@ -349,7 +392,7 @@ fn collect_local(
     root: &str,
     algorithm: u8,
     mode: Mode,
-    reads: LocalReads<'_>,
+    scope: Scope<'_>,
     cancel: &AtomicBool,
 ) -> io::Result<Collected> {
     let tree = KeyTree::with_mode("", HashSet::new(), mode);
@@ -357,7 +400,8 @@ fn collect_local(
     let setup = KeyedSetup {
         tree: &tree,
         collect: Some(&collect),
-        reads,
+        reads: scope.reads,
+        filter: scope.filter,
     };
     let sink: Sink = std::sync::Arc::new(Mutex::new(
         Box::new(io::sink()) as Box<dyn std::io::Write + Send>

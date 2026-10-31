@@ -25,7 +25,7 @@ use std::io;
 use std::path::PathBuf;
 
 use super::folder_key_cache::{FolderCache, Part, Record};
-use super::snapshot_dir::{literal_child, WalkContext};
+use super::snapshot_dir::WalkContext;
 use super::snapshot_host_stream::Stream;
 use super::types::Tree;
 use crate::agent_proto::FolderKey;
@@ -201,11 +201,9 @@ fn next_cache(
 ) -> Option<FolderCache> {
     let mut next = FolderCache::default();
     for (rel, mut record) in fresh {
-        let mut children = Vec::new();
-        for name in record.walked() {
-            children.push((name.clone(), *keys.get(&literal_child(&rel, &name))?));
-        }
-        record.children = children;
+        // A subfolder without a key was not walked (the host's filter left
+        // it out); the key check below refuses a record that lost one.
+        record.children = record.walked_children(&rel, keys);
         let key = *keys.get(&rel)?;
         if record.key() != key {
             return None;

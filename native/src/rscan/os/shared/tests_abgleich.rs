@@ -21,13 +21,20 @@ fn abgleich_task_whole_tree_rows_equal_the_folder_walk_rows() {
         0,
         "no folder listing with the whole tree"
     );
-    let request = (*whole.last_request.lock().unwrap()).expect("request recorded");
+    let request = whole
+        .last_request
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("request recorded");
     assert_eq!(
         request,
         HashWalkRequest {
             algorithm: None,
             min_bytes: 0,
-            meta: true
+            meta: true,
+            fresh: false,
+            filter: None,
         }
     );
 

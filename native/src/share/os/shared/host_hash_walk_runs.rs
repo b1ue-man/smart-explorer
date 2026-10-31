@@ -7,7 +7,7 @@
 use std::collections::HashSet;
 use std::io;
 
-use super::{child_rel, remote_folder, Batch};
+use super::{child_rel, Batch};
 use crate::share::{
     fs_access::FsAccess,
     fs_response::{FsHashEntry, FsHashMeta, FsOmissionReason},
@@ -79,7 +79,7 @@ fn one(
         }
     };
     if target.backend.scheme() != Scheme::Local {
-        remote_folder(batch, &*target.backend, &target.path, rel, depth)?;
+        super::remote::folder(batch, &*target.backend, &target.path, rel, depth)?;
         batch.end_folder()?;
         return Ok(None);
     }

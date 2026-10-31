@@ -18,7 +18,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use super::folder_key_cache::{FolderCache, Part, Record};
-use super::snapshot_dir::{literal_child, WalkContext};
+use super::snapshot_dir::WalkContext;
 use super::snapshot_host_stream::Stream;
 use super::snapshot_keyed::{KeyFiles, KeyedTree};
 use super::snapshot_pair_keys::{PairKeys, SideTree};
@@ -138,20 +138,17 @@ fn fetch_runs(
 }
 
 /// Records of runs whose key, with the subfolders' keys of `keys`, is the
-/// key `keys` names for their folder.
+/// key `keys` names for their folder. A subfolder without a key was not
+/// walked (the walk's filter left it out); a walked one whose key is missing
+/// makes the run's key differ, so its record is left out.
 fn records(runs: HashMap<String, Vec<Part>>, keys: &HashMap<String, FolderKey>) -> FolderCache {
     let mut records = FolderCache::default();
-    'runs: for (rel, parts) in runs {
+    for (rel, parts) in runs {
         let mut record = Record {
             parts,
             children: Vec::new(),
         };
-        for name in record.walked() {
-            match keys.get(&literal_child(&rel, &name)) {
-                Some(key) => record.children.push((name, *key)),
-                None => continue 'runs,
-            }
-        }
+        record.children = record.walked_children(&rel, keys);
         match keys.get(&rel) {
             Some(key) if record.key() == *key => records.insert(*key, record),
             _ => {}
@@ -161,11 +158,12 @@ fn records(runs: HashMap<String, Vec<Part>>, keys: &HashMap<String, FolderKey>) 
 }
 
 /// The local side `side`: its keys and runs from the agent's walk in this
-/// process; declines when that walk fails.
+/// process, with the job's filter as the remote side's walk applies it;
+/// declines when that walk fails.
 pub(super) fn provide_local(
     (pair, side): (&PairKeys, usize),
     root: &str,
-    md5: bool,
+    (md5, filter): (bool, Option<Arc<crate::agent_proto::WalkFilterSpec>>),
     cancel: &AtomicBool,
 ) {
     let algorithm = if md5 {
@@ -179,25 +177,28 @@ pub(super) fn provide_local(
         fresh: md5,
         run: pair.run_digests(side),
     };
-    let tree = crate::agent_proto::local_keyed_reading(root, algorithm, reads, cancel)
-        .ok()
-        .and_then(|collected| {
-            let keys: HashMap<String, FolderKey> = collected.keys.into_iter().collect();
-            let mut runs = HashMap::new();
-            for (rel, items) in collected.runs {
-                let parts = items
-                    .into_iter()
-                    .map(|item| Part::of(&rel, &from_wire(item)))
-                    .collect::<io::Result<Vec<Part>>>()
-                    .ok()?;
-                runs.insert(rel, parts);
-            }
-            let records = records(runs, &keys);
-            Some(SideTree {
-                keys,
-                records: Arc::new(records),
-            })
-        });
+    // A filter the walk cannot apply is left to the snapshot's own check.
+    let filter = filter.and_then(|spec| spec.compile().ok());
+    let tree =
+        crate::agent_proto::local_keyed_reading(root, algorithm, (reads, filter.as_ref()), cancel)
+            .ok()
+            .and_then(|collected| {
+                let keys: HashMap<String, FolderKey> = collected.keys.into_iter().collect();
+                let mut runs = HashMap::new();
+                for (rel, items) in collected.runs {
+                    let parts = items
+                        .into_iter()
+                        .map(|item| Part::of(&rel, &from_wire(item)))
+                        .collect::<io::Result<Vec<Part>>>()
+                        .ok()?;
+                    runs.insert(rel, parts);
+                }
+                let records = records(runs, &keys);
+                Some(SideTree {
+                    keys,
+                    records: Arc::new(records),
+                })
+            });
     pair.submit_keys(side, tree);
     pair.submit_fetched(side, FolderCache::default());
 }

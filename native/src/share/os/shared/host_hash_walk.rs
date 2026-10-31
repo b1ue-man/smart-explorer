@@ -1,5 +1,6 @@
 //! Host hash walks keep omissions explicit and local traversal handle-confined.
-//! Local roots are walked on the host's threads (`host_hash_walk_local.rs`);
+//! Local roots are walked on the host's threads (`host_hash_walk_local.rs`),
+//! exported connections one listing after the other (`host_hash_walk_remote.rs`);
 //! every folder reaches the stream before the entries below it. Files are
 //! opened only for a requested digest: size and time come from the listing.
 //!
@@ -11,6 +12,11 @@
 //! before the next one starts, and a folder that fills more than one batch
 //! holds the walk's run lock until its last batch is sent, so no other
 //! thread's batch comes in between.
+//!
+//! With `hash_walk_filter_v1` the request's scope applies: digests are read
+//! from the files (`fresh`), and with `meta` the job's filter
+//! (`agent_proto::walk_filter`) leaves files without a digest and folders
+//! unwalked, both still entries.
 use crate::{
     analytics::Progress,
     share::{
@@ -19,7 +25,7 @@ use crate::{
             FsHashEntry, FsHashMeta, FsHashWalkMessage, FsOmission, FsOmissionReason,
             LIST_BATCH_MAX_BYTES,
         },
-        host_list, host_stream,
+        host_stream,
         wire::{FsHashAlgo, FsHashWalk, FsResponse},
     },
     vfs::Scheme,
@@ -39,6 +45,8 @@ mod digest;
 mod keys;
 #[path = "host_hash_walk_local.rs"]
 mod local;
+#[path = "host_hash_walk_remote.rs"]
+mod remote;
 #[path = "host_hash_walk_runs.rs"]
 mod runs;
 
@@ -58,6 +66,13 @@ pub(super) struct Shared<'a> {
     run: Mutex<()>,
     /// `keys`: the folder runs go through the walk's key tree (`keys.rs`).
     keys: Option<crate::agent_proto::KeyTree<keys::Item>>,
+    /// `hash_walk_filter_v1` with `meta`: the job's filter
+    /// (`agent_proto::walk_filter`): no digest for a file it leaves out, no
+    /// walk into a folder it leaves out, both still entries.
+    filter: Option<crate::agent_proto::HostFilter>,
+    /// `hash_walk_filter_v1`: digests are read from the files, never taken
+    /// from the host's digest cache.
+    pub(super) fresh: bool,
 }
 
 impl Shared<'_> {
@@ -79,6 +94,23 @@ impl Shared<'_> {
     pub(super) fn meta(&self, meta: impl FnOnce() -> FsHashMeta) -> Option<FsHashMeta> {
         self.request.meta.then(meta)
     }
+
+    pub(super) fn filter(&self) -> Option<&crate::agent_proto::HostFilter> {
+        self.filter.as_ref()
+    }
+}
+
+/// The compiled filter and the fresh flag of a request's scope; the filter
+/// only with `meta` (the `hidden` it tests is the one the entries carry).
+fn scope_of(request: &FsHashWalk) -> io::Result<(Option<crate::agent_proto::HostFilter>, bool)> {
+    let Some(scope) = &request.scope else {
+        return Ok((None, false));
+    };
+    let filter = match scope.filter.clone().filter(|_| request.meta) {
+        Some(filter) => Some(crate::agent_proto::WalkFilterSpec::from(filter).compile()?),
+        None => None,
+    };
+    Ok((filter, scope.fresh))
 }
 
 /// The items one thread produced and has not sent yet.
@@ -147,6 +179,19 @@ impl<'s, 'a> Batch<'s, 'a> {
             Err(hole) => {
                 self.omitted.push(hole);
                 self.shared.omitted.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        Ok(())
+    }
+
+    /// A folder the walk's filter leaves out: its entry, never its content;
+    /// a keyed walk gives it no key (`agent_proto::RunKeys::skip_dir`).
+    pub(super) fn skipped_dir(&mut self, entry: FsHashEntry) -> io::Result<()> {
+        let rel = entry.rel.clone();
+        self.add(Ok(entry))?;
+        if let Some(run) = self.run.as_mut() {
+            if let Some(name) = run.name_of(&rel)? {
+                run.skip_dir(name);
             }
         }
         Ok(())
@@ -264,6 +309,7 @@ pub(in crate::share) fn run(
     if request.algo.is_some() {
         crate::agent_proto::hash_cache::configure_once(digest::cache_folder);
     }
+    let (filter, fresh) = scope_of(&request)?;
     let shared = Shared {
         request: &request,
         cancel: &cancel,
@@ -273,6 +319,8 @@ pub(in crate::share) fn run(
         omitted: AtomicU64::new(0),
         run: Mutex::new(()),
         keys: keys::tree(&request)?,
+        filter,
+        fresh,
     };
     let mut batch = Batch::new(&shared);
     runs::visit(&mut batch, &request, &access)?;
@@ -309,12 +357,18 @@ fn visit(batch: &mut Batch<'_, '_>, path: &str, access: &FsAccess, rel: &str) ->
             crate::vfs::validate_child_name(&entry.name)?;
             let child = child_rel(rel, &entry.name);
             let meta = batch.shared().meta(FsHashMeta::default);
-            batch.add(Ok(FsHashEntry {
+            let row = FsHashEntry {
                 rel: child.clone(),
                 is_dir: true,
                 meta,
                 ..FsHashEntry::default()
-            }))?;
+            };
+            let filter = batch.shared().filter();
+            if filter.is_some_and(|f| f.leaves_out_dir(&child, false)) {
+                batch.skipped_dir(row)?;
+                continue;
+            }
+            batch.add(Ok(row))?;
             children.push((
                 format!("{}/{}", path.trim_end_matches('/'), entry.name),
                 child,
@@ -358,141 +412,6 @@ fn visit(batch: &mut Batch<'_, '_>, path: &str, access: &FsAccess, rel: &str) ->
             }
         }
     } else {
-        remote(batch, &*target.backend, &target.path, rel, 0)
+        remote::walk(batch, &*target.backend, &target.path, rel, 0)
     }
-}
-
-/// An exported connection's folder, one listing after the other (its own
-/// connection bounds the pace): the folder's items, then its subfolders.
-fn remote(
-    batch: &mut Batch<'_, '_>,
-    backend: &dyn crate::vfs::Backend,
-    path: &str,
-    rel: &str,
-    depth: usize,
-) -> io::Result<()> {
-    batch.begin_folder(rel)?;
-    let subfolders = remote_folder(batch, backend, path, rel, depth)?;
-    batch.end_folder()?;
-    for (full, child) in subfolders {
-        remote(batch, backend, &full, &child, depth + 1)?;
-    }
-    Ok(())
-}
-
-/// The items of one folder of an exported connection; returns its
-/// subfolders (path, rel) to walk next.
-fn remote_folder(
-    batch: &mut Batch<'_, '_>,
-    backend: &dyn crate::vfs::Backend,
-    path: &str,
-    rel: &str,
-    depth: usize,
-) -> io::Result<Vec<(String, String)>> {
-    let mut subfolders = Vec::new();
-    batch.shared().check()?;
-    if depth > MAX_DEPTH {
-        batch.hole(
-            rel,
-            FsOmissionReason::Unreadable,
-            "Verzeichnistiefe überschreitet den sicheren Walk-Stack",
-        )?;
-        return Ok(subfolders);
-    }
-    let listing = match crate::vfs::list_dir_tolerant(backend, path) {
-        Ok(listing) => listing,
-        Err(error) => {
-            batch.failed(rel, error)?;
-            return Ok(subfolders);
-        }
-    };
-    for hole in listing.omitted {
-        batch.hole(&child_rel(rel, &hole.rel), hole.reason.into(), hole.detail)?;
-    }
-    for entry in listing.entries {
-        batch.shared().check()?;
-        if host_list::hidden(&entry.name) {
-            continue;
-        }
-        let child = child_rel(rel, &entry.name);
-        if crate::vfs::validate_child_name(&entry.name).is_err() {
-            batch.hole(
-                &child,
-                FsOmissionReason::Unrepresentable,
-                "Name ist kein Share-Pfad",
-            )?;
-            continue;
-        }
-        let meta = batch.shared().meta(|| FsHashMeta {
-            hidden: entry.hidden,
-            system: entry.system,
-            btime_ms: entry.btime_ms,
-            is_symlink: entry.is_symlink,
-            special: entry.special && !entry.is_symlink,
-        });
-        if entry.is_symlink || entry.special {
-            if meta.is_some() {
-                batch.add(Ok(FsHashEntry {
-                    rel: child,
-                    size: if entry.special { 0 } else { entry.size },
-                    mtime_ms: entry.mtime_ms,
-                    meta,
-                    ..FsHashEntry::default()
-                }))?;
-            } else if entry.is_symlink {
-                batch.hole(&child, FsOmissionReason::Link, "Link-Grenze")?;
-            } else {
-                batch.hole(
-                    &child,
-                    FsOmissionReason::Special,
-                    "Kein regulärer Datenstrom",
-                )?;
-            }
-            continue;
-        }
-        let full = match crate::vfs::sync_child_path(backend, path, &entry.name) {
-            Ok(full) => full,
-            Err(error) => {
-                batch.failed(&child, error)?;
-                continue;
-            }
-        };
-        if entry.is_dir {
-            batch.add(Ok(FsHashEntry {
-                rel: child.clone(),
-                is_dir: true,
-                size: if meta.is_some() { entry.size } else { 0 },
-                mtime_ms: entry.mtime_ms,
-                meta,
-                ..FsHashEntry::default()
-            }))?;
-            subfolders.push((full, child));
-        } else if entry.size >= batch.shared().request.min_bytes {
-            let digest = if batch.shared().request.algo.is_none() {
-                Ok(None)
-            } else {
-                crate::vfs::open_read_regular(backend, &full, entry.id.as_deref())
-                    .and_then(|read| batch.shared().digest(read, entry.size))
-            };
-            match digest {
-                Ok(digest) => {
-                    batch
-                        .shared()
-                        .progress
-                        .files
-                        .fetch_add(1, Ordering::Relaxed);
-                    batch.add(Ok(FsHashEntry {
-                        rel: child,
-                        size: entry.size,
-                        mtime_ms: entry.mtime_ms,
-                        digest,
-                        meta,
-                        ..FsHashEntry::default()
-                    }))?;
-                }
-                Err(e) => batch.failed(&child, e)?,
-            }
-        }
-    }
-    Ok(subfolders)
 }

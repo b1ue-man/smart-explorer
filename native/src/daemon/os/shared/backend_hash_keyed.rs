@@ -28,7 +28,7 @@ pub(super) fn serve(
     sink: &Sink,
     id: u64,
     backend: &BackendHandle,
-    (root, algorithm): (&str, u8),
+    (root, algorithm, scope): (&str, u8, crate::agent_proto::WalkScope),
     relayed: Relayed<'_>,
     cancel: &AtomicBool,
 ) -> io::Result<()> {
@@ -59,10 +59,13 @@ pub(super) fn serve(
         (None, true) => vfs::KeyedWalk::KeysOnly,
         (None, false) => vfs::KeyedWalk::Marks { known: &known },
     };
+    // The scope (`walk-filter-v1`) goes on to the backend's walk.
     let request = HashWalkRequest {
         algorithm: algorithm_from_wire(algorithm),
         min_bytes,
         meta: true,
+        fresh: scope.fresh,
+        filter: scope.filter.map(std::sync::Arc::new),
     };
     let mut items = Items::new(sink, id, true);
     let (tx, rx) = crossbeam_channel::bounded::<KeyedWalkItem>(1024);

@@ -4,7 +4,10 @@
 //! `FolderRun` marks and `HashPart`s, `ListDirMeta` and `StatMeta` (`meta-list-v1`) answered
 //! by `HashPart`s. Same little-endian, length-prefixed rules as the other
 //! frames; a server without the label answers the unknown tag with an
-//! error, so a client sends it only after the label.
+//! error, so a client sends it only after the label. `walk-filter-v1` adds
+//! the scope bits of `walk_scope_frames.rs` to the `WalkKeyed` option byte
+//! and, to `ListRuns`, one option byte after the folders (only when the
+//! scope is not the default), each followed by the filter when it is set.
 use std::io;
 
 use super::super::super::types::Frame;
@@ -89,16 +92,24 @@ fn take_tally(r: &mut Reader) -> io::Result<KeyTally> {
 /// Encoded body length after the request id and tag, `None` for other frames.
 pub(in super::super) fn payload_len(frame: &Frame) -> Option<io::Result<usize>> {
     Some(match frame {
-        Frame::WalkKeyed { root, known, .. } => (|| {
+        Frame::WalkKeyed {
+            root, known, scope, ..
+        } => (|| {
             if known.len() > MAX_KNOWN_BYTES || known.len() % 16 != 0 {
                 return Err(bad("known folder keys out of bounds"));
             }
             let mut length = super::string_len(root)?;
             add_len(&mut length, 10)?;
             add_len(&mut length, 4 + known.len())?;
+            add_len(&mut length, super::walk_scope_frames::len(scope)?)?;
             Ok(length)
         })(),
-        Frame::ListRuns { root, folders, .. } => (|| {
+        Frame::ListRuns {
+            root,
+            folders,
+            scope,
+            ..
+        } => (|| {
             if folders.len() > MAX_RUN_FOLDERS {
                 return Err(bad("too many folders for one run listing"));
             }
@@ -106,6 +117,9 @@ pub(in super::super) fn payload_len(frame: &Frame) -> Option<io::Result<usize>> 
             add_len(&mut length, 5)?;
             for folder in folders {
                 add_len(&mut length, super::string_len(folder)?)?;
+            }
+            if !scope.is_default() {
+                add_len(&mut length, 1 + super::walk_scope_frames::len(scope)?)?;
             }
             Ok(length)
         })(),
@@ -133,18 +147,22 @@ pub(in super::super) fn encode(frame: &Frame, b: &mut Vec<u8>) -> bool {
             min_bytes,
             known,
             keys_only,
+            scope,
         } => {
             b.push(85);
             put_str(b, root);
             b.push(*algorithm);
             put_u64(b, *min_bytes);
             put_bytes(b, known);
-            b.push(if *keys_only { KEYS_ONLY } else { 0 });
+            let options = if *keys_only { KEYS_ONLY } else { 0 };
+            b.push(options | super::walk_scope_frames::bits(scope));
+            super::walk_scope_frames::put(b, scope);
         }
         Frame::ListRuns {
             root,
             algorithm,
             folders,
+            scope,
         } => {
             b.push(90);
             put_str(b, root);
@@ -152,6 +170,11 @@ pub(in super::super) fn encode(frame: &Frame, b: &mut Vec<u8>) -> bool {
             b.extend_from_slice(&(folders.len() as u32).to_le_bytes());
             for folder in folders {
                 put_str(b, folder);
+            }
+            // Without a scope the frame stays the one of `walk-keys-v1`.
+            if !scope.is_default() {
+                b.push(super::walk_scope_frames::bits(scope));
+                super::walk_scope_frames::put(b, scope);
             }
         }
         Frame::FolderKey {
@@ -200,17 +223,18 @@ pub(in super::super) fn decode(tag: u8, r: &mut Reader) -> io::Result<Option<Fra
             if known.len() > MAX_KNOWN_BYTES || known.len() % 16 != 0 {
                 return Err(bad("known folder keys out of bounds"));
             }
-            let keys_only = match r.u8()? {
-                0 => false,
-                KEYS_ONLY => true,
-                _ => return Err(bad("unknown keyed walk option")),
-            };
+            let options = r.u8()?;
+            if options & !(KEYS_ONLY | super::walk_scope_frames::SCOPE_BITS) != 0 {
+                return Err(bad("unknown keyed walk option"));
+            }
+            let scope = super::walk_scope_frames::take(options, r)?;
             Frame::WalkKeyed {
                 root,
                 algorithm,
                 min_bytes,
                 known,
-                keys_only,
+                keys_only: options & KEYS_ONLY != 0,
+                scope,
             }
         }
         90 => {
@@ -224,10 +248,21 @@ pub(in super::super) fn decode(tag: u8, r: &mut Reader) -> io::Result<Option<Fra
             for _ in 0..count {
                 folders.push(r.string()?);
             }
+            // `walk-filter-v1`: an option byte with the scope bits follows.
+            let scope = if r.remaining() > 0 {
+                let options = r.u8()?;
+                if options & !super::walk_scope_frames::SCOPE_BITS != 0 {
+                    return Err(bad("unknown run listing option"));
+                }
+                super::walk_scope_frames::take(options, r)?
+            } else {
+                Default::default()
+            };
             Frame::ListRuns {
                 root,
                 algorithm,
                 folders,
+                scope,
             }
         }
         86 => {

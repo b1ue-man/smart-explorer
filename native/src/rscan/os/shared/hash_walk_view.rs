@@ -47,6 +47,8 @@ pub(super) fn walk_in_one_request(
         algorithm: None,
         min_bytes: 0,
         meta: true,
+        fresh: false,
+        filter: None,
     };
     let mut rows = Rows::new(root);
     let outcome = std::thread::scope(|scope| {

@@ -89,6 +89,14 @@ struct Cache {
 
 static CACHE: Mutex<Option<Cache>> = Mutex::new(None);
 
+/// The cache is one per process: every test that configures, clears or
+/// relies on its contents takes this turn first.
+#[cfg(test)]
+pub(crate) fn test_turn() -> MutexGuard<'static, ()> {
+    static TURN: Mutex<()> = Mutex::new(());
+    TURN.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 fn lock() -> MutexGuard<'static, Option<Cache>> {
     CACHE
         .lock()

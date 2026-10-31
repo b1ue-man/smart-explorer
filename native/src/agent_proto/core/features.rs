@@ -18,6 +18,11 @@ pub const LABEL_EXT: &str = "ext-v1";
 /// `WalkHashed3` and `HashPart`: hash walks in portions, on request with the
 /// listing attributes of every entry (links and special files as entries).
 pub const LABEL_WALK_META: &str = "walk-meta-v1";
+/// `WalkHashed3`, `WalkKeyed` and `ListRuns` with a scope (`walk_filter.rs`):
+/// digests read from the files now, and the sync job's filter applied next
+/// to the data. The service passes the scope on to its backend, which may
+/// walk unfiltered or from its cache (the client filters what arrives).
+pub const LABEL_WALK_FILTER: &str = "walk-filter-v1";
 /// `ListMeta`: tolerant listings with the listing attributes of every entry
 /// (hidden, system, creation time), announced by the background service only.
 pub const LABEL_LIST_META: &str = "list-meta-v1";
@@ -93,7 +98,7 @@ pub fn server_version(batch: bool) -> String {
 pub fn server_version_with(batch: bool, slots: usize) -> String {
     let slots = slots.clamp(1, CREDIT_REQUEST_LIMIT);
     let mut version = format!(
-        "{}+{LABEL_LINKS}.{LABEL_CREDIT}.{LABEL_STAGE}.{LABEL_EXT}.{LABEL_WALK_META}.{LABEL_SLOTS}{slots}",
+        "{}+{LABEL_LINKS}.{LABEL_CREDIT}.{LABEL_STAGE}.{LABEL_EXT}.{LABEL_WALK_META}.{LABEL_WALK_FILTER}.{LABEL_SLOTS}{slots}",
         env!("CARGO_PKG_VERSION")
     );
     if batch {
@@ -125,6 +130,8 @@ pub struct ServerFeatures {
     pub extensions: bool,
     /// `WalkHashed3` (`walk-meta-v1`).
     pub walk_meta: bool,
+    /// Walks with a scope (`walk-filter-v1`).
+    pub walk_filter: bool,
     /// `ListMeta` (`list-meta-v1`).
     pub list_meta: bool,
     /// `WalkKeyed` (`walk-keys-v1`).
@@ -167,6 +174,7 @@ impl ServerFeatures {
                 LABEL_STAGE => features.stage = true,
                 LABEL_EXT => features.extensions = true,
                 LABEL_WALK_META => features.walk_meta = true,
+                LABEL_WALK_FILTER => features.walk_filter = true,
                 LABEL_LIST_META => features.list_meta = true,
                 LABEL_WALK_KEYS => features.walk_keys = true,
                 LABEL_META_LIST => features.meta_list = true,

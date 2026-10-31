@@ -260,14 +260,15 @@ fn run_bisync_with(
     }
     let (opts, bounds, _) = checked_settings(job, dry_run)?;
     let ignore = job
-        .checked_glob_set_for(
+        .checked_ignore_for(
             crate::bisync::pair_key_policy(&*pair.a, &pair.root_a, &*pair.b, &pair.root_b)
                 .fold_case,
         )
         .map_err(invalid)?;
     let filter = crate::bisync::WalkFilter {
         include_hidden: job.include_hidden,
-        ignore: &ignore,
+        ignore: &ignore.globs,
+        host_ignore: &ignore.host,
         min_size: bounds.0,
         max_size: bounds.1,
         after_mtime_ms: bounds.2,

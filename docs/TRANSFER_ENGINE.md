@@ -816,24 +816,50 @@ den Weg selbst, das Lauf-Protokoll nennt je Seite „… Ordner gleich ihrem Ord
   der eigenständige se-agent nutzt `$XDG_CACHE_HOME/se-agent` bzw. `~/.cache/se-agent`.
   *Frisch prüfen:* Im Prüfsummen-Modus liest eine lokale Seite jede Datei neu (`LocalReads::fresh`,
   `hash_cache::digest_fresh`: der gespeicherte Wert wird nicht genommen, der gelesene gespeichert); auch
-  der Vergleich vor dem Überschreiben (`orchestration_plan::hash_checked`) liest frisch. Ein entfernter
-  Host (se-agent, Share-Host) antwortet weiter aus seinem Cache, solange der Stempel gleich ist; die
-  Anfrage trägt noch kein „frisch“-Kennzeichen (offen: es braucht ein Feld in `HashWalkRequest`, in den
-  Rahmen `WalkHashed3`/`WalkKeyed`/`ListRuns` und in `FsHashWalk`, deren Aufrufer und Gegenstücke in
-  `daemon/`, `rscan/`, `analytics/` und `share/core/` liegen). `se doctor --clear-hash-cache`
-  vergisst alle Prüfsummen dieses Geräts (Datei und Prozessspeicher des Aufrufs; ein laufender
-  Share-Host oder Sync behält seinen Speicher bis zum Neustart).
+  der Vergleich vor dem Überschreiben (`orchestration_plan::hash_checked`) liest frisch. Ebenso ein
+  entfernter Host: die Durchläufe des Syncs im Prüfsummen-Modus tragen `HashWalkRequest::fresh`
+  (se-agent und Hintergrunddienst `walk-filter-v1`: Optionsbit in `WalkHashed3`, `WalkKeyed`, `ListRuns`;
+  Share `hash_walk_filter_v1`: `FsHashWalk::scope.fresh`); se-agent (`LocalReads::fresh`) und Share-Host
+  (`host_hash_walk_local.rs`, `hash_cache::digest_fresh`) lesen dann jede Datei, deren Prüfschlüssel sie
+  bilden, und speichern den gelesenen Wert. Die Einzelanfrage des Syncs vor einem Download
+  (`vfs::content_md5`) fragt keinen Hash-Cache (SFTP-Befehl, FTP `HASH`, WebDAV-Eigenschaft; Share und
+  Dienst bieten sie nicht an). Duplikatsuche, rekursive Ansicht, Kopierprüfung und die anderen
+  Vergleichsmodi senden kein `fresh` und behalten den Cache. Eine Gegenstelle ohne die Fähigkeit
+  antwortet wie bisher aus ihrem Cache. Das Leeren des Caches (`se doctor --clear-hash-cache`,
+  Desktop-Einstellungen Seite Sync, Android Einstellungen Speicher, MCP über `se`) vergisst alle
+  Prüfsummen dieses Geräts: im aufrufenden Prozess, in der Datei (neue Generation,
+  `agent_proto/os/shared/hash_cache_file.rs`) und im Hintergrunddienst über seine IPC
+  (`daemon/os/shared/hash_cache_clear.rs`). Ein Prozess, den das Leeren nicht erreicht, vergisst
+  seine Prüfsummen, sobald er die neue Generation sieht (`forget_if_cleared`, spätestens nach einer
+  Sekunde), und schreibt sie nie zurück.
   *Schreiben:* neue Prüfsummen werden im Speicher gesammelt und gemeinsam geschrieben
   (`hash_cache::flush`: höchstens alle 30 s; `flush_now`: am Ende eines Durchlaufs, einer Verbindung
   oder eines Syncs), als atomarer Ersatz der Datei, die unter der Sperre gebildet und außerhalb der Sperre
   geschrieben wird; kein Faden wartet auf das Schreiben.
   *Einmal lesen:* Schlüsselphase und Schnappschuss einer lokalen Seite laufen gleichzeitig; ein Lauf
   teilt die gelesenen Prüfsummen (`RunDigests`, Pfad, Größe, Zeit): wer zuerst fragt, liest, der andere
-  wartet und nimmt das Ergebnis. Entfernte Seiten hashen auf dem Host auch Dateien, die die Filter
-  des Sync-Jobs ausschließen (die Anfrage trägt die Filter nicht, `GlobSet` gibt seine Muster nicht
-  preis; der Host-Cache macht es nur beim ersten Mal teuer). Ein SSH-Agent ohne eigene Datei-Prüfsumme gibt `content_digest` an
+  wartet und nimmt das Ergebnis. Ein SSH-Agent ohne eigene Datei-Prüfsumme gibt `content_digest` an
   seine SSH-Verbindung weiter (Exec-Befehl, siehe Tabelle oben). SFTP ohne Agent, FTP und WebDAV liefern die MD5 am Ort der Datei über
   `vfs::content_md5` (Block „MD5 am Ort der Datei“ oben), bevor `snapshot_dir::content_hash` lädt.
+- **Filter des Sync-Jobs auf der Seite mit den Dateien.** Die Durchläufe mit Eintragsmerkmalen und mit
+  Ordnerschlüsseln tragen den Filter des Jobs (`HashWalkRequest::filter`, `agent_proto::walk_filter`;
+  se-agent/Dienst `walk-filter-v1`, Share `hash_walk_filter_v1`, der lokale Schlüssel-Durchlauf der
+  Paarphase ebenso): versteckte Einträge, Größen- und Zeitgrenzen und die Ausschlussmuster, die die Seite
+  mit genau der Bedeutung des Clients auswerten kann. Der Client übernimmt dafür aus globset 0.4.18 den
+  regulären Ausdruck jedes Musters (`Glob::regex`, gebaut wie `compile_patterns`, `syncjobs::JobIgnore`);
+  die Seite liest ihn in einen Automaten über Bytes (`agent_proto/core/walk_pattern.rs`: `.` jedes Byte,
+  Groß-/Kleinschreibung nur für ASCII, eine Klasse erst gefaltet, dann verneint, ganze Pfade). Ein
+  Ausdruck außerhalb dieser Form wird dort nicht angewandt; der Client wendet jedes Muster weiter selbst
+  an. Unter Windows zählt ein `\` im Namen wie `/` (globset-Kandidat). Was der Filter ausschließt, kommt
+  weiter als Eintrag (der Planer führt ausgeschlossene Dateien als gefiltert, sie schützen ihren Ordner
+  und gelten nie als gelöscht), aber eine Datei ohne Prüfschlüssel und ungelesen, ein Ordner ohne seinen
+  Inhalt. So lässt die Seite nie mehr aus als der Client: was der Client nimmt, kommt mit Prüfschlüssel
+  und Inhalt. Ordnerschlüssel bleiben gleichheitsrichtig: ein ausgeschlossener Ordner ist ein Eintrag im
+  Lauf seines Elternordners ohne eigenen Schlüssel (`RunKeys::skip_dir`), eine ausgeschlossene Datei
+  trägt im Prüfsummen-Modus keinen Prüfschlüssel; ein Schlüssel eines Laufs mit anderem Filter ist
+  darum ein anderer, und ein gleicher Schlüssel bedeutet den gleichen gefilterten Ordner an jedem Pfad
+  (`folder_key_cache::Record::walked_children`: ein Unterordner ohne Schlüssel wurde nicht betreten).
+  Gegenstellen ohne die Fähigkeit durchlaufen ungefiltert; der Client filtert das Empfangene immer selbst.
 - **Sommerzeit.** Ist eine Seite FAT (Ortszeit), gelten gleiche Größen mit genau einer Stunde Abstand
   (± ein Schritt der gemeinsamen Genauigkeit) nur dann als gleich, wenn beide Beobachtungen einen am Ort
   der Datei gebildeten Prüfschlüssel tragen (`Sig::hash`: lokal gehasht, Server-MD5 der Auflistung,

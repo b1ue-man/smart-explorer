@@ -181,8 +181,9 @@ impl Record {
         folder_key(&run, self.children.clone())
     }
 
-    /// The subfolders the walk entered: folder entries without an omission
-    /// of the same name in this run (as `folder_key::RunKeys` counts them).
+    /// The subfolders the walk may have entered: folder entries without an
+    /// omission of the same name in this run. A folder the walk's filter
+    /// left out is among them but has no key (`agent_proto::walk_filter`).
     pub(super) fn walked(&self) -> Vec<String> {
         let unopened: HashSet<&str> = self
             .parts
@@ -201,6 +202,26 @@ impl Record {
                     ..
                 } if !unopened.contains(name.as_str()) => Some(name.clone()),
                 _ => None,
+            })
+            .collect()
+    }
+}
+
+impl Record {
+    /// The subfolders of this run of the folder `rel` that `keys` names a
+    /// key for, with that key: the folders the walk entered. A folder its
+    /// filter left out has no key; a missing key of an entered folder makes
+    /// `key()` differ from the walk's key, so such a record is never taken.
+    pub(super) fn walked_children(
+        &self,
+        rel: &str,
+        keys: &HashMap<String, FolderKey>,
+    ) -> Vec<(String, FolderKey)> {
+        self.walked()
+            .into_iter()
+            .filter_map(|name| {
+                let key = *keys.get(&child(rel, &name))?;
+                Some((name, key))
             })
             .collect()
     }

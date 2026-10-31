@@ -102,6 +102,8 @@ fn read(
                     .then_some(crate::analytics::HashAlgorithm::Md5),
                 min_bytes: 0,
                 meta: true,
+                fresh: false,
+                filter: None,
             };
             let keyed = walk(&ctx, files, |take, known| {
                 let (tx, rx) = crossbeam_channel::unbounded();

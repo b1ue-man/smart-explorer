@@ -21,6 +21,8 @@ fn keyed(
         algorithm: Some(crate::analytics::HashAlgorithm::Md5),
         min_bytes: 0,
         meta: true,
+        fresh: false,
+        filter: None,
     };
     let (tx, rx) = crossbeam_channel::unbounded();
     let cancel = AtomicBool::new(false);
@@ -165,6 +167,8 @@ fn abgleich_task_share_host_keys_only_counts_each_subtree_and_sends_no_item() ->
         algorithm: None,
         min_bytes: 0,
         meta: true,
+        fresh: false,
+        filter: None,
     };
     let (tx, rx) = crossbeam_channel::unbounded();
     let ran = vfs::hash_walk_keyed(
