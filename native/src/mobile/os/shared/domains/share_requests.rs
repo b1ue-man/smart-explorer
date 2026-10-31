@@ -73,7 +73,11 @@ pub(super) fn decide(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
     // acceptance; without them the Direct code's rights or „Rechte offen“.
     let rights = super::share_rights::rights_arg(args, None)?.filter(|_| accept);
     let identity = identity()?;
-    crate::share::decide_direct_request_with_rights(
+    // Commands, terminal and screen of `rights` (or of the Direct code) go
+    // through the Exec-grant journal of the background worker; the decision
+    // fails as a whole before it is stored when that is not possible. A
+    // failure after the connection was stored still reconfigures the worker.
+    let decided = crate::share::decide_direct_request_with_rights(
         default_home(),
         &identity,
         &id,
@@ -81,13 +85,19 @@ pub(super) fn decide(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
         decision,
         None,
         rights.as_ref(),
-    )
-    .map_err(|error| {
-        ApiError::new(
+    );
+    if let Err(error) = decided {
+        if error.starts_with(crate::share::connection_rights_actions::CONNECTION_STORED) {
+            reconfigure(rt);
+        }
+        return Err(ApiError::new(
             "conflict",
-            format!("Direkt-Entscheidung nicht gespeichert: {error}"),
-        )
-    })?;
+            crate::share::connection_rights_actions::decision_failure(
+                &error,
+                "Direkt-Entscheidung nicht gespeichert",
+            ),
+        ));
+    }
     reconfigure(rt);
     Ok(json!({}))
 }

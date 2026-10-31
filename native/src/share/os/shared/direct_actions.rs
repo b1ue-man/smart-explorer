@@ -1,3 +1,4 @@
+use super::connection_rights::RightsOrigin;
 use super::direct_ledger::{DirectRequestDirection, DirectRequestEntry};
 use super::direct_lifecycle::DirectDecisionState;
 use super::direct_protocol::{
@@ -117,9 +118,14 @@ pub fn decide_direct_request(
 }
 
 /// `decide_direct_request`; an acceptance with `rights` gives the requester
-/// exactly these rights in the same transaction (F1/F3: the user confirmed
-/// them while accepting). Without them the Direct code's rights or „Rechte
-/// offen“ apply.
+/// exactly these rights (F1/F3: the user confirmed them while accepting).
+/// Without them the Direct code's rights or „Rechte offen“ apply. Folders
+/// and write are stored in the transaction of the acceptance; commands,
+/// terminal and screen (of `rights` and of the Direct code) reach the
+/// grant only through the Exec-grant journal of the background worker:
+/// the acceptance fails as a whole before anything is stored when that is
+/// not possible (`require_exec_journal`), and the journal step follows the
+/// transaction (`finish_exec_rights`). Review 2, follow-up of W8.
 pub fn decide_direct_request_with_rights(
     default_home: Option<String>,
     identity: &ShareIdentity,
@@ -132,7 +138,20 @@ pub fn decide_direct_request_with_rights(
     if let Some(rights) = rights {
         crate::share::connection_rights_actions::validate_rights_for_this_host(rights)?;
     }
-    ShareIdentity::with_current_locked(identity.device_name.clone(), |current| {
+    let mut journal_device = None;
+    if decision == DirectDecisionKind::Accepted {
+        let profiles = ShareProfiles::load_checked(default_home.clone())?;
+        if let Some(entry) = profiles.direct_request(request_id) {
+            let requester = &entry.record.request.requester;
+            if crate::share::connection_rights_actions::require_exec_journal(
+                &profiles, requester, rights,
+            )? {
+                journal_device = Some(requester.device_id.clone());
+            }
+        }
+    }
+    let finish_home = default_home.clone();
+    let entry = ShareIdentity::with_current_locked(identity.device_name.clone(), |current| {
         super::identity_store::with_matching_identity_generation(identity, current, |locked| {
             decide_direct_request_locked(
                 default_home,
@@ -144,7 +163,15 @@ pub fn decide_direct_request_with_rights(
                 rights,
             )
         })
-    })
+    })?;
+    if let Some(device_id) = journal_device {
+        crate::share::connection_rights_actions::finish_exec_rights(
+            finish_home,
+            &device_id,
+            rights,
+        )?;
+    }
+    Ok(entry)
 }
 
 fn decide_direct_request_locked(
@@ -203,10 +230,12 @@ fn decide_direct_request_locked(
             .map_err(|error| error.to_string())?;
         if let (DirectDecisionKind::Accepted, Some(rights)) = (decision, rights) {
             let requester = &expected_request.requester;
-            candidate.apply_direct_connection_rights(
+            // Commands, terminal and screen wait for the Exec-grant journal.
+            candidate.apply_direct_connection_rights_deferring_exec(
                 &requester.device_id,
                 &requester.public_key,
                 rights,
+                RightsOrigin::Request,
                 now,
             )?;
         }

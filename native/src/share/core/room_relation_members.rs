@@ -29,6 +29,12 @@ pub struct RoomPolicy {
     /// in older rooms and in rooms without such a choice.
     #[serde(default, skip_serializing_if = "AccessGrantChange::is_empty")]
     pub member_access: AccessGrantChange,
+    /// Changes of commands, terminal or screen of admitted members that
+    /// only the Exec-grant journal may store (`exec_follow_up.rs`): the
+    /// room's member access of a member admitted later, or the rights of
+    /// a room chosen in one step. The daemon applies and ends them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub member_follow_ups: Vec<crate::share::exec_follow_up::MemberFollowUp>,
 }
 
 impl RoomPolicy {
@@ -38,6 +44,7 @@ impl RoomPolicy {
             members_may_write: false,
             confirm_new_members: false,
             member_access: AccessGrantChange::default(),
+            member_follow_ups: Vec::new(),
         }
     }
 
@@ -47,6 +54,7 @@ impl RoomPolicy {
             members_may_write: true,
             confirm_new_members: false,
             member_access: AccessGrantChange::default(),
+            member_follow_ups: Vec::new(),
         }
     }
 }

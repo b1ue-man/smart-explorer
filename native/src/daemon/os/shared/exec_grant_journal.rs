@@ -10,6 +10,9 @@ mod storage;
 #[path = "exec_grant_journal_rights.rs"]
 mod rights;
 
+#[path = "exec_grant_journal_follow_ups.rs"]
+mod follow_ups;
+
 use storage::{clear_entry, decode_entry, write_entry};
 
 const JOURNAL_VERSION: u32 = 2;
@@ -290,6 +293,18 @@ impl ShareHost {
                 .clone()
                 .ok_or_else(|| "an Exec-Grant recovery is already pending".to_string());
         }
+        self.mutate_grant_locked(prepare)
+    }
+
+    /// `mutate_grant_with` for a caller that holds `exec_grant_lock`, has
+    /// reloaded the profiles and found no open journal entry.
+    fn mutate_grant_locked<F>(&self, prepare: F) -> Result<ExecGrantPersistResult, String>
+    where
+        F: FnOnce(
+            &mut crate::share::ShareProfiles,
+            &crate::share::ShareIdentity,
+        ) -> Result<(crate::share::ExecGrantMutation, u64), String>,
+    {
         let (identity, mut profiles) = {
             let state = self
                 .state

@@ -6,10 +6,20 @@
 //! any grant goes as a whole through the background worker's Exec-grant
 //! journal (`daemon/os/shared/exec_grant_journal_rights.rs`), like every
 //! other change of those rights, so a revocation holds without a reload.
+//! Review 2, follow-up: every other path that gives or changes those rights
+//! (accepting a request with rights, the Direct code's rights, a PIN
+//! offer's rights, the rights chosen for a room, the automatic acceptance)
+//! stores everything but them in its own transaction and hands them to the
+//! same journal (`exec_follow_up.rs`); `require_exec_journal` makes such a
+//! decision fail as a whole before anything is stored when the journal
+//! cannot be used, and `finish_exec_rights` completes it afterwards.
 use crate::share::access_grant::AccountProfile;
-use crate::share::connection_rights::{ConnectionRights, RightsOrigin, RightsTarget};
+use crate::share::connection_rights::{
+    ConnectionRights, RightsOrigin, RightsTarget, MENU_CAPABILITIES,
+};
 use crate::share::connection_rights_exec::changed_exec_grants;
-use crate::share::{ShareProfiles, SharedRoot, DIRECT_EXPORT_SCOPE};
+use crate::share::exec_follow_up::pins_complete;
+use crate::share::{DirectPeerIdentity, ShareProfiles, SharedRoot, DIRECT_EXPORT_SCOPE};
 
 /// A grant's Exec right changed between the check and the transaction.
 const CONCURRENT_EXEC: &str =
@@ -178,7 +188,11 @@ pub fn finish_room_creation(
         profile_id: profile_id.into(),
     };
     mutate(default_home, |profiles, now| match rights {
-        Some(rights) => profiles.apply_room_connection_rights(profile_id, rights, now),
+        // The rights of members admitted already reach their grants through
+        // the Exec-grant journal (`RoomPolicy::member_follow_ups`).
+        Some(rights) => {
+            profiles.apply_room_connection_rights_deferring_exec(profile_id, rights, now)
+        }
         None => {
             profiles.cancel_connection_rights(&target);
             profiles.mark_room_rights_pending(profile_id, RightsOrigin::RoomCreated, now);
@@ -186,3 +200,112 @@ pub fn finish_room_creation(
         }
     })
 }
+
+/// Start of the failure of `finish_exec_rights`: the connection (and its
+/// folders and write right) was stored, only commands, terminal or screen
+/// are still open.
+pub(crate) const CONNECTION_STORED: &str = "Verbindung gespeichert, ";
+
+/// The text a surface shows for a failed decision: a failure after the
+/// connection was stored says so, any other one says the decision was not
+/// stored (`not_stored`, the surface's own wording).
+pub(crate) fn decision_failure(error: &str, not_stored: &str) -> String {
+    if error.starts_with(CONNECTION_STORED) {
+        error.to_string()
+    } else {
+        format!("{not_stored}: {error}")
+    }
+}
+
+/// Whether `rights` touch commands, terminal or screen.
+fn touches_exec(rights: &ConnectionRights) -> bool {
+    MENU_CAPABILITIES
+        .into_iter()
+        .any(|capability| rights.decision(capability).is_on())
+}
+
+/// Before an acceptance of `requester` that may give or change commands,
+/// terminal or screen of its grant: `rights` chosen with the acceptance, or
+/// else the Direct code's rights (which a new connection takes). Those
+/// rights reach the grant only through the Exec-grant journal of the
+/// background worker, so the acceptance fails as a whole, before anything
+/// is stored, when the journal cannot be used: the identity must be fully
+/// pinned (`public_key` equal to `node_id`, matching fingerprint) and the
+/// background worker of this version must be reachable (`ensure_worker_ready`
+/// replaces an older one). Returns whether `finish_exec_rights` follows the
+/// transaction. An acceptance that touches none of those rights needs
+/// neither the worker nor the check.
+pub(crate) fn require_exec_journal(
+    profiles: &ShareProfiles,
+    requester: &DirectPeerIdentity,
+    rights: Option<&ConnectionRights>,
+) -> Result<bool, String> {
+    let existing_exec = profiles
+        .grant_for(&requester.device_id)
+        .is_some_and(|grant| grant.exec.grants_any());
+    let chosen = rights.or(profiles.code_rights.as_ref());
+    let involved = chosen.is_some_and(touches_exec) || (rights.is_some() && existing_exec);
+    if !involved {
+        return Ok(false);
+    }
+    if !pins_complete(
+        &requester.public_key,
+        &requester.node_id,
+        &requester.fingerprint,
+    ) {
+        return Err(
+            "Befehle, Terminal oder Bildschirm brauchen eine vollstaendig gepinnte Identitaet \
+             (Schluessel gleich Knoten-ID, passender Fingerabdruck); die Anfrage bleibt unveraendert"
+                .into(),
+        );
+    }
+    crate::daemon::ensure_worker_ready().map_err(|error| {
+        format!(
+            "Befehle, Terminal oder Bildschirm gehen nur ueber das Exec-Grant-Journal des \
+             Hintergrunddienstes; er ist nicht erreichbar, die Anfrage bleibt unveraendert: {error}"
+        )
+    })?;
+    Ok(true)
+}
+
+/// After the transaction of an acceptance for which `require_exec_journal`
+/// returned `true`: hands the commands, terminal and screen of the
+/// requester to the Exec-grant journal when the transaction recorded them
+/// (`exec_follow_ups`). The connection exists by then and waits without
+/// those rights („Rechte offen“); a failure names the reason, and the
+/// background worker repeats the change on its next reload.
+pub(crate) fn finish_exec_rights(
+    default_home: Option<String>,
+    device_id: &str,
+    rights: Option<&ConnectionRights>,
+) -> Result<(), String> {
+    let profiles = ShareProfiles::load_checked(default_home)?;
+    let Some(grant) = profiles.grant_for(device_id) else {
+        return Ok(());
+    };
+    let waiting = profiles.exec_follow_ups.iter().any(|follow_up| {
+        follow_up.device_id == device_id && follow_up.public_key == grant.public_key
+    });
+    if !waiting {
+        return Ok(());
+    }
+    let Some(rights) = rights.cloned().or_else(|| profiles.code_rights.clone()) else {
+        return Ok(());
+    };
+    let target = RightsTarget::Direct {
+        device_id: grant.device_id.clone(),
+        public_key: grant.public_key.clone(),
+    };
+    crate::daemon::confirm_rights_in_worker(target, rights, Vec::new())
+        .map(|_| ())
+        .map_err(|error| {
+            format!(
+                "{CONNECTION_STORED}Befehle, Terminal oder Bildschirm noch nicht \
+                 freigegeben (Rechte offen): {error}"
+            )
+        })
+}
+
+#[cfg(test)]
+#[path = "abgleich_task_exec_journal_gate_tests.rs"]
+mod abgleich_task_tests;

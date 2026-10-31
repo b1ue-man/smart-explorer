@@ -249,14 +249,17 @@ fn abgleich_task_code_preset_gives_exactly_its_rights_on_connect() {
             Some(&all),
         )
         .unwrap();
+    // Commands, terminal and screen wait for the Exec-grant journal.
     let pin = target(&profiles, "pin");
-    assert!(profiles.pending_rights_of(&pin).is_none());
+    assert!(profiles.pending_rights_of(&pin).is_some());
     let grant = profiles.grant_for("pin").unwrap();
     assert!(grant.write);
     assert_eq!(
         grant.exec.decision_at(Capability::ScreenControl, NOW),
-        CapabilityDecision::Allow
+        CapabilityDecision::Off
     );
+    assert!(!grant.exec.grants_any());
+    assert_eq!(profiles.exec_follow_ups.len(), 1);
     // The connecting side of a PIN pairing chose no rights: it waits.
     let mut connector = profiles_with_exports();
     connector
@@ -470,7 +473,6 @@ fn abgleich_task_room_rights_wait_then_apply_to_members() {
         .confirm_connection_rights(&room, &RightsPreset::FilesExec.rights(), NOW)
         .unwrap();
     assert!(profiles.pending_rights_of(&room).is_none());
-    let before = profiles.clone();
     let room_profile = &mut profiles.rooms[0];
     assert!(room_profile.policy.members_may_write);
     assert_eq!(room_profile.exports.roots.len(), 2);
@@ -479,15 +481,17 @@ fn abgleich_task_room_rights_wait_then_apply_to_members() {
     member.kind = "room".into();
     member.relation_id = "rid".into();
     room_profile.upsert_member_from_presence(member, NOW);
+    // Recorded for the Exec-grant journal; the grant stays as it is.
     assert!(room_profile.apply_member_access("member", NOW));
     assert_eq!(
         room_profile.members[0]
             .exec
             .decision_at(Capability::ExecCommands, NOW),
-        CapabilityDecision::Allow
+        CapabilityDecision::Off
     );
-    // The member's access needs a configuration, not a runtime update.
-    assert!(crate::share::profiles_differ_beyond_runtime(
-        &before, &profiles
-    ));
+    assert_eq!(room_profile.policy.member_follow_ups.len(), 1);
+    assert!(
+        !room_profile.apply_member_access("member", NOW),
+        "recorded once"
+    );
 }

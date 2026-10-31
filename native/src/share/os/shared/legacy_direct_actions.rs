@@ -1,3 +1,4 @@
+use super::connection_rights::RightsOrigin;
 use super::identity::IdentityRepairAction;
 use super::identity::ShareIdentity;
 use super::legacy_direct_request::{LegacyDirectDecisionState, LegacyDirectRequestEntry};
@@ -21,7 +22,11 @@ pub fn decide_legacy_direct_request(
 }
 
 /// `decide_legacy_direct_request`; an acceptance with `rights` gives the
-/// device exactly these rights in the same transaction (F1/F3).
+/// device exactly these rights (F1/F3). As for a tracked request
+/// (`decide_direct_request_with_rights`), folders and write are stored in the
+/// transaction; commands, terminal and screen (of `rights` and of the
+/// Direct code) only through the Exec-grant journal, and the acceptance
+/// fails as a whole before anything is stored when that is not possible.
 pub fn decide_legacy_direct_request_with_rights(
     default_home: Option<String>,
     identity: &ShareIdentity,
@@ -33,7 +38,21 @@ pub fn decide_legacy_direct_request_with_rights(
     if let Some(rights) = rights {
         crate::share::connection_rights_actions::validate_rights_for_this_host(rights)?;
     }
-    ShareIdentity::with_current_locked(identity.device_name.clone(), |current| {
+    let mut journal_device = None;
+    if accepted {
+        let profiles = ShareProfiles::load_checked(default_home.clone())?;
+        if let Some(entry) = profiles.legacy_direct_request(selector) {
+            if crate::share::connection_rights_actions::require_exec_journal(
+                &profiles,
+                &entry.peer,
+                rights,
+            )? {
+                journal_device = Some(entry.peer.device_id.clone());
+            }
+        }
+    }
+    let finish_home = default_home.clone();
+    let entry = ShareIdentity::with_current_locked(identity.device_name.clone(), |current| {
         super::identity_store::with_matching_identity_generation(identity, current, |locked| {
             decide_legacy_direct_request_locked(
                 default_home,
@@ -44,7 +63,15 @@ pub fn decide_legacy_direct_request_with_rights(
                 rights,
             )
         })
-    })
+    })?;
+    if let Some(device_id) = journal_device {
+        crate::share::connection_rights_actions::finish_exec_rights(
+            finish_home,
+            &device_id,
+            rights,
+        )?;
+    }
+    Ok(entry)
 }
 
 fn decide_legacy_direct_request_locked(
@@ -83,10 +110,12 @@ fn decide_legacy_direct_request_locked(
         current.verify_for_local_identity(identity, now)?;
         candidate.decide_legacy_direct_request(selector, accepted, now)?;
         if let (true, Some(rights)) = (accepted, rights) {
-            candidate.apply_direct_connection_rights(
+            // Commands, terminal and screen wait for the Exec-grant journal.
+            candidate.apply_direct_connection_rights_deferring_exec(
                 &expected.peer.device_id,
                 &expected.peer.public_key,
                 rights,
+                RightsOrigin::Request,
                 now,
             )?;
         }

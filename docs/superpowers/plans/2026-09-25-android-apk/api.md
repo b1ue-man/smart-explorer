@@ -339,6 +339,7 @@ Aufzählungswerte (`direction`, `conflict`, `deletePolicy`, `compare`, `versioni
 - `sync.log {id, from?}` → `{text, next, size, restarted, verbose}`: vollständige Zeilen des Live-Protokolls ab Offset `from` (ohne `from`: letzte Seite, höchstens 1 MiB); `restarted` = Datei rotiert/gekürzt.
 - `sync.setLogVerbose {id, verbose}` → `{verbose}`: unveränderte Einträge ab dem nächsten Lauf einzeln protokollieren.
   Token ist opaque und an Job sowie unveränderte Endpunkte gebunden.
+- `sync.clearHashCache {}` → `{cleared, summary, steps:{app:{state,detail}, worker:{state,detail}}}`: vergisst die Dateiprüfsummen dieses Geräts in der App und im Hintergrunddienst (auf Android läuft der Dienst im selben Prozess). `cleared` ist wahr, wenn kein Schritt scheiterte und kein laufender Prozess unerreichbar blieb. `state` ist `cleared`, `same_process`, `not_running`, `not_reached` oder `failed`; `summary` nennt den Stand auf Deutsch.
 - `sync.restoreVersion {id,token,side?}` → `{taskId}`; `side` ist bei Legacy-Versionen ohne Seite
   erforderlich. Frische Verbindung, Paarsperre und erneuter Manifestabgleich vor sicherem Restore.
 - `sync.mirror {source,target}` → `{taskId}`; einseitiges Kopieren ohne Löschen im Ziel,
@@ -693,8 +694,8 @@ Request {requestId, contactId:String?, name, stateText, canAccept, canReject, ca
   `share.roomCode {profileId}` → `{code:String?}` · `share.leaveRoom {profileId}` → `{}` ·
   `share.removeRoom {profileId}` → `{removedFavorites:Int, orphanedJobs:[String]}`
 - `share.requestAccess {contactId, message:String?}` → `{}` · `share.decide {requestId, accept:Boolean,
-  preset:String?, rights:Rights?}` → `{}` (Annahme mit Rechten setzt genau diese in derselben Transaktion;
-  ohne sie gelten die Code-Rechte oder „Rechte offen“, §5.1) · `share.retry {requestId}` → `{}` · `share.deleteRequest {requestId}` → `{}`
+  preset:String?, rights:Rights?}` → `{}` (Annahme mit Rechten setzt Ordner und Schreiben in derselben Transaktion, Befehle, Terminal und
+  Bildschirm über das Exec-Grant-Journal des Hintergrunddiensts; ohne Rechte gelten die Code-Rechte oder „Rechte offen“, §5.1) · `share.retry {requestId}` → `{}` · `share.deleteRequest {requestId}` → `{}`
 - `share.addExport {scope:"direct"|<profileId>, path, label:String?}` → `{}` ·
   `share.removeExport {scope, path}` → `{}` (neue Rootanlage muss ein vorhandenes lokales Verzeichnis sein
   und ist RO; Entfernen nutzt den exakten gespeicherten Pfad)
@@ -866,8 +867,26 @@ Antworten `rights_presets {presets}` und `rights {pending, code_rights, changed}
 `ConnectionRights`, `RightsTarget`, `PendingRightsView`, snake_case). CLI: `se share grants presets|pending|
 confirm|cancel`, `--preset` und Einzelschalter an `se share request accept`, `se share request policy
 auto-accept`, `se share discoverable`, `se share identity`, `se share room create`, `se share grants set`.
-Gespeicherte Form (Review 2026-10-31 W9): Ein Profil mit Ordnern je Gerät, `pendingRights`, Code-Rechten
-oder Mitgliederrechten eines Raums wird mit `schema_version` 9 geschrieben; Versionen bis 0.5.189 lehnen
+Exec-Rechte nur über das Journal (Review 2 2026-10-31, Folge von W8): Befehle, Terminal und Bildschirm einer
+Verbindung entstehen oder ändern sich auf jedem Weg nur durch einen Eintrag des Exec-Grant-Journals des
+Hintergrunddiensts. Das gilt auch für `share.decide` mit `preset`/`rights` (Annahme), die Code-Rechte
+(`share.setCodeRights`, wirksam beim ersten Verbinden, bei `readmitted` und bei der automatischen Annahme),
+die Rechte eines PIN-Angebots (`share.discoverable`) und die Rechte eines Raums (`share.createRoom`, Zugang
+für später zugelassene Mitglieder). Ordner und Schreiben werden sofort gespeichert; Befehle, Terminal und
+Bildschirm hält das Profil als wartende Änderung (`exec_follow_ups`, `RoomPolicy.member_follow_ups`), die
+Verbindung steht bis dahin in `pendingRights`; der Dienst führt die Änderung als Journaleintrag aus (Entzug vor
+dem Speichern am Worker, Erweiterung danach, ein Abbruch wird beim Neuladen maskiert und wiederholt) und
+beendet Datensatz und „Rechte offen“ im selben Speicherschritt; `share.cancelRights` verwirft sie. Fail
+closed: `share.decide` mit Befehlen, Terminal oder Bildschirm (oder Code-Rechten mit ihnen) antwortet
+`conflict` vor jeder Speicherung, wenn die Anfrage keine vollständig gepinnte Identität (`public_key` gleich
+`node_id`, passender Fingerabdruck) hat oder der Hintergrunddienst dieser Version nicht erreichbar ist; die
+Anfrage bleibt unverändert. Scheitert erst der Journalschritt, ist die Verbindung gespeichert: Antwort
+`conflict` mit einer Meldung, die mit „Verbindung gespeichert, Befehle, Terminal oder Bildschirm noch nicht
+freigegeben (Rechte offen): …“ beginnt, der Worker wird neu geladen, die Verbindung steht in
+`pendingRights`. Ein Weg ohne Exec-Anteil (Voreinstellungen „Keine Rechte“, „Nur lesen“, „Dateien lesen und
+schreiben“ ohne Code-Rechte mit Exec) braucht den Dienst nicht.
+Gespeicherte Form (Review 2026-10-31 W9): Ein Profil mit Ordnern je Gerät, `pendingRights`, Code-Rechten,
+wartenden Exec-Änderungen oder Mitgliederrechten eines Raums wird mit `schema_version` 9 geschrieben; Versionen bis 0.5.189 lehnen
 es ab (sie lesen 3 bis 8), statt mehr Rechte zu lesen oder die Felder beim Speichern zu verlieren. Ohne
 diese Datensätze bleibt es Version 8. Das Ereignis der Rechte eines PIN-Angebots erreicht die
 Ereignisliste der GUI-Clients nicht (G7); `share.status` `discovery.offer.rights` liest sie aus dem Snapshot.

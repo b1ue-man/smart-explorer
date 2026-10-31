@@ -9,3 +9,5 @@ pub(crate) mod connection_rights_actions;
 pub(crate) mod connection_rights_apply;
 #[path = "core/connection_rights_exec.rs"]
 pub(crate) mod connection_rights_exec;
+#[path = "core/exec_follow_up.rs"]
+pub(crate) mod exec_follow_up;

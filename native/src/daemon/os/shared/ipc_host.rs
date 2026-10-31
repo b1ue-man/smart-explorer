@@ -75,6 +75,10 @@ pub(super) struct ShareHostState {
     pub(super) pending_direct_events: Vec<direct_event_queue::PendingDirectEvent>,
     pub(super) pending_legacy_events: Vec<(String, crate::share::PeerPresence)>,
     pub(super) exec_retry: Option<exec_grant_journal::ExecGrantPersistResult>,
+    /// Rights waiting for the Exec-grant journal (`exec_follow_up.rs`): when
+    /// the next attempt is due after a failure and the failure last shown.
+    pub(super) follow_up_retry_at: Option<Instant>,
+    pub(super) follow_up_error: Option<String>,
     /// LAN sightings/losses waiting to be applied like service events.
     pub(super) pending_lan_events: Vec<crate::share::ShareEvent>,
     pub(super) lan_status: crate::share::LanStatus,
@@ -108,6 +112,8 @@ impl ShareHostState {
             pending_direct_events: Vec::new(),
             pending_legacy_events: Vec::new(),
             exec_retry: None,
+            follow_up_retry_at: None,
+            follow_up_error: None,
             pending_lan_events: Vec::new(),
             lan_status: crate::share::LanStatus::default(),
             discovery_offers: crate::share::DiscoveryOfferBook::default(),
@@ -152,7 +158,9 @@ impl ShareHost {
         self.mounts.tick();
         self.lan_tick();
         self.drain_events();
-        if self.periodic_reload_due() {
+        // Rights an acceptance, the Direct code, a PIN offer or a room chose
+        // are stored by the Exec-grant journal; a reload applies them.
+        if self.periodic_reload_due() || self.exec_follow_ups_due() {
             if let Err(error) = self.reload_now() {
                 log(&format!("share worker reload failed: {error}"));
             }
@@ -254,6 +262,7 @@ impl ShareHost {
             .lock()
             .map_err(|_| "Exec-Grant mutation lock is poisoned".to_string())?;
         let running = self.reload_now_locked()?;
+        self.drain_exec_follow_ups_quietly();
         drop(_exclusive);
         self.flush_legacy_answers();
         Ok(running)

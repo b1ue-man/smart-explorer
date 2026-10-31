@@ -125,7 +125,10 @@ fn decide(
             );
         }
         Err(error) => {
-            app.error_msg = Some(format!("Direkt-Entscheidung nicht gespeichert: {error}"));
+            app.error_msg = Some(crate::share::connection_rights_actions::decision_failure(
+                &error,
+                "Direkt-Entscheidung nicht gespeichert",
+            ));
         }
     }
 }

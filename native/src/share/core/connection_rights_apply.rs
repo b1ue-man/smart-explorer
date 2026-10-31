@@ -48,6 +48,18 @@ fn rights_from_access(rights: &mut ConnectionRights, exec: &ExecGrant) {
     rights.account = grant.account;
 }
 
+/// Who stores the commands, terminal and screen of a grant when rights are
+/// applied. Only the Exec-grant journal of the background worker may set
+/// them (`Journal`: the confirmation inside a journal entry, W8); every
+/// other profile transaction leaves the grant as it is and records the
+/// change for the journal (`Deferred`, `exec_follow_up.rs`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ExecWrite {
+    Journal,
+    /// The origin a connection kept open for the deferred rights has.
+    Deferred(RightsOrigin),
+}
+
 impl ShareProfiles {
     pub fn pending_rights_of(&self, target: &RightsTarget) -> Option<&PendingRights> {
         self.pending_rights
@@ -132,8 +144,16 @@ impl ShareProfiles {
                 .flatten()
         });
         if let Some(rights) = advance {
+            // Commands, terminal and screen of rights chosen in advance
+            // reach the grant only through the Exec-grant journal.
             if self
-                .apply_direct_connection_rights(device_id, &public_key, &rights, now)
+                .apply_direct_rights(
+                    device_id,
+                    &public_key,
+                    &rights,
+                    now,
+                    ExecWrite::Deferred(origin),
+                )
                 .is_ok()
             {
                 return;
@@ -202,13 +222,50 @@ impl ShareProfiles {
 
     /// Sets exactly `rights` on the accepted Direct grant of `(device_id,
     /// public_key)` and ends its open confirmation, all or nothing. Returns
-    /// whether anything changed.
+    /// whether anything changed. This is the step of the Exec-grant journal
+    /// (`plan_confirm`): it stores commands, terminal and screen itself.
+    /// Every other caller uses `apply_direct_connection_rights_deferring_exec`.
     pub fn apply_direct_connection_rights(
         &mut self,
         device_id: &str,
         public_key: &str,
         rights: &ConnectionRights,
         now: i64,
+    ) -> Result<bool, String> {
+        self.apply_direct_rights(device_id, public_key, rights, now, ExecWrite::Journal)
+    }
+
+    /// `apply_direct_connection_rights` for every profile transaction
+    /// outside the journal (accepting a request with rights, the Direct
+    /// code's rights, a PIN offer's rights): folders and write are set; a
+    /// change of commands, terminal or screen leaves the grant as it is and
+    /// is recorded for the journal (`exec_follow_ups`), and the connection
+    /// stays open („Rechte offen“, with `origin`) until the journal stored
+    /// it.
+    pub(crate) fn apply_direct_connection_rights_deferring_exec(
+        &mut self,
+        device_id: &str,
+        public_key: &str,
+        rights: &ConnectionRights,
+        origin: RightsOrigin,
+        now: i64,
+    ) -> Result<bool, String> {
+        self.apply_direct_rights(
+            device_id,
+            public_key,
+            rights,
+            now,
+            ExecWrite::Deferred(origin),
+        )
+    }
+
+    fn apply_direct_rights(
+        &mut self,
+        device_id: &str,
+        public_key: &str,
+        rights: &ConnectionRights,
+        now: i64,
+        mode: ExecWrite,
     ) -> Result<bool, String> {
         rights.validate()?;
         let index = self
@@ -241,19 +298,46 @@ impl ShareProfiles {
         let mut exports = self.default_direct_exports.clone();
         let mut changed = exports.set_device_folders(device_id, public_key, &rights.folders)?;
         let mut exec = grant.exec.clone();
-        changed |= apply_exec(&mut exec, &rights.access_change(), now)?;
+        let exec_changed = apply_exec(&mut exec, &rights.access_change(), now)?;
+        let deferred = exec_changed && matches!(mode, ExecWrite::Deferred(_));
+        changed |= exec_changed;
         changed |= grant.write != rights.write;
         let grant = &mut self.direct_grants[index];
         grant.write = rights.write;
-        grant.exec = exec;
+        if !deferred {
+            grant.exec = exec;
+        }
         if changed {
             grant.updated_at = now;
         }
         self.default_direct_exports = exports;
+        let kept = self
+            .pending_rights
+            .iter()
+            .find(|pending| pending.target.is_direct(device_id))
+            .cloned();
         let before = self.pending_rights.len();
+        let had_follow_up = self
+            .exec_follow_ups
+            .iter()
+            .any(|follow_up| follow_up.device_id == device_id);
         self.pending_rights
             .retain(|pending| !pending.target.is_direct(device_id));
-        Ok(changed || before != self.pending_rights.len())
+        self.exec_follow_ups
+            .retain(|follow_up| follow_up.device_id != device_id);
+        if let (true, ExecWrite::Deferred(origin)) = (deferred, mode) {
+            self.defer_direct_exec(device_id, public_key, rights.access_change(), now);
+            self.pending_rights.push(PendingRights {
+                target: RightsTarget::Direct {
+                    device_id: device_id.into(),
+                    public_key: public_key.into(),
+                },
+                origin: kept.as_ref().map_or(origin, |pending| pending.origin),
+                since: kept.as_ref().map_or(now, |pending| pending.since),
+            });
+            return Ok(true);
+        }
+        Ok(changed || before != self.pending_rights.len() || had_follow_up)
     }
 
     /// „Bestätigen“: sets exactly `rights` on `target` (it need not wait).
@@ -280,7 +364,23 @@ impl ShareProfiles {
         let before = self.pending_rights.len();
         self.pending_rights
             .retain(|pending| &pending.target != target);
-        before != self.pending_rights.len()
+        // Rights chosen for the journal but not stored yet are not given.
+        let mut dropped = false;
+        match target {
+            RightsTarget::Direct { device_id, .. } => {
+                let waiting = self.exec_follow_ups.len();
+                self.exec_follow_ups
+                    .retain(|follow_up| &follow_up.device_id != device_id);
+                dropped = waiting != self.exec_follow_ups.len();
+            }
+            RightsTarget::Room { profile_id } => {
+                if let Some(room) = self.rooms.iter_mut().find(|room| &room.id == profile_id) {
+                    dropped = !room.policy.member_follow_ups.is_empty();
+                    room.policy.member_follow_ups.clear();
+                }
+            }
+        }
+        dropped || before != self.pending_rights.len()
     }
 
     /// F5/F6: the rights for devices that connect with this Direct code;
@@ -312,5 +412,6 @@ impl ShareProfiles {
         });
         self.default_direct_exports
             .retain_device_folders(|entry| grants.iter().any(|g| g.device_id == entry.device_id));
+        self.prune_exec_follow_ups();
     }
 }

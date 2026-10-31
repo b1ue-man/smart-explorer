@@ -1,11 +1,12 @@
 //! F1/F5 for rooms (plan 2026-10-31): a room created or joined here waits
 //! for its rights; confirming sets its exports, the members' write right
 //! and the access every admitted member gets, now and when admitted later.
-use super::apply_exec;
+use super::{apply_exec, ExecWrite};
 use crate::share::access_grant::{AccessGrantChange, Capability, Expiry};
 use crate::share::connection_rights::{
     ConnectionRights, FolderChoice, PendingRights, RightsOrigin, RightsTarget, MENU_CAPABILITIES,
 };
+use crate::share::exec_follow_up::MemberFollowUp;
 use crate::share::{ExportAccess, RoomProfile, ShareExportConfig, ShareProfiles, SharedRoot};
 
 /// The access change a room keeps for its later members: empty when the
@@ -156,11 +157,43 @@ impl ShareProfiles {
     /// Direct folders for `All`), the members' write right, and commands,
     /// terminal and screen for every admitted member now and every member
     /// admitted later. All or nothing; ends the room's open confirmation.
+    /// This is the step of the Exec-grant journal (`plan_confirm`): it
+    /// stores the members' commands, terminal and screen itself. Every
+    /// other caller uses `apply_room_connection_rights_deferring_exec`.
     pub fn apply_room_connection_rights(
         &mut self,
         profile_id: &str,
         rights: &ConnectionRights,
         now: i64,
+    ) -> Result<bool, String> {
+        self.apply_room_rights(profile_id, rights, now, ExecWrite::Journal)
+    }
+
+    /// `apply_room_connection_rights` for every profile transaction outside
+    /// the journal (the rights chosen when a room is created): exports, write
+    /// and the access kept for later members are set; a change of commands,
+    /// terminal or screen of a member admitted now leaves its grant as it is
+    /// and is recorded for the journal (`RoomPolicy::member_follow_ups`).
+    pub(crate) fn apply_room_connection_rights_deferring_exec(
+        &mut self,
+        profile_id: &str,
+        rights: &ConnectionRights,
+        now: i64,
+    ) -> Result<bool, String> {
+        self.apply_room_rights(
+            profile_id,
+            rights,
+            now,
+            ExecWrite::Deferred(RightsOrigin::RoomCreated),
+        )
+    }
+
+    fn apply_room_rights(
+        &mut self,
+        profile_id: &str,
+        rights: &ConnectionRights,
+        now: i64,
+        mode: ExecWrite,
     ) -> Result<bool, String> {
         rights.validate()?;
         let index = self
@@ -173,13 +206,29 @@ impl ShareProfiles {
         room.policy.members_may_write = rights.write;
         room.policy.member_access = member_template(rights);
         let change = rights.access_change();
+        let mut waiting = Vec::new();
         for member in room
             .members
             .iter_mut()
             .filter(|member| member.is_admitted())
         {
-            apply_exec(&mut member.exec, &change, now)?;
+            match mode {
+                ExecWrite::Journal => {
+                    apply_exec(&mut member.exec, &change, now)?;
+                }
+                ExecWrite::Deferred(_) => {
+                    let mut next = member.exec.clone();
+                    if apply_exec(&mut next, &change, now)? {
+                        waiting.push(MemberFollowUp {
+                            device_id: member.device_id.clone(),
+                            change: change.clone(),
+                        });
+                    }
+                }
+            }
         }
+        // The rights chosen now replace every earlier record of the room.
+        room.policy.member_follow_ups = waiting;
         let mut changed = room != self.rooms[index];
         self.rooms[index] = room;
         let before = self.pending_rights.len();
@@ -192,7 +241,10 @@ impl ShareProfiles {
 
 impl RoomProfile {
     /// F5: the room's member access for the admitted member `device_id`
-    /// that allows nothing yet. Returns whether its grant changed.
+    /// that allows nothing yet. The member's grant is not changed here: the
+    /// access is recorded for the Exec-grant journal
+    /// (`RoomPolicy::member_follow_ups`), which stores it. Returns whether a
+    /// record was made.
     pub(crate) fn apply_member_access(&mut self, device_id: &str, now: i64) -> bool {
         if self.policy.member_access.is_empty() {
             return false;
@@ -200,7 +252,7 @@ impl RoomProfile {
         let change = self.policy.member_access.clone();
         let Some(member) = self
             .members
-            .iter_mut()
+            .iter()
             .find(|member| member.device_id == device_id && member.is_admitted())
         else {
             return false;
@@ -213,6 +265,21 @@ impl RoomProfile {
         {
             return false;
         }
-        apply_exec(&mut member.exec, &change, now).unwrap_or(false)
+        let mut next = member.exec.clone();
+        if !apply_exec(&mut next, &change, now).unwrap_or(false) {
+            return false;
+        }
+        let follow_up = MemberFollowUp {
+            device_id: device_id.to_string(),
+            change,
+        };
+        if self.policy.member_follow_ups.contains(&follow_up) {
+            return false;
+        }
+        self.policy
+            .member_follow_ups
+            .retain(|waiting| waiting.device_id != device_id);
+        self.policy.member_follow_ups.push(follow_up);
+        true
     }
 }

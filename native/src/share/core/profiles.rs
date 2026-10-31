@@ -82,6 +82,12 @@ pub struct ShareProfiles {
     /// such devices connect without rights and wait for confirmation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code_rights: Option<crate::share::connection_rights::ConnectionRights>,
+    /// Changes of commands, terminal or screen of Direct grants that a
+    /// profile transaction chose but only the Exec-grant journal may store
+    /// (`exec_follow_up.rs`). Absent in older profiles; an older version
+    /// drops them, which leaves the grants without those rights.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exec_follow_ups: Vec<crate::share::exec_follow_up::ExecFollowUp>,
 }
 
 impl Default for ShareProfiles {
@@ -102,6 +108,7 @@ impl Default for ShareProfiles {
             rooms: Vec::new(),
             pending_rights: Vec::new(),
             code_rights: None,
+            exec_follow_ups: Vec::new(),
         }
     }
 }
@@ -115,10 +122,13 @@ impl ShareProfiles {
     /// rights record older versions would misread or drop, else 8.
     pub(crate) fn stored_schema_version(&self) -> u32 {
         let rooms_use_rights = self.rooms.iter().any(|room| {
-            !room.policy.member_access.is_empty() || !room.exports.device_folders.is_empty()
+            !room.policy.member_access.is_empty()
+                || !room.policy.member_follow_ups.is_empty()
+                || !room.exports.device_folders.is_empty()
         });
         if !self.pending_rights.is_empty()
             || self.code_rights.is_some()
+            || !self.exec_follow_ups.is_empty()
             || !self.default_direct_exports.device_folders.is_empty()
             || rooms_use_rights
         {

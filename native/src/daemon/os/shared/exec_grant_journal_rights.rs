@@ -86,8 +86,8 @@ pub(super) fn confirm_entry(
 }
 
 /// The persistence step of `entry` on the stored profiles: every grant
-/// (compare-and-set against the revision it replaces), then the rest of
-/// its confirmation. Repeating it after a crash changes nothing more; a
+/// (compare-and-set against the revision it replaces, ending the follow-up
+/// record that waited for it), then the rest of its confirmation. Repeating it after a crash changes nothing more; a
 /// confirmation that would by now change another grant is refused.
 pub(super) fn apply_persisted(
     entry: &JournalEntry,
@@ -96,6 +96,10 @@ pub(super) fn apply_persisted(
 ) -> Result<(), String> {
     for (mutation, expected) in entry.steps() {
         mutation.apply_persisted_cas(profiles, identity, expected)?;
+        // A change of the grant that waited for this step is stored with
+        // it, and an explicit change supersedes a waiting one
+        // (`exec_follow_up.rs`).
+        profiles.finish_exec_follow_ups(&mutation.target);
     }
     let Some(step) = &entry.rights else {
         return Ok(());
