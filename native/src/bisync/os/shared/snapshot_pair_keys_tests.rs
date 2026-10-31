@@ -1,13 +1,15 @@
 //! The pair's key phases (E10, first comparison without stored keys) with
 //! real agent servers: phase 1 sends keys and no item, phase 2 the items of
-//! each distinct unequal folder once; a local side's keys spare the remote
-//! side every equal folder; every snapshot equals the walk without keys.
+//! each distinct unequal folder once; a local side's keys, formed by its one
+//! snapshot walk, spare the remote side every equal folder; every snapshot
+//! equals the walk without keys.
 use super::super::omissions::{OmissionKind, SyncOmissions};
+use super::super::snapshot::walk_snapshot_observed;
 use super::super::snapshot::WalkFilter;
 use super::super::snapshot_dir::WalkContext;
 use super::super::snapshot_hash::HashMode;
 use super::super::snapshot_keyed::{KeyFiles, KeyedTree};
-use super::super::snapshot_pair_side::{provide_local, walk_remote, Walker};
+use super::super::snapshot_pair_side::{walk_remote, Walker};
 use super::super::snapshot_types::DirSet;
 use super::super::sync_overload::Progress;
 use super::super::types::{BisyncOptions, Tree};
@@ -113,6 +115,7 @@ fn side(
         local: None,
         key_files: None,
         pair,
+        local_keys: None,
     };
     let keyed = run(&ctx);
     let tree = match &keyed {
@@ -232,6 +235,34 @@ fn abgleich_task_first_comparison_sends_keys_then_only_unequal_folders() {
     );
 }
 
+/// The snapshot tree of the local side `root`, as side 0 of `pair`.
+fn local_walk(backend: &dyn Backend, root: &str, pair: Option<&PairKeys>) -> Tree {
+    let globs = globset::GlobSet::empty();
+    let filter = WalkFilter::basic(true, &globs);
+    let opts = BisyncOptions {
+        cross_mounts: true,
+        ..Default::default()
+    };
+    let cancel = AtomicBool::new(false);
+    let pair = pair.map(|pair| (pair, 0));
+    let flags = (false, false);
+    walk_snapshot_observed(
+        backend,
+        root,
+        &cancel,
+        &filter,
+        HashMode::None,
+        None,
+        flags.0,
+        flags.1,
+        opts,
+        None,
+        (None, pair),
+    )
+    .unwrap()
+    .tree
+}
+
 #[test]
 fn abgleich_task_local_side_keys_spare_the_remote_side_equal_folders() {
     let data = tempfile::tempdir().unwrap();
@@ -258,16 +289,22 @@ fn abgleich_task_local_side_keys_spare_the_remote_side_equal_folders() {
             items: AtomicU64::new(0),
         };
         let own = files(cache.path(), if changed { "b2" } else { "b1" });
-        let (keyed, walked) = std::thread::scope(|scope| {
-            scope.spawn(|| {
-                provide_local((&pair, 0), &root_a, (false, None), &AtomicBool::new(false))
-            });
-            side(&remote, &root_b, Some((&pair, 1)), |ctx| {
+        let local = vfs::LocalBackend::new(&root_a);
+        let (local_tree, (keyed, walked)) = std::thread::scope(|scope| {
+            // The local side's own snapshot walk offers its keys.
+            let local_side = scope.spawn(|| local_walk(&local, &root_a, Some(&pair)));
+            let remote_side = side(&remote, &root_b, Some((&pair, 1)), |ctx| {
                 walk_remote(ctx, (&pair, 1), &own, &walker).unwrap()
-            })
+            });
+            (local_side.join().unwrap(), remote_side)
         });
         let (full, _) = side(&remote, &root_b, None, |_| None);
         assert_eq!(keyed, full);
+        assert_eq!(
+            local_tree,
+            local_walk(&local, &root_a, None),
+            "the local snapshot is the one of its walk without keys"
+        );
         assert!(walked.is_some());
         let expected = if changed { 10 } else { 0 };
         assert_eq!(

@@ -14,6 +14,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use super::snapshot_dir::{scan_listing, Listed, WalkContext};
+use super::snapshot_local_keys::LocalKeys;
 use super::sync_overload::under_permits;
 use super::types::Tree;
 
@@ -319,6 +320,9 @@ impl TreeWalk<'_> {
                         _ => None,
                     })
                 {
+                    if let Some(keys) = self.context.local_keys {
+                        keys.failed(dir_rel, reason, error.to_string());
+                    }
                     super::snapshot_dir::record_omission(self.context, dir_rel, reason, true);
                     return Ok(Listed {
                         files: Vec::new(),
@@ -329,8 +333,17 @@ impl TreeWalk<'_> {
             }
             Err(error) => return Err(error),
         };
+        // A local side's folder keys take the listing as it came.
+        let keys = self.context.local_keys.map(|keys| {
+            let parts = LocalKeys::parts(&listing.entries, &listing.omitted);
+            (keys, parts)
+        });
         super::snapshot_dir::record_listing_omissions(self.context, dir_rel, listing.omitted)?;
         let listed = scan_listing(self.context, dir, dir_rel, listing.entries)?;
+        if let Some((keys, parts)) = keys {
+            let at = (self.context.be, dir, dir_rel);
+            keys.listed(at, parts, &listed, self.context.cancel);
+        }
         // Only a complete listing: a stopped walk may return part of one.
         if let Some(observer) = self.context.listed {
             if !self.context.cancel.load(Ordering::Relaxed) {

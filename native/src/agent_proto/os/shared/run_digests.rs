@@ -1,10 +1,11 @@
-//! The digests one sync run takes, so no file of a local side is read twice
-//! in that run: the pair's key phase reads the tree in this process
-//! (`local_keyed`) while the side's own snapshot walk reads it as well, on
-//! another thread. Whichever asks first for a file reads it; the other waits
-//! for that read and takes its result (single flight). Each digest is handed
-//! out twice (once per walk) and then forgotten; one a walk does not ask for
-//! again (a file the sync filters leave out) stays until the run ends.
+//! The digests one run takes, so no file is read twice in that run when two
+//! walks of the same local tree ask on different threads (`LocalReads::run`).
+//! Whichever asks first for a file reads it; the other waits for that read
+//! and takes its result (single flight). Each digest is handed out twice
+//! (once per walk) and then forgotten; one a walk does not ask for again
+//! stays until the run ends. A local sync side no longer needs it: its key
+//! phase and its snapshot are one walk (`bisync::snapshot_local_keys`), which
+//! asks without run digests.
 //!
 //! A digest here is a digest of this run: the file was read after the run
 //! began, so it also answers the checksum mode's demand for a fresh read.

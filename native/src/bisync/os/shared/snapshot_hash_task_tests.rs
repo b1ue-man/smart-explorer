@@ -1,6 +1,7 @@
-//! A local side reads each file once per run: its key phase and its snapshot
-//! walk share the digests of the run (`RunDigests`), the checksum compare mode
-//! reads fresh, and both give the MD5 of the content.
+//! `hash_file_cached` with the digests of a run (`RunDigests`): two asks
+//! read a file once, the checksum compare mode reads fresh, and both give
+//! the MD5 of the content. (A local sync side has one walk since G6 of the
+//! third review, `snapshot_local_keys.rs`, and asks without run digests.)
 use super::*;
 use crate::agent_proto::RunDigests;
 use crate::vfs::LocalBackend;

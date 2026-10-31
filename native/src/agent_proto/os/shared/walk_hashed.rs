@@ -5,9 +5,10 @@
 //! fail the walk; with `meta` (`WalkHashed3`) links and special files come as
 //! entries with their listing attributes instead. A failure at the root
 //! fails the walk. Every folder is sent before the entries below it.
-//! Pseudo filesystems (`is_pseudo_dir`) are a row, as their parent's listing
-//! shows them, followed by an omission of the same path: their content is
-//! never walked.
+//! Pseudo filesystems (`is_pseudo_dir`) and the folder of the digest cache
+//! (`hash_cache::is_cache_folder`) are a row, as their parent's listing shows
+//! them, followed by an omission of the same path: their content is never
+//! walked (`walk_kept_out.rs`).
 //!
 //! `WalkHashed2` answers one `HashEntry`/`HashOmitted` frame per item, as
 //! before; `WalkHashed3` answers `HashPart`s, whose items keep the order they
@@ -22,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
-use super::fs::{is_pseudo_dir, systemtime_ms};
+use super::fs::systemtime_ms;
 use super::ops_types::{digest, omission};
 use super::session::{emit, Sink};
 use super::walk_keyed::{Keyed, KeyedSetup, Scope};
@@ -235,13 +236,13 @@ pub(super) fn walk(
 
 /// The walk of `WalkHashed3` with `meta` whose folder runs go through
 /// `keys` (`walk_keyed.rs`): of the whole tree, or with `folders` only those
-/// folders (paths below `root`), each without its subfolders. The caller
-/// sends `End`.
+/// folders (paths below `root`), each with its subfolders when `deeper`. The
+/// caller sends `End`.
 pub(super) fn walk_keyed(
     sink: &Sink,
     id: u64,
     root: &str,
-    (algorithm, min_bytes, folders): (u8, u64, Option<&[String]>),
+    (algorithm, min_bytes, folders, deeper): (u8, u64, Option<&[String]>, bool),
     keys: KeyedSetup<'_>,
     cancel: &AtomicBool,
 ) -> io::Result<()> {
@@ -262,7 +263,6 @@ pub(super) fn walk_keyed(
             roots
         }
     };
-    let deeper = folders.is_none();
     let scope = Scope {
         reads: keys.reads,
         filter: keys.filter,
@@ -457,14 +457,10 @@ impl Walk<'_> {
                 return out.skipped_dir(plain(true, size, None));
             }
             out.entry(plain(true, size, None))?;
-            if path.to_str().is_some_and(is_pseudo_dir) {
-                // A row as in the folder's listing; its content (kernel and
-                // device state, no files) is never walked.
-                return out.omit(
-                    rel,
-                    omission::UNREADABLE,
-                    "Pseudo-Dateisystem: Inhalt wird nicht durchlaufen",
-                );
+            if let Some(detail) = super::walk_kept_out::kept_out_dir(&path) {
+                // A row as in the folder's listing; its content is never
+                // walked (`walk_kept_out.rs`).
+                return out.omit(rel, omission::UNREADABLE, detail);
             }
             local.push((path, rel));
             return Ok(());

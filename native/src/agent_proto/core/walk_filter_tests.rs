@@ -170,3 +170,35 @@ fn abgleich_task_run_listing_without_scope_keeps_its_frame() {
     *fresh.last_mut().unwrap() = 16;
     assert!(Frame::decode(&fresh).is_err());
 }
+
+#[test]
+fn abgleich_task_host_patterns_fit_the_text_every_host_takes() {
+    // JSON text as serde writes it: `a`, `\"`, `b`, `\\`, `c`, `\n`,
+    // `\u0001`, two bytes of `é` (17), quotes and a comma.
+    assert_eq!(super::pattern_wire_cost("a\"b\\c\n\u{1}é"), 20);
+    let regexes: Vec<String> = (0..3000)
+        .map(|index| format!("(?-u)^(?:/?|.*/)name{index}\\.tmp$"))
+        .collect();
+    let host = host_patterns(regexes.clone());
+    assert!(!host.is_empty() && host.len() < regexes.len());
+    // In order, as far as the text every host takes reaches.
+    assert_eq!(host[..], regexes[..host.len()]);
+    let text: usize = host
+        .iter()
+        .map(|regex| super::pattern_wire_cost(regex.as_str()))
+        .sum();
+    assert!(text <= super::HOST_PATTERN_WIRE, "{text}");
+    // The Share request's bound takes the list whole: the agent, the Share
+    // host and the local side's keys apply the same patterns.
+    let spec = WalkFilterSpec {
+        patterns: host.clone(),
+        ..WalkFilterSpec::default()
+    };
+    assert_eq!(spec.bounded().patterns, host);
+    // A longer list is cut to a prefix that fits.
+    let long = WalkFilterSpec {
+        patterns: regexes.clone(),
+        ..WalkFilterSpec::default()
+    };
+    assert_eq!(long.bounded().patterns, host);
+}

@@ -12,7 +12,9 @@ use std::sync::{Arc, Mutex};
 use super::omissions::OmissionKind;
 use super::omissions::SyncOmissions;
 use super::snapshot::WalkFilter;
-use super::snapshot_hash::{hash_file_cached, md5_hex_to_u64, md5_to_u64, HashMode, LocalReads};
+use super::snapshot_hash::{
+    hash_file_cached_hex, md5_hex_to_u64, md5_to_u64, HashMode, LocalReads,
+};
 use super::snapshot_types::DirSet;
 use super::sync_overload::{under_permits, Progress};
 use super::types::{Sig, Tree};
@@ -57,6 +59,9 @@ pub(super) struct WalkContext<'a> {
     pub(super) key_files: Option<super::snapshot_keyed::KeyFiles>,
     /// The pair's key phases and this side's index (`snapshot_pair_keys.rs`).
     pub(super) pair: Option<(&'a super::snapshot_pair_keys::PairKeys, usize)>,
+    /// A local side of the pair's key phases: this walk forms its folder
+    /// keys as it lists (`snapshot_local_keys.rs`).
+    pub(super) local_keys: Option<&'a super::snapshot_local_keys::LocalKeys>,
 }
 
 /// What one folder contributes to the snapshot.
@@ -260,12 +265,12 @@ fn signature_hash(ctx: &WalkContext<'_>, m: &VfsMeta, rel: &str, p: &str) -> io:
                 .map(|sig| sig.hash);
             match reused {
                 Some(hash) => Ok(hash),
-                None => content_hash(ctx, p, m)
+                None => content_hash(ctx, (p, rel), m)
                     .map_err(|error| io::Error::new(error.kind(), format!("hash {p}: {error}"))),
             }
         }
         HashMode::FullFresh => match native.unwrap_or(0) {
-            0 => content_hash(ctx, p, m).map_err(|error| {
+            0 => content_hash(ctx, (p, rel), m).map_err(|error| {
                 io::Error::new(error.kind(), format!("fresh checksum {p}: {error}"))
             }),
             hash => Ok(hash),
@@ -275,8 +280,13 @@ fn signature_hash(ctx: &WalkContext<'_>, m: &VfsMeta, rel: &str, p: &str) -> io:
 
 /// Reads one file to hash it: locally as before, on a remote side under a
 /// permit of its flow, reporting the streamed bytes to it and reading again
-/// after overload.
-fn content_hash(ctx: &WalkContext<'_>, path: &str, listed: &VfsMeta) -> io::Result<u64> {
+/// after overload. A local side's folder keys learn the digest
+/// (`ctx.local_keys`) once the file proved unchanged by the read.
+fn content_hash(
+    ctx: &WalkContext<'_>,
+    (path, rel): (&str, &str),
+    listed: &VfsMeta,
+) -> io::Result<u64> {
     let expected = Sig {
         size: listed.size,
         mtime_ms: listed.mtime_ms,
@@ -302,24 +312,30 @@ fn content_hash(ctx: &WalkContext<'_>, path: &str, listed: &VfsMeta) -> io::Resu
             .map(|hex| md5_hex_to_u64(&hex))
             .filter(|hash| *hash != 0)
     };
-    let result = if let Some(hash) = stored {
-        hash
+    let (result, hex) = if let Some(hash) = stored {
+        (hash, None)
     } else if let Some((flow, job)) = &ctx.reads {
-        under_permits(
+        let hash = under_permits(
             ctx.cancel,
             &ctx.progress,
             || flow.acquire_for(*job, ctx.cancel),
             |permit| hash_streamed(ctx.be, path, ctx.cancel, &|bytes| permit.progress(bytes)),
         )
-        .unwrap_or_else(|| Err(canceled()))?
+        .unwrap_or_else(|| Err(canceled()))?;
+        (hash, None)
     } else {
+        // The one walk of a local side reads each file once per run.
         let reads = LocalReads {
             fresh: ctx.hash == HashMode::FullFresh,
-            run: ctx.pair.and_then(|(pair, side)| pair.run_digests(side)),
+            run: None,
         };
-        hash_file_cached(ctx.be, path, ctx.cancel, reads)?
+        let hex = hash_file_cached_hex(ctx.be, path, ctx.cancel, reads)?;
+        (md5_hex_to_u64(&hex), Some(hex))
     };
     super::apply_guard::revalidate(ctx.be, path, &observed, "listed checksum file")?;
+    if let (Some(keys), Some(hex)) = (ctx.local_keys, hex) {
+        keys.digest(rel, hex);
+    }
     Ok(result)
 }
 

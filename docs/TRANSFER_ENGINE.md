@@ -800,8 +800,20 @@ den Weg selbst, das Lauf-Protokoll nennt je Seite „… Ordner gleich ihrem Ord
   wie ohne Schlüssel. Ältere Gegenstellen: bisheriger Durchlauf. Erstvergleich ohne gespeicherte
   Schlüssel: beide Seiten senden zuerst nur ihre Schlüssel, gleichzeitig; danach jede Seite nur die
   Läufe der Ordner, deren Inhalt noch niemand hält, jeden ungleichen Inhalt einmal
-  (`snapshot_pair_keys.rs`). Eine lokale Seite bildet ihre Schlüssel im eigenen Prozess; gleiche Ordner
-  der entfernten Gegenseite kommen dann gar nicht über die Verbindung.
+  (`snapshot_pair_keys.rs`). Eine lokale Seite bildet ihre Schlüssel mit ihrem einen Schnappschuss-
+  Durchlauf (`snapshot_local_keys.rs`, Quellstand 2026-10-31, nicht gebaut): jeder aufgelistete Ordner
+  gibt seinen Lauf (Einträge der Auflistung mit Art, Name, versteckt, bei Dateien Größe, Zeit und der im
+  Durchlauf gelesenen MD5; Auslassungen der Auflistung; betretene Unterordner mit ihrem Schlüssel), am
+  Ende folgen die Schlüssel von unten nach oben. Der lokale Baum wird damit einmal aufgelistet und jede
+  Datei höchstens einmal gelesen. Einen Ordner, den der Durchlauf nicht betritt (Filter des Jobs,
+  geschützter Ordner wie Einhängepunkt oder Systemordner), der Durchlauf der Gegenseite mit ihrem Filter
+  aber betritt, liest dessen Schlüssel-Durchlauf im eigenen Prozess einmal (`LocalKeyed::below`), damit
+  er und die Ordner darüber bei gleichem Inhalt den Schlüssel der Gegenseite haben; ausgenommen
+  Pseudo-Dateisysteme und die eigenen Ordner der App (mit dem Prüfsummen-Cache). Der Schnappschuss
+  selbst, mit Einhänge-, Link- und Junction-Grenzen, Abbruch, Fortschritt und geschützten Auslassungen,
+  bleibt der des Durchlaufs ohne Schlüssel. Ein Schlüssel aus weniger oder anderen Teilen als bei der
+  Gegenseite ist nie gleich: der Ordner wird dann geholt, nie als gleich genommen. Gleiche Ordner der
+  entfernten Gegenseite kommen gar nicht über die Verbindung.
 - **Prüfschlüssel ohne Dateiübertragung (E9).** Im Prüfsummen-Modus rechnet die Seite mit der Datei die
   MD5 im Durchlauf (Share-Host, se-agent); vor jedem Download in `snapshot_dir::content_hash` fragt der
   Sync `vfs::content_md5` der Seite. Ein persistenter Hash-Cache auf der Seite der Datei (se-agent,
@@ -836,15 +848,16 @@ den Weg selbst, das Lauf-Protokoll nennt je Seite „… Ordner gleich ihrem Ord
   (`hash_cache::flush`: höchstens alle 30 s; `flush_now`: am Ende eines Durchlaufs, einer Verbindung
   oder eines Syncs), als atomarer Ersatz der Datei, die unter der Sperre gebildet und außerhalb der Sperre
   geschrieben wird; kein Faden wartet auf das Schreiben.
-  *Einmal lesen:* Schlüsselphase und Schnappschuss einer lokalen Seite laufen gleichzeitig; ein Lauf
-  teilt die gelesenen Prüfsummen (`RunDigests`, Pfad, Größe, Zeit): wer zuerst fragt, liest, der andere
-  wartet und nimmt das Ergebnis. Ein SSH-Agent ohne eigene Datei-Prüfsumme gibt `content_digest` an
+  *Einmal lesen:* Schlüsselphase und Schnappschuss einer lokalen Seite sind ein Durchlauf
+  (`snapshot_local_keys.rs`); er liest jede Datei einmal und gibt ihre MD5 an den Lauf ihres Ordners.
+  Ein SSH-Agent ohne eigene Datei-Prüfsumme gibt `content_digest` an
   seine SSH-Verbindung weiter (Exec-Befehl, siehe Tabelle oben). SFTP ohne Agent, FTP und WebDAV liefern die MD5 am Ort der Datei über
   `vfs::content_md5` (Block „MD5 am Ort der Datei“ oben), bevor `snapshot_dir::content_hash` lädt.
 - **Filter des Sync-Jobs auf der Seite mit den Dateien.** Die Durchläufe mit Eintragsmerkmalen und mit
   Ordnerschlüsseln tragen den Filter des Jobs (`HashWalkRequest::filter`, `agent_proto::walk_filter`;
-  se-agent/Dienst `walk-filter-v1`, Share `hash_walk_filter_v1`, der lokale Schlüssel-Durchlauf der
-  Paarphase ebenso): versteckte Einträge, Größen- und Zeitgrenzen und die Ausschlussmuster, die die Seite
+  se-agent/Dienst `walk-filter-v1`, Share `hash_walk_filter_v1`; die lokale Seite der Paarphase
+  entscheidet mit demselben Filter, welche vom eigenen Filter ausgelassenen Ordner sie für ihre
+  Schlüssel liest): versteckte Einträge, Größen- und Zeitgrenzen und die Ausschlussmuster, die die Seite
   mit genau der Bedeutung des Clients auswerten kann. Der Client übernimmt dafür aus globset 0.4.18 den
   regulären Ausdruck jedes Musters (`Glob::regex`, gebaut wie `compile_patterns`, `syncjobs::JobIgnore`);
   die Seite liest ihn in einen Automaten über Bytes (`agent_proto/core/walk_pattern.rs`: `.` jedes Byte,
@@ -859,7 +872,15 @@ den Weg selbst, das Lauf-Protokoll nennt je Seite „… Ordner gleich ihrem Ord
   trägt im Prüfsummen-Modus keinen Prüfschlüssel; ein Schlüssel eines Laufs mit anderem Filter ist
   darum ein anderer, und ein gleicher Schlüssel bedeutet den gleichen gefilterten Ordner an jedem Pfad
   (`folder_key_cache::Record::walked_children`: ein Unterordner ohne Schlüssel wurde nicht betreten).
-  Gegenstellen ohne die Fähigkeit durchlaufen ungefiltert; der Client filtert das Empfangene immer selbst.
+  Agent, Share-Host und lokale Seite schlüsseln mit derselben Musterliste: `agent_proto::host_patterns`
+  nimmt höchstens so viel Mustertext, wie eine Share-Anfrage trägt (`HOST_PATTERN_WIRE`, 16 KiB
+  JSON-Text neben dem größten Text bekannter Schlüssel oder der Ordnerliste), und diese Liste geht an
+  jede Gegenstelle und an den lokalen Schlüssel-Durchlauf; die Kürzung der Share-Anfrage
+  (`WalkFilterSpec::bounded`) nimmt sie ganz. Ein Muster jenseits dieser Grenze wendet nur der Client an.
+  Gegenstellen ohne die Fähigkeit durchlaufen ungefiltert; ebenso ein Share-Host oder Agent, der einen
+  gesendeten Filter nicht übersetzen kann (etwa ein Konstrukt eines späteren Parsers): der Share-Host
+  läuft dann ohne Filter durch (`host_hash_walk.rs` `scope_of`), der Agent antwortet „nicht
+  unterstützt“, und der Client nimmt den bisherigen Weg. Der Client filtert das Empfangene immer selbst.
 - **Sommerzeit.** Ist eine Seite FAT (Ortszeit), gelten gleiche Größen mit genau einer Stunde Abstand
   (± ein Schritt der gemeinsamen Genauigkeit) nur dann als gleich, wenn beide Beobachtungen einen am Ort
   der Datei gebildeten Prüfschlüssel tragen (`Sig::hash`: lokal gehasht, Server-MD5 der Auflistung,

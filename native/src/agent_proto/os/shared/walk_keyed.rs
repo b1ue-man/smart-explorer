@@ -6,8 +6,9 @@
 //! inside a run are those of `WalkHashed3`. With `keys_only` the walk sends
 //! only every folder's key; `ListRuns` sends the runs of named folders only
 //! (the two phases of a pair comparison, `bisync::snapshot_pair_keys`).
-//! `local_keyed` runs the same walk in this process for a local sync side
-//! and collects runs and keys instead of sending them.
+//! `local_keyed` runs the same walk in this process and collects runs and
+//! keys instead of sending them; `Collected::below` does it for one folder
+//! a local sync side's own walk does not enter (`bisync::snapshot_local_keys`).
 use std::collections::HashSet;
 use std::io;
 use std::sync::atomic::AtomicBool;
@@ -292,7 +293,7 @@ pub(crate) fn handle_walk_keyed(
         },
         filter: filter.as_ref().and_then(Option::as_ref),
     };
-    let walk = (algorithm, min_bytes, None);
+    let walk = (algorithm, min_bytes, None, true);
     super::walk_hashed::walk_keyed(sink, id, root, walk, setup, cancel)?;
     if !tree.complete() {
         return Err(invalid("keyed walk ended before every folder was complete"));
@@ -334,23 +335,22 @@ pub(crate) fn handle_list_runs(
         },
         filter: filter.as_ref().and_then(Option::as_ref),
     };
-    let walk = (algorithm, 0, Some(folders.as_slice()));
+    let walk = (algorithm, 0, Some(folders.as_slice()), false);
     super::walk_hashed::walk_keyed(sink, id, root, walk, setup, cancel)?;
     emit(sink, id, &Frame::End)
 }
 
 /// The runs and keys of the local tree `root`, read by the walk the agent
-/// runs next to its data, in this process (a local sync side: its keys let
-/// the remote other side leave equal folders out).
+/// runs next to its data, in this process (the keys a walk next to the data
+/// forms for the same tree).
 pub(crate) fn local_keyed(root: &str, algorithm: u8, cancel: &AtomicBool) -> io::Result<Collected> {
     local_keyed_reading(root, algorithm, (LocalReads::default(), None), cancel)
 }
 
-/// `local_keyed` with the way file contents are read: a fresh read (the
-/// checksum compare mode) and the digests of the run, shared with the side's
-/// own snapshot walk so no file is read twice; and with the job's filter, as
-/// the walk of the remote side applies it (equal filtered folders get equal
-/// keys on both sides).
+/// `local_keyed` with the way file contents are read (a fresh read: the
+/// checksum compare mode; the digests of a run, `RunDigests`) and with the
+/// job's filter, as the walk of the remote side applies it (equal filtered
+/// folders get equal keys on both sides).
 pub(crate) fn local_keyed_reading(
     root: &str,
     algorithm: u8,
@@ -358,7 +358,7 @@ pub(crate) fn local_keyed_reading(
     cancel: &AtomicBool,
 ) -> io::Result<Collected> {
     let scope = Scope { reads, filter };
-    collect_local(root, algorithm, Mode::Marks, scope, cancel)
+    collect_local((root, ""), algorithm, Mode::Marks, scope, cancel)
 }
 
 impl Collected {
@@ -372,7 +372,8 @@ impl Collected {
         algorithm: u8,
         cancel: &AtomicBool,
     ) -> io::Result<Vec<(String, FolderKey, KeyTally)>> {
-        let collected = collect_local(root, algorithm, Mode::KeysOnly, Scope::default(), cancel)?;
+        let scope = Scope::default();
+        let collected = collect_local((root, ""), algorithm, Mode::KeysOnly, scope, cancel)?;
         let mut tallies: std::collections::HashMap<String, KeyTally> =
             collected.tallies.into_iter().collect();
         collected
@@ -386,16 +387,34 @@ impl Collected {
             })
             .collect()
     }
+
+    /// `local_keyed_reading` of the folder `rel` below the local tree
+    /// `root` and everything below it: the runs and keys of that subtree,
+    /// named by their paths below `root`, so the filter sees the paths it
+    /// sees in a walk of the whole tree. For a folder a local side's own
+    /// walk does not enter although the walk next to the data on the other
+    /// side does (`bisync::snapshot_local_keys`).
+    pub(crate) fn below(
+        (root, rel): (&str, &str),
+        algorithm: u8,
+        (reads, filter): (LocalReads<'_>, Option<&HostFilter>),
+        cancel: &AtomicBool,
+    ) -> io::Result<Collected> {
+        let scope = Scope { reads, filter };
+        collect_local((root, rel), algorithm, Mode::Marks, scope, cancel)
+    }
 }
 
+/// The keyed walk of the folder `rel` below `root` (`""`: the whole tree)
+/// with everything below it, collected in this process.
 fn collect_local(
-    root: &str,
+    (root, rel): (&str, &str),
     algorithm: u8,
     mode: Mode,
     scope: Scope<'_>,
     cancel: &AtomicBool,
 ) -> io::Result<Collected> {
-    let tree = KeyTree::with_mode("", HashSet::new(), mode);
+    let tree = KeyTree::with_mode(rel, HashSet::new(), mode);
     let collect = Mutex::new(Collected::default());
     let setup = KeyedSetup {
         tree: &tree,
@@ -406,7 +425,10 @@ fn collect_local(
     let sink: Sink = std::sync::Arc::new(Mutex::new(
         Box::new(io::sink()) as Box<dyn std::io::Write + Send>
     ));
-    super::walk_hashed::walk_keyed(&sink, 0, root, (algorithm, 0, None), setup, cancel)?;
+    let folders = [rel.to_string()];
+    let only = (!rel.is_empty()).then_some(&folders[..]);
+    let walk = (algorithm, 0, only, true);
+    super::walk_hashed::walk_keyed(&sink, 0, root, walk, setup, cancel)?;
     if !tree.complete() {
         return Err(invalid(
             "local keyed walk ended before every folder was complete",

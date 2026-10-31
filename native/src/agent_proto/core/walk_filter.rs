@@ -31,6 +31,27 @@ use super::walk_pattern::{pattern_states, PatternSet, MAX_STATES};
 pub const MAX_FILTER_PATTERNS: usize = 4096;
 /// Text of all patterns of one filter.
 pub const MAX_FILTER_TEXT: usize = 1024 * 1024;
+/// JSON text the patterns of one filter take at most (`pattern_wire_cost`
+/// summed): what a Share request carries beside its largest known-key text
+/// or folder list (`WalkFilterSpec::bounded`). `host_patterns`
+/// keeps every job within it, so the agent, the Share host and a local side
+/// all apply the same list and equal folders get equal keys everywhere.
+pub(crate) const HOST_PATTERN_WIRE: usize = 16 * 1024;
+
+/// The JSON text of `pattern` as one string of a list (with its comma), as
+/// `serde_json` writes it: quotes, `"` `\` and the short control escapes as
+/// two bytes, every other control character as six, the rest as its UTF-8.
+pub(crate) fn pattern_wire_cost(pattern: &str) -> usize {
+    let escaped: usize = pattern
+        .chars()
+        .map(|c| match c {
+            '"' | '\\' | '\u{8}' | '\u{c}' | '\n' | '\r' | '\t' => 2,
+            c if (c as u32) < 0x20 => 6,
+            c => c.len_utf8(),
+        })
+        .sum();
+    escaped + 3
+}
 
 /// The filter as the client sends it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -59,6 +80,27 @@ impl WalkFilterSpec {
             && self.before_mtime_ms == 0
     }
 
+    /// `self` with its patterns, in order, as far as they fit
+    /// `HOST_PATTERN_WIRE` (what a Share request carries). A pattern left
+    /// out is applied by the client alone: the host then leaves out less,
+    /// never more. A list from `host_patterns` always fits whole.
+    pub fn bounded(&self) -> WalkFilterSpec {
+        let mut used = 0usize;
+        let mut patterns = Vec::new();
+        for pattern in &self.patterns {
+            let cost = pattern_wire_cost(pattern);
+            if used.saturating_add(cost) > HOST_PATTERN_WIRE {
+                break;
+            }
+            used += cost;
+            patterns.push(pattern.clone());
+        }
+        WalkFilterSpec {
+            patterns,
+            ..self.clone()
+        }
+    }
+
     /// The filter ready to apply; refused when a pattern or the whole set
     /// exceeds what the walk evaluates (the client then sends none).
     pub fn compile(&self) -> io::Result<HostFilter> {
@@ -84,27 +126,32 @@ impl WalkFilterSpec {
 
 /// The patterns of `regexes` (globset regular expressions of one job, in
 /// order) the walk next to the data evaluates with the client's meaning,
-/// within the limits of one filter. A pattern left out here is applied by
-/// the client alone.
+/// within the limits of one filter and the text every host takes
+/// (`HOST_PATTERN_WIRE`): one list for the agent, the Share host and the
+/// local side's keys. A pattern left out here is applied by the client alone.
 pub fn host_patterns(regexes: Vec<String>) -> Vec<String> {
     let mut accepted = Vec::new();
     // The shared match state plus one split per pattern after the first.
     let mut states = 1usize;
     let mut text = 0usize;
+    let mut wire = 0usize;
     for regex in regexes {
         let Ok(own) = pattern_states(&regex) else {
             continue;
         };
         // Its states without its own match state, plus one split.
         let cost = own;
+        let wire_cost = pattern_wire_cost(&regex);
         if accepted.len() >= MAX_FILTER_PATTERNS
             || states.saturating_add(cost) > MAX_STATES
             || text.saturating_add(regex.len()) > MAX_FILTER_TEXT
+            || wire.saturating_add(wire_cost) > HOST_PATTERN_WIRE
         {
             continue;
         }
         states += cost;
         text += regex.len();
+        wire += wire_cost;
         accepted.push(regex);
     }
     accepted

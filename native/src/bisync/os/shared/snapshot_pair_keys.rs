@@ -1,8 +1,9 @@
 //! Folder keys of both sides of a pair, compared before any entry crosses a
 //! connection (E10, first comparison without stored keys). Phase 1: every
 //! remote side forms its keys where its files are and sends only the keys
-//! (`KeyedWalk::KeysOnly`); a local side forms its keys and runs in this
-//! process (`agent_proto::local_keyed`). Both sides do this at the same time.
+//! (`KeyedWalk::KeysOnly`); a local side forms its keys and runs with its
+//! one snapshot walk (`snapshot_local_keys.rs`). Both sides do this at the
+//! same time.
 //! The plan then names, per remote side, the folders whose items nothing on
 //! this device holds yet: not stored for either side, not on the local side,
 //! not fetched from the other side (each distinct key once, from the side
@@ -78,9 +79,6 @@ struct State {
 
 pub(super) struct PairKeys {
     takes_part: [bool; 2],
-    /// The digests each side's two walks share (a local side reads its tree
-    /// for the keys and for its snapshot at the same time).
-    digests: [crate::agent_proto::RunDigests; 2],
     stored: [Arc<FolderCache>; 2],
     state: Mutex<State>,
     changed: Condvar,
@@ -108,7 +106,6 @@ impl PairKeys {
         }
         Some(Self {
             takes_part,
-            digests: Default::default(),
             stored: [Arc::new(a.stored), Arc::new(b.stored)],
             state: Mutex::new(state),
             changed: Condvar::new(),
@@ -117,12 +114,6 @@ impl PairKeys {
 
     pub(super) fn takes_part(&self, side: usize) -> bool {
         self.takes_part[side]
-    }
-
-    /// The digests `side`'s walks share, when its keys are read in this
-    /// process next to its snapshot.
-    pub(super) fn run_digests(&self, side: usize) -> Option<&crate::agent_proto::RunDigests> {
-        self.takes_part[side].then(|| &self.digests[side])
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {

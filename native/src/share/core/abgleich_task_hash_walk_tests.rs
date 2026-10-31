@@ -391,13 +391,20 @@ fn abgleich_task_share_host_fresh_walk_never_answers_from_the_digest_cache() -> 
     let wrong = "0123456789abcdef0123456789abcdef".to_string();
     let stamp = || crate::agent_proto::path_stamp(&path);
     // A wrong digest stored for the unchanged file (as a stale cache would).
+    assert!(
+        stamp().is_some(),
+        "no durable file stamp on this test file system: the test proves nothing here"
+    );
     let md5 = crate::agent_proto::digest::MD5;
     let _ = crate::agent_proto::hash_cache::digest(stamp(), md5, || Ok(wrong.clone()), stamp);
+    // The walk without `fresh` answers from the cache: the cache really
+    // holds the wrong digest, so the fresh walk below has something to skip.
     let (_, items) = walk(&fixture, filtered(false, false))?;
     let cached = entries(items)["keep.txt"].digest.clone();
-    assert!(
-        cached.as_deref() == Some(ABC_MD5) || cached.as_deref() == Some(wrong.as_str()),
-        "{cached:?}"
+    assert_eq!(
+        cached.as_deref(),
+        Some(wrong.as_str()),
+        "the cache did not hold the stored digest: the test proves nothing"
     );
     let (ran, items) = walk(&fixture, filtered(true, false))?;
     assert!(ran);
@@ -408,4 +415,55 @@ fn abgleich_task_share_host_fresh_walk_never_answers_from_the_digest_cache() -> 
         "the checksum mode reads the file"
     );
     Ok(())
+}
+
+#[test]
+fn abgleich_task_share_host_walks_unfiltered_when_it_cannot_compile_the_filter() -> io::Result<()> {
+    let fixture = CopyPastePeerFixture::for_transfer_engine_task()?;
+    let root = &fixture.root_a;
+    fs::write(root.join("skip.tmp"), b"tmp")?;
+    fs::create_dir_all(root.join("cache"))?;
+    fs::write(root.join("cache").join("inner.txt"), b"x")?;
+    let mut request = filtered(false, true);
+    // A construct this host's parser refuses (as a later version's could
+    // send one): the whole filter is then no filter, never a failed walk.
+    let mut spec = (**request.filter.as_ref().unwrap()).clone();
+    spec.patterns.push("(?-u)^\\d$".to_string());
+    assert!(spec.compile().is_err());
+    request.filter = Some(std::sync::Arc::new(spec));
+    let (ran, items) = walk(&fixture, request)?;
+    assert!(ran, "the walk runs");
+    let seen = entries(items);
+    assert_eq!(
+        seen["skip.tmp"].digest.as_deref(),
+        Some("fa816edb83e95bf0c8da580bdfd491ef"),
+        "unfiltered: the file the filter would leave out is hashed"
+    );
+    assert!(
+        seen.contains_key("cache/inner.txt"),
+        "and the folder entered"
+    );
+    Ok(())
+}
+
+#[test]
+fn abgleich_task_share_filter_carries_the_whole_host_pattern_list() {
+    // More pattern text than one Share request takes.
+    let regexes: Vec<String> = (0..3000)
+        .map(|index| format!("(?-u)^(?:/?|.*/)name{index}\\.tmp$"))
+        .collect();
+    let host = crate::agent_proto::host_patterns(regexes.clone());
+    assert!(
+        !host.is_empty() && host.len() < regexes.len(),
+        "the bound applies"
+    );
+    let spec = crate::agent_proto::WalkFilterSpec {
+        patterns: host.clone(),
+        ..Default::default()
+    };
+    // The list the agent and the local side apply is the one this host gets.
+    let sent = crate::share::fs_response::FsWalkFilter::bounded(&spec);
+    assert_eq!(sent.patterns, host);
+    let json = serde_json::to_string(&sent.patterns).unwrap();
+    assert!(json.len() <= 16 * 1024 + 1, "{} bytes", json.len());
 }

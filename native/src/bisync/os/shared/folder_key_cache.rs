@@ -250,6 +250,11 @@ impl FolderCache {
         self.records.iter()
     }
 
+    /// Takes every record of `other` in.
+    pub(super) fn absorb(&mut self, other: FolderCache) {
+        self.records.extend(other.records);
+    }
+
     /// Copies `key` with everything below it from `from`; false when a
     /// record is missing there.
     pub(super) fn adopt(&mut self, key: FolderKey, from: &[&FolderCache]) -> bool {

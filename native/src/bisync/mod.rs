@@ -196,6 +196,8 @@ mod snapshot_host_stream;
 mod snapshot_host_walk;
 #[path = "os/shared/snapshot_keyed.rs"]
 mod snapshot_keyed;
+#[path = "os/shared/snapshot_local_keys.rs"]
+mod snapshot_local_keys;
 #[path = "os/shared/snapshot_mounts.rs"]
 mod snapshot_mounts;
 #[path = "os/shared/snapshot_pair.rs"]

@@ -1103,9 +1103,8 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   only. A record is 130 bytes (MD5) or 162 bytes (SHA-256) in the file. Writes
   are collected and written together, built under the cache's lock and written
   outside it (`flush` at most every 30 s, `flush_now` at the end of a walk,
-  connection or sync). One file read per run: `RunDigests` (single flight by
-  path, size, time) between the key phase and the snapshot walk of a local
-  side. The summary of the clear names the account ("Prüfsummen-Cache dieses
+  connection or sync). One file read per run: the key phase and the snapshot of a local
+  side are one walk (`bisync::snapshot_local_keys`). The summary of the clear names the account ("Prüfsummen-Cache dieses
   Kontos", "Hintergrunddienst dieses Kontos"): a worker under another account
   keeps its own digests in its own app data folder and is neither reached nor
   claimed.

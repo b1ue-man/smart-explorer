@@ -36,17 +36,28 @@ pub(crate) fn hash_file(backend: &dyn Backend, path: &str, cancel: &AtomicBool) 
 /// (`agent_proto::hash_cache`, E9): a file whose status is unchanged since
 /// its digest was taken (and not racy) is not read again. With `reads.fresh`
 /// (the checksum compare mode) the file is always read, and the digest read
-/// is stored. With `reads.run` the file is read at most once per run, also
-/// when the pair's key phase reads the same tree on another thread.
+/// is stored. With `reads.run` the file is read at most once per run
+/// (`RunDigests`).
 pub(crate) fn hash_file_cached(
     backend: &dyn Backend,
     path: &str,
     cancel: &AtomicBool,
     reads: LocalReads<'_>,
 ) -> io::Result<u64> {
+    hash_file_cached_hex(backend, path, cancel, reads).map(|hex| md5_hex_to_u64(&hex))
+}
+
+/// `hash_file_cached` as 32 lowercase hex digits (the digest a folder key
+/// of the side covers, `snapshot_local_keys.rs`).
+pub(super) fn hash_file_cached_hex(
+    backend: &dyn Backend,
+    path: &str,
+    cancel: &AtomicBool,
+    reads: LocalReads<'_>,
+) -> io::Result<String> {
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(metadata) if backend.is_local() && metadata.is_file() => metadata,
-        _ => return hash_file(backend, path, cancel),
+        _ => return md5_hex_file(backend, path, cancel),
     };
     crate::agent_proto::hash_cache::configure_once(|| {
         (!cfg!(test)).then(crate::support_dirs::app_data_dir)
@@ -54,7 +65,6 @@ pub(crate) fn hash_file_cached(
     crate::agent_proto::md5_cached(std::path::Path::new(path), &metadata, reads, cancel, || {
         md5_hex_file(backend, path, cancel)
     })
-    .map(|hex| md5_hex_to_u64(&hex))
 }
 
 /// The MD5 of a file as 32 lowercase hex digits, read through `backend`.
@@ -104,12 +114,15 @@ pub enum HashMode {
     /// Checksum mode: require a current nonzero hash and never reuse a previous
     /// size+mtime result as proof of unchanged content. A local side reads
     /// every file in this mode (`LocalReads::fresh`: the digest cache of the
-    /// device is not asked, and takes the digest read); only a digest read
-    /// earlier in the same run counts (`RunDigests`). A remote host's walk
-    /// answers from its own cache while a file's status is unchanged:
-    /// device, inode, size, modification and change time (ns), on file
-    /// systems with durable file IDs, and not racy (`se doctor
-    /// --clear-hash-cache` forgets the digests of this device).
+    /// device is not asked, and takes the digest read), once per run: its
+    /// one walk forms its snapshot and its folder keys together. A walk next
+    /// to the data reads every file as well: the request carries `fresh`
+    /// (`snapshot_agent.rs`; agent and service `walk-filter-v1`, Share
+    /// `hash_walk_filter_v1`), and the host then never answers from its own
+    /// digest cache. Only a host without that feature answers from its cache
+    /// while a file's status is unchanged: device, inode, size, modification
+    /// and change time (ns), on file systems with durable file IDs, and not
+    /// racy (`se doctor --clear-hash-cache` forgets the digests of a device).
     FullFresh,
 }
 

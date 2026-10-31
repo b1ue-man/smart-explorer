@@ -16,7 +16,8 @@
 //! With `hash_walk_filter_v1` the request's scope applies: digests are read
 //! from the files (`fresh`), and with `meta` the job's filter
 //! (`agent_proto::walk_filter`) leaves files without a digest and folders
-//! unwalked, both still entries.
+//! unwalked, both still entries. A filter the host cannot compile is no
+//! filter: the walk runs unfiltered (as the agent's), never fails for it.
 use crate::{
     analytics::Progress,
     share::{
@@ -101,16 +102,24 @@ impl Shared<'_> {
 }
 
 /// The compiled filter and the fresh flag of a request's scope; the filter
-/// only with `meta` (the `hidden` it tests is the one the entries carry).
-fn scope_of(request: &FsHashWalk) -> io::Result<(Option<crate::agent_proto::HostFilter>, bool)> {
+/// only with `meta` (the `hidden` it tests is the one the entries carry). A
+/// filter this host cannot compile (a pattern of a later parser, a set over
+/// its limits) is no filter: the walk runs unfiltered, as the agent's does,
+/// and the client applies its own filter to everything it gets.
+fn scope_of(request: &FsHashWalk) -> (Option<crate::agent_proto::HostFilter>, bool) {
     let Some(scope) = &request.scope else {
-        return Ok((None, false));
+        return (None, false);
     };
-    let filter = match scope.filter.clone().filter(|_| request.meta) {
-        Some(filter) => Some(crate::agent_proto::WalkFilterSpec::from(filter).compile()?),
-        None => None,
-    };
-    Ok((filter, scope.fresh))
+    let filter = scope
+        .filter
+        .clone()
+        .filter(|_| request.meta)
+        .and_then(|filter| {
+            crate::agent_proto::WalkFilterSpec::from(filter)
+                .compile()
+                .ok()
+        });
+    (filter, scope.fresh)
 }
 
 /// The items one thread produced and has not sent yet.
@@ -309,7 +318,7 @@ pub(in crate::share) fn run(
     if request.algo.is_some() {
         crate::agent_proto::hash_cache::configure_once(digest::cache_folder);
     }
-    let (filter, fresh) = scope_of(&request)?;
+    let (filter, fresh) = scope_of(&request);
     let shared = Shared {
         request: &request,
         cancel: &cancel,

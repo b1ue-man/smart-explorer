@@ -104,6 +104,7 @@ fn read(
         local: None,
         key_files: None,
         pair: None,
+        local_keys: None,
     };
     let mut items = 0u64;
     let (tree, counts) = match keyed {

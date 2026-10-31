@@ -87,6 +87,7 @@ fn read(
         local: None,
         key_files: None,
         pair: None,
+        local_keys: None,
     };
     let (tree, keyed) = match files {
         None => (
@@ -341,6 +342,7 @@ fn abgleich_task_run_marks_check_empty_and_unopened_folders_at_once() {
         local: None,
         key_files: None,
         pair: None,
+        local_keys: None,
     };
     let mut stream = super::super::snapshot_host_stream::Stream::new(&ctx);
     stream.run_mark("").unwrap();

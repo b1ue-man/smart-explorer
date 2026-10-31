@@ -133,30 +133,18 @@ pub(crate) struct FsWalkFilter {
     pub(crate) before_mtime_ms: i64,
 }
 
-/// JSON text the patterns of one walk request take at most: with the
-/// largest known-key text (`peer_hash_walk::KNOWN_KEYS`, about 214 KiB) or
-/// folder list (160 KiB) the request stays below the request frame limit
-/// (`framing::MAX_REQUEST_CTRL_FRAME`, 256 KiB).
-const FILTER_PATTERN_JSON: usize = 16 * 1024;
-
 impl FsWalkFilter {
-    /// `spec` with its patterns, in order, as far as they fit
-    /// `FILTER_PATTERN_JSON`; a pattern left out is applied by the client
-    /// alone (the host then leaves out less, never more).
+    /// `spec` with its patterns, in order, as far as they fit the text a
+    /// request carries beside its largest known-key text (about 214 KiB) or
+    /// folder list (160 KiB) below the request frame limit
+    /// (`framing::MAX_REQUEST_CTRL_FRAME`, 256 KiB): `WalkFilterSpec::bounded`,
+    /// the bound `agent_proto::host_patterns` already keeps every job within,
+    /// so the agent, this host and the local side apply the same list.
     pub(crate) fn bounded(spec: &WalkFilterSpec) -> Self {
-        let mut used = 0usize;
-        let mut patterns = Vec::new();
-        for pattern in &spec.patterns {
-            let cost = serde_json::to_string(pattern).map_or(usize::MAX, |text| text.len() + 1);
-            if used.saturating_add(cost) > FILTER_PATTERN_JSON {
-                break;
-            }
-            used += cost;
-            patterns.push(pattern.clone());
-        }
+        let spec = spec.bounded();
         Self {
             skip_hidden: spec.skip_hidden,
-            patterns,
+            patterns: spec.patterns,
             backslash_separates: spec.backslash_separates,
             min_size: spec.min_size,
             max_size: spec.max_size,

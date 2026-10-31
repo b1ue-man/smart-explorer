@@ -118,6 +118,11 @@ mod vault_error;
 mod walk_filter;
 #[path = "os/shared/walk_hashed.rs"]
 mod walk_hashed;
+#[path = "os/shared/walk_kept_out.rs"]
+mod walk_kept_out;
+#[cfg(test)]
+#[path = "os/shared/walk_kept_out_tests.rs"]
+mod walk_kept_out_tests;
 #[path = "os/shared/walk_keyed.rs"]
 mod walk_keyed;
 pub(crate) use walk_keyed::{

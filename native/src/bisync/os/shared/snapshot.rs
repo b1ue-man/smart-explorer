@@ -232,6 +232,19 @@ pub(super) fn walk_snapshot_observed(
     let filtered = Mutex::new(Tree::new());
     let dirs = Mutex::new(DirSet::new());
     let flow = (!be.is_local()).then(|| flow_for(be, root));
+    // A local side of the pair's key phases forms its keys with this walk,
+    // with the filter the other side's walk applies (equal filtered folders
+    // get equal keys on both sides).
+    let local_keys = pair
+        .filter(|(pair, side)| {
+            be.is_local()
+                && matches!(hash, HashMode::None | HashMode::FullFresh)
+                && pair.takes_part(*side)
+        })
+        .map(|_| {
+            let md5 = hash == HashMode::FullFresh;
+            super::snapshot_local_keys::LocalKeys::new(root, md5, filter.host_spec())
+        });
     let mut context = WalkContext {
         be,
         root,
@@ -261,6 +274,7 @@ pub(super) fn walk_snapshot_observed(
             super::snapshot_keyed::KeyFiles::of(be, root, peer, algorithm)
         }),
         pair,
+        local_keys: local_keys.as_ref(),
     };
     let started = std::time::Instant::now();
     let tree = match super::snapshot_agent::walk_snapshot_via_agent(&context)? {
@@ -277,9 +291,7 @@ pub(super) fn walk_snapshot_observed(
         }
         None => {
             context.host_listed = false;
-            let tree = with_local_keys(&context, || {
-                walk_tree(&context, flow, be.parallelism().max(1))
-            })?;
+            let tree = walk_tree(&context, flow, be.parallelism().max(1))?;
             if let Some(log) = &context.log {
                 log.line(
                     "Scan",
@@ -293,10 +305,13 @@ pub(super) fn walk_snapshot_observed(
             tree
         }
     };
+    drop(context);
     if let Some((pair, side)) = pair {
+        if let Some(keys) = local_keys {
+            pair.submit_keys(side, Some(keys.finish()));
+        }
         pair.finish(side);
     }
-    drop(context);
     if be.is_local() && hash != HashMode::None {
         crate::agent_proto::hash_cache::flush_now();
     }
@@ -307,38 +322,6 @@ pub(super) fn walk_snapshot_observed(
         omissions: omissions.into_inner().unwrap_or_else(|e| e.into_inner()),
         duplicates: duplicates.into_inner().unwrap_or_else(|e| e.into_inner()),
     })
-}
-
-/// `walk` of a local side; when the pair's key phases want this side's
-/// keys, they are read on another thread meanwhile
-/// (`snapshot_pair_side::provide_local`).
-fn with_local_keys(
-    context: &WalkContext<'_>,
-    walk: impl FnOnce() -> io::Result<Tree>,
-) -> io::Result<Tree> {
-    let local =
-        context.be.is_local() && matches!(context.hash, HashMode::None | HashMode::FullFresh);
-    match context
-        .pair
-        .filter(|(pair, side)| local && pair.takes_part(*side))
-    {
-        Some(pair) => std::thread::scope(|scope| {
-            let md5 = context.hash == HashMode::FullFresh;
-            let (root, cancel) = (context.root, context.cancel);
-            // The filter the remote side's walk applies, so equal filtered
-            // folders get equal keys on both sides.
-            let filter = context.filter.host_spec();
-            let keys = scope.spawn(move || {
-                super::snapshot_pair_side::provide_local(pair, root, (md5, filter), cancel)
-            });
-            let tree = walk();
-            if keys.join().is_err() {
-                pair.0.finish(pair.1);
-            }
-            tree
-        }),
-        None => walk(),
-    }
 }
 
 /// `f` with the context of a walk of `root` that keeps its omissions,
@@ -379,6 +362,7 @@ pub(super) fn with_walk_context<T>(
         local: None,
         key_files: None,
         pair: None,
+        local_keys: None,
     };
     f(&context)
 }

@@ -155,13 +155,20 @@ fn abgleich_task_agent_fresh_walk_never_answers_from_the_digest_cache() {
     let wrong = "0123456789abcdef0123456789abcdef".to_string();
     let stamp = || super::path_stamp(&path);
     // A wrong digest stored for the unchanged file (as a stale cache would).
+    assert!(
+        stamp().is_some(),
+        "no durable file stamp on this test file system: the test proves nothing here"
+    );
     let _ = super::hash_cache::digest(stamp(), digest::MD5, || Ok(wrong.clone()), stamp);
+    // The walk without `fresh` answers from the cache: the cache really
+    // holds the wrong digest, so the fresh walk below has something to skip.
     let cached = walk(data.path(), &WalkScope::default())["keep.txt"]
         .digest
         .clone();
-    assert!(
-        cached.as_deref() == Some(ABC_MD5) || cached.as_deref() == Some(wrong.as_str()),
-        "{cached:?}"
+    assert_eq!(
+        cached.as_deref(),
+        Some(wrong.as_str()),
+        "the cache did not hold the stored digest: the test proves nothing"
     );
     let fresh = WalkScope {
         fresh: true,

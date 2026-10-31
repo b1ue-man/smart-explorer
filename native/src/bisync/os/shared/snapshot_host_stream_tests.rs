@@ -206,6 +206,7 @@ fn read_side(backend: &Scripted, walk_entries: u64) -> Side {
         local: None,
         key_files: None,
         pair: None,
+        local_keys: None,
     };
     let tree = super::super::snapshot_agent::walk_snapshot_via_agent(&ctx);
     drop(ctx);
