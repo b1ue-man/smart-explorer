@@ -199,13 +199,14 @@ fn abgleich_task_cancel_keeps_the_connection_without_rights() {
     let mut profiles = profiles_with_exports();
     request(&mut profiles, "a", DirectRequestPolicy::Ask, true);
     let target = target(&profiles, "a");
-    assert!(profiles.cancel_connection_rights(&target));
+    assert!(profiles.cancel_connection_rights(&target, NOW + 1));
     assert!(profiles.pending_rights.is_empty());
     let grant = profiles.grant_for("a").unwrap();
     assert_eq!(grant.state, DirectGrantState::Accepted);
     assert!(!grant.write && !grant.exec.grants_any());
     assert!(session(&profiles, "a").exports.roots.is_empty());
-    assert!(!profiles.cancel_connection_rights(&target), "nothing waits");
+    let again = profiles.cancel_connection_rights(&target, NOW + 2);
+    assert!(!again, "nothing waits");
     // Later, from the device page, the rights can still be confirmed.
     profiles
         .confirm_connection_rights(&target, &RightsPreset::ReadWrite.rights(), NOW)

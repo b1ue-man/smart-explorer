@@ -1,4 +1,5 @@
 use super::super::access_grant::AccessGrantChange;
+use super::super::exec_follow_up::FollowUpEffect;
 use super::super::exec_policy::{ExecGrant, ExecGrantSettings};
 use super::super::exec_types::ExecPrincipal;
 use super::super::identity::ShareIdentity;
@@ -151,6 +152,21 @@ impl ExecGrantMutation {
         Ok(())
     }
 
+    /// Whether this mutation can reach the running worker before it is
+    /// stored without giving anything: `profiles` hold a policy that it
+    /// narrows and widens in nothing (G3, review 3 of 2026-10-31). Such a
+    /// revocation holds even when the storing that follows fails.
+    pub(crate) fn only_narrows(
+        &self,
+        profiles: &mut ShareProfiles,
+        identity: &ShareIdentity,
+    ) -> bool {
+        resolve_profile_policy(profiles, identity, &self.target, false).is_ok_and(|(_, current)| {
+            !self.policy.narrowed_against(current).is_empty()
+                && current.narrowed_against(&self.policy).is_empty()
+        })
+    }
+
     pub(crate) fn mask_all_policies(profiles: &mut ShareProfiles) {
         for grant in &mut profiles.direct_grants {
             grant.exec.mask_off();
@@ -297,6 +313,21 @@ fn resolve_profile_policy<'a>(
                 node_id: member.node_id.clone(),
             };
             Ok((principal, &mut member.exec))
+        }
+    }
+}
+
+impl ExecGrant {
+    /// What `change` would do to this grant, as a dry run on a copy; a
+    /// refused change does nothing.
+    pub(crate) fn effect_of(&self, change: &AccessGrantChange, now: i64) -> FollowUpEffect {
+        let mut next = self.clone();
+        if next.apply_access_change(change, now).is_err() {
+            return FollowUpEffect::default();
+        }
+        FollowUpEffect {
+            narrows: !next.narrowed_against(self).is_empty(),
+            widens: !self.narrowed_against(&next).is_empty(),
         }
     }
 }

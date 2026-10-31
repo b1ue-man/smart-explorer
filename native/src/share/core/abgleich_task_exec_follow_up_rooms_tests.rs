@@ -110,9 +110,40 @@ fn abgleich_task_follow_up_room_creation_without_members_and_cancel() {
     let room_target = RightsTarget::Room {
         profile_id: "room-1".into(),
     };
-    assert!(profiles.cancel_connection_rights(&room_target));
+    assert!(profiles.cancel_connection_rights(&room_target, NOW + 2));
     assert!(!profiles.exec_follow_ups_waiting());
     assert!(!profiles.rooms[0].members[0].exec.grants_any());
+}
+
+/// G3 (review 3): a narrowing of a room member's access is in force at the
+/// worker before the journal stores it.
+#[test]
+fn abgleich_task_follow_up_room_member_narrowing_is_masked_for_the_worker() {
+    let mut profiles = host();
+    profiles.rooms.push(room_with(vec![member("m1", 11)]));
+    profiles
+        .apply_room_connection_rights("room-1", &RightsPreset::All.rights(), NOW)
+        .unwrap();
+    assert!(profiles.rooms[0].members[0].exec.grants_any());
+    assert!(profiles.masked_by_narrowing_follow_ups(NOW).is_none());
+
+    profiles
+        .apply_room_connection_rights_deferring_exec(
+            "room-1",
+            &RightsPreset::ReadOnly.rights(),
+            NOW + 1,
+        )
+        .unwrap();
+    assert_eq!(profiles.rooms[0].policy.member_follow_ups.len(), 1);
+    assert!(
+        profiles.rooms[0].members[0].exec.grants_any(),
+        "the stored grant waits for the journal"
+    );
+    let masked = profiles
+        .masked_by_narrowing_follow_ups(NOW + 2)
+        .expect("the member's access narrows");
+    assert!(!masked.rooms[0].members[0].exec.grants_any());
+    assert!(profiles.rooms[0].members[0].exec.grants_any());
 }
 
 #[test]

@@ -3,10 +3,13 @@
 //! „Bestätigen“, „Abbrechen“ and the Direct code's rights. A change is one
 //! profile transaction (`connection_rights_actions.rs`, with the same host
 //! checks as every other surface), persisted before the worker reloads and
-//! applies it. „Bestätigen“ runs under the Exec-grant lock; when it changes
-//! commands, terminal or screen it goes through the Exec-grant journal
-//! (W8, `exec_grant_journal_rights.rs`). Only the client call of
-//! „Bestätigen“ starts a worker (it needs the journal); the others never do.
+//! applies it. „Bestätigen“ and „Abbrechen“ run under the Exec-grant lock;
+//! when they change commands, terminal or screen they go through the
+//! Exec-grant journal (W8, `exec_grant_journal_rights.rs`). Only the client
+//! call of „Bestätigen“ starts a worker (it needs the journal); the others
+//! never do. The „Abbrechen“ of the surfaces (`cancel_connection_rights` in
+//! `connection_rights_actions.rs`) reaches the journal through that call
+//! when commands, terminal or screen are held or waiting.
 use crate::daemon::ipc_host::ShareHost;
 use crate::daemon::ipc_protocol::{AccessIpcReply, AccessIpcRequest};
 use crate::share::connection_rights::{ConnectionRights, PresetView, RightsTarget};
@@ -44,9 +47,9 @@ impl ShareHost {
                 rights,
                 added,
             } => self.confirm_rights_journaled(&target, &rights, &added)?,
-            AccessIpcRequest::CancelRights { target } => {
-                actions::cancel_connection_rights(home(), &target)?
-            }
+            // Under the Exec-grant lock, through the journal when commands,
+            // terminal or screen are held or waiting (W2).
+            AccessIpcRequest::CancelRights { target } => self.cancel_rights_journaled(&target)?,
             AccessIpcRequest::SetCodeRights { rights } => actions::set_code_rights(home(), rights)?,
             _ => return Err("not a rights request".into()),
         };

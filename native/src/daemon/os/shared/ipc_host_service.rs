@@ -199,7 +199,7 @@ pub(super) fn configure_or_restart_locked(state: &mut ShareHostState) -> Result<
         match crate::share::ShareService::start_with_profile_home(
             state.server.clone(),
             identity,
-            state.profiles.clone(),
+            worker_profiles(&state.profiles),
             Some(default_home()),
         ) {
             Ok(service) => {
@@ -255,9 +255,21 @@ pub(in crate::daemon) fn configure_service(
     }
     service
         .cmd(crate::share::ShareCmd::ConfigureProfiles {
-            profiles: Box::new(profiles.clone()),
+            profiles: Box::new(worker_profiles(profiles)),
         })
         .map(|_| true)
+}
+
+/// The profiles a worker is started or configured with: the stored ones,
+/// with every grant masked off whose waiting change (`exec_follow_up.rs`)
+/// takes commands, terminal or screen away, so a revocation is in force at
+/// the worker from its first configuration until the Exec-grant journal has
+/// stored it (G3, review 3). The host state keeps the stored profiles: the
+/// journal derives its entries from them.
+fn worker_profiles(profiles: &crate::share::ShareProfiles) -> crate::share::ShareProfiles {
+    profiles
+        .masked_by_narrowing_follow_ups(crate::share::core_now_secs())
+        .unwrap_or_else(|| profiles.clone())
 }
 
 /// FA3: presence, routes, status and newly seen room members reach the worker

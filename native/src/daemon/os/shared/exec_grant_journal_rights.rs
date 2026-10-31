@@ -9,6 +9,13 @@
 //! it, as for `MutateGrant`. It runs under the same lock as every other
 //! grant change. A confirmation that changes no Exec grant stays one
 //! profile transaction under that lock.
+//!
+//! „Abbrechen“ of a connection whose commands, terminal or screen are held
+//! or waiting is the confirmation of `rights_after_cancel` (W2, review 3 of
+//! 2026-10-31): `cancel_rights_journaled`. A step that only narrows a grant
+//! reaches the running worker before the confirmation is stored, like a
+//! revocation (G3): it holds even when the storing fails
+//! (`apply_narrowing_first`).
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -85,6 +92,30 @@ pub(super) fn confirm_entry(
     Ok(Some(entry))
 }
 
+/// Hands every step of `entry` that allows something but only takes rights
+/// away from what `profiles` hold now to the running worker, before the
+/// confirmation is stored (G3, review 3 of 2026-10-31; a step that allows
+/// nothing has reached it already). Without a running worker there is
+/// nothing to narrow. The step is applied again after the storing, as every
+/// step that allows something; repeating a policy changes nothing.
+pub(super) fn apply_narrowing_first(
+    service: Option<&crate::share::ShareService>,
+    entry: &JournalEntry,
+    profiles: &ShareProfiles,
+    identity: &ShareIdentity,
+) -> Result<(), String> {
+    let Some(service) = service else {
+        return Ok(());
+    };
+    let mut scratch = profiles.clone();
+    for (mutation, _) in entry.steps() {
+        if mutation.policy.grants_any() && mutation.only_narrows(&mut scratch, identity) {
+            super::apply_to_worker(Some(service), mutation)?;
+        }
+    }
+    Ok(())
+}
+
 /// The persistence step of `entry` on the stored profiles: every grant
 /// (compare-and-set against the revision it replaces, ending the follow-up
 /// record that waited for it), then the rest of its confirmation. Repeating it after a crash changes nothing more; a
@@ -145,6 +176,43 @@ impl ShareHost {
             .lock()
             .map_err(|_| "Exec-Grant mutation lock is poisoned".to_string())?;
         self.reload_now_locked()?;
+        self.confirm_rights_reloaded(target, rights, added)
+    }
+
+    /// „Abbrechen“ of the daemon (W2, review 3 of 2026-10-31): a Direct
+    /// device whose commands, terminal or screen are held or waiting for
+    /// the journal gets the confirmation of `rights_after_cancel` under the
+    /// Exec-grant lock, so no waiting change is applied after it; every
+    /// other target is one profile transaction. When the journal cannot be
+    /// used, folders and write right still go and the error says what is
+    /// not taken back yet (`cancel_without_journal`).
+    pub(crate) fn cancel_rights_journaled(
+        &self,
+        target: &RightsTarget,
+    ) -> Result<RightsChange, String> {
+        let _exclusive = self
+            .exec_grant_lock
+            .lock()
+            .map_err(|_| "Exec-Grant mutation lock is poisoned".to_string())?;
+        let reloaded = self.reload_now_locked();
+        let stored = ShareProfiles::load_checked(Some(default_home()))?;
+        if !stored.cancel_needs_journal(target) {
+            return actions::cancel_in_profiles(Some(default_home()), target);
+        }
+        let rights = stored.rights_after_cancel(target);
+        reloaded
+            .and_then(|_| self.confirm_rights_reloaded(target, &rights, &[]))
+            .or_else(|error| actions::cancel_without_journal(Some(default_home()), target, &error))
+    }
+
+    /// The part of the confirmation after the profiles were reloaded under
+    /// the Exec-grant lock.
+    fn confirm_rights_reloaded(
+        &self,
+        target: &RightsTarget,
+        rights: &ConnectionRights,
+        added: &[(String, String)],
+    ) -> Result<RightsChange, String> {
         if load_pending()?.is_some() {
             return Err(
                 "Eine fruehere Aenderung von Befehlen, Terminal oder Bildschirm wird noch \
@@ -202,3 +270,7 @@ impl ShareHost {
 #[cfg(test)]
 #[path = "abgleich_task_confirm_journal_tests.rs"]
 mod abgleich_task_tests;
+
+#[cfg(test)]
+#[path = "abgleich_task_cancel_journal_tests.rs"]
+mod abgleich_task_cancel_tests;

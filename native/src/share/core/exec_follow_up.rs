@@ -30,6 +30,15 @@ pub struct ExecFollowUp {
     pub since: i64,
 }
 
+/// What a waiting change does to the grant it is meant for.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct FollowUpEffect {
+    /// It takes something away that the grant has now.
+    pub narrows: bool,
+    /// It gives something the grant does not have now.
+    pub widens: bool,
+}
+
 /// The same for one admitted member of a room (`RoomPolicy::member_follow_ups`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemberFollowUp {
@@ -104,6 +113,64 @@ impl ShareProfiles {
             change,
             since: now,
         });
+    }
+
+    /// What the waiting change of the Direct device `device_id` does to its
+    /// grant; nothing when none waits.
+    pub(crate) fn direct_follow_up_effect(&self, device_id: &str, now: i64) -> FollowUpEffect {
+        self.exec_follow_ups
+            .iter()
+            .find(|follow_up| follow_up.device_id == device_id)
+            .and_then(|follow_up| {
+                let grant = self.direct_grants.iter().find(|grant| {
+                    grant.device_id == follow_up.device_id
+                        && grant.public_key == follow_up.public_key
+                })?;
+                Some(grant.exec.effect_of(&follow_up.change, now))
+            })
+            .unwrap_or_default()
+    }
+
+    /// The profiles the running worker must hold while changes wait: the
+    /// grant of every Direct device and room member whose waiting change
+    /// takes rights away is masked off (its policy and revision as stored,
+    /// nothing allowed), so the revocation is in force before the journal
+    /// stores it and does not depend on that step. `None` when no waiting
+    /// change narrows anything. Never stored and never the base of a
+    /// journal entry: the journal derives its entries from the stored grant.
+    pub(crate) fn masked_by_narrowing_follow_ups(&self, now: i64) -> Option<ShareProfiles> {
+        let mut masked: Option<ShareProfiles> = None;
+        for follow_up in &self.exec_follow_ups {
+            let Some(index) = self.direct_grants.iter().position(|grant| {
+                grant.device_id == follow_up.device_id
+                    && grant.public_key == follow_up.public_key
+                    && grant.state == DirectGrantState::Accepted
+            }) else {
+                continue;
+            };
+            let grant = &self.direct_grants[index];
+            if grant.exec.effect_of(&follow_up.change, now).narrows {
+                masked.get_or_insert_with(|| self.clone()).direct_grants[index]
+                    .exec
+                    .mask_off();
+            }
+        }
+        for (room_index, room) in self.rooms.iter().enumerate() {
+            for follow_up in &room.policy.member_follow_ups {
+                let Some(index) = room.members.iter().position(|member| {
+                    member.device_id == follow_up.device_id && member.is_admitted()
+                }) else {
+                    continue;
+                };
+                let member = &room.members[index];
+                if member.exec.effect_of(&follow_up.change, now).narrows {
+                    masked.get_or_insert_with(|| self.clone()).rooms[room_index].members[index]
+                        .exec
+                        .mask_off();
+                }
+            }
+        }
+        masked
     }
 
     /// The first record that waits (Direct grants first), with what the
@@ -267,6 +334,9 @@ impl ShareProfiles {
     }
 }
 
+#[cfg(test)]
+#[path = "abgleich_task_follow_up_mask_tests.rs"]
+mod abgleich_task_mask_tests;
 #[cfg(test)]
 #[path = "abgleich_task_exec_follow_up_rooms_tests.rs"]
 mod abgleich_task_room_tests;

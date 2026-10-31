@@ -348,11 +348,12 @@ fn execute_locked(state: &mut ShareHostState, entry: &JournalEntry) -> ExecGrant
         }
         Ok(())
     };
-    let progress = drive_steps(
+    let mut progress = drive_steps(
         entry.phase,
         || {
             if entry.phase == JournalPhase::PendingApply {
                 apply(false)?;
+                rights::apply_narrowing_first(service.as_ref(), entry, &state.profiles, &identity)?;
             }
             let profiles =
                 crate::share::ShareProfiles::mutate_persisted(Some(default_home()), |profiles| {
@@ -365,7 +366,6 @@ fn execute_locked(state: &mut ShareHostState, entry: &JournalEntry) -> ExecGrant
         || clear_entry(&entry.operation_id),
     );
 
-    let mut progress = progress;
     if should_fail_closed(entry.phase, &progress) {
         // A completed enable whose acknowledgement could not be made durable
         // must not leave the live authorization active while it is reported as

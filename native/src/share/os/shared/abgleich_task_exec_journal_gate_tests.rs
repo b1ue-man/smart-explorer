@@ -4,8 +4,9 @@
 //! pinned; the background worker of this version is checked by
 //! `ensure_worker_ready`), and an acceptance that touches none of those
 //! rights needs neither the worker nor the check.
-use super::{decision_failure, require_exec_journal, CONNECTION_STORED};
+use super::{decision_failure, exec_open_text, require_exec_journal, CONNECTION_STORED};
 use crate::share::connection_rights::{ConnectionRights, RightsPreset, RightsTarget};
+use crate::share::exec_follow_up::FollowUpEffect;
 use crate::share::{DirectGrant, DirectGrantState, DirectPeerIdentity, ExecGrant, ShareProfiles};
 
 fn requester() -> DirectPeerIdentity {
@@ -107,4 +108,35 @@ fn abgleich_task_gate_a_failure_after_storing_says_so() {
         ),
         "Direkt-Entscheidung nicht gespeichert: Fingerabdruck falsch"
     );
+}
+
+/// G3 (review 3): the message of a failed journal step says whether rights
+/// are still to be given or still to be taken away.
+#[test]
+fn abgleich_task_gate_message_tells_not_yet_revoked_from_not_yet_released() {
+    let narrows = exec_open_text(FollowUpEffect {
+        narrows: true,
+        widens: false,
+    });
+    assert!(narrows.contains("noch nicht entzogen"), "{narrows}");
+    assert!(!narrows.contains("noch nicht freigegeben"), "{narrows}");
+    assert!(narrows.contains("Rechte offen"), "{narrows}");
+
+    let widens = exec_open_text(FollowUpEffect {
+        narrows: false,
+        widens: true,
+    });
+    assert!(widens.contains("noch nicht freigegeben"), "{widens}");
+    assert!(!widens.contains("entzogen"), "{widens}");
+    assert_eq!(widens, exec_open_text(FollowUpEffect::default()));
+
+    let both = exec_open_text(FollowUpEffect {
+        narrows: true,
+        widens: true,
+    });
+    assert!(both.contains("noch nicht entzogen"), "{both}");
+    assert!(both.contains("noch nicht freigegeben"), "{both}");
+    // The text after storing is shown unchanged by every surface.
+    let stored = format!("{CONNECTION_STORED}Befehle, Terminal oder Bildschirm {narrows}: x");
+    assert_eq!(decision_failure(&stored, "nicht gespeichert"), stored);
 }

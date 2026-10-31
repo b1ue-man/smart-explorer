@@ -13,12 +13,19 @@
 //! same journal (`exec_follow_up.rs`); `require_exec_journal` makes such a
 //! decision fail as a whole before anything is stored when the journal
 //! cannot be used, and `finish_exec_rights` completes it afterwards.
+//! Review 3, W2/G3: „Abbrechen“ leaves a connection with open rights without
+//! any right, also without the folders and write right a deferred acceptance
+//! stored (`cancel_connection_rights`; commands, terminal and screen go
+//! through the same journal); a waiting change that takes rights away is in
+//! force at the worker at once (`exec_follow_up.rs`), and the message of a
+//! failed journal step says „noch nicht entzogen“ for it
+//! (`exec_open_text`), „noch nicht freigegeben“ for a change that gives.
 use crate::share::access_grant::AccountProfile;
 use crate::share::connection_rights::{
     ConnectionRights, RightsOrigin, RightsTarget, MENU_CAPABILITIES,
 };
 use crate::share::connection_rights_exec::changed_exec_grants;
-use crate::share::exec_follow_up::pins_complete;
+use crate::share::exec_follow_up::{pins_complete, FollowUpEffect};
 use crate::share::{DirectPeerIdentity, ShareProfiles, SharedRoot, DIRECT_EXPORT_SCOPE};
 
 /// A grant's Exec right changed between the check and the transaction.
@@ -151,14 +158,64 @@ pub(crate) fn confirm_without_exec(
     })
 }
 
-/// „Abbrechen“: the connection stays without rights.
+/// „Abbrechen“: the connection stays and has no right afterwards (W2,
+/// review 3 of 2026-10-31), also when its folders and write right were
+/// stored already and only commands, terminal and screen wait for the
+/// Exec-grant journal (`exec_follow_up.rs`). Folders and write right are
+/// taken back. When the connection holds commands, terminal or screen, or a
+/// change of them waits, the worker's journal takes them back too
+/// (`rights_after_cancel` confirmed through the worker: revocation at the
+/// running worker before it is stored, started when needed, like every
+/// other change of those rights). Without the journal (`cancel_without_journal`)
+/// folders and write right still go, the revocation is recorded for the
+/// background worker and the error says what is not taken back yet.
 pub fn cancel_connection_rights(
     default_home: Option<String>,
     target: &RightsTarget,
 ) -> Result<RightsChange, String> {
-    mutate(default_home, |profiles, _| {
-        Ok(profiles.cancel_connection_rights(target))
+    let current = ShareProfiles::load_checked(default_home.clone())?;
+    if !current.cancel_needs_journal(target) {
+        return cancel_in_profiles(default_home, target);
+    }
+    let rights = current.rights_after_cancel(target);
+    match crate::daemon::confirm_rights_in_worker(target.clone(), rights, Vec::new()) {
+        Ok(changed) => Ok(RightsChange {
+            profiles: ShareProfiles::load_checked(default_home)?,
+            changed,
+        }),
+        Err(error) => cancel_without_journal(default_home, target, &error),
+    }
+}
+
+/// „Abbrechen“ as one profile transaction (nothing of commands, terminal or
+/// screen is taken back here).
+pub(crate) fn cancel_in_profiles(
+    default_home: Option<String>,
+    target: &RightsTarget,
+) -> Result<RightsChange, String> {
+    mutate(default_home, |profiles, now| {
+        Ok(profiles.cancel_connection_rights(target, now))
     })
+}
+
+/// „Abbrechen“ when the journal could not be used (`error`): the profile
+/// transaction takes folders and write right back and records the
+/// revocation of commands, terminal and screen for the background worker.
+/// It succeeds when nothing of them is held; else the connection stays
+/// „Rechte offen“ and the error names what is not taken back yet.
+pub(crate) fn cancel_without_journal(
+    default_home: Option<String>,
+    target: &RightsTarget,
+    error: &str,
+) -> Result<RightsChange, String> {
+    let change = cancel_in_profiles(default_home, target)?;
+    if change.profiles.pending_rights_of(target).is_none() {
+        return Ok(change);
+    }
+    Err(format!(
+        "Ordner und Schreiben sind entzogen; Befehle, Terminal oder Bildschirm noch nicht \
+         entzogen (Rechte offen; der Hintergrunddienst entzieht sie beim naechsten Laden): {error}"
+    ))
 }
 
 /// F5/F6: the rights of devices that connect with this Direct code.
@@ -194,7 +251,7 @@ pub fn finish_room_creation(
             profiles.apply_room_connection_rights_deferring_exec(profile_id, rights, now)
         }
         None => {
-            profiles.cancel_connection_rights(&target);
+            profiles.cancel_connection_rights(&target, now);
             profiles.mark_room_rights_pending(profile_id, RightsOrigin::RoomCreated, now);
             Ok(true)
         }
@@ -292,6 +349,7 @@ pub(crate) fn finish_exec_rights(
     let Some(rights) = rights.cloned().or_else(|| profiles.code_rights.clone()) else {
         return Ok(());
     };
+    let effect = profiles.direct_follow_up_effect(device_id, crate::share::core_now_secs());
     let target = RightsTarget::Direct {
         device_id: grant.device_id.clone(),
         public_key: grant.public_key.clone(),
@@ -300,10 +358,28 @@ pub(crate) fn finish_exec_rights(
         .map(|_| ())
         .map_err(|error| {
             format!(
-                "{CONNECTION_STORED}Befehle, Terminal oder Bildschirm noch nicht \
-                 freigegeben (Rechte offen): {error}"
+                "{CONNECTION_STORED}Befehle, Terminal oder Bildschirm {}: {error}",
+                exec_open_text(effect)
             )
         })
+}
+
+/// What the message of a failed journal step says is still open: a change
+/// that takes rights away is „noch nicht entzogen“ (the worker holds it
+/// masked until the journal stores it), one that gives rights is „noch nicht
+/// freigegeben“.
+pub(crate) fn exec_open_text(effect: FollowUpEffect) -> &'static str {
+    match (effect.narrows, effect.widens) {
+        (true, false) => {
+            "noch nicht entzogen (Rechte offen; der Hintergrunddienst sperrt sie beim \
+             naechsten Laden und wiederholt den Entzug)"
+        }
+        (true, true) => {
+            "zum Teil noch nicht entzogen, zum Teil noch nicht freigegeben (Rechte offen; \
+             der Hintergrunddienst sperrt den Entzug beim naechsten Laden)"
+        }
+        _ => "noch nicht freigegeben (Rechte offen)",
+    }
 }
 
 #[cfg(test)]

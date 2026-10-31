@@ -9,6 +9,14 @@
 //! the grant and repeats it), and storing the grant ends the record in the
 //! same profile transaction (`exec_grant_journal_rights.rs`).
 //!
+//! A waiting change that takes rights away is in force at the running worker
+//! at once, before the journal stores it (G3, review 3 of 2026-10-31): every
+//! start and configuration of the worker masks those grants off
+//! (`ipc_host_service.rs::worker_profiles`), as the recovery of a pending
+//! journal entry masks its grants. The stored profiles and the profiles of
+//! the host state stay as they are: the journal derives its entries from
+//! them.
+//!
 //! A record that can never be applied (the grant is gone, not active or
 //! without a fully pinned identity) is dropped with a visible error. Every
 //! other failure keeps the record; the periodic reload tries again after

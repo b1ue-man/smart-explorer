@@ -811,7 +811,7 @@ beiden Seiten, „Auch meine Freigaben öffnen“, Hintergrund-Reparatur, Gerät
 erlaubte Freigabe ohne Rechte, erstellter und beigetretener Raum) entsteht **ohne jedes Recht** und steht
 in `pendingRights` („Rechte offen“). `share.confirmRights` setzt die gewählten Rechte als Ganzes (alles
 oder nichts; ändert es Befehle, Terminal oder Bildschirm, über das Exec-Grant-Journal des
-Hintergrunddiensts, der dafür bei Bedarf startet); `share.cancelRights` behält die Verbindung ohne Rechte. Vorher gewählte Rechte am
+Hintergrunddiensts, der dafür bei Bedarf startet); `share.cancelRights` behält die Verbindung ohne jedes Recht (W2: auch ohne Ordner und Schreiben, die eine zurückgestellte Annahme schon gespeichert hatte; Befehle, Terminal und Bildschirm nimmt der Hintergrunddienst über das Journal zurück). Vorher gewählte Rechte am
 Direkt-Code (`codeRights`), am PIN-Angebot (`share.discoverable`) oder am Raum (`share.createRoom`) sind die
 Bestätigung im Voraus. Bestehende Freigaben und Räume behalten ihre Rechte; alte Datensätze werden
 unverändert gelesen (Freigabe ohne Ordnerauswahl sieht alle Direkt-Ordner).
@@ -876,13 +876,13 @@ für später zugelassene Mitglieder). Ordner und Schreiben werden sofort gespeic
 Bildschirm hält das Profil als wartende Änderung (`exec_follow_ups`, `RoomPolicy.member_follow_ups`), die
 Verbindung steht bis dahin in `pendingRights`; der Dienst führt die Änderung als Journaleintrag aus (Entzug vor
 dem Speichern am Worker, Erweiterung danach, ein Abbruch wird beim Neuladen maskiert und wiederholt) und
-beendet Datensatz und „Rechte offen“ im selben Speicherschritt; `share.cancelRights` verwirft sie. Fail
+beendet Datensatz und „Rechte offen“ im selben Speicherschritt. `share.cancelRights` verwirft die wartende Änderung und nimmt Ordner und Schreiben zurück (W2, Review 3 2026-10-31); hält die Verbindung Befehle, Terminal oder Bildschirm oder wartet eine Änderung dafür, bestätigt die Bridge „keine Rechte“ (Konto und Ende bleiben) über das Journal des Hintergrunddiensts, der dafür bei Bedarf startet (Entzug am Worker vor dem Speichern, `exec_grant_lock`); ist das Journal nicht nutzbar, antwortet sie `conflict` mit „Ordner und Schreiben sind entzogen; Befehle, Terminal oder Bildschirm noch nicht entzogen (Rechte offen; …): …“, hält den Entzug als wartende Änderung und lässt die Verbindung in `pendingRights`. Eine wartende Änderung, die Rechte wegnimmt (eine Annahme mit engeren Rechten, ein Abbrechen), gilt am Worker sofort: der Dienst reicht ihm bei jedem Neuladen die Freigabe maskiert (nichts erlaubt, Richtlinie und Revision unverändert), bis der Journalschritt die engere Freigabe speichert (G3); ein Schritt der Bestätigung, der nur wegnimmt, geht vor dem Speichern an den laufenden Worker. Fail
 closed: `share.decide` mit Befehlen, Terminal oder Bildschirm (oder Code-Rechten mit ihnen) antwortet
 `conflict` vor jeder Speicherung, wenn die Anfrage keine vollständig gepinnte Identität (`public_key` gleich
 `node_id`, passender Fingerabdruck) hat oder der Hintergrunddienst dieser Version nicht erreichbar ist; die
 Anfrage bleibt unverändert. Scheitert erst der Journalschritt, ist die Verbindung gespeichert: Antwort
 `conflict` mit einer Meldung, die mit „Verbindung gespeichert, Befehle, Terminal oder Bildschirm noch nicht
-freigegeben (Rechte offen): …“ beginnt, der Worker wird neu geladen, die Verbindung steht in
+freigegeben (Rechte offen): …“ beginnt (nimmt die wartende Änderung Rechte weg: „… noch nicht entzogen (Rechte offen; …): …“; gemischt: „zum Teil noch nicht entzogen, zum Teil noch nicht freigegeben“), der Worker wird neu geladen, die Verbindung steht in
 `pendingRights`. Ein Weg ohne Exec-Anteil (Voreinstellungen „Keine Rechte“, „Nur lesen“, „Dateien lesen und
 schreiben“ ohne Code-Rechte mit Exec) braucht den Dienst nicht.
 Gespeicherte Form (Review 2026-10-31 W9): Ein Profil mit Ordnern je Gerät, `pendingRights`, Code-Rechten,

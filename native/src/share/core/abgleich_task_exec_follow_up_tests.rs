@@ -266,11 +266,28 @@ fn abgleich_task_follow_up_cancel_confirm_and_explicit_change_end_the_record() {
         .unwrap();
     accept(&mut profiles, NOW);
     let target = target_of(&profiles, "peer");
-    // „Abbrechen“: the connection stays without those rights.
-    assert!(profiles.cancel_connection_rights(&target));
+    // „Abbrechen“: the connection stays without those rights, also without
+    // the folders and the write right that were stored with the acceptance
+    // (W2, review 3).
+    assert!(profiles.cancel_connection_rights(&target, NOW + 1));
     assert!(profiles.exec_follow_ups.is_empty());
     assert!(profiles.pending_rights.is_empty());
     assert!(all_off(&exec_on(&profiles, "peer")));
+    assert!(!profiles.grant_for("peer").unwrap().write);
+    let RightsTarget::Direct {
+        device_id,
+        public_key,
+    } = &target
+    else {
+        unreachable!()
+    };
+    assert_eq!(
+        profiles
+            .current_direct_rights(device_id, public_key)
+            .unwrap()
+            .folders,
+        FolderChoice::None
+    );
 
     // „Bestätigen“ (the journal's step) supersedes the record.
     profiles

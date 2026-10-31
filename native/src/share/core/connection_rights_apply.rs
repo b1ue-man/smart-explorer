@@ -1,10 +1,14 @@
 //! F1–F6 (plan 2026-10-31) on the stored profiles: a new connection starts
 //! without any right and waits („Rechte offen“); confirming sets the chosen
-//! rights in one step; cancelling keeps the connection without rights.
-//! Rights chosen in advance (Direct code, PIN offer, room) are that
-//! confirmation. Existing grants and rooms keep the rights they have.
+//! rights in one step; cancelling keeps the connection without rights
+//! (`connection_rights_cancel.rs`: also folders and write right that a
+//! deferred confirmation stored already). Rights chosen in advance (Direct
+//! code, PIN offer, room) are that confirmation. Existing grants and rooms
+//! keep the rights they have.
 use serde::{Deserialize, Serialize};
 
+#[path = "connection_rights_cancel.rs"]
+mod cancel;
 #[path = "connection_rights_rooms.rs"]
 mod rooms;
 
@@ -23,7 +27,11 @@ pub struct PendingRightsView {
     pub since: i64,
     /// Device or room name.
     pub name: String,
-    /// The rights the connection has now (no right while it waits).
+    /// The rights the connection has now: none while it waits plain; when
+    /// rights were chosen in advance (`ExecWrite::Deferred`) their folders
+    /// and write right are in force already and only commands, terminal and
+    /// screen wait for the Exec-grant journal („Abbrechen“ takes all of
+    /// them back).
     pub rights: ConnectionRights,
 }
 
@@ -356,31 +364,6 @@ impl ShareProfiles {
                 self.apply_room_connection_rights(profile_id, rights, now)
             }
         }
-    }
-
-    /// „Abbrechen“: the connection stays, without the rights it waited for.
-    /// Returns whether it was waiting.
-    pub fn cancel_connection_rights(&mut self, target: &RightsTarget) -> bool {
-        let before = self.pending_rights.len();
-        self.pending_rights
-            .retain(|pending| &pending.target != target);
-        // Rights chosen for the journal but not stored yet are not given.
-        let mut dropped = false;
-        match target {
-            RightsTarget::Direct { device_id, .. } => {
-                let waiting = self.exec_follow_ups.len();
-                self.exec_follow_ups
-                    .retain(|follow_up| &follow_up.device_id != device_id);
-                dropped = waiting != self.exec_follow_ups.len();
-            }
-            RightsTarget::Room { profile_id } => {
-                if let Some(room) = self.rooms.iter_mut().find(|room| &room.id == profile_id) {
-                    dropped = !room.policy.member_follow_ups.is_empty();
-                    room.policy.member_follow_ups.clear();
-                }
-            }
-        }
-        dropped || before != self.pending_rights.len()
     }
 
     /// F5/F6: the rights for devices that connect with this Direct code;
