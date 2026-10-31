@@ -1,0 +1,469 @@
+name: sync-abgleich-task
+run-name: Sync comparison as fast as the storage analysis ${{ inputs.candidate_sha }}
+
+# Single task-level suite of the batch of 2026-10-31 "Sync-Abgleich so schnell
+# wie die Speicheranalyse" (plan docs/plaene/2026-10-31-sync-abgleich-schnell/,
+# reading aid suite.md in that folder). Dispatch it once for the exact pushed
+# candidate SHA; it never builds release artifacts or publishes. One
+# entrypoint, native/test-sync-abgleich-task.py:
+#   gate        Clippy on library, binaries and tests (findings count only on
+#               lines changed since v0.5.189) and rustfmt of the changed lines
+#   functional  every `abgleich_task_` test (in the test list, ignored and
+#               integration-target ones included) plus the directly affected
+#               modules (a failure there is re-run on v0.5.189 and counts only
+#               when v0.5.189 passes it); Linux builds the embedded se-agent
+#               bundles from se-agent/ first
+#   behaviour   Linux: equality and backward compatibility of `se sync compare`
+#               and `se ls -R` between v0.5.189 (plus the two CLI commits
+#               1f004fd9 and bc18587b) and the candidate on generated trees for
+#               local-local, local-SFTP, local-SSH agent, local-Direct Share and
+#               Share-Share, also candidate client against a v0.5.189 far side
+#               and the reverse; then the merge rule `se cp --conflict update`
+#               over local, SFTP, SSH agent, Direct Share, FTP and SMB.
+#               Windows: the merge rule local-local
+#   measure     (input measure) wall time of `se sync compare` and `se ls -R`,
+#               v0.5.189 against the candidate, 100 000 files in 10 000 folders
+#               per side (an assumption), per side combination, cold and warm,
+#               median of `repetitions`, next to find, du, robocopy /L and
+#               `se search`. The table "Weg | v0.5.189 | Kandidat | Verhältnis"
+#               goes to the step summary, every number to the artifact
+#   android     the Android build stage (NDK check of the bridge, APKs, JVM
+#               unit tests including the classes named AbgleichTask)
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Full pushed candidate SHA, matching the selected ref
+        required: true
+        type: string
+      measure:
+        description: Run the measurement jobs (false = gate, functional, behaviour and Android only)
+        required: false
+        default: true
+        type: boolean
+      repetitions:
+        description: Repetitions per measurement (the median is reported)
+        required: false
+        default: '3'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-abgleich-task-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 240
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 1
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind workflow and checkout to the requested candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          git rev-parse --verify v0.5.189^{commit}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+          shared-key: sync-abgleich-dev
+          cache-on-failure: true
+          cache-workspace-crates: true
+
+      - name: Clippy on library, binaries and tests; findings on changed lines fail
+        shell: bash
+        timeout-minutes: 160
+        run: |
+          set +e -uo pipefail
+          git diff -U0 --no-color v0.5.189 HEAD -- native/src native/tests > "$RUNNER_TEMP/diff.txt"
+          cd native
+          cargo clippy --lib --bins --tests --message-format short 2>&1 \
+            | tr '\\' '/' | tee "$RUNNER_TEMP/clippy.txt"
+          status=${PIPESTATUS[0]}
+          if grep -E ': error\[E[0-9]+\]|^error\[E[0-9]+\]' "$RUNNER_TEMP/clippy.txt"; then
+            echo "::error::compile errors (clippy status $status)"
+            exit 1
+          fi
+          PY=$(command -v python3 || command -v python)
+          "$PY" - "$RUNNER_TEMP/diff.txt" "$RUNNER_TEMP/clippy.txt" > "$RUNNER_TEMP/findings.txt" <<'PYEOF'
+          import re, sys
+          changed, current = {}, None
+          for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+              if line.startswith("+++ "):
+                  path = line[4:].strip()
+                  current = path[len("b/native/"):] if path.startswith("b/native/") else None
+              elif line.startswith("@@") and current:
+                  m = re.search(r"\+(\d+)(?:,(\d+))?", line)
+                  start, count = int(m.group(1)), int(m.group(2) or 1)
+                  changed.setdefault(current, set()).update(range(start, start + count))
+          for line in open(sys.argv[2], encoding="utf-8", errors="replace"):
+              m = re.match(r"^((?:src|tests)/[^:]+):(\d+):\d+: (error|warning)", line)
+              if m and int(m.group(2)) in changed.get(m.group(1), ()):
+                  print(line.rstrip())
+          PYEOF
+          if [[ -s "$RUNNER_TEMP/findings.txt" ]]; then
+            echo "::error::findings on changed lines"
+            sort -u "$RUNNER_TEMP/findings.txt"
+            exit 1
+          fi
+          echo "clippy clean on changed lines"
+
+      - name: rustfmt; deviations on changed lines fail
+        if: runner.os == 'Linux'
+        shell: bash
+        timeout-minutes: 15
+        run: >-
+          python native/test-sync-abgleich-task.py --job fmt
+          --log-root "$RUNNER_TEMP/sync-abgleich-fmt"
+
+  functional:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 330
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 1
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          # The baseline comparison builds v0.5.189 from its tag in a git worktree.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind workflow and checkout to the requested candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          git rev-parse --verify v0.5.189^{commit}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+          shared-key: sync-abgleich-dev
+          cache-on-failure: true
+          cache-workspace-crates: true
+
+      - name: Run the one task entrypoint (functional)
+        shell: bash
+        timeout-minutes: 310
+        run: >-
+          python native/test-sync-abgleich-task.py --job functional
+          --log-root "$RUNNER_TEMP/sync-abgleich-functional"
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          summary="$RUNNER_TEMP/sync-abgleich-functional/summary.md"
+          if [[ -f "$summary" ]]; then cat "$summary" >> "$GITHUB_STEP_SUMMARY"; fi
+
+      - name: Preserve acceptance and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sync-abgleich-functional-${{ runner.os }}-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/sync-abgleich-functional
+          if-no-files-found: warn
+          retention-days: 14
+
+  behaviour:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    # Linux: the candidate, v0.5.189 and two mixed-agent builds in the
+    # development profile, a development share server, the equality runs and
+    # the merge cases against containers.
+    timeout-minutes: 345
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          # v0.5.189 and the two CLI commits are read from the history.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind workflow and checkout to the requested candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          for ref in v0.5.189 1f004fd9 bc18587b; do git rev-parse --verify "$ref^{commit}"; done
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Free disk space and check the fixture tools
+        if: runner.os == 'Linux'
+        shell: bash
+        timeout-minutes: 30
+        run: |
+          set -Eeuo pipefail
+          df -h /
+          sudo -n rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/share/swift || true
+          df -h /
+          sudo -n true
+          command -v docker ssh-keyscan ssh-keygen openssl find du cp
+          docker version --format '{{.Server.Version}}'
+
+      - name: Run the one task entrypoint (behaviour)
+        shell: bash
+        timeout-minutes: 330
+        run: >-
+          python native/test-sync-abgleich-task.py --job behaviour
+          --log-root "$RUNNER_TEMP/sync-abgleich-behaviour"
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          summary="$RUNNER_TEMP/sync-abgleich-behaviour/summary.md"
+          if [[ -f "$summary" ]]; then cat "$summary" >> "$GITHUB_STEP_SUMMARY"; fi
+
+      - name: Preserve acceptance and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sync-abgleich-behaviour-${{ runner.os }}-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/sync-abgleich-behaviour
+          if-no-files-found: warn
+          retention-days: 14
+
+  measure:
+    if: ${{ inputs.measure }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    # Release builds of the candidate and of v0.5.189 plus the repetitions of
+    # every measurement; the driver stops measuring at its own budget so the
+    # report is always written before this limit.
+    timeout-minutes: 355
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          # The baseline v0.5.189 is built from its tag in a git worktree.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind workflow and checkout to the requested candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          for ref in v0.5.189 1f004fd9 bc18587b; do git rev-parse --verify "$ref^{commit}"; done
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      # No build cache: the release outputs would evict the shared development
+      # caches of the other jobs.
+
+      - name: Free disk space and check the tools
+        if: runner.os == 'Linux'
+        shell: bash
+        timeout-minutes: 30
+        run: |
+          set -Eeuo pipefail
+          df -h /
+          sudo -n rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/share/swift || true
+          df -h /
+          sudo -n true
+          command -v docker ssh-keyscan ssh-keygen openssl find du cp
+
+      - name: Run the one task entrypoint (measure)
+        shell: bash
+        timeout-minutes: 345
+        run: >-
+          python native/test-sync-abgleich-task.py --job measure
+          --repetitions "${{ inputs.repetitions }}"
+          --budget-minutes 320
+          --log-root "$RUNNER_TEMP/sync-abgleich-measure"
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          summary="$RUNNER_TEMP/sync-abgleich-measure/summary.md"
+          if [[ -f "$summary" ]]; then cat "$summary" >> "$GITHUB_STEP_SUMMARY"; fi
+
+      - name: Preserve the measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sync-abgleich-measure-${{ runner.os }}-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/sync-abgleich-measure
+          if-no-files-found: warn
+          retention-days: 30
+
+  # The Android side of the batch (the changed Kotlin dialogs and API classes,
+  # the bridge's transfer domain): the existing Android build mode of the
+  # Android suite — NDK check and build of native/android-bridge, APKs and the
+  # JVM unit tests, then a check that every unit test class named AbgleichTask
+  # produced a result file without failures.
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Bind workflow and checkout to the requested candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          log_root="$RUNNER_TEMP/android-task-logs"
+          mkdir -p "$log_root"
+          printf 'SMART_EXPLORER_TASK_LOG_ROOT=%s\n' "$log_root" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+          shared-key: android-task-ndk
+          cache-on-failure: true
+
+      - name: Android build, APKs and JVM unit tests
+        shell: bash
+        timeout-minutes: 120
+        run: |
+          set -Eeuo pipefail
+          bash android/test-android-task.sh android-build --out "$RUNNER_TEMP/android-task-apk" 2>&1 | \
+            tee "$SMART_EXPLORER_TASK_LOG_ROOT/suite-android-build.log"
+
+      - name: Every AbgleichTask JVM test class ran and passed
+        shell: bash
+        timeout-minutes: 10
+        run: |
+          set -Eeuo pipefail
+          python3 - "$SMART_EXPLORER_TASK_LOG_ROOT/unit-test-results" <<'PYEOF'
+          import glob, os, re, sys
+          import xml.etree.ElementTree as ET
+          results = sys.argv[1]
+          sources = [path for path in glob.glob("android/app/src/test/java/**/*.kt", recursive=True)
+                     if "AbgleichTask" in os.path.basename(path)]
+          if not sources:
+              sys.exit("no unit test class named AbgleichTask exists under android/app/src/test/java")
+          failed = False
+          for source in sorted(sources):
+              text = open(source, encoding="utf-8").read()
+              package = re.search(r"^package\s+([\w.]+)", text, re.MULTILINE)
+              name = os.path.splitext(os.path.basename(source))[0]
+              full = f"{package.group(1)}.{name}" if package else name
+              report = os.path.join(sys.argv[1], f"TEST-{full}.xml")
+              if not os.path.isfile(report):
+                  print(f"FAIL {full}: no result file {report}")
+                  failed = True
+                  continue
+              suite = ET.parse(report).getroot()
+              tests, bad = int(suite.get("tests", 0)), int(suite.get("failures", 0)) + int(suite.get("errors", 0))
+              skipped = int(suite.get("skipped", 0))
+              print(f"{'ok  ' if tests and not bad and skipped < tests else 'FAIL'} {full}: "
+                    f"{tests} tests, {bad} failed, {skipped} skipped")
+              failed = failed or tests == 0 or bad > 0 or skipped >= tests
+          sys.exit(1 if failed else 0)
+          PYEOF
+
+      - name: Upload failure diagnostics
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: sync-abgleich-android-logs-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/android-task-logs
+          if-no-files-found: warn
+          retention-days: 14
