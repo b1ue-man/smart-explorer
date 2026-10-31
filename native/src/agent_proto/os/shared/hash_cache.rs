@@ -17,11 +17,41 @@
 //! the reuse, never a result. The agent keeps its file in its cache folder
 //! (`$XDG_CACHE_HOME/se-agent` or `~/.cache/se-agent`), the app in its data
 //! folder (`configure`).
+//! Persistent digest cache on the side that stores the files (E9): the SSH
+//! agent, a Share host and a local sync side keep the digests they computed,
+//! keyed by the file's status (`local_platform::file_stamp`: device and
+//! inode, or volume serial and 128-bit file ID on Windows, size,
+//! modification and status-change time in nanoseconds) and the algorithm. A digest is used again only while that status is unchanged.
+//!
+//! Racy timestamps (Git, `Documentation/technical/racy-git.txt`): a file
+//! changed within the time granularity of the moment its digest was taken
+//! can change again with the same times. So a digest counts only when the
+//! file's modification and change times lie more than `RACY_SLACK` before
+//! the moment the digest was taken (`recorded_ns`); otherwise it is computed
+//! again each time until the file is old enough.
+//!
+//! Only file systems with durable file IDs have a stamp (`file_ids.rs`: not
+//! FAT, exFAT, FUSE, SMB/CIFS, 9p or optical media; on Windows only NTFS and
+//! ReFS): a file without a stamp is never cached. A run that asks for a fresh
+//! read (`digest_fresh`, the checksum compare mode of a local sync side)
+//! never takes a stored digest, and stores the one it read.
+//!
+//! The file holds at most `MAX_ENTRIES` digests, the most recently used
+//! first. A cache that cannot be read or written costs only the reuse, never
+//! a result. New digests are collected in memory and written together
+//! (`flush`: at most every `FLUSH_INTERVAL`; `flush_now`: at the end of a
+//! walk or a connection), as one atomic replacement of the file that is
+//! built under the lock and written outside it, so no thread waits for a
+//! write. The cache lives in the app's data folder
+//! (`support_dirs::app_data_dir`, on Android the host's) or, in the
+//! standalone agent, in its cache folder (`$XDG_CACHE_HOME/se-agent` or
+//! `~/.cache/se-agent`, `se-agent/src/support_dirs.rs`). `clear` forgets
+//! every digest (`se doctor --clear-hash-cache`).
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const MAGIC: &[u8] = b"SEHC\x01";
 /// Digests kept (about 100 bytes each in the file).
@@ -30,6 +60,10 @@ const MAX_ENTRIES: usize = 500_000;
 /// cover the coarsest common time granularity, FAT).
 const RACY_SLACK_NS: i128 = 2_000_000_000;
 const FILE_NAME: &str = "hash-cache-v1.bin";
+/// New digests are written at most this often by `flush`.
+const FLUSH_INTERVAL: Duration = Duration::from_secs(30);
+/// How long `flush_now` waits for a write of another thread.
+const WRITE_WAIT: Duration = Duration::from_secs(5);
 
 struct Entry {
     stamp: [i128; 5],
@@ -43,7 +77,12 @@ struct Cache {
     folder: Option<PathBuf>,
     configured: bool,
     loaded: bool,
+    /// Digests were added since the last write (`rev` counts the additions).
     dirty: bool,
+    rev: u64,
+    /// A thread is writing the file (outside the lock).
+    writing: bool,
+    last_write: Option<Instant>,
     clock: u64,
     entries: HashMap<(i128, i128, u8), Entry>,
 }
@@ -62,8 +101,8 @@ fn now_ns() -> i128 {
         .map_or(0, |elapsed| elapsed.as_nanos() as i128)
 }
 
-/// Keeps the cache file in `folder` (the app: its data folder); `None`
-/// keeps digests for this process only.
+/// Keeps the cache file in `folder`; `None` keeps digests for this process
+/// only.
 pub(crate) fn configure(folder: Option<PathBuf>) {
     let mut guard = lock();
     let cache = guard.get_or_insert_with(Cache::default);
@@ -77,8 +116,7 @@ pub(crate) fn configure(folder: Option<PathBuf>) {
     };
 }
 
-/// `configure`, unless a folder was configured already (the app sets its
-/// data folder before every walk that hashes).
+/// `configure`, unless a folder was configured already.
 pub(crate) fn configure_once(folder: impl FnOnce() -> Option<PathBuf>) {
     let mut guard = lock();
     if guard.as_ref().is_some_and(|cache| cache.configured) {
@@ -91,22 +129,21 @@ pub(crate) fn configure_once(folder: impl FnOnce() -> Option<PathBuf>) {
     });
 }
 
-/// The agent's cache folder, from its environment (none in tests).
-fn agent_folder() -> Option<PathBuf> {
+/// The folder of a cache nobody configured: the data folder of the process
+/// (`crate::support_dirs::app_data_dir`: the app's on every platform, the
+/// standalone agent's cache folder, empty when it has none). None in tests.
+fn default_folder() -> Option<PathBuf> {
     if cfg!(test) {
         return None;
     }
-    let base = std::env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute())
-        .or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join(".cache")))?;
-    Some(base.join("se-agent"))
+    let folder = crate::support_dirs::app_data_dir();
+    (!folder.as_os_str().is_empty()).then_some(folder)
 }
 
 fn with_cache<T>(f: impl FnOnce(&mut Cache) -> T) -> T {
     let mut guard = lock();
     let cache = guard.get_or_insert_with(|| Cache {
-        folder: agent_folder(),
+        folder: default_folder(),
         configured: true,
         ..Cache::default()
     });
@@ -130,23 +167,49 @@ pub(crate) fn digest(
     compute: impl FnOnce() -> io::Result<String>,
     after: impl FnOnce() -> Option<[i128; 5]>,
 ) -> io::Result<String> {
+    digest_with(true, stamp, algorithm, compute, after)
+}
+
+/// `digest` that never takes a stored digest: the file is read, and the
+/// digest read is stored (the checksum compare mode asks for the content as
+/// it is now).
+pub(crate) fn digest_fresh(
+    stamp: Option<[i128; 5]>,
+    algorithm: u8,
+    compute: impl FnOnce() -> io::Result<String>,
+    after: impl FnOnce() -> Option<[i128; 5]>,
+) -> io::Result<String> {
+    digest_with(false, stamp, algorithm, compute, after)
+}
+
+fn digest_with(
+    reuse: bool,
+    stamp: Option<[i128; 5]>,
+    algorithm: u8,
+    compute: impl FnOnce() -> io::Result<String>,
+    after: impl FnOnce() -> Option<[i128; 5]>,
+) -> io::Result<String> {
     let Some(stamp) = stamp else {
         return compute();
     };
     let key = (stamp[0], stamp[1], algorithm);
-    let hit = with_cache(|cache| {
-        cache.clock += 1;
-        let clock = cache.clock;
-        cache.entries.get_mut(&key).and_then(|entry| {
-            let fresh = entry.stamp == stamp
-                && stamp[3] < entry.recorded_ns - RACY_SLACK_NS
-                && stamp[4] < entry.recorded_ns - RACY_SLACK_NS;
-            fresh.then(|| {
-                entry.used = clock;
-                entry.digest.clone()
+    let hit = reuse
+        .then(|| {
+            with_cache(|cache| {
+                cache.clock += 1;
+                let clock = cache.clock;
+                cache.entries.get_mut(&key).and_then(|entry| {
+                    let fresh = entry.stamp == stamp
+                        && stamp[3] < entry.recorded_ns - RACY_SLACK_NS
+                        && stamp[4] < entry.recorded_ns - RACY_SLACK_NS;
+                    fresh.then(|| {
+                        entry.used = clock;
+                        entry.digest.clone()
+                    })
+                })
             })
         })
-    });
+        .flatten();
     if let Some(digest) = hit {
         return Ok(digest);
     }
@@ -167,28 +230,98 @@ pub(crate) fn digest(
                 },
             );
             cache.dirty = true;
+            cache.rev += 1;
         });
     }
     Ok(digest)
 }
 
-/// Writes the cache file when digests were added (after a walk).
+/// Writes the digests added since the last write, unless the last write was
+/// less than `FLUSH_INTERVAL` ago (a request that may repeat per file).
 pub(crate) fn flush() {
-    let mut guard = lock();
-    let Some(cache) = guard.as_mut() else {
-        return;
-    };
-    let Some(folder) = cache.folder.clone().filter(|_| cache.dirty) else {
-        return;
-    };
-    if cache.entries.len() > MAX_ENTRIES {
-        let mut used: Vec<u64> = cache.entries.values().map(|entry| entry.used).collect();
-        used.sort_unstable_by(|left, right| right.cmp(left));
-        let oldest_kept = used[MAX_ENTRIES - 1];
-        cache.entries.retain(|_, entry| entry.used >= oldest_kept);
-    }
-    if save(cache, &folder).is_ok() {
+    write_pending(false);
+}
+
+/// Writes the digests added since the last write now (the end of a walk, of
+/// a connection or of a run).
+pub(crate) fn flush_now() {
+    write_pending(true);
+}
+
+/// Forgets every digest: in this process and in the cache file of `folder`.
+pub(crate) fn clear(folder: &Path) -> io::Result<()> {
+    if let Some(cache) = lock().as_mut() {
+        cache.entries.clear();
         cache.dirty = false;
+        cache.rev += 1;
+    }
+    match std::fs::remove_file(folder.join(FILE_NAME)) {
+        Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
+        _ => Ok(()),
+    }
+}
+
+/// The file contents of the cache and what they stand for, built under the
+/// lock; the write itself runs outside it.
+struct Pending {
+    folder: PathBuf,
+    bytes: Vec<u8>,
+    rev: u64,
+}
+
+fn take_pending(force: bool) -> Option<Pending> {
+    let deadline = Instant::now() + WRITE_WAIT;
+    loop {
+        let mut guard = lock();
+        let cache = guard.as_mut()?;
+        let folder = cache.folder.clone().filter(|_| cache.dirty)?;
+        if cache.writing {
+            // Another thread writes: its file may lack the newest digests,
+            // which stay dirty. A forced flush waits for it.
+            if !force || Instant::now() >= deadline {
+                return None;
+            }
+            drop(guard);
+            std::thread::sleep(Duration::from_millis(5));
+            continue;
+        }
+        if !force
+            && cache
+                .last_write
+                .is_some_and(|written| written.elapsed() < FLUSH_INTERVAL)
+        {
+            return None;
+        }
+        if cache.entries.len() > MAX_ENTRIES {
+            let mut used: Vec<u64> = cache.entries.values().map(|entry| entry.used).collect();
+            used.sort_unstable_by(|left, right| right.cmp(left));
+            let oldest_kept = used[MAX_ENTRIES - 1];
+            cache.entries.retain(|_, entry| entry.used >= oldest_kept);
+        }
+        cache.writing = true;
+        return Some(Pending {
+            bytes: encode(cache),
+            rev: cache.rev,
+            folder,
+        });
+    }
+}
+
+fn write_pending(force: bool) {
+    let Some(pending) = take_pending(force) else {
+        return;
+    };
+    let result = save(&pending.folder, &pending.bytes);
+    let mut guard = lock();
+    if let Some(cache) = guard.as_mut() {
+        cache.writing = false;
+        if result.is_ok() && cache.folder.as_deref() == Some(pending.folder.as_path()) {
+            cache.last_write = Some(Instant::now());
+            // Digests added meanwhile stay dirty for the next write.
+            if cache.rev == pending.rev {
+                cache.dirty = false;
+            }
+        }
     }
 }
 
@@ -244,12 +377,13 @@ fn load(cache: &mut Cache, path: &Path) {
     }
 }
 
-fn save(cache: &Cache, folder: &Path) -> io::Result<()> {
-    std::fs::create_dir_all(folder)?;
+/// The file contents: the most recently used digest last, so a file read
+/// back in order ends with the newest.
+fn encode(cache: &Cache) -> Vec<u8> {
     let mut entries: Vec<(&(i128, i128, u8), &Entry)> = cache.entries.iter().collect();
-    // Oldest first, so a file read back in order ends with the newest.
     entries.sort_unstable_by_key(|(_, entry)| entry.used);
     let mut out = MAGIC.to_vec();
+    out.reserve(entries.len() * 130);
     for ((_, _, algorithm), entry) in entries {
         if entry.digest.len() > 255 {
             continue;
@@ -262,9 +396,16 @@ fn save(cache: &Cache, folder: &Path) -> io::Result<()> {
         out.push(entry.digest.len() as u8);
         out.extend_from_slice(entry.digest.as_bytes());
     }
+    out
+}
+
+/// Replaces the cache file atomically (a staged file renamed over it).
+fn save(folder: &Path, bytes: &[u8]) -> io::Result<()> {
+    std::fs::create_dir_all(folder)?;
     let path = folder.join(FILE_NAME);
     let staged = folder.join(format!("{FILE_NAME}.{}.tmp", std::process::id()));
-    if let Err(error) = std::fs::write(&staged, &out).and_then(|()| std::fs::rename(&staged, &path))
+    if let Err(error) =
+        std::fs::write(&staged, bytes).and_then(|()| std::fs::rename(&staged, &path))
     {
         let _ = std::fs::remove_file(&staged);
         return Err(error);

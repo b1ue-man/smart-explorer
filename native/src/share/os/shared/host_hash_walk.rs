@@ -278,7 +278,8 @@ pub(in crate::share) fn run(
     runs::visit(&mut batch, &request, &access)?;
     batch.send()?;
     if request.algo.is_some() {
-        crate::agent_proto::hash_cache::flush();
+        // The digests this walk took are written once, at its end.
+        crate::agent_proto::hash_cache::flush_now();
     }
     if shared.keys.as_ref().is_some_and(|tree| !tree.complete()) {
         return Err(io::Error::new(

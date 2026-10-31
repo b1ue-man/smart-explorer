@@ -276,7 +276,7 @@ pub(super) fn walk_snapshot_observed(
     }
     drop(context);
     if be.is_local() && hash != HashMode::None {
-        crate::agent_proto::hash_cache::flush();
+        crate::agent_proto::hash_cache::flush_now();
     }
     Ok(Snapshot {
         tree,

@@ -14,7 +14,7 @@
 //! - every subfolder that was walked: its name and its key.
 //!
 //! Beside its key, a `Mode::KeysOnly` walk reports what each folder's subtree
-//! holds (`vfs::KeyTally`: files, bytes, omissions, files of unknown time,
+//! holds (`KeyTally`: files, bytes, omissions, files of unknown time,
 //! folder depth), so a caller that finds two folders equal by key accounts
 //! for everything in them without listing either side.
 //!
@@ -36,8 +36,8 @@
 use std::collections::HashSet;
 use std::io;
 
+use super::key_tally::{name_is_unusual, KeyTally};
 use super::sha256::Sha256;
-use crate::vfs::KeyTally;
 
 #[path = "folder_key_tree.rs"]
 mod tree;
@@ -262,8 +262,7 @@ impl<I> RunKeys<I> {
         }
         // A link, a special file and a name no transfer takes are reported by
         // the transfer's own walk: one omission each.
-        if matches!(shape.kind, EntryKind::Link | EntryKind::Special)
-            || crate::vfs::name_is_unusual(shape.name)
+        if matches!(shape.kind, EntryKind::Link | EntryKind::Special) || name_is_unusual(shape.name)
         {
             self.omit_one();
         }

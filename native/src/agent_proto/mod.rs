@@ -30,6 +30,8 @@ mod ext_ops;
 mod extension_parts;
 #[path = "core/features.rs"]
 mod features;
+#[path = "os/shared/file_digest.rs"]
+mod file_digest;
 #[path = "os/shared/file_identity.rs"]
 mod file_identity;
 #[path = "core/folder_key.rs"]
@@ -40,6 +42,8 @@ mod fs;
 mod hash;
 #[path = "os/shared/hash_cache.rs"]
 pub(crate) mod hash_cache;
+#[path = "core/key_tally.rs"]
+mod key_tally;
 #[cfg(not(windows))]
 #[path = "os/linux_os/local_platform.rs"]
 mod local_platform;
@@ -74,6 +78,8 @@ mod relative_path;
 #[cfg(test)]
 #[path = "core/remote_drive_task_tests.rs"]
 mod remote_drive_task_tests;
+#[path = "os/shared/run_digests.rs"]
+mod run_digests;
 #[cfg(target_os = "linux")]
 #[path = "os/linux_os/sandbox.rs"]
 mod sandbox;
@@ -109,7 +115,9 @@ mod vault_error;
 mod walk_hashed;
 #[path = "os/shared/walk_keyed.rs"]
 mod walk_keyed;
-pub(crate) use walk_keyed::{local_keyed, Collected as LocalKeyed, WireItem as KeyedWireItem};
+pub(crate) use walk_keyed::{
+    local_keyed, local_keyed_reading, Collected as LocalKeyed, WireItem as KeyedWireItem,
+};
 #[path = "os/shared/write_new.rs"]
 mod write_new;
 
@@ -131,12 +139,15 @@ pub use features::{
     lz4_switched_off, server_version, server_version_with, service_slots, ServerFeatures,
     LABEL_BATCH, LABEL_CREDIT, LABEL_LZ4, LABEL_RANGE, LABEL_STAGE,
 };
+pub(crate) use file_digest::{md5_cached, LocalReads};
 pub(crate) use folder_key::{
     entry_part, failure_part, folder_key, known_prefix, omission_part, parse_known, run_digest,
     EntryKind, FolderKey, KeyEmit, KeyTree, KnownKey, Mode as KeyMode, RunKeys, Shape as KeyShape,
     MAX_KNOWN_KEYS,
 };
 pub use fs::{is_pseudo_dir, list_local, stat_local, walk_local, WalkCounter};
+pub(crate) use key_tally::APP_TRASH_DIR_NAME;
+pub use key_tally::{name_is_unusual, KeyTally};
 pub(crate) use local_platform::available_space;
 pub(crate) use local_platform::{file_stamp, path_stamp};
 pub use node_codec::{TreeDecodeBudget, TREE_BUDGET_ERROR};
@@ -153,6 +164,7 @@ pub(crate) use range_space::space_test_lock;
 pub(crate) use range_space::{merge_in, overlaps};
 pub(crate) use range_stage::{random_stage_name, Claim, Pending, RangeStages};
 pub use relative_path::ValidatedRelativePath;
+pub(crate) use run_digests::RunDigests;
 #[cfg(target_os = "linux")]
 pub use sandbox::restrict_filesystem;
 pub use server::serve;

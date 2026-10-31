@@ -41,6 +41,7 @@ use prepare::prepare;
 mod queue;
 mod remote_copy;
 mod roots;
+mod run_setup;
 mod segments;
 mod segments_copy;
 mod segments_download;
@@ -56,15 +57,15 @@ mod worker;
 
 use folders::FolderRegister;
 pub(crate) use legacy::{run_legacy, run_legacy_with_identity};
+use run_setup::{first_source, report_failure, side_flow, source_batch_limits};
 pub(crate) use util::{jitter, lock, random_hex, sleep_unless};
 pub(crate) use view::{JobView, Side};
 
 use super::access::AccessGate;
-use super::engine_names::parent_path;
 use super::engine_policy::{BatchSizer, Breaker};
-use super::flow::{acquire_pair, flow_for, local_flow, Flow, PermitPair};
-use super::job::{JobItems, Layout, TransferJob};
-use super::types::{TransferIssue, TransferKind, TransferMsg, TransferProgress};
+use super::flow::{acquire_pair, Flow, PermitPair};
+use super::job::{Layout, TransferJob};
+use super::types::{TransferKind, TransferMsg, TransferProgress};
 use crate::types::CopyMode;
 use crate::vfs::BatchLimits;
 use queue::WorkQueue;
@@ -150,63 +151,6 @@ pub(crate) fn run_view_here(
     local::move_whole_roots(&engine, &mut plan);
     engine.run(&plan);
     engine.finish(&plan);
-}
-
-fn report_failure(
-    report: &(dyn Fn(TransferMsg) + Sync),
-    mut progress: TransferProgress,
-    message: String,
-    cancel: &AtomicBool,
-) {
-    progress.done = true;
-    progress.discovering = false;
-    // A job canceled while it was prepared ends as canceled, as one
-    // canceled later does: its preparation stopping is no error of its own.
-    if cancel.load(Ordering::Acquire) {
-        report(TransferMsg::Done {
-            progress,
-            errors: Vec::new(),
-            canceled: true,
-            issues: Vec::new(),
-            roots: Vec::new(),
-        });
-        return;
-    }
-    progress.errors = 1;
-    report(TransferMsg::Done {
-        progress,
-        errors: vec![message.clone()],
-        canceled: false,
-        issues: vec![TransferIssue {
-            path: String::new(),
-            message,
-        }],
-        roots: Vec::new(),
-    });
-}
-
-fn side_flow(side: Side<'_>, path: &str) -> Arc<Flow> {
-    match side {
-        Side::Remote(backend) => flow_for(backend, path),
-        Side::Local => local_flow(path),
-    }
-}
-
-/// Packet limits for the files of the selected `first`: below it when it is
-/// a folder (an export at a host's root has nothing packable above it),
-/// below its parent when it is a file (K-E).
-fn source_batch_limits(backend: &dyn crate::vfs::Backend, first: &str) -> Option<BatchLimits> {
-    backend
-        .batch_limits(first)
-        .or_else(|| backend.batch_limits(&parent_path(first)))
-}
-
-fn first_source(items: &JobItems) -> &str {
-    match items {
-        JobItems::Roots { paths, .. } => paths.first().map(String::as_str),
-        JobItems::Pairs(pairs) => pairs.first().map(|pair| pair.source.as_str()),
-    }
-    .unwrap_or("/")
 }
 
 /// One running job.

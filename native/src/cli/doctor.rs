@@ -8,6 +8,13 @@ const MAX_DIAGNOSTIC_FILE_BYTES: u64 = 4 * 1024 * 1024;
 pub(super) struct DoctorArgs {
     #[arg(long, help = "Print machine-readable JSON")]
     json: bool,
+    #[arg(
+        long,
+        help = "Forget every file digest this device keeps (hash-cache-v1.bin in the app data \
+                folder): the next read of a file is a fresh one. A Share host or sync that is \
+                running keeps its digests in memory until it restarts"
+    )]
+    clear_hash_cache: bool,
 }
 
 struct Health {
@@ -130,16 +137,33 @@ pub(super) fn doctor_value() -> Result<(serde_json::Value, bool), String> {
     Ok((report.json(), report.exit_code() == 0))
 }
 
+/// Forgets the digests of the device's hash cache (`--clear-hash-cache`).
+fn clear_hash_cache() -> Result<(), String> {
+    let folder = crate::support_dirs::app_data_dir();
+    crate::agent_proto::hash_cache::clear(&folder)
+        .map_err(|error| format!("hash cache in {} not cleared: {error}", folder.display()))
+}
+
 pub(super) fn run(args: DoctorArgs) -> Result<i32, String> {
+    if args.clear_hash_cache {
+        clear_hash_cache()?;
+    }
     let report = Report::collect()?;
     let exit_code = report.exit_code();
 
     if args.json {
+        let mut value = report.json();
+        if args.clear_hash_cache {
+            value["hash_cache_cleared"] = serde_json::Value::Bool(true);
+        }
         println!(
             "{}",
-            serde_json::to_string_pretty(&report.json()).map_err(|error| error.to_string())?
+            serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?
         );
         return Ok(exit_code);
+    }
+    if args.clear_hash_cache {
+        println!("hash_cache\tcleared");
     }
 
     println!("version\t{}", env!("CARGO_PKG_VERSION"));

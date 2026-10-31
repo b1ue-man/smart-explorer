@@ -330,7 +330,7 @@ pub enum Frame {
         rel: String,
         key: [u8; 32],
         same: bool,
-        tally: Option<crate::vfs::KeyTally>,
+        tally: Option<super::key_tally::KeyTally>,
     },
     /// The run of the folder (path relative to the walk root) of a
     /// `WalkKeyed` begins: every `HashPart` up to the next mark is of it.

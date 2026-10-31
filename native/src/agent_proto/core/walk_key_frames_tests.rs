@@ -45,7 +45,7 @@ fn abgleich_task_walk_key_frames_round_trip() {
             rel: String::new(),
             key: [1; 32],
             same: false,
-            tally: Some(crate::vfs::KeyTally {
+            tally: Some(crate::agent_proto::KeyTally {
                 files: 300,
                 bytes: u64::MAX,
                 omitted: 0,
@@ -98,7 +98,7 @@ fn abgleich_task_walk_key_frames_refuse_partial_known_keys() {
 
 #[test]
 fn abgleich_task_folder_key_tally_must_be_whole_and_in_range() {
-    let tally = crate::vfs::KeyTally {
+    let tally = crate::agent_proto::KeyTally {
         files: 1,
         bytes: 1 << 40,
         omitted: 0,
@@ -120,7 +120,7 @@ fn abgleich_task_folder_key_tally_must_be_whole_and_in_range() {
         rel: "a".into(),
         key: [2; 32],
         same: false,
-        tally: Some(crate::vfs::KeyTally {
+        tally: Some(crate::agent_proto::KeyTally {
             height: u32::MAX,
             ..tally
         }),

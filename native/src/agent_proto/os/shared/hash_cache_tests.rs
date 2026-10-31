@@ -100,6 +100,143 @@ fn abgleich_task_hash_cache_never_answers_a_racy_file() {
     assert_eq!(calls.load(Ordering::SeqCst), 3);
 }
 
+fn fresh_digest_of(path: &Path, calls: &AtomicUsize) -> String {
+    digest_fresh(
+        super::super::local_platform::path_stamp(path),
+        crate::agent_proto::digest::MD5,
+        || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(format!("{}", std::fs::read(path)?.len()))
+        },
+        || super::super::local_platform::path_stamp(path),
+    )
+    .unwrap()
+}
+
+#[test]
+fn abgleich_task_hash_cache_fresh_read_never_takes_a_stored_digest_and_stores_its_own() {
+    let _turn = turn();
+    configure(None);
+    let data = tempfile::tempdir().unwrap();
+    let path = old_file(data.path(), "fresh-read.bin", b"abc");
+    std::thread::sleep(Duration::from_millis(2_100));
+    let calls = AtomicUsize::new(0);
+    assert_eq!(digest_of(&path, &calls), "3");
+    assert_eq!(fresh_digest_of(&path, &calls), "3");
+    assert_eq!(fresh_digest_of(&path, &calls), "3");
+    assert_eq!(calls.load(Ordering::SeqCst), 3, "a fresh read reads");
+    assert_eq!(digest_of(&path, &calls), "3");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        3,
+        "the digest a fresh read stored answers the next ordinary ask"
+    );
+}
+
+#[test]
+fn abgleich_task_hash_cache_a_file_without_a_stamp_is_read_every_time() {
+    let _turn = turn();
+    configure(None);
+    let calls = AtomicUsize::new(0);
+    for _ in 0..3 {
+        let digest = digest(
+            None,
+            crate::agent_proto::digest::MD5,
+            || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok("x".into())
+            },
+            || None,
+        );
+        assert_eq!(digest.unwrap(), "x");
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
+}
+
+#[test]
+fn abgleich_task_hash_cache_collects_digests_and_writes_them_together() {
+    let _turn = turn();
+    let folder = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    configure(Some(folder.path().to_path_buf()));
+    let calls = AtomicUsize::new(0);
+    let first = old_file(data.path(), "w1.bin", b"abc");
+    let second = old_file(data.path(), "w2.bin", b"abcd");
+    let third = old_file(data.path(), "w3.bin", b"abcde");
+    std::thread::sleep(Duration::from_millis(2_100));
+    let file = folder.path().join(FILE_NAME);
+    digest_of(&first, &calls);
+    flush();
+    let one_entry = std::fs::metadata(&file).unwrap().len();
+    // Digests taken within the interval are collected, not written per file.
+    digest_of(&second, &calls);
+    flush();
+    digest_of(&third, &calls);
+    flush();
+    assert_eq!(std::fs::metadata(&file).unwrap().len(), one_entry);
+    // The end of a walk writes them together.
+    flush_now();
+    assert!(std::fs::metadata(&file).unwrap().len() > 2 * one_entry);
+    // Nothing new: nothing is written again.
+    let written = std::fs::metadata(&file).unwrap().modified().unwrap();
+    std::thread::sleep(Duration::from_millis(20));
+    flush_now();
+    assert_eq!(
+        std::fs::metadata(&file).unwrap().modified().unwrap(),
+        written
+    );
+    configure(None);
+}
+
+#[test]
+fn abgleich_task_hash_cache_threads_do_not_wait_for_a_write() {
+    let _turn = turn();
+    let folder = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    configure(Some(folder.path().to_path_buf()));
+    let calls = AtomicUsize::new(0);
+    let first = old_file(data.path(), "n1.bin", b"abc");
+    let second = old_file(data.path(), "n2.bin", b"abcd");
+    std::thread::sleep(Duration::from_millis(2_100));
+    digest_of(&first, &calls);
+    // A write is under way (taken, not yet on disk): the lock is free.
+    let pending = take_pending(true).expect("a digest is waiting");
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            digest_of(&second, &calls);
+            done.send(()).unwrap();
+        });
+        finished
+            .recv_timeout(Duration::from_secs(5))
+            .expect("a hashing thread waited for the write");
+    });
+    save(&pending.folder, &pending.bytes).unwrap();
+    assert!(folder.path().join(FILE_NAME).exists());
+    configure(None);
+}
+
+#[test]
+fn abgleich_task_hash_cache_clear_forgets_memory_and_file() {
+    let _turn = turn();
+    let folder = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    configure(Some(folder.path().to_path_buf()));
+    let path = old_file(data.path(), "c.bin", b"abc");
+    std::thread::sleep(Duration::from_millis(2_100));
+    let calls = AtomicUsize::new(0);
+    digest_of(&path, &calls);
+    flush_now();
+    assert!(folder.path().join(FILE_NAME).exists());
+    clear(folder.path()).unwrap();
+    assert!(!folder.path().join(FILE_NAME).exists());
+    digest_of(&path, &calls);
+    assert_eq!(calls.load(Ordering::SeqCst), 2, "read again after clearing");
+    // Clearing an empty folder is no error.
+    clear(&folder.path().join("none")).unwrap();
+    configure(None);
+}
+
 /// Windows: the stamp is volume serial, 128-bit file ID, size, last write
 /// and change time (`GetFileInformationByHandleEx`), so the cache works
 /// there too, and a write moves it even when the old times are set back.

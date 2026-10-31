@@ -289,18 +289,24 @@ pub(crate) fn rename_no_replace(source: &Path, destination: &Path) -> io::Result
     }
 }
 
+#[path = "file_ids.rs"]
+mod file_ids;
 #[path = "folder_reservation.rs"]
 pub(crate) mod folder_reservation;
 
 /// The status of the open file the digest cache keys on (`hash_cache.rs`):
 /// volume serial, 128-bit file ID (`FileIdInfo`), size, last write and
 /// change time (`FileBasicInfo`, `FILE_BASIC_INFO.ChangeTime`) in Unix
-/// nanoseconds. Every write moves the change time, and no call sets it.
+/// nanoseconds. Every write moves the change time, and no call sets it. A
+/// volume that is not NTFS or ReFS has none (`file_ids.rs`).
 pub(crate) fn file_stamp(file: &std::fs::File) -> Option<[i128; 5]> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{
         FileBasicInfo, FileIdInfo, GetFileInformationByHandleEx, FILE_BASIC_INFO, FILE_ID_INFO,
     };
+    if !file_ids::file_has_durable_ids(file) {
+        return None;
+    }
     let mut basic: FILE_BASIC_INFO = unsafe { std::mem::zeroed() };
     // SAFETY: the handle is open for the call; the buffer has the size given.
     let ok = unsafe {

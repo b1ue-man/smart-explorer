@@ -173,7 +173,13 @@ pub(super) fn provide_local(
     } else {
         crate::agent_proto::digest::NONE
     };
-    let tree = crate::agent_proto::local_keyed(root, algorithm, cancel)
+    let reads = crate::agent_proto::LocalReads {
+        // The checksum compare mode reads every file; the snapshot walk of
+        // the same side takes the digests of this run.
+        fresh: md5,
+        run: pair.run_digests(side),
+    };
+    let tree = crate::agent_proto::local_keyed_reading(root, algorithm, reads, cancel)
         .ok()
         .and_then(|collected| {
             let keys: HashMap<String, FolderKey> = collected.keys.into_iter().collect();

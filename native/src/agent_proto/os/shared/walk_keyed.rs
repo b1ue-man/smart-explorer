@@ -16,10 +16,10 @@ use std::sync::Mutex;
 use super::folder_key::{
     entry_part, parse_known, EntryKind, FolderKey, KeyEmit, KeyTree, Mode, RunKeys, Shape,
 };
+use super::key_tally::KeyTally;
 use super::ops_types::digest;
 use super::session::{emit, Sink};
-use super::{Frame, WireHashEntry, WireOmission};
-use crate::vfs::KeyTally;
+use super::{Frame, LocalReads, WireHashEntry, WireOmission};
 
 /// Estimated encoded bytes after which a `HashPart` of a run is sent.
 const PART_BYTES: usize = 256 * 1024;
@@ -77,6 +77,8 @@ impl KeyEmit<WireItem> for Collected {
 pub(super) struct KeyedSetup<'a> {
     pub(super) tree: &'a KeyTree<WireItem>,
     pub(super) collect: Option<&'a Mutex<Collected>>,
+    /// How a walk in this process reads file contents (`local_keyed`).
+    pub(super) reads: LocalReads<'a>,
 }
 
 /// The keyed state of one walking thread: the run of its current folder.
@@ -253,6 +255,7 @@ pub(crate) fn handle_walk_keyed(
     let setup = KeyedSetup {
         tree: &tree,
         collect: None,
+        reads: LocalReads::default(),
     };
     let walk = (algorithm, min_bytes, None);
     super::walk_hashed::walk_keyed(sink, id, root, walk, setup, cancel)?;
@@ -288,6 +291,7 @@ pub(crate) fn handle_list_runs(
     let setup = KeyedSetup {
         tree: &tree,
         collect: None,
+        reads: LocalReads::default(),
     };
     let walk = (algorithm, 0, Some(folders.as_slice()));
     super::walk_hashed::walk_keyed(sink, id, root, walk, setup, cancel)?;
@@ -298,7 +302,19 @@ pub(crate) fn handle_list_runs(
 /// runs next to its data, in this process (a local sync side: its keys let
 /// the remote other side leave equal folders out).
 pub(crate) fn local_keyed(root: &str, algorithm: u8, cancel: &AtomicBool) -> io::Result<Collected> {
-    collect_local(root, algorithm, Mode::Marks, cancel)
+    local_keyed_reading(root, algorithm, LocalReads::default(), cancel)
+}
+
+/// `local_keyed` with the way file contents are read: a fresh read (the
+/// checksum compare mode) and the digests of the run, shared with the side's
+/// own snapshot walk so no file is read twice.
+pub(crate) fn local_keyed_reading(
+    root: &str,
+    algorithm: u8,
+    reads: LocalReads<'_>,
+    cancel: &AtomicBool,
+) -> io::Result<Collected> {
+    collect_local(root, algorithm, Mode::Marks, reads, cancel)
 }
 
 impl Collected {
@@ -312,7 +328,8 @@ impl Collected {
         algorithm: u8,
         cancel: &AtomicBool,
     ) -> io::Result<Vec<(String, FolderKey, KeyTally)>> {
-        let collected = collect_local(root, algorithm, Mode::KeysOnly, cancel)?;
+        let reads = LocalReads::default();
+        let collected = collect_local(root, algorithm, Mode::KeysOnly, reads, cancel)?;
         let mut tallies: std::collections::HashMap<String, KeyTally> =
             collected.tallies.into_iter().collect();
         collected
@@ -332,6 +349,7 @@ fn collect_local(
     root: &str,
     algorithm: u8,
     mode: Mode,
+    reads: LocalReads<'_>,
     cancel: &AtomicBool,
 ) -> io::Result<Collected> {
     let tree = KeyTree::with_mode("", HashSet::new(), mode);
@@ -339,6 +357,7 @@ fn collect_local(
     let setup = KeyedSetup {
         tree: &tree,
         collect: Some(&collect),
+        reads,
     };
     let sink: Sink = std::sync::Arc::new(Mutex::new(
         Box::new(io::sink()) as Box<dyn std::io::Write + Send>

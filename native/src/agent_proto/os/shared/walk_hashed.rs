@@ -289,6 +289,7 @@ fn run_walk(
         cancel,
         // A walk collecting in this process serves a local sync side.
         local: keys.is_some_and(|keys| keys.collect.is_some()),
+        reads: keys.map(|keys| keys.reads).unwrap_or_default(),
     };
     let run = Mutex::new(());
     let walked = super::ordered_walk(
@@ -307,7 +308,7 @@ fn run_walk(
         },
     );
     if algorithm == digest::MD5 {
-        super::hash_cache::flush();
+        super::hash_cache::flush_now();
     }
     walked
 }
@@ -319,6 +320,8 @@ struct Walk<'a> {
     /// The walk runs in this process for a local sync side (`local_keyed`):
     /// `hidden` follows the platform's own rule (`walk_keyed::local_hidden`).
     local: bool,
+    /// How file contents are read (a fresh read, the run's digests).
+    reads: super::LocalReads<'a>,
 }
 
 impl Walk<'_> {
@@ -449,12 +452,9 @@ impl Walk<'_> {
             return Ok(());
         }
         let md5 = if self.algorithm == digest::MD5 {
-            let digest = super::hash_cache::digest(
-                super::local_platform::path_stamp(&path),
-                digest::MD5,
-                || super::ext_ops::md5_file(&path, metadata.len(), self.cancel),
-                || super::local_platform::path_stamp(&path),
-            );
+            let digest = super::md5_cached(&path, &metadata, self.reads, self.cancel, || {
+                super::ext_ops::md5_file(&path, metadata.len(), self.cancel)
+            });
             match digest {
                 Ok(md5) => Some(md5),
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => return Err(error),

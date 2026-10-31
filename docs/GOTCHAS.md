@@ -1034,15 +1034,34 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   Key: device and inode plus size, modification and status-change time in
   ns, per algorithm. Racy rule (Git `racy-git`): a stored digest counts only
   when both times lie more than 2 s before the moment it was taken, so a file
-  written within that slack is hashed again. Windows: the stamp comes from
-  `GetFileInformationByHandleEx` (`FileIdInfo`: volume serial and 128-bit
-  file ID, `FileBasicInfo`: `LastWriteTime`, `ChangeTime`; a file without an
-  ID is not cached). The agent stores
-  `hash-cache-v1.bin` in `$XDG_CACHE_HOME/se-agent` (or `~/.cache/se-agent`;
-  a confined `--serve-root` agent may not write it, which only costs the
-  reuse), the app in its data folder; tests never write it unless a test
-  configures a folder. Checksum mode keeps its guarantee: no write keeps that
-  status.
+  written within that slack is hashed again. Only file systems with durable
+  file IDs have a stamp: Linux `statfs` types FAT (`msdos`, `vfat`), exFAT,
+  FUSE, SMB/CIFS, 9p, vboxsf, ISO 9660 and UDF do not (the Linux FAT driver
+  invents inode numbers when it reads a directory, so after a remount another
+  file can carry a stored number; `os/linux_os/file_ids.rs`); Windows only
+  NTFS and ReFS (`GetVolumeInformationByHandleW`, `os/windows/file_ids.rs`),
+  whose stamp comes from `GetFileInformationByHandleEx` (`FileIdInfo`: volume
+  serial and 128-bit file ID, `FileBasicInfo`: `LastWriteTime`, `ChangeTime`).
+  `path_stamp` has none for a link or a non-regular file. The folder is
+  `support_dirs::app_data_dir()` (the unconfigured default too, so no app
+  walk can land in the agent's folder); the standalone `se-agent` supplies
+  its own `support_dirs` (`se-agent/src/support_dirs.rs`: `$XDG_CACHE_HOME/
+  se-agent` or `~/.cache/se-agent`; a confined `--serve-root` agent may not
+  write it, which only costs the reuse); tests never write it unless a test
+  configures a folder. The checksum compare mode reads fresh on a local side
+  (`digest_fresh`) and stores what it read; a remote host answers from its
+  cache while the stamp is unchanged (what no write keeps; silent bit rot
+  without a status change is not seen there until `se doctor
+  --clear-hash-cache`). Writes: digests are collected and written together,
+  built under the lock and written outside it (`flush` at most every 30 s,
+  `flush_now` at the end of a walk, connection or sync). One file read per
+  run: `RunDigests` (single flight by path, size, time) between the key phase
+  and the snapshot walk of a local side.
+- **`se-agent` and `KeyTally`:** the standalone agent has no serde and no
+  `apptrash`; `KeyTally` and `name_is_unusual` live in
+  `agent_proto/core/key_tally.rs` (std only, trash name as a constant that
+  `vfs/core/key_tally.rs` asserts equal to `apptrash::TRASH_DIR_NAME`), and
+  the app adds the Share wire's serde form through a private mirror there.
 - **Daylight saving in the sync comparison:** `TimeRules::across` applies the
   one-hour rule when either side is FAT (`MtimePrecision::local_time_shifts`),
   whatever the other side's precision (before: only when the coarser common

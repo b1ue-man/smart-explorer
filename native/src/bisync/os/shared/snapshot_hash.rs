@@ -3,6 +3,7 @@ use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::types::CompareMode;
+pub(crate) use crate::agent_proto::LocalReads;
 
 /// First 8 bytes of a 16-byte MD5 digest folded into a u64. Zero remains the
 /// sentinel for "not hashed", so a real zero prefix is bumped to one.
@@ -33,25 +34,26 @@ pub(crate) fn hash_file(backend: &dyn Backend, path: &str, cancel: &AtomicBool) 
 
 /// `hash_file` of a local side through the digest cache of this device
 /// (`agent_proto::hash_cache`, E9): a file whose status is unchanged since
-/// its digest was taken (and not racy) is not read again.
+/// its digest was taken (and not racy) is not read again. With `reads.fresh`
+/// (the checksum compare mode) the file is always read, and the digest read
+/// is stored. With `reads.run` the file is read at most once per run, also
+/// when the pair's key phase reads the same tree on another thread.
 pub(crate) fn hash_file_cached(
     backend: &dyn Backend,
     path: &str,
     cancel: &AtomicBool,
+    reads: LocalReads<'_>,
 ) -> io::Result<u64> {
-    match std::fs::symlink_metadata(path) {
-        Ok(metadata) if backend.is_local() && metadata.is_file() => {}
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) if backend.is_local() && metadata.is_file() => metadata,
         _ => return hash_file(backend, path, cancel),
-    }
+    };
     crate::agent_proto::hash_cache::configure_once(|| {
         (!cfg!(test)).then(crate::support_dirs::app_data_dir)
     });
-    crate::agent_proto::hash_cache::digest(
-        crate::agent_proto::path_stamp(std::path::Path::new(path)),
-        crate::agent_proto::digest::MD5,
-        || md5_hex_file(backend, path, cancel),
-        || crate::agent_proto::path_stamp(std::path::Path::new(path)),
-    )
+    crate::agent_proto::md5_cached(std::path::Path::new(path), &metadata, reads, cancel, || {
+        md5_hex_file(backend, path, cancel)
+    })
     .map(|hex| md5_hex_to_u64(&hex))
 }
 
@@ -100,10 +102,14 @@ pub enum HashMode {
     /// Hash when needed, but reuse a prior nonzero hash for unchanged metadata.
     Full,
     /// Checksum mode: require a current nonzero hash and never reuse a previous
-    /// size+mtime result as proof of unchanged content. The digest cache of
-    /// the storing device (`agent_proto::hash_cache`) is no such reuse: it
-    /// answers only while device, inode, size, modification and change time
-    /// (ns) are unchanged and not racy, a status no write keeps.
+    /// size+mtime result as proof of unchanged content. A local side reads
+    /// every file in this mode (`LocalReads::fresh`: the digest cache of the
+    /// device is not asked, and takes the digest read); only a digest read
+    /// earlier in the same run counts (`RunDigests`). A remote host's walk
+    /// answers from its own cache while a file's status is unchanged:
+    /// device, inode, size, modification and change time (ns), on file
+    /// systems with durable file IDs, and not racy (`se doctor
+    /// --clear-hash-cache` forgets the digests of this device).
     FullFresh,
 }
 
@@ -118,3 +124,7 @@ pub(super) fn hash_mode(this: &dyn Backend, other: &dyn Backend, compare: Compar
         CompareMode::MtimeSize => HashMode::None,
     }
 }
+
+#[cfg(test)]
+#[path = "snapshot_hash_task_tests.rs"]
+mod task_tests;

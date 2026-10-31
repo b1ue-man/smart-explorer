@@ -10,7 +10,7 @@ use std::io;
 use super::super::super::types::Frame;
 use super::super::{bad, Reader};
 use super::{add_len, put_bytes, put_str, put_u64};
-use crate::vfs::KeyTally;
+use crate::agent_proto::KeyTally;
 
 /// Known key prefixes one request may carry.
 const MAX_KNOWN_BYTES: usize = 16 * super::super::super::folder_key::MAX_KNOWN_KEYS;

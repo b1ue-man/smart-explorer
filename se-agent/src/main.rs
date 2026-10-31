@@ -5,7 +5,9 @@
 #[path = "../../native/src/agent_proto/mod.rs"]
 mod agent_proto;
 // What the shared protocol code takes from the app crate by path
-// (`crate::transfer`, `crate::vfs`); without it this crate does not build.
+// (`crate::transfer`, `crate::vfs`, `crate::support_dirs`); without it this
+// crate does not build.
+mod support_dirs;
 mod transfer;
 mod vfs;
 

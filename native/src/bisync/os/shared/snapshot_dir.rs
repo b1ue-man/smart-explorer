@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use super::omissions::OmissionKind;
 use super::omissions::SyncOmissions;
 use super::snapshot::WalkFilter;
-use super::snapshot_hash::{hash_file_cached, md5_hex_to_u64, md5_to_u64, HashMode};
+use super::snapshot_hash::{hash_file_cached, md5_hex_to_u64, md5_to_u64, HashMode, LocalReads};
 use super::snapshot_types::DirSet;
 use super::sync_overload::{under_permits, Progress};
 use super::types::{Sig, Tree};
@@ -313,7 +313,11 @@ fn content_hash(ctx: &WalkContext<'_>, path: &str, listed: &VfsMeta) -> io::Resu
         )
         .unwrap_or_else(|| Err(canceled()))?
     } else {
-        hash_file_cached(ctx.be, path, ctx.cancel)?
+        let reads = LocalReads {
+            fresh: ctx.hash == HashMode::FullFresh,
+            run: ctx.pair.and_then(|(pair, side)| pair.run_digests(side)),
+        };
+        hash_file_cached(ctx.be, path, ctx.cancel, reads)?
     };
     super::apply_guard::revalidate(ctx.be, path, &observed, "listed checksum file")?;
     Ok(result)

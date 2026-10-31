@@ -116,7 +116,15 @@ fn handle_walk_tree(sink: &Sink, id: u64, root: &str, cancel: &AtomicBool) -> io
 }
 
 /// Drive the agent request loop.
-pub fn serve(mut r: impl Read, w: impl Write + Send + 'static) -> io::Result<()> {
+pub fn serve(r: impl Read, w: impl Write + Send + 'static) -> io::Result<()> {
+    let result = serve_connection(r, w);
+    // The digests the connection took are written once it ends
+    // (`hash_cache`: collected in memory, written together).
+    super::hash_cache::flush_now();
+    result
+}
+
+fn serve_connection(mut r: impl Read, w: impl Write + Send + 'static) -> io::Result<()> {
     let session = ServerSession::new(Arc::new(Mutex::new(Box::new(w))));
     let mut workers = Vec::new();
 

@@ -151,8 +151,12 @@ fn hash_checked(
             "Server-Prüfsumme nicht verfügbar",
         ));
     }
-    // Read here or answered by this device's digest cache (E9).
-    let hash = super::snapshot_hash::hash_file_cached(backend, path, cancel)?;
+    // The comparison asks for the content as it is now: a fresh read.
+    let reads = super::snapshot_hash::LocalReads {
+        fresh: true,
+        run: None,
+    };
+    let hash = super::snapshot_hash::hash_file_cached(backend, path, cancel, reads)?;
     let after = backend.stat(path)?;
     if after.is_dir
         || after.is_symlink

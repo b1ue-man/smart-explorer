@@ -8,8 +8,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
 use std::sync::{Mutex, MutexGuard};
 
+use super::super::key_tally::KeyTally;
 use super::{folder_key, known_prefix, run_digest, FolderKey, KnownKey, RunKeys, BUFFER_BYTES};
-use crate::vfs::KeyTally;
 
 /// Where a `KeyTree` sends what is decided.
 pub(crate) trait KeyEmit<I> {

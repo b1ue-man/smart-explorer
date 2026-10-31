@@ -308,17 +308,27 @@ mod tests {
     }
 }
 
+#[path = "file_ids.rs"]
+mod file_ids;
 #[path = "folder_reservation.rs"]
 pub(crate) mod folder_reservation;
 
-/// The status of the open file the digest cache keys on (`hash_cache.rs`).
+/// The status of the open file the digest cache keys on (`hash_cache.rs`);
+/// `None` on a file system without durable file IDs (`file_ids.rs`).
 pub(crate) fn file_stamp(file: &std::fs::File) -> Option<[i128; 5]> {
-    change_stamp(&file.metadata().ok()?)
+    let metadata = file.metadata().ok()?;
+    (metadata.is_file() && file_ids::file_has_durable_ids(file))
+        .then(|| change_stamp(&metadata))
+        .flatten()
 }
 
-/// The status of `path` itself (never a link's target).
+/// The status of the regular file at `path` (a link or another kind has
+/// none); `None` on a file system without durable file IDs.
 pub(crate) fn path_stamp(path: &Path) -> Option<[i128; 5]> {
-    change_stamp(&std::fs::symlink_metadata(path).ok()?)
+    let metadata = std::fs::symlink_metadata(path).ok()?;
+    (metadata.is_file() && file_ids::path_has_durable_ids(path))
+        .then(|| change_stamp(&metadata))
+        .flatten()
 }
 
 /// The status of a file the digest cache keys on (`hash_cache.rs`): device,
