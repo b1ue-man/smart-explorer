@@ -36,13 +36,30 @@ Jobs (--job):
              update`) local-local, SFTP, SSH agent, Direct Share, FTP, SMB
              (WebDAV: see the report) and the reverse copy
              (Windows: merge local-local)
-  measure    (Linux; Windows local) wall time of `se sync compare` and
-             `se ls -R` for v0.5.189 (plus the two commits) and the candidate
-             on one generated tree (100 000 files in 10 000 folders, an
-             assumption), per side combination, cold (page cache dropped where
-             the runner allows it) and warm, `--repetitions` times, median;
-             references on the same data: `find`, `du`, `se search`
-             (Windows: robocopy /L)
+             Plan E (folder keys, keys without file transfer), Linux only,
+             counted in bytes that cross the loopback and container interfaces while one
+             `se` command runs (/proc/net/dev, idle traffic subtracted; the
+             job log does not serve: `se sync compare` writes none):
+             (1) local-SSH agent, local-Direct Share and Share-Share: first
+             comparison without stored keys, second comparison without a
+             change, comparison after one file changed deep in the tree, each
+             equal to v0.5.189 and far below its bytes; (2) checksum mode
+             against SFTP without agent, SSH agent, Direct Share and FTP
+             (a pyftpdlib with HASH/XMD5) moves no file content while
+             v0.5.189 moves all of it (WebDAV: not reachable by the command
+             line, named library tests instead); (3) `se cp --conflict
+             update` of an unchanged folder onto an equal target moves no
+             content and reports every file equal, and on a FAT volume files
+             of equal size with times exactly one hour apart count as equal
+  measure    (Linux; Windows local) wall time of `se sync compare` (first
+             comparison, second comparison without a change, checksum mode)
+             and `se ls -R` for v0.5.189 (plus the two commits) and the
+             candidate on one generated tree (100 000 files in 10 000 folders,
+             an assumption; checksum mode on 20 000 files in 2 000 folders),
+             per side combination, cold (page cache dropped where the runner
+             allows it) and warm, `--repetitions` times, median, with the
+             wire bytes of each run; references on the same data: `find`,
+             `du`, `se search` (Windows: robocopy /L)
 
 Outputs in --log-root: summary.md (appended to the step summary),
 summary.json (checks), measurements.json (every run), logs per stage.
@@ -54,6 +71,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import random
 import re
 import secrets
 import shutil
@@ -121,6 +139,78 @@ def sudo_ok():
     return _SUDO[0]
 
 
+# --------------------------------------------------------------------------- bytes over the connection (Linux)
+
+def wire_bytes():
+    """Bytes that crossed the runner's connection interfaces so far (Linux, /proc/net/dev): the bytes
+    received on `lo` (every packet between two processes of this runner, such as SSH to a container's
+    published port, FTP, the Share's QUIC datagrams and their relay, is received there once, so the
+    difference over one command is its traffic in both directions) plus the bytes received and sent on
+    the host ends of container networks (`veth*`), which carry the same connections when Docker routes
+    a published port without its user-space proxy. The sum is a measure, not a protocol trace: a
+    connection that passes both is counted twice, in the same way for v0.5.189 and the candidate. None
+    where the counters do not exist (Windows)."""
+    try:
+        total, seen = 0, False
+        for line in Path("/proc/net/dev").read_text(encoding="utf-8").splitlines():
+            name, _, rest = line.partition(":")
+            name, fields = name.strip(), rest.split()
+            if name == "lo":
+                total, seen = total + int(fields[0]), True
+            elif name.startswith("veth"):
+                total += int(fields[0]) + int(fields[8])
+        return total if seen else None
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+_IDLE_RATE = [0.0]
+
+
+def calibrate_idle(seconds=3.0):
+    """Bytes per second that cross the counted interfaces while nothing of the test runs (keepalives of the
+    Share server and the hosts, containers); every metered run subtracts this rate times its duration."""
+    before = wire_bytes()
+    if before is None:
+        return 0.0
+    time.sleep(seconds)
+    after = wire_bytes()
+    _IDLE_RATE[0] = max(0.0, (after - before) / seconds) if after is not None else 0.0
+    return _IDLE_RATE[0]
+
+
+def metered(command, env=None, timeout=1800, log=None):
+    """(result of the command, bytes that crossed the counted interfaces while it ran minus the idle
+    traffic; None where the counters do not exist)."""
+    before = wire_bytes()
+    ran = run(command, env=env, timeout=timeout, log=log)
+    after = wire_bytes()
+    if before is None or after is None:
+        return ran, None
+    return ran, max(0, after - before - int(_IDLE_RATE[0] * ran.seconds))
+
+
+def human(size):
+    if size is None:
+        return "n/a"
+    value, unit = float(size), "B"
+    for unit in ("B", "KiB", "MiB", "GiB"):
+        if value < 1024 or unit == "GiB":
+            break
+        value /= 1024
+    return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+
+
+def keys_dir(env):
+    """Where this `se` stores the folder keys of its sync comparisons (`sync_data_dir()/folder-keys`)."""
+    base = env.get("APPDATA") if WINDOWS else (env.get("XDG_DATA_HOME") or str(Path(env["HOME"]) / ".local" / "share"))
+    return Path(base) / "smart_explorer" / "sync" / "folder-keys"
+
+
+def forget_keys(env):
+    remove(keys_dir(env))
+
+
 def job_work(name):
     work = Path(os.environ.get("RUNNER_TEMP") or tempfile.gettempdir()) / f"se-abgleich-{name}"
     remove(work)
@@ -135,6 +225,8 @@ class Ctx:
         self.results, self.work, self.log_root = results, work, Path(log_root)
         self.bins, self.matrix, self.notes, self.trees, self.facts = {}, {}, [], [], {}
         self.bundle_sha = {}
+        # Plan E: {(way, kind, variant): runs}, rows of the byte table, generated trees by kind and role.
+        self.series, self.byte_rows, self.templates = {}, [], {}
 
 
 # --------------------------------------------------------------------------- job functional
@@ -163,6 +255,24 @@ def gated_elsewhere(path, number):
         return bool(re.search(r"unix|target_os\s*=\s*\"(linux|android|macos)\"", gates + head)) \
             or "linux" in hint or "unix" in hint
     return bool(re.search(r"windows", gates + head)) or "windows" in hint
+
+
+# Library tests that carry the claims the command line cannot reach (WebDAV is connected over HTTPS with the
+# built-in web roots only, so no fixture server serves `se`; Google Drive needs an account) or that no fixture
+# server can show (an FTP server with XMD5, the shape of the key phases). Each must exist and, being named
+# `abgleich_task_`, passes with the rest of the prefix.
+EVIDENCE_TESTS = (
+    "abgleich_task_webdav_md5_comes_from_the_checksum_property_without_a_download",
+    "abgleich_task_webdav_digest_comes_from_the_checksum_property_without_a_download",
+    "abgleich_task_ftp_md5_by_hash_command_without_a_data_connection",
+    "abgleich_task_ftp_md5_by_xmd5_command_takes_251_250_and_213",
+    "abgleich_task_sftp_md5_flow_asks_the_server_and_checks_size_and_time",
+    "abgleich_task_drive_digest_is_the_checksum_google_reports_not_a_download",
+    "abgleich_task_keyed_walk_sends_only_what_changed_and_equals_the_full_walk",
+    "abgleich_task_first_comparison_sends_keys_then_only_unequal_folders",
+    "abgleich_task_local_side_keys_spare_the_remote_side_equal_folders",
+    "abgleich_task_fat_side_takes_an_hour_shift_as_equal",
+)
 
 
 def stage_bundles(results, log_root):
@@ -194,6 +304,10 @@ def stage_listing(results, listed, ignored):
     results.record(stage, f"every `{TEST_PREFIX}` test of the sources is in the test list "
                    f"({len(declared) - len(missing)} listed, {len(excused)} gated to the other platform)",
                    not failed, "missing from the list (not compiled or misspelled): " + ", ".join(failed))
+    absent = [name for name in EVIDENCE_TESTS if name not in leafs
+              and (name not in declared or not gated_elsewhere(*declared[name]))]
+    results.record(stage, f"the {len(EVIDENCE_TESTS)} library tests for WebDAV, FTP, SFTP, Drive, the key phases "
+                   "and the FAT hour shift are in the test list", not absent, "missing: " + ", ".join(absent))
     plain = sorted(name for name in listed if TEST_PREFIX in leaf(name) and name not in ignored)
     results.record(stage, f"{len(plain)} plain `{TEST_PREFIX}` tests are listed", bool(plain), "")
     return declared
@@ -505,6 +619,64 @@ def copy_tree(source, target):
         run(["cp", "-a", str(source), str(target)], timeout=3600)
 
 
+# --------------------------------------------------------------------------- plan E fixtures
+
+# Folder keys: 30 x 20 folders of 20 files (12 000 files, 600 folders) and a few folders that differ
+# between the sides, so the listing is large next to the keys and the unequal folders are not empty.
+KEY_GROUPS, KEY_FOLDERS, KEY_FILES = 30, 20, 20
+KEY_CHANGED = "g13/f07/x/y/z/changed.txt"
+# Keys without transfer: 8 equal files, one of equal size and time but other content, one of equal
+# content but another time, 4 MiB each of random bytes (no compression can hide a transfer).
+SUM_BLOCK, SUM_EQUAL = 4 << 20, 8
+SUM_DIFF = "s/diff_same_size.bin"
+SUM_REMOTE_BYTES = (SUM_EQUAL + 2) * SUM_BLOCK
+SUM_SIDES = {"LS": 1, "LA": 1, "LH": 1, "HH": 2, "LF": 1}
+# Bounds on the bytes of the candidate next to v0.5.189 (a decision of the suite, plan E4):
+FIRST_BOUND, FOLLOW_BOUND, CHANGED_BOUND, EXTRA_BOUND = 0.5, 0.25, 0.35, 0.25
+SUM_BOUND, SUM_OLD_MIN = 0.2, 0.5
+
+
+def make_keys_tree(root, role):
+    root = Path(root)
+    for group in range(KEY_GROUPS):
+        for number in range(KEY_FOLDERS):
+            folder = root / f"g{group:02d}" / f"f{number:02d}"
+            folder.mkdir(parents=True, exist_ok=True)
+            for entry in range(KEY_FILES):
+                path = folder / f"entry_with_a_longer_name_{entry:03d}.dat"
+                path.write_bytes(b"%02d%02d%03d\n" % (group, number, entry))
+                os.utime(path, (BASE, BASE))
+    put(root / KEY_CHANGED, b"original\n", BASE)
+    put(root / "u01" / f"only_{role}.txt", f"only {role}\n".encode(), BASE)
+    put(root / "u02" / "size.txt", b"size of side a\n" if role == "a" else b"side b has more content here\n", BASE)
+    put(root / "u03" / "time.txt", b"same content\n", BASE + (0 if role == "a" else 7200))
+    normalize_dirs(root)
+
+
+def sum_block(seed):
+    return random.Random(seed).randbytes(SUM_BLOCK)
+
+
+def make_sum_tree(root, role):
+    root = Path(root)
+    for number in range(SUM_EQUAL):
+        put(root / "s" / f"equal{number}.bin", sum_block(number), BASE)
+    put(root / SUM_DIFF, sum_block(100 if role == "a" else 101), BASE)
+    put(root / "s" / "time_only.bin", sum_block(200), BASE + (0 if role == "a" else 7200))
+    normalize_dirs(root)
+
+
+def place(ctx, kind, destination, role):
+    """A copy of the generated tree of `kind` ("keys" or "sum") for `role` at `destination`; each tree is
+    generated once per job and copied (cp -a keeps the times)."""
+    template = ctx.templates.get((kind, role))
+    if template is None:
+        template = ctx.work / f"template-{kind}-{role}"
+        (make_keys_tree if kind == "keys" else make_sum_tree)(template, role)
+        ctx.templates[(kind, role)] = template
+    copy_tree(template, Path(destination))
+
+
 # --------------------------------------------------------------------------- remote fixtures (Linux)
 
 class SshBox:
@@ -796,6 +968,9 @@ def fixture_trees(ctx):
         root = ctx.work / name
         make_tree(root / "tree", role, ctx.notes)
         make_lk_tree(root / "lk", role)
+        if role == "a":
+            place(ctx, "keys", root / "keys", role)
+            place(ctx, "sum", root / "sum", role)
         trees[name] = root
     return trees
 
@@ -812,6 +987,8 @@ def stage_ssh(ctx, trees, client_of):
     box = SshBox(ctx.work, ctx.log_root)
     make_tree(box.data / "tree", "b", ctx.notes)
     make_lk_tree(box.data / "lk", "b")
+    place(ctx, "keys", box.data / "keys", "b")
+    place(ctx, "sum", box.data / "sum", "b")
     local_a, local_b = trees["local-a"], trees["local-b"]
     roots = [local_a, local_b, box.data, "/config/data"]
     try:
@@ -850,6 +1027,12 @@ def stage_ssh(ctx, trees, client_of):
                 listing = ", ".join(path.name for path in (box.home / ".cache" / "smart-explorer").glob("*"))
                 results.record("equality", f"LA {variant}: the agent bundle with sha256 {expected[:12]} was deployed "
                                "to the far side", deployed_agent(box, expected), f"deployed: {listing}")
+            if variant in ("old/old", "new/new"):
+                # Plan E: folder keys and keys without transfer over the SFTP and agent connections.
+                keys_series(ctx, "LA", variant, binary, client.env, str(local_a / "keys"), "@agent:/keys",
+                            box.data / "keys" / KEY_CHANGED)
+                for way, label in (("LS", "sftp"), ("LA", "agent")):
+                    sum_series(ctx, way, variant, binary, client.env, str(local_a / "sum"), f"@{label}:/sum")
         # The SSH account is also the far side of the merge cases.
         unmount_all(box.home)
         client = client_of("new/new")
@@ -880,6 +1063,9 @@ def stage_share(ctx, trees):
             for index, role in ((0, "b"), (1, "a")):
                 make_tree(net.exports[index] / "tree", role, ctx.notes)
                 make_lk_tree(net.exports[index] / "lk", role)
+                if variant in ("old/old", "new/new"):
+                    place(ctx, "keys", net.exports[index] / "keys", role)
+                    place(ctx, "sum", net.exports[index] / "sum", role)
             roots = [local_a, net.root, *net.endpoints]
             endpoint0, endpoint1 = net.endpoints
             binary, env = str(net.main.cli), net.main.env
@@ -887,6 +1073,14 @@ def stage_share(ctx, trees):
                     lambda sub: f"{endpoint0}/{sub}", lambda sub: f"{endpoint0}/{sub}", roots)
             collect(ctx, variant, "HH", binary, env, lambda sub: f"{endpoint1}/{sub}",
                     lambda sub: f"{endpoint0}/{sub}", lambda sub: f"{endpoint1}/{sub}", roots)
+            if variant in ("old/old", "new/new"):
+                # Plan E: folder keys and keys without transfer over the Direct Share.
+                keys_series(ctx, "LH", variant, binary, env, str(local_a / "keys"), f"{endpoint0}/keys",
+                            net.exports[0] / "keys" / KEY_CHANGED)
+                keys_series(ctx, "HH", variant, binary, env, f"{endpoint1}/keys", f"{endpoint0}/keys",
+                            net.exports[0] / "keys" / KEY_CHANGED)
+                sum_series(ctx, "LH", variant, binary, env, str(local_a / "sum"), f"{endpoint0}/sum")
+                sum_series(ctx, "HH", variant, binary, env, f"{endpoint1}/sum", f"{endpoint0}/sum")
             if variant == "new/new":
                 unmount_all(net.root)
                 merge_remote(ctx, "local-Direct Share", binary, env,
@@ -915,6 +1109,150 @@ def sanity(ctx):
             ok = len(value.get("rows", {})) > 50
             ctx.results.record("equality", f"fixture: ls -R {way} {shape} lists the generated tree (v0.5.189)",
                                ok, json.dumps(value, sort_keys=True)[:400] if not ok else "")
+
+
+# --------------------------------------------------------------------------- plan E: bytes of comparisons
+
+def add_job(binary, env, name, a, b, extra, log):
+    added = run([binary, "sync", "add", "--name", name, "--source", a, "--target", b, "--trigger", "manual",
+                 "--enabled", "false", *extra], env=env, timeout=300, log=log)
+    return added.ok, short(added, 400)
+
+
+def timed_compare(binary, env, name, log):
+    ran, wire = metered([binary, "sync", "compare", name, "--json"], env, 1800, log)
+    if not ran.ok:
+        return {"error": f"exit {ran.code}: {short(ran, 500)}", "bytes": wire}
+    try:
+        return {"norm": norm_compare(ran.stdout), "bytes": wire, "seconds": ran.seconds}
+    except (ValueError, KeyError, TypeError) as error:
+        return {"error": f"compare output unreadable ({error}): {ran.stdout[:300]}", "bytes": wire}
+
+
+def keys_series(ctx, way, variant, binary, env, loc_a, loc_b, changed_path):
+    """Three comparisons of one saved setup by one `se`: the first with no stored folder keys, the second
+    without any change, the third after one file changed deep in the far side's tree. The bytes of each
+    cross the counted interfaces; `changed_path` is the far side's file on the runner's disk, restored afterwards."""
+    log = ctx.log_root / f"keys-{slug(way)}.log"
+    name = slug(f"keys-{way}-{variant}")[:60]
+    saved, why = add_job(binary, env, name, loc_a, loc_b, [], log)
+    if not saved:
+        ctx.results.record("keys", f"{way} {variant}: sync setup saved", False, why)
+        return
+    calibrate_idle()
+    forget_keys(env)
+    steps = {"first": timed_compare(binary, env, name, log), "follow": timed_compare(binary, env, name, log)}
+    original = Path(changed_path).read_bytes()
+    try:
+        put(Path(changed_path), b"changed on the far side, and longer than before\n", BASE + 86400)
+        steps["changed"] = timed_compare(binary, env, name, log)
+    finally:
+        put(Path(changed_path), original, BASE)
+    ctx.series[(way, "keys", variant)] = steps
+
+
+def sum_series(ctx, way, variant, binary, env, loc_a, loc_b):
+    """One checksum-mode comparison with no stored keys; its bytes cross the counted interfaces."""
+    log = ctx.log_root / f"sum-{slug(way)}.log"
+    name = slug(f"sum-{way}-{variant}")[:60]
+    saved, why = add_job(binary, env, name, loc_a, loc_b, ["--compare", "checksum"], log)
+    if not saved:
+        ctx.results.record("sum", f"{way} {variant}: checksum setup saved", False, why)
+        return
+    calibrate_idle()
+    forget_keys(env)
+    ctx.series[(way, "sum", variant)] = timed_compare(binary, env, name, log)
+
+
+def paths_of(norm):
+    return {path for _kind, path in norm["actions"]} | set(norm["conflicts"])
+
+
+def usable(results, stage, label, step):
+    if step is None:
+        results.record(stage, f"{label}: run exists", False, "no run")
+        return False
+    if "error" in step:
+        results.record(stage, f"{label}: the comparison ran", False, step["error"])
+        return False
+    return True
+
+
+def evaluate_keys(ctx):
+    results, stage = ctx.results, "keys"
+    for way in sorted({w for (w, kind, _v) in ctx.series if kind == "keys"}):
+        old, new = ctx.series.get((way, "keys", "old/old")), ctx.series.get((way, "keys", "new/new"))
+        if old is None or new is None:
+            results.record(stage, f"{way}: runs of v0.5.189 and of the candidate exist", False,
+                           f"v0.5.189: {'yes' if old else 'no'}, candidate: {'yes' if new else 'no'}")
+            continue
+        labels = {"first": "first comparison, no stored keys", "follow": "second comparison, nothing changed",
+                  "changed": "comparison after one file changed deep in the tree"}
+        sound = True
+        for step, text in labels.items():
+            label = f"{way} {text}"
+            both = usable(results, stage, f"{label} (v0.5.189)", old[step]) and usable(
+                results, stage, f"{label} (candidate)", new[step])
+            sound = sound and both
+            if not both:
+                continue
+            results.record(stage, f"{label}: the result equals v0.5.189's",
+                           old[step]["norm"] == new[step]["norm"],
+                           "; ".join(diff_text(old[step]["norm"], new[step]["norm"])))
+            ctx.byte_rows.append((f"{way} {text}", old[step]["bytes"], new[step]["bytes"]))
+        if not sound:
+            continue
+        unequal = old["first"]["norm"]
+        results.record(stage, f"fixture: {way} v0.5.189 sees the four unequal files of three folders",
+                       len(unequal["actions"]) + len(unequal["conflicts"]) >= 4, json.dumps(unequal)[:300])
+        results.record(stage, f"{way}: the changed file is reported after the change, not before",
+                       KEY_CHANGED in paths_of(new["changed"]["norm"]) and KEY_CHANGED not in paths_of(
+                           new["follow"]["norm"]) and KEY_CHANGED in paths_of(old["changed"]["norm"]), "")
+        first_old = old["first"]["bytes"]
+        if first_old is None:
+            results.record(stage, f"{way}: bytes over the connection are measurable", False, "no network counter")
+            continue
+        results.record(stage, f"fixture: {way} v0.5.189 moves a listing over the connection "
+                       f"({human(first_old)} for {KEY_GROUPS * KEY_FOLDERS * KEY_FILES} files)",
+                       first_old >= 100_000, f"only {human(first_old)}")
+        new_first, new_follow, new_changed = (new[s]["bytes"] for s in ("first", "follow", "changed"))
+        summary = (f"bytes: v0.5.189 first {human(first_old)}; candidate first {human(new_first)}, "
+                   f"second {human(new_follow)}, after the change {human(new_changed)}")
+        results.record(stage, f"{way} (a) first comparison without stored keys sends keys and the unequal "
+                       f"folders only: below {FIRST_BOUND:.0%} of v0.5.189's bytes",
+                       new_first < FIRST_BOUND * first_old, summary)
+        results.record(stage, f"{way} (b) second comparison without a change lists nothing: below "
+                       f"{FOLLOW_BOUND:.0%} of v0.5.189's bytes and not above the first (8 KiB tolerance)",
+                       new_follow < FOLLOW_BOUND * first_old and new_follow <= new_first + 8192, summary)
+        results.record(stage, f"{way} (c) one changed file deep in the tree sends only the runs on its path: "
+                       f"below {CHANGED_BOUND:.0%} of v0.5.189's bytes and at most {EXTRA_BOUND:.0%} more than "
+                       "the second comparison", new_changed < CHANGED_BOUND * first_old
+                       and new_changed - new_follow < EXTRA_BOUND * first_old, summary)
+
+
+def evaluate_sum(ctx):
+    results, stage = ctx.results, "sum"
+    for way in sorted({w for (w, kind, _v) in ctx.series if kind == "sum"}):
+        old, new = ctx.series.get((way, "sum", "old/old")), ctx.series.get((way, "sum", "new/new"))
+        label = f"{way} checksum mode"
+        if not (usable(results, stage, f"{label} (v0.5.189)", old) and usable(results, stage, f"{label} (candidate)",
+                                                                                new)):
+            continue
+        content = SUM_REMOTE_BYTES * SUM_SIDES[way]
+        results.record(stage, f"{label}: the result equals v0.5.189's", old["norm"] == new["norm"],
+                       "; ".join(diff_text(old["norm"], new["norm"])))
+        results.record(stage, f"{label}: the file of equal size and time but other content is reported (both "
+                       "versions)", SUM_DIFF in paths_of(old["norm"]) and SUM_DIFF in paths_of(new["norm"]),
+                       f"v0.5.189: {sorted(paths_of(old['norm']))[:6]}; candidate: {sorted(paths_of(new['norm']))[:6]}")
+        ctx.byte_rows.append((label, old["bytes"], new["bytes"]))
+        if old["bytes"] is None or new["bytes"] is None:
+            results.record(stage, f"{label}: bytes over the connection are measurable", False, "no network counter")
+            continue
+        summary = f"bytes: v0.5.189 {human(old['bytes'])}, candidate {human(new['bytes'])}, content {human(content)}"
+        results.record(stage, f"fixture: {way} v0.5.189 moves the file content over the connection (at least "
+                       f"{SUM_OLD_MIN:.0%} of {human(content)})", old["bytes"] >= SUM_OLD_MIN * content, summary)
+        results.record(stage, f"{way} the far side forms the keys: the candidate moves less than {SUM_BOUND:.0%} "
+                       f"of the {human(content)} of file content", new["bytes"] < SUM_BOUND * content, summary)
 
 
 # --------------------------------------------------------------------------- merge rule
@@ -1058,10 +1396,45 @@ def merge_remote(ctx, name, binary, env, side, work):
                            f"counted {reverse_counts}; stderr: {reverse.stderr[-400:]}")
             results.record(stage, f"{name}: the backwards copy leaves the source bytes and times alone",
                            snapshot(src_tree) == before_src, "")
+        merge_equal(ctx, name, binary, env, side, work / "equal")
     except Exception as error:  # noqa: BLE001
         results.record(stage, f"{name}", False, f"{type(error).__name__}: {error}")
     finally:
         remove(work)
+
+
+def merge_equal(ctx, name, binary, env, side, work):
+    """`se cp -r --conflict update` of an unchanged folder onto an equal target (plan E): nothing is
+    replaced, every file is reported equal, and no file content crosses the connection."""
+    stage = "merge"
+    results = ctx.results
+    work = Path(work)
+    remove(work)
+    src_tree = work / "src" / "tree"
+    files = {f"f{number:02d}.bin": os.urandom(1 << 20) for number in range(16)}
+    files.update({"sub/deep/inner1.bin": os.urandom(4096), "sub/deep/inner2.bin": os.urandom(4096)})
+    content = sum(len(data) for data in files.values())
+    for number, (relative, data) in enumerate(sorted(files.items())):
+        put(src_tree / relative, data, BASE + 3600 * (number % 5))
+    normalize_dirs(src_tree)
+    side.seed(src_tree)
+    before_src, before_dst = snapshot(src_tree), snapshot(side.fetch())
+    log = ctx.log_root / f"merge-{slug(name)}.log"
+    calibrate_idle()
+    ran, wire = metered([binary, "cp", "-r", "--conflict", "update", str(src_tree),
+                         side.cli_parent if not side.local else str(side.folder)], env, 1800, log)
+    results.record(stage, f"{name}: an unchanged folder onto an equal target succeeds ({len(files)} files)",
+                   ran.ok, short(ran, 1200))
+    if not ran.ok:
+        return
+    counts = update_counts(ran.stderr)
+    results.record(stage, f"{name}: every one of the {len(files)} files is reported equal, nothing else",
+                   counts == {"gleiche übersprungen": len(files)}, f"counted {counts}; stderr: {ran.stderr[-400:]}")
+    results.record(stage, f"{name}: target and source are unchanged (bytes and times)",
+                   snapshot(side.fetch()) == before_dst and snapshot(src_tree) == before_src, "")
+    if not side.local and wire is not None:
+        results.record(stage, f"{name}: no file content crosses the connection (below 25% of "
+                       f"{human(content)})", wire < 0.25 * content, f"bytes over the connection: {human(wire)}")
 
 
 def stage_merge_ftp_smb(ctx, client_of):
@@ -1110,6 +1483,210 @@ def stage_merge_ftp_smb(ctx, client_of):
     ctx.results.record("merge", "NOT RUN: local-WebDAV `se cp --conflict update`", True, reason)
 
 
+# A pyftpdlib that hashes files itself (draft-bryan-ftpext-hash: `FEAT` lists `HASH` with MD5 and SHA-256,
+# `OPTS HASH <algorithm>` selects one, `HASH <file>` answers `213 <algorithm> 0-<last> <hex> <file>`;
+# plus `XMD5` / `XSHA256`), so the FTP side of the checksum mode has a server that can form the key.
+HASH_FTP_SERVER = r'''
+import hashlib
+import os
+import sys
+
+from pyftpdlib.authorizers import DummyAuthorizer
+from pyftpdlib.handlers import FTPHandler
+from pyftpdlib.servers import FTPServer
+
+FEATURES = ("HASH SHA-256*;MD5", "XMD5", "XSHA256")
+
+
+class Handler(FTPHandler):
+    hash_name = "SHA-256"
+    _feat = False
+    _feat_has_hash = False
+
+    def push(self, s):
+        if self._feat and "HASH" in str(s):
+            self._feat_has_hash = True
+        return FTPHandler.push(self, s)
+
+    def respond(self, resp, *args, **kwargs):
+        if self._feat and resp == "211 End FEAT." and not self._feat_has_hash:
+            self.push("".join(" %s\r\n" % feature for feature in FEATURES))
+        return FTPHandler.respond(self, resp, *args, **kwargs)
+
+    def ftp_FEAT(self, line):
+        self._feat, self._feat_has_hash = True, False
+        try:
+            FTPHandler.ftp_FEAT(self, line)
+        finally:
+            self._feat = False
+
+    def ftp_OPTS(self, line):
+        command, _, argument = line.partition(" ")
+        if command.upper() != "HASH":
+            return FTPHandler.ftp_OPTS(self, line)
+        name = argument.strip().upper()
+        if name in ("MD5", "SHA-256"):
+            self.hash_name = name
+            self.respond("200 HASH " + name)
+        else:
+            self.respond("501 unsupported algorithm")
+
+    def digest(self, line, name):
+        path = self.fs.ftp2fs(line)
+        if not os.path.isfile(path):
+            self.respond("550 not a regular file")
+            return None
+        context = hashlib.md5() if name == "MD5" else hashlib.sha256()
+        size = 0
+        with open(path, "rb") as handle:
+            while True:
+                chunk = handle.read(1 << 20)
+                if not chunk:
+                    break
+                context.update(chunk)
+                size += len(chunk)
+        return context.hexdigest(), size
+
+    def ftp_HASH(self, line):
+        found = self.digest(line, self.hash_name)
+        if found:
+            self.respond("213 %s 0-%d %s %s" % (self.hash_name, found[1] - 1, found[0], line))
+
+    def ftp_XMD5(self, line):
+        found = self.digest(line, "MD5")
+        if found:
+            self.respond("251 " + found[0])
+
+    def ftp_XSHA256(self, line):
+        found = self.digest(line, "SHA-256")
+        if found:
+            self.respond("250 " + found[0])
+
+
+for _name in ("HASH", "XMD5", "XSHA256"):
+    Handler.proto_cmds = dict(Handler.proto_cmds)
+    Handler.proto_cmds[_name] = dict(perm="r", auth=True, arg=True, help="Syntax: %s <file>." % _name)
+
+port, root, user, password = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
+authorizer = DummyAuthorizer()
+authorizer.add_user(user, password, root, perm="elradfmwMT")
+Handler.authorizer = authorizer
+FTPServer(("127.0.0.1", port), Handler).serve_forever()
+'''
+
+
+class HashFtp(speed.PyFtp):
+    """pyftpdlib with `HASH`, `XMD5` and `XSHA256`; the files live in a local folder."""
+
+    def __init__(self, work, log_root):
+        super().__init__(work, log_root)
+        self.root = Path(work) / "hash-ftp-root"
+        self.root.mkdir(parents=True, exist_ok=True)
+
+    def start(self):
+        installed = run([sys.executable, "-m", "pip", "install", "pyftpdlib>=1.5.9,<3"], timeout=600,
+                        log=self.log_root / "pyftpdlib.log")
+        ensure(installed.ok, f"pip install pyftpdlib: {installed.tail(400)}")
+        script = self.root.parent / "hash-ftp-server.py"
+        script.write_text(HASH_FTP_SERVER, encoding="utf-8")
+        self.process = subprocess.Popen([sys.executable, str(script), str(self.port), str(self.root), speed.USER,
+                                         self.password], stdout=open(self.log_root / "hash-ftp-server.log", "wb"),
+                                        stderr=subprocess.STDOUT)
+        ensure(speed.wait_tcp(self.port, b"220", 60), "the hashing pyftpdlib does not answer")
+        return self
+
+
+def stage_sum_ftp(ctx, trees, client_of):
+    """Checksum mode against FTP: the server forms the MD5 (`HASH`), v0.5.189 downloads the files."""
+    server = None
+    try:
+        server = HashFtp(ctx.work, ctx.log_root).start()
+        place(ctx, "sum", server.root / "sum", "b")
+        for variant, key in (("old/old", "old"), ("new/new", "new")):
+            binary = ctx.bins.get(key)
+            if binary is None:
+                continue
+            client = client_of(variant)
+            problem = add_saved(binary, client.env, "ftp", server.port, speed.USER, server.password, "/", "hashftp",
+                                ctx.log_root / "sum-ftp-connections.log")
+            if problem:
+                ctx.results.record("sum", f"LF {variant}: saved FTP connection works", False, problem)
+                continue
+            sum_series(ctx, "LF", variant, binary, client.env, str(trees["local-a"] / "sum"), "@hashftp:/sum")
+    except Exception as error:  # noqa: BLE001
+        ctx.results.record("sum", "LF: hashing FTP server", False, f"{type(error).__name__}: {error}")
+    finally:
+        if server is not None:
+            server.close()
+
+
+def stage_fat(ctx, binary, env):
+    """Summer time: on a FAT volume (times in local time) files of equal size whose times differ by exactly
+    one hour count as equal; two hours or another size decide as before (plan C7, E: Sommerzeit)."""
+    stage = "merge"
+    results = ctx.results
+    if WINDOWS or not sudo_ok():
+        reason = "a FAT image is mounted with `sudo -n mount -o loop`, which this runner does not allow"
+        note(ctx.notes, "FAT summer-time case: not run: " + reason)
+        results.record(stage, "NOT RUN: FAT volume with times one hour apart", True, reason)
+        return
+    work = ctx.work / "fat"
+    remove(work)
+    work.mkdir(parents=True)
+    log = ctx.log_root / "merge-fat.log"
+    image, mount_point = work / "fat.img", work / "mnt"
+    with open(image, "wb") as handle:
+        handle.truncate(128 << 20)
+    made = run(["mkfs.vfat", "-F", "32", str(image)], timeout=300, log=log)
+    if not made.ok:
+        results.record(stage, "FAT volume: image formatted (mkfs.vfat)", False, short(made, 600))
+        return
+    mount_point.mkdir()
+    mounted = run(["sudo", "-n", "mount", "-t", "vfat", "-o", f"loop,uid={os.getuid()},gid={os.getgid()},umask=022",
+                   str(image), str(mount_point)], timeout=120, log=log)
+    results.record(stage, "FAT volume: image mounted as vfat", mounted.ok, short(mounted, 600))
+    if not mounted.ok:
+        return
+    MOUNTS.append(mount_point)
+    try:
+        src_data, dst_data = b"S" * 24, b"D" * 24
+        # name: (destination time, destination bytes, expected: equal / replace / keep)
+        cases = {"same.txt": (BASE, dst_data, "equal"), "plus_hour.txt": (BASE + 3600, dst_data, "equal"),
+                 "minus_hour.txt": (BASE - 3600, dst_data, "equal"),
+                 "two_hours.txt": (BASE - 7200, dst_data, "replace"),
+                 "hour_other_size.txt": (BASE + 3600, b"D" * 40, "keep")}
+        src_tree, dst_tree = work / "src" / "tree", mount_point / "tree"
+        for relative, (stamp, data, _kind) in cases.items():
+            put(src_tree / relative, src_data if relative != "hour_other_size.txt" else b"S" * 10, BASE)
+            put(dst_tree / relative, data, stamp)
+        before_src = snapshot(src_tree)
+        ran = run([binary, "cp", "-r", "--conflict", "update", str(src_tree), str(mount_point)], env=env,
+                  timeout=600, log=log)
+        results.record(stage, "FAT volume: se cp -r --conflict update succeeds", ran.ok, short(ran, 1200))
+        if not ran.ok:
+            return
+        after = snapshot(dst_tree)
+        problems = []
+        for relative, (stamp, data, kind) in cases.items():
+            got = after.get(relative)
+            if got is None:
+                problems.append(f"{relative}: missing")
+                continue
+            want_data, want_time = (src_data, BASE) if kind == "replace" else (data, stamp)
+            if got[2] != sha(want_data) or abs(got[1] - want_time) > 2:
+                problems.append(f"{relative}: expected {kind}, found size {got[0]} and time {got[1] - want_time} s "
+                                "off the expected one")
+        results.record(stage, "FAT volume: one hour apart and equal size is equal (kept, not replaced), two hours "
+                       "older is replaced, one hour newer with another size stays", not problems, "; ".join(problems))
+        counts = update_counts(ran.stderr)
+        expected = {"gleiche übersprungen": 3, "neuere ersetzt": 1, "Ziel neuer behalten": 1}
+        results.record(stage, "FAT volume: the notice counts 3 equal skipped, 1 replaced, 1 newer destination",
+                       counts == expected, f"counted {counts}; stderr: {ran.stderr[-400:]}")
+        results.record(stage, "FAT volume: the source folder is unchanged", snapshot(src_tree) == before_src, "")
+    finally:
+        unmount_all(work)
+
+
 # --------------------------------------------------------------------------- jobs behaviour
 
 def job_behaviour(results, log_root):
@@ -1135,8 +1712,11 @@ def job_behaviour(results, log_root):
                 trees = fixture_trees(ctx)
                 stage_ssh(ctx, trees, client_of)
                 stage_share(ctx, trees)
+                stage_sum_ftp(ctx, trees, client_of)
                 evaluate_equality(ctx)
                 sanity(ctx)
+                evaluate_keys(ctx)
+                evaluate_sum(ctx)
             else:
                 results.record("equality", "binaries of v0.5.189 and of the candidate are built", False,
                                "see the build checks")
@@ -1146,6 +1726,7 @@ def job_behaviour(results, log_root):
                 merge_remote(ctx, "local-local", ctx.bins["new"], client_of("merge").env,
                              HostSide(local_dst, "", local=True), work / "merge-local")
                 stage_merge_ftp_smb(ctx, client_of)
+                stage_fat(ctx, ctx.bins["new"], client_of("merge").env)
     finally:
         ai.stop_background_daemons(list(clients.values()))
         unmount_all()
@@ -1167,17 +1748,33 @@ def write_behaviour_summary(ctx):
              f"{len(ctx.results.items) - len(failed)} passed, {len(failed)} failed", ""]
     for key, value in ctx.facts.items():
         lines.append(f"- {key}: {value}")
+    if ctx.byte_rows:
+        lines += ["", "### Bytes over the connection (lo and container networks, idle traffic subtracted; plan E)", "",
+                  "| Weg / Schritt | v0.5.189 | Kandidat | Verhältnis |", "|---|---|---|---|"]
+        for label, old, new in ctx.byte_rows:
+            ratio = f"{new / old:.3f}" if old and new is not None else "n/a"
+            lines.append(f"| {label} | {human(old)} | {human(new)} | {ratio} |")
     lines += ["", "| Stage | Check | Result |", "|---|---|---|"]
     for item in ctx.results.items:
         lines.append(f"| {item['stage']} | {item['check']} | {'pass' if item['ok'] else 'FAIL'} |")
+    if failed:
+        lines += ["", "### Failed checks", ""]
+        lines += [f"- {item['stage']}: {item['check']}: {item['detail'][:400]}" for item in failed]
     if ctx.notes:
         lines += ["", "### Not run / notes", ""] + [f"- {text}" for text in ctx.notes]
+    (ctx.log_root / "series.json").write_text(
+        json.dumps({"/".join(key): value for key, value in sorted(ctx.series.items())}, indent=2, default=str),
+        encoding="utf-8")
     (ctx.log_root / "summary.md").write_text(speed.redact("\n".join(lines)) + "\n", encoding="utf-8")
 
 
 # --------------------------------------------------------------------------- job measure
 
 FILES, FOLDERS = 100_000, 10_000
+SUM_FILES, SUM_FOLDERS = 20_000, 2_000
+COMPARE_OPS = ("cmp", "cmp2", "sum")
+OP_NAMES = {"cmp": "sync compare (first, no stored keys)", "cmp2": "sync compare (second, nothing changed)",
+            "sum": "sync compare --compare checksum", "ls": "ls -R"}
 OLD_LABEL, NEW_LABEL = BASELINE_TAG, "candidate"
 
 
@@ -1210,7 +1807,8 @@ class Meter:
     def row(self, way, op, mode, tool):
         row = self.find(way, op, mode, tool)
         if row is None:
-            row = {"way": way, "op": op, "mode": mode, "tool": tool, "samples": [], "internal": [], "errors": []}
+            row = {"way": way, "op": op, "mode": mode, "tool": tool, "samples": [], "internal": [], "bytes": [],
+                   "errors": []}
             self.rows.append(row)
         return row
 
@@ -1228,18 +1826,23 @@ def parse_count(op, ran):
         data = json.loads(ran.stdout)
     except ValueError:
         return None, None
-    if op == "cmp":
+    if op in COMPARE_OPS:
         return data.get("source_files", 0) + data.get("target_files", 0), data.get("seconds")
     return len(data), None
 
 
-def measure(meter, way, op, mode, jobs):
+def measure(meter, way, op, mode, jobs, prepare=None, prime=False):
     """`jobs` = {tool: (command, env)}. Each tool runs `reps` times, the order rotating per repetition. A
-    warm mode first runs every tool once untimed; a cold mode drops the page cache before every run."""
+    warm mode first runs every tool once untimed; `prime` does so in the cold mode as well (the second
+    comparison needs the keys of a first one); a cold mode drops the page cache before every run.
+    `prepare(env)` runs before every run, timed or not (the first comparison forgets its stored keys).
+    Each timed run also records the bytes that crossed the counted interfaces (Linux, `wire_bytes`)."""
     tools = list(jobs)
-    if mode == "warm":
+    if mode == "warm" or prime:
         for tool in tools:
             command, env = jobs[tool]
+            if prepare is not None:
+                prepare(env)
             run(command, env=env, timeout=1800)
     for rep in range(meter.reps):
         shift = rep % len(tools)
@@ -1249,13 +1852,17 @@ def measure(meter, way, op, mode, jobs):
                 row["errors"].append("not run: time budget of the job exhausted")
                 continue
             command, env = jobs[tool]
+            if prepare is not None:
+                prepare(env)
             if mode == "cold":
                 speed.drop_caches()
-            ran = run(command, env=env, timeout=1800)
+            ran, wire = metered(command, env=env, timeout=1800)
             if not ran.ok:
                 row["errors"].append(f"exit {ran.code}: {speed.redact(ran.stderr[-300:])}")
                 continue
             row["samples"].append(ran.seconds)
+            if wire is not None:
+                row["bytes"].append(wire)
             if rep == 0:
                 entries, internal = parse_count(op, ran)
                 if entries is not None:
@@ -1291,19 +1898,21 @@ def write_measure_summary(meter, results):
     ctx = meter.ctx
     lines = [f"## sync-abgleich: measure ({speed.platform_key()})", ""]
     lines += [f"- {key}: {value}" for key, value in ctx.facts.items()]
-    lines.append(f"- tree: {FILES} files in {FOLDERS} folders per side (an assumption: no load was named); "
+    lines.append(f"- tree: {FILES} files in {FOLDERS} folders per side ({SUM_FILES} files in {SUM_FOLDERS} folders "
+                 "for the checksum mode; an assumption: no load was named); "
                  f"repetitions: {meter.reps} (median shown); runner: {platform.platform()}, {os.cpu_count()} CPUs")
     lines += ["", "Verhaeltnis = Kandidat / v0.5.189 (below 1 = the candidate is faster); Faktor = "
               "v0.5.189 / Kandidat. Times are the wall time of the whole `se` process.", "",
               "### Weg | v0.5.189 | Kandidat | Verhältnis", "",
-              "| Weg | v0.5.189 | Kandidat | Verhältnis | Faktor | n (old/new) |", "|---|---|---|---|---|---|"]
+              "| Weg | v0.5.189 | Kandidat | Verhältnis | Faktor | n (old/new) | Bytes v0.5.189 | "
+              "Bytes Kandidat |", "|---|---|---|---|---|---|---|---|"]
     ways = []
     for row in meter.rows:
         key = (row["way"], row["op"], row["mode"])
         if key not in ways:
             ways.append(key)
-    names = {"cmp": "sync compare", "ls": "ls -R"}
-    empty = {"samples": [], "internal": []}
+    names = OP_NAMES
+    empty = {"samples": [], "internal": [], "bytes": []}
     for way, op, mode in ways:
         old = meter.find(way, op, mode, OLD_LABEL) or empty
         new = meter.find(way, op, mode, NEW_LABEL) or empty
@@ -1311,16 +1920,19 @@ def write_measure_summary(meter, results):
         new_t = statistics.median(new["samples"]) if new["samples"] else None
         ratio = f"{new_t / old_t:.2f}" if old_t and new_t else "n/a"
         factor = f"{old_t / new_t:.2f}x" if old_t and new_t else "n/a"
+        wire_old = human(statistics.median(old["bytes"])) if old["bytes"] else "n/a"
+        wire_new = human(statistics.median(new["bytes"])) if new["bytes"] else "n/a"
         lines.append(f"| {way} {names[op]} {mode} | {median_text(old['samples'])} | {median_text(new['samples'])} | "
-                     f"{ratio} | {factor} | {len(old['samples'])}/{len(new['samples'])} |")
+                     f"{ratio} | {factor} | {len(old['samples'])}/{len(new['samples'])} | {wire_old} | {wire_new} |")
     if any(row["internal"] for row in meter.rows):
         lines += ["", "### `seconds` reported by `se sync compare` itself (median of the first run per mode)", "",
                   "| Weg | v0.5.189 | Kandidat |", "|---|---|---|"]
         for way, op, mode in ways:
-            if op == "cmp":
+            if op in COMPARE_OPS:
                 old = meter.find(way, op, mode, OLD_LABEL) or empty
                 new = meter.find(way, op, mode, NEW_LABEL) or empty
-                lines.append(f"| {way} {mode} | {median_text(old['internal'])} | {median_text(new['internal'])} |")
+                lines.append(f"| {way} {op} {mode} | {median_text(old['internal'])} | "
+                             f"{median_text(new['internal'])} |")
     lines += ["", "### References on the same data (no filtering, nothing compared)", "",
               "| Weg | Referenz | Median |", "|---|---|---|"]
     for ref in meter.refs:
@@ -1375,6 +1987,10 @@ def job_measure(results, log_root, args):
         make_big(big / "a" / "tree", FILES, FOLDERS)
         copy_tree(big / "a" / "tree", big / "b" / "tree")
         a_tree, b_tree = big / "a" / "tree", big / "b" / "tree"
+        # The checksum mode reads every file of both sides, so it gets its own, smaller tree.
+        make_big(big / "a" / "sum", SUM_FILES, SUM_FOLDERS)
+        copy_tree(big / "a" / "sum", big / "b" / "sum")
+        a_sum, b_sum = big / "a" / "sum", big / "b" / "sum"
 
         def folder_references(way, folder):
             if WINDOWS:
@@ -1387,22 +2003,35 @@ def job_measure(results, log_root, args):
                                                                          "%p %s %T@\\n"])
                 reference(meter, way, "du -sb", ["du", "-sb", str(folder)])
 
-        def way_runs(way, loc_a, loc_b, ls_target, folder, binaries, environments):
+        def way_runs(way, loc_a, loc_b, ls_target, folder, binaries, environments, sum_locs):
             names = {label: slug(f"m-{way}-{label}")[:60] for label in binaries}
-            saved = True
+            sum_names = {label: slug(f"s-{way}-{label}")[:60] for label in binaries}
+            saved = sum_saved = True
             for label, binary in binaries.items():
                 added = run([binary, "sync", "add", "--name", names[label], "--source", loc_a, "--target", loc_b,
                              "--trigger", "manual", "--enabled", "false"], env=environments[label], timeout=300,
                             log=log_root / "measure-jobs.log")
                 results.record("measure", f"{way} {label}: sync setup saved", added.ok, short(added, 300))
                 saved = saved and added.ok
+                added = run([binary, "sync", "add", "--name", sum_names[label], "--source", sum_locs[0], "--target",
+                             sum_locs[1], "--trigger", "manual", "--enabled", "false", "--compare", "checksum"],
+                            env=environments[label], timeout=300, log=log_root / "measure-jobs.log")
+                results.record("measure", f"{way} {label}: checksum setup saved", added.ok, short(added, 300))
+                sum_saved = sum_saved and added.ok
+            calibrate_idle()
+
+            def compares(names_by_label):
+                return {label: ([binary, "sync", "compare", names_by_label[label], "--json"], environments[label])
+                        for label, binary in binaries.items()}
             for mode in modes:
                 if saved:
-                    measure(meter, way, "cmp", mode, {label: ([binary, "sync", "compare", names[label], "--json"],
-                                                              environments[label])
-                                                     for label, binary in binaries.items()})
+                    # First comparison: no stored folder keys before any run; second: the keys of a first one.
+                    measure(meter, way, "cmp", mode, compares(names), prepare=forget_keys)
+                    measure(meter, way, "cmp2", mode, compares(names), prime=True)
                 measure(meter, way, "ls", mode, {label: ([binary, "ls", ls_target, "-R", "--json"],
                                                          environments[label]) for label, binary in binaries.items()})
+            if sum_saved:
+                measure(meter, way, "sum", "warm", compares(sum_names), prepare=forget_keys)
             if not WINDOWS:
                 for label, binary in binaries.items():
                     reference(meter, way, f"se search '*' ({label})", [binary, "search", ls_target, "*", "--glob"],
@@ -1411,12 +2040,13 @@ def job_measure(results, log_root, args):
                 folder_references(way, folder)
             meter.write()
 
-        way_runs("LL", str(a_tree), str(b_tree), str(b_tree), b_tree, tools, envs)
+        way_runs("LL", str(a_tree), str(b_tree), str(b_tree), b_tree, tools, envs, (str(a_sum), str(b_sum)))
         if WINDOWS:
             return
         # LS and LA: the SSH account (agent and SFTP share its data).
         box = SshBox(work, log_root)
         copy_tree(a_tree, box.data / "tree")
+        copy_tree(a_sum, box.data / "sum")
         try:
             box.start()
         except Exception as error:  # noqa: BLE001
@@ -1433,9 +2063,11 @@ def job_measure(results, log_root, args):
                 results.record("measure", f"{label}: saved SSH connections work", problem is None, problem or "")
                 connected = connected and problem is None
             if connected:
-                way_runs("LS", str(a_tree), "@sftp:/tree", "@sftp:/tree", box.data / "tree", tools, envs)
+                way_runs("LS", str(a_tree), "@sftp:/tree", "@sftp:/tree", box.data / "tree", tools, envs,
+                         (str(a_sum), "@sftp:/sum"))
                 remove(box.home / ".cache")
-                way_runs("LA", str(a_tree), "@agent:/tree", "@agent:/tree", box.data / "tree", tools, envs)
+                way_runs("LA", str(a_tree), "@agent:/tree", "@agent:/tree", box.data / "tree", tools, envs,
+                         (str(a_sum), "@agent:/sum"))
         # LH and HH: one Share pair per version, because the host runs the version under test.
         server = build_share_server(ctx)
         for label, binary in tools.items():
@@ -1449,11 +2081,12 @@ def job_measure(results, log_root, args):
                 net = share_net(work, f"m-{label}", server, binary, binary, log_root)
                 for index in (0, 1):
                     copy_tree(a_tree, net.exports[index] / "tree")
+                    copy_tree(a_sum, net.exports[index] / "sum")
                 one, main_env = {label: str(net.main.cli)}, {label: net.main.env}
                 way_runs("LH", str(a_tree), f"{net.endpoints[0]}/tree", f"{net.endpoints[0]}/tree",
-                         net.exports[0] / "tree", one, main_env)
+                         net.exports[0] / "tree", one, main_env, (str(a_sum), f"{net.endpoints[0]}/sum"))
                 way_runs("HH", f"{net.endpoints[1]}/tree", f"{net.endpoints[0]}/tree", f"{net.endpoints[1]}/tree",
-                         None, one, main_env)
+                         None, one, main_env, (f"{net.endpoints[1]}/sum", f"{net.endpoints[0]}/sum"))
             except Exception as error:  # noqa: BLE001
                 results.record("measure", f"Share pair {label}", False, f"{type(error).__name__}: {error}")
             finally:

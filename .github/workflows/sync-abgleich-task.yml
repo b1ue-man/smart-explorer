@@ -20,11 +20,24 @@ run-name: Sync comparison as fast as the storage analysis ${{ inputs.candidate_s
 #               Share-Share, also candidate client against a v0.5.189 far side
 #               and the reverse; then the merge rule `se cp --conflict update`
 #               over local, SFTP, SSH agent, Direct Share, FTP and SMB.
+#               Linux, in bytes over the loopback interface (plan E): folder
+#               keys on local-SSH agent, local-Direct Share and Share-Share
+#               (first comparison, second comparison without a change,
+#               comparison after one file changed deep in the tree, each equal
+#               to v0.5.189 and far below its bytes); checksum mode against
+#               SFTP without agent, SSH agent, Direct Share and FTP (a
+#               pyftpdlib with HASH) moving no file content where v0.5.189
+#               moves all of it; an unchanged folder merged onto an equal
+#               target moving nothing and reported equal; a FAT image with
+#               times one hour apart counted equal (summer time).
 #               Windows: the merge rule local-local
-#   measure     (input measure) wall time of `se sync compare` and `se ls -R`,
-#               v0.5.189 against the candidate, 100 000 files in 10 000 folders
-#               per side (an assumption), per side combination, cold and warm,
-#               median of `repetitions`, next to find, du, robocopy /L and
+#   measure     (input measure) wall time of `se sync compare` (first
+#               comparison, second comparison without a change, checksum mode)
+#               and `se ls -R`, v0.5.189 against the candidate, 100 000 files
+#               in 10 000 folders per side (an assumption; checksum mode 20 000
+#               files in 2 000 folders), per side combination, cold and warm,
+#               median of `repetitions`, with the bytes over the loopback
+#               interface of each run, next to find, du, robocopy /L and
 #               `se search`. The table "Weg | v0.5.189 | Kandidat | Verhältnis"
 #               goes to the step summary, every number to the artifact
 #   android     the Android build stage (NDK check of the bridge, APKs, JVM
@@ -221,8 +234,10 @@ jobs:
         os: [ubuntu-24.04, windows-2025]
     runs-on: ${{ matrix.os }}
     # Linux: the candidate, v0.5.189 and two mixed-agent builds in the
-    # development profile, a development share server, the equality runs and
-    # the merge cases against containers.
+    # development profile, a development share server, the equality runs, the
+    # folder-key and checksum byte counts (plan E: 600 folders of 12 000
+    # files and 10 files of 4 MiB per far side and version) and the merge
+    # cases against containers and a FAT image.
     timeout-minutes: 345
     env:
       CANDIDATE_SHA: ${{ inputs.candidate_sha }}
@@ -265,6 +280,9 @@ jobs:
           df -h /
           sudo -n true
           command -v docker ssh-keyscan ssh-keygen openssl find du cp
+          # The summer-time case formats and mounts a FAT image (mkfs.vfat, mount -o loop).
+          command -v mkfs.vfat || { sudo -n apt-get update -qq && sudo -n apt-get install -y --no-install-recommends dosfstools; }
+          command -v mkfs.vfat
           docker version --format '{{.Server.Version}}'
 
       - name: Run the one task entrypoint (behaviour)
@@ -298,8 +316,9 @@ jobs:
         os: [ubuntu-24.04, windows-2025]
     runs-on: ${{ matrix.os }}
     # Release builds of the candidate and of v0.5.189 plus the repetitions of
-    # every measurement; the driver stops measuring at its own budget so the
-    # report is always written before this limit.
+    # every measurement (first and second comparison, checksum mode, listing,
+    # per side combination); the driver stops measuring at its own budget so
+    # the report is always written before this limit.
     timeout-minutes: 355
     env:
       CANDIDATE_SHA: ${{ inputs.candidate_sha }}
