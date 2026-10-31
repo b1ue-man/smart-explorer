@@ -13,7 +13,7 @@ use crate::types::FileEntry;
 use crate::vfs::{BackendHandle, HashWalkEntry, HashWalkItem, HashWalkRequest, VfsOmission};
 use crossbeam_channel::{bounded, RecvTimeoutError};
 use std::collections::HashSet;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -39,7 +39,10 @@ pub(super) fn walk_in_one_request(
         return false;
     }
     let (items_tx, items_rx) = bounded::<HashWalkItem>(QUEUE_ITEMS);
-    let cancel = state.cancel_handle();
+    // The stream stops on its own flag. A stop it needs (a side that sends no
+    // metadata before the first row) must not look like a stop of the scan: the
+    // folder walk that follows would honour it and list nothing.
+    let walk_stop = Arc::new(AtomicBool::new(false));
     let request = HashWalkRequest {
         algorithm: None,
         min_bytes: 0,
@@ -47,7 +50,7 @@ pub(super) fn walk_in_one_request(
     };
     let mut rows = Rows::new(root);
     let outcome = std::thread::scope(|scope| {
-        let walk_cancel = cancel.clone();
+        let walk_cancel = walk_stop.clone();
         let walker = std::thread::Builder::new()
             .name("rscan-walk".into())
             .spawn_scoped(scope, move || {
@@ -79,7 +82,7 @@ pub(super) fn walk_in_one_request(
             }
         }
         if stop_early {
-            cancel.store(true, Ordering::Relaxed);
+            walk_stop.store(true, Ordering::Relaxed);
         }
         drop(items_rx);
         Some(walker.join())

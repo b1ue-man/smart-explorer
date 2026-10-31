@@ -3,15 +3,25 @@ use super::Source;
 use std::{fs, io, os::unix::fs::MetadataExt, path::Path};
 
 pub(super) fn probe(path: &Path) -> io::Result<Option<Source>> {
-    // Preserve the existing consented local metadata boundary; a plain stat
-    // must not reject a path that local_access can inspect after its grant.
+    probe_device(device_of(path)?)
+}
+
+/// Device number of `path`, a symlink followed. The consented local metadata
+/// boundary applies: a plain stat must not reject a path that local_access can
+/// inspect after its grant.
+fn device_of(path: &Path) -> io::Result<u64> {
     let metadata = crate::local_access::symlink_metadata(path)?;
     let metadata = if metadata.file_type().is_symlink() {
         fs::metadata(path)?
     } else {
         metadata
     };
-    probe_device(metadata.dev())
+    Ok(metadata.dev())
+}
+
+/// The device number `WalkDevice` compares between neighbouring folders.
+pub(super) fn device_number(path: &Path) -> io::Result<Option<u64>> {
+    device_of(path).map(Some)
 }
 
 /// A regular file is on its own device: the same as `probe`.

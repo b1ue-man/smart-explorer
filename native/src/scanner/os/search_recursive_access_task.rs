@@ -32,6 +32,7 @@ fn search_recursive_access_task_local_budget_keeps_buffered_results() {
         vec![PendingDir {
             path: fixture.path().to_path_buf(),
             lineage: None,
+            parent: None,
         }],
         1,
     );

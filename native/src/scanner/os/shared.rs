@@ -2,7 +2,7 @@ use super::budget::ScanBudget;
 use super::core::ms_since_unix;
 use super::platform::{get_attrs, is_link_like, path_text};
 use super::retention::RetentionHandle;
-use super::walk::{walk_parallel, PendingDir};
+use super::walk::{scan_threads, walk_parallel, PendingDir};
 use crate::types::{FileEntry, ScanProgress};
 use crossbeam_channel::Sender;
 use std::collections::HashSet;
@@ -427,13 +427,11 @@ fn run_scan(
         let root_dir = PendingDir {
             path: root.clone(),
             lineage: None,
+            parent: None,
         };
         // The explicitly chosen root may itself be a junction; child links
         // remain non-recursive boundaries. Reserve stack space for deep trees.
-        let threads = std::thread::available_parallelism()
-            .map(|count| count.get())
-            .unwrap_or(2)
-            .min(4);
+        let threads = scan_threads();
         match rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
             .stack_size(8 * 1024 * 1024)

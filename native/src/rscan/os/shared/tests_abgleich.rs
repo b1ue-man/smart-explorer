@@ -6,7 +6,7 @@ use super::tests_abgleich_fixture::{
 };
 use crate::scanner::{RetentionHandle, ScanRetention};
 use crate::types::FileEntry;
-use crate::vfs::{HashWalkItem, HashWalkRequest, OmissionReason, VfsOmission};
+use crate::vfs::{HashWalkEntry, HashWalkItem, HashWalkRequest, OmissionReason, VfsOmission};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -62,6 +62,42 @@ fn abgleich_task_whole_tree_failure_before_any_row_falls_back() {
     assert!(count(&backend.lists) > 0);
     assert_eq!(scanned.rows.len(), 9);
     assert!(scanned.errors.is_empty());
+}
+
+/// A side that sends an entry without the requested metadata before any row
+/// makes the view fall back to the folder walk, and the scan is not stopped.
+#[test]
+fn abgleich_task_entry_without_metadata_falls_back_without_stopping_the_scan() {
+    let mut items = parity_items();
+    items[0] = HashWalkItem::Entry(HashWalkEntry {
+        rel: "a.txt".to_string(),
+        is_dir: false,
+        size: 3,
+        mtime_ms: 1_003,
+        digest: None,
+        meta: None,
+    });
+    let backend = TreeBackend::new(parity_listings(), Walk::Items(items), 2);
+    let scanned = scan(backend.clone(), "/r", None, None);
+    assert_eq!(
+        count(&backend.walk_requests),
+        1,
+        "the whole-tree request was made"
+    );
+    assert!(
+        count(&backend.lists) > 0,
+        "the folder walk lists after the fallback"
+    );
+    assert_eq!(
+        scanned.rows.len(),
+        9,
+        "root plus eight rows, as in the folder walk"
+    );
+    assert!(
+        scanned.errors.is_empty(),
+        "no stop error: {:?}",
+        scanned.errors
+    );
 }
 
 #[test]

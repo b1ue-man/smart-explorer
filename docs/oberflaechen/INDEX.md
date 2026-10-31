@@ -1,6 +1,6 @@
 # Oberflächen von Smart Explorer
 
-Stand: 2026-10-26; laufende Medien- und Fernzugriffsverträge ergänzt. Die Einträge beschreiben die jeweilige Oberfläche; veröffentlichte Versionen werden in den verlinkten Dokumenten getrennt belegt.
+Stand: 2026-10-31; rekursive Ansicht und `se ls --recursive` als Teildokument ergänzt; laufende Medien- und Fernzugriffsverträge ergänzt. Die Einträge beschreiben die jeweilige Oberfläche; veröffentlichte Versionen werden in den verlinkten Dokumenten getrennt belegt.
 
 Zweck: Dieses Verzeichnis hält fest, welche Oberflächen das Projekt hat und über welche Oberfläche jede Fähigkeit und jede Einstellung erreichbar ist. Eine Fähigkeit ist erst fertig, wenn jede Oberfläche, die ihren Gegenstand zeigt oder steuert, sie gleichwertig zeigt und steuert. Ausnahmen (zum Beispiel die Terminal-Verbindung selbst, eine Plattform ohne die nötige Betriebssystemfunktion) stehen mit Grund im Teildokument.
 
@@ -30,6 +30,7 @@ Zweck: Dieses Verzeichnis hält fest, welche Oberflächen das Projekt hat und ü
 | Maschinenanmeldung, TCP, RDP, Programmstart und Fensterfamilien | [fernzugriff.md](fernzugriff.md) |
 | se Desktop und se Launcher | [desktop-launcher.md](desktop-launcher.md) |
 | Eigene Android-Medienvorschau (Bilder, Video, Audio) | [medien.md](medien.md) |
+| Rekursive Ansicht (Strg+R, Android-Schalter „Rekursiv“), `se ls --recursive` in Text und JSON, MCP über `se` | [explorer.md](explorer.md) |
 
 ## Kostenklassen
 

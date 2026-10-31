@@ -50,6 +50,12 @@ pub(super) fn probe(path: &Path) -> io::Result<Option<Source>> {
     probe_volume(&file, &root)
 }
 
+/// Windows has no cheap device number: a walk leaves its root's volume only
+/// through a link, and `WalkDevice` probes every folder entered through one.
+pub(super) fn device_number(_path: &Path) -> io::Result<Option<u64>> {
+    Ok(None)
+}
+
 /// `probe` of a regular file: a file is never a mount point, so its folder
 /// decides. A folder found on no optical volume a moment ago is not
 /// resolved again (M6); positive answers are always resolved in full.

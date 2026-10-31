@@ -1,4 +1,7 @@
-use super::{acquire, acquire_source, permit::context_canceled, probe, Guard, Priority, ReadMode};
+use super::{
+    acquire, acquire_source, permit::context_canceled, probe, with_cancellation, Guard, Priority,
+    ReadMode,
+};
 use std::{
     io::{self, Read},
     path::{Path, PathBuf},
@@ -118,6 +121,8 @@ pub struct GuardedIterator<'a, I> {
     cancel: &'a AtomicBool,
     failed: bool,
     source: Option<super::Source>,
+    /// False for a folder on no protected device: no step takes the device lock.
+    guarded: bool,
 }
 
 impl<'a, I> GuardedIterator<'a, I> {
@@ -137,6 +142,47 @@ impl<'a, I> GuardedIterator<'a, I> {
             cancel,
             failed: false,
             source,
+            guarded: true,
+        })
+    }
+
+    /// `new` for a folder whose device the walk already knows: `source` is that
+    /// device's protected source, `None` for a folder on no protected device. The
+    /// latter takes neither the device lock nor a probe. A protected folder is
+    /// opened under the lock exactly as `new` opens it.
+    pub fn with_device(
+        path: &Path,
+        source: Option<super::Source>,
+        priority: Priority,
+        cancel: &'a AtomicBool,
+        open: impl FnOnce() -> io::Result<I>,
+    ) -> io::Result<Self> {
+        let Some(source) = source else {
+            return Ok(Self {
+                inner: open()?,
+                path: path.to_path_buf(),
+                priority,
+                cancel,
+                failed: false,
+                source: None,
+                guarded: false,
+            });
+        };
+        let guard = with_cancellation(cancel, || {
+            acquire_source(path, source, priority, || {
+                cancel.load(std::sync::atomic::Ordering::Acquire)
+            })
+        })?;
+        let source = Some(guard.source().clone());
+        let inner = open()?;
+        Ok(Self {
+            inner,
+            path: path.to_path_buf(),
+            priority,
+            cancel,
+            failed: false,
+            source,
+            guarded: true,
         })
     }
 }
@@ -146,6 +192,9 @@ impl<T, I: Iterator<Item = io::Result<T>>> Iterator for GuardedIterator<'_, I> {
     fn next(&mut self) -> Option<Self::Item> {
         if self.failed {
             return None;
+        }
+        if !self.guarded {
+            return self.inner.next();
         }
         let _guard = match acquire(&self.path, self.priority, &self.cancel) {
             Ok(guard) => guard,
