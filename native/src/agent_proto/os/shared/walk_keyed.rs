@@ -273,7 +273,30 @@ pub(crate) fn handle_list_runs(
 /// runs next to its data, in this process (a local sync side: its keys let
 /// the remote other side leave equal folders out).
 pub(crate) fn local_keyed(root: &str, algorithm: u8, cancel: &AtomicBool) -> io::Result<Collected> {
-    let tree = KeyTree::new("", HashSet::new());
+    collect_local(root, algorithm, Mode::Marks, cancel)
+}
+
+impl Collected {
+    /// Only the keys of the local tree `root` (the walk of `local_keyed`
+    /// without keeping any run): the folder `""` is the root, every other
+    /// folder is named by its path below it. For callers that compare keys
+    /// and never replay a run (merge copies, `transfer::update`).
+    pub(crate) fn keys_of(
+        root: &str,
+        algorithm: u8,
+        cancel: &AtomicBool,
+    ) -> io::Result<Vec<(String, FolderKey)>> {
+        Ok(collect_local(root, algorithm, Mode::KeysOnly, cancel)?.keys)
+    }
+}
+
+fn collect_local(
+    root: &str,
+    algorithm: u8,
+    mode: Mode,
+    cancel: &AtomicBool,
+) -> io::Result<Collected> {
+    let tree = KeyTree::with_mode("", HashSet::new(), mode);
     let collect = Mutex::new(Collected::default());
     let setup = KeyedSetup {
         tree: &tree,
@@ -291,6 +314,25 @@ pub(crate) fn local_keyed(root: &str, algorithm: u8, cancel: &AtomicBool) -> io:
     Ok(collect.into_inner().unwrap_or_else(|p| p.into_inner()))
 }
 
+/// `hidden` of an entry in the walk of a local sync side: on Windows the
+/// file attribute (as the Share host lists it, `vfs::local_attrs`), where a
+/// dot name is an ordinary name; elsewhere a leading dot, as the agent and
+/// SFTP list it.
+#[cfg(windows)]
+pub(super) fn local_hidden(_name: &str, metadata: &std::fs::Metadata) -> bool {
+    super::local_platform::hidden_attribute(metadata)
+}
+
+/// See the Windows variant.
+#[cfg(not(windows))]
+pub(super) fn local_hidden(name: &str, _metadata: &std::fs::Metadata) -> bool {
+    name.starts_with('.')
+}
+
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.to_string())
 }
+
+#[cfg(test)]
+#[path = "local_keyed_hidden_tests.rs"]
+mod hidden_tests;

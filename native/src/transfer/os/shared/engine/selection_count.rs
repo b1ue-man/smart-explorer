@@ -11,11 +11,17 @@
 //! and the other files of the folder are counted as usual. Only the calling
 //! thread reports, at the engine's progress interval.
 //!
+//! A source folder with the key of the same-named target folder
+//! (`update::compare`, keys formed where the files are) is equal as a whole:
+//! its target folder is not listed and its files count as equal without a
+//! comparison each; the source is still listed for the names and the count.
+//!
 //! The five counts describe the file rule "neuere ersetzen ältere"; the
 //! surfaces show them only for a job that applies the rule
 //! (`TransferJob::applies_update_rule`), else the files count as new or
 //! same-named like before the rule.
 use super::super::lock;
+use super::super::update::Keys;
 use crate::transfer::engine_names::{join_rel, name_problem};
 use crate::transfer::entries::{
     compile_remote_filter, remote_file_entry, RemoteFilterCtx, TransferCollectionBudget,
@@ -23,10 +29,13 @@ use crate::transfer::entries::{
 use crate::transfer::update_rule::{classify_local_time, Case, Stamp};
 use crate::transfer::{Endpoint, FolderConflictPreview, TransferJob};
 use crate::vfs::{Backend, LocalBackend, VfsMeta};
-use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::Duration;
+
+#[path = "selection_count_target.rs"]
+mod target;
+use target::{equal_by_key, equal_keys, read_target, Target};
 
 /// How long an idle thread waits for the others before it looks again.
 const WAIT: Duration = Duration::from_millis(100);
@@ -38,6 +47,9 @@ const SHOWN: usize = 5;
 struct Node {
     path: String,
     relative: String,
+    /// The folder below the selected one (`""` = the selected folder): what
+    /// the key comparison names it by.
+    inner: String,
     depth: usize,
     target_absent: bool,
 }
@@ -81,48 +93,10 @@ struct Context<'a> {
     allow_backslash: bool,
     window: u64,
     local_time: bool,
+    /// Folders whose keys are equal at both sides (`update::compare`).
+    keys: Option<Keys>,
     cancel: &'a AtomicBool,
     budget: Mutex<TransferCollectionBudget>,
-}
-
-/// The names of one target folder.
-enum Target {
-    Absent,
-    Unreadable,
-    Listed {
-        folded: bool,
-        names: HashMap<String, Vec<VfsMeta>>,
-        /// Names the target listed as omissions (folded like `names`).
-        omitted: HashSet<String>,
-    },
-}
-
-impl Target {
-    fn key(folded: bool, name: &str) -> String {
-        if folded {
-            name.to_lowercase()
-        } else {
-            name.to_string()
-        }
-    }
-
-    fn find(&self, name: &str) -> Option<&[VfsMeta]> {
-        let Self::Listed { folded, names, .. } = self else {
-            return None;
-        };
-        names.get(&Self::key(*folded, name)).map(Vec::as_slice)
-    }
-
-    /// The target lists `name` as an entry it cannot describe.
-    fn omits(&self, name: &str) -> bool {
-        let Self::Listed {
-            folded, omitted, ..
-        } = self
-        else {
-            return false;
-        };
-        omitted.contains(&Self::key(*folded, name))
-    }
 }
 
 pub fn count_folder_conflict(
@@ -135,6 +109,7 @@ pub fn count_folder_conflict(
     let source = super::backend(&job.source, &local);
     let target = super::backend(&job.target, &local);
     let view = super::super::JobView::of(job);
+    let keys = equal_keys(job, &view, preview, cancel);
     let context = Context {
         source,
         target,
@@ -144,6 +119,7 @@ pub fn count_folder_conflict(
         allow_backslash: view.allow_backslash(),
         window: super::super::update::window_of(&view),
         local_time: super::super::update::local_time_of(&view),
+        keys,
         cancel,
         budget: Mutex::new(TransferCollectionBudget::default()),
     };
@@ -153,6 +129,7 @@ pub fn count_folder_conflict(
             stack: vec![Node {
                 path: preview.source.clone(),
                 relative: preview.relative.clone(),
+                inner: String::new(),
                 depth: 0,
                 target_absent: !preview.existing,
             }],
@@ -260,43 +237,6 @@ fn merge(state: &mut Counting, found: Found) {
     state.stack.extend(found.children);
 }
 
-/// The target folder of `node`: one listing.
-fn read_target(context: &Context<'_>, node: &Node) -> Target {
-    if node.target_absent {
-        return Target::Absent;
-    }
-    let dir = join_rel(context.target_dir, &node.relative);
-    match crate::vfs::list_dir_tolerant(context.target, &dir) {
-        Ok(listed) => {
-            let folded = if context.target_local {
-                cfg!(windows)
-            } else {
-                !context.target.case_sensitive_paths(&dir)
-            };
-            let omitted = listed
-                .omitted
-                .iter()
-                .map(|omission| Target::key(folded, &omission.rel))
-                .collect();
-            let mut names: HashMap<String, Vec<VfsMeta>> =
-                HashMap::with_capacity(listed.entries.len());
-            for entry in listed.entries {
-                names
-                    .entry(Target::key(folded, &entry.name))
-                    .or_default()
-                    .push(entry);
-            }
-            Target::Listed {
-                folded,
-                names,
-                omitted,
-            }
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Target::Absent,
-        Err(_) => Target::Unreadable,
-    }
-}
-
 /// Counts the files of one source folder and finds its subfolders.
 fn count_folder(context: &Context<'_>, node: &Node) -> Found {
     let mut found = Found::default();
@@ -312,7 +252,11 @@ fn count_folder(context: &Context<'_>, node: &Node) -> Found {
     for omission in listed.omitted {
         found.omitted.push(join_rel(&node.path, &omission.rel));
     }
-    let target = read_target(context, node);
+    let target = if equal_by_key(context, node, &listed.entries) {
+        Target::Equal
+    } else {
+        read_target(context, node)
+    };
     for entry in listed.entries {
         if context.cancel.load(Ordering::Acquire) {
             return found;
@@ -379,7 +323,7 @@ fn count_folder(context: &Context<'_>, node: &Node) -> Found {
 fn child(node: &Node, target: &Target, path: String, relative: String, entry: &VfsMeta) -> Node {
     let target_absent = match target {
         Target::Absent => true,
-        Target::Unreadable => false,
+        Target::Unreadable | Target::Equal => false,
         // A name the target cannot list may be the folder: not known absent.
         Target::Listed { .. } => {
             !target.omits(&entry.name)
@@ -390,6 +334,11 @@ fn child(node: &Node, target: &Target, path: String, relative: String, entry: &V
         }
     };
     Node {
+        inner: if node.inner.is_empty() {
+            entry.name.clone()
+        } else {
+            format!("{}/{}", node.inner, entry.name)
+        },
         path,
         relative,
         depth: node.depth + 1,
@@ -409,6 +358,15 @@ fn count_file(
     if matches!(target, Target::Unreadable) {
         found.omitted.push(source.to_string());
         found.incomplete = true;
+        return;
+    }
+    if matches!(target, Target::Equal) {
+        // The key of the folder is the key of its source folder: the file is
+        // there, with its size and its time.
+        found.equal += 1;
+        if found.samples.len() < SHOWN {
+            found.samples.push(relative);
+        }
         return;
     }
     let omitted = target.omits(&entry.name);

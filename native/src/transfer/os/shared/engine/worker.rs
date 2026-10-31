@@ -35,7 +35,13 @@ pub(super) fn run(engine: &Engine<'_>, _slot: WorkerSlot<'_>) {
         match work {
             Work::Dir { rel, source } => folder_work(engine, rel, source),
             Work::Dirs(dirs) => {
-                let rels: Vec<&str> = dirs.iter().map(|(rel, _)| rel.as_str()).collect();
+                // Folders with equal keys at both sides exist with all their
+                // content (`update_keys.rs`): nothing to create there.
+                let rels: Vec<&str> = dirs
+                    .iter()
+                    .map(|(rel, _)| rel.as_str())
+                    .filter(|rel| !super::update::folder_equal(engine, rel))
+                    .collect();
                 if let Some(error) = engine.folders.ensure_many(&rels, engine.stop_flag()) {
                     breaker(engine, &error.message);
                 }
@@ -73,6 +79,9 @@ pub(super) fn run(engine: &Engine<'_>, _slot: WorkerSlot<'_>) {
 /// A folder of an unfiltered tree: created (or found) once, even when no
 /// file asks for it.
 fn folder_work(engine: &Engine<'_>, rel: String, source: String) {
+    if super::update::folder_equal(engine, &rel) {
+        return;
+    }
     match engine.folders.ensure(&rel, engine.stop_flag()) {
         // A move removes an emptied source folder only once its
         // counterpart exists at the target.

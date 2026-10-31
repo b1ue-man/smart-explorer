@@ -44,6 +44,17 @@ aus einem Download: SFTP per `sha256sum`-Befehl, FTP per `HASH`/`XSHA256`, Drive
 nur als Anzeige (`docs/TRANSFER_ENGINE.md`, „Prüfschlüssel ohne Dateiübertragung“); an den Oberflächen ändert
 sich nichts außer dass „Überprüfen“ und die Eigentumsprüfung beim Fortsetzen weniger lesen.
 
+Nachtrag 2026-10-31 (Ordnerschlüssel beim Zusammenführen, nicht gebaut, nicht getestet): Hat ein Quellordner den
+Ordnerschlüssel des gleichnamigen Zielordners (gebildet dort, wo die Dateien liegen: lokal im eigenen Prozess,
+entfernt über den Schlüssel-Durchlauf der Gegenseite), gilt er als gleich: sein Ziel wird nicht aufgelistet, keine
+Datei darin einzeln verglichen, alle zählen unter „gleich übersprungen“; nur Ordner mit anderem Schlüssel nehmen den
+bisherigen Weg. Das gilt für den Auftrag und für die vollständige Zählung der Vorschau „Zielordner entscheiden“ auf
+Desktop (`folder_conflict_ui.rs`), Android (`fs.folderPreview`), CLI (`se cp|get|put --conflict update`) und MCP
+gleichermaßen, weil es in der gemeinsamen Engine (`transfer/os/shared/engine/update_keys.rs`) liegt; keine
+Oberfläche bekommt eine Einstellung oder neue Anzeige, Zählwerte und Meldungen bleiben dieselben. Nur bei entferntem
+Ziel mit Schlüssel-Durchlauf (Share-Host, se-agent, Hintergrunddienst); sonst der bisherige Weg
+(`docs/TRANSFER_ENGINE.md`, „Ordnerschlüssel beim Zusammenführen“).
+
 Die Engine nutzt dieselben Backend-/Verbindungsidentitäten über VFS, Agent,
 Share und Daemon. Ein gleichlautender relativer Pfad auf zwei Gegenstellen
 bezeichnet weiterhin zwei verschiedene Orte. Sync und „Fehlende übertragen“

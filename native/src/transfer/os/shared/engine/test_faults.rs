@@ -37,6 +37,9 @@ pub(super) struct Faults {
     pub omit_names: Vec<String>,
     /// Listings report no modification time (a backend that has none).
     pub unknown_times: bool,
+    /// The fake answers `hash_walk_keyed` with folder keys (a host with
+    /// `hash_walk_keys_v1`); off, it declines like an older host.
+    pub keyed: bool,
     /// Runs with the path of the next private stage that is opened, before
     /// the stage exists (a test saves the replaced file again meanwhile).
     pub on_stage: Mutex<Option<EntryHook>>,
@@ -108,6 +111,7 @@ impl Fake {
     /// `list_dir_tolerant`: the folder with `Faults::omit_names` reported as
     /// omissions instead of entries.
     pub(super) fn tolerant_listing(&self, path: &str) -> VfsResult<crate::vfs::VfsListing> {
+        self.counters.listings.fetch_add(1, Ordering::SeqCst);
         let mut listing = crate::vfs::VfsListing::default();
         for entry in self.list_dir(path)? {
             if self.faults.omit_names.contains(&entry.name) {
@@ -121,6 +125,19 @@ impl Fake {
             }
         }
         Ok(listing)
+    }
+
+    /// A listing entry with the content MD5 the fixture knows for it, and no
+    /// time when the fake reports none.
+    pub(super) fn with_md5(&self, dir: &str, mut meta: crate::vfs::VfsMeta) -> crate::vfs::VfsMeta {
+        if self.faults.unknown_times {
+            meta.mtime_ms = 0;
+        }
+        let path = format!("{}/{}", dir.trim_end_matches('/'), meta.name);
+        if let Some(md5) = self.md5.get(&path) {
+            meta.content_md5 = Some(md5.clone());
+        }
+        meta
     }
 
     pub(super) fn fake_put_batch(

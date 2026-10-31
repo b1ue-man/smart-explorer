@@ -47,6 +47,16 @@ pub(crate) fn metadata_class(path: &Path, metadata: &std::fs::Metadata) -> (bool
     classify_tag(read != 0, info.ReparseTag, metadata.file_attributes())
 }
 
+/// Whether `metadata` carries the hidden attribute (`FILE_ATTRIBUTE_HIDDEN`),
+/// the rule the Share host lists by on Windows (`vfs::local_attrs`); the name
+/// does not matter. Used by the walk of a local sync side
+/// (`walk_keyed::local_hidden`).
+pub(crate) fn hidden_attribute(metadata: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_HIDDEN;
+    metadata.file_attributes() & FILE_ATTRIBUTE_HIDDEN != 0
+}
+
 fn classify_tag(known: bool, tag: u32, attributes: u32) -> (bool, bool) {
     use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_DEVICE;
     let link = !known || tag == 0 || tag & 0x2000_0000 != 0;

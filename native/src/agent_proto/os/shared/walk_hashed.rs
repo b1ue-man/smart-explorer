@@ -287,6 +287,8 @@ fn run_walk(
         algorithm,
         min_bytes,
         cancel,
+        // A walk collecting in this process serves a local sync side.
+        local: keys.is_some_and(|keys| keys.collect.is_some()),
     };
     let run = Mutex::new(());
     let walked = super::ordered_walk(
@@ -314,6 +316,9 @@ struct Walk<'a> {
     algorithm: u8,
     min_bytes: u64,
     cancel: &'a AtomicBool,
+    /// The walk runs in this process for a local sync side (`local_keyed`):
+    /// `hidden` follows the platform's own rule (`walk_keyed::local_hidden`).
+    local: bool,
 }
 
 impl Walk<'_> {
@@ -390,9 +395,15 @@ impl Walk<'_> {
         };
         let (link, special) = super::local_platform::metadata_class(&path, &metadata);
         let mtime_ms = metadata.modified().ok().map(systemtime_ms).unwrap_or(0);
-        // Names with a leading dot are hidden, as SFTP lists them.
+        // Names with a leading dot are hidden, as SFTP lists them; the walk
+        // of a local sync side takes the platform's own rule.
+        let hidden = if self.local {
+            super::walk_keyed::local_hidden(&name, &metadata)
+        } else {
+            name.starts_with('.')
+        };
         let meta = out.meta().then(|| WireHashMeta {
-            hidden: name.starts_with('.'),
+            hidden,
             system: false,
             btime_ms: metadata.created().ok().map(systemtime_ms).unwrap_or(0),
             is_symlink: link,

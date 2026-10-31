@@ -22,6 +22,8 @@ pub(super) use counters::{Counters, Ranges, ReadFault};
 mod evidence;
 #[path = "test_backend_evidence_tests.rs"]
 mod evidence_tests;
+#[path = "test_backend_keys.rs"]
+mod keys;
 #[path = "test_backend_single_put_tests.rs"]
 mod single_put_tests;
 #[path = "test_backend_streams.rs"]
@@ -148,17 +150,6 @@ impl Fake {
             extra: self.extra.clone(),
             _guard: Guard::new(&self.counters, true),
         })
-    }
-
-    fn with_md5(&self, dir: &str, mut meta: VfsMeta) -> VfsMeta {
-        if self.faults.unknown_times {
-            meta.mtime_ms = 0;
-        }
-        let path = format!("{}/{}", dir.trim_end_matches('/'), meta.name);
-        if let Some(md5) = self.md5.get(&path) {
-            meta.content_md5 = Some(md5.clone());
-        }
-        meta
     }
 }
 
@@ -432,6 +423,16 @@ impl crate::vfs::BackendExtensions for Fake {
     }
     fn list_dir_tolerant(&self, path: &str) -> VfsResult<crate::vfs::VfsListing> {
         self.tolerant_listing(path)
+    }
+    fn hash_walk_keyed(
+        &self,
+        root: &str,
+        request: crate::vfs::HashWalkRequest,
+        walk: crate::vfs::KeyedWalk<'_>,
+        tx: crossbeam_channel::Sender<crate::vfs::KeyedWalkItem>,
+        cancel: &AtomicBool,
+    ) -> VfsResult<bool> {
+        self.keyed_walk(root, request, walk, tx, cancel)
     }
     fn finish_stage(
         &self,

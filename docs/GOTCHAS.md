@@ -1016,9 +1016,17 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   fetch) it takes the walk with known keys. Waits watch the pair's stop flag;
   a side that does not take part is declined up front, and every side's walk
   declines what it did not submit when it ends. A local side reads keys and
-  runs with the agent's walk in this process (`agent_proto::local_keyed`, dot
-  names hidden as on the agent) beside its own walk; on Windows a remote side
-  that marks hidden files by attribute then differs only in those folders.
+  runs with the agent's walk in this process (`agent_proto::local_keyed`)
+  beside its own walk. Its `hidden` follows the platform (2026-10-31,
+  `walk_keyed::local_hidden`): on Windows the file attribute
+  `FILE_ATTRIBUTE_HIDDEN`, as the Share host lists it there (`vfs::local_attrs`),
+  and a dot name is an ordinary name; elsewhere a leading dot, as the agent and
+  SFTP list it. The flag is chosen only for a walk that collects in this
+  process (`Walk::local`); the agent's own walk on a Windows host keeps dot
+  names, so against a Windows se-agent only the folders holding such files
+  differ in key (more descent, never another result). The change moves the
+  keys of Windows folders with hidden or dot files once: stored key files
+  are content-addressed and simply do not match them.
 - **W8 with run marks:** an empty folder is checked when the next run mark
   arrives; a folder that could not be opened when its parent's run ends (or
   when its own failure arrives), not when the walk ends.

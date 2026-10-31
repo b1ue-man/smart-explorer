@@ -570,6 +570,39 @@ Host als Auslassung meldet (Share-Host: nicht lesbar, nicht darstellbar), gilt a
 unbekannt: die Datei dieses Namens behält beide, die übrigen Dateien des Ordners laufen wie sonst. Ein Ziel, das nicht gelesen werden kann, lässt die Datei allein laufen, wo der
 gewöhnliche Weg den Fehler meldet und wiederholt.
 
+**Ordnerschlüssel beim Zusammenführen** (Quellstand 2026-10-31, nicht gebaut; `engine/update_keys.rs`):
+Hat ein Quellordner denselben Ordnerschlüssel wie der Zielordner gleichen Namens, gilt er für die Regel als
+gleich: das Ziel wird nicht aufgelistet, keine Datei darin verglichen, alle Dateien zählen als „gleich übersprungen“
+(`Decision::Equal`, Fortschritt wie bei einer Einzelentscheidung), und die Ordner darin werden auch nicht
+angelegt (`update::folder_equal` in `worker.rs`; ein Ordner mit gleichem Schlüssel besteht samt Inhalt).
+- *Schlüssel dort bilden, wo die Dateien liegen:* eine lokale Seite im eigenen Prozess mit dem Durchlauf des
+  Agenten (`agent_proto` `LocalKeyed::keys_of`, ohne die Läufe zu behalten), eine entfernte Seite über den
+  Schlüssel-Durchlauf ihres Hosts (`vfs::hash_walk_keyed` mit `KeyedWalk::KeysOnly`: Share `hash_walk_keys_v1`,
+  Agent `walk-keys-v1`, Hintergrunddienst für ein Backend mit eigenem Durchlauf); über die Verbindung geht
+  je Ordner ein Schlüssel, kein Eintrag. Quelle und Ziel werden gleichzeitig durchlaufen.
+- *Gleichheit:* der Schlüssel deckt je Datei Name, Größe und Änderungszeit **in Millisekunden**
+  (`agent_proto/core/folder_key.rs`), dazu Art, versteckt und Auslassungen. Gleicher Schlüssel bedeutet damit
+  gleiche Größe und Zeitabstand 0, also „gleich“ für jedes Fenster der Regel. Ungleiche Schlüssel bedeuten nur
+  „hineinsehen“: diese Ordner nehmen den Weg ohne Schlüssel (Auflistung des Zielordners, Entscheidung je Datei),
+  die Unterordner mit gleichem Schlüssel darin werden trotzdem ausgelassen (Abstieg nach Schlüsseln wie im
+  Sync). Ergebnis (Kopien, Ersetzungen, Zählwerte, Meldungen) gleich dem Weg ohne Schlüssel; die Quelle wird
+  weiter durchlaufen (Dateiliste, Größen, Auslassungen), nur das Ziel wird nicht gelesen.
+- *Ausnahme Zeit 0:* eine Quelldatei mit unbekannter Zeit (0) nimmt nie den Schlüsselweg; die Regel behält dort
+  beide (Tabelle oben). Die Vorschau listet das Ziel eines Quellordners, in dem eine solche Datei liegt, wie bisher auf.
+- *Wann Schlüssel gelten:* nur bei **entferntem Ziel** (Upload, Remote–Remote), bei Dateiregel `Update` oder
+  `merge_update`, Layout `Tree` und einem Quellordner mit Entscheidung „Zusammenführen“. Ein lokales Ziel kostet ein
+  `stat` je Datei – weniger als beide Bäume zu durchlaufen und zu hashen. Gegenstellen ohne Schlüssel-Durchlauf
+  (ältere Hosts, SFTP ohne Agent, FTP, WebDAV, SMB, Drive) und fehlgeschlagene oder abgebrochene Durchläufe: Weg
+  ohne Schlüssel.
+- *Größe des Zielbaums:* ist der Zielbaum viel größer als der zusammengeführte Ordner, wäre die Auflistung je
+  Quellordner billiger als der Durchlauf. Der Schlüssel-Durchlauf des Ziels wird deshalb abgebrochen, sobald er
+  mehr als 16 Ordner je Quellordner plus 1024 gemeldet hat (Annahme zu den Kosten: eine Auflistung ist eine
+  Rundreise, das Lesen eines Ordners neben den Daten nicht; `FOLDERS_PER_SOURCE_FOLDER`, `FOLDERS_SLACK`). Das
+  wählt nur den Weg, nie das Ergebnis.
+- *Zeitpunkt:* die Schlüssel werden vor der ersten Entscheidung unter dem Quellordner gebildet, vor jeder Änderung
+  des Auftrags am Ziel; eine Datei, die sich zwischen Schlüssel und Entscheidung ändert, hat dasselbe Fenster wie
+  die Auflistung des Ziels.
+
 **Änderungszeit der Kopie:** Jede Datei, die die Engine kopiert oder ersetzt, trägt die Änderungszeit
 ihrer Quelle (Entscheidung des Koordinators 2026-10-31, `plan.md` C7: ohne sie ersetzte ein
 Zusammenführen zurück jede Kopie; Windows `CopyFile2` tat es schon), gesetzt vor der Veröffentlichung auf
@@ -628,7 +661,11 @@ Die fünf Zählwerte beschreiben die Regel und erscheinen nur, wenn der Auftrag 
 `FileDialogs.kt`; die Vorschau bekommt dasselbe `mergeFiles: "update"` wie die Übertragung). Sonst
 zeigen beide „neue und gleichnamige Dateien“ wie vor der Regel; die Auftragsregel (überschreiben,
 beide behalten, überspringen) gilt dann weiter. Ohne bekannte Zeit einer Seite zählt eine gleichnamige
-Datei als Konflikt, nicht als gleich (dieselbe `classify` wie die Engine).
+Datei als Konflikt, nicht als gleich (dieselbe `classify` wie die Engine). Mit Ordnerschlüsseln (oben)
+wird das Ziel eines Quellordners mit gleichem Schlüssel nicht aufgelistet und seine Dateien zählen als gleich
+(`engine/selection_count_target.rs`, `Target::Equal`); die Quelle wird weiter aufgelistet, denn die Zahl der
+Dateien und die Auslassungen kommen aus ihr. Die fünf Zählwerte, `colliding_files`, Beispiele und Auslassungen sind
+dieselben wie ohne Schlüssel.
 
 **Meldungen nach dem Lauf:** `TransferProgress::{replaced, skipped_equal, kept_newer, kept_both}`
 (Standardwert 0 beim Lesen älterer Meldungen); Übertragungsfenster (`app/core/transfer_rows.rs:159`,
@@ -687,7 +724,11 @@ Auftrag läuft dann im eigenen Prozess (`transfer_job_client.rs:155`).
   Vorschau `selection_count.rs`). Ungleiche Größen und andere Abstände entscheiden wie zuvor; beide
   Dateien einer Stundenabweichung mit anderem Inhalt gleicher Größe gelten damit als gleich (Größe plus Zeit, nie
   Inhalt).
-- Gleichheit ist Größe plus Zeit im Fenster, nie Inhalt.
+- Gleichheit ist Größe plus Zeit im Fenster, nie Inhalt. Mit Ordnerschlüsseln ist sie Größe plus Zeit in Millisekunden
+  (strenger, nie anders).
+- Ordnerschlüssel: ein Quellordner mit gleichem Schlüssel wird weiter aufgelistet (Dateiliste, Größen für den
+  Fortschritt, Auslassungen); gespart wird das Lesen des Ziels. Bei einem lokalen Ziel gelten Schlüssel nicht (siehe
+  oben). Der Schlüssel enthält keinen Inhalt der Dateien, nur ihre Größe und Zeit.
 - `se mv --conflict update` und der MCP `move` mit `file_conflict: update` nur lokal; gleiche Dateien
   bleiben in der Quelle, der Quellordner bleibt dann stehen.
 

@@ -30,6 +30,14 @@
 //! target with it once more right before it replaces (`publish.rs`,
 //! `download.rs`, the local copy), so a target saved meanwhile keeps both.
 //! A time one side does not know decides nothing: both are kept.
+//!
+//! Before a folder's files are looked at one by one, its key can settle them
+//! (`update_keys.rs`): a source folder with the key of the same-named folder
+//! at a remote target is equal for the rule, so neither the target folder is
+//! listed nor any of its files compared; the files count as equal and the
+//! folders are not even asked for. Only the folders whose keys differ take
+//! the way above. A source file with an unknown time (0) never takes the key
+//! way: the rule keeps both for it.
 use super::super::engine_names::{base_name, parent_path, parent_rel};
 use super::super::flow::Flow;
 use super::super::walk_listers::native;
@@ -40,7 +48,7 @@ use super::stats::Decision;
 use super::view::{JobView, Side};
 use super::Engine;
 use crate::transfer::update_rule::{classify_local_time, window_ms, Case, Replacing, Stamp};
-use crate::transfer::{FolderConflict, RecoveryMode};
+use crate::transfer::{FolderConflict, Layout, RecoveryMode};
 use crate::types::Conflict;
 use crate::vfs::{LocalBackend, MtimePrecision};
 use std::io;
@@ -49,6 +57,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 #[path = "update_listing.rs"]
 mod listings;
 use listings::{listing, Listings};
+#[path = "update_keys.rs"]
+mod keys;
+pub(super) use keys::{compare, Keys, Place};
 
 /// What the rule did with one file.
 #[derive(Debug, PartialEq, Eq)]
@@ -68,12 +79,30 @@ pub(super) enum Found {
     File(Stamp, Option<String>),
 }
 
+/// A planned root whose folder decision is "Zusammenführen".
+struct MergeRoot {
+    /// The planned root with a trailing `/`: the files below it.
+    prefix: String,
+    /// The planned root (its path relative to the target folder).
+    planned: String,
+    /// The source folder.
+    source: String,
+    /// The files below it follow the rule because the folder decision says
+    /// so (`FolderConflictPolicy::merge_update`); else only when the job's
+    /// policy is `Update`.
+    by_decision: bool,
+    /// The folders whose keys are equal on both sides, found once by the
+    /// first file or folder below the root that asks (`update_keys.rs`).
+    equal: OnceLock<Option<Keys>>,
+}
+
 /// Per-job state of the rule.
 pub(super) struct State {
-    /// Planned roots (with a trailing `/`) whose folder decision is
-    /// "Zusammenführen": the files below them follow the rule when the job
-    /// asks for it.
-    merge_prefixes: Vec<String>,
+    /// Planned roots whose folder decision is "Zusammenführen".
+    merge_roots: Vec<MergeRoot>,
+    /// The files lie below their source folders (`Layout::Tree`): only then
+    /// a folder's key says anything about the files below its planned root.
+    tree_layout: bool,
     window: OnceLock<u64>,
     local_time: OnceLock<bool>,
     listings: Mutex<Listings>,
@@ -81,17 +110,21 @@ pub(super) struct State {
 
 impl State {
     pub(super) fn new(view: &JobView<'_>, plan: &RootPlan) -> Self {
-        let merge_prefixes = if view.folders.merge_update {
-            plan.roots
-                .iter()
-                .filter(|root| view.folders.for_root(&root.source) == FolderConflict::Merge)
-                .map(|root| format!("{}/", root.planned.trim_end_matches('/')))
-                .collect()
-        } else {
-            Vec::new()
-        };
+        let merge_roots = plan
+            .roots
+            .iter()
+            .filter(|root| view.folders.for_root(&root.source) == FolderConflict::Merge)
+            .map(|root| MergeRoot {
+                prefix: format!("{}/", root.planned.trim_end_matches('/')),
+                planned: root.planned.clone(),
+                source: root.source.clone(),
+                by_decision: view.folders.merge_update,
+                equal: OnceLock::new(),
+            })
+            .collect();
         Self {
-            merge_prefixes,
+            merge_roots,
+            tree_layout: view.layout == Layout::Tree,
             window: OnceLock::new(),
             local_time: OnceLock::new(),
             listings: Mutex::new(Listings::default()),
@@ -115,9 +148,57 @@ impl Engine<'_> {
         self.view.conflict == Conflict::Update
             || self
                 .update
-                .merge_prefixes
+                .merge_roots
                 .iter()
-                .any(|prefix| file.rel.starts_with(prefix.as_str()))
+                .any(|root| root.by_decision && file.rel.starts_with(root.prefix.as_str()))
+    }
+
+    /// The merge root the rule decides for at `rel` (a file or a folder
+    /// below the root, or the root itself) and `rel`'s folder below it.
+    fn merge_root_of<'r>(&self, rel: &'r str, is_dir: bool) -> Option<(&MergeRoot, &'r str)> {
+        if !self.update.tree_layout {
+            return None;
+        }
+        let root = self.update.merge_roots.iter().find(|root| {
+            rel.starts_with(root.prefix.as_str())
+                || (is_dir && rel == root.planned.trim_end_matches('/'))
+        })?;
+        if self.view.conflict != Conflict::Update && !root.by_decision {
+            return None;
+        }
+        let below = rel.get(root.prefix.len()..).unwrap_or("");
+        Some((root, if is_dir { below } else { parent_of(below) }))
+    }
+
+    /// Whether the key of the folder `dir` of `root` is equal at both sides:
+    /// everything in it is equal and needs no look at the target.
+    fn keys_cover(&self, root: &MergeRoot, dir: &str) -> bool {
+        root.equal
+            .get_or_init(|| {
+                let source = Place {
+                    side: self.view.source,
+                    root: &root.source,
+                    flow: (!self.view.source.is_local()).then_some(&self.source_flow),
+                };
+                let target_dir = self.folders.path_of(&root.planned);
+                let target = Place {
+                    side: self.view.target,
+                    root: &target_dir,
+                    flow: Some(self.target_flow()),
+                };
+                compare(source, target, self.stop_flag())
+            })
+            .as_ref()
+            .is_some_and(|keys| keys.covers(dir))
+    }
+
+    /// Whether `file` lies in a folder with equal keys at both sides. A file
+    /// with an unknown time is never equal by key: the rule keeps both.
+    fn equal_by_key(&self, file: &FileWork) -> bool {
+        file.mtime_ms != 0
+            && self
+                .merge_root_of(&file.rel, false)
+                .is_some_and(|(root, dir)| self.keys_cover(root, dir))
     }
 
     /// The tolerance for comparing times (`window_of`), found once per job.
@@ -199,6 +280,9 @@ pub(super) fn settle_recovered(
     if file.conflict.is_some() || engine.resume || !engine.follows_update(file) {
         return Ok(Settled::Go);
     }
+    if engine.equal_by_key(file) {
+        return Ok(skip(engine, file, Decision::Equal));
+    }
     let found = look(engine, file).map_err(OpError::target)?;
     let case = match found {
         Found::Absent => {
@@ -268,6 +352,7 @@ pub(super) fn ensure_parents(engine: &Engine<'_>, candidates: &[FileWork]) {
     let mut parents: Vec<&str> = candidates
         .iter()
         .filter(|file| file.conflict.is_none() && !engine.resume && engine.follows_update(file))
+        .filter(|file| !engine.equal_by_key(file))
         .filter_map(|file| parent_rel(&file.rel))
         .collect();
     parents.sort_unstable();
@@ -275,6 +360,20 @@ pub(super) fn ensure_parents(engine: &Engine<'_>, candidates: &[FileWork]) {
     if !parents.is_empty() {
         engine.folders.ensure_many(&parents, engine.stop_flag());
     }
+}
+
+/// Whether the folder `rel` (a planned path, as `Work::Dir` names it) lies
+/// in a folder with equal keys at both sides: it exists at the target with
+/// everything in it, so it needs neither creating nor a look.
+pub(super) fn folder_equal(engine: &Engine<'_>, rel: &str) -> bool {
+    !engine.resume
+        && engine
+            .merge_root_of(rel, true)
+            .is_some_and(|(root, dir)| engine.keys_cover(root, dir))
+}
+
+fn parent_of(rel: &str) -> &str {
+    rel.rsplit_once('/').map_or("", |(parent, _)| parent)
 }
 
 /// A file the rule leaves alone: counted as handled so the progress ends at
@@ -328,6 +427,9 @@ fn look_local(path: &str) -> io::Result<Found> {
     }
 }
 
+#[cfg(test)]
+#[path = "abgleich_task_keys_tests.rs"]
+mod keys_tests;
 #[cfg(test)]
 #[path = "abgleich_task_replace_tests.rs"]
 mod replace_tests;
