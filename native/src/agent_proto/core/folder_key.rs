@@ -178,14 +178,16 @@ pub(crate) fn known_prefix(key: &FolderKey) -> KnownKey {
 
 /// The known keys of a request: concatenated 16-byte prefixes.
 pub(crate) fn parse_known(bytes: &[u8]) -> io::Result<HashSet<KnownKey>> {
-    if bytes.len() % 16 != 0 {
+    if !bytes.len().is_multiple_of(16) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "known folder keys are no whole 16-byte prefixes",
         ));
     }
     Ok(bytes
-        .chunks_exact(16)
+        .as_chunks::<16>()
+        .0
+        .iter()
         .map(|chunk| {
             let mut prefix = [0u8; 16];
             prefix.copy_from_slice(chunk);

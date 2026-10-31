@@ -66,6 +66,7 @@ fn totals(finished: &Finished) -> [u64; 5] {
     ]
 }
 
+#[cfg(unix)]
 fn issues(finished: &Finished) -> Vec<(String, String)> {
     let mut issues: Vec<(String, String)> = finished
         .issues

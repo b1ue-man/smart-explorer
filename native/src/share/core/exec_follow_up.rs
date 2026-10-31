@@ -59,7 +59,9 @@ pub(crate) enum FollowUpKey {
     },
 }
 
-/// What the daemon does with one record.
+/// What the daemon does with one record. One value at a time, never
+/// stored in bulk, so the size of `Apply` costs nothing worth a box.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum FollowUpWork {
     /// Apply `change` to the exact grant `target` through the journal.

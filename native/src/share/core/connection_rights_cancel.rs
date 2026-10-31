@@ -110,14 +110,13 @@ impl ShareProfiles {
         }
         let revoke = self.rights_after_cancel(target).access_change();
         let mut exec_on = false;
-        let mut changed = false;
         if let Some(grant) = self
             .direct_grants
             .iter_mut()
             .find(|grant| grant.device_id == device_id && grant.public_key == public_key)
         {
             exec_on = grant.exec.grants_any();
-            changed = std::mem::take(&mut grant.write);
+            let mut changed = std::mem::take(&mut grant.write);
             // `None` names no folder and cannot fail.
             changed |= self
                 .default_direct_exports

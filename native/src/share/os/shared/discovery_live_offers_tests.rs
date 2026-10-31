@@ -19,8 +19,10 @@ fn live(offer_id: &str, rights: Option<ConnectionRights>) -> OwnDiscoveryOffer {
 #[test]
 fn abgleich_task_restarted_interface_adopts_the_running_offer_with_its_rights() {
     // A fresh interface knows no offer: the daemon's list brings it in.
-    let mut state = DiscoveryUiState::default();
-    state.status = Some("kept".into());
+    let mut state = DiscoveryUiState {
+        status: Some("kept".into()),
+        ..DiscoveryUiState::default()
+    };
     state.retain_live_offers(&[live("o1", Some(RightsPreset::FilesExec.rights()))]);
     let offer = state
         .offer_for_target(&DiscoveryPublishTarget::Direct)

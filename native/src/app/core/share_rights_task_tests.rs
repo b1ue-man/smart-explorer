@@ -13,11 +13,14 @@ use crate::share::connection_rights_apply::PendingRightsView;
 use crate::share::ShareProfiles;
 use std::time::{Duration, Instant};
 
+/// Folders chosen per path: (export name, path).
+type Folders = Vec<(String, String)>;
+
 #[derive(Default)]
 struct Recorder {
-    confirms: Vec<(RightsTarget, ConnectionRights, Vec<(String, String)>)>,
+    confirms: Vec<(RightsTarget, ConnectionRights, Folders)>,
     cancels: Vec<RightsTarget>,
-    codes: Vec<(Option<ConnectionRights>, Vec<(String, String)>)>,
+    codes: Vec<(Option<ConnectionRights>, Folders)>,
 }
 
 fn change() -> RightsChange {
@@ -250,18 +253,18 @@ fn abgleich_task_a_draft_of_a_settled_confirmation_closes_and_a_stale_snapshot_d
     let now = Instant::now();
     let mut state = RightsWindowState::default();
     let a = view("a", RightsOrigin::Request);
-    state.sync(&[a.clone()], now);
+    state.sync(std::slice::from_ref(&a), now);
     assert!(state.draft.is_some());
     // Settled by the CLI: the next frame no longer lists it.
     state.sync(&[], now);
     assert!(state.draft.is_none());
 
     // Confirmed here: an older worker snapshot still lists it for a moment.
-    state.sync(&[a.clone()], now);
+    state.sync(std::slice::from_ref(&a), now);
     let draft = state.draft.clone().expect("open");
     state.settled(&draft, now);
     assert!(state.draft.is_none());
-    state.sync(&[a.clone()], now + Duration::from_secs(1));
+    state.sync(std::slice::from_ref(&a), now + Duration::from_secs(1));
     assert!(state.draft.is_none(), "stale snapshot ignored");
     state.sync(&[a], now + Duration::from_secs(30));
     assert!(state.draft.is_some(), "a real new wait opens it again");

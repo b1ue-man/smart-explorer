@@ -1,6 +1,5 @@
 package app.smartexplorer.android.ui.share
 
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.SaverScope
 import app.smartexplorer.android.api.ACCESS_ALLOW
 import app.smartexplorer.android.api.ACCESS_ASK
@@ -27,10 +26,10 @@ class AbgleichTaskRightsDraftSaverTest {
 
     private fun rotate(draft: RightsDraft): RightsDraft {
         val saved = with(RIGHTS_DRAFT_SAVER) {
-            SaverScope { true }.save(mutableStateOf(draft))
+            SaverScope { true }.save(draft)
         }
         assertNotNull("the draft is saved", saved)
-        return RIGHTS_DRAFT_SAVER.restore(saved!!)!!.value
+        return RIGHTS_DRAFT_SAVER.restore(saved!!)!!
     }
 
     @Test

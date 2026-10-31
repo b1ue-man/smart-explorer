@@ -188,7 +188,7 @@ fn abgleich_task_webdav_listing_without_md5_spares_the_question() {
         ..VfsMeta::default()
     };
     let memory = ChecksumMemory::default();
-    memory.note_listing(&[folder.clone()]);
+    memory.note_listing(std::slice::from_ref(&folder));
     assert!(!memory.md5_absent(), "a listing of folders says nothing");
     memory.note_listing(&[folder.clone(), file(None)]);
     assert!(memory.md5_absent());

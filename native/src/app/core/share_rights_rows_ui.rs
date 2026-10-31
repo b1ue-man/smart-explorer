@@ -148,7 +148,8 @@ pub(super) fn expiry(ui: &mut egui::Ui, draft: &mut RightsDraft) {
     ui.vertical(|ui| {
         ui.horizontal_wrapped(|ui| {
             if let ExpiryChoice::Keep(_) = draft.expiry {
-                ui.selectable_label(true, ExpiryChoice::Keep(0).label());
+                // Shown as chosen; choosing it again changes nothing.
+                let _ = ui.selectable_label(true, ExpiryChoice::Keep(0).label());
             }
             for choice in ExpiryChoice::FIXED {
                 if ui

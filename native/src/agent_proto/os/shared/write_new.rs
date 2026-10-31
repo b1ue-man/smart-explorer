@@ -84,12 +84,9 @@ pub(crate) fn handle_write_new(
         }
     };
     drop(file);
-    let reply = match transfer {
-        Ok(reply) => reply,
-        // Keep the exclusively created entry. Path-based cleanup can race a
-        // concurrent rename/replacement and remove content we never created.
-        Err(error) => return Err(error),
-    };
+    // On an error the exclusively created entry stays: path-based cleanup can
+    // race a concurrent rename/replacement and remove content we never created.
+    let reply = transfer?;
     // A lost final acknowledgement is ambiguous to the caller. Retain the
     // completed entry; the caller received Ready and therefore owns its name.
     emit(sink, id, &reply)

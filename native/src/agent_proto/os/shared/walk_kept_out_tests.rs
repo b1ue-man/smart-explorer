@@ -27,8 +27,11 @@ fn walked(root: &Path) -> LocalKeyed {
     super::local_keyed(root.to_str().unwrap(), digest::MD5, &AtomicBool::new(false)).unwrap()
 }
 
-/// The entries (`rel`, `is_dir`) and omissions (`rel`, `reason`) of a walk.
-fn items(collected: &LocalKeyed) -> (Vec<(String, bool)>, Vec<(String, u8)>) {
+/// The entries (`rel`, `is_dir`) and the omissions (`rel`, `reason`).
+type Items = (Vec<(String, bool)>, Vec<(String, u8)>);
+
+/// The entries and omissions of a walk.
+fn items(collected: &LocalKeyed) -> Items {
     let (mut entries, mut omissions) = (Vec::new(), Vec::new());
     for (_, run) in &collected.runs {
         for item in run {

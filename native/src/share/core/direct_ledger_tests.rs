@@ -8,6 +8,9 @@ use super::direct_protocol::DirectDecisionKind;
 use super::profiles::ShareProfiles;
 use super::types::{DirectAccessState, DirectGrantState};
 
+// Also compiled by `abgleich_task_rights_review_tests.rs` and
+// `abgleich_task_exec_follow_up_tests.rs`.
+#[allow(clippy::duplicate_mod)]
 #[path = "direct_ledger_fixture.rs"]
 mod fixture;
 use fixture::{decision, decision_receipt, outgoing_profiles, request, request_receipt};

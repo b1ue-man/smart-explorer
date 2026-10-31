@@ -46,14 +46,7 @@ pub(super) fn serve(
             "known folder keys are no whole 16-byte prefixes",
         ));
     }
-    let known: Vec<[u8; 16]> = known
-        .chunks_exact(16)
-        .map(|chunk| {
-            let mut prefix = [0u8; 16];
-            prefix.copy_from_slice(chunk);
-            prefix
-        })
-        .collect();
+    let known: Vec<[u8; 16]> = known.as_chunks::<16>().0.to_vec();
     let walk = match (folders, keys_only) {
         (Some(folders), _) => vfs::KeyedWalk::Runs { folders },
         (None, true) => vfs::KeyedWalk::KeysOnly,

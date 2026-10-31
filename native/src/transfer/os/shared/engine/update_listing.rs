@@ -14,7 +14,7 @@ use crate::transfer::update_rule::Stamp;
 use crate::vfs::{Backend, VfsMeta};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 
 /// Names of remote folders kept at once: the same 16 MiB of path text the
 /// work queue holds, so a job that merges a huge tree stays bounded.

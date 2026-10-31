@@ -1,7 +1,5 @@
 package app.smartexplorer.android.ui.share
 
-import androidx.compose.runtime.MutableState
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.Saver
 import app.smartexplorer.android.api.Rights
 import kotlinx.serialization.SerializationException
@@ -43,8 +41,11 @@ internal fun decodeRightsDraft(text: String): RightsDraft? = try {
     null
 }
 
-/** `rememberSaveable(stateSaver = RIGHTS_DRAFT_SAVER)` for the draft of the rights sheet. */
-internal val RIGHTS_DRAFT_SAVER = Saver<MutableState<RightsDraft>, String>(
-    save = { state -> encodeRightsDraft(state.value) },
-    restore = { saved -> decodeRightsDraft(saved)?.let { mutableStateOf(it) } },
+/**
+ * `rememberSaveable(stateSaver = RIGHTS_DRAFT_SAVER) { mutableStateOf(…) }` for the draft of the
+ * rights sheet: the saver handles the draft itself, `rememberSaveable` keeps the state around it.
+ */
+internal val RIGHTS_DRAFT_SAVER = Saver<RightsDraft, String>(
+    save = { draft -> encodeRightsDraft(draft) },
+    restore = { saved -> decodeRightsDraft(saved) },
 )

@@ -189,10 +189,8 @@ fn body(
         }
         (None, _) => {}
     }
-    if let Some(clicked) = preset_buttons(ui, draft.selected_preset(), None) {
-        if let Some(preset) = clicked {
-            draft.apply_preset(preset);
-        }
+    if let Some(Some(preset)) = preset_buttons(ui, draft.selected_preset(), None) {
+        draft.apply_preset(preset);
     }
     ui.separator();
     egui::Grid::new("share_rights_grid")

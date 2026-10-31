@@ -32,8 +32,6 @@ const OTHER_KEY: &str = "AAAAC3NzaC1lZDI1NTE5AAAAIAICAgICAgICAgICAgICAgICAgICAgI
 pub(super) enum ExecScript {
     /// Refuse the request (an account without commands).
     Reject,
-    /// Print `stdout`, exit with `status`, close.
-    Output { stdout: String, status: u32 },
     /// Accept and never answer, not even after EOF; a TERM signal is logged.
     Hang,
     /// Accept, read standard input until the client's EOF, then print
@@ -96,13 +94,6 @@ impl server::Handler for FakeSshd {
         let script = self.script.lock().unwrap().clone();
         match script {
             ExecScript::Reject => session.channel_failure(channel)?,
-            ExecScript::Output { stdout, status } => {
-                session.channel_success(channel)?;
-                session.data(channel, stdout.into_bytes())?;
-                session.exit_status_request(channel, status)?;
-                session.eof(channel)?;
-                session.close(channel)?;
-            }
             ExecScript::Hang => session.channel_success(channel)?,
             ExecScript::UntilEof { stdout, status } => {
                 session.channel_success(channel)?;

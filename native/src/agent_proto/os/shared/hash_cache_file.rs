@@ -102,6 +102,8 @@ pub(super) fn lock(folder: &Path) -> io::Result<File> {
         .read(true)
         .write(true)
         .create(true)
+        // The lock file holds no data; an existing one is kept as it is.
+        .truncate(false)
         .open(folder.join(LOCK_NAME))?;
     file.lock()?;
     Ok(file)

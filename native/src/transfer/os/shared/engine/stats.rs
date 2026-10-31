@@ -272,6 +272,9 @@ impl Stats {
     /// A replacement the target could not take: the file is kept beside its
     /// counterpart instead (counted as kept, no longer as replaced).
     pub(crate) fn replace_refused(&self) {
+        // The newest toolchains deprecate `fetch_update` for `try_update`;
+        // `fetch_update` also builds with the older ones of the release hosts.
+        #[allow(deprecated)]
         let _ = self.update[Decision::Replaced as usize].fetch_update(
             Ordering::AcqRel,
             Ordering::Acquire,

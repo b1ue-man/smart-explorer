@@ -228,7 +228,7 @@ where
             // A refused thread only means fewer helpers: the caller walks too.
             let _ = std::thread::Builder::new()
                 .name(format!("tree-walk-{index}"))
-                .spawn_scoped(scope, move || worker());
+                .spawn_scoped(scope, worker);
         }
         worker();
     });

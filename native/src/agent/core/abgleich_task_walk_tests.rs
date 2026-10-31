@@ -177,8 +177,8 @@ fn abgleich_task_agent_listing_marks_dot_names_hidden() {
         .iter()
         .map(|m| (m.name.as_str(), m.hidden))
         .collect();
-    assert_eq!(hidden[".hidden.txt"], true);
-    assert_eq!(hidden["a.txt"], false);
+    assert!(hidden[".hidden.txt"]);
+    assert!(!hidden["a.txt"]);
     let tolerant = vfs::list_dir_tolerant(&backend, &root).unwrap();
     assert!(tolerant
         .entries

@@ -351,7 +351,7 @@ fn view_answer(
     };
     let entries: &[FileEntry] = &snapshot.entries;
     let is_collapsed = |entry: &FileEntry| collapsed.contains(&session.base.at(&entry.path));
-    let visible = visible_rows(&tree, entries, &is_collapsed);
+    let visible = visible_rows(&tree, entries, is_collapsed);
     let rows: Vec<Value> = if snapshot.unchanged {
         Vec::new()
     } else {

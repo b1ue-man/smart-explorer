@@ -79,7 +79,7 @@ impl Sha256 {
         self.update(&pad[..pad_len]);
         self.update(&bit_len.to_be_bytes());
         let mut out = [0u8; 32];
-        for (slot, word) in out.chunks_exact_mut(4).zip(self.state) {
+        for (slot, word) in out.as_chunks_mut::<4>().0.iter_mut().zip(self.state) {
             slot.copy_from_slice(&word.to_be_bytes());
         }
         out

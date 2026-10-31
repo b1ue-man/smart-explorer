@@ -20,7 +20,8 @@ use crate::share::{
     DIRECT_EXPORT_SCOPE,
 };
 
-#[allow(dead_code)]
+// The same fixture as `direct_ledger_tests.rs`, compiled here once more.
+#[allow(dead_code, clippy::duplicate_mod)]
 #[path = "direct_ledger_fixture.rs"]
 mod ledger;
 
