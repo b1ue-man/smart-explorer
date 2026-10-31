@@ -30,6 +30,18 @@ run-name: Sync comparison as fast as the storage analysis ${{ inputs.candidate_s
 #               moves all of it; an unchanged folder merged onto an equal
 #               target moving nothing and reported equal; a FAT image with
 #               times one hour apart counted equal (summer time).
+#               Linux, connection flow (plan F, stage "rights"): five
+#               candidate instances on one development Share server and a
+#               v0.5.189 share restarted on the candidate: a request accepted
+#               without rights leaves a connection that `grants pending` names
+#               and that cannot read, write, run commands or open the screen;
+#               `grants confirm --preset read-only|read-write|all` sets exactly
+#               those rights; `grants cancel` keeps the connection without
+#               rights; a Direct code (`identity --preset files-exec`), a PIN
+#               offer (`discoverable --preset read-write`) and a room (`room
+#               create --preset read-only`) give a new device or member exactly
+#               their rights without a confirmation; `--folder` shows a device
+#               only that folder; a share made by v0.5.189 keeps its rights
 #               Windows: the merge rule local-local
 #   measure     (input measure) wall time of `se sync compare` (first
 #               comparison, second comparison without a change, checksum mode)
@@ -237,7 +249,9 @@ jobs:
     # development profile, a development share server, the equality runs, the
     # folder-key and checksum byte counts (plan E: 600 folders of 12 000
     # files and 10 files of 4 MiB per far side and version) and the merge
-    # cases against containers and a FAT image.
+    # cases against containers and a FAT image, then the connection flow
+    # (five candidate instances and one v0.5.189 share on a development Share
+    # server, a few minutes).
     timeout-minutes: 345
     env:
       CANDIDATE_SHA: ${{ inputs.candidate_sha }}

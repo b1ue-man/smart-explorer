@@ -51,6 +51,23 @@ Jobs (--job):
              update` of an unchanged folder onto an equal target moves no
              content and reports every file equal, and on a FAT volume files
              of equal size with times exactly one hour apart count as equal
+             Connection flow (plan 2026-10-31 section F), Linux only, five
+             candidate instances (stage "rights") and two v0.5.189/candidate
+             instances on one development Share server, checked by the other
+             device's real commands (ls, cat, cp, exec, screen probe):
+             (1) a Direct request accepted without rights: the connection
+             exists, `grants pending` names it, read, write, commands and
+             screen are refused; `grants confirm --preset read-only` reads
+             but does not write, `--preset read-write` writes, `--preset all`
+             runs commands; `grants cancel` on a second new connection keeps
+             it without rights; (2) a Direct code with `identity --preset
+             files-exec`, a PIN offer with `discoverable --preset read-write`
+             and a room with `room create --preset read-only` give a new
+             device or member exactly those rights without a confirmation;
+             (3) a confirmation with `--folder` shows the device only that
+             folder while another device still sees all; (4) a share made by
+             v0.5.189 keeps its rights when the candidate is started on its
+             profile
   measure    (Linux; Windows local) wall time of `se sync compare` (first
              comparison, second comparison without a change, checksum mode)
              and `se ls -R` for v0.5.189 (plus the two commits) and the
@@ -227,6 +244,8 @@ class Ctx:
         self.bundle_sha = {}
         # Plan E: {(way, kind, variant): runs}, rows of the byte table, generated trees by kind and role.
         self.series, self.byte_rows, self.templates = {}, [], {}
+        # The development share server, built once per job (build_share_server).
+        self.server, self.server_tried = None, False
 
 
 # --------------------------------------------------------------------------- job functional
@@ -748,9 +767,14 @@ def add_saved(binary, env, kind, port, user, password, root, label, log, agent=F
     return None if listed.ok else f"ls: {short(listed, 400)}"
 
 
-def share_net(work, tag, server, main_binary, host_binary, log_root, hosts=2):
+def share_net(work, tag, server, main_binary, host_binary, log_root, hosts=2, pair_hosts=True):
     """A Share server, one main client and `hosts` host clients paired Direct, each host exporting a
-    writable folder `export<i>`. The main and the host clients may be different versions."""
+    writable folder `export<i>`. The main and the host clients may be different versions. A host of the
+    candidate accepts the request with the preset `read-write` (since the candidate a new connection has
+    no right until it is confirmed, `grants set --write` alone would leave the main without a folder);
+    a host of v0.5.189 has no preset and accepts as before. `pair_hosts=False` stops after the clients are
+    connected to the server (the connection flow stage pairs them itself); `net.hosts`, `net.owner`
+    and `net.pair` carry what that stage needs."""
     pair = speed._load(f"share_fixture_{slug(tag)}", NATIVE / "sync-reliability-share-fixture.py")
     root = Path(work) / f"share-{slug(tag)}"
     root.mkdir(parents=True, exist_ok=True)
@@ -773,7 +797,8 @@ def share_net(work, tag, server, main_binary, host_binary, log_root, hosts=2):
         env=dict(os.environ, SE_SHARE_IDLE_KEEPALIVE_SECS="30", SE_SHARE_ALLOW_PLAINTEXT="0",
                  SE_SHARE_REQUIRE_KEY_LOGIN="0", SE_IROH_RELAY_DISABLE="0",
                  SE_IROH_RELAY_BIND=f"127.0.0.1:{relay_port}", SE_SHARE_FIXTURE_ROOT=str(root)))
-    net = types.SimpleNamespace(process=process, root=root, clients=[], endpoints=[], exports=[], main=None)
+    net = types.SimpleNamespace(process=process, root=root, clients=[], endpoints=[], exports=[], main=None,
+                                hosts=[], owner=owner, pair=pair)
 
     def close():
         for client in reversed(net.clients):
@@ -804,13 +829,17 @@ def share_net(work, tag, server, main_binary, host_binary, log_root, hosts=2):
             client.wait(lambda c=client: (lambda worker: worker.get("reachable") and worker.get("running")
                                           and worker.get("connected"))(
                 json.loads(c.call("share", "status", "--json").stdout).get("worker", {})), "connected worker")
+        net.main, net.hosts = main, hosts_list
+        if not pair_hosts:
+            return net
         for index, host in enumerate(hosts_list):
             identity = json.loads(host.call("share", "identity", "--json").stdout)
             direct = json.loads(main.call("connections", "add-peer", "--code", identity["direct_code"], "--name",
                                           f"AbgleichPeer{index}", "--json").stdout)
             host.wait(lambda h=host: json.loads(h.call("share", "request", "--json").stdout).get("count", 0) == 1,
                       "incoming request")
-            host.call("share", "request", "accept", "--json")
+            with_presets = host.call("share", "grants", "presets", check=False).returncode == 0
+            host.call("share", "request", "accept", "--json", *(["--preset", "read-write"] if with_presets else []))
             host.call("share", "grants", "set", pair.identity_of(main), "--write", "--json")
             export = root / f"export{index}"
             export.mkdir(exist_ok=True)
@@ -821,7 +850,6 @@ def share_net(work, tag, server, main_binary, host_binary, log_root, hosts=2):
             main.wait(lambda e=endpoint: main.call("ls", e, check=False).returncode == 0, "exported folder")
             net.endpoints.append(endpoint)
             net.exports.append(export)
-        net.main = main
         return net
     except Exception:
         close()
@@ -829,6 +857,8 @@ def share_net(work, tag, server, main_binary, host_binary, log_root, hosts=2):
 
 
 def build_share_server(ctx):
+    if ctx.server_tried:
+        return ctx.server
     server_dir = ROOT / "share-server"
     built = run(["cargo", "build", "--locked", "--bin", "se-share-server"], cwd=server_dir,
                 env=dict(os.environ, CARGO_TARGET_DIR=str(server_dir / "target")), timeout=3600,
@@ -836,7 +866,9 @@ def build_share_server(ctx):
     server = server_dir / "target" / "debug" / f"se-share-server{EXE}"
     ctx.results.record("build", "development share server", built.ok and server.exists(),
                        "" if built.ok else short(built, 2000))
-    return server if built.ok and server.exists() else None
+    ctx.server_tried = True
+    ctx.server = server if built.ok and server.exists() else None
+    return ctx.server
 
 
 # --------------------------------------------------------------------------- equality
@@ -1687,6 +1719,547 @@ def stage_fat(ctx, binary, env):
         unmount_all(work)
 
 
+# --------------------------------------------------------------------------- connection flow (Linux)
+#
+# Plan 2026-10-31 section F (F1 to F6): a new connection starts without rights, the rights are chosen in
+# one step ("confirm") or kept at none ("cancel"), a Direct code, a PIN offer and a room carry the rights
+# chosen when they were made, the folders are chosen per device. Two to five isolated `se` instances of
+# the candidate (each with its own profile, daemon and Share worker) talk through one development Share
+# server; every right is checked by the other device's real commands, not by reading the profile alone
+# (the profile is read only to prove which state the connection is in).
+
+RIGHTS_PIN = "739518"
+RIGHTS_MARK = "rights-exec-ok"
+RIGHTS_DATA, RIGHTS_OTHER = "RightsData", "RightsOther"
+RIGHTS_TEXT = {RIGHTS_DATA: "rights data text", RIGHTS_OTHER: "rights other text"}
+# The presets as the host must store them: (folders, write, commands, terminal, screen_view, screen_control).
+PRESET_SHAPES = {
+    "none": ("none", False, "off", "off", "off", "off"),
+    "read-only": ("all", False, "off", "off", "off", "off"),
+    "read-write": ("all", True, "off", "off", "off", "off"),
+    "files-exec": ("all", True, "allow", "allow", "off", "off"),
+    "all": ("all", True, "allow", "allow", "allow", "allow"),
+}
+
+
+def cli(client, *args, stdin=None, timeout=150):
+    """One `se` command of a client in its own profile; never raises (a timeout is code None)."""
+    return run([client.cli, *args], env=client.env, timeout=timeout, input_text=stdin,
+               log=client.owner.logs / f"rights-{client.label}.log")
+
+
+def cli_json(client, *args, stdin=None, timeout=150):
+    done = cli(client, *args, stdin=stdin, timeout=timeout)
+    ensure(done.ok, f"{client.label}: se {' '.join(args)} failed: {short(done)}")
+    try:
+        return json.loads(done.stdout)
+    except ValueError as error:
+        raise AssertionError(f"{client.label}: se {' '.join(args)} gave no JSON ({error}): {short(done)}") from error
+
+
+def until(check, what, seconds=120):
+    """The first truthy result of `check`, polled once a second; a failing poll is retried."""
+    deadline, last = time.monotonic() + seconds, None
+    while time.monotonic() < deadline:
+        try:
+            last = check()
+            if last:
+                return last
+        except (AssertionError, ValueError, KeyError, IndexError, TypeError, OSError) as error:
+            last = f"{type(error).__name__}: {error}"
+        time.sleep(1)
+    raise AssertionError(f"timed out after {seconds} s: {what} (last: {last})")
+
+
+def flat(rights):
+    """The rights of one connection as the tuple of PRESET_SHAPES."""
+    return (rights["folders"]["kind"], rights["write"], rights["commands"], rights["terminal"],
+            rights["screen_view"], rights["screen_control"])
+
+
+def grant_of(owner, device_id):
+    grants = [grant for grant in cli_json(owner, "share", "grants", "list", "--json")["grants"]
+              if grant["device_id"] == device_id]
+    ensure(len(grants) == 1, f"{len(grants)} grants for device {device_id[:12]} on {owner.label}")
+    return grants[0]
+
+
+def pending_of(owner, device_id):
+    listed = cli_json(owner, "share", "grants", "pending", "--json")["pending"]
+    return [item for item in listed if item["target"].get("device_id") == device_id]
+
+
+class Peer:
+    """One connecting device and what its commands reach on the owner through one endpoint."""
+
+    def __init__(self, rig, client, endpoint, name):
+        self.rig, self.client, self.endpoint, self.name = rig, client, endpoint, name
+        self.device_id = rig.net.pair.identity_of(client)
+        self.attempts = 0
+
+    def run(self, *args, timeout=120):
+        return cli(self.client, *args, timeout=timeout)
+
+    def prefix(self):
+        """`share://direct/ID`: the device itself, the target of `se exec` and `se screen`."""
+        return "/".join(self.endpoint.split("/")[:4])
+
+    def established(self):
+        """The owner's answer has arrived: this device's saved contact is „Freigegeben“ (independent of rights)."""
+        rows = cli_json(self.client, "connections", "list", "--json")
+        return any(row.get("kind") == "direct" and row.get("endpoint") == self.endpoint
+                   and row.get("access_state") == "Freigegeben" for row in rows)
+
+    def root_names(self):
+        done = self.run("ls", self.endpoint)
+        return done.stdout if done.ok else ""
+
+    def reads(self, folder=RIGHTS_DATA):
+        done = self.run("cat", f"{self.endpoint}/{folder}/readme.txt")
+        return done.ok and done.stdout.strip() == RIGHTS_TEXT[folder]
+
+    def lists(self, folder=RIGHTS_DATA):
+        done = self.run("ls", f"{self.endpoint}/{folder}")
+        return done.ok and "readme.txt" in done.stdout
+
+    def writes(self, endpoint=None, folder_path=None):
+        """Tries one upload into the owner's RightsData folder; whether the bytes arrived there."""
+        self.attempts += 1
+        name = f"w-{slug(self.name)}-{self.attempts}.txt"
+        source = self.rig.net.root / f"src-{slug(self.name)}-{self.attempts}.txt"
+        source.write_text(f"written by {self.name} {self.attempts}", encoding="utf-8")
+        target = f"{endpoint or self.endpoint + '/' + RIGHTS_DATA}/{name}"
+        done = self.run("cp", str(source), target, timeout=150)
+        landed = (folder_path or self.rig.data) / name
+        return done.ok and landed.is_file() and landed.read_text(encoding="utf-8") == source.read_text(encoding="utf-8")
+
+    def execs(self):
+        done = self.run("exec", self.prefix(), "--", "echo", RIGHTS_MARK)
+        return done.ok and RIGHTS_MARK in done.stdout
+
+    def screen(self):
+        """`se screen probe`: (supported, view, control) as the owner reports its rights, or None."""
+        done = self.run("screen", "probe", self.prefix(), "--json", timeout=160)
+        if not done.ok:
+            return None
+        report = json.loads(done.stdout)
+        return report.get("supported"), report.get("view"), report.get("control")
+
+    def screen_refused(self):
+        """The owner answers a screen probe with neither view nor control (a refusal, not a failed probe)."""
+        screen = self.screen()
+        ensure(screen is not None and screen[1] == "off" and screen[2] == "off",
+               f"{self.name}: screen probe {screen}")
+
+    def nothing_allowed(self):
+        """Every one of read, write, commands and screen is refused; returns the evidence text."""
+        ensure(RIGHTS_DATA not in self.root_names(), f"{self.name}: the root listing names {RIGHTS_DATA}")
+        ensure(not self.lists(), f"{self.name}: could list {RIGHTS_DATA}")
+        ensure(not self.reads(), f"{self.name}: could read a file")
+        ensure(not self.writes(), f"{self.name}: could write a file")
+        ensure(not self.execs(), f"{self.name}: could run a command")
+        self.screen_refused()
+        return "read, write, commands and the screen refused"
+
+    def reads_eventually(self, seconds=120):
+        until(lambda: self.reads(), f"{self.name} reads {RIGHTS_DATA}/readme.txt", seconds)
+
+    def writes_eventually(self, seconds=120):
+        until(lambda: self.writes(), f"{self.name} writes into {RIGHTS_DATA}", seconds)
+
+    def execs_eventually(self, seconds=120):
+        until(lambda: self.execs(), f"{self.name} runs a command on the owner", seconds)
+
+
+class Rig:
+    """The owner (hosts[0] of a net) and the devices that connect to it."""
+
+    def __init__(self, ctx, net):
+        self.ctx, self.net, self.results = ctx, net, ctx.results
+        self.owner = net.hosts[0]
+        self.owner_id = net.pair.identity_of(self.owner)
+        self.data, self.other = net.root / "rights-data", net.root / "rights-other"
+        self.code = None
+        self.peers = {}
+
+    def check(self, name, function):
+        self.results.check("rights", name, function)
+
+    def do(self, client, *args, stdin=None):
+        done = cli(client, *args, stdin=stdin)
+        ensure(done.ok, f"{client.label}: se {' '.join(args)} failed: {short(done)}")
+        return done
+
+    def prepare(self):
+        """Two writable Direct folders on the owner and its Direct code."""
+        for folder, label in ((self.data, RIGHTS_DATA), (self.other, RIGHTS_OTHER)):
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / "readme.txt").write_text(RIGHTS_TEXT[label], encoding="utf-8")
+            self.do(self.owner, "share", "export", "add", str(folder), "--label", label)
+            self.do(self.owner, "share", "export", "set", label, "--write")
+        self.do(self.owner, "share", "worker", "refresh")
+        self.code = cli_json(self.owner, "share", "identity", "--json")["direct_code"]
+        speed.SECRETS.add(RIGHTS_PIN)
+        shapes = {item["key"]: flat(item["rights"]) for item in cli_json(self.owner, "share", "grants", "presets",
+                                                                          "--json")["presets"]}
+        return shapes
+
+    def connect(self, client, name, accept=()):
+        """`add-peer` with the owner's Direct code, then the owner accepts the request (with `accept` options)."""
+        direct = cli_json(client, "connections", "add-peer", "--code", self.code, "--name", name, "--json")
+        peer = Peer(self, client, direct["endpoint"], name)
+        accepted = []
+        until(lambda: accepted.append(cli(self.owner, "share", "request", "accept", peer.device_id, "--json", *accept))
+              or accepted[-1].ok, f"{name}: the owner accepts the request", 120)
+        until(peer.established, f"{name}: the connection is established on its own side", 120)
+        self.peers[name] = peer
+        return peer
+
+
+def rights_flow(ctx, net):
+    rig = Rig(ctx, net)
+    listed = rig.prepare()
+    rig.check("owner: `se share grants presets` lists exactly none, read-only, read-write, files-exec and all "
+              "with the documented rights",
+              lambda: ensure(listed == PRESET_SHAPES, f"listed {listed}") or "the five presets")
+    ensure(rig.code, "the owner has no Direct code")
+    main, device_a, device_b, device_p = net.main, net.hosts[1], net.hosts[2], net.hosts[3]
+    flow_direct(rig, main)
+    flow_cancel_and_folders(rig, device_a)
+    flow_code(rig, device_b)
+    flow_pin(rig, device_p)
+    flow_room(rig, main)
+
+
+def flow_direct(rig, main):
+    """1. A request accepted without rights: connected, listed as waiting, everything refused; confirm sets
+    exactly the chosen rights step by step."""
+    peer = []
+    owner = rig.owner
+
+    def connected():
+        peer.append(rig.connect(main, "RightsM"))
+        return f"established; endpoint {peer[0].endpoint}"
+    rig.check("request accepted without rights: the connection exists on both sides", connected)
+    if not peer:
+        return
+    m = peer[0]
+
+    def waiting():
+        items = pending_of(owner, m.device_id)
+        ensure(len(items) == 1, f"{len(items)} pending entries for the device")
+        ensure(items[0]["origin"] == "request", items[0]["origin"])
+        ensure(flat(items[0]["rights"]) == PRESET_SHAPES["none"], items[0]["rights"])
+        text = cli(owner, "share", "grants", "pending")
+        ensure(text.ok and any(line.startswith("rights_pending\tdevice\t" + m.device_id) for line in
+                               text.stdout.splitlines()), f"text form: {short(text)}")
+        status = cli_json(owner, "share", "status", "--json")
+        ensure(any(item["target"].get("device_id") == m.device_id for item in status["rights_pending"]),
+               "share status --json does not list the waiting connection")
+        grant = grant_of(owner, m.device_id)
+        ensure(grant["rights"]["pending"] is True and grant["authorization"]["active"], grant["rights"])
+        return "listed by grants pending (JSON and text), share status and grants list"
+    rig.check("grants pending names the connection that waits for its rights", waiting)
+    rig.check("without rights: reading, writing, commands and the screen are refused", m.nothing_allowed)
+
+    def confirm(preset, *options):
+        return cli_json(owner, "share", "grants", "confirm", m.device_id, "--preset", preset, *options, "--json")
+
+    def read_only():
+        done = confirm("read-only")
+        ensure(done["action"] == "rights_confirmed" and flat(done["rights"]) == PRESET_SHAPES["read-only"], done)
+        ensure(not pending_of(owner, m.device_id), "the connection still waits after the confirmation")
+        m.reads_eventually()
+        ensure(m.lists(), "cannot list the folder")
+        ensure(not m.writes(), "could write although only reading was confirmed")
+        ensure(not m.execs(), "could run a command although only reading was confirmed")
+        m.screen_refused()
+        return "reads; write, commands and screen refused"
+    rig.check("grants confirm --preset read-only: reading works, writing is refused", read_only)
+
+    def read_write():
+        done = confirm("read-write")
+        ensure(flat(done["rights"]) == PRESET_SHAPES["read-write"], done)
+        m.writes_eventually()
+        ensure(m.reads(), "cannot read after the confirmation")
+        ensure(not m.execs(), "could run a command with read-write")
+        ensure(flat(grant_of(owner, m.device_id)["rights"]) == PRESET_SHAPES["read-write"], "stored rights differ")
+        return "writes; commands refused"
+    rig.check("grants confirm --preset read-write: writing works, commands stay refused", read_write)
+
+    def everything():
+        done = confirm("all")
+        ensure(flat(done["rights"]) == PRESET_SHAPES["all"], done)
+        m.execs_eventually()
+        stored = grant_of(owner, m.device_id)["rights"]
+        ensure(flat(stored) == PRESET_SHAPES["all"], stored)
+        screen = m.screen()
+        if screen is not None and screen[0]:
+            ensure(screen[1] == "allow" and screen[2] == "allow", f"screen probe {screen}")
+            seen = f"screen probe answers {screen}"
+        else:
+            # A runner without a display: the host may be unable to describe a screen; the stored rights
+            # above are what the owner would apply to a session.
+            seen = f"screen probe gave {screen}; stored screen rights are allow"
+        return f"commands run; {seen}"
+    rig.check("grants confirm --preset all: commands run, desktop view and control are stored as allowed", everything)
+
+
+def flow_cancel_and_folders(rig, device):
+    """1 (cancel) and 3 (folders per device)."""
+    owner = rig.owner
+    peer = []
+
+    def connected():
+        peer.append(rig.connect(device, "RightsA"))
+        return "established"
+    rig.check("second new connection: accepted without rights, waits", connected)
+    if not peer:
+        return
+    a = peer[0]
+    rig.check("second new connection: listed as waiting",
+              lambda: ensure(len(pending_of(owner, a.device_id)) == 1, "not listed by grants pending") or "listed")
+
+    def cancelled():
+        done = cli_json(owner, "share", "grants", "cancel", a.device_id, "--json")
+        ensure(done["action"] == "rights_cancelled", done)
+        ensure(not pending_of(owner, a.device_id), "still listed as waiting after cancel")
+        grant = grant_of(owner, a.device_id)
+        ensure(grant["authorization"]["active"], "the connection was removed by cancel")
+        ensure(flat(grant["rights"]) == PRESET_SHAPES["none"] and grant["rights"]["pending"] is False,
+               grant["rights"])
+        ensure(a.established(), "the connection is not established on its own side after cancel")
+        return a.nothing_allowed()
+    rig.check("grants cancel: the connection stays and has no rights", cancelled)
+
+    def folders():
+        done = cli_json(owner, "share", "grants", "confirm", a.device_id, "--preset", "read-only",
+                        "--folder", RIGHTS_DATA, "--json")
+        chosen = done["rights"]["folders"]
+        ensure(chosen["kind"] == "selected" and [Path(path).name for path in chosen["paths"]] == ["rights-data"],
+               chosen)
+        a.reads_eventually()
+        ensure(RIGHTS_DATA in a.root_names() and RIGHTS_OTHER not in a.root_names(),
+               f"root listing: {a.root_names()!r}")
+        ensure(not a.reads(RIGHTS_OTHER) and not a.lists(RIGHTS_OTHER), "reached the folder that was not chosen")
+        ensure(not a.writes(), "could write although only reading was confirmed")
+        stored = grant_of(owner, a.device_id)["rights"]["folders"]
+        ensure(stored["kind"] == "selected", stored)
+        return "sees only " + RIGHTS_DATA
+    rig.check("confirm with a folder choice: the device sees only that folder, a cancelled connection can be "
+              "confirmed later", folders)
+
+    def other_device():
+        m = rig.peers.get("RightsM")
+        ensure(m is not None and m.reads(RIGHTS_OTHER), "the first device (all folders) cannot read the other folder")
+        return "the first device still reads " + RIGHTS_OTHER
+    rig.check("folders are per device: another device with all folders still reads the other folder", other_device)
+
+
+def flow_code(rig, device):
+    """2a. A Direct code with a preset: a new device that connects with it has exactly those rights."""
+    owner = rig.owner
+    peer = []
+
+    def code_rights():
+        done = cli_json(owner, "share", "identity", "--preset", "files-exec", "--json")
+        ensure(flat(done["code_rights"]) == PRESET_SHAPES["files-exec"], done["code_rights"])
+        shown = cli_json(owner, "share", "identity", "--json")["code_rights"]
+        ensure(shown is not None and flat(shown) == PRESET_SHAPES["files-exec"], shown)
+        status = cli_json(owner, "share", "status", "--json")["code_rights"]
+        ensure(status is not None and flat(status) == PRESET_SHAPES["files-exec"], status)
+        return "code rights files-exec"
+    rig.check("se share identity --preset files-exec stores the rights of the Direct code", code_rights)
+
+    def connected():
+        peer.append(rig.connect(device, "RightsB"))
+        return "established"
+    rig.check("a new device connects with that code and the owner accepts without choosing rights", connected)
+    if not peer:
+        return
+    b = peer[0]
+
+    def exact():
+        ensure(not pending_of(owner, b.device_id), "the connection waits for a confirmation")
+        grant = grant_of(owner, b.device_id)
+        ensure(flat(grant["rights"]) == PRESET_SHAPES["files-exec"] and grant["rights"]["pending"] is False,
+               grant["rights"])
+        b.reads_eventually()
+        b.writes_eventually()
+        b.execs_eventually()
+        ensure(b.reads(RIGHTS_OTHER), "does not see every folder")
+        b.screen_refused()
+        return "reads, writes, runs commands; the screen is refused"
+    rig.check("the device has exactly the code's rights (files and commands, no screen) without a confirmation",
+              exact)
+
+
+def flow_pin(rig, device):
+    """2b. A PIN offer with a preset: a device that pairs with the PIN has exactly those rights."""
+    owner = rig.owner
+    peer = []
+
+    def paired():
+        offer = cli_json(owner, "share", "discoverable", "--preset", "read-write", "--name", "RightsPin",
+                         "--minutes", "10", "--pin-stdin", "--allow-weak-pin", "--json",
+                         stdin=RIGHTS_PIN + "\n")
+        ensure(offer.get("action") == "discoverable", offer)
+
+        def found():
+            listed = cli_json(device, "share", "discover", "list", "--json")["offers"]
+            return [item["discovery_id"] for item in listed if item["display_name"] == "RightsPin"]
+        discovery = until(found, "the offer RightsPin is discoverable", 120)[0]
+        # The PIN is read up to the end of the input, so it carries no line ending.
+        done = cli(device, "share", "discover", "pair", discovery, "--pin-stdin", "--json", stdin=RIGHTS_PIN,
+                   timeout=170)
+        ensure(done.ok and "completed" in done.stdout, f"pairing: {short(done)}")
+        owner_id = rig.owner_id
+
+        def endpoint():
+            rows = cli_json(device, "connections", "list", "--json")
+            direct = [row for row in rows if row.get("kind") == "direct" and row.get("access_state") == "Freigegeben"]
+            named = [row for row in direct if row.get("device_id") == owner_id]
+            return [row["endpoint"] for row in (named or (direct if len(direct) == 1 else []))]
+        peer.append(Peer(rig, device, until(endpoint, "the paired contact is listed", 120)[0], "RightsP"))
+        rig.peers["RightsP"] = peer[0]
+        return "paired with the PIN"
+    rig.check("PIN pairing with the offer's preset: the device pairs", paired)
+    if not peer:
+        return
+    p = peer[0]
+
+    def exact():
+        ensure(not pending_of(rig.owner, p.device_id), "the connection waits for a confirmation")
+        grant = grant_of(rig.owner, p.device_id)
+        ensure(flat(grant["rights"]) == PRESET_SHAPES["read-write"] and grant["rights"]["pending"] is False,
+               grant["rights"])
+        p.reads_eventually()
+        p.writes_eventually()
+        ensure(not p.execs(), "could run a command with a read-write offer")
+        p.screen_refused()
+        return "reads and writes; commands and the screen refused"
+    rig.check("the paired device has exactly the offer's rights (read-write) without a confirmation", exact)
+
+
+def flow_room(rig, member):
+    """2c. A room created with --preset read-only: a member reads, does not write."""
+    owner = rig.owner
+    room = {}
+
+    def created():
+        done = rig.do(owner, "share", "room", "create", "--name", "RightsRoom", "--preset", "read-only")
+        fields = dict(line.split("\t", 1) for line in done.stdout.splitlines() if "\t" in line)
+        ensure(fields.get("room_code", "").startswith("SE-R3-"), done.stdout)
+        room.update(fields)
+        room["relation"] = fields["room_code"].removeprefix("SE-R3-").rsplit("-", 1)[0]
+        listed = cli_json(owner, "share", "room", "list", "--json")["rooms"]
+        mine = [item for item in listed if item["id"] == fields["room_id"]]
+        ensure(len(mine) == 1 and mine[0]["policy"]["members_may_write"] is False, mine)
+        ensure(not [item for item in cli_json(owner, "share", "grants", "pending", "--json")["pending"]
+                    if item["target"].get("profile_id") == fields["room_id"]], "the room waits for its rights")
+        return f"room {fields['room_id']}"
+    rig.check("share room create --preset read-only: the room has its rights and does not wait", created)
+    if not room:
+        return
+
+    def joined():
+        rig.do(member, "connections", "add-room", "--code", room["room_code"], "--name", "RightsRoom")
+        for client in (owner, member):
+            rig.do(client, "share", "worker", "refresh")
+        room["endpoint"] = f"share://room/{room['relation']}/{rig.owner_id}/{RIGHTS_DATA}"
+        until(lambda: cli(member, "cat", f"{room['endpoint']}/readme.txt").stdout.strip() == RIGHTS_TEXT[RIGHTS_DATA],
+              "the member reads through the room", 180)
+        return "the member reads through the room"
+    rig.check("a member joins with the room code and reads", joined)
+    if "endpoint" not in room:
+        return
+
+    def read_only_member():
+        m = rig.peers.get("RightsM")
+        ensure(m is not None, "the first device did not connect")
+        # The member holds read-write through its Direct connection; through the room only reading is allowed.
+        ensure(m.writes(), "control: the member cannot write through its Direct connection")
+        ensure(not m.writes(endpoint=room["endpoint"]), "the member could write through the read-only room")
+        ensure(m.run("ls", room["endpoint"]).ok, "the member cannot list through the room")
+        return "reads through the room, upload refused, Direct upload works"
+    rig.check("the room member reads but cannot write (its Direct connection can)", read_only_member)
+
+
+def stage_rights(ctx):
+    """Item 1 to 3 of the connection flow on one net of five candidate instances."""
+    new = ctx.bins.get("new")
+    server = build_share_server(ctx)
+    if new is None or server is None:
+        ctx.results.record("rights", "candidate and share server are built", False, "see the build checks")
+        return
+    net = None
+    try:
+        net = share_net(ctx.work, "rights", server, new, new, ctx.log_root, hosts=4, pair_hosts=False)
+        rights_flow(ctx, net)
+    except Exception as error:  # noqa: BLE001 - the compatibility stage still runs
+        ctx.results.record("rights", "connection flow", False, f"{type(error).__name__}: {error}")
+    finally:
+        if net is not None:
+            net.close()
+
+
+def stage_rights_compat(ctx):
+    """Item 4: a share made by v0.5.189 keeps its rights when the candidate is started on its profile."""
+    old, new = ctx.bins.get("old"), ctx.bins.get("new")
+    server = build_share_server(ctx)
+    if old is None or new is None or server is None:
+        ctx.results.record("rights", "v0.5.189, candidate and share server are built", False, "see the build checks")
+        return
+    net = None
+    try:
+        net = share_net(ctx.work, "rights-old", server, old, old, ctx.log_root, hosts=1)
+        host, main, export = net.hosts[0], net.main, net.exports[0]
+        main_id = net.pair.identity_of(main)
+        seeded = Peer(types.SimpleNamespace(net=net, data=export), main, net.endpoints[0], "OldMain")
+
+        def before():
+            until(lambda: seeded.run("ls", net.endpoints[0]).ok, "v0.5.189 main lists the export", 120)
+            until(lambda: seeded.writes(endpoint=net.endpoints[0], folder_path=export), "v0.5.189 main writes", 120)
+            grants = json.loads(host.call("share", "grants", "list", "--json").stdout)["grants"]
+            mine = [grant for grant in grants if grant["device_id"] == main_id]
+            ensure(len(mine) == 1 and mine[0]["write"] is True, mine)
+            return "v0.5.189 host: the main device reads and writes"
+        ctx.results.check("rights", "v0.5.189 share: the profile made by v0.5.189 grants reading and writing", before)
+        host.close()
+        restarted = net.pair.Client(net.owner, Path(new), host.env, "host-candidate")
+        net.clients.append(restarted)
+        restarted.server_process = net.process
+        restarted.call("share", "worker", "refresh")
+        restarted.wait(lambda: (lambda worker: worker.get("reachable") and worker.get("running")
+                                and worker.get("connected"))(
+            json.loads(restarted.call("share", "status", "--json").stdout).get("worker", {})), "connected worker")
+
+        def kept():
+            grant = grant_of(restarted, main_id)
+            rights = grant["rights"]
+            ensure(grant["write"] is True and grant["authorization"]["active"], grant)
+            ensure(flat(rights) == PRESET_SHAPES["read-write"] and rights["pending"] is False, rights)
+            ensure(not pending_of(restarted, main_id), "the old share waits for a confirmation")
+            ensure(not [item for item in cli_json(restarted, "share", "status", "--json")["rights_pending"]
+                        if item["target"].get("device_id") == main_id], "share status lists it as waiting")
+            return f"stored rights {flat(rights)}"
+        ctx.results.check("rights", "candidate started on the v0.5.189 profile: the grant keeps its rights and does "
+                          "not wait for a confirmation", kept)
+
+        def still_works():
+            until(lambda: seeded.run("ls", net.endpoints[0]).ok, "v0.5.189 main lists the export", 180)
+            until(lambda: seeded.writes(endpoint=net.endpoints[0], folder_path=export), "v0.5.189 main writes", 180)
+            ensure(not seeded.execs(), "commands became allowed")
+            return "the v0.5.189 device still reads and writes, commands stay refused"
+        ctx.results.check("rights", "candidate host: the v0.5.189 device still reads and writes through the "
+                          "candidate's file access check", still_works)
+    except Exception as error:  # noqa: BLE001
+        ctx.results.record("rights", "v0.5.189 profile compatibility", False, f"{type(error).__name__}: {error}")
+    finally:
+        if net is not None:
+            net.close()
+
+
 # --------------------------------------------------------------------------- jobs behaviour
 
 def job_behaviour(results, log_root):
@@ -1713,6 +2286,8 @@ def job_behaviour(results, log_root):
                 stage_ssh(ctx, trees, client_of)
                 stage_share(ctx, trees)
                 stage_sum_ftp(ctx, trees, client_of)
+                stage_rights(ctx)
+                stage_rights_compat(ctx)
                 evaluate_equality(ctx)
                 sanity(ctx)
                 evaluate_keys(ctx)
