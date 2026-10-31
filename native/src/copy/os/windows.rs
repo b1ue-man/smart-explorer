@@ -160,11 +160,20 @@ pub(super) fn path_matches_identity(path: &Path, expected: FileIdentity) -> io::
     Ok(actual == expected)
 }
 
+/// The source's read-only attribute and modification time on a stage written
+/// through its handle (replacements, moves to another volume, protected
+/// sources); a new copy's stage by path takes them from the copy itself. As
+/// on Linux (`linux_os.rs`), a time the target cannot take keeps the stage's
+/// own: the rename that publishes the stage keeps whatever it has.
 pub(super) fn copy_permissions(
     writer: &File,
     source: &std::fs::Metadata,
     _destination: Option<&Path>,
 ) -> io::Result<()> {
+    // The time first: a read-only attribute set before could refuse it.
+    if let Ok(modified) = source.modified() {
+        let _ = writer.set_modified(modified);
+    }
     writer.set_permissions(source.permissions())
 }
 
