@@ -206,3 +206,26 @@ Nutzernachricht N6 (wörtlich): „noch eine ergänzung die mir grad einfällt. 
 | E15 | Voreinstellungen auf beiden Seiten (Beispiele: alles; Dateien lesen und schreiben; nur lesen; Dateien und Codeausführung) | N6 |
 
 Zu erhalten: Grundsatz vom 2026-10-28 „Verbinden ist die Einrichtung“ (RDP, Fenster, Programme, TCP richten sich aus dem einen Recht selbst ein); jede Oberfläche (docs/oberflaechen/share-exec.md). Tiefe: 3 (neuer Bedienweg und Rechte-Vertrag über Desktop, Android, CLI, MCP, Bridge). Nächster Schritt: Bestand (bestand-verbinden.md), dann Entwurf F-C/F-D.
+
+### F-B Bestand
+
+[bestand-verbinden.md](bestand-verbinden.md) (HEAD 015ea1f9). Kern: Rechte gelten heute ohne Bestätigung (Direkt-Annahme und Auto-Annahme `write = true`, PIN-Veröffentlichender sofort mit Schreibrecht, Direkt-Ordner sofort lesen+schreiben, Raum-Beitritt ohne Zulassung); die Ordnerliste gilt für alle Direkt-Geräte gemeinsam; Codes, PIN-Angebote und Räume tragen keine Rechteauswahl; Voreinstellungen nur für Befehle (drei), keine für Dateien/Bildschirm, keine auf Android; Warntext der Auto-Annahme widerspricht dem Code (`share_policy_ui.rs:38` gegen `legacy_direct_request_decision.rs:215`).
+
+### F-C Entscheidungen
+
+- F1 Neue Verbindung ohne Rechte: Jede neue Verbindung (Annahme einer Direkt-Anfrage, Auto-Annahme, PIN-Kopplung auf beiden Seiten, Raum-Beitritt) legt Kontakt und Freigabe ohne jedes Recht an (keine Ordner, kein Schreiben, keine Befehle, kein Terminal, kein Bildschirm) und öffnet auf der Seite, die etwas freigibt, das kompakte Menü „Rechte für <Gerät>“. Erst „Bestätigen“ setzt die gewählten Rechte; „Abbrechen“ behält die Verbindung ohne Rechte (später über die Geräteseite „Rechte einstellen“ wieder erreichbar). Bestehende Verbindungen behalten ihre Rechte (keine Migration, die Rechte entzieht oder vergibt).
+- F2 Ordner je Gerät: Die Freigabe trägt die Auswahl der Ordner dieses Geräts (Teilmenge der Direkt-Ordner, im Menü „Ordner hinzufügen“); ältere Freigaben ohne Auswahl behalten die gemeinsame Liste (bisheriges Verhalten).
+- F3 Inhalt des kompakten Menüs (oben die Voreinstellungen, darunter je Zeile ein Schalter): Ordner (Auswahl), Schreiben (inkl. Löschen/Papierkorb), Befehle (aus/fragen/erlauben), Terminal, Desktop sehen, Desktop steuern (schließt Programme, Anmeldung, lokale Dienste/RDP ein wie heute), „Remote Desktop einrichten“, wenn der Host es noch nicht ist, Ablauf (unbegrenzt/1 h/1 Tag/7 Tage), unter „Mehr“: Konto (`run_as`), Programmliste, Systemorte schreiben, TCP-Regeln, Rückfreigabe meiner Ordner. Ergänzt gegenüber N6: Terminal, Ablauf, Konto, Programmliste, Systemorte, TCP, Rückfreigabe (Bestand R8–R20).
+- F4 Voreinstellungen (gleich auf beiden Seiten und allen Oberflächen): „Keine Rechte“, „Nur lesen“, „Dateien lesen und schreiben“, „Dateien und Codeausführung“ (lesen+schreiben, Befehle erlauben, Terminal), „Alles“ (Dateien lesen+schreiben, Befehle, Terminal, Desktop sehen und steuern, RDP). Eine Voreinstellung füllt die Schalter; jeder Schalter bleibt einzeln änderbar.
+- F5 Freigeben per Code (E14): Beim Anzeigen/Erzeugen des Direkt-Codes, beim Veröffentlichen eines PIN-Angebots und beim Erstellen eines Raums wählt man im selben Schritt die Voreinstellung bzw. Rechte für Geräte, die damit verbinden; diese Wahl ist die Bestätigung im Voraus: ein Gerät, das mit diesem Code/Angebot verbindet, erhält genau diese Rechte. Ohne Wahl gilt „Keine Rechte“ und F1.
+- F6 Auto-Annahme: nimmt mit der Voreinstellung an, die beim Einschalten gewählt wurde (Standard „Keine Rechte“); der Warntext beschreibt das tatsächliche Verhalten.
+- F7 Oberflächen: Desktop (Dialog nach dem Verbinden, Geräteseite, Code-/Angebot-/Raumerstellung), Android (Bottom-Sheet, Geräte-Einstellungen, Code/Angebot/Raum), CLI (`--preset` und die Einzelschalter an `se share request accept`, `se share discoverable`, `se share identity`/Code, `se share room create`, `se share grants set`; `se share grants presets`), Bridge (`share.*` mit `preset`/`rights`), MCP über `se` (bestehende Sperrliste bleibt), Daemon-IPC; docs/oberflaechen/share-exec.md (inkl. Korrektur der veralteten Zeilenbelege aus bestand-verbinden.md Abschnitt 7).
+
+### F-D Arbeitsplan
+
+| Paket | Ergebnis | Dateien |
+|---|---|---|
+| G1 | Kern: Rechte-Zustand „unbestätigt“, Ordner je Gerät, Voreinstellungen, Rechte an Code/Angebot/Raum/Auto-Annahme, Bestätigen/Abbrechen; CLI, Bridge, IPC, Doku share-exec.md | `native/src/share/**` (ohne Schlüssel-Durchlauf), `native/src/cli/share/**`, `native/src/mobile/os/shared/domains/share_*`, `native/src/daemon/os/shared/*ipc*` |
+| G2 | Desktop: kompaktes Menü, Geräteseite, Code-/Angebot-/Raumerstellung mit Voreinstellung | `native/src/app/core/share_*` |
+| G3 | Android: Bottom-Sheet, Geräte-Einstellungen, Code/Angebot/Raum mit Voreinstellung | `android/app/src/main/java/app/smartexplorer/android/ui/share/**`, `api/Share*.kt` |
+| G4 | Suite: Rechte erst nach Bestätigung, Abbruch ohne Rechte, Code mit Voreinstellung, Ordner je Gerät, ältere Freigaben unverändert | Suite-Dateien |
