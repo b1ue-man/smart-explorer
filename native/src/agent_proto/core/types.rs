@@ -325,10 +325,12 @@ pub enum Frame {
     },
     /// The key of a folder of a `WalkKeyed`: `same = false` after the folder
     /// and everything below it were sent, `same = true` instead of them.
+    /// `tally`: what the subtree holds (a keys-only walk sends it).
     FolderKey {
         rel: String,
         key: [u8; 32],
         same: bool,
+        tally: Option<crate::vfs::KeyTally>,
     },
     /// The run of the folder (path relative to the walk root) of a
     /// `WalkKeyed` begins: every `HashPart` up to the next mark is of it.

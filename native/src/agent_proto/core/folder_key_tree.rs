@@ -9,6 +9,7 @@ use std::io;
 use std::sync::{Mutex, MutexGuard};
 
 use super::{folder_key, known_prefix, run_digest, FolderKey, KnownKey, RunKeys, BUFFER_BYTES};
+use crate::vfs::KeyTally;
 
 /// Where a `KeyTree` sends what is decided.
 pub(crate) trait KeyEmit<I> {
@@ -18,8 +19,15 @@ pub(crate) trait KeyEmit<I> {
     fn run(&mut self, rel: &str, items: Vec<I>) -> io::Result<()>;
     /// `same = false`: the end mark of a folder sent with everything below
     /// it; `same = true`: the folder's subtree is the one the client knows
-    /// under `key` and is not sent.
-    fn key(&mut self, rel: &str, key: &FolderKey, same: bool) -> io::Result<()>;
+    /// under `key` and is not sent. `tally` (`Mode::KeysOnly` only): what the
+    /// subtree holds.
+    fn key(
+        &mut self,
+        rel: &str,
+        key: &FolderKey,
+        same: bool,
+        tally: Option<KeyTally>,
+    ) -> io::Result<()>;
 }
 
 struct Node<I> {
@@ -29,6 +37,8 @@ struct Node<I> {
     items: Option<Vec<I>>,
     bytes: usize,
     same_children: Vec<(String, FolderKey)>,
+    /// The run's own counts, then the subtree's once every child is added.
+    tally: KeyTally,
 }
 
 struct State<I> {
@@ -105,6 +115,7 @@ impl<I> KeyTree<I> {
             parts,
             items,
             bytes,
+            tally,
             dirs,
             unopened,
         } = run;
@@ -123,6 +134,7 @@ impl<I> KeyTree<I> {
             items: (self.mode == Mode::Marks).then_some(items),
             bytes,
             same_children: Vec::new(),
+            tally,
         };
         let mut state = self.lock();
         if state.nodes.insert(rel.clone(), node).is_some() {
@@ -178,7 +190,7 @@ impl<I> KeyTree<I> {
             state.buffered = state.buffered.saturating_sub(bytes);
             emit.run(&folder, items)?;
             for (name, key) in same {
-                emit.key(&child_rel(&folder, &name), &key, true)?;
+                emit.key(&child_rel(&folder, &name), &key, true, None)?;
             }
         }
         Ok(())
@@ -198,6 +210,7 @@ impl<I> KeyTree<I> {
                 .get_mut(&rel)
                 .ok_or_else(|| invalid("walk completed an unknown folder"))?;
             let key = folder_key(&node.run, std::mem::take(&mut node.children));
+            let tally = node.tally;
             let unsent = node.items.is_some();
             let same = unsent && self.known.contains(&known_prefix(&key));
             let parent = self.parent_of(&rel).map(str::to_string);
@@ -217,11 +230,16 @@ impl<I> KeyTree<I> {
                         parent.same_children.push((name, key));
                     }
                 } else {
-                    emit.key(&rel, &key, true)?;
+                    emit.key(&rel, &key, true, None)?;
                 }
             } else {
                 self.emit_chain(state, &rel, emit)?;
-                emit.key(&rel, &key, false)?;
+                emit.key(
+                    &rel,
+                    &key,
+                    false,
+                    (self.mode == Mode::KeysOnly).then_some(tally),
+                )?;
                 state.nodes.remove(&rel);
             }
             let Some(parent) = parent else {
@@ -233,6 +251,7 @@ impl<I> KeyTree<I> {
                 .get_mut(&parent)
                 .ok_or_else(|| invalid("walk completed a folder before its parent"))?;
             node.children.push((name_in(&rel).to_string(), key));
+            node.tally.add_child(&tally);
             node.pending = node
                 .pending
                 .checked_sub(1)

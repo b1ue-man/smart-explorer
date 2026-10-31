@@ -170,7 +170,7 @@ impl Driver<'_, '_, '_> {
                 }
                 self.stream.item(normalized)
             }
-            KeyedWalkItem::Key { rel, key, same } => {
+            KeyedWalkItem::Key { rel, key, same, .. } => {
                 self.current = None;
                 if self.keys.insert(rel.clone(), key).is_some() {
                     return Err(invalid("keyed hash walk named one folder key twice"));

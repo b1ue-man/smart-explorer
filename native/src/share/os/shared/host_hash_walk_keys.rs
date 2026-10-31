@@ -10,13 +10,15 @@ use std::io;
 use std::sync::atomic::Ordering;
 
 use super::{Batch, Shared};
-use crate::agent_proto::{entry_part, EntryKind, FolderKey, KeyEmit, KeyMode, KeyTree, RunKeys};
+use crate::agent_proto::{
+    entry_part, EntryKind, FolderKey, KeyEmit, KeyMode, KeyShape, KeyTree, RunKeys,
+};
 use crate::share::{
     fs_response::{FsHashEntry, FsHashWalkMessage, FsOmission, LIST_BATCH_MAX_BYTES},
     host_stream,
     wire::FsResponse,
 };
-use crate::vfs::OmissionReason;
+use crate::vfs::{KeyTally, OmissionReason};
 
 /// One item of a keyed run.
 pub(super) type Item = Result<FsHashEntry, FsOmission>;
@@ -101,7 +103,13 @@ pub(super) fn add(batch: &mut Batch<'_, '_>, item: Item) -> io::Result<()> {
                 entry.digest.as_deref(),
                 meta.hidden,
             );
-            run.entry(&name, kind, part, item, item_cost);
+            let shape = KeyShape {
+                name: &name,
+                kind,
+                size: entry.size,
+                mtime_ms: entry.mtime_ms,
+            };
+            run.entry(shape, part, item, item_cost);
         }
         Err(hole) => {
             let reason = OmissionReason::from(hole.reason).code();
@@ -186,7 +194,13 @@ impl KeyEmit<Item> for Stream<'_, '_> {
         self.portion(&mut entries, &mut omitted)
     }
 
-    fn key(&mut self, rel: &str, key: &FolderKey, same: bool) -> io::Result<()> {
+    fn key(
+        &mut self,
+        rel: &str,
+        key: &FolderKey,
+        same: bool,
+        tally: Option<KeyTally>,
+    ) -> io::Result<()> {
         host_stream::emit(
             self.shared.tx,
             self.shared.cancel,
@@ -195,6 +209,7 @@ impl KeyEmit<Item> for Stream<'_, '_> {
                     rel: rel.to_string(),
                     key: key.iter().map(|byte| format!("{byte:02x}")).collect(),
                     same,
+                    tally,
                 },
             },
         )

@@ -10,14 +10,81 @@ use std::io;
 use super::super::super::types::Frame;
 use super::super::{bad, Reader};
 use super::{add_len, put_bytes, put_str, put_u64};
+use crate::vfs::KeyTally;
 
 /// Known key prefixes one request may carry.
 const MAX_KNOWN_BYTES: usize = 16 * super::super::super::folder_key::MAX_KNOWN_KEYS;
 const MARK_SAME: u8 = 1;
+/// `FolderKey` mark bit: the subtree's tally follows the key.
+const MARK_TALLY: u8 = 2;
 /// `WalkKeyed` option byte: keys only.
 const KEYS_ONLY: u8 = 1;
 /// Folders one `ListRuns` may name.
 const MAX_RUN_FOLDERS: usize = 1 << 20;
+
+/// Length of `value` as a LEB128 varint.
+fn varint_len(value: u64) -> usize {
+    (64 - value.max(1).leading_zeros() as usize).div_ceil(7)
+}
+
+fn tally_len(tally: &KeyTally) -> usize {
+    [
+        tally.files,
+        tally.bytes,
+        tally.omitted,
+        tally.untimed,
+        u64::from(tally.height),
+    ]
+    .into_iter()
+    .map(varint_len)
+    .sum()
+}
+
+fn put_varint(b: &mut Vec<u8>, mut value: u64) {
+    while value >= 0x80 {
+        b.push((value & 0x7f) as u8 | 0x80);
+        value >>= 7;
+    }
+    b.push(value as u8);
+}
+
+fn take_varint(r: &mut Reader) -> io::Result<u64> {
+    let mut value = 0u64;
+    for shift in (0..70).step_by(7) {
+        let byte = r.u8()?;
+        let bits = u64::from(byte & 0x7f);
+        if shift == 63 && bits > 1 {
+            return Err(bad("folder tally number out of range"));
+        }
+        value |= bits << shift;
+        if byte & 0x80 == 0 {
+            return Ok(value);
+        }
+    }
+    Err(bad("folder tally number out of range"))
+}
+
+fn put_tally(b: &mut Vec<u8>, tally: &KeyTally) {
+    for value in [
+        tally.files,
+        tally.bytes,
+        tally.omitted,
+        tally.untimed,
+        u64::from(tally.height),
+    ] {
+        put_varint(b, value);
+    }
+}
+
+fn take_tally(r: &mut Reader) -> io::Result<KeyTally> {
+    Ok(KeyTally {
+        files: take_varint(r)?,
+        bytes: take_varint(r)?,
+        omitted: take_varint(r)?,
+        untimed: take_varint(r)?,
+        height: u32::try_from(take_varint(r)?).map_err(|_| bad("folder depth out of range"))?,
+    })
+}
 
 /// Encoded body length after the request id and tag, `None` for other frames.
 pub(in super::super) fn payload_len(frame: &Frame) -> Option<io::Result<usize>> {
@@ -42,9 +109,12 @@ pub(in super::super) fn payload_len(frame: &Frame) -> Option<io::Result<usize>> 
             }
             Ok(length)
         })(),
-        Frame::FolderKey { rel, .. } => super::string_len(rel).and_then(|len| {
+        Frame::FolderKey { rel, tally, .. } => super::string_len(rel).and_then(|len| {
             let mut length = len;
             add_len(&mut length, 33)?;
+            if let Some(tally) = tally {
+                add_len(&mut length, tally_len(tally))?;
+            }
             Ok(length)
         }),
         Frame::ListDirMeta(path) | Frame::StatMeta(path) | Frame::FolderRun(path) => {
@@ -84,11 +154,23 @@ pub(in super::super) fn encode(frame: &Frame, b: &mut Vec<u8>) -> bool {
                 put_str(b, folder);
             }
         }
-        Frame::FolderKey { rel, key, same } => {
+        Frame::FolderKey {
+            rel,
+            key,
+            same,
+            tally,
+        } => {
             b.push(86);
             put_str(b, rel);
             b.extend_from_slice(key);
-            b.push(if *same { MARK_SAME } else { 0 });
+            let mut mark = if *same { MARK_SAME } else { 0 };
+            if tally.is_some() {
+                mark |= MARK_TALLY;
+            }
+            b.push(mark);
+            if let Some(tally) = tally {
+                put_tally(b, tally);
+            }
         }
         Frame::ListDirMeta(path) => {
             b.push(87);
@@ -152,12 +234,21 @@ pub(in super::super) fn decode(tag: u8, r: &mut Reader) -> io::Result<Option<Fra
             let rel = r.string()?;
             let mut key = [0u8; 32];
             key.copy_from_slice(r.take(32)?);
-            let same = match r.u8()? {
-                0 => false,
-                MARK_SAME => true,
-                _ => return Err(bad("unknown folder key mark")),
+            let mark = r.u8()?;
+            if mark & !(MARK_SAME | MARK_TALLY) != 0 {
+                return Err(bad("unknown folder key mark"));
+            }
+            let tally = if mark & MARK_TALLY != 0 {
+                Some(take_tally(r)?)
+            } else {
+                None
             };
-            Frame::FolderKey { rel, key, same }
+            Frame::FolderKey {
+                rel,
+                key,
+                same: mark & MARK_SAME != 0,
+                tally,
+            }
         }
         87 => Frame::ListDirMeta(r.string()?),
         88 => Frame::StatMeta(r.string()?),

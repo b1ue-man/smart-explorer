@@ -141,3 +141,52 @@ fn abgleich_task_agent_without_file_digest_hashes_through_its_connection() {
     );
     assert_eq!(digest.size, 3);
 }
+
+/// A keys-only walk through the real server carries each folder's tally.
+#[test]
+fn abgleich_task_agent_keys_only_walk_counts_each_subtree() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::create_dir_all(root.join("a/b")).unwrap();
+    std::fs::write(root.join("top.txt"), b"12345").unwrap();
+    std::fs::write(root.join("a/b/deep.txt"), b"123").unwrap();
+    std::fs::create_dir_all(root.join("empty")).unwrap();
+    let backend = real_agent();
+    let request = HashWalkRequest {
+        algorithm: None,
+        min_bytes: 0,
+        meta: true,
+    };
+    let (tx, rx) = crossbeam_channel::unbounded();
+    let ran = vfs::hash_walk_keyed(
+        &backend,
+        root.to_str().unwrap(),
+        request,
+        vfs::KeyedWalk::KeysOnly,
+        tx,
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert!(ran);
+    let mut tallies = std::collections::HashMap::new();
+    for item in rx.try_iter() {
+        match item {
+            KeyedWalkItem::Key {
+                rel,
+                tally: Some(tally),
+                ..
+            } => {
+                tallies.insert(rel, tally);
+            }
+            other => panic!("keys only sends tallied keys, got {other:?}"),
+        }
+    }
+    assert_eq!(tallies.len(), 4, "root, a, a/b and empty: {tallies:?}");
+    let top = tallies[""];
+    assert_eq!(
+        (top.files, top.bytes, top.height, top.clean()),
+        (2, 8, 2, true)
+    );
+    assert_eq!((tallies["a"].files, tallies["a"].height), (1, 1));
+    assert_eq!((tallies["empty"].files, tallies["empty"].height), (0, 0));
+}

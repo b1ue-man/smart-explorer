@@ -72,7 +72,11 @@ fn abgleich_task_keys_only_walk_names_the_folders_of_the_walk_with_runs() {
     let cancel = AtomicBool::new(false);
     let full = local_keyed(path, digest::NONE, &cancel).expect("walk with runs");
     let mut full_keys = full.keys;
-    let mut only = Collected::keys_of(path, digest::NONE, &cancel).expect("keys only");
+    let mut only: Vec<(String, [u8; 32])> = Collected::keys_of(path, digest::NONE, &cancel)
+        .expect("keys only")
+        .into_iter()
+        .map(|(rel, key, _)| (rel, key))
+        .collect();
     full_keys.sort();
     only.sort();
     assert_eq!(only, full_keys, "the same folders carry the same keys");

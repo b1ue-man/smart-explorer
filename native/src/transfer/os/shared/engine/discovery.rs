@@ -25,7 +25,10 @@ pub(super) fn discover(engine: &Engine<'_>, plan: &RootPlan) {
 
 fn walk_roots(engine: &Engine<'_>, plan: &RootPlan) {
     let view = &engine.view;
+    // A folder with the key of its target folder is not even listed.
+    let settled = |rel: &str, depth: usize| engine.settled_folder(rel, depth);
     let options = WalkOptions {
+        settled: Some(&settled),
         filter: compile_remote_filter(view.filter.cloned()),
         folders: engine.keeps_folders(),
         flatten: view.layout == super::super::job::Layout::Flatten,
@@ -123,6 +126,10 @@ pub(super) fn on_event(engine: &Engine<'_>, event: WalkEvent) -> bool {
             file.id = id;
             file.md5 = md5;
             engine.queue.push(Work::File(file), engine.stop_flag())
+        }
+        WalkEvent::Equal { files, bytes, .. } => {
+            engine.stats.equal_folder(files, bytes);
+            true
         }
         WalkEvent::Omitted { .. } => {
             engine.stats.omitted();

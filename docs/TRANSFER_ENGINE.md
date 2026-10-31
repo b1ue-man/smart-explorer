@@ -585,8 +585,29 @@ angelegt (`update::folder_equal` in `worker.rs`; ein Ordner mit gleichem Schlüs
   gleiche Größe und Zeitabstand 0, also „gleich“ für jedes Fenster der Regel. Ungleiche Schlüssel bedeuten nur
   „hineinsehen“: diese Ordner nehmen den Weg ohne Schlüssel (Auflistung des Zielordners, Entscheidung je Datei),
   die Unterordner mit gleichem Schlüssel darin werden trotzdem ausgelassen (Abstieg nach Schlüsseln wie im
-  Sync). Ergebnis (Kopien, Ersetzungen, Zählwerte, Meldungen) gleich dem Weg ohne Schlüssel; die Quelle wird
-  weiter durchlaufen (Dateiliste, Größen, Auslassungen), nur das Ziel wird nicht gelesen.
+  Sync). Ergebnis (Kopien, Ersetzungen, Zählwerte, Meldungen) gleich dem Weg ohne Schlüssel.
+- *Auch die Quelle wird nicht aufgelistet:* der Schlüssel-Durchlauf `KeysOnly` liefert je Ordner zusätzlich,
+  was sein Teilbaum enthält (`vfs::KeyTally`, `vfs/core/key_tally.rs`): Zahl der Dateien und ihre Bytes, Zahl der
+  Auslassungen (Links, Spezialdateien, nicht lesbare Einträge, der eigene Lesefehler eines Ordners und Namen, die
+  keine Übertragung nimmt: Backslash, NUL, `.`/`..`, der Papierkorbordner der App), Zahl der Dateien mit unbekannter
+  Zeit (0) und die Tiefe darunter. Quelle des Zählens: `RunKeys::entry/omission/failure`
+  (`agent_proto/core/folder_key.rs`), summiert über die Unterordner in `KeyTree::completed`
+  (`folder_key_tree.rs`); am Draht ein `FolderKey` mit Merkmalsbit 2 und fünf LEB128-Zahlen
+  (`walk_key_frames.rs`), bei Share `Key.tally` (`hash_walk_wire.rs`), lokal `LocalKeyed::keys_of`, über den
+  Hintergrunddienst unverändert weitergereicht (`backend_hash_keyed.rs`). Die Fähigkeiten `walk-keys-v1` und
+  `hash_walk_keys_v1` sind unveröffentlicht und tragen das Feld ohne neue Bezeichnung; eine Gegenstelle ohne
+  Zählung (`tally = None`) verhält sich wie bisher (Quelle wird aufgelistet).
+  Ein Ordner mit gleichem Schlüssel **und** sauberer Zählung (keine Auslassung, keine Datei mit Zeit 0, Tiefe
+  im Rahmen der Auflistung, `Keys::settled`) ist erledigt, bevor er aufgelistet wird: der Durchlauf
+  (`walk.rs`, `WalkOptions::settled`, `walk_settled.rs`) fragt vor dem Auflisten jedes Ordners
+  `Engine::settled_folder` und meldet ihn als ein `WalkEvent::Equal` statt `Dir` und Inhalt. Der Fortschritt
+  zählt seine Dateien daraus wie je Datei einzeln (`Stats::equal_folder`: gefunden, gleich übersprungen
+  `skipped_equal`, `skipped`, Bytes gutgeschrieben), ohne irgendeine anzusehen. Eine Auslassung oder eine Datei mit
+  Zeit 0 im Teilbaum führt zum bisherigen Weg für genau diesen Teilbaum: der Ordner wird aufgelistet, der Durchlauf
+  meldet die Auslassung mit ihrem Pfad (`WalkEvent::Problem`), die Datei mit Zeit 0 behält beide; Unterordner
+  darin ohne Auslassung können für sich erledigt sein. Nicht angewandt bei Filter, Layout `Flatten`, wiederaufgenommenem
+  Auftrag (Belege je Datei) und Kopie innerhalb eines Namensraums (der Durchlauf schließt dort das eigene Ziel
+  aus).
 - *Ausnahme Zeit 0:* eine Quelldatei mit unbekannter Zeit (0) nimmt nie den Schlüsselweg; die Regel behält dort
   beide (Tabelle oben). Die Vorschau listet das Ziel eines Quellordners, in dem eine solche Datei liegt, wie bisher auf.
 - *Wann Schlüssel gelten:* nur bei **entferntem Ziel** (Upload, Remote–Remote), bei Dateiregel `Update` oder
@@ -663,9 +684,12 @@ zeigen beide „neue und gleichnamige Dateien“ wie vor der Regel; die Auftrags
 beide behalten, überspringen) gilt dann weiter. Ohne bekannte Zeit einer Seite zählt eine gleichnamige
 Datei als Konflikt, nicht als gleich (dieselbe `classify` wie die Engine). Mit Ordnerschlüsseln (oben)
 wird das Ziel eines Quellordners mit gleichem Schlüssel nicht aufgelistet und seine Dateien zählen als gleich
-(`engine/selection_count_target.rs`, `Target::Equal`); die Quelle wird weiter aufgelistet, denn die Zahl der
-Dateien und die Auslassungen kommen aus ihr. Die fünf Zählwerte, `colliding_files`, Beispiele und Auslassungen sind
-dieselben wie ohne Schlüssel.
+(`engine/selection_count_target.rs`, `Target::Equal`). Ist auch der Teilbaum sauber (keine Auslassung, keine
+Datei mit Zeit 0, `Keys::settled`), wird der Quellordner ebenfalls nicht aufgelistet: seine Dateizahl kommt aus der
+Zählung des Schlüssel-Durchlaufs und zählt als gleich (`settled_by_key`); nur die Beispielnamen (höchstens fünf)
+kommen dann aus anderen Ordnern. Bei einem Filter wird die Quelle wie bisher aufgelistet. Die fünf Zählwerte,
+`colliding_files` und Auslassungen sind dieselben wie ohne Schlüssel; die Grenzen für Einträge und Pfadtext der
+Vorschau greifen für einen so erledigten Ordner nicht, weil nichts von ihm gelesen wird.
 
 **Meldungen nach dem Lauf:** `TransferProgress::{replaced, skipped_equal, kept_newer, kept_both}`
 (Standardwert 0 beim Lesen älterer Meldungen); Übertragungsfenster (`app/core/transfer_rows.rs:159`,
@@ -726,8 +750,10 @@ Auftrag läuft dann im eigenen Prozess (`transfer_job_client.rs:155`).
   Inhalt).
 - Gleichheit ist Größe plus Zeit im Fenster, nie Inhalt. Mit Ordnerschlüsseln ist sie Größe plus Zeit in Millisekunden
   (strenger, nie anders).
-- Ordnerschlüssel: ein Quellordner mit gleichem Schlüssel wird weiter aufgelistet (Dateiliste, Größen für den
-  Fortschritt, Auslassungen); gespart wird das Lesen des Ziels. Bei einem lokalen Ziel gelten Schlüssel nicht (siehe
+- Ordnerschlüssel: ein Quellordner mit gleichem Schlüssel und sauberer Zählung (keine Auslassung, keine Datei
+  mit Zeit 0) wird weder am Ziel noch an der Quelle aufgelistet; Dateizahl und Bytes für den Fortschritt kommen
+  aus der Zählung des Schlüssel-Durchlaufs. Ein Teilbaum mit Auslassung oder Zeit 0 wird aufgelistet wie
+  ohne Schlüssel (Meldung mit Pfad, beide behalten). Bei einem lokalen Ziel gelten Schlüssel nicht (siehe
   oben). Der Schlüssel enthält keinen Inhalt der Dateien, nur ihre Größe und Zeit.
 - `se mv --conflict update` und der MCP `move` mit `file_conflict: update` nur lokal; gleiche Dateien
   bleiben in der Quelle, der Quellordner bleibt dann stehen.
@@ -739,6 +765,11 @@ Primärquellen). Oberflächen und Einstellungen bleiben unverändert; „Verglei
 den Weg selbst, das Lauf-Protokoll nennt je Seite „… Ordner gleich ihrem Ordnerschlüssel (nicht
 übertragen), … Ordner übertragen“.
 
+- **Zählung am Schlüssel.** Der Schlüssel-Durchlauf `KeysOnly` sendet je Ordner zusätzlich die Zählung
+  seines Teilbaums (`vfs::KeyTally`: Dateien, Bytes, Auslassungen, Dateien mit Zeit 0, Tiefe); das
+  Zusammenführen unter der Dateiregel (Abschnitt „Ordnerschlüssel beim Zusammenführen“) listet damit auch
+  die Quelle eines gleichen Ordners nicht auf. Der Sync selbst braucht die Zählung nicht: er vergleicht
+  Schlüssel und Läufe.
 - **Ordnerschlüssel (E10).** Share-Host, se-agent und der Hintergrunddienst (wenn sein Backend einen
   eigenen Durchlauf hat) bilden beim Durchlauf für jeden Ordner einen SHA-256-Schlüssel über die
   Angaben, die der Vergleich aus ihm nimmt, und die Schlüssel seiner Unterordner

@@ -14,11 +14,12 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 
 use super::folder_key::{
-    entry_part, parse_known, EntryKind, FolderKey, KeyEmit, KeyTree, Mode, RunKeys,
+    entry_part, parse_known, EntryKind, FolderKey, KeyEmit, KeyTree, Mode, RunKeys, Shape,
 };
 use super::ops_types::digest;
 use super::session::{emit, Sink};
 use super::{Frame, WireHashEntry, WireOmission};
+use crate::vfs::KeyTally;
 
 /// Estimated encoded bytes after which a `HashPart` of a run is sent.
 const PART_BYTES: usize = 256 * 1024;
@@ -45,6 +46,8 @@ impl WireItem {
 pub(crate) struct Collected {
     pub(crate) runs: Vec<(String, Vec<WireItem>)>,
     pub(crate) keys: Vec<(String, FolderKey)>,
+    /// What each keyed folder's subtree holds (`Mode::KeysOnly` walks).
+    pub(crate) tallies: Vec<(String, KeyTally)>,
 }
 
 impl KeyEmit<WireItem> for Collected {
@@ -53,8 +56,17 @@ impl KeyEmit<WireItem> for Collected {
         Ok(())
     }
 
-    fn key(&mut self, rel: &str, key: &FolderKey, _same: bool) -> io::Result<()> {
+    fn key(
+        &mut self,
+        rel: &str,
+        key: &FolderKey,
+        _same: bool,
+        tally: Option<KeyTally>,
+    ) -> io::Result<()> {
         self.keys.push((rel.to_string(), *key));
+        if let Some(tally) = tally {
+            self.tallies.push((rel.to_string(), tally));
+        }
         Ok(())
     }
 }
@@ -109,9 +121,15 @@ impl<'a> Keyed<'a> {
             entry.digest.as_deref(),
             meta.hidden,
         );
+        let shape = Shape {
+            name: &name,
+            kind,
+            size: entry.size,
+            mtime_ms: entry.mtime_ms,
+        };
         let item = WireItem::Entry(entry);
         let cost = item.cost();
-        run.entry(&name, kind, part, item, cost);
+        run.entry(shape, part, item, cost);
         Ok(())
     }
 
@@ -171,7 +189,13 @@ impl KeyEmit<WireItem> for Parts<'_> {
         self.part(&mut entries, &mut omitted)
     }
 
-    fn key(&mut self, rel: &str, key: &FolderKey, same: bool) -> io::Result<()> {
+    fn key(
+        &mut self,
+        rel: &str,
+        key: &FolderKey,
+        same: bool,
+        tally: Option<KeyTally>,
+    ) -> io::Result<()> {
         emit(
             self.sink,
             self.id,
@@ -179,6 +203,7 @@ impl KeyEmit<WireItem> for Parts<'_> {
                 rel: rel.to_string(),
                 key: *key,
                 same,
+                tally,
             },
         )
     }
@@ -278,15 +303,28 @@ pub(crate) fn local_keyed(root: &str, algorithm: u8, cancel: &AtomicBool) -> io:
 
 impl Collected {
     /// Only the keys of the local tree `root` (the walk of `local_keyed`
-    /// without keeping any run): the folder `""` is the root, every other
-    /// folder is named by its path below it. For callers that compare keys
-    /// and never replay a run (merge copies, `transfer::update`).
+    /// without keeping any run), each with what its subtree holds: the
+    /// folder `""` is the root, every other folder is named by its path
+    /// below it. For callers that compare keys and never replay a run
+    /// (merge copies, `transfer::update`).
     pub(crate) fn keys_of(
         root: &str,
         algorithm: u8,
         cancel: &AtomicBool,
-    ) -> io::Result<Vec<(String, FolderKey)>> {
-        Ok(collect_local(root, algorithm, Mode::KeysOnly, cancel)?.keys)
+    ) -> io::Result<Vec<(String, FolderKey, KeyTally)>> {
+        let collected = collect_local(root, algorithm, Mode::KeysOnly, cancel)?;
+        let mut tallies: std::collections::HashMap<String, KeyTally> =
+            collected.tallies.into_iter().collect();
+        collected
+            .keys
+            .into_iter()
+            .map(|(rel, key)| {
+                let tally = tallies
+                    .remove(&rel)
+                    .ok_or_else(|| invalid("keys-only walk gave a folder no tally"))?;
+                Ok((rel, key, tally))
+            })
+            .collect()
     }
 }
 

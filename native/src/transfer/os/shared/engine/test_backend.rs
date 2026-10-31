@@ -168,6 +168,7 @@ impl Backend for Fake {
         self.identity.clone()
     }
     fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
+        self.counters.lists.fetch_add(1, Ordering::SeqCst);
         Ok(self
             .inner
             .list_dir(path)?

@@ -4,6 +4,7 @@
 //! with other keys take the way without keys, and every result (copies,
 //! replacements, counts, messages, the preview's five counts) equals the way
 //! without keys. A target without the keyed walk takes the way without keys.
+//! (The source side of the same keys: `abgleich_task_source_keys_tests.rs`.)
 use super::super::test_backend::{job, run, write, Fake, Finished};
 use crate::transfer::{
     count_folder_conflict, folder_conflicts, Endpoint, FolderConflict, FolderConflictPolicy,
@@ -15,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, UNIX_EPOCH};
 
-fn file(path: &Path, bytes: &[u8], seconds: u64) {
+pub(super) fn file(path: &Path, bytes: &[u8], seconds: u64) {
     write(path, bytes);
     fs::OpenOptions::new()
         .write(true)
@@ -27,7 +28,7 @@ fn file(path: &Path, bytes: &[u8], seconds: u64) {
 
 /// Source `local/src` and target `dest/src`: `a`, `b/deep` and `d/e` hold
 /// the same files on both sides (equal keys); `c` and `d` differ.
-fn trees(root: &Path) -> (PathBuf, PathBuf) {
+pub(super) fn trees(root: &Path) -> (PathBuf, PathBuf) {
     let source = root.join("local/src");
     let dest = root.join("dest");
     for base in [&source, &dest.join("src")] {
@@ -44,7 +45,7 @@ fn trees(root: &Path) -> (PathBuf, PathBuf) {
     (source, dest)
 }
 
-fn files_under(root: &Path) -> BTreeMap<String, Vec<u8>> {
+pub(super) fn files_under(root: &Path) -> BTreeMap<String, Vec<u8>> {
     fn walk(dir: &Path, base: &Path, out: &mut BTreeMap<String, Vec<u8>>) {
         for entry in fs::read_dir(dir).expect("read dir") {
             let path = entry.expect("entry").path();
@@ -71,7 +72,7 @@ struct Merged {
     tree: BTreeMap<String, Vec<u8>>,
 }
 
-fn merging() -> FolderConflictPolicy {
+pub(super) fn merging() -> FolderConflictPolicy {
     FolderConflictPolicy::new(FolderConflict::Merge)
 }
 
@@ -95,7 +96,7 @@ fn merge(source: &Path, dest: &Path, keyed: bool) -> Merged {
 }
 
 /// The numbers a surface shows for a finished merge.
-fn counts(finished: &Finished) -> [u64; 7] {
+pub(super) fn counts(finished: &Finished) -> [u64; 7] {
     let progress = &finished.progress;
     [
         progress.replaced,

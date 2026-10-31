@@ -109,9 +109,23 @@ fn forward(items: &mut Items<'_>, item: KeyedWalkItem) -> io::Result<()> {
             items.flush()?;
             emit(items.sink, items.id, &Frame::FolderRun(rel))
         }
-        KeyedWalkItem::Key { rel, key, same } => {
+        KeyedWalkItem::Key {
+            rel,
+            key,
+            same,
+            tally,
+        } => {
             items.flush()?;
-            emit(items.sink, items.id, &Frame::FolderKey { rel, key, same })
+            emit(
+                items.sink,
+                items.id,
+                &Frame::FolderKey {
+                    rel,
+                    key,
+                    same,
+                    tally,
+                },
+            )
         }
     }
 }

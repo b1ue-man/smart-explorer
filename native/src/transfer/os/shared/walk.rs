@@ -70,6 +70,15 @@ pub(crate) enum WalkEvent {
         id: Option<String>,
         md5: Option<String>,
     },
+    /// A folder the caller settled without a listing (`WalkOptions::settled`):
+    /// everything below it is equal at the target. It is neither listed nor
+    /// sent as `Dir`; `files` and `bytes` are what its subtree holds.
+    Equal {
+        path: String,
+        rel: String,
+        files: u64,
+        bytes: u64,
+    },
     /// Left out on purpose (the active app trash); not an error.
     Omitted { path: String },
     /// Not transferred: listing failed, link or special file, invalid or
@@ -80,7 +89,7 @@ pub(crate) enum WalkEvent {
 }
 
 #[derive(Default)]
-pub(crate) struct WalkOptions {
+pub(crate) struct WalkOptions<'a> {
     pub filter: Option<RemoteFilterCtx>,
     /// Emit folder events; unfiltered tree copies keep empty folders.
     pub folders: bool,
@@ -91,6 +100,10 @@ pub(crate) struct WalkOptions {
     /// Names may contain `\`: local copies on Unix, where it is an ordinary
     /// character. Every other rule of `vfs::validate_child_name` still holds.
     pub allow_backslash: bool,
+    /// Asked for every folder (a tree copy without filter) before it is
+    /// listed: a folder it settles is reported as `WalkEvent::Equal` and
+    /// neither listed nor sent. Never asked for a flattened or filtered walk.
+    pub settled: Option<Settled<'a>>,
 }
 
 struct Pending {
@@ -119,7 +132,7 @@ struct Shared {
 
 struct Walk<'a> {
     lister: &'a dyn Lister,
-    options: &'a WalkOptions,
+    options: &'a WalkOptions<'a>,
     flow: &'a Arc<Flow>,
     cancel: &'a AtomicBool,
     emit: &'a (dyn Fn(WalkEvent) -> bool + Sync),
@@ -135,7 +148,7 @@ struct Walk<'a> {
 pub(crate) fn walk(
     lister: &dyn Lister,
     roots: &[WalkRoot],
-    options: &WalkOptions,
+    options: &WalkOptions<'_>,
     flow: &Arc<Flow>,
     cancel: &AtomicBool,
     emit: &(dyn Fn(WalkEvent) -> bool + Sync),
@@ -429,6 +442,14 @@ impl Walk<'_> {
                     return true;
                 }
             }
+            if let Some(tally) = self.settled(&rel, parent.depth + 1) {
+                return self.send(WalkEvent::Equal {
+                    path,
+                    rel,
+                    files: tally.files,
+                    bytes: tally.bytes,
+                });
+            }
             if self.options.folders
                 && !self.options.flatten
                 && !self.send(WalkEvent::Dir {
@@ -463,6 +484,9 @@ impl Walk<'_> {
 
 #[path = "walk_roots.rs"]
 mod roots;
+#[path = "walk_settled.rs"]
+mod settled;
+pub(crate) use settled::{Settled, DEPTH_LIMIT};
 
 #[cfg(test)]
 #[path = "walk_tests.rs"]

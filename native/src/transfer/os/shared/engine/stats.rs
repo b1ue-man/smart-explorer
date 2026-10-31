@@ -257,6 +257,18 @@ impl Stats {
         self.update[decision as usize].fetch_add(1, Ordering::AcqRel);
     }
 
+    /// A folder settled as a whole by its key (`update_keys.rs`): its `files`
+    /// and `bytes` count exactly as each file would one by one (found, equal,
+    /// credited, skipped), without any of them being looked at.
+    pub(crate) fn equal_folder(&self, files: u64, bytes: u64) {
+        self.files_total.fetch_add(files, Ordering::AcqRel);
+        self.bytes_total.fetch_add(bytes, Ordering::AcqRel);
+        self.update[Decision::Equal as usize].fetch_add(files, Ordering::AcqRel);
+        self.bytes_done.fetch_add(bytes, Ordering::AcqRel);
+        self.skipped.fetch_add(files, Ordering::AcqRel);
+        self.progressed();
+    }
+
     /// A replacement the target could not take: the file is kept beside its
     /// counterpart instead (counted as kept, no longer as replaced).
     pub(crate) fn replace_refused(&self) {

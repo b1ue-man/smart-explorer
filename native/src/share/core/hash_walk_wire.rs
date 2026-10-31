@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::list_batch_wire::FsOmission;
-use crate::vfs::{HashWalkEntry, HashWalkItem, HashWalkMeta};
+use crate::vfs::{HashWalkEntry, HashWalkItem, HashWalkMeta, KeyTally};
 
 fn is_false(value: &bool) -> bool {
     !*value
@@ -39,12 +39,15 @@ pub(crate) enum FsHashWalkMessage {
         rel: String,
     },
     /// `hash_walk_keys_v1`: the key of the folder `rel` (64 lowercase hex
-    /// digits); `same`: its subtree is the known one and was not sent.
+    /// digits); `same`: its subtree is the known one and was not sent;
+    /// `tally`: what its subtree holds (a keys-only walk sends it).
     Key {
         rel: String,
         key: String,
         #[serde(default, skip_serializing_if = "is_false")]
         same: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tally: Option<KeyTally>,
     },
 }
 

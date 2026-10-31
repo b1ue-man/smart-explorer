@@ -1,7 +1,7 @@
 //! Data types of the optional backend extensions (`BackendExtensions`):
 //! tolerant listings, target limits, stage finishing, host-side duplicate
 //! search, hash walks, recycling and change subscriptions.
-use super::VfsMeta;
+use super::{KeyTally, VfsMeta};
 use crate::types::{win32_name_issue, Win32NameIssue};
 
 /// Why an existing entry is missing from a listing or walk. An omission is
@@ -316,11 +316,13 @@ pub enum KeyedWalkItem {
     Item(HashWalkItem),
     /// `same = false`: the folder `rel` and everything below it were sent;
     /// `same = true`: its subtree is the one the caller holds under `key`
-    /// and was not sent.
+    /// and was not sent. `tally`: what the subtree holds, sent with
+    /// `KeyedWalk::KeysOnly` only (`None` from a host that does not count).
     Key {
         rel: String,
         key: [u8; 32],
         same: bool,
+        tally: Option<KeyTally>,
     },
 }
 

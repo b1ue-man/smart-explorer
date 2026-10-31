@@ -39,11 +39,19 @@ fn abgleich_task_walk_key_frames_round_trip() {
             rel: "a/b".into(),
             key: [0xab; 32],
             same: true,
+            tally: None,
         },
         Frame::FolderKey {
             rel: String::new(),
             key: [1; 32],
             same: false,
+            tally: Some(crate::vfs::KeyTally {
+                files: 300,
+                bytes: u64::MAX,
+                omitted: 0,
+                untimed: 2,
+                height: 17,
+            }),
         },
         Frame::FolderRun("a/ä b".into()),
         Frame::ListDirMeta("/home/u".into()),
@@ -77,6 +85,7 @@ fn abgleich_task_walk_key_frames_refuse_partial_known_keys() {
         rel: "r".into(),
         key: [0; 32],
         same: false,
+        tally: None,
     };
     let mut encoded = mark.encode(2).unwrap();
     *encoded.last_mut().unwrap() = 7;
@@ -85,4 +94,36 @@ fn abgleich_task_walk_key_frames_refuse_partial_known_keys() {
     // decode.
     bytes.truncate(bytes.len() - 2);
     assert!(Frame::decode(&bytes).is_err());
+}
+
+#[test]
+fn abgleich_task_folder_key_tally_must_be_whole_and_in_range() {
+    let tally = crate::vfs::KeyTally {
+        files: 1,
+        bytes: 1 << 40,
+        omitted: 0,
+        untimed: 0,
+        height: 3,
+    };
+    let frame = Frame::FolderKey {
+        rel: "a".into(),
+        key: [2; 32],
+        same: false,
+        tally: Some(tally),
+    };
+    let mut bytes = frame.encode(5).unwrap();
+    assert_eq!(bytes.len(), frame.wire_len().unwrap());
+    bytes.pop();
+    assert!(Frame::decode(&bytes).is_err(), "a cut tally cannot decode");
+    // The largest depth survives the varint round trip.
+    let deep = Frame::FolderKey {
+        rel: "a".into(),
+        key: [2; 32],
+        same: false,
+        tally: Some(crate::vfs::KeyTally {
+            height: u32::MAX,
+            ..tally
+        }),
+    };
+    assert_eq!(roundtrip(deep.clone()), deep);
 }

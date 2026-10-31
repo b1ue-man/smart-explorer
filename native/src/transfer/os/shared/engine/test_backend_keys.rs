@@ -25,11 +25,12 @@ impl Fake {
             crate::agent_proto::digest::NONE,
             cancel,
         )?;
-        for (rel, key) in keys {
+        for (rel, key, tally) in keys {
             let _ = tx.send(KeyedWalkItem::Key {
                 rel,
                 key,
                 same: false,
+                tally: Some(tally),
             });
         }
         Ok(true)

@@ -37,6 +37,8 @@ pub(in super::super) struct Counters {
     /// Tolerant folder listings asked of the fake (the file rule's and the
     /// preview's look at a target folder).
     pub listings: AtomicUsize,
+    /// Every folder listing asked of the fake, a walk's included.
+    pub lists: AtomicUsize,
     /// Key walks (`hash_walk_keyed`) the fake answered.
     pub key_walks: AtomicUsize,
 }

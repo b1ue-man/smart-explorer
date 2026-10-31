@@ -1,5 +1,6 @@
 use super::*;
 use crate::types::FilterDef;
+use crate::vfs::KeyTally;
 use std::collections::{HashMap, HashSet};
 use std::io;
 
@@ -131,6 +132,75 @@ fn transfer_engine_task_walk_streams_folders_before_their_contents() {
         .filter(|event| matches!(event, WalkEvent::File { .. }))
         .count();
     assert_eq!(files, 3);
+}
+
+/// A folder the caller settles is one `Equal` event: neither listed, nor
+/// sent as a folder, nor any of its files; the rest of the tree is walked.
+#[test]
+fn abgleich_task_walk_settles_a_folder_without_listing_it() {
+    let tally = KeyTally {
+        files: 1,
+        bytes: 7,
+        ..KeyTally::default()
+    };
+    let asked = Mutex::new(Vec::new());
+    let settled = |rel: &str, depth: usize| {
+        asked.lock().expect("asked").push((rel.to_string(), depth));
+        (rel == "A/B").then_some(tally)
+    };
+    let options = WalkOptions {
+        folders: true,
+        settled: Some(&settled),
+        ..WalkOptions::default()
+    };
+    let lister = tree();
+    let (events, finished) = run(&lister, &[root("/src/A", "A")], &options);
+    assert!(finished);
+    let equal: Vec<_> = events
+        .iter()
+        .filter(|event| matches!(event, WalkEvent::Equal { .. }))
+        .collect();
+    assert_eq!(
+        equal,
+        [&WalkEvent::Equal {
+            path: "/src/A/B".into(),
+            rel: "A/B".into(),
+            files: 1,
+            bytes: 7,
+        }]
+    );
+    assert!(!events.iter().any(is_file("A/B/b.txt")), "{events:?}");
+    assert!(!events.iter().any(is_dir("A/B")), "no folder event for it");
+    position(&events, is_file("A/a.txt"));
+    position(&events, is_dir("A/C"));
+    // The root and C are listed; B is not.
+    assert_eq!(lister.lists.load(Ordering::SeqCst), 2);
+    let mut asked = asked.into_inner().expect("asked");
+    asked.sort();
+    assert_eq!(
+        asked,
+        [
+            ("A".to_string(), 0),
+            ("A/B".to_string(), 1),
+            ("A/C".to_string(), 1)
+        ]
+    );
+}
+
+/// A flattened or a filtered walk never asks: its files are not the files
+/// of the folder.
+#[test]
+fn abgleich_task_walk_never_settles_a_filtered_walk() {
+    let settled = |_: &str, _: usize| -> Option<KeyTally> { panic!("a filtered walk asked") };
+    let mut filter = FilterDef::new();
+    filter.extensions = vec!["txt".to_string()];
+    let options = WalkOptions {
+        filter: crate::transfer::entries::compile_remote_filter(Some((filter, "/src".into()))),
+        settled: Some(&settled),
+        ..WalkOptions::default()
+    };
+    let (_, finished) = run(&tree(), &[root("/src/A", "A")], &options);
+    assert!(finished);
 }
 
 #[test]

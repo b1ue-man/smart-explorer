@@ -153,3 +153,50 @@ fn abgleich_task_share_host_without_keys_capability_is_not_asked() -> io::Result
     assert!(!ran && items.is_empty());
     Ok(())
 }
+
+/// The keys-only phase sends one key per folder with what its subtree holds
+/// and no item (`vfs::KeyTally`): the caller settles an equal folder from it
+/// without a listing.
+#[test]
+fn abgleich_task_share_host_keys_only_counts_each_subtree_and_sends_no_item() -> io::Result<()> {
+    let fixture = CopyPastePeerFixture::for_transfer_engine_task()?;
+    tree(&fixture)?;
+    let request = HashWalkRequest {
+        algorithm: None,
+        min_bytes: 0,
+        meta: true,
+    };
+    let (tx, rx) = crossbeam_channel::unbounded();
+    let ran = vfs::hash_walk_keyed(
+        &*fixture.peer,
+        "/A",
+        request,
+        vfs::KeyedWalk::KeysOnly,
+        tx,
+        &AtomicBool::new(false),
+    )?;
+    assert!(ran);
+    let items: Vec<KeyedWalkItem> = rx.try_iter().collect();
+    let mut tallies = HashMap::new();
+    for item in &items {
+        match item {
+            KeyedWalkItem::Key {
+                rel,
+                tally: Some(tally),
+                same: false,
+                ..
+            } => {
+                tallies.insert(rel.clone(), *tally);
+            }
+            other => panic!("keys only sends tallied keys, got {other:?}"),
+        }
+    }
+    assert_eq!(tallies.len(), 7, "root, leer and d0..d4");
+    let root = tallies[""];
+    // a.txt (3 bytes) and five files of "inhalt N" (8 bytes each).
+    assert_eq!((root.files, root.bytes, root.height), (6, 43, 1));
+    assert!(root.clean(), "{root:?}");
+    assert_eq!((tallies["leer"].files, tallies["leer"].height), (0, 0));
+    assert_eq!((tallies["d3"].files, tallies["d3"].bytes), (1, 8));
+    Ok(())
+}

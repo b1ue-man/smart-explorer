@@ -15,6 +15,16 @@
 //! the comparison per file as before, and the subfolders whose keys are
 //! equal are still left out.
 //!
+//! A key walk also counts what each folder's subtree holds (`KeyTally`: files,
+//! bytes, omissions, files of unknown time, depth). A folder with equal keys
+//! and nothing to look at in its subtree is settled as a whole: the source
+//! walk does not list it either (`Keys::settled`, `WalkOptions::settled`);
+//! its files count as found, equal and skipped from the tally, exactly as
+//! they would one by one. A subtree with an omission (link, special file,
+//! unreadable entry, a name no transfer takes) or a file of unknown time is
+//! listed as before, so the transfer reports it with its path; its
+//! subfolders may still be settled themselves.
+//!
 //! Keys are used where they save a connection: for a remote target. A local
 //! target costs one `stat` per file, less than walking and hashing the whole
 //! tree. A side without the keyed walk (older hosts, SFTP, FTP, WebDAV, SMB,
@@ -28,9 +38,10 @@
 //! decides only which way is taken, never the result.
 use super::super::super::flow::{classify_error, Flow};
 use super::super::super::flow_control::OpOutcome;
+use super::super::super::walk::DEPTH_LIMIT;
 use super::super::super::walk_listers::native;
 use super::super::view::Side;
-use crate::vfs::{Backend, HashWalkRequest, KeyedWalk, KeyedWalkItem};
+use crate::vfs::{Backend, HashWalkRequest, KeyTally, KeyedWalk, KeyedWalkItem};
 use crossbeam_channel::RecvTimeoutError;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -38,7 +49,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 type Key = [u8; 32];
-type KeyMap = HashMap<String, Key>;
+/// Per folder: its key and, from a keys-only walk, what its subtree holds.
+type KeyMap = HashMap<String, (Key, Option<KeyTally>)>;
 
 /// Target folders allowed per source folder before the key walk is dropped.
 const FOLDERS_PER_SOURCE_FOLDER: usize = 16;
@@ -57,10 +69,13 @@ pub(in super::super) struct Place<'a> {
 }
 
 /// The folders (paths below the compared roots, `""` = the root itself) whose
-/// keys are equal on both sides and whose parent's key is not: everything
-/// below them is equal too.
+/// keys are equal on both sides: everything below them is equal too.
 pub(in super::super) struct Keys {
+    /// Equal folders whose parent's key is not equal.
     top: HashSet<String>,
+    /// Equal folders whose source subtree holds nothing to look at, with
+    /// what it holds.
+    settled: HashMap<String, KeyTally>,
 }
 
 impl Keys {
@@ -78,18 +93,35 @@ impl Keys {
         }
     }
 
+    /// What the folder `dir` (in `depth` below the walk's root) holds when its
+    /// key is equal and its subtree needs no look of its own: the caller
+    /// neither lists it nor compares a file in it. `None` when the folder is
+    /// not equal, holds an omission or a file of unknown time, or a listing
+    /// would reach deeper than a walk lists (and report it).
+    pub(in super::super) fn settled(&self, dir: &str, depth: usize) -> Option<KeyTally> {
+        let tally = *self.settled.get(dir)?;
+        (depth.saturating_add(tally.height as usize) < DEPTH_LIMIT).then_some(tally)
+    }
+
     fn of(source: &KeyMap, target: &KeyMap) -> Option<Self> {
-        let equal: HashSet<&str> = source
+        let equal: HashMap<&str, Option<KeyTally>> = source
             .iter()
-            .filter(|(rel, key)| target.get(*rel) == Some(*key))
-            .map(|(rel, _)| rel.as_str())
+            .filter(|(rel, (key, _))| target.get(*rel).map(|(other, _)| other) == Some(key))
+            .map(|(rel, (_, tally))| (rel.as_str(), *tally))
             .collect();
         let top: HashSet<String> = equal
-            .iter()
+            .keys()
             .filter(|rel| !has_equal_ancestor(&equal, rel))
             .map(|rel| (*rel).to_string())
             .collect();
-        (!top.is_empty()).then_some(Self { top })
+        let settled: HashMap<String, KeyTally> = equal
+            .iter()
+            .filter_map(|(rel, tally)| {
+                let tally = (*tally)?;
+                tally.clean().then(|| ((*rel).to_string(), tally))
+            })
+            .collect();
+        (!top.is_empty()).then_some(Self { top, settled })
     }
 }
 
@@ -97,11 +129,11 @@ fn parent(rel: &str) -> &str {
     rel.rsplit_once('/').map_or("", |(parent, _)| parent)
 }
 
-fn has_equal_ancestor(equal: &HashSet<&str>, rel: &str) -> bool {
+fn has_equal_ancestor(equal: &HashMap<&str, Option<KeyTally>>, rel: &str) -> bool {
     let mut current = rel;
     while !current.is_empty() {
         current = parent(current);
-        if equal.contains(current) {
+        if equal.contains_key(current) {
             return true;
         }
     }
@@ -173,7 +205,11 @@ fn side_keys(place: Place<'_>, cancel: &AtomicBool, bound: Option<&Bound>) -> Op
                 cancel,
             )
             .ok()?;
-            Some(keys.into_iter().collect())
+            Some(
+                keys.into_iter()
+                    .map(|(rel, key, tally)| (rel, (key, Some(tally))))
+                    .collect(),
+            )
         }
         Side::Remote(backend) => remote_keys(backend, place, cancel, bound),
     }
@@ -206,8 +242,10 @@ fn remote_keys(
         });
         loop {
             match rx.recv_timeout(POLL) {
-                Ok(KeyedWalkItem::Key { rel, key, .. }) => {
-                    keys.insert(rel, key);
+                Ok(KeyedWalkItem::Key {
+                    rel, key, tally, ..
+                }) => {
+                    keys.insert(rel, (key, tally));
                 }
                 Ok(_) | Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => break,

@@ -6,7 +6,7 @@ use super::super::super::update::{compare, Keys, Place};
 use super::{Context, Node};
 use crate::transfer::engine_names::join_rel;
 use crate::transfer::{FolderConflictPreview, TransferJob};
-use crate::vfs::VfsMeta;
+use crate::vfs::{KeyTally, VfsMeta};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::AtomicBool;
 
@@ -112,6 +112,17 @@ pub(super) fn equal_keys(
         flow: None,
     };
     compare(source, target, cancel)
+}
+
+/// What the folder of `node` holds when its key is the key of its target
+/// folder and nothing in its subtree needs a look (`Keys::settled`): its
+/// files count as equal and the folder is listed at neither side. Not for a
+/// filtered job, whose count leaves files out.
+pub(super) fn settled_by_key(context: &Context<'_>, node: &Node) -> Option<KeyTally> {
+    if node.target_absent || context.filter.is_some() {
+        return None;
+    }
+    context.keys.as_ref()?.settled(&node.inner, node.depth)
 }
 
 /// Whether the folder of `node` has the key of its target folder. A file with

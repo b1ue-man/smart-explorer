@@ -118,6 +118,8 @@ impl SelectionSource {
                             is_dir: false,
                         });
                     }
+                    // This walk settles no folder (`WalkOptions::settled` unset).
+                    WalkEvent::Equal { .. } => {}
                     WalkEvent::Omitted { .. } => listing.omitted += 1,
                     WalkEvent::Problem { path, message } => listing.problems.push((path, message)),
                     // Remote selections have no access gate; kept for completeness.

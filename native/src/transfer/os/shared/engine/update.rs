@@ -38,6 +38,13 @@
 //! folders are not even asked for. Only the folders whose keys differ take
 //! the way above. A source file with an unknown time (0) never takes the key
 //! way: the rule keeps both for it.
+//!
+//! The key walk also counts what each folder's subtree holds, so a folder
+//! with equal keys is not listed at the source either: discovery asks
+//! `settled_folder` before it lists a folder, and a settled one is one
+//! `WalkEvent::Equal` whose files and bytes are counted as found, equal and
+//! skipped at once (`Stats::equal_folder`). A subtree with an omission or a
+//! file of unknown time is listed as before.
 use super::super::engine_names::{base_name, parent_path, parent_rel};
 use super::super::flow::Flow;
 use super::super::walk_listers::native;
@@ -50,7 +57,7 @@ use super::Engine;
 use crate::transfer::update_rule::{classify_local_time, window_ms, Case, Replacing, Stamp};
 use crate::transfer::{FolderConflict, Layout, RecoveryMode};
 use crate::types::Conflict;
-use crate::vfs::{LocalBackend, MtimePrecision};
+use crate::vfs::{KeyTally, LocalBackend, MtimePrecision};
 use std::io;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -173,6 +180,32 @@ impl Engine<'_> {
     /// Whether the key of the folder `dir` of `root` is equal at both sides:
     /// everything in it is equal and needs no look at the target.
     fn keys_cover(&self, root: &MergeRoot, dir: &str) -> bool {
+        self.root_keys(root).is_some_and(|keys| keys.covers(dir))
+    }
+
+    /// What the folder `rel` (a planned path, in `depth` below its walk root)
+    /// holds when its key is equal at both sides and its subtree needs no
+    /// look of its own: the source walk neither lists nor sends it, and the
+    /// files in it count as equal (`WalkEvent::Equal`). `None` for a folder
+    /// that takes the way file by file: not equal, an omission or a file of
+    /// unknown time below it, a filtered or flattened job, a resumed one.
+    pub(super) fn settled_folder(&self, rel: &str, depth: usize) -> Option<KeyTally> {
+        // A resumed job keeps its receipts file by file; a copy inside one
+        // namespace excludes its own new destination from the walk, which a
+        // tally of the whole subtree would count.
+        if self.resume
+            || self.view.recovery == RecoveryMode::Resume
+            || !self.keeps_folders()
+            || self.view.source.same_namespace(self.view.target)
+        {
+            return None;
+        }
+        let (root, dir) = self.merge_root_of(rel, true)?;
+        self.root_keys(root)?.settled(dir, depth)
+    }
+
+    /// The folders of `root` whose keys are equal, found once.
+    fn root_keys<'r>(&self, root: &'r MergeRoot) -> Option<&'r Keys> {
         root.equal
             .get_or_init(|| {
                 let source = Place {
@@ -189,7 +222,6 @@ impl Engine<'_> {
                 compare(source, target, self.stop_flag())
             })
             .as_ref()
-            .is_some_and(|keys| keys.covers(dir))
     }
 
     /// Whether `file` lies in a folder with equal keys at both sides. A file
@@ -433,6 +465,9 @@ mod keys_tests;
 #[cfg(test)]
 #[path = "abgleich_task_replace_tests.rs"]
 mod replace_tests;
+#[cfg(test)]
+#[path = "abgleich_task_source_keys_tests.rs"]
+mod source_keys_tests;
 #[cfg(test)]
 #[path = "update_tests.rs"]
 mod tests;

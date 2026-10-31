@@ -213,12 +213,23 @@ fn walk_with<T: Send>(
                     publish(&tx, cancel, item).await?;
                 }
                 FsResponse::HashWalk {
-                    message: FsHashWalkMessage::Key { rel, key, same },
+                    message:
+                        FsHashWalkMessage::Key {
+                            rel,
+                            key,
+                            same,
+                            tally,
+                        },
                 } => {
                     let key = folder_key(&key)
                         .filter(|_| rel.is_empty() || peer_stream::relative(&rel))
                         .ok_or_else(|| peer_stream::invalid("Ungültiger Ordnerschlüssel"))?;
-                    let item = wrap(KeyedWalkItem::Key { rel, key, same })?;
+                    let item = wrap(KeyedWalkItem::Key {
+                        rel,
+                        key,
+                        same,
+                        tally,
+                    })?;
                     publish(&tx, cancel, item).await?;
                 }
                 FsResponse::HashWalk {

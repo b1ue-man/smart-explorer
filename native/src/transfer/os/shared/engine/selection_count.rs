@@ -14,7 +14,10 @@
 //! A source folder with the key of the same-named target folder
 //! (`update::compare`, keys formed where the files are) is equal as a whole:
 //! its target folder is not listed and its files count as equal without a
-//! comparison each; the source is still listed for the names and the count.
+//! comparison each. When nothing in its subtree needs a look either (no
+//! omission, no file of unknown time, `Keys::settled`), the source folder is
+//! not listed too: the key walk's tally gives the count, and no sample names
+//! come from it.
 //!
 //! The five counts describe the file rule "neuere ersetzen ältere"; the
 //! surfaces show them only for a job that applies the rule
@@ -35,7 +38,7 @@ use std::time::Duration;
 
 #[path = "selection_count_target.rs"]
 mod target;
-use target::{equal_by_key, equal_keys, read_target, Target};
+use target::{equal_by_key, equal_keys, read_target, settled_by_key, Target};
 
 /// How long an idle thread waits for the others before it looks again.
 const WAIT: Duration = Duration::from_millis(100);
@@ -240,6 +243,10 @@ fn merge(state: &mut Counting, found: Found) {
 /// Counts the files of one source folder and finds its subfolders.
 fn count_folder(context: &Context<'_>, node: &Node) -> Found {
     let mut found = Found::default();
+    if let Some(tally) = settled_by_key(context, node) {
+        found.equal = tally.files;
+        return found;
+    }
     let listed = match crate::vfs::list_dir_tolerant(context.source, &node.path) {
         Ok(listed) => listed,
         Err(_) => {

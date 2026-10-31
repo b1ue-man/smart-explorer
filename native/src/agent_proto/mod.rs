@@ -133,7 +133,8 @@ pub use features::{
 };
 pub(crate) use folder_key::{
     entry_part, failure_part, folder_key, known_prefix, omission_part, parse_known, run_digest,
-    EntryKind, FolderKey, KeyEmit, KeyTree, KnownKey, Mode as KeyMode, RunKeys, MAX_KNOWN_KEYS,
+    EntryKind, FolderKey, KeyEmit, KeyTree, KnownKey, Mode as KeyMode, RunKeys, Shape as KeyShape,
+    MAX_KNOWN_KEYS,
 };
 pub use fs::{is_pseudo_dir, list_local, stat_local, walk_local, WalkCounter};
 pub(crate) use local_platform::available_space;

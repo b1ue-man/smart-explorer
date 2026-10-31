@@ -98,6 +98,14 @@ impl Walk<'_> {
             return self.problem(&root.path, message);
         }
         if listed.is_dir {
+            if let Some(tally) = self.settled(&root.rel, 0) {
+                return self.send(WalkEvent::Equal {
+                    path: root.path.clone(),
+                    rel: root.rel.clone(),
+                    files: tally.files,
+                    bytes: tally.bytes,
+                });
+            }
             if self.options.folders
                 && !self.options.flatten
                 && !self.send(WalkEvent::Dir {

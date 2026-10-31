@@ -13,6 +13,11 @@
 //! - the folder's own failure (could not be read to its end): reason code;
 //! - every subfolder that was walked: its name and its key.
 //!
+//! Beside its key, a `Mode::KeysOnly` walk reports what each folder's subtree
+//! holds (`vfs::KeyTally`: files, bytes, omissions, files of unknown time,
+//! folder depth), so a caller that finds two folders equal by key accounts
+//! for everything in them without listing either side.
+//!
 //! Folder sizes and times, creation times, the system flag and omission texts
 //! are left out: the comparison does not use them, and they differ between
 //! two copies of the same tree. Items are sorted by their encoding, so the
@@ -32,6 +37,7 @@ use std::collections::HashSet;
 use std::io;
 
 use super::sha256::Sha256;
+use crate::vfs::KeyTally;
 
 #[path = "folder_key_tree.rs"]
 mod tree;
@@ -185,12 +191,23 @@ pub(crate) fn parse_known(bytes: &[u8]) -> io::Result<HashSet<KnownKey>> {
         .collect())
 }
 
+/// What an entry of a run is, for its key part and for the tally.
+#[derive(Clone, Copy)]
+pub(crate) struct Shape<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) kind: EntryKind,
+    pub(crate) size: u64,
+    pub(crate) mtime_ms: i64,
+}
+
 /// What one thread collects for the folder it reads.
 pub(crate) struct RunKeys<I> {
     pub(crate) rel: String,
     parts: Vec<Vec<u8>>,
     items: Vec<I>,
     bytes: usize,
+    /// What the run itself holds (subfolders add theirs once complete).
+    tally: KeyTally,
     /// Subfolder entries, and the children whose omission followed them.
     dirs: Vec<String>,
     unopened: HashSet<String>,
@@ -203,6 +220,7 @@ impl<I> RunKeys<I> {
             parts: Vec::new(),
             items: Vec::new(),
             bytes: 0,
+            tally: KeyTally::default(),
             dirs: Vec::new(),
             unopened: HashSet::new(),
         }
@@ -230,29 +248,43 @@ impl<I> RunKeys<I> {
     }
 
     /// An entry of this folder (`part` from `entry_part`).
-    pub(crate) fn entry(
-        &mut self,
-        name: &str,
-        kind: EntryKind,
-        part: Vec<u8>,
-        item: I,
-        cost: usize,
-    ) {
-        if kind == EntryKind::Dir {
-            self.dirs.push(name.to_string());
+    pub(crate) fn entry(&mut self, shape: Shape<'_>, part: Vec<u8>, item: I, cost: usize) {
+        match shape.kind {
+            EntryKind::File => {
+                self.tally.files = self.tally.files.saturating_add(1);
+                self.tally.bytes = self.tally.bytes.saturating_add(shape.size);
+                if shape.mtime_ms == 0 {
+                    self.tally.untimed = self.tally.untimed.saturating_add(1);
+                }
+            }
+            EntryKind::Dir => self.dirs.push(shape.name.to_string()),
+            EntryKind::Link | EntryKind::Special => {}
+        }
+        // A link, a special file and a name no transfer takes are reported by
+        // the transfer's own walk: one omission each.
+        if matches!(shape.kind, EntryKind::Link | EntryKind::Special)
+            || crate::vfs::name_is_unusual(shape.name)
+        {
+            self.omit_one();
         }
         self.push(part, item, cost);
+    }
+
+    fn omit_one(&mut self) {
+        self.tally.omitted = self.tally.omitted.saturating_add(1);
     }
 
     /// An omission of the child `name`: a subfolder entry it follows is not
     /// walked (could not be opened, pseudo file system).
     pub(crate) fn omission(&mut self, name: &str, reason: u8, item: I, cost: usize) {
         self.unopened.insert(name.to_string());
+        self.omit_one();
         self.push(omission_part(name, reason), item, cost);
     }
 
     /// The folder itself failed.
     pub(crate) fn failure(&mut self, reason: u8, item: I, cost: usize) {
+        self.omit_one();
         self.push(failure_part(reason), item, cost);
     }
 

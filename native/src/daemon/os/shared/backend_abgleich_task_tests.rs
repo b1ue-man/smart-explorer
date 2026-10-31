@@ -146,6 +146,16 @@ fn abgleich_task_service_relays_the_key_phases() {
         })
         .collect();
     assert_eq!(named.len(), 3, "root, a and b");
+    // Each key carries what its subtree holds, relayed unchanged.
+    let tally = keys
+        .iter()
+        .find_map(|item| match item {
+            vfs::KeyedWalkItem::Key { rel, tally, .. } if rel.is_empty() => *tally,
+            _ => None,
+        })
+        .expect("the root's tally");
+    assert_eq!((tally.files, tally.bytes, tally.height), (2, 2, 1));
+    assert!(tally.clean());
     // Phase 2: the run of `a` alone.
     let folders = vec!["a".to_string()];
     let (ran, runs) = keyed(&service, &root, vfs::KeyedWalk::Runs { folders: &folders });

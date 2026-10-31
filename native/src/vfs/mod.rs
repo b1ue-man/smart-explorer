@@ -82,6 +82,8 @@ mod confined_local_platform;
 pub(crate) use confined_local::ConfinedLocalBackend;
 #[path = "core/fs_profile.rs"]
 mod fs_profile;
+#[path = "core/key_tally.rs"]
+mod key_tally;
 #[path = "os/shared/local.rs"]
 mod local;
 #[path = "os/shared/local_dirs.rs"]
@@ -147,6 +149,7 @@ pub use self::extension_types::{
     StageFinished, TargetLimits, VfsListing, VfsOmission,
 };
 pub use self::extensions::{BackendExtensions, VersionArchivePolicy};
+pub use self::key_tally::{name_is_unusual, KeyTally};
 pub use self::local_extensions::{
     local_mount_boundary, local_volume_identity, LocalMountBoundaries,
 };

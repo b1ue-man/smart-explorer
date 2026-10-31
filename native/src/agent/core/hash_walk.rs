@@ -182,7 +182,17 @@ pub(super) fn walk_keyed(
                 Ok(())
             }
             Frame::FolderRun(rel) => forward(KeyedWalkItem::Run { rel }),
-            Frame::FolderKey { rel, key, same } => forward(KeyedWalkItem::Key { rel, key, same }),
+            Frame::FolderKey {
+                rel,
+                key,
+                same,
+                tally,
+            } => forward(KeyedWalkItem::Key {
+                rel,
+                key,
+                same,
+                tally,
+            }),
             other => Err(unexpected("keyed hash walk", &other)),
         });
         match result {
