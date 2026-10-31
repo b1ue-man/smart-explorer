@@ -3,7 +3,10 @@
 //! „Bestätigen“, „Abbrechen“ and the Direct code's rights. A change is one
 //! profile transaction (`connection_rights_actions.rs`, with the same host
 //! checks as every other surface), persisted before the worker reloads and
-//! applies it. The client calls never start a worker.
+//! applies it. „Bestätigen“ runs under the Exec-grant lock; when it changes
+//! commands, terminal or screen it goes through the Exec-grant journal
+//! (W8, `exec_grant_journal_rights.rs`). Only the client call of
+//! „Bestätigen“ starts a worker (it needs the journal); the others never do.
 use crate::daemon::ipc_host::ShareHost;
 use crate::daemon::ipc_protocol::{AccessIpcReply, AccessIpcRequest};
 use crate::share::connection_rights::{ConnectionRights, PresetView, RightsTarget};
@@ -36,9 +39,11 @@ impl ShareHost {
                 let profiles = ShareProfiles::load_checked(home())?;
                 return Ok(rights_of(&profiles, false));
             }
-            AccessIpcRequest::ConfirmRights { target, rights } => {
-                actions::confirm_connection_rights(home(), &target, &rights)?
-            }
+            AccessIpcRequest::ConfirmRights {
+                target,
+                rights,
+                added,
+            } => self.confirm_rights_journaled(&target, &rights, &added)?,
             AccessIpcRequest::CancelRights { target } => {
                 actions::cancel_connection_rights(home(), &target)?
             }
@@ -55,7 +60,6 @@ impl ShareHost {
     }
 }
 
-#[allow(dead_code)] // Client side for the GUI packages (plan 2026-10-31 G2/G3).
 fn expect_rights(
     reply: AccessIpcReply,
 ) -> Result<(Vec<PendingRightsView>, Option<ConnectionRights>, bool), String> {
@@ -87,13 +91,20 @@ pub(crate) fn pending_connection_rights(
     Ok((pending, code_rights))
 }
 
-/// „Bestätigen“ over IPC; returns whether anything changed.
-#[allow(dead_code)] // Client side for the GUI packages (plan 2026-10-31 G2/G3).
+/// „Bestätigen“ over IPC (starts the worker when needed, like every other
+/// change of commands, terminal or screen); returns whether anything
+/// changed. `added` (label, path) become Direct exports in the same step.
 pub(crate) fn confirm_connection_rights(
     target: RightsTarget,
     rights: ConnectionRights,
+    added: Vec<(String, String)>,
 ) -> Result<bool, String> {
-    let reply = super::request(AccessIpcRequest::ConfirmRights { target, rights })?;
+    crate::daemon::ensure_worker_ready()?;
+    let reply = super::request(AccessIpcRequest::ConfirmRights {
+        target,
+        rights,
+        added,
+    })?;
     expect_rights(reply).map(|(_, _, changed)| changed)
 }
 

@@ -20,7 +20,7 @@ pub(super) struct RoomArgs {
 #[derive(Subcommand)]
 enum RoomCommand {
     #[command(
-        about = "Create a Share room and print its invite code; --preset sets what members may do"
+        about = "Create a Share room and print its invite code; --preset sets what members may do (folders all: a copy of the Direct folders of now, later ones are not added)"
     )]
     Create {
         #[arg(long, default_value = "", help = "Local room display name")]

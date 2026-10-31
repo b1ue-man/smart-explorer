@@ -106,6 +106,14 @@ impl ShareProfiles {
                         decision.request_id.clone(),
                         decision.decision_revision,
                     );
+                    if decision.decision == DirectDecisionKind::Accepted
+                        && grant.state == DirectGrantState::Ignored
+                    {
+                        // W6: a new request of a revoked or ignored device
+                        // is a new connection; its old rights do not
+                        // return without confirmation (F1).
+                        new_connection = Some(RightsOrigin::Readmitted);
+                    }
                 }
                 grant.device_name = peer.device_name.clone();
                 grant.node_id = peer.node_id.clone();

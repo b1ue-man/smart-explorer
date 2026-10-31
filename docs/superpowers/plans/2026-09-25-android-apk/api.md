@@ -804,11 +804,13 @@ Request {requestId, contactId:String?, name, stateText, canAccept, canReject, ca
 Nicht auf Android: LAN-Uplink, Anfragen im Altformat, Exec als anderes Konto.
 
 ### 5.1 Rechte beim Verbinden (Plan 2026-10-31 §F, F1–F7, Paket G1)
-Grundsatz: Jede neue Verbindung (Annahme einer Direkt-Anfrage, automatische Annahme, PIN-Kopplung auf
+Grundsatz: Jede neue Verbindung (Annahme einer Direkt-Anfrage, auch der neuen Anfrage eines widerrufenen
+oder ignorierten Geräts mit Herkunft `readmitted`, automatische Annahme, PIN-Kopplung auf
 beiden Seiten, „Auch meine Freigaben öffnen“, Hintergrund-Reparatur, Gerät mit neuem Schlüssel, wieder
 erlaubte Freigabe ohne Rechte, erstellter und beigetretener Raum) entsteht **ohne jedes Recht** und steht
-in `pendingRights` („Rechte offen“). `share.confirmRights` setzt die gewählten Rechte in einer
-Profiltransaktion; `share.cancelRights` behält die Verbindung ohne Rechte. Vorher gewählte Rechte am
+in `pendingRights` („Rechte offen“). `share.confirmRights` setzt die gewählten Rechte als Ganzes (alles
+oder nichts; ändert es Befehle, Terminal oder Bildschirm, über das Exec-Grant-Journal des
+Hintergrunddiensts, der dafür bei Bedarf startet); `share.cancelRights` behält die Verbindung ohne Rechte. Vorher gewählte Rechte am
 Direkt-Code (`codeRights`), am PIN-Angebot (`share.discoverable`) oder am Raum (`share.createRoom`) sind die
 Bestätigung im Voraus. Bestehende Freigaben und Räume behalten ihre Rechte; alte Datensätze werden
 unverändert gelesen (Freigabe ohne Ordnerauswahl sieht alle Direkt-Ordner).
@@ -831,9 +833,16 @@ Eingabe: `preset` füllt die Schalter, jedes Feld in `rights` ändert sie; ohne 
 bei `confirmRights` die aktuelle Rechte der Verbindung, bei `setCodeRights` die aktuellen Code-Rechte,
 sonst „Keine Rechte“. `folders.paths` sind exakte `path`-Werte aus `exports.direct` (für Räume auch aus
 `exports.rooms`); ein anderer Pfad ist `conflict`. Ein Ordner hinzuzufügen geht zuerst über
-`share.addExport`. Für Räume: `folders` sind die Raumfreigaben (`all` = Kopie der Direkt-Ordner),
+`share.addExport`. Für Räume: `folders` sind die Raumfreigaben (`all` = Kopie der Direkt-Ordner zum
+Zeitpunkt des Bestätigens; später hinzugefügte Direkt-Ordner kommen nicht von selbst in den Raum),
 `write` ist `membersMayWrite`, Befehle/Terminal/Bildschirm gelten für alle zugelassenen Mitglieder und für
 später zugelassene.
+Typprüfung (Review 2026-10-31 G4): `preset` ist ein Text oder fehlt/`null`; `rights` ist ein Objekt oder
+fehlt/`null` und nennt nur die Felder `folders, write, commands, terminal, screenView, screenControl,
+validUntil, account`; `folders` ist ein Objekt mit `kind` und nur bei `kind:"selected"` mit `paths`
+(Liste von Texten) und `connections` (Boolean); `write` ist ein Boolean, die vier Entscheidungen und
+`account` sind Texte, `validUntil` ist eine Zahl oder `null` (kein Ende), `clear` ist ein Boolean. Jede
+andere Form ist `invalid` vor jeder Änderung.
 - `share.rightsPresets {}` → `{presets:[{key, label, description, rights:Rights}]}`
 - `share.pendingRights {}` → `{pendingRights:[PendingRights], codeRights:Rights?}` (ebenso in
   `share.status` als `pendingRights` und `codeRights`)
@@ -850,11 +859,18 @@ später zugelassene.
   entfernt die Code-Rechte (Geräte warten dann ohne Rechte)
 
 Daemon-IPC (`IpcRequest::Access`, `daemon/os/shared/ipc_protocol_access.rs`): `rights_presets`,
-`pending_rights`, `confirm_rights {target, rights}`, `cancel_rights {target}`, `set_code_rights {rights?}`;
+`pending_rights`, `confirm_rights {target, rights, added?}` (`added`: neue Direkt-Ordner als
+`[Bezeichnung, Pfad]`, im selben Schritt; mit Exec-Änderung über das Exec-Grant-Journal Version 3,
+`daemon/os/shared/exec_grant_journal_rights.rs`), `cancel_rights {target}`, `set_code_rights {rights?}`;
 Antworten `rights_presets {presets}` und `rights {pending, code_rights, changed}` (Rust-Formen
 `ConnectionRights`, `RightsTarget`, `PendingRightsView`, snake_case). CLI: `se share grants presets|pending|
 confirm|cancel`, `--preset` und Einzelschalter an `se share request accept`, `se share request policy
 auto-accept`, `se share discoverable`, `se share identity`, `se share room create`, `se share grants set`.
+Gespeicherte Form (Review 2026-10-31 W9): Ein Profil mit Ordnern je Gerät, `pendingRights`, Code-Rechten
+oder Mitgliederrechten eines Raums wird mit `schema_version` 9 geschrieben; Versionen bis 0.5.189 lehnen
+es ab (sie lesen 3 bis 8), statt mehr Rechte zu lesen oder die Felder beim Speichern zu verlieren. Ohne
+diese Datensätze bleibt es Version 8. Das Ereignis der Rechte eines PIN-Angebots erreicht die
+Ereignisliste der GUI-Clients nicht (G7); `share.status` `discovery.offer.rights` liest sie aus dem Snapshot.
 
 FC1-Kompatibilität: Persistente Legacy-Roots ohne `access` behalten RW, alte Grants ohne `write` true,
 alte Raumpolicy ihr bisheriges Schreibrecht. Neue Roots/Konten sind RO, neue Grants/Räume ohne Schreiben,

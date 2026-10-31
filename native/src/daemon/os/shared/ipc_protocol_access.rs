@@ -55,10 +55,15 @@ pub(crate) enum AccessIpcRequest {
     /// F1: the connections whose rights wait („Rechte offen“) and the rights
     /// of the Direct code.
     PendingRights,
-    /// F1 „Bestätigen“: exactly `rights` for `target`, one transaction.
+    /// F1 „Bestätigen“: exactly `rights` for `target`, all or nothing; the
+    /// folders in `added` (label, path) become Direct exports in the same
+    /// step. A change of commands, terminal or screen goes through the
+    /// Exec-grant journal (W8, review 2026-10-31).
     ConfirmRights {
         target: RightsTarget,
         rights: ConnectionRights,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        added: Vec<(String, String)>,
     },
     /// F1 „Abbrechen“: the connection stays without rights.
     CancelRights { target: RightsTarget },

@@ -7,9 +7,16 @@ use super::{default_home, stop_service_locked, ShareHost, ShareHostState};
 #[path = "exec_grant_journal_storage.rs"]
 mod storage;
 
-use storage::{clear_entry, write_entry};
+#[path = "exec_grant_journal_rights.rs"]
+mod rights;
+
+use storage::{clear_entry, decode_entry, write_entry};
 
 const JOURNAL_VERSION: u32 = 2;
+/// An entry of „Bestätigen“ (W8, review 2026-10-31): several grants and
+/// the rest of the connection rights. Daemons that know only version 2
+/// refuse it and fail closed (every grant masked, worker stopped).
+const CONFIRM_JOURNAL_VERSION: u32 = 3;
 const MAX_JOURNAL_BYTES: u64 = 64 * 1024;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -35,6 +42,13 @@ pub(super) struct JournalEntry {
     phase: JournalPhase,
     expected_policy_revision: u64,
     mutation: crate::share::ExecGrantMutation,
+    /// Version 3 only: the further grants of the same confirmation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    more: Vec<rights::GrantStep>,
+    /// Version 3 only: the confirmation itself, persisted in the same
+    /// profile transaction as the grants.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rights: Option<rights::RightsStep>,
 }
 
 impl JournalEntry {
@@ -58,13 +72,31 @@ impl JournalEntry {
             phase,
             expected_policy_revision,
             mutation,
+            more: Vec::new(),
+            rights: None,
         };
         entry.validate()?;
         Ok(entry)
     }
 
+    /// Every grant of the entry with the revision it replaces.
+    fn steps(&self) -> impl Iterator<Item = (&crate::share::ExecGrantMutation, u64)> {
+        std::iter::once((&self.mutation, self.expected_policy_revision)).chain(
+            self.more
+                .iter()
+                .map(|step| (&step.mutation, step.expected_policy_revision)),
+        )
+    }
+
     fn validate(&self) -> Result<(), String> {
-        if self.version != JOURNAL_VERSION {
+        let expected_version = if self.rights.is_some() {
+            CONFIRM_JOURNAL_VERSION
+        } else {
+            JOURNAL_VERSION
+        };
+        if self.version != expected_version
+            || (self.version == JOURNAL_VERSION && !self.more.is_empty())
+        {
             return Err(format!(
                 "unsupported Exec-Grant journal version {}",
                 self.version
@@ -78,12 +110,24 @@ impl JournalEntry {
         {
             return Err("invalid Exec-Grant journal operation id".into());
         }
+        // A confirmation that grants anything anywhere is persisted first;
+        // its revocations reach the worker before that (`execute_locked`).
         let phase_enabled = self.phase == JournalPhase::PendingApply;
-        if self.mutation.policy.grants_any() != phase_enabled {
+        if self
+            .steps()
+            .any(|(mutation, _)| mutation.policy.grants_any())
+            != phase_enabled
+        {
             return Err("Exec-Grant journal phase contradicts desired policy".into());
         }
-        self.mutation
-            .validate_persisted_shape(self.expected_policy_revision)?;
+        let mut targets = Vec::new();
+        for (mutation, expected) in self.steps() {
+            mutation.validate_persisted_shape(expected)?;
+            if targets.contains(&&mutation.target) {
+                return Err("Exec-Grant journal names one grant twice".into());
+            }
+            targets.push(&mutation.target);
+        }
         Ok(())
     }
 }
@@ -141,61 +185,15 @@ pub(super) fn load_pending() -> Result<Option<JournalEntry>, String> {
     Ok(Some(entry))
 }
 
-fn decode_entry(encoded: &[u8]) -> Result<JournalEntry, String> {
-    let mut value: serde_json::Value = serde_json::from_slice(encoded)
-        .map_err(|error| format!("Exec-Grant journal decode: {error}"))?;
-    if value.get("version").and_then(serde_json::Value::as_u64) == Some(1) {
-        migrate_v1_target(&mut value)?;
-    }
-    serde_json::from_value(value).map_err(|error| format!("Exec-Grant journal decode: {error}"))
-}
-
-fn migrate_v1_target(value: &mut serde_json::Value) -> Result<(), String> {
-    let principal = value
-        .pointer("/mutation/principal")
-        .and_then(serde_json::Value::as_object)
-        .ok_or_else(|| "legacy Exec-Grant journal has no exact principal".to_string())?;
-    let field = |name: &str| {
-        principal
-            .get(name)
-            .and_then(serde_json::Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .map(str::to_string)
-            .ok_or_else(|| format!("legacy Exec-Grant journal principal lacks {name}"))
-    };
-    let relation_kind = field("relation_kind")?;
-    let relation_id = field("relation_id")?;
-    let pins = serde_json::json!({
-        "device_id": field("device_id")?,
-        "public_key": field("public_key")?,
-        "fingerprint": field("fingerprint")?,
-        "node_id": field("node_id")?,
-    });
-    let target = match relation_kind.as_str() {
-        "direct" => serde_json::json!({ "Direct": pins }),
-        "room" => {
-            let mut fields = pins
-                .as_object()
-                .cloned()
-                .ok_or_else(|| "legacy Exec-Grant journal pins are invalid".to_string())?;
-            fields.insert("room_id".into(), serde_json::Value::String(relation_id));
-            serde_json::json!({ "RoomMember": fields })
-        }
-        _ => return Err("legacy Exec-Grant journal relation is unsupported".into()),
-    };
-    value["mutation"]["target"] = target;
-    value["version"] = serde_json::json!(JOURNAL_VERSION);
-    Ok(())
-}
-
 pub(super) fn mask_pending(
     profiles: &mut crate::share::ShareProfiles,
     identity: &crate::share::ShareIdentity,
     entry: &JournalEntry,
 ) -> Result<(), String> {
-    entry
-        .mutation
-        .mask_pending_policy(profiles, identity, entry.expected_policy_revision)
+    for (mutation, expected) in entry.steps() {
+        mutation.mask_pending_policy(profiles, identity, expected)?;
+    }
+    Ok(())
 }
 
 pub(super) fn mask_all(profiles: &mut crate::share::ShareProfiles) {
@@ -324,38 +322,31 @@ fn execute_locked(state: &mut ShareHostState, entry: &JournalEntry) -> ExecGrant
     };
     let service = state.service.clone();
     let mut committed = None;
+    // A grant that allows nothing reaches the worker before persistence,
+    // one that allows anything after it. For a single grant this is the
+    // phase order; a confirmation (W8) applies its revocations first.
+    let apply = |grants: bool| -> Result<(), String> {
+        for (mutation, _) in entry.steps() {
+            if mutation.policy.grants_any() == grants {
+                apply_to_worker(service.as_ref(), mutation)?;
+            }
+        }
+        Ok(())
+    };
     let progress = drive_steps(
         entry.phase,
         || {
+            if entry.phase == JournalPhase::PendingApply {
+                apply(false)?;
+            }
             let profiles =
                 crate::share::ShareProfiles::mutate_persisted(Some(default_home()), |profiles| {
-                    entry.mutation.apply_persisted_cas(
-                        profiles,
-                        &identity,
-                        entry.expected_policy_revision,
-                    )
+                    rights::apply_persisted(entry, profiles, &identity)
                 })?;
             committed = Some(profiles);
             Ok(())
         },
-        || match &service {
-            Some(service) => {
-                let applied = service.apply_persisted_exec_grant(
-                    entry.mutation.target.clone(),
-                    entry.mutation.principal.clone(),
-                    entry.mutation.policy.clone(),
-                )?;
-                if applied.target != entry.mutation.target
-                    || applied.principal != entry.mutation.principal
-                    || applied.policy != entry.mutation.policy
-                {
-                    return Err("Share worker acknowledged a different Exec-Grant".into());
-                }
-                Ok(())
-            }
-            None if entry.phase == JournalPhase::PendingDeny => Ok(()),
-            None => Err("Share worker is not active; apply remains pending".into()),
-        },
+        || apply(entry.phase == JournalPhase::PendingApply),
         || clear_entry(&entry.operation_id),
     );
 
@@ -403,6 +394,30 @@ fn execute_locked(state: &mut ShareHostState, entry: &JournalEntry) -> ExecGrant
             entry.phase.retry_state()
         },
         error: progress.error,
+    }
+}
+
+fn apply_to_worker(
+    service: Option<&crate::share::ShareService>,
+    mutation: &crate::share::ExecGrantMutation,
+) -> Result<(), String> {
+    match service {
+        Some(service) => {
+            let applied = service.apply_persisted_exec_grant(
+                mutation.target.clone(),
+                mutation.principal.clone(),
+                mutation.policy.clone(),
+            )?;
+            if applied.target != mutation.target
+                || applied.principal != mutation.principal
+                || applied.policy != mutation.policy
+            {
+                return Err("Share worker acknowledged a different Exec-Grant".into());
+            }
+            Ok(())
+        }
+        None if !mutation.policy.grants_any() => Ok(()),
+        None => Err("Share worker is not active; apply remains pending".into()),
     }
 }
 

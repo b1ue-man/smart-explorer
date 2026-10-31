@@ -24,7 +24,23 @@ pub(crate) fn vault_events() -> (u64, Vec<VaultEventView>) {
     (seq, views)
 }
 
+/// Whether `event` goes out to the GUI clients that poll the backlog. G7
+/// (review 2026-10-31): `DiscoveryEvent::OfferRights` is newer than the
+/// clients of a handover; an older GUI cannot decode a backlog that holds
+/// it. Every client reads an offer's rights from the snapshot instead
+/// (`ShareWorkerSnapshot::discovery_offers`, field `rights`, which older
+/// clients skip as unknown).
+pub(crate) fn reaches_clients(event: &ShareEvent) -> bool {
+    !matches!(
+        event,
+        ShareEvent::Discovery(crate::share::DiscoveryEvent::OfferRights { .. })
+    )
+}
+
 pub(crate) fn push(events: &mut Vec<ShareEvent>, event: ShareEvent) {
+    if !reaches_clients(&event) {
+        return;
+    }
     if matches!(
         &event,
         ShareEvent::Discovery(crate::share::DiscoveryEvent::DiscoveryList { .. })
@@ -42,6 +58,10 @@ pub(crate) fn push(events: &mut Vec<ShareEvent>, event: ShareEvent) {
         events.drain(0..overflow);
     }
 }
+
+#[cfg(test)]
+#[path = "abgleich_task_ui_events_tests.rs"]
+mod abgleich_task_tests;
 
 #[cfg(test)]
 mod tests {

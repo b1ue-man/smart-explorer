@@ -2,8 +2,8 @@ use super::core::{b64, random_token};
 use super::profiles::{
     direct_contact_secret_account, room_secret_account, DirectCode, ProfileRevision, RoomCode,
     ShareProfiles, LEGACY_SHARE_PROFILE_VERSION, OLDEST_SHARE_PROFILE_VERSION,
-    PREVIOUS_SHARE_PROFILE_VERSION, REMOVED_PEERS_PREVIOUS_VERSION, SHARE_PROFILE_VERSION,
-    TOMBSTONE_SHARE_PROFILE_VERSION,
+    PREVIOUS_SHARE_PROFILE_VERSION, REMOVED_PEERS_PREVIOUS_VERSION, RIGHTS_SHARE_PROFILE_VERSION,
+    SHARE_PROFILE_VERSION, TOMBSTONE_SHARE_PROFILE_VERSION,
 };
 use super::types::{
     DirectAccessState, DirectContact, DirectGrantState, PeerPresence, RoomProfile, ShareStatus,
@@ -65,7 +65,8 @@ impl ShareProfiles {
         profiles.storage_revision = revision;
         let old_version = profiles.schema_version;
         match profiles.schema_version {
-            SHARE_PROFILE_VERSION => {}
+            // W9: 9 only adds the rights records; read as it is.
+            SHARE_PROFILE_VERSION | RIGHTS_SHARE_PROFILE_VERSION => {}
             REMOVED_PEERS_PREVIOUS_VERSION
             | TOMBSTONE_SHARE_PROFILE_VERSION
             | PREVIOUS_SHARE_PROFILE_VERSION => {
@@ -77,7 +78,7 @@ impl ShareProfiles {
             }
             version => {
                 return Err(format!(
-                    "Nicht unterstuetzte Share-Profilversion {version} (erwartet {OLDEST_SHARE_PROFILE_VERSION} bis {SHARE_PROFILE_VERSION})"
+                    "Nicht unterstuetzte Share-Profilversion {version} (erwartet {OLDEST_SHARE_PROFILE_VERSION} bis {RIGHTS_SHARE_PROFILE_VERSION})"
                 ));
             }
         }
@@ -120,6 +121,7 @@ impl ShareProfiles {
         candidate.reconcile_legacy_grants(super::core::now_secs());
         candidate.recompute_all_identity_conflicts();
         candidate.prune_connection_rights_records();
+        candidate.schema_version = candidate.stored_schema_version();
         candidate
             .validate_direct_ledger()
             .map_err(|error| format!("Share-Profile sind beschaedigt: {error}"))?;

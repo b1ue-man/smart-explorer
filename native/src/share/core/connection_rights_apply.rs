@@ -91,8 +91,9 @@ impl ShareProfiles {
     /// F1: the grant of `device_id` was just created, or now belongs to a new
     /// key, by a new connection. It has no right at all; an accepted grant
     /// takes `advance` (rights chosen in advance: PIN offer) or, for an
-    /// accepted request, the rights of the Direct code, else it waits for
-    /// confirmation. Rights chosen in advance that no longer apply (a folder
+    /// accepted request (also the new request of a revoked or ignored
+    /// device, `Readmitted`, W6), the rights of the Direct code, else it
+    /// waits for confirmation. Rights chosen in advance that no longer apply (a folder
     /// is no longer exported) leave it waiting without rights.
     pub(crate) fn settle_new_direct_grant(
         &mut self,
@@ -126,7 +127,7 @@ impl ShareProfiles {
             return;
         }
         let advance = advance.cloned().or_else(|| {
-            (origin == RightsOrigin::Request)
+            matches!(origin, RightsOrigin::Request | RightsOrigin::Readmitted)
                 .then(|| self.code_rights.clone())
                 .flatten()
         });

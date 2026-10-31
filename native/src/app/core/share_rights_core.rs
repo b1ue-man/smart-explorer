@@ -1,5 +1,7 @@
 //! The real [`RightsBackend`] of the desktop: each button is one profile
-//! transaction of the core (`connection_rights_actions.rs`). Folders picked
+//! transaction of the core (`connection_rights_actions.rs`; „Bestätigen“
+//! with a change of commands, terminal or screen goes through the worker's
+//! Exec-grant journal as one step, W8). Folders picked
 //! in the window become Direct exports inside the same transaction, so
 //! „Abbrechen“ leaves no stray export behind.
 use super::share_rights_model::RightsBackend;
@@ -58,13 +60,9 @@ impl RightsBackend for CoreRights {
         rights: &ConnectionRights,
         added: &[(String, String)],
     ) -> Result<RightsChange, String> {
-        if added.is_empty() {
-            return actions::confirm_connection_rights(self.home.clone(), target, rights);
-        }
-        actions::validate_rights_for_this_host(rights)?;
-        with_added_folders(self.home.clone(), added, |profiles, now| {
-            profiles.confirm_connection_rights(target, rights, now)
-        })
+        // One step with the picked folders; a change of commands, terminal
+        // or screen goes through the worker's Exec-grant journal (W8).
+        actions::confirm_connection_rights_with_folders(self.home.clone(), target, rights, added)
     }
 
     fn cancel(&mut self, target: &RightsTarget) -> Result<RightsChange, String> {

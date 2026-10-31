@@ -166,7 +166,13 @@ pub enum FolderChoice {
     #[default]
     None,
     /// Every Direct folder and saved connection, also ones added later (the
-    /// meaning every grant without a selection keeps).
+    /// meaning every grant without a selection keeps). For a room,
+    /// confirming copies the Direct folders of that moment into the room's
+    /// exports (`connection_rights_rooms.rs`); later Direct folders are not
+    /// added (G5, review 2026-10-31): a folder added for one device would
+    /// otherwise open to every member of every room with „Alle“, members
+    /// this host never confirmed one by one. The surfaces say so (desktop
+    /// and Android folder row, `se share grants confirm --room`).
     All,
     /// Exactly these Direct folders (`SharedRoot::path`), and the exported
     /// saved connections (`/Verbindungen`) when `connections` is set.
@@ -366,7 +372,8 @@ pub enum RightsOrigin {
     Repair,
     /// The device's grant now belongs to a new key.
     IdentityReplaced,
-    /// A blocked or never-confirmed grant was allowed again.
+    /// A blocked or never-confirmed grant was allowed again, or a new
+    /// request of a revoked or ignored device was accepted (W6).
     Readmitted,
     /// A room created on this device.
     RoomCreated,

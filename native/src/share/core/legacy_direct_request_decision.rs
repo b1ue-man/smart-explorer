@@ -176,6 +176,9 @@ pub(super) fn set_exact_grant(
         .find(|grant| grant.device_id == peer.device_id)
     {
         let mut new_key = false;
+        // W6: accepting a request of a revoked or ignored device is a new
+        // connection; its old rights do not return without confirmation.
+        let readmitted = accepted && grant.state == DirectGrantState::Ignored;
         if !exact_grant(grant, peer) {
             if !accepted {
                 profiles.withdraw_direct_key(peer, now);
@@ -209,6 +212,8 @@ pub(super) fn set_exact_grant(
                 None,
                 now,
             );
+        } else if readmitted {
+            profiles.settle_new_direct_grant(&peer.device_id, RightsOrigin::Readmitted, None, now);
         }
         if !accepted {
             profiles.withdraw_direct_key(peer, now);

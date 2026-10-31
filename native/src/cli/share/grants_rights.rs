@@ -33,7 +33,7 @@ pub(super) struct TargetArgs {
     #[arg(conflicts_with = "room",
         add = ArgValueCandidates::new(crate::cli::completions_access::pending_rights_candidates))]
     selector: Option<String>,
-    /// Room profile id, room id or name instead of a device
+    /// Room profile id, room id or name instead of a device. For a room, folders "all" copies the Direct folders of now into the room; folders added later are not added to it
     #[arg(long, value_name = "ROOM",
         add = ArgValueCandidates::new(crate::cli::completions_access::room_candidates))]
     room: Option<String>,

@@ -413,9 +413,16 @@ impl RelationStore for InMemoryRelationStore {
             last_seen: None,
             status: ShareStatus::Waiting,
             members: Vec::new(),
-            exports: self.profiles.default_direct_exports.clone(),
+            // G8: like the production store (`profile_operations.rs`), a
+            // joined room has no folder and waits for its rights (F1).
+            exports: Default::default(),
             policy: crate::share::RoomPolicy::new_room(),
         });
+        self.profiles.mark_room_rights_pending(
+            &room_profile_id,
+            crate::share::connection_rights::RightsOrigin::RoomJoined,
+            super::core::now_secs(),
+        );
         self.room_material
             .insert(room_profile_id.clone(), material.clone());
         Ok(RelationStoreCommit::new(

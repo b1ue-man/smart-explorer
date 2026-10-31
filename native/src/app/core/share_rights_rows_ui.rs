@@ -56,11 +56,14 @@ pub(super) fn folders(ui: &mut egui::Ui, draft: &mut RightsDraft, info: &FolderI
                 );
             }
             FolderMode::All => {
-                ui.label(
-                    RichText::new("Alle Direkt-Ordner, auch später hinzugefügte.")
-                        .small()
-                        .color(theme::muted(ui)),
-                );
+                // G5 (review 2026-10-31): a room takes a copy of the Direct
+                // folders of now (`connection_rights_rooms.rs`).
+                let text = if draft.is_room() {
+                    "Die Direkt-Ordner von jetzt; später hinzugefügte kommen nicht von selbst in den Raum."
+                } else {
+                    "Alle Direkt-Ordner, auch später hinzugefügte."
+                };
+                ui.label(RichText::new(text).small().color(theme::muted(ui)));
             }
             FolderMode::None => {}
             FolderMode::Selected => {

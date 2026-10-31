@@ -15,6 +15,13 @@ use super::types::{DirectContact, DirectGrant, DirectGrantState, PeerPresence, R
 const DIRECT_CONTACT_SECRET_PREFIX: &str = "share:direct-contact:";
 const ROOM_SECRET_PREFIX: &str = "share:room:";
 pub(super) const SHARE_PROFILE_VERSION: u32 = 8;
+/// W9 (review 2026-10-31): a profile that carries rights records of the
+/// connect flow (folders per device, open confirmations, the Direct code's
+/// rights, a room's member access) is written with this version. Versions
+/// up to 0.5.189 accept only 3 to 8 and refuse it, so none of them reads a
+/// device without folders as one with every folder, or saves the profile
+/// without those records. Profiles without them stay version 8.
+pub(super) const RIGHTS_SHARE_PROFILE_VERSION: u32 = 9;
 pub(super) const REMOVED_PEERS_PREVIOUS_VERSION: u32 = 7;
 pub(super) const TOMBSTONE_SHARE_PROFILE_VERSION: u32 = 6;
 pub(super) const PREVIOUS_SHARE_PROFILE_VERSION: u32 = 5;
@@ -104,6 +111,23 @@ fn default_true() -> bool {
 }
 
 impl ShareProfiles {
+    /// The version this profile is written with (W9): 9 when it carries a
+    /// rights record older versions would misread or drop, else 8.
+    pub(crate) fn stored_schema_version(&self) -> u32 {
+        let rooms_use_rights = self.rooms.iter().any(|room| {
+            !room.policy.member_access.is_empty() || !room.exports.device_folders.is_empty()
+        });
+        if !self.pending_rights.is_empty()
+            || self.code_rights.is_some()
+            || !self.default_direct_exports.device_folders.is_empty()
+            || rooms_use_rights
+        {
+            RIGHTS_SHARE_PROFILE_VERSION
+        } else {
+            SHARE_PROFILE_VERSION
+        }
+    }
+
     pub fn direct_contact_id_from_code(&self, code: &str) -> Result<Option<String>, String> {
         let parsed = DirectCode::parse(code)?;
         Ok(self
@@ -140,12 +164,23 @@ impl ShareProfiles {
             } else if state != DirectGrantState::Accepted {
                 g.exec.disable_without_decision(now);
             }
+            // W6: accepting an ignored grant again is a new connection.
+            let readmitted =
+                state == DirectGrantState::Accepted && g.state == DirectGrantState::Ignored;
             g.device_name = presence.device_name.clone();
             g.public_key = presence.public_key.clone();
             g.fingerprint = presence.fingerprint.clone();
             g.node_id = presence.node_id.clone();
             g.state = state;
             g.updated_at = now;
+            if readmitted {
+                self.settle_new_direct_grant(
+                    &presence.device_id,
+                    super::connection_rights::RightsOrigin::Readmitted,
+                    None,
+                    now,
+                );
+            }
         } else {
             self.direct_grants.push(DirectGrant {
                 device_id: presence.device_id.clone(),

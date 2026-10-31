@@ -271,8 +271,9 @@ mod state;
 mod update_stop;
 
 pub(crate) use access_ipc::{
-    access_accounts, access_approvals, decide_access_approval, device_access_rights, exec_notice,
-    mutate_access_grant, ExecNoticeWatch,
+    access_accounts, access_approvals, confirm_connection_rights as confirm_rights_in_worker,
+    decide_access_approval, device_access_rights, exec_notice, mutate_access_grant,
+    ExecNoticeWatch,
 };
 // Only the Android facade calls it (`mobile`, compiled under the same cfg).
 #[cfg(any(target_os = "android", all(unix, test)))]

@@ -127,7 +127,7 @@ private fun FoldersRow(
     Column(Modifier.padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text("Ordner", style = MaterialTheme.typography.labelLarge)
         Text(
-            if (request.target.isRoom) "„Alle“ kopiert deine Direkt-Ordner in den Raum; mit „Auswahl“ bestimmst du die Raumordner."
+            if (request.target.isRoom) "„Alle“ kopiert deine Direkt-Ordner von jetzt in den Raum (später hinzugefügte nicht); mit „Auswahl“ bestimmst du die Raumordner."
             else "Welche deiner freigegebenen Ordner dieses Gerät sieht.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -146,7 +146,14 @@ private fun FoldersRow(
                 }
             }
         }
-        if (kind == FOLDERS_ALL && folders.isEmpty()) Text("Noch kein Ordner freigegeben; „Alle“ gilt für Ordner, die du später hinzufügst.", style = MaterialTheme.typography.bodySmall)
+        // Review 2026-10-31 G5: for a room „Alle“ copies today's Direct folders; later ones are not added.
+        if (kind == FOLDERS_ALL && folders.isEmpty()) {
+            Text(
+                if (request.target.isRoom) "Noch kein Ordner freigegeben; „Alle“ übernimmt die Direkt-Ordner von jetzt, später hinzugefügte kommen nicht von selbst in den Raum."
+                else "Noch kein Ordner freigegeben; „Alle“ gilt für Ordner, die du später hinzufügst.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
         if (kind != FOLDERS_NONE) TextButton(onClick = onAddFolder, enabled = enabled) { Text("Ordner hinzufügen …") }
     }
 }
@@ -171,8 +178,13 @@ private fun ExpiryRow(draft: RightsDraft, enabled: Boolean, onDraft: (RightsDraf
             }
         }
         if (!draft.knows(RIGHTS_FIELD_VALID_UNTIL)) Text("Unverändert", style = MaterialTheme.typography.bodySmall)
+        // Review 2026-10-31 G2: the end binds commands, terminal and the desktop; files never expire (as on the desktop).
+        Text(EXPIRY_SCOPE_TEXT, style = MaterialTheme.typography.bodySmall)
     }
 }
+
+/** What „Ablauf“ ends, word for word as the desktop window says it (`share_rights_rows_ui.rs`). */
+internal const val EXPIRY_SCOPE_TEXT = "Gilt für Befehle, Terminal und Desktop, nicht für Dateien."
 
 /**
  * The compact menu „Rechte für <Gerät/Raum>“ (plan §F, F1/F3/F4): presets on top, one row per right,

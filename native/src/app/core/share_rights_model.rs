@@ -166,6 +166,14 @@ impl RightsDraft {
         self.rights.account = account;
     }
 
+    /// Whether the draft is for a room (its „Alle“ is a copy, G5).
+    pub(in crate::app) fn is_room(&self) -> bool {
+        matches!(
+            self.subject,
+            RightsSubject::Connection(RightsTarget::Room { .. })
+        )
+    }
+
     pub(in crate::app) fn folder_mode(&self) -> FolderMode {
         match self.rights.folders {
             FolderChoice::All => FolderMode::All,

@@ -12,7 +12,6 @@ use super::profile_persistence::{
 };
 use super::profiles::{
     direct_contact_secret_account, room_secret_account, ProfileRevision, ShareProfiles,
-    SHARE_PROFILE_VERSION,
 };
 use super::room_relation::RoomRelationMaterial;
 use super::types::{DirectContact, DirectGrantState, PeerPresence, RoomProfile};
@@ -312,9 +311,10 @@ impl ProfilePersistence for SystemProfilePersistence {
 fn commit_transaction_candidate(
     candidate: &mut ShareProfiles,
 ) -> Result<(), profile_transaction::CommitError> {
-    candidate.schema_version = SHARE_PROFILE_VERSION;
     candidate.reconcile_legacy_grants(super::core::now_secs());
     candidate.recompute_all_identity_conflicts();
+    // W9: 9 when the profile carries rights records older versions misread.
+    candidate.schema_version = candidate.stored_schema_version();
     candidate.validate_direct_ledger().map_err(|error| {
         profile_transaction::CommitError::Fatal(format!("Share-Profile sind beschaedigt: {error}"))
     })?;

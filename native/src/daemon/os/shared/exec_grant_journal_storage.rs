@@ -1,4 +1,4 @@
-use super::{load_pending, JournalEntry, MAX_JOURNAL_BYTES};
+use super::{load_pending, JournalEntry, JOURNAL_VERSION, MAX_JOURNAL_BYTES};
 
 pub(super) fn write_entry(entry: &JournalEntry) -> Result<(), String> {
     entry.validate()?;
@@ -81,4 +81,51 @@ where
         }
     };
     Err(format!("{sync_error}; {recovery}"))
+}
+
+pub(super) fn decode_entry(encoded: &[u8]) -> Result<JournalEntry, String> {
+    let mut value: serde_json::Value = serde_json::from_slice(encoded)
+        .map_err(|error| format!("Exec-Grant journal decode: {error}"))?;
+    if value.get("version").and_then(serde_json::Value::as_u64) == Some(1) {
+        migrate_v1_target(&mut value)?;
+    }
+    serde_json::from_value(value).map_err(|error| format!("Exec-Grant journal decode: {error}"))
+}
+
+fn migrate_v1_target(value: &mut serde_json::Value) -> Result<(), String> {
+    let principal = value
+        .pointer("/mutation/principal")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| "legacy Exec-Grant journal has no exact principal".to_string())?;
+    let field = |name: &str| {
+        principal
+            .get(name)
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| format!("legacy Exec-Grant journal principal lacks {name}"))
+    };
+    let relation_kind = field("relation_kind")?;
+    let relation_id = field("relation_id")?;
+    let pins = serde_json::json!({
+        "device_id": field("device_id")?,
+        "public_key": field("public_key")?,
+        "fingerprint": field("fingerprint")?,
+        "node_id": field("node_id")?,
+    });
+    let target = match relation_kind.as_str() {
+        "direct" => serde_json::json!({ "Direct": pins }),
+        "room" => {
+            let mut fields = pins
+                .as_object()
+                .cloned()
+                .ok_or_else(|| "legacy Exec-Grant journal pins are invalid".to_string())?;
+            fields.insert("room_id".into(), serde_json::Value::String(relation_id));
+            serde_json::json!({ "RoomMember": fields })
+        }
+        _ => return Err("legacy Exec-Grant journal relation is unsupported".into()),
+    };
+    value["mutation"]["target"] = target;
+    value["version"] = serde_json::json!(JOURNAL_VERSION);
+    Ok(())
 }

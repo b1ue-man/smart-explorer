@@ -365,7 +365,8 @@ fn v3_and_v4_profiles_migrate_to_current_with_exec_default_denied() {
 
 #[test]
 fn profile_versions_older_than_v3_and_newer_than_v6_fail_closed() {
-    for version in [2, SHARE_PROFILE_VERSION + 1] {
+    // W9: version 9 (rights records) is read; 10 is not.
+    for version in [2, super::RIGHTS_SHARE_PROFILE_VERSION + 1] {
         let mut value = serde_json::to_value(ShareProfiles::default()).unwrap();
         value["schema_version"] = serde_json::json!(version);
         let mut storage = FakePersistence {

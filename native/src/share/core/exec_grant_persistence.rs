@@ -42,6 +42,37 @@ impl ExecGrantMutation {
         ))
     }
 
+    /// W8 (review 2026-10-31): the persisted step that sets exactly
+    /// `policy` on `target`, as a confirmation of connection rights computed
+    /// it from the current policy (one revision on). Another current
+    /// revision is refused as a concurrent change; a policy that allows
+    /// anything needs an active relation, like every other change.
+    pub(crate) fn prepare_exact(
+        profiles: &mut ShareProfiles,
+        identity: &ShareIdentity,
+        target: ExecGrantTarget,
+        policy: ExecGrant,
+    ) -> Result<(Self, u64), String> {
+        let (principal, current) =
+            resolve_profile_policy(profiles, identity, &target, policy.grants_any())?;
+        let current_revision = current.policy_revision;
+        if current_revision.checked_add(1) != Some(policy.policy_revision) {
+            return Err(format!(
+                "Exec-Grant revision changed concurrently: expected {}, found {current_revision}",
+                policy.policy_revision.saturating_sub(1)
+            ));
+        }
+        Ok((
+            Self {
+                target,
+                principal,
+                policy,
+                authorization_epoch: 0,
+            },
+            current_revision,
+        ))
+    }
+
     /// `settings` replaces run-as account and program list; `None` keeps
     /// them (every enable/disable before run-as existed).
     pub(crate) fn prepare_persisted(

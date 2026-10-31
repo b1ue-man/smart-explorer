@@ -37,10 +37,10 @@ stat/read guard write/edit against lost updates. \
 Never ask the user for passwords in chat: saved credentials are used \
 automatically; new password logins are added by the user in a terminal \
 (`se connections add … --password-stdin`). Change Share trust (access requests, \
-Exec grants and their program lists, device and room settings, discoverability) \
-only when the user explicitly asks. The `se` tool \
-runs any other Smart Explorer terminal command, for example \
-`[\"share\",\"status\",\"--json\"]`, and reaches every app setting: sync setups \
+connection rights: `share grants confirm|set`, every `--preset`; Exec grants, \
+program lists, device/room settings, discoverability) only when the user \
+explicitly asks. The `se` tool runs any other Smart Explorer terminal command \
+and reaches every app setting: sync setups \
 (`sync`), background worker (`background`), remotes and Google Drive \
 (`connections`), updates (`update`), Windows and Linux drives (`drive`), vaults \
 (`vault`), se Desktop (`desktop`).";
@@ -389,3 +389,7 @@ mod tests {
         assert!(first.len() <= 512, "{}", first.len());
     }
 }
+
+#[cfg(test)]
+#[path = "abgleich_task_catalog_tests.rs"]
+mod abgleich_task_tests;

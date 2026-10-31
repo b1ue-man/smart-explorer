@@ -7,3 +7,5 @@ pub(crate) mod connection_rights;
 pub(crate) mod connection_rights_actions;
 #[path = "core/connection_rights_apply.rs"]
 pub(crate) mod connection_rights_apply;
+#[path = "core/connection_rights_exec.rs"]
+pub(crate) mod connection_rights_exec;

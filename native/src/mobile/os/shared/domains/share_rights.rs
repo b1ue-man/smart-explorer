@@ -6,7 +6,7 @@
 //! profile transaction each, then the worker reloads.
 use serde_json::{json, Map, Value};
 
-use super::args::{invalid, opt_bool};
+use super::args::invalid;
 use super::share_state::{default_home, reconfigure, wake};
 use crate::mobile::{ApiError, Runtime};
 use crate::share::access_grant::{AccountProfile, CapabilityDecision};
@@ -56,12 +56,27 @@ pub(super) fn rights_json(rights: &ConnectionRights) -> Value {
     })
 }
 
+/// The fields `rights` may name (api.md §5.1). G4 (review 2026-10-31):
+/// every other field, and every field of another type, is `invalid`, so a
+/// caller never gets more rights than it asked for.
+const RIGHTS_FIELDS: [&str; 8] = [
+    "folders",
+    "write",
+    "commands",
+    "terminal",
+    "screenView",
+    "screenControl",
+    "validUntil",
+    "account",
+];
+
 fn decision(value: &Value, key: &str) -> Result<Option<CapabilityDecision>, ApiError> {
-    match value.get(key).and_then(Value::as_str) {
+    match value.get(key) {
         None => Ok(None),
-        Some(text) => CapabilityDecision::from_key(text)
+        Some(Value::String(text)) => CapabilityDecision::from_key(text)
             .map(Some)
             .ok_or_else(|| invalid(format!("{key} muss off, ask oder allow sein."))),
+        Some(_) => Err(invalid(format!("{key} muss off, ask oder allow sein."))),
     }
 }
 
@@ -69,24 +84,42 @@ fn folders_of(value: &Value) -> Result<Option<FolderChoice>, ApiError> {
     let Some(folders) = value.get("folders") else {
         return Ok(None);
     };
-    let paths = folders
-        .get("paths")
-        .and_then(Value::as_array)
-        .map(|paths| {
-            paths
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default();
-    Ok(Some(match folders.get("kind").and_then(Value::as_str) {
+    let folders = folders
+        .as_object()
+        .ok_or_else(|| invalid("folders muss ein Objekt {kind, paths?, connections?} sein."))?;
+    if let Some(unknown) = folders
+        .keys()
+        .find(|key| !matches!(key.as_str(), "kind" | "paths" | "connections"))
+    {
+        return Err(invalid(format!("folders.{unknown} ist kein Rechtefeld.")));
+    }
+    let paths = match folders.get("paths") {
+        None => Vec::new(),
+        Some(Value::Array(paths)) => paths
+            .iter()
+            .map(|path| {
+                path.as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| invalid("folders.paths muss eine Liste von Pfaden sein."))
+            })
+            .collect::<Result<_, _>>()?,
+        Some(_) => return Err(invalid("folders.paths muss eine Liste von Pfaden sein.")),
+    };
+    let connections = match folders.get("connections") {
+        None => false,
+        Some(Value::Bool(connections)) => *connections,
+        Some(_) => return Err(invalid("folders.connections muss true oder false sein.")),
+    };
+    let kind = folders.get("kind").and_then(Value::as_str);
+    if kind != Some("selected") && (!paths.is_empty() || connections) {
+        return Err(invalid(
+            "folders.paths und folders.connections gelten nur mit kind selected.",
+        ));
+    }
+    Ok(Some(match kind {
         Some("none") => FolderChoice::None,
         Some("all") => FolderChoice::All,
-        Some("selected") => FolderChoice::Selected {
-            paths,
-            connections: opt_bool(folders, "connections", false),
-        },
+        Some("selected") => FolderChoice::Selected { paths, connections },
         _ => return Err(invalid("folders.kind muss none, all oder selected sein.")),
     }))
 }
@@ -104,13 +137,34 @@ fn account_of(text: &str) -> Result<AccountProfile, ApiError> {
 
 /// The rights of `args`: `preset` (key of `share.rightsPresets`), else
 /// `base`, else „Keine Rechte“, changed by every field of `rights`.
-/// `None` when the call names neither.
+/// `None` when the call names neither. A field of the wrong type or an
+/// unknown field is `invalid` (G4).
 pub(super) fn rights_arg(
     args: &Value,
     base: Option<ConnectionRights>,
 ) -> Result<Option<ConnectionRights>, ApiError> {
-    let preset = args.get("preset").and_then(Value::as_str);
-    let fields = args.get("rights").filter(|value| !value.is_null());
+    let preset = match args.get("preset") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(key)) => Some(key.as_str()),
+        Some(_) => {
+            return Err(invalid(
+                "preset muss der Schlüssel einer Voreinstellung sein.",
+            ))
+        }
+    };
+    let fields = match args.get("rights") {
+        None | Some(Value::Null) => None,
+        Some(value @ Value::Object(map)) => {
+            if let Some(unknown) = map
+                .keys()
+                .find(|key| !RIGHTS_FIELDS.contains(&key.as_str()))
+            {
+                return Err(invalid(format!("rights.{unknown} ist kein Rechtefeld.")));
+            }
+            Some(value)
+        }
+        Some(_) => return Err(invalid("rights muss ein Objekt sein.")),
+    };
     if preset.is_none() && fields.is_none() {
         return Ok(None);
     }
@@ -124,8 +178,10 @@ pub(super) fn rights_arg(
         if let Some(folders) = folders_of(fields)? {
             rights.folders = folders;
         }
-        if let Some(write) = fields.get("write").and_then(Value::as_bool) {
-            rights.write = write;
+        match fields.get("write") {
+            None => {}
+            Some(Value::Bool(write)) => rights.write = *write,
+            Some(_) => return Err(invalid("write muss true oder false sein.")),
         }
         for (key, slot) in [
             ("commands", &mut rights.commands),
@@ -148,8 +204,10 @@ pub(super) fn rights_arg(
             }
             None => {}
         }
-        if let Some(account) = fields.get("account").and_then(Value::as_str) {
-            rights.account = account_of(account)?;
+        match fields.get("account") {
+            None => {}
+            Some(Value::String(account)) => rights.account = account_of(account)?,
+            Some(_) => return Err(invalid("account muss own, remote oder account:NAME sein.")),
         }
     }
     rights.validate().map_err(error)?;
@@ -267,7 +325,12 @@ pub(super) fn cancel(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
 /// `share.setCodeRights`: `clear: true` removes them, else `preset`/`rights`
 /// on top of the current code rights.
 pub(super) fn set_code_rights(rt: &Runtime, args: &Value) -> Result<Value, ApiError> {
-    let rights = if opt_bool(args, "clear", false) {
+    let clear = match args.get("clear") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(clear)) => *clear,
+        Some(_) => return Err(invalid("clear muss true oder false sein.")),
+    };
+    let rights = if clear {
         None
     } else {
         Some(
@@ -278,3 +341,7 @@ pub(super) fn set_code_rights(rt: &Runtime, args: &Value) -> Result<Value, ApiEr
     let change = actions::set_code_rights(default_home(), rights).map_err(error)?;
     Ok(finish(rt, &change.profiles, change.changed))
 }
+
+#[cfg(test)]
+#[path = "abgleich_task_share_rights_tests.rs"]
+mod abgleich_task_tests;

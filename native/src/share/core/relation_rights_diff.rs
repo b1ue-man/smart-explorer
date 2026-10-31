@@ -51,6 +51,7 @@ pub(crate) fn authorization_restrictions(
             .direct_grants
             .iter()
             .find(|new| new.device_id == grant.device_id);
+        let mut same_identity = None;
         let reason = match replacement {
             None => Some(RestrictionReason::Removed),
             Some(new)
@@ -63,25 +64,40 @@ pub(crate) fn authorization_restrictions(
             Some(new) => match new.state {
                 DirectGrantState::Ignored => Some(RestrictionReason::Blocked),
                 DirectGrantState::Reconfirm => Some(RestrictionReason::Reconfirm),
-                DirectGrantState::Accepted if grant.write && !new.write => {
-                    Some(RestrictionReason::WriteRevoked)
+                DirectGrantState::Accepted => {
+                    same_identity = Some(new);
+                    if grant.write && !new.write {
+                        Some(RestrictionReason::WriteRevoked)
+                    } else if exec_restricted(&grant.exec, &new.exec) {
+                        Some(RestrictionReason::ExecRevoked)
+                    } else {
+                        None
+                    }
                 }
-                DirectGrantState::Accepted if exec_restricted(&grant.exec, &new.exec) => {
-                    Some(RestrictionReason::ExecRevoked)
-                }
-                // F2: the device's own folder selection narrowed.
-                DirectGrantState::Accepted => exports_restriction(
-                    &current
-                        .default_direct_exports
-                        .visible_to(&grant.device_id, &grant.public_key),
-                    &candidate
-                        .default_direct_exports
-                        .visible_to(&new.device_id, &new.public_key),
-                ),
             },
         };
         if let Some(reason) = reason {
-            add(&mut restrictions, RelationScope::Direct, principal, reason);
+            add(
+                &mut restrictions,
+                RelationScope::Direct,
+                principal.clone(),
+                reason,
+            );
+        }
+        // F2/W7: the device's own folder selection narrowed. Checked on its
+        // own, so a narrowing in the same step as a write or Exec change
+        // still ends the device's work in the folders it lost.
+        if let Some(new) = same_identity {
+            if let Some(reason) = exports_restriction(
+                &current
+                    .default_direct_exports
+                    .visible_to(&grant.device_id, &grant.public_key),
+                &candidate
+                    .default_direct_exports
+                    .visible_to(&new.device_id, &new.public_key),
+            ) {
+                add(&mut restrictions, RelationScope::Direct, principal, reason);
+            }
         }
     }
     for contact in &current.direct_contacts {
