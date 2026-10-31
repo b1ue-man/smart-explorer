@@ -19,7 +19,7 @@ Eingaben: `measure` (Standard an: Messjobs), `repetitions` (Standard 3, der Medi
 
 Vier `se` werden im Entwicklungsprofil gebaut (Worktrees neben dem Kandidaten, gemeinsamer Zielordner für die Abhängigkeiten):
 
-- `old` = `v0.5.189` plus der native Teil von `1f004fd9` (`se sync compare`) und `bc18587b` (`se ls -R`), eingespielt mit `git diff | git apply`;
+- `old` = `v0.5.189` plus der native Teil von `bef433c4` (`se sync compare`) und `db93d3a6` (`se ls -R`), eingespielt mit `git diff | git apply`;
 - `new` = Kandidat (mit den frisch gebauten Agent-Bündeln);
 - `new_oldagent` = Kandidat-Quelltext mit den Agent-Bündeln von `v0.5.189` (der Client liefert den Agenten mit aus, also ist das „Kandidat-Client gegen Agent alter Version“);
 - `old_newagent` = `old` mit den frisch gebauten Agent-Bündeln des Kandidaten („alter Client gegen Agent des Kandidaten“).
