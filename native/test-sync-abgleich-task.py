@@ -872,16 +872,23 @@ class SshBox:
         run(["docker", "rm", "-f", self.name], timeout=120)
 
 
-def add_saved(binary, env, kind, port, user, password, root, label, log, agent=False, trust_client=None):
+# `se connections add` keeps one saved connection per host, port, user and root (a second label for the
+# same endpoint replaces the first, in v0.5.189 as in the candidate): the plain SFTP and the agent
+# connection to one SSH account therefore name the host differently, and each name's key is confirmed.
+SSH_HOSTS = {False: "127.0.0.1", True: "localhost"}
+
+
+def add_saved(binary, env, kind, port, user, password, root, label, log, agent=False, trust_client=None,
+              host="127.0.0.1"):
     """A saved connection of one `se`; None when it works, else the reason."""
-    args = ["connections", "add", kind, "--host", "127.0.0.1", "--port", str(port), "--user", user, "--root", root,
+    args = ["connections", "add", kind, "--host", host, "--port", str(port), "--user", user, "--root", root,
             "--label", label, "--password-stdin", *(["--agent"] if agent else [])]
     added = run([binary, *args], env=env, input_text=password + "\n", timeout=300, log=log)
     if not added.ok:
         return f"connections add: {short(added, 400)}"
     if trust_client is not None:
         try:
-            ai.trust_ssh_host_key(trust_client, binary, "127.0.0.1", port, log)
+            ai.trust_ssh_host_key(trust_client, binary, host, port, log)
         except Exception as error:  # noqa: BLE001
             return f"host key: {error}"
     listed = run([binary, "ls", f"@{label}:/"], env=env, timeout=600, log=log)
@@ -1078,6 +1085,60 @@ def diff_text(a, b, prefix="", limit=14):
     return lines[:limit]
 
 
+# Plan C3 (V1, 7ca9b26f): the listings of an SSH agent and of a Share host carry the hidden flag; v0.5.189's
+# never did (its agent listing set `hidden: false`, `agent/core/metadata.rs`), so `include_hidden = false`
+# did nothing on those sides. The candidate marks dot names hidden there as a local listing and SFTP do.
+HIDDEN_FIXED_WAYS = {"LA": "LS", "LH": "LL", "HH": "LL"}
+
+
+def dot_name(rel):
+    return str(rel).rstrip("/").rsplit("/", 1)[-1].startswith(".")
+
+
+def hidden_follows_dots(reference, value):
+    """True when the candidate's `ls -R` of a host side differs from v0.5.189 only in the hidden flags and
+    marks exactly the dot names hidden."""
+    if not (isinstance(reference, dict) and isinstance(value, dict)):
+        return False
+
+    def without_hidden(data):
+        data = json.loads(json.dumps(data, default=str))
+        data.pop("hidden", None)
+        for row in data.get("rows", {}).values():
+            if isinstance(row, dict):
+                row.pop("hidden", None)
+        return data
+    if without_hidden(reference) != without_hidden(value):
+        return False
+    flags = dict(value.get("hidden", {}))
+    flags.update({rel: row["hidden"] for rel, row in value.get("rows", {}).items()
+                  if isinstance(row, dict) and "hidden" in row})
+    return bool(flags) and all(bool(flag) == dot_name(rel) for rel, flag in flags.items())
+
+
+def hidden_filter_fixed(matrix, way, value):
+    """True when `include_hidden = false` takes away on the host way `way` exactly as many files as on its
+    basis way (which always marked dot names hidden and is unchanged from v0.5.189), and changes nothing
+    else there: the candidate's `cmp nohidden` equals its `cmp default` but for those files."""
+    basis = HIDDEN_FIXED_WAYS[way]
+    basis_all = matrix.get(("cmp", basis, "default", "new/new"))
+    basis_visible = matrix.get(("cmp", basis, "nohidden", "new/new"))
+    way_all = matrix.get(("cmp", way, "default", "new/new"))
+    if None in (basis_all, basis_visible, way_all, value) \
+            or matrix.get(("cmp", basis, "nohidden", "old/old")) != basis_visible:
+        return False
+    counted = ("source_files", "target_files")
+    try:
+        gone = [basis_all[key] - basis_visible[key] for key in counted]
+        taken = [way_all[key] - value[key] for key in counted]
+    except (KeyError, TypeError):
+        return False
+
+    def rest(result):
+        return {key: item for key, item in result.items() if key not in counted}
+    return gone == taken and rest(value) == rest(way_all)
+
+
 def evaluate_equality(ctx):
     results, matrix = ctx.results, ctx.matrix
     groups = {}
@@ -1094,16 +1155,23 @@ def evaluate_equality(ctx):
                 continue
             equal = value == reference
             detail = "; ".join(diff_text(reference, value))
-            if not equal and kind == "cmp" and way == "LA" and shape == "nohidden":
-                # Known, intended change (plan C3, V1): v0.5.189's agent listing never marks dot names as
-                # hidden, so include_hidden = false did nothing on an agent side. The candidate's agent
-                # must give what SFTP gives for the same data.
-                sftp_new = matrix.get(("cmp", "LS", "nohidden", "new/new"))
-                sftp_old = matrix.get(("cmp", "LS", "nohidden", "old/old"))
-                if sftp_new is not None and value == sftp_new and sftp_old == sftp_new and reference != sftp_old:
+            if not equal and kind == "cmp" and way in HIDDEN_FIXED_WAYS and shape == "nohidden":
+                # Known, intended change (HIDDEN_FIXED_WAYS): the candidate must give what a side gives that
+                # always marked dot names hidden (SFTP for the agent, a local folder for a Share host),
+                # and that side must be unchanged from v0.5.189.
+                basis = HIDDEN_FIXED_WAYS[way]
+                basis_new = matrix.get(("cmp", basis, "nohidden", "new/new"))
+                basis_old = matrix.get(("cmp", basis, "nohidden", "old/old"))
+                same_as_basis = basis_new is not None and value == basis_new and basis_old == basis_new
+                if same_as_basis or hidden_filter_fixed(matrix, way, value):
                     results.record("equality", f"{label}: {variant} differs from v0.5.189 only by the fixed "
-                                   "hidden-file filter of the agent side (V1, equals the SFTP result)", True, detail)
+                                   f"hidden-file filter of the host side (V1: it leaves out what the {basis} way "
+                                   "leaves out)", True, detail)
                     continue
+            if not equal and kind == "ls" and way in HIDDEN_FIXED_WAYS and hidden_follows_dots(reference, value):
+                results.record("equality", f"{label}: {variant} differs from v0.5.189 only by the hidden flags, "
+                               "which mark exactly the dot names (V1)", True, detail)
+                continue
             results.record("equality", f"{label}: {variant} == old/old (v0.5.189)", equal, detail)
     # Hidden flags of agent listings must follow the dot-name rule SFTP applies (plan C3).
     for sub in ("tree", "lk"):
@@ -1160,8 +1228,8 @@ def stage_ssh(ctx, trees, client_of):
             problem = None
             for label, agent in (("sftp", False), ("agent", True)):
                 problem = problem or add_saved(binary, client.env, "sftp", box.port, box.user, box.password,
-                                               "/config/data", label, log, agent=agent,
-                                               trust_client=client if label == "sftp" else None)
+                                               "/config/data", label, log, agent=agent, trust_client=client,
+                                               host=SSH_HOSTS[agent])
             if problem:
                 results.record("equality", f"{variant}: saved SSH connections work", False, problem)
                 continue
@@ -2761,7 +2829,7 @@ def job_measure(results, log_root, args):
                 for conn, agent in (("sftp", False), ("agent", True)):
                     problem = problem or add_saved(binary, envs[label], "sftp", box.port, box.user, box.password,
                                                    "/config/data", conn, log_root / "measure-connections.log",
-                                                   agent=agent, trust_client=clients[label] if conn == "sftp" else None)
+                                                   agent=agent, trust_client=clients[label], host=SSH_HOSTS[agent])
                 results.record("measure", f"{label}: saved SSH connections work", problem is None, problem or "")
                 connected = connected and problem is None
             if connected:
