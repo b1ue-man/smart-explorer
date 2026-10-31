@@ -221,13 +221,15 @@ fn scan_in_with(
 }
 
 /// Worker threads of a local scan: `SMART_EXPLORER_ANALYTICS_THREADS`, else
-/// the platform default (Android: one per core up to 4; desktop: 2).
+/// the platform default (Android: one per core up to 4; desktop: one per
+/// core), never more than the available cores.
 pub(crate) fn local_scan_threads() -> usize {
+    let cores = std::thread::available_parallelism().map_or(2, |cores| cores.get());
     std::env::var("SMART_EXPLORER_ANALYTICS_THREADS")
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or_else(crate::analytics::os::default_scan_threads)
-        .clamp(1, 4)
+        .clamp(1, cores.max(1))
 }
 
 struct Traversal<'a> {

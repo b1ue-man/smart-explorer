@@ -146,5 +146,8 @@ fn android_background_task_walks_without_volumes_keep_reporting_denials() {
     assert!(outcome.issues[0].path.ends_with("foreign"));
     assert!(outcome.protected.is_empty());
     #[cfg(not(target_os = "android"))]
-    assert_eq!(crate::analytics::os::default_scan_threads(), 2);
+    assert_eq!(
+        crate::analytics::os::default_scan_threads(),
+        std::thread::available_parallelism().map_or(2, |cores| cores.get())
+    );
 }

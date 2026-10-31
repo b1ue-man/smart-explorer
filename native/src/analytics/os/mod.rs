@@ -17,7 +17,9 @@ pub(crate) use host::{host_permission_note, recycle, volume_usage};
 /// Default worker count of a local scan. Android's shared storage is served
 /// by MediaProvider's multi-threaded FUSE daemon, whose readdirplus answers
 /// fill the attribute cache, so directory listings scale with the cores; four
-/// keep phones cool and responsive. The desktop keeps its established two.
+/// keep phones cool and responsive. The desktop uses every available core,
+/// like the local sync walk and the recursive view (2026-10-31; it was a
+/// fixed two without a recorded reason).
 #[cfg(target_os = "android")]
 pub(super) fn default_scan_threads() -> usize {
     std::thread::available_parallelism().map_or(2, |cores| cores.get().min(4))
@@ -25,7 +27,7 @@ pub(super) fn default_scan_threads() -> usize {
 
 #[cfg(not(target_os = "android"))]
 pub(super) fn default_scan_threads() -> usize {
-    2
+    std::thread::available_parallelism().map_or(2, |cores| cores.get())
 }
 
 #[path = "shared/checked_recycle.rs"]
