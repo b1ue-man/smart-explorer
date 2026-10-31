@@ -92,6 +92,16 @@ impl BackendExtensions for FtpBackend {
         })
     }
 
+    /// SHA-256 computed by the server through `HASH` or `XSHA256`
+    /// (content_digest.rs); `Ok(None)` for a server without either.
+    fn content_digest(
+        &self,
+        path: &str,
+        cancel: &AtomicBool,
+    ) -> VfsResult<Option<crate::vfs::ContentDigest>> {
+        self.digest_by_command(path, cancel)
+    }
+
     /// Every folder: one names-and-types listing per folder and one DELE per
     /// entry, without the generic walk's stats (tree_remove.rs).
     fn supports_remove_tree(&self, _path: &str) -> VfsResult<bool> {

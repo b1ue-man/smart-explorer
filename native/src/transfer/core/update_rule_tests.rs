@@ -135,3 +135,56 @@ fn abgleich_task_summary_names_counts_only() {
         Some("4 neuere ersetzt, 40 gleiche übersprungen, 2 Ziel neuer behalten, 1 als Konflikt doppelt behalten")
     );
 }
+
+#[test]
+fn abgleich_task_rule_local_time_side_equal_size_one_hour_apart_is_equal() {
+    let hour = 3_600_000;
+    let source = stamp(10, 1_700_000_000_000 + hour);
+    let target = stamp(10, 1_700_000_000_000);
+    assert_eq!(classify(source, target, 2_000), Case::SourceNewer);
+    assert_eq!(
+        classify_local_time(source, target, 2_000, true),
+        Case::Equal,
+        "a clock change moved the stored time of the FAT side"
+    );
+    assert_eq!(
+        classify_local_time(target, source, 2_000, true),
+        Case::Equal,
+        "either direction"
+    );
+    assert_eq!(
+        classify_local_time(
+            stamp(10, 1_700_000_000_000 + hour + 2_000),
+            target,
+            2_000,
+            true
+        ),
+        Case::Equal,
+        "the window is added to the hour"
+    );
+}
+
+#[test]
+fn abgleich_task_rule_local_time_keeps_every_other_decision() {
+    let hour = 3_600_000;
+    let base = 1_700_000_000_000;
+    assert_eq!(
+        classify_local_time(stamp(11, base + hour), stamp(10, base), 2_000, true),
+        Case::SourceNewer,
+        "another size is no shift"
+    );
+    assert_eq!(
+        classify_local_time(stamp(10, base + 2 * hour), stamp(10, base), 2_000, true),
+        Case::SourceNewer,
+        "two hours are no shift"
+    );
+    assert_eq!(
+        classify_local_time(stamp(10, base), stamp(10, base + hour + 5_000), 2_000, true),
+        Case::TargetNewer
+    );
+    assert_eq!(
+        classify_local_time(stamp(10, 0), stamp(10, base), 2_000, true),
+        Case::Conflict,
+        "an unknown time still decides nothing"
+    );
+}

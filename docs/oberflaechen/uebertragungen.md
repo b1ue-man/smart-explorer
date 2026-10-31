@@ -35,6 +35,15 @@ getippten Zielordner als Standard. Ein Backend ohne belegte exklusive
 Ordnerreservierung meldet die Einschränkung; ein unsicherer Keep-both-Ausgang
 wird nicht als erfolgreiche Reservierung ausgegeben.
 
+Nachtrag 2026-10-31 (Paket F5, nicht gebaut, nicht getestet): Hat eine Seite ein Dateisystem mit
+Ortszeit (FAT), gelten Dateien gleicher Größe mit genau einer Stunde Zeitabstand (± Fenster) als gleich; die
+Vorschau „Zielordner entscheiden“, Übertragungsfenster, `se`-Zeile `update: …`, MCP-Feld `update` und die
+Bridge zählen sie unter „gleich übersprungen“ (`transfer/core/time_window.rs`). Eine Drive-Datei, die ohne
+Stufe entsteht, trägt die Quellzeit seit der Anlegeanfrage. Prüfschlüssel kommen von der Gegenseite statt
+aus einem Download: SFTP per `sha256sum`-Befehl, FTP per `HASH`/`XSHA256`, Drive per `sha256Checksum`, WebDAV
+nur als Anzeige (`docs/TRANSFER_ENGINE.md`, „Prüfschlüssel ohne Dateiübertragung“); an den Oberflächen ändert
+sich nichts außer dass „Überprüfen“ und die Eigentumsprüfung beim Fortsetzen weniger lesen.
+
 Die Engine nutzt dieselben Backend-/Verbindungsidentitäten über VFS, Agent,
 Share und Daemon. Ein gleichlautender relativer Pfad auf zwei Gegenstellen
 bezeichnet weiterhin zwei verschiedene Orte. Sync und „Fehlende übertragen“

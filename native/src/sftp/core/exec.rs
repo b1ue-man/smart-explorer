@@ -208,40 +208,52 @@ impl CapturedExec {
 async fn capture_exec(channel: &mut russh::Channel<client::Msg>) -> io::Result<CapturedExec> {
     let mut capture = CapturedExec::default();
     loop {
-        match channel.wait().await {
-            Some(russh::ChannelMsg::Data { data }) => {
-                capture.stdout_truncated |=
-                    append_bounded(&mut capture.stdout, &data, SSH_EXEC_OUTPUT_LIMIT);
-            }
-            Some(russh::ChannelMsg::ExtendedData { data, .. }) => {
-                capture.stderr_truncated |=
-                    append_bounded(&mut capture.stderr, &data, SSH_EXEC_OUTPUT_LIMIT);
-            }
-            Some(russh::ChannelMsg::ExitStatus { exit_status }) => {
-                capture.exit_status = Some(exit_status);
-            }
-            Some(russh::ChannelMsg::ExitSignal {
-                signal_name,
-                error_message,
-                ..
-            }) => {
-                let error_message: String = error_message.chars().take(1024).collect();
-                capture.exit_signal = Some(if error_message.trim().is_empty() {
-                    format!("{signal_name:?}")
-                } else {
-                    format!("{signal_name:?} ({error_message})")
-                });
-            }
-            Some(russh::ChannelMsg::Failure) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "SSH server rejected the remote exec request",
-                ));
-            }
-            Some(russh::ChannelMsg::Close) | None => return Ok(capture),
-            _ => {}
+        if !absorb(&mut capture, channel.wait().await)? {
+            return Ok(capture);
         }
     }
+}
+
+/// Takes one channel message into `capture`; `Ok(false)` once the channel
+/// ended. A rejected exec request is an error.
+pub(super) fn absorb(
+    capture: &mut CapturedExec,
+    message: Option<russh::ChannelMsg>,
+) -> io::Result<bool> {
+    match message {
+        Some(russh::ChannelMsg::Data { data }) => {
+            capture.stdout_truncated |=
+                append_bounded(&mut capture.stdout, &data, SSH_EXEC_OUTPUT_LIMIT);
+        }
+        Some(russh::ChannelMsg::ExtendedData { data, .. }) => {
+            capture.stderr_truncated |=
+                append_bounded(&mut capture.stderr, &data, SSH_EXEC_OUTPUT_LIMIT);
+        }
+        Some(russh::ChannelMsg::ExitStatus { exit_status }) => {
+            capture.exit_status = Some(exit_status);
+        }
+        Some(russh::ChannelMsg::ExitSignal {
+            signal_name,
+            error_message,
+            ..
+        }) => {
+            let error_message: String = error_message.chars().take(1024).collect();
+            capture.exit_signal = Some(if error_message.trim().is_empty() {
+                format!("{signal_name:?}")
+            } else {
+                format!("{signal_name:?} ({error_message})")
+            });
+        }
+        Some(russh::ChannelMsg::Failure) => {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "SSH server rejected the remote exec request",
+            ));
+        }
+        Some(russh::ChannelMsg::Close) | None => return Ok(false),
+        _ => {}
+    }
+    Ok(true)
 }
 
 pub(super) fn append_bounded(target: &mut Vec<u8>, source: &[u8], limit: usize) -> bool {

@@ -88,3 +88,47 @@ fn abgleich_task_preview_counts_a_wide_tree_exactly_and_without_target_folders()
         "the preview never creates anything"
     );
 }
+
+/// The preview counts like the engine decides: equal sizes one hour apart on a
+/// target that stores local time are equal, not newer or older.
+#[test]
+fn abgleich_task_preview_counts_an_hour_apart_on_a_local_time_target_as_equal() {
+    use super::super::super::batches_backend_compatibility_task_tests::Limited;
+    use crate::vfs::MtimePrecision;
+    let root = tempfile::tempdir().expect("temp dir");
+    let source = root.path().join("local/src");
+    let dest = root.path().join("dest");
+    file(&source.join("later.txt"), b"AAAA", 1_700_000_000 + 3_600);
+    file(&source.join("earlier.txt"), b"BBBB", 1_700_000_000 - 3_600);
+    file(&source.join("other.txt"), b"CCCC", 1_700_000_000 + 7_200);
+    file(&dest.join("src/later.txt"), b"AAAA", 1_700_000_000);
+    file(&dest.join("src/earlier.txt"), b"BBBB", 1_700_000_000);
+    file(&dest.join("src/other.txt"), b"CCCC", 1_700_000_000);
+    for (precision, equal, newer, older) in [
+        (MtimePrecision::TwoSeconds, 2, 1, 0),
+        (MtimePrecision::Seconds, 0, 2, 1),
+    ] {
+        let mut limited = Limited::new("preview-local-time");
+        limited.precision = precision;
+        let transfer = job(
+            Endpoint::Local,
+            Endpoint::Remote(std::sync::Arc::new(limited)),
+            &dest,
+            &[&source],
+        );
+        let stop = AtomicBool::new(false);
+        let mut folders = folder_conflicts(&transfer, &stop).expect("roots");
+        let mut folder = folders.remove(0);
+        count_folder_conflict(&transfer, &mut folder, &stop, &|_| {});
+        assert!(folder.counted && folder.complete, "{folder:?}");
+        assert_eq!(
+            (
+                folder.equal_files,
+                folder.newer_files,
+                folder.target_newer_files
+            ),
+            (equal, newer, older),
+            "{precision:?}"
+        );
+    }
+}

@@ -17,17 +17,19 @@ use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
-struct Finished {
-    progress: TransferProgress,
-    errors: Vec<String>,
-    issues: Vec<TransferIssue>,
+pub(super) struct Finished {
+    pub(super) progress: TransferProgress,
+    pub(super) errors: Vec<String>,
+    pub(super) issues: Vec<TransferIssue>,
 }
 
-type Loopback = (Arc<FakeDrive>, Server, GDriveBackend);
+pub(super) type Loopback = (Arc<FakeDrive>, Server, GDriveBackend);
 
 /// A loopback Drive with the folder "Ziel"; `after` sees every request once
 /// the Drive answered it.
-fn drive_with_target(after: impl Fn(&FakeDrive, &Request) + Send + Sync + 'static) -> Loopback {
+pub(super) fn drive_with_target(
+    after: impl Fn(&FakeDrive, &Request) + Send + Sync + 'static,
+) -> Loopback {
     let drive = Arc::new(FakeDrive::default());
     drive.insert("target", "Ziel", "root", FOLDER_MIME, b"");
     let server = {
@@ -47,7 +49,7 @@ fn drive_with_target(after: impl Fn(&FakeDrive, &Request) + Send + Sync + 'stati
 
 /// Uploads `source` into the Drive folder "Ziel" ("keep both") through the
 /// engine, on this thread, to its terminal message.
-fn upload(backend: GDriveBackend, source: &Path) -> Finished {
+pub(super) fn upload(backend: GDriveBackend, source: &Path) -> Finished {
     let job = TransferJob {
         id: crate::transfer::new_job_id(),
         recoverable: false,

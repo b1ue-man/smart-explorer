@@ -2,7 +2,7 @@
 //! no result (the target is no longer the file this job published) is decided
 //! by the rule like any other file, not by the job's policy keeping both.
 use super::super::queue::FileWork;
-use super::super::test_backend::{fwd, job, write};
+use super::super::test_backend::{fwd, job, write, Fake};
 use super::super::{file_recovery, side_flow, Engine, FolderRegister};
 use super::*;
 use std::fs;

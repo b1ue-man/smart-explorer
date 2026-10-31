@@ -64,6 +64,10 @@ pub(crate) fn open(
     known_absent: bool,
 ) -> Result<Destination, OpError> {
     let path = engine.folders.path_of(&file.rel);
+    // The one-step writers below create the file without a stage, so a
+    // provider that takes the time in its create request (Drive) reads the
+    // source's time from this offer while the writer is opened.
+    let _creation_time = crate::transfer::creation_time::CreationTime::offer(file.mtime_ms);
     if let Some(size) = size.filter(|_| parent_created && !engine.resume) {
         if let Some(writer) = target
             .open_write_fresh(&path, size)

@@ -76,6 +76,21 @@ impl BackendExtensions for GDriveBackend {
         crate::vfs::Backend::open_read_id(self, path, Some(&id))
     }
 
+    /// The SHA-256 Google computed for the stored content (content_digest.rs).
+    fn content_digest(
+        &self,
+        path: &str,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> VfsResult<Option<crate::vfs::ContentDigest>> {
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "content digest canceled",
+            ));
+        }
+        self.digest_from_checksum(path)
+    }
+
     fn target_limits(&self, _root: &str) -> TargetLimits {
         TargetLimits {
             mtime_precision: MtimePrecision::Millis,

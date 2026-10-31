@@ -18,6 +18,8 @@ mod clipboard_parallel;
 pub(crate) mod compress_policy;
 #[path = "os/shared/copy_commit.rs"]
 mod copy_commit;
+#[path = "core/creation_time.rs"]
+pub(crate) mod creation_time;
 #[path = "os/shared/download_file.rs"]
 mod download_file;
 #[path = "os/shared/downloads.rs"]
@@ -87,6 +89,8 @@ mod snapshot_download;
 mod temp;
 #[path = "os/shared/temp_delete.rs"]
 mod temp_delete;
+#[path = "core/time_window.rs"]
+pub(crate) mod time_window;
 #[path = "core/types.rs"]
 mod types;
 #[path = "core/update_rule.rs"]

@@ -33,8 +33,10 @@
 //! ranged stages, FTP `MFMT`, SMB stages larger than one WRITE, SFTP without
 //! a pool channel). A target
 //! that cannot store a time keeps its own, which is no failure: the rule
-//! compares as it did. A Drive file in a folder this job created (written
-//! without a stage) has no place for a time and keeps the provider's.
+//! compares as it did. A Drive file written without a stage (in a folder this
+//! job created, or under its final name: `open_write_fresh`,
+//! `open_write_absent`) gets the time in its create request: `publish::open`
+//! offers it to the writer (`creation_time.rs`).
 use super::ops::OpError;
 use super::queue::FileWork;
 use super::Engine;

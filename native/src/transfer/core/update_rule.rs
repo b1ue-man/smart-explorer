@@ -8,6 +8,9 @@
 //! - the target is newer by more than the window: the target stays ("Ziel
 //!   neuer");
 //! - times within the window but different sizes: a conflict, both are kept;
+//! - a side that stores local time (FAT) and a distance of exactly one hour
+//!   (plus or minus the window) at equal size: equal, skipped (a clock
+//!   change moved the stored time, not the file; `time_window.rs`);
 //! - a time that one side does not know (0): nothing orders the two files and
 //!   equal sizes do not prove equal contents, so it is a conflict and both
 //!   are kept (nothing is skipped, nothing is replaced).
@@ -18,6 +21,7 @@
 //!
 //! A file that is missing at the target is inserted; that case needs no
 //! comparison and is decided by the engine (`engine/update.rs`).
+use super::time_window::dst_shift_equal;
 use super::types::TransferProgress;
 use crate::vfs::MtimePrecision;
 
@@ -55,6 +59,18 @@ pub(crate) fn window_ms(source: MtimePrecision, target: MtimePrecision) -> u64 {
 
 /// Compares a source file with its same-named target.
 pub(crate) fn classify(source: Stamp, target: Stamp, window_ms: u64) -> Case {
+    classify_local_time(source, target, window_ms, false)
+}
+
+/// `classify` where `local_time` says that a side stores local time
+/// (`MtimePrecision::local_time_shifts`): files of equal size whose times are
+/// exactly one hour apart (within the window) are equal.
+pub(crate) fn classify_local_time(
+    source: Stamp,
+    target: Stamp,
+    window_ms: u64,
+    local_time: bool,
+) -> Case {
     let comparable = source.mtime_ms != 0 && target.mtime_ms != 0;
     if !comparable {
         // No time to order them by, and equal sizes do not make equal files:
@@ -65,6 +81,15 @@ pub(crate) fn classify(source: Stamp, target: Stamp, window_ms: u64) -> Case {
     let delta = i128::from(source.mtime_ms) - i128::from(target.mtime_ms);
     if delta.unsigned_abs() <= u128::from(window_ms) {
         same_or_conflict(source, target)
+    } else if local_time
+        && source.size == target.size
+        && dst_shift_equal(
+            source.mtime_ms,
+            target.mtime_ms,
+            i64::try_from(window_ms).unwrap_or(i64::MAX),
+        )
+    {
+        Case::Equal
     } else if delta > 0 {
         Case::SourceNewer
     } else {

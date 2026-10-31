@@ -2,6 +2,8 @@
 mod chunked_stage;
 #[path = "core/chunked_upload.rs"]
 mod chunked_upload;
+#[path = "core/content_digest.rs"]
+mod content_digest;
 #[path = "core/webdav.rs"]
 mod core_impl;
 #[path = "core/extensions.rs"]

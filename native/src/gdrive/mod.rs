@@ -33,6 +33,8 @@ mod change_scope;
 mod changes;
 #[path = "core/chunk_stream.rs"]
 mod chunk_stream;
+#[path = "core/content_digest.rs"]
+mod content_digest;
 #[path = "os/shared/copy_writer.rs"]
 mod copy_writer;
 #[path = "core/core.rs"]
@@ -102,6 +104,12 @@ mod transfer_ops;
 #[path = "core/trash.rs"]
 mod trash;
 
+#[cfg(test)]
+#[path = "core/abgleich_task_creation_time_tests.rs"]
+mod abgleich_task_creation_time_tests;
+#[cfg(test)]
+#[path = "core/abgleich_task_drive_digest_tests.rs"]
+mod abgleich_task_drive_digest_tests;
 #[cfg(test)]
 #[path = "core/absent_engine_task_tests.rs"]
 mod absent_engine_task_tests;

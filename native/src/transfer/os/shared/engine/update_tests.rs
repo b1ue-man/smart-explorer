@@ -376,3 +376,43 @@ fn abgleich_task_a_merge_back_after_a_copy_replaces_nothing() {
     assert_eq!(finished.progress.files_done, 0);
     assert_eq!(finished.progress.skipped_equal, 2);
 }
+
+/// A file of equal size on a target that stores local time (FAT) and reads
+/// exactly one hour apart after a clock change is the same file: skipped,
+/// not replaced. A target that does not store local time replaces it.
+#[test]
+fn abgleich_task_update_rule_takes_an_hour_apart_on_a_local_time_target_as_equal() {
+    use super::super::batches_backend_compatibility_task_tests::Limited;
+    use crate::vfs::MtimePrecision;
+    use std::sync::Arc;
+    for (precision, replaced) in [
+        (MtimePrecision::TwoSeconds, false),
+        (MtimePrecision::Seconds, true),
+    ] {
+        let root = tempfile::tempdir().expect("temp dir");
+        let source = root.path().join("local/clock.txt");
+        let dest = root.path().join("dest");
+        file(&source, b"same size A", 1_700_000_000 + 3_600);
+        file(&dest.join("clock.txt"), b"same size B", 1_700_000_000);
+        let mut limited = Limited::new("local-time-target");
+        limited.precision = precision;
+        let mut transfer = job(
+            Endpoint::Local,
+            Endpoint::Remote(Arc::new(limited)),
+            &dest,
+            &[&source],
+        );
+        transfer.conflict = Conflict::Update;
+        let finished = run(transfer);
+        if !replaced {
+            assert!(finished.issues.is_empty(), "{:?}", finished.issues);
+            assert_eq!(fs::read(dest.join("clock.txt")).unwrap(), b"same size B");
+        }
+        let progress = &finished.progress;
+        assert_eq!(
+            (progress.replaced, progress.skipped_equal),
+            if replaced { (1, 0) } else { (0, 1) },
+            "{precision:?}"
+        );
+    }
+}

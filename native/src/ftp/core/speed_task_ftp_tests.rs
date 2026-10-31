@@ -41,11 +41,13 @@ fn speed_task_ftp_new_connection_takes_over_the_feat_answer() {
         mlst: false,
         mlsd: false,
         mfmt: true,
+        ..Features::default()
     };
     let own = Features {
         mlst: true,
         mlsd: true,
         mfmt: false,
+        ..Features::default()
     };
     let taken = inherited_features(None, Some(known)).expect("the other answer");
     assert!(taken.mfmt && !taken.mlst);

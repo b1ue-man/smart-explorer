@@ -1,6 +1,6 @@
 //! Looks at the selected entries and the target while the roots are planned.
-use super::super::walk_listers::native;
-use super::view::Side;
+use super::super::view::Side;
+use crate::transfer::walk_listers::native;
 
 pub(super) fn selected_directory(
     side: Side<'_>,

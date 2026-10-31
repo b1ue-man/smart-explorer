@@ -1,5 +1,7 @@
 #[path = "core/connection.rs"]
 mod connection;
+#[path = "core/content_digest.rs"]
+mod content_digest;
 #[path = "core/ftp.rs"]
 mod core_impl;
 #[path = "core/data_finish.rs"]
@@ -27,6 +29,9 @@ mod tree_remove;
 #[path = "core/writer.rs"]
 mod writer;
 
+#[cfg(test)]
+#[path = "core/abgleich_task_hash_tests.rs"]
+mod abgleich_task_hash_tests;
 #[cfg(test)]
 #[path = "core/data_overlap_server.rs"]
 mod data_overlap_server;

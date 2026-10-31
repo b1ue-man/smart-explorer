@@ -12,7 +12,7 @@ use super::session::connect_checked;
 use russh::server::{self, Auth, Msg, Session};
 use russh::Channel;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 const HOST: &str = "127.0.0.1";
@@ -27,9 +27,29 @@ smbRp/TC+71kv4RNIYOiAAAADHNlLXRlc3QtaG9zdAE=
 /// Another valid ed25519 public key (known_hosts_tests.rs `KEY_TWO`).
 const OTHER_KEY: &str = "AAAAC3NzaC1lZDI1NTE5AAAAIAICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC";
 
+/// What the server does with an exec request (digest_exec tests).
+#[derive(Clone)]
+pub(super) enum ExecScript {
+    /// Refuse the request (an account without commands).
+    Reject,
+    /// Print `stdout`, exit with `status`, close.
+    Output { stdout: String, status: u32 },
+    /// Accept and never answer; a TERM signal is logged.
+    Hang,
+}
+
+/// The commands the server received and the signals it saw.
+#[derive(Default)]
+pub(super) struct ExecLog {
+    pub(super) commands: Mutex<Vec<String>>,
+    pub(super) signals: Mutex<Vec<String>>,
+}
+
 #[derive(Clone)]
 struct FakeSshd {
     passwords: Arc<AtomicUsize>,
+    script: Arc<Mutex<ExecScript>>,
+    log: Arc<ExecLog>,
 }
 
 impl server::Handler for FakeSshd {
@@ -53,18 +73,56 @@ impl server::Handler for FakeSshd {
         reply.accept().await;
         Ok(())
     }
+
+    async fn exec_request(
+        &mut self,
+        channel: russh::ChannelId,
+        data: &[u8],
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        self.log
+            .commands
+            .lock()
+            .unwrap()
+            .push(String::from_utf8_lossy(data).into_owned());
+        let script = self.script.lock().unwrap().clone();
+        match script {
+            ExecScript::Reject => session.channel_failure(channel)?,
+            ExecScript::Output { stdout, status } => {
+                session.channel_success(channel)?;
+                session.data(channel, stdout.into_bytes())?;
+                session.exit_status_request(channel, status)?;
+                session.eof(channel)?;
+                session.close(channel)?;
+            }
+            ExecScript::Hang => session.channel_success(channel)?,
+        }
+        Ok(())
+    }
+
+    async fn signal(
+        &mut self,
+        _channel: russh::ChannelId,
+        signal: russh::Sig,
+        _session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        self.log.signals.lock().unwrap().push(format!("{signal:?}"));
+        Ok(())
+    }
 }
 
-struct Sshd {
-    runtime: tokio::runtime::Runtime,
-    port: u16,
+pub(super) struct Sshd {
+    pub(super) runtime: tokio::runtime::Runtime,
+    pub(super) port: u16,
     passwords: Arc<AtomicUsize>,
     algorithm: String,
-    fingerprint: String,
+    pub(super) fingerprint: String,
+    pub(super) script: Arc<Mutex<ExecScript>>,
+    pub(super) log: Arc<ExecLog>,
 }
 
 impl Sshd {
-    fn start() -> Self {
+    pub(super) fn start() -> Self {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
@@ -83,8 +141,12 @@ impl Sshd {
             .expect("listen");
         let port = listener.local_addr().expect("address").port();
         let passwords = Arc::new(AtomicUsize::new(0));
+        let script = Arc::new(Mutex::new(ExecScript::Reject));
+        let log = Arc::new(ExecLog::default());
         let handler = FakeSshd {
             passwords: passwords.clone(),
+            script: script.clone(),
+            log: log.clone(),
         };
         drop(runtime.spawn(async move {
             while let Ok((socket, _)) = listener.accept().await {
@@ -102,6 +164,8 @@ impl Sshd {
             passwords,
             algorithm: public.algorithm().to_string(),
             fingerprint: known_hosts::fingerprint(&public),
+            script,
+            log,
         }
     }
 
@@ -111,7 +175,7 @@ impl Sshd {
 
     /// What the main connection showed: this server's algorithm with
     /// `fingerprint`.
-    fn main_key(&self, fingerprint: &str) -> UnknownHostKey {
+    pub(super) fn main_key(&self, fingerprint: &str) -> UnknownHostKey {
         UnknownHostKey {
             host: HOST.into(),
             port: self.port,
@@ -120,7 +184,7 @@ impl Sshd {
         }
     }
 
-    fn extra(&self, main: UnknownHostKey) -> Result<super::session::Checked, String> {
+    pub(super) fn extra(&self, main: UnknownHostKey) -> Result<super::session::Checked, String> {
         let source: super::config::PasswordSource =
             Arc::new(|| Ok(zeroize::Zeroizing::new("secret".to_string())));
         let login = ExtraLogin::Password(source);

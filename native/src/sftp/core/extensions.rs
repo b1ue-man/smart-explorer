@@ -146,6 +146,17 @@ impl BackendExtensions for SftpBackend {
         })
     }
 
+    /// SHA-256 computed by the SSH server itself through an exec request
+    /// (digest_command.rs); `Ok(None)` where the account may run no
+    /// commands or the host has no SHA-256 tool.
+    fn content_digest(
+        &self,
+        path: &str,
+        cancel: &AtomicBool,
+    ) -> VfsResult<Option<crate::vfs::ContentDigest>> {
+        self.digest_by_command(path, cancel)
+    }
+
     /// Packets give each file the time its entry names: an `FSETSTAT` on the
     /// open handle behind the WRITEs, before the CLOSE (batch_put.rs).
     fn batch_put_times(&self) -> bool {

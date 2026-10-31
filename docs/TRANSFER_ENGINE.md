@@ -181,6 +181,24 @@ mehr als der Hälfte der Arbeitszeit → diese Seite; sonst `remote`. Leitung: d
 | SMB | Credits, COPYCHUNK | Pakete über Compounds: CREATE, WRITE und CLOSE je Datei und das Umbenennen in zwei Rundreisen; Reparse-Punkte werden nie über `read_file_compound*` gelesen (eigene Anfragen, damit Links nicht gefolgt werden); mehrere Lese-Blöcke gleichzeitig, serverseitige Kopie wo angeboten, neue Kopien ohne FLUSH; Bereiche über `read_at`; Schreiben in Bereichen über eigene Handles, die vor dem ersten Byte gegen die Kennung der Stufe geprüft werden (S14); Belege für Kopierstufen der Engine (G3-02): der `stat` des Ziels geht mit dem CLOSE der Stufe hinaus, der `stat` der Stufe direkt danach, die Veröffentlichung ist ein Compound CREATE (kein Ordner, Link als er selbst) + SET_INFO (Umbenennen ohne Ersetzen) + CLOSE, dessen CREATE-Antwort die veröffentlichte Datei beschreibt (`native/src/smb/core/stage_evidence.rs`). Einzeldateien (G3-07, Arbeitsbaum 2026-10-28): Lesen öffnet mit CREATE + erstem READ (512 KiB) in einem Compound, ein passender Bereich mit CLOSE (`compound_read.rs`); eine Engine-Stufe bis MaxWriteSize wird beim Öffnen exklusiv angelegt (belegter Name dort `AlreadyExists`) und beim Commit mit WRITE + CLOSE (`POSTQUERY_ATTRIB`, liefert den Beleg der Stufe) in einem Compound abgeschlossen, der Stat des Ziels daneben (`compound_put.rs`) | Block ≤ 512 KiB bzw. MaxReadSize, Tiefe nach Credits; eine Serverkopie sieht Abbrechen erst an ihrem Ende |
 | ZIP (Quelle) | – | ein Parse je Archiv, Einträge gestreamt | Parallelität = Kernzahl (Entpacken ist CPU-gebunden) |
 
+**Prüfschlüssel ohne Dateiübertragung (`vfs::content_digest`, Stand 2026-10-31, nicht gebaut).** Wo die
+Gegenseite selbst hashen kann, bekommt jeder Aufrufer (Sync im Prüfsummen-Modus, Duplikatsuche, Überprüfen
+nach Kopien, Eigentumsprüfung beim Fortsetzen) die SHA-256 als Antwort, ohne die Datei zu laden:
+
+| Backend | Weg | Voraussetzung, sonst `Ok(None)` und der bisherige Weg | Quelle |
+|---|---|---|---|
+| SFTP ohne Agent | Exec-Anfrage auf einem zusätzlichen Sitzungskanal der Verbindung: `sh -c '<fester Text>' sh '<Pfad>'` mit `sha256sum`, `shasum -a 256` oder `sha256 -q`; der Pfad ist nur `$1`, einfach gequotet, die Datei wird über eine Umleitung gelesen; Größe und Zeit per SFTP vor und nach dem Befehl müssen gleich sein (`sftp/core/digest_command.rs`, `digest_exec.rs`); Wartezeit 60 s plus 1 s je 8 MiB (langsamer lohnt sich gegenüber dem Laden nicht), Abbruch sendet TERM | das Konto darf Befehle ausführen, der Host hat ein SHA-256-Werkzeug; abgelehnte Anfrage, Exit 126/127 oder eine Antwort ohne Prüfschlüssel schließen den Weg für die Verbindung, drei andere Fehlschläge in Folge ebenfalls | RFC 4254 Abschnitt 6.5 (exec), 6.9 (signal) |
+| FTP/FTPS | `OPTS HASH SHA-256`, dann `HASH <Pfad>` (Antwort `213 SHA-256 0-<Ende> <hex> <Pfad>`), sonst `XSHA256 <Pfad>` (Antwort `213`/`250` mit einem 64-stelligen Token); keine Datenverbindung, die Lesezeit der Steuerverbindung wird auf die Wartezeit gehoben und danach zurückgesetzt; Größe und Zeit vorher/nachher (`ftp/core/content_digest.rs`) | FEAT nennt `HASH` mit `SHA-256` bzw. `XSHA256`; Algorithmus, Bereich (ganze Datei, Ende gleich Größe oder Größe − 1) und Antwortcode müssen stimmen; eine Ablehnung gibt `Ok(None)`. Ein laufender Befehl lässt sich auf der Steuerverbindung nicht abbrechen (RFC 959 kennt `ABOR` nur für Datenverbindungen), er ist durch die Wartezeit begrenzt. Antwortcode von `XSHA256` bei echten Servern: nicht gemessen (213 und 250 werden angenommen) | draft-bryan-ftpext-hash-02; ProFTPD mod_digest |
+| WebDAV, Nextcloud, ownCloud | eine PROPFIND-Anfrage, `oc:checksums` mit `SHA256:<hex>`; Größe aus derselben Antwort (`webdav/core/content_digest.rs`) | der Server speichert eine SHA-256 (Nextcloud-Entwicklerhandbuch: MD5, SHA1, SHA256, SHA3-256, Adler32 als Typen); MD5 und SHA1 passen nicht zum SHA-256-Vertrag. Der Wert ist, was ein Hochladender mitsandte (bei einfachem `PUT` ungeprüft gespeichert); diese Engine sendet ihn nie. Deshalb stützt die Engine ihre Belege (Eigentum, Überprüfen) nicht darauf: `file_evidence::on_device` lässt WebDAV aus, sie liest zurück wie zuvor | Nextcloud Developer Manual, „Basic file and folder operations“ |
+| Google Drive | `files.get` mit `fields=sha256Checksum` auf der genauen ID (`gdrive/core/content_digest.rs`) | Datei mit gespeichertem Inhalt; für Docs-Editors-Dateien und Verknüpfungen fehlt das Feld (`Ok(None)`); „if available“: ist es noch nicht berechnet, liest die Engine zurück | Drive API v3, `files` |
+| SMB | bleibt bei Übertragung | SMB 2/3 kennt keine serverseitige Prüfsumme des Dateiinhalts (kein Befehl in MS-SMB2; `FSCTL_SRV_COPYCHUNK` kopiert, hasht nicht) | MS-SMB2 |
+
+Überprüfen nach Kopien und Eigentumsprüfung (`engine/file_evidence.rs` `current`, `on_device`) fragen
+zuerst `vfs::content_digest` der Seite, auf der die Datei liegt, und lesen nur zurück, wenn sie keinen
+Prüfschlüssel bilden kann; lokal, Share, Agent und jetzt SFTP mit Befehlen, FTP mit `HASH`/`XSHA256` und Drive
+liefern ihn ohne Übertragung. Ein Prüfschlüssel, den der Server nur als Behauptung eines Hochladenden führt
+(WebDAV), zählt dort nicht.
+
 **SFTP-Kanäle und -Zusatzverbindungen.** Ein Bereich nimmt einen leeren Kanal. Gibt es keinen, öffnet er
 einen neuen, solange die gelernte Grenze es erlaubt; sonst teilt er den am wenigsten belasteten
 Kanal mit anderen Bereichen, sofern dort noch Handles frei sind (`native/src/sftp/core/link_rules.rs:272-284`,
@@ -496,6 +514,7 @@ Entscheidung `transfer/core/update_rule.rs:50`):
 |---|---|
 | fehlt | eingefügt |
 | gleiche Größe, Zeitabstand höchstens das Fenster | gleich, übersprungen |
+| gleiche Größe, Zeitabstand genau eine Stunde (± Fenster) und eine Seite speichert Ortszeit (FAT, `MtimePrecision::local_time_shifts`) | gleich, übersprungen (Sommerzeitumstellung, `transfer/core/time_window.rs` `dst_shift_equal`; die Vorschau zählt ebenso; Stand 2026-10-31) |
 | Quelle um mehr als das Fenster neuer (jede Größe) | ersetzt das Ziel |
 | Ziel um mehr als das Fenster neuer (jede Größe) | Ziel bleibt, „Ziel neuer“ |
 | Zeit im Fenster, andere Größe | Konflikt: beide behalten (`Name (2)`) |
@@ -639,12 +658,20 @@ Auftrag läuft dann im eigenen Prozess (`transfer_job_client.rs:155`).
   SFTP ohne Pool-Kanal, Share-Hosts und Agenten ohne `stage_mtime_v1`/`stage-mtime-v1` und Ersetzungen
   (dauerhafte Stufe). Der Stufenbeleg der Gegenstelle entfällt dort, wenn das Setzen die Zeit änderte.
   Ein Ziel, das die Zeit nicht speichern kann, behält seine eigene (kein Fehler des Eintrags). Eine
-  Drive-Datei in einem vom Auftrag angelegten Ordner hat weiter keinen Platz für eine Zeit.
+  Drive-Datei, die ohne Stufe entsteht (in einem vom Auftrag angelegten Ordner, `open_write_fresh`, oder unter dem
+  Endnamen, `open_write_absent`), trägt die Zeit seit 2026-10-31 schon in der Anlegeanfrage (`modifiedTime`): die
+  Engine bietet sie dem Schreiber an, während sie ihn öffnet (`transfer/core/creation_time.rs`,
+  `engine/publish.rs` `open`; Annahme: der Aufruf läuft auf dem Faden der Engine, ein Schreiber liest das Angebot
+  nur beim Öffnen), `gdrive/core/sized_writer.rs` übernimmt es in `NewObject::mtime_ms`; keine Anfrage mehr.
 - Ein Ziel, das keine Zeit speichern kann (`finish_stage` meldet `mtime_applied: false`), behält
   seine eigene; die Regel vergleicht dann wie zuvor.
 - Ein Konflikt (gleiche Zeit, andere Größe) legt bei jedem Lauf eine weitere nummerierte Kopie an.
-- Keine Sommerzeit-Verschiebung (FAT speichert Ortszeit; Stundenabweichung nach Umstellung bleibt
-  außerhalb des Fensters).
+- Sommerzeit (seit 2026-10-31): speichert eine Seite Ortszeit (laut `fs_profile` FAT/VFAT, Zeitauflösung zwei
+  Sekunden; exFAT meldet zehn Millisekunden und zählt nicht dazu), gelten Dateien gleicher Größe mit einem
+  Zeitabstand von genau 3600 s ± Fenster als gleich (`classify_local_time`, `engine/update.rs` `local_time_of`,
+  Vorschau `selection_count.rs`). Ungleiche Größen und andere Abstände entscheiden wie zuvor; beide
+  Dateien einer Stundenabweichung mit anderem Inhalt gleicher Größe gelten damit als gleich (Größe plus Zeit, nie
+  Inhalt).
 - Gleichheit ist Größe plus Zeit im Fenster, nie Inhalt.
 - `se mv --conflict update` und der MCP `move` mit `file_conflict: update` nur lokal; gleiche Dateien
   bleiben in der Quelle, der Quellordner bleibt dann stehen.

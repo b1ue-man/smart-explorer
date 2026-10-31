@@ -39,10 +39,10 @@ use super::roots::RootPlan;
 use super::stats::Decision;
 use super::view::{JobView, Side};
 use super::Engine;
-use crate::transfer::update_rule::{classify, window_ms, Case, Replacing, Stamp};
+use crate::transfer::update_rule::{classify_local_time, window_ms, Case, Replacing, Stamp};
 use crate::transfer::{FolderConflict, RecoveryMode};
 use crate::types::Conflict;
-use crate::vfs::LocalBackend;
+use crate::vfs::{LocalBackend, MtimePrecision};
 use std::io;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -75,6 +75,7 @@ pub(super) struct State {
     /// asks for it.
     merge_prefixes: Vec<String>,
     window: OnceLock<u64>,
+    local_time: OnceLock<bool>,
     listings: Mutex<Listings>,
 }
 
@@ -92,6 +93,7 @@ impl State {
         Self {
             merge_prefixes,
             window: OnceLock::new(),
+            local_time: OnceLock::new(),
             listings: Mutex::new(Listings::default()),
         }
     }
@@ -123,6 +125,15 @@ impl Engine<'_> {
         *self.update.window.get_or_init(|| window_of(&self.view))
     }
 
+    /// Whether a side of the job stores local time (FAT): an hour apart at
+    /// equal size is equal (`time_window.rs`), found once per job.
+    fn update_local_time(&self) -> bool {
+        *self
+            .update
+            .local_time
+            .get_or_init(|| local_time_of(&self.view))
+    }
+
     /// The flow a listing of the remote target takes its permit from.
     pub(super) fn target_flow(&self) -> &Arc<Flow> {
         match (self.view.source, self.view.target) {
@@ -138,12 +149,26 @@ impl Engine<'_> {
 /// the two sides, two seconds where a side does not know its own. Also the
 /// tolerance of the folder preview.
 pub(super) fn window_of(view: &JobView<'_>) -> u64 {
+    let (source, target) = precisions_of(view);
+    window_ms(source, target)
+}
+
+/// Whether either side of `view` stores local time (`fs_profile`: FAT), so a
+/// clock change can shift its times by exactly one hour. Also used by the
+/// folder preview.
+pub(super) fn local_time_of(view: &JobView<'_>) -> bool {
+    let (source, target) = precisions_of(view);
+    source.local_time_shifts() || target.local_time_shifts()
+}
+
+/// The time resolutions of the source and the target of `view`.
+fn precisions_of(view: &JobView<'_>) -> (MtimePrecision, MtimePrecision) {
     let local = LocalBackend::new("/");
     let precision = |side: Side<'_>, root: &str| match side {
         Side::Local => crate::vfs::mtime_precision(&local, root),
         Side::Remote(backend) => crate::vfs::mtime_precision(backend, root),
     };
-    window_ms(
+    (
         precision(view.source, &view.gate_root()),
         precision(view.target, view.target_dir),
     )
@@ -188,7 +213,7 @@ pub(super) fn settle_recovered(
                 mtime_ms: file.mtime_ms,
             };
             let window = engine.update_window();
-            let case = classify(source, target, window);
+            let case = classify_local_time(source, target, window, engine.update_local_time());
             if case == Case::SourceNewer {
                 file.replacing = Some(Replacing {
                     id,

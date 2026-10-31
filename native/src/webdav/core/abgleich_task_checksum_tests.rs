@@ -1,0 +1,77 @@
+//! `content_digest` over WebDAV: the SHA-256 that ownCloud and Nextcloud
+//! report in `oc:checksums` comes back from one PROPFIND, the file is not
+//! read (no GET), and a server without a SHA-256 entry answers `Ok(None)`.
+use super::super::content_digest::{from_propfind, sha256_token};
+use super::request_count_server::{lock, Server};
+use crate::vfs::content_digest;
+use std::sync::atomic::AtomicBool;
+
+const HEX: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+
+fn put(server: &Server, path: &str, checksums: Option<&str>) {
+    lock(&server.dav.files).insert(path.to_string(), (b"abcde".to_vec(), 1_700_000_000));
+    if let Some(text) = checksums {
+        lock(&server.dav.checksums).insert(path.to_string(), text.to_string());
+    }
+}
+
+#[test]
+fn abgleich_task_webdav_digest_comes_from_the_checksum_property_without_a_download() {
+    let server = Server::start();
+    let backend = server.backend();
+    put(
+        &server,
+        "/a.bin",
+        Some(&format!(
+            "SHA1:da39a3ee5e6b4b0d3255bfef95601890afd80709 SHA256:{HEX}"
+        )),
+    );
+    let found = content_digest(&backend, "/a.bin", &AtomicBool::new(false))
+        .unwrap()
+        .expect("the server stores a SHA-256");
+    assert_eq!(found.sha256, HEX);
+    assert_eq!(found.size, 5);
+    assert_eq!(server.dav.count("GET"), 0, "the content was not read");
+    assert_eq!(server.dav.count("PUT"), 0);
+}
+
+#[test]
+fn abgleich_task_webdav_digest_needs_a_sha256_entry() {
+    let server = Server::start();
+    let backend = server.backend();
+    put(
+        &server,
+        "/md5.bin",
+        Some("SHA1:da39a3ee5e6b4b0d3255bfef95601890afd80709 MD5:d41d8cd98f00b204e9800998ecf8427e"),
+    );
+    put(&server, "/none.bin", None);
+    for path in ["/md5.bin", "/none.bin"] {
+        let found = content_digest(&backend, path, &AtomicBool::new(false)).unwrap();
+        assert_eq!(found, None, "{path}");
+    }
+    assert_eq!(server.dav.count("GET"), 0);
+}
+
+#[test]
+fn abgleich_task_webdav_digest_tokens_parse_strictly() {
+    assert_eq!(
+        sha256_token(&format!("md5:aa SHA-256:{}", HEX.to_ascii_uppercase())).as_deref(),
+        Some(HEX)
+    );
+    assert_eq!(sha256_token("SHA256:abc"), None, "too short");
+    assert_eq!(
+        sha256_token(&format!("SHA3-256:{HEX}")),
+        None,
+        "another algorithm"
+    );
+    assert_eq!(sha256_token(&format!("SHA256{HEX}")), None, "no separator");
+}
+
+#[test]
+fn abgleich_task_webdav_digest_of_a_collection_is_refused() {
+    let xml = r#"<?xml version="1.0"?><d:multistatus xmlns:d="DAV:"><d:response><d:href>/x/</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>"#;
+    assert_eq!(
+        from_propfind(xml).unwrap_err().kind(),
+        std::io::ErrorKind::InvalidInput
+    );
+}

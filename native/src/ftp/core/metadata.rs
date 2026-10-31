@@ -13,6 +13,10 @@ pub(super) struct Features {
     pub(super) mlst: bool,
     pub(super) mlsd: bool,
     pub(super) mfmt: bool,
+    /// `HASH` lists SHA-256 (draft-bryan-ftpext-hash-02).
+    pub(super) hash_sha256: bool,
+    /// `XSHA256` (ProFTPD mod_digest and servers that copied it).
+    pub(super) xsha256: bool,
 }
 
 impl FtpConnection {
@@ -32,6 +36,8 @@ impl FtpConnection {
                     mlst: has("MLST"),
                     mlsd: has("MLST") || has("MLSD"),
                     mfmt: has("MFMT"),
+                    hash_sha256: hash_offers_sha256(&features),
+                    xsha256: has("XSHA256"),
                 })
             }
             Err(error) if matches!(reply_code(&error), Some(500 | 502 | 504)) => {
@@ -52,6 +58,22 @@ impl FtpConnection {
             .map(|precision| *precision)
             .unwrap_or(MtimePrecision::Unknown)
     }
+}
+
+/// The FEAT line of the draft is `HASH SHA-256;SHA-512;SHA-1*;MD5`; the
+/// asterisk marks the algorithm selected at the moment.
+fn hash_offers_sha256(features: &suppaftp::types::Features) -> bool {
+    features
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("HASH"))
+        .filter_map(|(_, algorithms)| algorithms.as_deref())
+        .flat_map(|algorithms| algorithms.split(';'))
+        .any(|algorithm| {
+            algorithm
+                .trim()
+                .trim_end_matches('*')
+                .eq_ignore_ascii_case("SHA-256")
+        })
 }
 
 pub(super) fn parse_time(text: &str) -> Option<i64> {

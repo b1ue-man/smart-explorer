@@ -29,6 +29,8 @@ pub struct SftpBackend {
     pub(super) stage_folders: Arc<Mutex<HashMap<String, (bool, Instant)>>>,
     /// Evidence of committed copy stages for the receipts (stage_evidence.rs).
     pub(super) written: WrittenStages,
+    /// Whether this server answers the hash command (digest_command.rs).
+    pub(super) digest_gate: Arc<super::digest_command::DigestGate>,
     root: String,
     /// Read by `url()` (UI display), consumed in the connect-UI step.
     #[allow(dead_code)]
@@ -65,6 +67,7 @@ impl SftpBackend {
             pool,
             stage_folders: Arc::new(Mutex::new(HashMap::new())),
             written: WrittenStages::default(),
+            digest_gate: Arc::default(),
             root,
             url,
         })

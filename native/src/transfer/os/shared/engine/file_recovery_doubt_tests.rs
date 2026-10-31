@@ -297,7 +297,8 @@ fn screen_metadata_runtime_task_target_without_digest_falls_back_to_read_back() 
     let target = root.path().join("target");
     write(&source, b"payload");
     fs::create_dir(&target).unwrap();
-    // An SFTP target without an agent: its device cannot hash.
+    // A target whose device cannot hash (a WebDAV server, an FTP server
+    // without `HASH`).
     let candidate = job(
         Endpoint::Local,
         Endpoint::Remote(Arc::new(Limited::new("no-device-digest"))),
@@ -347,6 +348,56 @@ fn screen_metadata_runtime_task_target_without_digest_falls_back_to_read_back() 
     assert!(retry.issues.is_empty(), "{:?}", retry.issues);
     assert_eq!(backend.promotes.load(Ordering::SeqCst), 1);
     assert_eq!(names(&target), ["a.bin"]);
+}
+
+/// A target whose device hashes files itself answers the ownership question
+/// with its digest: the content is not read back. With the read refused the
+/// same question fails on a device that cannot hash.
+#[test]
+fn abgleich_task_ownership_of_a_target_uses_the_devices_digest_not_a_read_back() {
+    for device_digest in [true, false] {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("a.bin");
+        let target = root.path().join("target");
+        write(&source, b"payload");
+        fs::create_dir(&target).unwrap();
+        let mut limited = Limited::new("device-digest");
+        limited.device_digest = device_digest;
+        limited.read_error = Some(io::ErrorKind::PermissionDenied);
+        let backend = Arc::new(limited);
+        let candidate = job(
+            Endpoint::Local,
+            Endpoint::Remote(backend.clone()),
+            &target,
+            &[&source],
+        );
+        let cancel = AtomicBool::new(false);
+        let report = |_| {};
+        let file = work(&source, "a.bin");
+        let engine = open(&candidate, &cancel, &report).unwrap();
+        apply(&engine, &file);
+        assert_eq!(engine.issues.total(), 0, "{:?}", engine.issues.shown().0);
+        let receipt = engine
+            .job_record
+            .as_ref()
+            .unwrap()
+            .read_file(&file)
+            .unwrap()
+            .unwrap();
+        let meter = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let decided = with_check_meter(meter.clone(), || {
+            doubt::ownership(&receipt, engine.view.source, engine.view.target, &cancel)
+        });
+        if device_digest {
+            assert_eq!(decided.unwrap(), Ownership::Own);
+            assert_eq!(backend.digests.load(Ordering::SeqCst), 1);
+            // Only the local source was hashed, on its own disk.
+            assert_eq!(meter.load(Ordering::Acquire), 0);
+        } else {
+            assert!(decided.is_err(), "no digest, no read: undecided");
+            assert_eq!(backend.digests.load(Ordering::SeqCst), 0);
+        }
+    }
 }
 
 #[path = "file_recovery_metadata_tests.rs"]

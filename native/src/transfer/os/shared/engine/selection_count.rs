@@ -20,7 +20,7 @@ use crate::transfer::engine_names::{join_rel, name_problem};
 use crate::transfer::entries::{
     compile_remote_filter, remote_file_entry, RemoteFilterCtx, TransferCollectionBudget,
 };
-use crate::transfer::update_rule::{classify, Case, Stamp};
+use crate::transfer::update_rule::{classify_local_time, Case, Stamp};
 use crate::transfer::{Endpoint, FolderConflictPreview, TransferJob};
 use crate::vfs::{Backend, LocalBackend, VfsMeta};
 use std::collections::{HashMap, HashSet};
@@ -80,6 +80,7 @@ struct Context<'a> {
     filter: Option<RemoteFilterCtx>,
     allow_backslash: bool,
     window: u64,
+    local_time: bool,
     cancel: &'a AtomicBool,
     budget: Mutex<TransferCollectionBudget>,
 }
@@ -142,6 +143,7 @@ pub fn count_folder_conflict(
         filter: compile_remote_filter(job.filter.clone()),
         allow_backslash: view.allow_backslash(),
         window: super::super::update::window_of(&view),
+        local_time: super::super::update::local_time_of(&view),
         cancel,
         budget: Mutex::new(TransferCollectionBudget::default()),
     };
@@ -420,7 +422,7 @@ fn count_file(
         }
     };
     let case = match existing {
-        [one] if !omitted && !one.is_dir && !one.is_symlink && !one.special => classify(
+        [one] if !omitted && !one.is_dir && !one.is_symlink && !one.special => classify_local_time(
             Stamp {
                 size: entry.size,
                 mtime_ms: entry.mtime_ms,
@@ -430,6 +432,7 @@ fn count_file(
                 mtime_ms: one.mtime_ms,
             },
             context.window,
+            context.local_time,
         ),
         // A folder, link or several entries under that name: not the same
         // file, both are kept.

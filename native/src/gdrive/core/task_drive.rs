@@ -366,6 +366,14 @@ impl FakeDrive {
     }
 }
 
+pub(super) fn sha256_hex_of(content: &[u8]) -> String {
+    ring::digest::digest(&ring::digest::SHA256, content)
+        .as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 fn object(id: &str, name: &str, parent: &str, mime: &str, content: Option<&[u8]>) -> Value {
     let mut object = json!({
         "id": id, "name": name, "parents": [parent], "mimeType": mime, "trashed": false,
@@ -374,6 +382,7 @@ fn object(id: &str, name: &str, parent: &str, mime: &str, content: Option<&[u8]>
     if let Some(content) = content {
         object["size"] = json!(content.len().to_string());
         object["md5Checksum"] = json!(format!("{:x}", md5::compute(content)));
+        object["sha256Checksum"] = json!(sha256_hex_of(content));
     }
     object
 }

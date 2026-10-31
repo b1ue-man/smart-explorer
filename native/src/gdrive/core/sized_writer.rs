@@ -4,6 +4,9 @@
 //! pre-generated ID): no probe, no stage, no promotion. The sized copy stage
 //! creates its private object the same way. Both stream instead of spooling to
 //! a temporary file while the transfer memory budget allows.
+//! Both one-step writers put the source's time into the create request
+//! (`modifiedTime`) when the engine offered it while opening them
+//! (`transfer::creation_time`).
 //! `open_absent` (G3-08b) creates a new file under its final name in an
 //! existing folder the same way, then proves the name leads to it alone
 //! (absent_write.rs).
@@ -42,7 +45,7 @@ pub(super) fn open_fresh(
         path,
         size,
         Purpose::Fresh,
-        None,
+        crate::transfer::creation_time::offered(),
     )?))
 }
 
@@ -56,7 +59,7 @@ pub(super) fn open_absent(
         path,
         size,
         Purpose::Absent,
-        None,
+        crate::transfer::creation_time::offered(),
     )?))
 }
 

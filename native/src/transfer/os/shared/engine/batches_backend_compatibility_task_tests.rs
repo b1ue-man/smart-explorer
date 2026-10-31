@@ -26,6 +26,12 @@ pub(super) struct Limited {
     pub reserved_renames: AtomicUsize,
     pub mutate_stage: AtomicUsize,
     pub refuse_listing: AtomicBool,
+    /// The device behind this target hashes files itself (an SSH server that
+    /// runs `sha256sum`, an FTP server with `HASH`, Drive's checksum).
+    pub device_digest: bool,
+    pub digests: AtomicUsize,
+    /// The time resolution the target reports (`target_limits`).
+    pub precision: crate::vfs::MtimePrecision,
 }
 impl Limited {
     pub fn new(label: &str) -> Self {
@@ -42,6 +48,9 @@ impl Limited {
             reserved_renames: AtomicUsize::new(0),
             mutate_stage: AtomicUsize::new(0),
             refuse_listing: AtomicBool::new(false),
+            device_digest: false,
+            digests: AtomicUsize::new(0),
+            precision: crate::vfs::MtimePrecision::Unknown,
         }
     }
 }
@@ -148,6 +157,25 @@ impl BackendExtensions for Limited {
         } else {
             Ok(None)
         }
+    }
+    fn target_limits(&self, _root: &str) -> crate::vfs::TargetLimits {
+        crate::vfs::TargetLimits {
+            mtime_precision: self.precision,
+            ..crate::vfs::TargetLimits::default()
+        }
+    }
+    fn content_digest(
+        &self,
+        path: &str,
+        cancel: &AtomicBool,
+    ) -> io::Result<Option<crate::vfs::ContentDigest>> {
+        if !self.device_digest {
+            return Ok(None);
+        }
+        self.digests.fetch_add(1, Ordering::SeqCst);
+        // The device reads its own disk: `open_read` of this stand-in, which
+        // may be refused for the client, is not involved.
+        crate::vfs::digest_by_local_read(&self.inner, path, cancel)
     }
     fn rename_reserved_directory(&self, source: &str, destination: &str) -> io::Result<()> {
         self.reserved_renames.fetch_add(1, Ordering::SeqCst);

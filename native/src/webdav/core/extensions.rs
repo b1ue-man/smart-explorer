@@ -46,6 +46,22 @@ impl BackendExtensions for WebdavBackend {
         Ok(listing)
     }
 
+    /// The SHA-256 the server stores in `oc:checksums` (content_digest.rs);
+    /// `Ok(None)` for a server without one.
+    fn content_digest(
+        &self,
+        path: &str,
+        cancel: &AtomicBool,
+    ) -> VfsResult<Option<crate::vfs::ContentDigest>> {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "content digest canceled",
+            ));
+        }
+        self.digest_from_checksums(path)
+    }
+
     fn target_limits(&self, _root: &str) -> TargetLimits {
         TargetLimits {
             mtime_precision: MtimePrecision::Seconds,

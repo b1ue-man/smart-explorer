@@ -207,7 +207,7 @@ fn rustls_client_config() -> Arc<rustls::ClientConfig> {
 const FTP_SETUP_TIMEOUT: Duration = Duration::from_secs(10);
 const FTP_CONNECT_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(3);
 const FTP_DATA_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const FTP_IO_TIMEOUT: Duration = Duration::from_secs(60);
+pub(super) const FTP_IO_TIMEOUT: Duration = Duration::from_secs(60);
 const FTP_MAX_CONNECT_ADDRESSES: usize = 8;
 
 fn keepalive(stream: &TcpStream) -> io::Result<()> {

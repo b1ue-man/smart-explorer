@@ -119,8 +119,12 @@ pub(super) fn current_source(
 }
 
 /// The file's digest from the device that holds it (`vfs::content_digest`):
-/// local disk, a Share peer or room member, the SSH agent. Only the answer
-/// crosses the network. `None` when that device cannot hash.
+/// local disk, a Share peer or room member, the SSH agent, an SSH server that
+/// runs `sha256sum` for the connection, an FTP server with `HASH`/`XSHA256`,
+/// Drive's `sha256Checksum`. Only the answer crosses the network. `None` when
+/// that device cannot hash. WebDAV is left out on purpose: its `oc:checksums`
+/// is what an uploader claimed, not what the server computed, and these
+/// proofs decide whether a file at the target is ours.
 fn on_device(
     side: Side<'_>,
     path: &str,
@@ -129,6 +133,9 @@ fn on_device(
 ) -> io::Result<Option<Proof>> {
     crate::source_media::with_cancellation(cancel, || {
         with_backend(side, |backend| {
+            if backend.scheme() == crate::vfs::Scheme::Webdav {
+                return Ok(None);
+            }
             let native = super::super::walk_listers::native(path);
             let medium = if side.is_local() {
                 crate::source_media::probe(&native)?

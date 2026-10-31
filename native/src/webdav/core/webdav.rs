@@ -469,6 +469,9 @@ impl Backend for WebdavBackend {
 mod connection_tests;
 
 #[cfg(test)]
+#[path = "abgleich_task_checksum_tests.rs"]
+mod abgleich_task_checksum_tests;
+#[cfg(test)]
 #[path = "request_count_server.rs"]
 mod request_count_server;
 #[cfg(test)]

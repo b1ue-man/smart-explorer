@@ -22,6 +22,8 @@ pub(super) struct Dav {
     /// path -> (bytes, modification time in seconds)
     pub(super) files: Mutex<HashMap<String, (Vec<u8>, i64)>>,
     pub(super) log: Mutex<Vec<Request>>,
+    /// path -> the `oc:checksums` text the server reports for it.
+    pub(super) checksums: Mutex<HashMap<String, String>>,
     /// MOVE answers `X-OC-Mtime: accepted`.
     pub(super) move_proof: AtomicBool,
     /// MOVE gives the moved file another time.
@@ -53,11 +55,25 @@ impl Dav {
             // The connect looks at the root once.
             "PROPFIND" if request.path == "/" => (207, vec![], COLLECTION.to_string()),
             "PROPFIND" => match files.get(&request.path) {
-                Some((bytes, seconds)) => (
-                    207,
-                    vec![],
-                    multistatus(&request.path, bytes.len(), *seconds),
-                ),
+                Some((bytes, seconds)) => {
+                    let mut text = multistatus(&request.path, bytes.len(), *seconds);
+                    if let Some(checksums) = lock(&self.checksums).get(&request.path) {
+                        text = text
+                            .replacen(
+                                "<d:multistatus xmlns:d=\"DAV:\">",
+                                "<d:multistatus xmlns:d=\"DAV:\" xmlns:oc=\"http://owncloud.org/ns\">",
+                                1,
+                            )
+                            .replacen(
+                                "</d:prop>",
+                                &format!(
+                                    "<oc:checksums><oc:checksum>{checksums}</oc:checksum></oc:checksums></d:prop>"
+                                ),
+                                1,
+                            );
+                    }
+                    (207, vec![], text)
+                }
                 None => (404, vec![], String::new()),
             },
             "MOVE" => {
