@@ -102,6 +102,20 @@ impl Part {
         Ok(())
     }
 
+    /// The source's modification time (Unix ms; 0 = unknown) on the complete
+    /// part, before it is closed and published: a download keeps the time of
+    /// its source, as a local copy does. A file system that refuses it keeps
+    /// the time of the download (best effort).
+    fn carry_time(&self, mtime_ms: i64) {
+        let (Some(file), Ok(millis)) = (self.file.as_deref(), u64::try_from(mtime_ms)) else {
+            return;
+        };
+        if millis > 0 {
+            let _ =
+                file.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_millis(millis));
+        }
+    }
+
     fn close(&mut self, durable: bool) -> Result<(), OpError> {
         if let Some(file) = self.file.take() {
             if durable {
@@ -130,7 +144,7 @@ pub(super) fn download<'e>(
     buffer: &mut [u8],
 ) -> OpResult {
     let destination = native(&engine.folders.path_of(&file.rel));
-    if let Some(outcome) = existing(engine, &destination, file.size)? {
+    if let Some(outcome) = existing(engine, &destination, file.size, engine.conflict_of(file))? {
         return Ok(outcome);
     }
     let expected = source
@@ -260,8 +274,9 @@ pub(super) fn existing(
     engine: &Engine<'_>,
     destination: &Path,
     size: u64,
+    conflict: Conflict,
 ) -> Result<Option<Outcome>, OpError> {
-    if !(engine.resume || engine.view.conflict == Conflict::Skip) {
+    if !(engine.resume || conflict == Conflict::Skip) {
         return Ok(None);
     }
     match std::fs::symlink_metadata(destination) {
@@ -298,7 +313,9 @@ pub(super) fn publish_local_known(
     known: Option<HostEvidence>,
 ) -> OpResult {
     let known = known.as_ref();
-    let overwrite = engine.view.conflict == Conflict::Overwrite && !engine.resume;
+    let conflict = engine.conflict_of(file);
+    let overwrite = conflict == Conflict::Overwrite && !engine.resume;
+    part.carry_time(file.mtime_ms);
     part.close(overwrite)?;
     if overwrite {
         refuse_folder_or_link(destination)?;
@@ -334,10 +351,10 @@ pub(super) fn publish_local_known(
                 super::file_recovery::unpublished(engine, file)
                     .map_err(|error| OpError::at(At::Unknown, error))?;
                 if engine.resume {
-                    return existing(engine, destination, part.written())?
+                    return existing(engine, destination, part.written(), conflict)?
                         .ok_or_else(|| OpError::at(At::Publish, super::publish::different_size()));
                 }
-                if engine.view.conflict == Conflict::Skip {
+                if conflict == Conflict::Skip {
                     return Ok(Outcome::Skipped);
                 }
                 target = next_free(destination, &mut names)?;

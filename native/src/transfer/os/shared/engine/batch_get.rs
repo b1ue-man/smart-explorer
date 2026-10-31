@@ -34,7 +34,7 @@ pub(super) fn download(
     let mut failures = Failures::new(engine);
     for file in files {
         let destination = native(&engine.folders.path_of(&file.rel));
-        match existing(engine, &destination, file.size) {
+        match existing(engine, &destination, file.size, engine.conflict_of(&file)) {
             Ok(Some(outcome)) => finished(engine, outcome),
             Err(failure) => failures.member(file, failure, Attempt::NotPublished),
             // Exports change their length on the way: they go alone.

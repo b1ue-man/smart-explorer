@@ -19,6 +19,11 @@ use serde::{Deserialize, Serialize};
 
 /// The job service's label in the `Hello` reply.
 pub(crate) const TRANSFER_JOBS_V1: &str = "transfer-jobs-v1";
+/// A worker with this label also decides the file rule "neuere ersetzen
+/// ältere" (`Conflict::Update`, file policy code 3, `merge_update` of the
+/// folder policy). A job that uses the rule goes only to such a worker; for
+/// an older one the client keeps the proxy path, which runs the job itself.
+pub(crate) const TRANSFER_UPDATE_V1: &str = "transfer-update-v1";
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -85,7 +90,7 @@ pub(crate) struct JobWire {
     pub(crate) items: JobItems,
     pub(crate) layout: Layout,
     pub(crate) filter: Option<StoredFilter>,
-    /// `JobRecord::file_policy`: 0 rename, 1 overwrite, 2 skip.
+    /// 0 rename, 1 overwrite, 2 skip, 3 update (`TRANSFER_UPDATE_V1`).
     pub(crate) conflict: u8,
     pub(crate) folders: FolderConflictPolicy,
     pub(crate) moving: bool,
@@ -143,6 +148,7 @@ impl JobWire {
             0 => Conflict::Rename,
             1 => Conflict::Overwrite,
             2 => Conflict::Skip,
+            3 => Conflict::Update,
             _ => return Err("Unbekannte Dateikonfliktregel im Auftrag".into()),
         };
         let filter = self
@@ -159,5 +165,13 @@ fn conflict_code(conflict: Conflict) -> u8 {
         Conflict::Rename => 0,
         Conflict::Overwrite => 1,
         Conflict::Skip => 2,
+        Conflict::Update => 3,
+    }
+}
+
+impl JobWire {
+    /// Whether the job needs a worker that knows `TRANSFER_UPDATE_V1`.
+    pub(crate) fn needs_update_rule(&self) -> bool {
+        self.conflict == 3 || self.folders.merge_update
     }
 }

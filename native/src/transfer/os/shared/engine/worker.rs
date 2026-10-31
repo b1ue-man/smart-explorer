@@ -43,12 +43,28 @@ pub(super) fn run(engine: &Engine<'_>, _slot: WorkerSlot<'_>) {
                     folder_work(engine, rel, source);
                 }
             }
-            Work::File(file) => crate::source_media::with_cancellation(engine.stop_flag(), || {
-                match super::batch::members(engine, &file) {
-                    Some(members) => super::batch::run(engine, file, members, &mut buffer),
-                    None => run_file(engine, file, &mut buffer),
-                }
-            }),
+            Work::File(mut file) => {
+                crate::source_media::with_cancellation(engine.stop_flag(), || {
+                    // The file rule "neuere ersetzen ältere" decides before a
+                    // packet is formed: skipped files never travel, replacements
+                    // go alone. A failed look at the target leaves the file to
+                    // its own path, which reports and retries it.
+                    match super::update::settle(engine, &mut file) {
+                        Ok(super::update::Settled::Skipped) => {
+                            finished(engine, Outcome::Skipped);
+                            return;
+                        }
+                        Ok(super::update::Settled::Go) => {
+                            file.alone |= file.replacing.is_some();
+                        }
+                        Err(_) => file.alone = true,
+                    }
+                    match super::batch::members(engine, &file) {
+                        Some(members) => super::batch::run(engine, file, members, &mut buffer),
+                        None => run_file(engine, file, &mut buffer),
+                    }
+                })
+            }
             Work::Segment { job } => super::segments::help(engine, job, &mut buffer),
         }
     }
@@ -131,7 +147,14 @@ pub(super) fn run_file(engine: &Engine<'_>, mut file: FileWork, buffer: &mut [u8
         let meter = Meter::new(&permits, &engine.stats);
         meter.add_wait(std::mem::take(&mut waited));
         let result = super::file_evidence::with_check_meter(engine.stats.check_meter(), || {
-            ops::transfer(engine, &file, parent_created, &mut carry, &meter, buffer)
+            ops::transfer(
+                engine,
+                &mut file,
+                parent_created,
+                &mut carry,
+                &meter,
+                buffer,
+            )
         });
         let moved = meter.moved();
         let accounts = meter.accounts();

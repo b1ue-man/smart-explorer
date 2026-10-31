@@ -261,7 +261,7 @@ pub(super) fn access_prompt_possible(src: &Target, src_meta: &VfsMeta) -> bool {
     crate::local_access::can_request_access(&crate::local_access::display_path(&native))
 }
 
-fn last_name(path: &str) -> &str {
+pub(super) fn last_name(path: &str) -> &str {
     path.trim_end_matches('/').rsplit('/').next().unwrap_or("")
 }
 
@@ -270,7 +270,7 @@ fn last_name(path: &str) -> &str {
 /// listing is unsafe or listed twice: the older path checks the whole tree
 /// before it writes anything and reports that case with its own message (the
 /// engine refuses such entries too, but only after it started writing).
-fn child_paths(src: &Target, dst_path: &str) -> Result<Option<Vec<String>>, String> {
+pub(super) fn child_paths(src: &Target, dst_path: &str) -> Result<Option<Vec<String>>, String> {
     let listed = src
         .backend
         .list_dir(&src.path)
@@ -401,11 +401,21 @@ fn publish(observer: &TreeObserver, progress: &TransferProgress) {
 
 /// The result of a finished run in the terms of `se cp` (U49-4 point 5).
 pub(super) fn settle(finished: &Finished, dst_path: &str) -> Result<TreeOutcome, String> {
+    settle_with(finished, dst_path, true)
+}
+
+/// `settle` for a run under `--conflict update`: files left alone and
+/// numbered names are what the rule decided, not a destination that changed.
+pub(super) fn settle_merged(finished: &Finished, dst_path: &str) -> Result<TreeOutcome, String> {
+    settle_with(finished, dst_path, false)
+}
+
+fn settle_with(finished: &Finished, dst_path: &str, strict: bool) -> Result<TreeOutcome, String> {
     if finished.canceled {
         return Err(TRANSFER_CANCELLED.to_string());
     }
     let skipped = finished.progress.skipped;
-    if skipped > 0 {
+    if strict && skipped > 0 {
         return Err(format!(
             "destination changed during copy: {skipped} existing files were left alone"
         ));
@@ -438,7 +448,7 @@ pub(super) fn settle(finished: &Finished, dst_path: &str) -> Result<TreeOutcome,
     if let Some(root) = finished
         .roots
         .iter()
-        .find(|root| root.rel != base_name(&root.source))
+        .find(|root| strict && root.rel != base_name(&root.source))
     {
         // The engine numbers a name that appeared at a remote destination
         // after the check; nothing was replaced, but the name is not the typed one.
@@ -452,6 +462,7 @@ pub(super) fn settle(finished: &Finished, dst_path: &str) -> Result<TreeOutcome,
         destination: dst_path.to_string(),
         omitted,
         kept: Vec::new(),
+        update: None,
     })
 }
 

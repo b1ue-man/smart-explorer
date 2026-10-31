@@ -19,7 +19,10 @@ Stand: 2026-10-21 (Lauf 3 des Doku-Laufs U42, E13-Doku). Grundlage: der Batch �
   Zielordner öffnen, Entfernen.
 - **Nie ersetzen:** belegte Namen werden „Name (2)“; lokale Ordner werden zusammengeführt,
   Remote-Ordner bekommen bei Konflikt einen neuen Namen. Nur „Kopieren/Verschieben nach…“
-  (lokal) kennt „Überschreiben“ als ausdrückliche Wahl.
+  (lokal) kennt „Überschreiben“ als ausdrückliche Wahl. Ausnahme seit dem Quellstand
+  2026-10-31 (unveröffentlicht): die Dateiregel „Neuere ersetzen ältere“ (Abschnitt
+  „Dateiregel“) ersetzt eine ältere Datei durch eine neuere, wenn die Person Ordner
+  zusammenführt oder die Regel ausdrücklich wählt.
 - **Ordner in sich selbst** (oder einen seiner Unterordner) wird für jede Kombination abgelehnt.
 - **Windows-Explorer:** Remote-Auswahlen gehen als virtuelle Dateien auf die Zwischenablage
   bzw. per Ziehen in den Explorer; der Explorer holt die Liste erst beim Einfügen und die
@@ -477,6 +480,111 @@ die Prüfungen laufen erst in der Task-Suite `speed-setup-task.yml`.
   Nextcloud: große Dateien als Chunk-Upload (G3-12, Zeile WebDAV oben). SMB: Lesen öffnet mit dem
   ersten READ in einem Compound, eine Engine-Stufe bis MaxWriteSize schließt mit WRITE + CLOSE in
   einem Compound ab (G3-07, Zeile SMB oben). SFTP: Pakete aus Serverkopien (Zeile SFTP oben).
+
+## Dateiregel „Neuere ersetzen ältere“ (Quellstand 2026-10-31, nicht gebaut, nicht veröffentlicht)
+
+Auftrag des Nutzers (2026-10-31): beim Einfügen mit „Zusammenführen“ werden fehlende Dateien
+eingefügt, neuere (nach „zuletzt bearbeitet“) ersetzen ältere, gleiche werden übersprungen;
+gemeint sind alle Dateioperationen dieser Art. Plan: `docs/plaene/2026-10-31-sync-abgleich-schnell/`
+(C7, D4); Vergleich mit rsync, rclone, robocopy, FreeFileSync, Explorer: dort `referenzen-abgleich.md`
+Abschnitte 3.12, 4, 6.
+
+**Regel je gleichnamiger Datei** (`Conflict::Update`, `native/src/types/core/types.rs:133`; reine
+Entscheidung `transfer/core/update_rule.rs:50`):
+
+| Ziel | Ergebnis |
+|---|---|
+| fehlt | eingefügt |
+| gleiche Größe, Zeitabstand höchstens das Fenster | gleich, übersprungen |
+| Quelle um mehr als das Fenster neuer (jede Größe) | ersetzt das Ziel |
+| Ziel um mehr als das Fenster neuer (jede Größe) | Ziel bleibt, „Ziel neuer“ |
+| Zeit im Fenster, andere Größe | Konflikt: beide behalten (`Name (2)`) |
+| Ordner, Link, Sonderdatei oder mehrere Einträge unter dem Namen | beide behalten |
+| Zeit einer Seite unbekannt (0) | gleiche Größe: gleich; andere Größe: Konflikt |
+
+Das **Fenster** ist die gröbere Zeitauflösung beider Seiten (`vfs::mtime_precision` je Seite: lokale
+Dateisystemprofile, SFTP/FTP/WebDAV nach Protokoll); weiß eine Seite ihre Auflösung nicht, zählt sie
+mit 2 s (`update_rule.rs:44`, `engine/update.rs:151`). Das Fenster wird je Auftrag einmal aus dem
+Zielordner und dem Quellordner bestimmt, nicht je Unterordner.
+
+**Wer die Regel anwendet:** alle Dateien eines Auftrags mit Dateiregel `Update` (Kopierdialog, CLI,
+MCP, Android-Auswahl) und, mit `FolderConflictPolicy::merge_update`
+(`transfer/core/folder_conflict.rs:28`), die Dateien unterhalb eines ausgewählten Ordners, für den
+„Zusammenführen“ gewählt wurde. Einfügen, Ziehen und „Herunterladen nach…“ setzen das Kennzeichen
+(`app/core/transfer_route.rs:127`, Android `mergeFiles: "update"`); eine einzeln ausgewählte Datei
+und der Kopierdialog mit ausdrücklicher Wahl behalten ihre Regel.
+
+**Wie sie wirkt:** Die Engine entscheidet **einmal je Datei, bevor ein Kopierweg läuft**
+(`engine/update.rs:166`, aufgerufen im Worker vor der Paketbildung `worker.rs:52`, für Paketkandidaten
+`batch.rs:82` und für Einzeldateien nach der Belegprüfung `ops.rs:291`) und speichert das Ergebnis in
+der Datei (`FileWork::conflict`): „einfügen“ und „Konflikt“ laufen als `Rename`, „ersetzen“ als
+`Overwrite`, gleiche und neuere Ziele werden gezählt und nicht übertragen. Darunter sieht jeder Weg
+nur die bekannten Regeln und behält deren Schutz: lokal und Download ersetzen über Stufe,
+`replace_file_atomic` und Haltepunkt wie das Überschreiben bisher (`local.rs:55`, `download.rs:316`);
+lokale Pakete nehmen nur neue Namen, eine Ersetzung geht allein (`batch.rs:82`).
+
+**Das Ziel wird gelesen:** lokal mit einem `stat`, entfernt mit einer Auflistung je Zielordner, im
+Auftrag gehalten, begrenzt auf 16 MiB Namen (`update.rs:301`); in einem Ordner, den der Auftrag selbst
+anlegte, gar nicht. Ein Ziel, das nicht gelesen werden kann, lässt die Datei allein laufen, wo der
+gewöhnliche Weg den Fehler meldet und wiederholt.
+
+**Änderungszeit der Kopie:** Jede Datei, die die Engine kopiert oder ersetzt, trägt die Änderungszeit
+ihrer Quelle, gesetzt vor der Veröffentlichung auf Stufe oder Teildatei (kein Name zeigt je eine falsche
+Zeit; Rechteprüfung und No-Replace-Veröffentlichung bleiben). Windows lokal: `CopyFile2` (`copy/os/
+windows_time_rules.rs`, unverändert). Linux und Android lokal, lokale Pakete und Serverkopien: auf dem
+offenen Stufenhandle neben den Rechten (`copy/os/linux_os.rs:239`, `File::set_modified`; ein Dateisystem,
+das sie ablehnt, behält die Kopierzeit, kein Fehler). Download und Download-Pakete: auf der fertigen
+Teildatei vor dem Schließen (`engine/download.rs:109`, `:318`). Entfernte Ziele über Stufen (Upload,
+Remote–Remote, Serverkopie, Bereiche, Stufen der Remote–Remote-Pakete): `vfs::finish_stage` mit
+`StageFinish::mtime_ms` vor `publish::publish` (`engine/publish_time.rs:30`); WebDAV und Drive
+nehmen die Zeit schon beim Hochladen (`open_write_copy_stage_timed`, `publish_time.rs:22`). Was ein
+Peer vorher über die Stufe gemeldet hat, wird nach dem Setzen verworfen (die Belege lesen die Stufe
+dann selbst). Ersetzungen machen die Stufe dabei zusätzlich dauerhaft (`StageDurability::Now`);
+scheitert das, wird die Stufe verworfen und die Datei gemeldet.
+
+**Ersetzen auf entfernten Zielen:** neu. Die Datei geht in eine dauerhafte Stufe
+(`open_write_copy_stage_sized`) und wird mit `promote_staged_to_id` an das gesehene Objekt gebunden
+veröffentlicht (`publish.rs:304`). Kann das Ziel das nicht (`Unsupported`), hat sich die Datei
+geändert (`InvalidData`) oder ist verschwunden (`NotFound`), bleibt beides: die Stufe wird unter
+`Name (2)` veröffentlicht, im Protokoll steht der Grund, gezählt als „doppelt behalten“, nicht als
+ersetzt (`publish.rs:423`, `Stats::replace_refused`). Namen oberster Ebene werden unter der Regel nicht
+vorab nummeriert (`roots.rs:325`, `roots.rs:383`), damit ein belegter Name verglichen werden kann.
+
+**Vorschau „Zielordner entscheiden“** (`engine/selection_count.rs:103`): zählt neu, neuer, gleich,
+Ziel neuer und Konflikt (`FolderConflictPreview::{new,newer,equal,target_newer,conflict}_files`;
+`colliding_files` bleibt die Summe der gleichnamigen). Das Ziel wird je Ordner einmal aufgelistet, nicht
+je Datei mit `stat`; die Ordner werden von so vielen Fäden gezählt, wie die langsamere Seite zulässt
+(`Backend::parallelism`); Meldungen kommen nur vom aufrufenden Faden.
+
+**Meldungen nach dem Lauf:** `TransferProgress::{replaced, skipped_equal, kept_newer, kept_both}`
+(Standardwert 0 beim Lesen älterer Meldungen); Übertragungsfenster (`app/core/transfer_rows.rs:159`,
+Hinweis `:211`), CLI-Zeile `se: update: …` auf stderr, MCP-Ergebnis `update`, Android-Ergebnis
+`replaced/skippedEqual/keptNewer/keptBoth` und Hinweiszeile. Übersprungene gleiche und neuere Ziele
+zählen als bearbeitet, damit der Fortschritt sein Ende erreicht.
+
+**Gespeicherte Aufträge und ältere Versionen:** `JobRecord::file_update` (`#[serde(default)]`) hält die
+Regel, `file_policy` bleibt dabei 0 – eine ältere Version öffnet den Auftrag als „beide behalten“ und
+ersetzt nie etwas (`job_record.rs:139`, `job_store.rs:70`). `merge_update` wird nur geschrieben, wenn
+es gesetzt ist. Zwischen App und Worker: Dateiregelcode 3 und die Fähigkeit `transfer-update-v1`
+(`daemon/os/shared/transfer_job_wire.rs:26`); ein Worker ohne sie bekommt den Auftrag nicht, der
+Auftrag läuft dann im eigenen Prozess (`transfer_job_client.rs:155`).
+
+**Grenzen (nicht gemessen, nicht gebaut):**
+- **Pakete an entfernte Ziele tragen die Änderungszeit nicht**: `put_batch` (Share, Agent), das
+  Ein-Datei-Paket und eine Drive-Datei in einem vom Auftrag angelegten Ordner veröffentlichen ohne
+  Stufe des Clients, und ihr Drahtformat hat keinen Platz für eine Zeit (`BatchPut` trägt nur Pfad
+  und Größe, `vfs/core/batch.rs`; das Format gehört `share/` und `agent_proto/`). Dateien der Regel
+  gehen deshalb einzeln (`update.rs`), alle anderen Uploads in Paketen behalten die Zeit der Gegenstelle.
+  Ein Zusammenführen zurück kann eine so hochgeladene, unveränderte Datei als „neuer“ ersetzen, bis
+  das Format eine Zeit trägt (Abhängigkeit für den Agenten, der `vfs/core` und die Drahtformate schreibt).
+- Ein Ziel, das keine Zeit speichern kann (`finish_stage` meldet `mtime_applied: false`), behält
+  seine eigene; die Regel vergleicht dann wie zuvor.
+- Ein Konflikt (gleiche Zeit, andere Größe) legt bei jedem Lauf eine weitere nummerierte Kopie an.
+- Keine Sommerzeit-Verschiebung (FAT speichert Ortszeit; Stundenabweichung nach Umstellung bleibt
+  außerhalb des Fensters).
+- Gleichheit ist Größe plus Zeit im Fenster, nie Inhalt.
+- `se mv --conflict update` und der MCP `move` mit `file_conflict: update` nur lokal; gleiche Dateien
+  bleiben in der Quelle, der Quellordner bleibt dann stehen.
 
 ## Was erhalten bleibt
 

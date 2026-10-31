@@ -84,6 +84,9 @@ fn parse(args: &Value) -> Result<Plan, ApiError> {
         "skip" => Conflict::Skip,
         "replace" => Conflict::Overwrite,
         "keepBoth" => Conflict::Rename,
+        // "Neuere ersetzen ältere": any combination of local and connected
+        // sides (the engine decides it per file).
+        "update" => Conflict::Update,
         other => {
             return Err(ApiError::invalid(format!(
                 "Unbekannte Konfliktregel: {other}"
@@ -103,6 +106,17 @@ fn parse(args: &Value) -> Result<Plan, ApiError> {
     let mut folders = FolderConflictPolicy::new(parse_folder(
         opt_str(args, "folderConflict").unwrap_or("keep-both"),
     )?);
+    // Paste: the files of a folder the person merges follow "neuere
+    // ersetzen ältere". Absent (older apps): they keep the file rule.
+    match opt_str(args, "mergeFiles") {
+        None | Some("keepBoth") => {}
+        Some("update") => folders = folders.with_merge_update(),
+        Some(other) => {
+            return Err(ApiError::invalid(format!(
+                "Unbekannte Regel für zusammengeführte Dateien: {other}"
+            )))
+        }
+    }
     if let Some(choices) = args.get("folderConflicts").and_then(Value::as_object) {
         for (location, choice) in choices {
             let source = Loc::parse(location)?;
@@ -206,8 +220,9 @@ pub(crate) fn preview_job(rt: &Runtime, args: &Value) -> Result<TransferJob, Api
 /// The engine job of a transfer that involves a connection: the selected
 /// entries under their names, or with `filter` + `baseDir` the matching
 /// files below them at their paths relative to `baseDir` (found while
-/// copying). `conflict` applies to local→local only (api.md): here occupied
-/// names are numbered and nothing is replaced.
+/// copying). `conflict` applies to local→local only (api.md), except
+/// `update` ("neuere ersetzen ältere"), which applies to every combination:
+/// elsewhere occupied names are numbered and nothing is replaced.
 fn plan_job(
     plan: &Plan,
     paths: Vec<String>,
@@ -238,7 +253,9 @@ fn plan_job(
         },
         layout: Layout::Tree,
         filter: plan.filter.clone(),
-        conflict: if plan.sources[0].is_local() && plan.target.is_local() {
+        conflict: if plan.conflict == Conflict::Update
+            || plan.sources[0].is_local() && plan.target.is_local()
+        {
             plan.conflict
         } else {
             Conflict::Rename

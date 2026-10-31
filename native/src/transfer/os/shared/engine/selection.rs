@@ -4,6 +4,10 @@ use crate::vfs::{Backend, LocalBackend};
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+#[path = "selection_count.rs"]
+mod count;
+pub use count::count_folder_conflict;
+
 fn backend<'a>(endpoint: &'a Endpoint, local: &'a LocalBackend) -> &'a dyn Backend {
     match endpoint {
         Endpoint::Local => local,
@@ -109,125 +113,6 @@ fn root_kind(source: &dyn Backend, local: bool, path: &str) -> io::Result<(bool,
         return Ok((metadata.is_dir(), link));
     }
     source.stat(path).map(|meta| (meta.is_dir, meta.is_symlink))
-}
-
-pub fn count_folder_conflict(
-    job: &TransferJob,
-    preview: &mut FolderConflictPreview,
-    cancel: &AtomicBool,
-    report: &dyn Fn(&FolderConflictPreview),
-) {
-    let local = LocalBackend::new("/");
-    let source = backend(&job.source, &local);
-    let target = backend(&job.target, &local);
-    let filter = super::super::entries::compile_remote_filter(job.filter.clone());
-    let allow_backslash = job.source.is_local()
-        && job.target.is_local()
-        && super::super::platform::backslash_is_name_char();
-    let mut stack = vec![(preview.source.clone(), preview.relative.clone(), 0usize)];
-    let mut budget = super::super::entries::TransferCollectionBudget::default();
-    let mut last_report = std::time::Instant::now();
-    let mut complete = true;
-    'scan: while let Some((path, relative, depth)) = stack.pop() {
-        if cancel.load(Ordering::Acquire) {
-            return;
-        }
-        let listed = match crate::source_media::with_cancellation(cancel, || {
-            crate::vfs::list_dir_tolerant(source, &path)
-        }) {
-            Ok(listed) => listed,
-            Err(_) => {
-                omitted(preview, &path);
-                complete = false;
-                continue;
-            }
-        };
-        complete &= listed.omitted.is_empty();
-        for omission in listed.omitted {
-            omitted(
-                preview,
-                &super::super::engine_names::join_rel(&path, &omission.rel),
-            );
-        }
-        for entry in listed.entries {
-            if cancel.load(Ordering::Acquire) {
-                return;
-            }
-            if super::super::engine_names::name_problem(&entry.name, allow_backslash).is_some() {
-                omitted(
-                    preview,
-                    &super::super::engine_names::join_rel(&path, &entry.name),
-                );
-                complete = false;
-                continue;
-            }
-            let child_source = super::super::engine_names::join_rel(&path, &entry.name);
-            let child_relative = super::super::engine_names::join_rel(&relative, &entry.name);
-            if let Err(error) =
-                budget.record_node(depth + 1, &[&child_source, &child_relative, &entry.name])
-            {
-                preview.note = Some(error);
-                complete = false;
-                break 'scan;
-            }
-            if entry.is_symlink || entry.special || crate::apptrash::excluded_name(&entry.name) {
-                omitted(preview, &child_source);
-                complete = false;
-                continue;
-            }
-            if let Some(filter) = &filter {
-                let row = super::super::entries::remote_file_entry(
-                    &child_source,
-                    &path,
-                    &entry,
-                    filter.depth_for(&child_source),
-                );
-                if entry.is_dir {
-                    if filter.allows_dir_descendants(&row) {
-                        stack.push((child_source, child_relative, depth + 1));
-                    }
-                    continue;
-                }
-                if !filter.matches(&row) {
-                    continue;
-                }
-            }
-            if entry.is_dir {
-                stack.push((child_source, child_relative, depth + 1));
-                continue;
-            }
-            let destination =
-                super::super::engine_names::join_rel(&job.target_dir, &child_relative);
-            match crate::source_media::with_cancellation(cancel, || target.stat(&destination)) {
-                Ok(_) => {
-                    preview.colliding_files += 1;
-                    if preview.samples.len() < 5 {
-                        preview.samples.push(child_relative);
-                    }
-                }
-                Err(error) if error.kind() == io::ErrorKind::NotFound => preview.new_files += 1,
-                Err(_) => {
-                    omitted(preview, &child_source);
-                    complete = false;
-                }
-            }
-            if last_report.elapsed() >= super::PROGRESS_INTERVAL {
-                report(preview);
-                last_report = std::time::Instant::now();
-            }
-        }
-        report(preview);
-    }
-    preview.complete = complete;
-    preview.counted = true;
-    report(preview);
-}
-
-fn omitted(preview: &mut FolderConflictPreview, path: &str) {
-    preview.omitted += 1;
-    if preview.omitted_paths.len() < 5 {
-        preview.omitted_paths.push(path.to_string());
-    }
 }
 
 fn preview_context_valid(

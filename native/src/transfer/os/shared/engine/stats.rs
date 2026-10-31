@@ -10,6 +10,17 @@ use std::time::{Duration, Instant};
 /// Names of running files shown per transfer (spec: up to three).
 const ACTIVE_SHOWN: usize = 3;
 
+/// What the file rule "neuere ersetzen ältere" decided for one file; the
+/// counters of `TransferProgress` (`replaced`, `skipped_equal`, `kept_newer`,
+/// `kept_both`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Decision {
+    Replaced = 0,
+    Equal = 1,
+    TargetNewer = 2,
+    Both = 3,
+}
+
 pub(crate) struct Stats {
     started: Instant,
     files_total: AtomicU64,
@@ -19,6 +30,8 @@ pub(crate) struct Stats {
     /// Every byte moved, retried ones included: the rate's measure.
     bytes_moved: AtomicU64,
     skipped: AtomicU64,
+    /// Decisions of the file rule "neuere ersetzen ältere" (`update.rs`).
+    update: [AtomicU64; 4],
     omitted: AtomicU64,
     running: AtomicU64,
     /// Highest `bytes_done` so far: bytes beyond it (or a finished file) are
@@ -110,6 +123,12 @@ impl Stats {
             bytes_done: AtomicU64::new(0),
             bytes_moved: AtomicU64::new(0),
             skipped: AtomicU64::new(0),
+            update: [
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+            ],
             omitted: AtomicU64::new(0),
             running: AtomicU64::new(0),
             high_water: AtomicU64::new(0),
@@ -233,6 +252,22 @@ impl Stats {
         self.progressed();
     }
 
+    /// One decision of the file rule "neuere ersetzen ältere".
+    pub(crate) fn decided(&self, decision: Decision) {
+        self.update[decision as usize].fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// A replacement the target could not take: the file is kept beside its
+    /// counterpart instead (counted as kept, no longer as replaced).
+    pub(crate) fn replace_refused(&self) {
+        let _ = self.update[Decision::Replaced as usize].fetch_update(
+            Ordering::AcqRel,
+            Ordering::Acquire,
+            |count| Some(count.saturating_sub(1)),
+        );
+        self.decided(Decision::Both);
+    }
+
     fn progressed(&self) {
         self.last_progress_ms
             .fetch_max(self.elapsed_ms(), Ordering::AcqRel);
@@ -323,6 +358,10 @@ impl Stats {
         progress.omitted = self.omitted.load(Ordering::Acquire);
         progress.discovering = self.discovering.load(Ordering::Acquire);
         progress.skipped = self.skipped.load(Ordering::Acquire);
+        progress.replaced = self.update[Decision::Replaced as usize].load(Ordering::Acquire);
+        progress.skipped_equal = self.update[Decision::Equal as usize].load(Ordering::Acquire);
+        progress.kept_newer = self.update[Decision::TargetNewer as usize].load(Ordering::Acquire);
+        progress.kept_both = self.update[Decision::Both as usize].load(Ordering::Acquire);
         progress.rate_bps = rate_bps;
         progress.active = active;
         progress.parallel = self

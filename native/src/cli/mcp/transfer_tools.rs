@@ -34,6 +34,17 @@ pub(super) fn start(session: &Session, kind: JobKind, args: &Args<'_>) -> Result
         "fail" => crate::transfer::FolderConflict::Fail,
         _ => return Err("folder_conflict must be merge, keep-both or fail".into()),
     };
+    let update = match args.opt_string("file_conflict")?.as_deref() {
+        None => false,
+        Some("update") => true,
+        Some(_) => return Err("file_conflict must be update".into()),
+    };
+    if update && (overwrite || folders != crate::transfer::FolderConflict::Merge) {
+        return Err(
+            "file_conflict update cannot be combined with overwrite or another folder_conflict"
+                .into(),
+        );
+    }
     // Resolve both ends before a job exists, so a typo fails immediately.
     let source = session.targets.resolve(&source_spec)?;
     let destination = session.targets.resolve(&destination_spec)?;
@@ -46,6 +57,18 @@ pub(super) fn start(session: &Session, kind: JobKind, args: &Args<'_>) -> Result
     job.set_control(Arc::new(TransferControl(observer.clone())));
     spawn_worker(job.clone(), move |_| {
         let outcome = match kind {
+            _ if update => crate::cli::update_copy::run(
+                &source,
+                &destination,
+                recursive,
+                if kind == JobKind::Move {
+                    crate::types::CopyMode::Move
+                } else {
+                    crate::types::CopyMode::Copy
+                },
+                &observer,
+                Some(folders),
+            ),
             JobKind::Move => crate::cli::ops::move_observed_with_folders(
                 &source,
                 &destination,
@@ -78,6 +101,12 @@ pub(super) fn start(session: &Session, kind: JobKind, args: &Args<'_>) -> Result
                         }))
                         .collect::<Vec<_>>(),
                     "kept_directories": outcome.kept,
+                    "update": outcome.update.map(|counts| json!({
+                        "replaced": counts.replaced,
+                        "skipped_equal": counts.skipped_equal,
+                        "kept_newer": counts.kept_newer,
+                        "kept_both": counts.kept_both,
+                    })),
                     "progress": progress,
                 }),
                 error: None,

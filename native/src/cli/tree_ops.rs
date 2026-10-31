@@ -29,6 +29,8 @@ pub(super) struct TreeOutcome {
     /// Move only: source directories kept because they still hold omitted
     /// entries, root first.
     pub(super) kept: Vec<String>,
+    /// `--conflict update` only: what the rule decided.
+    pub(super) update: Option<super::file_rule::RuleCounts>,
 }
 
 impl TreeOutcome {
@@ -37,6 +39,7 @@ impl TreeOutcome {
             destination,
             omitted: Vec::new(),
             kept: Vec::new(),
+            update: None,
         }
     }
 
@@ -62,6 +65,9 @@ impl TreeOutcome {
                 format!("kept source directory, it still holds skipped entries: {path}")
             }),
         );
+        if let Some(line) = self.update.and_then(super::file_rule::RuleCounts::line) {
+            lines.push(format!("update: {line}"));
+        }
         lines
     }
 }

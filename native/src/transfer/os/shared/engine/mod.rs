@@ -34,6 +34,7 @@ mod ops;
 mod prepare;
 mod publish;
 mod publish_queue;
+mod publish_time;
 use prepare::prepare;
 mod queue;
 mod remote_copy;
@@ -45,6 +46,7 @@ mod segments_upload;
 mod source;
 mod stats;
 pub(crate) mod stored_identity;
+mod update;
 mod upload;
 mod util;
 mod view;
@@ -229,16 +231,16 @@ pub(crate) struct Engine<'a> {
     sizer: Mutex<BatchSizer>,
     /// Inside one account: the server copied none of a packet (no batch).
     server_packets_refused: AtomicBool,
-    /// Large files being transferred in parts, by id (helper workers find
-    /// their file here).
+    /// Large files being transferred in parts, by id (helpers find them here).
     segments: segments::Registry<'a>,
     /// "Transfer missing files": existing destinations are kept (K8).
     resume: bool,
-    /// Source folders of a per-file move whose target folder exists (source
-    /// path, target rel); removed at the end when empty.
+    /// Source folders of a per-file move whose target exists, removed when empty.
     moved_dirs: Mutex<Vec<(String, String)>>,
     /// Who limits the job (`bottleneck.rs`).
     judgement: Mutex<bottleneck::Judgement>,
+    /// The file rule "neuere ersetzen ältere" (`update.rs`).
+    update: update::State,
     report: &'a (dyn Fn(TransferMsg) + Sync),
 }
 
@@ -305,6 +307,7 @@ impl<'a> Engine<'a> {
             resume: view.resume.is_some(),
             moved_dirs: Mutex::new(Vec::new()),
             judgement: Mutex::new(bottleneck::Judgement::new()),
+            update: update::State::new(&view, plan),
             report,
         };
         for _ in 0..plan.omitted {

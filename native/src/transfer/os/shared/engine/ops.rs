@@ -278,7 +278,7 @@ pub(crate) struct Carry {
 /// Runs one file operation for `file` on the job's endpoints.
 pub(crate) fn transfer<'e>(
     engine: &Engine<'e>,
-    file: &FileWork,
+    file: &mut FileWork,
     parent_created: bool,
     carry: &mut Carry,
     meter: &Meter<'_>,
@@ -287,6 +287,11 @@ pub(crate) fn transfer<'e>(
     if let Some(outcome) = super::file_recovery::resume(engine, file)? {
         return Ok(outcome);
     }
+    // A file the batch path left undecided is decided here (`update.rs`).
+    if super::update::settle(engine, file)? == super::update::Settled::Skipped {
+        return Ok(Outcome::Skipped);
+    }
+    let file: &FileWork = file;
     crate::source_media::with_cancellation(engine.stop_flag(), || {
         match (engine.view.source, engine.view.target) {
             (Side::Local, Side::Local) => {

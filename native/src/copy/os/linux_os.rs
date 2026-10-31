@@ -229,7 +229,13 @@ pub(super) fn path_matches_identity(path: &Path, expected: FileIdentity) -> io::
 }
 
 /// Final ordinary permissions, never set-id bits; replacing a private
-/// destination cannot make its contents more readable than before.
+/// destination cannot make its contents more readable than before. The
+/// stage also gets the source's modification time, as `CopyFile2` gives it
+/// on Windows: the file rule "neuere ersetzen ältere" compares by it, and a
+/// copy stamped with the time of the copy would read as newer than its own
+/// source. It is set here, on the open stage after the last write and before
+/// the publication, so no name ever shows a wrong time; a file system that
+/// refuses it keeps the time of the copy (best effort, never a failure).
 pub(super) fn copy_permissions(
     writer: &File,
     source: &std::fs::Metadata,
@@ -250,7 +256,7 @@ pub(super) fn copy_permissions(
             Err(error) => return Err(error),
         }
     }
-    match writer.set_permissions(std::fs::Permissions::from_mode(mode)) {
+    let permissions = match writer.set_permissions(std::fs::Permissions::from_mode(mode)) {
         Err(error)
             if matches!(
                 error.kind(),
@@ -262,7 +268,13 @@ pub(super) fn copy_permissions(
             Ok(())
         }
         result => result,
+    };
+    if permissions.is_ok() {
+        if let Ok(modified) = source.modified() {
+            let _ = writer.set_modified(modified);
+        }
     }
+    permissions
 }
 
 pub(super) fn path_text(path: &Path) -> io::Result<String> {

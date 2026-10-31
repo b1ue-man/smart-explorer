@@ -146,6 +146,8 @@ fn folder_rows(
         }).ok_or_else(|| ApiError::invalid("Vorschauquelle gehört nicht zur Auswahl"))?;
         Ok(json!({ "source": source, "relative": folder.relative, "keepBoth": folder.keep_both, "keepBothSupported": folder.keep_both_supported, "existing": folder.existing,
             "newFiles": folder.new_files, "collidingFiles": folder.colliding_files,
+            "newerFiles": folder.newer_files, "equalFiles": folder.equal_files,
+            "targetNewerFiles": folder.target_newer_files, "conflictFiles": folder.conflict_files,
             "samples": folder.samples, "omitted": folder.omitted, "omittedPaths": folder.omitted_paths, "note": folder.note, "complete": folder.complete, "counted": folder.counted }))
     }).collect()
 }
@@ -172,14 +174,16 @@ pub(crate) fn folder_preview(rt: &Runtime, args: &Value) -> Result<Value, ApiErr
                 if state.ready && state.folders.iter().all(|folder| folder.counted) {
                     return Ok(json!({ "folders": folder_rows(&args, &state.folders)? }));
                 }
-                let new_files: u64 = state.folders.iter().map(|folder| folder.new_files).sum();
-                let collisions: u64 = state
-                    .folders
-                    .iter()
-                    .map(|folder| folder.colliding_files)
-                    .sum();
+                let total = |count: fn(&crate::transfer::FolderConflictPreview) -> u64| -> u64 {
+                    state.folders.iter().map(count).sum()
+                };
                 ctx.message(&format!(
-                    "Bisher {new_files} neue und {collisions} gleichnamige Dateien"
+                    "Bisher {} neu, {} neuer, {} gleich, {} Ziel neuer, {} Konflikt",
+                    total(|folder| folder.new_files),
+                    total(|folder| folder.newer_files),
+                    total(|folder| folder.equal_files),
+                    total(|folder| folder.target_newer_files),
+                    total(|folder| folder.conflict_files),
                 ));
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }

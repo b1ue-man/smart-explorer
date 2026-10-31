@@ -313,3 +313,69 @@ fn speed_task_android_report_transfer_sets_the_limiter() {
     assert_eq!(task["limiter"], "remote");
     assert_eq!(task["limiterText"], "Begrenzt durch Leitung oder Server");
 }
+
+#[test]
+fn abgleich_task_android_update_rule_reaches_every_combination() {
+    let plan = parse(&json!({
+        "sources": ["sftp://u@h:22/docs/bericht.pdf"],
+        "targetDir": "/storage/emulated/0/Download",
+        "conflict": "update",
+    }))
+    .expect("plan");
+    assert_eq!(plan.conflict, Conflict::Update);
+    let job = plan_job(
+        &plan,
+        paths(&plan),
+        connection("/"),
+        Endpoint::Local,
+        labels(),
+    );
+    assert_eq!(job.conflict, Conflict::Update, "a download takes the rule");
+    let upload = parse(&json!({
+        "sources": ["/storage/emulated/0/DCIM/Camera"],
+        "targetDir": "sftp://u@h:22/sicherung",
+        "conflict": "update",
+    }))
+    .expect("plan");
+    let job = plan_job(
+        &upload,
+        paths(&upload),
+        Endpoint::Local,
+        connection("/"),
+        labels(),
+    );
+    assert_eq!(job.conflict, Conflict::Update, "an upload takes the rule");
+    assert!(job.validate().is_ok());
+}
+
+#[test]
+fn abgleich_task_android_merge_files_follow_the_rule_only_when_asked() {
+    let base = json!({
+        "sources": ["/storage/emulated/0/DCIM/Camera"],
+        "targetDir": "sftp://u@h:22/sicherung",
+        "folderConflicts": { "/storage/emulated/0/DCIM/Camera": "merge" },
+    });
+    let plain = parse(&base).expect("plan");
+    assert!(!plain.folders.merge_update, "older apps keep the file rule");
+    let mut asked = base.clone();
+    asked["mergeFiles"] = json!("update");
+    let asked = parse(&asked).expect("plan");
+    assert!(asked.folders.merge_update);
+    assert_eq!(
+        asked.conflict,
+        Conflict::Rename,
+        "top-level files keep both"
+    );
+    let mut unknown = base;
+    unknown["mergeFiles"] = json!("bogus");
+    assert!(parse(&unknown).is_err());
+}
+
+#[test]
+fn abgleich_task_android_result_names_the_rule_decisions() {
+    assert_eq!(super::super::drive::rule_text([0; 4]), None);
+    assert_eq!(
+        super::super::drive::rule_text([2, 5, 1, 0]).as_deref(),
+        Some("2 neuere ersetzt, 5 gleiche übersprungen, 1 Ziel neuer behalten")
+    );
+}

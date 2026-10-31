@@ -75,6 +75,21 @@ pub struct TransferProgress {
     pub link_bps: u64,
     /// Ranges of large files transferred right now.
     pub segments: u32,
+    /// Decisions of the file rule "neuere ersetzen ältere"
+    /// (`Conflict::Update`): files whose older target was replaced by a
+    /// newer source ...
+    #[serde(default)]
+    pub replaced: u64,
+    /// ... equal files that were skipped (part of `skipped`) ...
+    #[serde(default)]
+    pub skipped_equal: u64,
+    /// ... newer targets that were kept (part of `skipped`) ...
+    #[serde(default)]
+    pub kept_newer: u64,
+    /// ... and files of the same time but another size, kept beside their
+    /// counterpart under a numbered name.
+    #[serde(default)]
+    pub kept_both: u64,
 }
 
 impl TransferProgress {
@@ -110,6 +125,10 @@ impl TransferProgress {
             limiter_shares: [0; 4],
             link_bps: 0,
             segments: 0,
+            replaced: 0,
+            skipped_equal: 0,
+            kept_newer: 0,
+            kept_both: 0,
         }
     }
 

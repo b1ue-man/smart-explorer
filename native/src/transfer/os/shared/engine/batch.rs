@@ -17,7 +17,8 @@ use super::ops::{At, OpError};
 use super::queue::{FileWork, Work};
 use super::view::Side;
 use super::worker::{
-    breaker, is_connection_failure, overload_wait, parent_ready, report, run_file, target_refuses,
+    breaker, finished, is_connection_failure, overload_wait, parent_ready, report, run_file,
+    target_refuses,
 };
 use super::Engine;
 use std::time::Duration;
@@ -74,6 +75,22 @@ fn admit(engine: &Engine<'_>, candidates: Vec<FileWork>) -> Option<Vec<FileWork>
     // Probe after releasing the queue mutex; optical/probe-error entries go
     // back as single files before any packet reader can acquire their permit.
     for mut candidate in candidates {
+        // The file rule "neuere ersetzen ältere" decides before the packet
+        // takes the file: equal files and newer targets leave here, a
+        // replacement and a file whose target could not be looked at go
+        // alone (packets only publish new names).
+        match super::update::settle(engine, &mut candidate) {
+            Ok(super::update::Settled::Skipped) => {
+                finished(engine, super::ops::Outcome::Skipped);
+                continue;
+            }
+            Ok(super::update::Settled::Go) if !candidate.alone => {}
+            Ok(super::update::Settled::Go) | Err(_) => {
+                candidate.alone = true;
+                single.push(candidate);
+                continue;
+            }
+        }
         if resume_allows(engine, &candidate) && packet_source(engine, &candidate) {
             more.push(candidate);
         } else {

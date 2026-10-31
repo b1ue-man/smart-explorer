@@ -14,6 +14,7 @@
 use super::ipc_host::ShareHost;
 use super::ipc_protocol::transfer::{
     EndpointWire, JobWire, TransferIpcReply, TransferIpcRequest, TRANSFER_JOBS_V1,
+    TRANSFER_UPDATE_V1,
 };
 use super::ipc_protocol::{write_response, IpcResponse};
 use crate::transfer::{JobView, Side, TransferIssue, TransferMsg, TransferProgress};
@@ -121,7 +122,7 @@ impl ShareHost {
     ) -> io::Result<()> {
         let reply = match request {
             TransferIpcRequest::Hello => TransferIpcReply::Hello {
-                capabilities: vec![TRANSFER_JOBS_V1.to_string()],
+                capabilities: vec![TRANSFER_JOBS_V1.to_string(), TRANSFER_UPDATE_V1.to_string()],
             },
             TransferIpcRequest::Cancel { id } => TransferIpcReply::Cancelled { found: cancel(&id) },
             TransferIpcRequest::Start { job } => {

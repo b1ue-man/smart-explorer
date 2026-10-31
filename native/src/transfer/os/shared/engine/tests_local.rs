@@ -96,6 +96,7 @@ fn transfer_engine_task_local_conflicts_follow_the_policy() {
                 assert_eq!(fs::read(dest.join("note.txt")).expect("new"), b"new");
                 assert_eq!(names(&dest), ["note.txt"]);
             }
+            Conflict::Update => unreachable!("not in the list above"),
         }
     }
 }

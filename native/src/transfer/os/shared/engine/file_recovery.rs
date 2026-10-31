@@ -268,7 +268,7 @@ fn after_checked(
         });
     } else if let Some(proof) = &receipt.proof {
         let held = held.filter(|_| {
-            engine.is_move() || engine.view.conflict == crate::types::Conflict::Overwrite
+            engine.is_move() || engine.conflict_of(file) == crate::types::Conflict::Overwrite
         });
         if let (Some(held), Some(identity)) = (held, proof.object.as_deref()) {
             crate::copy::confirm_transfer_publication_handle(

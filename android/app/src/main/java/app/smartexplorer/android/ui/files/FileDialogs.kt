@@ -289,7 +289,12 @@ internal fun ConflictDialog(
                     CheckLine("Überspringen", choice == "skip") { choice = "skip" }
                     CheckLine("Für alle verbleibenden Ordner", all) { all = !all }
                     if (all && choice == "keep-both" && !keepBothAllowed) Text("Mindestens ein verbleibender Ordner verlangt ausdrücklich Zusammenführen oder Überspringen.")
-                    Text("Zusammenführen: bisher ${folder.newFiles} neue und ${folder.collidingFiles} gleichnamige Dateien")
+                    Text(
+                        "Zusammenführen: bisher ${folder.newFiles} neu, ${folder.newerFiles} neuer (ersetzen), " +
+                            "${folder.equalFiles} gleich (übersprungen), ${folder.targetNewerFiles} Ziel neuer (bleibt), " +
+                            "${folder.conflictFiles} Konflikt (beide behalten)",
+                    )
+                    Text("Dateien in zusammengeführten Ordnern: neuere ersetzen ältere, Gleiche werden übersprungen.")
                     folder.samples.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
                     if (!folder.counted) Text(previewError ?: previewProgress ?: "Zählung läuft im Hintergrund; Übernehmen bleibt möglich.")
                     else if (!folder.complete) Text("Unvollständig: ${folder.omitted} geschützte oder nicht lesbare Bereiche")
@@ -302,10 +307,11 @@ internal fun ConflictDialog(
                     Text("Im Ziel gibt es schon: $shown")
                 }
                 if (choosable && !revoked) {
-                    Text("Gleichnamige Dateien${if (folder != null) " beim Zusammenführen" else ""}:")
+                    Text("Gleichnamige Dateien${if (folder != null) " oberster Ebene" else ""}:")
                     CheckLine("Beide behalten", fileChoice == "keepBoth") { fileChoice = "keepBoth" }
                     CheckLine("Ersetzen", fileChoice == "replace") { fileChoice = "replace" }
                     CheckLine("Überspringen", fileChoice == "skip") { fileChoice = "skip" }
+                    CheckLine("Neuere ersetzen ältere", fileChoice == "update") { fileChoice = "update" }
                 } else if (!revoked) Text("Gleichnamige Dateien werden nummeriert.")
             }
         },

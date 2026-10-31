@@ -697,11 +697,22 @@ Benutzern und, solange der Hüter nicht zugänglich ist, vor einer Kopie des Ord
 `app-key-file` liegt der Schlüssel im selben Datenordner: Gegen Offline-Zugriff auf den
 ganzen Datenordner (zum Beispiel eine Datensicherung davon) hilft dort nur
 Plattenverschlüsselung. Beispiele: `se doctor --json`, `se connections list`,
-`se ls @label:/pfad`,
+`se ls @label:/pfad`, `se ls -R @label:/pfad --json` (ganzer Baum wie die rekursive Ansicht),
 `se get @sftp:/bericht.pdf .`, `se put ./lokal.txt @webdav:/ziel/`,
 `se cp @drive:/a.txt @share:/b.txt`, `se search @label:/ "*.rs"`,
 `se share discoverable --minutes 5 --pin-stdin`, `se update --check`,
-`se sync list`, `se background status`, `se connections edit LABEL --host NEU`.
+`se sync list`, `se sync compare NAME` (wie „Vergleichen“), `se background status`, `se connections edit LABEL --host NEU`.
+**Dateiregel „Neuere ersetzen ältere“ (Quellstand 2026-10-31, noch nicht veröffentlicht):**
+`se cp|get|put|mv ... --conflict update` (und im MCP `copy`/`move` mit `file_conflict: "update"`)
+fügt fehlende Dateien ein, ersetzt ältere durch neuere nach der Änderungszeit, überspringt gleiche
+(gleiche Größe, Zeit innerhalb der gröberen Zeitauflösung beider Seiten, unbekannt: 2 s), behält ein
+neueres Ziel und behält bei gleicher Zeit und anderer Größe beide. Ein vorhandener Zielordner wird
+zusammengeführt; die Option schließt `--force`, `--resume-job` und eine andere `--folder-conflict`
+als `merge` aus; `mv` arbeitet nur lokal. Die Zeile `se: update: …` auf stderr nennt die
+Entscheidungen. In der App gilt dieselbe Regel für die Dateien eines Ordners, für den beim Einfügen
+„Zusammenführen“ gewählt wird (Desktop und Android), und als Wahl im Kopierdialog und im
+Android-Namenskonflikt; die Vorschau „Zielordner entscheiden“ zählt neu, neuer, gleich, Ziel
+neuer und Konflikt. Beschreibung und Grenzen: `docs/TRANSFER_ENGINE.md`, Abschnitt „Dateiregel“.
 **Links (ab 0.5.177):** `se search` meldet Links (`l`) und FIFOs/Sockets/Geräte
 (`s`) über ihren Namen und betritt Links nie; `--dirs` nimmt Ordner zusätzlich
 auf. `se cp -r`/`se mv -r` überspringen Links und Sonderdateien innerhalb eines

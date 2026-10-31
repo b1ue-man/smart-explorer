@@ -218,6 +218,7 @@ fn screen_metadata_runtime_task_resumed_job_with_different_digest_treats_target_
                 assert_eq!(names(&target), ["a.jpg"]);
                 assert_eq!(fs::read(target.join("a.jpg")).unwrap(), b"omega");
             }
+            Conflict::Update => unreachable!("not in the list above"),
         }
         assert_eq!(fs::read(&source).unwrap(), b"alpha");
     }

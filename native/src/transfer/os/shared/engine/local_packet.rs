@@ -196,7 +196,7 @@ fn first_names(engine: &Engine<'_>, files: Vec<FileWork>) -> Option<Vec<Member>>
         let start = if fresh_folder(engine, &file) {
             Ok(Some(requested.clone()))
         } else {
-            crate::copy::packet_start(&requested, engine.view.conflict)
+            crate::copy::packet_start(&requested, engine.conflict_of(&file))
         };
         match start {
             // The single path reports a source that is no regular file
@@ -342,7 +342,7 @@ fn transfer(
     let request = LocalRequest {
         source: &source,
         target: &member.requested,
-        conflict: engine.view.conflict,
+        conflict: engine.conflict_of(&member.file),
         mode: CopyMode::Copy,
         cancel: engine.stop_flag(),
         parallel: 1,
