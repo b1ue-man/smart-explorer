@@ -123,3 +123,15 @@ Phase 1 (Ziel: ein Basis-Crate, auf das alles Übrige zeigt):
 Folgephasen: Kopierschicht (`copy`, `transfer`; `transfer → vault` 15 Verweise lösen),
 Protokoll-Backends (`sftp`, `ftp`, `smb`, `webdav`, `gdrive`; `sftp → daemon` 2), dann `share`,
 GUI (`app`, `desktop`, `screen`) und CLI.
+
+Die Verweise von `vfs` nach oben (Produktionscode, Stand 2026-11-01) und ihre Auflösung:
+
+| Ziel | Verwendet | Auflösung in Phase 1 |
+|---|---|---|
+| `analytics` | Datentypen `ReclaimProgress`, `DuplicateReport`, `ScanOutcome`, `Progress`, `HashAlgorithm` | Typen ins Basis-Crate verschieben, `analytics` nutzt sie von dort |
+| `agent_proto` | `SearchSpec`, `WireNode`, `WalkFilterSpec`, `APP_TRASH_DIR_NAME` | Wire-Datentypen ins Basis-Crate |
+| `bisync` | `Sig` | Signaturtyp ins Basis-Crate |
+| `vault` | `EphemeralSpool` | Schnittstelle im Basis-Crate, `vault` liefert die Umsetzung beim Start |
+| `sftp`, `ftp`, `smb` | `backend_from_url` | Registrierung der URL-Schemata beim Start statt direkter Aufrufe |
+| `copy` | `local_file_identity_handle`, `copy_to_new_file` | lokale Dateihelfer ins Basis-Crate |
+| `connect` | `validate_sync_endpoints`, `location_paths_overlap` | reine Pfadprüfungen ins Basis-Crate |
