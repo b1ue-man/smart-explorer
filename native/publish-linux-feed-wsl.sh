@@ -55,7 +55,13 @@ export ZIG_GLOBAL_CACHE_DIR="${SMART_EXPLORER_ZIG_CACHE_DIR:-$HOME/.cache/zig/$z
 linux_target_dir="${SMART_EXPLORER_LINUX_TARGET_DIR:-$HOME/.cache/smart-explorer/linux-target}"
 share_target_dir="${SMART_EXPLORER_SHARE_TARGET_DIR:-$HOME/.cache/smart-explorer/share-target}"
 use_system_linkers=0
-if [ "$(stat -f -c '%T' /root 2>/dev/null || true)" = "wslfs" ]; then
+# WSL1, and a native Ubuntu 24.04 release runner that asks for it
+# (SMART_EXPLORER_SYSTEM_LINKERS=1, .github/workflows/release.yml), link with
+# the host's gcc and LLD against its glibc 2.39, which the app requires
+# anyway. The Zig path's glibc 2.17 floor lacks memfd_create and renameat2
+# that the app now calls (release dry run 41356402684).
+if [ "${SMART_EXPLORER_SYSTEM_LINKERS:-0}" = "1" ] ||
+  [ "$(stat -f -c '%T' /root 2>/dev/null || true)" = "wslfs" ]; then
   use_system_linkers=1
 fi
 

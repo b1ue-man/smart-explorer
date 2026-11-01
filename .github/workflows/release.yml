@@ -192,7 +192,7 @@ jobs:
           out="$RUNNER_TEMP/linux"
           mkdir -p "$out/update-feed" "$out/share-server"
           SMART_EXPLORER_FEED_DIR="$out/update-feed" SMART_EXPLORER_SHARE_DIR="$out/share-server" \
-            SMART_EXPLORER_BUILD_JOBS="$(nproc)" SMART_EXPLORER_RELEASE_LTO=thin \
+            SMART_EXPLORER_BUILD_JOBS="$(nproc)" SMART_EXPLORER_RELEASE_LTO=thin SMART_EXPLORER_SYSTEM_LINKERS=1 \
             bash native/publish-linux-feed-wsl.sh
 
       - uses: actions/upload-artifact@v4
