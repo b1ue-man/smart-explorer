@@ -58,7 +58,8 @@ jobs:
           if ($head -ne $env:SOURCE_SHA.ToLowerInvariant() -or $main -ne $head) {
             throw "Release source drift: input=$env:SOURCE_SHA HEAD=$head origin/main=$main."
           }
-          $scriptRoot = Join-Path (Get-Location) "native"
+          $repoRoot = (Resolve-Path ".").Path
+          $scriptRoot = Join-Path $repoRoot "native"
           . (Join-Path $scriptRoot "release-publication.ps1")
           . (Join-Path $scriptRoot "release-version.ps1")
           $plan = Resolve-ReleasePlan
@@ -88,7 +89,8 @@ jobs:
           PLAN_VERSION: ${{ needs.plan.outputs.version }}
         run: |
           $ErrorActionPreference = "Stop"
-          $scriptRoot = Join-Path (Get-Location) "native"
+          $repoRoot = (Resolve-Path ".").Path
+          $scriptRoot = Join-Path $repoRoot "native"
           . (Join-Path $scriptRoot "release-publication.ps1")
           . (Join-Path $scriptRoot "release-version.ps1")
           Set-NativeVersion $env:PLAN_VERSION
@@ -231,7 +233,7 @@ jobs:
           PLAN_VERSION: ${{ needs.plan.outputs.version }}
         run: |
           set -euo pipefail
-          pwsh -NoProfile -Command '$ErrorActionPreference="Stop"; $scriptRoot = Join-Path (Get-Location) "native"; . (Join-Path $scriptRoot "release-publication.ps1"); . (Join-Path $scriptRoot "release-version.ps1"); Set-NativeVersion $env:PLAN_VERSION'
+          pwsh -NoProfile -Command '$ErrorActionPreference="Stop"; $repoRoot = (Resolve-Path ".").Path; $scriptRoot = Join-Path $repoRoot "native"; . (Join-Path $scriptRoot "release-publication.ps1"); . (Join-Path $scriptRoot "release-version.ps1"); Set-NativeVersion $env:PLAN_VERSION'
           if [ -z "$ANDROID_KEYSTORE_B64" ]; then
             echo "::error::The ANDROID_KEYSTORE_B64 repository secret is missing."
             exit 1
