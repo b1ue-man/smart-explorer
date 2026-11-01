@@ -80,16 +80,6 @@ impl ExecRegistry {
         Ok(())
     }
 
-    /// Revision and enablement the registry holds for `principal`; `None`
-    /// when it was never configured here.
-    pub(crate) fn policy_of(&self, principal: &ExecPrincipal) -> Option<(u64, bool)> {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        state
-            .policies
-            .get(&PrincipalIdentity::from(principal))
-            .map(|policy| (policy.revision, policy.enabled))
-    }
-
     /// Apply reductions before replacing the auth snapshot under its lock.
     pub(crate) fn restrict_authorization(
         &self,

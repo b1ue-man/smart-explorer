@@ -74,7 +74,7 @@ jobs:
         shell: bash
         timeout-minutes: 120
         working-directory: native
-        run: cargo test --lib -- ideal_task_ abgleich_task_ 'updater::' sync_reliability_task_provider_
+        run: cargo test --lib -- ideal_task_ abgleich_task_ 'updater::' 'share::exec_grant_runtime::'
 
   measure:
     strategy:
