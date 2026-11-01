@@ -192,6 +192,22 @@ pub(super) fn apply_configuration_transition(
             keep_jobs,
         ));
     }
+    // A principal the registry denies at a newer revision (an enabled grant
+    // or member that left the configuration was revoked with a synthetic
+    // revision; a masked grant was denied at its own revision) and that comes
+    // back with an older or the same revision stays denied until a strictly
+    // newer explicit decision. The configuration goes on with it denied: the
+    // whole transition used to fail, and the worker then took no later change
+    // at all (decisions, pairing, rights, online) until the service restarted
+    // (user report 2026-11-01, "stale authorisation" on Windows, cleared by
+    // reconnecting the Share server).
+    for update in &mut updates {
+        if let Some((revision, enabled)) = registry.policy_of(&update.0) {
+            if update.1 < revision || (update.1 == revision && update.2 && !enabled) {
+                *update = (update.0.clone(), revision, false, false);
+            }
+        }
+    }
     registry
         .apply_configuration_authorizations(
             next_epoch,

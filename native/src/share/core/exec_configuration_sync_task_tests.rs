@@ -139,11 +139,20 @@ fn sync_reliability_task_provider_room_enabled_removal_revokes() {
     );
     let mut stale = current.clone();
     stale.authorization_epoch = 1;
-    assert!(apply_configuration_transition(&removed, &stale, 1, &registry).is_err());
-    // The removal's synthetic revision is 2: enabling that same revision is
-    // still forbidden; only a strictly newer explicit decision may enable.
+    // The revoked member comes back with its old revision (a delayed stored
+    // profile): the configuration goes on and the member stays denied,
+    // instead of the whole refresh failing (ideal_task, 2026-11-01).
+    apply_configuration_transition(&removed, &stale, 1, &registry).unwrap();
+    assert!(registry
+        .prepare(principal.clone(), token(1, 1), &request(), 11)
+        .is_err());
+    // The removal's synthetic revision is 2: that same revision stays denied
+    // too; only a strictly newer explicit decision may enable.
     stale.rooms[0].members[0].exec.policy_revision = 2;
-    assert!(apply_configuration_transition(&removed, &stale, 1, &registry).is_err());
+    apply_configuration_transition(&removed, &stale, 1, &registry).unwrap();
+    assert!(registry
+        .prepare(principal.clone(), token(2, 1), &request(), 11)
+        .is_err());
     stale.rooms[0].members[0].exec.policy_revision = 3;
     apply_configuration_transition(&removed, &stale, 1, &registry).unwrap();
     assert!(registry
@@ -151,6 +160,28 @@ fn sync_reliability_task_provider_room_enabled_removal_revokes() {
         .is_err());
     assert!(registry
         .prepare(principal, token(3, 1), &request(), 12)
+        .is_ok());
+}
+
+/// A grant denied at its own revision (a waiting change masks it) that comes
+/// back enabled at that revision does not stop the configuration: it stays
+/// denied until a newer decision (ideal_task, 2026-11-01).
+#[test]
+fn ideal_task_same_revision_return_does_not_block_the_configuration() {
+    let current = room_state(1, true);
+    let registry = ExecRegistry::new(ExecRegistryLimits::default());
+    apply_configuration_transition(&current, &current, 0, &registry).unwrap();
+    let principal = effective_policies(&current).remove(0).principal;
+    let masked = room_state(1, false);
+    apply_configuration_transition(&current, &masked, 1, &registry).unwrap();
+    apply_configuration_transition(&masked, &current, 1, &registry).unwrap();
+    assert!(registry
+        .prepare(principal.clone(), token(1, 1), &request(), 11)
+        .is_err());
+    let newer = room_state(2, true);
+    apply_configuration_transition(&current, &newer, 1, &registry).unwrap();
+    assert!(registry
+        .prepare(principal, token(2, 1), &request(), 12)
         .is_ok());
 }
 

@@ -213,8 +213,22 @@ pub(super) fn configure_or_restart_locked(state: &mut ShareHostState) -> Result<
             Err(error) => return Err(format!("Share-Worker Start: {error}")),
         }
     } else if let Some(service) = &state.service {
-        if !configure_service(service, &state.profiles)? {
-            state.configure_deferred = true;
+        match configure_service(service, &state.profiles) {
+            Ok(true) => {}
+            Ok(false) => state.configure_deferred = true,
+            // The running service holds an Exec authorization the stored
+            // profiles cannot follow: it would refuse every later
+            // configuration. A fresh service starts from the stored state,
+            // as reconnecting the Share server by hand did (user report
+            // 2026-11-01).
+            Err(error) if error.contains("StaleAuthorization") => {
+                log(&format!(
+                    "Share-Worker: veraltete Exec-Berechtigung im Dienst ({error}); Dienst startet neu"
+                ));
+                stop_service_locked(state)?;
+                return configure_or_restart_locked(state);
+            }
+            Err(error) => return Err(error),
         }
     }
     Ok(())
