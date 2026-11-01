@@ -120,11 +120,21 @@ fn speed_task_evidence_upload_members_cost_no_requests() {
     let few = upload(24, true);
     let many = upload(96, true);
     assert!(many.packets >= 1, "{many:?}");
-    // 72 more files, not one more stat, identity or folder request.
+    // 72 more files, not one more stat, identity or folder request. The bulk
+    // folder requests serve the target's folder chains (Vault and its
+    // FOLDERS folders): how the workers meet decides whether a packet finds
+    // a chain claimed and leaves it to its files' own request
+    // (folders_bulk.rs), so a run takes one or a few, never one per member
+    // (suite run 41262127011: two for 24 files, one for 96).
     assert_eq!(few.stats, many.stats, "{few:?} {many:?}");
     assert_eq!(few.identities, many.identities, "{few:?} {many:?}");
     assert_eq!(many.dirs, 0, "{many:?}");
-    assert_eq!(few.bulk_dirs, many.bulk_dirs, "{few:?} {many:?}");
+    for seen in [&few, &many] {
+        assert!(
+            (1..=FOLDERS + 1).contains(&seen.bulk_dirs),
+            "{few:?} {many:?}"
+        );
+    }
 }
 
 #[test]

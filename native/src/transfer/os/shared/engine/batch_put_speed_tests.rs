@@ -81,7 +81,8 @@ fn speed_task_batch_unpublished_failure_is_retried_once() {
         max_bytes: 1024 * 1024,
     });
     let (fake, _) = fake.handle();
-    let handle: BackendHandle = Arc::new(Refusing(fake.clone(), AtomicBool::new(false)));
+    let refusing = Arc::new(Refusing(fake.clone(), AtomicBool::new(false)));
+    let handle: BackendHandle = refusing.clone();
     let finished = run(job(
         Endpoint::Local,
         Endpoint::Remote(handle),
@@ -97,8 +98,18 @@ fn speed_task_batch_unpublished_failure_is_retried_once() {
             format!("file {index}").as_bytes()
         );
     }
-    // Exactly one single upload: the refused member, sent once more.
-    assert_eq!(fake.counters.stages.load(Ordering::SeqCst), 1);
+    // The refused member is sent once more on its own. A file a worker took
+    // before the others were queued goes alone as well (how the workers
+    // meet the walk decides that; suite run 41262127011 sent one such file).
+    // Every file reaches the remote exactly once, in a packet or alone.
+    assert!(refusing.1.load(Ordering::SeqCst), "a packet was sent");
+    let mut batched = fake.counters.batched.lock().expect("batched").clone();
+    let sent = batched.len();
+    batched.sort();
+    batched.dedup();
+    assert_eq!(batched.len(), sent, "nothing went twice in a packet");
+    assert!(sent < 4, "the refused member is in no packet: {batched:?}");
+    assert_eq!(fake.counters.stages.load(Ordering::SeqCst), 4 - sent);
 }
 
 /// A packet peer far away: every packet takes a while on the wire.
