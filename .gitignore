@@ -4,7 +4,9 @@ native/explorer-command/target/
 /native/.Cargo.lock.complete-release-version.*
 /native/.Cargo.toml.complete-release-version.*
 
-# Graphify project graph lives at /graphify-out; avoid accidental nested runs.
+# Graphify project graph lives at /graphify-out; it is generated per clone
+# (AGENTS.md, graphify) and not versioned. Avoid accidental nested runs.
+/graphify-out/
 native/src/graphify-out/
 .codex/
 graphify-out/cache/
@@ -31,6 +33,7 @@ Thumbs.db
 !release-native/update-feed/se.exe.sha256
 !release-native/update-feed/se-mcp-launcher.exe
 !release-native/update-feed/se-mcp-launcher.exe.sha256
+release-native/update-feed/versions/
 # EXCEPTION: ship the installer + portable exe so they're downloadable from the
 # repo (and referenced by the README). The Release attaches them too.
 !release-native/Smart Explorer Setup *.exe

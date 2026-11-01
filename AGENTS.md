@@ -18,6 +18,13 @@ Architecture overview and entry points: `docs/ARCHITEKTUR.md` (read it before br
   signature, hash, version, and publication-integrity checks. Documentation-only
   changes still do not independently require a native release.
 
+- History rewrite of 2026-11-01 (owner: „Das Löschen von alten Builds aus dem Git-Repo ist
+  erlaubt.“): every committed build under `release-native/` was removed from all branches and
+  tags once, and the tags were moved to the rewritten commits; the previous history is kept
+  outside the repository, and `docs/plaene/2026-11-01-idealzustand/commit-map.txt` maps old
+  to new commit IDs. Tags are immutable again from then on. Never push a clone made before
+  that date: re-clone or reset it to `origin` first.
+
 ## no local builds or test execution
 
 - Codex must not run builds, compilers, linkers, test suites, packaging, release builds, or
@@ -172,7 +179,7 @@ These rules apply to `native/src` unless a task explicitly says otherwise.
 
 ## graphify
 
-This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships. The initial graph is AST-only, built from `native/src` into the repository root.
+This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships. The initial graph is AST-only, built from `native/src` into the repository root. Since 2026-11-01 `graphify-out/` is generated per clone and ignored by Git (`.gitignore`): it is never committed, and a fresh clone builds it with the full root refresh below before the first query.
 
 When the user types `/graphify`, invoke the `skill` tool with `skill: "graphify"` before doing anything else.
 
@@ -181,5 +188,5 @@ Rules:
 - Dirty graphify-out/ files are expected after hooks or incremental updates; dirty graph files are not a reason to skip graphify. Only skip graphify if the task is about stale or incorrect graph output, or the user explicitly says not to use it.
 - If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
 - Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
-- After modifying native source code, update the root graph from the repository root. If `graphify-out/manifest.json` already exists, `graphify extract native/src --out . --no-cluster` may incorrectly rewrite `graphify-out/graph.json` with only the changed files; do not leave that partial graph in place. For a reliable full root refresh, first verify the resolved targets are inside the repository-root `graphify-out/`, remove only the generated root files `graphify-out/manifest.json`, `graphify-out/graph.json`, and `graphify-out/GRAPH_REPORT.md`, then run `graphify extract native/src --out . --no-cluster` and `graphify cluster-only . --no-viz --no-label`. Finally rewrite `graphify-out/graph.json` without indentation (`python3 -c "import json,sys; p=sys.argv[1]; d=json.load(open(p, encoding='utf-8')); json.dump(d, open(p, 'w', encoding='utf-8'), separators=(',', ':'), ensure_ascii=False)" graphify-out/graph.json`): graphify writes it indented, which reached 99.0 MiB on 2026-10-31, and GitHub refuses every push with a blob above 100 MiB (GH001); graphify reads the compact file unchanged.
+- After modifying native source code, update the root graph from the repository root. If `graphify-out/manifest.json` already exists, `graphify extract native/src --out . --no-cluster` may incorrectly rewrite `graphify-out/graph.json` with only the changed files; do not leave that partial graph in place. For a reliable full root refresh, first verify the resolved targets are inside the repository-root `graphify-out/`, remove only the generated root files `graphify-out/manifest.json`, `graphify-out/graph.json`, and `graphify-out/GRAPH_REPORT.md`, then run `graphify extract native/src --out . --no-cluster` and `graphify cluster-only . --no-viz --no-label`. Finally rewrite `graphify-out/graph.json` without indentation (`python3 -c "import json,sys; p=sys.argv[1]; d=json.load(open(p, encoding='utf-8')); json.dump(d, open(p, 'w', encoding='utf-8'), separators=(',', ':'), ensure_ascii=False)" graphify-out/graph.json`): graphify writes it indented (99.0 MiB on 2026-10-31); graphify reads the compact file unchanged, and the compact file keeps the local checkout small.
 - Do not use `graphify update native/src` for the required root graph refresh; it writes a separate `native/src/graphify-out/` instead of updating the repository-root graph. If that directory is accidentally created, verify it is ignored/untracked and remove only that generated `native/src/graphify-out/` directory after confirming the root `graphify-out/graph.json` has been rebuilt and clustered.
