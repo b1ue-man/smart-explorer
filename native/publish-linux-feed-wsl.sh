@@ -16,10 +16,19 @@ set -euo pipefail
 
 # This leaf is also callable from the Windows/WSL release path, where Cargo
 # settings from the parent PowerShell process are not reliably inherited.
-export CARGO_BUILD_JOBS="$(nproc)"
+# The release workflow on a native Linux runner builds with ThinLTO like
+# Windows (SMART_EXPLORER_RELEASE_LTO=thin, codegen units 8; build measurement
+# run 41356400264: 19.7 minutes with 4 jobs, rustc peak 9.9 GiB). Without it
+# the WSL1 path keeps LTO off, which avoided its linker stalls (ba14ecac).
+export CARGO_BUILD_JOBS="${SMART_EXPLORER_BUILD_JOBS:-$(nproc)}"
 export CARGO_INCREMENTAL=0
-export CARGO_PROFILE_RELEASE_LTO=off
-export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
+if [ "${SMART_EXPLORER_RELEASE_LTO:-off}" = "thin" ]; then
+  export CARGO_PROFILE_RELEASE_LTO=thin
+  export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=8
+else
+  export CARGO_PROFILE_RELEASE_LTO=off
+  export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
+fi
 export CARGO_PROFILE_RELEASE_DEBUG=0
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

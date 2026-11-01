@@ -148,7 +148,14 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   large Linux tree through `native/run-release-memory-bounded.sh`, which uses a
   3-GiB high/4-GiB hard cgroup limit plus at most 1 GiB of swap when systemd
   scopes are available. Do not weaken or make these limits ambient overrides;
-  ordinary diagnostic builds may use separate Cargo settings.
+  ordinary diagnostic builds may use separate Cargo settings. The release
+  workflow `.github/workflows/release.yml` runs only on 16-GB GitHub runners
+  and passes the runner's core count explicitly (`publish-update.ps1
+  -BuildJobs`, `SMART_EXPLORER_BUILD_JOBS`) with ThinLTO on both platforms
+  (`SMART_EXPLORER_RELEASE_LTO=thin`): build measurement run 41356400264 (app
+  and `se`) took 19.7 instead of 66.4 minutes on Windows and 19.7 instead of
+  46.9 on Linux with 4 jobs, at a rustc peak of 9.0 and 9.9 GiB. Without these
+  explicit inputs every leaf keeps its local defaults.
 - **Embedded SSH-agent binaries retain source paths.** Unmapped Cargo registry
   paths make an otherwise identical static-musl agent differ between a local
   build and GitHub's `/home/runner` build, tripping the intentional exact-byte

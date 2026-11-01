@@ -149,7 +149,8 @@ jobs:
           $out = Join-Path $env:RUNNER_TEMP "windows"
           New-Item -ItemType Directory -Force (Join-Path $out "update-feed"), (Join-Path $out "release") | Out-Null
           pwsh -NoProfile -File native/publish-update.ps1 -AllowPartialFeed -DeferFeedVersion `
-            -Feed (Join-Path $out "update-feed") -ReleaseOutput (Join-Path $out "release")
+            -Feed (Join-Path $out "update-feed") -ReleaseOutput (Join-Path $out "release") `
+            -BuildJobs ([Environment]::ProcessorCount)
           if ($LASTEXITCODE -ne 0) { throw "Windows build failed." }
 
       - uses: actions/upload-artifact@v4
@@ -191,6 +192,7 @@ jobs:
           out="$RUNNER_TEMP/linux"
           mkdir -p "$out/update-feed" "$out/share-server"
           SMART_EXPLORER_FEED_DIR="$out/update-feed" SMART_EXPLORER_SHARE_DIR="$out/share-server" \
+            SMART_EXPLORER_BUILD_JOBS="$(nproc)" SMART_EXPLORER_RELEASE_LTO=thin \
             bash native/publish-linux-feed-wsl.sh
 
       - uses: actions/upload-artifact@v4

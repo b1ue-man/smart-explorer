@@ -8,7 +8,12 @@ param(
     [string]$Feed = "",
     [switch]$AllowPartialFeed,
     [switch]$DeferFeedVersion,
-    [string]$ReleaseOutput = ""
+    [string]$ReleaseOutput = "",
+    # Parallel compiler jobs. 1 keeps the 8-GiB hosts of a local publication
+    # within their memory budget; the release workflow on its 16-GB runners
+    # passes their core count (build measurement run 41356400264: 4 jobs
+    # 19.7 instead of 66.4 minutes, rustc peak 9.0 GiB).
+    [ValidateRange(1, 64)][int]$BuildJobs = 1
 )
 
 $ErrorActionPreference = "Stop"
@@ -16,7 +21,7 @@ Set-Location $PSScriptRoot
 
 # Keep every direct Windows release leaf within the canonical memory budget;
 # WSL does not reliably inherit custom Windows environment variables.
-$env:CARGO_BUILD_JOBS = "1"
+$env:CARGO_BUILD_JOBS = "$BuildJobs"
 $env:CARGO_INCREMENTAL = "0"
 $env:CARGO_PROFILE_RELEASE_LTO = "thin"
 $env:CARGO_PROFILE_RELEASE_CODEGEN_UNITS = "8"
