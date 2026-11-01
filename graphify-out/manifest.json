@@ -13375,9 +13375,9 @@
     "semantic_hash": "5057278e03a29f7feb0b6325339312e4"
   },
   "sftp/core/backend.rs": {
-    "mtime": 1793496295.9715726,
-    "ast_hash": "5eac90da7fa88886f10b20463d22577a",
-    "semantic_hash": "5eac90da7fa88886f10b20463d22577a"
+    "mtime": 1793504560.619333,
+    "ast_hash": "07e4015701459673ed1b243e3b4d7c02",
+    "semantic_hash": "07e4015701459673ed1b243e3b4d7c02"
   },
   "sftp/core/batch_fake.rs": {
     "mtime": 1793446104.055115,
@@ -13455,9 +13455,9 @@
     "semantic_hash": "d797a02f31b240b0dca0544c533eab1a"
   },
   "sftp/core/digest_batch_flow.rs": {
-    "mtime": 1793496651.6472268,
-    "ast_hash": "fa5cd5f05e41acf77fbe6277776024fd",
-    "semantic_hash": "fa5cd5f05e41acf77fbe6277776024fd"
+    "mtime": 1793504581.8695943,
+    "ast_hash": "d377b193571686046e826c375dc08590",
+    "semantic_hash": "d377b193571686046e826c375dc08590"
   },
   "sftp/core/digest_command.rs": {
     "mtime": 1793496295.9715726,
@@ -13470,9 +13470,9 @@
     "semantic_hash": "fd4456bd264d93e3add5b4ab53b8f1e8"
   },
   "sftp/core/digest_exec.rs": {
-    "mtime": 1793461161.4855893,
-    "ast_hash": "552ac7a82ce027b0ad5d115676bb8248",
-    "semantic_hash": "552ac7a82ce027b0ad5d115676bb8248"
+    "mtime": 1793504581.8695943,
+    "ast_hash": "577a47ab4f82d5c1e4f8ea925db25cf2",
+    "semantic_hash": "577a47ab4f82d5c1e4f8ea925db25cf2"
   },
   "sftp/core/enqueue.rs": {
     "mtime": 1793208537.7712302,
@@ -13488,6 +13488,11 @@
     "mtime": 1793469755.7721171,
     "ast_hash": "c5cf14c47c394b4b1d9ee075ef9fd9bf",
     "semantic_hash": "c5cf14c47c394b4b1d9ee075ef9fd9bf"
+  },
+  "sftp/core/exec_slots.rs": {
+    "mtime": 1793504588.6586778,
+    "ast_hash": "27790d77412775ba073798684ad0fb8a",
+    "semantic_hash": "27790d77412775ba073798684ad0fb8a"
   },
   "sftp/core/extensions.rs": {
     "mtime": 1793496338.6500983,
@@ -13695,9 +13700,9 @@
     "semantic_hash": "682f4acf4c48eb0816bb7cd2169c2c43"
   },
   "sftp/mod.rs": {
-    "mtime": 1793496295.9725726,
-    "ast_hash": "8bf4c574fca536e5ab7b5095f5482c3b",
-    "semantic_hash": "8bf4c574fca536e5ab7b5095f5482c3b"
+    "mtime": 1793504560.620333,
+    "ast_hash": "619756feed6f8235babe30e60f0fac46",
+    "semantic_hash": "619756feed6f8235babe30e60f0fac46"
   },
   "sftp/os/shared/known_hosts.rs": {
     "mtime": 1792146991.6486022,
@@ -17435,9 +17440,9 @@
     "semantic_hash": "01000f12639a181e29a75b1aa39ba695"
   },
   "transfer/os/shared/engine/batch_put_speed_tests.rs": {
-    "mtime": 1793261386.3509645,
-    "ast_hash": "0c28d23be87cb865a33f3ebcf606657e",
-    "semantic_hash": "0c28d23be87cb865a33f3ebcf606657e"
+    "mtime": 1793501558.182047,
+    "ast_hash": "df994b59b46c5fad5da2d252ba921d8c",
+    "semantic_hash": "df994b59b46c5fad5da2d252ba921d8c"
   },
   "transfer/os/shared/engine/batch_remote.rs": {
     "mtime": 1793446103.3041058,
@@ -17875,9 +17880,9 @@
     "semantic_hash": "b66e1bef7772068aa1a6e31949a52724"
   },
   "transfer/os/shared/engine/test_backend_evidence_tests.rs": {
-    "mtime": 1793484843.214665,
-    "ast_hash": "dbd52c26c07988200011f7f40e9ebb69",
-    "semantic_hash": "dbd52c26c07988200011f7f40e9ebb69"
+    "mtime": 1793501562.1470954,
+    "ast_hash": "038377c0af4124c7d7386692a8a9c4b0",
+    "semantic_hash": "038377c0af4124c7d7386692a8a9c4b0"
   },
   "transfer/os/shared/engine/test_backend_keys.rs": {
     "mtime": 1793454093.7160428,
