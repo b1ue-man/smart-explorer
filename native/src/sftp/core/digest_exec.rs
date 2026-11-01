@@ -18,7 +18,8 @@ const POLL: Duration = Duration::from_millis(200);
 
 /// Runs `command` on a new session channel of the connection, sends `stdin`
 /// and EOF, and returns what it printed. `Ok(None)`: the server refused one
-/// more channel.
+/// more channel while no other digest command ran on this connection; a
+/// refusal while others run waits for one of them to end (exec_slots.rs).
 pub(super) fn run(
     backend: &SftpBackend,
     command: &str,
@@ -29,10 +30,19 @@ pub(super) fn run(
     if cancel.load(Ordering::Relaxed) {
         return Err(canceled());
     }
-    let (generation, mut channel) = match backend.try_open_session_channel()? {
-        ChannelOpen::Opened(generation, channel) => (generation, channel),
-        ChannelOpen::Refused(_) => return Ok(None),
+    let mut slot = backend.exec_slots.enter(cancel).ok_or_else(canceled)?;
+    let (generation, mut channel) = loop {
+        match backend.try_open_session_channel()? {
+            ChannelOpen::Opened(generation, channel) => break (generation, channel),
+            ChannelOpen::Refused(_) if backend.exec_slots.refused(&slot) => {
+                drop(slot);
+                slot = backend.exec_slots.enter(cancel).ok_or_else(canceled)?;
+            }
+            ChannelOpen::Refused(_) => return Ok(None),
+        }
     };
+    // The slot stays taken until the command ended.
+    let _running = slot;
     backend.request_exec(&generation, &channel, true, command)?;
     let captured = backend.rt.block_on(async {
         feed(&channel, stdin).await;

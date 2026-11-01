@@ -87,6 +87,8 @@ mod enqueue;
 mod errors;
 #[path = "core/exec.rs"]
 mod exec;
+#[path = "core/exec_slots.rs"]
+mod exec_slots;
 #[path = "core/extensions.rs"]
 mod extensions;
 #[path = "core/handle_budget.rs"]

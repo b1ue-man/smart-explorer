@@ -35,6 +35,8 @@ pub struct SftpBackend {
     pub(super) md5_gate: Arc<super::digest_command::DigestGate>,
     /// Whether group answers of the MD5 command line up (digest_batch.rs).
     pub(super) md5_batch_gate: Arc<super::digest_command::DigestGate>,
+    /// Digest commands running at once on this connection (exec_slots.rs).
+    pub(super) exec_slots: Arc<super::exec_slots::ExecSlots>,
     root: String,
     /// Read by `url()` (UI display), consumed in the connect-UI step.
     #[allow(dead_code)]
@@ -74,6 +76,7 @@ impl SftpBackend {
             digest_gate: Arc::default(),
             md5_gate: Arc::default(),
             md5_batch_gate: Arc::default(),
+            exec_slots: Arc::default(),
             root,
             url,
         })
@@ -356,8 +359,7 @@ impl Backend for SftpBackend {
         self.stage_writer(path, size, Commit::Unsynced, None)
     }
 
-    /// Inside one server the server copies itself (`copy-data`,
-    /// copy_data.rs); `None` streams.
+    /// Inside one server the server copies itself (`copy-data`, copy_data.rs); `None` streams.
     fn server_copy_to_stage(
         &self,
         src: &str,

@@ -261,7 +261,16 @@ Bündelanfrage mit einer Exec-Anfrage je Gruppe (`sftp/core/digest_batch.rs`, `d
 - eine Gruppe hat höchstens 1 024 Dateien, eine geschätzte Ausgabe unter 56 KiB (die Erfassung behält
   64 KiB) und höchstens 256 MiB Inhalt (Wartezeit 60 s plus 1 s je 8 MiB); drei nicht aufgehende
   Gruppenantworten in Folge schließen nur den Bündelweg der Verbindung (`md5_batch_gate`), der Einzelweg
-  bleibt.
+  bleibt;
+- höchstens 8 Prüfsummenbefehle laufen je Verbindung gleichzeitig (`sftp/core/exec_slots.rs`; OpenSSH
+  öffnet je Verbindung `MaxSessions` = 10 Sitzungskanäle, einen davon hält die SFTP-Sitzung). Der
+  Durchlauf listet mehrere Ordner gleichzeitig, und jeder fragt seine MD5s über einen eigenen Kanal ab.
+  Lehnt der Server einen Kanal ab, während andere Prüfsummenbefehle laufen, sinkt die Grenze auf deren
+  Zahl, und die Anfrage wartet, bis einer endet. Nur eine Ablehnung ohne laufenden Prüfsummenbefehl gibt
+  `Ok(None)`. Ursache: Im Messlauf 41262127011 (Bündelweg ohne diese Grenze) brauchte LS im
+  Prüfsummenmodus 8,30 s bei 36,6 MiB (v0.5.189, das den Inhalt lädt: 5,73 s bei 67,2 MiB). Ein Lauf von
+  dreien brauchte 19,3 s bei 72,2 MiB, also so viel wie mit Download. Die Dateien abgelehnter Kanäle nahmen
+  den Einzelweg, bekamen auch dort keinen Kanal und luden deshalb den Inhalt.
 
 Durchgereicht wird die Bündelanfrage von Agent-Verbindung (an die SFTP-Verbindung), Einhängeproxy,
 Wurzel-Backend des Dienstes (jeder Pfad wie bei `content_md5` aufgelöst), Share-Freigabe (nur lesbare

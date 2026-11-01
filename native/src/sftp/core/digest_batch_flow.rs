@@ -78,7 +78,8 @@ pub(super) fn md5_many_by(
         }
         let captured = match run(&command, &group.stdin, wait_for(group.bytes)) {
             Ok(Some(captured)) => captured,
-            // No channel to spare right now: these files go their own way.
+            // The server gives no channel while no other digest command
+            // runs here (exec_slots.rs): these files go their own way.
             Ok(None) => continue,
             Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
                 gates.md5.give_up();
