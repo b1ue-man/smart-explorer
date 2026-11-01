@@ -90,3 +90,36 @@ nicht im Repo sichern, sondern außerhalb auf dem Server.
   Stand: Ansatz gewählt (Arbeiterpools je Seite und Stufe, Anpassung nach Wartezeiten); offen.
 - S2 Release nur über Assets (E8/D8): Stand: Ansatz (Entwurf → Upload → Prüfen → Veröffentlichen)
   beschrieben; Umsetzung im nächsten Fenster.
+
+## D13 — Zuschnitt der Crate-Aufteilung (Analyse 2026-11-01)
+
+Grundlage: Verweise `crate::<modul>` im Produktionscode von `native/src` (Testdateien und
+`#[cfg(test)]`-Teile ausgenommen), 62 Top-Module.
+
+- Ohne Zyklus (sofort eigenes Crate möglich): `types` (339 Zeilen), `format` (124),
+  `cryptomator` (2191), `icons`, `licenses`, `linemerge`, `quickshare`, `shell_clipboard`,
+  `shell_menu` — zusammen etwa 3 900 Zeilen; Gewinn klein.
+- Zyklus: 52 Module, 561 884 Zeilen. Meistgenutzt: `vfs` (1481 Verweise aus dem Zyklus,
+  9185 Zeilen), `share` (1340), `daemon` (494), `screen` (376), `vault` (368), `bisync` (364),
+  `support_dirs` (309), `mount` (293), `transfer` (282).
+- Basisschicht: `vfs` verweist 92-mal nach oben: `local_access` 34, `source_media` 33,
+  `analytics` 9, `agent_proto` 5, `types` 3, `connect` 2, `copy` 2, `bisync` 2, `vault` 2,
+  `sftp`/`ftp`/`smb` je 1. `local_access` hängt nur an `types` und `analytics` (1 Verweis),
+  `source_media` an `folder_index` (2) und `local_access` (2).
+
+Phase 1 (Ziel: ein Basis-Crate, auf das alles Übrige zeigt):
+1. `local_access`, `source_media`, `folder_index` und `types`/`format` ohne Verweis nach oben
+   (der eine Verweis `local_access → analytics` und die beiden `source_media → folder_index`
+   werden geprüft und umgedreht oder mitverschoben).
+2. Die 25 Verweise `vfs → analytics/agent_proto/connect/copy/bisync/vault/sftp/ftp/smb`
+   werden durch Schnittstellen (Traits oder Registrierung beim Start) ersetzt, die die oberen
+   Module implementieren.
+3. Neues Crate `native/core` (`smart_explorer_core`) mit diesen Modulen; im Haupt-Crate
+   bleiben die Pfade über `pub use smart_explorer_core::vfs;` und gleichartige Zeilen gleich,
+   damit die übrigen 3 900 Dateien unverändert bauen.
+4. Messbarer Nachweis: `cargo build --timings` des Messjobs zeigt das Basis-Crate als eigene,
+   parallel übersetzte Einheit; eine Änderung oberhalb baut es nicht neu.
+
+Folgephasen: Kopierschicht (`copy`, `transfer`; `transfer → vault` 15 Verweise lösen),
+Protokoll-Backends (`sftp`, `ftp`, `smb`, `webdav`, `gdrive`; `sftp → daemon` 2), dann `share`,
+GUI (`app`, `desktop`, `screen`) und CLI.
