@@ -1222,13 +1222,17 @@ du sie einmal selbst ein:
 > ```
 >
 > **→ „Speichern" klicken. Fertig.** Beim nächsten Start (oder „Jetzt prüfen")
-> stellt die App die neueste Version aus dem Git geprüft bereit und fragt vor
-> Installation/Neustart nach.
+> stellt die App die neueste Version aus den GitHub Releases geprüft bereit und
+> fragt vor Installation/Neustart nach.
 
-Technisch lädt die App `version.txt` plus die vier OS-passenden Programme
-App, Update-Helfer, `se` und `se-mcp-launcher` samt SHA-256-Dateien aus
-[`release-native/update-feed/`](release-native/update-feed) über
-`raw.githubusercontent.com`. Statt des Repo-Links kannst du auch direkt einen
+Technisch lädt die App `version.txt` des neuesten Releases über
+`https://github.com/b1ue-man/smart-explorer/releases/latest/download/` und danach
+die vier OS-passenden Programme App, Update-Helfer, `se` und `se-mcp-launcher`
+samt SHA-256-Dateien aus genau diesem Release (`releases/download/v<Version>/`),
+damit ein zwischendurch veröffentlichter Release keine Versionen mischt. Ein
+eingetragener Repo-Link und die frühere Raw-Adresse
+(`raw.githubusercontent.com/…/main/release-native/update-feed`, Installationen bis
+0.5.190) bedeuten denselben Release-Feed. Statt des Repo-Links kannst du auch direkt einen
 Ordner-Pfad/UNC oder eine `https://…`-URL eintragen. Die Quelle steht auch in
 `%APPDATA%\smart_explorer\update_source.txt` bzw.
 `$XDG_DATA_HOME/smart_explorer/update_source.txt`.
@@ -1573,16 +1577,17 @@ JNI-Exporte und die DEX-Klassen: Die Releaseprüfung verweigert eine APK mit
 einem Zugang zu den Android-Bildfixtures. Debug-Instrumentierung und Release verwenden getrennte
 JNI-Verzeichnisse; diese Prüfung baut die APK nicht erneut.
 
-> **Wichtig:** Damit anonyme Clients aus dem Git updaten können, muss das Repo
-> **public** sein (`raw.githubusercontent.com` braucht sonst Auth). Siehe
-> RELEASING.md.
+> **Wichtig:** Damit anonyme Clients aus den Releases updaten können, muss das
+> Repo **public** sein (Release-Assets eines privaten Repos brauchen sonst Auth).
+> Siehe RELEASING.md.
 
 **Update-Quelle (Feed)** — einstellbar in der App (Sidebar → UPDATE), im
 Terminal mit `se update --source …` oder in
 `%APPDATA%\smart_explorer\update_source.txt`. Erlaubt: ein **Ordner**
 (lokal/`\\server\share`), eine **https-URL** oder ein **GitHub-Repo-Link**
-(`https://github.com/b1ue-man/smart-explorer` → wird auf den `main`-Feed
-übersetzt). Installierte Instanzen prüfen den Feed bei jedem Start und stagen
+(`https://github.com/b1ue-man/smart-explorer` → wird auf den Release-Feed
+`…/releases/latest/download` übersetzt; ein `…/tree/<Branch>`-Link außer `main`
+liest den Raw-Ordner dieses Branches). Installierte Instanzen prüfen den Feed bei jedem Start und stagen
 ein neues, hash-verifiziertes App/Updater/`se`-Bundle. Die transaktionale
 Installation und der Neustart erfolgen erst nach ausdrücklicher Bestätigung
 (in der App oder durch `se update`).

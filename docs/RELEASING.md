@@ -35,14 +35,24 @@ for current release truth.
 
 ## ⚠️ Prerequisite for auto-update to work: the repo must be PUBLIC
 
-The default update source is the **raw Git feed on `main`**:
+The default update source (since the release after v0.5.190) is the **GitHub
+release feed**:
 
 ```
-https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/release-native/update-feed
+https://github.com/b1ue-man/smart-explorer/releases/latest/download
 ```
 
-`raw.githubusercontent.com` (and private-repo Release assets) require auth for a
-**private** repo, so an anonymous app gets `404` and can't self-update. Make the
+The updater (desktop and Android) reads `version.txt` there and then takes every
+payload and `.sha256` from `releases/download/v<version>/`, so a release published
+in between cannot mix versions. A repository link, its `main` branch and the
+former raw feed of `main` (`raw.githubusercontent.com/…/main/release-native/update-feed`,
+written into `update_source.txt` by installs up to 0.5.190) normalize to it.
+Installs up to 0.5.190 still read the raw feed of `main`; the committed
+`release-native/update-feed/` stays in `main` until every install runs a version
+with the release feed (plan `docs/plaene/2026-11-01-idealzustand/plan.md`, D8).
+
+Release assets of a **private** repo require auth, so an anonymous app gets `404`
+and can't self-update. Make the
 repository **public** (Settings → General → Danger Zone → Change visibility) and
 the feed + Release downloads work for everyone. Until then, only a signed-in
 user can pull updates.
@@ -1167,7 +1177,9 @@ If the update check fails with `os error 10013` / "Zugriff auf einen Socket war
 aufgrund der Zugriffsrechte des Sockets unzulässig", the GitHub feed can still
 be fine. Bitdefender Firewall has blocked Smart Explorer this way before. Check
 the Bitdefender/Windows Firewall app rule for `Smart Explorer.exe` and allow
-outbound HTTPS to `raw.githubusercontent.com`.
+outbound HTTPS to `github.com` and `release-assets.githubusercontent.com` (the
+redirect target of release downloads, observed 2026-11-01; installs up to 0.5.190
+also `raw.githubusercontent.com`).
 
 ## Quick consistency check
 
