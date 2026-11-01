@@ -1,0 +1,103 @@
+name: Build measurement
+
+# Evidence for the build settings of the release (plan
+# docs/plaene/2026-11-01-idealzustand, D9/D10/D14): wall time per crate
+# (cargo --timings), the peak memory of the compiler processes and the binary
+# size of the release profile with 1, 2 and 4 parallel compiler jobs and with
+# ThinLTO or no LTO, on the runners the release uses. Changes nothing.
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Full pushed SHA to measure
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+        setting:
+          - { jobs: 1, lto: thin }
+          - { jobs: 2, lto: thin }
+          - { jobs: 4, lto: thin }
+          - { jobs: 4, lto: "off" }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    env:
+      CARGO_BUILD_JOBS: ${{ matrix.setting.jobs }}
+      CARGO_PROFILE_RELEASE_LTO: ${{ matrix.setting.lto }}
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 8
+      CARGO_PROFILE_RELEASE_DEBUG: 0
+      CARGO_INCREMENTAL: 0
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.candidate_sha }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Release build of the desktop app and se, with timings and peak memory
+        shell: pwsh
+        timeout-minutes: 170
+        working-directory: native
+        run: |
+          $ErrorActionPreference = "Stop"
+          cargo fetch --locked
+          $peak = 0L
+          $started = Get-Date
+          $build = Start-Process cargo -ArgumentList @("build", "--release", "--locked", "--bin", "smart_explorer", "--bin", "se", "--timings") -NoNewWindow -PassThru
+          while (-not $build.HasExited) {
+            $now = (Get-Process -Name rustc -ErrorAction SilentlyContinue | Measure-Object WorkingSet64 -Sum).Sum
+            if ($now -gt $peak) { $peak = $now }
+            Start-Sleep -Milliseconds 500
+          }
+          $build.WaitForExit()
+          $minutes = ((Get-Date) - $started).TotalMinutes
+          if ($build.ExitCode -ne 0) { throw "cargo build failed with $($build.ExitCode)." }
+          $exe = if ($IsWindows) { ".exe" } else { "" }
+          $app = (Get-Item "target/release/smart_explorer$exe").Length / 1MB
+          $se = (Get-Item "target/release/se$exe").Length / 1MB
+          $line = "| $env:RUNNER_OS | $env:CARGO_BUILD_JOBS | $env:CARGO_PROFILE_RELEASE_LTO | {0:N1} | {1:N2} | {2:N1} | {3:N1} |" -f $minutes, ($peak / 1GB), $app, $se
+          "| OS | jobs | LTO | minutes | peak rustc GiB | app MiB | se MiB |" >> $env:GITHUB_STEP_SUMMARY
+          "|---|---|---|---|---|---|---|" >> $env:GITHUB_STEP_SUMMARY
+          $line >> $env:GITHUB_STEP_SUMMARY
+          Write-Host $line
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: timings-${{ runner.os }}-j${{ matrix.setting.jobs }}-${{ matrix.setting.lto }}
+          path: native/target/cargo-timings/cargo-timing.html
+          if-no-files-found: warn
+          retention-days: 14
+
+  bloat:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.candidate_sha }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: What the desktop app and se consist of (largest crates)
+        timeout-minutes: 110
+        working-directory: native
+        run: |
+          set -euo pipefail
+          cargo install cargo-bloat --locked
+          for bin in smart_explorer se; do
+            echo "### $bin" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            cargo bloat --release --locked --bin "$bin" --crates -n 30 | tee -a "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          done
