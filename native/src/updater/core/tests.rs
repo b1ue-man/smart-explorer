@@ -56,23 +56,72 @@ fn archived_versions_parse_and_sort_numerically() {
     }
 }
 
+/// Repository links, `main` and the former raw feed of `main` mean the
+/// release feed; another branch keeps its raw folder; explicit release URLs
+/// and foreign feeds stay as configured.
 #[test]
-fn github_repo_url_becomes_raw_feed() {
-    assert_eq!(
-        feed::normalize_http_feed("https://github.com/b1ue-man/smart-explorer"),
-        "https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/release-native/update-feed"
-    );
-    assert_eq!(
-        feed::normalize_http_feed("https://github.com/b1ue-man/smart-explorer.git/"),
-        "https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/release-native/update-feed"
-    );
+fn ideal_task_github_sources_become_the_release_feed() {
+    let latest = "https://github.com/b1ue-man/smart-explorer/releases/latest/download";
+    for source in [
+        "https://github.com/b1ue-man/smart-explorer",
+        "https://github.com/b1ue-man/smart-explorer.git/",
+        "http://github.com/b1ue-man/smart-explorer",
+        "https://github.com/b1ue-man/smart-explorer/tree/main",
+        "https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/release-native/update-feed",
+        "https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/release-native/update-feed/",
+        latest,
+    ] {
+        assert_eq!(feed::normalize_http_feed(source), latest, "{source}");
+    }
     assert_eq!(
         feed::normalize_http_feed("https://github.com/o/r/tree/dev"),
         "https://raw.githubusercontent.com/o/r/dev/release-native/update-feed"
     );
     assert_eq!(
+        feed::normalize_http_feed(
+            "https://raw.githubusercontent.com/o/r/dev/release-native/update-feed"
+        ),
+        "https://raw.githubusercontent.com/o/r/dev/release-native/update-feed"
+    );
+    assert_eq!(
+        feed::normalize_http_feed("https://github.com/o/r/releases/download/v0.5.190"),
+        "https://github.com/o/r/releases/download/v0.5.190"
+    );
+    assert_eq!(
         feed::normalize_http_feed("https://example.com/feed/"),
         "https://example.com/feed"
+    );
+    assert_eq!(
+        feed::github_repo(latest),
+        Some(("b1ue-man".into(), "smart-explorer".into()))
+    );
+}
+
+/// The files of one update come from the tagged release whose version was
+/// read, never from a release published meanwhile.
+#[test]
+fn ideal_task_release_feed_pins_the_files_to_the_read_version() {
+    assert_eq!(
+        feed::pin_release_feed("https://github.com/o/r/releases/latest/download", "0.5.191"),
+        "https://github.com/o/r/releases/download/v0.5.191"
+    );
+    assert_eq!(
+        feed::pin_release_feed("https://example.com/feed", "0.5.191"),
+        "https://example.com/feed"
+    );
+    assert_eq!(
+        crate::updater::pinned_feed("https://github.com/o/r", "0.5.191"),
+        "https://github.com/o/r/releases/download/v0.5.191"
+    );
+    assert_eq!(
+        crate::updater::pinned_feed("/local/feed", "0.5.191"),
+        "/local/feed"
+    );
+    let pinned = feed::classify_feed("https://github.com/o/r").pinned("0.5.191");
+    assert!(
+        matches!(&pinned, feed::Feed::Http(base) if base == "https://github.com/o/r/releases/download/v0.5.191"),
+        "{}",
+        pinned.display()
     );
 }
 

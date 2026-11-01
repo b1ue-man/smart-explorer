@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use super::core::{parse_sha256_file, sha256_file};
-use super::feed::{classify_feed, Feed};
+use super::feed::{classify_feed, pin_release_feed, Feed};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(25);
 /// Per read, so a large download on a slow link is not cut off as a whole.
@@ -23,6 +23,16 @@ fn agent() -> ureq::Agent {
         .timeout_read(READ_TIMEOUT)
         .user_agent(USER_AGENT)
         .build()
+}
+
+/// The feed holding exactly the files of `version`: a release feed names the
+/// newest release, which can change between the version check and the
+/// download (`pin_release_feed`). Other feeds stay as configured.
+pub fn pinned_feed(feed: &str, version: &str) -> String {
+    match classify_feed(feed) {
+        Feed::Http(base) => pin_release_feed(&base, version),
+        Feed::Local(_) => feed.to_string(),
+    }
 }
 
 /// The feed's version (first line of `version.txt`), checked to look like

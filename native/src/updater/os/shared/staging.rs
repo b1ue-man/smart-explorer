@@ -50,6 +50,7 @@ impl Drop for StagingGuard {
 }
 
 pub(super) fn stage_from_feed(feed: &Feed, version: &str) -> Result<StagedUpdate, String> {
+    let feed = &feed.pinned(version);
     let mut guard = StagingGuard::new();
     let app = feed.fetch_exe(version)?;
     guard.track(&app);

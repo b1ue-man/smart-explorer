@@ -165,6 +165,16 @@ impl Feed {
     }
 }
 
+impl Feed {
+    /// This feed for the files of `version` (`pin_release_feed`).
+    pub(super) fn pinned(&self, version: &str) -> Feed {
+        match self {
+            Feed::Http(base) => Feed::Http(pin_release_feed(base, version)),
+            Feed::Local(dir) => Feed::Local(dir.clone()),
+        }
+    }
+}
+
 /// Translate the configured source string into a transport.
 pub(super) fn classify_feed(raw: &str) -> Feed {
     let s = raw.trim();
@@ -176,10 +186,19 @@ pub(super) fn classify_feed(raw: &str) -> Feed {
     }
 }
 
-/// Accept a bare GitHub repo URL as shorthand for its raw update-feed folder.
+/// Suffix of a repository's release feed: GitHub answers
+/// `releases/latest/download/<asset>` with a redirect to that asset of the
+/// newest published release.
+const LATEST_RELEASE: &str = "/releases/latest/download";
+
+/// A GitHub repository link, its `main` branch and the former raw feed of
+/// `main` (`update_source.txt` of installs up to 0.5.190) all mean the
+/// repository's release feed; another branch keeps its raw feed folder.
 pub(super) fn normalize_http_feed(url: &str) -> String {
     const FEED_SUBDIR: &str = "release-native/update-feed";
     let trimmed = url.trim().trim_end_matches('/');
+    let release =
+        |owner: &str, repo: &str| format!("https://github.com/{owner}/{repo}{LATEST_RELEASE}");
     if let Some(rest) = trimmed
         .strip_prefix("https://github.com/")
         .or_else(|| trimmed.strip_prefix("http://github.com/"))
@@ -188,17 +207,35 @@ pub(super) fn normalize_http_feed(url: &str) -> String {
         if parts.len() >= 2 && !parts[0].is_empty() && !parts[1].is_empty() {
             let owner = parts[0];
             let repo = parts[1].trim_end_matches(".git");
-            let branch = if parts.len() >= 4 && parts[2] == "tree" {
-                parts[3]
-            } else {
-                "main"
-            };
-            return format!(
-                "https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{FEED_SUBDIR}"
-            );
+            match &parts[2..] {
+                [] | ["tree", "main"] => return release(owner, repo),
+                ["tree", branch, ..] => {
+                    return format!(
+                        "https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{FEED_SUBDIR}"
+                    )
+                }
+                _ => {}
+            }
+        }
+    }
+    if let Some(rest) = trimmed.strip_prefix("https://raw.githubusercontent.com/") {
+        if let [owner, repo, "main", "release-native", "update-feed"] =
+            rest.split('/').collect::<Vec<_>>().as_slice()
+        {
+            return release(*owner, *repo);
         }
     }
     trimmed.to_string()
+}
+
+/// The feed of exactly `version`: the newest release can change between two
+/// requests, so every file of one update comes from the tagged release whose
+/// `version.txt` was read.
+pub(super) fn pin_release_feed(base: &str, version: &str) -> String {
+    match base.strip_suffix(LATEST_RELEASE) {
+        Some(repo) => format!("{repo}/releases/download/v{version}"),
+        None => base.to_string(),
+    }
 }
 
 fn http_get_string(url: &str) -> Result<String, String> {
@@ -275,7 +312,9 @@ fn format_http_error(url: &str, err: ureq::Error) -> String {
 /// Owner/repo from the configured feed, if it's a GitHub feed.
 pub(super) fn github_repo(feed_raw: &str) -> Option<(String, String)> {
     let base = normalize_http_feed(feed_raw);
-    let rest = base.strip_prefix("https://raw.githubusercontent.com/")?;
+    let rest = base
+        .strip_prefix("https://github.com/")
+        .or_else(|| base.strip_prefix("https://raw.githubusercontent.com/"))?;
     let parts: Vec<&str> = rest.split('/').collect();
     if parts.len() >= 2 && !parts[0].is_empty() && !parts[1].is_empty() {
         Some((
@@ -386,37 +425,15 @@ pub fn download_version(version: &str) -> Result<PathBuf, String> {
         "https://github.com/{owner}/{repo}/releases/download/v{version}/{}",
         spec.hash_name
     );
-    match download_with_required_sha256(
+    // Every published version keeps its assets in its GitHub release; the
+    // former `release/v*` branch feeds no longer carry binaries.
+    download_with_required_sha256(
         &url,
         &hash_url,
         spec.hash_name,
         "rollback_download",
         version,
-    ) {
-        Ok(dest) => Ok(dest),
-        Err(release_err) => {
-            let branch_url = format!(
-            "https://raw.githubusercontent.com/{owner}/{repo}/release/v{version}/release-native/update-feed/{}", app_release_asset_name()
-        );
-            let branch_hash_url = format!(
-            "https://raw.githubusercontent.com/{owner}/{repo}/release/v{version}/release-native/update-feed/{}",
-            spec.hash_name
-        );
-            download_with_required_sha256(
-                &branch_url,
-                &branch_hash_url,
-                spec.hash_name,
-                "rollback_download",
-                version,
-            )
-            .map_err(|branch_err| {
-                format!(
-                    "Release-Download fehlgeschlagen: {}; Branch-Fallback fehlgeschlagen: {}",
-                    release_err, branch_err
-                )
-            })
-        }
-    }
+    )
 }
 
 /// Download and durably stage all payloads for a specific GitHub release.
@@ -428,19 +445,7 @@ pub fn download_update(version: &str) -> Result<StagedUpdate, String> {
     let release = Feed::Http(format!(
         "https://github.com/{owner}/{repo}/releases/download/v{version}"
     ));
-    match stage_from_feed(&release, version) {
-        Ok(bundle) => Ok(bundle),
-        Err(release_error) => {
-            let branch = Feed::Http(format!(
-                "https://raw.githubusercontent.com/{owner}/{repo}/release/v{version}/release-native/update-feed"
-            ));
-            stage_from_feed(&branch, version).map_err(|branch_error| {
-                format!(
-                    "Release-Payloads fehlgeschlagen: {release_error}; Branch-Fallback fehlgeschlagen: {branch_error}"
-                )
-            })
-        }
-    }
+    stage_from_feed(&release, version)
 }
 
 fn download_with_required_sha256(

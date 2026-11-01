@@ -84,6 +84,8 @@ fn download_task(ctx: &TaskCtx, feed: &str, current: &str) -> Result<Value, ApiE
             format!("Keine neuere Version verfügbar ({version})."),
         ));
     }
+    let pinned = crate::updater::pinned_feed(feed, &version);
+    let feed = pinned.as_str();
     let expected = crate::updater::read_feed_sha256(feed, APK_NAME)
         .map_err(|error| ApiError::new("network", error))?;
     let dir = update_dir();

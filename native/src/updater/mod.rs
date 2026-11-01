@@ -45,7 +45,9 @@ pub use feed::{
     complete_legacy_launcher, download_update, download_version, list_remote_versions,
     CompletedLegacyLauncher, LegacyLauncherRequest,
 };
-pub use feed_files::{download_feed_file, file_sha256, read_feed_sha256, read_feed_version};
+pub use feed_files::{
+    download_feed_file, file_sha256, pinned_feed, read_feed_sha256, read_feed_version,
+};
 pub use flow::{check_async, update_to_latest_async};
 /// The `se` installed next to the running app (the desktop GUI runs it for
 /// `se plugin`).

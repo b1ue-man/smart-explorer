@@ -12,7 +12,7 @@
 ; What it sets up so the app "just works":
 ;   * installs Smart Explorer.exe (per-user, %LOCALAPPDATA%\Programs)
 ;   * makes the bundled se.exe available from new terminals via the user PATH
-;   * points auto-update at the Git feed (update_source.txt) on first install
+;   * points auto-update at the GitHub release feed (update_source.txt) on first install
 ;   * registers the "In Smart Explorer öffnen" right-click verb (HKCU, reversible)
 ;   * Start-menu + desktop shortcuts, Add/Remove Programs entry
 
@@ -144,9 +144,10 @@ Section "Smart Explorer (erforderlich)" SEC_MAIN
   nsExec::Exec 'netsh advfirewall firewall delete rule name="Smart Explorer Share Peer Listener"'
   nsExec::Exec 'netsh advfirewall firewall add rule name="Smart Explorer Share Peer Listener" dir=in action=allow program="$INSTDIR\${EXE_NAME}" enable=yes protocol=UDP profile=private,domain'
 
-  ; Default update feed (Git/HTTPS) — keep an existing (possibly customized) one.
-  ; update_source.txt ships the raw.githubusercontent feed URL, so a fresh
-  ; install auto-updates from Git with no configuration.
+  ; Default update feed (HTTPS) — keep an existing (possibly customized) one.
+  ; update_source.txt ships the release feed URL (releases/latest/download), so
+  ; a fresh install auto-updates from the GitHub releases with no configuration;
+  ; an older raw-feed entry is read as the same release feed by the updater.
   IfFileExists "$INSTDIR\update_source.txt" +2 0
     File "${__FILEDIR__}\update_source.txt"
 

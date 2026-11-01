@@ -1,1 +1,1 @@
-https://raw.githubusercontent.com/b1ue-man/smart-explorer/main/release-native/update-feed
+https://github.com/b1ue-man/smart-explorer/releases/latest/download

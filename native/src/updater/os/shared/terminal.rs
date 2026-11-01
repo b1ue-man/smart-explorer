@@ -126,7 +126,7 @@ pub fn replace_cli(cli: &Path, version: &str) -> Result<ReplacedCli, String> {
     remove_orphans(cli);
     arm_interrupt_undo()?;
     let source = update_source_str().ok_or(NO_SOURCE)?;
-    let feed = classify_feed(&source);
+    let feed = classify_feed(&source).pinned(version);
     let payload = feed.fetch_cli_exe(version)?;
     let launcher = feed.fetch_launcher_exe(version)?;
     let mcp = McpTerminalUpdate::prepare(cli, version, &payload, launcher.as_ref())?;
