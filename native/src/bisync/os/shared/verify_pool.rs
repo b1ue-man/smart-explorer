@@ -32,6 +32,9 @@ pub(super) struct Job {
     pub(super) planned: Sig,
 }
 
+/// The MD5 per `Job::key` of one side (`run_side`).
+pub(super) type SideResults = Vec<(usize, io::Result<u64>)>;
+
 /// The check of one file: its MD5 as the planner's `u64`, bound to `planned`.
 pub(super) type Check<'a> = dyn Fn(&str, Sig) -> io::Result<u64> + Sync + 'a;
 
@@ -49,7 +52,7 @@ pub(super) fn run_side(
     jobs: Vec<Job>,
     check: &Check<'_>,
     cancel: &AtomicBool,
-) -> Vec<(usize, io::Result<u64>)> {
+) -> SideResults {
     let batched = batch(backend, &jobs, cancel);
     let mut results = Vec::with_capacity(jobs.len());
     let mut open = Vec::new();

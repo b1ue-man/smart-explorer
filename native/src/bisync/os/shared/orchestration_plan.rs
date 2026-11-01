@@ -91,7 +91,7 @@ fn verify_contents(
     plan: &mut PairPlan,
     cancel: &AtomicBool,
 ) {
-    use super::verify_pool::{run_side, Job};
+    use super::verify_pool::{run_side, Job, SideResults};
     let mut failed: Vec<(usize, io::Error)> = Vec::new();
     let mut sides = Vec::new();
     for (side, snapshot, backend, root) in [
@@ -118,7 +118,7 @@ fn verify_contents(
         }
         sides.push((side, backend, jobs));
     }
-    let checked: Vec<(PairSide, Vec<(usize, io::Result<u64>)>)> = std::thread::scope(|scope| {
+    let checked: Vec<(PairSide, SideResults)> = std::thread::scope(|scope| {
         let running: Vec<_> = sides
             .into_iter()
             .map(|(side, backend, jobs)| {
@@ -176,6 +176,9 @@ fn hash_checked(
     planned: Sig,
     cancel: &AtomicBool,
 ) -> io::Result<u64> {
+    if backend.is_local() {
+        return hash_local(path, backend, planned, cancel);
+    }
     let before = backend.stat(path)?;
     if before.is_dir
         || before.is_symlink
@@ -196,33 +199,25 @@ fn hash_checked(
     {
         return Ok(hash);
     }
-    if !backend.is_local() {
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "Server-Prüfsumme nicht verfügbar",
-        ));
-    }
-    // The comparison asks for the content as it is now: a fresh read.
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "Server-Prüfsumme nicht verfügbar",
+    ))
+}
+
+/// The MD5 of a local file as it is now (a fresh read), bound to what the
+/// planner saw by the read itself (`snapshot_hash::hash_planned`).
+fn hash_local(
+    path: &str,
+    backend: &dyn Backend,
+    planned: Sig,
+    cancel: &AtomicBool,
+) -> io::Result<u64> {
     let reads = super::snapshot_hash::LocalReads {
         fresh: true,
         run: None,
     };
-    let hash = super::snapshot_hash::hash_file_cached(backend, path, cancel, reads)?;
-    let after = backend.stat(path)?;
-    if after.is_dir
-        || after.is_symlink
-        || after.special
-        || after.size != planned.size
-        || after.size != before.size
-        || after.mtime_ms != before.mtime_ms
-        || after.id != before.id
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::Interrupted,
-            "Datei beim Prüfsummenvergleich geändert",
-        ));
-    }
-    Ok(hash)
+    super::snapshot_hash::hash_planned(backend, path, planned, cancel, reads)
 }
 
 /// Every independent guard is checked, even if an earlier guard is confirmed.

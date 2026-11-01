@@ -222,7 +222,7 @@ pub(super) fn normalize_http_feed(url: &str) -> String {
         if let [owner, repo, "main", "release-native", "update-feed"] =
             rest.split('/').collect::<Vec<_>>().as_slice()
         {
-            return release(*owner, *repo);
+            return release(owner, repo);
         }
     }
     trimmed.to_string()

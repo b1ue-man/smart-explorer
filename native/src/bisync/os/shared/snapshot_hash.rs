@@ -2,7 +2,8 @@ use crate::vfs::Backend;
 use std::io::{self, Read};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::types::CompareMode;
+use super::apply_guard::ExpectedFile;
+use super::types::{CompareMode, Sig};
 pub(crate) use crate::agent_proto::LocalReads;
 
 /// First 8 bytes of a 16-byte MD5 digest folded into a u64. Zero remains the
@@ -55,15 +56,40 @@ pub(super) fn hash_file_cached_hex(
     cancel: &AtomicBool,
     reads: LocalReads<'_>,
 ) -> io::Result<String> {
+    cached_hex(backend, path, ExpectedFile::Unknown, cancel, reads)
+}
+
+/// `hash_file_cached` of a file the planner saw as `planned`: the read checks
+/// that size and time are still the planned ones when it starts and that the
+/// identity is unchanged after it (`apply_guard`), so the caller needs no
+/// status calls of its own around it (each one is a handle open on Windows).
+pub(super) fn hash_planned(
+    backend: &dyn Backend,
+    path: &str,
+    planned: Sig,
+    cancel: &AtomicBool,
+    reads: LocalReads<'_>,
+) -> io::Result<u64> {
+    let expected = ExpectedFile::Present(Sig { hash: 0, ..planned });
+    cached_hex(backend, path, expected, cancel, reads).map(|hex| md5_hex_to_u64(&hex))
+}
+
+fn cached_hex(
+    backend: &dyn Backend,
+    path: &str,
+    expected: ExpectedFile,
+    cancel: &AtomicBool,
+    reads: LocalReads<'_>,
+) -> io::Result<String> {
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(metadata) if backend.is_local() && metadata.is_file() => metadata,
-        _ => return md5_hex_file(backend, path, cancel),
+        _ => return md5_hex_expect(backend, path, expected, cancel),
     };
     crate::agent_proto::hash_cache::configure_once(|| {
         (!cfg!(test)).then(crate::support_dirs::app_data_dir)
     });
     crate::agent_proto::md5_cached(std::path::Path::new(path), &metadata, reads, cancel, || {
-        md5_hex_file(backend, path, cancel)
+        md5_hex_expect(backend, path, expected, cancel)
     })
 }
 
@@ -75,12 +101,17 @@ pub(super) fn hash_file_cached_hex(
 /// observation, index commit, move finalization, own-write recognition)
 /// goes through here.
 fn md5_hex_file(backend: &dyn Backend, path: &str, cancel: &AtomicBool) -> io::Result<String> {
-    let captured = super::apply_guard::capture(
-        backend,
-        path,
-        super::apply_guard::ExpectedFile::Unknown,
-        "checksum file",
-    )?;
+    md5_hex_expect(backend, path, ExpectedFile::Unknown, cancel)
+}
+
+/// `md5_hex_file` of a file that must match `expected` when it is opened.
+fn md5_hex_expect(
+    backend: &dyn Backend,
+    path: &str,
+    expected: ExpectedFile,
+    cancel: &AtomicBool,
+) -> io::Result<String> {
+    let captured = super::apply_guard::capture(backend, path, expected, "checksum file")?;
     let metadata = captured.regular("checksum file")?;
     if !backend.is_local() {
         if let Some(hex) = crate::vfs::content_md5(backend, path, cancel)? {
