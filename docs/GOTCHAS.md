@@ -1122,6 +1122,41 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   `content_digest` (and `content_md5`) to its SSH connection, whose server
   hashes through an exec request; the service answers only for its backend.
 
+## Optical media guard on local Windows paths (source state 2026-11-01, not built, not released)
+
+- **Every local status, listing and guarded read probes its path.** The local
+  backend guards `stat` and `list_tolerant` (`vfs/os/shared/local.rs` with
+  `local_optical.rs`), a regular read goes through `source_media::guard_reader`.
+  A sync walk of a local side therefore probes each folder twice (its status in
+  `snapshot_walk.rs` `list_plain_directory`, then its listing) and, in the
+  checksum mode, each file five times (status before and after the read in
+  `snapshot_dir.rs` `content_hash` and in `snapshot_hash.rs` `md5_hex_file`, and
+  the read itself). Linux probes are cheap (`lstat`, device kept in
+  `probe_cache`).
+- **A full Windows probe costs about 0.38 ms** (`GetVolumePathNameW`, drive type;
+  measure job of suite run 41253633650, windows-2025, warm, 4 CPUs: `se ls -R` of
+  100 000 files in 10 000 folders 46.2 s while the scanner probed every folder and
+  entry, 0.46 s without). 40 400 probes of a local-to-local `se sync compare` of
+  that tree explain about 15 s of its 17.7 s (Linux: 0.80 s); 208 000 probes of
+  the checksum mode on 20 000 files per side about 79 s of its 96.3 s (Linux:
+  0.70 s). This share is computed from those runs, not measured by itself.
+- **A path that is no reparse point takes the answer of the folder above it**
+  (`source_media/os/windows_plain.rs`): a volume mounted in a folder makes that
+  folder a reparse point and a drive root has no folder above it, so such a path
+  lies on its parent's volume. Only "not optical" is taken, only from an answer
+  at most `probe_cache::FRESH` (2 s) old, and it is passed on with that answer's
+  time, so it lapses with it (as the folder answers kept for files since M6).
+  Optical answers, reparse points (junctions, links, mount points, cloud
+  placeholders), unreadable attributes and paths below no drive letter
+  (`\\?\Volume{…}`, `\\?\GLOBALROOT\…`) are resolved in full every time.
+  Cost per path now: at most one `GetFileAttributesW` and the cache lock. Tests:
+  `abgleich_task_sync_walk_resolves_the_volume_once_not_per_folder_and_file`
+  (full probes of one walk: before at least 92, or 492 in the checksum mode,
+  now at most 8 even when the kept answers lapse during the walk; the same
+  tree) and the other `abgleich_task_` tests of `windows_plain_tests.rs` and
+  `probe_cache.rs`. Not measured on Windows yet: the next measure job of the
+  suite decides the remaining time.
+
 ## Share / local network
 
 - **The relay is the start bridge (D1, 2026-10-28).** While LAN and direct paths are still being

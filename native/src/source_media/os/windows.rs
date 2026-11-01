@@ -20,13 +20,31 @@ struct DeviceNumber {
     partition: u32,
 }
 
+#[path = "windows_plain.rs"]
+mod plain;
+
+/// The optical source of `path`; a "not optical" answer of a drive path may
+/// come from the folder above it without resolving the volume again
+/// (`windows_plain.rs`).
 pub(super) fn probe(path: &Path) -> io::Result<Option<Source>> {
     let normalized = crate::local_access::normalize_scan_root(path);
     let text = normalized.to_string_lossy();
     if text.starts_with(r"\\?\UNC\") || (text.starts_with(r"\\") && !text.starts_with(r"\\?\")) {
         return Ok(None);
     }
-    let path = wide(&normalized);
+    #[cfg(test)]
+    if plain::hooks::resolving_always() {
+        return resolve(&normalized);
+    }
+    plain::probe_known(&normalized, resolve)
+}
+
+/// The probe of the verbatim `normalized` path resolved in full: its volume
+/// path, the drive type and, on an optical drive, the device.
+fn resolve(normalized: &Path) -> io::Result<Option<Source>> {
+    #[cfg(test)]
+    plain::hooks::count_resolution(normalized);
+    let path = wide(normalized);
     let mut root = vec![0u16; 32768];
     if unsafe { GetVolumePathNameW(path.as_ptr(), root.as_mut_ptr(), root.len() as u32) } == 0 {
         return Err(io::Error::last_os_error());
