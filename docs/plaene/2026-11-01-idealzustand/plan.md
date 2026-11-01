@@ -74,6 +74,13 @@ nicht im Repo sichern, sondern außerhalb auf dem Server.
 | D7 | Brücken-Release, lokale Installation | Release v0.5.191 mit 26 Assets | offen |
 | D8 | (nächstes Fenster) Veröffentlichung nur über Assets, parallele Jobs, Linux nativ (M3); danach Feed aus `main` | — | geplant |
 | D9 | (nächstes Fenster) Crate-Aufteilung Phase 1 (M6), Messjob `--timings`/Speicher/`cargo bloat` (M4, M7) | — | geplant |
+| D10 | Build-Einstellungen für CI-Runner (M4): Speicherspitze bei 2 und 4 Jobs messen, danach `CARGO_BUILD_JOBS` je Runner; eine LTO-Angabe für Windows und Linux, Laufzeitwirkung mit der Speed-Suite geprüft; cargo-about als fertiges Programm; Lizenzliste einmal je Lauf; Share-Server als Workspace-Mitglied | Windows-Schritt kürzer, Linux und Windows gleich optimiert | geplant (mit D8) |
+| D11 | Android-ABIs arm64 und x86_64 als parallele Jobs statt nacheinander (heute 12,7 + 11,7 min) | Android-Job ≈ ein ABI lang | geplant (mit D8) |
+| D12 | Suiten (M5): gemeinsame Einrichtung (Checkout, Toolchain, ein Abhängigkeits-Cache je OS ohne eigenes Crate) für alle Task-Workflows; Vergleichsversionen aus Release-Assets statt aus der Quelle bauen (in `ideal-task.yml` schon so) | weniger Cache-Verdrängung, ~12 min je Vergleichsbau gespart | geplant |
+| D13 | Crate-Aufteilung weitere Phasen (M6): Zyklus von 42 Modulen lösen, Protokoll-Backends, Share, Transfer, GUI und CLI als eigene Crates | eigenes Crate je Bereich, Teil-Neubau bei Änderungen | geplant nach D9 |
+| D14 | Binärgröße (M7): `cargo bloat`, zweiter Renderer (glow + wgpu) | kleinere Programme | geplant nach Messung in D9 |
+| D15 | Repo-Ordnung: Task-Skripte aus dem Wurzelordner `native/` in einen eigenen Ordner, verwaiste Branches (`release/v*`, alte Arbeits-Branches) prüfen, Feed und Installer-Ausnahmen aus `main`/`.gitignore` nach der Brücke | übersichtlicher Bestand | geplant (Feed nach D8) |
+| D16 | Signatur der Desktop-Updates (Windows/Linux prüfen heute nur SHA-256 aus derselben Quelle; Android hat die APK-Signatur) | Update nur mit gültiger Signatur | geplant, eigener Sicherheitspunkt |
 
 ## Kreative Schleifen
 
