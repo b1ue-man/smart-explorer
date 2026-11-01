@@ -1,5 +1,5 @@
 use crate::vfs::Backend;
-use std::io;
+use std::io::{self, Read};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::types::CompareMode;
@@ -75,8 +75,6 @@ pub(super) fn hash_file_cached_hex(
 /// observation, index commit, move finalization, own-write recognition)
 /// goes through here.
 fn md5_hex_file(backend: &dyn Backend, path: &str, cancel: &AtomicBool) -> io::Result<String> {
-    use std::io::Read;
-
     let captured = super::apply_guard::capture(
         backend,
         path,
@@ -90,16 +88,39 @@ fn md5_hex_file(backend: &dyn Backend, path: &str, cancel: &AtomicBool) -> io::R
             return Ok(hex);
         }
     }
-    let mut reader = crate::vfs::open_read_regular(backend, path, metadata.id.as_deref())?;
+    let reader = crate::vfs::open_read_regular(backend, path, metadata.id.as_deref())?;
+    let (digest, length) = if metadata.size > CHUNK as u64 {
+        md5_read_ahead(reader, cancel)?
+    } else {
+        md5_inline(reader, cancel)?
+    };
+    if length != metadata.size {
+        return Err(super::apply_guard::drift("checksum stream length changed"));
+    }
+    super::apply_guard::revalidate(backend, path, &captured, "checksum file")?;
+    Ok(format!("{digest:x}"))
+}
+
+/// Read size of one chunk of a file larger than one chunk: such a file is
+/// read one chunk ahead on a second thread while the MD5 consumes the chunk
+/// before, so the disk (or the link) and the processor work at the same time
+/// instead of taking turns. The MD5 itself runs in order and cannot be split.
+const CHUNK: usize = 1 << 20;
+
+fn canceled() -> io::Error {
+    io::Error::new(io::ErrorKind::Interrupted, "checksum walk canceled")
+}
+
+fn md5_inline(
+    mut reader: Box<dyn Read + Send>,
+    cancel: &AtomicBool,
+) -> io::Result<(md5::Digest, u64)> {
     let mut context = md5::Context::new();
     let mut buffer = [0u8; 65_536];
     let mut length = 0u64;
     loop {
         if cancel.load(Ordering::Relaxed) {
-            return Err(io::Error::new(
-                io::ErrorKind::Interrupted,
-                "checksum walk canceled",
-            ));
+            return Err(canceled());
         }
         match reader.read(&mut buffer) {
             Ok(0) => break,
@@ -110,11 +131,72 @@ fn md5_hex_file(backend: &dyn Backend, path: &str, cancel: &AtomicBool) -> io::R
             Err(error) => return Err(error),
         }
     }
-    if length != metadata.size {
-        return Err(super::apply_guard::drift("checksum stream length changed"));
+    Ok((context.compute(), length))
+}
+
+/// `md5_inline` with the next chunk read while this one is hashed. Two
+/// buffers circulate; whichever side stops first (end, error, cancel) drops
+/// its channel end, which ends the other.
+fn md5_read_ahead(
+    mut reader: Box<dyn Read + Send>,
+    cancel: &AtomicBool,
+) -> io::Result<(md5::Digest, u64)> {
+    use std::sync::mpsc::sync_channel;
+    let (full_tx, full_rx) = sync_channel::<io::Result<Vec<u8>>>(1);
+    let (empty_tx, empty_rx) = sync_channel::<Vec<u8>>(2);
+    for _ in 0..2 {
+        let _ = empty_tx.send(vec![0u8; CHUNK]);
     }
-    super::apply_guard::revalidate(backend, path, &captured, "checksum file")?;
-    Ok(format!("{:x}", context.compute()))
+    std::thread::scope(move |scope| {
+        scope.spawn(move || {
+            while let Ok(mut buffer) = empty_rx.recv() {
+                if cancel.load(Ordering::Relaxed) {
+                    let _ = full_tx.send(Err(canceled()));
+                    return;
+                }
+                buffer.resize(CHUNK, 0);
+                match fill(&mut *reader, &mut buffer) {
+                    Ok(0) => return,
+                    Ok(read) => {
+                        buffer.truncate(read);
+                        if full_tx.send(Ok(buffer)).is_err() {
+                            return;
+                        }
+                    }
+                    Err(error) => {
+                        let _ = full_tx.send(Err(error));
+                        return;
+                    }
+                }
+            }
+        });
+        let mut context = md5::Context::new();
+        let mut length = 0u64;
+        for chunk in full_rx {
+            let chunk = chunk?;
+            if cancel.load(Ordering::Relaxed) {
+                return Err(canceled());
+            }
+            length = length.saturating_add(chunk.len() as u64);
+            context.consume(&chunk);
+            let _ = empty_tx.send(chunk);
+        }
+        Ok((context.compute(), length))
+    })
+}
+
+/// Reads until `buffer` is full or the file ends; the count read.
+fn fill(reader: &mut dyn Read, buffer: &mut [u8]) -> io::Result<usize> {
+    let mut filled = 0;
+    while filled < buffer.len() {
+        match reader.read(&mut buffer[filled..]) {
+            Ok(0) => break,
+            Ok(read) => filled += read,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(filled)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

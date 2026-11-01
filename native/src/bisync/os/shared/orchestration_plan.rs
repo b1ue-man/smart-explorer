@@ -1,7 +1,7 @@
 //! Planning against Backend facts, with cheap on-demand content comparison,
 //! followed by the rule stage of the job kind (`plan_rules`).
 use std::io;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 
 use super::compare::TimeRules;
 use super::guards::{deletion_block, empty_side_block, unconfirmed, DeleteCounts};
@@ -65,34 +65,7 @@ pub(super) fn prepare_spelled(
         b.omissions.extend(plan.omissions.clone());
         return plan;
     }
-    for rel in &plan.verify {
-        if cancel.load(Ordering::Acquire) {
-            break;
-        }
-        for (side, snapshot, backend, root) in [
-            (PairSide::A, &mut *a, endpoints.a, endpoints.root_a),
-            (PairSide::B, &mut *b, endpoints.b, endpoints.root_b),
-        ] {
-            let spelled = plan.spellings.side_rel(rel, side);
-            let Some(signature) = snapshot.tree.get_mut(spelled) else {
-                continue;
-            };
-            if signature.hash != 0 {
-                continue;
-            }
-            match crate::vfs::sync_path(backend, root, spelled)
-                .and_then(|path| hash_checked(backend, &path, *signature, cancel))
-            {
-                Ok(hash) => signature.hash = hash,
-                Err(error) => {
-                    let kind = crate::vfs::omission_reason(&error)
-                        .map(OmissionKind::from)
-                        .unwrap_or(OmissionKind::Unreadable);
-                    plan.omissions.record_kind(rel, kind, true);
-                }
-            }
-        }
-    }
+    verify_contents(endpoints, a, b, &mut plan, cancel);
     let counts = (plan.files_a, plan.files_b);
     a.omissions.extend(plan.omissions);
     let mut final_ctx = *ctx;
@@ -106,6 +79,84 @@ pub(super) fn prepare_spelled(
     a.omissions.extend(final_plan.omissions.clone());
     b.omissions.extend(final_plan.omissions.clone());
     final_plan
+}
+
+/// The MD5 of both sides for every key of `plan.verify` (`verify_pool.rs`):
+/// both sides at the same time, each with its own adaptive workers. A file
+/// that cannot be checked becomes an omission of its key, as before.
+fn verify_contents(
+    endpoints: SyncEndpoints<'_>,
+    a: &mut SideSnapshot,
+    b: &mut SideSnapshot,
+    plan: &mut PairPlan,
+    cancel: &AtomicBool,
+) {
+    use super::verify_pool::{run_side, Job};
+    let mut failed: Vec<(usize, io::Error)> = Vec::new();
+    let mut sides = Vec::new();
+    for (side, snapshot, backend, root) in [
+        (PairSide::A, &*a, endpoints.a, endpoints.root_a),
+        (PairSide::B, &*b, endpoints.b, endpoints.root_b),
+    ] {
+        let mut jobs = Vec::new();
+        for (key, rel) in plan.verify.iter().enumerate() {
+            let spelled = plan.spellings.side_rel(rel, side);
+            let Some(signature) = snapshot.tree.get(spelled) else {
+                continue;
+            };
+            if signature.hash != 0 {
+                continue;
+            }
+            match crate::vfs::sync_path(backend, root, spelled) {
+                Ok(path) => jobs.push(Job {
+                    key,
+                    path,
+                    planned: *signature,
+                }),
+                Err(error) => failed.push((key, error)),
+            }
+        }
+        sides.push((side, backend, jobs));
+    }
+    let checked: Vec<(PairSide, Vec<(usize, io::Result<u64>)>)> = std::thread::scope(|scope| {
+        let running: Vec<_> = sides
+            .into_iter()
+            .map(|(side, backend, jobs)| {
+                scope.spawn(move || {
+                    let check =
+                        |path: &str, planned: Sig| hash_checked(backend, path, planned, cancel);
+                    (side, run_side(backend, jobs, &check, cancel))
+                })
+            })
+            .collect();
+        running
+            .into_iter()
+            .filter_map(|side| side.join().ok())
+            .collect()
+    });
+    for (side, results) in checked {
+        let snapshot = match side {
+            PairSide::A => &mut *a,
+            PairSide::B => &mut *b,
+        };
+        for (key, result) in results {
+            match result {
+                Ok(hash) => {
+                    let spelled = plan.spellings.side_rel(&plan.verify[key], side);
+                    if let Some(signature) = snapshot.tree.get_mut(spelled) {
+                        signature.hash = hash;
+                    }
+                }
+                Err(error) => failed.push((key, error)),
+            }
+        }
+    }
+    for (key, error) in failed {
+        let kind = crate::vfs::omission_reason(&error)
+            .map(OmissionKind::from)
+            .unwrap_or(OmissionKind::Unreadable);
+        plan.omissions.record_kind(&plan.verify[key], kind, true);
+    }
 }
 
 /// The rule stage of the job kind installed on this thread (C5.4), after

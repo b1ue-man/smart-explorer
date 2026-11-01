@@ -247,6 +247,8 @@ mod sync_relative_path;
 pub(crate) mod transfer_stream;
 #[path = "core/types.rs"]
 mod types;
+#[path = "os/shared/verify_pool.rs"]
+mod verify_pool;
 #[path = "os/shared/version_listing.rs"]
 mod version_listing;
 #[path = "os/shared/version_manifest.rs"]
