@@ -1,7 +1,11 @@
 //! One listed folder of a snapshot walk: every entry is checked, filtered and,
 //! where the hash mode asks for it, hashed, exactly as the walk always did
-//! (budget, duplicate names, protected omissions, hash reuse). The walk in
-//! `snapshot.rs` decides which folders are listed when.
+//! (budget, duplicate names, protected omissions, hash reuse). The files of a
+//! remote side whose content must be hashed are asked together first
+//! (`vfs::content_md5_many`: SFTP without an agent forms their MD5s with one
+//! exec request per group, not one per file); a file without such an answer
+//! goes the single-file way. The walk in `snapshot.rs` decides which folders
+//! are listed when.
 use crate::transfer::Flow;
 use crate::vfs::{Backend, VfsMeta};
 use std::collections::{HashMap, HashSet};
@@ -88,6 +92,8 @@ pub(super) fn scan_listing(
     };
     let mut child_names: HashMap<String, (bool, HashSet<String>)> = HashMap::new();
     let mut app_parents = super::snapshot_policy::AppParents::default();
+    // (rel, path, listing) of every file that passed the filters, hashed below.
+    let mut files: Vec<(String, String, VfsMeta)> = Vec::new();
     for m in entries {
         if ctx.cancel.load(Ordering::Relaxed) {
             break; // stop promptly mid-directory (esp. when hashing)
@@ -211,31 +217,79 @@ pub(super) fn scan_listing(
             }
             listed.dirs.push((p, rel));
         } else {
-            let hash = match signature_hash(ctx, &m, &rel, &p) {
-                Ok(hash) => hash,
-                Err(error) => {
-                    if error.kind() == io::ErrorKind::Interrupted {
-                        return Err(error);
-                    }
-                    let kind = crate::vfs::omission_reason(&error)
-                        .map(OmissionKind::from)
-                        .unwrap_or(OmissionKind::Unreadable);
-                    record_omission(ctx, &rel, kind, true);
-                    continue;
-                }
-            };
-            listed.files.push((
-                rel,
-                Sig {
-                    size: m.size,
-                    mtime_ms: m.mtime_ms,
-                    hash,
-                },
-                id.unwrap_or_default(),
-            ));
+            files.push((rel, p, m));
         }
     }
+    let batched = batched_md5(ctx, &files)?;
+    for ((rel, p, m), batched) in files.into_iter().zip(batched) {
+        if ctx.cancel.load(Ordering::Relaxed) {
+            break;
+        }
+        let hash = match signature_hash(ctx, &m, &rel, &p, batched) {
+            Ok(hash) => hash,
+            Err(error) => {
+                if error.kind() == io::ErrorKind::Interrupted {
+                    return Err(error);
+                }
+                let kind = crate::vfs::omission_reason(&error)
+                    .map(OmissionKind::from)
+                    .unwrap_or(OmissionKind::Unreadable);
+                record_omission(ctx, &rel, kind, true);
+                continue;
+            }
+        };
+        listed.files.push((
+            rel,
+            Sig {
+                size: m.size,
+                mtime_ms: m.mtime_ms,
+                hash,
+            },
+            m.id.unwrap_or_default(),
+        ));
+    }
     Ok(listed)
+}
+
+/// The MD5s of the files of one folder whose content must be hashed, asked
+/// together where a remote side has a batched way (`vfs::content_md5_many`).
+/// An answer proves a regular file with the listed size and time before and
+/// after its MD5 was formed (the checks `content_hash` makes around the single
+/// request). `None` for every other file: it goes its own way below, with
+/// its own errors and omissions. A local side, a walk next to the data
+/// (digests in the listing) and an ID-addressed provider are not asked.
+fn batched_md5(
+    ctx: &WalkContext<'_>,
+    files: &[(String, String, VfsMeta)],
+) -> io::Result<Vec<Option<u64>>> {
+    let mut out = vec![None; files.len()];
+    if ctx.be.is_local() || ctx.host_listed || ctx.be.has_duplicate_file_names() {
+        return Ok(out);
+    }
+    let wanted: Vec<usize> = (0..files.len())
+        .filter(|index| cheap_hash(ctx, &files[*index].2, &files[*index].0).is_none())
+        .collect();
+    if wanted.is_empty() {
+        return Ok(out);
+    }
+    let asked: Vec<(&str, &VfsMeta)> = wanted
+        .iter()
+        .map(|index| (files[*index].1.as_str(), &files[*index].2))
+        .collect();
+    match crate::vfs::content_md5_many(ctx.be, &asked, ctx.cancel) {
+        Ok(Some(found)) => {
+            for (index, hex) in wanted.into_iter().zip(found) {
+                out[index] = hex
+                    .map(|hex| md5_hex_to_u64(&hex))
+                    .filter(|hash| *hash != 0);
+            }
+        }
+        Ok(None) => {}
+        Err(error) if error.kind() == io::ErrorKind::Interrupted => return Err(error),
+        // Every file then asks on its own, which reports what went wrong.
+        Err(_) => {}
+    }
+    Ok(out)
 }
 
 /// Content hash, cheapest source first:
@@ -243,38 +297,46 @@ pub(super) fn scan_listing(
 ///     oc:checksums) — no download;
 ///  2. the previous run's hash, reused when size+mtime are unchanged — no
 ///     re-read (never in Checksum mode, which demands a fresh hash);
-///  3. read the file to hash it (Full only — a cheap local read, or an
+///  3. the MD5 the folder's batched request brought (`batched`);
+///  4. read the file to hash it (Full only — a cheap local read, or an
 ///     explicit Checksum-mode remote download).
-fn signature_hash(ctx: &WalkContext<'_>, m: &VfsMeta, rel: &str, p: &str) -> io::Result<u64> {
+fn signature_hash(
+    ctx: &WalkContext<'_>,
+    m: &VfsMeta,
+    rel: &str,
+    p: &str,
+    batched: Option<u64>,
+) -> io::Result<u64> {
+    if let Some(hash) = cheap_hash(ctx, m, rel).or(batched) {
+        return Ok(hash);
+    }
+    let label = if ctx.hash == HashMode::FullFresh {
+        "fresh checksum"
+    } else {
+        "hash"
+    };
+    content_hash(ctx, (p, rel), m)
+        .map_err(|error| io::Error::new(error.kind(), format!("{label} {p}: {error}")))
+}
+
+/// Steps 1 and 2 of `signature_hash` (and the modes that hash nothing):
+/// `None` when the content must be hashed.
+fn cheap_hash(ctx: &WalkContext<'_>, m: &VfsMeta, rel: &str) -> Option<u64> {
     let native = m
         .content_md5
         .as_deref()
         .map(md5_hex_to_u64)
         .filter(|hash| *hash != 0);
     match ctx.hash {
-        HashMode::None => Ok(0),
-        HashMode::NativeOnly => Ok(native.unwrap_or(0)),
-        HashMode::Full => {
-            if let Some(hash) = native {
-                return Ok(hash);
-            }
-            let reused = ctx
-                .prev
+        HashMode::None => Some(0),
+        HashMode::NativeOnly => Some(native.unwrap_or(0)),
+        HashMode::Full => native.or_else(|| {
+            ctx.prev
                 .and_then(|tree| tree.get(rel))
                 .filter(|sig| sig.size == m.size && sig.mtime_ms == m.mtime_ms && sig.hash != 0)
-                .map(|sig| sig.hash);
-            match reused {
-                Some(hash) => Ok(hash),
-                None => content_hash(ctx, (p, rel), m)
-                    .map_err(|error| io::Error::new(error.kind(), format!("hash {p}: {error}"))),
-            }
-        }
-        HashMode::FullFresh => match native.unwrap_or(0) {
-            0 => content_hash(ctx, (p, rel), m).map_err(|error| {
-                io::Error::new(error.kind(), format!("fresh checksum {p}: {error}"))
-            }),
-            hash => Ok(hash),
-        },
+                .map(|sig| sig.hash)
+        }),
+        HashMode::FullFresh => native,
     }
 }
 
@@ -418,3 +480,7 @@ pub(super) fn literal_child(parent: &str, name: &str) -> String {
         format!("{parent}/{name}")
     }
 }
+
+#[cfg(test)]
+#[path = "abgleich_task_batch_md5_tests.rs"]
+mod batch_md5_tests;

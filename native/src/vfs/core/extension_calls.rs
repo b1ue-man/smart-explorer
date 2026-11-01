@@ -286,6 +286,44 @@ pub fn content_md5<B: Backend + ?Sized>(
     }
 }
 
+/// The MD5s of many files formed where they are stored, in one exchange per
+/// group of files where the side has one (`BackendExtensions::content_md5_many`;
+/// SFTP without an agent: one exec request per group, sftp/core/digest_batch.rs).
+/// `files` pairs each path with the metadata the caller listed for it. Per
+/// file, in order: `Some(md5)` (32 lowercase hex digits) for a regular file
+/// that had the listed size and time before and after its MD5 was formed, or
+/// `None`, after which the caller asks for that file on its own (its errors
+/// and omissions are then the single-file ones). `Ok(None)`: no batched way
+/// here, the caller asks file by file (a side whose single request is cheap,
+/// FTP `HASH`, keeps that).
+pub fn content_md5_many<B: Backend + ?Sized>(
+    backend: &B,
+    files: &[(&str, &VfsMeta)],
+    cancel: &AtomicBool,
+) -> VfsResult<Option<Vec<Option<String>>>> {
+    let Some(extensions) = backend.extensions() else {
+        return Ok(None);
+    };
+    let Some(found) = extensions.content_md5_many(files, cancel)? else {
+        return Ok(None);
+    };
+    if found.len() != files.len() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "content MD5s answered for another number of files",
+        ));
+    }
+    Ok(Some(
+        found
+            .into_iter()
+            .map(|hex| {
+                hex.filter(|hex| hex.len() == 32 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+                    .map(|hex| hex.to_ascii_lowercase())
+            })
+            .collect(),
+    ))
+}
+
 /// Host-side hash walk with folder keys (`BackendExtensions::hash_walk_keyed`);
 /// `Ok(false)` = unsupported before any item.
 pub fn hash_walk_keyed<B: Backend + ?Sized>(

@@ -24,6 +24,9 @@ pub enum VersionArchivePolicy {
     AppPrivate,
 }
 
+/// Per file, in order, its MD5 or `None` (`content_md5_many`).
+type Md5Many = VfsResult<Option<Vec<Option<String>>>>;
+
 /// Every method has a conservative default, so an implementation names
 /// only what its protocol or host can do. Wrappers that rewrite paths or
 /// guard access (export roots, mounts) must not hand out the extensions of
@@ -104,13 +107,12 @@ pub trait BackendExtensions: Backend {
         self.stat(path)
     }
 
-    /// Publish a stage on protocols lacking an atomic replacing rename.
-    /// The caller durably journals the exact absent sibling `retained`
-    /// before this call. `Ok(false)` means unsupported without mutation;
-    /// `Ok(true)` leaves the old original at `retained`. An error restores
-    /// without replacing or preserves the original at that same known path.
-    /// Implementations never delete the retained original and must not claim
-    /// atomic namespace replacement for this reversible sequence.
+    /// Publish a stage on protocols lacking an atomic replacing rename. The caller durably journals
+    /// the exact absent sibling `retained` before this call. `Ok(false)` means unsupported without
+    /// mutation; `Ok(true)` leaves the old original at `retained`. An error restores without
+    /// replacing or preserves the original at that same known path. Implementations never delete
+    /// the retained original and must not claim atomic namespace replacement for this reversible
+    /// sequence.
     fn replace_staged_reversible(
         &self,
         staged: &str,
@@ -240,13 +242,12 @@ pub trait BackendExtensions: Backend {
         Ok(false)
     }
 
-    /// Walk `root` on the storing host and stream every folder, regular file
-    /// (with digest when requested) and omission into `tx`, every folder
-    /// before the entries below it. With `request.meta` every entry carries
-    /// `HashWalkMeta` and links and special files are entries; a side
-    /// without that answers `Ok(false)` before sending anything. `Ok(false)`
-    /// only for "unsupported" before any item; a later failure (transport,
-    /// host, cancel) is an error, so a partial walk is never taken as complete.
+    /// Walk `root` on the storing host and stream every folder, regular file (with digest when
+    /// requested) and omission into `tx`, every folder before the entries below it. With
+    /// `request.meta` every entry carries `HashWalkMeta` and links and special files are entries;
+    /// a side without that answers `Ok(false)` before sending anything. `Ok(false)` only for
+    /// "unsupported" before any item; a later failure (transport, host, cancel) is an error, so a
+    /// partial walk is never taken as complete.
     fn hash_walk(
         &self,
         root: &str,
@@ -274,10 +275,9 @@ pub trait BackendExtensions: Backend {
         Ok(false)
     }
 
-    /// SHA-256 of the regular file `path`, computed on the device that stores
-    /// it (call it through `vfs::content_digest`). `Ok(None)` = not possible
-    /// without moving the content over the network; the default for every
-    /// backend and for wrappers that do not forward it.
+    /// SHA-256 of the regular file `path`, computed on the device that stores it (call it through
+    /// `vfs::content_digest`). `Ok(None)` = not possible without moving the content over the
+    /// network; the default for every backend and for wrappers that do not forward it.
     fn content_digest(
         &self,
         path: &str,
@@ -308,12 +308,11 @@ pub trait BackendExtensions: Backend {
         Ok(false)
     }
 
-    /// Delete the plain folder `path` and everything below it. Links are
-    /// removed as entries and never followed; a link or file at `path` is
-    /// refused, and each implementation keeps its root protections (a Share
-    /// host never removes its export root). Counters go to `progress`; a set
-    /// `cancel` ends the run at the next entry with `Canceled` (removed entries
-    /// stay removed); a failure carries the counters reached.
+    /// Delete the plain folder `path` and everything below it. Links are removed as entries and
+    /// never followed; a link or file at `path` is refused, and each implementation keeps its root
+    /// protections (a Share host never removes its export root). Counters go to `progress`; a set
+    /// `cancel` ends the run at the next entry with `Canceled` (removed entries stay removed); a
+    /// failure carries the counters reached.
     fn remove_tree(
         &self,
         path: &str,
@@ -350,12 +349,11 @@ pub trait BackendExtensions: Backend {
         None
     }
 
-    /// Whether the peer publishes one new file in one round trip as a
-    /// packet of one (`vfs::single_put`, Z-P4): the intent is recorded
-    /// before the commit, the peer publishes without replacing (numbered
-    /// when the name is taken) and answers with the result, and a lost
-    /// answer is resolved by the peer's outcome registry, never by sending
-    /// again. Wrappers that rewrite paths keep `false`.
+    /// Whether the peer publishes one new file in one round trip as a packet of one
+    /// (`vfs::single_put`, Z-P4): the intent is recorded before the commit, the peer publishes
+    /// without replacing (numbered when the name is taken) and answers with the result, and a lost
+    /// answer is resolved by the peer's outcome registry, never by sending again. Wrappers that
+    /// rewrite paths keep `false`.
     fn single_put(&self) -> bool {
         false
     }
@@ -384,12 +382,17 @@ pub trait BackendExtensions: Backend {
         Ok(None)
     }
 
-    /// The MD5 (32 lowercase hex digits) of the regular file `path`, formed
-    /// on the device that stores it, for the sync's checksum signature (call
-    /// it through `vfs::content_md5`). `Ok(None)` = not possible without
-    /// moving the content; the default.
+    /// The MD5 (32 lowercase hex digits) of the regular file `path`, formed on the device that
+    /// stores it, for the sync's checksum signature (call it through `vfs::content_md5`).
+    /// `Ok(None)` = not possible without moving the content; the default.
     fn content_md5(&self, path: &str, cancel: &AtomicBool) -> VfsResult<Option<String>> {
         let _ = (path, cancel);
+        Ok(None)
+    }
+
+    /// `vfs::content_md5_many`: `Ok(None)` = no batched way (the default).
+    fn content_md5_many(&self, files: &[(&str, &VfsMeta)], cancel: &AtomicBool) -> Md5Many {
+        let _ = (files, cancel);
         Ok(None)
     }
 
@@ -420,14 +423,12 @@ pub trait BackendExtensions: Backend {
         self.open_write_absent(path, size)
     }
 
-    /// Several server-side copies within this namespace at once, for a
-    /// packet of small files (`vfs::server_copy_batch`): per item
-    /// `(source, stage, size)` what `server_copy_to_stage(source, stage,
-    /// size)` answers, in item order. `Ok(Some(len))`: copied into the new
-    /// private stage; `Ok(None)`: not copied here and nothing of the attempt
-    /// exists (the caller streams that file); `Err`: failed (`AlreadyExists`
-    /// = the stage name is taken and was left alone). Default: `Ok(None)`
-    /// for every item, nothing is sent.
+    /// Several server-side copies within this namespace at once, for a packet of small files
+    /// (`vfs::server_copy_batch`): per item `(source, stage, size)` what
+    /// `server_copy_to_stage(source, stage, size)` answers, in item order. `Ok(Some(len))`: copied
+    /// into the new private stage; `Ok(None)`: not copied here and nothing of the attempt exists
+    /// (the caller streams that file); `Err`: failed (`AlreadyExists` = the stage name is taken and
+    /// was left alone). Default: `Ok(None)` for every item, nothing is sent.
     fn server_copy_batch(&self, items: &[(String, String, u64)]) -> Vec<io::Result<Option<u64>>> {
         items.iter().map(|_| Ok(None)).collect()
     }

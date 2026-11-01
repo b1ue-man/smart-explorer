@@ -211,6 +211,43 @@ impl BackendExtensions for GuardedBackend {
         self.read(path)?;
         Ok(md5)
     }
+    /// `content_md5` for many files together: only readable paths are asked,
+    /// and an MD5 is handed out only while its path is still readable. Any
+    /// other file gets `None`; its own `content_md5` then reports the denial.
+    fn content_md5_many(
+        &self,
+        files: &[(&str, &vfs::VfsMeta)],
+        cancel: &AtomicBool,
+    ) -> VfsResult<Option<Vec<Option<String>>>> {
+        let allowed: Vec<bool> = files
+            .iter()
+            .map(|(path, _)| self.read(path).is_ok())
+            .collect();
+        let asked: Vec<(&str, &vfs::VfsMeta)> = files
+            .iter()
+            .zip(&allowed)
+            .filter(|(_, allowed)| **allowed)
+            .map(|(file, _)| *file)
+            .collect();
+        let Some(answers) = vfs::content_md5_many(&*self.inner, &asked, cancel)? else {
+            return Ok(None);
+        };
+        let mut answers = answers.into_iter();
+        Ok(Some(
+            files
+                .iter()
+                .zip(allowed)
+                .map(|((path, _), allowed)| {
+                    let md5 = if allowed {
+                        answers.next().flatten()
+                    } else {
+                        None
+                    };
+                    md5.filter(|_| self.read(path).is_ok())
+                })
+                .collect(),
+        ))
+    }
     fn supports_recycle(&self, path: &str) -> VfsResult<bool> {
         self.read(path)?;
         vfs::supports_recycle(&*self.inner, path)

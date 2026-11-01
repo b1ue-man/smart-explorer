@@ -33,6 +33,8 @@ pub struct SftpBackend {
     pub(super) digest_gate: Arc<super::digest_command::DigestGate>,
     /// The same for the MD5 command (its tool may exist without SHA-256's).
     pub(super) md5_gate: Arc<super::digest_command::DigestGate>,
+    /// Whether group answers of the MD5 command line up (digest_batch.rs).
+    pub(super) md5_batch_gate: Arc<super::digest_command::DigestGate>,
     root: String,
     /// Read by `url()` (UI display), consumed in the connect-UI step.
     #[allow(dead_code)]
@@ -71,6 +73,7 @@ impl SftpBackend {
             written: WrittenStages::default(),
             digest_gate: Arc::default(),
             md5_gate: Arc::default(),
+            md5_batch_gate: Arc::default(),
             root,
             url,
         })

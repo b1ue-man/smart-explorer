@@ -46,7 +46,10 @@
 //! fixed script (`MD5_SCRIPT`): `md5sum` (GNU coreutils, busybox) or
 //! `md5 -q` (BSD, macOS). No other tool is tried (no `openssl`), and a host
 //! with neither answers `Ok(None)`. Each algorithm has its own gate: a host
-//! without `sha256sum` may still have `md5sum`.
+//! without `sha256sum` may still have `md5sum`. The checksum compare mode asks
+//! for the MD5s of a folder's files together (`content_md5_many`,
+//! digest_batch.rs): one exec request per group, under the same rules and
+//! the same MD5 gate.
 use super::backend::SftpBackend;
 use super::exec::CapturedExec;
 use crate::vfs::{is_sha256_hex, ContentDigest, VfsMeta, VfsResult};
@@ -138,17 +141,17 @@ impl DigestGate {
         self.unavailable.load(Ordering::Relaxed)
     }
 
-    fn give_up(&self) {
+    pub(super) fn give_up(&self) {
         self.unavailable.store(true, Ordering::Relaxed);
     }
 
-    fn failed(&self) {
+    pub(super) fn failed(&self) {
         if self.failures.fetch_add(1, Ordering::Relaxed) + 1 >= FAILURES_BEFORE_GIVING_UP {
             self.give_up();
         }
     }
 
-    fn worked(&self) {
+    pub(super) fn worked(&self) {
         self.failures.store(0, Ordering::Relaxed);
     }
 }

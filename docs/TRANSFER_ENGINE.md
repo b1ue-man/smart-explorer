@@ -215,7 +215,8 @@ liefern ihn ohne Übertragung. Ein Prüfschlüssel, den der Server nur als Behau
 
 **MD5 am Ort der Datei (`vfs::content_md5`, Stand 2026-10-31, nicht gebaut).** Die Signatur des Syncs ist
 eine MD5 (gespeicherte Basen). Der Sync fragt vor jedem Download `vfs::content_md5` der Seite
-(`bisync/os/shared/snapshot_dir.rs` `content_hash`); die Backends überschreiben `BackendExtensions::content_md5`
+(`bisync/os/shared/snapshot_dir.rs` `content_hash`), im Durchlauf zuvor die Dateien eines Ordners zusammen
+(`vfs::content_md5_many`, Block „MD5 vieler Dateien in einer Anfrage“ unten); die Backends überschreiben `BackendExtensions::content_md5`
 und liefern die MD5 ohne Dateiübertragung, sofern die Gegenseite sie bilden kann. Sonst gibt der Aufruf
 `Ok(None)` und der Sync nimmt den bisherigen Weg (Datei laden und hashen). Das Ergebnis muss 32 Hex-Ziffern
 sein (`vfs::content_md5` lehnt anderes mit `InvalidData` ab).
@@ -227,6 +228,47 @@ sein (`vfs::content_md5` lehnt anderes mit `InvalidData` ab).
 | WebDAV, Nextcloud, ownCloud | eine PROPFIND-Anfrage (Tiefe 0), `oc:checksums` mit `MD5:<hex>` (`webdav/core/content_digest.rs` `md5_from_propfind`) | der Server nennt eine MD5; der Wert ist wie bei SHA-256 die Angabe, die ein Hochladender mitsandte, und derselbe Wert, den die Auflistungen schon tragen; diese Engine sendet ihn nie. Ohne MD5-Eintrag: `Ok(None)`. Je Verbindung gemerkt (`ChecksumMemory`, je Algorithmus): zeigte eine Auflistung mit Dateien keine MD5 oder die erste Tiefe-0-Antwort keine MD5 bzw. SHA-256, gibt die Verbindung `Ok(None)` ohne weitere PROPFIND (Apache `mod_dav`, nginx, IIS); eine spätere Auflistung oder Antwort mit Prüfsumme öffnet den Weg wieder | Nextcloud Developer Manual, „Basic file and folder operations“ |
 | Google Drive | die MD5 steht schon in der Auflistung (`md5Checksum`, `gdrive/core/backend.rs`, `provides_content_hash`); kein eigener Aufruf nötig | – | Drive API v3, `files` |
 | SMB | bleibt bei Übertragung | SMB 2/3 kennt keine serverseitige Prüfsumme des Dateiinhalts | MS-SMB2 |
+
+**MD5 vieler Dateien in einer Anfrage (`vfs::content_md5_many`, Stand 2026-11-01, nicht gebaut).** Der
+Durchlauf einer Seite im Prüfsummen-Modus fragt die MD5 aller Dateien eines Ordners, deren Inhalt er hashen
+muss, zusammen ab (`bisync/os/shared/snapshot_dir.rs` `batched_md5`), bevor eine Datei einzeln gefragt
+oder geladen wird. Ursache (Messlauf 41253633650, 20 000 kleine Dateien in 2 000 Ordnern: 44,36 s und
+97,0 MiB gegen 4,82 s und 74,9 MiB in v0.5.189): der Einzelweg öffnete je Datei einen Sitzungskanal und
+startete je Datei eine Shell mit `cat`, `wc` und `md5sum`; Kanal, Shellstart und vier SFTP-Statusabfragen
+kosteten je Datei mehr Zeit und Bytes als das Laden der kleinen Datei. SFTP ohne Agent beantwortet die
+Bündelanfrage mit einer Exec-Anfrage je Gruppe (`sftp/core/digest_batch.rs`, `digest_batch_flow.rs`):
+
+- feste Befehlszeile `sh -c '<fester Text>'` (`MD5_BATCH_SCRIPT`) ohne `'`, `\`, `!`, Zeilenumbruch und ohne
+  Pfad; die Pfade kommen über die Standardeingabe: `P`, ein Trennbyte, dann die Einträge (Kennbyte und Pfad)
+  durch dieses Byte getrennt. Das Trennbyte ist ein Steuerzeichen (0x02 bis 0x1F ohne Tabulator und
+  Zeilenumbruch), das in keinem Pfad der Gruppe vorkommt; das Skript teilt mit `IFS` auf genau dieses Byte,
+  `set -f` und `LC_ALL=C`. Ein Pfad mit NUL, ein leerer Pfad oder ein Pfad, der jedes Trennbyte enthält,
+  geht den Einzelweg;
+- das Skript ruft `wc -c` und `md5sum` (bzw. `md5 -r`) je Gruppe einmal für alle Dateien auf, nicht je
+  Datei; ein Pfad mit Zeilenumbruch (Kennbyte `o`, Werkzeuge könnten seinen Namen auf zwei Zeilen
+  schreiben) wird innerhalb derselben Anfrage über Umleitungen einzeln gehasht. Gelesen wird nur das erste
+  Wort jeder Werkzeugzeile; stimmt die Zeilenzahl eines Abschnitts nicht mit der Zahl der Dateien überein
+  (Datei zwischen Test und Werkzeug verschwunden), gilt der Abschnitt für keine Datei;
+- jede Antwortzeile beginnt mit der zur Laufzeit gebildeten Marke (`se-digest-v1 file|none|fail|one`,
+  `sizes`, `digests`, `end`); ohne Marke (cmd.exe, PowerShell, erzwungener Befehl), bei `notool`, bei
+  abgelehnter Exec-Anfrage, bei `none` für eine per SFTP unveränderte Datei oder bei einer vom Skript
+  gelesenen Größe ungleich der SFTP-Größe schließt sich der MD5-Weg der Verbindung (dieselbe Sperre wie
+  beim Einzelweg); ein Konto mit `ForceCommand internal-sftp` endet sofort wie beim Einzelweg;
+- Größe, Zeit und Art jeder Datei per SFTP vor dem Befehl (gleich der Auflistung) und danach (gleich der
+  Auflistung), beide Male als viele LSTAT-Anfragen gleichzeitig auf der Hauptsitzung; nur dann gilt die
+  MD5; jede andere Datei bekommt `None` und geht den Einzelweg (`vfs::content_md5`, danach der Download)
+  mit dessen Fehlern und Auslassungen;
+- eine Gruppe hat höchstens 1 024 Dateien, eine geschätzte Ausgabe unter 56 KiB (die Erfassung behält
+  64 KiB) und höchstens 256 MiB Inhalt (Wartezeit 60 s plus 1 s je 8 MiB); drei nicht aufgehende
+  Gruppenantworten in Folge schließen nur den Bündelweg der Verbindung (`md5_batch_gate`), der Einzelweg
+  bleibt.
+
+Durchgereicht wird die Bündelanfrage von Agent-Verbindung (an die SFTP-Verbindung), Einhängeproxy,
+Wurzel-Backend des Dienstes (jeder Pfad wie bei `content_md5` aufgelöst), Share-Freigabe (nur lesbare
+Pfade, Lesbarkeit danach erneut geprüft), Gerätebaum und Browsing-Cache. Seiten ohne Bündelweg (FTP
+`HASH`, WebDAV, Share-Gegenstelle) fragen wie bisher je Datei. Nicht gebündelt sind die Einzelprüfungen
+außerhalb des Durchlaufs (`incremental_changes.rs` `target_rel_drifted`, `incremental_index_commit.rs`,
+`move_finalize.rs`, eigene Schreibvorgänge im Dienst).
 
 **SFTP-Kanäle und -Zusatzverbindungen.** Ein Bereich nimmt einen leeren Kanal. Gibt es keinen, öffnet er
 einen neuen, solange die gelernte Grenze es erlaubt; sonst teilt er den am wenigsten belasteten
@@ -815,8 +857,9 @@ den Weg selbst, das Lauf-Protokoll nennt je Seite „… Ordner gleich ihrem Ord
   Gegenseite ist nie gleich: der Ordner wird dann geholt, nie als gleich genommen. Gleiche Ordner der
   entfernten Gegenseite kommen gar nicht über die Verbindung.
 - **Prüfschlüssel ohne Dateiübertragung (E9).** Im Prüfsummen-Modus rechnet die Seite mit der Datei die
-  MD5 im Durchlauf (Share-Host, se-agent); vor jedem Download in `snapshot_dir::content_hash` fragt der
-  Sync `vfs::content_md5` der Seite. Ein persistenter Hash-Cache auf der Seite der Datei (se-agent,
+  MD5 im Durchlauf (Share-Host, se-agent); sonst fragt der Durchlauf die Dateien eines Ordners zusammen
+  (`vfs::content_md5_many`, SFTP ohne Agent: eine Exec-Anfrage je Gruppe) und vor jedem Download in
+  `snapshot_dir::content_hash` die übrigen einzeln über `vfs::content_md5`. Ein persistenter Hash-Cache auf der Seite der Datei (se-agent,
   Share-Host, lokale Seite) erspart das erneute Lesen unveränderter Dateien: Schlüssel Gerät, Inode,
   Größe, Änderungs- und Statusänderungszeit (ns); kein Treffer, solange eine der Zeiten nicht mehr als
   2 s vor dem Erfassungszeitpunkt liegt (Git „racy-git“); höchstens 500 000 Einträge. Er gilt nur auf

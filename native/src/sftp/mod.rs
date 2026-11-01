@@ -42,7 +42,8 @@
 //! minutes after any failure (security answer E13-S15 as changed by G3-10;
 //! extra_link.rs, link_rules.rs, pool_growth.rs, pool_extra.rs).
 //! The SHA-256 of a file is computed by the SSH server through an exec
-//! request, not by reading the file (digest_command.rs, digest_exec.rs).
+//! request, not by reading the file (digest_command.rs, digest_exec.rs); the
+//! MD5s of many files come from one exec request per group (digest_batch.rs).
 //! A folder is deleted with one READDIR per folder and many REMOVEs in
 //! flight on the main session (tree_remove.rs).
 //! An interactive terminal (pty-req, then shell or exec) opens as one more
@@ -72,6 +73,10 @@ mod config;
 mod connection;
 #[path = "core/copy_data.rs"]
 mod copy_data;
+#[path = "core/digest_batch.rs"]
+mod digest_batch;
+#[path = "core/digest_batch_flow.rs"]
+mod digest_batch_flow;
 #[path = "core/digest_command.rs"]
 mod digest_command;
 #[path = "core/digest_exec.rs"]

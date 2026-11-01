@@ -46,6 +46,16 @@ impl BackendExtensions for MountProxy {
         decode(vfs::content_md5(&*self.inner, path, cancel))
     }
 
+    /// The MD5s of many files of the inner side together, under the same gate.
+    fn content_md5_many(
+        &self,
+        files: &[(&str, &vfs::VfsMeta)],
+        cancel: &AtomicBool,
+    ) -> VfsResult<Option<Vec<Option<String>>>> {
+        let _permit = self.gate.enter()?;
+        decode(vfs::content_md5_many(&*self.inner, files, cancel))
+    }
+
     fn capacity(&self, root: &str) -> VfsResult<crate::vfs::CapacitySnapshot> {
         {
             let _permit = self.gate.enter()?;

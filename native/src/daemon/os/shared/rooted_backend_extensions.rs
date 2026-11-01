@@ -72,6 +72,40 @@ impl BackendExtensions for RootedBackend {
         Ok(md5)
     }
 
+    /// `content_md5` for many files together: each path resolved and confined
+    /// as there (a path that does not resolve gets `None`, and its own call
+    /// reports why), the same lock check after.
+    fn content_md5_many(
+        &self,
+        files: &[(&str, &vfs::VfsMeta)],
+        cancel: &AtomicBool,
+    ) -> VfsResult<Option<Vec<Option<String>>>> {
+        let found = {
+            let _operation = self.operation.read()?;
+            let resolved: Vec<Option<String>> = files
+                .iter()
+                .map(|(path, _)| self.checked_existing(path).ok())
+                .collect();
+            let asked: Vec<(&str, &vfs::VfsMeta)> = files
+                .iter()
+                .zip(&resolved)
+                .filter_map(|((_, meta), path)| Some((path.as_deref()?, *meta)))
+                .collect();
+            let Some(answers) =
+                vfs::content_md5_many(&*self.inner, &asked, cancel).map_err(sanitize_error)?
+            else {
+                return Ok(None);
+            };
+            let mut answers = answers.into_iter();
+            resolved
+                .iter()
+                .map(|path| path.as_ref().and_then(|_| answers.next().flatten()))
+                .collect()
+        };
+        let _operation = self.operation.read()?;
+        Ok(Some(found))
+    }
+
     fn capacity(&self, root: &str) -> VfsResult<vfs::CapacitySnapshot> {
         let _operation = self.operation.read()?;
         let path = self.checked_existing(root)?;

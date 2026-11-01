@@ -154,6 +154,14 @@ impl BackendExtensions for CachingBackend {
         crate::vfs::content_md5(&*self.inner, path, cancel)
     }
 
+    fn content_md5_many(
+        &self,
+        files: &[(&str, &VfsMeta)],
+        cancel: &AtomicBool,
+    ) -> VfsResult<Option<Vec<Option<String>>>> {
+        crate::vfs::content_md5_many(&*self.inner, files, cancel)
+    }
+
     fn hash_walk_keyed(
         &self,
         root: &str,

@@ -164,6 +164,17 @@ impl BackendExtensions for SftpBackend {
         self.md5_by_command(path, cancel)
     }
 
+    /// The MD5s of many files through one exec request per group
+    /// (digest_batch.rs, digest_batch_flow.rs): the per-file channel and
+    /// shell start cost more than a small file.
+    fn content_md5_many(
+        &self,
+        files: &[(&str, &crate::vfs::VfsMeta)],
+        cancel: &AtomicBool,
+    ) -> VfsResult<Option<Vec<Option<String>>>> {
+        self.md5_many_by_command(files, cancel).map(Some)
+    }
+
     /// Packets give each file the time its entry names: an `FSETSTAT` on the
     /// open handle behind the WRITEs, before the CLOSE (batch_put.rs).
     fn batch_put_times(&self) -> bool {

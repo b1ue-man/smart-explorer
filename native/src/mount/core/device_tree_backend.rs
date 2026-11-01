@@ -319,6 +319,14 @@ impl BackendExtensions for LazyChildBackend {
     ) -> VfsResult<Option<String>> {
         self.call(|inner| crate::vfs::content_md5(&**inner, path, cancel))
     }
+    /// The MD5s of many files of the device's own backend, as `content_md5`.
+    fn content_md5_many(
+        &self,
+        files: &[(&str, &crate::vfs::VfsMeta)],
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> VfsResult<Option<Vec<Option<String>>>> {
+        self.call(|inner| crate::vfs::content_md5_many(&**inner, files, cancel))
+    }
     fn capacity(&self, root: &str) -> VfsResult<crate::vfs::CapacitySnapshot> {
         self.call(|inner| crate::vfs::capacity(&**inner, root))
     }

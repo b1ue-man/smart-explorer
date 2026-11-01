@@ -137,12 +137,12 @@ pub use self::error_classes::{is_target_refusal, omission_reason};
 pub use self::extension_calls::confirm_namespace;
 pub use self::extension_calls::default_sync_child_path as literal_child_path;
 pub use self::extension_calls::{
-    change_signal, change_signal_mode, content_md5, find_duplicates, finish_stage, hash_walk,
-    hash_walk_keyed, list_dir_tolerant, mtime_precision, open_read_regular,
-    open_write_copy_stage_timed, previous_state_identities, recycle, remove_tree,
-    replace_staged_reversible, supports_duplicate_search, supports_hash_walk, supports_recycle,
-    supports_remove_tree, sync_child_path, sync_filesystem, sync_path, sync_stat, target_limits,
-    unix_mode, version_archive_policy, volume_identity,
+    change_signal, change_signal_mode, content_md5, content_md5_many, find_duplicates,
+    finish_stage, hash_walk, hash_walk_keyed, list_dir_tolerant, mtime_precision,
+    open_read_regular, open_write_copy_stage_timed, previous_state_identities, recycle,
+    remove_tree, replace_staged_reversible, supports_duplicate_search, supports_hash_walk,
+    supports_recycle, supports_remove_tree, sync_child_path, sync_filesystem, sync_path, sync_stat,
+    target_limits, unix_mode, version_archive_policy, volume_identity,
 };
 pub use self::extension_types::{
     ChangeNotice, ChangeSignalMode, ChangeSubscription, HashWalkEntry, HashWalkItem, HashWalkMeta,

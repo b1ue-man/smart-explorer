@@ -419,6 +419,18 @@ impl BackendExtensions for AgentBackend {
         vfs::content_md5(&*self.inner, path, cancel)
     }
 
+    /// The MD5s of many files through the SSH connection, as `content_md5`.
+    fn content_md5_many(
+        &self,
+        files: &[(&str, &vfs::VfsMeta)],
+        cancel: &AtomicBool,
+    ) -> VfsResult<Option<Vec<Option<String>>>> {
+        if self.features().service {
+            return Ok(None);
+        }
+        vfs::content_md5_many(&*self.inner, files, cancel)
+    }
+
     fn supports_recycle(&self, path: &str) -> VfsResult<bool> {
         if !self.serves_peer() {
             if self.features().service {
