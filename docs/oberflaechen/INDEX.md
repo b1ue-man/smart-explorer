@@ -8,13 +8,13 @@ Zweck: Dieses Verzeichnis hält fest, welche Oberflächen das Projekt hat und ü
 
 | Oberfläche | Einstieg im Code | Art |
 |---|---|---|
-| CLI `se` | `native/src/bin/se.rs`, Befehle unter `native/src/cli/` | Terminal, Text- und JSON-Ausgabe, Shell-Vervollständigung (`native/src/cli/completions.rs`) |
-| Desktop-GUI | `native/src/app/` (egui), Fenster und Seiten in `native/src/app/core/` | Windows und Linux |
+| CLI `se` | `native/src/bin/se.rs`, Befehle unter `native/crates/cli/src/cli/` | Terminal, Text- und JSON-Ausgabe, Shell-Vervollständigung (`native/crates/cli/src/cli/completions.rs`) |
+| Desktop-GUI | `native/crates/gui/src/app/` (egui), Fenster und Seiten in `native/crates/gui/src/app/core/` | Windows und Linux |
 | Android-App | `android/app/src/main/java/app/smartexplorer/android/` (Compose) | Bildschirme, Dialoge, Benachrichtigungen |
-| Android-Bridge | `native/src/mobile/` (JSON-Methoden), Kotlin `android/.../api/` | Vertrag `docs/superpowers/plans/2026-09-25-android-apk/api.md` |
-| Daemon-IPC | `native/src/daemon/os/shared/ipc_protocol.rs` | Loopback zwischen GUI/CLI und Hintergrund-Worker |
-| MCP-Server `se mcp` | `native/src/cli/mcp/` (Katalog `catalog.rs`) | KI-Agenten; das Werkzeug `se` führt jeden CLI-Befehl aus |
-| Netzprotokolle | Share/Exec `native/src/share/core/`, Agent `native/src/agent_proto/` | Gerät zu Gerät |
+| Android-Bridge | `native/crates/mobile/src/mobile/` (JSON-Methoden), Kotlin `android/.../api/` | Vertrag `docs/superpowers/plans/2026-09-25-android-apk/api.md` |
+| Daemon-IPC | `native/crates/engine/src/daemon/os/shared/ipc_protocol.rs` | Loopback zwischen GUI/CLI und Hintergrund-Worker |
+| MCP-Server `se mcp` | `native/crates/cli/src/cli/mcp/` (Katalog `catalog.rs`) | KI-Agenten; das Werkzeug `se` führt jeden CLI-Befehl aus |
+| Netzprotokolle | Share/Exec `native/crates/engine/src/share/core/`, Agent `native/crates/storage/src/agent_proto/` | Gerät zu Gerät |
 | Dokumentation | `README.md`, `docs/` | Bedienwege und Verträge |
 
 ## Teildokumente

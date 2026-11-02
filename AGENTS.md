@@ -159,7 +159,23 @@ These rules apply to first-party documentation (`README.md`, `native/README.md`,
 
 ## native Rust architecture
 
-These rules apply to `native/src` unless a task explicitly says otherwise.
+These rules apply to `native/crates/*/src` and `native/src` unless a task explicitly says otherwise.
+
+- Crate layers (D13, plan `docs/plaene/2026-11-01-idealzustand`): `native/` is one workspace. The root package
+  `smart_explorer` holds only the programs (`src/main.rs`, `src/bin/`) and a facade that re-exports the crates;
+  below it `crates/cli` → `crates/gui` → `crates/engine` → `crates/transfer` → `crates/storage` → `crates/core`,
+  and `crates/mobile` → `crates/engine` for Android (`android-bridge` is the JNI library). Each crate re-exports
+  the one below (`pub use <lower>::*`), so `crate::<module>` paths reach every lower module.
+- A lower crate never names a module of a higher one, in production or test code. Where it needs an
+  implementation from above, it owns a port (`declare_port!`/`provide_port!` in `crates/core/src/ports.rs`): the
+  linker joins accessor and provider, so no program or test can run without the implementation. The own test
+  binaries of storage and transfer bind refusing stand-ins (`crates/storage/src/test_ports.rs`,
+  `test_providers.rs`); tests of the real behaviour live in the crate that links the provider.
+- Test helpers a higher crate's tests use are gated `#[cfg(any(test, feature = "test-support"))]`; the feature
+  chains core ← storage ← transfer ← engine, and only dev-dependencies enable it.
+- Dependency versions live once in `[workspace.dependencies]` of `native/Cargo.toml`; a crate lists the ones its
+  code names (`name.workspace = true`). Tests of every crate run with `cargo test --workspace --exclude
+  smart_explorer_android`.
 
 - Keep files narrowly scoped to one feature responsibility. New or substantially edited Rust source files must stay under 500 lines and under 50 KiB. Existing oversized files are technical debt: do not add meaningful new code to them without extracting a cohesive submodule first, or state the exception clearly.
 - Split by behavior, not by convenience. Prefer separate files for domain types, parsing/formatting, persistence, protocol/wire code, UI rendering, background orchestration, and platform adapters instead of a single feature catch-all file.
@@ -179,7 +195,7 @@ These rules apply to `native/src` unless a task explicitly says otherwise.
 
 ## graphify
 
-This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships. The initial graph is AST-only, built from `native/src` into the repository root. Since 2026-11-01 `graphify-out/` is generated per clone and ignored by Git (`.gitignore`): it is never committed, and a fresh clone builds it with the full root refresh below before the first query.
+This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships. The initial graph is AST-only, built from `native/crates` (the workspace crates; `native/src` holds only the programs and the facade) into the repository root. Since 2026-11-01 `graphify-out/` is generated per clone and ignored by Git (`.gitignore`): it is never committed, and a fresh clone builds it with the full root refresh below before the first query.
 
 When the user types `/graphify`, invoke the `skill` tool with `skill: "graphify"` before doing anything else.
 
@@ -188,5 +204,5 @@ Rules:
 - Dirty graphify-out/ files are expected after hooks or incremental updates; dirty graph files are not a reason to skip graphify. Only skip graphify if the task is about stale or incorrect graph output, or the user explicitly says not to use it.
 - If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
 - Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
-- After modifying native source code, update the root graph from the repository root. If `graphify-out/manifest.json` already exists, `graphify extract native/src --out . --no-cluster` may incorrectly rewrite `graphify-out/graph.json` with only the changed files; do not leave that partial graph in place. For a reliable full root refresh, first verify the resolved targets are inside the repository-root `graphify-out/`, remove only the generated root files `graphify-out/manifest.json`, `graphify-out/graph.json`, and `graphify-out/GRAPH_REPORT.md`, then run `graphify extract native/src --out . --no-cluster` and `graphify cluster-only . --no-viz --no-label`. Finally rewrite `graphify-out/graph.json` without indentation (`python3 -c "import json,sys; p=sys.argv[1]; d=json.load(open(p, encoding='utf-8')); json.dump(d, open(p, 'w', encoding='utf-8'), separators=(',', ':'), ensure_ascii=False)" graphify-out/graph.json`): graphify writes it indented (99.0 MiB on 2026-10-31); graphify reads the compact file unchanged, and the compact file keeps the local checkout small.
-- Do not use `graphify update native/src` for the required root graph refresh; it writes a separate `native/src/graphify-out/` instead of updating the repository-root graph. If that directory is accidentally created, verify it is ignored/untracked and remove only that generated `native/src/graphify-out/` directory after confirming the root `graphify-out/graph.json` has been rebuilt and clustered.
+- After modifying native source code, update the root graph from the repository root. If `graphify-out/manifest.json` already exists, `graphify extract native/crates --out . --no-cluster` may incorrectly rewrite `graphify-out/graph.json` with only the changed files; do not leave that partial graph in place. For a reliable full root refresh, first verify the resolved targets are inside the repository-root `graphify-out/`, remove only the generated root files `graphify-out/manifest.json`, `graphify-out/graph.json`, and `graphify-out/GRAPH_REPORT.md`, then run `graphify extract native/crates --out . --no-cluster` and `graphify cluster-only . --no-viz --no-label`. Finally rewrite `graphify-out/graph.json` without indentation (`python3 -c "import json,sys; p=sys.argv[1]; d=json.load(open(p, encoding='utf-8')); json.dump(d, open(p, 'w', encoding='utf-8'), separators=(',', ':'), ensure_ascii=False)" graphify-out/graph.json`): graphify writes it indented (99.0 MiB on 2026-10-31); graphify reads the compact file unchanged, and the compact file keeps the local checkout small.
+- Do not use `graphify update native/crates` (or `native/src`) for the required root graph refresh; it writes a separate `graphify-out/` below that directory instead of updating the repository-root graph. If such a directory is accidentally created, verify it is ignored/untracked and remove only that generated directory after confirming the root `graphify-out/graph.json` has been rebuilt and clustered.

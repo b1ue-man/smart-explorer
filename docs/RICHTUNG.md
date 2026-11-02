@@ -34,7 +34,7 @@ Grenzen, die der Nutzer gesetzt hat:
 
 - **Direkt zwischen den Geräten:** gleiches LAN oder WLAN zuerst, dann die übrigen Direktwege, das Relay nur als gekennzeichneter Rückfall. Der Server vermittelt nur. Siehe `docs/ARCHITEKTUR.md`, Abschnitt „Zweck“.
 - **Rechte je Gerät an einer Stelle:** Siehe `EINSTELLUNGEN-GERAETE`, P18.
-  - Befund: Das Rechtemodell kennt eine feste Liste von Fähigkeiten, nämlich Befehle, Terminal, Bildschirm ansehen und Bildschirm steuern (`native/src/share/core/access_grant.rs:18-37`).
+  - Befund: Das Rechtemodell kennt eine feste Liste von Fähigkeiten, nämlich Befehle, Terminal, Bildschirm ansehen und Bildschirm steuern (`native/crates/engine/src/share/core/access_grant.rs:18-37`).
   - Jede neue Ebene kommt dort als eigene Fähigkeit dazu.
 - **Erst die einzelnen Komponenten zuverlässig,** dann die nächste Ebene.
 

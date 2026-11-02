@@ -1,0 +1,116 @@
+name: Crate split and shared task setup
+
+# The task-level suite of the D13/D12 batch (docs/plaene/2026-11-01-idealzustand).
+# One entrypoint, native/test-crates-task.py:
+#   workspace  build every crate and target, run every test (Linux, Windows),
+#              check the Windows GNU target
+#   android    compile and link the Android JNI library (arm64-v8a)
+#   agent      build the SSH-agent bundles the release embeds
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Full pushed candidate SHA, matching the selected ref
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: crates-task-${{ github.repository }}
+  cancel-in-progress: false
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
+  CARGO_TERM_COLOR: never
+
+jobs:
+  workspace:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.candidate_sha }}
+
+      - name: Bind the checkout to the requested candidate
+        shell: bash
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
+          [[ "$(git rev-parse HEAD)" == "${CANDIDATE_SHA,,}" ]]
+
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
+        with:
+          targets: ${{ runner.os == 'Windows' && 'x86_64-pc-windows-gnu' || '' }}
+
+      - name: Linux test packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config xvfb libegl1 libgl1 libx11-6 libx11-xcb1 \
+            libxcursor1 libxi6 libxkbcommon0 libxkbcommon-x11-0 libxrandr2
+
+      - name: Every crate, every test
+        timeout-minutes: 230
+        run: python3 native/test-crates-task.py --part workspace
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: crates-task-workspace-${{ runner.os }}
+          path: native/target/crates-task-logs
+          if-no-files-found: warn
+          retention-days: 7
+
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.candidate_sha }}
+
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
+        with:
+          targets: aarch64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked --version 4.1.2
+
+      - name: Android JNI library
+        timeout-minutes: 110
+        run: python3 native/test-crates-task.py --part android
+
+  agent:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.candidate_sha }}
+
+      - name: Rust toolchain
+        uses: ./.github/actions/native-setup
+        with:
+          targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl
+          cache: 'false'
+
+      - name: Musl tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: SSH-agent bundles
+        timeout-minutes: 50
+        run: python3 native/test-crates-task.py --part agent

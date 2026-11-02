@@ -514,8 +514,8 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   becomes `STATUS_ACCESS_DENIED`, which Explorer shows as "Access denied" for an
   error that has nothing to do with rights. `dokany_status` passes only the listed
   codes and returns `STATUS_IO_DEVICE_ERROR` for everything else
-  (`native/src/mount/os/windows/callback_status.rs:232-252`,
-  `native/src/mount/os/windows/dokany_status_table.rs:1-12`). An error kind without
+  (`native/crates/engine/src/mount/os/windows/callback_status.rs:232-252`,
+  `native/crates/engine/src/mount/os/windows/dokany_status_table.rs:1-12`). An error kind without
   any Win32 code also ends as `STATUS_IO_DEVICE_ERROR` (`callback_status.rs:242`).
 - **Host and network unreachable have their own codes.** `HostUnreachable` maps to
   `ERROR_HOST_UNREACHABLE` (1232, "The network location cannot be reached."),
@@ -528,8 +528,8 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
 - **No `auto_unmount`.** The host opens the session with `Config::default()`,
   two read loops, owner-only access (`SessionACL::Owner`, so `user_allow_other` is
   not needed) and `nodev,nosuid,noatime`; it does not set `auto_unmount`
-  (`native/src/mount/os/linux_os/fuse_host.rs:1-10`). A crashed host leaves a mount
-  that the daemon removes (`native/src/daemon/os/linux_os/mount_cleanup.rs`).
+  (`native/crates/engine/src/mount/os/linux_os/fuse_host.rs:1-10`). A crashed host leaves a mount
+  that the daemon removes (`native/crates/engine/src/daemon/os/linux_os/mount_cleanup.rs`).
 - **Three ways a session ends.** An unmount by the host, an unmount outside the host
   (file manager eject, `fusermount3 -u`, `se drive unmount`), and an abort while still
   mounted (kernel request timeout or `fusectl`). Only the last is a failure; its
@@ -537,16 +537,16 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
 - **The kernel request timeout is a hard limit.** A value above 0 in
   `fs.fuse.default_request_timeout` lets the kernel abort a drive whose request takes
   longer. Se does not work around it; `se drive runtime` reports the value
-  (`native/src/mount/os/linux_os/fuse_runtime.rs:6-9`, `:201-203`).
+  (`native/crates/engine/src/mount/os/linux_os/fuse_runtime.rs:6-9`, `:201-203`).
 - **Open descriptors can keep a host alive.** After a short grace period the host
   cuts such connections through `fusectl`; their files are then published as after a
   Dokany unmount (`fuse_host.rs:19-21`). Without `fusectl` mounted, only the delayed
-  unmount remains (`native/src/mount/os/linux_os/fuse_abort.rs:75`).
+  unmount remains (`native/crates/engine/src/mount/os/linux_os/fuse_abort.rs:75`).
 - **`setattr` covers only truncate, chmod, chown and utimensat**
-  (`native/src/mount/os/linux_os/fuse_ops_attr.rs:1-2`). The filesystem implements
+  (`native/crates/engine/src/mount/os/linux_os/fuse_ops_attr.rs:1-2`). The filesystem implements
   `lookup`, `getattr`, `mkdir`, `unlink`, `rmdir`, `rename`, `mknod`, `open`, `read`,
   `write`, `flush`, `release`, `fsync`, `opendir`, `readdir`, `releasedir`, `statfs`
-  and `create` (`native/src/mount/os/linux_os/fuse_fs.rs:245-476`). Symbolic links,
+  and `create` (`native/crates/engine/src/mount/os/linux_os/fuse_fs.rs:245-476`). Symbolic links,
   hard links, extended attributes and file locks have no handler in that file; what
   the `fuser` library answers for them is not verified here.
 - **A FUSE drive needs `fusermount3` with setuid root** and `/dev/fuse` for the
@@ -558,33 +558,33 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
 - **Windows accounts logged on without a password have no network credentials.**
   The service (LocalSystem with `SeTcbPrivilege`) logs a local account on with
   `MsV1_0S4ULogon` and logon type `Network`
-  (`native/src/share/os/windows/exec_account_s4u.rs:1-6`). Network drives and EFS
+  (`native/crates/engine/src/share/os/windows/exec_account_s4u.rs:1-6`). Network drives and EFS
   files are therefore not available to a command that runs as that account.
 - **Windows commands run in session 0 without a window.** The relay runs in session 0
   inside a job object of the service; `PI_NOUI` suppresses message boxes
-  (`native/src/share/os/windows/exec_account_spawn.rs:1-4`, `:44-50`). The startup
+  (`native/crates/engine/src/share/os/windows/exec_account_spawn.rs:1-4`, `:44-50`). The startup
   info gives the relay an empty desktop name, so it connects to a window station of its
   own logon session (`exec_account_spawn.rs:318-326`).
 - **The token probe depends on two policies.** The probe treats an administrator as
   elevated only when `EnableLUA` is on and `LocalAccountTokenFilterPolicy` is not 1
-  (`native/src/share/os/windows/exec_account_tests.rs:431-441`).
+  (`native/crates/engine/src/share/os/windows/exec_account_tests.rs:431-441`).
 - **The PAM service has no `pam_systemd`.** Account units use `PAMName=smart-explorer-exec`
   with `account` checks of the distribution, `pam_limits`, `pam_loginuid` and
   `pam_keyinit`, but no `pam_systemd`; otherwise processes of a job would leave their
-  unit (`native/src/share/os/linux_os/exec_pam_service.rs:1-10`, `:76-89`).
+  unit (`native/crates/engine/src/share/os/linux_os/exec_pam_service.rs:1-10`, `:76-89`).
 - **Account units are `Type=notify`, not `Type=exec`.** With `PAMName=` the PAM session
   process that systemd 249 and 255 fork keeps the descriptor that reports the `execve()`
   open (closed only from systemd 256), so a `Type=exec` unit never leaves "activating" and
   is killed after `TimeoutStartUSec` ("timeout, exit status 9"). The supervisor sends
   `READY=1` to `NOTIFY_SOCKET` once it holds its connection; a PAM refusal still ends the
   unit before that with its exit status. The worker's own units stay `Type=exec`
-  (`native/src/share/os/linux_os/exec_account_unit.rs`, `exec_supervisor_stdio.rs`).
+  (`native/crates/engine/src/share/os/linux_os/exec_account_unit.rs`, `exec_supervisor_stdio.rs`).
 - **`ExitType=` is not sent.** systemd 249 (Ubuntu 22.04) refuses a unit with an unknown
   property; `ExitType` exists only from systemd 250, where its default `main` is what
-  the unit needs (`native/src/share/os/linux_os/exec_systemd.rs:100-103`).
+  the unit needs (`native/crates/engine/src/share/os/linux_os/exec_systemd.rs:100-103`).
 - **The root worker refuses expired accounts and forced password changes.** Before a
   unit starts, the account's shadow entry is read, and an expired account or one that
-  waits for a password change is refused (`native/src/share/os/linux_os/exec_account.rs:1-12`).
+  waits for a password change is refused (`native/crates/engine/src/share/os/linux_os/exec_account.rs:1-12`).
 - **Program copies are not updated by the updater.** The Linux copy lives at
   `/usr/local/sbin/smart-explorer-exec`; the Windows copy at
   `%ProgramFiles%\Smart Explorer\exec-accounts\se.exe`. Run
@@ -595,12 +595,12 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
 - **GTK and KDE bookmark files have no lock.** Both files are read once and replaced
   through a temporary file in the same folder. A change another program writes between
   the read and the replace is lost (`docs/oberflaechen/laufwerke.md`, section 4;
-  `native/src/mount/os/linux_os/bookmarks_gtk.rs`, `bookmarks_kde.rs`).
+  `native/crates/engine/src/mount/os/linux_os/bookmarks_gtk.rs`, `bookmarks_kde.rs`).
 - **Device folder names follow fixed rules.** Characters are replaced per dialect,
   the length limit is 255, and an empty name becomes `Gerät`. Two devices whose names
   compare equal (Windows ignores case) both get ` (<6 hex>)` from the SHA-256 of their
   key; a device named `Räume` becomes `Räume (Gerät)` so it cannot collide with the room
-  folder (`native/src/mount/core/device_tree_names.rs`).
+  folder (`native/crates/engine/src/mount/core/device_tree_names.rs`).
 - **A taken drive letter has no fallback.** On Windows the device tree needs its letter
   free; no other letter is chosen automatically (stated in the DRV-M6 reading; not verified in this run).
 - **Child journals survive switching the tree off.** `off` unmounts the tree and keeps
@@ -611,7 +611,7 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
 ## Screen streaming (0.5.183)
 
 - **Pull buffers start with a 16-byte head.** `screenPull` writes the head (time, flags,
-  length) at offsets 0 to 15 and the payload from offset 16 (`native/src/screen/os/android/viewer_sink.rs`,
+  length) at offsets 0 to 15 and the payload from offset 16 (`native/crates/engine/src/screen/os/android/viewer_sink.rs`,
   `HEADER_BYTES`). The decoder's input buffer must leave those 16 bytes free.
 - **Return −3 copies nothing.** When the destination is too small, `pull_into` writes only the
   payload length into bytes 12 to 15 and returns −3; the app then pulls again into a larger
@@ -625,69 +625,69 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
 - **Tile pictures are converted from BGRA to RGBA** in the core (`viewer_sink.rs`,
   `bgra_to_rgba`), so the app draws them without a byte-order step.
 - **The Android host has no keyboard events.** Its input capabilities are pointer, text,
-  touch and seven system actions, and `keyboard` is false (`native/src/screen/os/android/bridge_backend.rs:103-115`).
+  touch and seven system actions, and `keyboard` is false (`native/crates/engine/src/screen/os/android/bridge_backend.rs:103-115`).
   Without the accessibility service the host offers no input at all (`bridge_backend.rs:98-100`).
 - **Window lists are bounded by bytes, not entries.** `MAX_WINDOWS_BYTES` (1 MiB, protocol
   v1) limits the list; `WindowList::bounded` drops whole entries, never truncates titles
-  (`native/src/screen/core/wire.rs:54`, `window_list.rs:171-190`).
+  (`native/crates/engine/src/screen/core/wire.rs:54`, `window_list.rs:171-190`).
 - **The relay drops at 512 packets or 1 MiB per client.** The vendored relay's send queue
   is `PER_CLIENT_SEND_QUEUE_DEPTH` = 512 (`vendor/iroh-relay-1.0.0/src/protos/relay.rs:40`)
   with a 1 MiB per-client byte budget (`vendor/iroh-relay-1.0.0/src/server/queue_budget.rs:8`).
-  The host keeps a relay path below 768 KiB (`native/src/screen/core/pacing.rs:17`).
+  The host keeps a relay path below 768 KiB (`native/crates/engine/src/screen/core/pacing.rs:17`).
 - **A viewer reads at most four picture streams at once.** One running and one new picture group
-  for each kind (`video`, `preview`); a stream that is reset is stopped (`native/src/screen/core/gop_stream.rs:24-27`).
+  for each kind (`video`, `preview`); a stream that is reset is stopped (`native/crates/engine/src/screen/core/gop_stream.rs:24-27`).
 - **Windows Graphics Capture is asked once per process.** The interop factory check runs once,
-  without a version check (`native/src/screen/os/windows/capture_wgc.rs:54-63`).
+  without a version check (`native/crates/engine/src/screen/os/windows/capture_wgc.rs:54-63`).
 - **PipeWire is loaded at run time.** `libpipewire-0.3.so.0` is opened with `libloading`
-  (`native/src/screen/os/linux_os/pipewire_abi.rs:2`, `:163`); a missing library ends the
+  (`native/crates/engine/src/screen/os/linux_os/pipewire_abi.rs:2`, `:163`); a missing library ends the
   portal path with `pipewire_missing`.
 - **OpenH264 is pinned, not verified against Cisco's checksums.** Cisco publishes only MD5 sums,
   so the integrity rests on the pins of version 2.6.0 for win64 and linux64 (size and SHA-256 of the
-  compressed file, SHA-256 of the library) in `native/src/screen/os/native_ffi/openh264_pins.rs:1-7`.
+  compressed file, SHA-256 of the library) in `native/crates/engine/src/screen/os/native_ffi/openh264_pins.rs:1-7`.
   The license is shown before every download.
 - **Old peers close with `session_limit`.** The host sends no session-count refusal any more
-  (R15c); the viewer still maps `session_limit` for older hosts (`native/src/screen/core/wire_hello.rs:273`).
+  (R15c); the viewer still maps `session_limit` for older hosts (`native/crates/engine/src/screen/core/wire_hello.rs:273`).
 - **LightDM greeters focus every mapped window.** They run without a window manager and give
   the keyboard to each newly mapped window, except override-redirect windows and windows of type
   NOTIFICATION (unity-greeter 24.04.1 `src/unity-greeter.vala` `focus_upon_map`;
   lightdm-gtk-greeter `wm_window_filter` also skips COMBO and TOOLTIP). `WM_HINTS.input=False`
   does not help. The screen indicator therefore takes the type NOTIFICATION when no EWMH window
   manager announces itself (`_NET_SUPPORTING_WM_CHECK`), otherwise every key of a controlling
-  viewer lands in the indicator (`native/src/app/os/linux_os.rs`, `indicator_window_type`).
+  viewer lands in the indicator (`native/crates/gui/src/app/os/linux_os.rs`, `indicator_window_type`).
   Measured 2026-10-28 on a LightDM/unity-greeter X server: an ordinary window and one with the
   input hint off took the focus; a NOTIFICATION window did not.
 
 ## Cryptomator vaults (0.5.183)
 
 - **Vault comparison lives in memory, in the service only.** One entry per vault job and
-  per checked site; it is never written to disk (`native/src/vault/os/shared/compare_cache.rs:2`).
+  per checked site; it is never written to disk (`native/crates/engine/src/vault/os/shared/compare_cache.rs:2`).
   A restarted service answers `compare_stale`.
-- **Merge limits.** A text merge is offered only up to 512 KiB (`native/src/vault/os/shared/compare_merge.rs:26`);
+- **Merge limits.** A text merge is offered only up to 512 KiB (`native/crates/engine/src/vault/os/shared/compare_merge.rs:26`);
   one line of the service carries at most 2 MiB after JSON escaping (`compare_merge.rs:23`).
 - **Removed cipher files stay in a backup folder.** Repairs and removals first move the
-  cipher files to `<app data>/vault-removed/` (`native/src/vault/os/shared/health_fixes.rs:4`,
+  cipher files to `<app data>/vault-removed/` (`native/crates/engine/src/vault/os/shared/health_fixes.rs:4`,
   `compare_files.rs:6`).
-- **Vault folder listings are cached for 20 seconds** (`native/src/vault/os/shared/dir_cache.rs:7`).
-  Vault backends are not wrapped in `CachingBackend`: that wrapper appears only for remote backends (`native/src/mobile/os/shared/pool.rs:2`); the vault path uses its own listing cache (Stand U29).
+- **Vault folder listings are cached for 20 seconds** (`native/crates/engine/src/vault/os/shared/dir_cache.rs:7`).
+  Vault backends are not wrapped in `CachingBackend`: that wrapper appears only for remote backends (`native/crates/mobile/src/mobile/os/shared/pool.rs:2`); the vault path uses its own listing cache (Stand U29).
 - **The window setting is a separate file.** „Beim Öffnen einhängen“ is stored for all
   sites in `<app data>/vaults/ui.json` as `{"schema":1,"mount_on_open":true}`; a missing or
-  unreadable file means `true` (`native/src/app/core/vault_ui_settings.rs:1-4`).
+  unreadable file means `true` (`native/crates/gui/src/app/core/vault_ui_settings.rs:1-4`).
 - **Sleep and screen-lock signals depend on the platform.** Linux locks on the screen-lock
-  signal only when the desktop environment reports the session lock (`native/src/vault/os/linux_os.rs:38-39`).
+  signal only when the desktop environment reports the session lock (`native/crates/engine/src/vault/os/linux_os.rs:38-39`).
   Windows listens with a hidden window; assumption A1 (the message reaches that window)
-  is not verified (`native/src/vault/os/windows.rs:9-18`).
+  is not verified (`native/crates/engine/src/vault/os/windows.rs:9-18`).
 - **An open file holds the background lock.** While a vault file is open, the background
   delay does not lock that site; closing the last file lets the next tick lock it
-  (`native/src/vault/os/shared/session_timer.rs:59-72`).
+  (`native/crates/engine/src/vault/os/shared/session_timer.rs:59-72`).
 - **Freedesktop thumbnails are removed on Linux.** At the end of a drive and on lock, the
-  worker removes thumbnails of files in the drive folder (`native/src/vault/os/linux_thumbnails.rs:44`).
+  worker removes thumbnails of files in the drive folder (`native/crates/engine/src/vault/os/linux_thumbnails.rs:44`).
   Windows thumbnails can only be switched off globally (Stand U14).
 - **The Android saved password is an envelope.** The core stores `android-kw1:` followed by
   Base64url of IV, ciphertext and tag, bound to the site with AAD; a changed lock screen
-  invalidates it (`native/src/mobile/os/shared/domains/vault_keys.rs:26`;
+  invalidates it (`native/crates/mobile/src/mobile/os/shared/domains/vault_keys.rs:26`;
   `android/app/src/main/java/app/smartexplorer/android/ui/vaults/VaultSavedPassword.kt:158-161`).
 - **Cancelling key derivation discards the key.** The unlock returns `canceled` and does
-  not register the vault (`native/src/vault/os/shared/unlock.rs:59`).
+  not register the vault (`native/crates/engine/src/vault/os/shared/unlock.rs:59`).
 - **Android vault screens are protected by a flag and by the input method.** `FLAG_SECURE`
   is set per window through `SecureWindow` and on the sheets with `SecureOn`
   (`android/app/src/main/java/app/smartexplorer/android/ui/vaults/SecureWindow.kt:16`); the password
@@ -696,15 +696,15 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   from the content URI of the own provider (`VaultCompareDetail.kt:66-70`). A preview is offered only
   while the vault is unlocked and shared under „Ordner für Apps bereitstellen“; otherwise it shows
   „Keine Vorschau“ (Abweichung 9 of U31, Stand SEC point 11).
-- **Password minimum is 8 characters** (`native/src/vault/os/shared/password.rs:29`).
+- **Password minimum is 8 characters** (`native/crates/engine/src/vault/os/shared/password.rs:29`).
 - **Recovery keys are not supported.** The core shows the note instead of a word list
-  (`native/src/vault/os/shared/manage.rs:27`).
+  (`native/crates/engine/src/vault/os/shared/manage.rs:27`).
 - **Vault sync jobs have fixed and selectable fields.** A replica is placed next to the vault
   for a stated reason; the seeding rule is one rule; K20 and K21 stay withheld without a known
   site; a file of the same size in the same second without a server hash is a known gap, covered
   by a test (Stand U20).
 - **Fallback copies are sealed.** The recovery manifest of fallback copies seals its field texts
-  with the site's log key (`native/src/app/os/shared/remote_helpers/recovery_manifest.rs:49-56`).
+  with the site's log key (`native/crates/gui/src/app/os/shared/remote_helpers/recovery_manifest.rs:49-56`).
 - **Carried over from U05 (not re-verified in this run):** the scrypt work buffer, the
   CMAC subkeys in AES-SIV and decrypted names held as `String` are not overwritten after use
   (plan hand-over from U05). `zeroize` is used in `cryptomator/core/keys.rs` and `kdf.rs`.
@@ -712,100 +712,100 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
 ## Transfer engine tempo (0.5.183)
 
 - **Single files do not stop a run.** A failed file is reported and the run continues; the
-  exit code is 1 when any file failed (Stand U49, `native/src/cli/engine_copy.rs`).
+  exit code is 1 when any file failed (Stand U49, `native/crates/cli/src/cli/engine_copy.rs`).
 - **Numbering at a remote target is an error.** The engine reports it instead of renaming
   (Stand U49).
 - **Windows access prompts are not asked by the engine.** A local source for which the
   access gate would ask for read rights stays on the legacy path (`access_prompt_possible`);
   the engine never asks in the terminal or in the MCP service (Stand U49).
 - **Sensors fail quietly.** Each read error of a system sensor is `None`; Android does not read
-  `/proc/stat` (assumption, Stand U50, `native/src/transfer/os/shared/sensors.rs`).
+  `/proc/stat` (assumption, Stand U50, `native/crates/transfer/src/transfer/os/shared/sensors.rs`).
 - **The hints file holds only hashes.** `transfer-hints.json` keeps the SHA-256 of a random salt
   and the connection identity, never a host, account, path or name; it is `0600` in a `0700`
-  folder (`native/src/transfer/os/shared/hints.rs:1-12`).
+  folder (`native/crates/transfer/src/transfer/os/shared/hints.rs:1-12`).
 - **Packages are not in the time accounts yet.** Packets do not book their time (Stand U50).
 - **The memory budget never revokes.** A buffer held by an operation stays reserved when the
-  budget shrinks (`native/src/transfer/os/shared/memory.rs`).
+  budget shrinks (`native/crates/transfer/src/transfer/os/shared/memory.rs`).
 - **`NO_BUFFERING` needs a known memory figure.** Without the available memory the flag is
   never set; with it, a file of at least a quarter of that memory is copied without the system
-  cache (`native/src/copy/os/shared/copy_flags.rs:25`, `:47-58`).
+  cache (`native/crates/transfer/src/copy/os/shared/copy_flags.rs:25`, `:47-58`).
 - **Windows compressed traffic stays off.** `REQUEST_COMPRESSED_TRAFFIC` is switched off
-  (`native/src/copy/os/shared/copy_flags.rs:19`, E13-S11).
+  (`native/crates/transfer/src/copy/os/shared/copy_flags.rs:19`, E13-S11).
 - **Parallel ranges need a quiet, known drive.** They run only with permits the flow handed out,
   an empty queue and a drive known not to rotate; an unknown rotation (btrfs, network, `/sys`
-  unreadable) never runs them in parallel (Stand U51, `native/src/copy/os/linux_range.rs`).
+  unreadable) never runs them in parallel (Stand U51, `native/crates/transfer/src/copy/os/linux_range.rs`).
 - **Clipboard copies run in parallel.** Providing remote files for other programs loads folder
-  files under the job id `CLIPBOARD_JOB` (`native/src/transfer/os/shared/clipboard_parallel.rs:19`).
+  files under the job id `CLIPBOARD_JOB` (`native/crates/transfer/src/transfer/os/shared/clipboard_parallel.rs:19`).
 - **MD5 runs in its own thread per copy.** The sync hash starts one thread per copy from 1 MiB;
   creation errors stay inline (Stand U52, `StreamHasher`).
 - **WebDAV sync uploads save one PROPFIND.** The stage time is not asked again after the stage
-  has been checked (`native/src/webdav/core/extensions.rs`, Stand U52).
+  has been checked (`native/crates/engine/src/webdav/core/extensions.rs`, Stand U52).
 - **SMB compounds must not follow reparse points.** `read_file_compound*` follows them, so the
   engine sends its own requests; a data reparse point (dedup) is read through the single path
   (Stand U46).
 - **FTP has no command pipelining.** STOR and RETR leave before the TCP connection of the data
   channel is set up (suppaftp); the next command waits for the reply to the previous one, as
-  RFC 959 requires (`native/src/ftp/core/data_overlap_server.rs`).
+  RFC 959 requires (`native/crates/storage/src/ftp/core/data_overlap_server.rs`).
 - **Packet streams read with their own loop.** `read_exact` retries `Interrupted`; packet
   readers therefore use their own loop (Stand U46).
 - **Parts are sparse files.** A part sets the file length first (`set_len`) and seeks to the
-  written position on resume (`native/src/transfer/os/shared/engine/download.rs:73`, `:84`).
+  written position on resume (`native/crates/transfer/src/transfer/os/shared/engine/download.rs:73`, `:84`).
 - **SFTP encryption order.** AES-GCM comes first only when the CPU offers AES instructions
-  through `ring`; otherwise ChaCha20 stays first (`native/src/sftp/core/session.rs:341-342`).
+  through `ring`; otherwise ChaCha20 stays first (`native/crates/transfer/src/sftp/core/session.rs:341-342`).
 - **SFTP range writes need a safe folder chain.** The folder chain from the stage to `/` must
   belong to the account or to root and be closed to group and others (or sticky and root);
   `is_regular()` of `russh-sftp` tests a single bit and takes links for regular files, so the
   engine checks the file type itself (Sicherheitsantwort S7, Stand U48).
 - **FTP stage probe is skipped only for random names.** It is skipped only for names
   `.se-upload-<16 hex>` made by `getrandom`; the fallback value of `random_hex` starts with `w`,
-  which is not a hex digit and so never looks random (`native/src/transfer/os/shared/engine/util.rs:28-36`).
+  which is not a hex digit and so never looks random (`native/crates/transfer/src/transfer/os/shared/engine/util.rs:28-36`).
 - **The Share host removes unfinished range stages** at the end of the connection, after 300 s
   without progress and at the next start; an agent range stage stays on the channel that opened it
   (Stand U53).
 - **`SE_SHARE_QUIC_CC` and `SE_TEST_NO_LZ4` are measuring switches**, not settings
-  (`native/src/share/core/keepalive.rs:105`).
+  (`native/crates/engine/src/share/core/keepalive.rs:105`).
 - **SFTP open files per channel are capped at 64.** The window of a batch uses
   `min(open-handles, 64)`; an OPEN with a plain failure status counts as congestion, a specific
-  status as a file error (Sicherheitsantwort E13-S13, `native/src/sftp/core/batch_ops.rs:52`).
+  status as a file error (Sicherheitsantwort E13-S13, `native/crates/transfer/src/sftp/core/batch_ops.rs:52`).
 - **One TCP stream per SSH connection limits long, wide links.** Channels of one SSH connection
   share its TCP stream and kernel buffer, so more channels do not raise the rate there; only extra
-  SSH connections do (Sicherheitsantwort E13-S15, Punkt 15; `native/src/sftp/core/channel_pool.rs:20-24`).
+  SSH connections do (Sicherheitsantwort E13-S15, Punkt 15; `native/crates/transfer/src/sftp/core/channel_pool.rs:20-24`).
 - **Extra SSH connections need the stored origin.** They exist only through
   `SftpBackend::connect_with_origin` with a stored password or key; `SftpBackend::connect` assumes
-  an interactive login and never opens one (`native/src/sftp/core/backend.rs:38-41`,
-  `link_rules.rs:41-55`, `native/src/connect/os/shared/connector.rs:91-107`).
+  an interactive login and never opens one (`native/crates/transfer/src/sftp/core/backend.rs:38-41`,
+  `link_rules.rs:41-55`, `native/crates/engine/src/connect/os/shared/connector.rs:91-107`).
 - **The channel limit counts channels in setup.** A refusal learns the limit from the ready and the
-  in-setup channels (`native/src/sftp/core/channel_pool.rs:57-59`, `:168-170`, `:355`).
+  in-setup channels (`native/crates/transfer/src/sftp/core/channel_pool.rs:57-59`, `:168-170`, `:355`).
 - **`queue/rotational` is not the truth on virtual disks.** Cloud VM disks and loop devices often
   report 1. A buffered copy does not gain from parallel ranges there (writeback sets the depth),
   so only the unbuffered path for very large files probes one thread against two, once per device
   pair, without `fdatasync` (direct requests are done at the device when they return;
-  `native/src/copy/os/linux_probe.rs`).
+  `native/crates/transfer/src/copy/os/linux_probe.rs`).
 - **`statx` goes through its syscall number.** The `statx` symbol needs glibc 2.28; the release
-  baseline is 2.17, so `STATX_DIOALIGN` is read via `libc::syscall` (`native/src/copy/os/linux_direct.rs`).
+  baseline is 2.17, so `STATX_DIOALIGN` is read via `libc::syscall` (`native/crates/transfer/src/copy/os/linux_direct.rs`).
   `O_DIRECT` through `/proc/self/fd` may be refused on Android (f2fs with fscrypt, restricted /proc):
   every refusal before the first byte falls back to the buffered path.
 - **`Detail::Kinds` applies to FTP LIST rows only.** Publishing a stage lists names and kinds; LIST
   rows are then not refined with SIZE and MDTM; the refinement at `metadata.rs:242` is guarded by `!mlsx`, so MLST/MLSD rows never take it
-  (`native/src/ftp/core/listing_detail.rs:13-21`, `native/src/ftp/core/metadata.rs:144-146`, `:242`,
-  `native/src/ftp/core/staging.rs:96`).
+  (`native/crates/storage/src/ftp/core/listing_detail.rs:13-21`, `native/crates/storage/src/ftp/core/metadata.rs:144-146`, `:242`,
+  `native/crates/storage/src/ftp/core/staging.rs:96`).
 - **Measurement statistics exist only in debug-assertion builds.** `SE_TEST_NO_SHARE_STATS` and
   `share-quic-stats.jsonl` work where debug assertions are on (development builds and the `speed`
-  profile), never in release builds or unit tests (`native/src/share/core/transfer_meter.rs:23-27`,
-  `native/src/share/core/quic_stats_hub.rs:103`).
+  profile), never in release builds or unit tests (`native/crates/engine/src/share/core/transfer_meter.rs:23-27`,
+  `native/crates/engine/src/share/core/quic_stats_hub.rs:103`).
 - **A netem root rule on `lo` also shapes local IPC.** The test program's TCP hop to the Share
   daemon crosses the same rule; the speed stage keeps the daemon's ports out of it with a two-band
   `prio` root (`native/rdt_task/speed_net.py:41-44`, `:107-124`).
 - **`net.core.rmem_max` caps the 7 MiB receive buffer request.** netwatch 0.19.3 (`native/Cargo.lock:4401-4402`)
   asks for `SOCKET_BUFFER_SIZE = 7 << 20` on its UDP socket (crate source on docs.rs, line number not
   determined). Linux limits `SO_RCVBUF` of unprivileged processes to `net.core.rmem_max` (socket(7);
-  not verified in this repository). The reporter reads that ceiling (`native/src/share/core/quic_stats_proc.rs:150-168`).
+  not verified in this repository). The reporter reads that ceiling (`native/crates/engine/src/share/core/quic_stats_proc.rs:150-168`).
 
 ### Tempo packages of 2026-10-28 (not built or run yet)
 
 - **`se cp`/`se mv` take two paths.** A copy into an existing folder or with `--force`, the MCP
   keep-both copy and a move that is not one rename plan the whole tree and run on the engine
-  (`native/src/cli/tree_engine.rs`, M16); resume and every remote combination stay on the spool
+  (`native/crates/cli/src/cli/tree_engine.rs`, M16); resume and every remote combination stay on the spool
   path. A move interrupted by a crash on the engine path shows up in the GUI recovery catalog, not
   in the `se` resume list.
 - **Local flows start wide unless the drive rotates.** Flash or unknown volumes start at twice the
@@ -813,7 +813,7 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   `/MT` default, because virtual disks report rotation falsely and NCQ serves small files in parallel
   (2026-10-29; before: 2). Windows asks the volume for its seek penalty
   (`IOCTL_STORAGE_QUERY_PROPERTY`); a volume spanning several disks or a refused query counts as
-  unknown and starts wide (`native/src/transfer/os/windows.rs` `volume_is_rotational`, M7).
+  unknown and starts wide (`native/crates/transfer/src/transfer/os/windows.rs` `volume_is_rotational`, M7).
 - **Copy workers keep normal priority.** They no longer lower it, so on a saturated CPU they
   compete with the GUI thread (M20); background sync does not run on the engine.
 - **Completed jobs are pruned after 14 days.** Record first, then the `.files` folder, only while
@@ -830,7 +830,7 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
 - **The FTP name cache works only with MLST and inside a job.** The engine holds each remote
   side's `vfs::transfer_scope` for the job's lifetime; the cache is active only once the FTP
   backend returns its `listing_scope()` there (open on 2026-10-28). Without MLST (vsftpd) one
-  folder LIST per publish remains (`native/src/ftp/core/name_cache.rs`, G3-04b).
+  folder LIST per publish remains (`native/crates/storage/src/ftp/core/name_cache.rs`, G3-04b).
 - **A single download still stats its source after reading.** The host's evidence on `ReadAt` is
   taken before the read, so it cannot replace the check that the file did not change while it was
   read (`engine/source.rs` `RemoteCheck::finish`).
@@ -1179,7 +1179,7 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   open during the start phase reports "Verbunden (Relay)" (`PeerBackend::transport_status`). On
   the wire the start phase travels as `relay_fallback` with `relay_start: true`, so a 0.5.188 GUI
   still parses it; from 0.5.189 an unknown phase reads as no route (`ipc_protocol_login.rs`
-  `tolerant_route`). A TCP tunnel without a fixed end carries `expires_at` = `i64::MAX`. Code: `native/src/share/core/route_start.rs`.
+  `tolerant_route`). A TCP tunnel without a fixed end carries `expires_at` = `i64::MAX`. Code: `native/crates/engine/src/share/core/route_start.rs`.
 - Google Drive allows several same-name siblings. `GDriveBackend::list_dir`
   keeps the canonical copy (newest `modifiedTime`, then smaller id) under the
   plain name and renders every further sibling as `Name [drive-id <8-char id

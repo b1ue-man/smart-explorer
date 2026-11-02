@@ -169,9 +169,9 @@ create additional task-suite invocations.
 Linux drives (`se drive mount`, from 0.5.183) use FUSE through the Rust crate `fuser`
 (`native/Cargo.toml`, pinned `=0.18.0`). The crate is statically linked; the system
 needs the `fuse3` package at run time. `/dev/fuse` must be readable and writable for the
-user, and `fusermount3` must be setuid root (`native/src/mount/os/linux_os/fuse_runtime.rs`,
+user, and `fusermount3` must be setuid root (`native/crates/engine/src/mount/os/linux_os/fuse_runtime.rs`,
 module header). `se drive install-runtime` installs no package on Linux; it prints the
-distribution's command (`native/src/cli/drive_output_linux.rs`). `install-linux.sh --with-fuse` installs `fuse3` from the distribution's package sources
+distribution's command (`native/crates/cli/src/cli/drive_output_linux.rs`). `install-linux.sh --with-fuse` installs `fuse3` from the distribution's package sources
 (apt, dnf, pacman or zypper); without the flag the script only prints the package command. It then
 checks `fusermount3` (setuid root) and `/dev/fuse` and warns when either is not ready
 (`install-linux.sh`, function `check_fuse`).
@@ -180,15 +180,15 @@ checks `fusermount3` (setuid root) and `/dev/fuse` and warns when either is not 
 
 The Exec account service (`se share exec accounts setup`, administrator) is installed
 outside the update feed in `release-native/update-feed/`; the updater code has no reference
-to its files (`native/src/updater/`). Its program copy keeps the version it was installed with until an administrator runs
+to its files (`native/crates/engine/src/updater/`). Its program copy keeps the version it was installed with until an administrator runs
 `se share exec accounts update` after an update of Smart Explorer:
 
-- Linux: `/usr/local/sbin/smart-explorer-exec` (`native/src/share/os/linux_os/exec_binary_copy.rs`).
-- Windows: `%ProgramFiles%\Smart Explorer\exec-accounts\se.exe` (`native/src/share/os/windows/exec_account_config.rs`).
+- Linux: `/usr/local/sbin/smart-explorer-exec` (`native/crates/engine/src/share/os/linux_os/exec_binary_copy.rs`).
+- Windows: `%ProgramFiles%\Smart Explorer\exec-accounts\se.exe` (`native/crates/engine/src/share/os/windows/exec_account_config.rs`).
 
 The app reports the service as outdated when its helper protocol number differs from
-`HELPER_PROTOCOL` (Linux: `native/src/share/os/linux_os/exec_helper_client.rs`; Windows:
-`native/src/share/os/windows/exec_account_client.rs`).
+`HELPER_PROTOCOL` (Linux: `native/crates/engine/src/share/os/linux_os/exec_helper_client.rs`; Windows:
+`native/crates/engine/src/share/os/windows/exec_account_client.rs`).
 
 ## Private-DLL dependency: approve once, reuse exact bytes
 

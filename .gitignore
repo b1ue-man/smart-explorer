@@ -8,6 +8,7 @@ native/explorer-command/target/
 # (AGENTS.md, graphify) and not versioned. Avoid accidental nested runs.
 /graphify-out/
 native/src/graphify-out/
+native/crates/graphify-out/
 .codex/
 graphify-out/cache/
 

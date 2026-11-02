@@ -646,13 +646,13 @@ same run.
 Two peers that both announce a capability use it; a peer that does not announce it gets the
 classic requests.
 
-- **Capabilities.** `ranges_v1` (`native/src/share/core/batch_wire.rs:58`) enables ranges;
+- **Capabilities.** `ranges_v1` (`native/crates/engine/src/share/core/batch_wire.rs:58`) enables ranges;
   `lz4_v1` (`batch_wire.rs:63`) enables LZ4 content blocks. The SSH agent announces the same
-  ideas with the labels `range-v1` and `lz4-v1` (`native/src/agent_proto/core/features.rs:17`, `:20`).
+  ideas with the labels `range-v1` and `lz4-v1` (`native/crates/storage/src/agent_proto/core/features.rs:17`, `:20`).
 - **Range read: `ReadAt`.** The request carries `path`, `offset` and `len`. `len` is left out
   when it is zero. The flag `lz4` is left out unless it is true; with `lz4_v1` the host may then send
-  content blocks with the tag `TAG_DATA_LZ4` (`native/src/share/core/fs_request.rs:251-262`,
-  `native/src/share/core/framing.rs:18`).
+  content blocks with the tag `TAG_DATA_LZ4` (`native/crates/engine/src/share/core/fs_request.rs:251-262`,
+  `native/crates/engine/src/share/core/framing.rs:18`).
 - **Range write: three requests.** `SegmentedStageOpen` creates the exclusive stage of a file; the
   host picks the name and keeps the handle and answers `SegmentedStageReady`. `StageWriteAt` writes
   one range of an open stage; the client then sends exactly `len` bytes and ends its stream.
@@ -662,7 +662,7 @@ classic requests.
 
 ## Screen relay limits (0.5.183)
 
-Screen sessions use the ALPN `smart-explorer/share-screen/1` (`native/src/screen/core/wire.rs:17`)
+Screen sessions use the ALPN `smart-explorer/share-screen/1` (`native/crates/engine/src/screen/core/wire.rs:17`)
 on the same Iroh connections as the other peer traffic, so they use the relay when no direct
 path exists. The relay routes ciphertext, as for every other protocol here.
 
@@ -673,9 +673,9 @@ path exists. The relay routes ciphertext, as for every other protocol here.
   not fit is dropped. On the TCP leg the relay retransmits; a drop on the relay itself
   is real loss for the QUIC layer.
 - **The host guards the relay path.** The host limits the unacknowledged bytes on a relay
-  path to 768 KiB (`RELAY_GUARD_BYTES`, `native/src/screen/core/pacing.rs:17`, `:31-37`), so
+  path to 768 KiB (`RELAY_GUARD_BYTES`, `native/crates/engine/src/screen/core/pacing.rs:17`, `:31-37`), so
   one burst stays below the relay's 1 MiB budget. Direct paths are not limited by this guard
-  (`native/src/screen/core/host_mode.rs:82`, `:109`).
+  (`native/crates/engine/src/screen/core/host_mode.rs:82`, `:109`).
 - **No loss repair for pictures.** The plan decided against forward error correction; QUIC resends lost packets, and the viewer asks for a key frame after a
   broken picture group (see `docs/oberflaechen/bildschirm.md`, section 5).
 - **The signaling server has no screen state.** `share-server` does not parse screen
