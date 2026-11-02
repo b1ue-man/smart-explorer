@@ -1,6 +1,6 @@
 [package]
 name = "smart_explorer_core"
-version = "0.0.0"
+version.workspace = true
 edition = "2021"
 description = "Smart Explorer core layer: types, formats, host adapter, private storage, local access"
 license = "MIT"
@@ -32,6 +32,8 @@ aes-gcm-011.workspace = true
 aes-09.workspace = true
 ctr-010.workspace = true
 sha2-011.workspace = true
+hmac-013.workspace = true
+sha1-011.workspace = true
 scrypt.workspace = true
 data-encoding.workspace = true
 flate2.workspace = true

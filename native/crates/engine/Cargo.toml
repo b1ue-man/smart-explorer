@@ -1,6 +1,6 @@
 [package]
 name = "smart_explorer_engine"
-version = "0.0.0"
+version.workspace = true
 edition = "2021"
 description = "Smart Explorer engine: everything the GUI, the CLI and the Android facade share"
 license = "MIT"

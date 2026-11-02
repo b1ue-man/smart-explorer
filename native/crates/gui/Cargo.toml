@@ -1,6 +1,6 @@
 [package]
 name = "smart_explorer_gui"
-version = "0.0.0"
+version.workspace = true
 edition = "2021"
 description = "Smart Explorer desktop GUI: explorer window and se Desktop"
 license = "MIT"

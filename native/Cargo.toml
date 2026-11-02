@@ -1,6 +1,6 @@
 [package]
 name = "smart_explorer"
-version = "0.5.193"
+version.workspace = true
 edition = "2021"
 authors = ["Silas <weizenbein1@gmail.com>"]
 description = "Fast native file explorer with deep filtering"
@@ -28,6 +28,12 @@ members = [
     "crates/mobile",
 ]
 exclude = ["explorer-command"]
+
+# The one version of the programs and every workspace crate: the release
+# scripts set it here (native/release-version.ps1, first `version =` line of
+# this file) and in Cargo.lock; `env!("CARGO_PKG_VERSION")` in any crate reads it.
+[workspace.package]
+version = "0.5.193"
 
 # P28: application frames require a validated path/policy generation before
 # serialization. Keep these three upstream pins together; provenance, API and

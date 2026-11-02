@@ -18,6 +18,13 @@ edition = "2021"
 name = "se-agent"
 path = "src/main.rs"
 
+# The shared agent_proto source gates its test helpers with
+# `any(test, feature = "test-support")` (D13: the helpers serve tests of the
+# crates above storage). se-agent declares the feature so the cfg is known and
+# never enables it.
+[features]
+test-support = []
+
 [dependencies]
 rayon = "1.10"
 # The shared protocol names its range stages and journals with random bytes

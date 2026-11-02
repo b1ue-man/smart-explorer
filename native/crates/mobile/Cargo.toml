@@ -1,6 +1,6 @@
 [package]
 name = "smart_explorer_mobile"
-version = "0.0.0"
+version.workspace = true
 edition = "2021"
 description = "Smart Explorer Android facade behind the Kotlin UI"
 license = "MIT"

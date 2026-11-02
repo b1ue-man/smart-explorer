@@ -55,23 +55,30 @@ function Set-NativeVersion([string]$Version) {
     }
 
     $lockText = [System.IO.File]::ReadAllText($cargoLock)
+    # The root package and the workspace crates share the workspace version
+    # (D13: crates/core ... crates/mobile; the Android bridge keeps its own).
     $lockPattern = [regex]::new(
-        '(?ms)(^\[\[package\]\]\r?\nname = "smart_explorer"\r?\nversion = ")([^"]+)(")'
+        '(?ms)(^\[\[package\]\]\r?\nname = "smart_explorer(_core|_storage|_transfer|_engine|_gui|_cli|_mobile)?"\r?\nversion = ")([^"]+)(")'
     )
     $lockMatches = $lockPattern.Matches($lockText)
-    if ($lockMatches.Count -ne 1) {
+    $rootMatches = @($lockMatches | Where-Object { -not $_.Groups[2].Success })
+    if ($rootMatches.Count -ne 1) {
         throw "Cargo.lock must contain exactly one smart_explorer root package entry."
     }
-    $lockVersion = $lockMatches[0].Groups[2].Value
-    if ($lockVersion -ne $Version -and (Get-NextPatchVersion $lockVersion) -ne $Version) {
-        throw "Cargo.lock root version '$lockVersion' cannot advance or resume '$Version'."
+    if ($lockMatches.Count -ne 8) {
+        throw "Cargo.lock must contain the root package and the seven workspace crates, found $($lockMatches.Count)."
+    }
+    foreach ($lockMatch in $lockMatches) {
+        $lockVersion = $lockMatch.Groups[3].Value
+        if ($lockVersion -ne $Version -and (Get-NextPatchVersion $lockVersion) -ne $Version) {
+            throw "Cargo.lock version '$lockVersion' of $($lockMatch.Value.Split([char]10)[1]) cannot advance or resume '$Version'."
+        }
     }
 
     $updatedCargo = $cargoPattern.Replace($cargoText, "version = `"$Version`"", 1)
     $updatedLock = $lockPattern.Replace(
         $lockText,
-        { param($match) "$($match.Groups[1].Value)$Version$($match.Groups[3].Value)" },
-        1
+        { param($match) "$($match.Groups[1].Value)$Version$($match.Groups[4].Value)" }
     )
     $encoding = [System.Text.UTF8Encoding]::new($false)
     $stageId = "{0}-{1}" -f $PID, [guid]::NewGuid().ToString('N')

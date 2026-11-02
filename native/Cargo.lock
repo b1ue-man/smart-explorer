@@ -7133,7 +7133,7 @@ dependencies = [
 
 [[package]]
 name = "smart_explorer_cli"
-version = "0.0.0"
+version = "0.5.193"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -7163,7 +7163,7 @@ dependencies = [
 
 [[package]]
 name = "smart_explorer_core"
-version = "0.0.0"
+version = "0.5.193"
 dependencies = [
  "aes 0.9.1",
  "aes-gcm 0.11.1",
@@ -7176,6 +7176,7 @@ dependencies = [
  "data-encoding",
  "flate2",
  "getrandom 0.2.17",
+ "hmac 0.13.0",
  "icu_normalizer",
  "keyring",
  "libc",
@@ -7183,6 +7184,7 @@ dependencies = [
  "scrypt",
  "serde",
  "serde_json",
+ "sha1 0.11.0",
  "sha2 0.10.9",
  "sha2 0.11.0",
  "similar",
@@ -7195,7 +7197,7 @@ dependencies = [
 
 [[package]]
 name = "smart_explorer_engine"
-version = "0.0.0"
+version = "0.5.193"
 dependencies = [
  "aes-kw",
  "argon2 0.5.3",
@@ -7268,7 +7270,7 @@ dependencies = [
 
 [[package]]
 name = "smart_explorer_gui"
-version = "0.0.0"
+version = "0.5.193"
 dependencies = [
  "base64 0.22.1",
  "calloop 0.13.0",
@@ -7316,7 +7318,7 @@ dependencies = [
 
 [[package]]
 name = "smart_explorer_mobile"
-version = "0.0.0"
+version = "0.5.193"
 dependencies = [
  "base64 0.22.1",
  "crossbeam-channel",
@@ -7337,7 +7339,7 @@ dependencies = [
 
 [[package]]
 name = "smart_explorer_storage"
-version = "0.0.0"
+version = "0.5.193"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -7369,7 +7371,7 @@ dependencies = [
 
 [[package]]
 name = "smart_explorer_transfer"
-version = "0.0.0"
+version = "0.5.193"
 dependencies = [
  "base64 0.22.1",
  "chrono",

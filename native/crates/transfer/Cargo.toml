@@ -1,6 +1,6 @@
 [package]
 name = "smart_explorer_transfer"
-version = "0.0.0"
+version.workspace = true
 edition = "2021"
 description = "Smart Explorer transfer layer: copying, transfer engine, synchronisation, SFTP/SMB/agent backends"
 license = "MIT"
