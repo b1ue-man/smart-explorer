@@ -17,21 +17,27 @@ pub(super) struct RunnerLan {
 }
 
 impl RunnerLan {
+    /// The runner's LAN interface: the one SE_REVIEW_LAN_IP/_IFINDEX/_IFNAME
+    /// name when the suite sets them, otherwise the single up, non-loopback
+    /// interface with a private or link-local IPv4 (the one with the default
+    /// gateway when several have one). Never loopback or a public address.
     fn discover() -> Self {
-        let ip: Ipv4Addr = std::env::var("SE_REVIEW_LAN_IP")
-            .expect("remote suite must discover SE_REVIEW_LAN_IP")
-            .parse()
-            .expect("private IPv4");
+        let facts = crate::net::gather_interface_facts().expect("current OS interface facts");
+        let (ip, index, name) = match std::env::var("SE_REVIEW_LAN_IP") {
+            Ok(ip) => (
+                ip.parse::<Ipv4Addr>().expect("private IPv4"),
+                std::env::var("SE_REVIEW_LAN_IFINDEX")
+                    .expect("runner interface index")
+                    .parse::<u32>()
+                    .expect("numeric interface index"),
+                std::env::var("SE_REVIEW_LAN_IFNAME").expect("runner interface name"),
+            ),
+            Err(_) => Self::only_private_interface(&facts),
+        };
         assert!(
             ip.is_private() || ip.is_link_local(),
             "no loopback/public fallback"
         );
-        let index: u32 = std::env::var("SE_REVIEW_LAN_IFINDEX")
-            .expect("runner interface index")
-            .parse()
-            .expect("numeric interface index");
-        let name = std::env::var("SE_REVIEW_LAN_IFNAME").expect("runner interface name");
-        let facts = crate::net::gather_interface_facts().expect("current OS interface facts");
         let matching: Vec<_> = facts
             .iter()
             .filter(|iface| iface.addrs.contains(&IpAddr::V4(ip)))
@@ -52,6 +58,37 @@ impl RunnerLan {
             facts,
             interface,
         }
+    }
+
+    fn only_private_interface(facts: &[InterfaceFacts]) -> (Ipv4Addr, u32, String) {
+        let candidates: Vec<(Ipv4Addr, &InterfaceFacts)> = facts
+            .iter()
+            .filter(|iface| {
+                iface.up && !iface.loopback && iface.index > 0 && !iface.adapter_id.is_empty()
+            })
+            .flat_map(|iface| {
+                iface.addrs.iter().filter_map(move |addr| match addr {
+                    IpAddr::V4(v4) if v4.is_private() || v4.is_link_local() => Some((*v4, iface)),
+                    _ => None,
+                })
+            })
+            .collect();
+        let routed: Vec<_> = candidates
+            .iter()
+            .filter(|(_, iface)| iface.has_gateway)
+            .collect();
+        let chosen = match (routed.as_slice(), candidates.as_slice()) {
+            ([only], _) => *only,
+            ([], [only]) => only,
+            _ => panic!(
+                "set SE_REVIEW_LAN_IP/_IFINDEX/_IFNAME: no single private LAN interface among {:?}",
+                candidates
+                    .iter()
+                    .map(|(ip, iface)| format!("{} {ip}", iface.name))
+                    .collect::<Vec<_>>()
+            ),
+        };
+        (chosen.0, chosen.1.index, chosen.1.name.clone())
     }
 
     pub(super) fn host(&self, own_uplink: OwnUplink) -> LanLinkHostFacts {
