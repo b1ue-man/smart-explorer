@@ -156,10 +156,17 @@ verify_test_log() {
             exit 1
         fi
     done
-    grep -Eq \
-        "^test result: ok\\. ${expected_count} passed; 0 failed; 0 ignored; 0 measured; [0-9]+ filtered out; finished in .+$" \
-        "$log" || {
-        echo "filtered test summary did not match the expected result in $log" >&2
+    # One summary per test program of the workspace crates (D13); together they
+    # show $expected_count passed and nothing failed, ignored or measured.
+    awk -v expected="$expected_count" '
+        /^test result: / {
+            summaries++
+            if ($3 != "ok.") bad = 1
+            passed += $4; failed += $6; ignored += $8; measured += $10
+        }
+        END { exit !(summaries > 0 && !bad && passed == expected && failed == 0 && ignored == 0 && measured == 0) }
+    ' "$log" || {
+        echo "filtered test summaries in $log do not add up to $expected_count passed, 0 failed, 0 ignored" >&2
         exit 1
     }
 }

@@ -437,7 +437,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
-          # desktop_task_lock_only_expected_additions compares native/Cargo.lock with da2646d2.
+          # desktop_task_lock_only_expected_additions compares native/Cargo.lock with 64468178 (da2646d2 before the history rewrite).
           fetch-depth: 0
           persist-credentials: false
 

@@ -21,7 +21,9 @@ Parts:
              and the mobile crate) for one ABI (--abi arm64-v8a or x86_64, the
              two the release builds): compile and link the cdylib; with
              arm64-v8a also configure the Gradle app, which reads its version
-             from the workspace manifest (version.workspace, D13).
+             from the workspace manifest (version.workspace, D13), with the
+             rustls verifier Maven repository the release build passes
+             (-PrustlsVerifierMaven, android/build-release-apk.sh).
   agent      the SSH-agent bundles through native/build-agent-bundles.sh, the
              path the release's prepare job takes (se-agent includes the
              shared protocol sources from crates/storage and crates/core).
@@ -30,6 +32,7 @@ Every command's tail goes to the step summary; a failing command fails the
 part after all of its commands ran.
 """
 import argparse
+import json
 import os
 import platform
 import re
@@ -95,13 +98,42 @@ def part_windows_gnu():
     return ok
 
 
+def rustls_verifier_maven():
+    """The Maven repository inside the rustls-platform-verifier-android crate, resolved as
+    android/build-release-apk.sh does; android/settings.gradle.kts refuses to configure without it
+    (-PrustlsVerifierMaven). None, with the reason in the summary, when it cannot be resolved."""
+    process = subprocess.run(["cargo", "metadata", "--locked", "--format-version", "1",
+                              "--filter-platform", "aarch64-linux-android",
+                              "--manifest-path", str(NATIVE / "Cargo.toml")],
+                             cwd=NATIVE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                             encoding="utf-8", errors="replace")
+    if process.returncode != 0:
+        summary("cargo metadata failed:\n```\n" + process.stderr[-4000:] + "\n```")
+        return None
+    paths = sorted({package["manifest_path"] for package in json.loads(process.stdout)["packages"]
+                    if package["name"] == "rustls-platform-verifier-android"})
+    if len(paths) != 1:
+        summary(f"expected one rustls-platform-verifier-android package, found {len(paths)}")
+        return None
+    maven = Path(paths[0]).parent / "maven"
+    if not (maven / "rustls" / "rustls-platform-verifier").is_dir():
+        summary(f"rustls-platform-verifier Maven repository missing at {maven}")
+        return None
+    return maven
+
+
 def part_android(abi):
     ok = run(f"Android JNI library, {abi}",
              ["cargo", "ndk", "-t", abi, "--platform", "30", "build", "--locked",
               "-p", "smart_explorer_android"])
     if abi == "arm64-v8a":
+        maven = rustls_verifier_maven()
+        if maven is None:
+            summary("### Gradle configuration of the Android app\nnot run: no rustls verifier Maven repository")
+            return False
         ok &= run("Gradle configuration of the Android app",
-                  ["./gradlew", "--no-daemon", "--stacktrace", ":app:help"], cwd=ROOT / "android")
+                  ["sh", "./gradlew", "--no-daemon", "--console=plain", "--stacktrace", ":app:help",
+                   f"-PrustlsVerifierMaven={maven}"], cwd=ROOT / "android")
     return ok
 
 

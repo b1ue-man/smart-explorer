@@ -2197,7 +2197,8 @@ def source_names() -> dict[str, set[str]]:
     rust_re = re.compile(r"\bfn\s+((?:" + prefix + r")\w*)")
     kotlin_re = re.compile(r"\bfun\s+`?((?:" + prefix + r")\w*)`?\s*\(")
     found: dict[str, set[str]] = {"rust": set(), "junit": set(), "instr": set()}
-    for path in (NATIVE / "src").rglob("*.rs"):
+    # The programs (native/src) and the workspace crates that hold the tests since D13 (native/crates).
+    for path in [*(NATIVE / "src").rglob("*.rs"), *(NATIVE / "crates").rglob("*.rs")]:
         found["rust"].update(rust_re.findall(path.read_text(encoding="utf-8", errors="replace")))
     for key, roots in (("junit", ANDROID_UNIT_PACKAGE_ROOTS), ("instr", ANDROID_TEST_PACKAGE_ROOTS)):
         for root in roots:

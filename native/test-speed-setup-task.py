@@ -859,7 +859,7 @@ def stage_elevated(results, log_root, executable, env):
     # The test program itself runs as root; cargo and the target folder stay the runner's.
     prefix = ["sudo", "-n", "env", "DEBIAN_FRONTEND=noninteractive", f"PATH={os.environ.get('PATH', '')}",
               "HOME=/root", "RUST_BACKTRACE=1"]
-    run_named(results, "elevated", [str(program)], env, log_root / "elevated.log", prefix=prefix)
+    run_named(results, "elevated", [str(program)], [H3], env, log_root / "elevated.log", prefix=prefix)
     # Evidence of the service the step configured (state, last journal lines).
     for command in (["systemctl", "status", "xrdp", "--no-pager"],
                     ["journalctl", "-u", "xrdp", "-n", "60", "--no-pager"], ["ss", "-ltnp"]):

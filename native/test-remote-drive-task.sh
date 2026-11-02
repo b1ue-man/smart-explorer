@@ -249,10 +249,10 @@ runtime_process="$repo_root/native/crates/engine/src/mount/os/windows/runtime_in
 installer="$repo_root/native/installer.nsi"
 
 test "$(grep -Fc 'request_subsystem(true, "sftp")' "$sftp_session")" -eq 1
-if rg -q 'RawSftpSession|posix-rename@openssh\.com' "$repo_root/native/src/sftp"; then
-    echo "plain SFTP must use one standard subsystem without POSIX-rename coupling" >&2
-    exit 1
-fi
+# The former guard against RawSftpSession and posix-rename@openssh.com is
+# gone: the SFTP backend uses both on purpose since 4ba81b8d (2026-09-29) and
+# f0f902f8 (2026-10-21, sftp/core/posix_rename.rs); it had stopped checking
+# anything when native/src/sftp moved.
 assert_contains "$sftp_session" 'Duration::from_millis(250)'
 assert_contains "$sftp_backend" 'create: true'
 assert_contains "$sftp_backend" 'replace: false'

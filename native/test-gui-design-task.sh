@@ -45,7 +45,11 @@ expected = [name for source in sources for name in re.findall(
 output = (logs / 'behavior.log').read_text()
 for name in expected:
     assert re.search(r'test [^\n]*::' + re.escape(name) + r' \.\.\. ok', output), name
-assert f'{len(expected)} passed; 0 failed; 0 ignored;' in output
+# One summary per test program of the workspace crates (D13: gui and engine).
+summaries = re.findall(r'^test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored;', output, re.M)
+assert summaries and all(state == 'ok' for state, *_ in summaries), summaries
+assert sum(int(passed) for _, passed, _, _ in summaries) == len(expected), summaries
+assert not any(int(failed) or int(ignored) for _, _, failed, ignored in summaries), summaries
 report = {'candidate': candidate, 'test_command': 'cargo test --manifest-path native/Cargo.toml --locked --no-fail-fast --workspace --exclude smart_explorer_android --exclude smart_explorer --lib',
           'milestones': {'D1': 'compact neutral shell, same-row toolbar, search focus, filtering and split panes',
                          'D2': 'unboxed locations, capacity alignment, settings and bounded feature dialogs',

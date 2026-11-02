@@ -293,7 +293,7 @@ cfg_excludes_platform() {
 unexpected=()
 for name in "${missing_tests[@]}"; do
     [[ -z "$name" ]] && continue
-    defined_in="$(grep -rlE "fn ${name}\b" "$repo_root/native/src" | head -n 1)"
+    defined_in="$(grep -rlE "fn ${name}\b" "$repo_root/native/src" "$repo_root/native/crates" | head -n 1)"
     if cfg_excludes_platform "$(test_cfgs "$defined_in" "$name")"; then
         continue
     fi

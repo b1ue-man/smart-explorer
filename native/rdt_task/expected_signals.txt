@@ -1233,7 +1233,7 @@ speed_task_ftp_retr_is_sent_while_the_data_connection_connects  linux-core:unit 
 speed_task_ftp_still_waits_for_every_reply_before_dependent_commands  linux-core:unit  pfad=ftp::data_overlap_tests::speed_task_ftp_still_waits_for_every_reply_before_dependent_commands  quelle=E13,Code
 speed_task_ftp_stor_is_sent_while_the_data_connection_connects  linux-core:unit  pfad=ftp::data_overlap_tests::speed_task_ftp_stor_is_sent_while_the_data_connection_connects  quelle=E13,Code
 speed_task_ftp_range_421_ends_ranges_without_new_logins       linux-core:unit  pfad=ftp::range_tests::speed_task_ftp_range_421_ends_ranges_without_new_logins  quelle=E13,Code
-speed_task_ftp_range_needs_two_connections                    linux-core:unit  pfad=ftp::range_tests::speed_task_ftp_range_needs_two_connections  quelle=E13,Code
+speed_task_ftp_range_logs_in_for_a_fresh_job_and_assembles_byte_exact linux-core:unit  pfad=ftp::range_tests::speed_task_ftp_range_logs_in_for_a_fresh_job_and_assembles_byte_exact  quelle=E13,Code
 speed_task_ftp_range_reader_aborts_after_len_and_resyncs      linux-core:unit  pfad=ftp::range_tests::speed_task_ftp_range_reader_aborts_after_len_and_resyncs  quelle=E13,Code
 speed_task_ftp_range_without_rest_returns_none                linux-core:unit  pfad=ftp::range_tests::speed_task_ftp_range_without_rest_returns_none  quelle=E13,Code
 speed_task_ftp_stage_probe_is_skipped_only_for_system_random_names  linux-core:unit  pfad=ftp::range_tests::speed_task_ftp_stage_probe_is_skipped_only_for_system_random_names  quelle=E13,Code
@@ -1460,7 +1460,7 @@ speed_task_sftp_growth_failure_stops_and_a_cancelled_attempt_may_retry linux-cor
 speed_task_sftp_other_host_key_means_no_extra_connection_and_a_block linux-core:unit  pfad=sftp::link_tests::speed_task_sftp_other_host_key_means_no_extra_connection_and_a_block  quelle=E13,Code
 speed_task_sftp_block_lasts_fifteen_minutes_per_host_port_and_user linux-core:unit  pfad=sftp::link_tests::speed_task_sftp_block_lasts_fifteen_minutes_per_host_port_and_user  quelle=E13,Code
 speed_task_sftp_one_unauthenticated_connection_per_server_at_a_time linux-core:unit  pfad=sftp::link_tests::speed_task_sftp_one_unauthenticated_connection_per_server_at_a_time  quelle=E13,Code
-speed_task_sftp_extra_login_only_for_stored_password_or_key_never_agent linux-core:unit  pfad=sftp::link_tests::speed_task_sftp_extra_login_only_for_stored_password_or_key_never_agent  quelle=E13,Code
+speed_task_sftp_extra_login_for_stored_credentials_and_the_agent linux-core:unit  pfad=sftp::link_tests::speed_task_sftp_extra_login_for_stored_credentials_and_the_agent  quelle=E13,Code
 speed_task_sftp_hint_names_connections_and_the_block           linux-core:unit  pfad=sftp::link_tests::speed_task_sftp_hint_names_connections_and_the_block  quelle=E13,Code
 speed_task_sftp_log_line_has_the_facts_and_no_line_breaks      linux-core:unit  pfad=sftp::link_tests::speed_task_sftp_log_line_has_the_facts_and_no_line_breaks  quelle=E13,Code
 speed_task_share_stats_keepalives_and_listings_are_no_burst    linux-core:unit  pfad=share::quic_stats_tests::speed_task_share_stats_keepalives_and_listings_are_no_burst  quelle=E13,Code

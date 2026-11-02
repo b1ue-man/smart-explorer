@@ -256,17 +256,27 @@ verify_test_log() {
     occurrences="$(grep -Ec "^test (.*::)?${test_name} \.\.\. ok$" "$log" || true)"
     [[ "$occurrences" -eq 1 ]] || die "expected exactly one passing result for $test_name, found $occurrences"
   done
-  grep -Eq "^test result: ok\\. ${expected_count} passed; 0 failed; 0 ignored; 0 measured; [0-9]+ filtered out; finished in .+$" "$log" ||
-    die "test summary in $log does not show $expected_count passed, 0 failed, 0 ignored"
+  # One summary per test program of the workspace crates (D13); together they show
+  # $expected_count passed and nothing failed, ignored or measured.
+  awk -v expected="$expected_count" '
+    /^test result: / {
+      summaries++
+      if ($3 != "ok.") bad = 1
+      passed += $4; failed += $6; ignored += $8; measured += $10
+    }
+    END { exit !(summaries > 0 && !bad && passed == expected && failed == 0 && ignored == 0 && measured == 0) }
+  ' "$log" ||
+    die "test summaries in $log do not add up to $expected_count passed, 0 failed, 0 ignored"
 }
 
 g1_source_check() {
   local found expected
-  found="$(grep -rhoE 'fn android_task_[a-z0-9_]+' "$native_dir/src" | sed 's/^fn //' | sort)"
+  # The programs (native/src) and the workspace crates (native/crates, D13).
+  found="$(grep -rhoE 'fn android_task_[a-z0-9_]+' "$native_dir/src" "$native_dir/crates" | sed 's/^fn //' | sort)"
   expected="$(printf '%s\n' "${g1_tests[@]}" "${android_only_tests[@]}" | sed '/^$/d' | sort)"
   if [[ "$found" != "$expected" ]]; then
     diff <(printf '%s\n' "$expected") <(printf '%s\n' "$found") >&2 || true
-    die "android_task_ tests in native/src differ from the suite's list (< suite, > sources)"
+    die "android_task_ tests in native/src and native/crates differ from the suite's list (< suite, > sources)"
   fi
   [[ -z "$(uniq -d <<<"$found")" ]] || die "duplicate android_task_ test names: $(uniq -d <<<"$found")"
 }
