@@ -189,8 +189,9 @@ def helper(name):
 def source_test_names():
     """Names of the `luecken_task_` functions this platform compiles, from the sources."""
     names = set()
-    src = NATIVE / "src"
-    for path in src.rglob("*.rs"):
+    sources = [(src, path) for src in [NATIVE / "src", *sorted((NATIVE / "crates").glob("*/src"))]
+               for path in src.rglob("*.rs")]
+    for src, path in sources:
         relative = path.relative_to(src).as_posix()
         if WINDOWS and relative in NOT_ON_WINDOWS_FILES:
             continue
@@ -207,7 +208,7 @@ def stage_unit(results, log_root):
     # fixture refuses unless SMART_EXPLORER_COPY_PASTE_TASK=1. Enabling it makes
     # them check Share sessions over iroh 1.3.0 and the hybrid key exchange.
     environment = dict(os.environ, SMART_EXPLORER_COPY_PASTE_TASK="1")
-    completed = ai.run(["cargo", "test", "--locked", "--lib", "--", *UNIT_FILTERS, *skips],
+    completed = ai.run(["cargo", "test", "--locked", "--workspace", "--exclude", "smart_explorer_android", "--exclude", "smart_explorer", "--lib", "--", *UNIT_FILTERS, *skips],
                        cwd=ai.NATIVE, env=environment, log=log_root / "unit.log", timeout=5400)
     output = (completed.stdout + completed.stderr).decode(errors="replace")
     summary = [line for line in output.splitlines() if line.startswith("test result:")]
@@ -1263,7 +1264,7 @@ def stage_ftps(results, log_root):
         results.check(stage, "strict FTPS server (TLS on login and data, this run's CA)", server)
         if "SE_SYNC_PROVIDER_MANIFEST" in env:
             # The lib test binary of the `unit` stage; no new build.
-            completed = ai.run(["cargo", "test", "--locked", "--lib", "--", "--exact", FTPS_PROVIDER_TEST,
+            completed = ai.run(["cargo", "test", "--locked", "--workspace", "--exclude", "smart_explorer_android", "--exclude", "smart_explorer", "--lib", "--", "--exact", FTPS_PROVIDER_TEST,
                                 "--test-threads=1"], cwd=ai.NATIVE, env=env, log=logs / "cargo-test.log",
                                timeout=3600)
             output = (completed.stdout + completed.stderr).decode(errors="replace")

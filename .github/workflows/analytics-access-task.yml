@@ -49,25 +49,12 @@ jobs:
         with:
           workspaces: native
 
-      - uses: actions/cache/restore@v4
-        with:
-          path: ${{ runner.temp }}/analytics-task-binary
-          key: analytics-task-binary-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: analytics-task-binary-${{ runner.os }}-${{ runner.arch }}-
-
       - name: Run the single storage-access task entrypoint
         shell: pwsh
         timeout-minutes: 110
         run: >-
           ./native/test-analytics-access-task.ps1
           -LogRoot (Join-Path $env:RUNNER_TEMP 'analytics-access-task')
-          -BinaryCacheRoot (Join-Path $env:RUNNER_TEMP 'analytics-task-binary')
-
-      - uses: actions/cache/save@v4
-        if: always()
-        with:
-          path: ${{ runner.temp }}/analytics-task-binary
-          key: analytics-task-binary-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - uses: actions/upload-artifact@v4
         if: always()

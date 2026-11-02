@@ -54,24 +54,6 @@ mobile/core/entry.rs types/core/media_kind.rs types/mod.rs
 """.split()
 
 
-def sha256(path):
-    with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
-
-
-def build_fingerprint():
-    digest = hashlib.sha256()
-    paths = subprocess.check_output(["git", "ls-files", "-z", "--", "native/src",
-        "native/Cargo.toml", "native/Cargo.lock", "native/build.rs", "native/assets",
-        "native/.cargo", ".cargo"], cwd=ROOT).decode().split("\0")
-    for name in sorted(filter(None, paths)):
-        digest.update(name.encode())
-        digest.update(bytes.fromhex(sha256(ROOT / name)))
-    digest.update(subprocess.check_output(["rustc", "-vV"], cwd=NATIVE))
-    digest.update(b"native-lib-test;debug=0;incremental=1")
-    return digest.hexdigest()
-
-
 def run(command, log, seconds, env, stderr=None):
     print("Running:", " ".join(map(str, command)), flush=True)
     with log.open("w", encoding="utf-8") as output:
@@ -99,13 +81,22 @@ def run(command, log, seconds, env, stderr=None):
         raise RuntimeError(f"Command failed with {code}; diagnostics: {log}")
 
 
+def source_path(name):
+    """The file of native/src, or of exactly one crate under native/crates/<crate>/src, for a module path."""
+    candidates = [NATIVE / "src" / name, *sorted((NATIVE / "crates").glob("*/src/" + name))]
+    found = [path for path in candidates if path.is_file()]
+    if len(found) != 1:
+        raise RuntimeError(f"expected exactly one source file for {name}, found {len(found)}")
+    return found[0]
+
+
 def format_gate(logs, env):
     rustfmt = shutil.which("rustfmt")
     if not rustfmt:
         raise RuntimeError("rustfmt is required for the batch formatting gate.")
     report = []
     for name in FORMAT_FILES:
-        path = NATIVE / "src" / name
+        path = source_path(name)
         with path.open("rb") as source:
             result = subprocess.run([rustfmt, "--check", "--edition", "2021", "--color", "never"],
                 stdin=source, capture_output=True, env=env)
@@ -117,39 +108,9 @@ def format_gate(logs, env):
 
 
 def fixture(args, logs, env, candidate):
-    cache = args.binary_cache.resolve() if args.binary_cache else None
-    fingerprint = build_fingerprint() if cache else None
-    cached = cache / ("fixture.exe" if os.name == "nt" else "fixture") if cache else None
-    if cache:
-        try:
-            metadata = json.loads((cache / "provenance.json").read_text())
-            if metadata["build_inputs_sha256"] == fingerprint and metadata["binary_sha256"] == sha256(cached):
-                print("Reusing the source- and hash-bound development fixture.", flush=True)
-                return cached
-        except (OSError, ValueError, KeyError):
-            pass
-    build_log = logs / "build.jsonl"
-    run(["cargo", "test", "--locked", "--lib", "--no-run", "--message-format=json"],
-        build_log, 9000, env, logs / "build.stderr.log")
-    binary = None
-    for line in build_log.read_text(encoding="utf-8").splitlines():
-        try:
-            record = json.loads(line)
-        except ValueError:
-            continue
-        if record.get("reason") == "compiler-artifact" and record.get("profile", {}).get("test") \
-                and record.get("executable") and record.get("target", {}).get("name") == "smart_explorer":
-            binary = Path(record["executable"])
-    if binary is None:
-        raise RuntimeError("Cargo did not report the expected library fixture executable.")
-    if cache:
-        cache.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(binary, cached)
-        (cache / "provenance.json").write_text(json.dumps(
-            {"build_inputs_sha256": fingerprint, "binary_sha256": sha256(cached), "source": candidate}),
-            encoding="utf-8")
-        return cached
-    return binary
+    """The library tests of every workspace crate through cargo (the Android bridge is excluded): cargo
+    builds and runs each test executable of the crates; listing and runs use this command prefix."""
+    return ["cargo", "test", "--locked", "--workspace", "--exclude", "smart_explorer_android", "--exclude", "smart_explorer", "--lib", "--"]
 
 
 def main():
@@ -157,7 +118,6 @@ def main():
         raise RuntimeError("This suite runs only on the configured remote CI/automation runner.")
     parser = argparse.ArgumentParser()
     parser.add_argument("--log-root", type=Path, required=True)
-    parser.add_argument("--binary-cache", type=Path)
     args = parser.parse_args()
     logs = args.log_root.resolve()
     logs.mkdir(parents=True, exist_ok=True)
@@ -173,8 +133,8 @@ def main():
     for name in ["SE_SHARE_RELAY_URL", "SE_SHARE_RELAY_ONLY"]:
         env.pop(name, None)
     format_gate(logs, env)
-    binary = fixture(args, logs, env, candidate)
-    run([str(binary), "--list", "--format", "terse"], logs / "available-tests.txt", 120, env)
+    cargo_tests = fixture(args, logs, env, candidate)
+    run([*cargo_tests, "--list", "--format", "terse"], logs / "available-tests.txt", 120, env)
     available = [line.removesuffix(": test") for line in
         (logs / "available-tests.txt").read_text(encoding="utf-8").splitlines() if line.endswith(": test")]
     mapping = {}
@@ -201,13 +161,13 @@ def main():
         for name in ["APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"]:
             Path(env[name]).mkdir(parents=True, exist_ok=True)
         # The remote-open tests are ignored outside an isolated task profile (this one).
-        run([str(binary), "--include-ignored", "--test-threads=1", "--exact", *selected],
+        run([*cargo_tests, "--include-ignored", "--test-threads=1", "--exact", *selected],
             logs / "suite.log", 3600, env)
     result = (logs / "suite.log").read_text(encoding="utf-8", errors="replace")
     missing = [name for name in selected if f"test {name} ... ok" not in result]
     if missing:
         raise RuntimeError("Missing successful results: " + ", ".join(missing[:40]))
-    evidence = {"candidate": candidate, "binary_sha256": sha256(binary), "platform": sys.platform,
+    evidence = {"candidate": candidate, "test_command": " ".join(cargo_tests), "platform": sys.platform,
         "milestones": mapping, "integration_tests": len(selected), "result": "passed"}
     (logs / "acceptance.json").write_text(json.dumps(evidence, indent=2), encoding="utf-8")
     print(result[-20000:])

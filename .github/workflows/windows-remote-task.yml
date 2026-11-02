@@ -48,11 +48,6 @@ jobs:
           workspaces: native
       - uses: actions/cache/restore@v4
         with:
-          path: ${{ runner.temp }}/windows-remote-task-binary
-          key: windows-remote-task-binary-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: windows-remote-task-binary-${{ runner.os }}-${{ runner.arch }}-
-      - uses: actions/cache/restore@v4
-        with:
           path: ${{ runner.temp }}/windows-remote-task-dependency
           key: windows-remote-dependency-${{ runner.os }}-${{ hashFiles('native/prepare-dokany-private.ps1', 'native/dokany-private/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: windows-remote-dependency-${{ runner.os }}-${{ hashFiles('native/prepare-dokany-private.ps1', 'native/dokany-private/**') }}-
@@ -63,14 +58,8 @@ jobs:
           ./native/test-windows-remote-task.ps1
           -InstallRuntime
           -LogRoot (Join-Path $env:RUNNER_TEMP 'windows-remote-task')
-          -BinaryCacheRoot (Join-Path $env:RUNNER_TEMP 'windows-remote-task-binary')
           -DependencyCacheRoot (Join-Path $env:RUNNER_TEMP 'windows-remote-task-dependency')
           -PreparePrivateRuntime
-      - uses: actions/cache/save@v4
-        if: always()
-        with:
-          path: ${{ runner.temp }}/windows-remote-task-binary
-          key: windows-remote-task-binary-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
       - uses: actions/cache/save@v4
         if: always()
         with:

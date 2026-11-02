@@ -311,7 +311,10 @@ def fixture_kwin(fixtures: common.StageFixtures, name: str) -> tuple[bool, str]:
     if not LINUX:
         return False, "nur unter Linux"
     ctx = fixtures.ctx
-    program = str(ctx.cargo.test_exe) if ctx.cargo.build_lib() and ctx.cargo.test_exe else None
+    # The desktop entry below grants org_kde_plasma_window_management to one test program: the engine crate's
+    # program, which lists screen_task_kde_window_list and screen_task_kde_remote_desktop_input.
+    engine = ctx.cargo.program_for_package("smart_explorer_engine") if ctx.cargo.build_lib() else None
+    program = str(engine) if engine else None
     session = helper("screen-task-linux").start_kwin(keep_logs(fixtures, fixtures.make_dir("kwin")), ctx.base_env(),
                                                      program)
     add_session(fixtures, session)

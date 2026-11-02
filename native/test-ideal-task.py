@@ -22,7 +22,7 @@ REPEAT = 3
 
 
 def clippy(since):
-    diff = subprocess.run(["git", "diff", "-U0", "--no-color", since, "HEAD", "--", "native/src"],
+    diff = subprocess.run(["git", "diff", "-U0", "--no-color", since, "HEAD", "--", "native/crates", "native/src"],
                           cwd=REPO, capture_output=True, text=True, check=True).stdout
     changed, current = {}, None
     for line in diff.splitlines():
@@ -33,15 +33,19 @@ def clippy(since):
             m = re.search(r"\+(\d+)(?:,(\d+))?", line)
             start, count = int(m.group(1)), int(m.group(2) or 1)
             changed.setdefault(current, set()).update(range(start, start + count))
-    ran = subprocess.run(["cargo", "clippy", "--lib", "--bins", "--tests", "--message-format", "short"],
-                         cwd=REPO / "native", capture_output=True, text=True)
+    crates = subprocess.run(["cargo", "clippy", "--workspace", "--exclude", "smart_explorer_android", "--exclude", "smart_explorer", "--lib", "--tests", "--message-format", "short"],
+                            cwd=REPO / "native", capture_output=True, text=True)
+    root = subprocess.run(["cargo", "clippy", "-p", "smart_explorer", "--lib", "--bins", "--tests", "--message-format", "short"],
+                          cwd=REPO / "native", capture_output=True, text=True)
+    ran = subprocess.CompletedProcess(args=[], returncode=max(crates.returncode, root.returncode),
+                                      stdout=crates.stdout + root.stdout, stderr=crates.stderr + root.stderr)
     out = (ran.stdout + ran.stderr).replace("\\", "/")
     print(out[-20000:])
     if re.search(r"(^|: )error\[E\d+\]", out, re.M) or ran.returncode != 0 and "error: could not compile" in out:
         print("::error::compile errors in clippy")
         return 1
     findings = sorted({line for line in out.splitlines()
-                       if (m := re.match(r"^((?:src|tests)/[^:]+):(\d+):\d+: (error|warning)", line))
+                       if (m := re.match(r"^((?:crates/[^/:]+/)?(?:src|tests)/[^:]+):(\d+):\d+: (error|warning)", line))
                        and int(m.group(2)) in changed.get(m.group(1), ())})
     if findings:
         print("::error::clippy findings on changed lines")

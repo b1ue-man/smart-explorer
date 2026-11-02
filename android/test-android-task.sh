@@ -275,14 +275,14 @@ run_g1() {
   step "G1 android_task_ tests on the Linux host (${#g1_tests[@]} expected)"
   g1_source_check
   local log="$log_root/g1-android-task-tests.log"
-  (cd "$native_dir" && cargo test --locked --lib android_task_ -- --test-threads=1) 2>&1 | tee "$log"
+  (cd "$native_dir" && cargo test --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --lib android_task_ -- --test-threads=1) 2>&1 | tee "$log"
   verify_test_log "$log" "${#g1_tests[@]}" "${g1_tests[@]}"
 }
 
 run_g2_moved_tests() {
   step "G2 moved desktop tests under their new paths (${#g2_paths[@]} expected)"
   local list="$log_root/g2-test-list.txt" log="$log_root/g2-moved-tests.log" path missing=()
-  (cd "$native_dir" && cargo test --locked --lib -- --list) >"$list" 2>&1
+  (cd "$native_dir" && cargo test --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --lib -- --list) >"$list" 2>&1
   for path in "${g2_paths[@]}"; do
     grep -Fxq "$path: test" "$list" || missing+=("$path")
   done
@@ -292,12 +292,12 @@ run_g2_moved_tests() {
   # The moved app/ GUI-task tests build App through their task constructors, which require the
   # same opt-in variables as their original suites (test-search-recursive-access-task.py).
   (cd "$native_dir" && SMART_EXPLORER_ANALYTICS_TASK=1 SMART_EXPLORER_COPY_PASTE_TASK=1 \
-    SMART_EXPLORER_GUI_TASK=1 cargo test --locked --lib -- --test-threads=1 --exact "${g2_paths[@]}") 2>&1 | tee "$log"
+    SMART_EXPLORER_GUI_TASK=1 cargo test --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --lib -- --test-threads=1 --exact "${g2_paths[@]}") 2>&1 | tee "$log"
   verify_test_log "$log" "${#g2_paths[@]}" "${names[@]}"
 }
 
 batch_rust_files() {
-  git -C "$repo_root" diff --name-only --diff-filter=AM "$batch_base" HEAD -- 'native/src/*.rs' 'native/android-bridge/*.rs'
+  git -C "$repo_root" diff --name-only --diff-filter=AM "$batch_base" HEAD -- 'native/crates/*/src/*.rs' 'native/src/*.rs' 'native/android-bridge/*.rs'
 }
 
 run_g2_rustfmt() {
@@ -324,7 +324,7 @@ run_g2_check_and_clippy() {
   local ranges="$log_root/batch-ranges.txt" file target log hits
   : >"$ranges"
   while IFS= read -r file; do
-    [[ "$file" == native/src/* ]] || continue
+    [[ "$file" == native/src/* || "$file" == native/crates/*/src/* ]] || continue
     git -C "$repo_root" diff -U0 "$batch_base" HEAD -- "$file" | awk -v file="${file#native/}" '
       /^@@ / {
         split($3, plus, ",")
@@ -337,13 +337,13 @@ run_g2_check_and_clippy() {
     step "G2 cargo check + clippy --lib --bins ($target)"
     log="$log_root/g2-clippy-$target.log"
     if [[ "$target" == host ]]; then
-      (cd "$native_dir" && cargo clippy --locked --lib --bins --message-format short) 2>&1 | tee "$log"
+      (cd "$native_dir" && cargo clippy --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --lib --message-format short && cargo clippy --locked -p smart_explorer --lib --bins --message-format short) 2>&1 | tee "$log"
     else
       rustup target list --installed | grep -qx "$target" || die "Rust target $target is not installed"
       require_tools x86_64-w64-mingw32-gcc
-      (cd "$native_dir" && cargo clippy --locked --target "$target" --lib --bins --message-format short) 2>&1 | tee "$log"
+      (cd "$native_dir" && cargo clippy --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --target "$target" --lib --message-format short && cargo clippy --locked -p smart_explorer --target "$target" --lib --bins --message-format short) 2>&1 | tee "$log"
     fi
-    hits="$({ grep -E '^src/[^:]+:[0-9]+:[0-9]+: (warning|error)' "$log" || true; } | sort -u | awk -F: -v ranges="$ranges" '
+    hits="$({ grep -E '^(crates/[^/:]+/)?src/[^:]+:[0-9]+:[0-9]+: (warning|error)' "$log" || true; } | sort -u | awk -F: -v ranges="$ranges" '
       BEGIN { while ((getline line < ranges) > 0) { split(line, r, " "); n++; f[n] = r[1]; s[n] = r[2]; e[n] = r[3] } }
       { for (i = 1; i <= n; i++) if ($1 == f[i] && $2 >= s[i] && $2 <= e[i]) { print; break } }')"
     if [[ -n "$hits" ]]; then

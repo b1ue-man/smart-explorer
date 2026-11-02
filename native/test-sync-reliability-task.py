@@ -119,7 +119,7 @@ def handoff(shared, out, source, binaries):
 
 
 def discover(shared, binary, env, report):
-    raw = subprocess.check_output([binary, "--list", "--format", "terse"], cwd=ROOT,
+    raw = subprocess.check_output([*binary, "--list", "--format", "terse"], cwd=ROOT / "native",
                                   env=env, text=True, timeout=120)
     available = {line.removesuffix(": test") for line in raw.splitlines() if line.endswith(": test")}
     required = [name for name in CASES if name not in ("C09", "C10")]
@@ -157,12 +157,12 @@ def host_results(text, selected):
     summaries = re.findall(r"^test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored; (\d+) measured;",
                            text, re.MULTILINE)
     running = re.findall(r"^running (\d+) tests?$", text, re.MULTILINE)
-    counters = tuple(map(int, summaries[0][1:])) if len(summaries) == 1 else None
+    counters = tuple(sum(int(row[index]) for row in summaries) for index in range(1, 5)) if summaries else None
     actual = tuple(Counter(observed.values())[status] for status in ("ok", "FAILED", "ignored"))
     exact = (set(names) == set(selected) == set(observed) and all(count == 1 for count in names.values())
-             and running == [str(len(selected))] and counters is not None
+             and sum(int(count) for count in running) == len(selected) and counters is not None
              and counters == (*actual, 0) and sum(counters) == len(selected)
-             and summaries[0][0] == ("FAILED" if actual[1] else "ok"))
+             and any(row[0] == "FAILED" for row in summaries) == bool(actual[1]))
     evidence = {"missing": sorted(set(selected) - observed.keys()),
                 "unexpected": sorted(names.keys() - set(selected)),
                 "duplicates": sorted(name for name, count in names.items() if count != 1),
@@ -191,7 +191,7 @@ def native_stage(args, env, source, logs, shared):
     shared.BASE = BASE
     stage("source-format", lambda: shared.format_patch(logs, env, source))
     cache = ROOT / ".review-task-cache"
-    binary = stage("native-host", lambda: shared.artifact("native", "smart_explorer", "test", cache, logs, env))
+    binary = stage("native-host", lambda: shared.library_test_command(logs, env))
     cli = stage("development-cli", lambda: shared.artifact("native", "se", "bin", cache, logs, env))
     server = stage("development-share-server", lambda: shared.artifact("share-server", "se-share-server", "bin", cache, logs, env))
     if args.out and cli and server:
@@ -223,9 +223,9 @@ def native_stage(args, env, source, logs, shared):
                 # Other cases still run and C04 itself must fail for missing
                 # runtime fixtures. Missing providers never become a skip.
             stage("whole-flow-host", lambda: shared.run(
-                [binary, "--exact", *selected, "--include-ignored", "--test-threads=1",
+                [*binary, "--exact", *selected, "--include-ignored", "--test-threads=1",
                  "--no-capture", "--format=pretty", "--color=never"],
-                logs / "whole-flow.log", fixture_env, seconds=10800))
+                logs / "whole-flow.log", fixture_env, seconds=10800, cwd=ROOT / "native"))
             text = (logs / "whole-flow.log").read_text(errors="replace") if (logs / "whole-flow.log").exists() else ""
             observed, exact, evidence = host_results(text, selected)
             records["exact-execution"] = {"result": "passed" if exact else "failed", "evidence": evidence}

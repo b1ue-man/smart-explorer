@@ -6,11 +6,12 @@ Runs only on the remote runner (AGENTS.md); one call per job of
 
     python native/test-rechte-desktop-tresore-task.py --job <JOB> --log-root "$RUNNER_TEMP/rdt-<JOB>"
 
-Development profile only: the library tests of ``smart_explorer`` with exact name lists
-(``cargo test --lib --manifest-path native/Cargo.toml -- <full paths> --exact``), ``se`` and
-``smart_explorer`` where a stage needs them, the share server only for device pairs, the Android
-library only for the emulator. Never ``--workspace``, ``--all-targets``, ``--release``, installer
-or feed.
+Development profile only: the library tests of every workspace crate with exact name lists
+(``cargo test --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --lib -- <full
+paths> --exact``; a root run ``sudo -n -E <program>`` starts each test in the test program that lists it,
+found by ``cargo test --no-run --message-format json``), ``se`` and ``smart_explorer`` where a stage needs
+them (``cargo build --bin``), the share server only for device pairs, the Android library only for the
+emulator. Never ``--all-targets``, ``--release``, installer or feed.
 
 Jobs and stages (D3; owner module in ``native/rdt_task``; ``inventory`` closes every job):
 

@@ -1,10 +1,6 @@
 #requires -Version 7.2
 param(
-    [string]$TestBinary = '',
-    [string]$TestBinarySha256 = '',
-    [string]$TestBinarySourceSha = '',
-    [string]$LogRoot = '',
-    [string]$BinaryCacheRoot = ''
+    [string]$LogRoot = ''
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -82,37 +78,11 @@ $git = (Get-Command git.exe -CommandType Application | Select-Object -First 1).S
 $head = Invoke-TaskProcess $git @('-C', $repoRoot, 'rev-parse', 'HEAD') 30 'candidate'
 if ($head.Code -ne 0 -or $head.Output.Trim() -notmatch '^[0-9a-f]{40}$') { throw 'Candidate identity unavailable.' }
 $candidate = $head.Output.Trim()
-$cache = $null
-$fingerprint = Get-MountTaskBuildFingerprint $repoRoot
-$built = $false
-if (-not [string]::IsNullOrWhiteSpace($TestBinary)) {
-    if ($TestBinarySourceSha -cne $candidate -or $TestBinarySha256 -notmatch '^[a-fA-F0-9]{64}$' -or
-        (Get-FileHash -LiteralPath $TestBinary -Algorithm SHA256).Hash -ine $TestBinarySha256) {
-        throw 'An explicitly supplied development binary requires this source SHA and its exact SHA-256.'
-    }
-} elseif (-not [string]::IsNullOrWhiteSpace($BinaryCacheRoot)) {
-    $cache = Get-MountTaskCacheLocation $BinaryCacheRoot $repoRoot
-    $TestBinary = Get-MountTaskCachedBinary $cache $fingerprint
+$cargo = (Get-Command cargo.exe -CommandType Application | Select-Object -First 1).Source
+$cargoTests = @('test', '--locked', '--workspace', '--exclude', 'smart_explorer_android', '--exclude', 'smart_explorer', '--lib', '--')
+function Invoke-CargoTests([string[]]$Arguments, [int]$Seconds, [string]$Label) {
+    Invoke-TaskProcess $cargo (@($cargoTests) + @($Arguments)) $Seconds $Label
 }
-if ([string]::IsNullOrWhiteSpace($TestBinary)) {
-    $build = Invoke-TaskProcess (Get-Command cargo.exe -CommandType Application | Select-Object -First 1).Source @(
-        'test', '--locked', '--lib', '--no-run', '--message-format=json-render-diagnostics'
-    ) 5400 'native-incremental'
-    if ($build.Code -ne 0) { throw "Affected library target failed to build: $($build.Error)" }
-    $executables = @(
-        foreach ($line in ($build.Output -split '\r?\n')) {
-            if (-not $line.StartsWith('{')) { continue }
-            $message = ConvertFrom-Json $line
-            if ($message.reason -eq 'compiler-artifact' -and $message.target.name -eq 'smart_explorer' -and
-                $message.profile.test -and $null -ne $message.executable) { [string]$message.executable }
-        }
-    )
-    if ($executables.Count -ne 1) { throw 'Cargo did not identify exactly one library fixture executable.' }
-    $TestBinary = $executables[0]
-    $built = $true
-}
-$TestBinary = (Resolve-Path -LiteralPath $TestBinary).Path
-if ($built -and $null -ne $cache) { Save-MountTaskCachedBinary $cache $fingerprint $TestBinary }
 $filters = @(
     'mount_recovery_cache_task',
     'mount_optimization_task_reopen_reuses_contents_but_revalidates',
@@ -126,7 +96,7 @@ $filters = @(
     'mount_optimization_task_lazy_destination_survives_atomic_replace',
     'mount_vault_task_retirement_preserves_dirty_and_recovery_referenced_spools'
 )
-$selected = Invoke-TaskProcess $TestBinary ($filters + @('--list')) 60 'selected-cases'
+$selected = Invoke-CargoTests ($filters + @('--list')) 60 'selected-cases'
 if ($selected.Code -ne 0) { throw 'Could not enumerate task acceptance cases.' }
 foreach ($required in @(
     'mount_recovery_cache_task_missing_payload_keeps_siblings_and_restored_retry',
@@ -153,14 +123,13 @@ foreach ($required in @(
 )) {
     if (-not $selected.Output.Contains($required)) { throw "Missing task acceptance case: $required" }
 }
-$result = Invoke-TaskProcess $TestBinary ($filters + @('--nocapture', '--test-threads=1')) 1800 'mount-recovery-cache'
+$result = Invoke-CargoTests ($filters + @('--nocapture', '--test-threads=1')) 1800 'mount-recovery-cache'
 Write-Host $result.Output
 if ($result.Code -ne 0) { throw "Mount recovery/cache task failed: $($result.Error)" }
 [ordered]@{
     schema = 1
     candidate = $candidate
     outcome = 'PASS'
-    test_binary_sha256 = (Get-FileHash -LiteralPath $TestBinary -Algorithm SHA256).Hash.ToLowerInvariant()
-    build_inputs_sha256 = $fingerprint
+    test_command = 'cargo test --workspace --exclude smart_explorer_android --exclude smart_explorer --lib'
     windows = [Environment]::OSVersion.VersionString
 } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $LogRoot 'approval.json')

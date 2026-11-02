@@ -1,8 +1,6 @@
 #requires -Version 7.2
 param(
-    [string]$TestBinary = '',
     [string]$LogRoot = '',
-    [string]$BinaryCacheRoot = '',
     [switch]$InstallRuntime,
     [string]$DependencyCacheRoot = ''
 )
@@ -176,47 +174,14 @@ foreach ($path in @($prepared.DllPath, $prepared.ManifestPath, $prepared.SourceP
 $dependencyManifest = [IO.File]::ReadAllText($prepared.ManifestPath) | ConvertFrom-Json
 $dependencyIdentity = "$($prepared.DllSha256):$($dependencyManifest.source_package.sha256)"
 
-$binaryCache = $null
-$buildFingerprint = $null
-$builtForTask = $false
-if ([string]::IsNullOrWhiteSpace($TestBinary) -and -not [string]::IsNullOrWhiteSpace($BinaryCacheRoot)) {
-    $binaryCache = Get-MountTaskCacheLocation $BinaryCacheRoot $repoRoot
-    $sourceFingerprint = Get-MountTaskBuildFingerprint $repoRoot
-    $buildFingerprint = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(
-        [Text.Encoding]::UTF8.GetBytes("$sourceFingerprint`:$dependencyIdentity"))).ToLowerInvariant()
-    $TestBinary = Get-MountTaskCachedBinary $binaryCache $buildFingerprint
-    if ([string]::IsNullOrWhiteSpace($TestBinary)) {
-        Write-Host 'No matching intact retained fixture; using the single incremental native build.'
-    }
+$cargo = (Get-Command cargo.exe -CommandType Application | Select-Object -First 1).Source
+$cargoTests = @('test', '--locked', '--workspace', '--exclude', 'smart_explorer_android', '--exclude', 'smart_explorer', '--lib', '--')
+function Invoke-CargoTests([string[]]$Arguments, [int]$Seconds, [string]$Label) {
+    Invoke-TaskProcess $cargo (@($cargoTests) + @($Arguments)) $Seconds $Label
 }
-if ([string]::IsNullOrWhiteSpace($TestBinary)) {
-    # This is the only build: one incremental native library test target, not
-    # a workspace/all-target/release build. Discover its actual hashed filename.
-    $build = Invoke-TaskProcess (Get-Command cargo.exe -CommandType Application | Select-Object -First 1).Source @(
-        'test', '--locked', '--lib', '--no-run', '--message-format=json-render-diagnostics'
-    ) 5400 'native-incremental'
-    if ($build.Code -ne 0) { throw "Affected native target failed to build: $($build.Error)" }
-    $executables = @(
-        foreach ($line in ($build.Output -split '\r?\n')) {
-            if (-not $line.StartsWith('{')) { continue }
-            $message = ConvertFrom-Json $line
-            if ($message.reason -eq 'compiler-artifact' -and $message.target.name -eq 'smart_explorer' -and
-                $message.profile.test -and $null -ne $message.executable) {
-                [string]$message.executable
-            }
-        }
-    )
-    if ($executables.Count -ne 1) { throw 'Cargo did not identify exactly one native library test executable.' }
-    $TestBinary = $executables[0]
-    $builtForTask = $true
-}
-$TestBinary = (Resolve-Path -LiteralPath $TestBinary).Path
-if ($builtForTask -and $null -ne $binaryCache) {
-    Save-MountTaskCachedBinary $binaryCache $buildFingerprint $TestBinary
-}
-[IO.File]::WriteAllText((Join-Path $LogRoot 'test-executable.txt'), $TestBinary)
+[IO.File]::WriteAllText((Join-Path $LogRoot 'test-command.txt'), 'cargo test --workspace --exclude smart_explorer_android --exclude smart_explorer --lib')
 
-$selected = Invoke-TaskProcess $TestBinary @('mount_vault_task', '--list', '--include-ignored') 30 'selected-cases'
+$selected = Invoke-CargoTests @('mount_vault_task', '--list', '--include-ignored') 30 'selected-cases'
 if ($selected.Code -ne 0) { throw 'Could not enumerate the selected task cases.' }
 foreach ($required in @(
     'listing_name_and_collision_safety',
@@ -295,7 +260,7 @@ foreach ($required in @(
     if (-not $selected.Output.Contains($required)) { throw "Missing task acceptance case: $required" }
 }
 # One filter, one invocation, one incremental library output throughout the loop.
-$run = Invoke-TaskProcess $TestBinary @(
+$run = Invoke-CargoTests @(
     'mount_vault_task', '--include-ignored', '--nocapture', '--test-threads=1'
 ) 2400 'mount-vault'
 Write-Host $run.Output
@@ -311,7 +276,7 @@ $approval = [ordered]@{
     candidate = $head.Output.Trim()
     dll_sha256 = $prepared.DllSha256
     source_sha256 = $dependencyManifest.source_package.sha256
-    test_binary_sha256 = (Get-FileHash -LiteralPath $TestBinary -Algorithm SHA256).Hash.ToLowerInvariant()
+    test_command = 'cargo test --workspace --exclude smart_explorer_android --exclude smart_explorer --lib'
     outcome = 'PASS'
 }
 [IO.File]::WriteAllText((Join-Path $LogRoot 'approval.json'),

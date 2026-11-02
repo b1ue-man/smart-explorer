@@ -297,7 +297,7 @@ def includers():
     global _INCLUDERS
     if _INCLUDERS is None:
         _INCLUDERS = {}
-        for source in sorted((NATIVE / "src").rglob("*.rs")):
+        for source in sorted(speed.source_files()):
             lines = source.read_text(encoding="utf-8", errors="replace").splitlines()
             for number, line in enumerate(lines):
                 match = re.match(r'\s*#\[path\s*=\s*"([^"]+)"\]', line)
@@ -405,8 +405,8 @@ def stage_bundles(results, log_root):
 def stage_listing(results, listed, ignored):
     stage = "listing"
     leafs = {leaf(name) for name in listed}
-    declared = declared_tests([NATIVE / "src"])
-    results.record(stage, f"tests named `{TEST_PREFIX}` exist in native/src", bool(declared),
+    declared = declared_tests([NATIVE / "src", NATIVE / "crates"])
+    results.record(stage, f"tests named `{TEST_PREFIX}` exist in native/src and native/crates", bool(declared),
                    "no test function with that name found")
     missing = sorted(name for name in declared if name not in leafs)
     excused = [name for name in missing if gated_elsewhere(*declared[name])]
@@ -427,7 +427,7 @@ def run_ignored(results, stage, executable, names, env, log, cwd=NATIVE):
     """Ignored tests by exact full name; each one must pass."""
     if not names:
         return
-    ran = run([executable, "--ignored", "--test-threads=1", "--exact", *names], cwd=cwd, env=env, timeout=3 * 3600,
+    ran = run([*executable, "--ignored", "--test-threads=1", "--exact", *names], cwd=cwd, env=env, timeout=3 * 3600,
               log=log)
     outcomes = speed.test_outcomes(ran.output)
     for name in names:
@@ -455,8 +455,8 @@ def stage_integration(results, log_root, work, env):
         results.record("integration", f"{target} builds", bool(executable), "" if executable else built.tail(3000))
         if not executable:
             continue
-        ignored = set(speed.list_tests(executable, ignored=True, env=env))
-        every = [name for name in speed.list_tests(executable, env=env) if TEST_PREFIX in leaf(name)]
+        ignored = set(speed.list_tests([executable], ignored=True, env=env))
+        every = [name for name in speed.list_tests([executable], env=env) if TEST_PREFIX in leaf(name)]
         plain = [name for name in every if name not in ignored]
         if plain:
             ran = run([executable, "--test-threads=1", TEST_PREFIX], cwd=NATIVE, env=env, timeout=3 * 3600,
@@ -475,7 +475,7 @@ def stage_integration(results, log_root, work, env):
                 for kind, reason in servers.failed.items():
                     results.record("integration", f"{kind} server for the ignored cases", False, reason)
                 environment.update(servers.env())
-            run_ignored(results, "integration", executable, heavy, environment,
+            run_ignored(results, "integration", [executable], heavy, environment,
                         log_root / f"integration-{target}-ignored.log")
         finally:
             if servers is not None:
@@ -492,8 +492,7 @@ def job_functional(results, log_root):
     try:
         if not WINDOWS:
             stage_bundles(results, log_root)
-        executable, built = speed.cargo_executable(["test", "--locked", "--lib"], "smart_explorer",
-                                                   log_root / "build.log", env=env)
+        executable, built = speed.lib_test_command(log_root / "build.log", env=env)
         results.record("build", "library test binary (development profile)", bool(executable),
                        "" if executable else built.tail(4000))
         if not executable:

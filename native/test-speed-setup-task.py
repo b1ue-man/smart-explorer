@@ -346,8 +346,25 @@ def cargo_executable(args, target_name, log, env=None, cwd=NATIVE, timeout=4 * 3
     return executable, ran
 
 
-def list_tests(executable, ignored=False, env=None):
-    ran = run([executable, "--list", *(["--ignored"] if ignored else [])], cwd=NATIVE, env=env, timeout=600)
+def source_files():
+    """Every Rust source of native/src and of the crates under native/crates."""
+    return [*(NATIVE / "src").rglob("*.rs"), *(NATIVE / "crates").rglob("*.rs")]
+
+
+def lib_test_command(log, env=None, release=False):
+    """Cargo runs the library tests of the workspace crates. The root package and the Android bridge are
+    excluded, so the root programs are never built with the crates' test features. Returns the command
+    prefix (ending in --) and the build check, or (None, build check) when the build fails."""
+    flags = ["--workspace", "--exclude", "smart_explorer_android", "--exclude", "smart_explorer", "--lib"]
+    flags += ["--release"] if release else []
+    built = run(["cargo", "test", "--locked", *flags, "--no-run"], cwd=NATIVE, env=env, timeout=4 * 3600, log=log)
+    if not built.ok:
+        return None, built
+    return ["cargo", "test", "--locked", *flags, "--"], built
+
+
+def list_tests(command, ignored=False, env=None):
+    ran = run([*command, "--list", *(["--ignored"] if ignored else [])], cwd=NATIVE, env=env, timeout=600)
     return [match.group(1) for match in re.finditer(r"^(\S+): test$", ran.stdout, re.MULTILINE)]
 
 
@@ -374,7 +391,7 @@ def platform_key():
 # --------------------------------------------------------------------------- job fmt
 
 def changed_lines(base):
-    diff = run(["git", "diff", "-U0", "--no-color", base, "HEAD", "--", "native/src", "native/tests"],
+    diff = run(["git", "diff", "-U0", "--no-color", base, "HEAD", "--", "native/crates", "native/src", "native/tests"],
                cwd=ROOT, timeout=300).stdout
     changed, current = {}, None
     for line in diff.splitlines():
@@ -654,7 +671,7 @@ def stage_unit(results, log_root, executable, env):
     filters = [*PREFIXES, *MOVED, *AFFECTED]
     skipped = [*UNIT_SKIPS, *(name for name, _ in ENV_SKIPS)]
     skips = [argument for name in skipped for argument in ("--skip", name)]
-    ran = run([executable, "--test-threads=1", *skips, *filters], cwd=NATIVE, env=env, timeout=4 * 3600,
+    ran = run([*executable, "--test-threads=1", *skips, *filters], cwd=NATIVE, env=env, timeout=4 * 3600,
               log=log_root / "unit.log")
     outcomes = test_outcomes(ran.output)
     summary = [line for line in ran.output.splitlines() if line.startswith("test result:")]
@@ -688,7 +705,7 @@ def stage_unit(results, log_root, executable, env):
     # Source names this platform does not compile (cfg-gated): reported, not failed.
     compiled = {leaf(name) for name in listed}
     in_sources = set()
-    for path in list((NATIVE / "src").rglob("*.rs")):
+    for path in list(source_files()):
         text = path.read_text(encoding="utf-8", errors="replace")
         for name in re.findall(r"\bfn (\w*(?:" + "|".join(PREFIXES) + r")\w*)\s*\(", text):
             in_sources.add(name)
@@ -719,7 +736,7 @@ def stage_baseline(results, log_root, env, failed, selection):
         executable, built = cargo_executable(["test", "--locked", "--lib"], "smart_explorer", log,
                                              env=build_env, cwd=tree / "native")
         ensure(executable, f"{BASELINE_TAG} library test binary: {built.tail(2000)}")
-        known = set(list_tests(executable, env=env))
+        known = set(list_tests([executable], env=env))
         present = [test for test in failed if test in known]
         ran = run([executable, "--test-threads=1", *selection], cwd=tree / "native", env=env,
                   timeout=4 * 3600, log=log)
@@ -746,7 +763,7 @@ def stage_removable(results, log_root, executable, env):
             if entry.name.upper() in ("SYSTEM VOLUME INFORMATION", "$RECYCLE.BIN"):
                 continue
             remove(entry)
-    ran = run([executable, "--test-threads=1", "--nocapture", "removable_media_task_"], cwd=NATIVE, env=env,
+    ran = run([*executable, "--test-threads=1", "--nocapture", "removable_media_task_"], cwd=NATIVE, env=env,
               timeout=3600, log=log_root / "removable.log")
     results.record("removable", "paste into the roots and a folder of FAT32 and exFAT",
                    ran.ok and "removable media roots checked: 2" in ran.output,
@@ -755,7 +772,7 @@ def stage_removable(results, log_root, executable, env):
 
 def run_named(results, stage, executable, names, env, log, *, prefix=()):
     """Runs ignored tests by name (substring filters) and requires each one to pass."""
-    ran = run([*prefix, executable, "--ignored", "--test-threads=1", *names], cwd=NATIVE, env=env,
+    ran = run([*prefix, *executable, "--ignored", "--test-threads=1", *names], cwd=NATIVE, env=env,
               timeout=3 * 3600, log=log)
     outcomes = test_outcomes(ran.output)
     for name in names:
@@ -826,7 +843,7 @@ def stage_transfer_task(results, log_root, work, env):
                    "" if executable else built.tail(3000))
     if not executable:
         return
-    listed = list_tests(executable, ignored=True, env=env)
+    listed = list_tests([executable], ignored=True, env=env)
     names = [name for name in listed if CRASH_LOG_PREFIX in name]
     if not names:
         results.record("transfer_task", f"{CRASH_LOG_PREFIX}* cases listed", False, "no ignored crash-log case")
@@ -886,8 +903,7 @@ def job_functional(results, log_root):
         (profile / variable.lower()).mkdir(parents=True, exist_ok=True)
         env[variable] = str(profile / variable.lower())
     try:
-        executable, built = cargo_executable(["test", "--locked", "--lib"], "smart_explorer",
-                                             log_root / "build.log", env=env)
+        executable, built = lib_test_command(log_root / "build.log", env=env)
         results.record("build", "library test binary (development profile)", bool(executable),
                        "" if executable else built.tail(4000))
         if not executable:
@@ -1035,7 +1051,7 @@ def run_benchmarks(ledger, executable, names, env, reps, *, prefix="", timeout=3
             if heavy and free_gib(temp or tempfile.gettempdir()) < BENCH_FREE_GIB:
                 ledger.note(f"{leaf(name)}: not run: less than {BENCH_FREE_GIB} GiB free for its 2 GiB data set")
                 break
-            ran = run([executable, "--ignored", "--exact", name, "--nocapture", "--test-threads=1"], cwd=NATIVE,
+            ran = run([*executable, "--ignored", "--exact", name, "--nocapture", "--test-threads=1"], cwd=NATIVE,
                       env=env, timeout=timeout, log=log)
             if not ran.ok:
                 failed = failure_detail(ran.output)
@@ -1194,8 +1210,7 @@ def build_candidate(ledger, bins, *, se=True, lib_tests=False, transfer_task=Fal
             bins.candidate = bins.dir / "candidate" / f"se{EXE}"
             shutil.copy2(NATIVE / "target" / "release" / f"se{EXE}", bins.candidate)
     if lib_tests:
-        bins.lib_tests, built = cargo_executable(["test", "--locked", "--release", "--lib"], "smart_explorer",
-                                                 log)
+        bins.lib_tests, built = lib_test_command(log, release=True)
         ledger.results.record("build", "candidate library benchmarks (release)", bool(bins.lib_tests),
                               "" if bins.lib_tests else built.tail(3000))
     if transfer_task:
@@ -1783,7 +1798,7 @@ def part_remote_bench(ledger, work, args):
             # Nextcloud has no `se cp` path (saved WebDAV connections are HTTPS only):
             # its chunk-upload case and benchmarks run here only.
             bench_kinds = kinds + [kind for kind in ("nextcloud",) if kind in servers.info]
-            names = [name for name in list_tests(bins.transfer_task, ignored=True, env=env)
+            names = [name for name in list_tests([bins.transfer_task], ignored=True, env=env)
                      if "speed_task_remote_" in leaf(name)
                      and any(f"_{kind}_" in leaf(name) for kind in bench_kinds)]
             ledger.facts["transfer_task benchmarks"] = len(names)
@@ -1800,7 +1815,7 @@ def part_remote_bench(ledger, work, args):
                 pyftp = PyFtp(work, ledger.log_root).start()
                 env_mlst = dict(env, SE_TASK_FTP_URL=pyftp.url())
                 ftp_names = [name for name in names if "_ftp_" in leaf(name)] or [
-                    name for name in list_tests(bins.transfer_task, ignored=True, env=env_mlst)
+                    name for name in list_tests([bins.transfer_task], ignored=True, env=env_mlst)
                     if "speed_task_remote_ftp_" in leaf(name)]
                 run_benchmarks(ledger, bins.transfer_task, ftp_names, env_mlst, 1, prefix="mlst_")
                 bench_rows(ledger, "pyftpdlib (MLST)", prefix="mlst_")
@@ -1841,7 +1856,7 @@ def part_windows_remote(ledger, work, args):
                           purge=lambda _kind, name: remove(root / name), work=work)
         if bins.transfer_task:
             env = dict(os.environ, RUST_BACKTRACE="1", SE_TASK_FTP_URL=pyftp.url())
-            names = [name for name in list_tests(bins.transfer_task, ignored=True, env=env)
+            names = [name for name in list_tests([bins.transfer_task], ignored=True, env=env)
                      if "speed_task_remote_ftp_" in leaf(name)]
             ledger.note("speed_task_remote_sftp_/_smb_/_webdav_ on Windows: not run, their servers need Linux "
                         "containers (measured in the Linux remote-bench job)")

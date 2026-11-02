@@ -55,25 +55,12 @@ jobs:
         with:
           python-version: '3.12'
 
-      - uses: actions/cache/restore@v4
-        with:
-          path: ${{ runner.temp }}/windows-direct-binary
-          key: windows-direct-binary-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: windows-direct-binary-${{ runner.os }}-${{ runner.arch }}-
-
       - name: Run the one task entrypoint
         shell: bash
         timeout-minutes: 245
         run: >-
           python native/test-windows-direct-task.py
           --log-root "$RUNNER_TEMP/windows-direct-task"
-          --binary-cache "$RUNNER_TEMP/windows-direct-binary"
-
-      - uses: actions/cache/save@v4
-        if: always()
-        with:
-          path: ${{ runner.temp }}/windows-direct-binary
-          key: windows-direct-binary-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Preserve acceptance and failure evidence
         if: always()

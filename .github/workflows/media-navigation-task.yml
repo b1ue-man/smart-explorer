@@ -62,25 +62,12 @@ jobs:
         with:
           python-version: '3.12'
 
-      - uses: actions/cache/restore@v4
-        with:
-          path: ${{ runner.temp }}/media-navigation-binary
-          key: media-navigation-binary-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: media-navigation-binary-${{ runner.os }}-${{ runner.arch }}-
-
       - name: Run the one task entrypoint
         shell: bash
         timeout-minutes: 290
         run: >-
           python native/test-media-navigation-task.py
           --log-root "$RUNNER_TEMP/media-navigation-task"
-          --binary-cache "$RUNNER_TEMP/media-navigation-binary"
-
-      - uses: actions/cache/save@v4
-        if: always()
-        with:
-          path: ${{ runner.temp }}/media-navigation-binary
-          key: media-navigation-binary-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Preserve acceptance and failure evidence
         if: always()

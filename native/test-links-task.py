@@ -54,7 +54,7 @@ McpSession = ai.McpSession
 
 
 def stage_unit(results, log_root):
-    completed = ai.run(["cargo", "test", "--locked", "--lib", "--", "links_task_", "cli::"],
+    completed = ai.run(["cargo", "test", "--locked", "--workspace", "--exclude", "smart_explorer_android", "--exclude", "smart_explorer", "--lib", "--", "links_task_", "cli::"],
                        cwd=ai.NATIVE, log=log_root / "unit.log", timeout=5400)
     output = (completed.stdout + completed.stderr).decode(errors="replace")
     summary = [line for line in output.splitlines() if line.startswith("test result:")]

@@ -1,8 +1,6 @@
 #requires -Version 7.2
 param(
-    [string]$TestBinary = '',
     [string]$LogRoot = '',
-    [string]$BinaryCacheRoot = '',
     [switch]$InstallRuntime
 )
 
@@ -118,48 +116,17 @@ $runtimeIdentity | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $LogRoot
 $startDriver = Invoke-TaskProcess (Join-Path $system 'sc.exe') @('start', 'dokan2') 30 'driver-start'
 if ($startDriver.Code -notin @(0, 1056)) { throw "Could not start Dokany driver: $($startDriver.Output)" }
 
-$binaryCache = $null
-$buildFingerprint = $null
-$builtForTask = $false
-if ([string]::IsNullOrWhiteSpace($TestBinary) -and -not [string]::IsNullOrWhiteSpace($BinaryCacheRoot)) {
-    $binaryCache = Get-MountTaskCacheLocation $BinaryCacheRoot $repoRoot
-    $buildFingerprint = Get-MountTaskBuildFingerprint $repoRoot
-    $TestBinary = Get-MountTaskCachedBinary $binaryCache $buildFingerprint
-    if ([string]::IsNullOrWhiteSpace($TestBinary)) {
-        Write-Host 'No matching intact retained fixture; using the single incremental native build.'
-    }
+$cargo = (Get-Command cargo.exe -CommandType Application | Select-Object -First 1).Source
+$cargoTests = @('test', '--locked', '--workspace', '--exclude', 'smart_explorer_android', '--exclude', 'smart_explorer', '--lib', '--')
+function Invoke-CargoTests([string[]]$Arguments, [int]$Seconds, [string]$Label) {
+    Invoke-TaskProcess $cargo (@($cargoTests) + @($Arguments)) $Seconds $Label
 }
-if ([string]::IsNullOrWhiteSpace($TestBinary)) {
-    # This is the only build: one incremental native library test target, not
-    # a workspace/all-target/release build. Discover its actual hashed filename.
-    $build = Invoke-TaskProcess (Get-Command cargo.exe -CommandType Application | Select-Object -First 1).Source @(
-        'test', '--locked', '--lib', '--no-run', '--message-format=json-render-diagnostics'
-    ) 5400 'native-incremental'
-    if ($build.Code -ne 0) { throw "Affected native target failed to build: $($build.Error)" }
-    $executables = @(
-        foreach ($line in ($build.Output -split '\r?\n')) {
-            if (-not $line.StartsWith('{')) { continue }
-            $message = ConvertFrom-Json $line
-            if ($message.reason -eq 'compiler-artifact' -and $message.target.name -eq 'smart_explorer' -and
-                $message.profile.test -and $null -ne $message.executable) {
-                [string]$message.executable
-            }
-        }
-    )
-    if ($executables.Count -ne 1) { throw 'Cargo did not identify exactly one native library test executable.' }
-    $TestBinary = $executables[0]
-    $builtForTask = $true
-}
-$TestBinary = (Resolve-Path -LiteralPath $TestBinary).Path
-if ($builtForTask -and $null -ne $binaryCache) {
-    Save-MountTaskCachedBinary $binaryCache $buildFingerprint $TestBinary
-}
-[IO.File]::WriteAllText((Join-Path $LogRoot 'test-executable.txt'), $TestBinary)
-$selected = Invoke-TaskProcess $TestBinary @('mount_batching_task', '--list', '--include-ignored') 30 'selected-cases'
+[IO.File]::WriteAllText((Join-Path $LogRoot 'test-command.txt'), 'cargo test --workspace --exclude smart_explorer_android --exclude smart_explorer --lib')
+$selected = Invoke-CargoTests @('mount_batching_task', '--list', '--include-ignored') 30 'selected-cases'
 if ($selected.Code -ne 0 -or $selected.Output -notmatch 'mount_batching_task_real_driver_navigation_and_checker') {
     throw 'The selected executable does not contain the actual mounted-volume task fixture.'
 }
-$run = Invoke-TaskProcess $TestBinary @(
+$run = Invoke-CargoTests @(
     'mount_batching_task', '--include-ignored', '--nocapture', '--test-threads=1'
 ) 600 'mounted-volume'
 Write-Host $run.Output

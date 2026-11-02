@@ -202,21 +202,21 @@ else
 fi
 (
     cd "$repo_root/native"
-    run_task cargo test --locked --lib lan_cleanup_task_ -- --test-threads=1
+    run_task cargo test --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --lib lan_cleanup_task_ -- --test-threads=1
 ) 2>&1 | tee "$native_log"
 verify_test_log "$native_log" "${#native_tests[@]}" "${native_tests[@]}"
 
 echo "lan/cleanup task suite: storage-analysis hardening"
 (
     cd "$repo_root/native"
-    run_task cargo test --locked --lib analytics_access_task_ -- --test-threads=1
+    run_task cargo test --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --lib analytics_access_task_ -- --test-threads=1
 ) 2>&1 | tee "$suite_tmp/analytics.log"
 verify_test_log "$suite_tmp/analytics.log" "${#analytics_tests[@]}" "${analytics_tests[@]}"
 
 echo "lan/cleanup task suite: affected integrations"
 (
     cd "$repo_root/native"
-    run_task cargo test --locked --lib -- --test-threads=1 --exact \
+    run_task cargo test --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --lib -- --test-threads=1 --exact \
         share::direct_request_tombstone::tests::v5_profile_migration_preserves_exec_and_defaults_tombstones_empty \
         share::legacy_direct_request_tests::corrupt_evidence_and_future_schema_fail_closed_while_v6_defaults_empty \
         daemon::ipc_host::service_lifecycle::tests::explicit_stop_barrier_blocks_periodic_auto_connect_reload \
@@ -247,7 +247,7 @@ if ! git -C "$repo_root" cat-file -e "${batch_base}^{commit}" 2>/dev/null; then
     git -C "$repo_root" fetch --quiet --depth=1 origin "$batch_base"
 fi
 mapfile -t batch_files < <(
-    git -C "$repo_root" diff --name-only --diff-filter=AM "$batch_base" HEAD -- 'native/src/*.rs'
+    git -C "$repo_root" diff --name-only --diff-filter=AM "$batch_base" HEAD -- 'native/crates/*/src/*.rs' 'native/src/*.rs'
 )
 if [[ "${#batch_files[@]}" -eq 0 ]]; then
     echo "no batch source files found relative to $batch_base" >&2
@@ -271,7 +271,7 @@ if [[ "$format_failures" -ne 0 ]]; then
 fi
 echo "lan/cleanup task suite: ${#batch_files[@]} batch source files are rustfmt-clean"
 
-# Clippy diagnostics are matched by their `src/...:line:col:` prefix in the
+# Clippy diagnostics are matched by their `src/...` (or `crates/<crate>/src/...`) `:line:col:` prefix in the
 # short message format (paths relative to native/) against the lines this
 # batch added or changed, so older diagnostics on untouched lines of a touched
 # file stay tracked debt instead of failing a feature batch. A diagnostic
@@ -292,7 +292,7 @@ for batch_file in "${batch_files[@]}"; do
 done
 batch_diagnostics() {
     local log=$1
-    { grep -E '^src/[^:]+:[0-9]+:[0-9]+: (warning|error)' "$log" || true; } | sort -u | awk -F: -v ranges="$batch_ranges" '
+    { grep -E '^(crates/[^/:]+/)?src/[^:]+:[0-9]+:[0-9]+: (warning|error)' "$log" || true; } | sort -u | awk -F: -v ranges="$batch_ranges" '
         BEGIN {
             while ((getline line < ranges) > 0) {
                 split(line, range, " ")
@@ -326,12 +326,15 @@ for clippy_target in "${clippy_targets[@]}"; do
     if [[ "$clippy_target" == host ]]; then
         (
             cd "$repo_root/native"
-            run_task cargo clippy --locked --lib --bins --message-format short
+            run_task cargo clippy --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --lib --message-format short
+            run_task cargo clippy --locked -p smart_explorer --lib --bins --message-format short
         ) 2>&1 | tee "$clippy_log"
     else
         (
             cd "$repo_root/native"
-            run_task cargo clippy --locked --target "$clippy_target" --lib --bins \
+            run_task cargo clippy --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --target "$clippy_target" --lib \
+                --message-format short
+            run_task cargo clippy --locked -p smart_explorer --target "$clippy_target" --lib --bins \
                 --message-format short
         ) 2>&1 | tee "$clippy_log"
     fi

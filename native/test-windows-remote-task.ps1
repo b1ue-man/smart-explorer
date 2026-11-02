@@ -1,10 +1,6 @@
 #requires -Version 7.2
 param(
-    [string]$TestBinary = '',
-    [string]$TestBinarySha256 = '',
-    [string]$TestBinarySourceSha = '',
     [string]$LogRoot = '',
-    [string]$BinaryCacheRoot = '',
     [string]$DependencyCacheRoot = '',
     [switch]$PreparePrivateRuntime,
     [switch]$InstallRuntime
@@ -175,44 +171,12 @@ foreach ($path in @($prepared.DllPath, $prepared.ManifestPath, $prepared.SourceP
     [IO.File]::Copy($path, (Join-Path $dependencyEvidence ([IO.Path]::GetFileName($path))), $false)
 }
 $dependencyManifest = ConvertFrom-Json ([IO.File]::ReadAllText($prepared.ManifestPath))
-$cache = $null
-$sourceFingerprint = Get-MountTaskBuildFingerprint $repoRoot
-$dependencyIdentity = "$($prepared.DllSha256):$($dependencyManifest.source_package.sha256)"
-$fingerprint = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(
-    [Text.Encoding]::UTF8.GetBytes("$sourceFingerprint`:$dependencyIdentity"))).ToLowerInvariant()
-$built = $false
-if (-not [string]::IsNullOrWhiteSpace($TestBinary)) {
-    if ($TestBinarySourceSha -cne $candidate -or $TestBinarySha256 -notmatch '^[a-fA-F0-9]{64}$' -or
-        (Get-FileHash -LiteralPath $TestBinary -Algorithm SHA256).Hash -ine $TestBinarySha256) {
-        throw 'An explicitly supplied development binary requires this source SHA and exact SHA-256.'
-    }
-} elseif (-not [string]::IsNullOrWhiteSpace($BinaryCacheRoot)) {
-    $cache = Get-MountTaskCacheLocation $BinaryCacheRoot $repoRoot
-    $TestBinary = Get-MountTaskCachedBinary $cache $fingerprint
+$cargo = (Get-Command cargo.exe -CommandType Application | Select-Object -First 1).Source
+$cargoTests = @('test', '--locked', '--workspace', '--exclude', 'smart_explorer_android', '--exclude', 'smart_explorer', '--lib', '--')
+function Invoke-CargoTests([string[]]$Arguments, [int]$Seconds, [string]$Label, [switch]$Fixture) {
+    Invoke-TaskProcess $cargo (@($cargoTests) + @($Arguments)) $Seconds $Label -Fixture:$Fixture
 }
-if ([string]::IsNullOrWhiteSpace($TestBinary)) {
-    $build = Invoke-TaskProcess (Get-Command cargo.exe -CommandType Application | Select-Object -First 1).Source @(
-        'test', '--locked', '--lib', '--no-run', '--message-format=json-render-diagnostics'
-    ) 7200 'native-incremental'
-    if ($build.Code -ne 0) {
-        Write-Host $build.Error
-        throw 'Affected library target failed to build; native-incremental.stderr.log contains the diagnostics.'
-    }
-    $executables = @(
-        foreach ($line in ($build.Output -split '\r?\n')) {
-            if (-not $line.StartsWith('{')) { continue }
-            $message = ConvertFrom-Json $line
-            if ($message.reason -eq 'compiler-artifact' -and $message.target.name -eq 'smart_explorer' -and
-                $message.profile.test -and $null -ne $message.executable) { [string]$message.executable }
-        }
-    )
-    if ($executables.Count -ne 1) { throw 'Cargo did not identify exactly one library fixture executable.' }
-    $TestBinary = $executables[0]
-    $built = $true
-}
-$TestBinary = (Resolve-Path -LiteralPath $TestBinary).Path
-if ($built -and $null -ne $cache) { Save-MountTaskCachedBinary $cache $fingerprint $TestBinary }
-$selected = Invoke-TaskProcess $TestBinary @('windows_remote_task_', '--list', '--include-ignored') 30 'selected-cases' -Fixture
+$selected = Invoke-CargoTests @('windows_remote_task_', '--list', '--include-ignored') 30 'selected-cases' -Fixture
 if ($selected.Code -ne 0) { throw 'Could not enumerate the selected task cases.' }
 $requiredCases = @(
     'windows_remote_task_peer_names_are_stable_exact_and_reversible',
@@ -240,12 +204,22 @@ $requiredCases = @(
 foreach ($required in $requiredCases) {
     if (-not $selected.Output.Contains("$required`: test")) { throw "Missing task acceptance case: $required" }
 }
-$dumpKey = Enable-WindowsRemoteTaskDump $TestBinary $LogRoot
+$build = Invoke-TaskProcess $cargo @('test', '--locked', '--workspace', '--exclude', 'smart_explorer_android', '--exclude', 'smart_explorer', '--lib', '--no-run', '--message-format=json-render-diagnostics') 5400 'test-executables'
+if ($build.Code -ne 0) { throw "Test executables failed to build: $($build.Error)" }
+$executables = @(
+    foreach ($line in ($build.Output -split '\r?\n')) {
+        if (-not $line.StartsWith('{')) { continue }
+        $message = ConvertFrom-Json $line
+        if ($message.reason -eq 'compiler-artifact' -and $message.profile.test -and $null -ne $message.executable) { [string]$message.executable }
+    }
+)
+if ($executables.Count -eq 0) { throw 'Cargo reported no test executable for the windows-remote task.' }
+$dumpKeys = @($executables | ForEach-Object { Enable-WindowsRemoteTaskDump $_ $LogRoot })
 try {
     $dumpTool = Get-WindowsRemoteTaskDumpTool $LogRoot
-    $result = Invoke-TaskProcess $TestBinary @('windows_remote_task_', '--include-ignored', '--nocapture', '--test-threads=1') 1800 'windows-remote' -Fixture
+    $result = Invoke-CargoTests @('windows_remote_task_', '--include-ignored', '--nocapture', '--test-threads=1') 1800 'windows-remote' -Fixture
 } finally {
-    Remove-Item -LiteralPath $dumpKey -Recurse -Force
+    foreach ($dumpKey in $dumpKeys) { Remove-Item -LiteralPath $dumpKey -Recurse -Force }
 }
 Write-Host $result.Output
 foreach ($line in ($result.Error -split '\r?\n')) {
@@ -259,8 +233,7 @@ if ($result.Code -ne 0) {
     schema = 1
     candidate = $candidate
     outcome = 'PASS'
-    test_binary_sha256 = (Get-FileHash -LiteralPath $TestBinary -Algorithm SHA256).Hash.ToLowerInvariant()
-    build_inputs_sha256 = $fingerprint
+    test_command = 'cargo test --workspace --exclude smart_explorer_android --exclude smart_explorer --lib'
     private_dll_sha256 = $prepared.DllSha256
     private_source_sha256 = $dependencyManifest.source_package.sha256
     windows = [Environment]::OSVersion.VersionString

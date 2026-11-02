@@ -46,23 +46,12 @@ jobs:
         uses: ./.github/actions/native-setup
         with:
           workspaces: native
-      - uses: actions/cache/restore@v4
-        with:
-          path: ${{ runner.temp }}/copy-paste-task-binary
-          key: copy-paste-task-binary-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: copy-paste-task-binary-${{ runner.os }}-${{ runner.arch }}-
       - name: Run the single clipboard and cross-remote task entrypoint
         shell: pwsh
         timeout-minutes: 170
         run: >-
           ./native/test-copy-paste-task.ps1
           -LogRoot (Join-Path $env:RUNNER_TEMP 'copy-paste-task')
-          -BinaryCacheRoot (Join-Path $env:RUNNER_TEMP 'copy-paste-task-binary')
-      - uses: actions/cache/save@v4
-        if: always()
-        with:
-          path: ${{ runner.temp }}/copy-paste-task-binary
-          key: copy-paste-task-binary-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:

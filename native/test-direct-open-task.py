@@ -60,26 +60,6 @@ SYNC_REQUIRED = [
 ]
 
 
-def sha256(path):
-    with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
-
-
-def build_fingerprint():
-    digest = hashlib.sha256()
-    # Include all checked-in native build inputs; omit source-independent
-    # documentation and orchestration so a runner-only fix can reuse the binary.
-    paths = subprocess.check_output(["git", "ls-files", "-z", "--", "native/src",
-        "native/Cargo.toml", "native/Cargo.lock", "native/build.rs", "native/assets",
-        "native/.cargo", ".cargo"], cwd=ROOT).decode().split("\0")
-    for name in sorted(filter(None, paths)):
-        digest.update(name.encode())
-        digest.update(bytes.fromhex(sha256(ROOT / name)))
-    digest.update(subprocess.check_output(["rustc", "-vV"], cwd=NATIVE))
-    digest.update(b"native-lib-test;debug=0;incremental=1")
-    return digest.hexdigest()
-
-
 def run(command, log, seconds, env, stderr=None):
     print("Running:", " ".join(map(str, command)), flush=True)
     with log.open("w", encoding="utf-8") as output:
@@ -112,10 +92,7 @@ def main():
         raise RuntimeError("This suite runs only on the configured remote CI/automation runner.")
     parser = argparse.ArgumentParser()
     parser.add_argument("--log-root", type=Path, required=True)
-    parser.add_argument("--binary", type=Path)
     parser.add_argument("--source-sha")
-    parser.add_argument("--binary-sha256")
-    parser.add_argument("--binary-cache", type=Path)
     args = parser.parse_args()
     logs = args.log_root.resolve()
     logs.mkdir(parents=True, exist_ok=True)
@@ -129,44 +106,10 @@ def main():
         SMART_EXPLORER_E2E_TEST_NAMESPACE="direct_open_" + candidate[:12])
     for name in ["SE_SHARE_RELAY_URL", "SE_SHARE_RELAY_ONLY"]:
         env.pop(name, None)
-    binary = args.binary
-    cache = args.binary_cache.resolve() if args.binary_cache else None
-    fingerprint = build_fingerprint() if cache else None
-    cached_binary = cache / ("fixture.exe" if os.name == "nt" else "fixture") if cache else None
-    if binary is None and cache:
-        try:
-            metadata = json.loads((cache / "provenance.json").read_text())
-            if metadata["build_inputs_sha256"] == fingerprint and metadata["binary_sha256"] == sha256(cached_binary):
-                binary = cached_binary
-                print("Reusing the source- and hash-bound development fixture.", flush=True)
-        except (OSError, ValueError, KeyError):
-            pass
-    if binary:
-        binary = binary.resolve()
-        if args.binary and (args.source_sha != candidate or args.binary_sha256 != sha256(binary)):
-            raise RuntimeError("Supplied development binary needs this exact source SHA and SHA-256.")
-    else:
-        # Cargo reuses its validated dependency/incremental cache on this host.
-        # Discover the executable from compiler-artifact records, not stale paths.
-        build_log = logs / "build.jsonl"
-        run(["cargo", "test", "--locked", "--lib", "--no-run", "--message-format=json"],
-            build_log, 9000, env, logs / "build.stderr.log")
-        for line in build_log.read_text(encoding="utf-8").splitlines():
-            try:
-                record = json.loads(line)
-            except ValueError:
-                continue
-            if record.get("reason") == "compiler-artifact" and record.get("profile", {}).get("test") and record.get("executable"):
-                if record.get("target", {}).get("name") == "smart_explorer":
-                    binary = Path(record["executable"])
-        if binary is None:
-            raise RuntimeError("Cargo did not report the expected library fixture executable.")
-        if cache:
-            cache.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(binary, cached_binary)
-            metadata = {"build_inputs_sha256": fingerprint, "binary_sha256": sha256(cached_binary)}
-            (cache / "provenance.json").write_text(json.dumps(metadata), encoding="utf-8")
-    run([str(binary), "--list", "--format", "terse"], logs / "available-tests.txt", 60, env)
+    # The library tests of every workspace crate run through cargo: cargo builds and runs each test
+    # executable of the crates (the Android bridge is excluded). Listing and runs use this command.
+    cargo_tests = ["cargo", "test", "--locked", "--workspace", "--exclude", "smart_explorer_android", "--exclude", "smart_explorer", "--lib", "--"]
+    run([*cargo_tests, "--list", "--format", "terse"], logs / "available-tests.txt", 1800, env)
     available = [line.removesuffix(": test") for line in (logs / "available-tests.txt").read_text(encoding="utf-8").splitlines() if line.endswith(": test")]
     selected = [name for name in available if any(prefix in name for prefix in PREFIXES)]
     required = [
@@ -217,7 +160,7 @@ def main():
             XDG_CONFIG_HOME=str(Path(profile) / "config"), XDG_DATA_HOME=str(Path(profile) / "data"))
         for name in ["APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME", "XDG_DATA_HOME"]:
             Path(env[name]).mkdir(parents=True, exist_ok=True)
-        run([str(binary), "--include-ignored", "--test-threads=1", "--exact", *selected],
+        run([*cargo_tests, "--include-ignored", "--test-threads=1", "--exact", *selected],
             logs / "suite.log", 1800, env)
     result = (logs / "suite.log").read_text(encoding="utf-8", errors="replace")
     for name in selected:
@@ -240,7 +183,7 @@ def main():
             logs / "android-conflict-contract.log", 3600, env)
         reports = ROOT / "android/app/build/test-results/testDebugUnitTest"
         shutil.copytree(reports, logs / "android-conflict-results", dirs_exist_ok=True)
-    evidence = {"candidate": candidate, "binary_sha256": sha256(binary),
+    evidence = {"candidate": candidate, "test_command": " ".join(cargo_tests),
         "platform": sys.platform, "selected": selected, "result": "passed"}
     (logs / "acceptance.json").write_text(json.dumps(evidence, indent=2), encoding="utf-8")
     print(result)

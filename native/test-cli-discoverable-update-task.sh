@@ -172,14 +172,14 @@ else
 fi
 (
     cd "$repo_root/native"
-    run_task cargo test --locked --lib cli_task_ -- --test-threads=1
+    run_task cargo test --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --lib cli_task_ -- --test-threads=1
 ) 2>&1 | tee "$suite_tmp/milestones.log"
 verify_test_log "$suite_tmp/milestones.log" "${#milestone_tests[@]}" "${milestone_tests[@]}"
 
 echo "cli discoverable/update task suite: affected integrations"
 (
     cd "$repo_root/native"
-    run_task cargo test --locked --lib -- --test-threads=1 "${integration_tests[@]}"
+    run_task cargo test --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --lib -- --test-threads=1 "${integration_tests[@]}"
 ) 2>&1 | tee "$suite_tmp/integrations.log"
 verify_test_log "$suite_tmp/integrations.log" "${#integration_tests[@]}" "${integration_tests[@]}"
 
@@ -252,7 +252,7 @@ if ! git -C "$repo_root" cat-file -e "${batch_base}^{commit}" 2>/dev/null; then
     git -C "$repo_root" fetch --quiet --depth=1 origin "$batch_base"
 fi
 mapfile -t batch_files < <(
-    git -C "$repo_root" diff --name-only --diff-filter=AM "$batch_base" HEAD -- 'native/src/*.rs'
+    git -C "$repo_root" diff --name-only --diff-filter=AM "$batch_base" HEAD -- 'native/crates/*/src/*.rs' 'native/src/*.rs'
 )
 if [[ "${#batch_files[@]}" -eq 0 ]]; then
     echo "no batch source files found relative to $batch_base" >&2
@@ -323,7 +323,7 @@ echo "cli discoverable/update task suite: ${#batch_files[@]} batch source files 
 
 batch_diagnostics() {
     local log=$1
-    { grep -E '^src/[^:]+:[0-9]+:[0-9]+: (warning|error)' "$log" || true; } | sort -u | awk -F: -v ranges="$batch_ranges" '
+    { grep -E '^(crates/[^/:]+/)?src/[^:]+:[0-9]+:[0-9]+: (warning|error)' "$log" || true; } | sort -u | awk -F: -v ranges="$batch_ranges" '
         BEGIN {
             while ((getline line < ranges) > 0) {
                 split(line, range, " ")
@@ -359,12 +359,15 @@ for clippy_target in "${clippy_targets[@]}"; do
     if [[ "$clippy_target" == host ]]; then
         (
             cd "$repo_root/native"
-            run_task cargo clippy --locked --lib --bins --message-format short
+            run_task cargo clippy --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --lib --message-format short
+            run_task cargo clippy --locked -p smart_explorer --lib --bins --message-format short
         ) 2>&1 | tee "$clippy_log"
     else
         (
             cd "$repo_root/native"
-            run_task cargo clippy --locked --target "$clippy_target" --lib --bins \
+            run_task cargo clippy --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --target "$clippy_target" --lib \
+                --message-format short
+            run_task cargo clippy --locked -p smart_explorer --target "$clippy_target" --lib --bins \
                 --message-format short
         ) 2>&1 | tee "$clippy_log"
     fi

@@ -18,7 +18,7 @@
 # aber je Job nur an genau einem Ort.
 #
 # Optionen:
-#   art=lib       Bibliothekstest des Crates smart_explorer (Standard); laeuft mit vollem
+#   art=lib       Bibliothekstest eines Workspace-Crates (Standard); laeuft mit vollem
 #                 Testpfad und --exact
 #   art=modul     Bestandsharness: alle Tests, deren voller Pfad das Bruchstueck modul=
 #                 enthaelt

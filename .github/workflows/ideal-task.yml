@@ -70,7 +70,7 @@ jobs:
         shell: bash
         timeout-minutes: 120
         working-directory: native
-        run: cargo test --lib -- ideal_task_ abgleich_task_ 'updater::' 'share::exec_grant_runtime::'
+        run: cargo test --workspace --exclude smart_explorer_android --exclude smart_explorer --lib -- ideal_task_ abgleich_task_ 'updater::' 'share::exec_grant_runtime::'
 
   measure:
     strategy:

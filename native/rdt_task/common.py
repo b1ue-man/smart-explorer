@@ -19,10 +19,11 @@ GitHub job per call (``--job``). Everything a stage needs lives here:
     counts as passed). The file is rewritten after every record, so a job that
     hits its time limit still leaves every finished result behind.
 ``Cargo``
-    Development profile only (D3 Bauregel): the library tests of
-    ``smart_explorer`` once per job, ``se`` and ``smart_explorer`` on demand, the
-    share server only for stages with a device pair. No ``--workspace``,
-    ``--all-targets``, ``--release``, installer or feed build. One exception:
+    Development profile only (D3 Bauregel): the library tests of every workspace crate, one test program
+    per crate, each listed once (``cargo test --locked --workspace --exclude smart_explorer_android
+    --exclude smart_explorer --lib --no-run``; the root package has no library tests: native/src/lib.rs
+    only re-exports the crates), ``se`` and ``smart_explorer`` on demand, the share server only for stages
+    with a device pair. No ``--all-targets``, ``--release``, installer or feed build. One exception:
     the throughput stages build ``speed_task`` and their ``se`` in the profile
     ``speed`` (``SPEED_PROFILE``, release optimization with debug assertions),
     since speed measured on opt-level 1 is not the speed that ships.
@@ -688,6 +689,17 @@ class StageError(RuntimeError):
     """A precondition of a stage group failed; the message becomes the report reason."""
 
 
+def workspace_crate_dirs() -> dict[str, Path]:
+    """Package name -> directory of every crate under native/crates (the ``name`` of its ``[package]`` table)."""
+    dirs: dict[str, Path] = {}
+    for manifest in sorted((NATIVE / "crates").glob("*/Cargo.toml")):
+        _, _, package_table = manifest.read_text(encoding="utf-8").partition("[package]")
+        match = re.search(r'^name\s*=\s*"([^"]+)"', package_table.split("\n[", 1)[0], re.M)
+        if match:
+            dirs[match.group(1)] = manifest.parent
+    return dirs
+
+
 class Cargo:
     """Development-profile builds of exactly what a stage needs (D3 Bauregel)."""
 
@@ -695,7 +707,11 @@ class Cargo:
         self.ctx = ctx
         self.lib_ok: bool | None = None
         self.lib_error = ""
-        self.test_exe: Path | None = None
+        self.programs: dict[str, Path] = {}
+        self.program_of_path: dict[str, Path] = {}
+        self.ambiguous_paths: set[str] = set()
+        self.package_of_program: dict[Path, str] = {}
+        self.dir_of_program: dict[Path, Path] = {}
         self.paths: list[str] | None = None
         self.ignored: set[str] = set()
         self.by_leaf: dict[str, list[str]] = {}
@@ -710,45 +726,85 @@ class Cargo:
         return NATIVE / "Cargo.toml"
 
     def build_lib(self) -> bool:
-        """``cargo test --lib --no-run`` once per job, then the test list of the binary."""
+        """``cargo test --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --lib
+        --no-run`` once per job: one test program per workspace crate (the root package has no library tests),
+        each program listed once. ``program_for`` gives the program that lists a test path."""
         if self.lib_ok is not None:
             return self.lib_ok
         started = time.monotonic()
-        completed = self.ctx.run(["cargo", "test", "--locked", "--lib", "--no-run", "--manifest-path",
+        completed = self.ctx.run(["cargo", "test", "--locked", "--workspace", "--exclude", "smart_explorer_android",
+                                  "--exclude", "smart_explorer", "--lib", "--no-run", "--manifest-path",
                                   self.manifest(), "--message-format=json-render-diagnostics"],
                                  stage="build", cwd=REPO, env=self.ctx.base_env(), timeout=BUILD_TIMEOUT_S)
-        executable = None
+        artifacts: dict[str, Path] = {}
         for message in json_lines(completed.output):
             target = message.get("target") or {}
             if (message.get("reason") == "compiler-artifact" and (message.get("profile") or {}).get("test")
-                    and target.get("name") == "smart_explorer" and "bin" not in (target.get("kind") or [])
-                    and message.get("executable")):
-                executable = Path(message["executable"])
-        if completed.ok and executable and executable.is_file():
-            listing = self.ctx.run([executable, "--list"], stage="build", cwd=NATIVE,
-                                   env=self.ctx.test_env(), timeout=600)
-            ignored = self.ctx.run([executable, "--list", "--ignored"], stage="build", cwd=NATIVE,
-                                   env=self.ctx.test_env(), timeout=600)
-            if listing.ok and ignored.ok:
-                self.test_exe = executable
-                self.paths = LIST_LINE.findall(listing.output)
-                self.ignored = set(LIST_LINE.findall(ignored.output))
+                    and "bin" not in (target.get("kind") or []) and message.get("executable")):
+                artifacts[target.get("name", "")] = Path(message["executable"])
+        if completed.ok and artifacts and all(path.is_file() for path in artifacts.values()):
+            crate_dirs = workspace_crate_dirs()
+            problems: list[str] = []
+            paths: list[str] = []
+            ignored: set[str] = set()
+            for package, executable in sorted(artifacts.items()):
+                listing = self.ctx.run([executable, "--list"], stage="build", cwd=NATIVE,
+                                       env=self.ctx.test_env(), timeout=600)
+                ignored_run = self.ctx.run([executable, "--list", "--ignored"], stage="build", cwd=NATIVE,
+                                           env=self.ctx.test_env(), timeout=600)
+                if not (listing.ok and ignored_run.ok):
+                    failed = listing if not listing.ok else ignored_run
+                    problems.append(f"{package}: " + excerpt(failed.output, 1500))
+                    continue
+                listed = LIST_LINE.findall(listing.output)
+                paths.extend(listed)
+                ignored.update(LIST_LINE.findall(ignored_run.output))
+                self.programs[package] = executable
+                self.package_of_program[executable] = package
+                if package in crate_dirs:
+                    self.dir_of_program[executable] = crate_dirs[package]
+                for path in listed:
+                    if path in self.program_of_path:
+                        self.ambiguous_paths.add(path)
+                    else:
+                        self.program_of_path[path] = executable
+            if problems:
+                self.lib_ok = False
+                self.lib_error = "Testliste eines Testprogramms nicht lesbar: " + "\n".join(problems)
+            else:
+                self.paths = paths
+                self.ignored = ignored
                 self.by_leaf = collections.defaultdict(list)
-                for path in self.paths:
+                for path in paths:
                     self.by_leaf[leaf(path)].append(path)
                 self.lib_ok = True
-            else:
-                self.lib_ok = False
-                self.lib_error = "Testliste des Testprogramms nicht lesbar: " + excerpt(listing.output, 1500)
         else:
             self.lib_ok = False
-            self.lib_error = f"cargo test --lib --no-run: {completed.describe()}\n" + excerpt(
+            self.lib_error = f"cargo test --workspace --lib --no-run: {completed.describe()}\n" + excerpt(
                 "\n".join(line for line in completed.output.splitlines() if not line.startswith("{")), 2500)
-        reason = (f"{len(self.paths or [])} Tests im Testprogramm {self.test_exe}" if self.lib_ok
+        reason = (f"{len(self.paths or [])} Tests in {len(self.programs)} Testprogrammen" if self.lib_ok
                   else self.lib_error)
         self.ctx.report.stage_done("build", PASSED if self.lib_ok else FAILED, reason,
                                    time.monotonic() - started)
         return self.lib_ok
+
+    def program_for(self, path: str) -> Path | None:
+        """The test program that lists ``path``; None when no program lists it or several programs do."""
+        if path in self.ambiguous_paths:
+            return None
+        return self.program_of_path.get(path)
+
+    def program_problem(self, path: str) -> str:
+        """The report reason for a path that ``program_for`` cannot map to a program with a crate directory."""
+        if path in self.ambiguous_paths:
+            return "Testpfad in mehreren Testprogrammen gelistet (mehrdeutig)"
+        if path in self.program_of_path:
+            return "Crate-Verzeichnis zum Testprogramm fehlt"
+        return "Testpfad in keinem Testprogramm der Crates gelistet"
+
+    def program_for_package(self, package: str) -> Path | None:
+        """The test program of one workspace crate, by package name."""
+        return self.programs.get(package)
 
     def bin_path(self, name: str, profile: str | None = None) -> Path | None:
         """``cargo build --bin <name>`` on first use: the development profile, or ``profile`` (the speed stages).
@@ -1700,34 +1756,64 @@ class JobContext:
 
     def run_libtest(self, stage: str, paths: list[str], env: dict, include_ignored: bool,
                     threads: int | None, root: bool) -> dict[str, list]:
+        """Exact test paths -> ``{path: [status, reason, duration]}``. Paths that are not root runs go through
+        cargo over every workspace crate (``--lib``). Root runs execute each path in the test program that lists
+        it, ``sudo -n -E <program> --exact ...``, from that crate's directory (cargo's working directory for its
+        tests)."""
         results: dict[str, list] = {}
-        for part in chunks(paths):
-            arguments = ["--exact", *part]
-            if include_ignored:
-                arguments.append("--include-ignored")
-            if threads:
-                arguments.append(f"--test-threads={threads}")
-            if root:
-                command, cwd = ["sudo", "-n", "-E", self.cargo.test_exe, *arguments], NATIVE
+        runnable: list[str] = []
+        for path in paths:
+            if path in self.cargo.ambiguous_paths:
+                results[path] = [FAILED, self.cargo.program_problem(path), 0.0]
             else:
-                command = ["cargo", "test", "--locked", "--lib", "--manifest-path", Cargo.manifest(), "--", *arguments]
-                cwd = REPO
-            parser = LibtestParser(time.monotonic())
-            completed = self.run(command, stage=stage, cwd=cwd, env=env, timeout=LIB_TIMEOUT_S, on_line=parser.feed)
-            blocks = {match.group(1): match.group(2).strip() for match in FAILURE_BLOCK.finditer(completed.output)}
-            for path in part:
-                if path not in parser.results:
-                    parser.results[path] = [FAILED, f"kein Ergebnis ({completed.describe()}): "
-                                            + excerpt(completed.output, 1200), 0.0]
-                elif parser.results[path][0] == FAILED:
-                    block = blocks.get(path) or excerpt(completed.output, 1200)
-                    said = NOT_RUN_SAID.search(block)
-                    if said:
-                        parser.results[path] = [NOT_RUN, said.group(1).strip(), parser.results[path][2]]
-                    else:
-                        parser.results[path][1] = block
-            results.update(parser.results)
+                runnable.append(path)
+        if not root:
+            command = ["cargo", "test", "--locked", "--workspace", "--exclude", "smart_explorer_android",
+                       "--exclude", "smart_explorer", "--lib", "--manifest-path", Cargo.manifest(), "--"]
+            for part in chunks(runnable):
+                results.update(self._libtest_part(stage, part, env, include_ignored, threads, command, REPO))
+            return results
+        by_program: dict[Path, list[str]] = collections.defaultdict(list)
+        for path in runnable:
+            program = self.cargo.program_for(path)
+            if program is None or program not in self.cargo.dir_of_program:
+                results[path] = [FAILED, self.cargo.program_problem(path), 0.0]
+            else:
+                by_program[program].append(path)
+        for program, group in by_program.items():
+            package = self.cargo.package_of_program[program]
+            directory = self.cargo.dir_of_program[program]
+            root_env = dict(env, CARGO_MANIFEST_DIR=str(directory), CARGO_PKG_NAME=package, CARGO_CRATE_NAME=package)
+            for part in chunks(group):
+                results.update(self._libtest_part(stage, part, root_env, include_ignored, threads,
+                                                  ["sudo", "-n", "-E", str(program)], directory))
         return results
+
+    def _libtest_part(self, stage: str, part: list[str], env: dict, include_ignored: bool, threads: int | None,
+                      command: list, cwd: Path) -> dict[str, list]:
+        """One libtest process for the exact paths in ``part``; ``command`` is the prefix before the libtest
+        arguments."""
+        arguments = ["--exact", *part]
+        if include_ignored:
+            arguments.append("--include-ignored")
+        if threads:
+            arguments.append(f"--test-threads={threads}")
+        parser = LibtestParser(time.monotonic())
+        completed = self.run([*command, *arguments], stage=stage, cwd=cwd, env=env, timeout=LIB_TIMEOUT_S,
+                             on_line=parser.feed)
+        blocks = {match.group(1): match.group(2).strip() for match in FAILURE_BLOCK.finditer(completed.output)}
+        for path in part:
+            if path not in parser.results:
+                parser.results[path] = [FAILED, f"kein Ergebnis ({completed.describe()}): "
+                                        + excerpt(completed.output, 1200), 0.0]
+            elif parser.results[path][0] == FAILED:
+                block = blocks.get(path) or excerpt(completed.output, 1200)
+                said = NOT_RUN_SAID.search(block)
+                if said:
+                    parser.results[path] = [NOT_RUN, said.group(1).strip(), parser.results[path][2]]
+                else:
+                    parser.results[path][1] = block
+        return parser.results
 
     def run_junit(self, stage: str, entries: list[Entry]) -> None:
         results = self.state.get("junit")
@@ -2097,9 +2183,10 @@ def inventory_job(ctx: JobContext) -> tuple[list[str], list[str]]:
 
 
 def rust_functions() -> set[str]:
-    """Every ``fn`` name under native/src (for entries without a batch prefix, such as mcp_task_*)."""
+    """Every ``fn`` name under native/src and native/crates (entries without a batch prefix, such as
+    mcp_task_*)."""
     names: set[str] = set()
-    for path in (NATIVE / "src").rglob("*.rs"):
+    for path in [*(NATIVE / "src").rglob("*.rs"), *(NATIVE / "crates").rglob("*.rs")]:
         names.update(re.findall(r"\bfn\s+(\w+)", path.read_text(encoding="utf-8", errors="replace")))
     return names
 

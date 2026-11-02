@@ -96,7 +96,7 @@ def failure_detail(stdout, stderr):
 
 
 def stage_unit(results, log_root):
-    completed = ai.run(["cargo", "test", "--locked", "--lib", "--", *UNIT_FILTERS],
+    completed = ai.run(["cargo", "test", "--locked", "--workspace", "--exclude", "smart_explorer_android", "--exclude", "smart_explorer", "--lib", "--", *UNIT_FILTERS],
                        cwd=ai.NATIVE, log=log_root / "unit.log", timeout=5400)
     stdout = completed.stdout.decode(errors="replace")
     stderr = completed.stderr.decode(errors="replace")

@@ -95,17 +95,18 @@ def main():
     env = dict(os.environ, CARGO_BUILD_JOBS="1", CARGO_INCREMENTAL="1",
                CARGO_PROFILE_TEST_DEBUG="0", CARGO_PROFILE_DEV_DEBUG="0", CARGO_TERM_COLOR="never")
     cache = ROOT / ".review-task-cache"
-    binary = shared.artifact("native", "smart_explorer", "test", cache, logs, env)
-    listing = subprocess.check_output([binary, "--list", "--format", "terse"], text=True, timeout=120)
+    command = shared.library_test_command(logs, env)
+    listing = subprocess.check_output([*command, "--list", "--format", "terse"], text=True, timeout=120,
+                                      cwd=ROOT / "native", env=env)
     selected = [line.removesuffix(": test") for line in listing.splitlines()
                 if line.endswith(": test") and any(value in line for value in SELECTORS)]
     if not selected or any(not any(value in name for name in selected) for value in SELECTORS):
         raise RuntimeError("Required behavior cases were not discovered in the actual test host.")
-    shared.run([binary, "--exact", *selected, "--test-threads=1", "--nocapture"],
-               logs / "behavior.log", env, seconds=1200)
+    shared.run([*command, "--exact", *selected, "--test-threads=1", "--nocapture"],
+               logs / "behavior.log", env, seconds=1200, cwd=ROOT / "native")
     result = (logs / "behavior.log").read_text()
-    report = re.search(r"test result: ok\. (\d+) passed;", result)
-    if report is None or int(report.group(1)) != len(selected):
+    passed = [int(count) for count in re.findall(r"test result: ok\. (\d+) passed;", result)]
+    if not passed or sum(passed) != len(selected):
         raise RuntimeError("The test host did not execute every selected behavior case.")
     cli = shared.artifact("native", "se", "bin", cache, logs, env)
     runtime(shared, cli, logs, env)

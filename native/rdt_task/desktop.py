@@ -39,7 +39,7 @@ import time
 from pathlib import Path
 
 from . import common, screen
-from .common import FAILED, LINUX, NATIVE, NOT_RUN, PASSED, REPO
+from .common import FAILED, LINUX, NOT_RUN, PASSED, REPO
 
 NO_HANG = "desktop_task_no_hang_restart_during_suite"
 PROGMAN = "desktop_task_windows_progman_precheck"
@@ -163,10 +163,15 @@ def run_variant_b(ctx: common.JobContext, stage: str, entry) -> None:
         ctx.record(entry.name, stage, NOT_RUN, "docker fehlt im Runner: Container fedora:43 nicht startbar (A18)")
         return
     tool = screen.helper("desktop-task-linux")
-    exe = Path(ctx.cargo.test_exe)
+    exe = ctx.cargo.program_for(paths[0])
+    if exe is None or exe not in ctx.cargo.dir_of_program:
+        ctx.record(entry.name, stage, FAILED, ctx.cargo.program_problem(paths[0]))
+        return
+    crate = ctx.cargo.dir_of_program[exe]
+    package = ctx.cargo.package_of_program[exe]
     env = {"SE_DESKTOP_TASK_GNOME": "1", "SE_DESKTOP_TASK_GUI": str(gui), "RUST_BACKTRACE": "1",
-           "CARGO_MANIFEST_DIR": str(NATIVE), "CARGO_PKG_NAME": "smart_explorer", "CARGO_CRATE_NAME": "smart_explorer"}
-    command = tool.fedora_command(exe, paths, env, [REPO, exe.parent, gui.parent], NATIVE)
+           "CARGO_MANIFEST_DIR": str(crate), "CARGO_PKG_NAME": package, "CARGO_CRATE_NAME": package}
+    command = tool.fedora_command(exe, paths, env, [REPO, exe.parent, gui.parent], crate)
     parser = common.LibtestParser(time.monotonic())
     completed = ctx.run(command, stage=stage, timeout=100 * 60, on_line=parser.feed)
     result = parser.results.get(paths[0])

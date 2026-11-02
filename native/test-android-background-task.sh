@@ -107,7 +107,7 @@ if ! git -C "$repo_root" cat-file -e "${batch_base}^{commit}" 2>/dev/null; then
 fi
 mapfile -t batch_files < <(
     git -C "$repo_root" diff --name-only --diff-filter=AM "$batch_base" HEAD -- \
-        'native/src/*.rs' 'native/tests/*.rs' 'share-server/src/*.rs'
+        'native/crates/*/src/*.rs' 'native/src/*.rs' 'native/tests/*.rs' 'share-server/src/*.rs'
 )
 if [[ "${#batch_files[@]}" -eq 0 ]]; then
     echo "no batch source files found relative to $batch_base" >&2
@@ -164,7 +164,7 @@ done
 batch_diagnostics() {
     local log=$1
     # Cargo prints Windows paths with backslashes; the ranges use slashes.
-    { tr '\\' '/' < "$log" | grep -E '^(src|tests)/[^:]+:[0-9]+:[0-9]+: (warning|error)' || true; } |
+    { tr '\\' '/' < "$log" | grep -E '^(crates/[^/:]+/)?(src|tests)/[^:]+:[0-9]+:[0-9]+: (warning|error)' || true; } |
         sort -u | awk -F: -v ranges="$batch_ranges" '
         BEGIN {
             while ((getline line < ranges) > 0) {
@@ -204,7 +204,9 @@ for clippy_target in "${clippy_targets[@]}"; do
     fi
     if ! (
         cd "$repo_root/native"
-        run_task cargo clippy --locked "${target_arguments[@]}" --all-targets \
+        run_task cargo clippy --locked --workspace --exclude smart_explorer_android --exclude smart_explorer "${target_arguments[@]}" --all-targets \
+            --message-format short
+        run_task cargo clippy --locked -p smart_explorer "${target_arguments[@]}" --all-targets \
             --message-format short
     ) 2>&1 | tee "$clippy_log"; then
         stage_failed "clippy ($clippy_target) did not complete"
@@ -250,14 +252,14 @@ report_hung_test() {
 }
 if ! (
     cd "$repo_root/native"
-    run_task timeout --kill-after=60s 2700 cargo test --locked --lib android_background_task_ -- --test-threads=1
+    run_task timeout --kill-after=60s 2700 cargo test --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --lib android_background_task_ -- --test-threads=1
 ) 2>&1 | tee "$milestone_log"; then
     report_hung_test "$milestone_log"
     stage_failed "milestone tests"
 fi
 passed_line="$(grep -E '^test result: ok\. [0-9]+ passed; 0 failed' "$milestone_log" | head -n 1 || true)"
 mapfile -t source_tests < <(
-    grep -rhoE 'fn android_background_task_[A-Za-z0-9_]+' "$repo_root/native/src" |
+    grep -rhoE 'fn android_background_task_[A-Za-z0-9_]+' "$repo_root/native/src" "$repo_root/native/crates" |
         sed 's/^fn //' | sort -u
 )
 mapfile -t compiled_tests < <(
@@ -330,7 +332,7 @@ echo "android background task suite: tests of the affected modules"
 if ! (
     cd "$repo_root/native"
     SMART_EXPLORER_COPY_PASTE_TASK=1 SMART_EXPLORER_GUI_TASK=1 run_task timeout --kill-after=60s 3600 \
-        cargo test --locked --lib -- --test-threads=1 "${skip_arguments[@]}" "${affected_modules[@]}"
+        cargo test --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --lib -- --test-threads=1 "${skip_arguments[@]}" "${affected_modules[@]}"
 ) 2>&1 | tee "$modules_log" ||
     ! grep -Eq '^test result: ok\. [0-9]+ passed; 0 failed' "$modules_log"; then
     report_hung_test "$modules_log"
@@ -351,7 +353,8 @@ echo "android background task suite: Share server tests"
 if ! (
     cd "$repo_root/share-server"
     CARGO_TARGET_DIR="$repo_root/share-server/target" run_task timeout --kill-after=60s 2400 \
-        cargo test --locked -- --test-threads=1
+        cargo test --locked --workspace --exclude smart_explorer_android --exclude smart_explorer -- --test-threads=1
+        cargo test --locked -p smart_explorer -- --test-threads=1
 ) 2>&1 | tee "$server_log" ||
     ! grep -Eq '^test result: ok\. [0-9]+ passed; 0 failed' "$server_log"; then
     report_hung_test "$server_log"

@@ -62,25 +62,12 @@ jobs:
         with:
           python-version: '3.12'
 
-      - uses: actions/cache/restore@v4
-        with:
-          path: ${{ runner.temp }}/direct-open-binary
-          key: direct-open-binary-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: direct-open-binary-${{ runner.os }}-${{ runner.arch }}-
-
       - name: Run the one task entrypoint
         shell: bash
         timeout-minutes: 245
         run: >-
           python native/test-direct-open-task.py
           --log-root "$RUNNER_TEMP/direct-open-task"
-          --binary-cache "$RUNNER_TEMP/direct-open-binary"
-
-      - uses: actions/cache/save@v4
-        if: always()
-        with:
-          path: ${{ runner.temp }}/direct-open-binary
-          key: direct-open-binary-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Preserve acceptance and failure evidence
         if: always()

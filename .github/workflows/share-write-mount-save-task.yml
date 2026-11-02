@@ -61,25 +61,12 @@ jobs:
         with:
           python-version: '3.12'
 
-      - uses: actions/cache/restore@v4
-        with:
-          path: ${{ runner.temp }}/share-write-binary
-          key: share-write-binary-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: share-write-binary-${{ runner.os }}-${{ runner.arch }}-
-
       - name: Run the one task entrypoint
         shell: bash
         timeout-minutes: 290
         run: >-
           python native/test-share-write-mount-save-task.py
           --log-root "$RUNNER_TEMP/share-write-task"
-          --binary-cache "$RUNNER_TEMP/share-write-binary"
-
-      - uses: actions/cache/save@v4
-        if: always()
-        with:
-          path: ${{ runner.temp }}/share-write-binary
-          key: share-write-binary-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Preserve acceptance and failure evidence
         if: always()

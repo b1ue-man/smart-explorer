@@ -49,25 +49,12 @@ jobs:
         with:
           workspaces: native
 
-      - uses: actions/cache/restore@v4
-        with:
-          path: ${{ runner.temp }}/mount-recovery-cache-task-binary
-          key: mount-recovery-cache-task-binary-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: mount-recovery-cache-task-binary-${{ runner.os }}-${{ runner.arch }}-
-
       - name: Run the single mount-recovery-cache task entrypoint
         shell: pwsh
         timeout-minutes: 170
         run: >-
           ./native/test-mount-recovery-cache-task.ps1
           -LogRoot (Join-Path $env:RUNNER_TEMP 'mount-recovery-cache-task')
-          -BinaryCacheRoot (Join-Path $env:RUNNER_TEMP 'mount-recovery-cache-task-binary')
-
-      - uses: actions/cache/save@v4
-        if: always()
-        with:
-          path: ${{ runner.temp }}/mount-recovery-cache-task-binary
-          key: mount-recovery-cache-task-binary-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - uses: actions/upload-artifact@v4
         if: always()

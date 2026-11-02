@@ -39,7 +39,7 @@ def openh264_fixture(directory, logs, env):
     """Supply the existing codec fixture from the exact checked-in Cisco pin."""
     if platform.machine().lower() not in {"x86_64", "amd64"}:
         return
-    source = (ROOT / "native/src/screen/os/native_ffi/openh264_pins.rs").read_text()
+    source = (ROOT / "native/crates/engine/src/screen/os/native_ffi/openh264_pins.rs").read_text()
     target = 'windows' if os.name == "nt" else 'target_os = "linux"'
     marker = '#[cfg(all(' + target + ', target_arch = "x86_64"))]'
     if source.count(marker) != 1:
@@ -125,7 +125,7 @@ def fingerprint(crate, target, env):
     if crate == "share-server":
         inputs.append("vendor/iroh-relay-1.0.0")
     if crate == "native":
-        inputs += ["native/build_support", "native/dokany-private", "native/prepare-dokany-private.ps1",
+        inputs += ["native/crates", "native/crates/build_support", "native/dokany-private", "native/prepare-dokany-private.ps1",
             "native/app.rc", "native/app.manifest", "vendor/iroh-1.3.0",
             "vendor/noq-1.3.0", "vendor/noq-proto-1.3.0", "vendor/egui_glow-0.29.1"]
     digest = hashlib.sha256()
@@ -139,9 +139,9 @@ def fingerprint(crate, target, env):
     return digest.hexdigest()
 
 
-def artifact(crate, name, kind, cache, logs, env, package=None):
-    stamp = fingerprint(crate, (name, kind, package), env)
-    dest = cache / crate / (name + ("-test" if kind == "test" else "") + (".exe" if os.name == "nt" else ""))
+def artifact(crate, name, cache, logs, env, package=None):
+    stamp = fingerprint(crate, (name, package), env)
+    dest = cache / crate / (name + (".exe" if os.name == "nt" else ""))
     meta = dest.with_suffix(dest.suffix + ".json")
     try:
         data = json.loads(meta.read_text())
@@ -150,14 +150,12 @@ def artifact(crate, name, kind, cache, logs, env, package=None):
             return dest
     except (OSError, ValueError, KeyError):
         pass
-    args = ["cargo", "test" if kind == "test" else "build", "--locked"]
+    args = ["cargo", "build", "--locked"]
     if crate == "native":
         args += ["-p", package or "smart_explorer"]
     args += ["--lib"] if name in {"smart_explorer", "egui_glow"} else ["--bin", name]
-    if kind == "test":
-        args += ["--no-run"]
     args += ["--message-format=json"]
-    label = f"{crate}-{name}-{kind}"
+    label = f"{crate}-{name}-dev"
     log = logs / (label + ".jsonl")
     run(args, log, env, seconds=10800, cwd=ROOT / crate, stderr=logs / (label + ".stderr.log"))
     binary = None
@@ -167,7 +165,7 @@ def artifact(crate, name, kind, cache, logs, env, package=None):
         except ValueError:
             continue
         if record.get("reason") == "compiler-artifact" and record.get("target", {}).get("name") == name:
-            if bool(record.get("profile", {}).get("test")) == (kind == "test") and record.get("executable"):
+            if not record.get("profile", {}).get("test") and record.get("executable"):
                 binary = Path(record["executable"])
     if binary is None or not binary.is_file():
         raise RuntimeError("Cargo did not discover the requested development executable: " + label)
@@ -182,7 +180,7 @@ def format_patch(logs, env, candidate):
         return
     output(["git", "cat-file", "-e", BASE + "^{commit}"])
     paths = output(["git", "diff", "--name-only", "--diff-filter=AM", BASE, "HEAD", "--",
-        "native/src", "native/android-bridge/src", "share-server/src"]).splitlines()
+        "native/src", "native/crates", "native/android-bridge/src", "share-server/src"]).splitlines()
     patch, problems, lengths = [], [], {}
     for name in (name for name in paths if name.endswith(".rs")):
         original = (ROOT / name).read_text()
@@ -272,10 +270,30 @@ def android_unit_evidence(logs, candidate):
         "result": "passed", "scope": "Selected JVM cases only; no Android codec or device execution."}, indent=2))
 
 
-def native_tests(binary, logs, env):
+def command_digest(command):
+    """Digest of the cargo command that ran the tests (the test programs are not kept)."""
+    return hashlib.sha256(" ".join(command).encode()).hexdigest()
+
+
+def library_test_command(logs, env):
+    """Cargo runs the library tests of every workspace crate. The root package is excluded here, so
+    the root programs and root targets are built only by their own calls (test-support rule)."""
+    command = ["cargo", "test", "--locked", "--workspace", "--exclude", "smart_explorer_android",
+        "--exclude", "smart_explorer", "--lib", "--"]
+    run([*command[:-1], "--no-run"], logs / "library-test-build.log", env, seconds=10800, cwd=ROOT / "native")
+    return command
+
+
+def egui_glow_test_command(logs, env):
+    command = ["cargo", "test", "--locked", "-p", "egui_glow", "--lib", "--"]
+    run([*command[:-1], "--no-run"], logs / "egui-glow-test-build.log", env, seconds=10800, cwd=ROOT / "native")
+    return command
+
+
+def native_tests(command, logs, env):
     plan = manifest()["native"]
     listing = logs / "native-available.txt"
-    run([binary, "--list", "--format", "terse"], listing, env, seconds=120)
+    run([*command, "--list", "--format", "terse"], listing, env, seconds=120, cwd=ROOT / "native")
     available = [line.removesuffix(": test") for line in listing.read_text().splitlines() if line.endswith(": test")]
     filters = list(plan["prefixes"])
     platform = "windows" if os.name == "nt" else "linux"
@@ -290,7 +308,7 @@ def native_tests(binary, logs, env):
         if not any(marker in name for name in selected):
             raise RuntimeError("Missing required batch behavior: " + marker)
     (logs / "native-selection.json").write_text(json.dumps(selected, indent=2))
-    args = [binary, "--include-ignored", "--show-output", "--test-threads=1", *filters]
+    args = [*command, "--include-ignored", "--show-output", "--test-threads=1", *filters]
     for suffix in plan["exclude"]:
         args += ["--skip", suffix]
     log = logs / "native-suite.log"
@@ -303,7 +321,7 @@ def native_tests(binary, logs, env):
         fixture_env.update(SE_SCREEN_TASK_X11="1", XDG_SESSION_TYPE="x11")
         args = ["xvfb-run", "--auto-servernum", "--error-file=" + str(logs / "xvfb.log"),
             "--server-args=-screen 0 1280x720x24 -nolisten tcp -noreset", *args]
-    run(args, log, fixture_env, seconds=7200)
+    run(args, log, fixture_env, seconds=7200, cwd=ROOT / "native")
     result = log.read_text(errors="replace")
     for name in selected:
         if f"test {name} ... ok" not in result:
@@ -324,20 +342,20 @@ def native_tests(binary, logs, env):
     completed = [name for name in selected if name not in not_executed]
     evidence = milestone_evidence("native", completed, unavailable, platform)
     quality_evidence(logs, env["CANDIDATE_SHA"], completed, unavailable,
-        plan["quality"], sha(MANIFEST), sha(binary))
+        plan["quality"], sha(MANIFEST), command_digest(command))
     (logs / "native-acceptance.json").write_text(json.dumps({"candidate": env["CANDIDATE_SHA"],
-        "manifest_sha256": sha(MANIFEST), "binary_sha256": sha(binary), "platform": platform,
+        "manifest_sha256": sha(MANIFEST), "binary_sha256": command_digest(command), "platform": platform,
         "selected": selected, "passed_fixtures": completed, "not_executed": unavailable,
         "milestone_evidence": evidence, "result": "passed_with_unverified_environment" if unavailable else "passed",
         "unverified": manifest()["unverified"]}, indent=2))
     print(result[-16000:])
 
 
-def glow_scope_tests(binary, logs, env):
+def glow_scope_tests(command, logs, env):
     """Only the modified vendor error ledger, within this same task suite."""
     plan = manifest()["native"]["glow_scope"]
     listing = logs / "glow-scope-available.txt"
-    run([binary, "--list", "--format", "terse"], listing, env, seconds=120)
+    run([*command, "--list", "--format", "terse"], listing, env, seconds=120, cwd=ROOT / "native")
     available = [line.removesuffix(": test") for line in listing.read_text().splitlines() if line.endswith(": test")]
     selected = sorted(name for name in available if plan["prefix"] in name)
     for case in plan["cases"]:
@@ -346,32 +364,32 @@ def glow_scope_tests(binary, logs, env):
     if len(selected) != len(plan["cases"]):
         raise RuntimeError("Vendor GL error selection differs from the task manifest.")
     log = logs / "glow-scope-suite.log"
-    run([binary, plan["prefix"], "--show-output", "--test-threads=1"], log, env, seconds=1800)
+    run([*command, plan["prefix"], "--show-output", "--test-threads=1"], log, env, seconds=1800, cwd=ROOT / "native")
     result = log.read_text(errors="replace")
     for name in selected:
         if f"test {name} ... ok" not in result:
             raise RuntimeError("Missing successful vendor GL error boundary: " + name)
     (logs / "glow-scope-acceptance.json").write_text(json.dumps({
         "candidate": env["CANDIDATE_SHA"], "manifest_sha256": sha(MANIFEST),
-        "binary_sha256": sha(binary), "package": "egui_glow", "version": "0.29.1",
+        "binary_sha256": command_digest(command), "package": "egui_glow", "version": "0.29.1",
         "selected": selected, "passed_fixtures": selected, "result": "passed",
         "scope": "Real vendor error ledger with controlled GL error reads; no physical GL context or driver failure."}, indent=2))
 
 
-def p27_network_tests(binary, logs, env):
+def p27_network_tests(command, logs, env):
     """One isolated transport measurement using the existing library binary."""
     if os.name == "nt":
         return
     plan = manifest()["native"]["p27_network"]
     listing = logs / "native-available.txt"
     if not listing.is_file():
-        run([binary, "--list", "--format", "terse"], listing, env, seconds=120)
+        run([*command, "--list", "--format", "terse"], listing, env, seconds=120, cwd=ROOT / "native")
     available = listing.read_text().splitlines()
     if available.count(plan["fixture"] + ": test") != 1:
         raise RuntimeError("Missing or ambiguous P27 network fixture.")
-    run(["bash", ROOT / "native/review-task-network.sh", "exec", binary.resolve(),
+    run(["bash", ROOT / "native/review-task-network.sh", "exec", *command,
         "--exact", plan["fixture"], "--ignored", "--nocapture", "--test-threads=1"],
-        logs / "p27-network.log", env, seconds=1800)
+        logs / "p27-network.log", env, seconds=1800, cwd=ROOT / "native")
     evidence_path = logs / "p27-network/acceptance.json"
     evidence = json.loads(evidence_path.read_text())
     if (evidence.get("schema") != 1 or evidence.get("candidate") != env["CANDIDATE_SHA"]
@@ -392,7 +410,7 @@ def p27_network_tests(binary, logs, env):
                 raise RuntimeError("Missing P27 raw observations: " + str(raw))
     (logs / "p27-acceptance.json").write_text(json.dumps({
         "candidate": env["CANDIDATE_SHA"], "manifest_sha256": sha(MANIFEST),
-        "binary_sha256": sha(binary), "evidence_sha256": sha(evidence_path),
+        "binary_sha256": command_digest(command), "evidence_sha256": sha(evidence_path),
         "point": "P27", "milestones": ["P27a", "P27b"], "result": "passed",
         "fixture": plan["fixture"], "profiles": observed, "scope": evidence["scope"]}, indent=2))
 
@@ -475,14 +493,14 @@ def main():
             path.mkdir(mode=0o700)
             env[name] = str(path)
         stage("openh264-prerequisite", lambda: openh264_fixture(Path(profile), logs, env))
-        fixture = stage("library-build", lambda: artifact("native", "smart_explorer", "test", args.binary_cache, logs, env))
-        cli = stage("worker-development", lambda: artifact("native", "se", "dev", args.binary_cache, logs, env))
+        fixture = stage("library-build", lambda: library_test_command(logs, env))
+        cli = stage("worker-development", lambda: artifact("native", "se", args.binary_cache, logs, env))
         if fixture and cli:
             env["SE_SCREEN_TASK_WORKER"] = str(cli.resolve())
             stage("native-behavior", lambda: native_tests(fixture, logs, env))
         if fixture:
             stage("p27-network-behavior", lambda: p27_network_tests(fixture, logs, env))
-        glow = stage("glow-scope-build", lambda: artifact("native", "egui_glow", "test", args.binary_cache, logs, env, package="egui_glow"))
+        glow = stage("glow-scope-build", lambda: egui_glow_test_command(logs, env))
         if glow:
             stage("glow-scope-behavior", lambda: glow_scope_tests(glow, logs, env))
     (logs / "summary.json").write_text(json.dumps({"candidate": candidate, "failures": failures}, indent=2))
