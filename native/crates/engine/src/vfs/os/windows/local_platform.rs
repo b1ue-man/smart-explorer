@@ -10,7 +10,8 @@ mod review_task_stage_tests;
 #[path = "volume_info.rs"]
 mod volume_info;
 
-pub use local_writes::{check_new_name, create_new_private, open_stage, replace_file};
+pub use crate::host::replace_local_file as replace_file;
+pub use local_writes::{check_new_name, create_new_private, open_stage};
 
 const MAX_LONG_PATH_UNITS: usize = 32_768;
 

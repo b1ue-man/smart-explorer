@@ -103,7 +103,7 @@ pub fn write_private_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Re
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
-        crate::vfs::replace_local_file(&stage, path)?;
+        crate::host::replace_local_file(&stage, path)?;
         crate::creds::private_storage::sync_directory(parent)
     })();
     if result.is_err() {

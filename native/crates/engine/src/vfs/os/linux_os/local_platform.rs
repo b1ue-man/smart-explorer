@@ -176,11 +176,8 @@ pub fn fallback_limits() -> super::TargetLimits {
     super::TargetLimits::default()
 }
 
-/// Atomically replace `destination` (a regular file the caller checked) with
-/// `source`.
-pub fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
-    std::fs::rename(source, destination)
-}
+/// Replacing a local file lives in `crate::host` (D13).
+pub use crate::host::replace_local_file as replace_file;
 
 /// Publish without replacing: `renameat2(RENAME_NOREPLACE)`, then hard link +
 /// unlink where the filesystem lacks the flag (NFS, sshfs, ntfs-3g), then a
