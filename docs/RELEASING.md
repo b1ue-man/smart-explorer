@@ -251,8 +251,11 @@ Release; no build is committed to Git (plan `docs/plaene/2026-11-01-idealzustand
    `source_sha=<sha>`, `dry_run=false` (a dry run builds and verifies everything into a draft under
    the tag `dryrun-vX.Y.Z-<run id>` and deletes it again; no commit, tag or visible release).
 2. Jobs: `plan` (Tagged/Bump/Resume plan of `native/release-version.ps1`, exact source binding),
-   `prepare` (version, embedded SSH-agent bundles, license notices), then in parallel `windows`
-   (`native/publish-update.ps1 -AllowPartialFeed -DeferFeedVersion -BuildJobs <cores>`), `linux`
+   `prepare` (version, embedded SSH-agent bundles, license notices), then in parallel three
+   `windows-build` runners (`native/publish-update.ps1 -Stage Build -Programs …`: app and MCP
+   launcher, `se` and updater, share server and context-menu DLL; the build is CPU-bound on four
+   cores) followed by `windows` (`-Stage Package -Prebuilt …`: installer, portable copies and feed
+   from those programs, no compiling), `linux`
    (`native/publish-linux-feed-wsl.sh` with `SMART_EXPLORER_BUILD_JOBS`, `SMART_EXPLORER_RELEASE_LTO=thin`,
    `SMART_EXPLORER_SYSTEM_LINKERS=1`) and `android` (`android/build-release-apk.sh` with
    `CARGO_BUILD_JOBS=<cores>` and `SMART_EXPLORER_PREPARED_RUST_LICENSES_SHA256`), all three from the

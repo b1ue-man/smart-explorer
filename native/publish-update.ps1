@@ -3,6 +3,12 @@
 # paths here and adds the Linux payloads before publishing version.txt.
 # Direct calls must provide -AllowPartialFeed plus separate -Feed and
 # -ReleaseOutput paths; they do not create a complete cross-platform release.
+#
+# .github/workflows/release.yml splits the Windows leaf over several runners
+# (plan docs/plaene/2026-11-01-idealzustand, D11): -Stage Build compiles only
+# -Programs into -BuildOutput; -Stage Package takes all six programs from
+# -Prebuilt and builds the installer, the portable copies and the feed without
+# compiling. -Stage All (default) does both in one run.
 
 param(
     [string]$Feed = "",
@@ -13,7 +19,12 @@ param(
     # within their memory budget; the release workflow on its 16-GB runners
     # passes their core count (build measurement run 41356400264: 4 jobs
     # 19.7 instead of 66.4 minutes, rustc peak 9.0 GiB).
-    [ValidateRange(1, 64)][int]$BuildJobs = 1
+    [ValidateRange(1, 64)][int]$BuildJobs = 1,
+    [ValidateSet("All", "Build", "Package")][string]$Stage = "All",
+    [ValidateSet("smart_explorer", "smart_explorer_updater", "se", "se-mcp-launcher", "se-share-server", "smart_explorer_command")]
+    [string[]]$Programs = @("smart_explorer", "smart_explorer_updater", "se", "se-mcp-launcher", "se-share-server", "smart_explorer_command"),
+    [string]$BuildOutput = "",
+    [string]$Prebuilt = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -40,33 +51,53 @@ $sourceCommit = (& $git.Source -C $repoRoot rev-parse "HEAD^{commit}" | Out-Stri
 if ($LASTEXITCODE -ne 0 -or $sourceCommit -notmatch '^[0-9a-f]{40,64}$') {
     throw "Quell-Commit fuer das Windows-Buildmanifest konnte nicht bestimmt werden."
 }
+$packages = $Stage -ne "Build"
+$compiles = $Stage -ne "Package"
+if ($Stage -eq "Build") {
+    if ([string]::IsNullOrWhiteSpace($BuildOutput)) {
+        throw "-Stage Build braucht einen -BuildOutput Pfad."
+    }
+    $BuildOutput = [System.IO.Path]::GetFullPath($BuildOutput)
+} elseif ($Stage -eq "Package") {
+    if ([string]::IsNullOrWhiteSpace($Prebuilt) -or -not (Test-Path -LiteralPath $Prebuilt -PathType Container)) {
+        throw "-Stage Package braucht ein vorhandenes -Prebuilt Verzeichnis."
+    }
+    $Prebuilt = (Resolve-Path -LiteralPath $Prebuilt).Path
+}
+if ($packages) {
+    $Programs = @("smart_explorer", "smart_explorer_updater", "se", "se-mcp-launcher", "se-share-server", "smart_explorer_command")
+}
+$nativeBins = @($Programs | Where-Object { $_ -in @("smart_explorer", "smart_explorer_updater", "se", "se-mcp-launcher") })
+
 $defaultFeed = Join-Path $repoRoot "release-native\update-feed"
 $defaultReleaseOutput = Join-Path $repoRoot "release-native"
-if ([string]::IsNullOrWhiteSpace($Feed)) {
-    $Feed = $defaultFeed
+if ($packages) {
+    if ([string]::IsNullOrWhiteSpace($Feed)) {
+        $Feed = $defaultFeed
+    }
+    $resolvedFeed = if (Test-Path $Feed) { (Resolve-Path $Feed).Path } else { [System.IO.Path]::GetFullPath($Feed) }
+    $resolvedDefaultFeed = if (Test-Path $defaultFeed) { (Resolve-Path $defaultFeed).Path } else { [System.IO.Path]::GetFullPath($defaultFeed) }
+    if (-not $AllowPartialFeed) {
+        throw "publish-update.ps1 baut immer nur Windows-Payloads. Bestaetige den Teil-Build explizit mit -AllowPartialFeed; fuer einen vollstaendigen Release nutze publish-release-local.ps1."
+    }
+    if ($resolvedFeed -eq $resolvedDefaultFeed) {
+        throw "Ein Windows-only Lauf darf den gemeinsamen Standard-Feed nicht veraendern. Nutze einen separaten -Feed Pfad oder publish-release-local.ps1 fuer den vollstaendigen Feed."
+    }
+    if ([string]::IsNullOrWhiteSpace($ReleaseOutput)) {
+        throw "Ein Windows-only Lauf braucht einen expliziten separaten -ReleaseOutput Pfad."
+    }
+    $resolvedReleaseOutput = if (Test-Path $ReleaseOutput) { (Resolve-Path $ReleaseOutput).Path } else { [System.IO.Path]::GetFullPath($ReleaseOutput) }
+    $resolvedDefaultReleaseOutput = if (Test-Path $defaultReleaseOutput) { (Resolve-Path $defaultReleaseOutput).Path } else { [System.IO.Path]::GetFullPath($defaultReleaseOutput) }
+    if ($resolvedReleaseOutput -eq $resolvedDefaultReleaseOutput) {
+        throw "Ein Windows-only Lauf darf die gemeinsamen release-native Artefakte nicht veraendern. Nutze einen separaten -ReleaseOutput Pfad."
+    }
+    $feedPrefix = $resolvedFeed.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+    if ($resolvedReleaseOutput -eq $resolvedFeed -or
+        $resolvedReleaseOutput.StartsWith($feedPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "-ReleaseOutput darf nicht dem -Feed entsprechen oder innerhalb des Feed-Pfads liegen."
+    }
+    $ReleaseOutput = $resolvedReleaseOutput
 }
-$resolvedFeed = if (Test-Path $Feed) { (Resolve-Path $Feed).Path } else { [System.IO.Path]::GetFullPath($Feed) }
-$resolvedDefaultFeed = if (Test-Path $defaultFeed) { (Resolve-Path $defaultFeed).Path } else { [System.IO.Path]::GetFullPath($defaultFeed) }
-if (-not $AllowPartialFeed) {
-    throw "publish-update.ps1 baut immer nur Windows-Payloads. Bestaetige den Teil-Build explizit mit -AllowPartialFeed; fuer einen vollstaendigen Release nutze publish-release-local.ps1."
-}
-if ($resolvedFeed -eq $resolvedDefaultFeed) {
-    throw "Ein Windows-only Lauf darf den gemeinsamen Standard-Feed nicht veraendern. Nutze einen separaten -Feed Pfad oder publish-release-local.ps1 fuer den vollstaendigen Feed."
-}
-if ([string]::IsNullOrWhiteSpace($ReleaseOutput)) {
-    throw "Ein Windows-only Lauf braucht einen expliziten separaten -ReleaseOutput Pfad."
-}
-$resolvedReleaseOutput = if (Test-Path $ReleaseOutput) { (Resolve-Path $ReleaseOutput).Path } else { [System.IO.Path]::GetFullPath($ReleaseOutput) }
-$resolvedDefaultReleaseOutput = if (Test-Path $defaultReleaseOutput) { (Resolve-Path $defaultReleaseOutput).Path } else { [System.IO.Path]::GetFullPath($defaultReleaseOutput) }
-if ($resolvedReleaseOutput -eq $resolvedDefaultReleaseOutput) {
-    throw "Ein Windows-only Lauf darf die gemeinsamen release-native Artefakte nicht veraendern. Nutze einen separaten -ReleaseOutput Pfad."
-}
-$feedPrefix = $resolvedFeed.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
-if ($resolvedReleaseOutput -eq $resolvedFeed -or
-    $resolvedReleaseOutput.StartsWith($feedPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-    throw "-ReleaseOutput darf nicht dem -Feed entsprechen oder innerhalb des Feed-Pfads liegen."
-}
-$ReleaseOutput = $resolvedReleaseOutput
 
 function Assert-NonEmptyFile([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
@@ -159,40 +190,45 @@ function Publish-FeedDirectoryTransaction(
 # Resolve and verify the one centrally pinned Dokany MSI before starting the
 # expensive native builds. The ignored target cache is shared by preflight and
 # release so the full build never redownloads an already verified dependency.
-$dokanyFetch = Join-Path $PSScriptRoot "fetch-dokany-runtime.ps1"
-if (-not (Test-Path -LiteralPath $dokanyFetch -PathType Leaf)) {
-    throw "Dokany dependency fetcher missing: $dokanyFetch"
-}
-$dokanyMsi = (& $dokanyFetch | Select-Object -Last 1)
-if ([string]::IsNullOrWhiteSpace($dokanyMsi)) {
-    throw "Dokany dependency fetcher returned no MSI path."
-}
-Assert-NonEmptyFile $dokanyMsi
-$archiveExtractor = @("7z.exe", "7za.exe", "7z", "7za") |
-    ForEach-Object { Get-Command $_ -CommandType Application -ErrorAction SilentlyContinue } |
-    Select-Object -First 1 |
-    ForEach-Object { $_.Source }
-if (-not $archiveExtractor) {
-    $archiveCandidates = @(
-        "$env:ProgramFiles\7-Zip\7z.exe",
-        "${env:ProgramFiles(x86)}\7-Zip\7z.exe"
-    )
-    $archiveExtractor = $archiveCandidates |
-        Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } |
-        Select-Object -First 1
-}
-if (-not $archiveExtractor) {
-    throw "7z wird zum Prüfen der eingebetteten Dokany-Installerdateien benötigt."
+if ($packages) {
+    $dokanyFetch = Join-Path $PSScriptRoot "fetch-dokany-runtime.ps1"
+    if (-not (Test-Path -LiteralPath $dokanyFetch -PathType Leaf)) {
+        throw "Dokany dependency fetcher missing: $dokanyFetch"
+    }
+    $dokanyMsi = (& $dokanyFetch | Select-Object -Last 1)
+    if ([string]::IsNullOrWhiteSpace($dokanyMsi)) {
+        throw "Dokany dependency fetcher returned no MSI path."
+    }
+    Assert-NonEmptyFile $dokanyMsi
+    $archiveExtractor = @("7z.exe", "7za.exe", "7z", "7za") |
+        ForEach-Object { Get-Command $_ -CommandType Application -ErrorAction SilentlyContinue } |
+        Select-Object -First 1 |
+        ForEach-Object { $_.Source }
+    if (-not $archiveExtractor) {
+        $archiveCandidates = @(
+            "$env:ProgramFiles\7-Zip\7z.exe",
+            "${env:ProgramFiles(x86)}\7-Zip\7z.exe"
+        )
+        $archiveExtractor = $archiveCandidates |
+            Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } |
+            Select-Object -First 1
+    }
+    if (-not $archiveExtractor) {
+        throw "7z wird zum Prüfen der eingebetteten Dokany-Installerdateien benötigt."
+    }
 }
 
 # Reuse the remotely approved runtime bytes; never build a new DLL as an
 # incidental part of installer/feed publication, or accept a bootstrap override.
-if ($env:SMART_EXPLORER_DOKANY_DLL_DIR -or $env:SMART_EXPLORER_DOKANY_DLL_SHA256) {
-    throw "Release payload builds refuse bootstrap private-DLL overrides."
+# The desktop crate embeds them (build.rs), so every native build checks them.
+if ($compiles -and $nativeBins.Count -gt 0) {
+    if ($env:SMART_EXPLORER_DOKANY_DLL_DIR -or $env:SMART_EXPLORER_DOKANY_DLL_SHA256) {
+        throw "Release payload builds refuse bootstrap private-DLL overrides."
+    }
+    & (Join-Path $PSScriptRoot "prepare-dokany-private.ps1") `
+        -ArtifactDirectory (Join-Path $PSScriptRoot "assets/dokany-private") `
+        -VerifyOnly -RequireApproved | Out-Host
 }
-& (Join-Path $PSScriptRoot "prepare-dokany-private.ps1") `
-    -ArtifactDirectory (Join-Path $PSScriptRoot "assets/dokany-private") `
-    -VerifyOnly -RequireApproved | Out-Host
 
 # Build
 $env:Path = "$env:USERPROFILE\.cargo\bin;C:\Strawberry\c\bin;$env:Path"
@@ -207,18 +243,32 @@ if (-not $hostMatch.Success) {
 $hostTriple = $hostMatch.Groups[1].Value
 $nativeTargetDir = Join-Path $PSScriptRoot "target"
 $nativeReleaseDir = Join-Path (Join-Path $nativeTargetDir $hostTriple) "release"
-$nativeApp = Join-Path $nativeReleaseDir "smart_explorer.exe"
-$nativeUpdater = Join-Path $nativeReleaseDir "smart_explorer_updater.exe"
-$nativeCli = Join-Path $nativeReleaseDir "se.exe"
-$nativeLauncher = Join-Path $nativeReleaseDir "se-mcp-launcher.exe"
-cargo build --locked --release --target-dir $nativeTargetDir --target $hostTriple --bin smart_explorer --bin smart_explorer_updater --bin se --bin se-mcp-launcher
-if ($LASTEXITCODE -ne 0) { throw "Build fehlgeschlagen" }
-
 $shareSrc = Join-Path $repoRoot "share-server"
-$shareOut = Join-Path $ReleaseOutput "share-server"
-if (Test-Path $shareSrc) {
-    $shareTargetDir = Join-Path $shareSrc "target"
-    $shareReleaseDir = Join-Path (Join-Path $shareTargetDir $hostTriple) "release"
+$shareTargetDir = Join-Path $shareSrc "target"
+$shareReleaseDir = Join-Path (Join-Path $shareTargetDir $hostTriple) "release"
+$commandProject = Join-Path $PSScriptRoot "explorer-command"
+$commandTargetDir = Join-Path $commandProject "target"
+$commandReleaseDir = Join-Path (Join-Path $commandTargetDir $hostTriple) "release"
+# Where each program is read from: this run's target directories, or the
+# outputs of the Build stages (same names, share server in share-server/).
+$programDir = if ($Stage -eq "Package") { $Prebuilt } else { $nativeReleaseDir }
+$nativeApp = Join-Path $programDir "smart_explorer.exe"
+$nativeUpdater = Join-Path $programDir "smart_explorer_updater.exe"
+$nativeCli = Join-Path $programDir "se.exe"
+$nativeLauncher = Join-Path $programDir "se-mcp-launcher.exe"
+$shareExe = if ($Stage -eq "Package") { Join-Path (Join-Path $Prebuilt "share-server") "se-share-server.exe" } else { Join-Path $shareReleaseDir "se-share-server.exe" }
+$commandDll = if ($Stage -eq "Package") { Join-Path $Prebuilt "smart_explorer_command.dll" } else { Join-Path $commandReleaseDir "smart_explorer_command.dll" }
+
+if ($compiles -and $nativeBins.Count -gt 0) {
+    $binArguments = @($nativeBins | ForEach-Object { @("--bin", $_) })
+    cargo build --locked --release --target-dir $nativeTargetDir --target $hostTriple @binArguments
+    if ($LASTEXITCODE -ne 0) { throw "Build fehlgeschlagen" }
+}
+
+if ($compiles -and "se-share-server" -in $Programs) {
+    if (-not (Test-Path $shareSrc)) {
+        throw "Share-Server-Quellverzeichnis fehlt: $shareSrc"
+    }
     Push-Location $shareSrc
     try {
         cargo build --locked --release --target-dir $shareTargetDir --target $hostTriple --bin se-share-server
@@ -226,24 +276,39 @@ if (Test-Path $shareSrc) {
     } finally {
         Pop-Location
     }
-    New-Item -ItemType Directory -Force $shareOut | Out-Null
-    Copy-Item (Join-Path $shareReleaseDir "se-share-server.exe") (Join-Path $shareOut "se-share-server.exe") -Force
-} else {
-    throw "Share-Server-Quellverzeichnis fehlt: $shareSrc"
 }
 
-$commandProject = Join-Path $PSScriptRoot "explorer-command"
-$commandTargetDir = Join-Path $commandProject "target"
-$commandReleaseDir = Join-Path (Join-Path $commandTargetDir $hostTriple) "release"
-Push-Location $commandProject
-try {
-    cargo build --locked --release --target-dir $commandTargetDir --target $hostTriple
-    if ($LASTEXITCODE -ne 0) { throw "Context-Menü-DLL-Build fehlgeschlagen" }
-} finally {
-    Pop-Location
+if ($compiles -and "smart_explorer_command" -in $Programs) {
+    Push-Location $commandProject
+    try {
+        cargo build --locked --release --target-dir $commandTargetDir --target $hostTriple
+        if ($LASTEXITCODE -ne 0) { throw "Context-Menü-DLL-Build fehlgeschlagen" }
+    } finally {
+        Pop-Location
+    }
 }
-$commandDll = Join-Path $commandReleaseDir "smart_explorer_command.dll"
-Assert-NonEmptyFile $commandDll
+
+$programFiles = @{
+    "smart_explorer" = $nativeApp; "smart_explorer_updater" = $nativeUpdater; "se" = $nativeCli
+    "se-mcp-launcher" = $nativeLauncher; "se-share-server" = $shareExe; "smart_explorer_command" = $commandDll
+}
+foreach ($program in $Programs) {
+    Assert-NonEmptyFile $programFiles[$program]
+}
+if ($Stage -eq "Build") {
+    foreach ($program in $Programs) {
+        $relative = if ($program -eq "se-share-server") { "share-server" } else { "" }
+        $destinationDir = Join-Path $BuildOutput $relative
+        New-Item -ItemType Directory -Force $destinationDir | Out-Null
+        Copy-Item -LiteralPath $programFiles[$program] -Destination $destinationDir -Force
+    }
+    Write-Host "Build-Stufe fertig: $($Programs -join ', ') -> $BuildOutput"
+    exit 0
+}
+
+$shareOut = Join-Path $ReleaseOutput "share-server"
+New-Item -ItemType Directory -Force $shareOut | Out-Null
+Copy-Item -LiteralPath $shareExe -Destination (Join-Path $shareOut "se-share-server.exe") -Force
 
 # Installer neu bauen (fuer Neuinstallationen). EXE_SRC zeigt auf den nativen
 # Windows-Build (installer.nsi defaultet auf den gnu-Cross-Pfad).

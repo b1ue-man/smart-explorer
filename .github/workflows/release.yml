@@ -113,10 +113,23 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-  windows:
+  # The Windows build is CPU-bound on four cores (measurement 41376180921):
+  # three runners compile the programs in parallel, the windows job then
+  # packs them (installer, portable copies, feed) into the artifact publish
+  # reads (plan docs/plaene/2026-11-01-idealzustand, D11).
+  windows-build:
     needs: [plan, prepare]
     runs-on: windows-2025
-    timeout-minutes: 180
+    timeout-minutes: 120
+    strategy:
+      matrix:
+        include:
+          - part: app
+            programs: smart_explorer,se-mcp-launcher
+          - part: cli
+            programs: se,smart_explorer_updater
+          - part: extras
+            programs: se-share-server,smart_explorer_command
     steps:
       - uses: actions/checkout@v7
         with:
@@ -129,29 +142,69 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Windows release tools
+      - name: Build ${{ matrix.programs }}
+        shell: pwsh
+        timeout-minutes: 110
+        env:
+          PROGRAMS: ${{ matrix.programs }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          # In this session: -Programs takes an array, which pwsh -File cannot pass.
+          & ./native/publish-update.ps1 -Stage Build -Programs ($env:PROGRAMS -split ",") `
+            -BuildOutput (Join-Path $env:RUNNER_TEMP "windows-build") -BuildJobs ([Environment]::ProcessorCount)
+          if ($LASTEXITCODE -ne 0) { throw "Windows build of $env:PROGRAMS failed." }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-build-${{ matrix.part }}
+          path: ${{ runner.temp }}/windows-build
+          if-no-files-found: error
+          retention-days: 1
+
+  windows:
+    needs: [plan, prepare, windows-build]
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.source_sha }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: prepared
+          path: .
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: windows-build-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/windows-prebuilt
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: NSIS
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $makensis = @("$env:ProgramFiles\NSIS\makensis.exe", "${env:ProgramFiles(x86)}\NSIS\makensis.exe")
           foreach ($attempt in 1..3) {
-            choco install strawberryperl nsis -y --no-progress
+            choco install nsis -y --no-progress
             if ($makensis | Where-Object { Test-Path -LiteralPath $_ }) { break }
             if ($attempt -eq 3) { throw "NSIS (makensis.exe) is still missing after $attempt attempts." }
             Start-Sleep -Seconds 60
           }
 
-      - name: Build the Windows payloads, share server, context-menu DLL and installer
+      - name: Pack the installer, portable copies and feed of the Windows programs
         shell: pwsh
-        timeout-minutes: 170
+        timeout-minutes: 50
         run: |
           $ErrorActionPreference = "Stop"
           $out = Join-Path $env:RUNNER_TEMP "windows"
           New-Item -ItemType Directory -Force (Join-Path $out "update-feed"), (Join-Path $out "release") | Out-Null
-          pwsh -NoProfile -File native/publish-update.ps1 -AllowPartialFeed -DeferFeedVersion `
-            -Feed (Join-Path $out "update-feed") -ReleaseOutput (Join-Path $out "release") `
-            -BuildJobs ([Environment]::ProcessorCount)
-          if ($LASTEXITCODE -ne 0) { throw "Windows build failed." }
+          pwsh -NoProfile -File native/publish-update.ps1 -Stage Package -Prebuilt (Join-Path $env:RUNNER_TEMP "windows-prebuilt") `
+            -AllowPartialFeed -DeferFeedVersion -Feed (Join-Path $out "update-feed") -ReleaseOutput (Join-Path $out "release")
+          if ($LASTEXITCODE -ne 0) { throw "Windows packaging failed." }
 
       - uses: actions/upload-artifact@v4
         with:
