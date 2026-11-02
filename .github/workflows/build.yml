@@ -48,7 +48,7 @@ jobs:
             share-server
 
       - name: Native Windows library tests
-        run: cargo test --lib --no-fail-fast -- --test-threads=1
+        run: cargo test --workspace --exclude smart_explorer_android --lib --no-fail-fast -- --test-threads=1
 
       - name: Native Windows standalone se tests
         run: cargo test --test se_cli --no-fail-fast -- --test-threads=1
@@ -134,14 +134,16 @@ jobs:
           cargo audit --file ../se-agent/Cargo.lock
 
       - name: Check (windows target)
-        run: cargo check --target x86_64-pc-windows-gnu
+        run: cargo check --workspace --exclude smart_explorer_android --target x86_64-pc-windows-gnu
 
       - name: Tests (host, including se subprocess coverage)
         # One build job and one test thread keep memory bounded while exercising
-        # the library, every binary harness, and native/tests/se_cli.rs.
+        # every workspace crate (engine, gui, cli, mobile; D13), every binary
+        # harness, and native/tests/se_cli.rs. The Android bridge builds only for
+        # Android.
         env:
           CARGO_BUILD_JOBS: 1
-        run: cargo test --all-targets --no-fail-fast -- --test-threads=1
+        run: cargo test --workspace --exclude smart_explorer_android --all-targets --no-fail-fast -- --test-threads=1
 
       - name: Linux GUI disposable startup check
         run: |
@@ -151,7 +153,7 @@ jobs:
       - name: Compile test harness (windows target)
         env:
           CARGO_BUILD_JOBS: 1
-        run: cargo test --no-run --all-targets --target x86_64-pc-windows-gnu
+        run: cargo test --workspace --exclude smart_explorer_android --no-run --all-targets --target x86_64-pc-windows-gnu
 
       - name: Clippy
         run: |

@@ -1,0 +1,234 @@
+use std::io;
+
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use hmac::{Hmac, Mac};
+use sha2::{Digest, Sha256};
+
+type HmacSha256 = Hmac<Sha256>;
+
+pub fn eio<E: std::fmt::Display>(e: E) -> io::Error {
+    io::Error::other(e.to_string())
+}
+
+pub fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+pub fn random_bytes<const N: usize>() -> Result<[u8; N], String> {
+    let mut out = [0u8; N];
+    fill_random(&mut out)?;
+    Ok(out)
+}
+
+pub fn random_token(bytes: usize) -> Result<String, String> {
+    let mut raw = vec![0u8; bytes];
+    fill_random(&mut raw)?;
+    Ok(b64(&raw))
+}
+
+pub fn random_hex_token<const N: usize>() -> Result<String, String> {
+    Ok(hex(&random_bytes::<N>()?))
+}
+
+fn fill_random(out: &mut [u8]) -> Result<(), String> {
+    fill_random_with(out, getrandom::getrandom)
+}
+
+fn fill_random_with<E: std::fmt::Display>(
+    out: &mut [u8],
+    mut source: impl FnMut(&mut [u8]) -> Result<(), E>,
+) -> Result<(), String> {
+    let mut last_err = None;
+    for _ in 0..3 {
+        match source(out) {
+            Ok(()) => return Ok(()),
+            Err(e) => last_err = Some(e),
+        }
+    }
+    Err(format!(
+        "secure random source unavailable after retries: {}",
+        last_err
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "unknown error".to_string())
+    ))
+}
+
+pub fn random_uuid_v4() -> Result<String, String> {
+    let mut b = random_bytes::<16>()?;
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    Ok(format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        b[0],
+        b[1],
+        b[2],
+        b[3],
+        b[4],
+        b[5],
+        b[6],
+        b[7],
+        b[8],
+        b[9],
+        b[10],
+        b[11],
+        b[12],
+        b[13],
+        b[14],
+        b[15]
+    ))
+}
+
+pub fn b64(raw: &[u8]) -> String {
+    URL_SAFE_NO_PAD.encode(raw)
+}
+
+pub fn b64_decode(s: &str) -> Result<Vec<u8>, String> {
+    URL_SAFE_NO_PAD.decode(s.trim()).map_err(|e| e.to_string())
+}
+
+pub fn hex(raw: &[u8]) -> String {
+    const H: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(raw.len() * 2);
+    for b in raw {
+        out.push(H[(b >> 4) as usize] as char);
+        out.push(H[(b & 0x0f) as usize] as char);
+    }
+    out
+}
+
+pub fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
+    let s = s.trim();
+    if !s.len().is_multiple_of(2) {
+        return Err("hex length must be even".into());
+    }
+    let mut out = Vec::with_capacity(s.len() / 2);
+    let bytes = s.as_bytes();
+    for i in (0..bytes.len()).step_by(2) {
+        let hi = hex_val(bytes[i])?;
+        let lo = hex_val(bytes[i + 1])?;
+        out.push((hi << 4) | lo);
+    }
+    Ok(out)
+}
+
+fn hex_val(b: u8) -> Result<u8, String> {
+    match b {
+        b'0'..=b'9' => Ok(b - b'0'),
+        b'a'..=b'f' => Ok(b - b'a' + 10),
+        b'A'..=b'F' => Ok(b - b'A' + 10),
+        _ => Err("invalid hex".into()),
+    }
+}
+
+pub fn public_fingerprint(public_key: &[u8]) -> String {
+    let digest = Sha256::digest(public_key);
+    hex(&digest[..16])
+}
+
+pub fn sha256_b64(payload: &[u8]) -> String {
+    b64(&Sha256::digest(payload))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn presence_payload(
+    kind: &str,
+    relation_id: &str,
+    device_id: &str,
+    public_key: &str,
+    node_id: &str,
+    relay_url: &str,
+    candidates: &[String],
+    expires_at: i64,
+    nonce: &str,
+) -> String {
+    let mut c = candidates.to_vec();
+    c.sort();
+    format!(
+        "{kind}|{relation_id}|{device_id}|{public_key}|{node_id}|{relay_url}|{}|{expires_at}|{nonce}",
+        c.join(",")
+    )
+}
+
+pub fn hmac_proof(secret: &[u8], payload: &str) -> String {
+    hmac_proof_bytes(secret, payload.as_bytes())
+}
+
+pub fn hmac_proof_bytes(secret: &[u8], payload: &[u8]) -> String {
+    let mut mac = HmacSha256::new_from_slice(secret).expect("hmac accepts arbitrary key length");
+    mac.update(payload);
+    b64(&mac.finalize().into_bytes())
+}
+
+pub fn verify_hmac(secret: &[u8], payload: &str, proof: &str) -> bool {
+    verify_hmac_bytes(secret, payload.as_bytes(), proof)
+}
+
+pub fn verify_hmac_bytes(secret: &[u8], payload: &[u8], proof: &str) -> bool {
+    let Ok(expected) = b64_decode(proof) else {
+        return false;
+    };
+    let Ok(mut mac) = HmacSha256::new_from_slice(secret) else {
+        return false;
+    };
+    mac.update(payload);
+    mac.verify_slice(&expected).is_ok()
+}
+
+pub fn iroh_signature(secret: &iroh::SecretKey, payload: &[u8]) -> String {
+    b64(&secret.sign(payload).to_bytes())
+}
+
+pub fn verify_iroh_signature(public_key: &str, payload: &[u8], signature: &str) -> bool {
+    let Ok(public_key) = public_key.parse::<iroh::PublicKey>() else {
+        return false;
+    };
+    let Ok(bytes) = b64_decode(signature) else {
+        return false;
+    };
+    let Ok(bytes) = <[u8; iroh::Signature::LENGTH]>::try_from(bytes.as_slice()) else {
+        return false;
+    };
+    public_key
+        .verify(payload, &iroh::Signature::from_bytes(&bytes))
+        .is_ok()
+}
+
+#[cfg(test)]
+pub fn sanitize_name(name: &str) -> String {
+    let n: String = name
+        .chars()
+        .map(|c| {
+            if "/\\:*?\"<>|".contains(c) || c.is_control() {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let n = n.trim().trim_matches('.').to_string();
+    if n.is_empty() {
+        "datei".to_string()
+    } else {
+        n
+    }
+}
+
+#[cfg(test)]
+mod entropy_tests {
+    use super::fill_random_with;
+
+    #[test]
+    fn entropy_failure_is_returned_after_bounded_retries() {
+        let mut calls = 0;
+        let error = fill_random_with(&mut [0u8; 8], |_| {
+            calls += 1;
+            Err::<(), _>("entropy offline")
+        })
+        .unwrap_err();
+        assert_eq!(calls, 3);
+        assert!(error.contains("entropy offline"));
+    }
+}

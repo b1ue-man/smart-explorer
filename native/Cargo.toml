@@ -7,11 +7,16 @@ description = "Fast native file explorer with deep filtering"
 license = "MIT"
 publish = false
 
-# The Android JNI library shares this crate's Cargo.lock and profiles. The root
-# package stays the default member, so desktop commands run in `native/` are
-# unchanged. `explorer-command` keeps its own lock and release profile.
+# One workspace (plan docs/plaene/2026-11-01-idealzustand, D13): this root
+# package holds the programs and the `smart_explorer` facade; the engine, the
+# desktop GUI, the CLI and the Android facade are crates under crates/, the
+# Android JNI library is android-bridge. All share this Cargo.lock and the
+# profiles below. The root package stays the default member, so `cargo build
+# --bin ...` in `native/` builds the programs as before; tests of every crate
+# run with `cargo test --workspace`. `explorer-command` keeps its own lock and
+# release profile.
 [workspace]
-members = ["android-bridge"]
+members = ["android-bridge", "crates/engine", "crates/gui", "crates/cli", "crates/mobile"]
 exclude = ["explorer-command"]
 
 # P28: application frames require a validated path/policy generation before
@@ -32,9 +37,47 @@ path = "src/bin/se_mcp_launcher.rs"
 # Only the remote debug instrumentation APK enables these isolated JNI fixtures.
 [features]
 default = []
-android-instrumentation-fixtures = []
+android-instrumentation-fixtures = [
+    "smart_explorer_engine/android-instrumentation-fixtures",
+    "smart_explorer_mobile/android-instrumentation-fixtures",
+]
 
 [dependencies]
+smart_explorer_engine = { path = "crates/engine" }
+crossbeam-channel.workspace = true
+tempfile.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+zeroize.workspace = true
+same-file.workspace = true
+getrandom.workspace = true
+iroh = { version = "=1.3.0", default-features = true, features = ["unstable-custom-transports"] }
+sha2-011.workspace = true
+lz4_flex.workspace = true
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+smart_explorer_gui = { path = "crates/gui" }
+smart_explorer_cli = { path = "crates/cli" }
+eframe.workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+smart_explorer_mobile = { path = "crates/mobile" }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+winreg.workspace = true
+windows.workspace = true
+
+[target.'cfg(not(windows))'.dependencies]
+libc.workspace = true
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+iroh = { version = "=1.3.0", default-features = true, features = ["test-utils"] }
+
+# Versions of every external crate the workspace members use (plan
+# docs/plaene/2026-11-01-idealzustand, D13); a member names the ones its code
+# uses with `name.workspace = true`.
+[workspace.dependencies]
 rayon = "1.10"
 # Screen still pictures (SCR-M4): PNG encoder and decoder of `screen::core::snapshot`.
 png = "0.18"
@@ -128,12 +171,6 @@ md5 = "0.7"
 # Persistent sync state for incremental managed mirror jobs. `bundled` keeps the
 # Windows release independent from a system SQLite installation.
 rusqlite = { version = "0.40.1", features = ["bundled"] }
-# Peer file sharing (share.rs, #21): Iroh 1.0 provides authenticated P2P QUIC
-# connections by endpoint public key, with relay fallback over HTTP(S) relay
-# servers. Keep the default ring-backed TLS stack; do not enable aws-lc.
-# 1.1.0 fixes GHSA-7cq4-mhxw-xw78 (relay batch frame stalls relay input),
-# GHSA-vwh7-9883-83xj and GHSA-jx4g-cg2x-jc35; 1.3.0 also lifts rustls.
-iroh = { version = "=1.3.0", default-features = true, features = ["unstable-custom-transports"] }
 # The QUIC congestion controllers Bbr3Config/CubicConfig for the measurement
 # switch SE_SHARE_QUIC_CC (share/core/keepalive.rs, E13); iroh does not
 # re-export them. Same version as iroh's own dependency in Cargo.lock.
@@ -201,15 +238,9 @@ flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 # Lossless tile codec of the screen protocol (screen/core/tiles_codec.rs):
 # pure-Rust LZ4 block format, already in the lock through smb2.
 lz4_flex = "0.14"
-
-# rfd is per-target so the crate also builds on a non-Windows host (CI / local
-# `cargo test`): Windows uses the Win32 common-controls dialog; elsewhere the
-# xdg-portal backend. This split has ZERO effect on the shipped Windows binary.
-[target.'cfg(windows)'.dependencies]
 # Windows secrets use Credential Manager. Linux deliberately uses the app's
 # owner-protected, headless file store instead of a DBus/session keyring.
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
-rfd = { version = "0.15", default-features = false, features = ["common-controls-v6"] }
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
@@ -326,23 +357,11 @@ windows = { version = "0.58", features = [
     "Storage_Search",
     "System",
 ] }
-
-# SCR-M3: OpenH264 as the user's Cisco download (BSD-2-Clause; with
-# `libloading` no C code; pulls openh264-sys2 BSD-2-Clause and wide), the
-# .bz2 unpacker (MIT OR Apache-2.0, pure-Rust libbz2-rs-sys: bzip2-1.0.6)
-# and run-time loading of mfplat.dll (libloading, ISC). Rust >= 1.85.
-[target.'cfg(any(windows, target_os = "linux"))'.dependencies]
 openh264 = { version = "0.9.9", default-features = false, features = ["libloading"] }
 # Typed input/output timestamps; same dynamically loaded Cisco ABI, no source build.
 openh264-sys2 = { version = "0.9.9", default-features = false, features = ["libloading"] }
 bzip2 = "0.6"
 libloading = "0.8"
-
-# Desktop GUI and OS recycle bin. Android builds only the core library behind
-# the Kotlin UI: egui/winit have no place in a Compose app, and `trash` 5 has no
-# Android backend (Android uses the app trash in `apptrash`). Windows and Linux
-# still resolve exactly the same packages as before this split.
-[target.'cfg(not(target_os = "android"))'.dependencies]
 # P13 edits only the owned MCP command/args while preserving user TOML layout.
 # Same pure-Rust parser already in Cargo.lock; parse/display require Rust 1.85.
 toml_edit = { version = "=0.25.11", default-features = false, features = ["parse", "display"] }
@@ -358,17 +377,7 @@ raw-window-handle = "0.6"
 egui_extras = { version = "0.29", features = ["datepicker"] }
 trash = "5"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
-
-# Host-only (CI / `cargo test`); never part of the Windows build.
-[target.'cfg(not(windows))'.dependencies]
 libc = "0.2" # renameat2(RENAME_NOREPLACE) for race-free local move quarantine
-
-# rfd has no Android backend (and no D-Bus/Wayland there); Android picks files
-# through the Storage Access Framework in Kotlin instead.
-[target.'cfg(all(not(windows), not(target_os = "android")))'.dependencies]
-rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
-
-[target.'cfg(target_os = "linux")'.dependencies]
 # P3: bounded host-side SVG icons, Rust-only raster decoders. No system fonts,
 # mmap-fonts, SVGZ or native font library; wire viewers receive PNG only.
 resvg = { version = "=0.49.0", default-features = false, features = ["raster-images"] }
@@ -406,20 +415,6 @@ egui-winit = { version = "=0.29.1", default-features = false, features = ["x11",
 # of GNOME desktop sharing. Already in the lock through iroh (ring backend,
 # MIT OR Apache-2.0); default features off so no aws-lc toolchain joins.
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
-
-[build-dependencies]
-# Pure-Rust verification of prepared DLL bytes; never compile/download Dokany
-# from build.rs. Both dependencies already occur in Cargo.lock.
-serde_json = "1"
-sha2 = "0.10"
-# Deflates the embedded agent bundles and license file (build.rs); the same
-# pure-Rust flate2 as the program's, already in Cargo.lock.
-flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
-
-[target.'cfg(target_os = "linux")'.dev-dependencies]
-# Private P27 relay fixture only. Production Iroh features remain unchanged;
-# the single remote task runner resolves any additional test-only lock entries.
-iroh = { version = "=1.3.0", default-features = true, features = ["test-utils"] }
 
 [profile.release]
 opt-level = 3

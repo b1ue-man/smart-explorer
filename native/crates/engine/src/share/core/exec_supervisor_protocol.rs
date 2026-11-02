@@ -1,0 +1,320 @@
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::io::{self, Read, Write};
+
+use super::exec_terminal::ExecTerminalSize;
+use super::exec_types::ExecStart;
+
+const MAX_CONTROL_BYTES: usize = 512 * 1024;
+const MAX_DATA_BYTES: usize = 64 * 1024;
+const MAX_RESIZE_BYTES: usize = 256;
+
+const START: u8 = 1;
+const STDIN: u8 = 2;
+const STDIN_EOF: u8 = 3;
+const CANCEL: u8 = 4;
+const RESIZE: u8 = 5;
+const STARTED: u8 = 16;
+const STDOUT: u8 = 17;
+const STDERR: u8 = 18;
+const ROOT_EXITED: u8 = 19;
+const EXITED: u8 = 20;
+const ERROR: u8 = 21;
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SupervisorStart {
+    pub request: ExecStart,
+    pub environment: BTreeMap<String, String>,
+    /// `None`: the job runs as the worker's own account (Standardnutzer).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<RunAsAccount>,
+}
+
+/// A local account resolved by the root worker (`getpwnam_r`,
+/// `getgrouplist`) for a grant's `run_as`. The supervisor switches the job's
+/// root process to exactly these ids before `exec`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RunAsAccount {
+    pub name: String,
+    pub uid: u32,
+    pub gid: u32,
+    pub groups: Vec<u32>,
+    pub home: String,
+    pub shell: String,
+}
+
+/// Search path of a job that runs as another account, the default of
+/// OpenSSH (`_PATH_STDPATH`) with the local prefixes.
+pub const ACCOUNT_PATH: &str =
+    "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+/// Worker values a job of another account keeps: locale (`LANG`, `LC_ALL`,
+/// `LC_CTYPE`) and time zone (`TZ`).
+const ACCOUNT_INHERITED: [&str; 4] = ["LANG", "LC_ALL", "LC_CTYPE", "TZ"];
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SupervisorCommand {
+    Start(SupervisorStart),
+    Stdin(Vec<u8>),
+    StdinEof,
+    Cancel,
+    /// New window size of the terminal of a terminal start.
+    Resize(ExecTerminalSize),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SupervisorExit {
+    pub code: Option<i32>,
+    pub signal: Option<i32>,
+    pub output_truncated: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SupervisorEvent {
+    Started { pid: u32 },
+    Stdout(Vec<u8>),
+    Stderr(Vec<u8>),
+    RootExited(SupervisorExit),
+    Exited(SupervisorExit),
+    Error(String),
+}
+
+/// Environment of a job that runs as `account`: like an `sshd` session it
+/// starts clean (HOME, USER, LOGNAME, SHELL, PATH, locale) instead of
+/// inheriting the root worker's variables, then takes the caller's values.
+pub fn environment_for_account(
+    request: &ExecStart,
+    account: &RunAsAccount,
+) -> BTreeMap<String, String> {
+    let mut environment = BTreeMap::new();
+    for name in ACCOUNT_INHERITED {
+        if let Ok(value) = std::env::var(name) {
+            environment.insert(name.to_string(), value);
+        }
+    }
+    environment.insert("HOME".into(), account.home.clone());
+    environment.insert("USER".into(), account.name.clone());
+    environment.insert("LOGNAME".into(), account.name.clone());
+    environment.insert("SHELL".into(), account.shell.clone());
+    environment.insert("PATH".into(), ACCOUNT_PATH.into());
+    for (name, value) in &request.env {
+        environment.insert(name.clone(), value.clone());
+    }
+    environment
+}
+
+pub fn environment_for(request: &ExecStart) -> BTreeMap<String, String> {
+    let mut environment: BTreeMap<_, _> = std::env::vars()
+        .filter(|(name, _)| {
+            !name.is_empty() && !name.contains('=') && !is_private_environment(name)
+        })
+        .collect();
+    for (name, value) in &request.env {
+        environment.insert(name.clone(), value.clone());
+    }
+    environment
+}
+
+fn is_private_environment(name: &str) -> bool {
+    name.to_ascii_uppercase().starts_with("SMART_EXPLORER_")
+}
+
+pub fn send_command(writer: &mut impl Write, command: &SupervisorCommand) -> io::Result<()> {
+    match command {
+        SupervisorCommand::Start(start) => send_json(writer, START, start),
+        SupervisorCommand::Stdin(data) => send_data(writer, STDIN, data),
+        SupervisorCommand::StdinEof => send_data(writer, STDIN_EOF, &[]),
+        SupervisorCommand::Cancel => send_data(writer, CANCEL, &[]),
+        SupervisorCommand::Resize(size) => send_json(writer, RESIZE, size),
+    }
+}
+
+pub fn recv_command(reader: &mut impl Read) -> io::Result<SupervisorCommand> {
+    let (tag, payload) = recv_payload(reader, MAX_CONTROL_BYTES)?;
+    match tag {
+        START => decode(&payload).map(SupervisorCommand::Start),
+        STDIN if payload.len() <= MAX_DATA_BYTES => Ok(SupervisorCommand::Stdin(payload)),
+        STDIN_EOF if payload.is_empty() => Ok(SupervisorCommand::StdinEof),
+        CANCEL if payload.is_empty() => Ok(SupervisorCommand::Cancel),
+        RESIZE if payload.len() <= MAX_RESIZE_BYTES => {
+            let size: ExecTerminalSize = decode(&payload)?;
+            size.validate()
+                .map_err(|_| invalid("invalid exec supervisor resize"))?;
+            Ok(SupervisorCommand::Resize(size))
+        }
+        _ => Err(invalid("invalid exec supervisor command")),
+    }
+}
+
+pub fn send_event(writer: &mut impl Write, event: &SupervisorEvent) -> io::Result<()> {
+    match event {
+        SupervisorEvent::Started { pid } => send_json(writer, STARTED, pid),
+        SupervisorEvent::Stdout(data) => send_data(writer, STDOUT, data),
+        SupervisorEvent::Stderr(data) => send_data(writer, STDERR, data),
+        SupervisorEvent::RootExited(exit) => send_json(writer, ROOT_EXITED, exit),
+        SupervisorEvent::Exited(exit) => send_json(writer, EXITED, exit),
+        SupervisorEvent::Error(message) => send_json(writer, ERROR, message),
+    }
+}
+
+pub fn recv_event(reader: &mut impl Read) -> io::Result<SupervisorEvent> {
+    let (tag, payload) = recv_payload(reader, MAX_CONTROL_BYTES)?;
+    match tag {
+        STARTED => decode(&payload).map(|pid| SupervisorEvent::Started { pid }),
+        STDOUT if payload.len() <= MAX_DATA_BYTES => Ok(SupervisorEvent::Stdout(payload)),
+        STDERR if payload.len() <= MAX_DATA_BYTES => Ok(SupervisorEvent::Stderr(payload)),
+        ROOT_EXITED => decode(&payload).map(SupervisorEvent::RootExited),
+        EXITED => decode(&payload).map(SupervisorEvent::Exited),
+        ERROR => decode(&payload).map(SupervisorEvent::Error),
+        _ => Err(invalid("invalid exec supervisor event")),
+    }
+}
+
+fn send_json(writer: &mut impl Write, tag: u8, value: &impl Serialize) -> io::Result<()> {
+    let payload = serde_json::to_vec(value).map_err(io::Error::other)?;
+    send_data(writer, tag, &payload)
+}
+
+fn send_data(writer: &mut impl Write, tag: u8, payload: &[u8]) -> io::Result<()> {
+    let limit = if matches!(tag, STDIN | STDOUT | STDERR) {
+        MAX_DATA_BYTES
+    } else {
+        MAX_CONTROL_BYTES
+    };
+    if payload.len() > limit {
+        return Err(invalid("exec supervisor frame exceeds its limit"));
+    }
+    let size = u32::try_from(payload.len()).map_err(|_| invalid("frame size overflow"))?;
+    writer.write_all(&[tag])?;
+    writer.write_all(&size.to_be_bytes())?;
+    writer.write_all(payload)?;
+    writer.flush()
+}
+
+fn recv_payload(reader: &mut impl Read, limit: usize) -> io::Result<(u8, Vec<u8>)> {
+    let mut header = [0u8; 5];
+    reader.read_exact(&mut header)?;
+    let size = u32::from_be_bytes([header[1], header[2], header[3], header[4]]) as usize;
+    if size > limit {
+        return Err(invalid("exec supervisor frame exceeds its limit"));
+    }
+    let mut payload = vec![0u8; size];
+    reader.read_exact(&mut payload)?;
+    Ok((header[0], payload))
+}
+
+fn decode<T: DeserializeOwned>(payload: &[u8]) -> io::Result<T> {
+    serde_json::from_slice(payload).map_err(io::Error::other)
+}
+
+fn invalid(message: &'static str) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::share::{ExecCommand, ExecId};
+
+    #[test]
+    fn binary_data_round_trips_without_json_expansion() {
+        let command = SupervisorCommand::Stdin(vec![0, 1, 255]);
+        let mut bytes = Vec::new();
+        send_command(&mut bytes, &command).unwrap();
+        assert_eq!(recv_command(&mut bytes.as_slice()).unwrap(), command);
+        assert_eq!(bytes.len(), 8);
+    }
+
+    #[test]
+    fn terminal_task_resize_round_trips_and_rejects_unusable_sizes() {
+        let command = SupervisorCommand::Resize(ExecTerminalSize {
+            cols: 120,
+            rows: 40,
+        });
+        let mut bytes = Vec::new();
+        send_command(&mut bytes, &command).unwrap();
+        assert_eq!(bytes[0], 5);
+        assert_eq!(recv_command(&mut bytes.as_slice()).unwrap(), command);
+
+        for (cols, rows) in [(0, 24), (80, 0), (32768, 24), (80, 32768)] {
+            let mut bytes = Vec::new();
+            let size = ExecTerminalSize { cols, rows };
+            send_command(&mut bytes, &SupervisorCommand::Resize(size)).unwrap();
+            let error = recv_command(&mut bytes.as_slice()).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{cols}x{rows}");
+        }
+
+        let mut oversized = vec![5u8];
+        let padded = format!("{{\"cols\":80,\"rows\":24{}}}", " ".repeat(300));
+        oversized.extend_from_slice(&(padded.len() as u32).to_be_bytes());
+        oversized.extend_from_slice(padded.as_bytes());
+        let error = recv_command(&mut oversized.as_slice()).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn inherited_private_values_are_removed_before_explicit_overrides() {
+        let request = ExecStart {
+            exec_id: ExecId::parse("01".repeat(16)).unwrap(),
+            command: ExecCommand::Shell {
+                command: "true".into(),
+            },
+            cwd: None,
+            env: BTreeMap::from([("SMART_EXPLORER_ALLOWED_BY_CALLER".into(), "yes".into())]),
+            timeout_ms: None,
+            max_output_bytes: None,
+            terminal: None,
+        };
+        let environment = environment_for(&request);
+        assert_eq!(
+            environment
+                .get("SMART_EXPLORER_ALLOWED_BY_CALLER")
+                .map(String::as_str),
+            Some("yes")
+        );
+    }
+
+    #[test]
+    fn luecken_task_other_account_starts_with_a_clean_environment() {
+        let mut request = ExecStart {
+            exec_id: ExecId::parse("02".repeat(16)).unwrap(),
+            command: ExecCommand::Shell {
+                command: "true".into(),
+            },
+            cwd: None,
+            env: BTreeMap::from([("EDITOR".into(), "vi".into())]),
+            timeout_ms: None,
+            max_output_bytes: None,
+            terminal: None,
+        };
+        let account = RunAsAccount {
+            name: "alice".into(),
+            uid: 1000,
+            gid: 1000,
+            groups: vec![1000, 27],
+            home: "/home/alice".into(),
+            shell: "/bin/bash".into(),
+        };
+        let environment = environment_for_account(&request, &account);
+        assert_eq!(environment["HOME"], "/home/alice");
+        assert_eq!(environment["USER"], "alice");
+        assert_eq!(environment["LOGNAME"], "alice");
+        assert_eq!(environment["SHELL"], "/bin/bash");
+        assert_eq!(environment["EDITOR"], "vi");
+        assert!(environment["PATH"].starts_with("/usr/local/sbin"));
+        assert!(!environment.contains_key("XDG_RUNTIME_DIR"));
+        request.env.insert("HOME".into(), "/tmp".into());
+        assert_eq!(environment_for_account(&request, &account)["HOME"], "/tmp");
+
+        let start = SupervisorStart {
+            request,
+            environment: BTreeMap::new(),
+            account: Some(account),
+        };
+        let mut bytes = Vec::new();
+        send_command(&mut bytes, &SupervisorCommand::Start(start.clone())).unwrap();
+        assert_eq!(
+            recv_command(&mut bytes.as_slice()).unwrap(),
+            SupervisorCommand::Start(start)
+        );
+    }
+}

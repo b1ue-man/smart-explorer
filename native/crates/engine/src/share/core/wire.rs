@@ -1,0 +1,393 @@
+use serde::{Deserialize, Serialize};
+
+use super::direct_protocol::{
+    DirectRequestId, SignedDirectDecision, SignedDirectDecisionReceipt, SignedDirectRequest,
+    SignedDirectRequestReceipt,
+};
+use super::export_config::ExportAccess;
+use super::types::{ExecRequest, ExecResult, PeerPresence};
+
+#[path = "batch_wire.rs"]
+mod batch_wire;
+#[path = "evidence_wire.rs"]
+mod evidence_wire;
+#[path = "fs_request.rs"]
+mod fs_request;
+#[path = "stage_ranges_wire.rs"]
+mod stage_ranges_wire;
+#[path = "wire_capabilities.rs"]
+mod wire_capabilities;
+
+pub use self::batch_wire::{
+    discardable_stage, plan_batches, validate_get, validate_put, BatchPart, FsBatchGet,
+    FsBatchOutcome, FsBatchPut, FsBatchStatus, FsTransferCapabilities, BATCH_MAX_BYTES,
+    BATCH_MAX_FILES, NONCE_HEX_LEN, TRANSFER_V1_CAPABILITY,
+};
+pub use self::evidence_wire::{
+    validate_create_dirs, FsCreateDirs, FsDirOutcome, FsFileEvidence, FsWritten, CREATE_DIRS_MAX,
+};
+pub use self::fs_request::{
+    FsDuplicateSearch, FsHashWalk, FsListBatch, FsRecycle, FsRequest, FsReversibleReplace,
+    FsStageFinish, FsStorageAnalysis, FsSyncFilesystem, FsWatch,
+};
+pub use self::fs_request::{FsHashAlgo, FsStageDurability};
+pub use self::stage_ranges_wire::{FsSegmentedFinish, FsSegmentedOpen, FsStageWrite};
+pub use self::wire_capabilities::{FsHostFeatures, FsTargetLimits};
+
+pub const TRACKED_DIRECT_CAPABILITY: &str = "tracked_direct_v1";
+/// Server keeps idle clients alive with its own keepalives (V1).
+pub const IDLE_KEEPALIVE_CAPABILITY: &str = "idle_keepalive_v1";
+pub const MOUNT_PATH_CAPABILITY_CONTRACT_VERSION: u8 = 1;
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(tag = "t", rename_all = "snake_case")]
+pub enum ClientMsg {
+    Hello {
+        protocol_version: u32,
+        device_id: String,
+        device_name: String,
+        listen_port: u16,
+        lan: Vec<String>,
+        public_key: String,
+        fingerprint: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        capabilities: Vec<String>,
+    },
+    PublishDirect {
+        presence: PeerPresence,
+    },
+    UnpublishDirect {
+        lookup_id: String,
+    },
+    WatchDirect {
+        lookup_id: String,
+    },
+    RequestDirect {
+        lookup_id: String,
+        presence: PeerPresence,
+    },
+    DirectAccessAccepted {
+        lookup_id: String,
+        requester_device_id: String,
+        accepted: bool,
+        presence: Option<PeerPresence>,
+        msg: Option<String>,
+    },
+    UnwatchDirect {
+        lookup_id: String,
+    },
+    JoinRoom {
+        room_id: String,
+        presence: PeerPresence,
+    },
+    LeaveRoom {
+        room_id: String,
+    },
+    Heartbeat,
+    /// Only after `idle_keepalive_v1` was negotiated. `keepalive_secs`
+    /// proposes a shorter server keepalive (proxies with short timeouts).
+    SetIdle {
+        idle: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        keepalive_secs: Option<u32>,
+    },
+    KeepaliveAck,
+}
+
+/// Idle-mode messages of a server that negotiated `idle_keepalive_v1`.
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(tag = "t", rename_all = "snake_case")]
+pub enum IdleServerMsg {
+    IdleAck {
+        idle: bool,
+        #[serde(default)]
+        keepalive_secs: Option<u32>,
+    },
+    Keepalive,
+}
+
+impl IdleServerMsg {
+    /// `Ok(None)` for every other server message.
+    pub fn parse(line: &str) -> Result<Option<Self>, String> {
+        let value: serde_json::Value =
+            serde_json::from_str(line).map_err(|error| error.to_string())?;
+        if !matches!(
+            value.get("t").and_then(serde_json::Value::as_str),
+            Some("idle_ack" | "keepalive")
+        ) {
+            return Ok(None);
+        }
+        serde_json::from_value(value)
+            .map(Some)
+            .map_err(|error| error.to_string())
+    }
+}
+
+#[derive(Deserialize, Clone, Debug)]
+#[serde(tag = "t", rename_all = "snake_case")]
+pub enum SrvMsg {
+    HelloOk {
+        #[serde(default)]
+        capabilities: Vec<String>,
+    },
+    DirectAvailable {
+        lookup_id: String,
+        presence: PeerPresence,
+    },
+    DirectOffline {
+        lookup_id: String,
+    },
+    DirectAccessRequest {
+        lookup_id: String,
+        presence: PeerPresence,
+    },
+    DirectAccessAccepted {
+        lookup_id: String,
+        requester_device_id: String,
+        accepted: bool,
+        presence: Option<PeerPresence>,
+        msg: Option<String>,
+    },
+    RoomRoster {
+        room_id: String,
+        members: Vec<PeerPresence>,
+    },
+    RoomJoined {
+        room_id: String,
+        presence: PeerPresence,
+    },
+    RoomLeft {
+        room_id: String,
+        device_id: String,
+    },
+    Error {
+        scope: String,
+        msg: String,
+    },
+    Pong,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(tag = "t", rename_all = "snake_case")]
+pub enum TrackedDirectClientMsg {
+    #[serde(rename = "submit_direct_request")]
+    Request {
+        request: Box<SignedDirectRequest>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        legacy_presence: Option<PeerPresence>,
+    },
+    #[serde(rename = "submit_direct_request_receipt")]
+    RequestReceipt { receipt: SignedDirectRequestReceipt },
+    #[serde(rename = "submit_direct_decision")]
+    Decision { decision: SignedDirectDecision },
+    #[serde(rename = "submit_direct_decision_receipt")]
+    DecisionReceipt {
+        receipt: SignedDirectDecisionReceipt,
+    },
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(tag = "t", rename_all = "snake_case")]
+pub enum TrackedDirectServerMsg {
+    #[serde(rename = "direct_request")]
+    Request { request: SignedDirectRequest },
+    #[serde(rename = "direct_request_receipt")]
+    RequestReceipt { receipt: SignedDirectRequestReceipt },
+    #[serde(rename = "direct_decision")]
+    Decision { decision: SignedDirectDecision },
+    #[serde(rename = "direct_decision_receipt")]
+    DecisionReceipt {
+        receipt: SignedDirectDecisionReceipt,
+    },
+    #[serde(rename = "direct_route_ack")]
+    RouteAck {
+        request_id: DirectRequestId,
+        route: DirectRoute,
+        outcome: DirectRouteOutcome,
+    },
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DirectRoute {
+    Request,
+    RequestReceipt,
+    Decision,
+    DecisionReceipt,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DirectRouteOutcome {
+    Forwarded,
+    LegacyForwarded,
+    TargetOffline,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct PeerHello {
+    pub protocol_version: u32,
+    pub relation_kind: String,
+    pub relation_id: String,
+    pub device_id: String,
+    pub public_key: String,
+    #[serde(default)]
+    pub node_id: String,
+    #[serde(default)]
+    pub session_nonce: String,
+    #[serde(default)]
+    pub session_proof: String,
+    pub requested_capabilities: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FsMeta {
+    pub name: String,
+    pub is_dir: bool,
+    pub is_symlink: bool,
+    pub size: u64,
+    pub mtime_ms: i64,
+    pub btime_ms: i64,
+    pub hidden: bool,
+    pub system: bool,
+    pub id: Option<String>,
+    /// Additive (RV1): neither file, folder nor link (FIFO, socket, device);
+    /// never opened. Older hosts omit it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub special: bool,
+}
+
+/// One compact node in the bounded, post-order tree-walk stream. IDs are
+/// assigned parent-first, while nodes are emitted child-first so the receiver
+/// can assemble the final tree without retaining a second flat copy.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsWalkNode {
+    pub id: u64,
+    pub parent: Option<u64>,
+    pub name: String,
+    pub is_dir: bool,
+    pub size: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsWriteCapabilities {
+    pub create: bool,
+    pub replace: bool,
+    pub namespace_replace: bool,
+    /// Additive: the host's transfer features, the same for every path.
+    /// Hosts before transfer v1 omit it; their clients ignore it.
+    #[serde(default, skip_serializing_if = "FsTransferCapabilities::is_absent")]
+    pub transfer: FsTransferCapabilities,
+    /// Additive (RV1): the host's further features, the same for every path.
+    #[serde(default, skip_serializing_if = "FsHostFeatures::is_absent")]
+    pub features: FsHostFeatures,
+    /// Additive (RV1): access of the export that holds the path; absent for
+    /// `/`, `/Verbindungen` and from older hosts. Enforced only by hosts
+    /// with `export_access_v1`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access: Option<ExportAccess>,
+    /// Additive (RV1): limits of the storage that holds the path.
+    #[serde(default, skip_serializing_if = "FsTargetLimits::is_unknown")]
+    pub limits: FsTargetLimits,
+}
+
+impl From<crate::vfs::StagedWriteCapabilities> for FsWriteCapabilities {
+    fn from(value: crate::vfs::StagedWriteCapabilities) -> Self {
+        Self {
+            create: value.create,
+            replace: value.replace,
+            namespace_replace: value.namespace_replace,
+            transfer: FsTransferCapabilities::default(),
+            features: FsHostFeatures::default(),
+            access: None,
+            limits: FsTargetLimits::default(),
+        }
+    }
+}
+
+impl From<FsWriteCapabilities> for crate::vfs::StagedWriteCapabilities {
+    fn from(value: FsWriteCapabilities) -> Self {
+        Self {
+            create: value.create,
+            replace: value.replace,
+            namespace_replace: value.namespace_replace,
+        }
+    }
+}
+
+/// A deliberately small, additive classification for filesystem failures.
+/// The message remains the source of detail; this kind exists only where a
+/// caller must make a safe control-flow decision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FsErrorKind {
+    NotFound,
+    PermissionDenied,
+    AlreadyExists,
+    Unsupported,
+    /// The host is full or its backend reported a rate limit: congestion,
+    /// not failure. Older peers read it as `Unknown`.
+    Busy,
+    /// RV1: the host's storage is full; every further write fails the same
+    /// way. Older peers read the new kinds as `Unknown`.
+    StorageFull,
+    /// RV1: the host's user is over its storage quota.
+    QuotaExceeded,
+    /// RV1: the export, its storage or the peer's right is read-only.
+    ReadOnly,
+    /// RV1: the file is larger than the host's file system takes.
+    FileTooLarge,
+    /// RV1: the host's file system cannot take this name.
+    InvalidName,
+    #[serde(other)]
+    Unknown,
+}
+
+pub use super::fs_response::FsResponse;
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(tag = "c", rename_all = "snake_case")]
+pub enum Ctrl {
+    PeerHello {
+        hello: PeerHello,
+    },
+    PeerHelloOk,
+    /// Sent only to clients requesting route_policy_v1; legacy HelloOk is unchanged.
+    PeerHelloOkRoute,
+    /// Unit-only selector for the bounded binary reciprocal Direct stream.
+    /// Relation material is never serialized into this JSON control frame.
+    DirectReciprocal,
+    Ping {
+        nonce: String,
+    },
+    Pong {
+        nonce: String,
+    },
+    Fs {
+        req: FsRequest,
+        /// Opaque mount-root lease, scoped by the server to the authenticated
+        /// peer principal. Older clients omit it and retain stateless browsing.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lease: Option<String>,
+    },
+    FsResp {
+        resp: FsResponse,
+    },
+    Exec {
+        req: ExecRequest,
+    },
+    ExecResp {
+        result: ExecResult,
+    },
+    ExecErr {
+        msg: String,
+    },
+}
+
+#[cfg(test)]
+#[path = "wire_tests.rs"]
+mod remote_drive_task_wire_tests;

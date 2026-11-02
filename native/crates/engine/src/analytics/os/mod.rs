@@ -1,0 +1,38 @@
+pub(super) use crate::local_access::{
+    display_path, normalize_scan_root, parallel_scan_allowed, read_directory, EntryKind, LocalEntry,
+};
+
+#[cfg(windows)]
+#[path = "windows.rs"]
+mod host;
+#[cfg(target_os = "android")]
+#[path = "android.rs"]
+mod host;
+#[cfg(all(not(windows), not(target_os = "android")))]
+#[path = "linux_os.rs"]
+mod host;
+pub use host::host_recycle_available;
+pub use host::{host_permission_note, recycle, volume_usage};
+
+/// Default worker count of a local scan. Android's shared storage is served
+/// by MediaProvider's multi-threaded FUSE daemon, whose readdirplus answers
+/// fill the attribute cache, so directory listings scale with the cores; four
+/// keep phones cool and responsive. The desktop uses every available core,
+/// like the local sync walk and the recursive view (2026-10-31; it was a
+/// fixed two without a recorded reason).
+#[cfg(target_os = "android")]
+pub(super) fn default_scan_threads() -> usize {
+    std::thread::available_parallelism().map_or(2, |cores| cores.get().min(4))
+}
+
+#[cfg(not(target_os = "android"))]
+pub(super) fn default_scan_threads() -> usize {
+    std::thread::available_parallelism().map_or(2, |cores| cores.get())
+}
+
+#[path = "shared/checked_recycle.rs"]
+mod checked_recycle;
+
+#[cfg(target_os = "linux")]
+#[path = "linux_trash.rs"]
+mod linux_trash;

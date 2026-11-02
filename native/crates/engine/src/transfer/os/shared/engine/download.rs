@@ -1,0 +1,466 @@
+//! Remote file → local folder: the bytes go to a private `.part` next to the
+//! destination (kept across the one retry, which continues where it stopped
+//! when the provider can read from an offset, K8), are checked against the
+//! listing (length, MD5 or one stat), and are published without replacing
+//! anything unless the user chose "overwrite". New files are not synced to
+//! disk one by one; a replacement is.
+use super::super::engine_names::{next_numbered, parent_rel};
+use super::super::local_stage::{create_download_part, ensure_local_space};
+use super::super::walk_listers::native;
+use super::file_evidence::HostEvidence;
+use super::ops::{At, Carry, Meter, OpError, OpResult, Outcome};
+use super::queue::FileWork;
+use super::source::RemoteCheck;
+use super::Engine;
+use crate::types::Conflict;
+use crate::vfs::Backend;
+use std::fs::File;
+use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+/// A private partial download; removed unless it was published. Its file is
+/// shared (`Arc`) so the parts of a split download can write into it at
+/// once (`segments_download`); the single stream owns the only handle.
+pub struct Part {
+    path: PathBuf,
+    file: Option<Arc<File>>,
+    written: u64,
+    published: bool,
+    retained: bool,
+}
+
+impl Part {
+    pub fn create(destination: &Path) -> Result<Self, OpError> {
+        let (path, file) = create_download_part(destination).map_err(OpError::target)?;
+        Ok(Self {
+            path,
+            file: Some(Arc::new(file)),
+            written: 0,
+            published: false,
+            retained: false,
+        })
+    }
+
+    pub fn write(&mut self, bytes: &[u8]) -> Result<(), OpError> {
+        let mut file: &File = self
+            .file
+            .as_deref()
+            .ok_or_else(|| OpError::target(io::Error::other("Teildatei ist geschlossen")))?;
+        file.write_all(bytes).map_err(OpError::target)?;
+        self.written += bytes.len() as u64;
+        Ok(())
+    }
+
+    pub fn written(&self) -> u64 {
+        self.written
+    }
+
+    /// Where the part lives (a second handle reads it back to hash it).
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// The file for writers that fill ranges of it at once.
+    pub fn shared_file(&self) -> Option<Arc<File>> {
+        self.file.clone()
+    }
+
+    /// Gives the part its final length once, so ranges can be written in
+    /// any order (the file is sparse until they are all in).
+    pub fn prepare_segments(&mut self, size: u64) -> Result<(), OpError> {
+        let file = self
+            .file
+            .as_deref()
+            .ok_or_else(|| OpError::target(io::Error::other("Teildatei ist geschlossen")))?;
+        file.set_len(size).map_err(OpError::target)
+    }
+
+    /// The bytes before `bytes` are written (the safe start of a range
+    /// attempt, or the whole file once every range is in).
+    pub fn set_written(&mut self, bytes: u64) {
+        self.written = bytes;
+    }
+
+    /// Puts the file pointer on `written` for a single stream that follows a
+    /// range attempt (offset writes can move the pointer on Windows).
+    pub fn seek_to_written(&mut self) -> Result<(), OpError> {
+        if let Some(mut file) = self.file.as_deref() {
+            file.seek(SeekFrom::Start(self.written))
+                .map_err(OpError::target)?;
+        }
+        Ok(())
+    }
+
+    /// Starts over from byte 0 (the provider cannot continue mid-file).
+    fn restart(&mut self) -> Result<(), OpError> {
+        if let Some(mut file) = self.file.as_deref() {
+            file.set_len(0).map_err(OpError::target)?;
+            file.seek(SeekFrom::Start(0)).map_err(OpError::target)?;
+        }
+        self.written = 0;
+        Ok(())
+    }
+
+    /// The source's modification time (Unix ms; 0 = unknown) on the complete
+    /// part, before it is closed and published: a download keeps the time of
+    /// its source, as a local copy does. A file system that refuses it keeps
+    /// the time of the download (best effort).
+    fn carry_time(&self, mtime_ms: i64) {
+        let (Some(file), Ok(millis)) = (self.file.as_deref(), u64::try_from(mtime_ms)) else {
+            return;
+        };
+        if millis > 0 {
+            let _ =
+                file.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_millis(millis));
+        }
+    }
+
+    fn close(&mut self, durable: bool) -> Result<(), OpError> {
+        if let Some(file) = self.file.take() {
+            if durable {
+                file.sync_all().map_err(OpError::target)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Drop for Part {
+    fn drop(&mut self) {
+        self.file.take();
+        if !self.published && !self.retained {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+pub(super) fn download<'e>(
+    engine: &Engine<'e>,
+    source: &'e dyn Backend,
+    file: &FileWork,
+    carry: &mut Carry,
+    meter: &Meter<'_>,
+    buffer: &mut [u8],
+) -> OpResult {
+    let destination = native(&engine.folders.path_of(&file.rel));
+    if let Some(outcome) = existing(engine, &destination, file.size, engine.conflict_of(file))? {
+        return Ok(outcome);
+    }
+    let expected = source
+        .read_size(&file.source, file.size)
+        .map_err(OpError::source)?;
+    let mut part = match carry.part.take() {
+        Some(part) => part,
+        None => {
+            ensure_local_space(&destination, expected.unwrap_or(file.size)).map_err(|message| {
+                OpError::target(io::Error::new(io::ErrorKind::StorageFull, message))
+            })?;
+            Part::create(&destination)?
+        }
+    };
+    let mut check = RemoteCheck::new(file, expected);
+    match super::segments_download::try_split(
+        engine, source, file, &mut part, &mut check, expected, meter, buffer,
+    ) {
+        Ok(true) => {
+            let size = part.written();
+            check.finish(source, file, size)?;
+            return publish_local(engine, part, &destination, file);
+        }
+        Ok(false) => {}
+        Err(error) => {
+            carry.part = Some(part);
+            return Err(error);
+        }
+    }
+    // A fresh read from a peer with transfer evidence also brings what the
+    // peer read about the source, so publishing asks for nothing more.
+    let mut known = None;
+    let mut reader = match open_reader(source, file, &mut part, &mut check, buffer, &mut known) {
+        Ok(reader) => reader,
+        Err(error) => {
+            carry.part = Some(part);
+            return Err(error);
+        }
+    };
+    meter.credit(part.written());
+    loop {
+        if engine.stopped() {
+            return Err(OpError::canceled());
+        }
+        let limit = check.limit(part.written(), buffer.len());
+        let read = match meter.timed_source(|| reader.read(&mut buffer[..limit])) {
+            Ok(read) => read,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => {
+                carry.part = Some(part);
+                return Err(OpError::source(error));
+            }
+        };
+        if read == 0 {
+            break;
+        }
+        meter.timed_cpu(|| check.update(file, part.written(), &buffer[..read]))?;
+        meter.timed_target(|| part.write(&buffer[..read]))?;
+        meter.add(read as u64);
+    }
+    drop(reader);
+    let read = part.written();
+    check.finish(source, file, read)?;
+    let known = known.map(super::batch_put::host_evidence);
+    publish_local_known(engine, part, &destination, file, known)
+}
+
+/// Opens the source where the part stops: from its written length when the
+/// provider can, else from the start with an emptied part.
+fn open_reader(
+    source: &dyn Backend,
+    file: &FileWork,
+    part: &mut Part,
+    check: &mut RemoteCheck,
+    buffer: &mut [u8],
+    known: &mut Option<crate::vfs::FileEvidence>,
+) -> Result<Box<dyn Read + Send>, OpError> {
+    if part.written() > 0 {
+        let resumed = source
+            .open_read_at(&file.source, file.id.as_deref(), part.written())
+            .map_err(OpError::source)?;
+        if let Some(reader) = resumed {
+            if check.hashing() {
+                rehash(part, check, file, buffer)?;
+            }
+            return Ok(reader);
+        }
+        part.restart()?;
+    }
+    let evidenced = crate::vfs::open_read_evidence(source, &file.source, file.id.as_deref())
+        .map_err(OpError::source)?;
+    if let Some((reader, evidence)) = evidenced {
+        *known = Some(evidence);
+        return Ok(reader);
+    }
+    source
+        .open_read_id(&file.source, file.id.as_deref())
+        .map_err(OpError::source)
+}
+
+/// Feeds the bytes already in the part to the change check (MD5).
+fn rehash(
+    part: &Part,
+    check: &mut RemoteCheck,
+    file: &FileWork,
+    buffer: &mut [u8],
+) -> Result<(), OpError> {
+    let mut reader = File::open(&part.path).map_err(OpError::target)?;
+    let mut offset = 0u64;
+    while offset < part.written() {
+        let wanted = (part.written() - offset).min(buffer.len() as u64) as usize;
+        let read = reader
+            .read(&mut buffer[..wanted])
+            .map_err(OpError::target)?;
+        if read == 0 {
+            break;
+        }
+        check.update(file, offset, &buffer[..read])?;
+        offset += read as u64;
+    }
+    Ok(())
+}
+
+/// Decides before any transfer whether an existing destination is kept:
+/// "skip" and "transfer missing files" leave it alone.
+pub(super) fn existing(
+    engine: &Engine<'_>,
+    destination: &Path,
+    size: u64,
+    conflict: Conflict,
+) -> Result<Option<Outcome>, OpError> {
+    if !(engine.resume || conflict == Conflict::Skip) {
+        return Ok(None);
+    }
+    match std::fs::symlink_metadata(destination) {
+        Ok(metadata) if engine.resume => {
+            if metadata.is_file() && metadata.len() == size {
+                Ok(Some(Outcome::Skipped))
+            } else {
+                Err(OpError::at(At::Publish, super::publish::different_size()))
+            }
+        }
+        Ok(_) => Ok(Some(Outcome::Skipped)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(OpError::target(error)),
+    }
+}
+
+/// Publishes a complete part under the job's conflict policy.
+pub(super) fn publish_local(
+    engine: &Engine<'_>,
+    part: Part,
+    destination: &Path,
+    file: &FileWork,
+) -> OpResult {
+    publish_local_known(engine, part, destination, file, None)
+}
+
+/// `publish_local` with the remote source as the peer described it while
+/// sending it (`known`): its receipt then asks the peer for nothing.
+pub(super) fn publish_local_known(
+    engine: &Engine<'_>,
+    mut part: Part,
+    destination: &Path,
+    file: &FileWork,
+    known: Option<HostEvidence>,
+) -> OpResult {
+    let known = known.as_ref();
+    let conflict = engine.conflict_of(file);
+    let mut overwrite = conflict == Conflict::Overwrite && !engine.resume;
+    part.carry_time(file.mtime_ms);
+    part.close(overwrite)?;
+    // A replacement the file rule decided is bound to the target it saw: one
+    // look right before the part may replace it. A target saved again
+    // meanwhile is kept and the download is numbered like "keep both".
+    if overwrite {
+        if let Some(decided) = file.replacing.as_ref() {
+            if !crate::copy::target_still_decided(destination, decided) {
+                engine.stats.replace_refused();
+                engine.issues.note(
+                    &file.source,
+                    "Ersetzen nicht möglich (Ziel hat sich seit der Entscheidung geändert) – beide behalten",
+                );
+                overwrite = false;
+            }
+        }
+    }
+    if overwrite {
+        refuse_folder_or_link(destination)?;
+        let staged = crate::copy::native_path_text(&part.path).map_err(OpError::target)?;
+        let target = crate::copy::native_path_text(destination).map_err(OpError::target)?;
+        prepare_part(engine, file, &mut part, &staged, &target, known)?;
+        if let Err(error) = super::super::platform::replace_file_atomic(&part.path, destination) {
+            part.retained = true;
+            return Err(OpError::at(At::Publish, error));
+        }
+        part.published = true;
+        super::file_recovery::after(engine, file, &target)
+            .map_err(|error| OpError::at(At::Unknown, error))?;
+        return Ok(Outcome::Done);
+    }
+    let mut target = destination.to_path_buf();
+    let mut names = next_numbered(&file_name(destination));
+    loop {
+        let staged = crate::copy::native_path_text(&part.path).map_err(OpError::target)?;
+        let actual = crate::copy::native_path_text(&target).map_err(OpError::target)?;
+        prepare_part(engine, file, &mut part, &staged, &actual, known)?;
+        match crate::vfs::promote_local_copy(&part.path, &target) {
+            Ok(()) => {
+                part.published = true;
+                super::file_recovery::after(engine, file, &actual)
+                    .map_err(|error| OpError::at(At::Unknown, error))?;
+                if parent_rel(&file.rel).is_none() {
+                    engine.folders.record_alias(&file.rel, &file_name(&target));
+                }
+                return Ok(Outcome::Done);
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                super::file_recovery::unpublished(engine, file)
+                    .map_err(|error| OpError::at(At::Unknown, error))?;
+                if engine.resume {
+                    return existing(engine, destination, part.written(), conflict)?
+                        .ok_or_else(|| OpError::at(At::Publish, super::publish::different_size()));
+                }
+                if conflict == Conflict::Skip {
+                    return Ok(Outcome::Skipped);
+                }
+                target = next_free(destination, &mut names)?;
+            }
+            Err(error) => {
+                part.retained = true;
+                return Err(OpError::at(
+                    At::Publish,
+                    io::Error::new(
+                        error.kind(),
+                        format!(
+                            "„{}“ ohne Ersetzen veröffentlichen ({:?}): {error}",
+                            destination.display(),
+                            error.kind()
+                        ),
+                    ),
+                ));
+            }
+        }
+    }
+}
+
+fn prepare_part(
+    engine: &Engine<'_>,
+    file: &FileWork,
+    part: &mut Part,
+    staged: &str,
+    target: &str,
+    known: Option<&HostEvidence>,
+) -> Result<(), OpError> {
+    let prepared =
+        super::file_recovery::before_known(engine, file, staged, target, known, None, None);
+    if let Err(error) = prepared {
+        if let Err(failure) = super::file_recovery::preparation_failed(engine, file) {
+            part.retained = true;
+            return Err(OpError::at(At::Unknown, io::Error::other(format!("Publikationsvorbereitung fehlgeschlagen: {error}; Nichtpublikation unbestätigt: {failure}; eigene Teildatei bleibt erhalten: {staged}"))));
+        }
+        return Err(OpError::target(error));
+    }
+    Ok(())
+}
+
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// The next numbered sibling that does not exist yet.
+fn next_free(
+    destination: &Path,
+    names: &mut impl Iterator<Item = String>,
+) -> Result<PathBuf, OpError> {
+    let parent = destination.parent().unwrap_or_else(|| Path::new("."));
+    for name in names {
+        let candidate = parent.join(name);
+        match std::fs::symlink_metadata(&candidate) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(candidate),
+            Err(error) => return Err(OpError::at(At::Publish, error)),
+            Ok(_) => {}
+        }
+    }
+    Err(OpError::at(
+        At::Publish,
+        io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!(
+                "Kein freier Name für „{}“ (AlreadyExists)",
+                destination.display()
+            ),
+        ),
+    ))
+}
+
+fn refuse_folder_or_link(destination: &Path) -> Result<(), OpError> {
+    match std::fs::symlink_metadata(destination) {
+        Ok(metadata)
+            if metadata.is_dir()
+                || crate::local_access::metadata_is_link_like(destination, &metadata) =>
+        {
+            Err(OpError::at(
+                At::Publish,
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "Ziel ist ein Ordner oder Link und wird nicht ersetzt: {}",
+                        destination.display()
+                    ),
+                ),
+            ))
+        }
+        _ => Ok(()),
+    }
+}

@@ -1,0 +1,495 @@
+use std::io::{self, Read, Write};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use crate::vfs::{
+    Backend, BatchGet, BatchLimits, BatchPut, BatchPutOutcome, BatchSink, Scheme, VfsMeta,
+    VfsResult,
+};
+
+use super::core::eio;
+use super::framing::recv_ctrl;
+use super::identity::ShareIdentity;
+use super::io_deadline;
+use super::peer_endpoint_source::PeerEndpointSource;
+use super::session::relation_kind_id;
+use super::types::{
+    ExecRequest, ExecResult, PeerEndpoint, PeerOpenTarget, ShareAuthState, ShareStatus,
+};
+use super::wire::{Ctrl, FsMeta, FsRequest, FsResponse};
+
+pub(super) use super::framing::{reply, send_ctrl};
+pub use super::node::ShareIrohNode;
+
+#[path = "peer_batch_get.rs"]
+mod peer_batch_get;
+#[path = "peer_batch_put.rs"]
+mod peer_batch_put;
+#[path = "peer_evidence.rs"]
+pub(super) mod peer_evidence;
+#[path = "peer_stage_ranges.rs"]
+mod peer_stage_ranges;
+#[path = "peer_stages.rs"]
+pub(super) mod peer_stages;
+#[path = "peer_transfer.rs"]
+pub(super) mod peer_transfer;
+
+pub struct PeerBackend {
+    pub(super) endpoint_source: PeerEndpointSource,
+    pub(super) identity: ShareIdentity,
+    pub(super) node: Arc<ShareIrohNode>,
+    pub(super) mount_lease: super::mount_lease_client::PeerMountLeaseClient,
+    /// Transfer v1 capabilities of the host and this client's own stages.
+    pub(super) transfer: peer_transfer::PeerTransferState,
+}
+
+impl PeerBackend {
+    pub fn new(
+        endpoint: PeerEndpoint,
+        identity: ShareIdentity,
+        node: Arc<ShareIrohNode>,
+    ) -> Self {
+        Self {
+            endpoint_source: PeerEndpointSource::fixed(endpoint),
+            identity,
+            node,
+            mount_lease: Default::default(),
+            transfer: Default::default(),
+        }
+    }
+
+    pub fn new_live(
+        endpoint: PeerEndpoint,
+        target: PeerOpenTarget,
+        auth: Arc<std::sync::Mutex<ShareAuthState>>,
+        identity: ShareIdentity,
+        node: Arc<ShareIrohNode>,
+    ) -> Self {
+        Self {
+            endpoint_source: PeerEndpointSource::live(endpoint, target, auth),
+            identity,
+            node,
+            mount_lease: Default::default(),
+            transfer: Default::default(),
+        }
+    }
+
+    pub(super) fn initial_endpoint(&self) -> &PeerEndpoint {
+        self.endpoint_source.initial()
+    }
+
+    pub(super) fn current_endpoint(&self) -> io::Result<PeerEndpoint> {
+        self.endpoint_source.current()
+    }
+
+    pub fn probe_root(&self) -> io::Result<Vec<VfsMeta>> {
+        self.list_dir("/")
+    }
+
+    /// A session whose payload runs over the relay reads "Verbunden
+    /// (Relay)", also in the start phase (D1): relay use is always marked
+    /// (core principle, review B6); the route view names the start phase.
+    pub fn transport_status(&self) -> ShareStatus {
+        self.node
+            .session_transport(self.initial_endpoint())
+            .map(|transport| match transport {
+                "relay" => ShareStatus::ConnectedRelay,
+                "direct" => ShareStatus::ConnectedDirect,
+                _ => ShareStatus::Connected,
+            })
+            .unwrap_or(ShareStatus::Connected)
+    }
+
+    pub(super) fn mount_lease_token(&self) -> io::Result<Option<String>> {
+        self.mount_lease.current()
+    }
+
+    pub fn exec(&self, req: ExecRequest) -> io::Result<ExecResult> {
+        let started = Instant::now();
+        let timeout = Duration::from_millis(req.timeout_ms.min(15 * 60 * 1_000))
+            .saturating_add(Duration::from_secs(30))
+            .min(Duration::from_secs(15 * 60 + 30));
+        let endpoint = self.current_endpoint()?;
+        let mut opened = self.node.open_stream_until(
+            &endpoint,
+            &self.identity,
+            Instant::now() + super::peer_request::CONTROL_ATTEMPT_TIMEOUT,
+        )?;
+        let result =
+            self.node
+                .block_on(io_deadline::run_for("peer exec request", timeout, async {
+                    send_ctrl(&mut opened.send, &Ctrl::Exec { req }).await?;
+                    recv_ctrl(&mut opened.recv).await
+                }));
+        let response = match result {
+            Ok(Ctrl::ExecResp { result }) => result,
+            Ok(Ctrl::ExecErr { msg }) => return Err(eio(msg)),
+            Ok(_) => {
+                let _ = self
+                    .node
+                    .invalidate_outgoing_session(&opened.session_key, opened.generation);
+                return Err(eio("Peer sendet falsche Exec-Antwort"));
+            }
+            Err(error) => {
+                io_deadline::abort(&mut opened.send, &mut opened.recv);
+                let _ = self
+                    .node
+                    .invalidate_outgoing_session(&opened.session_key, opened.generation);
+                return Err(error);
+            }
+        };
+        super::peer_telemetry::report_exec_success(
+            &self.node.ev,
+            format!(
+                "Share-Exec: {} ms, code={:?}, timeout={}",
+                started.elapsed().as_millis(),
+                response.exit_code,
+                response.timed_out
+            ),
+        );
+        Ok(response)
+    }
+}
+
+impl Backend for PeerBackend {
+    fn extensions(&self) -> Option<&dyn crate::vfs::BackendExtensions> {
+        Some(self)
+    }
+    fn scheme(&self) -> Scheme {
+        Scheme::Peer
+    }
+
+    fn root_display(&self) -> String {
+        "/".to_string()
+    }
+
+    fn state_identity(&self) -> String {
+        let endpoint = self.initial_endpoint();
+        let (kind, relation) = relation_kind_id(endpoint);
+        format!("peer:{kind}:{relation}:{}", endpoint.presence.node_id)
+    }
+
+    fn list_dir(&self, path: &str) -> VfsResult<Vec<VfsMeta>> {
+        let listing = super::peer_list_batch::list(self, path)?;
+        if !listing.omitted.is_empty() {
+            return Err(io::Error::other(
+                "Verzeichnis enthält nicht auflistbare Einträge; tolerantes Listen erforderlich",
+            ));
+        }
+        Ok(listing.entries)
+    }
+
+    fn stat(&self, path: &str) -> VfsResult<VfsMeta> {
+        match self.request(FsRequest::Stat {
+            path: path.to_string(),
+        })? {
+            FsResponse::Meta { meta } => Ok(meta.into()),
+            _ => Err(eio("unerwartete Antwort auf stat")),
+        }
+    }
+
+    fn try_exists(&self, path: &str) -> VfsResult<bool> {
+        super::fs_error::exists_from_stat(self.stat(path))
+    }
+
+    fn scan_storage(
+        &self,
+        root: &str,
+        progress: &crate::analytics::Progress,
+    ) -> VfsResult<Option<crate::analytics::ScanOutcome>> {
+        super::peer_storage_analysis::scan(self, root, progress)
+    }
+
+    fn supports_walk_tree(&self) -> bool {
+        true
+    }
+
+    fn walk_tree(
+        &self,
+        root: &str,
+        on_progress: &(dyn Fn(u64, u64) -> bool + Sync),
+    ) -> VfsResult<Option<crate::agent_proto::WireNode>> {
+        super::peer_storage_snapshot::walk_peer(self, root, on_progress)
+    }
+
+    fn open_read(&self, path: &str) -> VfsResult<Box<dyn Read + Send>> {
+        self.open_reader(path)
+    }
+
+    fn open_read_id(&self, path: &str, id: Option<&str>) -> VfsResult<Box<dyn Read + Send>> {
+        self.read_by_id(path, id)
+    }
+
+    fn open_read_at(
+        &self,
+        path: &str,
+        id: Option<&str>,
+        offset: u64,
+    ) -> VfsResult<Option<Box<dyn Read + Send>>> {
+        self.read_at(path, id, offset)
+    }
+
+    /// Ranges of a file as separate requests, when the host advertises
+    /// `ranges_v1` (an older host streams the file as one).
+    fn supports_range_reads(&self, path: &str) -> bool {
+        let _ = path;
+        self.ranges_offered()
+    }
+
+    fn open_read_range(
+        &self,
+        path: &str,
+        id: Option<&str>,
+        offset: u64,
+        len: u64,
+    ) -> VfsResult<Option<Box<dyn Read + Send>>> {
+        self.read_range(path, id, offset, len)
+    }
+
+    /// A stage several requests fill range by range (`ranges_v1`).
+    fn open_segmented_stage(
+        &self,
+        stage: &str,
+        size: u64,
+    ) -> VfsResult<Option<Box<dyn crate::vfs::SegmentedStage>>> {
+        self.open_ranged_stage(stage, size)
+    }
+
+    fn open_write(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
+        self.open_writer(
+            FsRequest::Write {
+                path: path.to_string(),
+                lz4: self.lz4_offered(),
+            },
+            "peer write open",
+        )
+    }
+
+    fn open_write_new(&self, path: &str) -> VfsResult<Box<dyn Write + Send>> {
+        self.open_owned_writer(path)
+    }
+
+    fn open_write_copy_stage_sized(
+        &self,
+        path: &str,
+        size: u64,
+    ) -> VfsResult<Box<dyn Write + Send>> {
+        let writer = self.open_write_copy_stage(path)?;
+        Ok(peer_transfer::sized_writer(writer, size))
+    }
+
+    fn promote_copy_stage(&self, staged: &str, destination: &str) -> VfsResult<()> {
+        self.promote_without_replace(staged, destination, true)
+    }
+
+    fn server_copy_to_stage(
+        &self,
+        src: &str,
+        stage: &str,
+        size: u64,
+        _cancel: &std::sync::atomic::AtomicBool,
+    ) -> VfsResult<Option<u64>> {
+        self.copy_to_stage(src, stage, size)
+    }
+
+    fn discard_copy_stage(&self, stage: &str) -> VfsResult<()> {
+        self.discard_own_stage(stage)
+    }
+
+    fn batch_limits(&self, dir: &str) -> Option<BatchLimits> {
+        self.batch_limits_below(dir)
+    }
+
+    fn put_batch(
+        &self,
+        entries: &[BatchPut],
+        data: &mut dyn Read,
+    ) -> VfsResult<Vec<BatchPutOutcome>> {
+        self.put_batch_v1(entries, data)
+    }
+
+    fn get_batch(&self, items: &[BatchGet], sink: &mut dyn BatchSink) -> VfsResult<()> {
+        self.get_batch_v1(items, sink)
+    }
+
+    fn flow_key(&self, _path: &str) -> String {
+        self.connection_flow_key()
+    }
+
+    fn transfer_ceiling(&self, _path: &str) -> Option<usize> {
+        Some(self.transfer_slots())
+    }
+
+    fn transfer_hint(&self) -> Option<String> {
+        // The route of the cached session: a relay start phase while the
+        // direct path is set up, a relay fallback (whose server limits the
+        // bandwidth, research §3.1) or nothing for a direct path (D1).
+        self.node.session_route_hint(self.initial_endpoint())
+    }
+
+    fn copy_file(&self, src: &str, dst: &str) -> VfsResult<u64> {
+        match self.request(FsRequest::CopyFile {
+            src: src.to_string(),
+            dst: dst.to_string(),
+        })? {
+            FsResponse::Data { size } => Ok(size),
+            FsResponse::Ok => Ok(self.stat(dst).map(|metadata| metadata.size).unwrap_or(0)),
+            _ => Err(eio("unerwartete Antwort auf copy_file")),
+        }
+    }
+
+    fn rename(&self, src: &str, dst: &str) -> VfsResult<()> {
+        let ticket = self.begin_tracked_mutation(src)?;
+        match self.tracked_request(
+            FsRequest::Rename {
+                src: src.to_string(),
+                dst: dst.to_string(),
+            },
+            ticket.as_ref(),
+            "rename",
+        )? {
+            FsResponse::Ok => {
+                if let Some(ticket) = ticket {
+                    ticket.release();
+                }
+                Ok(())
+            }
+            _ => Err(eio("unerwartete Antwort auf rename")),
+        }
+    }
+
+    fn promote_staged_no_replace(&self, staged: &str, destination: &str) -> VfsResult<()> {
+        self.promote_without_replace(staged, destination, false)
+    }
+
+    fn rename_no_replace(&self, src: &str, dst: &str) -> VfsResult<()> {
+        let ticket = self.begin_tracked_mutation(src)?;
+        match self.stage_request_once(
+            FsRequest::RenameNoReplace {
+                src: src.to_string(),
+                dst: dst.to_string(),
+            },
+            "rename_no_replace",
+        )? {
+            FsResponse::Ok => {
+                if let Some(ticket) = ticket {
+                    ticket.release();
+                }
+                Ok(())
+            }
+            _ => Err(eio("unerwartete Antwort auf rename_no_replace")),
+        }
+    }
+
+    fn promote_staged(&self, staged: &str, destination: &str) -> VfsResult<()> {
+        let ticket = self.begin_stage_publication(staged)?;
+        match self.stage_request_once(
+            FsRequest::PromoteStaged {
+                staged: staged.to_string(),
+                destination: destination.to_string(),
+            },
+            "promote_staged",
+        )? {
+            FsResponse::Ok => {
+                ticket.release();
+                Ok(())
+            }
+            _ => Err(eio("unerwartete Antwort auf promote_staged")),
+        }
+    }
+
+    fn remove_file(&self, path: &str) -> VfsResult<()> {
+        let ticket = self.begin_tracked_mutation(path)?;
+        match self.tracked_request(
+            FsRequest::RemoveFile {
+                path: path.to_string(),
+            },
+            ticket.as_ref(),
+            "remove_file",
+        )? {
+            FsResponse::Ok => {
+                if let Some(ticket) = ticket {
+                    ticket.release();
+                }
+                Ok(())
+            }
+            _ => Err(eio("unerwartete Antwort auf remove_file")),
+        }
+    }
+
+    fn remove_dir(&self, path: &str) -> VfsResult<()> {
+        match self.request(FsRequest::RemoveDir {
+            path: path.to_string(),
+        })? {
+            FsResponse::Ok => Ok(()),
+            _ => Err(eio("unerwartete Antwort auf remove_dir")),
+        }
+    }
+
+    fn mkdir_all(&self, path: &str) -> VfsResult<()> {
+        match self.request(FsRequest::MkdirAll {
+            path: path.to_string(),
+        })? {
+            FsResponse::Ok => Ok(()),
+            _ => Err(eio("unerwartete Antwort auf mkdir_all")),
+        }
+    }
+
+    fn create_dir(&self, path: &str) -> VfsResult<()> {
+        self.create_directory(path, false)
+    }
+
+    fn create_dir_new(&self, path: &str) -> VfsResult<()> {
+        self.create_directory(path, true)
+    }
+
+    fn parallelism(&self) -> usize {
+        8
+    }
+
+    fn rename_overwrites(&self) -> bool {
+        // A share can expose any backend. Safe staged replacement is delegated
+        // to the resolved host backend through PromoteStaged instead.
+        false
+    }
+
+    fn staged_write_capabilities(&self, root: &str) -> crate::vfs::StagedWriteCapabilities {
+        self.probe_mount_path_capabilities(root)
+            .map(|capabilities| capabilities.staged_write)
+            .unwrap_or_default()
+    }
+
+    fn probe_staged_write_capabilities(
+        &self,
+        root: &str,
+    ) -> VfsResult<crate::vfs::StagedWriteCapabilities> {
+        self.probe_mount_path_capabilities(root)
+            .map(|capabilities| capabilities.staged_write)
+    }
+
+    fn mount_path_capabilities(&self, root: &str) -> VfsResult<crate::vfs::MountPathCapabilities> {
+        self.query_mount_path_capabilities(
+            root,
+            true,
+            Instant::now() + io_deadline::PEER_OP_TIMEOUT,
+        )
+    }
+}
+
+impl From<FsMeta> for VfsMeta {
+    fn from(metadata: FsMeta) -> Self {
+        VfsMeta {
+            name: metadata.name,
+            is_dir: metadata.is_dir,
+            is_symlink: metadata.is_symlink,
+            special: metadata.special,
+            size: metadata.size,
+            mtime_ms: metadata.mtime_ms,
+            btime_ms: metadata.btime_ms,
+            hidden: metadata.hidden,
+            system: metadata.system,
+            id: metadata.id,
+            content_md5: None,
+        }
+    }
+}

@@ -7099,6 +7099,72 @@ checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 name = "smart_explorer"
 version = "0.5.193"
 dependencies = [
+ "crossbeam-channel",
+ "eframe",
+ "getrandom 0.2.17",
+ "iroh",
+ "libc",
+ "lz4_flex",
+ "same-file",
+ "serde_json",
+ "sha2 0.10.9",
+ "sha2 0.11.0",
+ "smart_explorer_cli",
+ "smart_explorer_engine",
+ "smart_explorer_gui",
+ "smart_explorer_mobile",
+ "tempfile",
+ "windows 0.58.0",
+ "windows-sys 0.59.0",
+ "winreg",
+ "zeroize",
+]
+
+[[package]]
+name = "smart_explorer_android"
+version = "0.0.0"
+dependencies = [
+ "jni 0.22.4",
+ "ndk-context",
+ "rustls-platform-verifier",
+ "serde_json",
+ "smart_explorer",
+]
+
+[[package]]
+name = "smart_explorer_cli"
+version = "0.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "clap",
+ "clap_complete",
+ "crossbeam-channel",
+ "ctrlc",
+ "eframe",
+ "getrandom 0.2.17",
+ "iroh",
+ "libc",
+ "ring",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sha2 0.11.0",
+ "smart_explorer_engine",
+ "smart_explorer_gui",
+ "tempfile",
+ "tokio",
+ "toml_edit",
+ "windows 0.58.0",
+ "windows-sys 0.59.0",
+ "zeroize",
+]
+
+[[package]]
+name = "smart_explorer_engine"
+version = "0.0.0"
+dependencies = [
  "aes 0.9.1",
  "aes-gcm 0.11.1",
  "aes-kw",
@@ -7107,21 +7173,13 @@ dependencies = [
  "ashpd 0.13.13",
  "base64 0.22.1",
  "bzip2",
- "calloop 0.13.0",
- "calloop-wayland-source 0.3.0",
  "chacha20 0.10.0",
  "chacha20poly1305",
  "chrono",
- "clap",
- "clap_complete",
  "crossbeam-channel",
  "ctr 0.10.1",
  "ctrlc",
  "data-encoding",
- "eframe",
- "egui-wgpu",
- "egui-winit",
- "egui_extras",
  "flate2",
  "fuser",
  "futures-util",
@@ -7143,21 +7201,17 @@ dependencies = [
  "mdns-sd",
  "ml-kem",
  "noq-proto",
- "notify",
  "opaque-ke",
  "openh264",
  "openh264-sys2",
  "png",
  "quick-xml 0.39.2",
  "rand 0.10.1",
- "raw-window-handle",
  "rayon",
  "rcgen",
  "regex",
  "resvg",
- "rfd",
  "ring",
- "rmcp",
  "roxmltree 0.20.0",
  "rusqlite",
  "russh",
@@ -7173,12 +7227,10 @@ dependencies = [
  "sha2 0.11.0",
  "similar",
  "smb2",
- "smithay-client-toolkit 0.19.2",
  "socket2",
  "suppaftp",
  "tempfile",
  "tokio",
- "toml_edit",
  "trash",
  "tungstenite",
  "ureq",
@@ -7192,6 +7244,53 @@ dependencies = [
  "windows-sys 0.59.0",
  "winreg",
  "x11rb",
+ "zbus 5.16.0",
+ "zeroize",
+ "zip",
+]
+
+[[package]]
+name = "smart_explorer_gui"
+version = "0.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "calloop 0.13.0",
+ "calloop-wayland-source 0.3.0",
+ "chrono",
+ "crossbeam-channel",
+ "eframe",
+ "egui-wgpu",
+ "egui-winit",
+ "egui_extras",
+ "futures-util",
+ "getrandom 0.2.17",
+ "globset",
+ "image",
+ "libc",
+ "libloading",
+ "mdns-sd",
+ "notify",
+ "openh264",
+ "png",
+ "raw-window-handle",
+ "rfd",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sha2 0.11.0",
+ "smart_explorer_engine",
+ "smithay-client-toolkit 0.19.2",
+ "tempfile",
+ "tokio",
+ "trash",
+ "wayland-client",
+ "wayland-protocols",
+ "wayland-protocols-wlr",
+ "windows 0.58.0",
+ "windows-core 0.58.0",
+ "windows-sys 0.59.0",
+ "winreg",
+ "x11rb",
  "xkbcommon-dl",
  "zbus 5.16.0",
  "zeroize",
@@ -7199,14 +7298,24 @@ dependencies = [
 ]
 
 [[package]]
-name = "smart_explorer_android"
+name = "smart_explorer_mobile"
 version = "0.0.0"
 dependencies = [
- "jni 0.22.4",
- "ndk-context",
- "rustls-platform-verifier",
+ "base64 0.22.1",
+ "crossbeam-channel",
+ "getrandom 0.2.17",
+ "globset",
+ "libc",
+ "md5 0.7.0",
+ "serde",
  "serde_json",
- "smart_explorer",
+ "sha2 0.10.9",
+ "sha2 0.11.0",
+ "smart_explorer_engine",
+ "tempfile",
+ "tokio",
+ "trash",
+ "zeroize",
 ]
 
 [[package]]

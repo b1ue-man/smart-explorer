@@ -1,0 +1,67 @@
+[package]
+name = "smart_explorer_gui"
+version = "0.0.0"
+edition = "2021"
+description = "Smart Explorer desktop GUI: explorer window and se Desktop"
+license = "MIT"
+publish = false
+
+[dependencies]
+smart_explorer_engine = { path = "../engine" }
+png.workspace = true
+crossbeam-channel.workspace = true
+notify.workspace = true
+globset.workspace = true
+chrono.workspace = true
+tokio.workspace = true
+futures-util.workspace = true
+tempfile.workspace = true
+base64.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+zeroize.workspace = true
+getrandom.workspace = true
+mdns-sd.workspace = true
+zip.workspace = true
+sha2-011.workspace = true
+
+[target.'cfg(not(windows))'.dependencies]
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-core.workspace = true
+rfd = { version = "0.15", default-features = false, features = ["common-controls-v6"] }
+windows-sys.workspace = true
+winreg.workspace = true
+windows.workspace = true
+
+[target.'cfg(all(not(windows), not(target_os = "android")))'.dependencies]
+rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
+
+[target.'cfg(any(windows, target_os = "linux"))'.dependencies]
+openh264.workspace = true
+libloading.workspace = true
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+eframe.workspace = true
+raw-window-handle.workspace = true
+egui_extras.workspace = true
+trash.workspace = true
+image.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus.workspace = true
+x11rb.workspace = true
+wayland-client.workspace = true
+wayland-protocols.workspace = true
+wayland-protocols-wlr.workspace = true
+smithay-client-toolkit.workspace = true
+calloop.workspace = true
+calloop-wayland-source.workspace = true
+xkbcommon-dl.workspace = true
+egui-wgpu.workspace = true
+egui-winit.workspace = true
+
+[dev-dependencies]
+smart_explorer_engine = { path = "../engine", features = ["test-support"] }

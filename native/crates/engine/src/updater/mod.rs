@@ -1,0 +1,69 @@
+#[path = "os/shared/apply.rs"]
+mod apply;
+#[path = "os/shared/archive.rs"]
+mod archive;
+#[path = "os/shared/cli_swap.rs"]
+mod cli_swap;
+#[path = "os/shared/config.rs"]
+mod config;
+#[path = "core/core.rs"]
+mod core;
+#[path = "os/shared/feed.rs"]
+mod feed;
+#[path = "os/shared/feed_files.rs"]
+mod feed_files;
+#[path = "os/shared/flow.rs"]
+mod flow;
+#[cfg(windows)]
+#[path = "os/windows.rs"]
+mod os;
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[path = "os/linux_os.rs"]
+mod os;
+#[path = "os/shared/staging.rs"]
+mod staging;
+#[path = "os/shared/startup_ack.rs"]
+mod startup_ack;
+#[path = "os/shared/terminal.rs"]
+mod terminal;
+#[path = "core/types.rs"]
+mod types;
+
+pub use apply::{apply_staged_update, apply_staged_update_for};
+#[allow(unused_imports)]
+pub use archive::{
+    archive_current_version, cleanup_old_binaries, is_auto_update_paused, list_archived_versions,
+    pinned_version, resume_auto_update,
+};
+pub use cli_swap::ReplacedCli;
+pub use config::{
+    peek_updater_error, set_startup_check, set_update_source, startup_check_enabled,
+    take_updater_error, update_source_str,
+};
+pub use core::is_newer;
+pub use feed::{
+    complete_legacy_launcher, download_update, download_version, list_remote_versions,
+    CompletedLegacyLauncher, LegacyLauncherRequest,
+};
+pub use feed_files::{
+    download_feed_file, file_sha256, pinned_feed, read_feed_sha256, read_feed_version,
+};
+pub use flow::{check_async, update_to_latest_async};
+/// The `se` installed next to the running app (the desktop GUI runs it for
+/// `se plugin`).
+pub use os::installed_cli_path;
+pub use os::revert_to;
+pub use staging::{discard_staged_update, load_staged_update, verify_staged_update};
+pub use startup_ack::{
+    acknowledge_update_startup, capture_update_startup_ack, update_startup_ack_pending,
+};
+pub use terminal::{
+    check_feed, desktop_update_possible, detect_installation, replace_cli, stage_update, FeedCheck,
+    Installation,
+};
+pub use terminal::{lock_cli_for_integration, LegacyIntegrationGuard};
+pub use types::{StagedUpdate, UpdateMsg, VerifiedPayload};
+
+#[cfg(test)]
+#[path = "core/tests.rs"]
+mod tests;

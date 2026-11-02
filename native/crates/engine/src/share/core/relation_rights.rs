@@ -1,0 +1,345 @@
+//! Rights of a relation as seen by the host (contract V5).
+//!
+//! [`SessionAuthorization`] is what one authorized filesystem stream may do;
+//! [`RestrictionSet`] names exactly whose rights a configuration change
+//! narrowed („Recht eingeschränkt für (Schlüssel, Beziehung)“), so only those
+//! sessions, leases, transfers, Exec jobs and repairs end (FA3). A narrowed
+//! or ended access right (C5) ends only the sessions of its capabilities.
+use super::access_grant::Capability;
+use super::fs::ShareExportConfig;
+use super::profiles::ShareProfiles;
+use super::types::{DirectContact, DirectGrant, RoomProfile, ShareAuthState, ShareStatus};
+
+#[path = "relation_rights_diff.rs"]
+mod diff;
+
+/// Only reductions of existing authority close work (FA3). Exec grants are
+/// compared capability by capability (C5): each narrowed capability is its
+/// own restriction, and a pure widening restricts nothing, so a running
+/// session survives „Immer erlauben“.
+pub fn authorization_restrictions(
+    current: &ShareAuthState,
+    candidate: &ShareAuthState,
+) -> RestrictionSet {
+    let mut restrictions = diff::authorization_restrictions(current, candidate);
+    restrictions
+        .items
+        .retain(|item| item.reason != RestrictionReason::ExecRevoked);
+    if restrictions.everything.is_none() {
+        restrictions.merge(super::access_grant_runtime::capability_restrictions(
+            current, candidate,
+        ));
+    }
+    restrictions
+}
+
+/// Result of authorizing one incoming filesystem stream.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionAuthorization {
+    /// Exports this relation sees (Direct: the device's folders of
+    /// `default_direct_exports`, room: `room.exports`).
+    pub exports: ShareExportConfig,
+    /// Write right of the relation (Direct `DirectGrant.write`, room
+    /// `RoomPolicy.members_may_write`). A writing request is allowed only for
+    /// `may_write && root.access == ReadWrite`.
+    pub may_write: bool,
+}
+
+impl SessionAuthorization {
+    /// `exports` are all Direct exports; the session sees only the folders
+    /// of this grant's device (F2, `ShareExportConfig::visible_to`).
+    pub fn direct(exports: ShareExportConfig, grant: &DirectGrant) -> Self {
+        Self {
+            exports: exports.visible_to(&grant.device_id, &grant.public_key),
+            may_write: grant.write,
+        }
+    }
+
+    pub fn room(room: &RoomProfile) -> Self {
+        Self {
+            exports: room.exports.clone(),
+            may_write: room.policy.members_may_write,
+        }
+    }
+}
+
+/// Relation in which a right was restricted.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum RelationScope {
+    /// The Direct relation with one peer in both directions (incoming over
+    /// this device's lookup id, outgoing over the contact's lookup id).
+    Direct,
+    /// One room (`RoomProfile.room_id`).
+    Room { room_id: String },
+}
+
+/// Identity a restriction applies to. A session, lease, transfer, Exec job or
+/// repair matches when its peer key **or** node id is equal; empty values
+/// never match.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct PrincipalKey {
+    pub public_key: String,
+    pub node_id: String,
+}
+
+impl PrincipalKey {
+    pub fn matches(&self, public_key: &str, node_id: &str) -> bool {
+        (!self.public_key.is_empty() && self.public_key == public_key)
+            || (!self.node_id.is_empty() && self.node_id == node_id)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RestrictionReason {
+    /// Contact or grant removed („Entfernen“).
+    Removed,
+    /// Grant ignored or member blocked („Sperren“).
+    Blocked,
+    /// Grant suspended for re-confirmation (code rotation, identity repair).
+    Reconfirm,
+    /// Peer key or node changed, or a pin was replaced.
+    IdentityChanged,
+    /// Write right withdrawn (grant, room, or export access).
+    WriteRevoked,
+    /// Exec grant withdrawn.
+    ExecRevoked,
+    /// Exports removed or narrowed.
+    ExportsNarrowed,
+    /// Relation inactive: room left or deactivated, Direct offline, contact
+    /// access withdrawn.
+    RelationInactive,
+    /// Not attributable to a key and relation: close everything (pre-V5).
+    Unattributed,
+    /// One capability of an access right narrowed (C5): its sessions end;
+    /// file sessions, leases and the other capabilities stay.
+    CapabilityNarrowed(Capability),
+    /// The access right ended (`valid_until`): the sessions of every
+    /// capability end; file sessions and leases stay.
+    GrantExpired,
+}
+
+impl RestrictionReason {
+    /// Whether the reason concerns access-right capabilities only (Exec
+    /// jobs, screen sessions), not the relation's file access.
+    pub fn capability_only(self) -> bool {
+        matches!(self, Self::CapabilityNarrowed(_) | Self::GrantExpired)
+    }
+
+    /// Whether the reason ends sessions of `capability`.
+    pub fn ends(self, capability: Capability) -> bool {
+        match self {
+            Self::CapabilityNarrowed(narrowed) => narrowed == capability,
+            _ => true,
+        }
+    }
+}
+
+/// Event „Recht eingeschränkt für (Schlüssel, Beziehung)“.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct RightsRestriction {
+    pub relation: RelationScope,
+    /// `None`: every principal of the relation.
+    pub principal: Option<PrincipalKey>,
+    pub reason: RestrictionReason,
+}
+
+impl RightsRestriction {
+    pub fn affects(
+        &self,
+        relation_kind: &str,
+        relation_id: &str,
+        public_key: &str,
+        node_id: &str,
+    ) -> bool {
+        let relation = match &self.relation {
+            RelationScope::Direct => relation_kind == "direct",
+            RelationScope::Room { room_id } => relation_kind == "room" && room_id == relation_id,
+        };
+        relation
+            && self
+                .principal
+                .as_ref()
+                .is_none_or(|principal| principal.matches(public_key, node_id))
+    }
+}
+
+/// All restrictions of one configuration change. Empty: nothing may be
+/// closed (presence and other runtime data, new members, any extension);
+/// everything: close all as before V5.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RestrictionSet {
+    everything: Option<RestrictionReason>,
+    items: Vec<RightsRestriction>,
+}
+
+impl RestrictionSet {
+    pub fn everything(reason: RestrictionReason) -> Self {
+        Self {
+            everything: Some(reason),
+            items: Vec::new(),
+        }
+    }
+
+    pub fn push(&mut self, restriction: RightsRestriction) {
+        if !self.items.contains(&restriction) {
+            self.items.push(restriction);
+        }
+    }
+
+    pub fn merge(&mut self, other: RestrictionSet) {
+        if self.everything.is_none() {
+            self.everything = other.everything;
+        }
+        for restriction in other.items {
+            self.push(restriction);
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.everything.is_none() && self.items.is_empty()
+    }
+
+    /// `Some(reason)` when the change cannot be scoped and everything closes.
+    pub fn everything_reason(&self) -> Option<RestrictionReason> {
+        self.everything
+    }
+
+    pub fn items(&self) -> &[RightsRestriction] {
+        &self.items
+    }
+
+    /// Whether a session, lease, transfer or repair of this principal, or
+    /// its connection, is hit. `relation_kind` is `"direct"` or `"room"` as
+    /// in `PeerHello.relation_kind`; `relation_id` is the room id (ignored
+    /// for Direct). Restrictions of access-right capabilities alone leave
+    /// them alone; `affects_capability` covers those.
+    pub fn affects(
+        &self,
+        relation_kind: &str,
+        relation_id: &str,
+        public_key: &str,
+        node_id: &str,
+    ) -> bool {
+        self.everything.is_some()
+            || self.items.iter().any(|item| {
+                !item.reason.capability_only()
+                    && item.affects(relation_kind, relation_id, public_key, node_id)
+            })
+    }
+
+    /// Whether a session of `capability` of this principal (an Exec job, a
+    /// screen session) is hit: by any restriction of its relation and key,
+    /// except a narrowing of another capability.
+    pub fn affects_capability(
+        &self,
+        relation_kind: &str,
+        relation_id: &str,
+        public_key: &str,
+        node_id: &str,
+        capability: Capability,
+    ) -> bool {
+        self.everything.is_some()
+            || self.items.iter().any(|item| {
+                item.reason.ends(capability)
+                    && item.affects(relation_kind, relation_id, public_key, node_id)
+            })
+    }
+
+    /// Whether an Exec job of this principal is hit. A job's start kind is
+    /// not kept with it, so a narrowing of commands or terminal ends both.
+    pub fn affects_exec(
+        &self,
+        relation_kind: &str,
+        relation_id: &str,
+        public_key: &str,
+        node_id: &str,
+    ) -> bool {
+        Capability::EXEC.into_iter().any(|capability| {
+            self.affects_capability(relation_kind, relation_id, public_key, node_id, capability)
+        })
+    }
+}
+
+fn without_contact_runtime(contact: &DirectContact) -> DirectContact {
+    let mut contact = contact.clone();
+    contact.status = ShareStatus::default();
+    contact.last_seen = None;
+    contact.last_error = None;
+    contact.presence = None;
+    contact.lan_candidates.clear();
+    contact.lan_seen_at = None;
+    contact.lan_uplink = None;
+    contact
+}
+
+fn without_room_runtime(room: &RoomProfile) -> RoomProfile {
+    let mut room = room.clone();
+    room.status = ShareStatus::default();
+    room.last_seen = None;
+    for member in &mut room.members {
+        member.device_name.clear();
+        member.relay_url.clear();
+        member.candidates.clear();
+        member.last_seen = None;
+        member.status = ShareStatus::default();
+        member.presence = None;
+    }
+    room
+}
+
+/// FA3 (daemon event path): whether `after` differs from `before` in anything
+/// the worker needs a configuration for. Runtime data (presence, status,
+/// `last_seen`, errors, LAN routes, member routes and names) and members seen
+/// for the first time reach the worker as `ShareCmd::UpdateRuntime` instead,
+/// without a configuration transition.
+pub fn profiles_differ_beyond_runtime(
+    before: &ShareProfiles,
+    after: &ShareProfiles,
+) -> bool {
+    before.default_direct_exports != after.default_direct_exports
+        || before.direct_grants != after.direct_grants
+        || before.direct_requests != after.direct_requests
+        || before.direct_request_tombstones != after.direct_request_tombstones
+        || before.direct_contacts.len() != after.direct_contacts.len()
+        || before
+            .direct_contacts
+            .iter()
+            .zip(&after.direct_contacts)
+            .any(|(before, after)| {
+                without_contact_runtime(before) != without_contact_runtime(after)
+            })
+        || before.rooms.len() != after.rooms.len()
+        || before
+            .rooms
+            .iter()
+            .zip(&after.rooms)
+            .any(|(before, after)| room_differs_beyond_runtime(before, after))
+}
+
+fn room_differs_beyond_runtime(before: &RoomProfile, after: &RoomProfile) -> bool {
+    let before = without_room_runtime(before);
+    let after = without_room_runtime(after);
+    before.id != after.id
+        || before.name != after.name
+        || before.room_id != after.room_id
+        || before.auto_join != after.auto_join
+        || before.exports != after.exports
+        || before.policy != after.policy
+        || before
+            .members
+            .iter()
+            .any(|member| !after.members.contains(member))
+        // F5: a member recorded with the room's member access needs the
+        // configuration that carries it (a runtime update never grants).
+        || after.members.iter().any(|member| {
+            member.exec.grants_any()
+                && !before
+                    .members
+                    .iter()
+                    .any(|known| known.device_id == member.device_id)
+        })
+}
+
+#[cfg(test)]
+#[path = "relation_rights_task_tests.rs"]
+mod task_tests;
