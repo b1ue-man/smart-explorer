@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 
 /// `enum pw_stream_state` as the callbacks report it.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn state_name(state: i32) -> &'static str {
     match state {
         -1 => "error",
@@ -67,7 +67,7 @@ impl Trace {
 
     /// The stream streams with a negotiated format, and all of its buffers
     /// without picture (at least one) were empty or corrupted chunks.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn only_empty_chunks(&self) -> bool {
         let skipped = self.skipped.load(Ordering::Relaxed);
         self.state.load(Ordering::Relaxed) == 3
@@ -76,7 +76,7 @@ impl Trace {
             && skipped == self.empty_chunks.load(Ordering::Relaxed)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn describe(&self) -> String {
         format!(
             "stream {} after {} state changes; format {:?} after {} format events; \

@@ -161,7 +161,7 @@ impl Pipeline {
 }
 
 /// One still picture of the stage's source as tile records within `limit`.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn still_tiles(
     stage: &mut Stage,
     frame_id: u64,

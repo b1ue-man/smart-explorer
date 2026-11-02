@@ -45,7 +45,7 @@ impl LatestFrame {
         }
     }
     /// What the stream did so far (the failure text of a silent stream).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn describe(&self) -> String {
         let pictures = self.lock().seq;
         format!("{pictures} pictures; {}", self.trace.describe())
@@ -54,7 +54,7 @@ impl LatestFrame {
     /// The stream runs, but every buffer it sent so far was an empty or
     /// corrupted chunk: it only reports cursor moves, no screen change (the
     /// source sends a picture only when the screen changes).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn only_empty_chunks(&self) -> bool {
         self.lock().seq == 0 && self.trace.only_empty_chunks()
     }

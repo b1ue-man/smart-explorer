@@ -13,7 +13,7 @@ use std::sync::atomic::AtomicBool;
 
 use crate::vfs::{
     location_paths, BackendHandle, LocalServerCopy, SealedSpool, SealedSpools, SyncEndpointRules,
-    UrlBackends,
+    UrlBackends, VAULT_SIDE_REFUSED,
 };
 
 fn unavailable(what: &str) -> io::Error {
@@ -23,12 +23,27 @@ fn unavailable(what: &str) -> io::Error {
     )
 }
 
-/// `sftp://` and `smb://` roots.
+/// `sftp://` and `smb://` roots. Like the real SMB port, an `smb://` URL
+/// without a password is refused for missing credentials before anything
+/// would connect; every other root is unavailable here.
 pub struct NoUrlBackends;
 
 impl UrlBackends for NoUrlBackends {
     fn open(&self, url: &str) -> io::Result<BackendHandle> {
-        Err(unavailable(url.split("://").next().unwrap_or(url)))
+        let (scheme, rest) = url.trim_start().split_once("://").unwrap_or((url, ""));
+        if scheme.eq_ignore_ascii_case("smb") {
+            let authority = rest.split('/').next().unwrap_or("");
+            let password = authority
+                .rsplit_once('@')
+                .is_some_and(|(userinfo, _)| userinfo.contains(':'));
+            if !password {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "SMB-Zugangsdaten erforderlich — bitte eine gespeicherte Verbindung nutzen",
+                ));
+            }
+        }
+        Err(unavailable(scheme))
     }
 }
 
@@ -70,7 +85,7 @@ impl SyncEndpointRules for PlainEndpointRules {
             if scheme.is_some_and(|scheme| {
                 scheme.eq_ignore_ascii_case("vault") || scheme.eq_ignore_ascii_case("vault-store")
             }) {
-                return Err("Ein Tresor ist keine Seite eines allgemeinen Abgleichs.".into());
+                return Err(VAULT_SIDE_REFUSED.into());
             }
         }
         let source = location_paths::path_key(source);

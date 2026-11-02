@@ -70,7 +70,7 @@ fn validate_session_url(location: &str) -> io::Result<()> {
     let google = scheme == "https"
         && url.port_or_known_default() == Some(443)
         && (host == "googleapis.com" || host.ends_with(".googleapis.com"));
-    let test_local = cfg!(test)
+    let test_local = cfg!(any(test, feature = "test-support"))
         && scheme == "http"
         && matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1");
     if !google && !test_local {

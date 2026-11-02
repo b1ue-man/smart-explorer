@@ -28,7 +28,7 @@ impl CollectionLimits {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) const fn new(max_nodes: usize, max_text_bytes: usize, max_depth: usize) -> Self {
         Self {
             max_nodes,

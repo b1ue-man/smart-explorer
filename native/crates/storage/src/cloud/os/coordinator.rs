@@ -398,7 +398,7 @@ pub(super) fn config_changed(provider: Provider, cfg: &ClientConfig) -> std::io:
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn test_clear_runtime_failure() {
     if let Ok(mut value) = RUNTIME_FAILURE.lock() {
         *value = None;

@@ -10,12 +10,15 @@ use std::{io, net::TcpStream};
 #[cfg(test)]
 #[path = "batches_login_image_task_tests.rs"]
 mod batches_login_image_task_tests;
+#[cfg(any(test, feature = "test-support"))]
+#[path = "login_image_fixture.rs"]
+mod image_fixture;
 #[path = "login_ipc_registry.rs"]
 mod registry;
 #[path = "login_ipc_session.rs"]
 mod session;
-#[cfg(test)]
-pub use batches_login_image_task_tests::{login_image_fixture, LoginImageFixture};
+#[cfg(any(test, feature = "test-support"))]
+pub use image_fixture::{login_image_fixture, LoginImageFixture};
 impl ShareHost {
     pub(in crate::daemon) fn serve_login(
         &self,

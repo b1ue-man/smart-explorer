@@ -3,12 +3,12 @@
 use super::sync_conflict_task_fixture::filter;
 use super::sync_reliability_task_auth_fixture::CloudCredentials;
 use super::sync_reliability_task_fixture::{contains_bytes, options};
-use super::sync_reliability_task_live_fixture::LiveTree;
+use super::sync_reliability_task_live_fixture::{checked, LiveTree};
 use super::GDriveBackend;
 use crate::bisync::{self, Direction, Outcome};
 use crate::vfs::{self, Backend, LocalBackend};
 use std::collections::BTreeMap;
-use std::io::{self, Read, Write};
+use std::io::{Read, Write};
 use std::sync::atomic::AtomicBool;
 
 fn required(name: &str) -> String {
@@ -18,15 +18,6 @@ fn required(name: &str) -> String {
         .unwrap_or_else(|| {
             panic!("C10 AUTHORIZATION BLOCKER: required environment value {name} is missing")
         })
-}
-
-pub(super) fn checked<T>(result: io::Result<T>, action: &str) -> T {
-    result.unwrap_or_else(|error| {
-        panic!(
-            "C10 {action} failed ({:?}); no credential values are logged",
-            error.kind()
-        )
-    })
 }
 
 fn connect(root: &str) -> GDriveBackend {

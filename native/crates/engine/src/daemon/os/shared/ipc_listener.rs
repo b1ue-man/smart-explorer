@@ -289,7 +289,7 @@ impl Drop for PreAuthPermit {
 /// The listener of `start_listener` for tests: the same accept loop,
 /// capability prelude and client handling over `host`, without publishing
 /// its address or generation. Dropping the value ends the loop.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(in crate::daemon) fn serve_for_test(host: ShareHost, token: String) -> io::Result<IpcListener> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     listener.set_nonblocking(true)?;
@@ -323,7 +323,7 @@ pub(in crate::daemon) fn serve_for_test(host: ShareHost, token: String) -> io::R
     Ok(IpcListener { addr, stopping })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl IpcListener {
     pub(in crate::daemon) fn addr(&self) -> SocketAddr {
         self.addr

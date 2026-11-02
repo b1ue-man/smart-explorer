@@ -24,7 +24,7 @@ pub use ownership::{
 use ownership::{owners, PendingStart};
 #[path = "open_device.rs"]
 mod open_device;
-#[cfg(any(target_os = "android", all(unix, test)))]
+#[cfg(any(target_os = "android", all(unix, any(test, feature = "test-support"))))]
 pub use open_device::open_device;
 pub use open_device::{open_device_session, open_device_with, OpenOptions};
 #[cfg(test)]

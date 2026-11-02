@@ -39,9 +39,9 @@ use super::{
 
 // Names the Dokany volume harnesses take from this module through
 // `use super::*` and production code here no longer uses.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use crate::mount::{prepare_spool_root, MountRuntimeConfig, MountStatus};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use std::time::Duration;
 
 #[cfg(test)]

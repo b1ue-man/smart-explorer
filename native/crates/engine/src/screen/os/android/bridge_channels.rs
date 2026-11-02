@@ -367,11 +367,11 @@ pub fn ended(id: u64, reason: &str) -> Result<(), String> {
 }
 
 /// Serializes the tests that use the process-wide register.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub static TEST_LOCK: Mutex<()> = Mutex::new(());
 
 /// A fresh register for one test (hold `TEST_LOCK`).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn reset_for_tests() {
     *lock(&REGISTER) = None;
     lock(&INPUT).clear();

@@ -21,18 +21,18 @@ use std::{
 struct DeviceKey {
     device: Option<u64>,
     /// Synthetic device of a test profile; production has none.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     profile: Option<std::path::PathBuf>,
 }
 
-#[cfg(not(test))]
+#[cfg(not(any(test, feature = "test-support")))]
 fn key_of(path: &Path) -> io::Result<DeviceKey> {
     Ok(DeviceKey {
         device: super::platform::device_number(path)?,
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn key_of(path: &Path) -> io::Result<DeviceKey> {
     Ok(DeviceKey {
         device: super::platform::device_number(path)?,

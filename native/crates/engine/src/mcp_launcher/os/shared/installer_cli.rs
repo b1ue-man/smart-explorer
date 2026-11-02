@@ -9,13 +9,13 @@ mod removal;
 mod removal_inventory;
 pub use removal::retire_current_installation;
 
-#[cfg(all(test, any(windows, target_os = "linux")))]
+#[cfg(all(any(test, feature = "test-support"), any(windows, target_os = "linux")))]
 use crate::mcp_launcher::installation::{hash_bytes, read_json};
-#[cfg(all(test, any(windows, target_os = "linux")))]
+#[cfg(all(any(test, feature = "test-support"), any(windows, target_os = "linux")))]
 use crate::mcp_launcher::{os, Manifest};
-#[cfg(all(test, any(windows, target_os = "linux")))]
+#[cfg(all(any(test, feature = "test-support"), any(windows, target_os = "linux")))]
 use removal::retire_mcp;
-#[cfg(all(test, any(windows, target_os = "linux")))]
+#[cfg(all(any(test, feature = "test-support"), any(windows, target_os = "linux")))]
 use removal_inventory::{
     inventory, load_removal, remaining_managed_files, write_removal_record, RemovalFile,
 };

@@ -63,7 +63,7 @@ pub fn window_ms(source: MtimePrecision, target: MtimePrecision) -> u64 {
 
 /// Compares a source file with its same-named target (the rule without a
 /// local-time side; the engine calls `classify_local_time`).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn classify(source: Stamp, target: Stamp, window_ms: u64) -> Case {
     classify_local_time(source, target, window_ms, false, || None)
 }

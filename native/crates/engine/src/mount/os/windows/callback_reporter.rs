@@ -5,7 +5,7 @@ use crate::{daemon::MountHostSession, mount::MountStatus};
 /// Keep status delivery separate from the real filesystem callback machinery.
 pub(super) enum CallbackReporter {
     Host(Arc<MountHostSession>),
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     Capture(std::sync::mpsc::Sender<MountStatus>),
 }
 
@@ -19,7 +19,7 @@ impl CallbackReporter {
     pub(super) fn report(&self, status: MountStatus) -> Result<(), String> {
         match self {
             Self::Host(session) => session.report_status(status),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             Self::Capture(sender) => sender
                 .send(status)
                 .map_err(|_| "mounted-volume status observer closed".to_string()),

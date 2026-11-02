@@ -8,12 +8,11 @@ pub fn requires_storage_access(_endpoint: &str) -> bool {
 
 use std::borrow::Cow;
 
+// The Credential Manager adapter uses this debug-only parser of the core
+// layer as well; one source keeps both isolated resource names on the same
+// validation contract.
 #[cfg(debug_assertions)]
-// The Credential Manager adapter includes this debug-only parser as well; one
-// source keeps both isolated resource names on the same validation contract.
-#[allow(clippy::duplicate_mod)]
-#[path = "../../../windows_test_namespace.rs"]
-mod test_namespace;
+use crate::windows_test_namespace as test_namespace;
 
 const DAEMON_MUTEX_NAME: &str = r"Local\SmartExplorerSyncDaemon";
 #[cfg(debug_assertions)]

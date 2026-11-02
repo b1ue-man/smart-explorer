@@ -65,7 +65,7 @@ mod wire;
 #[cfg(test)]
 #[path = "core/abgleich_task_batch_time_tests.rs"]
 mod abgleich_task_batch_time_tests;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "core/batch_fake.rs"]
 mod batch_fake;
 #[cfg(test)]
@@ -77,7 +77,7 @@ mod delete_speed_task_tests;
 #[cfg(test)]
 #[path = "core/range_tests.rs"]
 mod range_tests;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "core/segmented_stage_fake.rs"]
 mod segmented_stage_fake;
 #[cfg(test)]

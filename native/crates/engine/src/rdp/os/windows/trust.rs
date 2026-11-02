@@ -49,7 +49,7 @@ pub fn write_cert_hash(listener: SocketAddr, sha1: &CertificateSha1) -> Result<(
 }
 
 /// The stored thumbprint of one name, for the task tests.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn read_cert_hash(name: &str) -> Option<Vec<u8>> {
     let key = RegKey::predef(HKEY_CURRENT_USER)
         .open_subkey(format!(r"{SERVERS}\{name}"))

@@ -105,7 +105,7 @@ impl ParentCapture {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.closing.store(true, Ordering::Release);
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn from_test_admission(admission: Arc<SessionAdmission>) -> Arc<Self> {
         Arc::new(Self {
             admission,

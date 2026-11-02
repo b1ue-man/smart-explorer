@@ -170,7 +170,7 @@ fn keep(engine: &Engine<'_>, dir: &str, listing: &Listing) {
 }
 
 /// Test access to the folding rule (an omitted name is looked up folded).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn listing_of(case_sensitive: bool, entries: Vec<VfsMeta>, omitted: &[&str]) -> Listing {
     let mut by_name: HashMap<String, Vec<VfsMeta>> = HashMap::new();
     for entry in entries {

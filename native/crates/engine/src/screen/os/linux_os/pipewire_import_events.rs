@@ -179,7 +179,7 @@ impl ImportController {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub mod fixture_support {
     use super::*;
     use crate::screen::core::capture_admission::{CaptureGrant, SessionAdmission, SourceKey};

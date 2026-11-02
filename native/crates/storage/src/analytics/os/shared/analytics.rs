@@ -31,7 +31,7 @@ use outcome::Diagnostics;
 #[path = "analytics_walk.rs"]
 mod walk;
 pub use outcome::{ScanIssue, ScanOutcome, ScanStatus};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use walk::scan_entries;
 use walk::scan_entries_with;
 

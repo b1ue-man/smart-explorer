@@ -55,7 +55,7 @@ pub(super) fn open<'a>(
     follow_symlinks: bool,
     cancel: &'a AtomicBool,
 ) -> io::Result<(WalkDevice, Items<'a>)> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(error) = injected(directory) {
         return Err(error);
     }
@@ -76,13 +76,13 @@ pub(super) fn open<'a>(
 
 /// Folders whose opening fails with the given kind (tests only). The walk meets
 /// such a fault at its turn, in the serial and the read-ahead paths alike.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) static INJECTED: Mutex<Vec<(PathBuf, io::ErrorKind)>> = Mutex::new(Vec::new());
 
 /// Compared in the form the walk opens folders in (`normalize_scan_root`:
 /// `\\?\C:\...` on Windows, unchanged elsewhere), whatever form the test
 /// named the folder in.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn injected(directory: &Path) -> Option<io::Error> {
     let opened = crate::local_access::normalize_scan_root(directory);
     lock(&INJECTED)

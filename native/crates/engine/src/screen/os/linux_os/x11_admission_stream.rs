@@ -2,7 +2,7 @@
 //! that header until its exact raw/parsed owners have been admitted.
 //! read never waits for Parent IPC; poll performs the admission instead.
 use crate::screen::core::capture_admission::{CaptureAuthority, CaptureGrant, CaptureSlice};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use crate::screen::core::capture_admission::{CaptureGeneration, SourceKey};
 use crate::screen::core::capture_plan::{CaptureOwner, CapturePhases, CapturePlan};
 use std::io::{self, IoSlice};

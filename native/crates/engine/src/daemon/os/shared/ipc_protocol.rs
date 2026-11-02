@@ -5,7 +5,7 @@ use super::line::MAX_IPC_LINE;
 #[path = "ipc_protocol_bounds.rs"]
 mod bounds;
 pub(super) use self::bounds::bound_snapshot_for_ipc;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use self::bounds::encoded_response_len;
 
 // Drive-host wire types (plan 2026-10-17 B2, R1); re-exported unchanged.

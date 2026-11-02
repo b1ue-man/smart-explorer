@@ -52,7 +52,7 @@ pub enum Taken {
 mod pause;
 pub use pause::LatestFrame;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub use memory::convert_rows;
 
 /// What the callbacks need; boxed, so its address stays.

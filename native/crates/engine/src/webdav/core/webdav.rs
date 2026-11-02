@@ -60,7 +60,7 @@ const IDLE_CONNECTIONS_PER_HOST: usize = 100;
 
 fn transport_builder() -> ureq::AgentBuilder {
     let builder = ureq::AgentBuilder::new();
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(path) = std::env::var_os("SE_SYNC_FIXTURE_CA_DER") {
         let mut roots = rustls::RootCertStore::empty();
         roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
@@ -474,7 +474,7 @@ mod connection_tests;
 #[cfg(test)]
 #[path = "abgleich_task_checksum_tests.rs"]
 mod abgleich_task_checksum_tests;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "request_count_server.rs"]
 mod request_count_server;
 #[cfg(test)]

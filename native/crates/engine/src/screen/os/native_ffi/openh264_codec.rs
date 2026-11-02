@@ -31,7 +31,7 @@ use crate::screen::core::codec_registry::{
 use crate::screen::core::decoded_frame::{DecodedFrame, FrameIdentities};
 use crate::screen::core::host_backend::{Chroma, ScreenDecoder, YuvPicture};
 use crate::screen::core::negotiate::CodecOffer;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use crate::screen::core::negotiate::H264Profile;
 use crate::screen::core::pixel_convert::{
     i420_to_bgra, BgraImage, FrameSize, I420Image, YuvMatrix,
@@ -334,13 +334,13 @@ impl ScreenDecoder for OpenH264Decoder {
 
 /// Serializes the task tests that load OpenH264 in this test process (one
 /// of them checks that switching off unloads the library).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 #[path = "batches_quality_acceptance_task_tests.rs"]
 mod quality_acceptance_tests;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "quality_acceptance_baseline.rs"]
 mod quality_baseline;
 #[cfg(test)]

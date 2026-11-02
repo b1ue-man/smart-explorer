@@ -206,7 +206,7 @@ pub use self::local_platform::rename_no_replace as promote_local_copy;
 pub use self::local_platform::replace_file as replace_local_file;
 pub use self::ports::{
     validate_sync_endpoints, LocalServerCopy, SealedSpool, SealedSpools, SyncEndpointRules,
-    UrlBackends,
+    UrlBackends, VAULT_SIDE_REFUSED,
 };
 pub use self::promotion::{
     creates_stages_exclusively, promote_staged_create, promote_staged_replace, stage_proven,

@@ -17,7 +17,7 @@ use crate::screen::core::capture_admission::{
 use crate::screen::core::capture_image::{AdmittedBytes, CaptureImageBuilder, CapturedImage};
 use crate::screen::core::host_backend::{HostOutputPlan, PreparedSourceInfo};
 use crate::screen::core::host_backend::{ScreenSource, SourceFrame, SourceRefusal};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use crate::screen::core::pixel_convert::BgraImage;
 use crate::screen::core::pixel_convert::FrameSize;
 use std::ffi::c_void;
@@ -181,7 +181,7 @@ fn refuse(reason: &str) -> SourceRefusal {
 }
 
 impl X11Source {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn open(source: &SourceId) -> Result<Self, SourceRefusal> {
         let admission = super::host_backend::prepared::test_admission("x11-fixture");
         let key = SourceKey::new("x11-fixture", &format!("linux:{source:?}"))

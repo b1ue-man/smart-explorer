@@ -18,7 +18,7 @@ use super::exec_types::{ExecId, ExecTerminal};
 
 pub(super) type TransportClosed = Pin<Box<dyn Future<Output = ()> + Send>>;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run<W, R>(
     send: W,

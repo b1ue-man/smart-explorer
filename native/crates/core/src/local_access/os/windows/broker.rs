@@ -36,7 +36,7 @@ fn clients() -> &'static Mutex<Vec<Arc<Client>>> {
     CLIENTS.get_or_init(Mutex::default)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn remove_test_grant(root: &str) {
     clients()
         .lock()

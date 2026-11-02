@@ -232,7 +232,7 @@ impl MountEngine {
         let _ = self.metadata_points.invalidate(path, recursive);
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn metadata_cache_usage(&self) -> io::Result<(usize, usize, usize)> {
         self.metadata_cache.usage()
     }

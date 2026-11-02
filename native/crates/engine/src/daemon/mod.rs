@@ -148,7 +148,7 @@ mod mount_process;
 #[cfg(windows)]
 #[path = "os/windows/mount_process.rs"]
 mod mount_process;
-#[cfg(any(windows, test))]
+#[cfg(any(windows, test, feature = "test-support"))]
 #[path = "os/windows/mount_process_environment.rs"]
 mod mount_process_environment;
 #[cfg(test)]
@@ -181,7 +181,7 @@ mod platform;
 #[allow(dead_code, unused_imports)]
 #[path = "os/android/platform.rs"]
 mod android_platform;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "os/shared/direct_open_task_bridge.rs"]
 mod direct_open_task_bridge;
 #[path = "os/shared/problem_notify.rs"]
@@ -191,7 +191,7 @@ mod request_workers;
 #[cfg(test)]
 #[path = "os/shared/request_workers_task_tests.rs"]
 mod request_workers_task_tests;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub use direct_open_task_bridge::DirectOpenTaskBridge;
 #[path = "os/shared/rooted_backend.rs"]
 mod rooted_backend;
@@ -205,13 +205,13 @@ mod rooted_backend_io;
 mod rooted_backend_paths;
 #[path = "os/shared/run_loop.rs"]
 mod run_loop;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "os/shared/vault_task_backend.rs"]
 mod vault_task_backend;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "os/shared/vault_task_tree.rs"]
 mod vault_task_tree;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub use vault_task_backend::{VaultTaskBridge, VaultTaskCounters};
 #[cfg(all(test, target_os = "linux"))]
 #[path = "os/shared/rooted_backend_task_tests.rs"]
@@ -236,7 +236,7 @@ mod tcp_ipc_client;
 #[path = "os/shared/transfer_job_ipc.rs"]
 mod transfer_job_ipc;
 /// The Android bridge's start with its admission (`mobile/.../tcp.rs`).
-#[cfg(any(target_os = "android", all(unix, test)))]
+#[cfg(any(target_os = "android", all(unix, any(test, feature = "test-support"))))]
 pub use tcp_ipc_client::tcp_start_with;
 pub use tcp_ipc_client::{
     tcp_close, tcp_list, tcp_start, tcp_start_for_process, tcp_start_within, tcp_status,
@@ -261,7 +261,7 @@ pub use ipc_protocol::login::{
     LoginSessionView,
 };
 pub use login_ipc::shutdown_login_viewers;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub use login_ipc::{login_image_fixture, LoginImageFixture};
 pub use login_ipc_client::{
     login_session, login_sessions, login_status, login_stop, LoginClose, LoginViewer,
@@ -279,7 +279,7 @@ pub use access_ipc::{
     ExecNoticeWatch,
 };
 // Only the Android facade calls it (`mobile`, compiled under the same cfg).
-#[cfg(any(target_os = "android", all(unix, test)))]
+#[cfg(any(target_os = "android", all(unix, any(test, feature = "test-support"))))]
 pub use access_ipc::report_approval_undeliverable;
 pub use catch_up::{CatchUpRecord, CatchUpSkip, CatchUpStatus};
 pub use drive_modules::devices_ipc::{
@@ -377,7 +377,7 @@ mod sync_links_remote_tests;
 #[cfg(test)]
 #[path = "os/shared/sync_reliability_task_old_jobs_editor_tests.rs"]
 mod sync_reliability_task_old_jobs_editor_tests;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "os/shared/sync_reliability_task_old_jobs_fixture.rs"]
 mod sync_reliability_task_old_jobs_fixture;
 #[cfg(test)]
@@ -398,10 +398,10 @@ mod tests;
 #[cfg(test)]
 #[path = "os/shared/transfer_engine_task_service_tests.rs"]
 mod transfer_engine_task_service_tests;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub use backend_server::serve_backend as serve_sync_link_fixture;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn windows_remote_task_rooted(
     backend: crate::vfs::BackendHandle,
     mode: crate::mount::MountMode,

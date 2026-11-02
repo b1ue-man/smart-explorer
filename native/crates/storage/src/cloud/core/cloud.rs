@@ -207,7 +207,7 @@ pub fn refresh_access_with_identity(
 }
 
 pub fn refresh_endpoint(p: Provider) -> Result<String, super::AuthError> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(url) = sync_reliability_task_refresh_hook::endpoint()
         .map_err(|_| super::AuthError::new(super::AuthState::StorageError))?
     {
@@ -228,10 +228,10 @@ pub fn auth_success_revision(p: Provider) -> Option<i64> {
     super::os::coordinator::success_revision(p)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "sync_reliability_task_refresh_hook.rs"]
 mod sync_reliability_task_refresh_hook;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub use sync_reliability_task_refresh_hook::{test_refresh_endpoint, TestRefreshEndpoint};
 
 #[cfg(test)]

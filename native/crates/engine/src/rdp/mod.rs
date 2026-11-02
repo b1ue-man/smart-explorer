@@ -4,13 +4,13 @@ pub mod core;
 mod os;
 pub use self::core::{AuthenticatedProbe, HostProbe};
 pub use os::probe as probe_local_host;
-#[cfg(all(target_os = "linux", test))]
+#[cfg(all(target_os = "linux", any(test, feature = "test-support")))]
 pub use os::shared::clients::choose_client;
 pub use os::shared::clients::{local_clients, watch_process_exit, Credentials, NEEDS_SDL};
 /// Host-side RDP self-setup (design 3): triggers, state and system steps.
 pub use os::shared::self_setup as host_setup;
 /// The Android bridge's open (`mobile/.../rdp.rs`).
-#[cfg(any(target_os = "android", all(unix, test)))]
+#[cfg(any(target_os = "android", all(unix, any(test, feature = "test-support"))))]
 pub use os::shared::session::open_device;
 pub use os::shared::session::SessionView;
 pub use os::shared::session::{begin_owned_shutdown, resume_owned_sessions};

@@ -416,11 +416,11 @@ mod segments_upload_tests;
 mod speed_task_local_tests;
 #[cfg(test)]
 mod speed_task_tests;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 mod test_backend;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 mod test_faults;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 mod test_run;
 #[cfg(test)]
 mod tests_batch;

@@ -8,7 +8,7 @@ use crate::{
     screen::core::input_model::{InputEvent, PressedInputs},
 };
 use serde::Serialize;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use std::time::Duration;
 use std::{
     io,
@@ -179,7 +179,7 @@ impl ViewerSession {
             })?;
         Ok(session)
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn from_fixture_viewer(
         viewer: LoginViewer,
         images: Arc<ImageAdmission>,
@@ -191,7 +191,7 @@ impl ViewerSession {
             Ok(viewer)
         })
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn wait_fixture_frame(&self, wait: Duration) -> Option<ViewerFrame> {
         let state = self.shared.state.lock().ok()?;
         let (mut state, _) = self
@@ -203,7 +203,7 @@ impl ViewerSession {
             .ok()?;
         state.frame.take()
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn wait_fixture_ready(&self, wait: Duration) -> bool {
         let Ok(state) = self.shared.state.lock() else {
             return false;

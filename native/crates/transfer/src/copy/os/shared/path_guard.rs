@@ -27,7 +27,7 @@ pub fn validate_directory_target(src: &Path, target: &Path) -> io::Result<()> {
 
 /// The older per-file folder preparation (the engine's folder register does
 /// this once per folder now); kept for the safety regression tests.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn prepare_target_parent(root: &Path, target: &Path) -> io::Result<()> {
     let root = absolute_normalized(root)?;
     let target = absolute_normalized(target)?;
@@ -89,7 +89,7 @@ pub(super) fn prepare_target_parent(root: &Path, target: &Path) -> io::Result<()
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn ensure_plain_directory_tree(path: &Path) -> io::Result<()> {
     let mut current = PathBuf::new();
     for component in path.components() {
@@ -112,7 +112,7 @@ fn ensure_plain_directory_tree(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn ensure_plain_directory(path: &Path) -> io::Result<()> {
     match std::fs::symlink_metadata(path) {
         Ok(metadata) => validate_plain_directory(path, &metadata),
@@ -128,7 +128,7 @@ fn ensure_plain_directory(path: &Path) -> io::Result<()> {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn validate_plain_directory(path: &Path, metadata: &std::fs::Metadata) -> io::Result<()> {
     if crate::local_access::metadata_is_link_like(path, metadata) {
         return Err(io::Error::new(

@@ -39,7 +39,7 @@ use crate::share::{ExecGrant, ExecStart};
 // How a request ends: the answer, a change of the grant, a refusal.
 #[path = "access_approval_answer.rs"]
 mod answer;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use answer::grant_change;
 use answer::{grant_watch, GrantChange, Log};
 

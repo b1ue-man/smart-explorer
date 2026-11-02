@@ -94,6 +94,22 @@ impl Backend for Source {
     }
 }
 
+/// A reader that yields 17 bytes of `A` and then fails with the given kind
+/// (`.0` records whether the first chunk was read).
+pub struct BrokenReader(pub bool, pub io::ErrorKind);
+
+impl Read for BrokenReader {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        if self.0 {
+            return Err(io::Error::new(self.1, "injected remote read failure"));
+        }
+        self.0 = true;
+        let n = out.len().min(17);
+        out[..n].fill(b'A');
+        Ok(n)
+    }
+}
+
 pub fn assert_no_parts(directory: &Path, destination_exists: bool) {
     let paths: Vec<_> = std::fs::read_dir(directory)
         .unwrap()

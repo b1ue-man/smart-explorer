@@ -49,10 +49,10 @@ mod state;
 #[path = "file_recovery_verify.rs"]
 mod verification;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) use journal::log_path;
 pub(super) use journal::Journal;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) use legacy::{convert_to_old_format, old_receipt_file};
 pub(super) use observer::{stage_proof, LocalObserver};
 use paths::destination_parts;

@@ -120,7 +120,7 @@ pub(super) fn probe_file(file: &File) -> io::Result<Option<Source>> {
         return Err(io::Error::other("held volume path exceeds OS buffer"));
     }
     let text = String::from_utf16_lossy(&path[..size as usize]);
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     {
         let mut dos = vec![0u16; 32768];
         let size = unsafe {

@@ -1,4 +1,4 @@
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use super::persistence_codec::parse_kv;
 pub(super) use super::persistence_codec::san;
 use super::persistence_codec::{parse_kv_checked, serialize_kv};
@@ -174,7 +174,7 @@ pub(super) fn write_job(dir: &Path, job: &SyncJob) -> io::Result<()> {
     atomic_write(&job_file(dir, &job.id), serialize_kv(job).as_bytes())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn save_dir(dir: &Path, jobs: &[SyncJob]) -> io::Result<()> {
     for job in jobs {
         job.validate()

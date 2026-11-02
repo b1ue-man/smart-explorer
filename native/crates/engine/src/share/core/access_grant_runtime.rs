@@ -168,7 +168,7 @@ impl GrantEndWatch {
         capability: Capability,
         end: Option<i64>,
     ) -> Option<Self> {
-        let audit: fn(AccessEntry<'_>) = if cfg!(test) {
+        let audit: fn(AccessEntry<'_>) = if cfg!(any(test, feature = "test-support")) {
             ignore_entry
         } else {
             crate::share::access_audit::record_access
@@ -182,7 +182,7 @@ impl GrantEndWatch {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn with_audit(self, audit: fn(AccessEntry<'_>)) -> Self {
         Self { audit, ..self }
     }

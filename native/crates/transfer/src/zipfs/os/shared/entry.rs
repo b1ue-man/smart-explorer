@@ -113,7 +113,7 @@ pub(super) struct Streamed {
     current: Vec<u8>,
     consumed: usize,
     ended: bool,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) produced: Arc<std::sync::atomic::AtomicUsize>,
 }
 
@@ -167,9 +167,9 @@ fn fill(entry: &mut impl Read, chunk: &mut [u8]) -> io::Result<usize> {
 pub(super) fn stream(mut archive: Archive, index: usize) -> io::Result<Streamed> {
     let (sender, pieces) = crossbeam_channel::bounded::<Piece>(1);
     let (recycle, recycled) = crossbeam_channel::bounded::<Vec<u8>>(1);
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     let produced = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     let counter = produced.clone();
     std::thread::Builder::new()
         .name("zip-read".to_string())
@@ -197,7 +197,7 @@ pub(super) fn stream(mut archive: Archive, index: usize) -> io::Result<Streamed>
                     }
                     Err(error) => Piece::Failed(error),
                 };
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-support"))]
                 counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 let last = !matches!(piece, Piece::Data(_));
                 if sender.send(piece).is_err() || last {
@@ -211,7 +211,7 @@ pub(super) fn stream(mut archive: Archive, index: usize) -> io::Result<Streamed>
         current: Vec::new(),
         consumed: 0,
         ended: false,
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         produced,
     })
 }

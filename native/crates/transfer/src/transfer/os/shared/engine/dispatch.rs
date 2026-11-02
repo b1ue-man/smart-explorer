@@ -17,18 +17,18 @@ const REFUSALS_THAT_END_THE_JOB: u32 = 3;
 
 /// Tests make the next starts of this thread's dispatcher fail, as a process
 /// at its thread limit does.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static REFUSED_STARTS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn refuse_next_starts(count: u32) {
     REFUSED_STARTS.with(|refused| refused.set(count));
 }
 
 fn start_refused_by_test() -> bool {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     {
         REFUSED_STARTS.with(|refused| {
             let left = refused.get();
@@ -36,7 +36,7 @@ fn start_refused_by_test() -> bool {
             left > 0
         })
     }
-    #[cfg(not(test))]
+    #[cfg(not(any(test, feature = "test-support")))]
     {
         false
     }

@@ -194,7 +194,7 @@ impl PullQueue {
         self.ready.notify_all();
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn len(&self) -> usize {
         lock(&self.state).items.len()
     }

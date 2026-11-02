@@ -21,17 +21,17 @@ pub(super) struct StoreLock {
 
 /// The effective user the store belongs to. Tests may pretend to be another
 /// user to exercise every ownership refusal without a second account.
-#[cfg(not(test))]
+#[cfg(not(any(test, feature = "test-support")))]
 pub(super) fn effective_uid() -> u32 {
     unsafe { libc::geteuid() }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     pub(super) static UID_OVERRIDE: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn effective_uid() -> u32 {
     UID_OVERRIDE
         .with(|forced| forced.get())

@@ -119,7 +119,7 @@ impl PreparedSource for PortalPrepared {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn test_admission(session: &str) -> Arc<SessionAdmission> {
     use crate::screen::core::frame_memory::{CapacityCeiling, MemoryFacts, MemoryPool};
     let facts = Some(MemoryFacts {

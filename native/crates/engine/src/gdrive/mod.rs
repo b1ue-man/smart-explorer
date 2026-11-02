@@ -128,7 +128,7 @@ mod read_retry_tests;
 #[cfg(test)]
 #[path = "core/remote_provider_task_tests.rs"]
 mod remote_provider_task_tests;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "core/sync_conflict_task_fixture.rs"]
 mod sync_conflict_task_fixture;
 #[cfg(test)]
@@ -137,10 +137,10 @@ mod sync_conflict_task_safety_tests;
 #[cfg(test)]
 #[path = "core/sync_conflict_task_tests.rs"]
 mod sync_conflict_task_tests;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "core/task_drive.rs"]
 mod task_drive;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "core/task_http.rs"]
 mod task_http;
 #[cfg(test)]
@@ -152,7 +152,7 @@ mod transfer_engine_task_tests;
 
 pub use state::GDriveBackend;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "core/sync_reliability_task_fixture.rs"]
 pub mod sync_reliability_task_fixture;
 #[cfg(test)]
@@ -171,7 +171,7 @@ mod sync_reliability_task_notebook_tests;
 #[path = "core/sync_reliability_task_resume_tests.rs"]
 mod sync_reliability_task_resume_tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "core/gui_task_fixture.rs"]
 mod gui_task_fixture;
 #[cfg(any(test, feature = "test-support"))]
@@ -212,15 +212,15 @@ mod sync_reliability_task_roundtrip_tests;
 #[path = "core/sync_reliability_task_spelling_migration_tests.rs"]
 mod sync_reliability_task_spelling_migration_tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "core/sync_reliability_task_legacy_fixture.rs"]
 mod sync_reliability_task_legacy_fixture;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "core/sync_reliability_task_live_fixture.rs"]
 mod sync_reliability_task_live_fixture;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "core/sync_reliability_task_auth_fixture.rs"]
 mod sync_reliability_task_auth_fixture;
 

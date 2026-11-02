@@ -14,7 +14,7 @@ use super::exec_client_messages::{
     authentication, classify_io, client_failure_message, disconnected, failure, peer_name, protocol,
 };
 use super::exec_heartbeat::{ExecHeartbeatPolicy, EXEC_HEARTBEAT_POLICY};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use super::exec_protocol::ExecHelloOk;
 use super::exec_protocol::{
     recv_hello_result, recv_server_hello, send_client_frame, send_client_hello, ClientFrame,
@@ -96,7 +96,7 @@ mod input;
 #[path = "exec_client_spawn.rs"]
 mod spawn;
 pub use input::ExecInputSender;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn batches_fixture_sender(
     data: mpsc::Sender<ExecClientInput>,
     cancel: watch::Sender<bool>,
@@ -210,7 +210,7 @@ async fn run_connected_inner(
     result
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 async fn run_stream<W, R>(
     send: W,
     recv: R,
@@ -237,7 +237,7 @@ where
     .await
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[allow(clippy::too_many_arguments)]
 async fn run_stream_with_policy<W, R>(
     send: W,

@@ -194,7 +194,7 @@ impl Growth {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn stopped(&self) -> bool {
         self.phase == Phase::Stopped
     }

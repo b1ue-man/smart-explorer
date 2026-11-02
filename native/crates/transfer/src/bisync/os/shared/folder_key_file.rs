@@ -237,14 +237,14 @@ pub(super) fn save(path: &Path, cache: &FolderCache) -> io::Result<()> {
 }
 
 /// Reads a whole side file through `reader` (tests of damaged files).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn parse_from(mut reader: impl std::io::Read) -> io::Result<FolderCache> {
     let mut bytes = Vec::new();
     reader.read_to_end(&mut bytes)?;
     parse(&bytes)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn encode_for_test(cache: &FolderCache) -> Vec<u8> {
     encode(cache)
 }

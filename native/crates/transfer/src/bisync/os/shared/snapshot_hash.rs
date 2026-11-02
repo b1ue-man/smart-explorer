@@ -86,7 +86,7 @@ fn cached_hex(
         _ => return md5_hex_expect(backend, path, expected, cancel),
     };
     crate::agent_proto::hash_cache::configure_once(|| {
-        (!cfg!(test)).then(crate::support_dirs::app_data_dir)
+        (!cfg!(any(test, feature = "test-support"))).then(crate::support_dirs::app_data_dir)
     });
     crate::agent_proto::md5_cached(std::path::Path::new(path), &metadata, reads, cancel, || {
         md5_hex_expect(backend, path, expected, cancel)

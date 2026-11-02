@@ -8,8 +8,10 @@ use super::endpoint::parse_remote_url;
 pub use crate::vfs::location_paths::paths_overlap;
 use crate::vfs::location_paths::{path_key, paths_overlap_one_way};
 
-/// Why a general sync refuses a vault locator as one of its sides.
-pub const VAULT_SIDE_REFUSED: &str = "Tresororte (vault://, vault-store://) sind keine Seite allgemeiner Sync-Jobs: Tresore gleicht der Tresor-Sync ab";
+/// Why a general sync refuses a vault locator as one of its sides; the text
+/// lives with the endpoint-rules port of the storage layer (D13), so its
+/// stand-in in the lower layers' tests answers with the same words.
+pub use crate::vfs::VAULT_SIDE_REFUSED;
 
 pub enum EndpointSpec {
     Local(String),

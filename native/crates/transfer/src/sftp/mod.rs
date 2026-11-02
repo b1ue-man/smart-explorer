@@ -159,7 +159,7 @@ mod abgleich_task_digest_exec_tests;
 #[cfg(test)]
 #[path = "core/abgleich_task_md5_tests.rs"]
 mod abgleich_task_md5_tests;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "core/batch_fake.rs"]
 mod batch_fake;
 #[cfg(test)]

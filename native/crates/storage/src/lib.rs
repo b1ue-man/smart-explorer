@@ -3,6 +3,13 @@
 //! protocol, scans and analyses. It re-exports the core layer, so
 //! `crate::<module>` paths reach those modules.
 #![cfg_attr(target_os = "android", allow(dead_code, unused_imports))]
+// The helpers behind `test-support` serve the tests of the crates above
+// (fixtures, hooks, counters); this crate's own build without its tests has
+// no caller for some of them and for the imports of their `#[test]` items.
+#![cfg_attr(
+    all(feature = "test-support", not(test)),
+    allow(dead_code, unused_imports)
+)]
 
 pub use smart_explorer_core::*;
 

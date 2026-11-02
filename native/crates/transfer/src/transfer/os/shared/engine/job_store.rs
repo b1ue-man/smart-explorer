@@ -7,7 +7,7 @@ use crate::transfer::job_record::{JobRecord, SourceGuard, StoredEndpoint, Stored
 use crate::transfer::{Endpoint, JobItems, TransferJob};
 use crate::types::CopyMode;
 // The recovery tests below reach it through their `use super::*`.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use crate::types::Conflict;
 use crate::vfs::{Backend, LocalBackend};
 use std::io;

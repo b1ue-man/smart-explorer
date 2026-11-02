@@ -28,7 +28,7 @@ impl EntryTable {
         self.paths.get(key).map(|indexed| &indexed.entry)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn contains_key(&self, key: &str) -> bool { self.paths.contains_key(key) }
 
     pub fn insert(&mut self, key: String, entry: Arc<Entry>) -> Option<Arc<Entry>> {
@@ -75,6 +75,6 @@ impl EntryTable {
         self.paths.values().map(|indexed| &indexed.entry)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn is_empty(&self) -> bool { self.paths.is_empty() }
 }

@@ -16,7 +16,7 @@
 #![allow(dead_code)] // engine; the sync UI wiring lands next.
 #![allow(unused_imports)] // re-exports below preserve the crate::bisync API surface.
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "os/shared/abgleich_task_agent_fixture.rs"]
 mod abgleich_task_agent_fixture;
 #[cfg(test)]
@@ -131,7 +131,7 @@ mod merge_recorded;
 mod merge_recovery;
 #[path = "os/shared/merge_resume.rs"]
 mod merge_resume;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "os/shared/merge_task_fixture.rs"]
 mod merge_task_fixture;
 #[path = "os/shared/move_finalize.rs"]

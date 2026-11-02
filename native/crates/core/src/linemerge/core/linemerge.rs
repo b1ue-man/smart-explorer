@@ -84,7 +84,7 @@ impl MergeDeadline {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub enum Choice {
     A,
     B,
@@ -99,7 +99,7 @@ pub struct Hunk {
     pub a: Vec<String>,
     pub b: Vec<String>,
     /// For change hunks: which side(s) to keep. Ignored when `equal`.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub choice: Choice,
 }
 
@@ -155,7 +155,7 @@ fn timed_hunks(
                 equal: false,
                 a: std::mem::take(ca),
                 b: std::mem::take(cb),
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-support"))]
                 choice: Choice::A,
             });
         }
@@ -167,7 +167,7 @@ fn timed_hunks(
                 equal: true,
                 a: v.clone(),
                 b: v,
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-support"))]
                 choice: Choice::Both,
             });
         }
@@ -362,7 +362,7 @@ pub fn assemble_rows(rows: &[Row]) -> String {
 }
 
 /// Rebuild the merged text from the hunks' choices.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn assemble(hunks: &[Hunk]) -> String {
     let mut out: Vec<String> = Vec::new();
     for h in hunks {

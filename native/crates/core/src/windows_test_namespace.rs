@@ -1,4 +1,7 @@
-//! Debug-only namespace parsing for isolated Windows end-to-end tests.
+//! Debug-only namespace parsing for isolated Windows end-to-end tests. Pure
+//! string rules: the Credential Manager adapter (`creds`), the daemon mutex
+//! (engine) and the se Desktop shell mutex (GUI) qualify their Windows
+//! resource names with this one validation contract.
 
 pub const ENV_NAME: &str = "SMART_EXPLORER_E2E_TEST_NAMESPACE";
 const MAX_NAMESPACE_BYTES: usize = 48;

@@ -202,7 +202,10 @@ mod analysis_request_id;
 mod analysis_spool;
 #[path = "os/shared/analysis_tasks.rs"]
 mod analysis_tasks;
-#[cfg(any(target_os = "android", all(target_os = "linux", test)))]
+#[cfg(any(
+    target_os = "android",
+    all(target_os = "linux", any(test, feature = "test-support"))
+))]
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 #[path = "os/android/exec_proc.rs"]
 mod exec_proc;

@@ -332,7 +332,7 @@ impl CertificateSha1 {
         }
         Ok(Self(normalized.to_ascii_uppercase()))
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn as_str(&self) -> &str {
         &self.0
     }

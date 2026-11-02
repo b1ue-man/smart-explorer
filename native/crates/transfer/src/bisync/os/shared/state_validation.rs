@@ -41,7 +41,7 @@ impl StateBudget {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn with_limits(max_nodes: usize, max_text_bytes: usize) -> Self {
         Self {
             nodes: 0,

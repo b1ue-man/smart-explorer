@@ -231,7 +231,7 @@ pub(super) fn visit(
 /// journal of 0.5.188 and earlier (tests of the conversion): every receipt
 /// its own counted file, except the one of `pending` (a file, and whether
 /// its receipt file stays), which becomes the index's pending intent.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(in crate::transfer::engine) fn convert_to_old_format(
     job_path: &Path,
     record: &JobRecord,
@@ -281,7 +281,7 @@ pub(in crate::transfer::engine) fn convert_to_old_format(
 }
 
 /// The older format's receipt file of `file` (tests of the conversion).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(in crate::transfer::engine) fn old_receipt_file(
     job_path: &Path,
     file: &super::FileWork,

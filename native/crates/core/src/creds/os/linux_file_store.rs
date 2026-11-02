@@ -209,7 +209,7 @@ impl FileStore {
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn record_path(&self, account: &str) -> PathBuf {
         self.directory
             .join(record_name_for_digest(&account_digest(account)))

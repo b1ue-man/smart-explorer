@@ -37,7 +37,7 @@ pub(super) fn mark_ported(path: &Path) {
 }
 
 /// Tests: makes the next access port again, as a new process would.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn forget_ported(path: &Path) {
     if let Some(ported) = PORTED
         .lock()

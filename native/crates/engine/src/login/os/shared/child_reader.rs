@@ -127,7 +127,7 @@ fn next(reader: &mut Reader, input: &Input, cookie: &str) -> io::Result<Option<A
     };
     Ok(Some((reply, pixels)))
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn read_fixture(
     output: Box<dyn Read + Send>,
     input: Input,

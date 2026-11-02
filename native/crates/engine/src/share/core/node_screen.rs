@@ -87,15 +87,16 @@ impl NodeScreen {
     pub(super) fn new() -> Self {
         let registry = Arc::new(ScreenRegistry::default());
         let broker = crate::share::consent_launch::approvals().broker();
-        let (indicator, audit): (Arc<dyn SessionIndicator>, AuditSink) = if cfg!(test) {
-            let none = DesktopIndicator::with(None, false, &registry);
-            (Arc::new(none), ignore_entry)
-        } else {
-            let record: AuditSink = crate::share::access_audit::record_access;
-            (crate::screen::os::host_indicator(&registry), record)
-        };
+        let (indicator, audit): (Arc<dyn SessionIndicator>, AuditSink) =
+            if cfg!(any(test, feature = "test-support")) {
+                let none = DesktopIndicator::with(None, false, &registry);
+                (Arc::new(none), ignore_entry)
+            } else {
+                let record: AuditSink = crate::share::access_audit::record_access;
+                (crate::screen::os::host_indicator(&registry), record)
+            };
         Self {
-            backend: RwLock::new(if cfg!(test) {
+            backend: RwLock::new(if cfg!(any(test, feature = "test-support")) {
                 Arc::new(SyntheticBackend) as Arc<dyn ScreenHostBackend>
             } else {
                 crate::screen::os::host_backend()

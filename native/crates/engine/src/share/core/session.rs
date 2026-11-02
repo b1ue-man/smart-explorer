@@ -311,7 +311,7 @@ pub(super) fn session_payload(
     )
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn relay_url_from_signal(config: &str) -> String {
     config
         .split([',', ';'])

@@ -13,7 +13,7 @@ use crate::test_ports::{NoSealedSpools, PlainEndpointRules};
 use crate::transfer::{
     JobView, RecordContext, RecordKind, TransferMsg, TransferVault, TransferWorker,
 };
-use crate::vfs::Backend;
+use crate::vfs::{Backend, Scheme};
 
 fn no_vault() -> io::Error {
     io::Error::new(
@@ -62,8 +62,11 @@ impl TransferVault for NoVault {
     ) -> io::Result<Zeroizing<Vec<u8>>> {
         Err(no_vault())
     }
-    fn site_of(&self, _backend: &dyn Backend) -> Option<Option<String>> {
-        None
+    // Like `vault::vault_site_of`: a vault backend is a vault side even when
+    // no site is known here (none is opened in these tests), so its fields
+    // are never written in plaintext; every other backend is no vault.
+    fn site_of(&self, backend: &dyn Backend) -> Option<Option<String>> {
+        (backend.scheme() == Scheme::Vault).then_some(None)
     }
     fn mount_of(&self, _path: &Path) -> Option<Option<String>> {
         None

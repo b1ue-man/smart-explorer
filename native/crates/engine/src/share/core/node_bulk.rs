@@ -163,7 +163,7 @@ impl ShareIrohNode {
     }
 
     /// Extra connections the peer `endpoint` gets from now on (tests).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(in crate::share) fn want_bulk_connections(&self, endpoint: &PeerEndpoint, extra: usize) {
         if let Ok(mut table) = table().lock() {
             table.entry(session_key(endpoint)).or_default().wanted = extra.min(MAX_EXTRA);

@@ -231,7 +231,7 @@ fn decode_records(
 
 #[path = "capture_transport_wire.rs"]
 mod sending;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub use sending::send_owned;
 pub use sending::{picture_grant, prepare_owned, send_prepared};
 

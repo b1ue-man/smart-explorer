@@ -78,7 +78,7 @@ impl StreamContext {
 }
 
 /// Transfers `principal` runs on this host right now.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn transfers_in_use(principal: &super::session::PeerPrincipal) -> usize {
     admission::principal_in_use(principal)
 }

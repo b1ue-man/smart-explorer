@@ -237,7 +237,7 @@ fn found() -> &'static Found {
 }
 
 /// Media Foundation runs here and has an H.264 encoder (task tests).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn available() -> bool {
     let found = found();
     !found.hardware.is_empty() || !found.software.is_empty()

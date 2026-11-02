@@ -80,7 +80,7 @@ pub struct PortalSession;
 impl PortalSession {
     /// Starts the portal negotiation on a thread of its own and returns at
     /// once.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn start(options: PortalOptions) -> io::Result<PortalHandle> {
         let admission = super::host_backend::prepared::test_admission("portal-fixture");
         let key = SourceKey::new("portal-fixture", "portal")?;
@@ -139,7 +139,7 @@ impl PortalHandle {
     }
 
     /// A handle in a given state, without a session behind it (tests).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn detached(state: PortalState) -> Self {
         Self {
             state: Arc::new(Mutex::new(state)),
@@ -372,7 +372,7 @@ impl PortalSource {
         }
     }
     /// Starts the portal session; never waits for the dialog.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn open(options: PortalOptions) -> io::Result<Self> {
         Ok(Self::with_handle(PortalSession::start(options)?))
     }
@@ -439,7 +439,7 @@ impl ScreenSource for PortalSource {
     }
 
     fn capture(&mut self, _frame_id: u64, keyframe: bool) -> io::Result<SourceFrame> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         self.memory().activate_for_test()?;
         let latest = match &*self.handle.lock() {
             PortalState::Waiting | PortalState::WaitingInactive => {

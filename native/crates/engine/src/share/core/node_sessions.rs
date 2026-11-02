@@ -28,7 +28,7 @@ mod bulk;
 
 /// Streams (requests) this process opened to peers: the measure of the
 /// `speed_task_share_*` benchmarks.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) static OPENED_STREAMS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
@@ -157,7 +157,7 @@ impl ShareIrohNode {
         identity: &ShareIdentity,
         deadline: Instant,
     ) -> io::Result<OpenedPeerStream> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         OPENED_STREAMS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.require_sharing_active()?;
         let key = session_key(endpoint);
@@ -421,7 +421,7 @@ impl ShareIrohNode {
         ))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn outgoing_generation_for_test(
         &self,
         endpoint: &PeerEndpoint,
@@ -435,7 +435,7 @@ impl ShareIrohNode {
             .map(Connection::stable_id))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn disconnect_outgoing_for_test(&self, endpoint: &PeerEndpoint) -> io::Result<bool> {
         let key = session_key(endpoint);
         let generation = self

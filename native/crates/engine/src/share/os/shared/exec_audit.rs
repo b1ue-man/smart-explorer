@@ -186,7 +186,7 @@ fn view_in(directory: &std::path::Path, lines: usize) -> io::Result<Vec<ExecAudi
     Ok(audit_view::entries(files::tail_in(directory, lines)?))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn line(event: &AuditEvent<'_>) -> Value {
     line_with(event, None)
 }

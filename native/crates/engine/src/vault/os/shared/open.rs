@@ -161,7 +161,7 @@ pub fn open_vault_location(
     let resolve = |location: &str| crate::connect::resolve_endpoint(location);
     let worker: WorkerOpen<'_> = &worker_open;
     // A unit test never starts a worker; the worker never asks itself.
-    let reach = (!cfg!(test) && !hosts_register()).then_some(worker);
+    let reach = (!cfg!(any(test, feature = "test-support")) && !hosts_register()).then_some(worker);
     open_location_in(&RegistryStore::open_default(), site, path, &resolve, reach)
         .map_err(|error| error.to_string())
 }

@@ -456,7 +456,7 @@ enum Reopened {
 }
 
 // The fixture also serves the Dokany harness of the Windows host.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "device_tree_test_support.rs"]
 pub(in crate::mount) mod support;
 #[cfg(test)]

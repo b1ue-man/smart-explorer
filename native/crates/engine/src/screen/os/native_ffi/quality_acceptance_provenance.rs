@@ -67,7 +67,7 @@ pub(super) fn verify() -> Value {
         range(
             &codec,
             "/// One OpenH264 encoder;",
-            "pub struct OpenH264DecoderFactory"
+            "pub(crate) struct OpenH264DecoderFactory"
         ),
         frozen(&snapshot, "ENCODER")
     );
@@ -91,8 +91,8 @@ pub(super) fn verify() -> Value {
         original("native/src/screen/os/native_ffi/openh264_pins.rs").contains(pin.library_sha256)
     );
     let rate = original("native/src/screen/core/rate_control.rs");
-    assert!(rate.contains("pub const MIN_BITRATE_BPS: u64 = 150_000;"));
-    assert!(rate.contains("pub const MAX_BITRATE_BPS: u64 = 240_000_000;"));
+    assert!(rate.contains("pub(crate) const MIN_BITRATE_BPS: u64 = 150_000;"));
+    assert!(rate.contains("pub(crate) const MAX_BITRATE_BPS: u64 = 240_000_000;"));
     json!({"release_commit": baseline::RELEASE_COMMIT,
         "pixel_source_sha256": baseline::PIXEL_SHA256, "codec_source_sha256": baseline::CODEC_SHA256,
         "source_blocks": "byte-identical to immutable git source",

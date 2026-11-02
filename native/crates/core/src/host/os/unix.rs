@@ -85,7 +85,10 @@ pub fn lower_thread_priority() {
 }
 
 /// The niceness of the calling thread (tests).
-#[cfg(all(test, any(target_os = "linux", target_os = "android")))]
+#[cfg(all(
+    any(test, feature = "test-support"),
+    any(target_os = "linux", target_os = "android")
+))]
 fn thread_niceness() -> libc::c_int {
     // SAFETY: plain system calls about the calling thread's own id.
     unsafe {

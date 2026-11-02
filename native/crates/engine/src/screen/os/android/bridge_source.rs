@@ -253,7 +253,7 @@ impl Drop for BridgeSource {
 }
 
 /// The epoch bits of `flags` for `epoch` (the app's side, tests).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn epoch_flags(epoch: u64) -> u32 {
     u32::try_from(epoch & 0xFFFF).unwrap_or(0) << super::bridge_channels::EPOCH_SHIFT
 }

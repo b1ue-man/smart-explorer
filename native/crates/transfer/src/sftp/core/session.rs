@@ -21,7 +21,7 @@ mod extra;
 #[path = "host_key_handler.rs"]
 mod handler;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) use self::extra::{connect_checked, Checked};
 pub(super) use self::extra::{establish, Established, ExtraLink, Request};
 

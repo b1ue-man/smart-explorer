@@ -79,7 +79,7 @@ fn principal_slots(principal: &PeerPrincipal) -> Arc<Semaphore> {
 }
 
 /// Transfers `principal` runs right now (tests observe slot releases).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn principal_in_use(principal: &PeerPrincipal) -> usize {
     let table = principal_table()
         .lock()

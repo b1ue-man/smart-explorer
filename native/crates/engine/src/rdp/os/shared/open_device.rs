@@ -30,7 +30,7 @@ pub const DEVICE_OFFLINE: &str = "rdp_device_offline: Gerät ist nicht erreichba
 
 /// Design 9.1 `open_device`: GUI and MCP hand the session to the owner
 /// registry; the returned view describes it.
-#[cfg(any(target_os = "android", all(unix, test)))]
+#[cfg(any(target_os = "android", all(unix, any(test, feature = "test-support"))))]
 pub fn open_device(
     device_id: &str,
     public_key: &str,

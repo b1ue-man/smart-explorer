@@ -110,7 +110,7 @@ pub(super) fn canonical_contains(root: &Path, path: &Path) -> bool {
     path.starts_with(root)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn create_directory_link(target: &Path, link: &Path) -> std::io::Result<()> {
     std::os::windows::fs::symlink_dir(target, link)
 }

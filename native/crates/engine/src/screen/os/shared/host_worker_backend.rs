@@ -86,13 +86,13 @@ pub enum WorkerProgram {
     },
     /// One program for every source with extra environment (task tests
     /// with a built `se`).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     Fixed {
         path: PathBuf,
         env: Vec<(String, String)>,
     },
     /// No host process: capture and encoding in this process (task tests).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     InProcess,
 }
 
@@ -276,9 +276,9 @@ impl ScreenHostBackend for WorkerBackend {
             WorkerProgram::Installation { gui, current } => {
                 (program_for(gui.as_deref(), current.as_deref(), source), &[])
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             WorkerProgram::Fixed { path, env } => (Some(path.as_path()), env.as_slice()),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             WorkerProgram::InProcess => return Err(SourceRefusal::new("family_worker_required")),
         };
         let program =
@@ -308,9 +308,9 @@ impl ScreenHostBackend for WorkerBackend {
             WorkerProgram::Installation { gui, current } => {
                 (program_for(gui.as_deref(), current.as_deref(), source), &[])
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             WorkerProgram::Fixed { path, env } => (Some(path.as_path()), env.as_slice()),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             WorkerProgram::InProcess => return self.inner.open_source(source, wanted),
         };
         let Some(program) = program else {
@@ -356,7 +356,7 @@ impl ScreenHostBackend for WorkerBackend {
     }
 
     fn inject(&self, events: &[InputEvent]) -> Result<(), ControlBlock> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if self.program == WorkerProgram::InProcess {
             return self.inner.inject(events);
         }

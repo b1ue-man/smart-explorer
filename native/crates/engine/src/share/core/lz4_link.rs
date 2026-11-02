@@ -110,7 +110,7 @@ impl Lz4Link {
         measurements.writers.clear();
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(in crate::share) fn ratio(&self) -> Option<f64> {
         self.lock().ratio
     }

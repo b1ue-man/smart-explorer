@@ -32,7 +32,7 @@ const MAX_QUEUED_INPUT: usize = 16;
 #[path = "exec_admission.rs"]
 mod admission;
 pub(super) use admission::handle_connection;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) use admission::start_grant;
 
 /// The client half after the start frame: its frame reader, the inputs it

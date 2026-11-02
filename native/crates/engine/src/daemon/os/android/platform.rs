@@ -24,10 +24,12 @@ use super::platform as posix;
 
 pub use posix::DriveInfo;
 pub use posix::{
-    atomic_replace, metadata_is_link_like, normalize_local_backend_path, open_log,
-    restore_control_if_absent, spawn_shell, wait_for_ipc_client, wake_ipc_listener,
-    DaemonInstanceGuard,
+    atomic_replace, metadata_is_link_like, normalize_local_backend_path, restore_control_if_absent,
+    spawn_shell, wait_for_ipc_client, wake_ipc_listener, DaemonInstanceGuard,
 };
+// The worker log is the transfer layer's in every configuration that compiles
+// this file (Android and the Linux host tests).
+pub use crate::worker_log::open_log;
 
 const LOCK_DIRECTORY: &str = "daemon-lock";
 const SHELL: &str = "/system/bin/sh";

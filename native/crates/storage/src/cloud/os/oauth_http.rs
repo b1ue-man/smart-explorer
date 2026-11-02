@@ -130,9 +130,9 @@ pub fn identify(provider: Provider, token: &str) -> Result<String, AuthError> {
             "https://www.googleapis.com/drive/v3/about?fields=user(permissionId)".to_string()
         }
     };
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     let fixture_url = crate::cloud::core_impl::refresh_endpoint(provider)?;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     let url = if let Some(authority) = fixture_url.strip_prefix("http://") {
         format!(
             "http://{}/drive/v3/about?fields=user(permissionId)",

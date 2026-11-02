@@ -54,7 +54,7 @@ impl StreamHasher {
     }
 
     /// Whether a helper thread is running for this hash.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn uses_helper(&self) -> bool {
         self.helper.is_some()
     }

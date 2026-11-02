@@ -196,7 +196,7 @@ pub fn verify_iroh_signature(public_key: &str, payload: &[u8], signature: &str) 
         .is_ok()
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn sanitize_name(name: &str) -> String {
     let n: String = name
         .chars()

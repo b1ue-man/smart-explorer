@@ -94,7 +94,7 @@ pub struct Progress {
     state: Arc<Mutex<State>>,
     scope: Option<Arc<(String, String)>>,
     offset: (u64, u64, u64),
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     reports: Arc<AtomicU64>,
 }
 
@@ -226,7 +226,7 @@ impl Progress {
     }
 
     fn receive_snapshot(&self, mut snapshot: ScanSnapshot, final_result: bool) -> io::Result<()> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         self.reports.fetch_add(1, Ordering::Relaxed);
         snapshot.files = snapshot
             .files
@@ -301,7 +301,7 @@ impl Progress {
         state.remote_received = Some(Instant::now());
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn report_count(&self) -> u64 {
         self.reports.load(Ordering::Relaxed)
     }

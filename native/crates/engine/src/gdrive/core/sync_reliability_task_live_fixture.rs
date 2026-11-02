@@ -2,11 +2,19 @@
 use super::api::{drive_request, mutation_once, FOLDER_MIME};
 use super::identity::{in_parent, text};
 use super::new_object::NewObject;
-use super::sync_reliability_task_live_tests::checked;
 use super::GDriveBackend;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashSet};
 use std::io;
+
+pub(super) fn checked<T>(result: io::Result<T>, action: &str) -> T {
+    result.unwrap_or_else(|error| {
+        panic!(
+            "C10 {action} failed ({:?}); no credential values are logged",
+            error.kind()
+        )
+    })
+}
 
 struct OwnedObject {
     id: String,

@@ -335,7 +335,7 @@ pub struct SessionHandle {
 }
 
 impl SessionHandle {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn id(&self) -> String {
         self.id.to_string()
     }
@@ -345,7 +345,7 @@ impl SessionHandle {
         self.stop.clone()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn stop_reason(&self) -> Option<EndReason> {
         *self.stop.borrow()
     }

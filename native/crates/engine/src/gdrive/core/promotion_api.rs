@@ -222,7 +222,7 @@ fn required_text(json: &serde_json::Value, field: &str) -> VfsResult<String> {
         .ok_or_else(|| invalid(format!("Drive object has no usable {field}")))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn query_literal(value: &str) -> String {
     value.replace('\\', "\\\\").replace('\'', "\\'")
 }

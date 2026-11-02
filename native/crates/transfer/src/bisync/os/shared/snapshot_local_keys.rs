@@ -65,7 +65,7 @@ struct State {
     keys: HashMap<String, FolderKey>,
     records: FolderCache,
     /// The folders read by that walk (tests: the tree is listed once).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     below: Vec<String>,
 }
 
@@ -239,7 +239,7 @@ impl LocalKeys {
     /// The subtree `rel` as the other side's walk reads it, here; left
     /// without keys when that walk fails (its folder is then fetched).
     fn read_below(&self, rel: &str, cancel: &AtomicBool) {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         self.lock().below.push(rel.to_string());
         let algorithm = if self.md5 {
             crate::agent_proto::digest::MD5
@@ -275,7 +275,7 @@ impl LocalKeys {
     }
 
     /// The folders read by the other side's walk here, in this run.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn read_below_folders(&self) -> Vec<String> {
         let mut below = self.lock().below.clone();
         below.sort();

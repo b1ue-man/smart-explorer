@@ -15,7 +15,7 @@ pub(super) struct HostNotifications {
 
 impl HostNotifications {
     /// The volume harnesses hold the engine itself.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn deliver(
         &mut self,
         engine: &crate::mount::MountEngine,

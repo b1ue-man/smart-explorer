@@ -122,7 +122,7 @@ impl RunDigests {
     }
 
     /// Digests still held (a file only one walk asked for).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn held(&self) -> usize {
         self.lock().len()
     }

@@ -270,7 +270,7 @@ pub fn apply(
 }
 
 /// Android tap „Öffnen“ (only the Android bridge calls it).
-#[cfg(any(target_os = "android", all(unix, test)))]
+#[cfg(any(target_os = "android", all(unix, any(test, feature = "test-support"))))]
 pub fn open(device_id: &str, public_key: &str, port: u16) -> Result<MappedService, String> {
     let mut all = devices();
     let device = all
@@ -303,7 +303,7 @@ pub fn open(device_id: &str, public_key: &str, port: u16) -> Result<MappedServic
 }
 
 /// Android tap „Schließen“.
-#[cfg(any(target_os = "android", all(unix, test)))]
+#[cfg(any(target_os = "android", all(unix, any(test, feature = "test-support"))))]
 pub fn close(device_id: &str, public_key: &str, port: u16) -> bool {
     let mut all = devices();
     let Some(device) = all.get_mut(&device_key(device_id, public_key)) else {

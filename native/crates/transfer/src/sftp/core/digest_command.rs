@@ -157,7 +157,7 @@ impl DigestGate {
 }
 
 /// The command line of the SHA-256 script: the same for every path.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn command_for() -> String {
     command_line(Algorithm::Sha256)
 }
@@ -201,7 +201,7 @@ pub(super) enum Reply {
 
 /// Reads the command's result: the script's marker line decides; without
 /// it the shell did not run the script.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn interpret(capture: &CapturedExec) -> Reply {
     interpret_for(capture, Algorithm::Sha256)
 }

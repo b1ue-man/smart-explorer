@@ -18,11 +18,11 @@ use super::node::ShareIrohNode;
 
 type Notices = Mutex<HashMap<ExecId, watch::Receiver<ExecClientNotice>>>;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "batches_exec_fixture.rs"]
 mod batches_exec_fixture;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl ShareExecInput {
     pub fn batches_fixture() -> batches_exec_fixture::ExecInputFixture {
         batches_exec_fixture::input()

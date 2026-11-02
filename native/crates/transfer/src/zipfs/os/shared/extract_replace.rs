@@ -164,7 +164,7 @@ impl std::fmt::Display for IndexedError {
 
 impl std::error::Error for IndexedError {}
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) mod test_support {
     use std::io::Write;
     use std::path::{Path, PathBuf};

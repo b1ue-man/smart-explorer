@@ -78,9 +78,9 @@ pub mod host_stage;
 pub mod icon_cache;
 pub mod icon_host;
 pub mod image_admission;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub mod quality_acceptance_baseline;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub mod quality_acceptance_metrics;
 pub mod visibility;
 // Not yet used by SCR-M2: `TOOLBAR_KEYS`, `key_usage`, `key_name`,
@@ -129,10 +129,10 @@ pub mod family_protocol;
 pub mod family_viewer;
 pub mod worker_family;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub mod capture_test_support;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub mod screen_metadata_runtime_fixtures;
 
 #[cfg(test)]

@@ -17,7 +17,7 @@ pub struct EphemeralSpool {
     cryptor: ContentCryptor,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     /// Spools made on this thread (tests see which copies were sealed).
     pub static SEALED_SPOOLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -30,7 +30,7 @@ impl EphemeralSpool {
 
     fn in_file(file: File) -> io::Result<Self> {
         let key = Masterkey::generate().map_err(io::Error::from)?;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         SEALED_SPOOLS.with(|count| count.set(count.get() + 1));
         Ok(Self {
             file,
@@ -55,7 +55,7 @@ impl EphemeralSpool {
     }
 
     /// The stored bytes as they lie in the file (tests).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn stored(&mut self) -> io::Result<Vec<u8>> {
         let mut bytes = Vec::new();
         self.file.seek(SeekFrom::Start(0))?;

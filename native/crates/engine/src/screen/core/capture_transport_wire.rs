@@ -8,7 +8,7 @@ pub fn picture_grant(reply: &WorkerReply) -> io::Result<Option<CaptureGrant>> {
         _ => Ok(None),
     }
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn send_owned(
     writer: &mut impl Write,
     reply: &WorkerReply,

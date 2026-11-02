@@ -367,7 +367,7 @@ impl ShareIrohNode {
             Ok(permit) => permit,
             Err(_) => {
                 close(&connection);
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-support"))]
                 diagnose_failure(&self.ev, &connection, "inbound_slots", &busy());
                 return Err(busy());
             }
@@ -387,7 +387,7 @@ impl ShareIrohNode {
         if !known || connection.alpn() != LAN_LINK_ALPN || transport.register(&connection).is_err()
         {
             close(&connection);
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             diagnose_failure(
                 &self.ev,
                 &connection,
@@ -396,11 +396,11 @@ impl ShareIrohNode {
             );
             return Err(eio("Kein aktueller Direct-Pin fuer LAN-Link"));
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         let diagnostics = self.ev.clone();
         let result =
             super::lan_link_exchange::run(self, transport.clone(), connection.clone(), None).await;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if let Err(error) = &result {
             diagnose_failure(&diagnostics, &connection, "round", error);
         }
@@ -445,7 +445,7 @@ fn close(connection: &Connection) {
     connection.close(VarInt::from_u32(0x534c), b"paired link status ended");
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn diagnose_failure(
     events: &crossbeam_channel::Sender<super::types::ShareEvent>,
     connection: &Connection,

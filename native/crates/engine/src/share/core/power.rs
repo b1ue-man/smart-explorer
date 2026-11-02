@@ -15,7 +15,7 @@ mod hub;
 #[path = "power_probe.rs"]
 mod probe;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub use self::hub::{hold_needed, HOLD_THROTTLE_MS};
 pub use self::hub::{PowerHub, PowerSubscription};
 pub use self::probe::ProbeBatch;
@@ -84,6 +84,6 @@ pub fn global() -> &'static Arc<PowerHub> {
 #[cfg(test)]
 #[path = "power_tests.rs"]
 mod android_background_task_power_tests;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "power_test_support.rs"]
 pub mod test_support;

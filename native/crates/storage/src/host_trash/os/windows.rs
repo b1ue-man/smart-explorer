@@ -422,17 +422,17 @@ pub(super) fn locate(record: &Record) -> io::Result<Location> {
     Ok(Location::Missing)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn test_intent(root: &Path, file: &File, size: u64) -> io::Result<Record> {
     intent(root, file, size, digest(file, size)?)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn test_path(file: &File) -> io::Result<PathBuf> {
     final_path(file)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn test_symlink_file(original: &Path, link: &Path) -> io::Result<()> {
     std::os::windows::fs::symlink_file(original, link)
 }

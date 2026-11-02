@@ -246,12 +246,12 @@ fn image_path() -> Option<PathBuf> {
     (!replaced).then_some(path)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn test_image() -> Option<PathBuf> {
     std::env::var_os("SMART_EXPLORER_PERM_SE_BIN").map(PathBuf::from)
 }
 
-#[cfg(not(test))]
+#[cfg(not(any(test, feature = "test-support")))]
 fn test_image() -> Option<PathBuf> {
     None
 }

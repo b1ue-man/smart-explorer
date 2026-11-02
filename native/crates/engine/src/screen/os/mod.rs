@@ -33,7 +33,7 @@ mod platform_session_memory;
 #[path = "shared/session_memory.rs"]
 pub mod session_memory;
 
-#[cfg(any(target_os = "android", test))]
+#[cfg(any(target_os = "android", test, feature = "test-support"))]
 #[path = "android/app_icons.rs"]
 pub mod android_app_icons;
 #[path = "shared/app_icons.rs"]
@@ -299,32 +299,32 @@ mod windows_static_tests;
 // SCR-M8 (U27): Android as host. The app captures and encodes; these files
 // keep the session and the bridge to it. Plain Rust, so the host tests of
 // every platform check them too.
-#[cfg(any(target_os = "android", test))]
+#[cfg(any(target_os = "android", test, feature = "test-support"))]
 #[path = "android/capture_admission.rs"]
 mod android_capture_admission;
-#[cfg(any(target_os = "android", test))]
+#[cfg(any(target_os = "android", test, feature = "test-support"))]
 #[path = "android/capture_arena.rs"]
 pub mod android_capture_arena;
 #[cfg(all(target_os = "android", feature = "android-instrumentation-fixtures"))]
 #[path = "android/capture_fixture.rs"]
 pub mod android_capture_fixture;
-#[cfg(any(target_os = "android", test))]
+#[cfg(any(target_os = "android", test, feature = "test-support"))]
 #[path = "android/capture_prepared.rs"]
 mod android_capture_prepared;
-#[cfg(any(target_os = "android", test))]
+#[cfg(any(target_os = "android", test, feature = "test-support"))]
 #[path = "android/bridge_backend.rs"]
 pub mod bridge_backend;
-#[cfg(any(target_os = "android", test))]
+#[cfg(any(target_os = "android", test, feature = "test-support"))]
 #[path = "android/bridge_channels.rs"]
 pub mod bridge_channels;
-#[cfg(any(target_os = "android", test))]
+#[cfg(any(target_os = "android", test, feature = "test-support"))]
 #[path = "android/bridge_source.rs"]
 mod bridge_source;
 #[cfg(test)]
 #[path = "android/bridge_tests.rs"]
 mod bridge_tests;
 // SCR-M9 (U28): Android as viewer; the queue behind `screenPull`.
-#[cfg(any(target_os = "android", test))]
+#[cfg(any(target_os = "android", test, feature = "test-support"))]
 #[path = "android/viewer_sink.rs"]
 pub mod viewer_sink;
 #[cfg(test)]
@@ -404,7 +404,7 @@ pub fn host_indicator(registry: &Arc<ScreenRegistry>) -> Arc<dyn SessionIndicato
 
 #[path = "codec_facade.rs"]
 mod codec_facade;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use codec_facade::media_foundation_present;
 use codec_facade::{media_foundation_codecs, openh264_codecs, openh264_switched_on};
 pub use codec_facade::{openh264_action, openh264_license, OpenH264Action};

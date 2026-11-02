@@ -179,7 +179,7 @@ fn granted_since_start(
 fn apply_steering_change(granted: bool, revoked: bool, steering: BTreeSet<(String, String)>) {
     let remaining = !steering.is_empty();
     let ended = super::access_steering::note_steering_devices(steering) || revoked;
-    if cfg!(test) {
+    if cfg!(any(test, feature = "test-support")) {
         return;
     }
     if granted {
@@ -198,7 +198,9 @@ fn apply_steering_change(granted: bool, revoked: bool, steering: BTreeSet<(Strin
 pub(super) fn recheck_steering(state: &ShareAuthState, now: i64) -> Option<i64> {
     let steering = steering_devices(state, now);
     let remaining = !steering.is_empty();
-    if super::access_steering::note_steering_devices(steering) && !cfg!(test) {
+    if super::access_steering::note_steering_devices(steering)
+        && !cfg!(any(test, feature = "test-support"))
+    {
         crate::rdp::host_setup::coverage_ended(remaining);
     }
     next_steering_end(state, now)
@@ -240,7 +242,7 @@ pub(super) fn on_node_start(auth: &Arc<Mutex<ShareAuthState>>, device_id: &str) 
     };
     let any = !steering.is_empty();
     super::access_steering::note_steering_devices(steering);
-    if cfg!(test) {
+    if cfg!(any(test, feature = "test-support")) {
         return;
     }
     crate::rdp::host_setup::note_host_device(device_id);

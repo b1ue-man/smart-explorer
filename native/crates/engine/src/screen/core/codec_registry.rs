@@ -176,7 +176,7 @@ fn tiles_entry() -> CodecEntry {
 
 impl CodecRegistry {
     /// Only the tile codec (task tests).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn builtin() -> Self {
         Self::default()
     }

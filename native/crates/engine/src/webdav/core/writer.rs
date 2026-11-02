@@ -136,7 +136,7 @@ impl WebdavWriter {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn with_uploader(uploader: Arc<dyn WebdavUpload>) -> io::Result<Self> {
         Ok(Self {
             uploader,
@@ -178,7 +178,7 @@ impl WebdavWriter {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn spooled_bytes(&self) -> io::Result<u64> {
         self.spool.metadata().map(|metadata| metadata.len())
     }

@@ -79,7 +79,7 @@ use file::{FILE_NAME, NO_GENERATION};
 mod records;
 #[path = "hash_cache_write.rs"]
 mod write;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use write::take_pending;
 use write::write_pending;
 
@@ -249,7 +249,7 @@ pub fn configure_once(folder: impl FnOnce() -> Option<PathBuf>) {
 /// (`crate::support_dirs::app_data_dir`: the app's on every platform, the
 /// standalone agent's cache folder, empty when it has none). None in tests.
 fn default_folder() -> Option<PathBuf> {
-    if cfg!(test) {
+    if cfg!(any(test, feature = "test-support")) {
         return None;
     }
     let folder = crate::support_dirs::app_data_dir();
@@ -437,17 +437,17 @@ pub fn is_cache_folder(path: &Path) -> bool {
 }
 
 /// The digests in memory (tests).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn resident_entries() -> usize {
     lock().as_ref().map_or(0, |cache| cache.entries.len())
 }
 
 /// The error every write fails with (tests): a refused permission cannot be
 /// made on demand on a runner that is root.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 static FORCED_WRITE_ERROR: Mutex<Option<io::ErrorKind>> = Mutex::new(None);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn forced_write_error() -> Option<io::ErrorKind> {
     *FORCED_WRITE_ERROR
         .lock()

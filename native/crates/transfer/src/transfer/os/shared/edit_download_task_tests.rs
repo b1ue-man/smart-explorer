@@ -1,21 +1,7 @@
 use super::*;
-use crate::transfer::edit_download_task_source::{assert_no_parts, Source};
+use crate::transfer::edit_download_task_source::{assert_no_parts, BrokenReader, Source};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-
-struct BrokenReader(bool, io::ErrorKind);
-
-impl Read for BrokenReader {
-    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
-        if self.0 {
-            return Err(io::Error::new(self.1, "injected remote read failure"));
-        }
-        self.0 = true;
-        let n = out.len().min(17);
-        out[..n].fill(b'A');
-        Ok(n)
-    }
-}
 
 #[test]
 fn direct_open_task_open_failure_retries_but_terminal_failures_and_other_backends_do_not() {

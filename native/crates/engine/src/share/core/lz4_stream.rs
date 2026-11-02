@@ -48,7 +48,7 @@ enum Packer {
     /// Decisions from the measurements of the stream's connection (Z-P8).
     Link { link: Lz4Link, local: Local },
     /// One stream's own policy with fixed measurements (tests).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     Own(crate::agent_proto::BlockSender),
 }
 
@@ -86,7 +86,7 @@ impl Lz4Stream {
     }
 
     /// A stream whose policy already has measurements (tests).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(in crate::share) fn with_policy(policy: crate::transfer::compress_policy::Policy) -> Self {
         Self(Arc::new(Mutex::new(State {
             packer: Packer::Own(crate::agent_proto::BlockSender::with_policy(policy)),
@@ -109,7 +109,7 @@ impl Lz4Stream {
         let timer = stats::Timer::start();
         let packed = match &mut state.packer {
             Packer::Link { link, local } => pack_on_link(link, local, chunk, offset),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             Packer::Own(sender) => sender.try_pack(chunk, offset),
         };
         timer.stop(stats::Phase::Lz4);
@@ -124,7 +124,7 @@ impl Lz4Stream {
     pub(in crate::share) fn record_send(&self, bytes: usize, blocked: Duration, now: Instant) {
         match &mut self.state().packer {
             Packer::Link { link, local } => link.record_send(local.writer, bytes, blocked, now),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             Packer::Own(sender) => sender.record_send(bytes, blocked, now),
         }
     }

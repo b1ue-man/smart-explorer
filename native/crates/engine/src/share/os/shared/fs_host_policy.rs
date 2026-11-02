@@ -280,7 +280,7 @@ fn remember_verified(directory: &Path, identity: fs_path_adapter::DirectoryIdent
 }
 
 /// Forgets every proven directory (tests that rearrange folders).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn forget_verified_directories() {
     if let Ok(mut table) = verified().lock() {
         table.clear();

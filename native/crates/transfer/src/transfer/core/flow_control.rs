@@ -166,7 +166,7 @@ impl FlowControl {
     }
 
     /// A queue formed in the last window (the latency brake acted).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn limit_inflated(&self) -> bool {
         self.limit_inflated
     }

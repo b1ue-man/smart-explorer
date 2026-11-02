@@ -109,7 +109,7 @@ fn encode_error(error: serde_json::Error) -> io::Error {
     invalid_data(format!("encode mount registry-2: {error}"))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn known_sources() -> &'static [&'static str] {
     &KNOWN_SOURCES
 }

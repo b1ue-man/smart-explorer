@@ -10,7 +10,7 @@ use super::{Cache, Entry, Key};
 
 /// How many times digests were encoded for the file (tests: a process that
 /// gave up writing encodes nothing).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) static ENCODES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// One decoded record: key, stamp, moment, digest.
@@ -33,7 +33,7 @@ fn push_record(out: &mut Vec<u8>, algorithm: u8, entry: &Entry) -> bool {
 /// The records of `entries`, in the order given, framed into blocks of at
 /// most `BLOCK_RECORDS`; with the number of blocks and of records.
 fn blocks_of<'a>(entries: impl Iterator<Item = (&'a Key, &'a Entry)>) -> (Vec<u8>, usize, usize) {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     ENCODES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let mut out = Vec::new();
     let mut payload = Vec::new();

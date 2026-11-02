@@ -170,7 +170,7 @@ impl Backoff {
 /// Sleep for a backoff wait. Unit tests count waits against the hide limit
 /// without spending them, like the resumable retry delays always did.
 pub(super) fn pause(wait: Duration) {
-    if !cfg!(test) {
+    if !cfg!(any(test, feature = "test-support")) {
         std::thread::sleep(wait);
     }
 }

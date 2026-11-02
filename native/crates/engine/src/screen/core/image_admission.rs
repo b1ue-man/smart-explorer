@@ -106,7 +106,7 @@ impl ImageAdmission {
             usage: Mutex::new(Usage::default()),
         })
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn in_test_pool(
         pool: Arc<MemoryPool>,
         policy: LocalImagePolicy,

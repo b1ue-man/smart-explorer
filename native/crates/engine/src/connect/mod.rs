@@ -69,7 +69,7 @@ mod remote_drive_task_tests;
 #[path = "core/sync_paths_task_tests.rs"]
 mod sync_paths_task_tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "os/shared/sync_reliability_task_provider_fixture.rs"]
 pub mod sync_reliability_task_provider_fixture;
 #[cfg(test)]

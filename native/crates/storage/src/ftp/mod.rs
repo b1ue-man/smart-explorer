@@ -32,7 +32,7 @@ mod writer;
 #[cfg(test)]
 #[path = "core/abgleich_task_hash_tests.rs"]
 mod abgleich_task_hash_tests;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "core/data_overlap_server.rs"]
 mod data_overlap_server;
 #[cfg(test)]
@@ -41,7 +41,7 @@ mod data_overlap_tests;
 #[cfg(test)]
 #[path = "core/delete_speed_task_tests.rs"]
 mod delete_speed_task_tests;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "core/luecken_task_ftp_fixture.rs"]
 mod luecken_task_ftp_fixture;
 #[cfg(test)]

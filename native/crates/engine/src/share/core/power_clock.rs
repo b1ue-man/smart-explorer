@@ -60,13 +60,13 @@ pub fn wall_ms_now() -> i64 {
 
 /// Test clock: `advance` lets both clocks run (device awake), `suspend` only
 /// the wall clock (device asleep, monotonic timers stand still).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub struct ManualClock {
     start: Instant,
     state: std::sync::Mutex<(Duration, i64)>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl ManualClock {
     pub fn new(wall_ms: i64) -> Self {
         Self {
@@ -93,7 +93,7 @@ impl ManualClock {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl PowerClock for ManualClock {
     fn now(&self) -> Now {
         let state = self

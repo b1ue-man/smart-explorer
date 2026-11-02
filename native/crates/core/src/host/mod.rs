@@ -48,4 +48,4 @@ pub use local_replace::wide as wide_local_path;
 pub use memory::{memory_budget, reserve_memory, try_reserve_memory, MemoryReservation};
 pub use platform::{available_memory, physical_memory};
 #[cfg(windows)]
-pub use windows_file_proof::stable_handle_identity;
+pub use windows_file_proof::{same_file_object, stable_handle_identity};

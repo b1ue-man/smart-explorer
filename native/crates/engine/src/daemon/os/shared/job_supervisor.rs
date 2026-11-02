@@ -432,7 +432,7 @@ impl JobSupervisor {
             }
         }
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn is_idle(&self) -> bool {
         self.active.is_empty() && self.pending.is_empty()
     }

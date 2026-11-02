@@ -246,7 +246,7 @@ pub fn disable(host: &ShareHost) -> Result<DevicesStatus, String> {
 
 /// The registry entry goes and the decision becomes „aus“, in `directory`
 /// (what `disable` does to the files; the tests run it on a temporary one).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn forget_in(directory: &Path, id: &MountId) -> io::Result<()> {
     super::super::mount_registry::remove_in(directory, id)?;
     write_choice_in(directory, Choice::Off)

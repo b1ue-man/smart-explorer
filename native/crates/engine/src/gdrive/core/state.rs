@@ -171,17 +171,17 @@ impl GDriveBackend {
         request.timeout(self.request_timeout)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn test_backend(api_base: &str) -> Self {
         Self::test_backend_with_timeout(api_base, Duration::from_secs(3))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn test_backend_with_timeout(api_base: &str, request_timeout: Duration) -> Self {
         Self::test_backend_with_storage(api_base, request_timeout, None)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn test_backend_with_pending_dir(
         api_base: &str,
         request_timeout: Duration,
@@ -190,7 +190,7 @@ impl GDriveBackend {
         Self::test_backend_with_storage(api_base, request_timeout, Some(pending_folder_dir))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn test_backend_with_storage(
         api_base: &str,
         request_timeout: Duration,
@@ -209,7 +209,7 @@ impl GDriveBackend {
         )
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn test_backend_with_identity(
         api_base: &str,
         request_timeout: Duration,
@@ -276,7 +276,7 @@ impl GDriveBackend {
             .cloned())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn test_capture_legacy_folder(&self, key: &str, id: &str) {
         self.remember_path(key, id, Some(super::api::FOLDER_MIME))
             .unwrap();
@@ -287,7 +287,7 @@ impl GDriveBackend {
             .insert(key.to_string(), id.to_string());
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn test_with_loaded_caches(
         mut self,
         account_path: PathBuf,

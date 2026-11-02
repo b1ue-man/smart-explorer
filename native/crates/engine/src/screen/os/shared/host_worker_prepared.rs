@@ -234,7 +234,7 @@ impl super::backend::WorkerBackend {
         control: bool,
         admission: Arc<SessionAdmission>,
     ) -> Result<Box<dyn PreparedSource>, SourceRefusal> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if self.program == super::backend::WorkerProgram::InProcess {
             return self
                 .inner
@@ -244,11 +244,11 @@ impl super::backend::WorkerBackend {
             super::backend::WorkerProgram::Installation { gui, current } => {
                 (program_for(gui.as_deref(), current.as_deref(), source), &[])
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             super::backend::WorkerProgram::Fixed { path, env } => {
                 (Some(path.as_path()), env.as_slice())
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             super::backend::WorkerProgram::InProcess => {
                 return Err(SourceRefusal::new(
                     "inprocess preparation was not delegated",

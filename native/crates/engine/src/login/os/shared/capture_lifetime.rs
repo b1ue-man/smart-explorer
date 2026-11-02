@@ -56,7 +56,7 @@ impl CaptureLifetime {
     pub fn reader(self: &Arc<Self>) -> ReaderEnd {
         ReaderEnd(self.clone())
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn confirmed_exit(&self) {
         self.advance(true, false);
     }

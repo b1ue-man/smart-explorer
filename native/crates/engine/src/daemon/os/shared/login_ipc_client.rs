@@ -178,7 +178,7 @@ impl LoginViewer {
             source,
         })
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn from_fixture_stream(
         socket: TcpStream,
         target: GatewayTarget,

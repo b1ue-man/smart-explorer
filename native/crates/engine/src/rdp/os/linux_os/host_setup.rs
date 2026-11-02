@@ -13,16 +13,16 @@ use std::time::{Duration, Instant};
 /// The polkit path of the root steps (`pkexec <se> rdp host-setup …`).
 #[path = "host_setup_pkexec.rs"]
 mod pkexec;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub use pkexec::pkexec_outcome;
 use pkexec::via_pkexec;
 
 // Pure decisions of the setup adapters for the task suite.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub use super::gnome::{credential_input, managed_username};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub use super::krdp::has_users;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub use super::xrdp::{loopback_config, parse_port};
 
 /// se installed xrdp itself; only then a network-wide xrdp becomes loopback.

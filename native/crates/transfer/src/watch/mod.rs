@@ -31,7 +31,7 @@ mod host_signal;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 #[path = "os/linux_os/inotify_tree.rs"]
 mod inotify_tree;
-#[cfg(any(windows, test))]
+#[cfg(any(windows, test, feature = "test-support"))]
 #[path = "core/notify_records.rs"]
 mod notify_records;
 #[path = "core/paths.rs"]

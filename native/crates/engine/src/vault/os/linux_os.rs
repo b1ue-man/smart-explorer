@@ -71,7 +71,7 @@ impl Shared {
         );
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn holds_inhibitor(&self) -> bool {
         self.inhibitor
             .lock()

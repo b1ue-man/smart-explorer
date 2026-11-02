@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 
 use crate::share::core::eio;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use crate::share::io_deadline::PEER_OP_TIMEOUT;
 use crate::share::keepalive::TRANSFER_STREAMS_PER_CONNECTION;
 use crate::share::node_sessions::OpenedPeerStream;
@@ -35,7 +35,7 @@ const FOREGROUND_TRANSFERS: u32 = crate::share::keepalive::CONTROL_STREAM_RESERV
 /// an unreachable host does not cost a probe per file.
 const FAILED_PROBE_RETRY: Duration = Duration::from_secs(10);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 const MIN_SERVER_COPY_RATE: u64 = 1024 * 1024;
 
 /// Transfer state of one PeerBackend.
@@ -369,7 +369,7 @@ fn expect_ok(response: FsResponse, operation: &str) -> io::Result<()> {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn server_copy_budget(size: u64) -> Duration {
     PEER_OP_TIMEOUT.saturating_add(Duration::from_secs(size / MIN_SERVER_COPY_RATE))
 }

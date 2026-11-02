@@ -181,7 +181,7 @@ impl InodeTable {
     }
 
     /// Counted inodes, the root included.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn len(&self) -> usize {
         self.lock().map(|inner| inner.nodes.len()).unwrap_or(0)
     }

@@ -191,7 +191,7 @@ fn is_folder(change: &VfsChange) -> bool {
     change.meta.as_ref().is_some_and(|meta| meta.is_dir)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl ChangeScope {
     pub(super) fn for_test(root_key: &str, root_id: &str) -> Self {
         Self {

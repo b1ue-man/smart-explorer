@@ -48,7 +48,7 @@ pub(super) fn for_account(account: &str) -> Arc<CreatePacer> {
 }
 
 impl CreatePacer {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn slot_at(&self, now: Instant) -> Duration {
         self.reserve_at(now)
             .map_or(Duration::ZERO, |(at, _)| at.saturating_duration_since(now))

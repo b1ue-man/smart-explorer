@@ -103,7 +103,7 @@ pub(super) fn wait_for(size: u64) -> Duration {
 /// The digest of `reply` to `HASH`, when it is the SHA-256 of exactly the
 /// `size` bytes of the file. The draft's examples show an inclusive end
 /// (`0-255` for 256 bytes); servers that name the size itself are accepted too.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn parse_hash_reply(reply: &str, size: u64) -> Option<String> {
     parse_hash_reply_for(reply, size, Algorithm::Sha256)
 }
@@ -124,7 +124,7 @@ pub(super) fn parse_hash_reply_for(reply: &str, size: u64, algorithm: Algorithm)
 }
 
 /// The digest of `reply` to `XSHA256`: the one 64-digit token after the code.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn parse_bare_reply(reply: &str) -> Option<String> {
     parse_bare_reply_for(reply, Algorithm::Sha256)
 }

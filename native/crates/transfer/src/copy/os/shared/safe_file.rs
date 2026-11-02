@@ -11,12 +11,12 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::super::platform;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use super::move_guard::{quarantine_source, restore_quarantine, source_snapshot_path};
 use super::move_guard::{
     quarantine_source_observed, restore_after_error, restore_quarantine_if_any,
 };
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use super::path_guard::prepare_target_parent;
 use super::publication::PublicationObserver;
 use super::staging::{stage_copy, LocalFailure, Parallel};
@@ -396,7 +396,7 @@ fn metadata_if_exists(path: &Path) -> io::Result<Option<std::fs::Metadata>> {
 
 /// The older single-file entry point with its own folder preparation, kept
 /// for the regression tests of the safety rules above.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug)]
 pub(super) enum TransferResult {
     Completed,
@@ -404,7 +404,7 @@ pub(super) enum TransferResult {
     Canceled,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn transfer_file(
     src: &Path,
     target: &Path,

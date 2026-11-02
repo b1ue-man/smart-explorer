@@ -87,7 +87,7 @@ impl Guard {
 
 impl Drop for Guard {
     fn drop(&mut self) {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         super::test_profiles::leave(&self.source.device);
         status::update(&self.source, |status| {
             status.active = false;
@@ -190,7 +190,7 @@ pub(super) fn acquire_checked(
                 status.mode = ReadMode::Exclusive;
             });
             drop(waiting);
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             super::test_profiles::enter(&source.device);
             return Ok(Guard {
                 source,

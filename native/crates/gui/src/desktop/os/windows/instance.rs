@@ -20,9 +20,7 @@ use super::super::store::DesktopDir;
 const MUTEX_NAME: &str = r"Local\SmartExplorerDesktopShell";
 
 #[cfg(debug_assertions)]
-#[allow(clippy::duplicate_mod)]
-#[path = "../../../../../engine/src/windows_test_namespace.rs"]
-mod test_namespace;
+use crate::windows_test_namespace as test_namespace;
 
 /// Ownership of the shell mutex; released when dropped.
 pub struct ShellInstance(HANDLE);

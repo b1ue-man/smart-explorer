@@ -10,7 +10,7 @@ pub(super) fn encode(error: io::Error) -> io::Error {
     } else {
         // Test builds name the stripped error in the captured output of a
         // failing test; the error itself stays exactly as sanitized.
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         eprintln!("mount error sanitized: {:?}: {error}", error.kind());
         encoded(error.kind())
     }

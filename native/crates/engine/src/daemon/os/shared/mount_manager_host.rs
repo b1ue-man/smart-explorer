@@ -367,7 +367,7 @@ impl MountManager {
                 })?
         };
         // Tests stand in for the vault register of this process here.
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         {
             if let Some(key) = session_fixture::injected_spool_key(id.as_str()) {
                 return key;
@@ -468,6 +468,6 @@ fn host_status_is_terminal(status: &MountStatus, has_recovery_boundary: bool) ->
 #[path = "mount_manager_host_task_tests.rs"]
 mod task_tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "mount_manager_host_session_fixture.rs"]
 pub(in crate::daemon) mod session_fixture;

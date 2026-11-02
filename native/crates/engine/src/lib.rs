@@ -6,6 +6,13 @@
 // CLI). Helpers that only the desktop GUI/CLI reach are therefore unused there;
 // the desktop builds keep the full dead-code and unused-import lints.
 #![cfg_attr(target_os = "android", allow(dead_code, unused_imports))]
+// The helpers behind `test-support` serve the tests of the crates above
+// (fixtures, hooks, counters); this crate's own build without its tests has
+// no caller for some of them and for the imports of their `#[test]` items.
+#![cfg_attr(
+    all(feature = "test-support", not(test)),
+    allow(dead_code, unused_imports)
+)]
 
 // The layers below (D13 phase B); their modules keep their `crate::` paths.
 pub use smart_explorer_transfer::*;

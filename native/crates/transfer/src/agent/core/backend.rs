@@ -1,6 +1,6 @@
 use super::agent_error::agent_error;
 use super::pool::AgentPool;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use super::transport::HeartbeatPolicy;
 use super::transport::{AgentConnection, AgentReconnect};
 use crate::agent_proto::{Frame, ServerFeatures, BATCH_MAX_BYTES, BATCH_MAX_FILES};
@@ -54,7 +54,7 @@ impl AgentBackend {
         Self::from_streams_inner((r, w), inner, Some(reconnect), Some(root))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn from_streams_with_reconnect_and_heartbeat(
         r: Box<dyn Read + Send>,
         w: Box<dyn Write + Send>,
@@ -74,7 +74,7 @@ impl AgentBackend {
     }
 
     /// A pool over test streams: `opener` provides further channels.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn pooled_for_test(
         r: Box<dyn Read + Send>,
         w: Box<dyn Write + Send>,

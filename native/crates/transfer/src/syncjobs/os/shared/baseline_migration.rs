@@ -100,7 +100,7 @@ fn pending_path(id: &str) -> io::Result<PathBuf> {
         .join(format!("{id}.pending")))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn migrate_defaults_for_test(job: &mut SyncJob) {
     upgrade_defaults(job);
 }

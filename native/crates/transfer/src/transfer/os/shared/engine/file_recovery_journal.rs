@@ -312,7 +312,7 @@ fn migrate(
 }
 
 /// Where the crash log of the job stored at `job_path` lives (tests).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(in crate::transfer::engine) fn log_path(job_path: &Path) -> std::path::PathBuf {
     directory(job_path).join(LOG)
 }

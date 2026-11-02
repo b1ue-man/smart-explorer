@@ -91,7 +91,7 @@ impl Hints {
     }
 
     /// Hints that neither read nor write (tests of other parts).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn disabled() -> Self {
         Self {
             path: None,
@@ -231,9 +231,9 @@ fn global() -> std::sync::MutexGuard<'static, Hints> {
     HINTS
         .get_or_init(|| {
             // Tests of other parts never touch the user's file.
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             let hints = Hints::disabled();
-            #[cfg(not(test))]
+            #[cfg(not(any(test, feature = "test-support")))]
             let hints = Hints::at(crate::support_dirs::app_data_file(FILE_NAME));
             Mutex::new(hints)
         })

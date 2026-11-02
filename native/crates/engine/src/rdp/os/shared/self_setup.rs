@@ -74,7 +74,7 @@ static HOST_DEVICE: RwLock<Option<String>> = RwLock::new(None);
 /// host page shows it next to the setup state.
 static LAST_ERROR: RwLock<Option<String>> = RwLock::new(None);
 /// Background requests of test builds are recorded instead of started.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub static TEST_REQUESTS: Mutex<Vec<SetupTrigger>> = Mutex::new(Vec::new());
 
 /// The marker of one version: `<sync_data_dir>/rdp-setup-<version>.json`.
@@ -322,7 +322,7 @@ pub fn request(trigger: SetupTrigger) {
 }
 
 /// Test builds record background requests instead of starting a setup.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn recorded_for_test(trigger: SetupTrigger) -> bool {
     if let Ok(mut requests) = TEST_REQUESTS.lock() {
         requests.push(trigger);
@@ -330,7 +330,7 @@ fn recorded_for_test(trigger: SetupTrigger) -> bool {
     true
 }
 
-#[cfg(not(test))]
+#[cfg(not(any(test, feature = "test-support")))]
 fn recorded_for_test(_: SetupTrigger) -> bool {
     false
 }
@@ -420,7 +420,7 @@ pub fn rotate_managed_credentials() {
 /// (GNOME offers no loopback binding; `grdctl` knows only `set-port`); the
 /// next grant (T1) or a viewer's „Remote Desktop“ (T4) switches it on again.
 pub fn coverage_ended(steering_remains: bool) {
-    if cfg!(test) {
+    if cfg!(any(test, feature = "test-support")) {
         return;
     }
     let spawned = std::thread::Builder::new()

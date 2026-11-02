@@ -27,7 +27,7 @@ use super::*;
 // The decision about one start, with the host user's answer on `ask`.
 #[path = "access_approval_exec.rs"]
 mod approval;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(in crate::share) use approval::start_grant;
 use approval::{decide_start, ApprovedStart, Refusal, StartApproval};
 

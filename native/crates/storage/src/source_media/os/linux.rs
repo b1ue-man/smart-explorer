@@ -30,7 +30,7 @@ pub(super) fn probe_regular_file(path: &Path) -> io::Result<Option<Source>> {
 }
 
 pub(super) fn probe_file(file: &fs::File) -> io::Result<Option<Source>> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     {
         use std::os::fd::AsRawFd;
         if let Ok(path) = fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd())) {

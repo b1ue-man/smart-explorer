@@ -94,7 +94,7 @@ pub(super) fn check_target_override(value: Option<&std::ffi::OsStr>) -> io::Resu
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub mod fixture {
     use super::*;
     use crate::screen::os::pipewire_abi::memory::{

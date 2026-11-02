@@ -87,7 +87,7 @@ fn cached(path: &Path) -> Option<DataKey> {
 
 /// Tests: drops the cached key of `path`, as a new process would start
 /// without it.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn forget(path: &Path) {
     if let Some(keys) = KEYS
         .lock()

@@ -168,7 +168,7 @@ impl MemoryPool {
             bytes,
         })
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn committed_bytes(&self) -> u64 {
         self.state
             .lock()

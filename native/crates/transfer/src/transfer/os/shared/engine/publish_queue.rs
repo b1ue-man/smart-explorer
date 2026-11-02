@@ -48,7 +48,7 @@ impl Publisher<'_, '_> {
     /// Publishes `part` as `destination` for packet member `index`, on the
     /// publisher thread when there is one. The engine always passes the
     /// stream's evidence (`submit_known`); tests use this short form.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn submit(&self, index: usize, part: Part, destination: PathBuf, file: FileWork) {
         self.submit_known(index, part, destination, file, None);
     }

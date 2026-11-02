@@ -3,7 +3,7 @@
 use super::pixel_convert::{BgraImage, BgraView, I420Image};
 use super::wire::invalid;
 use std::io;
-pub const RELEASE_COMMIT: &str = "a814f263096fe69d3746e840b5f3fad3fd7e88a0";
+pub const RELEASE_COMMIT: &str = "daed7c158ecea9bad35567450f5b1fe61b78facf";
 pub const PIXEL_PATH: &str = "native/src/screen/core/pixel_convert.rs";
 pub const PIXEL_SHA256: &str =
     "322c0c1221f98f3d5993b3f9b84f24cfd6552dcf1b91a5bfc84167b16fb61165";
@@ -12,7 +12,7 @@ pub const CODEC_SHA256: &str =
     "7f1f1ee52d5da0130a6ad6e21aa4c7655c99f3067fe7b4e504c2c9e514c40ac1";
 // BEGIN_FROZEN_PIXELS
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum YuvMatrix {
+pub(crate) enum YuvMatrix {
     Bt601,
     /// Default: HD content; encoders signal it in the VUI.
     #[default]
@@ -65,7 +65,7 @@ fn clamp_u8(value: i32) -> u8 {
 
 /// BGRA → I420. Odd sides are allowed: the last chroma sample repeats the
 /// edge pixel. Alpha is ignored.
-pub fn bgra_to_i420(src: &BgraView, matrix: YuvMatrix) -> io::Result<I420Image> {
+pub(crate) fn bgra_to_i420(src: &BgraView, matrix: YuvMatrix) -> io::Result<I420Image> {
     let size = src.size();
     size.check_frame()?;
     let k = matrix.coefficients();
@@ -123,7 +123,7 @@ fn yuv_to_bgra(k: &Coefficients, luma: u8, u: u8, v: u8, out: &mut [u8]) {
 }
 
 /// I420 → BGRA into `dst` of the same size.
-pub fn i420_to_bgra(
+pub(crate) fn i420_to_bgra(
     src: &I420Image,
     matrix: YuvMatrix,
     dst: &mut BgraImage,

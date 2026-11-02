@@ -106,7 +106,7 @@ mod cancel_tests;
 #[cfg(test)]
 #[path = "os/shared/clipboard_parallel_tests.rs"]
 mod clipboard_parallel_tests;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "os/shared/copy_paste_task_backend.rs"]
 mod copy_paste_task_backend;
 #[cfg(test)]

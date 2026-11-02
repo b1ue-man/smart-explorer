@@ -97,7 +97,7 @@ fn rewrite_now(pending: &Pending) -> io::Result<Vec<u8>> {
 /// Appends the pending digests, or replaces the file when there is no file
 /// of this generation yet or it has no room.
 fn perform(pending: &mut Pending) -> io::Result<file::Replaced> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(kind) = super::forced_write_error() {
         return Err(io::Error::from(kind));
     }

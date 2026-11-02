@@ -202,7 +202,7 @@ pub use recovery_manifest::{
     InactiveMountRecovery, RecoveryFile, RecoveryGap, RecoveryGapKind, RecoveryJournal,
     RecoveryManifest, RECOVERY_FORMAT_VERSION,
 };
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub use recovery_state::fail_next_recovery_at;
 pub use recovery_state::{recovery_checkpoint, RecoveryCommitPoint};
 pub use recovery_storage::publish as publish_recovery_object;

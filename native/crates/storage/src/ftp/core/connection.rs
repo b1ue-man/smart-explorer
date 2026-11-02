@@ -187,7 +187,7 @@ fn rustls_client_config() -> Arc<rustls::ClientConfig> {
     let mut roots = rustls::RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     // The remote task owns this CA. Production builds have no fixture input.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(path) = std::env::var_os("SE_SYNC_FIXTURE_CA_DER") {
         let der = std::fs::read(path).expect("read owned sync fixture CA");
         roots

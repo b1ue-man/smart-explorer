@@ -13,18 +13,18 @@ pub enum RecoveryCommitPoint {
     OwnershipPublished,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 std::thread_local! {
     static RECOVERY_FAULT: std::cell::Cell<Option<RecoveryCommitPoint>> = const { std::cell::Cell::new(None) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn fail_next_recovery_at(point: Option<RecoveryCommitPoint>) {
     RECOVERY_FAULT.with(|fault| fault.set(point));
 }
 
 pub fn recovery_checkpoint(point: RecoveryCommitPoint) -> std::io::Result<()> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if RECOVERY_FAULT.with(|fault| {
         if fault.get() == Some(point) {
             fault.set(None);

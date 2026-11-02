@@ -37,13 +37,13 @@ use load_support::{expire_observed_path, invalidate_descendants, invalidate_path
     invalidate_slot, LoadTable, RetiredMetadata};
 pub(super) use load_support::{Admission, DirectoryObservation, LoadSlot, MetadataLookup,
     SnapshotPublication};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) use crate::mount::metadata_batch::run_metadata_batch;
 pub use changes::MetadataChange;
 use support::*;
 
 // Kept only as a historical threshold for regression fixtures, not admission.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) const MAX_CACHED_ENTRIES: usize = 50_000;
 const MAX_CACHED_BYTES: usize = 128 * 1024 * 1024;
 const MAX_CACHED_DIRECTORY_BYTES: usize = MAX_CACHED_BYTES;
@@ -333,13 +333,13 @@ impl MetadataCache {
         validate_listing(entries)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn usage(&self) -> io::Result<(usize, usize, usize)> {
         let state = self.lock_state()?;
         Ok((state.directories.len(), state.entries, state.bytes))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn cooldown_count(&self) -> io::Result<usize> {
         Ok(self.lock_state()?.snapshot_cooldowns.len())
     }

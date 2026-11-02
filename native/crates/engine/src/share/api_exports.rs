@@ -200,10 +200,10 @@ pub fn run_exec_platform_self_test() -> std::io::Result<()> {
 #[cfg(test)]
 #[path = "core/backend_tests.rs"]
 mod backend_tests;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "core/copy_paste_task_fixture.rs"]
 mod copy_paste_task_fixture;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub use copy_paste_task_fixture::CopyPastePeerFixture;
 #[cfg(test)]
 #[path = "core/copy_paste_task_tests.rs"]

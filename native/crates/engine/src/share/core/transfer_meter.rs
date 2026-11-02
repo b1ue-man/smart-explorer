@@ -23,7 +23,9 @@ pub(super) const NO_STATS_VARIABLE: &str = "SE_TEST_NO_SHARE_STATS";
 pub(super) fn enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
-        cfg!(debug_assertions) && !cfg!(test) && std::env::var_os(NO_STATS_VARIABLE).is_none()
+        cfg!(debug_assertions)
+            && !cfg!(any(test, feature = "test-support"))
+            && std::env::var_os(NO_STATS_VARIABLE).is_none()
     })
 }
 

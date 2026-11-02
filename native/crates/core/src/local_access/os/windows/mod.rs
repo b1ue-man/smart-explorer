@@ -30,7 +30,7 @@ pub use read::{open_read, open_regular, symlink_metadata};
 pub mod access_fixtures;
 #[cfg(any(test, feature = "test-support"))]
 pub use privilege::BackupRead;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 mod access_task {
     // Old path of the fixture types, used by helper_task.
     pub(super) use super::access_fixtures::{DeniedDirectory, Identity};

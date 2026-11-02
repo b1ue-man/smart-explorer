@@ -101,7 +101,7 @@ impl AuthPenalties {
         sources.insert(source.to_string(), Penalty { until, active });
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn tracked(&self) -> usize {
         self.sources.lock().unwrap().len()
     }

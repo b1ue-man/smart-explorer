@@ -398,7 +398,7 @@ pub fn apply_vault_preview_action(
 #[cfg(test)]
 #[path = "sync_job_more_tests.rs"]
 mod more_tests;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "sync_job_test_support.rs"]
 mod test_support;
 #[cfg(test)]

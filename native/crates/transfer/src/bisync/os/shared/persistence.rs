@@ -345,11 +345,11 @@ fn invalid(message: impl Into<String>) -> io::Error {
 #[path = "persistence_tests.rs"]
 mod tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn parse_binary(input: &[u8]) -> io::Result<Baseline> {
     parse_binary_with_limits(input, limits())
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn parse_legacy(bytes: &[u8]) -> io::Result<Baseline> {
     parse_legacy_with_limits(bytes, limits())
 }

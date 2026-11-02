@@ -32,9 +32,9 @@ use super::writer::FtpWriter;
 use suppaftp::list::ListParser;
 use suppaftp::FtpError;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use super::connection::FtpUrl;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use std::time::Duration;
 
 fn io_err(error: FtpError) -> io::Error {

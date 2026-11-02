@@ -329,5 +329,5 @@ impl ImportController {
 pub(super) mod control;
 #[path = "pipewire_import_events.rs"]
 mod events;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) use events::fixture_support;

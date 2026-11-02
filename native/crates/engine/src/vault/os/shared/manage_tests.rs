@@ -310,11 +310,15 @@ fn vault_task_recovery_key_reported_unsupported() {
         CREATE_RECOVERY_HINT,
         "Einen Wiederherstellungsschlüssel erzeugt Cryptomator Desktop für diesen Tresor"
     );
-    // No word list and no recovery key code in se (OE1).
-    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    for file in [
-        "vault/os/shared/wordlist.rs",
-        "cryptomator/core/recovery_key.rs",
+    // No word list and no recovery key code in se (OE1). `vault` lives in
+    // this crate, `cryptomator` in the core layer (D13).
+    let engine = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let core = Path::new(env!("CARGO_MANIFEST_DIR")).join("../core/src");
+    assert!(engine.join("vault").is_dir());
+    assert!(core.join("cryptomator/core").is_dir());
+    for (source, file) in [
+        (&engine, "vault/os/shared/wordlist.rs"),
+        (&core, "cryptomator/core/recovery_key.rs"),
     ] {
         assert!(!source.join(file).exists(), "{file}");
     }

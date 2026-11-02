@@ -16,7 +16,7 @@ pub(in crate::mcp_launcher) use spawn::*;
 
 pub(in crate::mcp_launcher) const CLI_NAME: &str = "se";
 pub(in crate::mcp_launcher) const LAUNCHER_NAME: &str = "se-mcp-launcher";
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(in crate::mcp_launcher) fn create_test_directory_link(source: &Path, target: &Path) -> std::io::Result<()> {
     std::os::unix::fs::symlink(source, target)
 }

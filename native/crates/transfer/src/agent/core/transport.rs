@@ -197,7 +197,7 @@ impl AgentConnection {
         Ok(mux)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn replace_observed_for_test(
         self: &Arc<Self>,
         observed: &Arc<Mux>,

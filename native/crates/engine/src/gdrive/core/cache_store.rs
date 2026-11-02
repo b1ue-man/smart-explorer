@@ -111,7 +111,7 @@ impl CacheStore {
     }
 
     /// Completed writes (successful or not).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn writes(&self) -> u64 {
         self.shared.lock().writes
     }

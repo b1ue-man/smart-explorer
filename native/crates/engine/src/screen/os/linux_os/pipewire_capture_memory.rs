@@ -259,7 +259,7 @@ impl CaptureMemory {
             );
         }
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn activate_for_test(&self) -> io::Result<()> {
         use crate::screen::core::host_codec_adapters::{HostCodecPlan, HostContract};
         if self.current_grant().is_some() {
@@ -279,7 +279,7 @@ impl CaptureMemory {
         Ok(())
     }
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn convert_rows(
     src: &[u8],
     stride: usize,

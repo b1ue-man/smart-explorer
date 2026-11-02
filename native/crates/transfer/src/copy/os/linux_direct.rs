@@ -219,7 +219,7 @@ impl Direct {
     }
 
     /// Test seam: handles opened by the test with a stand-in for the request.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn from_parts(
         reader: File,
         writer: File,

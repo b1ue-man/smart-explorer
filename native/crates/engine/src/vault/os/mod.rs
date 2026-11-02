@@ -227,7 +227,7 @@ pub fn platform_lock_defaults() -> LockSettings {
 #[path = "shared/backend_dirs_tests.rs"]
 mod backend_dirs_tests;
 // VLT-M14 (stage vault-backends): vaults on real servers.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "shared/backend_servers_support.rs"]
 mod backend_servers_support;
 #[cfg(test)]
@@ -237,7 +237,7 @@ mod backend_servers_tests;
 #[path = "shared/issues_vault_tests.rs"]
 mod issues_vault_tests;
 // U26 (VLT-M8): the comparison mode, its actions and the check.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "shared/backend_test_support.rs"]
 mod backend_test_support;
 #[cfg(test)]
@@ -252,7 +252,7 @@ mod compare_actions_tests;
 #[cfg(test)]
 #[path = "shared/compare_folders_tests.rs"]
 mod compare_folders_tests;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "shared/compare_test_support.rs"]
 mod compare_test_support;
 #[cfg(test)]
@@ -285,7 +285,7 @@ mod sealed_spool_tests;
 #[cfg(test)]
 #[path = "shared/session_lock_tests.rs"]
 mod session_lock_tests;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "shared/session_test_support.rs"]
 mod session_test_support;
 #[cfg(test)]

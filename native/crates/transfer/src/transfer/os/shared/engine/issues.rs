@@ -88,7 +88,7 @@ fn vault_side(sides: [Side<'_>; 2]) -> Fields {
 
 impl IssueLog {
     /// A log without a vault side (tests; transfers use `for_sides`).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn new(job_id: u64, dir: PathBuf) -> Self {
         Self::with_fields(job_id, dir, Fields::Plain, process_sealer())
     }

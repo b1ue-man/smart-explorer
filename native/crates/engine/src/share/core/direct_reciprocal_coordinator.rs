@@ -407,7 +407,7 @@ fn jittered_delay(key: &DirectRepairKey, attempt: u32, base: u64, spread: u64) -
     Duration::from_secs(seconds)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "direct_reciprocal_coordinator_task_test_support.rs"]
 mod task_test_support;
 

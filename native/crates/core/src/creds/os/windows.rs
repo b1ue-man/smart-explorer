@@ -4,12 +4,11 @@ use std::borrow::Cow;
 
 use keyring::{Entry, Error};
 
+// The daemon and the shell mutex use the same debug-only parser, so every
+// test-facing Windows resource name enforces one namespace contract without
+// release code.
 #[cfg(debug_assertions)]
-// The daemon adapter includes the same debug-only parser so both test-facing
-// Windows resource names enforce one namespace contract without release code.
-#[allow(clippy::duplicate_mod)]
-#[path = "../../../../engine/src/windows_test_namespace.rs"]
-mod test_namespace;
+use crate::windows_test_namespace as test_namespace;
 
 const KEYRING_SERVICE: &str = "smart_explorer";
 #[cfg(debug_assertions)]

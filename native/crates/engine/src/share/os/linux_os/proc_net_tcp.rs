@@ -291,7 +291,7 @@ pub fn connection_owned_by(
 
 /// The PID of the process that owns the connection socket `local → remote`;
 /// `None` when this account cannot see that process's descriptors.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn connection_owner(local: SocketAddr, remote: SocketAddr) -> io::Result<Option<u32>> {
     let Some(row) = connection_row(local, remote)? else {
         return Ok(None);

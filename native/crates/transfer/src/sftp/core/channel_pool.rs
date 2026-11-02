@@ -31,9 +31,9 @@ use super::connection::{SftpConnection, SftpGeneration};
 use super::exec::ChannelOpen;
 pub(super) use super::link_rules::pool_usable;
 use super::link_rules::{account_key, limit_after_refusal, seat, Candidate, ExtraLogin, Seat};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) use super::link_rules::{learned_limit, pick, Pick};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) use super::pool_channel::offered;
 pub(super) use super::pool_channel::{note_failure, open_failed, ChannelLease, PoolChannel};
 use super::pool_channel::{setup, Owner};

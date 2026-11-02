@@ -36,8 +36,8 @@ fn printable(text: &str) -> String {
 /// Writes the line to the service log (`crate::worker_log::log`, which locks
 /// across processes). Tests do not touch the user's log.
 pub(in crate::sftp) fn emit(line: &str) {
-    #[cfg(not(test))]
+    #[cfg(not(any(test, feature = "test-support")))]
     crate::worker_log::log(line);
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     let _ = line;
 }

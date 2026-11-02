@@ -195,7 +195,7 @@ fn invalid(detail: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, detail)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn parse_changes_value(value: &serde_json::Value) -> VfsChangeBatch {
     checked_changes(value).expect("test fixture has a valid Drive change array")
 }

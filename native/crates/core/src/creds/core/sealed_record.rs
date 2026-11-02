@@ -290,7 +290,7 @@ pub fn open_legacy(
 }
 
 /// A format 1 record as earlier versions wrote it (tests and porting checks).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn encode_legacy(account: &str, secret: &str) -> Vec<u8> {
     let mut record = Vec::with_capacity(LEGACY_HEADER_BYTES + secret.len() + 32);
     record.extend_from_slice(LEGACY_MAGIC);

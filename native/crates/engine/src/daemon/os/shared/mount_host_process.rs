@@ -10,7 +10,7 @@ use super::mount_job::{MountHostChild, MountHostJob};
 #[cfg(not(windows))]
 use std::process::Child as MountHostChild;
 
-#[cfg(any(windows, target_os = "linux", test))]
+#[cfg(any(windows, target_os = "linux", test, feature = "test-support"))]
 pub(super) const MOUNT_HOST_STDERR_LIMIT: usize = 16 * 1024;
 const MOUNT_HOST_DETAIL_LIMIT: usize = 12 * 1024;
 const STDERR_DRAIN_GRACE: Duration = Duration::from_millis(100);
@@ -143,7 +143,7 @@ struct CapturedStderr {
 }
 
 impl CapturedStderr {
-    #[cfg(any(windows, target_os = "linux", test))]
+    #[cfg(any(windows, target_os = "linux", test, feature = "test-support"))]
     fn push_tail(&mut self, bytes: &[u8]) {
         if bytes.len() >= MOUNT_HOST_STDERR_LIMIT {
             self.bytes.clear();

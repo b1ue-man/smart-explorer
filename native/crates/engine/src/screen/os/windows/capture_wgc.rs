@@ -26,14 +26,14 @@ use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 use windows::Win32::System::WinRT::Direct3D11::IDirect3DDxgiInterfaceAccess;
 use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
 const POLL: Duration = Duration::from_millis(5);
-#[cfg(any(test, debug_assertions))]
+#[cfg(any(test, feature = "test-support", debug_assertions))]
 static FORCED_OFF: AtomicBool = AtomicBool::new(false);
-#[cfg(any(test, debug_assertions))]
+#[cfg(any(test, feature = "test-support", debug_assertions))]
 pub(super) fn force_unavailable_for_tests(off: bool) {
     FORCED_OFF.store(off, Ordering::SeqCst);
 }
 pub(super) fn available() -> bool {
-    #[cfg(any(test, debug_assertions))]
+    #[cfg(any(test, feature = "test-support", debug_assertions))]
     if FORCED_OFF.load(Ordering::SeqCst) {
         return false;
     }

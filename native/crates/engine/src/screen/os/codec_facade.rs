@@ -17,12 +17,12 @@ pub(super) fn media_foundation_codecs() -> Factories {
 }
 
 /// Whether Media Foundation runs here with an H.264 encoder (task tests).
-#[cfg(all(windows, test))]
+#[cfg(all(windows, any(test, feature = "test-support")))]
 pub(super) fn media_foundation_present() -> bool {
     mf_common::available()
 }
 
-#[cfg(all(not(windows), test))]
+#[cfg(all(not(windows), any(test, feature = "test-support")))]
 pub(super) fn media_foundation_present() -> bool {
     false
 }

@@ -2,10 +2,6 @@
 mod shell;
 pub use shell::{shell_command, spawn_shell};
 
-// Android's platform module re-exports this path (daemon/os/android/platform.rs).
-#[cfg(target_os = "android")]
-pub use crate::worker_log::open_log;
-
 pub fn requires_storage_access(_endpoint: &str) -> bool {
     false
 }
@@ -17,7 +13,7 @@ use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 const DAEMON_LOCK_FILE: &str = "smart-explorer-sync-daemon.lock";
 
 #[derive(Clone)]

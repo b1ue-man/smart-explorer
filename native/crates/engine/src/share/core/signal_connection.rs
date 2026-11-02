@@ -145,19 +145,19 @@ impl SignalConnection {
         self.key_login = true;
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn from_test_tcp(stream: TcpStream) -> io::Result<Self> {
         Self::from_tcp("tcp://test".into(), stream)
     }
 
     /// A client WebSocket over an already upgraded test socket.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn from_test_websocket(mut socket: WebSocket<MaybeTlsStream<TcpStream>>) -> Self {
         set_ws_timeouts(socket.get_mut(), SIGNAL_READ_POLL, SIGNAL_WRITE_TIMEOUT);
         Self::from_websocket("ws://test".into(), socket, false)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn shutdown_test_transport(&mut self) -> io::Result<()> {
         match &self.transport {
             Transport::Tcp { stream, .. } => stream.shutdown(std::net::Shutdown::Both),

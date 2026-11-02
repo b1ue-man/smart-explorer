@@ -29,13 +29,13 @@ mod mount_cleanup;
 #[cfg(target_os = "linux")]
 pub(super) use mount_cleanup::clean_after_host;
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(any(test, feature = "test-support"), target_os = "linux"))]
 #[path = "fuse_task_backends.rs"]
 mod fuse_task_backends;
 #[cfg(all(test, target_os = "linux"))]
 #[path = "fuse_task_daemon_tests.rs"]
 mod fuse_task_daemon_tests;
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(any(test, feature = "test-support"), target_os = "linux"))]
 #[path = "fuse_task_harness.rs"]
 mod fuse_task_harness;
 #[cfg(all(test, target_os = "linux"))]

@@ -386,14 +386,14 @@ pub(super) fn help(engine: &Engine<'_>, job: u64, buffer: &mut [u8]) {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) static TRACE: Mutex<Vec<(std::thread::ThreadId, &'static str)>> = Mutex::new(Vec::new());
 
 /// Tests record the order of memory, permit and release of every helper.
 fn trace(event: &'static str) {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     lock(&TRACE).push((std::thread::current().id(), event));
-    #[cfg(not(test))]
+    #[cfg(not(any(test, feature = "test-support")))]
     let _ = event;
 }
 

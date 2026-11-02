@@ -65,7 +65,7 @@ pub(super) fn source_snapshot_entry(path: &Path) -> io::Result<SourceSnapshot> {
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn quarantine_source(source: &Path) -> io::Result<QuarantinedSource> {
     quarantine_source_observed(source, None)
 }

@@ -112,7 +112,7 @@ impl AuthMemo {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(in crate::share) fn is_empty(&self) -> bool {
         self.0.lock().map(|memo| memo.is_none()).unwrap_or(true)
     }
@@ -243,7 +243,7 @@ impl IncomingSession {
         )
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(in crate::share) fn memo_is_empty(&self) -> bool {
         self.memo.is_empty()
     }

@@ -198,7 +198,7 @@ pub(super) fn report_spawn_failure(
 #[path = "tests.rs"]
 mod tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "tests_abgleich_fixture.rs"]
 mod tests_abgleich_fixture;
 

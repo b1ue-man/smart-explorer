@@ -231,7 +231,7 @@ pub fn parse_kv_checked(body: &str) -> Result<SyncJob, String> {
     Ok(job)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn parse_kv(body: &str) -> Option<SyncJob> {
     parse_kv_checked(body).ok()
 }

@@ -104,7 +104,7 @@ pub fn run(
     run_with(RunRequest::new(a, root_a, b, root_b, opts, filter, cancel))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn run_with_store_path(
     endpoints: SyncEndpoints<'_>,
     opts: BisyncOptions,

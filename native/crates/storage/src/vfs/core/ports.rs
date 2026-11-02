@@ -52,6 +52,11 @@ crate::declare_port! {
     pub fn sealed_spools() -> dyn SealedSpools = smart_explorer_port_vfs_sealed_spools;
 }
 
+/// Why a general sync refuses a vault locator as one of its sides: the one
+/// text of every implementation of [`SyncEndpointRules`] (`connect`
+/// re-exports it as `VAULT_SIDE_REFUSED`).
+pub const VAULT_SIDE_REFUSED: &str = "Tresororte (vault://, vault-store://) sind keine Seite allgemeiner Sync-Jobs: Tresore gleicht der Tresor-Sync ab";
+
 /// The endpoint rules of a general sync (`connect::validate_sync_endpoints`).
 pub trait SyncEndpointRules: Sync {
     /// Vault locators are no side of a general sync; source and target must
