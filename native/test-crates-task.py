@@ -7,13 +7,21 @@ Parts:
   workspace  every crate of the workspace except the Android-only bridge:
              the crates' tests (with test-support), then the programs and
              their integration tests in their own invocation (without it),
-             on Linux and Windows; on Windows also check the GNU target. Proves that the layers
+             on Linux and Windows (MSVC). Proves that the layers
              core/storage/transfer/engine, the GUI, the CLI, the mobile
              facade and the programs compile and link (every port has its
              provider, the lower crates' own tests their stand-ins) and that
              the tests that moved between crates still pass.
+  windows-gnu  on Linux with MinGW-w64: compile and link every test binary and
+             program for x86_64-pc-windows-gnu with GNU ld, whose archive
+             order is the one a port provider above its accessor depends on
+             (rustc's symbols.o names every #[no_mangle] symbol before the
+             rlibs, rust-lang/rust#95604).
   android    the Android JNI library (native/android-bridge over the facade
-             and the mobile crate) for arm64-v8a: compile and link the cdylib.
+             and the mobile crate) for one ABI (--abi arm64-v8a or x86_64, the
+             two the release builds): compile and link the cdylib; with
+             arm64-v8a also configure the Gradle app, which reads its version
+             from the workspace manifest (version.workspace, D13).
   agent      the SSH-agent bundles through native/build-agent-bundles.sh, the
              path the release's prepare job takes (se-agent includes the
              shared protocol sources from crates/storage and crates/core).
@@ -33,7 +41,6 @@ ROOT = Path(__file__).resolve().parent.parent
 NATIVE = ROOT / "native"
 WINDOWS = platform.system() == "Windows"
 SUMMARY = os.environ.get("GITHUB_STEP_SUMMARY")
-EXCLUDE = ["--workspace", "--exclude", "smart_explorer_android"]
 CRATES = ["--workspace", "--exclude", "smart_explorer_android", "--exclude", "smart_explorer"]
 
 
@@ -76,16 +83,26 @@ def part_workspace():
              ["cargo", "test", "--locked", *CRATES, "--no-fail-fast", "--", *threads])
     ok &= run("Programs and their integration tests",
               ["cargo", "test", "--locked", "-p", "smart_explorer", "--no-fail-fast", "--", *threads])
-    if WINDOWS:
-        ok &= run("Check of the Windows GNU target",
-                  ["cargo", "check", "--locked", *EXCLUDE, "--all-targets", "--target", "x86_64-pc-windows-gnu"])
     return ok
 
 
-def part_android():
-    return run("Android JNI library, arm64-v8a",
-               ["cargo", "ndk", "-t", "arm64-v8a", "--platform", "30", "build", "--locked",
-                "-p", "smart_explorer_android"])
+def part_windows_gnu():
+    gnu = ["--no-run", "--all-targets", "--target", "x86_64-pc-windows-gnu"]
+    ok = run("Test binaries of every crate, x86_64-pc-windows-gnu",
+             ["cargo", "test", "--locked", *CRATES, *gnu])
+    ok &= run("Programs and their test binaries, x86_64-pc-windows-gnu",
+              ["cargo", "test", "--locked", "-p", "smart_explorer", *gnu])
+    return ok
+
+
+def part_android(abi):
+    ok = run(f"Android JNI library, {abi}",
+             ["cargo", "ndk", "-t", abi, "--platform", "30", "build", "--locked",
+              "-p", "smart_explorer_android"])
+    if abi == "arm64-v8a":
+        ok &= run("Gradle configuration of the Android app",
+                  ["./gradlew", "--no-daemon", "--stacktrace", ":app:help"], cwd=ROOT / "android")
+    return ok
 
 
 def part_agent():
@@ -94,10 +111,13 @@ def part_agent():
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--part", required=True, choices=["workspace", "android", "agent"])
+    parser.add_argument("--part", required=True, choices=["workspace", "windows-gnu", "android", "agent"])
+    parser.add_argument("--abi", choices=["arm64-v8a", "x86_64"], default="arm64-v8a")
     args = parser.parse_args()
     summary(f"## crates-task: {args.part} ({platform.system()})")
-    ok = {"workspace": part_workspace, "android": part_android, "agent": part_agent}[args.part]()
+    parts = {"workspace": part_workspace, "windows-gnu": part_windows_gnu,
+             "android": lambda: part_android(args.abi), "agent": part_agent}
+    ok = parts[args.part]()
     summary("**passed**" if ok else "**failed**")
     sys.exit(0 if ok else 1)
 

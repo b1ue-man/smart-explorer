@@ -57,7 +57,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
-          # The stale search diffs the documentation against the batch base da2646d2.
+          # The stale search diffs the documentation against the batch base 64468178 (da2646d2 before the history rewrite).
           fetch-depth: 0
           persist-credentials: false
 

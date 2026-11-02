@@ -155,9 +155,13 @@ jobs:
           ./test-linux-gui-startup.sh --runtime-only target/debug/smart_explorer
 
       - name: Compile test harness (windows target)
+        # Crates with test-support, the programs without it (D13), as in the
+        # host tests above.
         env:
           CARGO_BUILD_JOBS: 1
-        run: cargo test --workspace --exclude smart_explorer_android --no-run --all-targets --target x86_64-pc-windows-gnu
+        run: |
+          cargo test --workspace --exclude smart_explorer_android --exclude smart_explorer --no-run --all-targets --target x86_64-pc-windows-gnu
+          cargo test -p smart_explorer --no-run --all-targets --target x86_64-pc-windows-gnu
 
       - name: Clippy
         run: |

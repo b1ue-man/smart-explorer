@@ -32,7 +32,7 @@ from .common import FAILED, LICENSE_FILE, LOCK_FILE, NATIVE, NOT_RUN, PASSED, PR
 AUDIT_IGNORES = ("RUSTSEC-2026-0194", "RUSTSEC-2026-0195")
 WORKFLOW = REPO / ".github" / "workflows" / "rechte-desktop-tresore-task.yml"
 ENTRYPOINT = "native/test-rechte-desktop-tresore-task.py"
-BATCH_BASE = "da2646d2"  # code state at the start of the plan (plan.md, head)
+BATCH_BASE = "64468178"  # code state at the start of the plan (plan.md, head: da2646d2 before the history rewrite of 2026-11-01)
 
 # job -> (runs-on, minimum timeout-minutes from D3, needs, places the artifact rdt-prepare)
 JOB_EXPECTATIONS = {

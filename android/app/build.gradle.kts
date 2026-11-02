@@ -12,22 +12,31 @@ val cargoManifest = layout.projectDirectory.file("../../native/Cargo.toml")
 val cargoLock = layout.projectDirectory.file("../../native/Cargo.lock")
 
 /**
- * Reads `version = "x.y.z"` from the `[package]` table of native/Cargo.toml only, so an inline
- * dependency version elsewhere in the manifest can never match. The APK shares the desktop
- * release version; the release bump rewrites exactly this field.
+ * Reads `version = "x.y.z"` from the `[package]` table of native/Cargo.toml, or from
+ * `[workspace.package]` when the package inherits it (`version.workspace = true`, D13), so an
+ * inline dependency version elsewhere in the manifest can never match. The APK shares the
+ * desktop release version; the release bump rewrites exactly this field.
  */
 fun readCargoVersion(): Triple<Int, Int, Int> {
     val cargoToml = providers.fileContents(cargoManifest).asText.orNull
         ?: error("native/Cargo.toml not found or unreadable")
-    val packageHeader = Regex("""(?m)^\[package\]\s*$""").find(cargoToml)
-        ?: error("[package] table not found in native/Cargo.toml")
-    val afterHeader = cargoToml.substring(packageHeader.range.last + 1)
-    val nextHeader = Regex("""(?m)^\[.*\]\s*$""").find(afterHeader)
-    val packageBody = if (nextHeader != null) afterHeader.substring(0, nextHeader.range.first) else afterHeader
-    val versionLine = packageBody.lineSequence()
+    fun tableBody(table: String): String? {
+        val header = Regex("""(?m)^\[""" + Regex.escape(table) + """\]\s*$""").find(cargoToml) ?: return null
+        val afterHeader = cargoToml.substring(header.range.last + 1)
+        val nextHeader = Regex("""(?m)^\[.*\]\s*$""").find(afterHeader)
+        return if (nextHeader != null) afterHeader.substring(0, nextHeader.range.first) else afterHeader
+    }
+    fun versionLine(body: String): String? = body.lineSequence()
         .map { it.trim() }
         .firstOrNull { it.startsWith("version") && it.substringBefore("=").trim() == "version" }
-        ?: error("version field not found inside [package] table of native/Cargo.toml")
+    val packageBody = tableBody("package") ?: error("[package] table not found in native/Cargo.toml")
+    val inherits = packageBody.lineSequence().map { it.replace(" ", "") }.any { it == "version.workspace=true" }
+    val versionLine = if (inherits) {
+        versionLine(tableBody("workspace.package") ?: error("[workspace.package] table not found in native/Cargo.toml"))
+            ?: error("version field not found inside [workspace.package] table of native/Cargo.toml")
+    } else {
+        versionLine(packageBody) ?: error("version field not found inside [package] table of native/Cargo.toml")
+    }
     val versionValue = versionLine.substringAfter("=").trim().trim('"')
     val parts = versionValue.split(".").map { part ->
         part.trim().toIntOrNull() ?: error("Unexpected Cargo version format: '$versionValue'")

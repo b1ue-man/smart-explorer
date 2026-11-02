@@ -400,7 +400,7 @@ fn closure(
 }
 
 /// The packages the S5 dependencies of the plan may have added to the lock
-/// against `da2646d2` (C8, DN22): the image decoders of the background
+/// against `64468178` (`da2646d2` before the history rewrite of 2026-11-01; C8, DN22): the image decoders of the background
 /// picture, together with S3 OE5's (A23).
 const ALLOWED_NEW: [&str; 7] = [
     "zune-jpeg",
@@ -417,14 +417,15 @@ const ALLOWED_NEW: [&str; 7] = [
 fn desktop_task_lock_only_expected_additions() {
     require_task();
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let current = std::fs::read_to_string(manifest.join("Cargo.lock")).unwrap();
+    // The workspace lock two levels above crates/gui (D13).
+    let current = std::fs::read_to_string(manifest.join("../../Cargo.lock")).unwrap();
     let baseline = Command::new("git")
-        .args(["show", "da2646d2:native/Cargo.lock"])
+        .args(["show", "64468178:native/Cargo.lock"])
         .current_dir(&manifest)
         .output()
         .unwrap_or_else(|error| not_run(&format!("git: {error}")));
     if !baseline.status.success() {
-        not_run("da2646d2 fehlt in der Historie (flacher Checkout)");
+        not_run("64468178 fehlt in der Historie (flacher Checkout)");
     }
     let before = lock_packages(&String::from_utf8_lossy(&baseline.stdout));
     let after = lock_packages(&current);
