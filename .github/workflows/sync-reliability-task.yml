@@ -40,17 +40,14 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust toolchain and dependency cache
         id: rust
+        uses: ./.github/actions/native-setup
         with:
           components: rustfmt
-      - uses: Swatinem/rust-cache@v2
-        with:
           workspaces: |
             native
             share-server
-          shared-key: rv1-native
-          cache-on-failure: true
       - name: Prepare actual Linux protocol fixtures
         if: matrix.stage == 'linux'
         shell: bash
@@ -121,15 +118,12 @@ jobs:
           distribution: temurin
           java-version: '17'
           cache: gradle
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust toolchain and dependency cache
         id: rust
+        uses: ./.github/actions/native-setup
         with:
           targets: x86_64-linux-android
-      - uses: Swatinem/rust-cache@v2
-        with:
           workspaces: native
-          shared-key: rv1-ndk
-          cache-on-failure: true
       - uses: actions/cache/restore@v4
         id: outputs
         with:

@@ -51,17 +51,13 @@ jobs:
           [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
           [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
           [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
-          git rev-parse --verify v0.5.190^{commit}
+          git rev-parse --verify 'v0.5.190^{commit}'
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
         with:
           components: clippy
-
-      - uses: Swatinem/rust-cache@v2
-        with:
           workspaces: native
-          shared-key: ideal-dev
-          cache-on-failure: true
 
       - name: Clippy on library, binaries and tests; findings on changed lines fail
         shell: bash
@@ -101,17 +97,14 @@ jobs:
           [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
           [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
+        with:
+          workspaces: native
 
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: native
-          shared-key: ideal-release
-          cache-on-failure: true
 
       - name: Build the candidate se (release profile)
         shell: bash

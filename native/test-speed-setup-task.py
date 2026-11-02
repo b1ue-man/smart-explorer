@@ -1153,25 +1153,34 @@ class Bins:
 
 
 def build_baseline(ledger, work, bins):
+    """The released se of BASELINE_TAG: its release asset, checked against the published .sha256
+    (the same assets as native/test-ideal-task.py). The old version is not built from source here."""
     log = ledger.log_root / "build-baseline.log"
-    tree = Path(work) / "baseline-src"
-    added = run(["git", "worktree", "add", "--detach", tree, BASELINE_TAG], cwd=ROOT, timeout=600, log=log)
-    if not added.ok:
-        ledger.note(f"baseline {BASELINE_TAG}: worktree failed: {added.tail(400)}")
+    folder = Path(work) / "baseline-release"
+    folder.mkdir(parents=True, exist_ok=True)
+    name = f"se{EXE}"
+    repo = os.environ.get("GITHUB_REPOSITORY", "b1ue-man/smart-explorer")
+    for asset in (name, name + ".sha256"):
+        got = run(["gh", "release", "download", BASELINE_TAG, "-R", repo, "-p", asset, "-D", folder, "--clobber"],
+                  cwd=ROOT, timeout=900, log=log)
+        if not got.ok:
+            ledger.results.record("build", f"baseline {BASELINE_TAG}: release asset {asset} downloaded", False,
+                                  got.tail(600))
+            return
+    tokens = (folder / (name + ".sha256")).read_text(encoding="utf-8").split()
+    expected = tokens[0].lower() if tokens else ""
+    digest = hashlib.sha256((folder / name).read_bytes()).hexdigest()
+    ledger.results.record("build", f"baseline {BASELINE_TAG}: release {name} matches its published SHA-256",
+                          bool(expected) and digest == expected, f"{digest} differs from {expected or 'nothing'}")
+    if digest != expected:
         return
-    # The candidate's target folder: the dependencies compile once. The
-    # binary is copied out before the candidate overwrites target/release/se.
-    env = dict(os.environ, CARGO_TARGET_DIR=str(NATIVE / "target"))
-    built = run(["cargo", "build", "--locked", "--release", "--bin", "se"], cwd=tree / "native", env=env,
-                timeout=4 * 3600, log=log)
-    if not built.ok:
-        ledger.note(f"baseline {BASELINE_TAG}: release build failed: {built.tail(600)}")
-        return
+    if not WINDOWS:
+        (folder / name).chmod(0o755)
     (bins.dir / "baseline").mkdir(parents=True, exist_ok=True)
-    bins.baseline = bins.dir / "baseline" / f"se{EXE}"
-    shutil.copy2(NATIVE / "target" / "release" / f"se{EXE}", bins.baseline)
+    bins.baseline = bins.dir / "baseline" / name
+    shutil.copy2(folder / name, bins.baseline)
     commit = run(["git", "rev-parse", BASELINE_TAG + "^{commit}"], cwd=ROOT).stdout.strip()
-    ledger.facts["baseline"] = f"{BASELINE_TAG} ({commit})"
+    ledger.facts["baseline"] = f"{BASELINE_TAG} ({commit}), released {name} sha256 {digest[:16]}"
 
 
 def build_candidate(ledger, bins, *, se=True, lib_tests=False, transfer_task=False):
@@ -1992,7 +2001,6 @@ def main():
         write_summary(ledger, results, f"speed-setup: measure {args.part} ({platform_key()})")
         if not WINDOWS:
             run(["sudo", "-n", "tc", "qdisc", "del", "dev", "lo", "root"], timeout=60)
-        run(["git", "worktree", "remove", "--force", str(work / "baseline-src")], cwd=ROOT, timeout=300)
         shutil.rmtree(work, ignore_errors=True)
     return results.finish()
 

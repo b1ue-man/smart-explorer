@@ -49,13 +49,10 @@ jobs:
           [void][IO.Directory]::CreateDirectory($logs)
           [IO.File]::WriteAllText((Join-Path $logs 'candidate.txt'), $head)
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
         with:
           workspaces: native
-          shared-key: windows-mount-batching
-          cache-on-failure: true
 
       - name: Restore source-bound fixture binary
         id: mount-binary-cache

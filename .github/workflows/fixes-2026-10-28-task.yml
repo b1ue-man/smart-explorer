@@ -56,16 +56,11 @@ jobs:
           [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
           [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
         with:
           components: clippy
-
-      - uses: Swatinem/rust-cache@v2
-        with:
           workspaces: native
-          shared-key: search-recursive-access
-          cache-on-failure: true
-          cache-workspace-crates: true
 
       - name: Clippy on library and binaries; findings on changed lines fail
         shell: bash
@@ -75,7 +70,7 @@ jobs:
           git diff -U0 --no-color v0.5.187 HEAD -- native/src > "$RUNNER_TEMP/diff.txt"
           cd native
           cargo clippy --lib --bins --message-format short 2>&1 \
-            | tr '\\' '/' | tee "$RUNNER_TEMP/clippy.txt"
+            | tr '\134' '/' | tee "$RUNNER_TEMP/clippy.txt"
           status=${PIPESTATUS[0]}
           if grep -E ': error\[E[0-9]+\]|^error\[E[0-9]+\]' "$RUNNER_TEMP/clippy.txt"; then
             echo "::error::compile errors (clippy status $status)"

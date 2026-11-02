@@ -42,11 +42,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y python3-numpy python3-pil
           /usr/bin/python3 -c "import numpy, PIL"
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
         with:
           workspaces: native
-          cache-on-failure: true
       - name: Evaluate the single combined task suite
         timeout-minutes: 110
         run: bash native/test-gui-design-task.sh

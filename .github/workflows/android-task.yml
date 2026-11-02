@@ -60,10 +60,12 @@ jobs:
             exit 1
           fi
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
         with:
           targets: x86_64-pc-windows-gnu
           components: rustfmt, clippy
+          workspaces: native
 
       - name: Install the Windows cross C toolchain
         shell: bash
@@ -72,12 +74,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y mingw-w64 jq
           x86_64-w64-mingw32-gcc --version | head -n 1
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: native
-          shared-key: android-task-host
-          cache-on-failure: true
 
       - name: Run the host part of the task suite (G1, G2, G7)
         shell: bash
@@ -127,15 +123,12 @@ jobs:
             exit 1
           fi
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
         with:
           workspaces: |
             native
             share-server
-          shared-key: android-task-desktop-bins
-          cache-on-failure: true
 
       - name: Build the desktop Share binaries (G5 prerequisites)
         shell: bash
@@ -202,15 +195,11 @@ jobs:
           java-version: "17"
           cache: gradle
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
         with:
           targets: aarch64-linux-android,x86_64-linux-android
-
-      - uses: Swatinem/rust-cache@v2
-        with:
           workspaces: native
-          shared-key: android-task-ndk
-          cache-on-failure: true
 
       - name: Build and check the Android side (G3)
         shell: bash

@@ -32,17 +32,14 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust toolchain and dependency cache
         id: rust
+        uses: ./.github/actions/native-setup
         with:
           components: rustfmt
-      - uses: Swatinem/rust-cache@v2
-        with:
           workspaces: |
             native
             share-server
-          shared-key: rv1-native
-          cache-on-failure: true
       - uses: actions/cache/restore@v4
         id: outputs
         with:
@@ -55,6 +52,8 @@ jobs:
       - name: Run the one focused startup task suite
         shell: pwsh
         timeout-minutes: 170
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: python native/test-startup-regression-task.py
       - uses: actions/cache/save@v4
         if: ${{ always() && steps.outputs.outcome == 'success' }}

@@ -22,8 +22,9 @@ run-name: Connecting is the setup, fast transfers ${{ inputs.candidate_sha }}
 #   measure     (input measure) G5: every ignored `speed_task_` benchmark in
 #               release mode, `repetitions` times, median (remote-bench also
 #               against Nextcloud nextcloud:30-apache, SE_TASK_NEXTCLOUD, with
-#               the 2 GiB chunk-upload case); v0.5.188 built in a
-#               worktree next to the candidate and both measured with the same
+#               the 2 GiB chunk-upload case); v0.5.188 as its released se
+#               (release asset, SHA-256 checked) next to the candidate and both
+#               measured with the same
 #               user-level operations (`se cp`/`se mv`, remote `se cp`, Share
 #               pair) against cp, rsync, robocopy /MT, rclone, lftp, scp,
 #               smbclient and iperf3 on the same data; netem 1 ms / 20 ms;
@@ -94,20 +95,15 @@ jobs:
           [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
           [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
         with:
           components: clippy, rustfmt
+          workspaces: native
 
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: native
-          shared-key: search-recursive-access
-          cache-on-failure: true
-          cache-workspace-crates: true
 
       - name: Clippy on library, binaries and tests; findings on changed lines fail
         shell: bash
@@ -117,7 +113,7 @@ jobs:
           git diff -U0 --no-color v0.5.188 HEAD -- native/src native/tests > "$RUNNER_TEMP/diff.txt"
           cd native
           cargo clippy --lib --bins --tests --message-format short 2>&1 \
-            | tr '\\' '/' | tee "$RUNNER_TEMP/clippy.txt"
+            | tr '\134' '/' | tee "$RUNNER_TEMP/clippy.txt"
           status=${PIPESTATUS[0]}
           if grep -E ': error\[E[0-9]+\]|^error\[E[0-9]+\]' "$RUNNER_TEMP/clippy.txt"; then
             echo "::error::compile errors (clippy status $status)"
@@ -186,18 +182,14 @@ jobs:
           [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
           [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
+        with:
+          workspaces: native
 
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: native
-          shared-key: search-recursive-access
-          cache-on-failure: true
-          cache-workspace-crates: true
 
       - name: Install the X server and the FreeRDP 3 clients (A4, A5)
         if: runner.os == 'Linux'
@@ -291,20 +283,22 @@ jobs:
           - os: windows-2025
             part: windows-remote
     runs-on: ${{ matrix.os }}
-    # Release builds of the candidate and of v0.5.188 plus three repetitions
-    # of every measurement; the driver stops measuring at its own budget so
-    # the report is always written before this limit.
+    # Release build of the candidate and the released v0.5.188 (release asset) plus
+    # three repetitions of every measurement; the driver stops measuring at its own
+    # budget so the report is always written before this limit.
     timeout-minutes: 355
     env:
       CANDIDATE_SHA: ${{ inputs.candidate_sha }}
       CARGO_BUILD_JOBS: 2
       CARGO_INCREMENTAL: 0
       CARGO_TERM_COLOR: never
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
-          # The baseline v0.5.188 is built from its tag in a git worktree.
+          # The baseline v0.5.188 is its released se (release asset, SHA-256 checked);
+          # the tag is checked in the bind step below.
           fetch-depth: 0
           persist-credentials: false
 
@@ -315,9 +309,12 @@ jobs:
           [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
           [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
           [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
-          git rev-parse --verify v0.5.188^{commit}
+          git rev-parse --verify 'v0.5.188^{commit}'
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust toolchain
+        uses: ./.github/actions/native-setup
+        with:
+          cache: 'false'
 
       - uses: actions/setup-python@v6
         with:
@@ -415,15 +412,11 @@ jobs:
           java-version: "17"
           cache: gradle
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
         with:
           targets: aarch64-linux-android,x86_64-linux-android
-
-      - uses: Swatinem/rust-cache@v2
-        with:
           workspaces: native
-          shared-key: android-task-ndk
-          cache-on-failure: true
 
       - name: Android build, APKs and JVM unit tests
         shell: bash

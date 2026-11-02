@@ -15,7 +15,7 @@ run-name: Sync comparison as fast as the storage analysis ${{ inputs.candidate_s
 #               bundles from se-agent/ first
 #   behaviour   Linux: equality and backward compatibility of `se sync compare`
 #               and `se ls -R` between v0.5.189 (plus the two CLI commits
-#               bef433c4 and db93d3a6) and the candidate on generated trees for
+#               55fd7661 and 9aea6715) and the candidate on generated trees for
 #               local-local, local-SFTP, local-SSH agent, local-Direct Share and
 #               Share-Share, also candidate client against a v0.5.189 far side
 #               and the reverse; then the merge rule `se cp --conflict update`
@@ -109,22 +109,17 @@ jobs:
           [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
           [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
           [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
-          git rev-parse --verify v0.5.189^{commit}
+          git rev-parse --verify 'v0.5.189^{commit}'
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
         with:
           components: clippy, rustfmt
+          workspaces: native
 
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: native
-          shared-key: sync-abgleich-dev
-          cache-on-failure: true
-          cache-workspace-crates: true
 
       - name: Clippy on library, binaries and tests; findings on changed lines fail
         shell: bash
@@ -134,7 +129,7 @@ jobs:
           git diff -U0 --no-color v0.5.189 HEAD -- native/src native/tests > "$RUNNER_TEMP/diff.txt"
           cd native
           cargo clippy --lib --bins --tests --message-format short 2>&1 \
-            | tr '\\' '/' | tee "$RUNNER_TEMP/clippy.txt"
+            | tr '\134' '/' | tee "$RUNNER_TEMP/clippy.txt"
           status=${PIPESTATUS[0]}
           if grep -E ': error\[E[0-9]+\]|^error\[E[0-9]+\]' "$RUNNER_TEMP/clippy.txt"; then
             echo "::error::compile errors (clippy status $status)"
@@ -201,20 +196,16 @@ jobs:
           [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
           [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
           [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
-          git rev-parse --verify v0.5.189^{commit}
+          git rev-parse --verify 'v0.5.189^{commit}'
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
+        with:
+          workspaces: native
 
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: native
-          shared-key: sync-abgleich-dev
-          cache-on-failure: true
-          cache-workspace-crates: true
 
       - name: Run the one task entrypoint (functional)
         shell: bash
@@ -274,9 +265,12 @@ jobs:
           [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
           [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
           [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
-          for ref in v0.5.189 bef433c4 db93d3a6; do git rev-parse --verify "$ref^{commit}"; done
+          for ref in v0.5.189 55fd7661e8ac745dcb710b6174a14d653df264db 9aea6715b4135911074d4387ef4db7653a43b3fe; do git rev-parse --verify "$ref^{commit}"; done
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust toolchain
+        uses: ./.github/actions/native-setup
+        with:
+          cache: 'false'
 
       - uses: actions/setup-python@v6
         with:
@@ -339,6 +333,7 @@ jobs:
       CARGO_BUILD_JOBS: 2
       CARGO_INCREMENTAL: 0
       CARGO_TERM_COLOR: never
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -354,9 +349,12 @@ jobs:
           [[ "$CANDIDATE_SHA" =~ ^[a-fA-F0-9]{40}$ ]]
           [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
           [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
-          for ref in v0.5.189 bef433c4 db93d3a6; do git rev-parse --verify "$ref^{commit}"; done
+          for ref in v0.5.189 55fd7661e8ac745dcb710b6174a14d653df264db 9aea6715b4135911074d4387ef4db7653a43b3fe; do git rev-parse --verify "$ref^{commit}"; done
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust toolchain
+        uses: ./.github/actions/native-setup
+        with:
+          cache: 'false'
 
       - uses: actions/setup-python@v6
         with:
@@ -441,15 +439,11 @@ jobs:
           java-version: "17"
           cache: gradle
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
         with:
           targets: aarch64-linux-android,x86_64-linux-android
-
-      - uses: Swatinem/rust-cache@v2
-        with:
           workspaces: native
-          shared-key: android-task-ndk
-          cache-on-failure: true
 
       - name: Android build, APKs and JVM unit tests
         shell: bash

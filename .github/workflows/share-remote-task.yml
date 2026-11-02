@@ -56,9 +56,8 @@ jobs:
             exit 1
           fi
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
         with:
           workspaces: |
             native

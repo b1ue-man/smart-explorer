@@ -44,13 +44,10 @@ jobs:
               throw 'Requested candidate, workflow ref and checkout differ.'
           }
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
         with:
           workspaces: native
-          shared-key: windows-mount-batching
-          cache-on-failure: true
 
       - uses: actions/cache/restore@v4
         with:

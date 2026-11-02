@@ -61,10 +61,14 @@ jobs:
             exit 1
           fi
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
         with:
           targets: x86_64-pc-windows-gnu
           components: rustfmt, clippy
+          workspaces: |
+            native
+            share-server
 
       - name: Install the Windows cross C toolchain and the end-to-end prerequisites
         shell: bash
@@ -74,13 +78,6 @@ jobs:
           sudo apt-get install -y mingw-w64 jq
           x86_64-w64-mingw32-gcc --version | head -n 1
           jq --version
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            native
-            share-server
-          cache-on-failure: true
 
       - name: Run the single task-level suite
         shell: bash
@@ -132,13 +129,10 @@ jobs:
             exit 1
           fi
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
         with:
           workspaces: native
-          shared-key: windows-mount-batching
-          cache-on-failure: true
 
       - name: Run the single task-level suite (Windows milestones)
         shell: bash

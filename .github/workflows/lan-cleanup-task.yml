@@ -57,10 +57,14 @@ jobs:
             exit 1
           fi
 
-      - uses: dtolnay/rust-toolchain@stable
+      # The fix loop reruns this same suite; keep the dependency build
+      # when a candidate fails so only the changed crate is rebuilt.
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
         with:
           targets: x86_64-pc-windows-gnu
           components: rustfmt, clippy
+          workspaces: native
 
       - name: Install the Windows cross C toolchain for the target gate
         shell: bash
@@ -69,13 +73,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y mingw-w64
           x86_64-w64-mingw32-gcc --version | head -n 1
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: native
-          # The fix loop reruns this same suite; keep the dependency build
-          # when a candidate fails so only the changed crate is rebuilt.
-          cache-on-failure: true
 
       - name: Run the single task-level suite
         shell: bash

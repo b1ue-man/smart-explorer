@@ -45,19 +45,15 @@ jobs:
           [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
           [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Reuse the preceding host-library task's dependency/incremental output.
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
+        with:
+          workspaces: native
 
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: native
-          # Reuse the preceding host-library task's dependency/incremental output.
-          shared-key: search-recursive-access
-          cache-on-failure: true
-          cache-workspace-crates: true
 
       - uses: actions/cache/restore@v4
         with:

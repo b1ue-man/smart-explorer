@@ -69,19 +69,16 @@ jobs:
           [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
           [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Registry and installed tools (cargo-audit, cargo-about) only; a separate key keeps
+      # this almost empty target folder away from the build caches of the other jobs.
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
+        with:
+          workspaces: native
 
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: native
-          # Registry and installed tools (cargo-audit, cargo-about) only; a separate key keeps
-          # this almost empty target folder away from the build caches of the other jobs.
-          shared-key: rechte-desktop-tresore-prepare
-          cache-on-failure: true
 
       - name: Run the one task entrypoint (lock, audit, licenses, static)
         shell: bash
@@ -153,7 +150,12 @@ jobs:
           name: rdt-prepare
           path: ${{ github.workspace }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
+        with:
+          workspaces: |
+            native
+            share-server
 
       - uses: actions/setup-python@v6
         with:
@@ -165,14 +167,6 @@ jobs:
         with:
           distribution: temurin
           java-version: '25'
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            native
-            share-server
-          shared-key: rechte-desktop-tresore
-          cache-on-failure: true
 
       - name: Load sch_netem for the netem checks of screen-pair (U41)
         continue-on-error: true
@@ -237,17 +231,14 @@ jobs:
           name: rdt-prepare
           path: ${{ github.workspace }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
+        with:
+          workspaces: native
 
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: native
-          shared-key: rechte-desktop-tresore
-          cache-on-failure: true
 
       # Missing fuse3 turns the FUSE entries into "not run" with the reason. gdb gives a worker that does not stop
       # its user stacks in the failure message (fuse_task_daemon_tests.rs, worker_state).
@@ -320,17 +311,14 @@ jobs:
           name: rdt-prepare
           path: ${{ github.workspace }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
+        with:
+          workspaces: native
 
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: native
-          shared-key: rechte-desktop-tresore
-          cache-on-failure: true
 
       - name: Run the one task entrypoint
         shell: bash
@@ -390,17 +378,14 @@ jobs:
           name: rdt-prepare
           path: ${{ github.workspace }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
+        with:
+          workspaces: native
 
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: native
-          shared-key: rechte-desktop-tresore
-          cache-on-failure: true
 
       - name: Install the X11 desktop tools (D3 linux-desktop)
         continue-on-error: true
@@ -470,17 +455,14 @@ jobs:
           name: rdt-prepare
           path: ${{ github.workspace }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
+        with:
+          workspaces: native
 
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: native
-          shared-key: rechte-desktop-tresore
-          cache-on-failure: true
 
       - name: Install sway and the wlroots portal (D3 linux-wayland)
         continue-on-error: true
@@ -553,17 +535,14 @@ jobs:
           name: rdt-prepare
           path: ${{ github.workspace }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
+        with:
+          workspaces: native
 
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: native
-          shared-key: rechte-desktop-tresore
-          cache-on-failure: true
 
       - name: Install GNOME Shell and DING (D3 linux-gnome; not run when the shell does not start)
         continue-on-error: true
@@ -631,19 +610,16 @@ jobs:
           name: rdt-prepare
           path: ${{ github.workspace }}
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-
-      - uses: Swatinem/rust-cache@v2
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
         with:
           workspaces: |
             native
             share-server
-          shared-key: rechte-desktop-tresore
-          cache-on-failure: true
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
 
       # Dokany: the stages install it only from SE_TASK_DOKANY_MSI with a matching
       # SE_TASK_DOKANY_MSI_SHA256; without both, the Dokany entries are "not run".
@@ -718,19 +694,16 @@ jobs:
           name: rdt-prepare
           path: ${{ github.workspace }}
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-
-      - uses: Swatinem/rust-cache@v2
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
         with:
           workspaces: |
             native
             share-server
-          shared-key: rechte-desktop-tresore
-          cache-on-failure: true
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
 
       - name: Enable Media Foundation without a restart (S4 K6; not run when it fails)
         continue-on-error: true
@@ -795,17 +768,14 @@ jobs:
           name: rdt-prepare
           path: ${{ github.workspace }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
+        with:
+          workspaces: native
 
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: native
-          shared-key: rechte-desktop-tresore
-          cache-on-failure: true
 
       - name: Run the one task entrypoint
         shell: bash
@@ -865,19 +835,16 @@ jobs:
           name: rdt-prepare
           path: ${{ github.workspace }}
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-
-      - uses: Swatinem/rust-cache@v2
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
         with:
           workspaces: |
             native
             share-server
-          shared-key: rechte-desktop-tresore
-          cache-on-failure: true
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
 
       - name: Run the one task entrypoint (Linux se and share server, development profile)
         shell: bash
@@ -955,19 +922,15 @@ jobs:
           cache: gradle
 
       # D3 Bauregel: the Android library only for the emulator ABI.
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
         with:
           targets: x86_64-linux-android
+          workspaces: native
 
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: native
-          shared-key: rechte-desktop-tresore-android
-          cache-on-failure: true
 
       - name: Run the one task entrypoint (APKs, JVM and Robolectric tests)
         shell: bash
@@ -1258,17 +1221,14 @@ jobs:
           name: rdt-desktop-bins
           path: ${{ runner.temp }}/rdt-desktop-bins
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
+        with:
+          workspaces: native
 
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: native
-          shared-key: rechte-desktop-tresore
-          cache-on-failure: true
 
       - name: Install the reference tools and load the shaping module
         shell: bash
@@ -1337,17 +1297,14 @@ jobs:
           name: rdt-prepare
           path: ${{ github.workspace }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
+        with:
+          workspaces: native
 
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: native
-          shared-key: rechte-desktop-tresore
-          cache-on-failure: true
 
       - name: Install the reference tools
         shell: bash
@@ -1415,17 +1372,14 @@ jobs:
           name: rdt-prepare
           path: ${{ github.workspace }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
+        with:
+          workspaces: native
 
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: native
-          shared-key: rechte-desktop-tresore
-          cache-on-failure: true
 
       - name: Install fio (the requirements against it are not run when this fails)
         continue-on-error: true

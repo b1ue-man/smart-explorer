@@ -1,0 +1,68 @@
+# Shared setup of the native task workflows (.github/workflows/*-task.yml).
+#
+# Purpose: one place for the Rust toolchain and the dependency cache, so that every
+# task suite installs the same stable toolchain and shares one dependency cache per
+# runner OS. The cache holds the dependencies of the listed Cargo workspaces, never
+# their own crates (cache-workspace-crates keeps its default false). Its key is built
+# from the runner OS and native/Cargo.lock, not from a suite or crate name.
+#
+# Call it after actions/checkout, so that native/Cargo.lock exists in the workspace.
+# A job that must not add cache entries passes `cache: 'false'` (toolchain only).
+name: Native task setup
+description: Rust toolchain (stable, requested targets and components) and one dependency cache per runner OS.
+
+inputs:
+  targets:
+    description: Comma-separated rustup targets to install; empty installs none.
+    required: false
+    default: ''
+  components:
+    description: Comma-separated rustup components to install; empty installs none.
+    required: false
+    default: ''
+  workspaces:
+    description: Newline-separated Cargo workspace directories, relative to the repository root, whose dependencies are cached.
+    required: false
+    default: native
+  cache:
+    description: 'true restores and saves the dependency cache; false sets up the toolchain only.'
+    required: false
+    default: 'true'
+
+outputs:
+  cachekey:
+    description: Short rustc version hash from dtolnay/rust-toolchain, for actions/cache keys in the calling job.
+    value: ${{ steps.toolchain.outputs.cachekey }}
+
+runs:
+  using: composite
+  steps:
+    - name: Rust toolchain
+      id: toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ inputs.targets }}
+        components: ${{ inputs.components }}
+
+    # hashFiles() is not in the documented context table for composite steps, so the
+    # native/Cargo.lock hash is computed here with sha256sum (Git Bash on Windows).
+    - name: Cargo.lock hash for the cache key
+      id: lock
+      if: ${{ inputs.cache == 'true' }}
+      shell: bash
+      run: |
+        if [[ -f native/Cargo.lock ]]; then
+          echo "hash=$(sha256sum native/Cargo.lock | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+        else
+          echo "hash=missing" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Dependency cache (per runner OS, keyed by native/Cargo.lock)
+      if: ${{ inputs.cache == 'true' }}
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: ${{ inputs.workspaces }}
+        # Swatinem adds the rustc and manifest hashes by default; they stay in the key.
+        key: ${{ runner.os }}-${{ steps.lock.outputs.hash }}
+        shared-key: native-deps
+        cache-on-failure: true

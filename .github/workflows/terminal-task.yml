@@ -63,9 +63,14 @@ jobs:
           [[ "${CANDIDATE_SHA,,}" == "${GITHUB_SHA,,}" ]]
           [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Reuse the preceding host-library tasks' dependency/incremental output.
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
         with:
           components: rustfmt
+          workspaces: |
+            native
+            share-server
 
       - uses: actions/setup-python@v6
         with:
@@ -98,16 +103,6 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: python -m pip install pywinpty==3.0.5
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            native
-            share-server
-          # Reuse the preceding host-library tasks' dependency/incremental output.
-          shared-key: search-recursive-access
-          cache-on-failure: true
-          cache-workspace-crates: true
 
       - name: Run the one task entrypoint
         shell: bash
@@ -158,15 +153,11 @@ jobs:
           java-version: "17"
           cache: gradle
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust toolchain and dependency cache
+        uses: ./.github/actions/native-setup
         with:
           targets: aarch64-linux-android,x86_64-linux-android
-
-      - uses: Swatinem/rust-cache@v2
-        with:
           workspaces: native
-          shared-key: android-task-ndk
-          cache-on-failure: true
 
       - name: Build and check the Android side (facade, screens, NDK library, JVM tests)
         shell: bash

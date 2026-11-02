@@ -25,7 +25,7 @@ Jobs (--job):
              se-agent bundles from se-agent/ (native/build-agent-bundles.sh)
   behaviour  (Linux) equality and backward compatibility of the sync
              comparison and the recursive listing: v0.5.189 plus the two CLI
-             commits bef433c4 (`se sync compare`) and db93d3a6 (`se ls -R`)
+             commits 55fd7661 (`se sync compare`) and 9aea6715 (`se ls -R`)
              next to the candidate, on generated trees (files, folders, hidden
              dot files, links, a FIFO, an unreadable folder, a mounted
              sub-tree) for local-local, local-SFTP (no agent), local-SSH with
@@ -105,7 +105,8 @@ ROOT = NATIVE.parent
 WINDOWS = os.name == "nt"
 EXE = ".exe" if WINDOWS else ""
 BASELINE_TAG = "v0.5.189"
-CLI_COMMITS = ("bef433c4", "db93d3a6")
+CLI_COMMITS = ("55fd7661e8ac745dcb710b6174a14d653df264db",  # `se sync compare`
+               "9aea6715b4135911074d4387ef4db7653a43b3fe")  # `se ls -R`
 TEST_PREFIX = "abgleich_task_"
 BUNDLES = ("se-agent-x86_64-linux-musl", "se-agent-aarch64-linux-musl")
 AFFECTED = ("bisync::", "rscan::", "scanner::", "share::", "agent::", "agent_proto::", "transfer::", "copy::",
@@ -606,12 +607,21 @@ def build_variants(ctx, release, hybrids):
         ctx.facts[f"agent bundle of {label}"] = ctx.bundle_sha.get(label, "unknown")[:16]
 
 
-# GitHub refuses a git blob above 100 MiB (GH001), and the complete release commits every feed payload
-# (docs/GOTCHAS.md, "Every feed payload must stay below 100 MiB"). The growth of the release `se` from
-# v0.5.189 (with the two CLI commits) to the candidate, built here with the same toolchain, estimates the
-# growth of the release payloads before the three-hour release build would find it.
+# GitHub refuses a git blob above 100 MiB (GH001). Until 2026-11-02 the complete release committed every feed
+# payload; the sizes used here are those of the v0.5.189 release assets with the same names (assumption: an
+# asset carries the same bytes as its former payload). The growth of the release `se` from v0.5.189 (with the
+# two CLI commits) to the candidate, built here with the same toolchain, estimates the growth of the release
+# payloads before the three-hour release build would find it.
 GITHUB_BLOB_LIMIT = 100 * 1024 * 1024
 PAYLOADS = ("smart_explorer.exe", "se.exe") if WINDOWS else ("smart_explorer", "se")
+
+
+def release_sizes(tag):
+    """Name -> size in bytes of every asset of the GitHub release `tag` (gh api; GH_TOKEN is set in the job)."""
+    repo = os.environ.get("GITHUB_REPOSITORY", "b1ue-man/smart-explorer")
+    ran = run(["gh", "api", f"repos/{repo}/releases/tags/{tag}"], cwd=ROOT, timeout=300)
+    ensure(ran.ok, f"gh api release {tag}: {ran.tail(400)}")
+    return {asset["name"]: int(asset["size"]) for asset in json.loads(ran.stdout)["assets"]}
 
 
 def stage_size(ctx):
@@ -620,17 +630,16 @@ def stage_size(ctx):
         return
     growth = new.stat().st_size - old.stat().st_size
     ctx.facts["release se growth over v0.5.189"] = f"{growth / 2**20:+.2f} MiB ({growth:+d} bytes)"
+    sizes = release_sizes(BASELINE_TAG)
     for payload in PAYLOADS:
-        sized = subprocess.run(["git", "cat-file", "-s", f"{BASELINE_TAG}:release-native/update-feed/{payload}"],
-                               cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        ensure(sized.returncode == 0, f"git cat-file -s {payload}: {sized.stderr[:300]}")
-        released = int(sized.stdout.strip())
+        ensure(payload in sizes, f"release {BASELINE_TAG} has no asset {payload}")
+        released = sizes[payload]
         projected = released + growth
         margin = GITHUB_BLOB_LIMIT - projected
-        ctx.facts[f"{payload} projected"] = (f"{projected / 2**20:.2f} MiB (v0.5.189 {released / 2**20:.2f} MiB, "
-                                             f"{margin / 2**20:.2f} MiB below the limit)")
-        ctx.results.record("size", f"{payload}: v0.5.189 size plus the growth of the release se stays below "
-                           "GitHub's 100 MiB blob limit (estimate)", margin > 0,
+        ctx.facts[f"{payload} projected"] = (f"{projected / 2**20:.2f} MiB (v0.5.189 release asset "
+                                             f"{released / 2**20:.2f} MiB, {margin / 2**20:.2f} MiB below the limit)")
+        ctx.results.record("size", f"{payload}: v0.5.189 release asset size plus the growth of the release se stays "
+                           "below GitHub's 100 MiB blob limit (estimate)", margin > 0,
                            f"projected {projected} bytes, limit {GITHUB_BLOB_LIMIT}")
         if 0 < margin < 2 * 2**20:
             note(ctx.notes, f"{payload}: less than 2 MiB below the 100 MiB limit by this estimate; a size "

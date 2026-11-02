@@ -9,6 +9,7 @@ import subprocess
 import time
 
 ROOT = Path(__file__).resolve().parent.parent
+PREVIOUS_TAG = "v0.5.169"
 SELECTORS = [
     "startup_regression_task_",
     "review_task_directory_handles_create_private_children_without_replacement",
@@ -26,17 +27,25 @@ def worker_pids(paths):
             if row.get("ExecutablePath") and Path(row["ExecutablePath"]).resolve() in paths}
 
 
+def released_asset(tag, name, folder):
+    """One asset of the GitHub release `tag`, downloaded into `folder` with gh (GH_TOKEN is set in the job)."""
+    folder.mkdir(parents=True, exist_ok=True)
+    repo = os.environ.get("GITHUB_REPOSITORY", "b1ue-man/smart-explorer")
+    subprocess.run(["gh", "release", "download", tag, "-R", repo, "-p", name, "-D", str(folder), "--clobber"],
+                   cwd=ROOT, check=True, timeout=900)
+    return folder / name
+
+
 def runtime(shared, cli, logs, env):
     data = logs / "runtime-data"
     data.mkdir()
     runtime_env = dict(env, APPDATA=str(data), LOCALAPPDATA=str(data / "local"))
     previous = logs / "previous-se.exe"
-    with previous.open("wb") as stream:
-        subprocess.run(["git", "show", "v0.5.169:release-native/update-feed/se.exe"],
-                       cwd=ROOT, stdout=stream, check=True, timeout=120)
-    sidecar = shared.output(["git", "show", "v0.5.169:release-native/update-feed/se.exe.sha256"])
-    if shared.sha(previous) != sidecar.split()[0]:
-        raise RuntimeError("Previous published CLI does not match its committed hash.")
+    released_asset(PREVIOUS_TAG, "se.exe", logs).replace(previous)
+    tokens = released_asset(PREVIOUS_TAG, "se.exe.sha256", logs).read_text(encoding="utf-8").split()
+    expected = tokens[0].lower() if tokens else ""
+    if not expected or shared.sha(previous).lower() != expected:
+        raise RuntimeError(f"Previous published CLI {PREVIOUS_TAG} does not match its published hash.")
     paths = {cli.resolve(), previous.resolve()}
     initial = worker_pids(paths)
     sync = data / "smart_explorer" / "sync"
