@@ -118,7 +118,7 @@ jobs:
             New-Item -ItemType Directory -Force $dir | Out-Null
             Set-Item -Path "env:$($pair[0])" -Value $dir
           }
-          cargo test --release --lib --locked --no-run
+          cargo test --release --workspace --exclude smart_explorer_android --exclude smart_explorer --lib --locked --no-run
           if ($LASTEXITCODE -ne 0) { throw "Building the library tests failed." }
           $names = @("speed_task_share_large_file_512m", "speed_task_share_small_files_4k",
                      "speed_task_vault_stream_throughput", "speed_task_zip_extract_throughput",
@@ -129,7 +129,7 @@ jobs:
             foreach ($rep in 1..3) {
               # cargo reports on stderr; that must not stop the step.
               $ErrorActionPreference = "Continue"
-              $output = cargo test --release --lib --locked -- --ignored $name --nocapture --test-threads=1 2>&1 | Out-String
+              $output = cargo test --release --workspace --exclude smart_explorer_android --exclude smart_explorer --lib --locked -- --ignored $name --nocapture --test-threads=1 2>&1 | Out-String
               $code = $LASTEXITCODE
               $ErrorActionPreference = "Stop"
               if ($code -ne 0) { Write-Host $output; throw "$name failed with exit code $code." }

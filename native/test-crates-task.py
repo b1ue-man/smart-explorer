@@ -85,8 +85,21 @@ def part_workspace():
     # dev-dependencies); the programs and their integration tests build in a
     # separate invocation without it, so `se`/`smart_explorer` started by
     # native/tests run the production paths as in a release.
+    # The local loopback fixtures of the copy/paste and Windows-remote tests
+    # refuse to start unless their switch is set; they need nothing else.
+    env = dict(os.environ, SMART_EXPLORER_COPY_PASTE_TASK="1", SMART_EXPLORER_WINDOWS_REMOTE_TASK="1")
+    # Tests that need resources only their own suites provide: real protocol
+    # servers (SE_SYNC_PROVIDER_MANIFEST), a live Google account
+    # (SE_DRIVE_TEST_CLIENT_ID) and a candidate se binary installed by the
+    # remote runner (batches P13 retirement).
+    skips = ["sync_reliability_task_provider", "sync_reliability_task_options_share_private_versions",
+             "sync_reliability_task_old_jobs_crossremote", "sync_reliability_task_live_",
+             "batches_p13_linux_installed_cli_retirement_reexecs_only_with_its_bound_root",
+             "batches_p13_linux_retirement_handoff_cannot_select_a_foreign_installation"]
+    summary("Not run here, they need their suite's resources: " + ", ".join(f"`{name}`" for name in skips))
+    skip_args = [arg for name in skips for arg in ("--skip", name)]
     ok = run("Tests of every crate",
-             ["cargo", "test", "--locked", *CRATES, "--no-fail-fast", "--", *threads])
+             ["cargo", "test", "--locked", *CRATES, "--no-fail-fast", "--", *threads, *skip_args], env=env)
     ok &= run("Programs and their integration tests",
               ["cargo", "test", "--locked", "-p", "smart_explorer", "--no-fail-fast", "--", *threads])
     return ok

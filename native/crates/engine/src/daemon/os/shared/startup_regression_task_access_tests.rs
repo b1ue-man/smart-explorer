@@ -5,6 +5,7 @@
 use crate::local_access::platform::directory_handle::create::private_security::{
     descriptor, win, PrivateSecurity, ACL_REVISION,
 };
+use std::io::Write;
 use std::mem::size_of;
 use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
