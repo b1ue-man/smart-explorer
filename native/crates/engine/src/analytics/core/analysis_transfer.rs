@@ -136,7 +136,7 @@ impl AnalysisReceiver {
                         .nodes
                         .saturating_mul(2 * std::mem::size_of::<super::SizeNode>() as u64),
                 );
-                if self.node_budget.is_some() && memory > crate::transfer::memory_budget() as u64 {
+                if self.node_budget.is_some() && memory > crate::host::memory_budget() as u64 {
                     return Err(invalid(
                         "Analyse-Ergebnis überschreitet das Speicherbudget des Empfängers",
                     ));

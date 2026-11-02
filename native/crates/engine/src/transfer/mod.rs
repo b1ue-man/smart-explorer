@@ -14,8 +14,6 @@ pub mod access;
 mod cancel;
 #[path = "os/shared/clipboard_parallel.rs"]
 mod clipboard_parallel;
-#[path = "core/compress_policy.rs"]
-pub mod compress_policy;
 #[path = "os/shared/copy_commit.rs"]
 mod copy_commit;
 #[path = "os/shared/download_file.rs"]
@@ -59,14 +57,6 @@ mod lane;
 pub mod limiter;
 #[path = "os/shared/local_stage.rs"]
 mod local_stage;
-#[path = "os/shared/memory.rs"]
-mod memory;
-#[cfg(windows)]
-#[path = "os/windows.rs"]
-mod platform;
-#[cfg(not(windows))]
-#[path = "os/unix.rs"]
-mod platform;
 #[path = "os/shared/progress.rs"]
 mod progress;
 #[path = "os/shared/read_pipeline.rs"]
@@ -77,10 +67,6 @@ mod remote_copy;
 pub mod segments;
 #[path = "os/shared/selection.rs"]
 mod selection;
-#[path = "core/sensor_parse.rs"]
-pub mod sensor_parse;
-#[path = "os/shared/sensors.rs"]
-pub mod sensors;
 #[path = "os/shared/snapshot_download.rs"]
 mod snapshot_download;
 #[path = "os/shared/temp.rs"]
@@ -115,9 +101,6 @@ mod cancel_tests;
 #[path = "os/shared/clipboard_parallel_tests.rs"]
 mod clipboard_parallel_tests;
 #[cfg(test)]
-#[path = "core/compress_policy_tests.rs"]
-mod compress_policy_tests;
-#[cfg(test)]
 #[path = "os/shared/copy_paste_task_backend.rs"]
 mod copy_paste_task_backend;
 #[cfg(test)]
@@ -129,9 +112,6 @@ mod limiter_tests;
 #[cfg(test)]
 #[path = "core/segments_tests.rs"]
 mod segments_tests;
-#[cfg(test)]
-#[path = "core/sensor_parse_tests.rs"]
-mod sensor_parse_tests;
 #[cfg(test)]
 #[path = "os/shared/tests.rs"]
 mod tests;
@@ -165,7 +145,11 @@ pub use lane::{
 };
 pub use limiter::Limiter;
 pub use local_stage::download_to_id;
-pub use memory::{memory_budget, reserve_memory, try_reserve_memory, MemoryReservation};
+// The host adapter, memory budget, sensors and compression policy live in
+// `crate::host` (core layer, D13); these lines keep their transfer paths.
+use crate::host::platform;
+pub use crate::host::{compress_policy, sensor_parse, sensors};
+pub use crate::host::{memory_budget, reserve_memory, try_reserve_memory, MemoryReservation};
 pub use platform::available_memory;
 pub use platform::{
     canonical_folder, lower_thread_priority, physical_memory, replace_file_atomic,

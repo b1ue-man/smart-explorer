@@ -16,7 +16,6 @@
 //! a source that changed since the listing goes alone with what it is now.
 use super::super::flow::classify_error;
 use super::super::flow_control::OpOutcome;
-use super::super::memory::reserve_memory;
 use super::batch::{Attempt, Failures};
 use super::batch_put::{host_evidence, packet_lost, settle, without_evidence, Delivery};
 use super::file_evidence::HostEvidence;
@@ -26,6 +25,7 @@ use super::queue::FileWork;
 use super::view::JobView;
 use super::worker::run_file;
 use super::Engine;
+use crate::host::reserve_memory;
 use crate::vfs::{Backend, BatchGet, BatchLimits, BatchPut, EvidencePutOutcome, FileEvidence};
 use gather::{Gather, Slot};
 use std::io::{self, Read};

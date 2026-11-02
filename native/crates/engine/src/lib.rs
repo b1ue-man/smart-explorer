@@ -30,6 +30,7 @@ pub mod folder_index;
 pub mod format;
 pub mod ftp;
 pub mod gdrive;
+pub mod host;
 pub mod host_trash;
 pub mod keep_awake;
 pub mod licenses;

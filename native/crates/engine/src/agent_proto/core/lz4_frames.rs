@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use lz4_flex::block::{compress_into, decompress_into, get_maximum_output_size};
 
-use crate::transfer::compress_policy::{Policy, PROBE_BYTES};
+use crate::host::compress_policy::{Policy, PROBE_BYTES};
 
 use super::super::super::types::{Frame, CHUNK};
 use super::super::{bad, Reader};
@@ -114,7 +114,7 @@ pub fn raw_len(block: &[u8]) -> io::Result<usize> {
 /// is assumed while they cannot tell (the policy's default for an unknown
 /// value).
 pub fn free_cores() -> f64 {
-    crate::transfer::sensors::latest()
+    crate::host::sensors::latest()
         .free_cores()
         .unwrap_or(1.0)
 }

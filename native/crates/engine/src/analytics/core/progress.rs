@@ -107,7 +107,7 @@ impl Progress {
         }
         // Names, nodes and the vectors retaining their children. The report
         // also checks the actual encoded size before allocating the tree.
-        (crate::transfer::memory_budget() as u64 / 128).clamp(2, super::tree_transfer::MAX_NODES)
+        (crate::host::memory_budget() as u64 / 128).clamp(2, super::tree_transfer::MAX_NODES)
     }
 
     pub fn set_node_budget(&self, nodes: u64) {

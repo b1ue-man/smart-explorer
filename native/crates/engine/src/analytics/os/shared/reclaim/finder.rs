@@ -28,7 +28,7 @@ const CANDIDATE_TEXT_CEILING: u64 = 1024 * 1024 * 1024;
 /// Candidate path text the device can hold: 1/64 of its memory (paths are the
 /// only data a search keeps per file), at least the former fixed budget.
 pub fn candidate_text_budget() -> u64 {
-    crate::transfer::physical_memory()
+    crate::host::physical_memory()
         .map_or(MAX_CANDIDATE_TEXT_BYTES, |memory| memory / 64)
         .clamp(MAX_CANDIDATE_TEXT_BYTES, CANDIDATE_TEXT_CEILING)
 }

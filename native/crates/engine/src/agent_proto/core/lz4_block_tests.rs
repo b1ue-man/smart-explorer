@@ -8,7 +8,7 @@ use super::{random, text};
 use crate::agent_proto::{
     credit_cost, pack_lz4, pack_raw, raw_len, unpack, BlockSender, Frame, MAX_RAW,
 };
-use crate::transfer::compress_policy::{Policy, METER_WINDOW};
+use crate::host::compress_policy::{Policy, METER_WINDOW};
 
 #[test]
 fn speed_task_lz4_block_roundtrip() {

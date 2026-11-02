@@ -12,11 +12,11 @@ use super::super::engine_policy::{
 };
 use super::super::flow::classify_error;
 use super::super::flow_control::OpOutcome;
-use super::super::memory::reserve_memory;
 use super::folders::FolderError;
 use super::ops::{self, nanos, At, Carry, Meter, OpError, Outcome, COPY_BUFFER};
 use super::queue::{FileWork, Work, WorkerSlot};
 use super::Engine;
+use crate::host::reserve_memory;
 use std::io;
 use std::time::{Duration, Instant};
 

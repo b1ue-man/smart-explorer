@@ -13,7 +13,7 @@ use crate::agent_proto::{
     server_version_with, unpack, write_frame, BlockSender, Frame, ServerFeatures, CHUNK,
     CREDIT_INITIAL, MAX_RAW,
 };
-use crate::transfer::compress_policy::{Policy, METER_WINDOW};
+use crate::host::compress_policy::{Policy, METER_WINDOW};
 
 const MIB: usize = 1024 * 1024;
 

@@ -7,7 +7,6 @@
 use super::super::engine_names::{base_name, parent_rel};
 use super::super::flow::classify_error;
 use super::super::flow_control::OpOutcome;
-use super::super::memory::reserve_memory;
 use super::batch::{Attempt, Failures};
 use super::file_evidence::HostEvidence;
 use super::file_recovery::PacketIntent;
@@ -16,6 +15,7 @@ use super::queue::FileWork;
 use super::source::LocalSource;
 use super::worker::{finished, run_file};
 use super::Engine;
+use crate::host::reserve_memory;
 use crate::vfs::{Backend, BatchPut, BatchPutOutcome, EvidencePutOutcome, FileEvidence};
 use std::io::{self, Read};
 use std::sync::atomic::{AtomicBool, Ordering};

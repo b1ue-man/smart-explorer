@@ -10,11 +10,11 @@
 use super::super::flow::{acquire_pair, classify_error};
 use super::super::flow_control::OpOutcome;
 use super::super::limiter::OpAccounts;
-use super::super::memory::reserve_memory;
 use super::super::segments::{Ledger, SegmentSizer};
 use super::ops::{self, nanos, Meter, OpError};
 use super::queue::Work;
 use super::{lock, Engine};
+use crate::host::reserve_memory;
 use crate::vfs::Backend;
 use std::collections::HashMap;
 use std::io::{self, Read};

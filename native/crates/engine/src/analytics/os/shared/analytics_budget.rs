@@ -121,11 +121,11 @@ fn retention_nodes() -> u64 {
     // A retained directory may add one aggregate. Decoder Vec capacity may
     // double the node storage; reserve half the memory for those worst cases.
     let reserve = 4 * (2 * std::mem::size_of::<super::SizeNode>() as u64 + 17);
-    (crate::transfer::memory_budget() as u64 / reserve).clamp(1, MAX_ANALYTICS_NODES)
+    (crate::host::memory_budget() as u64 / reserve).clamp(1, MAX_ANALYTICS_NODES)
 }
 
 fn retention_text() -> u64 {
-    (crate::transfer::memory_budget() as u64 / 4)
+    (crate::host::memory_budget() as u64 / 4)
         .min(crate::analytics::tree_transfer::MAX_BYTES / 2)
 }
 
