@@ -78,7 +78,7 @@ nicht im Repo sichern, sondern außerhalb auf dem Server.
 | D10 | (erledigt. Jobs: Messlauf 41356400264, Windows 66,4 → 19,7 min, Linux 46,9 → 19,7 min, rustc-Spitze 9,0/9,9 GiB; Android jetzt ebenfalls ein Job je Kern. LTO: Messlauf 41376180921 hält ThinLTO über alle Crates, weil Cargos Standard unter Windows keine Bauzeit spart (23,8 statt 23,7 min für die vier Programme), unter Linux 8,9 min spart, aber Tresor bis 85 %, Zip ~30 % und Share-Kleindateien ~35 % langsamer macht. cargo-about als fertiges Programm (SHA-256 gebunden) und Lizenzliste einmal im prepare-Job, Android übernimmt sie samt Agent-Bundles. Share-Server als Workspace-Mitglied entfällt: native nutzt iroh-relay 1.3.0, der Share-Server die vendorte 1.0.0, Cargo löst keine zwei semver-kompatiblen Versionen in einem Workspace auf; Gewinn wären ~2 min. Release- und Messlauf kompilieren dieselben 586 Einheiten; 32,9 statt 23,7 min im Release v0.5.193 war Runner-Streuung. Probelauf 41381835015 auf 762b093e: prepare 2,6 statt 5,1 min, Android 26,2 statt 36,3 min (ABIs 10,0 + 9,3 statt 13,1 + 12,2 min), alle 26 Assets im Entwurf geprüft und der Entwurf gelöscht) Build-Einstellungen für CI-Runner (M4): Speicherspitze bei 2 und 4 Jobs messen, danach `CARGO_BUILD_JOBS` je Runner; eine LTO-Angabe für Windows und Linux, Laufzeitwirkung mit der Speed-Suite geprüft; cargo-about als fertiges Programm; Lizenzliste einmal je Lauf; Share-Server als Workspace-Mitglied | Windows-Schritt kürzer, Linux und Windows gleich optimiert | geplant (mit D8) |
 | D11 | Kritischen Pfad des Release-Laufs weiter kürzen. Windows (v0.5.193: 41 min) ist CPU-gebunden: Messlauf 41376180921 zeigt 100 % auf 4 Kernen während der LTO-Durchläufe je Programm (App 11,9 min, `se` 10,9 min parallel), freie Kerne nur ~2 min im Frontend der Bibliothek; nur ein zweiter Runner verkürzt ihn: Job App (+ Updater), Job `se`/MCP-Launcher/Share-Server/DLL, danach ein Installer-Job (NSIS), der das heutige `windows`-Artefakt erzeugt, sodass `publish` unverändert bleibt; `publish-update.ps1` bekommt dafür eine Programmauswahl und einen Packmodus. Danach Linux (gnu-App 15 min und musl-Werkzeuge 14 min nacheinander) als zwei Jobs und die Android-ABIs arm64/x86_64 als parallele Jobs | Windows-Pfad ≈ 29 statt ≈ 38 min, Release ≈ 39 statt ≈ 48 min | umgesetzt: `windows-build` (App + MCP-Launcher, `se` + Updater, Share-Server + DLL) → `windows` (Packen), Probelauf 41387696822: Windows-Pfad 29,3 statt 33,4 min auf einem langsamen `se`-Runner (Abhängigkeiten 6,8 statt 3,9 min), Linux danach mit 32 min der längste Pfad; darum `linux-build` (gui, static) → `linux` (Feed) und `android-lib` (arm64-v8a, x86_64) → `android` (APK). Probelauf 41393646281 auf 0ea59fb1: 32,8 min gesamt (v0.5.193: 54), Linux nach 19 min, Android nach 18 min fertig, längster Pfad Windows `se` + Updater 24,5 min + Packen 3,1 min; dessen Runner kompilierte schon die gemeinsamen Abhängigkeiten 1,6-mal langsamer (6,5 statt 4,0 min), also Runner-Streuung, keine Aufteilungsfrage. Erledigt |
 | D12 | Suiten (M5): gemeinsame Einrichtung (Checkout, Toolchain, ein Abhängigkeits-Cache je OS ohne eigenes Crate) für alle Task-Workflows; Vergleichsversionen aus Release-Assets statt aus der Quelle bauen (in `ideal-task.yml` schon so) | weniger Cache-Verdrängung, ~12 min je Vergleichsbau gespart | geplant |
-| D13 | Crate-Aufteilung weitere Phasen (M6): Zyklus von 42 Modulen lösen, Protokoll-Backends, Share, Transfer, GUI und CLI als eigene Crates | eigenes Crate je Bereich, Teil-Neubau bei Änderungen | geplant nach D9 |
+| D13 | Crate-Aufteilung vollständig (M6). Nutzer 2026-11-02: „D13 verlange ich vollständig OHNE zwischen release und tests zwischen den umbauten.“ und „wenn du die gui als eigene create(s) machen kannst währe es klasse weil das dann einfachere anpassungen ermöglicht.“ | eigenes Crate je Schicht, Teil-Neubau bei Änderungen | Phase A umgesetzt (02215055), Phase B in Arbeit, Stand im Abschnitt „D13 — Stand“ |
 | D14 | Binärgröße (M7): `cargo bloat`, zweiter Renderer (glow + wgpu) | kleinere Programme | geprüft 2026-11-02, keine Änderung: beide Renderer sind gewollt — Bildschirm- und Fernfenster öffnen mit wgpu und fallen auf glow zurück, wenn das Fenster keine wgpu-Oberfläche bekommt (`app/core/screen_launch.rs`, `app/core/family_viewer.rs`), die Linux-Layer-Shell zeichnet mit egui-wgpu; einen streichen nähme diesen Rückfall. Ohne LTO quer über die Crates wäre die App 1–3 MiB größer und deutlich langsamer (D10); `strip = symbols` ist gesetzt, `panic = unwind` braucht der Dokany-Schutz. Größter Block bleibt das eigene Crate (43 % von `.text`), das schrumpft erst mit D13 |
 | D15 | Repo-Ordnung: Task-Skripte aus dem Wurzelordner `native/` in einen eigenen Ordner, verwaiste Branches (`release/v*`, alte Arbeits-Branches) prüfen, Feed und Installer-Ausnahmen aus `main`/`.gitignore` nach der Brücke | übersichtlicher Bestand | geplant (Feed nach D8) |
 | D16 | Signatur der Desktop-Updates (Windows/Linux prüfen heute nur SHA-256 aus derselben Quelle; Android hat die APK-Signatur) | Update nur mit gültiger Signatur | geplant, eigener Sicherheitspunkt |
@@ -90,6 +90,35 @@ nicht im Repo sichern, sondern außerhalb auf dem Server.
   Stand: Ansatz gewählt (Arbeiterpools je Seite und Stufe, Anpassung nach Wartezeiten); offen.
 - S2 Release nur über Assets (E8/D8): Stand: Ansatz (Entwurf → Upload → Prüfen → Veröffentlichen)
   beschrieben; Umsetzung im nächsten Fenster.
+
+## D13 — Stand (2026-11-02)
+
+Phase A (Commit 02215055): Workspace unter `native/`. Root-Paket `smart_explorer` = Programme und
+Fassade (`pub use smart_explorer_cli::*` bzw. auf Android `smart_explorer_mobile::*`), darunter
+`crates/cli` → `crates/gui` → `crates/engine`, daneben `crates/mobile` → `crates/engine`. Jedes Crate
+re-exportiert das darunterliegende, so behalten verschobene Dateien ihre `crate::<modul>`-Pfade;
+`pub(crate)` in Kern und GUI wurde `pub`. Das Panel gespeicherter Terminal-/MCP-Aufträge liegt in der
+CLI und wird vor `run_gui` registriert (`cli::register_gui_panels`). Testhilfen des Kerns, die Tests
+von GUI/CLI/Mobile nutzen, hängen am Feature `test-support` (Dev-Abhängigkeit). Versionen stehen
+einmal in `[workspace.dependencies]`; nie genannte Pins bleiben beim Kern. `Cargo.lock` gewinnt nur
+die vier Pfadpakete. Noch nicht übersetzt (keine Zwischentests nach Nutzervorgabe).
+
+Phase B (Schichten unter dem Kern), Schnitt nach geringster Zahl umzukehrender Verweise
+(lokale Suche über die Modulkanten des Produktionscodes, 47 Verweise an 18 Kanten; mit Testcode 126):
+
+| Crate | Module | Zeilen |
+|---|---|---|
+| `smart_explorer_core` | creds, cryptomator, format, licenses, linemerge, local_access, support_dirs, types | 17 078 |
+| `smart_explorer_storage` | agent_proto, analytics, android_fs, apptrash, cloud, filter, ftp, host_trash, rscan, scanner, source_media, vfs | 68 294 |
+| `smart_explorer_transfer` | agent, bisync, copy, sftp, smb, sync, syncjobs, transfer, watch, zipfs | 150 981 |
+| `smart_explorer_engine` (Rest) | apps, autostart, connect, daemon, folder_index, gdrive, keep_awake, login, login_entry, mcp_launcher, mount, net, notify_desktop, rdp, remote_window, screen, share, updater, vault, webdav | 409 085 |
+
+Umzukehrende Verweise im Produktionscode: transfer→vault 17, analytics→transfer 5, agent_proto→transfer 2,
+analytics→bisync 2, sftp→daemon 2, source_media→folder_index 2, syncjobs→connect 2, vfs→connect 2,
+vfs→copy 2, vfs→bisync 2, vfs→vault 2, agent→share 1, agent→vault 1, local_access→analytics 1,
+support_dirs→vfs 1, transfer→daemon 1, vfs→sftp 1, vfs→smb 1. Testcode mit Verweisen nach oben wandert
+in das Crate, dessen Module er braucht. Nächster Schritt: je Kante Typ nach unten verschieben oder
+Schnittstelle mit Registrierung beim Start; danach die drei Crates anlegen wie in Phase A.
 
 ## D13 — Zuschnitt der Crate-Aufteilung (Analyse 2026-11-01)
 
