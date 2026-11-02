@@ -1,7 +1,7 @@
-//! The parts of the app's transfer engine that the shared protocol code uses:
-//! the compression policy of the LZ4 frames (one definition, included from the
-//! app) and the free cores, which the agent does not measure.
-#[path = "../../native/src/transfer/core/compress_policy.rs"]
+//! The parts of the app's host module that the shared protocol code uses
+//! (`crate::host`): the compression policy of the LZ4 frames (one definition,
+//! included from the app) and the free cores, which the agent does not measure.
+#[path = "../../native/crates/engine/src/host/core/compress_policy.rs"]
 pub(crate) mod compress_policy;
 
 /// The agent has none of the app's sensors: every value is unknown, and the

@@ -2,13 +2,13 @@
 //! shared, dependency-free `agent_proto` module — included here so the app and
 //! this minimal crate use one definition.
 
-#[path = "../../native/src/agent_proto/mod.rs"]
+#[path = "../../native/crates/engine/src/agent_proto/mod.rs"]
 mod agent_proto;
-// What the shared protocol code takes from the app crate by path
-// (`crate::transfer`, `crate::vfs`, `crate::support_dirs`); without it this
-// crate does not build.
+// What the shared protocol code takes from the app crates by path
+// (`crate::host`, `crate::vfs`, `crate::support_dirs`); without it this crate
+// does not build.
+mod host;
 mod support_dirs;
-mod transfer;
 mod vfs;
 
 use std::io::Write;
