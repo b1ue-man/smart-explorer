@@ -213,10 +213,16 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-  linux:
+  # The Linux desktop app (glibc) and the static programs (musl) are two
+  # separate builds of the whole crate; they run on two runners, the linux
+  # job stages the feed from them (plan docs/plaene/2026-11-01-idealzustand, D11).
+  linux-build:
     needs: [plan, prepare]
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    strategy:
+      matrix:
+        stage: [gui, static]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -238,15 +244,56 @@ jobs:
             libegl1 libgl1 libgl1-mesa-dri libx11-6 libx11-xcb1 libxcursor1 libxi6 libxkbcommon0 \
             libxkbcommon-x11-0 libxrandr2
 
-      - name: Build the Linux payloads and share server
+      - name: Build the Linux ${{ matrix.stage }} programs
         timeout-minutes: 110
+        run: |
+          set -euo pipefail
+          SMART_EXPLORER_BUILD_JOBS="$(nproc)" SMART_EXPLORER_RELEASE_LTO=thin SMART_EXPLORER_SYSTEM_LINKERS=1 \
+            bash native/publish-linux-feed-wsl.sh --stage "${{ matrix.stage }}" --build-out "$RUNNER_TEMP/linux-build"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-build-${{ matrix.stage }}
+          path: ${{ runner.temp }}/linux-build
+          if-no-files-found: error
+          retention-days: 1
+
+  linux:
+    needs: [plan, prepare, linux-build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.source_sha }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: prepared
+          path: .
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: linux-build-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/linux-prebuilt
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu,x86_64-unknown-linux-musl
+
+      - name: Linux packaging tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools file
+
+      - name: Stage the Linux payloads and share server
+        timeout-minutes: 50
         run: |
           set -euo pipefail
           out="$RUNNER_TEMP/linux"
           mkdir -p "$out/update-feed" "$out/share-server"
           SMART_EXPLORER_FEED_DIR="$out/update-feed" SMART_EXPLORER_SHARE_DIR="$out/share-server" \
-            SMART_EXPLORER_BUILD_JOBS="$(nproc)" SMART_EXPLORER_RELEASE_LTO=thin SMART_EXPLORER_SYSTEM_LINKERS=1 \
-            bash native/publish-linux-feed-wsl.sh
+            SMART_EXPLORER_SYSTEM_LINKERS=1 \
+            bash native/publish-linux-feed-wsl.sh --stage package --prebuilt "$RUNNER_TEMP/linux-prebuilt"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -255,10 +302,16 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-  android:
+  # The two Android ABIs are two builds of the whole crate; they run on two
+  # runners, the android job assembles, signs and verifies the APK from them
+  # (plan docs/plaene/2026-11-01-idealzustand, D11).
+  android-lib:
     needs: [plan, prepare]
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    timeout-minutes: 120
+    strategy:
+      matrix:
+        abi: [arm64-v8a, x86_64]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -271,11 +324,6 @@ jobs:
           name: prepared
           path: .
 
-      - uses: actions/setup-java@v6
-        with:
-          distribution: temurin
-          java-version: "17"
-
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android,x86_64-linux-android
@@ -283,13 +331,9 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked --version 4.1.2
 
-      - name: Build and verify the signed Android release APK
-        timeout-minutes: 160
+      - name: Build the ${{ matrix.abi }} native library
+        timeout-minutes: 110
         env:
-          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           PLAN_VERSION: ${{ needs.plan.outputs.version }}
         run: |
           set -euo pipefail
@@ -299,6 +343,53 @@ jobs:
           export CARGO_BUILD_JOBS
           SMART_EXPLORER_PREPARED_RUST_LICENSES_SHA256="$(sha256sum third-party/rust-crates/THIRD-PARTY-LICENSES.txt | awk '{ print $1 }')"
           export SMART_EXPLORER_PREPARED_RUST_LICENSES_SHA256
+          bash android/build-release-apk.sh --expect-version "$PLAN_VERSION" --abi "${{ matrix.abi }}" \
+            --lib-out "$RUNNER_TEMP/android-lib"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-lib-${{ matrix.abi }}
+          path: ${{ runner.temp }}/android-lib
+          if-no-files-found: error
+          retention-days: 1
+
+  android:
+    needs: [plan, prepare, android-lib]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.source_sha }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: prepared
+          path: .
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: android-lib-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/android-libs
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Assemble, sign and verify the Android release APK
+        timeout-minutes: 50
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          PLAN_VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set -euo pipefail
           if [ -z "$ANDROID_KEYSTORE_B64" ]; then
             echo "::error::The ANDROID_KEYSTORE_B64 repository secret is missing."
             exit 1
@@ -309,7 +400,8 @@ jobs:
           (umask 077 && printf '%s' "$ANDROID_KEYSTORE_B64" | base64 --decode > "$signing_dir/release.p12")
           unset ANDROID_KEYSTORE_B64
           export ANDROID_KEYSTORE_FILE="$signing_dir/release.p12"
-          bash android/build-release-apk.sh --expect-version "$PLAN_VERSION" --out "$RUNNER_TEMP/android"
+          bash android/build-release-apk.sh --expect-version "$PLAN_VERSION" \
+            --prebuilt-libs "$RUNNER_TEMP/android-libs" --out "$RUNNER_TEMP/android"
 
       - uses: actions/upload-artifact@v4
         with:

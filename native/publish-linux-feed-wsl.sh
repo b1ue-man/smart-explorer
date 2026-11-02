@@ -11,6 +11,15 @@
 #   native/publish-linux-feed-wsl.sh --write-version
 #   native/publish-linux-feed-wsl.sh --check-env
 #   native/publish-linux-feed-wsl.sh --check-gui
+#   native/publish-linux-feed-wsl.sh --stage gui|static --build-out DIR
+#   native/publish-linux-feed-wsl.sh --stage package --prebuilt DIR
+#
+# .github/workflows/release.yml splits the leaf over runners (plan
+# docs/plaene/2026-11-01-idealzustand, D11): --stage gui builds only the
+# desktop app, --stage static the updater, CLI, MCP launcher and share server,
+# each into --build-out; --stage package takes all five programs from
+# --prebuilt and stages the feed without compiling. The default (all) does
+# everything in one run.
 
 set -euo pipefail
 
@@ -46,6 +55,9 @@ write_version=0
 build_share_server=1
 check_env=0
 check_gui=0
+stage=all
+build_out=""
+prebuilt=""
 bootstrap_zig="${SMART_EXPLORER_BOOTSTRAP_ZIG:-1}"
 zig_version="${SMART_EXPLORER_ZIG_VERSION:-0.16.0}"
 zig_root="${SMART_EXPLORER_ZIG_ROOT:-$HOME/.local/zig}"
@@ -78,6 +90,18 @@ while [ "$#" -gt 0 ]; do
       ;;
     --check-gui)
       check_gui=1
+      ;;
+    --stage)
+      shift
+      stage="${1:?missing value for --stage}"
+      ;;
+    --build-out)
+      shift
+      build_out="${1:?missing value for --build-out}"
+      ;;
+    --prebuilt)
+      shift
+      prebuilt="${1:?missing value for --prebuilt}"
       ;;
     --no-bootstrap-zig)
       bootstrap_zig=0
@@ -127,6 +151,24 @@ if [ "$check_env" = "1" ] && [ "$check_gui" = "1" ]; then
 fi
 if [ "$write_version" = "1" ] && [ "$check_gui" = "1" ]; then
   echo "--check-gui is a non-publishing test build and cannot write the feed version." >&2
+  exit 2
+fi
+case "$stage" in
+  all) ;;
+  gui | static)
+    [ -n "$build_out" ] || { echo "--stage $stage needs --build-out DIR." >&2; exit 2; }
+    ;;
+  package)
+    [ -d "$prebuilt" ] || { echo "--stage package needs an existing --prebuilt DIR." >&2; exit 2; }
+    prebuilt="$(cd "$prebuilt" && pwd)"
+    ;;
+  *)
+    echo "Unknown --stage $stage (all, gui, static, package)." >&2
+    exit 2
+    ;;
+esac
+if [ "$stage" != "all" ] && { [ "$check_env" = "1" ] || [ "$check_gui" = "1" ] || [ "$build_share_server" != "1" ]; }; then
+  echo "--stage $stage builds release payloads; it excludes --check-env, --check-gui and --skip-share-server." >&2
   exit 2
 fi
 if [ "$linux_gui_target" != "x86_64-unknown-linux-gnu" ]; then
@@ -420,21 +462,62 @@ gui_rustflags=""
 if [ "$use_system_linkers" = "1" ]; then
   gui_rustflags="-C link-arg=-Wl,-z,pack-relative-relocs -C link-arg=-Wl,--icf=all"
 fi
-echo "Building Linux desktop app for $linux_gui_target ..."
-CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="$gui_rustflags" \
-cargo build --locked --release \
-  --target-dir "$linux_target_dir" \
-  --target "$linux_gui_target" --bin smart_explorer
+# Where each program is read from: this run's target directories, or the
+# outputs of the gui and static stages.
+gui_bin="$linux_target_dir/$linux_gui_target/release/smart_explorer"
+static_dir="$linux_target_dir/$linux_static_target/release"
+share_bin="$share_target_dir/$linux_static_target/release/se-share-server"
+if [ "$stage" = "package" ]; then
+  gui_bin="$prebuilt/smart_explorer"
+  static_dir="$prebuilt"
+  share_bin="$prebuilt/se-share-server"
+  for prebuilt_program in "$gui_bin" "$static_dir/smart_explorer_updater" "$static_dir/se" \
+    "$static_dir/se-mcp-launcher" "$share_bin"; do
+    [ -s "$prebuilt_program" ] || { echo "Prebuilt program missing or empty: $prebuilt_program" >&2; exit 1; }
+  done
+fi
+if [ "$stage" = "all" ] || [ "$stage" = "gui" ]; then
+  echo "Building Linux desktop app for $linux_gui_target ..."
+  CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="$gui_rustflags" \
+  cargo build --locked --release \
+    --target-dir "$linux_target_dir" \
+    --target "$linux_gui_target" --bin smart_explorer
+fi
+if [ "$stage" = "gui" ]; then
+  mkdir -p "$build_out"
+  install -m 0755 "$gui_bin" "$build_out/smart_explorer"
+  echo "Linux gui stage built: $build_out/smart_explorer"
+  exit 0
+fi
 if [ "$check_gui" = "1" ]; then
   "$script_dir/test-linux-gui-startup.sh" \
     "$linux_target_dir/$linux_gui_target/release/smart_explorer"
   echo "Targeted Linux GUI build/start check passed; no feed files were changed."
   exit 0
 fi
-echo "Building static Linux updater, CLI and MCP launcher for $linux_static_target ..."
-cargo build --locked --release \
-  --target-dir "$linux_target_dir" \
-  --target "$linux_static_target" --bin smart_explorer_updater --bin se --bin se-mcp-launcher
+if [ "$stage" = "all" ] || [ "$stage" = "static" ]; then
+  echo "Building static Linux updater, CLI and MCP launcher for $linux_static_target ..."
+  cargo build --locked --release \
+    --target-dir "$linux_target_dir" \
+    --target "$linux_static_target" --bin smart_explorer_updater --bin se --bin se-mcp-launcher
+fi
+if [ "$stage" = "static" ]; then
+  [ -d "$repo_root/share-server" ] || { echo "Share-server source missing: $repo_root/share-server" >&2; exit 1; }
+  echo "Building static Linux share server for $linux_static_target ..."
+  (
+    cd "$repo_root/share-server"
+    cargo build --locked --release \
+      --target-dir "$share_target_dir" \
+      --target "$linux_static_target" --bin se-share-server
+  )
+  mkdir -p "$build_out"
+  for static_program in smart_explorer_updater se se-mcp-launcher; do
+    install -m 0755 "$static_dir/$static_program" "$build_out/$static_program"
+  done
+  install -m 0755 "$share_bin" "$build_out/se-share-server"
+  echo "Linux static stage built into $build_out"
+  exit 0
+fi
 
 feed_parent="$(dirname "$feed")"
 mkdir -p "$feed_parent"
@@ -453,10 +536,10 @@ if [ "$write_version" = "1" ]; then
   rm -f "$feed_candidate/version.txt"
 fi
 
-install -m 0755 "$linux_target_dir/$linux_gui_target/release/smart_explorer" "$feed_candidate/smart_explorer"
-install -m 0755 "$linux_target_dir/$linux_static_target/release/smart_explorer_updater" "$feed_candidate/smart_explorer_updater"
-install -m 0755 "$linux_target_dir/$linux_static_target/release/se" "$feed_candidate/se"
-install -m 0755 "$linux_target_dir/$linux_static_target/release/se-mcp-launcher" "$feed_candidate/se-mcp-launcher"
+install -m 0755 "$gui_bin" "$feed_candidate/smart_explorer"
+install -m 0755 "$static_dir/smart_explorer_updater" "$feed_candidate/smart_explorer_updater"
+install -m 0755 "$static_dir/se" "$feed_candidate/se"
+install -m 0755 "$static_dir/se-mcp-launcher" "$feed_candidate/se-mcp-launcher"
 
 mkdir -p "$(dirname "$share_out")"
 feed_abs="$(cd "$feed_parent" && pwd)/$feed_name"
@@ -472,23 +555,21 @@ elif [[ "$share_abs/" == "$feed_abs/"* ]]; then
 fi
 
 if [ "$build_share_server" = "1" ] && [ -d "$repo_root/share-server" ]; then
-  echo "Building static Linux share server for $linux_static_target ..."
-  (
-    cd "$repo_root/share-server"
-    cargo build --locked --release \
-      --target-dir "$share_target_dir" \
-      --target "$linux_static_target" --bin se-share-server
-  )
+  if [ "$stage" = "all" ]; then
+    echo "Building static Linux share server for $linux_static_target ..."
+    (
+      cd "$repo_root/share-server"
+      cargo build --locked --release \
+        --target-dir "$share_target_dir" \
+        --target "$linux_static_target" --bin se-share-server
+    )
+  fi
   if [ "$share_in_feed" = "1" ]; then
-    install -m 0755 \
-      "$share_target_dir/$linux_static_target/release/se-share-server" \
-      "$feed_candidate/se-share-server-linux"
+    install -m 0755 "$share_bin" "$feed_candidate/se-share-server-linux"
   else
     mkdir -p "$share_out"
     share_stage="$(mktemp "$share_parent/.se-share-server-linux.stage.XXXXXX")"
-    install -m 0755 \
-      "$share_target_dir/$linux_static_target/release/se-share-server" \
-      "$share_stage"
+    install -m 0755 "$share_bin" "$share_stage"
   fi
 elif [ "$build_share_server" = "1" ]; then
   echo "Share-server source missing: $repo_root/share-server" >&2

@@ -255,11 +255,14 @@ Release; no build is committed to Git (plan `docs/plaene/2026-11-01-idealzustand
    `windows-build` runners (`native/publish-update.ps1 -Stage Build -Programs …`: app and MCP
    launcher, `se` and updater, share server and context-menu DLL; the build is CPU-bound on four
    cores) followed by `windows` (`-Stage Package -Prebuilt …`: installer, portable copies and feed
-   from those programs, no compiling), `linux`
-   (`native/publish-linux-feed-wsl.sh` with `SMART_EXPLORER_BUILD_JOBS`, `SMART_EXPLORER_RELEASE_LTO=thin`,
-   `SMART_EXPLORER_SYSTEM_LINKERS=1`) and `android` (`android/build-release-apk.sh` with
-   `CARGO_BUILD_JOBS=<cores>` and `SMART_EXPLORER_PREPARED_RUST_LICENSES_SHA256`), all three from the
-   files of `prepare`, finally `publish`
+   from those programs, no compiling), two `linux-build` runners (`native/publish-linux-feed-wsl.sh
+   --stage gui|static` with `SMART_EXPLORER_BUILD_JOBS`, `SMART_EXPLORER_RELEASE_LTO=thin`,
+   `SMART_EXPLORER_SYSTEM_LINKERS=1`: the glibc desktop app, and updater, CLI, MCP launcher and share
+   server for musl) followed by `linux` (`--stage package --prebuilt …`: feed and share server), and
+   two `android-lib` runners (`android/build-release-apk.sh --abi arm64-v8a|x86_64 --lib-out …` with
+   `CARGO_BUILD_JOBS=<cores>` and `SMART_EXPLORER_PREPARED_RUST_LICENSES_SHA256`) followed by
+   `android` (`--prebuilt-libs …`: Gradle, signing, verification), all from the files of `prepare`,
+   finally `publish`
    (`native/publish-release-assets.ps1`).
 3. `publish` assembles the 26 assets, checks every `.sha256` sidecar, the installer's embedded
    payloads and `se.exe --version`, commits only `native/Cargo.toml`, `native/Cargo.lock`,

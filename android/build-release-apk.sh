@@ -14,6 +14,8 @@ Usage:
   android/build-release-apk.sh --check-env
   android/build-release-apk.sh [--expect-version X.Y.Z] --out DIR
   android/build-release-apk.sh [--expect-version X.Y.Z] --verify APK --out DIR
+  android/build-release-apk.sh [--expect-version X.Y.Z] --abi ABI --lib-out DIR
+  android/build-release-apk.sh [--expect-version X.Y.Z] --prebuilt-libs DIR --out DIR
 
   --check-env       check the Android release toolchain; installs only the
                     pinned NDK (android/ndk-version) and the two Rust targets
@@ -21,6 +23,11 @@ Usage:
                     DIR must be absent or empty
   --verify APK      verify an existing signed APK instead of building one
   --expect-version  fail unless native/Cargo.toml carries this version
+  --abi ABI         build only the native library of ABI (arm64-v8a or x86_64)
+                    into DIR/ABI/ (--lib-out); no Gradle, no signing inputs
+  --prebuilt-libs   build the APK from DIR/ABI/ libraries of earlier --abi runs
+                    instead of compiling them (.github/workflows/release.yml
+                    builds the ABIs on parallel runners)
 
 Build signing: ANDROID_KEYSTORE_FILE, ANDROID_KEYSTORE_PASSWORD,
 ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD. SDK: ANDROID_HOME or ANDROID_SDK_ROOT.
@@ -50,6 +57,9 @@ check_env_requested=0
 out_dir=""
 verify_source=""
 expect_version=""
+lib_abi=""
+lib_out=""
+prebuilt_libs=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --check-env)
@@ -71,6 +81,21 @@ while [ "$#" -gt 0 ]; do
       expect_version="$2"
       shift
       ;;
+    --abi)
+      [ "$#" -ge 2 ] || die "--abi needs an ABI"
+      lib_abi="$2"
+      shift
+      ;;
+    --lib-out)
+      [ "$#" -ge 2 ] || die "--lib-out needs a directory"
+      lib_out="$2"
+      shift
+      ;;
+    --prebuilt-libs)
+      [ "$#" -ge 2 ] || die "--prebuilt-libs needs a directory"
+      prebuilt_libs="$2"
+      shift
+      ;;
     -h | --help)
       usage
       exit 0
@@ -83,12 +108,25 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 if [ "$check_env_requested" = 1 ]; then
-  if [ -n "$out_dir" ] || [ -n "$verify_source" ] || [ -n "$expect_version" ]; then
+  if [ -n "$out_dir" ] || [ -n "$verify_source" ] || [ -n "$expect_version" ] ||
+    [ -n "$lib_abi$lib_out$prebuilt_libs" ]; then
     die "--check-env takes no other option"
   fi
   mode=check-env
+elif [ -n "$lib_abi" ]; then
+  [ -n "$lib_out" ] || die "--abi needs --lib-out"
+  [ -z "$out_dir$verify_source$prebuilt_libs" ] || die "--abi takes no --out, --verify or --prebuilt-libs"
+  case " ${abis[*]} " in
+    *" $lib_abi "*) ;;
+    *) die "--abi must be one of: ${abis[*]}" ;;
+  esac
+  mode=lib
 elif [ -z "$out_dir" ]; then
   die "--out is required"
+elif [ -n "$lib_out" ]; then
+  die "--lib-out needs --abi"
+elif [ -n "$prebuilt_libs" ] && [ "$mode" = verify ]; then
+  die "--prebuilt-libs builds an APK; it takes no --verify"
 fi
 
 # Release profile pins shared with native/publish-feed.sh; the job count stays
@@ -218,7 +256,7 @@ require_signing() {
 
 check_build_env() {
   local version
-  require_tools cargo rustup cargo-ndk java python3 sha256sum find sort
+  require_tools cargo rustup java python3 sha256sum find sort
   [ -f "$script_dir/gradlew" ] || die "android/gradlew is missing"
   expected_cert >/dev/null
   version="$(cargo_version)"
@@ -226,7 +264,11 @@ check_build_env() {
   resolve_sdk
   ensure_ndk
   resolve_build_tools
-  ensure_rust_targets
+  # Prebuilt libraries need no Android Rust targets and no cargo-ndk.
+  if [ -z "$prebuilt_libs" ]; then
+    require_tools cargo-ndk
+    ensure_rust_targets
+  fi
   require_signing
 }
 
@@ -278,21 +320,42 @@ assert_16k_aligned() {
   done <<<"$aligns"
 }
 
-build_apk() {
-  local maven abi library ndk_args=()
-  maven="$(rustls_maven_dir)"
-  for abi in "${abis[@]}"; do
+# The native libraries of the given ABIs into DIR/ABI/, each 16 KB aligned.
+build_native_libs() {
+  local target_dir=$1 abi library ndk_args=()
+  shift
+  for abi in "$@"; do
     ndk_args+=(-t "$abi")
-    rm -f -- "$jni_libs/$abi/$bridge_library"
+    rm -f -- "$target_dir/$abi/$bridge_library"
   done
   (
     cd "$native_dir"
-    cargo ndk "${ndk_args[@]}" --platform "$android_platform" -o "$jni_libs" \
+    cargo ndk "${ndk_args[@]}" --platform "$android_platform" -o "$target_dir" \
       build --release --locked -p "$bridge_package"
   )
+  for abi in "$@"; do
+    library="$target_dir/$abi/$bridge_library"
+    [ -s "$library" ] || die "cargo-ndk did not produce $library"
+    assert_16k_aligned "$library"
+  done
+}
+
+build_apk() {
+  local maven abi library
+  maven="$(rustls_maven_dir)"
+  if [ -n "$prebuilt_libs" ]; then
+    for abi in "${abis[@]}"; do
+      library="$prebuilt_libs/$abi/$bridge_library"
+      [ -s "$library" ] || die "prebuilt library missing or empty: $library"
+      mkdir -p -- "$jni_libs/$abi"
+      cp -- "$library" "$jni_libs/$abi/$bridge_library"
+    done
+  else
+    build_native_libs "$jni_libs" "${abis[@]}"
+  fi
   for abi in "${abis[@]}"; do
     library="$jni_libs/$abi/$bridge_library"
-    [ -s "$library" ] || die "cargo-ndk did not produce $library"
+    [ -s "$library" ] || die "native library missing or empty: $library"
     assert_16k_aligned "$library"
   done
   rm -rf -- "$apk_output_dir"
@@ -415,7 +478,20 @@ if [ "$mode" = verify ]; then
   exit 0
 fi
 
+if [ "$mode" = lib ]; then
+  require_tools cargo rustup cargo-ndk python3 sha256sum find sort
+  resolve_sdk
+  ensure_ndk
+  ensure_rust_targets
+  prepare_rust_licenses
+  build_native_libs "$lib_out" "$lib_abi"
+  echo "Android native library built: $lib_out/$lib_abi/$bridge_library"
+  exit 0
+fi
+
 check_build_env
-prepare_rust_licenses
+if [ -z "$prebuilt_libs" ]; then
+  prepare_rust_licenses
+fi
 build_apk
 publish_verified "$built_apk" "$version" "$code" "$cert"
