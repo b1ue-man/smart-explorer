@@ -206,8 +206,6 @@ jobs:
     needs: [plan, prepare]
     runs-on: ubuntu-24.04
     timeout-minutes: 180
-    env:
-      CARGO_BUILD_JOBS: 2
     steps:
       - uses: actions/checkout@v7
         with:
@@ -242,6 +240,10 @@ jobs:
           PLAN_VERSION: ${{ needs.plan.outputs.version }}
         run: |
           set -euo pipefail
+          # One compiler job per core, as the desktop builds (rustc peak with
+          # 4 jobs 9.9 GiB of 16 GiB, measurement 41356400264).
+          CARGO_BUILD_JOBS="$(nproc)"
+          export CARGO_BUILD_JOBS
           SMART_EXPLORER_PREPARED_RUST_LICENSES_SHA256="$(sha256sum third-party/rust-crates/THIRD-PARTY-LICENSES.txt | awk '{ print $1 }')"
           export SMART_EXPLORER_PREPARED_RUST_LICENSES_SHA256
           if [ -z "$ANDROID_KEYSTORE_B64" ]; then

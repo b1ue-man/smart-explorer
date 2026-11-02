@@ -132,14 +132,15 @@ documentation together.
   and MIT texts), `Rust-Crates\THIRD-PARTY-LICENSES.txt` and `OpenH264\BINARY_LICENSE.txt`
   (`native/installer.nsi:136-144`).
 - **Build input.** The installer embeds `third-party/rust-crates/THIRD-PARTY-LICENSES.txt`
-  (`native/installer.nsi`, `SEC_MAIN`). Before a new build, the complete release wrapper
-  generates this canonical input with `native/rust-licenses.ps1 -Mode Generate -EnsureTool`
-  and then requires `-Mode Check -EnsureTool` to succeed. The Android build entrypoint
-  performs the same preparation before compiling its native libraries. The pinned
-  cargo-about generator reads the shipped manifests and lockfiles; missing or incomplete
-  license texts still stop the build. The generated file joins the wrapper's explicit
-  bounded release commit. Environment-only checks and reused or immutable tagged
-  candidates remain check-only; they never regenerate a release input or rebuild an APK.
+  (`native/installer.nsi`, `SEC_MAIN`); the desktop programs and the Android library embed it
+  too (`native/build.rs`). The `prepare` job of `.github/workflows/release.yml` generates this
+  canonical input once with `native/rust-licenses.ps1 -Mode Generate -EnsureTool` (exit 0 means
+  complete, exit 2 lists every gap and stops the release); the Windows, Linux and Android jobs
+  build from exactly those bytes, Android bound by their SHA-256. `-EnsureTool` installs the
+  release's prebuilt cargo-about 0.9.2 on x86_64 Linux and Windows, bound to the SHA-256 GitHub
+  lists for the archive, and otherwise builds it with `cargo install`. The pinned generator reads
+  the shipped manifests and lockfiles; missing or incomplete license texts stop the build. The
+  generated file joins the release commit.
 - **Uninstall of the account service** (`native/installer.nsi`, section `Uninstall`): if
   `sc.exe query SmartExplorerExecAccounts` finds the service, an interactive uninstall asks whether
   to delete the `se-remote` account with its profile folder. The answer defaults to No; Yes adds
@@ -253,7 +254,9 @@ Release; no build is committed to Git (plan `docs/plaene/2026-11-01-idealzustand
    `prepare` (version, embedded SSH-agent bundles, license notices), then in parallel `windows`
    (`native/publish-update.ps1 -AllowPartialFeed -DeferFeedVersion -BuildJobs <cores>`), `linux`
    (`native/publish-linux-feed-wsl.sh` with `SMART_EXPLORER_BUILD_JOBS`, `SMART_EXPLORER_RELEASE_LTO=thin`,
-   `SMART_EXPLORER_SYSTEM_LINKERS=1`) and `android` (`android/build-release-apk.sh`), finally `publish`
+   `SMART_EXPLORER_SYSTEM_LINKERS=1`) and `android` (`android/build-release-apk.sh` with
+   `CARGO_BUILD_JOBS=<cores>` and `SMART_EXPLORER_PREPARED_RUST_LICENSES_SHA256`), all three from the
+   files of `prepare`, finally `publish`
    (`native/publish-release-assets.ps1`).
 3. `publish` assembles the 26 assets, checks every `.sha256` sidecar, the installer's embedded
    payloads and `se.exe --version`, commits only `native/Cargo.toml`, `native/Cargo.lock`,
@@ -950,12 +953,11 @@ plan:
 `android/build-release-apk.sh` installs the NDK pinned in `android/ndk-version`
 when it is missing (r28 and newer produce 16 KB-aligned libraries). In build
 mode it first generates and checks the Rust license notices with PowerShell 7
-and the pinned cargo-about. When the complete wrapper builds Android through
-the same Linux/WSL checkout, it instead passes the SHA-256 of the notices it
-has just successfully generated and checked; Bash requires those exact bytes.
-This internal handoff adds no PowerShell requirement inside WSL. The hash binds
-the prepared bytes; the wrapper's preceding Generate/Check establishes their
-completeness and freshness. `--verify` and `--check-env` do not run license
+and the pinned cargo-about. The `android` job of `.github/workflows/release.yml`
+instead passes `SMART_EXPLORER_PREPARED_RUST_LICENSES_SHA256`, the SHA-256 of
+the notices the `prepare` job generated; Bash requires those exact bytes. The
+hash binds the prepared bytes; the preceding Generate establishes their
+completeness. `--verify` and `--check-env` do not run license
 generation and retain their existing Android-tool requirements. Build mode then builds
 `native/android-bridge` for `arm64-v8a` and `x86_64` with
 `cargo ndk --platform 30`, checks the 16 KB `LOAD` alignment of both libraries,

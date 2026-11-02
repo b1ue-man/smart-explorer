@@ -155,7 +155,13 @@ Hard-won, verified findings. Each cost real debugging. Don't re-tread them.
   (`SMART_EXPLORER_RELEASE_LTO=thin`): build measurement run 41356400264 (app
   and `se`) took 19.7 instead of 66.4 minutes on Windows and 19.7 instead of
   46.9 on Linux with 4 jobs, at a rustc peak of 9.0 and 9.9 GiB. Without these
-  explicit inputs every leaf keeps its local defaults.
+  explicit inputs every leaf keeps its local defaults. Keep ThinLTO across
+  crates: run 41376180921 (2026-11-02) measured Cargo's default (ThinLTO only
+  inside each crate) for the four release programs at 11.9 instead of 20.8
+  minutes on Linux but 23.8 instead of 23.7 on Windows, and the release-profile
+  benchmarks lost up to 85 % (vault SivGcm 2 GiB on Linux 3053 → 452 MiB/s,
+  Windows 1918 → 900), zip extraction about 30 % and Share small files about
+  35 %. The Android release build also uses one compiler job per core.
 - **Embedded SSH-agent binaries retain source paths.** Unmapped Cargo registry
   paths make an otherwise identical static-musl agent differ between a local
   build and GitHub's `/home/runner` build, tripping the intentional exact-byte
