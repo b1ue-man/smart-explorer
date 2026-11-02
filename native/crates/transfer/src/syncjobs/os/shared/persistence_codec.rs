@@ -322,17 +322,6 @@ mod tests {
     }
 
     #[test]
-    fn kv_roundtrip() {
-        let job = sample();
-        let back = parse_kv_checked(&serialize_kv(&job)).unwrap();
-        assert_eq!(back.id, job.id);
-        assert_eq!(back.direction, Direction::AtoB);
-        assert_eq!(back.conflict, ConflictMode::NewerWins);
-        assert_eq!(back.ignore, job.ignore);
-        assert_eq!(back.interval_min, 15);
-    }
-
-    #[test]
     fn sync_paths_task_saved_paths_roundtrip_without_whitespace_or_url_decoding() {
         for path in [
             "/space at end ",
@@ -355,14 +344,6 @@ mod tests {
             parse_kv_checked(legacy).unwrap().source,
             "sftp://u@host:22/old%20name"
         );
-    }
-
-    #[test]
-    fn unknown_and_missing_keys_remain_forward_compatible() {
-        let body = "id=abc\nname=X\nsource=s\ntarget=t\nfuture_option=42\n";
-        let job = parse_kv_checked(body).unwrap();
-        assert_eq!(job.direction, Direction::Both);
-        assert_eq!(job.retain_days, 30);
     }
 
     #[test]

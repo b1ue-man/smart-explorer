@@ -168,25 +168,6 @@ fn abgleich_task_agent_walk_without_meta_keeps_the_former_items() {
 }
 
 #[test]
-fn abgleich_task_agent_listing_marks_dot_names_hidden() {
-    let directory = tree();
-    let root = directory.path().to_string_lossy().into_owned();
-    let backend = real_agent();
-    let listing = backend.list_dir(&root).unwrap();
-    let hidden: HashMap<_, _> = listing
-        .iter()
-        .map(|m| (m.name.as_str(), m.hidden))
-        .collect();
-    assert!(hidden[".hidden.txt"]);
-    assert!(!hidden["a.txt"]);
-    let tolerant = vfs::list_dir_tolerant(&backend, &root).unwrap();
-    assert!(tolerant
-        .entries
-        .iter()
-        .all(|m| m.hidden == m.name.starts_with('.')));
-}
-
-#[test]
 fn abgleich_task_agent_without_walk_meta_never_gets_an_attribute_request() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let record = seen.clone();

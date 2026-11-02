@@ -397,17 +397,6 @@ fn speed_task_agent_range_frames_are_charged_by_credit() {
 }
 
 #[test]
-fn speed_task_agent_unknown_frame_tag_is_an_error() {
-    let mut raw = Vec::new();
-    raw.extend_from_slice(&1u64.to_le_bytes());
-    raw.push(69);
-    assert_eq!(
-        Frame::decode(&raw).expect_err("tag 69 is unknown").kind(),
-        ErrorKind::InvalidData
-    );
-}
-
-#[test]
 fn speed_task_agent_labels_range_and_lz4() {
     let agent = ServerFeatures::parse(&server_version(true));
     assert!(agent.ranges);

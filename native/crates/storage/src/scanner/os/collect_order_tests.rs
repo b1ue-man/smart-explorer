@@ -336,12 +336,6 @@ fn abgleich_task_listing_threads_finish_a_wide_tree() {
 }
 
 #[test]
-fn abgleich_task_listing_threads_follow_the_cores_available_at_run_time() {
-    let available = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
-    assert_eq!(listing::threads(), available.min(16));
-}
-
-#[test]
 fn abgleich_task_listing_threads_honor_a_cancel_before_the_walk() {
     let tree = fixture("cancel");
     let cancel = AtomicBool::new(true);

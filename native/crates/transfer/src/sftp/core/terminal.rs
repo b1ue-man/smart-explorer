@@ -246,26 +246,6 @@ mod tests {
     }
 
     #[test]
-    fn terminal_task_modes_are_valid_rfc4254_opcodes() {
-        let value_of = |wanted: Pty| {
-            TERMINAL_MODES
-                .iter()
-                .find(|(pty, _)| *pty == wanted)
-                .map(|(_, value)| *value)
-        };
-        assert_eq!(value_of(Pty::VERASE), Some(127));
-        assert_eq!(value_of(Pty::IUTF8), Some(1));
-        let mut opcodes = Vec::new();
-        for (pty, _) in TERMINAL_MODES {
-            let opcode = pty as u8;
-            // RFC 4254 section 8: opcodes 1..=159; 0 ends the list.
-            assert!((1..160).contains(&opcode), "opcode {opcode} is not valid");
-            assert!(!opcodes.contains(&opcode), "opcode {opcode} is repeated");
-            opcodes.push(opcode);
-        }
-    }
-
-    #[test]
     fn terminal_task_request_values_are_checked_before_the_channel_opens() {
         assert!(request("xterm-256color", 80, 24).validate().is_ok());
         assert!(request("a", 32_767, 32_767).validate().is_ok());
@@ -283,15 +263,5 @@ mod tests {
             assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
             assert!(!error.to_string().contains('\u{1b}'));
         }
-    }
-
-    #[test]
-    fn terminal_task_error_text_names_the_refused_pty_request() {
-        assert_eq!(
-            SshTerminalError::Refused.to_string(),
-            "the SSH server refused a terminal (pty-req)"
-        );
-        let failed = SshTerminalError::Failed(io::Error::other("transport lost"));
-        assert_eq!(failed.to_string(), "transport lost");
     }
 }

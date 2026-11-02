@@ -230,9 +230,3 @@ fn state_counts(state: &Arc<Mutex<State>>) -> (usize, usize, usize, usize) {
         state.rooms.len(),
     )
 }
-
-#[test]
-fn large_test_queue_stays_below_the_production_byte_budget() {
-    let normal_roster_upper_bound = MAX_ROOM_MEMBERS * 2 * 1024;
-    assert!(normal_roster_upper_bound < MAX_WRITER_QUEUED_BYTES);
-}

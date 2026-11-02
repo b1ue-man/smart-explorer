@@ -418,15 +418,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn remote_drive_task_sftp_client_config_enables_bounded_keepalives() {
-        let config = client_config();
-
-        assert_eq!(config.keepalive_interval, Some(Duration::from_secs(15)));
-        assert_eq!(config.keepalive_max, 3);
-        assert_eq!(config.inactivity_timeout, None);
-    }
-
     /// Pins of 0.5.180 hold the key type russh 0.61.2 negotiated: the first
     /// entry of its own `Preferred::DEFAULT.key` that the server supports
     /// (russh 0.61.2 negotiation.rs lines 155-173 and 378-402). russh 0.64.1

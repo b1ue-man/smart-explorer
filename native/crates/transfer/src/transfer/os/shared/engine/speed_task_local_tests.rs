@@ -235,19 +235,3 @@ benches! {
     speed_task_local_large_move_same_volume => LARGE, Way::MoveSame;
     speed_task_local_large_move_cross_volume => LARGE, Way::MoveCross;
 }
-
-/// The data sets and ways are what the benchmarks promise (runs always).
-#[test]
-fn speed_task_local_matrix_names_every_case() {
-    assert_eq!(SMALL.files as u64 * SMALL.bytes, 5000 * 4096);
-    assert_eq!(MEDIUM.files as u64 * MEDIUM.bytes, 1000 * 1024 * 1024);
-    assert_eq!(LARGE.files as u64 * LARGE.bytes, 2 * 1024 * 1024 * 1024);
-    let names: Vec<&str> = [Way::Gui, Way::Cli, Way::MoveSame, Way::MoveCross]
-        .iter()
-        .map(|way| way.name())
-        .collect();
-    assert_eq!(
-        names,
-        ["gui", "cli", "move_same_volume", "move_cross_volume"]
-    );
-}

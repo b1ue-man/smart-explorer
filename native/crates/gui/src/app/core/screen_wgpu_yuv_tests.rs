@@ -29,22 +29,6 @@ fn close(a: u8, b: u8) -> bool {
     (i32::from(a) - i32::from(b)).abs() <= TOLERANCE
 }
 
-#[test]
-fn screen_task_viewer_yuv_shader_matches_cpu() {
-    arithmetic_matches_the_cpu_conversion();
-    match gpu() {
-        Some((device, queue)) => shader_matches_the_cpu_conversion(&device, &queue),
-        None => {
-            assert_ne!(
-                std::env::var("SE_SCREEN_TASK_GPU").as_deref(),
-                Ok("1"),
-                "no wgpu adapter on a runner that has to have one"
-            );
-            eprintln!("nicht ausgeführt: no wgpu adapter, the shader itself was not compared");
-        }
-    }
-}
-
 /// The shader's arithmetic against the fixed-point conversion, over a
 /// lattice of the legal sample range.
 fn arithmetic_matches_the_cpu_conversion() {

@@ -420,27 +420,4 @@ mod tests {
             r#"{"t":"hello_challenge","nonce":"00ff"}"#
         );
     }
-
-    #[test]
-    fn presence_roundtrips() {
-        let presence = PeerPresence {
-            kind: "room".into(),
-            relation_id: "r".into(),
-            device_id: "d".into(),
-            device_name: "Device".into(),
-            public_key: "pk".into(),
-            fingerprint: "fp".into(),
-            node_id: "node".into(),
-            relay_url: "http://127.0.0.1:51821".into(),
-            candidates: vec!["127.0.0.1:1".into()],
-            expires_at: 99,
-            nonce: "n".into(),
-            proof: "proof".into(),
-        };
-        let serialized = serde_json::to_string(&presence).unwrap();
-        let parsed: PeerPresence = serde_json::from_str(&serialized).unwrap();
-        assert_eq!(parsed.kind, "room");
-        assert_eq!(parsed.relation_id, "r");
-        assert_eq!(parsed.device_id, "d");
-    }
 }

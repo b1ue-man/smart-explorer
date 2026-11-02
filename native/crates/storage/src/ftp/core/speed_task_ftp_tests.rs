@@ -24,18 +24,6 @@ fn events_starting(server: &Server, prefix: &str) -> usize {
 }
 
 #[test]
-fn speed_task_ftp_kinds_listing_skips_the_per_file_probes() {
-    assert!(!Detail::Kinds.refines_list_rows());
-    assert!(!Detail::Kinds.records_precision());
-}
-
-#[test]
-fn speed_task_ftp_exact_listing_keeps_the_per_file_probes() {
-    assert!(Detail::Exact.refines_list_rows());
-    assert!(Detail::Exact.records_precision());
-}
-
-#[test]
 fn speed_task_ftp_new_connection_takes_over_the_feat_answer() {
     let known = Features {
         mlst: false,

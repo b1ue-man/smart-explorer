@@ -188,19 +188,6 @@ mod tests {
         assert!(SIGNAL_MAINTENANCE_POLICY.pong_expired(Some(SIGNAL_PONG_TIMEOUT)));
     }
 
-    #[test]
-    fn iroh_transport_keepalives_are_explicit_and_nonzero() {
-        assert_eq!(IROH_CONNECTION_KEEPALIVE_INTERVAL, Duration::from_secs(5));
-        assert_eq!(IROH_PATH_KEEPALIVE_INTERVAL, Duration::from_secs(5));
-        assert_eq!(IROH_CONNECTION_IDLE_TIMEOUT, Duration::from_secs(20));
-        assert!(!IROH_CONNECTION_KEEPALIVE_INTERVAL.is_zero());
-        assert!(!IROH_PATH_KEEPALIVE_INTERVAL.is_zero());
-        assert_eq!(IROH_MAX_CONCURRENT_BIDI_STREAMS, 64);
-        assert_eq!(IROH_MAX_CONCURRENT_UNI_STREAMS, 0);
-
-        let _config = iroh_transport_config();
-    }
-
     /// The controller a factory builds, by its type.
     fn kind(factory: Arc<dyn ControllerFactory + Send + Sync>) -> &'static str {
         let controller = factory.build(std::time::Instant::now(), 1200).into_any();

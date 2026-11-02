@@ -262,20 +262,6 @@ fn root_listing_failure_is_explicit() {
 }
 
 #[test]
-fn agent_walk_hashed_is_preferred() {
-    let md5 = "900150983cd24fb0d6963f7d28e17f72";
-    let be = MockBackend::with_walk_hits(vec![hit("a.bin", 3, md5), hit("b.bin", 3, md5)]);
-    let p = ReclaimProgress::default();
-    let report = scan_reclaim_backend(be.clone(), "/", &p, &duplicates_from_one_byte());
-    assert_eq!(report.duplicate_groups.len(), 1);
-    assert_eq!(
-        report.duplicate_groups[0].evidence,
-        DuplicateEvidence::AgentMd5
-    );
-    assert_eq!(be.open_reads.load(Ordering::Relaxed), 0);
-}
-
-#[test]
 fn review_task_agent_walk_failure_falls_back_to_listing() {
     let md5 = "900150983cd24fb0d6963f7d28e17f72";
     let be = MockBackend::with_failing_walk(

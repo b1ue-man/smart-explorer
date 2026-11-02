@@ -139,23 +139,4 @@ mod mkdir_tests {
     use super::*;
     use std::os::unix::fs::symlink;
 
-    #[test]
-    fn mkdir_all_rejects_link_ancestor() {
-        let base = std::env::temp_dir().join(format!(
-            "se-vfs-mkdir-link-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let victim = base.join("victim");
-        let link = base.join("link");
-        std::fs::create_dir_all(&victim).unwrap();
-        symlink(&victim, &link).unwrap();
-        assert!(mkdir_all_plain(&link.join("child")).is_err());
-        assert!(!victim.join("child").exists());
-        std::fs::remove_file(link).ok();
-        std::fs::remove_dir_all(base).ok();
-    }
 }

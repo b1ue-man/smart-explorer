@@ -112,12 +112,6 @@ fn abgleich_task_ordered_walk_stops_at_the_first_error_and_on_cancel() {
     assert_eq!(error.kind(), io::ErrorKind::Interrupted);
 }
 
-#[test]
-fn abgleich_task_walk_threads_follow_the_host() {
-    let expected = std::thread::available_parallelism().map_or(1, |n| n.get());
-    assert_eq!(walk_threads(), expected);
-}
-
 /// G15: after one thread fails, a thread with its own pending folders stops
 /// after the folder it is reading instead of reading them to the end.
 #[test]

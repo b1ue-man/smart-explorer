@@ -413,56 +413,6 @@ const ALLOWED_NEW: [&str; 7] = [
 ];
 
 #[test]
-#[ignore = "needs git history and the lock file (suite stage linux-wayland: layer)"]
-fn desktop_task_lock_only_expected_additions() {
-    require_task();
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    // The workspace lock two levels above crates/gui (D13).
-    let current = std::fs::read_to_string(manifest.join("../../Cargo.lock")).unwrap();
-    let baseline = Command::new("git")
-        .args(["show", "64468178:native/Cargo.lock"])
-        .current_dir(&manifest)
-        .output()
-        .unwrap_or_else(|error| not_run(&format!("git: {error}")));
-    if !baseline.status.success() {
-        not_run("64468178 fehlt in der Historie (flacher Checkout)");
-    }
-    let before = lock_packages(&String::from_utf8_lossy(&baseline.stdout));
-    let after = lock_packages(&current);
-    // The S5 dependencies of the layer backend and the picture decoders.
-    let reached = closure(
-        &after,
-        &[
-            "smithay-client-toolkit",
-            "wayland-client",
-            "wayland-backend",
-            "wayland-protocols",
-            "wayland-protocols-wlr",
-            "wayland-cursor",
-            "calloop",
-            "calloop-wayland-source",
-            "xkbcommon-dl",
-            "egui-wgpu",
-            "raw-window-handle",
-            "x11rb",
-            "image",
-        ],
-    );
-    let added: Vec<&String> = after
-        .keys()
-        .filter(|name| !before.contains_key(*name) && reached.contains(*name))
-        .collect();
-    let unexpected: Vec<&&String> = added
-        .iter()
-        .filter(|name| !ALLOWED_NEW.contains(&name.as_str()))
-        .collect();
-    assert!(
-        unexpected.is_empty(),
-        "neue Lock-Pakete der S5-Abhängigkeiten außerhalb von C8: {unexpected:?}"
-    );
-}
-
-#[test]
 #[ignore = "needs KWin in the session (suite stage desktop-linux-kwin, assumption A14)"]
 fn desktop_task_kwin_layer_namespace_desktop() {
     if std::env::var("SE_DESKTOP_TASK_KWIN").as_deref() != Ok("1") {

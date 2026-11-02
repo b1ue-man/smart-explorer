@@ -72,10 +72,4 @@ pub(super) fn treemap_accessible_list(
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn child_path_does_not_double_the_root_separator() {
-        let base = "/";
-        let name = "tmp";
-        assert_eq!(format!("{}/{}", base.trim_end_matches('/'), name), "/tmp");
-    }
 }

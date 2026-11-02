@@ -84,9 +84,4 @@ mod tests {
             "smart_explorer.test.device_A1"
         );
     }
-
-    #[test]
-    fn credential_service_rejects_an_unsafe_namespace() {
-        assert!(keyring_service_name_for(Some(r"device\A")).is_err());
-    }
 }

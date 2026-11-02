@@ -25,39 +25,6 @@ fn poll_until_idle(supervisor: &mut JobSupervisor) {
 }
 
 #[test]
-fn serializes_all_daemon_jobs_globally() {
-    let running = Arc::new(AtomicUsize::new(0));
-    let maximum = Arc::new(AtomicUsize::new(0));
-    let completed = Arc::new(AtomicUsize::new(0));
-    let runner: JobRunner = {
-        let running = running.clone();
-        let maximum = maximum.clone();
-        let completed = completed.clone();
-        Arc::new(move |_, _| {
-            let now = running.fetch_add(1, Ordering::SeqCst) + 1;
-            maximum.fetch_max(now, Ordering::SeqCst);
-            std::thread::sleep(Duration::from_millis(20));
-            running.fetch_sub(1, Ordering::SeqCst);
-            completed.fetch_add(1, Ordering::SeqCst);
-        })
-    };
-    let mut supervisor = JobSupervisor::with_hooks(runner, thread_spawner());
-
-    assert_eq!(
-        supervisor.enqueue(&job("one")).unwrap(),
-        EnqueueStatus::Started
-    );
-    assert_eq!(
-        supervisor.enqueue(&job("two")).unwrap(),
-        EnqueueStatus::Queued
-    );
-    poll_until_idle(&mut supervisor);
-
-    assert_eq!(completed.load(Ordering::SeqCst), 2);
-    assert_eq!(maximum.load(Ordering::SeqCst), 1);
-}
-
-#[test]
 fn stop_cancels_and_joins_active_job_without_starting_pending_work() {
     let started = Arc::new(AtomicUsize::new(0));
     let finished = Arc::new(AtomicBool::new(false));

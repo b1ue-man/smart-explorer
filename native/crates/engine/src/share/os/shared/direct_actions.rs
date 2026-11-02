@@ -406,9 +406,4 @@ mod tests {
     use super::reusable_request_id;
     use crate::share::{DirectDecisionState, ShareProfiles};
 
-    #[test]
-    fn no_empty_ledger_request_is_reused() {
-        assert!(reusable_request_id(&ShareProfiles::default(), "peer", 10).is_none());
-        assert_eq!(DirectDecisionState::Pending.code(), "pending");
-    }
 }

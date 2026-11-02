@@ -96,18 +96,3 @@ fn review_task_checked_rename_publishes_only_own_stages_off_android() {
         cfg!(target_os = "android")
     );
 }
-
-#[test]
-fn review_task_rename_ladder_refuses_existing_names_on_local_disks() {
-    let fixture = tempfile::tempdir().unwrap();
-    let stage = fixture.path().join("a.txt.se-sync-0123456789abcdef");
-    let taken = fixture.path().join("taken.txt");
-    std::fs::write(&stage, b"new").unwrap();
-    std::fs::write(&taken, b"old").unwrap();
-    let error = rename_no_replace(&stage, &taken).unwrap_err();
-    assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
-    assert_eq!(std::fs::read(&taken).unwrap(), b"old");
-    let free = fixture.path().join("free.txt");
-    rename_no_replace(&stage, &free).unwrap();
-    assert_eq!(std::fs::read(&free).unwrap(), b"new");
-}

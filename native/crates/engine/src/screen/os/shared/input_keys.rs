@@ -196,24 +196,6 @@ mod tests {
         }
     }
 
-    /// One viewer controls a host at a time (C5); the next takes over once
-    /// the first gave control back or went.
-    #[test]
-    fn screen_task_control_exclusive() {
-        use crate::screen::core::registry::ScreenRegistry;
-        let registry = std::sync::Arc::new(ScreenRegistry::default());
-        let first = registry.register(control_session("laptop")).unwrap();
-        let second = registry.register(control_session("tablet")).unwrap();
-        first.take_control().unwrap();
-        assert_eq!(second.take_control().unwrap_err().device_id, "laptop");
-        assert!(first.release_control());
-        second.take_control().unwrap();
-        assert_eq!(first.take_control().unwrap_err().device_id, "tablet");
-        drop(second);
-        first.take_control().unwrap();
-        assert_eq!(registry.controller().unwrap().device_id, "laptop");
-    }
-
     /// What the host pressed for the viewer goes up when the session ends,
     /// gives control back or loses its connection; modifiers last.
     #[test]

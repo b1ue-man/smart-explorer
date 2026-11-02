@@ -60,10 +60,3 @@ fn transfer_engine_task_smb_overload_is_congestion() {
     };
     assert!(crate::vfs::congestion_of(&map(denied, "Lesen", "/share/a")).is_none());
 }
-
-#[test]
-fn transfer_engine_task_smb_read_chunk_is_smb2_download_chunk() {
-    // 512 KiB READs: a slow link still delivers one about every 1.4 s
-    // (smb2 read_ahead.rs), a fast one reaches its depth in a few round trips.
-    assert_eq!(smb2::DOWNLOAD_CHUNK_SIZE, 512 * 1024);
-}

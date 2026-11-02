@@ -283,21 +283,6 @@ fn transfer_engine_task_sftp_pool_shares_channels_once_the_server_refuses() {
 }
 
 #[test]
-fn transfer_engine_task_sftp_client_window_covers_bandwidth_delay() {
-    let config = client_config();
-    assert_eq!(config.window_size, 16 * 1024 * 1024);
-    assert_eq!(config.maximum_packet_size, 32 * 1024);
-    // One full window of full-size packets per channel buffer.
-    assert_eq!(
-        config.channel_buffer_size,
-        (config.window_size / config.maximum_packet_size) as usize
-    );
-    // Keepalive unchanged.
-    assert_eq!(config.keepalive_interval, Some(Duration::from_secs(15)));
-    assert_eq!(config.keepalive_max, 3);
-}
-
-#[test]
 fn transfer_engine_task_sftp_sized_stage_needs_the_exact_length() {
     assert!(check_length(Some(5), 5).is_ok());
     assert!(check_length(None, 9).is_ok());

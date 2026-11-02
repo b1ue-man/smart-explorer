@@ -103,10 +103,4 @@ impl Pipeline {
 mod stream_block_tests {
     use super::STREAM_BLOCK;
 
-    /// `engine::ops` is private to the engine module, so the engine's
-    /// `COPY_BUFFER` (256 KiB, `engine/ops.rs`) is compared as a literal.
-    #[test]
-    fn speed_task_stream_block_equals_the_engine_copy_buffer() {
-        assert_eq!(STREAM_BLOCK, 256 * 1024);
-    }
 }

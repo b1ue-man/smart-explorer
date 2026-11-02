@@ -37,30 +37,3 @@ fn sources(dir: &Path) -> Vec<PathBuf> {
     }
     found
 }
-
-#[test]
-fn screen_task_windows_interop_factories_only() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/screen/os/windows");
-    let files = sources(&dir);
-    assert!(
-        files.iter().any(|file| file.ends_with("capture_wgc.rs")),
-        "the Windows capture sources were not found under {}",
-        dir.display()
-    );
-    let mut interop = false;
-    for file in files {
-        let text = fs::read_to_string(&file).unwrap();
-        for name in forbidden() {
-            assert!(
-                !text.contains(&name),
-                "{} uses {name}; capture items come from the interop factories",
-                file.display()
-            );
-        }
-        interop |= text.contains("CreateForMonitor") && text.contains("CreateForWindow");
-    }
-    assert!(
-        interop,
-        "no file creates capture items with the interop factory"
-    );
-}

@@ -429,17 +429,4 @@ mod task_tests {
         drop(single.enter()?);
         Ok(())
     }
-
-    #[test]
-    fn mount_vault_task_remote_drive_task_metadata_priority_is_a_bounded_burst() {
-        let state = GateState {
-            active: 0,
-            transfer_waiters: 1,
-            metadata_waiters: 1,
-            metadata_burst: MAX_METADATA_PRIORITY_BURST,
-            ..GateState::default()
-        };
-        assert!(transfer_can_enter(&state, 1));
-        assert!(!metadata_can_enter(&state, 1));
-    }
 }

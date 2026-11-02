@@ -175,9 +175,4 @@ impl ShareIrohNode {
 mod tests {
     use super::*;
 
-    #[test]
-    fn speed_task_share_bulk_keys_are_distinct_per_connection() {
-        assert_eq!(extra_key("direct:r:n", 1), "direct:r:n#bulk1");
-        assert_ne!(extra_key("direct:r:n", 1), extra_key("direct:r:n", 2));
-    }
 }

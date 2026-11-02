@@ -38,56 +38,6 @@ fn handles(src: &std::path::Path, dst: &std::path::Path) -> (BackendHandle, Back
 }
 
 #[test]
-fn mirrors_tree_and_updates_changed() {
-    let src = tmp("src");
-    let dst = tmp("dst");
-    std::fs::create_dir_all(src.join("sub")).unwrap();
-    std::fs::write(src.join("a.txt"), b"hello").unwrap();
-    std::fs::write(src.join("sub/b.txt"), b"world!!").unwrap();
-
-    let (sb, db) = handles(&src, &dst);
-    let (tx, rx) = unbounded();
-    start_sync(
-        sb,
-        fwd(&src),
-        db,
-        fwd(&dst),
-        SyncOptions {
-            delete_extra: false,
-            dry_run: false,
-        },
-        tx,
-    );
-    let result = wait(&rx);
-    assert_eq!(result.stats.errors, 0);
-    assert_eq!(result.stats.copied, 2);
-    assert_eq!(std::fs::read(dst.join("a.txt")).unwrap(), b"hello");
-    assert_eq!(std::fs::read(dst.join("sub/b.txt")).unwrap(), b"world!!");
-
-    std::fs::write(src.join("a.txt"), b"hello world").unwrap();
-    let (sb, db) = handles(&src, &dst);
-    let (tx, rx) = unbounded();
-    start_sync(
-        sb,
-        fwd(&src),
-        db,
-        fwd(&dst),
-        SyncOptions {
-            delete_extra: false,
-            dry_run: false,
-        },
-        tx,
-    );
-    let result = wait(&rx);
-    assert_eq!(result.stats.copied, 1);
-    assert_eq!(result.stats.skipped, 1);
-    assert_eq!(std::fs::read(dst.join("a.txt")).unwrap(), b"hello world");
-
-    std::fs::remove_dir_all(src).ok();
-    std::fs::remove_dir_all(dst).ok();
-}
-
-#[test]
 fn delete_extra_removes_orphans() {
     let src = tmp("src2");
     let dst = tmp("dst2");

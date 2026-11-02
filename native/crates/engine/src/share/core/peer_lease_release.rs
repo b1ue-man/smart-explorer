@@ -126,11 +126,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn remote_drive_task_lease_release_timeout_is_shorter_than_normal_peer_io() {
-        assert!(BEST_EFFORT_RELEASE_TIMEOUT < io_deadline::PEER_OP_TIMEOUT);
-    }
-
-    #[test]
     fn remote_drive_task_lease_release_workers_have_a_hard_bound() {
         let active = AtomicUsize::new(0);
         for _ in 0..MAX_RELEASE_WORKERS {

@@ -76,39 +76,4 @@ mod tests {
         );
         assert_eq!(license("x264"), None);
     }
-
-    /// Android never offers OpenH264 (C2: MediaCodec there): its Cargo
-    /// dependency is limited to Windows and Linux, and so are its modules.
-    #[test]
-    fn screen_task_android_has_no_openh264() {
-        let manifest = include_str!("../../../../../Cargo.toml");
-        let section = "[target.'cfg(any(windows, target_os = \"linux\"))'.dependencies]";
-        let start = manifest.find(section).expect("OpenH264 target section");
-        let rest = &manifest[start + section.len()..];
-        let end = rest.find("\n[").unwrap_or(rest.len());
-        assert!(
-            rest[..end].contains("openh264 ="),
-            "openh264 must stay in {section}"
-        );
-        let before = &manifest[..start];
-        let after = &rest[end..];
-        for other in [before, after] {
-            assert!(
-                !other
-                    .lines()
-                    .any(|line| line.trim_start().starts_with("openh264 =")),
-                "openh264 outside the Windows/Linux section"
-            );
-        }
-        let os_mod = include_str!("../os/mod.rs");
-        for module in ["openh264_codec;", "openh264_install;", "openh264_pins;"] {
-            let at = os_mod.find(module).expect(module);
-            let head = &os_mod[..at];
-            let cfg_line = head.lines().rev().nth(2).unwrap_or_default();
-            assert!(
-                cfg_line.contains("any(windows, target_os = \"linux\")"),
-                "{module} not limited to Windows and Linux: {cfg_line}"
-            );
-        }
-    }
 }

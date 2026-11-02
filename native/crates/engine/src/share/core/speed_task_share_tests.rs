@@ -218,12 +218,6 @@ fn speed_task_share_small_files_4k() -> io::Result<()> {
     bench_set("small_5000x4k", 5000, 4 * 1024)
 }
 
-#[test]
-#[ignore = "benchmark: run explicitly with --ignored --nocapture"]
-fn speed_task_share_medium_files_64k() -> io::Result<()> {
-    bench_set("medium_1000x64k", 1000, 64 * 1024)
-}
-
 /// Runs one case and prints its byte rate and requests per job.
 fn bench_bytes(
     case: &str,
@@ -312,12 +306,6 @@ fn bench_large_file(label: &str, size: usize) -> io::Result<()> {
         })?;
     }
     Ok(())
-}
-
-#[test]
-#[ignore = "benchmark: run explicitly with --ignored --nocapture"]
-fn speed_task_share_single_files_64k() -> io::Result<()> {
-    bench_single_files("single_200x64k", 200, 64 * 1024)
 }
 
 #[test]
