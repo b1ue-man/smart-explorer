@@ -108,8 +108,8 @@ Phase B (Schichten unter dem Kern), Schnitt nach geringster Zahl umzukehrender V
 
 | Crate | Module | Zeilen |
 |---|---|---|
-| `smart_explorer_core` | creds, cryptomator, format, licenses, linemerge, local_access, support_dirs, types | 17 078 |
-| `smart_explorer_storage` | agent_proto, analytics, android_fs, apptrash, cloud, filter, ftp, host_trash, rscan, scanner, source_media, vfs | 68 294 |
+| `smart_explorer_core` | creds, cryptomator, format, host (neu), licenses, linemerge, local_access, support_dirs, types | 17 078 + host |
+| `smart_explorer_storage` | agent_proto, analytics, android_fs, apptrash, cloud, filter, ftp, host_trash, rscan, scanner, source_media, vault_error (neu), vfs | 68 294 |
 | `smart_explorer_transfer` | agent, bisync, copy, sftp, smb, sync, syncjobs, transfer, watch, zipfs | 150 981 |
 | `smart_explorer_engine` (Rest) | apps, autostart, connect, daemon, folder_index, gdrive, keep_awake, login, login_entry, mcp_launcher, mount, net, notify_desktop, rdp, remote_window, screen, share, updater, vault, webdav | 409 085 |
 
@@ -123,10 +123,9 @@ Auflösung je Kante (Produktionscode, Bestand 2026-11-02; Testcode folgt seinem 
 
 | Kante | verwendet | Auflösung |
 |---|---|---|
-| agent→share | `is_synthetic_container` (share/core/fs_capabilities.rs, reine Pfadprüfung) | Funktion in `vfs` (storage), share re-exportiert sie |
-| agent→vault | `vault_locked`, `locked_site`, `wire_error_text` (Fehlertyp `VaultLocked`) | Fehlertyp und die drei Funktionen nach core (`vault_error`), vault re-exportiert |
-| agent_proto→transfer | `compress_policy`, `sensors::latest` | zusammen mit der nächsten Zeile ein Modul `host_load` (Speicherbudget, Sensoren, `sensor_parse`, Kompressionspolitik und ihre OS-Abfragen aus transfer/os/{unix,windows}.rs) in core; transfer re-exportiert |
-| analytics→transfer | `memory_budget`, `physical_memory` (transfer/os/shared/memory.rs nutzt `platform::available_memory`; `parse_meminfo_available` liegt in transfer/core/sensor_parse.rs) | Modul `host_load` (vorige Zeile) |
+| agent→share | `is_synthetic_container` | erledigt (16db8521): vfs/core/peer_namespace.rs mit `split_clean`, `normalize`, `CONNECTIONS_ROOT`; share re-exportiert |
+| agent→vault | `vault_locked`, `locked_site`, `wire_error_text` | erledigt (16db8521): Modul `vault_error` (storage, nutzt agent_proto), vault re-exportiert |
+| agent_proto→transfer, analytics→transfer | `compress_policy`, `sensors::latest`, `memory_budget`, `physical_memory` | erledigt (64ea0855): Modul `host` (core) mit dem OS-Adapter, Speicherbudget, Sensoren, `sensor_parse`, Kompressionspolitik; transfer importiert `host::platform` und re-exportiert |
 | local_access→analytics | ein Verweis in local_access/os/windows/access_task.rs | Typ nach core oder Aufruf umdrehen (offen) |
 | sftp→daemon | `log_worker` (Worker-Protokoll) | Protokollfunktion nach core (support_dirs) |
 | source_media→folder_index | `path_has_skipped_segment` in fixture_root.rs (Testfixture) | Funktion nach storage (source_media) oder Fixture ins obere Crate |
