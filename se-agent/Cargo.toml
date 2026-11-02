@@ -3,8 +3,8 @@
 # the pure-Rust LZ4 block codec — no ring/TLS/GUI — and therefore
 # cross-compiles to static musl for arbitrary Linux servers without a musl C
 # toolchain. It shares the protocol/walk source with the app via #[path] include
-# of the engine crate's agent_proto module (native/crates/engine/src/agent_proto,
-# with host/core/compress_policy.rs and vfs/core/staging_names.rs), so there is
+# of the storage crate's agent_proto module (native/crates/storage/src/agent_proto,
+# with vfs/core/staging_names.rs and core's host/core/compress_policy.rs), so there is
 # one definition. See
 # docs/SSH_AGENT_PLAN.md §7. Diagnostic build:
 #   cd se-agent && cargo build --release --target x86_64-unknown-linux-musl

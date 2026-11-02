@@ -7,35 +7,19 @@
 // the desktop builds keep the full dead-code and unused-import lints.
 #![cfg_attr(target_os = "android", allow(dead_code, unused_imports))]
 
+// The layers below (D13 phase B); their modules keep their `crate::` paths.
+pub use smart_explorer_transfer::*;
+
 #[cfg(all(feature = "android-instrumentation-fixtures", not(debug_assertions)))]
 compile_error!("Android image fixtures are allowed only in a debug instrumentation build");
 
-pub mod agent;
-pub mod agent_proto;
-pub mod analytics;
-#[cfg(unix)]
-pub mod android_fs;
 pub mod apps;
-pub mod apptrash;
 pub mod autostart;
-pub mod bisync;
-pub mod cloud;
 pub mod connect;
-pub mod copy;
-pub mod creds;
-pub mod cryptomator;
 pub mod daemon;
-pub mod filter;
 pub mod folder_index;
-pub mod format;
-pub mod ftp;
 pub mod gdrive;
-pub mod host;
-pub mod host_trash;
 pub mod keep_awake;
-pub mod licenses;
-pub mod linemerge;
-pub mod local_access;
 pub mod login;
 #[cfg(not(target_os = "android"))]
 pub mod login_entry;
@@ -44,32 +28,14 @@ pub use login_entry::run_login_service_if_requested;
 pub mod mcp_launcher;
 pub mod mount;
 pub mod net;
-/// Ports: lower layers reach their higher implementations through the
-/// linker (D13); `declare_port!` and `provide_port!` are defined there.
-pub mod ports;
 pub mod rdp;
 pub mod remote_window;
-pub mod rscan;
-pub mod scanner;
 pub mod screen;
 pub use screen::os::host_worker_main::run_screen_host_worker_if_requested;
-pub mod sftp;
 pub mod share;
-pub mod smb;
-pub mod source_media;
-pub mod support_dirs;
-pub mod sync;
-pub mod syncjobs;
-pub mod transfer;
-pub mod types;
 pub mod updater;
 pub mod vault;
-pub mod vault_error;
-pub mod vfs;
-pub mod watch;
 pub mod webdav;
-pub mod worker_log;
-pub mod zipfs;
 
 /// Appends every panic (thread name, message, backtrace) to the app data
 /// `crash.log`, then runs the previously installed hook. The desktop GUI installs

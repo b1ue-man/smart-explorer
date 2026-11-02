@@ -1,0 +1,58 @@
+[package]
+name = "smart_explorer_transfer"
+version = "0.0.0"
+edition = "2021"
+description = "Smart Explorer transfer layer: copying, transfer engine, synchronisation, SFTP/SMB/agent backends"
+license = "MIT"
+publish = false
+build = "build.rs"
+
+[features]
+default = []
+# Test helpers the tests of the crates above use (fake remotes).
+test-support = ["smart_explorer_storage/test-support"]
+
+[dependencies]
+smart_explorer_storage = { path = "../storage" }
+crossbeam-channel.workspace = true
+globset.workspace = true
+chrono.workspace = true
+russh.workspace = true
+russh-sftp.workspace = true
+tokio.workspace = true
+futures-util.workspace = true
+smb2.workspace = true
+tempfile.workspace = true
+base64.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+ring.workspace = true
+zeroize.workspace = true
+getrandom.workspace = true
+md5.workspace = true
+rusqlite.workspace = true
+sha1.workspace = true
+hmac.workspace = true
+zip.workspace = true
+icu_normalizer.workspace = true
+hmac-013.workspace = true
+sha2-011.workspace = true
+sha1-011.workspace = true
+flate2.workspace = true
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+trash.workspace = true
+
+[target.'cfg(not(windows))'.dependencies]
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+
+[dev-dependencies]
+smart_explorer_storage = { path = "../storage", features = ["test-support"] }
+
+# build.rs
+[build-dependencies]
+flate2.workspace = true

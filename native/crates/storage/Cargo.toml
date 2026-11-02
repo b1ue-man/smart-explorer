@@ -1,0 +1,48 @@
+[package]
+name = "smart_explorer_storage"
+version = "0.0.0"
+edition = "2021"
+description = "Smart Explorer storage layer: virtual file system, local and FTP backends, agent protocol, scans"
+license = "MIT"
+publish = false
+
+[features]
+default = []
+# Test helpers the tests of the crates above use (source media profiles, the
+# hash-cache turn); only their dev-dependencies enable it.
+test-support = ["smart_explorer_core/test-support"]
+
+[dependencies]
+smart_explorer_core = { path = "../core" }
+rayon.workspace = true
+crossbeam-channel.workspace = true
+regex.workspace = true
+globset.workspace = true
+chrono.workspace = true
+ureq.workspace = true
+tokio.workspace = true
+futures-util.workspace = true
+suppaftp.workspace = true
+tempfile.workspace = true
+rustls.workspace = true
+webpki-roots.workspace = true
+base64.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+ring.workspace = true
+getrandom.workspace = true
+md5.workspace = true
+socket2.workspace = true
+sha2-011.workspace = true
+flate2.workspace = true
+lz4_flex.workspace = true
+
+[target.'cfg(not(windows))'.dependencies]
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+
+[dev-dependencies]
+smart_explorer_core = { path = "../core", features = ["test-support"] }

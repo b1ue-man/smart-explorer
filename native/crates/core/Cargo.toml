@@ -1,0 +1,52 @@
+[package]
+name = "smart_explorer_core"
+version = "0.0.0"
+edition = "2021"
+description = "Smart Explorer core layer: types, formats, host adapter, private storage, local access"
+license = "MIT"
+publish = false
+build = "build.rs"
+
+[features]
+default = []
+# Test helpers and fault hooks the tests of the crates above use (access
+# fixtures, publication hooks); only their dev-dependencies enable it.
+test-support = []
+
+[dependencies]
+rayon.workspace = true
+similar.workspace = true
+chrono.workspace = true
+tempfile.workspace = true
+base64.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+chacha20poly1305.workspace = true
+zeroize.workspace = true
+getrandom.workspace = true
+icu_normalizer.workspace = true
+aes-siv.workspace = true
+aes-kw.workspace = true
+aes-gcm-011.workspace = true
+aes-09.workspace = true
+ctr-010.workspace = true
+sha2-011.workspace = true
+scrypt.workspace = true
+data-encoding.workspace = true
+flate2.workspace = true
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+trash.workspace = true
+
+[target.'cfg(not(windows))'.dependencies]
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+keyring.workspace = true
+windows-sys.workspace = true
+windows-core.workspace = true
+
+# build.rs
+[build-dependencies]
+flate2.workspace = true

@@ -8,15 +8,25 @@ license = "MIT"
 publish = false
 
 # One workspace (plan docs/plaene/2026-11-01-idealzustand, D13): this root
-# package holds the programs and the `smart_explorer` facade; the engine, the
-# desktop GUI, the CLI and the Android facade are crates under crates/, the
+# package holds the programs and the `smart_explorer` facade; the layers core,
+# storage, transfer and engine, the desktop GUI, the CLI and the Android facade
+# are crates under crates/, the
 # Android JNI library is android-bridge. All share this Cargo.lock and the
 # profiles below. The root package stays the default member, so `cargo build
 # --bin ...` in `native/` builds the programs as before; tests of every crate
 # run with `cargo test --workspace`. `explorer-command` keeps its own lock and
 # release profile.
 [workspace]
-members = ["android-bridge", "crates/engine", "crates/gui", "crates/cli", "crates/mobile"]
+members = [
+    "android-bridge",
+    "crates/core",
+    "crates/storage",
+    "crates/transfer",
+    "crates/engine",
+    "crates/gui",
+    "crates/cli",
+    "crates/mobile",
+]
 exclude = ["explorer-command"]
 
 # P28: application frames require a validated path/policy generation before

@@ -7162,13 +7162,42 @@ dependencies = [
 ]
 
 [[package]]
-name = "smart_explorer_engine"
+name = "smart_explorer_core"
 version = "0.0.0"
 dependencies = [
  "aes 0.9.1",
  "aes-gcm 0.11.1",
  "aes-kw",
  "aes-siv",
+ "base64 0.22.1",
+ "chacha20poly1305",
+ "chrono",
+ "ctr 0.10.1",
+ "data-encoding",
+ "flate2",
+ "getrandom 0.2.17",
+ "icu_normalizer",
+ "keyring",
+ "libc",
+ "rayon",
+ "scrypt",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sha2 0.11.0",
+ "similar",
+ "tempfile",
+ "trash",
+ "windows-core 0.58.0",
+ "windows-sys 0.59.0",
+ "zeroize",
+]
+
+[[package]]
+name = "smart_explorer_engine"
+version = "0.0.0"
+dependencies = [
+ "aes-kw",
  "argon2 0.5.3",
  "ashpd 0.13.13",
  "base64 0.22.1",
@@ -7177,7 +7206,6 @@ dependencies = [
  "chacha20poly1305",
  "chrono",
  "crossbeam-channel",
- "ctr 0.10.1",
  "ctrlc",
  "data-encoding",
  "flate2",
@@ -7193,7 +7221,6 @@ dependencies = [
  "if-addrs 0.13.4",
  "image",
  "iroh",
- "keyring",
  "libc",
  "libloading",
  "lz4_flex",
@@ -7209,26 +7236,18 @@ dependencies = [
  "rand 0.10.1",
  "rayon",
  "rcgen",
- "regex",
  "resvg",
  "ring",
  "roxmltree 0.20.0",
- "rusqlite",
- "russh",
- "russh-sftp",
  "rustls",
  "same-file",
- "scrypt",
  "serde",
  "serde_json",
  "sha1 0.10.6",
  "sha1 0.11.0",
  "sha2 0.10.9",
  "sha2 0.11.0",
- "similar",
- "smb2",
- "socket2",
- "suppaftp",
+ "smart_explorer_transfer",
  "tempfile",
  "tokio",
  "trash",
@@ -7240,13 +7259,11 @@ dependencies = [
  "wayland-protocols-wlr",
  "webpki-roots 0.26.11",
  "windows 0.58.0",
- "windows-core 0.58.0",
  "windows-sys 0.59.0",
  "winreg",
  "x11rb",
  "zbus 5.16.0",
  "zeroize",
- "zip",
 ]
 
 [[package]]
@@ -7316,6 +7333,74 @@ dependencies = [
  "tokio",
  "trash",
  "zeroize",
+]
+
+[[package]]
+name = "smart_explorer_storage"
+version = "0.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "crossbeam-channel",
+ "flate2",
+ "futures-util",
+ "getrandom 0.2.17",
+ "globset",
+ "libc",
+ "lz4_flex",
+ "md5 0.7.0",
+ "rayon",
+ "regex",
+ "ring",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sha2 0.11.0",
+ "smart_explorer_core",
+ "socket2",
+ "suppaftp",
+ "tempfile",
+ "tokio",
+ "ureq",
+ "webpki-roots 0.26.11",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "smart_explorer_transfer"
+version = "0.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "crossbeam-channel",
+ "flate2",
+ "futures-util",
+ "getrandom 0.2.17",
+ "globset",
+ "hmac 0.12.1",
+ "hmac 0.13.0",
+ "icu_normalizer",
+ "libc",
+ "md5 0.7.0",
+ "ring",
+ "rusqlite",
+ "russh",
+ "russh-sftp",
+ "serde",
+ "serde_json",
+ "sha1 0.10.6",
+ "sha1 0.11.0",
+ "sha2 0.10.9",
+ "sha2 0.11.0",
+ "smart_explorer_storage",
+ "smb2",
+ "tempfile",
+ "tokio",
+ "trash",
+ "windows-sys 0.59.0",
+ "zeroize",
+ "zip",
 ]
 
 [[package]]
