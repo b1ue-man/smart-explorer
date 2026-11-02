@@ -115,7 +115,8 @@ impl AgentBackend {
         &self.version
     }
 
-    pub(super) fn features(&self) -> ServerFeatures {
+    /// The features the agent announced in its handshake.
+    pub fn features(&self) -> ServerFeatures {
         self.pool.features()
     }
 

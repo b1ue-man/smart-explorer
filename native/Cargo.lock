@@ -7190,7 +7190,6 @@ dependencies = [
  "similar",
  "tempfile",
  "trash",
- "windows-core 0.58.0",
  "windows-sys 0.59.0",
  "zeroize",
 ]
@@ -7261,6 +7260,7 @@ dependencies = [
  "wayland-protocols-wlr",
  "webpki-roots 0.26.11",
  "windows 0.58.0",
+ "windows-core 0.58.0",
  "windows-sys 0.59.0",
  "winreg",
  "x11rb",

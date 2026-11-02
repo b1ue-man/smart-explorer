@@ -93,6 +93,8 @@ rcgen.workspace = true
 windows-sys.workspace = true
 winreg.workspace = true
 windows.workspace = true
+# #[implement] (screen::os::windows::mf_buffer_lease) expands to ::windows_core paths.
+windows-core.workspace = true
 
 [dev-dependencies]
 smart_explorer_transfer = { path = "../transfer", features = ["test-support"] }

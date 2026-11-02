@@ -47,7 +47,6 @@ libc.workspace = true
 [target.'cfg(windows)'.dependencies]
 keyring.workspace = true
 windows-sys.workspace = true
-windows-core.workspace = true
 
 # build.rs
 [build-dependencies]

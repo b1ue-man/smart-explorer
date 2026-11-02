@@ -77,7 +77,10 @@ def run(title, command, cwd=NATIVE, env=None):
 
 
 def part_workspace():
-    threads = ["--test-threads=1"] if WINDOWS else []
+    # One test thread on both systems, as build.yml: tests of the programs
+    # start se workers and fixture servers with deadlines and count the
+    # processes of the machine.
+    threads = ["--test-threads=1"]
     # The crates' own tests build the layers with feature test-support (their
     # dev-dependencies); the programs and their integration tests build in a
     # separate invocation without it, so `se`/`smart_explorer` started by
