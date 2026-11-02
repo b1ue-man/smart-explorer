@@ -273,8 +273,11 @@ Release; no build is committed to Git (plan `docs/plaene/2026-11-01-idealzustand
 4. The committed `release-native/update-feed/` stays at v0.5.192: it is the bridge for installs up to
    0.5.190, which still read the raw feed of `main`; every later version reads the release feed.
 
-Dry run 41363952649 (2026-11-02) on ecefbb71: Windows 40 min, Linux 26 min, Android 26 min in
-parallel, publish verified all 26 assets in the draft.
+Dry run 41393646281 (2026-11-02) on 0ea59fb1: 32.8 minutes in total (release v0.5.193 before the
+splits: 54). Windows programs 5.2 (share server and DLL), 17.5 (app) and 24.5 minutes (`se` and
+updater, on a runner that also compiled the shared dependencies 1.6 times slower) plus 3.1 for
+packing, Linux 13.1 (desktop app) and 17.9 (static programs) plus 1.1 for staging, Android 11.3 and
+11.5 per ABI plus 6.4 for the APK; publish verified all 26 assets in the draft.
 
 ## Cut a release
 
