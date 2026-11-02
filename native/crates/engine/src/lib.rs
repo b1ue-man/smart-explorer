@@ -44,6 +44,9 @@ pub use login_entry::run_login_service_if_requested;
 pub mod mcp_launcher;
 pub mod mount;
 pub mod net;
+/// Ports: lower layers reach their higher implementations through the
+/// linker (D13); `declare_port!` and `provide_port!` are defined there.
+pub mod ports;
 pub mod rdp;
 pub mod remote_window;
 pub mod rscan;
@@ -65,6 +68,7 @@ pub mod vault_error;
 pub mod vfs;
 pub mod watch;
 pub mod webdav;
+pub mod worker_log;
 pub mod zipfs;
 
 /// Appends every panic (thread name, message, backtrace) to the app data

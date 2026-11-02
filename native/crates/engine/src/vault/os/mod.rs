@@ -101,6 +101,9 @@ mod sync_job;
 mod transfer_blob;
 #[path = "shared/transfer_blob_context.rs"]
 mod transfer_blob_context;
+// The vault port of the transfer layer (D13, `crate::ports`).
+#[path = "shared/transfer_port.rs"]
+mod transfer_port;
 #[path = "shared/unlock.rs"]
 mod unlock;
 
@@ -159,9 +162,7 @@ pub use password::{
 };
 pub use registry_store::{resolve_in, RegistryLoad, RegistryStore, VAULTS_DIR};
 pub use remember::{account, OsSecretStore, SecretStore, ACCOUNT_PREFIX};
-pub use replica::{
-    create_vault_job, default_replicas_root, CopyTarget, JobPlace, VaultJobCreated,
-};
+pub use replica::{create_vault_job, default_replicas_root, CopyTarget, JobPlace, VaultJobCreated};
 pub use sealed_spool::{SealedSpoolFile, SealedSpoolStorage};
 pub use session::{
     host_visibility, hosts_register, lock_all_for_exit, register, wire_error_text, ConsumerGuard,
@@ -232,6 +233,9 @@ mod backend_servers_support;
 #[cfg(test)]
 #[path = "shared/backend_servers_tests.rs"]
 mod backend_servers_tests;
+#[cfg(test)]
+#[path = "shared/issues_vault_tests.rs"]
+mod issues_vault_tests;
 // U26 (VLT-M8): the comparison mode, its actions and the check.
 #[cfg(test)]
 #[path = "shared/backend_test_support.rs"]

@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::keys::KeyPolicy;
 use super::types::{Baseline, Sig};
 
-pub(super) struct RecordBook {
+pub struct RecordBook {
     pub baseline: Baseline,
     names: BTreeMap<String, BTreeSet<String>>,
     keys: KeyPolicy,

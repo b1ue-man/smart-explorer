@@ -22,9 +22,23 @@ pub(super) fn handle_identity(file: &File) -> io::Result<Option<String>> {
     if !metadata.is_file() || class.link_like || class.special {
         return Ok(None);
     }
-    match crate::copy::local_file_identity_handle(file) {
+    match local_file_identity_handle(file) {
         Ok(identity) => Ok(Some(identity)),
         Err(error) if error.kind() == io::ErrorKind::Unsupported => Ok(None),
         Err(error) => Err(error),
     }
+}
+
+/// The same identity through an already authorized handle. Confined VFS
+/// adapters use this boundary without reopening an external path.
+pub fn local_file_identity_handle(file: &File) -> io::Result<String> {
+    let metadata = file.metadata()?;
+    let class = crate::local_access::classify_open_file(file)?;
+    if !metadata.is_file() || class.link_like || class.special {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "file identity requires a regular, non-link file",
+        ));
+    }
+    crate::host::stable_handle_identity(file)
 }

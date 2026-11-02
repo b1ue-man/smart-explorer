@@ -1,6 +1,6 @@
 //! Durable transfer records: authenticated purpose, record and exact vault scope.
 use super::transfer_blob_context::{
-    context_for_sites, invalid, validate_context, TransferBlobContext,
+    context_for_sites, invalid, scope_of, validate_context, TransferBlobContext,
 };
 use crate::vault::MAX_SEALED_TEXT;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -20,6 +20,7 @@ pub fn seal_transfer_blob(
     record_id: &str,
     plain: &[u8],
 ) -> io::Result<Vec<u8>> {
+    let context = scope_of(context)?;
     validate_context(context)?;
     if record_id.is_empty() {
         return Err(invalid());

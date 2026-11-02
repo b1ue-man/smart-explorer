@@ -119,7 +119,7 @@ pub(super) fn validate_kind(job: &SyncJob) -> Result<(), String> {
                     "vault_site_a/vault_site_b gibt es nur bei Tresor-Jobs (kind=vault)".into(),
                 );
             }
-            crate::connect::validate_sync_endpoints(&job.source, &job.target)
+            crate::vfs::validate_sync_endpoints(&job.source, &job.target)
         }
         JobKind::Vault => validate_vault(job),
     }

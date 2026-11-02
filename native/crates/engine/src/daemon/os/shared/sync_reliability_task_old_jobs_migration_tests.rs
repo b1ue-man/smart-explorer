@@ -1,4 +1,6 @@
-//! C08 migration and editing retain executable saved-job identity and state.
+//! C08 migration and editing retain executable saved-job identity and state. Moved
+//! here from syncjobs/os/shared/sync_reliability_task_old_jobs_tests.rs: the saved-job
+//! fixture lies above the transfer layer (plan docs/plaene/2026-11-01-idealzustand, D13).
 use crate::daemon::sync_reliability_task_old_jobs_tests::SavedJob;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -110,7 +112,7 @@ fn sync_reliability_task_old_jobs_tsv_and_text_baseline_import_execute_same_job(
     .join("\t");
     let legacy_jobs = temp.path().join("jobs.tsv");
     std::fs::write(&legacy_jobs, format!("{row}\n")).unwrap();
-    let imported = super::migration::load_or_migrate(&configs, &legacy_jobs).unwrap();
+    let imported = crate::syncjobs::migration::load_or_migrate(&configs, &legacy_jobs).unwrap();
     assert_eq!(imported.len(), 1);
     assert_eq!(imported[0].id, id);
     assert_eq!(imported[0].config_version, 0);
@@ -140,7 +142,7 @@ fn sync_reliability_task_old_jobs_tsv_and_text_baseline_import_execute_same_job(
     );
     let saved = SavedJob::with_body(
         id.clone(),
-        super::persistence_codec::serialize_kv_core(&imported[0]),
+        crate::syncjobs::persistence_codec::serialize_kv_core(&imported[0]),
     );
     let job = saved.load();
     assert_eq!(job.id, id);

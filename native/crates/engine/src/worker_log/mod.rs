@@ -1,10 +1,19 @@
 //! Cross-process append and bounded rotation; no diagnostic history is
 //! truncated in place. The same OS file lock also serializes job state.
+//! Moved from the daemon (plan D13) so that the transfer layer writes the
+//! service log too; the daemon re-exports `log` under its old names.
+#[cfg(windows)]
+#[path = "os/windows.rs"]
+mod platform;
+#[cfg(not(windows))]
+#[path = "os/linux_os.rs"]
+mod platform;
+pub use platform::open_log;
 use std::io::{self, Write};
 use std::path::Path;
 const CAP: u64 = 256 * 1024;
 const ARCHIVES: usize = 3;
-pub(super) fn log(message: &str) {
+pub fn log(message: &str) {
     let directory = crate::support_dirs::sync_data_dir();
     let result = (|| -> io::Result<()> {
         std::fs::create_dir_all(&directory)?;
@@ -43,7 +52,7 @@ fn append(directory: &Path, message: &str) -> io::Result<()> {
         end -= 1;
     }
     let message = message[..end].replace(['\r', '\n'], " ");
-    let mut file = super::platform::open_log(&path)?;
+    let mut file = open_log(&path)?;
     writeln!(
         file,
         "{} {}",

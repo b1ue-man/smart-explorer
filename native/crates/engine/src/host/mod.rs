@@ -15,6 +15,10 @@ mod local_replace;
 mod local_replace;
 #[path = "os/shared/memory.rs"]
 mod memory;
+// Restart-stable file identity, shared verbatim with se-agent (through agent_proto).
+#[cfg(not(windows))]
+#[path = "os/linux_file_proof.rs"]
+mod linux_file_proof;
 #[cfg(windows)]
 #[path = "os/windows.rs"]
 pub mod platform;
@@ -25,6 +29,9 @@ pub mod platform;
 pub mod sensor_parse;
 #[path = "os/shared/sensors.rs"]
 pub mod sensors;
+#[cfg(windows)]
+#[path = "os/windows_file_proof.rs"]
+mod windows_file_proof;
 
 #[cfg(test)]
 #[path = "core/compress_policy_tests.rs"]
@@ -33,8 +40,12 @@ mod compress_policy_tests;
 #[path = "core/sensor_parse_tests.rs"]
 mod sensor_parse_tests;
 
+#[cfg(not(windows))]
+pub use linux_file_proof::stable_handle_identity;
 pub use local_replace::replace_file as replace_local_file;
 #[cfg(windows)]
 pub use local_replace::wide as wide_local_path;
 pub use memory::{memory_budget, reserve_memory, try_reserve_memory, MemoryReservation};
 pub use platform::{available_memory, physical_memory};
+#[cfg(windows)]
+pub use windows_file_proof::stable_handle_identity;

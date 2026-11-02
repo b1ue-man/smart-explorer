@@ -8,6 +8,7 @@
 //! vault's purpose key `log-fields` (shown again only while it is
 //! unlocked), and withheld when that is not possible. The issues of the
 //! transfer list stay in memory as they are.
+use super::super::ports::{vault, FIELDS_WITHHELD};
 use super::super::types::TransferIssue;
 use super::Side;
 use std::fs::File;
@@ -35,9 +36,9 @@ enum LogFile {
     Unavailable,
 }
 
-/// Seals the texts of a vault site (`vault::seal_log_fields`).
-pub type FieldSealer =
-    Arc<dyn Fn(&str, &[&str]) -> Result<Vec<String>, String> + Send + Sync>;
+/// Seals the texts of a vault site (`vault::seal_log_fields` through the
+/// vault port).
+pub type FieldSealer = Arc<dyn Fn(&str, &[&str]) -> Result<Vec<String>, String> + Send + Sync>;
 
 /// Whether a vault takes part in the transfer (K20).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -66,7 +67,7 @@ pub fn log_dir() -> PathBuf {
 
 /// The sealer of this process: the worker's register or its IPC.
 fn process_sealer() -> FieldSealer {
-    Arc::new(|site: &str, items: &[&str]| crate::vault::seal_log_fields(site, items))
+    Arc::new(|site: &str, items: &[&str]| vault().seal_log_fields(site, items))
 }
 
 /// The vault side among `sides`: `Some(site)` for a vault backend opened
@@ -75,7 +76,7 @@ fn vault_side(sides: [Side<'_>; 2]) -> Fields {
     let mut fields = Fields::Plain;
     for side in sides {
         if let Side::Remote(backend) = side {
-            match crate::vault::vault_site_of(backend) {
+            match vault().site_of(backend) {
                 Some(Some(site)) => return Fields::Vault(Some(site)),
                 Some(None) => fields = Fields::Vault(None),
                 None => {}
@@ -98,7 +99,7 @@ impl IssueLog {
         Self::for_sides_with(job_id, dir, source, target, process_sealer())
     }
 
-    fn for_sides_with(
+    pub fn for_sides_with(
         job_id: u64,
         dir: PathBuf,
         source: Side<'_>,
@@ -126,7 +127,7 @@ impl IssueLog {
         match &self.fields {
             Fields::Vault(site) => Some(site.clone()),
             Fields::Plain if path.is_empty() => None,
-            Fields::Plain => crate::vault::vault_mount_of(Path::new(path)),
+            Fields::Plain => vault().mount_of(Path::new(path)),
         }
     }
 
@@ -139,7 +140,7 @@ impl IssueLog {
             serde_json::json!({
                 "vault": site.unwrap_or_default(),
                 "path": "",
-                "message": crate::vault::FIELDS_WITHHELD,
+                "message": FIELDS_WITHHELD,
             })
         };
         let Some(site) = site else {
@@ -355,7 +356,3 @@ mod tests {
         );
     }
 }
-
-#[cfg(test)]
-#[path = "issues_vault_tests.rs"]
-mod vault_tests;

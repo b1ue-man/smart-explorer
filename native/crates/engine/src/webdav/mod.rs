@@ -45,6 +45,10 @@ mod transfer_engine_task_tests;
 mod sync_reliability_task_provider_redirect_tests;
 
 #[cfg(test)]
+#[path = "core/batches_backend_webdav_compatibility_task_tests.rs"]
+mod batches_backend_webdav_compatibility_task_tests;
+
+#[cfg(test)]
 #[path = "core/sync_reliability_task_provider_collections_tests.rs"]
 mod sync_reliability_task_provider_collections_tests;
 

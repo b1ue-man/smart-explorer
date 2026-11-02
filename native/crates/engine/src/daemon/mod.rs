@@ -366,11 +366,26 @@ pub use update_stop::{
 };
 
 #[cfg(test)]
+#[path = "os/shared/edit_download_direct_open_tests.rs"]
+mod edit_download_direct_open_tests;
+#[cfg(all(test, windows))]
+#[path = "os/shared/startup_regression_task_access_tests.rs"]
+mod startup_regression_task_access_tests;
+#[cfg(test)]
+#[path = "os/shared/sync_links_remote_tests.rs"]
+mod sync_links_remote_tests;
+#[cfg(test)]
+#[path = "os/shared/sync_reliability_task_old_jobs_editor_tests.rs"]
+mod sync_reliability_task_old_jobs_editor_tests;
+#[cfg(test)]
 #[path = "os/shared/sync_reliability_task_old_jobs_fixture.rs"]
 mod sync_reliability_task_old_jobs_fixture;
 #[cfg(test)]
 #[path = "os/shared/sync_reliability_task_old_jobs_loader_tests.rs"]
 mod sync_reliability_task_old_jobs_loader_tests;
+#[cfg(test)]
+#[path = "os/shared/sync_reliability_task_old_jobs_migration_tests.rs"]
+mod sync_reliability_task_old_jobs_migration_tests;
 #[cfg(test)]
 #[path = "os/shared/sync_reliability_task_old_jobs_tests.rs"]
 pub mod sync_reliability_task_old_jobs_tests;
@@ -380,6 +395,9 @@ mod sync_reliability_task_old_jobs_trigger_tests;
 #[cfg(test)]
 #[path = "core/tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "os/shared/transfer_engine_task_service_tests.rs"]
+mod transfer_engine_task_service_tests;
 #[cfg(test)]
 pub use backend_server::serve_backend as serve_sync_link_fixture;
 
@@ -420,6 +438,4 @@ mod connect_triggers;
 mod guardian;
 pub use guardian::run_guardian;
 
-#[path = "os/shared/log_store.rs"]
-mod log_store;
 pub use state::log as log_worker;

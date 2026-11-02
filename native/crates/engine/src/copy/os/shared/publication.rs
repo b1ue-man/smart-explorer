@@ -54,19 +54,9 @@ pub fn local_file_identity(path: &Path) -> io::Result<String> {
     super::super::platform::stable_path_identity(path)
 }
 
-/// The same identity through an already authorized handle. Confined VFS
-/// adapters use this boundary without reopening an external path.
-pub fn local_file_identity_handle(file: &File) -> io::Result<String> {
-    let metadata = file.metadata()?;
-    let class = crate::local_access::classify_open_file(file)?;
-    if !metadata.is_file() || class.link_like || class.special {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "file identity requires a regular, non-link file",
-        ));
-    }
-    super::super::platform::stable_handle_identity(file)
-}
+/// The handle identity is defined in the storage layer (`vfs`); copy keeps
+/// its old path through this re-export.
+pub use crate::vfs::local_file_identity_handle;
 
 pub(super) fn before(
     observer: Option<&dyn PublicationObserver>,

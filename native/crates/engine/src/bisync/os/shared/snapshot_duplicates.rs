@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 
 use super::snapshot_dir::WalkContext;
 
-pub(super) type DuplicateGroups = BTreeMap<String, Vec<VfsMeta>>;
+pub type DuplicateGroups = BTreeMap<String, Vec<VfsMeta>>;
 
 pub(super) fn observe(
     ctx: &WalkContext<'_>,

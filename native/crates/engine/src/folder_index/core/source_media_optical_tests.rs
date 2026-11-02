@@ -1,4 +1,7 @@
-use super::*;
+use crate::source_media::{
+    acquire, guard_reader, snapshots, test_profiles, with_cancellation, GuardedIterator, Priority,
+    Source, OPTICAL_BLOCK_BYTES,
+};
 use std::{
     fs,
     io::Read,
@@ -223,7 +226,7 @@ fn batches_task_optical_process_lock_excludes_second_process() {
     fs::write(fixture.path().join("parent-holds"), b"held").unwrap();
     let mut child = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
-            "source_media::tests::batches_task_optical_process_child",
+            "folder_index::source_media_optical_tests::batches_task_optical_process_child",
             "--exact",
         ])
         .env("SE_TEST_OPTICAL_ROOT", fixture.path())

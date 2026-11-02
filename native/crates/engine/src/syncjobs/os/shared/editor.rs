@@ -332,7 +332,7 @@ fn validate_ignore_patterns(raw: &str) -> Result<(), String> {
 }
 
 fn validate_endpoints(source: &str, target: &str) -> Result<(), String> {
-    crate::connect::validate_sync_endpoints(source, target)
+    crate::vfs::validate_sync_endpoints(source, target)
 }
 
 #[cfg(test)]

@@ -1,22 +1,34 @@
 //! Scope and live-session authority for persisted transfer names.
 use super::{hosts_register, mount_policy, register, vault_mount_of, RegistryStore};
+use crate::transfer::ports::RecordContext;
 use crate::vault::{vault_locked, RootBinding, VaultLocator, VaultStoreLocator};
 use std::{
     io,
     path::{Path, PathBuf},
 };
 
+/// The vault scope of persisted transfer names as callers hold it: the
+/// opaque `transfer::RecordContext` (D13: the transfer layer keeps it without
+/// naming `vault`), carrying a `BlobScope`. A context with any other content
+/// is refused by every function here.
+pub type TransferBlobContext = RecordContext;
+
 /// Never serialized and only redacted in Debug: bindings may contain names.
 #[derive(Clone)]
-pub struct TransferBlobContext {
+pub(super) struct BlobScope {
     pub(super) bindings: Vec<RootBinding>,
     records: Vec<String>,
     epochs: Vec<u64>,
 }
-impl std::fmt::Debug for TransferBlobContext {
+impl std::fmt::Debug for BlobScope {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("TransferBlobContext(..)")
     }
+}
+
+/// The scope inside `context`; refused when the vault did not create it.
+pub(super) fn scope_of(context: &TransferBlobContext) -> io::Result<&BlobScope> {
+    context.scope::<BlobScope>().ok_or_else(invalid)
 }
 
 pub fn transfer_blob_context(locations: &[&str]) -> io::Result<Option<TransferBlobContext>> {
@@ -45,14 +57,14 @@ pub fn transfer_blob_context(locations: &[&str]) -> io::Result<Option<TransferBl
     if sites.is_empty() {
         return Ok(None);
     }
-    context_for_sites(&sites).map(Some)
+    context_for_sites(&sites).map(|scope| Some(RecordContext::new(scope)))
 }
 
-pub(super) fn context_for_sites(sites: &[String]) -> io::Result<TransferBlobContext> {
+pub(super) fn context_for_sites(sites: &[String]) -> io::Result<BlobScope> {
     if sites.is_empty() || sites.windows(2).any(|pair| pair[0] >= pair[1]) {
         return Err(invalid());
     }
-    let mut context = TransferBlobContext {
+    let mut context = BlobScope {
         bindings: Vec::new(),
         records: Vec::new(),
         epochs: Vec::new(),
@@ -85,6 +97,7 @@ pub(super) fn context_for_sites(sites: &[String]) -> io::Result<TransferBlobCont
 /// Consumers must clear plaintext on Err, and also on register lock events.
 /// Full open validates current provider/account/root identity separately.
 pub fn check_transfer_blob_context(context: &TransferBlobContext) -> io::Result<()> {
+    let context = scope_of(context)?;
     validate_records(context)?;
     for (binding, expected) in context.bindings.iter().zip(&context.epochs) {
         if !hosts_register() {
@@ -103,6 +116,10 @@ pub fn check_transfer_blob_context(context: &TransferBlobContext) -> io::Result<
 /// Persisting an already captured job must remain possible during provider
 /// outage. This checks only local records and session epochs; it never rebinds.
 pub fn check_transfer_blob_context_live(context: &TransferBlobContext) -> io::Result<()> {
+    validate_context(scope_of(context)?)
+}
+/// `check_transfer_blob_context_live` on the scope itself.
+pub(super) fn validate_context(context: &BlobScope) -> io::Result<()> {
     validate_records(context)?;
     for (binding, expected) in context.bindings.iter().zip(&context.epochs) {
         if hosts_register() {
@@ -119,7 +136,7 @@ pub fn check_transfer_blob_context_live(context: &TransferBlobContext) -> io::Re
     }
     Ok(())
 }
-fn validate_records(context: &TransferBlobContext) -> io::Result<()> {
+fn validate_records(context: &BlobScope) -> io::Result<()> {
     for (binding, expected) in context.bindings.iter().zip(&context.records) {
         let record = RegistryStore::open_default()
             .resolve(&binding.site)
@@ -201,5 +218,3 @@ pub(super) fn invalid() -> io::Error {
         "Tresorbindung der Transfermetadaten ist nicht bestätigt",
     )
 }
-
-pub(super) use check_transfer_blob_context_live as validate_context;

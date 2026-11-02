@@ -193,7 +193,7 @@ fn reopen_directory(parent: &File) -> io::Result<File> {
 }
 
 fn require_namespace_support(parent: &File) -> io::Result<()> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     task_tests::namespace_support()?;
     let file = parent.try_clone()?;
     let mut device = Box::new([0u32; 2]);
@@ -254,7 +254,7 @@ fn namespace_supported(filesystem: &str, characteristics: u32) -> bool {
 }
 
 fn flush_directory(file: File) -> io::Result<()> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     task_tests::before_flush(&file)?;
     let mut completion: Box<IO_STATUS_BLOCK> = Box::new(unsafe { std::mem::zeroed() });
     // Normal flags (0) flush data, metadata and underlying storage cache.
@@ -307,6 +307,7 @@ fn unconfirmed(operation: &str) -> io::Error {
     io::Error::other(format!("{operation} completion unconfirmed"))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
 #[path = "publication_task_tests.rs"]
-mod task_tests;
+pub mod task_tests;

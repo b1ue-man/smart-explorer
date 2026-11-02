@@ -137,7 +137,7 @@ fn index_error(error: rusqlite::Error) -> io::Error {
     io::Error::other(format!("incremental sync index: {error}"))
 }
 
-pub(super) fn pair_dir(pair_id: &str) -> PathBuf {
+pub fn pair_dir(pair_id: &str) -> PathBuf {
     crate::support_dirs::sync_data_dir()
         .join(PAIRS_DIR)
         .join(pair_id)

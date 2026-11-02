@@ -91,6 +91,7 @@ mod tests;
 #[cfg(test)]
 #[path = "core/transfer_engine_task_service_tests.rs"]
 mod transfer_engine_task_service_tests;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
 #[path = "core/transfer_engine_task_tests.rs"]
-mod transfer_engine_task_tests;
+pub mod transfer_engine_task_tests;

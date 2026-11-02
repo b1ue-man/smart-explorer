@@ -22,7 +22,8 @@ use crate::local_access::{LocalEntry, NotRegular};
 mod quarantine;
 pub use quarantine::QuarantinedChild;
 #[path = "create.rs"]
-mod create;
+#[doc(hidden)]
+pub mod create;
 pub use create::secure_private_handle;
 #[path = "directory_identity.rs"]
 pub(super) mod identity;

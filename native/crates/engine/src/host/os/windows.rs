@@ -24,7 +24,7 @@ pub fn backslash_is_name_char() -> bool {
 }
 
 pub fn replace_file_atomic(src: &Path, dest: &Path) -> std::io::Result<()> {
-    crate::vfs::replace_local_file(src, dest)
+    crate::host::replace_local_file(src, dest)
 }
 
 pub fn available_space_for_path(path: &Path) -> Option<u64> {

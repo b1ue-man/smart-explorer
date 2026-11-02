@@ -225,7 +225,7 @@ fn stream<T: Send>(
 
 /// The tree of a whole remote side through its walk next to the data, with
 /// hidden entries and across mounts (`None` = that side has no such walk).
-pub(super) fn walk_hashed_via_agent(
+pub fn walk_hashed_via_agent(
     backend: &dyn crate::vfs::Backend,
     root: &str,
     cancel: &std::sync::atomic::AtomicBool,

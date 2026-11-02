@@ -119,6 +119,26 @@ fn discard_own(stage: &Path, file: File) {
     }
 }
 
+/// The kernel copy behind `LocalBackend::server_copy_to_stage` (D13,
+/// `crate::ports`): the same function, reached from `vfs` through its port.
+struct KernelCopy;
+
+impl crate::vfs::LocalServerCopy for KernelCopy {
+    fn copy_to_new_file(
+        &self,
+        source: &Path,
+        stage: &Path,
+        expected: u64,
+        cancel: &AtomicBool,
+    ) -> io::Result<u64> {
+        copy_to_new_file(source, stage, expected, cancel)
+    }
+}
+
+crate::provide_port!(
+    smart_explorer_port_vfs_local_server_copy: dyn crate::vfs::LocalServerCopy = KernelCopy
+);
+
 #[cfg(test)]
 #[path = "server_copy_tests.rs"]
 mod tests;

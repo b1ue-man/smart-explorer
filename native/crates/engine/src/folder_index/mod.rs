@@ -31,3 +31,7 @@ pub use os::stat_and_rank;
 #[cfg(test)]
 #[path = "core/tests.rs"]
 mod tests;
+
+#[cfg(all(test, any(windows, target_os = "linux")))]
+#[path = "core/source_media_optical_tests.rs"]
+mod source_media_optical_tests;

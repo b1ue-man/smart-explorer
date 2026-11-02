@@ -20,6 +20,9 @@ pub use scanner::scan_confined;
 pub use scanner::scan_confined_with;
 pub use scanner::*;
 pub use scanner::{local_scan_threads, scan_with, scan_with_guard, ScanBudget};
+#[cfg(all(test, windows))]
+#[path = "os/windows/access_task.rs"]
+mod access_task;
 mod os;
 pub use os::host_recycle_available;
 pub use os::{

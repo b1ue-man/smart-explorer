@@ -32,7 +32,7 @@ use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 /// `FILE_REMOTE_DEVICE`: the device is a remote one (a network redirector).
 const REMOTE_DEVICE: u32 = 0x10;
 /// `FILE_WEBDAV_FS`: a network file system on WebDAV (the same masks as
-/// `copy/os/windows_file_proof.rs` uses to refuse a remote volume).
+/// `host/os/windows_file_proof.rs` uses to refuse a remote volume).
 const WEBDAV_DEVICE: u32 = 0x2000;
 
 /// Whether the device characteristics name a network volume.

@@ -219,3 +219,14 @@ pub fn backend_from_url(url: &str) -> io::Result<SmbBackend> {
         root: parsed.root,
     })
 }
+
+/// `smb://` roots of `vfs::backend_for` (D13, `crate::ports`).
+struct SmbUrls;
+
+impl crate::vfs::UrlBackends for SmbUrls {
+    fn open(&self, url: &str) -> io::Result<crate::vfs::BackendHandle> {
+        Ok(std::sync::Arc::new(backend_from_url(url)?))
+    }
+}
+
+crate::provide_port!(smart_explorer_port_vfs_smb: dyn crate::vfs::UrlBackends = SmbUrls);

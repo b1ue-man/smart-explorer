@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-pub(super) fn temp_root(label: &str) -> PathBuf {
+pub fn temp_root(label: &str) -> PathBuf {
     let root = std::env::temp_dir().join(format!(
         "se_transfer_engine_{label}_{}_{}",
         std::process::id(),
@@ -26,18 +26,18 @@ pub(super) fn temp_root(label: &str) -> PathBuf {
     root
 }
 
-pub(super) fn fwd(path: &Path) -> String {
+pub fn fwd(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
-pub(super) struct Served {
-    pub(super) backend: AgentBackend,
+pub struct Served {
+    pub backend: AgentBackend,
     shutdown: TcpStream,
     server: std::thread::JoinHandle<()>,
 }
 
 impl Served {
-    pub(super) fn finish(self) {
+    pub fn finish(self) {
         drop(self.backend);
         let _ = self.shutdown.shutdown(Shutdown::Both);
         let _ = self.server.join();
@@ -45,7 +45,7 @@ impl Served {
 }
 
 /// A client over loopback; `serve` runs the server side of one connection.
-pub(super) fn served(serve: impl FnOnce(TcpStream, TcpStream) + Send + 'static) -> Served {
+pub fn served(serve: impl FnOnce(TcpStream, TcpStream) + Send + 'static) -> Served {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let server = std::thread::spawn(move || {
@@ -76,7 +76,7 @@ pub(super) fn serve_agent() -> Served {
 
 /// Open a large read, consume one byte and leave the rest unread; a parallel
 /// listing must still answer at once and the stream must stay intact.
-pub(super) fn assert_slow_consumer_does_not_block(backend: &AgentBackend, root: &Path) {
+pub fn assert_slow_consumer_does_not_block(backend: &AgentBackend, root: &Path) {
     let big = vec![0x5au8; 24 * 1024 * 1024];
     std::fs::write(root.join("big.bin"), &big).unwrap();
     std::fs::write(root.join("small.txt"), b"x").unwrap();
@@ -99,11 +99,11 @@ pub(super) fn assert_slow_consumer_does_not_block(backend: &AgentBackend, root: 
 }
 
 #[derive(Default)]
-pub(super) struct RecordingSink {
-    pub(super) begun: Vec<(usize, u64)>,
-    pub(super) data: HashMap<usize, Vec<u8>>,
+pub struct RecordingSink {
+    pub begun: Vec<(usize, u64)>,
+    pub data: HashMap<usize, Vec<u8>>,
     pub(super) ended: Vec<(usize, Option<String>)>,
-    pub(super) failed: Vec<usize>,
+    pub failed: Vec<usize>,
     pub(super) abort_at: Option<usize>,
 }
 

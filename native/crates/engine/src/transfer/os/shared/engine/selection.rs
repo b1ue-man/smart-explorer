@@ -119,8 +119,7 @@ fn preview_context_valid(
     state: &std::sync::Mutex<crate::transfer::folder_conflict::FolderPreviewState>,
     context: Option<&super::record_io::RecordContext>,
 ) -> bool {
-    if context.is_none_or(|context| crate::vault::check_transfer_blob_context_live(context).is_ok())
-    {
+    if context.is_none_or(|context| crate::transfer::ports::vault().check_live(context).is_ok()) {
         return true;
     }
     let mut state = state

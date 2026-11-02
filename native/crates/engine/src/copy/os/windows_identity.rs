@@ -1,6 +1,6 @@
 //! Full Windows file identity for durable file publication receipts.
 use std::{io, path::Path};
-#[path = "windows_file_proof.rs"]
+#[path = "../../host/os/windows_file_proof.rs"]
 mod windows_file_proof;
 pub use windows_file_proof::{same_file_object, stable_handle_identity};
 

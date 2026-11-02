@@ -37,7 +37,7 @@ pub fn parallel_scan_allowed() -> bool {
     io::Error::last_os_error().raw_os_error() == Some(ERROR_NO_TOKEN as i32)
 }
 
-pub(super) struct BackupRead {
+pub(crate) struct BackupRead {
     previous: Option<Token>,
     _token: Token,
     // A thread identity must never migrate through Send/Sync.
@@ -45,7 +45,7 @@ pub(super) struct BackupRead {
 }
 
 impl BackupRead {
-    pub(super) fn enable() -> io::Result<Self> {
+    pub(crate) fn enable() -> io::Result<Self> {
         let mut handle = null_mut();
         let previous = if unsafe {
             OpenThreadToken(

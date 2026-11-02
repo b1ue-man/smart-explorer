@@ -288,13 +288,13 @@ impl Drop for Pair {
     }
 }
 
-pub(super) fn clean(out: &Outcome) {
+pub fn clean(out: &Outcome) {
     assert!(out.errors.is_empty() && out.conflicts.is_empty() && out.blocked.is_none()
         && out.stopped.is_none() && out.deferred.is_empty() && !out.busy && !out.canceled,
         "errors={:?}, conflicts={}, blocked={:?}, stopped={:?}, deferred={:?}, busy={}, canceled={}",
         out.errors, out.conflicts.len(), out.blocked, out.stopped, out.deferred, out.busy, out.canceled);
 }
-pub(super) fn forward() -> BisyncOptions {
+pub fn forward() -> BisyncOptions {
     BisyncOptions {
         direction: Direction::AtoB,
         max_transfers: 1,

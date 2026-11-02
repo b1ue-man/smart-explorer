@@ -3,7 +3,7 @@ use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 
 pub type FileIdentity = (u32, u64);
-#[path = "../../../copy/os/windows_file_proof.rs"]
+#[path = "../../../host/os/windows_file_proof.rs"]
 mod persistent_file_proof;
 pub use persistent_file_proof::{same_file_object, stable_handle_identity};
 

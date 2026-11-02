@@ -11,7 +11,8 @@ const VAULT_PREFIXES: [&str; 2] = ["vault://", "vault-store://"];
 /// Build the backend for a root string. Remote schemes are recognized by URL
 /// prefix; everything else (drive paths, `\\server\share` UNC, mapped drives)
 /// is local. The SFTP/FTP/SMB arms are filled in by their respective steps so
-/// that adding a protocol never touches the callers. An `smb://` root needs its
+/// that adding a protocol never touches the callers; SFTP and SMB, in a higher
+/// layer, open through their ports (`vfs::ports`, D13). An `smb://` root needs its
 /// password in the URL; saved connections open through `connect`. Vault
 /// locators are refused: they must never reach the local backend.
 pub fn backend_for(root: &str) -> io::Result<BackendHandle> {
@@ -23,11 +24,11 @@ pub fn backend_for(root: &str) -> io::Result<BackendHandle> {
             "Tresororte (vault://, vault-store://) öffnet nur die Ortsauflösung",
         ))
     } else if lower.starts_with("sftp://") {
-        Ok(Arc::new(crate::sftp::backend_from_url(r)?))
+        super::ports::sftp_backends().open(r)
     } else if lower.starts_with("ftp://") || lower.starts_with("ftps://") {
         Ok(Arc::new(crate::ftp::backend_from_url(r)?))
     } else if lower.starts_with("smb://") {
-        Ok(Arc::new(crate::smb::backend_from_url(r)?))
+        super::ports::smb_backends().open(r)
     } else {
         Ok(Arc::new(LocalBackend::new(r)))
     }

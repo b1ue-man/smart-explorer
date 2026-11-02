@@ -25,7 +25,7 @@ pub(super) struct Frame {
     pub dirs_remove: Vec<String>,
 }
 
-pub(super) struct Journal {
+pub struct Journal {
     path: PathBuf,
     valid_bytes: u64,
     keys: KeyPolicy,

@@ -11,7 +11,7 @@ pub(super) fn san(s: &str) -> String {
 }
 
 /// Serialize one job as a `key=value` block (the body of its `.conf` file).
-pub(super) fn serialize_kv(j: &SyncJob) -> String {
+pub fn serialize_kv(j: &SyncJob) -> String {
     let mut s = serialize_kv_core(j);
     push_rv1_keys(&mut s, j);
     push_vault_keys(&mut s, j);
@@ -51,7 +51,7 @@ fn push_rv1_keys(s: &mut String, j: &SyncJob) {
 /// The keys every version before RV1 wrote, in their order. The legacy
 /// import verifies jobs by a hash over exactly these, so it stays stable when
 /// keys are added.
-pub(super) fn serialize_kv_core(j: &SyncJob) -> String {
+pub fn serialize_kv_core(j: &SyncJob) -> String {
     let mut s = String::new();
     s.push_str("# Smart Explorer sync job\n");
     s.push_str(&format!("id={}\n", san(&j.id)));
@@ -126,7 +126,7 @@ fn push_endpoint(output: &mut String, key: &str, value: &str) {
 
 /// Parse one `key=value` block. Unknown and missing keys remain
 /// forward-compatible, but a malformed known key invalidates the whole job.
-pub(super) fn parse_kv_checked(body: &str) -> Result<SyncJob, String> {
+pub fn parse_kv_checked(body: &str) -> Result<SyncJob, String> {
     let mut job = SyncJob::new(String::new(), String::new(), String::new());
     job.id.clear();
     job.ignore.clear();

@@ -4,8 +4,9 @@ use std::{ffi::OsString, fs::File, io, path::Path};
 #[path = "core/entry_error.rs"]
 mod entry_error;
 #[cfg(windows)]
+#[doc(hidden)]
 #[path = "os/windows/mod.rs"]
-mod platform;
+pub mod platform;
 #[cfg(not(windows))]
 #[path = "os/linux_os.rs"]
 mod platform;
@@ -16,6 +17,11 @@ mod regular;
 pub use entry_error::EntryError;
 pub use platform::{ConfinedDirectory, DirectoryHandle, QuarantinedChild};
 pub use regular::{FinalLink, NotRegular};
+
+// The analytics access tests (remote Windows task) reach the privileged
+// fixtures through these names.
+#[cfg(all(test, windows))]
+pub(crate) use platform::{access_fixtures, BackupRead};
 
 #[cfg(test)]
 #[path = "directory_handle_tests.rs"]

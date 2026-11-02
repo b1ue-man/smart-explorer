@@ -105,11 +105,7 @@ pub fn unconfirmed_jobs() -> io::Result<Vec<JobRecord>> {
     Ok(records)
 }
 
-pub fn reopen_job(
-    id: &str,
-    source: Endpoint,
-    target: Endpoint,
-) -> Result<TransferJob, String> {
+pub fn reopen_job(id: &str, source: Endpoint, target: Endpoint) -> Result<TransferJob, String> {
     let record: JobRecord = read_record(
         &path(id).map_err(|error| error.to_string())?,
         RecordKind::Job,
@@ -175,7 +171,7 @@ fn load_catalog() -> io::Result<(CatalogState, Vec<(String, RecordContext)>)> {
                 ));
             }
             if let Some(context) = &context {
-                crate::vault::check_transfer_blob_context_live(context)?;
+                crate::transfer::ports::vault().check_live(context)?;
             }
             Ok(Some((record, context)))
         })();

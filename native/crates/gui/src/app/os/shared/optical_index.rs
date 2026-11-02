@@ -317,7 +317,7 @@ fn paths_hash(index: &FolderIndex, root: &str) -> String {
 }
 
 #[cfg(test)]
-#[path = "../../../../../engine/src/source_media/fixture_root.rs"]
+#[path = "fixture_root.rs"]
 mod fixture_root;
 
 #[cfg(test)]

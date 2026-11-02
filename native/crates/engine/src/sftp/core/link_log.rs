@@ -33,11 +33,11 @@ fn printable(text: &str) -> String {
         .collect()
 }
 
-/// Writes the line to the service log (`crate::daemon::log_worker`, which locks
+/// Writes the line to the service log (`crate::worker_log::log`, which locks
 /// across processes). Tests do not touch the user's log.
 pub(in crate::sftp) fn emit(line: &str) {
     #[cfg(not(test))]
-    crate::daemon::log_worker(line);
+    crate::worker_log::log(line);
     #[cfg(test)]
     let _ = line;
 }

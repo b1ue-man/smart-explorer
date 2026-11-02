@@ -110,8 +110,9 @@ fn drive_parent(path: &Path) -> Option<&Path> {
 
 /// Test hooks: full probes counted below watched folders, and a switch that
 /// resolves every probe in full (the answers before this change).
-#[cfg(test)]
-pub(super) mod hooks {
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub mod hooks {
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -126,7 +127,7 @@ pub(super) mod hooks {
 
     /// While set, every probe of this process is resolved in full. Other
     /// tests then only take the full probe they took before this change.
-    pub(in super::super) fn resolve_always(on: bool) {
+    pub fn resolve_always(on: bool) {
         ALWAYS.store(on, Ordering::SeqCst);
     }
 
@@ -140,9 +141,9 @@ pub(super) mod hooks {
     }
 
     /// Counts the full probes of paths below `root` while it lives.
-    pub(in super::super) struct Resolutions(PathBuf);
+    pub struct Resolutions(PathBuf);
 
-    pub(in super::super) fn watch(root: &Path) -> Resolutions {
+    pub fn watch(root: &Path) -> Resolutions {
         let root = crate::local_access::normalize_scan_root(root);
         WATCHED
             .lock()
@@ -152,7 +153,7 @@ pub(super) mod hooks {
     }
 
     impl Resolutions {
-        pub(in super::super) fn count(&self) -> usize {
+        pub fn count(&self) -> usize {
             WATCHED
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())

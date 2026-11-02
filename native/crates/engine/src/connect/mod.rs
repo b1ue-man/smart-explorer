@@ -75,3 +75,19 @@ pub mod sync_reliability_task_provider_fixture;
 #[cfg(test)]
 #[path = "os/shared/sync_reliability_task_provider_tests.rs"]
 mod sync_reliability_task_provider_tests;
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "os/shared/sync_reliability_task_provider_ftps_tests.rs"]
+mod sync_reliability_task_provider_ftps_tests;
+
+#[cfg(test)]
+#[path = "core/smb_endpoint_tests.rs"]
+mod smb_endpoint_tests;
+
+#[cfg(test)]
+#[path = "os/shared/smb_segments_end_to_end_tests.rs"]
+mod smb_segments_end_to_end_tests;
+
+#[cfg(test)]
+#[path = "os/shared/sync_reliability_task_share_versions_tests.rs"]
+mod sync_reliability_task_share_versions_tests;

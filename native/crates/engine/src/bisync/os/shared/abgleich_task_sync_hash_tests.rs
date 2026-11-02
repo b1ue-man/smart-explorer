@@ -5,8 +5,8 @@
 //! tells the equal files from the one that differs. The scripted server
 //! answers MLST and MLSD (passive data connections), SIZE and MDTM, and
 //! records every command line of every control connection.
-use super::core_impl::backend_from_url;
 use crate::bisync::{self, Action, BisyncOptions, CompareMode, WalkFilter};
+use crate::ftp::backend_from_url;
 use crate::vfs::LocalBackend;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};

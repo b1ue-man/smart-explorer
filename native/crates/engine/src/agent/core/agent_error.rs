@@ -179,9 +179,9 @@ mod tests {
     #[test]
     fn vault_task_vault_error_envelope_roundtrip_and_legacy_text() {
         const SITE: &str = "0123456789abcdef0123456789abcdef";
-        let locked = crate::vault::vault_locked(SITE);
+        let locked = crate::vault_error::vault_locked(SITE);
         // The worker writes the envelope only for a locked vault.
-        let wire = crate::vault::wire_error_text(&locked).expect("envelope of VaultLocked");
+        let wire = crate::vault_error::wire_error_text(&locked).expect("envelope of VaultLocked");
         assert_eq!(
             wire,
             format!("SE_VAULT_V1 locked {SITE} Tresor {SITE} ist gesperrt")
@@ -193,12 +193,12 @@ mod tests {
             ),
             io::Error::new(io::ErrorKind::NotFound, "Tresor x ist gesperrt"),
         ] {
-            assert_eq!(crate::vault::wire_error_text(&other), None, "{other}");
+            assert_eq!(crate::vault_error::wire_error_text(&other), None, "{other}");
         }
         // A client of this version rebuilds the typed error.
         let error = agent_error(wire.clone());
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
-        assert_eq!(crate::vault::locked_site(&error), Some(SITE));
+        assert_eq!(crate::vault_error::locked_site(&error), Some(SITE));
         assert_eq!(error.to_string(), format!("Tresor {SITE} ist gesperrt"));
         // An older client keeps the legacy meaning „error with a message“:
         // its parsers do not know the prefix, the text stays readable.
@@ -213,7 +213,7 @@ mod tests {
             "SE_VAULT_V1 locked".to_string(),
         ] {
             let error = agent_error(legacy.clone());
-            assert_eq!(crate::vault::locked_site(&error), None, "{legacy}");
+            assert_eq!(crate::vault_error::locked_site(&error), None, "{legacy}");
             assert_eq!(error.kind(), io::ErrorKind::Other, "{legacy}");
             assert_eq!(error.to_string(), legacy);
         }

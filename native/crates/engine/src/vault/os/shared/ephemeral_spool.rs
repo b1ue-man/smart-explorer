@@ -64,6 +64,30 @@ impl EphemeralSpool {
     }
 }
 
+/// The vault spool behind `vfs::SealedSpools` (D13, `crate::ports`): the
+/// copies of `vfs::copy_between` with a vault side spool through it.
+struct VaultSpools;
+
+impl crate::vfs::SealedSpools for VaultSpools {
+    fn create(&self) -> io::Result<Box<dyn crate::vfs::SealedSpool>> {
+        Ok(Box::new(EphemeralSpool::new()?))
+    }
+}
+
+impl crate::vfs::SealedSpool for EphemeralSpool {
+    fn fill(&mut self, reader: &mut dyn Read) -> io::Result<u64> {
+        EphemeralSpool::fill(self, reader)
+    }
+
+    fn reader(&mut self) -> io::Result<Box<dyn Read + '_>> {
+        Ok(Box::new(EphemeralSpool::reader(self)?))
+    }
+}
+
+crate::provide_port!(
+    smart_explorer_port_vfs_sealed_spools: dyn crate::vfs::SealedSpools = VaultSpools
+);
+
 #[cfg(test)]
 #[path = "ephemeral_spool_tests.rs"]
 mod tests;

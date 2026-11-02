@@ -38,3 +38,7 @@ pub use imp::{
     validate_directory_target, LocalFailure, LocalOutcome, LocalRequest, PacketStage,
     PacketStaging, PublicationObserver,
 };
+
+#[cfg(all(test, windows))]
+#[path = "os/shared/publication_observed_task_tests.rs"]
+mod publication_observed_task_tests;

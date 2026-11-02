@@ -334,13 +334,14 @@ impl Backend for LocalBackend {
         cancel: &std::sync::atomic::AtomicBool,
     ) -> VfsResult<Option<u64>> {
         local_platform::check_new_name(&local_platform::to_os(stage))?;
-        crate::copy::copy_to_new_file(
-            &local_platform::to_os(src),
-            &local_platform::to_os(stage),
-            size,
-            cancel,
-        )
-        .map(Some)
+        super::ports::local_server_copy()
+            .copy_to_new_file(
+                &local_platform::to_os(src),
+                &local_platform::to_os(stage),
+                size,
+                cancel,
+            )
+            .map(Some)
     }
     fn discard_copy_stage(&self, stage: &str) -> VfsResult<()> {
         let path = local_platform::to_os(stage);

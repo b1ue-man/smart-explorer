@@ -12,8 +12,6 @@ mod batch_remote;
 mod batch_remote_server;
 #[cfg(test)]
 mod batches_backend_compatibility_task_tests;
-#[cfg(test)]
-mod batches_backend_webdav_compatibility_task_tests;
 mod bottleneck;
 mod discovery;
 mod dispatch;
@@ -29,7 +27,8 @@ pub mod folder_reservation;
 pub use folder_alias_store::new_job_id;
 mod selection;
 pub use selection::{count_folder_conflict, folder_conflicts, FolderPreviewScan};
-mod issues;
+#[doc(hidden)]
+pub mod issues;
 mod legacy;
 mod local;
 mod ops;
@@ -87,11 +86,7 @@ const MIN_WAIT: Duration = Duration::from_millis(10);
 static NEXT_JOB: AtomicU64 = AtomicU64::new(1);
 
 /// Runs `job` and reports through `tx`; exactly one `TransferMsg::Done`.
-pub fn run_job(
-    job: TransferJob,
-    tx: &crossbeam_channel::Sender<TransferMsg>,
-    cancel: &AtomicBool,
-) {
+pub fn run_job(job: TransferJob, tx: &crossbeam_channel::Sender<TransferMsg>, cancel: &AtomicBool) {
     run_view(
         JobView::of(&job),
         &|message| {
@@ -106,12 +101,8 @@ pub fn run_job(
 /// inside the worker (Z-P2): no byte goes through the worker's loopback
 /// proxy, and a crash of this process does not end a recoverable job.
 /// Everything else, and every worker without the job service, runs here.
-pub fn run_view(
-    view: JobView<'_>,
-    report: &(dyn Fn(TransferMsg) + Sync),
-    cancel: &AtomicBool,
-) {
-    if crate::daemon::run_transfer_in_worker(&view, report, cancel) {
+pub fn run_view(view: JobView<'_>, report: &(dyn Fn(TransferMsg) + Sync), cancel: &AtomicBool) {
+    if crate::transfer::ports::worker().run_in_worker(&view, report, cancel) {
         return;
     }
     run_view_here(view, report, cancel)

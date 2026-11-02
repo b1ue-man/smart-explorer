@@ -15,8 +15,6 @@ mod hash_walk;
 mod incremental;
 #[path = "tests/links.rs"]
 mod links;
-#[path = "tests/links_remote.rs"]
-mod links_remote;
 #[path = "tests/move_retry.rs"]
 mod move_retry;
 #[path = "tests/safety.rs"]
@@ -32,9 +30,7 @@ fn tmp(tag: &str) -> PathBuf {
     std::fs::create_dir_all(&p).unwrap();
     p
 }
-fn fwd(p: &Path) -> String {
-    p.to_string_lossy().replace('\\', "/")
-}
+use super::test_paths::fwd;
 
 /// Full run helper: walk, plan, apply, update+save baseline.
 fn run(

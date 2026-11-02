@@ -4,21 +4,15 @@ use serde::{de::DeserializeOwned, Serialize};
 use std::io::{self, Read};
 use std::path::Path;
 
-pub type RecordContext = crate::vault::TransferBlobContext;
+// The vault scope and the sealing come from the vault port (D13).
+use crate::transfer::ports::vault;
+pub use crate::transfer::ports::RecordContext;
 
+/// The purpose a record is sealed for (`vault::TransferBlobPurpose`).
 #[derive(Clone, Copy)]
 pub enum RecordKind {
     Job,
     Alias,
-}
-
-impl RecordKind {
-    fn purpose(self) -> crate::vault::TransferBlobPurpose {
-        match self {
-            Self::Job => crate::vault::TransferBlobPurpose::Job,
-            Self::Alias => crate::vault::TransferBlobPurpose::Alias,
-        }
-    }
 }
 
 pub fn record_locations(
@@ -31,7 +25,7 @@ pub fn record_locations(
     for (side, paths) in [(source, sources.to_vec()), (target, vec![target_root])] {
         match side {
             Side::Local => locations.extend(paths.into_iter().map(str::to_string)),
-            Side::Remote(backend) => match crate::vault::vault_site_of(backend) {
+            Side::Remote(backend) => match vault().site_of(backend) {
                 Some(Some(site)) => locations.push(format!("vault://{site}/")),
                 Some(None) => {
                     return Err(io::Error::new(
@@ -50,7 +44,7 @@ pub fn record_locations(
 }
 
 pub fn record_context(locations: &[String]) -> io::Result<Option<RecordContext>> {
-    crate::vault::transfer_blob_context(&locations.iter().map(String::as_str).collect::<Vec<_>>())
+    vault().record_context(&locations.iter().map(String::as_str).collect::<Vec<_>>())
 }
 
 pub fn write_record<T: Serialize>(
@@ -63,7 +57,7 @@ pub fn write_record<T: Serialize>(
     let plain = zeroize::Zeroizing::new(serde_json::to_vec(value).map_err(io::Error::other)?);
     match context {
         Some(context) => {
-            let sealed = crate::vault::seal_transfer_blob(context, kind.purpose(), id, &plain)?;
+            let sealed = vault().seal(context, kind, id, &plain)?;
             crate::support_dirs::write_private_atomic(path, &sealed)
         }
         None => crate::support_dirs::write_private_atomic(path, &plain),
@@ -79,7 +73,7 @@ pub fn seal_payload(
     plain: &[u8],
 ) -> io::Result<Vec<u8>> {
     match context {
-        Some(context) => crate::vault::seal_transfer_blob(context, kind.purpose(), id, plain),
+        Some(context) => vault().seal(context, kind, id, plain),
         None => Ok(plain.to_vec()),
     }
 }
@@ -97,7 +91,8 @@ pub fn open_payload<T: DeserializeOwned>(
         return serde_json::from_slice(stored).map_err(io::Error::other);
     }
     let max_plain = usize::try_from(crate::transfer::memory_budget()).unwrap_or(usize::MAX);
-    let plain = crate::vault::open_transfer_blob(kind.purpose(), id, stored, max_plain)
+    let plain = vault()
+        .open(kind, id, stored, max_plain)
         .map_err(record_error)?;
     serde_json::from_slice(&plain).map_err(io::Error::other)
 }
@@ -143,8 +138,8 @@ pub fn read_record_state<T: DeserializeOwned>(
         ));
     }
     let max_plain = max_plain.min(crate::transfer::memory_budget());
-    match crate::vault::open_transfer_blob(
-        kind.purpose(),
+    match vault().open(
+        kind,
         id,
         &stored,
         usize::try_from(max_plain).unwrap_or(usize::MAX),
@@ -192,7 +187,7 @@ pub fn monitor_contexts<T: Send + 'static>(
             return;
         };
         contexts.retain(|(id, context)| {
-            if crate::vault::check_transfer_blob_context_live(context).is_ok() {
+            if vault().check_live(context).is_ok() {
                 return true;
             }
             revoke(

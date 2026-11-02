@@ -5,7 +5,7 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
 
 pub type FileIdentity = (u64, u64);
-#[path = "../../../copy/os/linux_file_proof.rs"]
+#[path = "../../../host/os/linux_file_proof.rs"]
 mod persistent_file_proof;
 pub use persistent_file_proof::stable_handle_identity;
 

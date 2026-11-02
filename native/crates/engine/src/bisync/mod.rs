@@ -19,6 +19,12 @@
 #[cfg(test)]
 #[path = "os/shared/abgleich_task_agent_fixture.rs"]
 mod abgleich_task_agent_fixture;
+#[cfg(test)]
+#[path = "os/shared/abgleich_task_sync_hash_tests.rs"]
+mod abgleich_task_sync_hash_tests;
+#[cfg(all(test, windows))]
+#[path = "os/shared/abgleich_task_sync_walk_hooks_tests.rs"]
+mod abgleich_task_sync_walk_hooks_tests;
 #[path = "os/shared/apply.rs"]
 mod apply;
 #[path = "os/shared/apply_actions.rs"]
@@ -65,8 +71,9 @@ mod baseline_records;
 mod checkpoint;
 #[path = "os/shared/checkpoint_commit.rs"]
 mod checkpoint_commit;
+#[doc(hidden)]
 #[path = "os/shared/checkpoint_journal.rs"]
-mod checkpoint_journal;
+pub mod checkpoint_journal;
 #[path = "os/shared/checkpoint_run.rs"]
 mod checkpoint_run;
 #[path = "core/compare.rs"]
@@ -171,8 +178,9 @@ mod replacement_publish;
 mod replacement_recovery;
 #[path = "os/shared/replica.rs"]
 mod replica;
+#[doc(hidden)]
 #[path = "os/shared/replica_state.rs"]
-mod replica_state;
+pub mod replica_state;
 #[path = "os/shared/resolve.rs"]
 mod resolve_conflict;
 #[path = "os/shared/run_log.rs"]
@@ -183,10 +191,12 @@ mod run_log_lines;
 mod run_types;
 #[path = "os/shared/single_recorded.rs"]
 mod single_recorded;
+#[doc(hidden)]
 #[path = "os/shared/snapshot.rs"]
-mod snapshot;
+pub mod snapshot;
+#[doc(hidden)]
 #[path = "os/shared/snapshot_agent.rs"]
-mod snapshot_agent;
+pub mod snapshot_agent;
 #[path = "os/shared/snapshot_dir.rs"]
 mod snapshot_dir;
 #[path = "os/shared/snapshot_duplicates.rs"]
@@ -317,10 +327,12 @@ mod contract_tests;
 #[cfg(test)]
 #[path = "os/shared/index_review_tests.rs"]
 mod index_review_tests;
-#[cfg(all(test, windows))]
+#[cfg(all(any(test, feature = "test-support"), windows))]
+#[doc(hidden)]
 #[path = "os/windows/link_fixture.rs"]
 pub mod link_fixture;
-#[cfg(all(test, unix))]
+#[cfg(all(any(test, feature = "test-support"), unix))]
+#[doc(hidden)]
 #[path = "os/linux_os/link_fixture.rs"]
 pub mod link_fixture;
 #[cfg(test)]
@@ -336,18 +348,23 @@ mod stream_hash_tests;
 #[path = "os/shared/sync_speed_task_tests.rs"]
 mod sync_speed_task_tests;
 #[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+#[path = "os/shared/test_paths.rs"]
+pub mod test_paths;
+#[cfg(any(test, feature = "test-support"))]
 #[path = "os/shared/test_remote.rs"]
 pub mod test_remote;
 #[cfg(test)]
 #[path = "os/shared/tests.rs"]
 mod tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "os/shared/sync_reliability_task_backend_fixture.rs"]
 mod sync_reliability_task_backend_fixture;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
 #[path = "os/shared/sync_reliability_task_fixture.rs"]
-mod sync_reliability_task_fixture;
+pub mod sync_reliability_task_fixture;
 #[cfg(test)]
 #[path = "os/shared/sync_reliability_task_options_tests.rs"]
 mod sync_reliability_task_options_tests;

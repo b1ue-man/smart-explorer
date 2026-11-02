@@ -3,6 +3,10 @@
 use crate::creds::{Protocol, SavedConnection};
 
 use super::endpoint::parse_remote_url;
+// The pure overlap rules live in the storage layer (D13), shared with the
+// sync root checks of `vfs` and `syncjobs`.
+pub use crate::vfs::location_paths::paths_overlap;
+use crate::vfs::location_paths::{path_key, paths_overlap_one_way};
 
 /// Why a general sync refuses a vault locator as one of its sides.
 pub const VAULT_SIDE_REFUSED: &str = "Tresororte (vault://, vault-store://) sind keine Seite allgemeiner Sync-Jobs: Tresore gleicht der Tresor-Sync ab";
@@ -181,6 +185,20 @@ pub fn validate_sync_endpoints(source: &str, target: &str) -> Result<(), String>
     Ok(())
 }
 
+/// The endpoint rules of `vfs` and `syncjobs` (D13, `crate::ports`): the
+/// same function, reached from the lower layers through their port.
+struct SyncEndpoints;
+
+impl crate::vfs::SyncEndpointRules for SyncEndpoints {
+    fn validate(&self, source: &str, target: &str) -> Result<(), String> {
+        validate_sync_endpoints(source, target)
+    }
+}
+
+crate::provide_port!(
+    smart_explorer_port_vfs_sync_endpoints: dyn crate::vfs::SyncEndpointRules = SyncEndpoints
+);
+
 fn endpoint_key(endpoint: &str) -> (String, String) {
     match EndpointSpec::parse(endpoint) {
         Ok(EndpointSpec::Local(path)) => {
@@ -215,35 +233,6 @@ fn endpoint_key(endpoint: &str) -> (String, String) {
         }
         Err(_) => (endpoint.into(), String::new()),
     }
-}
-
-pub fn paths_overlap(a: &str, b: &str) -> bool {
-    let (a, b) = (path_key(a), path_key(b));
-    paths_overlap_one_way(&a, &b) || paths_overlap_one_way(&b, &a)
-}
-
-fn paths_overlap_one_way(parent: &str, child: &str) -> bool {
-    parent == child
-        || child
-            .strip_prefix(parent)
-            .is_some_and(|rest| rest.starts_with('/'))
-}
-
-fn path_key(path: &str) -> String {
-    let mut parts: Vec<&str> = Vec::new();
-    for part in path.split('/') {
-        match part {
-            "." => {}
-            ".." if parts
-                .last()
-                .is_some_and(|part| !part.is_empty() && *part != "..") =>
-            {
-                parts.pop();
-            }
-            _ => parts.push(part),
-        }
-    }
-    parts.join("/").trim_end_matches('/').to_string()
 }
 
 pub(super) fn parse_host_port(hostport: &str, protocol: Protocol) -> Option<(String, u16)> {

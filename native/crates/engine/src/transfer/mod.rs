@@ -22,6 +22,10 @@ mod download_file;
 mod downloads;
 #[path = "os/shared/edit_download.rs"]
 mod edit_download;
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+#[path = "os/shared/edit_download_task_source.rs"]
+pub mod edit_download_task_source;
 #[path = "os/shared/engine/mod.rs"]
 pub mod engine;
 #[path = "core/engine_names.rs"]
@@ -57,6 +61,8 @@ mod lane;
 pub mod limiter;
 #[path = "os/shared/local_stage.rs"]
 mod local_stage;
+#[path = "core/ports.rs"]
+pub mod ports;
 #[path = "os/shared/progress.rs"]
 mod progress;
 #[path = "os/shared/read_pipeline.rs"]
@@ -145,6 +151,7 @@ pub use lane::{
 };
 pub use limiter::Limiter;
 pub use local_stage::download_to_id;
+pub use ports::{TransferVault, TransferWorker, FIELDS_WITHHELD};
 // The host adapter, memory budget, sensors and compression policy live in
 // `crate::host` (core layer, D13); these lines keep their transfer paths.
 use crate::host::platform;

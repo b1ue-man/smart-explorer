@@ -1,9 +1,13 @@
 //! K20 of the vault plan: the transfer log keeps no vault cleartext. Fields
 //! of a vault side are sealed with the vault's key, withheld when that is
-//! not possible; transfers without a vault keep their lines unchanged.
-use super::*;
+//! not possible; transfers without a vault keep their lines unchanged. Moved here from
+//! transfer/os/shared/engine/issues_vault_tests.rs: the vault layer lies above the
+//! transfer layer (plan docs/plaene/2026-11-01-idealzustand, D13).
 use crate::bisync::test_remote::FakeRemote;
+use crate::transfer::engine::issues::{FieldSealer, IssueLog};
+use crate::transfer::engine::Side;
 use crate::vfs::Scheme;
+use std::sync::Arc;
 
 const SITE: &str = "0123456789abcdef0123456789abcdef";
 const MARKER: &str = "Geheimakte4d1";

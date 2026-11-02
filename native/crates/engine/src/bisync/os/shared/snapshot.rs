@@ -133,7 +133,7 @@ pub(super) fn walk_files_with_duplicate_files(
     walk_snapshot(be, root, cancel, filter, hash, prev, true, false).map(|snapshot| snapshot.tree)
 }
 
-pub(super) struct Snapshot {
+pub struct Snapshot {
     pub tree: Tree,
     pub filtered: Tree,
     pub dirs: DirSet,
@@ -142,7 +142,7 @@ pub(super) struct Snapshot {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn walk_snapshot(
+pub fn walk_snapshot(
     be: &dyn Backend,
     root: &str,
     cancel: &AtomicBool,
@@ -169,7 +169,7 @@ pub(super) fn walk_snapshot(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn walk_snapshot_with_options(
+pub fn walk_snapshot_with_options(
     be: &dyn Backend,
     root: &str,
     cancel: &AtomicBool,

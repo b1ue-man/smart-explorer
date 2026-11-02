@@ -28,16 +28,18 @@ mod job_state_lock;
 mod job_state_policy;
 #[path = "os/shared/job_state_store.rs"]
 mod job_state_store;
+#[doc(hidden)]
 #[path = "os/shared/migration.rs"]
-mod migration;
+pub mod migration;
 pub use baseline_migration::legacy_baseline_pending;
 #[path = "os/shared/recorded_options.rs"]
 mod recorded_options;
 pub use recorded_options::recorded_options;
 #[path = "os/shared/persistence.rs"]
 mod persistence;
+#[doc(hidden)]
 #[path = "os/shared/persistence_codec.rs"]
-mod persistence_codec;
+pub mod persistence_codec;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 #[path = "os/linux_os.rs"]
 mod platform;
@@ -87,12 +89,6 @@ pub use job_state_lock::StateLock as RuntimeFileLock;
 
 pub use job_state_classify::classify_failure;
 
-#[cfg(test)]
-#[path = "os/shared/sync_reliability_task_old_jobs_editor_tests.rs"]
-mod sync_reliability_task_old_jobs_editor_tests;
-#[cfg(test)]
-#[path = "os/shared/sync_reliability_task_old_jobs_tests.rs"]
-mod sync_reliability_task_old_jobs_tests;
 #[cfg(test)]
 #[path = "os/shared/sync_transparency_task_state_tests.rs"]
 mod sync_transparency_task_state_tests;

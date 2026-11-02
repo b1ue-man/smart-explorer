@@ -7,7 +7,7 @@ pub(super) type FileIdentity = (u64, u64);
 #[path = "linux_recovery.rs"]
 mod linux_recovery;
 pub(super) use linux_recovery::{recover_transfer_child, recover_transfer_child_live};
-#[path = "linux_file_proof.rs"]
+#[path = "../../host/os/linux_file_proof.rs"]
 mod linux_file_proof;
 pub(super) use linux_file_proof::stable_handle_identity;
 

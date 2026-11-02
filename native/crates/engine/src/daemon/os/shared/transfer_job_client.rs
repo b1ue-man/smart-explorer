@@ -126,6 +126,25 @@ pub fn run_transfer_in_worker(
     }
 }
 
+/// The worker port of the transfer layer (D13, `crate::ports`):
+/// `transfer::run_view` asks it before running a job in this process.
+struct WorkerTransfers;
+
+impl crate::transfer::TransferWorker for WorkerTransfers {
+    fn run_in_worker(
+        &self,
+        view: &JobView<'_>,
+        report: &(dyn Fn(TransferMsg) + Sync),
+        cancel: &AtomicBool,
+    ) -> bool {
+        run_transfer_in_worker(view, report, cancel)
+    }
+}
+
+crate::provide_port!(
+    smart_explorer_port_transfer_worker: dyn crate::transfer::TransferWorker = WorkerTransfers
+);
+
 fn worker() -> Option<(SocketAddr, String)> {
     let address = super::ipc_storage::read_ipc_addr()?;
     let token = super::ipc_storage::read_token().ok()?;

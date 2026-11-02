@@ -103,6 +103,7 @@ mod local_dirs;
 mod local_extensions;
 #[path = "os/shared/local_file_identity.rs"]
 mod local_file_identity;
+pub use local_file_identity::local_file_identity_handle;
 #[cfg(windows)]
 #[path = "os/windows/local_platform.rs"]
 mod local_platform;
@@ -111,8 +112,12 @@ mod local_platform;
 mod local_platform;
 #[path = "os/shared/local_stage.rs"]
 mod local_stage;
+#[path = "core/location_paths.rs"]
+pub mod location_paths;
 #[path = "core/meta.rs"]
 mod meta;
+#[path = "core/ports.rs"]
+pub mod ports;
 #[path = "core/promotion.rs"]
 mod promotion;
 #[path = "core/ranges.rs"]
@@ -199,6 +204,10 @@ pub use self::local_platform::check_new_name as check_local_new_name;
 pub use self::local_platform::create_new_private as create_local_copy_stage;
 pub use self::local_platform::rename_no_replace as promote_local_copy;
 pub use self::local_platform::replace_file as replace_local_file;
+pub use self::ports::{
+    validate_sync_endpoints, LocalServerCopy, SealedSpool, SealedSpools, SyncEndpointRules,
+    UrlBackends,
+};
 pub use self::promotion::{
     creates_stages_exclusively, promote_staged_create, promote_staged_replace, stage_proven,
     unique_staging_path,

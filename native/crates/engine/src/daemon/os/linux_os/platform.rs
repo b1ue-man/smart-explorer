@@ -2,22 +2,9 @@
 mod shell;
 pub use shell::{shell_command, spawn_shell};
 
-pub fn open_log(path: &std::path::Path) -> std::io::Result<std::fs::File> {
-    use std::os::unix::fs::OpenOptionsExt;
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(path)?;
-    if !file.metadata()?.is_file() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            "log must be a regular file",
-        ));
-    }
-    Ok(file)
-}
+// Android's platform module re-exports this path (daemon/os/android/platform.rs).
+#[cfg(target_os = "android")]
+pub use crate::worker_log::open_log;
 
 pub fn requires_storage_access(_endpoint: &str) -> bool {
     false

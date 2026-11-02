@@ -1,6 +1,14 @@
-use super::super::*;
-use super::fwd;
+//! Sync links over the remote agent and the daemon's link fixture, and the walk
+//! snapshot's equality with the folder walk. Moved here from
+//! bisync/os/shared/tests/links_remote.rs: the endpoint starts the daemon's
+//! sync-link fixture, which lies above the transfer layer (plan
+//! docs/plaene/2026-11-01-idealzustand, D13).
 use crate::agent::AgentBackend;
+use crate::bisync::test_paths::fwd;
+use crate::bisync::{
+    baseline_file, empty_globset, link_fixture, snapshot, snapshot_agent, BisyncOptions,
+    CompareMode, HashMode, WalkFilter,
+};
 use crate::vfs::{Backend, BackendHandle, LocalBackend};
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
@@ -172,7 +180,7 @@ fn sync_links_task_agent_and_daemon_streams_fall_back_without_losing_protection(
         compare: CompareMode::Checksum,
         ..Default::default()
     };
-    let result = super::super::run(&ea.backend, &ra, &eb.backend, &rb, opts, &cancel, &filter);
+    let result = crate::bisync::run(&ea.backend, &ra, &eb.backend, &rb, opts, &cancel, &filter);
     assert!(result.errors.is_empty(), "{:?}", result.errors);
     assert!(result.conflicts.is_empty());
     assert_eq!(
@@ -307,7 +315,7 @@ type SideFacts = (
     Vec<String>,
     Vec<String>,
     Vec<String>,
-    Vec<(String, super::super::OmissionKind, bool)>,
+    Vec<(String, crate::bisync::OmissionKind, bool)>,
 );
 
 #[cfg(unix)]

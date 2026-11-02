@@ -320,9 +320,9 @@ pub const USE_PROVIDER_CODE: &str = "vault_use_provider";
 pub const USE_PROVIDER_TEXT: &str = "Tresordateien öffnen andere Apps über den \
 Dokumentanbieter von se, ohne Klartextkopie im Zwischenspeicher";
 
-/// K20: what an issue line of a vault says when its fields cannot be sealed.
-pub const FIELDS_WITHHELD: &str =
-    "Eintrag eines Tresors – Pfad und Meldung nur bei entsperrtem Tresor in der Übertragungsliste";
+/// K20: what an issue line of a vault says when its fields cannot be sealed
+/// (the transfer issue log writes it, so the text lives in `transfer`, D13).
+pub use crate::transfer::FIELDS_WITHHELD;
 
 /// A place inside a vault: the site as written and the cleartext path
 /// (`/` for the vault root). `None` for every other location.

@@ -17,7 +17,6 @@ use super::url::{
 };
 use super::wire::ends_listing;
 use super::{backend_from_url, root_has_share, root_with_share};
-use crate::creds::Protocol;
 use smb2::types::status::NtStatus;
 use smb2::types::Command;
 use smb2::Error;
@@ -389,29 +388,6 @@ fn android_task_smb_urls_without_credentials_or_share_never_connect() {
         .err()
         .unwrap();
     assert_eq!(no_share.kind(), io::ErrorKind::InvalidInput);
-}
-
-#[test]
-fn android_task_smb_protocol_and_endpoints_are_recognized() {
-    assert_eq!(Protocol::parse("smb"), Some(Protocol::Smb));
-    assert_eq!(Protocol::Smb.as_str(), "smb");
-    assert_eq!(Protocol::Smb.default_port(), 445);
-    assert!(Protocol::Smb.is_url());
-
-    let endpoint = "smb://FIRMA\\anna@nas:1445/daten/x";
-    assert!(crate::connect::is_remote_url(endpoint));
-    let (protocol, user, host, port, path) = crate::connect::parse_remote_url(endpoint).unwrap();
-    assert_eq!(protocol, Protocol::Smb);
-    assert_eq!(
-        (user.as_str(), host.as_str(), port),
-        ("FIRMA\\anna", "nas", 1445)
-    );
-    assert_eq!(path, "/daten/x");
-    crate::connect::validate_sync_endpoints(endpoint, "/storage/emulated/0/x").unwrap();
-    assert!(
-        crate::connect::validate_sync_endpoints(endpoint, "smb://FIRMA\\anna@nas:1445/daten")
-            .is_err()
-    );
 }
 
 #[test]

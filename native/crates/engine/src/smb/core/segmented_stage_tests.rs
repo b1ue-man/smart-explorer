@@ -1,14 +1,12 @@
 //! The SMB stage several writers fill (E13, U48-7, security answer S14): a
 //! range handle writes only into the file that was created, never creates a
 //! missing name, and a server without a usable file identity gets no ranges.
-//! The stage lives in memory here; the last test needs a real server.
+//! The stage lives in memory here.
 use super::segmented_stage::{
     identity_from, judge, open_with, standard_from, Deviation, Facts, Identity, StageWire,
     SMB_SEGMENTED_WRITE,
 };
 use super::segmented_stage_fake::{foreign, Store};
-use crate::connect::sync_reliability_task_provider_fixture as fixture;
-use crate::vfs::SegmentedStage;
 use smb2::msg::create::CreateAction;
 use std::io::{self, Write};
 use std::sync::atomic::Ordering;
@@ -278,44 +276,4 @@ fn speed_task_smb_segment_finish_checks_identity_and_size_at_a_handle() {
     standard[20] = 1;
     assert_eq!(standard_from(&standard), Some((30, true, false)));
     assert_eq!(standard_from(&standard[..10]), None);
-}
-
-#[test]
-#[ignore = "requires the suite-owned real SMB fixture (SE_SYNC_PROVIDER_MANIFEST)"]
-fn speed_task_smb_segments_end_to_end() {
-    const MIB: usize = 1024 * 1024;
-    let providers = fixture::providers();
-    let provider = providers
-        .iter()
-        .find(|provider| provider.name == "smb")
-        .expect("the segmented SMB stage requires its real SMB fixture");
-    let (backend, root) = provider.open("segments-end-to-end");
-    let size = 3 * MIB + 777;
-    let content: Vec<u8> = (0..size).map(|index| (index % 251) as u8).collect();
-    let stage_path = fixture::path(&*backend, &root, "e2e.bin.se-upload-00ff00ff00ff00ff");
-    let stage = backend
-        .open_segmented_stage(&stage_path, size as u64)
-        .unwrap()
-        .expect("the server gives the stage a file identity");
-    let ranges = [(0, MIB), (MIB, MIB), (2 * MIB, size - 2 * MIB)];
-    let shared: &dyn SegmentedStage = &*stage;
-    std::thread::scope(|scope| {
-        for (offset, len) in ranges {
-            let bytes = &content[offset..offset + len];
-            scope.spawn(move || {
-                let mut writer = shared.segment(offset as u64, len as u64).unwrap();
-                for piece in bytes.chunks(100 * 1024) {
-                    writer.write_all(piece).unwrap();
-                }
-                writer.flush().unwrap();
-            });
-        }
-    });
-    stage.finish().unwrap();
-    let destination = fixture::path(&*backend, &root, "e2e.bin");
-    backend
-        .promote_copy_stage(&stage_path, &destination)
-        .unwrap();
-    assert_eq!(fixture::read(&*backend, &root, "e2e.bin"), content);
-    backend.remove_file(&destination).unwrap();
 }

@@ -226,7 +226,8 @@ pub fn remove_versions(
     super::version_ops::remove(lock, pair_id, sides, cancel)
 }
 
-pub(super) fn now_ms() -> i64 {
+#[doc(hidden)]
+pub fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX))

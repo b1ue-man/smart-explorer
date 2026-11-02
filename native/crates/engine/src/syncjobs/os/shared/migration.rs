@@ -11,7 +11,7 @@ const MARKER_LIMIT_BYTES: u64 = 1024 * 1024;
 const MARKER_NAME: &str = ".legacy-import.pending";
 const MARKER_HEADER: &str = "smart-explorer-legacy-import-v1";
 
-pub(super) fn load_or_migrate(directory: &Path, legacy: &Path) -> io::Result<Vec<SyncJob>> {
+pub fn load_or_migrate(directory: &Path, legacy: &Path) -> io::Result<Vec<SyncJob>> {
     let marker = directory.join(MARKER_NAME);
     let marker_exists = exists_checked(&marker)?;
     let legacy_exists = exists_checked(legacy)?;

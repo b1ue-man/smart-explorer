@@ -16,13 +16,13 @@ pub fn copy_file<B: Backend + ?Sized>(
 /// vault takes part.
 enum Spool {
     Plain(std::fs::File),
-    Sealed(crate::vault::EphemeralSpool),
+    Sealed(Box<dyn super::SealedSpool>),
 }
 
 impl Spool {
     fn new(sealed: bool) -> io::Result<Self> {
         if sealed {
-            Ok(Spool::Sealed(crate::vault::EphemeralSpool::new()?))
+            Ok(Spool::Sealed(super::ports::sealed_spools().create()?))
         } else {
             Ok(Spool::Plain(tempfile::tempfile()?))
         }

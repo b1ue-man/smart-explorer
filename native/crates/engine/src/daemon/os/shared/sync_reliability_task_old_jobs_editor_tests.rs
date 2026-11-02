@@ -1,5 +1,7 @@
-//! C08 codec and editor retain the same stored endpoints, owner and options.
-use super::sync_reliability_task_old_jobs_tests::root_path;
+//! C08 codec and editor retain the same stored endpoints, owner and options. Moved
+//! here from syncjobs/os/shared/sync_reliability_task_old_jobs_editor_tests.rs: the
+//! saved-job fixture lies above the transfer layer (plan docs/plaene/2026-11-01-idealzustand, D13).
+use super::sync_reliability_task_old_jobs_migration_tests::root_path;
 use crate::daemon::sync_reliability_task_old_jobs_tests::SavedJob;
 
 #[test]
@@ -20,14 +22,17 @@ fn sync_reliability_task_old_jobs_literal_remote_locators_keep_options_through_m
     ];
     for (source, target) in endpoints {
         let saved = SavedJob::old(source, target, "calendar");
-        let before = super::persistence_codec::parse_kv_checked(&saved.original).unwrap();
+        let before = crate::syncjobs::persistence_codec::parse_kv_checked(&saved.original).unwrap();
         assert_eq!(before.config_version, 0);
         saved.assert_options(source, target);
         let job = saved.load();
-        let original = super::persistence_codec::serialize_kv(&job);
+        let original = crate::syncjobs::persistence_codec::serialize_kv(&job);
         let editor = crate::syncjobs::editor::JobEditor::from_job(&job);
         let edited = editor.build_sync_job(Some(&job)).unwrap();
-        assert_eq!(super::persistence_codec::serialize_kv(&edited), original);
+        assert_eq!(
+            crate::syncjobs::persistence_codec::serialize_kv(&edited),
+            original
+        );
         crate::syncjobs::upsert(&edited).unwrap();
         saved.assert_options(source, target);
         assert_eq!(

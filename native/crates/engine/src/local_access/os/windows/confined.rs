@@ -19,8 +19,9 @@ use windows_sys::Win32::Storage::FileSystem::{
 mod names;
 #[path = "confined_native.rs"]
 mod native;
+#[doc(hidden)]
 #[path = "publication.rs"]
-mod publication;
+pub mod publication;
 
 struct Pinned {
     file: File,

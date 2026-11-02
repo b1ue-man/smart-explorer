@@ -34,7 +34,7 @@ use windows_sys::Win32::{
     System::Threading::{GetCurrentProcess, GetCurrentThread, OpenProcessToken, OpenThreadToken},
 };
 
-const ACL_REVISION: u32 = 2;
+pub const ACL_REVISION: u32 = 2;
 const SECURITY_DESCRIPTOR_REVISION: u32 = 1;
 
 struct Token(HANDLE);
@@ -48,15 +48,15 @@ impl Drop for Token {
     }
 }
 
-struct PrivateSecurity {
+pub struct PrivateSecurity {
     descriptor: SECURITY_DESCRIPTOR,
-    _acl: Vec<u64>,
+    pub _acl: Vec<u64>,
     user: Vec<u64>,
     default_owner: Vec<u64>,
 }
 
 impl PrivateSecurity {
-    fn new(is_directory: bool) -> io::Result<Self> {
+    pub fn new(is_directory: bool) -> io::Result<Self> {
         let token = effective_token()?;
         let user = token_information(&token, TokenUser, size_of::<TOKEN_USER>())?;
         let default_owner = token_information(&token, TokenOwner, size_of::<TOKEN_OWNER>())?;
@@ -288,7 +288,7 @@ fn token_information(
     Ok(buffer)
 }
 
-fn descriptor(file: &File, information: u32) -> io::Result<Vec<u64>> {
+pub fn descriptor(file: &File, information: u32) -> io::Result<Vec<u64>> {
     let mut needed = 0;
     // SAFETY: a live metadata-capable file; first query sizes the buffer.
     let first = unsafe {
@@ -387,7 +387,7 @@ fn verify_private(file: &File, security: &PrivateSecurity, is_directory: bool) -
     Ok(())
 }
 
-fn win(result: i32) -> io::Result<()> {
+pub fn win(result: i32) -> io::Result<()> {
     if result == 0 {
         Err(io::Error::last_os_error())
     } else {

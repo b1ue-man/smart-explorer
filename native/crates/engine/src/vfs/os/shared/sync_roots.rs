@@ -25,9 +25,9 @@ pub fn validate_sync_roots(
                 return Err(overlap());
             }
         }
-        crate::connect::validate_sync_endpoints(root_a, root_b).map_err(invalid)?;
+        super::validate_sync_endpoints(root_a, root_b).map_err(invalid)?;
     } else if a.namespace_identity() == b.namespace_identity()
-        && crate::connect::location_paths_overlap(root_a, root_b)
+        && super::location_paths::paths_overlap(root_a, root_b)
     {
         return Err(overlap());
     }

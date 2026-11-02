@@ -12,8 +12,9 @@ use windows_sys::Win32::Storage::FileSystem::{
 
 use super::{validate_directory, validate_name, DirectoryHandle, PinnedDirectory};
 
+#[doc(hidden)]
 #[path = "private_security.rs"]
-mod private_security;
+pub mod private_security;
 pub use private_security::secure_private_handle;
 
 impl DirectoryHandle {
