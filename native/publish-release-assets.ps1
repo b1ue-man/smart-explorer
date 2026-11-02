@@ -166,7 +166,9 @@ try {
     $feedUrl = "https://github.com/$repository/releases/latest/download/version.txt"
     $deadline = (Get-Date).AddMinutes(5)
     do {
-        $latest = try { (Invoke-WebRequest -Uri $feedUrl -UseBasicParsing).Content.Trim() } catch { "" }
+        # The asset arrives as application/octet-stream, which Invoke-WebRequest
+        # returns as bytes; curl gives the text (release 41369467666).
+        $latest = "$(& curl.exe -sSL $feedUrl)".Trim()
         if ($latest -eq $version) { break }
         Start-Sleep -Seconds 10
     } while ((Get-Date) -lt $deadline)
