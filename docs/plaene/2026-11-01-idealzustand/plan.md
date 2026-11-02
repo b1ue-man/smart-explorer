@@ -117,7 +117,32 @@ Umzukehrende Verweise im Produktionscode: transfer→vault 17, analytics→trans
 analytics→bisync 2, sftp→daemon 2, source_media→folder_index 2, syncjobs→connect 2, vfs→connect 2,
 vfs→copy 2, vfs→bisync 2, vfs→vault 2, agent→share 1, agent→vault 1, local_access→analytics 1,
 support_dirs→vfs 1, transfer→daemon 1, vfs→sftp 1, vfs→smb 1. Testcode mit Verweisen nach oben wandert
-in das Crate, dessen Module er braucht. Nächster Schritt: je Kante Typ nach unten verschieben oder
+in das Crate, dessen Module er braucht.
+
+Auflösung je Kante (Produktionscode, Bestand 2026-11-02; Testcode folgt seinem Crate):
+
+| Kante | verwendet | Auflösung |
+|---|---|---|
+| agent→share | `is_synthetic_container` (share/core/fs_capabilities.rs, reine Pfadprüfung) | Funktion in `vfs` (storage), share re-exportiert sie |
+| agent→vault | `vault_locked`, `locked_site`, `wire_error_text` (Fehlertyp `VaultLocked`) | Fehlertyp und die drei Funktionen nach core (`vault_error`), vault re-exportiert |
+| agent_proto→transfer | `compress_policy`, `sensors::latest` | Kompressionspolitik und Sensorwerte nach storage (agent_proto), transfer re-exportiert |
+| analytics→bisync | `is_engine_name` (bisync/core/paths.rs) | Namensprüfung nach core, bisync re-exportiert |
+| analytics→transfer | `memory_budget`, `physical_memory` (transfer/os/shared/memory.rs, os/unix.rs, os/windows.rs) | Speicherbudget mit OS-Adaptern nach core |
+| local_access→analytics | ein Verweis in local_access/os/windows/access_task.rs | Typ nach core oder Aufruf umdrehen (offen) |
+| sftp→daemon | `log_worker` (Worker-Protokoll) | Protokollfunktion nach core (support_dirs) |
+| source_media→folder_index | `path_has_skipped_segment` in fixture_root.rs (Testfixture) | Funktion nach storage (source_media) oder Fixture ins obere Crate |
+| support_dirs→vfs | `replace_local_file` | Ersetzen einer lokalen Datei nach core, vfs re-exportiert |
+| syncjobs→connect, vfs→connect | `validate_sync_endpoints`, `location_paths_overlap` (connect/core/location.rs) | reine Ortsprüfung nach storage (vfs), connect re-exportiert |
+| transfer→daemon | `run_transfer_in_worker` (daemon/os/shared/transfer_job_client.rs) | Schnittstelle im transfer-Crate, der daemon trägt die Umsetzung ein; ohne Eintrag läuft der Auftrag im eigenen Prozess wie heute außerhalb des Workers (zu prüfen) |
+| transfer→vault | Versiegeln der Auftragsdaten: `transfer_blob_context`, `check_transfer_blob_context_live`, `seal_transfer_blob`, `open_transfer_blob`, `vault_site_of`, `vault_mount_of`, `seal_log_fields`, `FIELDS_WITHHELD` | Schnittstelle `TransferVault` im transfer-Crate, vault trägt sie ein; ohne Eintrag lehnt transfer jeden Ort in einem Tresor ab (geschlossen scheitern, nie Klartext) |
+| vfs→bisync | Typ `Sig` (bisync/core/types.rs) | Typ nach storage (vfs), bisync re-exportiert |
+| vfs→copy | `local_file_identity_handle`, `copy_to_new_file` | lokale Dateihelfer nach storage (vfs) |
+| vfs→sftp, vfs→smb | `backend_from_url` in vfs/core/dispatch.rs | Zuordnung URL→Backend als Register in vfs; sftp und smb tragen sich ein, oder die Zuordnung wandert ins transfer-Crate (offen: Aufrufer in storage, z. B. ftp) |
+| vfs→vault | `EphemeralSpool` (vault/os/shared/ephemeral_spool.rs) | Spool-Schnittstelle in vfs, vault trägt die verschlüsselte Umsetzung ein |
+
+Offen für Eintragungen (transfer→daemon, transfer→vault, vfs→vault, vfs→sftp/smb): ein Einstieg
+`smart_explorer_engine::init()`, den jedes Programm, die Android-Fassade und die Testhilfen aufrufen, oder
+statische Zuordnung über Typen statt Laufzeiteintrag; Entscheidung beim Umsetzen dieser Kanten. Nächster Schritt: je Kante Typ nach unten verschieben oder
 Schnittstelle mit Registrierung beim Start; danach die drei Crates anlegen wie in Phase A.
 
 ## D13 — Zuschnitt der Crate-Aufteilung (Analyse 2026-11-01)
