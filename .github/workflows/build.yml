@@ -138,12 +138,16 @@ jobs:
 
       - name: Tests (host, including se subprocess coverage)
         # One build job and one test thread keep memory bounded while exercising
-        # every workspace crate (engine, gui, cli, mobile; D13), every binary
-        # harness, and native/tests/se_cli.rs. The Android bridge builds only for
-        # Android.
+        # every workspace crate (D13), every binary harness, and
+        # native/tests/se_cli.rs. The crates' tests build with feature
+        # test-support; the programs and their integration tests build in a
+        # second invocation without it, as released. The Android bridge builds
+        # only for Android.
         env:
           CARGO_BUILD_JOBS: 1
-        run: cargo test --workspace --exclude smart_explorer_android --all-targets --no-fail-fast -- --test-threads=1
+        run: |
+          cargo test --workspace --exclude smart_explorer_android --exclude smart_explorer --all-targets --no-fail-fast -- --test-threads=1
+          cargo test -p smart_explorer --all-targets --no-fail-fast -- --test-threads=1
 
       - name: Linux GUI disposable startup check
         run: |

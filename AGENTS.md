@@ -174,8 +174,10 @@ These rules apply to `native/crates/*/src` and `native/src` unless a task explic
 - Test helpers a higher crate's tests use are gated `#[cfg(any(test, feature = "test-support"))]`; the feature
   chains core ← storage ← transfer ← engine, and only dev-dependencies enable it.
 - Dependency versions live once in `[workspace.dependencies]` of `native/Cargo.toml`; a crate lists the ones its
-  code names (`name.workspace = true`). Tests of every crate run with `cargo test --workspace --exclude
-  smart_explorer_android`.
+  code names (`name.workspace = true`). The crates' tests run with `cargo test --workspace --exclude
+  smart_explorer_android --exclude smart_explorer`; the programs and their integration tests run in their own
+  invocation, `cargo test -p smart_explorer`, because a shared invocation would build the programs with the
+  test-support feature the crates' dev-dependencies enable.
 
 - Keep files narrowly scoped to one feature responsibility. New or substantially edited Rust source files must stay under 500 lines and under 50 KiB. Existing oversized files are technical debt: do not add meaningful new code to them without extracting a cohesive submodule first, or state the exception clearly.
 - Split by behavior, not by convenience. Prefer separate files for domain types, parsing/formatting, persistence, protocol/wire code, UI rendering, background orchestration, and platform adapters instead of a single feature catch-all file.

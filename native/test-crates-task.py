@@ -5,8 +5,9 @@ D13) and the shared task setup (D12). Run only on GitHub Actions
 
 Parts:
   workspace  every crate of the workspace except the Android-only bridge:
-             build all targets, run every test (Linux and Windows); on
-             Windows also check the GNU target. Proves that the layers
+             the crates' tests (with test-support), then the programs and
+             their integration tests in their own invocation (without it),
+             on Linux and Windows; on Windows also check the GNU target. Proves that the layers
              core/storage/transfer/engine, the GUI, the CLI, the mobile
              facade and the programs compile and link (every port has its
              provider, the lower crates' own tests their stand-ins) and that
@@ -33,6 +34,7 @@ NATIVE = ROOT / "native"
 WINDOWS = platform.system() == "Windows"
 SUMMARY = os.environ.get("GITHUB_STEP_SUMMARY")
 EXCLUDE = ["--workspace", "--exclude", "smart_explorer_android"]
+CRATES = ["--workspace", "--exclude", "smart_explorer_android", "--exclude", "smart_explorer"]
 
 
 def summary(text):
@@ -65,11 +67,15 @@ def run(title, command, cwd=NATIVE, env=None):
 
 
 def part_workspace():
-    env = dict(os.environ)
-    ok = run("Build every crate and target", ["cargo", "build", "--locked", *EXCLUDE, "--all-targets"])
     threads = ["--test-threads=1"] if WINDOWS else []
-    ok &= run("Every test of the workspace",
-              ["cargo", "test", "--locked", *EXCLUDE, "--no-fail-fast", "--", *threads], env=env)
+    # The crates' own tests build the layers with feature test-support (their
+    # dev-dependencies); the programs and their integration tests build in a
+    # separate invocation without it, so `se`/`smart_explorer` started by
+    # native/tests run the production paths as in a release.
+    ok = run("Tests of every crate",
+             ["cargo", "test", "--locked", *CRATES, "--no-fail-fast", "--", *threads])
+    ok &= run("Programs and their integration tests",
+              ["cargo", "test", "--locked", "-p", "smart_explorer", "--no-fail-fast", "--", *threads])
     if WINDOWS:
         ok &= run("Check of the Windows GNU target",
                   ["cargo", "check", "--locked", *EXCLUDE, "--all-targets", "--target", "x86_64-pc-windows-gnu"])
