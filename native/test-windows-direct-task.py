@@ -88,7 +88,7 @@ def run(command, log, seconds, env, stderr=None):
 def fixture_binary(args, logs, env):
     """The library tests of every workspace crate through cargo (the Android bridge is excluded): cargo
     builds and runs each test executable of the crates; listing and runs use this command prefix."""
-    return ["cargo", "test", "--locked", "--workspace", "--exclude", "smart_explorer_android", "--exclude", "smart_explorer", "--lib", "--"]
+    return ["cargo", "test", "--locked", "--no-fail-fast", "--workspace", "--exclude", "smart_explorer_android", "--exclude", "smart_explorer", "--lib", "--"]
 
 
 def select(available):
@@ -128,6 +128,7 @@ def main():
     for name in ["SE_SHARE_RELAY_URL", "SE_SHARE_RELAY_ONLY"]:
         env.pop(name, None)
     cargo_tests = fixture_binary(args, logs, env)
+    run([*cargo_tests[:-1], "--no-run"], logs / "build-tests.log", 5400, env)
     run([*cargo_tests, "--list", "--format", "terse"], logs / "available-tests.txt", 60, env)
     available = [line.removesuffix(": test") for line in
                  (logs / "available-tests.txt").read_text(encoding="utf-8").splitlines()

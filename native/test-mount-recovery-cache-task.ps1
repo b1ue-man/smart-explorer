@@ -79,7 +79,7 @@ $head = Invoke-TaskProcess $git @('-C', $repoRoot, 'rev-parse', 'HEAD') 30 'cand
 if ($head.Code -ne 0 -or $head.Output.Trim() -notmatch '^[0-9a-f]{40}$') { throw 'Candidate identity unavailable.' }
 $candidate = $head.Output.Trim()
 $cargo = (Get-Command cargo.exe -CommandType Application | Select-Object -First 1).Source
-$cargoTests = @('test', '--locked', '--workspace', '--exclude', 'smart_explorer_android', '--exclude', 'smart_explorer', '--lib', '--')
+$cargoTests = @('test', '--locked', '--no-fail-fast', '--workspace', '--exclude', 'smart_explorer_android', '--exclude', 'smart_explorer', '--lib', '--')
 function Invoke-CargoTests([string[]]$Arguments, [int]$Seconds, [string]$Label) {
     Invoke-TaskProcess $cargo (@($cargoTests) + @($Arguments)) $Seconds $Label
 }
@@ -96,6 +96,8 @@ $filters = @(
     'mount_optimization_task_lazy_destination_survives_atomic_replace',
     'mount_vault_task_retirement_preserves_dirty_and_recovery_referenced_spools'
 )
+$build = Invoke-TaskProcess $cargo @('test', '--locked', '--workspace', '--exclude', 'smart_explorer_android', '--exclude', 'smart_explorer', '--lib', '--no-fail-fast', '--no-run') 5400 'test-build'
+if ($build.Code -ne 0) { throw "Test build failed: $($build.Error)" }
 $selected = Invoke-CargoTests ($filters + @('--list')) 60 'selected-cases'
 if ($selected.Code -ne 0) { throw 'Could not enumerate task acceptance cases.' }
 foreach ($required in @(
@@ -130,6 +132,6 @@ if ($result.Code -ne 0) { throw "Mount recovery/cache task failed: $($result.Err
     schema = 1
     candidate = $candidate
     outcome = 'PASS'
-    test_command = 'cargo test --workspace --exclude smart_explorer_android --exclude smart_explorer --lib'
+    test_command = 'cargo test --no-fail-fast --workspace --exclude smart_explorer_android --exclude smart_explorer --lib'
     windows = [Environment]::OSVersion.VersionString
 } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $LogRoot 'approval.json')

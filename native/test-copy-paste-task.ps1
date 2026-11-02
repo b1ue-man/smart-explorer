@@ -89,10 +89,12 @@ $head = Invoke-TaskProcess $git @('-C', $repoRoot, 'rev-parse', 'HEAD') 30 'cand
 if ($head.Code -ne 0 -or $head.Output.Trim() -notmatch '^[0-9a-f]{40}$') { throw 'Candidate identity unavailable.' }
 $candidate = $head.Output.Trim()
 $cargo = (Get-Command cargo.exe -CommandType Application | Select-Object -First 1).Source
-$cargoTests = @('test', '--locked', '--workspace', '--exclude', 'smart_explorer_android', '--exclude', 'smart_explorer', '--lib', '--')
+$cargoTests = @('test', '--locked', '--no-fail-fast', '--workspace', '--exclude', 'smart_explorer_android', '--exclude', 'smart_explorer', '--lib', '--')
 function Invoke-CargoTests([string[]]$Arguments, [int]$Seconds, [string]$Label, [switch]$Fixture) {
     Invoke-TaskProcess $cargo (@($cargoTests) + @($Arguments)) $Seconds $Label -Fixture:$Fixture
 }
+$build = Invoke-TaskProcess $cargo @('test', '--locked', '--workspace', '--exclude', 'smart_explorer_android', '--exclude', 'smart_explorer', '--lib', '--no-fail-fast', '--no-run') 5400 'test-build'
+if ($build.Code -ne 0) { throw "Test build failed: $($build.Error)" }
 $selected = Invoke-CargoTests @('copy_paste_task_', '--list', '--include-ignored') 30 'selected-cases' -Fixture
 if ($selected.Code -ne 0) { throw 'Could not enumerate the selected task cases.' }
 $requiredCases = @(
@@ -144,6 +146,6 @@ if ($result.Code -ne 0) { throw "Clipboard and cross-remote task failed: $($resu
     schema = 1
     candidate = $candidate
     outcome = 'PASS'
-    test_command = 'cargo test --workspace --exclude smart_explorer_android --exclude smart_explorer --lib'
+    test_command = 'cargo test --no-fail-fast --workspace --exclude smart_explorer_android --exclude smart_explorer --lib'
     windows = [Environment]::OSVersion.VersionString
 } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $LogRoot 'approval.json')

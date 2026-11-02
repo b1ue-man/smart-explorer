@@ -134,7 +134,7 @@ MOVED = ("batches_task_transfer_compat_reserved_share_rename_is_a_single_write_w
 # Directly affected integrations: every test of the modules the batch changed
 # (as the transfer-engine suite did), plus the pure core of the changed
 # screen, mount and desktop code and the two desktop test files WP3 edited.
-AFFECTED = ("transfer::", "copy::", "vfs::", "sync::", "bisync::", "syncjobs::", "connect::", "gdrive::",
+AFFECTED = ("transfer::", "host::", "copy::", "vfs::", "sync::", "bisync::", "syncjobs::", "connect::", "gdrive::",
             "ftp::", "webdav::", "sftp::", "smb::", "zipfs::", "cryptomator::", "agent::", "agent_proto::",
             "daemon::", "share::", "rdp::", "source_media::", "app::", "cli::", "mobile::", "screen::core::",
             "mount::core::", "desktop::core::", "open_target_tests", "adapter_tests", "file_recovery",
@@ -355,7 +355,7 @@ def lib_test_command(log, env=None, release=False):
     """Cargo runs the library tests of the workspace crates. The root package and the Android bridge are
     excluded, so the root programs are never built with the crates' test features. Returns the command
     prefix (ending in --) and the build check, or (None, build check) when the build fails."""
-    flags = ["--workspace", "--exclude", "smart_explorer_android", "--exclude", "smart_explorer", "--lib"]
+    flags = ["--no-fail-fast", "--workspace", "--exclude", "smart_explorer_android", "--exclude", "smart_explorer", "--lib"]
     flags += ["--release"] if release else []
     built = run(["cargo", "test", "--locked", *flags, "--no-run"], cwd=NATIVE, env=env, timeout=4 * 3600, log=log)
     if not built.ok:
@@ -815,6 +815,31 @@ def stage_rdp_clients(results, log_root, executable, env):
             run(["taskkill", "/F", "/IM", "mstsc.exe"], timeout=60)
 
 
+def elevated_program(name, env, log):
+    """The development test program of the workspace crates that lists the ignored test `name`, found from
+    cargo's build records. The root run executes that program itself: cargo never runs as root."""
+    built = run(["cargo", "test", "--locked", "--workspace", "--exclude", "smart_explorer_android",
+                 "--exclude", "smart_explorer", "--lib", "--no-fail-fast", "--no-run", "--message-format=json"],
+                cwd=NATIVE, env=env, timeout=4 * 3600, log=log)
+    if not built.ok:
+        return None, built
+    programs = []
+    for line in built.stdout.splitlines():
+        if not line.startswith("{"):
+            continue
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        target = message.get("target") or {}
+        if (message.get("reason") == "compiler-artifact" and (message.get("profile") or {}).get("test")
+                and message.get("executable") and "bin" not in (target.get("kind") or [])):
+            programs.append(Path(message["executable"]))
+    owners = [program for program in programs
+              if any(leaf(test) == name for test in list_tests([str(program)], ignored=True, env=env))]
+    return (owners[0] if len(owners) == 1 else None), built
+
+
 def stage_elevated(results, log_root, executable, env):
     if WINDOWS:
         elevated = run(["net", "session"], timeout=60).ok
@@ -826,10 +851,15 @@ def stage_elevated(results, log_root, executable, env):
     if not sudo_ok():
         results.record("elevated", H3, False, "passwordless sudo is not available")
         return
-    # The test binary runs as root itself; cargo and the target folder stay the runner's.
+    program, built = elevated_program(H3, env, log_root / "elevated-build.log")
+    if program is None:
+        results.record("elevated", H3, False, "no unique test program lists the test"
+                       + (f": {built.tail(1500)}" if not built.ok else ""))
+        return
+    # The test program itself runs as root; cargo and the target folder stay the runner's.
     prefix = ["sudo", "-n", "env", "DEBIAN_FRONTEND=noninteractive", f"PATH={os.environ.get('PATH', '')}",
               "HOME=/root", "RUST_BACKTRACE=1"]
-    run_named(results, "elevated", executable, [H3], env, log_root / "elevated.log", prefix=prefix)
+    run_named(results, "elevated", [str(program)], env, log_root / "elevated.log", prefix=prefix)
     # Evidence of the service the step configured (state, last journal lines).
     for command in (["systemctl", "status", "xrdp", "--no-pager"],
                     ["journalctl", "-u", "xrdp", "-n", "60", "--no-pager"], ["ss", "-ltnp"]):
@@ -1806,9 +1836,9 @@ def part_remote_bench(ledger, work, args):
             # runner: one repetition of its cases took 38 min in run
             # 40771342971, three no longer fit the job; they run once.
             cloud = [name for name in names if "_nextcloud_" in leaf(name)]
-            run_benchmarks(ledger, bins.transfer_task, [name for name in names if name not in cloud], env,
+            run_benchmarks(ledger, [bins.transfer_task], [name for name in names if name not in cloud], env,
                            ledger.reps)
-            run_benchmarks(ledger, bins.transfer_task, cloud, env, 1)
+            run_benchmarks(ledger, [bins.transfer_task], cloud, env, 1)
             bench_rows(ledger, "loopback")
             # The cached FTP path needs MLST (KP3); vsftpd has none, pyftpdlib does.
             try:
@@ -1817,7 +1847,7 @@ def part_remote_bench(ledger, work, args):
                 ftp_names = [name for name in names if "_ftp_" in leaf(name)] or [
                     name for name in list_tests([bins.transfer_task], ignored=True, env=env_mlst)
                     if "speed_task_remote_ftp_" in leaf(name)]
-                run_benchmarks(ledger, bins.transfer_task, ftp_names, env_mlst, 1, prefix="mlst_")
+                run_benchmarks(ledger, [bins.transfer_task], ftp_names, env_mlst, 1, prefix="mlst_")
                 bench_rows(ledger, "pyftpdlib (MLST)", prefix="mlst_")
             except Exception as error:  # noqa: BLE001
                 ledger.note(f"FTP with MLST (pyftpdlib): not measured: {error}")
@@ -1860,7 +1890,7 @@ def part_windows_remote(ledger, work, args):
                      if "speed_task_remote_ftp_" in leaf(name)]
             ledger.note("speed_task_remote_sftp_/_smb_/_webdav_ on Windows: not run, their servers need Linux "
                         "containers (measured in the Linux remote-bench job)")
-            run_benchmarks(ledger, bins.transfer_task, names, env, ledger.reps)
+            run_benchmarks(ledger, [bins.transfer_task], names, env, ledger.reps)
             bench_rows(ledger, "loopback (pyftpdlib)")
     finally:
         ai.stop_background_daemons(list(clients.values()))

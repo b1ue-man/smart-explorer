@@ -137,12 +137,12 @@ def stage_build(results, log_root):
     built = cargo_with_warnings(results, "cargo build --bin se",
                                 ["cargo", "build", "--locked", "--bin", "se", "--message-format", "short"], log)
     tests = cargo_with_warnings(results, "cargo test --lib --no-run",
-                                ["cargo", "test", "--locked", "--workspace", "--exclude", "smart_explorer_android", "--exclude", "smart_explorer", "--lib", "--no-run", "--message-format", "short"], log)
+                                ["cargo", "test", "--locked", "--no-fail-fast", "--workspace", "--exclude", "smart_explorer_android", "--exclude", "smart_explorer", "--lib", "--no-run", "--message-format", "short"], log)
     return built, tests
 
 
 def stage_unit(results, log_root):
-    completed = run(["cargo", "test", "--locked", "--workspace", "--exclude", "smart_explorer_android", "--exclude", "smart_explorer", "--lib", "--", *UNIT_FILTERS],
+    completed = run(["cargo", "test", "--locked", "--no-fail-fast", "--workspace", "--exclude", "smart_explorer_android", "--exclude", "smart_explorer", "--lib", "--", *UNIT_FILTERS],
                     cwd=NATIVE, log=log_root / "unit.log", timeout=5400)
     output = (completed.stdout + completed.stderr).decode(errors="replace")
     summary = [line for line in output.splitlines() if line.startswith("test result:")]

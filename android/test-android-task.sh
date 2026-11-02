@@ -275,14 +275,14 @@ run_g1() {
   step "G1 android_task_ tests on the Linux host (${#g1_tests[@]} expected)"
   g1_source_check
   local log="$log_root/g1-android-task-tests.log"
-  (cd "$native_dir" && cargo test --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --lib android_task_ -- --test-threads=1) 2>&1 | tee "$log"
+  (cd "$native_dir" && cargo test --locked --no-fail-fast --workspace --exclude smart_explorer_android --exclude smart_explorer --lib android_task_ -- --test-threads=1) 2>&1 | tee "$log"
   verify_test_log "$log" "${#g1_tests[@]}" "${g1_tests[@]}"
 }
 
 run_g2_moved_tests() {
   step "G2 moved desktop tests under their new paths (${#g2_paths[@]} expected)"
   local list="$log_root/g2-test-list.txt" log="$log_root/g2-moved-tests.log" path missing=()
-  (cd "$native_dir" && cargo test --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --lib -- --list) >"$list" 2>&1
+  (cd "$native_dir" && cargo test --locked --no-fail-fast --workspace --exclude smart_explorer_android --exclude smart_explorer --lib -- --list) >"$list" 2>&1
   for path in "${g2_paths[@]}"; do
     grep -Fxq "$path: test" "$list" || missing+=("$path")
   done
@@ -292,7 +292,7 @@ run_g2_moved_tests() {
   # The moved app/ GUI-task tests build App through their task constructors, which require the
   # same opt-in variables as their original suites (test-search-recursive-access-task.py).
   (cd "$native_dir" && SMART_EXPLORER_ANALYTICS_TASK=1 SMART_EXPLORER_COPY_PASTE_TASK=1 \
-    SMART_EXPLORER_GUI_TASK=1 cargo test --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --lib -- --test-threads=1 --exact "${g2_paths[@]}") 2>&1 | tee "$log"
+    SMART_EXPLORER_GUI_TASK=1 cargo test --locked --no-fail-fast --workspace --exclude smart_explorer_android --exclude smart_explorer --lib -- --test-threads=1 --exact "${g2_paths[@]}") 2>&1 | tee "$log"
   verify_test_log "$log" "${#g2_paths[@]}" "${names[@]}"
 }
 

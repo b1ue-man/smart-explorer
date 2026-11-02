@@ -732,7 +732,7 @@ class Cargo:
         if self.lib_ok is not None:
             return self.lib_ok
         started = time.monotonic()
-        completed = self.ctx.run(["cargo", "test", "--locked", "--workspace", "--exclude", "smart_explorer_android",
+        completed = self.ctx.run(["cargo", "test", "--locked", "--no-fail-fast", "--workspace", "--exclude", "smart_explorer_android",
                                   "--exclude", "smart_explorer", "--lib", "--no-run", "--manifest-path",
                                   self.manifest(), "--message-format=json-render-diagnostics"],
                                  stage="build", cwd=REPO, env=self.ctx.base_env(), timeout=BUILD_TIMEOUT_S)
@@ -1768,7 +1768,7 @@ class JobContext:
             else:
                 runnable.append(path)
         if not root:
-            command = ["cargo", "test", "--locked", "--workspace", "--exclude", "smart_explorer_android",
+            command = ["cargo", "test", "--locked", "--no-fail-fast", "--workspace", "--exclude", "smart_explorer_android",
                        "--exclude", "smart_explorer", "--lib", "--manifest-path", Cargo.manifest(), "--"]
             for part in chunks(runnable):
                 results.update(self._libtest_part(stage, part, env, include_ignored, threads, command, REPO))

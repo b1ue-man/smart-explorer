@@ -131,7 +131,7 @@ jobs:
           cargo clippy --workspace --exclude smart_explorer_android --exclude smart_explorer --lib --tests --message-format short 2>&1 \
             | tr '\134' '/' | tee "$RUNNER_TEMP/clippy.txt"
           status=${PIPESTATUS[0]}
-          cargo clippy -p smart_explorer --lib --bins --tests 2>&1 | tr '\134' '/' | tee -a "$RUNNER_TEMP/clippy.txt" > /dev/null
+          cargo clippy -p smart_explorer --lib --bins --tests --message-format short 2>&1 | tr '\134' '/' | tee -a "$RUNNER_TEMP/clippy.txt" > /dev/null
           root_status=${PIPESTATUS[0]}
           if [[ "$root_status" -ne 0 ]]; then status=$root_status; fi
           if grep -E ': error\[E[0-9]+\]|^error\[E[0-9]+\]' "$RUNNER_TEMP/clippy.txt"; then

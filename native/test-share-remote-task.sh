@@ -158,14 +158,14 @@ else
 fi
 (
     cd "$repo_root/native"
-    run_task cargo test --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --lib share_remote_task_ -- --test-threads=1
+    run_task cargo test --locked --no-fail-fast --workspace --exclude smart_explorer_android --exclude smart_explorer --lib share_remote_task_ -- --test-threads=1
 ) 2>&1 | tee "$native_log"
 verify_test_log "$native_log" "${#native_tests[@]}" "${native_tests[@]}"
 
 echo "share/remote task suite: corrected legacy authorization regressions"
 (
     cd "$repo_root/native"
-    run_task cargo test --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --lib ci_remote_task_ -- --test-threads=1
+    run_task cargo test --locked --no-fail-fast --workspace --exclude smart_explorer_android --exclude smart_explorer --lib ci_remote_task_ -- --test-threads=1
 ) 2>&1 | tee "$native_log"
 verify_test_log "$native_log" "${#ci_native_tests[@]}" "${ci_native_tests[@]}"
 

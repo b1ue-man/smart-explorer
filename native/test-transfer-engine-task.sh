@@ -239,7 +239,7 @@ milestone_log="$suite_tmp/milestones.log"
 echo "transfer engine task suite: milestone tests ($platform)"
 if ! (
     cd "$repo_root/native"
-    run_task cargo test --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --lib transfer_engine_task_ -- --test-threads=1
+    run_task cargo test --locked --no-fail-fast --workspace --exclude smart_explorer_android --exclude smart_explorer --lib transfer_engine_task_ -- --test-threads=1
 ) 2>&1 | tee "$milestone_log"; then
     stage_failed "milestone tests"
 fi
@@ -308,7 +308,7 @@ if [[ "${#runner_milestones[@]}" -ne 0 ]]; then
     echo "transfer engine task suite: ${#runner_milestones[@]} runner-only milestone tests"
     if ! (
         cd "$repo_root/native"
-        SMART_EXPLORER_COPY_PASTE_TASK=1 run_task cargo test --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --lib -- --ignored --exact \
+        SMART_EXPLORER_COPY_PASTE_TASK=1 run_task cargo test --locked --no-fail-fast --workspace --exclude smart_explorer_android --exclude smart_explorer --lib -- --ignored --exact \
             --test-threads=1 "${runner_milestones[@]}"
     ) 2>&1 | tee "$runner_log" ||
         ! grep -Eq "^test result: ok\. ${#runner_milestones[@]} passed; 0 failed" "$runner_log"; then
@@ -324,7 +324,7 @@ copy_paste_log="$suite_tmp/copy-paste.log"
 echo "transfer engine task suite: copy/paste safety tests"
 if ! (
     cd "$repo_root/native"
-    SMART_EXPLORER_COPY_PASTE_TASK=1 run_task cargo test --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --lib copy_paste_task_transfer_ \
+    SMART_EXPLORER_COPY_PASTE_TASK=1 run_task cargo test --locked --no-fail-fast --workspace --exclude smart_explorer_android --exclude smart_explorer --lib copy_paste_task_transfer_ \
         -- --ignored --test-threads=1
 ) 2>&1 | tee "$copy_paste_log" ||
     ! grep -Eq '^test result: ok\. 9 passed; 0 failed' "$copy_paste_log"; then
@@ -352,7 +352,7 @@ modules_log="$suite_tmp/modules.log"
 echo "transfer engine task suite: tests of the affected modules"
 if ! (
     cd "$repo_root/native"
-    SMART_EXPLORER_COPY_PASTE_TASK=1 SMART_EXPLORER_GUI_TASK=1 run_task cargo test --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --lib -- \
+    SMART_EXPLORER_COPY_PASTE_TASK=1 SMART_EXPLORER_GUI_TASK=1 run_task cargo test --locked --no-fail-fast --workspace --exclude smart_explorer_android --exclude smart_explorer --lib -- \
         --test-threads=1 "${skip_arguments[@]}" "${affected_modules[@]}"
 ) 2>&1 | tee "$modules_log" ||
     ! grep -Eq '^test result: ok\. [0-9]+ passed; 0 failed' "$modules_log"; then

@@ -108,7 +108,7 @@ def main():
         env.pop(name, None)
     # The library tests of every workspace crate run through cargo: cargo builds and runs each test
     # executable of the crates (the Android bridge is excluded). Listing and runs use this command.
-    cargo_tests = ["cargo", "test", "--locked", "--workspace", "--exclude", "smart_explorer_android", "--exclude", "smart_explorer", "--lib", "--"]
+    cargo_tests = ["cargo", "test", "--locked", "--no-fail-fast", "--workspace", "--exclude", "smart_explorer_android", "--exclude", "smart_explorer", "--lib", "--"]
     run([*cargo_tests, "--list", "--format", "terse"], logs / "available-tests.txt", 1800, env)
     available = [line.removesuffix(": test") for line in (logs / "available-tests.txt").read_text(encoding="utf-8").splitlines() if line.endswith(": test")]
     selected = [name for name in available if any(prefix in name for prefix in PREFIXES)]

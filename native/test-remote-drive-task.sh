@@ -537,7 +537,7 @@ trap cleanup_test_logs EXIT
 (
     cd "$repo_root/native"
     "$repo_root/native/run-task-memory-bounded.sh" \
-        cargo test --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --lib remote_drive_task_ -- --test-threads=1
+        cargo test --locked --no-fail-fast --workspace --exclude smart_explorer_android --exclude smart_explorer --lib remote_drive_task_ -- --test-threads=1
 ) | tee "$native_test_log"
 grep -Eq 'test result: ok\. [1-9][0-9]* passed;' "$native_test_log" || {
     echo "native remote-drive filter did not execute any task tests" >&2

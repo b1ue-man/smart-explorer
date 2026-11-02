@@ -252,7 +252,7 @@ report_hung_test() {
 }
 if ! (
     cd "$repo_root/native"
-    run_task timeout --kill-after=60s 2700 cargo test --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --lib android_background_task_ -- --test-threads=1
+    run_task timeout --kill-after=60s 2700 cargo test --locked --no-fail-fast --workspace --exclude smart_explorer_android --exclude smart_explorer --lib android_background_task_ -- --test-threads=1
 ) 2>&1 | tee "$milestone_log"; then
     report_hung_test "$milestone_log"
     stage_failed "milestone tests"
@@ -332,7 +332,7 @@ echo "android background task suite: tests of the affected modules"
 if ! (
     cd "$repo_root/native"
     SMART_EXPLORER_COPY_PASTE_TASK=1 SMART_EXPLORER_GUI_TASK=1 run_task timeout --kill-after=60s 3600 \
-        cargo test --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --lib -- --test-threads=1 "${skip_arguments[@]}" "${affected_modules[@]}"
+        cargo test --locked --no-fail-fast --workspace --exclude smart_explorer_android --exclude smart_explorer --lib -- --test-threads=1 "${skip_arguments[@]}" "${affected_modules[@]}"
 ) 2>&1 | tee "$modules_log" ||
     ! grep -Eq '^test result: ok\. [0-9]+ passed; 0 failed' "$modules_log"; then
     report_hung_test "$modules_log"
@@ -353,8 +353,7 @@ echo "android background task suite: Share server tests"
 if ! (
     cd "$repo_root/share-server"
     CARGO_TARGET_DIR="$repo_root/share-server/target" run_task timeout --kill-after=60s 2400 \
-        cargo test --locked --workspace --exclude smart_explorer_android --exclude smart_explorer -- --test-threads=1
-        cargo test --locked -p smart_explorer -- --test-threads=1
+        cargo test --locked -- --test-threads=1
 ) 2>&1 | tee "$server_log" ||
     ! grep -Eq '^test result: ok\. [0-9]+ passed; 0 failed' "$server_log"; then
     report_hung_test "$server_log"

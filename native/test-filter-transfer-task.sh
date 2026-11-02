@@ -197,14 +197,14 @@ else
 fi
 (
     cd "$repo_root/native"
-    run_task cargo test --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --lib recursive_filter_task_ -- --test-threads=1
+    run_task cargo test --locked --no-fail-fast --workspace --exclude smart_explorer_android --exclude smart_explorer --lib recursive_filter_task_ -- --test-threads=1
 ) 2>&1 | tee "$native_log"
 verify_test_log "$native_log" "${#native_tests[@]}" "${native_tests[@]}"
 
 echo "filter/transfer task suite: affected integrations"
 (
     cd "$repo_root/native"
-    run_task cargo test --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --lib -- --test-threads=1 --exact "${integration_paths[@]}"
+    run_task cargo test --locked --no-fail-fast --workspace --exclude smart_explorer_android --exclude smart_explorer --lib -- --test-threads=1 --exact "${integration_paths[@]}"
 ) 2>&1 | tee "$integration_log"
 verify_test_log "$integration_log" "${#integration_tests[@]}" "${integration_tests[@]}"
 

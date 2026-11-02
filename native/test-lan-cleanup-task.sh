@@ -202,21 +202,21 @@ else
 fi
 (
     cd "$repo_root/native"
-    run_task cargo test --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --lib lan_cleanup_task_ -- --test-threads=1
+    run_task cargo test --locked --no-fail-fast --workspace --exclude smart_explorer_android --exclude smart_explorer --lib lan_cleanup_task_ -- --test-threads=1
 ) 2>&1 | tee "$native_log"
 verify_test_log "$native_log" "${#native_tests[@]}" "${native_tests[@]}"
 
 echo "lan/cleanup task suite: storage-analysis hardening"
 (
     cd "$repo_root/native"
-    run_task cargo test --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --lib analytics_access_task_ -- --test-threads=1
+    run_task cargo test --locked --no-fail-fast --workspace --exclude smart_explorer_android --exclude smart_explorer --lib analytics_access_task_ -- --test-threads=1
 ) 2>&1 | tee "$suite_tmp/analytics.log"
 verify_test_log "$suite_tmp/analytics.log" "${#analytics_tests[@]}" "${analytics_tests[@]}"
 
 echo "lan/cleanup task suite: affected integrations"
 (
     cd "$repo_root/native"
-    run_task cargo test --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --lib -- --test-threads=1 --exact \
+    run_task cargo test --locked --no-fail-fast --workspace --exclude smart_explorer_android --exclude smart_explorer --lib -- --test-threads=1 --exact \
         share::direct_request_tombstone::tests::v5_profile_migration_preserves_exec_and_defaults_tombstones_empty \
         share::legacy_direct_request_tests::corrupt_evidence_and_future_schema_fail_closed_while_v6_defaults_empty \
         daemon::ipc_host::service_lifecycle::tests::explicit_stop_barrier_blocks_periodic_auto_connect_reload \

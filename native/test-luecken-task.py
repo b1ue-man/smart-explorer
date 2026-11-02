@@ -145,7 +145,7 @@ UNIT_FILTERS = ["luecken_task_", "creds::", "sftp::", "share::exec", "share::nod
 # (SE_SYNC_PROVIDER_MANIFEST): the FTPS one runs in the `ftps` stage, the
 # provider matrix (under `connect::`) only in the sync reliability suite.
 UNIT_SKIPS = ["sync_reliability_task_provider_ftps", "sync_reliability_task_provider_matrix"]
-FTPS_PROVIDER_TEST = ("ftp::sync_reliability_task_provider_ftps_tests::"
+FTPS_PROVIDER_TEST = ("connect::sync_reliability_task_provider_ftps_tests::"
                       "sync_reliability_task_provider_ftps_both_writers_confirm_bytes_after_tls_close")
 # The `luecken_task_` test functions of native/src (146: `grep -c "fn luecken_task_"`
 # over the gap batch and the Share/Exec GUI parity of plan I; 125 + 21) and what each
@@ -208,7 +208,7 @@ def stage_unit(results, log_root):
     # fixture refuses unless SMART_EXPLORER_COPY_PASTE_TASK=1. Enabling it makes
     # them check Share sessions over iroh 1.3.0 and the hybrid key exchange.
     environment = dict(os.environ, SMART_EXPLORER_COPY_PASTE_TASK="1")
-    completed = ai.run(["cargo", "test", "--locked", "--workspace", "--exclude", "smart_explorer_android", "--exclude", "smart_explorer", "--lib", "--", *UNIT_FILTERS, *skips],
+    completed = ai.run(["cargo", "test", "--locked", "--no-fail-fast", "--workspace", "--exclude", "smart_explorer_android", "--exclude", "smart_explorer", "--lib", "--", *UNIT_FILTERS, *skips],
                        cwd=ai.NATIVE, env=environment, log=log_root / "unit.log", timeout=5400)
     output = (completed.stdout + completed.stderr).decode(errors="replace")
     summary = [line for line in output.splitlines() if line.startswith("test result:")]
@@ -1264,7 +1264,7 @@ def stage_ftps(results, log_root):
         results.check(stage, "strict FTPS server (TLS on login and data, this run's CA)", server)
         if "SE_SYNC_PROVIDER_MANIFEST" in env:
             # The lib test binary of the `unit` stage; no new build.
-            completed = ai.run(["cargo", "test", "--locked", "--workspace", "--exclude", "smart_explorer_android", "--exclude", "smart_explorer", "--lib", "--", "--exact", FTPS_PROVIDER_TEST,
+            completed = ai.run(["cargo", "test", "--locked", "--no-fail-fast", "--workspace", "--exclude", "smart_explorer_android", "--exclude", "smart_explorer", "--lib", "--", "--exact", FTPS_PROVIDER_TEST,
                                 "--test-threads=1"], cwd=ai.NATIVE, env=env, log=logs / "cargo-test.log",
                                timeout=3600)
             output = (completed.stdout + completed.stderr).decode(errors="replace")

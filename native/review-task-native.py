@@ -278,7 +278,7 @@ def command_digest(command):
 def library_test_command(logs, env):
     """Cargo runs the library tests of every workspace crate. The root package is excluded here, so
     the root programs and root targets are built only by their own calls (test-support rule)."""
-    command = ["cargo", "test", "--locked", "--workspace", "--exclude", "smart_explorer_android",
+    command = ["cargo", "test", "--locked", "--no-fail-fast", "--workspace", "--exclude", "smart_explorer_android",
         "--exclude", "smart_explorer", "--lib", "--"]
     run([*command[:-1], "--no-run"], logs / "library-test-build.log", env, seconds=10800, cwd=ROOT / "native")
     return command
@@ -376,18 +376,42 @@ def glow_scope_tests(command, logs, env):
         "scope": "Real vendor error ledger with controlled GL error reads; no physical GL context or driver failure."}, indent=2))
 
 
-def p27_network_tests(command, logs, env):
-    """One isolated transport measurement using the existing library binary."""
+def library_programs(logs, env):
+    """The development test programs of the workspace crates, from cargo's build records. Listing runs as the
+    runner; the P27 run goes through the network helper, which runs the program as root. cargo never runs as root."""
+    log = logs / "library-programs.jsonl"
+    run(["cargo", "test", "--locked", "--no-fail-fast", "--workspace", "--exclude", "smart_explorer_android",
+         "--exclude", "smart_explorer", "--lib", "--no-run", "--message-format=json"], log, env,
+        seconds=10800, cwd=ROOT / "native")
+    programs = []
+    for line in log.read_text().splitlines():
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        target = record.get("target") or {}
+        if (record.get("reason") == "compiler-artifact" and (record.get("profile") or {}).get("test")
+                and record.get("executable") and "bin" not in (target.get("kind") or [])):
+            programs.append(Path(record["executable"]))
+    return programs
+
+
+def p27_network_tests(logs, env):
+    """One isolated transport measurement. The test program that lists the fixture runs through the network
+    helper; the helper runs that program as root inside its namespace."""
     if os.name == "nt":
         return
     plan = manifest()["native"]["p27_network"]
-    listing = logs / "native-available.txt"
-    if not listing.is_file():
-        run([*command, "--list", "--format", "terse"], listing, env, seconds=120, cwd=ROOT / "native")
-    available = listing.read_text().splitlines()
-    if available.count(plan["fixture"] + ": test") != 1:
+    owners = []
+    for program in library_programs(logs, env):
+        listing = logs / f"native-available-{program.name}.txt"
+        if not listing.is_file():
+            run([str(program), "--list", "--format", "terse"], listing, env, seconds=120, cwd=ROOT / "native")
+        if listing.read_text().splitlines().count(plan["fixture"] + ": test") == 1:
+            owners.append(program)
+    if len(owners) != 1:
         raise RuntimeError("Missing or ambiguous P27 network fixture.")
-    run(["bash", ROOT / "native/review-task-network.sh", "exec", *command,
+    run(["bash", ROOT / "native/review-task-network.sh", "exec", str(owners[0]),
         "--exact", plan["fixture"], "--ignored", "--nocapture", "--test-threads=1"],
         logs / "p27-network.log", env, seconds=1800, cwd=ROOT / "native")
     evidence_path = logs / "p27-network/acceptance.json"
@@ -499,7 +523,7 @@ def main():
             env["SE_SCREEN_TASK_WORKER"] = str(cli.resolve())
             stage("native-behavior", lambda: native_tests(fixture, logs, env))
         if fixture:
-            stage("p27-network-behavior", lambda: p27_network_tests(fixture, logs, env))
+            stage("p27-network-behavior", lambda: p27_network_tests(logs, env))
         glow = stage("glow-scope-build", lambda: egui_glow_test_command(logs, env))
         if glow:
             stage("glow-scope-behavior", lambda: glow_scope_tests(glow, logs, env))

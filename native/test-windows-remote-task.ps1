@@ -172,10 +172,12 @@ foreach ($path in @($prepared.DllPath, $prepared.ManifestPath, $prepared.SourceP
 }
 $dependencyManifest = ConvertFrom-Json ([IO.File]::ReadAllText($prepared.ManifestPath))
 $cargo = (Get-Command cargo.exe -CommandType Application | Select-Object -First 1).Source
-$cargoTests = @('test', '--locked', '--workspace', '--exclude', 'smart_explorer_android', '--exclude', 'smart_explorer', '--lib', '--')
+$cargoTests = @('test', '--locked', '--no-fail-fast', '--workspace', '--exclude', 'smart_explorer_android', '--exclude', 'smart_explorer', '--lib', '--')
 function Invoke-CargoTests([string[]]$Arguments, [int]$Seconds, [string]$Label, [switch]$Fixture) {
     Invoke-TaskProcess $cargo (@($cargoTests) + @($Arguments)) $Seconds $Label -Fixture:$Fixture
 }
+$build = Invoke-TaskProcess $cargo @('test', '--locked', '--workspace', '--exclude', 'smart_explorer_android', '--exclude', 'smart_explorer', '--lib', '--no-fail-fast', '--no-run', '--message-format=json-render-diagnostics') 5400 'test-executables'
+if ($build.Code -ne 0) { throw "Test executables failed to build: $($build.Error)" }
 $selected = Invoke-CargoTests @('windows_remote_task_', '--list', '--include-ignored') 30 'selected-cases' -Fixture
 if ($selected.Code -ne 0) { throw 'Could not enumerate the selected task cases.' }
 $requiredCases = @(
@@ -204,8 +206,6 @@ $requiredCases = @(
 foreach ($required in $requiredCases) {
     if (-not $selected.Output.Contains("$required`: test")) { throw "Missing task acceptance case: $required" }
 }
-$build = Invoke-TaskProcess $cargo @('test', '--locked', '--workspace', '--exclude', 'smart_explorer_android', '--exclude', 'smart_explorer', '--lib', '--no-run', '--message-format=json-render-diagnostics') 5400 'test-executables'
-if ($build.Code -ne 0) { throw "Test executables failed to build: $($build.Error)" }
 $executables = @(
     foreach ($line in ($build.Output -split '\r?\n')) {
         if (-not $line.StartsWith('{')) { continue }
@@ -233,7 +233,7 @@ if ($result.Code -ne 0) {
     schema = 1
     candidate = $candidate
     outcome = 'PASS'
-    test_command = 'cargo test --workspace --exclude smart_explorer_android --exclude smart_explorer --lib'
+    test_command = 'cargo test --no-fail-fast --workspace --exclude smart_explorer_android --exclude smart_explorer --lib'
     private_dll_sha256 = $prepared.DllSha256
     private_source_sha256 = $dependencyManifest.source_package.sha256
     windows = [Environment]::OSVersion.VersionString

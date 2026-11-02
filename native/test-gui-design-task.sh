@@ -31,7 +31,7 @@ trap finish EXIT
 
 # The library tests of the workspace crates run through cargo: no supplied or discovered program,
 # and the root package and the Android bridge are excluded (no release or cross-platform build).
-cargo test --manifest-path native/Cargo.toml --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --lib -- gui_design_task_ --include-ignored --nocapture --test-threads=1 \
+cargo test --manifest-path native/Cargo.toml --locked --no-fail-fast --workspace --exclude smart_explorer_android --exclude smart_explorer --lib -- gui_design_task_ --include-ignored --nocapture --test-threads=1 \
     2>&1 | tee "$log_root/behavior.log"
 
 python3 - "$log_root" "$candidate" <<'PY'
@@ -46,7 +46,7 @@ output = (logs / 'behavior.log').read_text()
 for name in expected:
     assert re.search(r'test [^\n]*::' + re.escape(name) + r' \.\.\. ok', output), name
 assert f'{len(expected)} passed; 0 failed; 0 ignored;' in output
-report = {'candidate': candidate, 'test_command': 'cargo test --manifest-path native/Cargo.toml --locked --workspace --exclude smart_explorer_android --exclude smart_explorer --lib',
+report = {'candidate': candidate, 'test_command': 'cargo test --manifest-path native/Cargo.toml --locked --no-fail-fast --workspace --exclude smart_explorer_android --exclude smart_explorer --lib',
           'milestones': {'D1': 'compact neutral shell, same-row toolbar, search focus, filtering and split panes',
                          'D2': 'unboxed locations, capacity alignment, settings and bounded feature dialogs',
                          'D3': 'Drive empty-page semantics, safe names/mutations and full scan-report clipboard',

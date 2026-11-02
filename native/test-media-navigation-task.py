@@ -110,7 +110,7 @@ def format_gate(logs, env):
 def fixture(args, logs, env, candidate):
     """The library tests of every workspace crate through cargo (the Android bridge is excluded): cargo
     builds and runs each test executable of the crates; listing and runs use this command prefix."""
-    return ["cargo", "test", "--locked", "--workspace", "--exclude", "smart_explorer_android", "--exclude", "smart_explorer", "--lib", "--"]
+    return ["cargo", "test", "--locked", "--no-fail-fast", "--workspace", "--exclude", "smart_explorer_android", "--exclude", "smart_explorer", "--lib", "--"]
 
 
 def main():
@@ -134,6 +134,7 @@ def main():
         env.pop(name, None)
     format_gate(logs, env)
     cargo_tests = fixture(args, logs, env, candidate)
+    run([*cargo_tests[:-1], "--no-run"], logs / "build-tests.log", 5400, env)
     run([*cargo_tests, "--list", "--format", "terse"], logs / "available-tests.txt", 120, env)
     available = [line.removesuffix(": test") for line in
         (logs / "available-tests.txt").read_text(encoding="utf-8").splitlines() if line.endswith(": test")]

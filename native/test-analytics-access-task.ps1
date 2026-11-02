@@ -89,10 +89,12 @@ if ($privileges.Code -ne 0 -or -not $privileges.Output.Contains('SeBackupPrivile
 }
 
 $cargo = (Get-Command cargo.exe -CommandType Application | Select-Object -First 1).Source
-$cargoTests = @('test', '--locked', '--workspace', '--exclude', 'smart_explorer_android', '--exclude', 'smart_explorer', '--lib', '--')
+$cargoTests = @('test', '--locked', '--no-fail-fast', '--workspace', '--exclude', 'smart_explorer_android', '--exclude', 'smart_explorer', '--lib', '--')
 function Invoke-CargoTests([string[]]$Arguments, [int]$Seconds, [string]$Label) {
     Invoke-TaskProcess $cargo (@($cargoTests) + @($Arguments)) $Seconds $Label
 }
+$build = Invoke-TaskProcess $cargo @('test', '--locked', '--workspace', '--exclude', 'smart_explorer_android', '--exclude', 'smart_explorer', '--lib', '--no-fail-fast', '--no-run') 5400 'test-build'
+if ($build.Code -ne 0) { throw "Test build failed: $($build.Error)" }
 $selected = Invoke-CargoTests @('analytics_access_task', '--list', '--include-ignored') 30 'selected-cases'
 if ($selected.Code -ne 0) { throw 'Could not enumerate the selected task cases.' }
 foreach ($required in @(
@@ -119,6 +121,6 @@ if ($result.Code -ne 0) { throw "Storage-access task failed: $($result.Error)" }
     schema = 1
     candidate = $candidate
     outcome = 'PASS'
-    test_command = 'cargo test --workspace --exclude smart_explorer_android --exclude smart_explorer --lib'
+    test_command = 'cargo test --no-fail-fast --workspace --exclude smart_explorer_android --exclude smart_explorer --lib'
     windows = [Environment]::OSVersion.VersionString
 } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $LogRoot 'approval.json')

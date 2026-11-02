@@ -117,11 +117,13 @@ $startDriver = Invoke-TaskProcess (Join-Path $system 'sc.exe') @('start', 'dokan
 if ($startDriver.Code -notin @(0, 1056)) { throw "Could not start Dokany driver: $($startDriver.Output)" }
 
 $cargo = (Get-Command cargo.exe -CommandType Application | Select-Object -First 1).Source
-$cargoTests = @('test', '--locked', '--workspace', '--exclude', 'smart_explorer_android', '--exclude', 'smart_explorer', '--lib', '--')
+$cargoTests = @('test', '--locked', '--no-fail-fast', '--workspace', '--exclude', 'smart_explorer_android', '--exclude', 'smart_explorer', '--lib', '--')
 function Invoke-CargoTests([string[]]$Arguments, [int]$Seconds, [string]$Label) {
     Invoke-TaskProcess $cargo (@($cargoTests) + @($Arguments)) $Seconds $Label
 }
-[IO.File]::WriteAllText((Join-Path $LogRoot 'test-command.txt'), 'cargo test --workspace --exclude smart_explorer_android --exclude smart_explorer --lib')
+[IO.File]::WriteAllText((Join-Path $LogRoot 'test-command.txt'), 'cargo test --no-fail-fast --workspace --exclude smart_explorer_android --exclude smart_explorer --lib')
+$build = Invoke-TaskProcess $cargo @('test', '--locked', '--workspace', '--exclude', 'smart_explorer_android', '--exclude', 'smart_explorer', '--lib', '--no-fail-fast', '--no-run') 5400 'test-build'
+if ($build.Code -ne 0) { throw "Test build failed: $($build.Error)" }
 $selected = Invoke-CargoTests @('mount_batching_task', '--list', '--include-ignored') 30 'selected-cases'
 if ($selected.Code -ne 0 -or $selected.Output -notmatch 'mount_batching_task_real_driver_navigation_and_checker') {
     throw 'The selected executable does not contain the actual mounted-volume task fixture.'
