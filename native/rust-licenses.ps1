@@ -15,12 +15,14 @@
 # the checked-in file) is missing or differs, or when the generation is
 # incomplete. Line endings and the "Generated:" date line are not compared.
 # -EnsureTool installs the pinned cargo-about when it is missing or another
-# version is on PATH. cargo-about reads each manifest's Cargo.lock (--locked)
-# and needs network access only for crate sources not yet downloaded.
+# version is on PATH: the release's prebuilt program on x86_64 Linux and
+# Windows, otherwise cargo install. cargo-about reads each manifest's
+# Cargo.lock (--locked) and needs network access only for crate sources not
+# yet downloaded.
 #
-# New release builds generate and then check this input through
-# native/publish-release-local.ps1 or android/build-release-apk.sh. Existing
-# release candidates and environment-only wrapper runs remain check-only.
+# Releases generate this input once in the prepare job of
+# .github/workflows/release.yml; every build job embeds those bytes. A
+# standalone android/build-release-apk.sh run generates and checks it.
 
 [CmdletBinding()]
 param(
@@ -45,6 +47,16 @@ try {
 # old on 2026-10-17 (0.9.2, published 2026-08-18). Its binary needs the `cli`
 # feature; `--locked` builds it with its own published Cargo.lock.
 $CargoAboutVersion = "0.9.2"
+# -EnsureTool on the x86_64 CI hosts takes the release's prebuilt program
+# instead of a two-minute build (plan docs/plaene/2026-11-01-idealzustand,
+# D10), bound to the SHA-256 GitHub lists for each archive (checked
+# 2026-11-02); other hosts build it with cargo install.
+$CargoAboutPrebuilt = @{
+    "Linux-X64"   = @{ Target = "x86_64-unknown-linux-musl"; Program = "cargo-about"
+        Sha256 = "9099a59e820c38a68b9d65f300662a567d56562f9a10f6aa4c7e86c17c2566af" }
+    "Windows-X64" = @{ Target = "x86_64-pc-windows-msvc"; Program = "cargo-about.exe"
+        Sha256 = "1c03e5890238562497c2d89a3b75b02560af349c1fc3e713d3284f532a5cd748" }
+}
 $RepoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $ConfigPath = [System.IO.Path]::GetFullPath((Join-Path $RepoRoot "third-party/rust-crates/about.toml"))
 $CheckedInPath = [System.IO.Path]::GetFullPath((Join-Path $RepoRoot "third-party/rust-crates/THIRD-PARTY-LICENSES.txt"))
@@ -107,6 +119,47 @@ function Get-CargoAboutVersion {
     return $null
 }
 
+function Install-PrebuiltCargoAbout {
+    # True when the pinned prebuilt program is in cargo's bin directory; false
+    # when this host has none or the download failed (cargo install follows).
+    # A digest mismatch stops the run.
+    $os = if ($IsWindows) { "Windows" } elseif ($IsLinux) { "Linux" } else { "Other" }
+    $key = "$os-$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)"
+    if (-not $CargoAboutPrebuilt.ContainsKey($key)) {
+        return $false
+    }
+    $prebuilt = $CargoAboutPrebuilt[$key]
+    $name = "cargo-about-$CargoAboutVersion-$($prebuilt.Target)"
+    $url = "https://github.com/EmbarkStudios/cargo-about/releases/download/$CargoAboutVersion/$name.tar.gz"
+    $download = Join-Path ([System.IO.Path]::GetTempPath()) "se-cargo-about-$([guid]::NewGuid().ToString('N'))"
+    New-Item -ItemType Directory -Path $download | Out-Null
+    try {
+        $archive = Join-Path $download "$name.tar.gz"
+        try {
+            Invoke-WebRequest -Uri $url -OutFile $archive -MaximumRetryCount 3 -RetryIntervalSec 5
+        } catch {
+            Write-Host "Prebuilt cargo-about not downloaded ($($_.Exception.Message)); building it."
+            return $false
+        }
+        $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actual -ne $prebuilt.Sha256) {
+            throw "$url has SHA-256 $actual, expected $($prebuilt.Sha256)."
+        }
+        & tar -xzf $archive -C $download
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not unpack $archive (tar exit code $LASTEXITCODE)."
+        }
+        $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $HOME ".cargo" }
+        $bin = Join-Path $cargoHome "bin"
+        New-Item -ItemType Directory -Force -Path $bin | Out-Null
+        Copy-Item -LiteralPath (Join-Path (Join-Path $download $name) $prebuilt.Program) -Destination (Join-Path $bin $prebuilt.Program) -Force
+        Write-Host "Prebuilt cargo-about $CargoAboutVersion ($($prebuilt.Target), SHA-256 $actual) installed into $bin."
+        return $true
+    } finally {
+        Remove-Item -LiteralPath $download -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Assert-CargoAbout {
     if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
         throw "cargo is not on PATH; the Rust crate license notices need cargo and cargo-about $CargoAboutVersion."
@@ -121,9 +174,11 @@ function Assert-CargoAbout {
         throw "cargo-about $CargoAboutVersion is required (found: $found). Install it with: $install"
     }
     Write-Host "Installing cargo-about $CargoAboutVersion (found: $found)."
-    & cargo install cargo-about --locked --version $CargoAboutVersion --features cli --force | Out-Host
-    if ($LASTEXITCODE -ne 0) {
-        throw "'$install' failed with exit code $LASTEXITCODE."
+    if (-not (Install-PrebuiltCargoAbout)) {
+        & cargo install cargo-about --locked --version $CargoAboutVersion --features cli --force | Out-Host
+        if ($LASTEXITCODE -ne 0) {
+            throw "'$install' failed with exit code $LASTEXITCODE."
+        }
     }
     $installed = Get-CargoAboutVersion
     if ($installed -ne $CargoAboutVersion) {

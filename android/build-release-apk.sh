@@ -234,9 +234,10 @@ prepare_rust_licenses() {
   local notices="$repo_root/third-party/rust-crates/THIRD-PARTY-LICENSES.txt"
   local prepared="${SMART_EXPLORER_PREPARED_RUST_LICENSES_SHA256:-}" actual
   if [ -n "$prepared" ]; then
-    # Internal wrapper handoff: only after its successful Generate + Check.
-    # The hash binds those verified shared-checkout bytes across Windows/WSL;
-    # it is not itself an independent license-completeness check.
+    # Release handoff: only after a successful Generate (exit 0: complete) in
+    # the prepare job of .github/workflows/release.yml. The hash binds those
+    # verified bytes to this build; it is not itself an independent
+    # license-completeness check.
     [[ "$prepared" =~ ^[0-9a-f]{64}$ ]] || die "invalid prepared Rust license SHA-256"
     [ -s "$notices" ] || die "prepared Rust license notices are missing or empty"
     actual="$(sha256sum "$notices" | awk '{ print $1 }')"
