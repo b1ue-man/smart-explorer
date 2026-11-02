@@ -209,7 +209,7 @@ impl Backend for AgentBackend {
     fn batch_limits(&self, dir: &str) -> Option<BatchLimits> {
         // A proxied Share keeps its own rule: its export list (`/`) and the
         // connections container hold no files, so no packet goes there.
-        if self.scheme() == Scheme::Peer && crate::share::is_synthetic_container(dir) {
+        if self.scheme() == Scheme::Peer && crate::vfs::is_synthetic_container(dir) {
             return None;
         }
         self.features().batches().then_some(BatchLimits {

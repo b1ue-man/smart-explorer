@@ -4,8 +4,9 @@ use std::sync::{Arc, Mutex};
 use crate::vfs::MountPathCapabilities;
 
 use super::fs::{self, ShareExportConfig};
-
-const CONNECTIONS_ROOT: &str = "/Verbindungen";
+// The peer namespace lives in the storage layer (D13).
+pub use crate::vfs::is_synthetic_container;
+use crate::vfs::{normalize_share_path as normalize, SHARE_CONNECTIONS_ROOT as CONNECTIONS_ROOT};
 
 pub(super) struct ResolvedMountCapabilities {
     pub(super) virtual_root: String,
@@ -40,21 +41,3 @@ pub(super) fn resolve_mount_capabilities(
     }))
 }
 
-/// Whether `path` is one of the synthetic mountpoint containers (`/` and
-/// `/Verbindungen`), which hold no files of their own; invalid paths count
-/// as such, since nothing can be written there either.
-pub fn is_synthetic_container(path: &str) -> bool {
-    match normalize(path) {
-        Ok(normalized) => normalized == "/" || normalized == CONNECTIONS_ROOT,
-        Err(_) => true,
-    }
-}
-
-fn normalize(path: &str) -> io::Result<String> {
-    let parts = fs::split_clean(path)?;
-    if parts.is_empty() {
-        Ok("/".into())
-    } else {
-        Ok(format!("/{}", parts.join("/")))
-    }
-}

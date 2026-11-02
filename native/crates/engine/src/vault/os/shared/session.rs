@@ -411,17 +411,7 @@ pub fn host_visibility(foreground: bool, screen_on: bool) {
     register().set_host(foreground, screen_on, Instant::now());
 }
 
-/// The error frame text of the worker's vault connections (`Vault::Open`)
-/// for a locked vault: `SE_VAULT_V1 locked <site> <text>` (C3.2); `None`
-/// for every other error, which keeps its text.
-pub fn wire_error_text(error: &std::io::Error) -> Option<String> {
-    let site = crate::vault::core::locked_site(error)?;
-    Some(crate::agent_proto::vault_error_message(
-        crate::agent_proto::VAULT_LOCKED_WIRE,
-        site,
-        &error.to_string(),
-    ))
-}
+pub use crate::vault_error::wire_error_text;
 
 /// The worker ends: every vault locks (C3.3 „Ende des Workers“), so no key
 /// stays in the memory of the ending process. Android keeps its register in

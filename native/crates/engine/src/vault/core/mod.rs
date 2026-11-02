@@ -34,44 +34,9 @@ mod sync_rules_dirs;
 #[cfg(test)]
 mod locator_tests;
 
-/// The structured code of a locked vault across process boundaries (IPC
-/// `Err.code`, Bridge `ApiError` kind, agent envelope; C3.2).
-pub const VAULT_LOCKED_CODE: &str = "vault_locked";
-
-/// The payload of every error of a locked vault (C3.2). It travels inside an
-/// `io::Error` of kind `PermissionDenied`, so `try_exists` (only `NotFound`
-/// means absent) never reads a locked vault as empty.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct VaultLocked {
-    /// Site ID of the locked vault (never a path or a name inside it).
-    pub site: String,
-}
-
-impl fmt::Display for VaultLocked {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Tresor {} ist gesperrt", self.site)
-    }
-}
-
-impl std::error::Error for VaultLocked {}
-
-/// The error every operation on a locked vault returns.
-pub fn vault_locked(site: &str) -> io::Error {
-    io::Error::new(
-        io::ErrorKind::PermissionDenied,
-        VaultLocked {
-            site: site.to_string(),
-        },
-    )
-}
-
-/// The site of a `VaultLocked` error; `None` for every other error.
-pub fn locked_site(error: &io::Error) -> Option<&str> {
-    error
-        .get_ref()?
-        .downcast_ref::<VaultLocked>()
-        .map(|locked| locked.site.as_str())
-}
+// The error of a locked vault lives in the storage layer (D13), so backends
+// and the agent below the vault name it.
+pub use crate::vault_error::{locked_site, vault_locked, VaultLocked, VAULT_LOCKED_CODE};
 
 /// Told once when the session it watches is locked, so it can drop what it
 /// derived from the vault's cleartext (K46: memory only, discarded on lock).

@@ -61,6 +61,7 @@ pub mod transfer;
 pub mod types;
 pub mod updater;
 pub mod vault;
+pub mod vault_error;
 pub mod vfs;
 pub mod watch;
 pub mod webdav;

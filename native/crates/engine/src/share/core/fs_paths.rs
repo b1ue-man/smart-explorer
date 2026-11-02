@@ -1,23 +1,7 @@
 //! Pure Share path parsing. Operation paths are names, not user-input labels.
-use std::io;
 
-use super::core::eio;
-
-pub(super) fn split_clean(path: &str) -> io::Result<Vec<String>> {
-    let mut out = Vec::new();
-    // Leading/trailing whitespace can belong to a filename. Reject invalid
-    // components without silently retargeting a valid operation's spelling.
-    for part in path.trim_matches('/').split('/') {
-        if part.is_empty() {
-            continue;
-        }
-        if part == "." || part == ".." || part.contains('\\') || part.contains('\0') {
-            return Err(eio("Ungueltiger Pfad"));
-        }
-        out.push(part.to_string());
-    }
-    Ok(out)
-}
+/// The clean split of operation paths lives in the storage layer (D13).
+pub(super) use crate::vfs::split_share_path as split_clean;
 
 pub(super) fn join_under(root: &str, rest: &[String]) -> String {
     let root = root.replace('\\', "/");

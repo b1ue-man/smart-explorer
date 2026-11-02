@@ -16,7 +16,7 @@ pub(super) fn agent_error(message: String) -> io::Error {
     // typed error, so surfaces say „gesperrt“ and pools drop the backend.
     if let Some(wire) = crate::agent_proto::parse_vault_error(&message) {
         if wire.code == crate::agent_proto::VAULT_LOCKED_WIRE {
-            return crate::vault::vault_locked(wire.site);
+            return crate::vault_error::vault_locked(wire.site);
         }
     }
     if let Some(error) = crate::agent_proto::parse_transport_error(&message) {

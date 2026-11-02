@@ -34,6 +34,12 @@ mod capabilities;
 mod congestion;
 #[path = "core/content_digest.rs"]
 mod content_digest;
+#[path = "core/peer_namespace.rs"]
+mod peer_namespace;
+pub use peer_namespace::{
+    is_synthetic_container, normalize as normalize_share_path, split_clean as split_share_path,
+    CONNECTIONS_ROOT as SHARE_CONNECTIONS_ROOT,
+};
 #[path = "core/sync_signature.rs"]
 mod sync_signature;
 pub use self::content_digest::{content_digest, ContentDigest};
