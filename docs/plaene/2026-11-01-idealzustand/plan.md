@@ -125,17 +125,16 @@ Auflösung je Kante (Produktionscode, Bestand 2026-11-02; Testcode folgt seinem 
 |---|---|---|
 | agent→share | `is_synthetic_container` (share/core/fs_capabilities.rs, reine Pfadprüfung) | Funktion in `vfs` (storage), share re-exportiert sie |
 | agent→vault | `vault_locked`, `locked_site`, `wire_error_text` (Fehlertyp `VaultLocked`) | Fehlertyp und die drei Funktionen nach core (`vault_error`), vault re-exportiert |
-| agent_proto→transfer | `compress_policy`, `sensors::latest` | Kompressionspolitik und Sensorwerte nach storage (agent_proto), transfer re-exportiert |
-| analytics→bisync | `is_engine_name` (bisync/core/paths.rs) | Namensprüfung nach core, bisync re-exportiert |
-| analytics→transfer | `memory_budget`, `physical_memory` (transfer/os/shared/memory.rs, os/unix.rs, os/windows.rs) | Speicherbudget mit OS-Adaptern nach core |
+| agent_proto→transfer | `compress_policy`, `sensors::latest` | zusammen mit der nächsten Zeile ein Modul `host_load` (Speicherbudget, Sensoren, `sensor_parse`, Kompressionspolitik und ihre OS-Abfragen aus transfer/os/{unix,windows}.rs) in core; transfer re-exportiert |
+| analytics→transfer | `memory_budget`, `physical_memory` (transfer/os/shared/memory.rs nutzt `platform::available_memory`; `parse_meminfo_available` liegt in transfer/core/sensor_parse.rs) | Modul `host_load` (vorige Zeile) |
 | local_access→analytics | ein Verweis in local_access/os/windows/access_task.rs | Typ nach core oder Aufruf umdrehen (offen) |
 | sftp→daemon | `log_worker` (Worker-Protokoll) | Protokollfunktion nach core (support_dirs) |
 | source_media→folder_index | `path_has_skipped_segment` in fixture_root.rs (Testfixture) | Funktion nach storage (source_media) oder Fixture ins obere Crate |
 | support_dirs→vfs | `replace_local_file` | Ersetzen einer lokalen Datei nach core, vfs re-exportiert |
-| syncjobs→connect, vfs→connect | `validate_sync_endpoints`, `location_paths_overlap` (connect/core/location.rs) | reine Ortsprüfung nach storage (vfs), connect re-exportiert |
+| syncjobs→connect, vfs→connect | `validate_sync_endpoints`, `location_paths_overlap` (connect/core/location.rs) | nicht rein: `endpoint_key` nutzt `vault::vault_location`/`vault_store_location` und `connect::parse_remote_url`, `Location` nennt `share::PeerOpenTarget`; zuerst prüfen, ob `vfs/os/shared/sync_roots.rs` und `syncjobs` ihre Prüfung über den Aufrufer erhalten können, sonst Tresor-Ortsformat und URL-Zerlegung nach core |
 | transfer→daemon | `run_transfer_in_worker` (daemon/os/shared/transfer_job_client.rs) | Schnittstelle im transfer-Crate, der daemon trägt die Umsetzung ein; ohne Eintrag läuft der Auftrag im eigenen Prozess wie heute außerhalb des Workers (zu prüfen) |
 | transfer→vault | Versiegeln der Auftragsdaten: `transfer_blob_context`, `check_transfer_blob_context_live`, `seal_transfer_blob`, `open_transfer_blob`, `vault_site_of`, `vault_mount_of`, `seal_log_fields`, `FIELDS_WITHHELD` | Schnittstelle `TransferVault` im transfer-Crate, vault trägt sie ein; ohne Eintrag lehnt transfer jeden Ort in einem Tresor ab (geschlossen scheitern, nie Klartext) |
-| vfs→bisync | Typ `Sig` (bisync/core/types.rs) | Typ nach storage (vfs), bisync re-exportiert |
+| vfs→bisync, analytics→bisync | Typ `Sig`, `is_engine_name` | erledigt (d5d620ac): vfs/core/sync_signature.rs, bisync re-exportiert |
 | vfs→copy | `local_file_identity_handle`, `copy_to_new_file` | lokale Dateihelfer nach storage (vfs) |
 | vfs→sftp, vfs→smb | `backend_from_url` in vfs/core/dispatch.rs | Zuordnung URL→Backend als Register in vfs; sftp und smb tragen sich ein, oder die Zuordnung wandert ins transfer-Crate (offen: Aufrufer in storage, z. B. ftp) |
 | vfs→vault | `EphemeralSpool` (vault/os/shared/ephemeral_spool.rs) | Spool-Schnittstelle in vfs, vault trägt die verschlüsselte Umsetzung ein |
