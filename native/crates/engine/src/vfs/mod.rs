@@ -34,10 +34,13 @@ mod capabilities;
 mod congestion;
 #[path = "core/content_digest.rs"]
 mod content_digest;
+#[path = "core/sync_signature.rs"]
+mod sync_signature;
 pub use self::content_digest::{content_digest, ContentDigest};
 pub use self::content_digest::{
     digest_by_local_read, is_md5_hex, is_sha256_hex, md5_exact, sha256_exact,
 };
+pub use sync_signature::{is_engine_name, Sig, REPLICA_MARKER_NAME, VERSIONS_DIR_NAME};
 #[path = "os/shared/copy_transfer.rs"]
 mod copy_transfer;
 #[path = "core/core.rs"]

@@ -81,12 +81,12 @@ pub fn write_bytes(be: &dyn Backend, path: &str, data: &[u8]) -> Result<(), Stri
     result
 }
 
-pub fn sig_from(be: &dyn Backend, path: &str) -> Result<crate::bisync::Sig, String> {
+pub fn sig_from(be: &dyn Backend, path: &str) -> Result<crate::vfs::Sig, String> {
     let metadata = be.stat(path).map_err(|error| error.to_string())?;
     if metadata.is_dir || metadata.is_symlink {
         return Err(format!("Konfliktziel ist keine reguläre Datei: {path}"));
     }
-    Ok(crate::bisync::Sig {
+    Ok(crate::vfs::Sig {
         size: metadata.size,
         mtime_ms: metadata.mtime_ms,
         hash: 0,

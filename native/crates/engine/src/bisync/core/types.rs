@@ -1,15 +1,8 @@
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
-/// Size + mtime (+ optional content hash) signature of one file on one side.
-/// `hash` is 0 when this side wasn't hashed (see `HashMode`/`hash_mode`); when
-/// non-zero it's the MD5-derived content key and takes priority in compares.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct Sig {
-    pub size: u64,
-    pub mtime_ms: i64,
-    pub hash: u64,
-}
+/// The signature type lives in the storage layer (D13).
+pub use crate::vfs::Sig;
 
 /// Current file set (relative path -> signature) of one side.
 pub type Tree = BTreeMap<String, Sig>;

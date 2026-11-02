@@ -58,7 +58,7 @@ pub(super) fn scan_entries_with(
                 let nm: Box<str> = ent.name.to_string_lossy().into_owned().into_boxed_str();
                 // The app trash (Android) is left out like in every other walk.
                 if crate::apptrash::excluded_name(&nm)
-                    || crate::bisync::is_engine_name(&nm)
+                    || crate::vfs::is_engine_name(&nm)
                     || crate::vfs::is_staging_name(&nm)
                     || excluded.iter().any(|hidden| hidden == &dir.join(&ent.name))
                 {

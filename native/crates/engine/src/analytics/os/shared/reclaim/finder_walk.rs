@@ -294,6 +294,6 @@ impl Walk<'_> {
 /// entries and the app's stages (a crash may leave one behind).
 fn skipped_name(name: &str) -> bool {
     crate::apptrash::excluded_name(name)
-        || crate::bisync::is_engine_name(name)
+        || crate::vfs::is_engine_name(name)
         || crate::vfs::is_staging_name(name)
 }
