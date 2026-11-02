@@ -174,7 +174,10 @@ try {
     Write-Host "Smart Explorer $tag published; the release feed answers $version."
 } finally {
     if ($dryRun) {
-        & gh release delete $releaseTag --repo $repository --yes --cleanup-tag
+        # A draft never created its tag, so there is no tag to clean up.
+        & gh release delete $releaseTag --repo $repository --yes
+        if ($LASTEXITCODE -ne 0) { throw "Could not delete the dry-run draft $releaseTag." }
         Write-Host "Dry run: draft $releaseTag deleted."
     }
 }
+exit 0

@@ -241,6 +241,32 @@ private selection. This is not live DLL replacement or a promise of automatic
 recovery from every hang. Candidate scope and validation limits are in
 [MOUNT_OPTIMIZATION.md](MOUNT_OPTIMIZATION.md).
 
+## Cut a release with the assets-only workflow (2026-11-02)
+
+`.github/workflows/release.yml` publishes a release whose payloads live only in the GitHub
+Release; no build is committed to Git (plan `docs/plaene/2026-11-01-idealzustand/plan.md`, D8).
+
+1. Push the finished batch to `main`, then dispatch the workflow with the full `main` SHA:
+   `source_sha=<sha>`, `dry_run=false` (a dry run builds and verifies everything into a draft under
+   the tag `dryrun-vX.Y.Z-<run id>` and deletes it again; no commit, tag or visible release).
+2. Jobs: `plan` (Tagged/Bump/Resume plan of `native/release-version.ps1`, exact source binding),
+   `prepare` (version, embedded SSH-agent bundles, license notices), then in parallel `windows`
+   (`native/publish-update.ps1 -AllowPartialFeed -DeferFeedVersion -BuildJobs <cores>`), `linux`
+   (`native/publish-linux-feed-wsl.sh` with `SMART_EXPLORER_BUILD_JOBS`, `SMART_EXPLORER_RELEASE_LTO=thin`,
+   `SMART_EXPLORER_SYSTEM_LINKERS=1`) and `android` (`android/build-release-apk.sh`), finally `publish`
+   (`native/publish-release-assets.ps1`).
+3. `publish` assembles the 26 assets, checks every `.sha256` sidecar, the installer's embedded
+   payloads and `se.exe --version`, commits only `native/Cargo.toml`, `native/Cargo.lock`,
+   `native/agent-bin/*` and `third-party/rust-crates/THIRD-PARTY-LICENSES.txt`, pushes `main`
+   fast-forward and the tag, uploads into a draft, compares every uploaded size and SHA-256 digest
+   with the expected value, then marks the release latest and waits until
+   `releases/latest/download/version.txt` answers the new version.
+4. The committed `release-native/update-feed/` stays at v0.5.192: it is the bridge for installs up to
+   0.5.190, which still read the raw feed of `main`; every later version reads the release feed.
+
+Dry run 41363952649 (2026-11-02) on ecefbb71: Windows 40 min, Linux 26 min, Android 26 min in
+parallel, publish verified all 26 assets in the draft.
+
 ## Cut a release
 
 For the historical 0.5.150 Dokany request-delivery correction, the task-level pipeline was
