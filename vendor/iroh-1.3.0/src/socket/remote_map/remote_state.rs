@@ -1,4 +1,4 @@
-// Smart Explorer P28b/V3 patch (2026-10-25); see vendor/SMART_EXPLORER_ROUTE_POLICY.md.
+// Smart Explorer P28b/V3 patch (2026-10-25), A7 (2026-11-06); see vendor/SMART_EXPLORER_ROUTE_POLICY.md.
 use std::{
     collections::{BTreeSet, VecDeque},
     net::SocketAddr,
@@ -42,9 +42,11 @@ use crate::{
     },
 };
 
-mod path_state;
+#[path = "application_path_pruning.rs"]
+mod application_path_pruning;
 #[path = "application_path_retirement.rs"]
 mod application_path_retirement;
+mod path_state;
 mod path_watcher;
 mod remote_info;
 
@@ -139,6 +141,8 @@ struct State {
     path_events: PathEvents,
     /// A stream of events of announced NAT traversal candidate addresses for all connections.
     addr_events: AddrEvents,
+    /// Policy-fact changes of policy-enabled client connections (Smart Explorer A7).
+    policy_events: MergeUnbounded<application_path_pruning::PolicyChanges>,
 
     // Internal state - Holepunching and path state.
     //
@@ -198,6 +202,7 @@ impl RemoteStateActor {
                 connections_close: Default::default(),
                 path_events: Default::default(),
                 addr_events: Default::default(),
+                policy_events: Default::default(),
                 paths: RemotePathState::new(metrics),
                 last_holepunch: None,
                 selected_path: Default::default(),
@@ -287,6 +292,9 @@ impl RemoteStateActor {
                 }
                 Some((id, evt)) = self.state.path_events.next() => {
                     self.handle_path_event(id, evt);
+                }
+                Some(conn_id) = self.state.policy_events.next() => {
+                    self.release_policy_candidates(conn_id);
                 }
                 Some((id, evt)) = self.state.addr_events.next() => {
                     trace!(?id, ?evt, "remote addrs updated, triggering holepunching");
@@ -406,6 +414,12 @@ impl RemoteStateActor {
             conn.nat_traversal_updates().map(move |evt| (conn_id, evt)),
         ));
         self.state.connections_close.push(OnClosed::new(&conn));
+        if conn.application_path_policy_enabled() && conn.side().is_client() {
+            // Releases candidates when the app's grant or a proof changes later.
+            self.state
+                .policy_events
+                .push(application_path_pruning::policy_changes(conn_id, &conn));
+        }
 
         // Add local addrs to the connection
         let local_addrs = self.state.local_candidates();
@@ -701,8 +715,17 @@ impl RemoteStateActor {
             // Open path if it doesn't exist yet.
             self.state
                 .open_path_on_conn(*conn_id, conn_state, &conn, &selected);
+            // Under an explicit application policy the app's grant decides which
+            // IP path carries data: keep it, the selected path and relay/custom
+            // paths once a grant holds; before that keep every candidate for the
+            // app's finite LAN/direct round. Upstream users still prune below.
+            let released =
+                application_path_pruning::release_redundant_paths(&conn, conn_state, &selected);
 
             for (path_id, path_fourtuple) in conn_state.paths.iter() {
+                if released.contains(path_id) {
+                    continue;
+                }
                 let Some(path) = conn.path(*path_id) else {
                     continue;
                 };
@@ -712,9 +735,8 @@ impl RemoteStateActor {
                 // Relay and custom paths are kept open. Only the client closes paths,
                 // to avoid the client and server independently closing different paths
                 // and racing to abandon the last one.
-                // Under an explicit application policy, keep candidate IP paths
-                // available for the app's finite LAN/direct round. Admission, not
-                // Backup status, controls their payload; upstream users still prune.
+                // Policy-enabled connections released their redundant IP paths
+                // above; admission, not Backup status, controls their payload.
                 if !conn.application_path_policy_enabled()
                     && conn.side().is_client()
                     && path_fourtuple.is_ip()
@@ -745,6 +767,22 @@ impl RemoteStateActor {
             // Record the new selected path in the path watcher.
             conn_state.path_state.record_selected(&selected);
         }
+    }
+
+    /// Smart Explorer A7: releases redundant IP candidates of one policy-enabled
+    /// client connection after its grant or a path proof changed. Opens nothing
+    /// and sets no status, so a failed proof is not retried from here.
+    fn release_policy_candidates(&mut self, conn_id: ConnId) {
+        let (Some(conn_state), Some(selected)) = (
+            self.connections.get(&conn_id),
+            self.state.selected_path.as_ref(),
+        ) else {
+            return;
+        };
+        let Some(conn) = conn_state.handle.upgrade() else {
+            return;
+        };
+        application_path_pruning::release_redundant_paths(&conn, conn_state, selected);
     }
 
     fn open_path_on_all_conns(&mut self, open_addr: &transports::FourTuple) {

@@ -10,6 +10,7 @@ fn path(key: &str, class: RouteClass, validated: bool) -> RouteCandidate {
         validated,
         validation_pending: !validated,
         rtt: Some(Duration::from_millis(1)),
+        preferred: false,
     }
 }
 

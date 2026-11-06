@@ -1,5 +1,6 @@
 // Smart Explorer P28b/V3 patch (2026-10-25); see vendor/SMART_EXPLORER_ROUTE_POLICY.md.
-//! Fresh, finite policy proofs and bounded replacement of redundant candidates.
+//! Fresh, finite policy proofs, bounded replacement of redundant candidates and
+//! their release after the app's route decision.
 
 use super::{
     ApplicationPathPolicyError, Connection, PathId, SpaceKind,
@@ -125,6 +126,37 @@ impl Connection {
         if !self.application_path_retirement_allowed(id) {
             return Err(ApplicationPathPolicyError::ProtectedPath);
         }
+        self.close_path(now, id, VarInt::from_u32(0))
+            .map_err(|_| ApplicationPathPolicyError::ProtectedPath)
+    }
+
+    /// Smart Explorer A7 (2026-11-06): whether a client may close `id` after the
+    /// app's route decision. Another path must hold the current grant and carry
+    /// application data now; that path survives, so this never closes the last
+    /// usable path. Validation and capacity of `id` do not matter: a later grant
+    /// of a reopened path needs its own fresh on-path proof anyway.
+    fn application_candidate_release_allowed(&self, id: PathId) -> bool {
+        self.config.application_path_policy
+            && self.side().is_client()
+            && self.paths.contains_key(&id)
+            && !self.abandoned_paths.contains(&id)
+            && self
+                .application_path_policy
+                .admitted
+                .is_some_and(|(admitted, _)| {
+                    admitted != id && self.application_data_allowed_on_path(admitted)
+                })
+    }
+
+    pub(super) fn release_application_candidate(
+        &mut self,
+        now: Instant,
+        id: PathId,
+    ) -> Result<(), ApplicationPathPolicyError> {
+        if !self.application_candidate_release_allowed(id) {
+            return Err(ApplicationPathPolicyError::ProtectedPath);
+        }
+        // abandon_path advances the revision once and keeps the other path's grant.
         self.close_path(now, id, VarInt::from_u32(0))
             .map_err(|_| ApplicationPathPolicyError::ProtectedPath)
     }

@@ -40,6 +40,11 @@ pub enum ApplicationPathUpdate {
     /// Retire an unadmitted, nonvalidating redundant path for another candidate.
     /// The token and all protection conditions are rechecked atomically.
     RetireRedundantPath(ApplicationPathToken),
+    /// Close an unadmitted redundant candidate after the app's route decision:
+    /// another path of this client connection currently carries application
+    /// data. Token, grant and side are rechecked atomically; the path budget
+    /// need not be full (Smart Explorer A7, 2026-11-06).
+    ReleaseCandidate(ApplicationPathToken),
 }
 
 /// A rejected policy update. No application contents are included in errors.
@@ -63,7 +68,8 @@ pub enum ApplicationPathPolicyError {
     /// The handshake/path validation has not completed, or the path was abandoned.
     #[error("application path is not validated")]
     UnvalidatedPath,
-    /// Capacity or the current grant/validation/survivor state prevents retirement.
+    /// Capacity or the current grant/validation/survivor state prevents retirement,
+    /// or no other path carries the current grant for a candidate release.
     #[error("application path is protected from retirement")]
     ProtectedPath,
     /// The policy revision cannot advance without wrapping.
@@ -89,6 +95,9 @@ pub struct ApplicationPathObservation {
     /// can be retired without removing a validation or the last usable path.
     /// RetireRedundantPath rechecks this under the connection's mutation lock.
     pub retirement_allowed: bool,
+    /// Whether the local path manager prefers this path (local PATH_STATUS
+    /// Available; Iroh sets it on its selected path only). Grants nothing.
+    pub preferred: bool,
     /// Whether Noq is still validating this path with on-path challenges.
     pub validation_in_progress: bool,
     /// Whether a previous RFC 9000 incarnation is still being validated.
@@ -212,6 +221,7 @@ impl Connection {
                         && !self.application_path_policy.pending_validation.contains(&id),
                     data_allowed: self.application_data_allowed_on_path(id),
                     retirement_allowed: self.application_path_retirement_allowed(id),
+                    preferred: data.local_status() == super::PathStatus::Available,
                     validation_in_progress: data.is_validating_path(),
                     previous_validation_in_progress: path.prev.as_ref().is_some_and(|(_, prev)| prev.is_validating_path()),
                     validation_deadline: self.timers.get(Timer::PerPath(id, PathTimer::PathValidationFailed)),
@@ -231,7 +241,8 @@ impl Connection {
 
     /// Digest of every snapshot fact that changes only through a transport or
     /// policy event: generation, revision, network-change state, admission, the
-    /// path set and each path's validation and admission state. Clocks,
+    /// path set and each path's validation, admission and local preference
+    /// (status set by the path manager on selection, A7). Clocks,
     /// deadlines, PTOs and byte counters are excluded; they move without an event.
     ///
     /// Noq compares it after every driver poll and wakes waiting observers only
@@ -263,6 +274,7 @@ impl Connection {
                 policy.pending_validation.contains(&id),
                 self.application_data_allowed_on_path(id),
                 self.application_path_retirement_allowed(id),
+                data.local_status() == super::PathStatus::Available,
                 data.is_validating_path(),
                 path.prev.as_ref().is_some_and(|(_, prev)| prev.is_validating_path()),
             )
@@ -309,7 +321,8 @@ impl Connection {
                 }
                 (policy.generation, Some((token.path_id, token.path_generation)))
             }
-            ApplicationPathUpdate::RetireRedundantPath(token) => {
+            ApplicationPathUpdate::RetireRedundantPath(token)
+            | ApplicationPathUpdate::ReleaseCandidate(token) => {
                 self.check_application_path_token(token)?;
                 (policy.generation, policy.admitted)
             }
@@ -323,6 +336,10 @@ impl Connection {
             // close_path performs the single revision change and retains the
             // grant on the independent surviving path.
             return self.retire_redundant_application_path(now, token.path_id);
+        }
+        if let ApplicationPathUpdate::ReleaseCandidate(token) = update {
+            // Same single revision change through close_path; the grant stays.
+            return self.release_application_candidate(now, token.path_id);
         }
         if matches!(update, ApplicationPathUpdate::BeginGeneration(_)) {
             self.application_path_policy.requires_new_generation = false;
@@ -473,58 +490,5 @@ impl Connection {
 }
 
 #[cfg(test)]
-mod tests {
-    use bytes::Bytes;
-    use super::*;
-    use crate::{FrameStats, VarInt, frame, connection::{PacketBuilder, TransmitBuf, datagrams::DatagramState}};
-
-    #[test]
-    fn route_policy_task_serializer_blocks_payload_and_redacts_close() {
-        let mut bytes = Vec::new();
-        let mut transmit = TransmitBuf::new(&mut bytes, std::num::NonZeroUsize::MIN, 1200);
-        transmit.start_new_datagram();
-        let mut builder = PacketBuilder::policy_data_buf(&mut transmit, false);
-        let mut stats = FrameStats::default();
-        builder.write_frame(frame::Datagram { data: Bytes::from_static(b"private") }, &mut stats);
-        builder.write_frame(frame::StreamMeta {
-            id: crate::StreamId(0), offsets: 0..7, fin: false,
-        }.encoder(true), &mut stats);
-        assert_eq!(builder.buf.len(), 0);
-        builder.write_frame(frame::Ping, &mut stats);
-        let close = frame::Close::Application(crate::ApplicationClose {
-            error_code: VarInt::from_u32(7), reason: Bytes::from_static(b"private close reason"),
-        });
-        builder.write_frame(close.encoder(256), &mut stats);
-        drop(builder);
-        let mut frames = frame::Iter::new(Bytes::copy_from_slice(transmit.as_mut_slice())).unwrap();
-        assert!(matches!(frames.next().unwrap().unwrap(), frame::Frame::Ping));
-        assert!(matches!(frames.next().unwrap().unwrap(),
-            frame::Frame::Close(frame::Close::Application(close))
-                if close.reason.is_empty() && close.error_code == VarInt::from_u32(7)));
-        assert!(frames.next().is_none());
-    }
-
-    #[test]
-    fn route_policy_task_datagram_queue_survives_block_and_grant() {
-        let mut bytes = Vec::new();
-        let mut transmit = TransmitBuf::new(&mut bytes, std::num::NonZeroUsize::MIN, 1200);
-        transmit.start_new_datagram();
-        let mut datagrams = DatagramState::default();
-        datagrams.outgoing.push_back(frame::Datagram { data: Bytes::from_static(b"payload") });
-        datagrams.outgoing_total = 7;
-        let mut stats = FrameStats::default();
-        let mut blocked = PacketBuilder::policy_data_buf(&mut transmit, false);
-        assert!(!datagrams.write(&mut blocked, &mut stats));
-        assert_eq!(datagrams.outgoing_total, 7);
-        assert_eq!(datagrams.outgoing.len(), 1);
-        drop(blocked);
-        let mut allowed = PacketBuilder::policy_data_buf(&mut transmit, true);
-        assert!(datagrams.write(&mut allowed, &mut stats));
-        assert_eq!(datagrams.outgoing_total, 0);
-        assert!(datagrams.outgoing.is_empty());
-        drop(allowed);
-        let frame = frame::Iter::new(Bytes::copy_from_slice(transmit.as_mut_slice()))
-            .unwrap().next().unwrap().unwrap();
-        assert!(matches!(frame, frame::Frame::Datagram(frame) if frame.data.as_ref() == b"payload"));
-    }
-}
+#[path = "application_path_policy_tests.rs"]
+mod tests;

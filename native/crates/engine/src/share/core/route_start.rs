@@ -80,7 +80,14 @@ impl StartPhase {
                         RouteClass::Relay => progress.direct_done || bridge,
                     }
             })
-            .min_by_key(|p| (rank(p.class), p.rtt.unwrap_or(Duration::MAX), p.key.clone()))?;
+            .min_by_key(|p| {
+                (
+                    rank(p.class),
+                    !p.preferred,
+                    p.rtt.unwrap_or(Duration::MAX),
+                    p.key.clone(),
+                )
+            })?;
         if path.class != RouteClass::Relay && !self.non_relay_chosen {
             self.non_relay_chosen = true;
             self.closed_now = true;

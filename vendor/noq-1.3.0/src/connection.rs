@@ -820,6 +820,18 @@ impl Connection {
         self.0.shared.application_policy_changed.clone()
     }
 
+    /// Current digest of the event-driven policy facts (see
+    /// `proto::Connection::application_path_policy_fingerprint`). An observer
+    /// creates its `Notified` first, then compares this value with the one it
+    /// last handled, so a change between two waits is never lost (Smart
+    /// Explorer A7, 2026-11-06).
+    pub fn application_path_policy_fingerprint(&self) -> u64 {
+        self.0
+            .lock_without_waking("application_path_policy_fingerprint")
+            .inner
+            .application_path_policy_fingerprint()
+    }
+
     /// The side of the connection (client or server)
     pub fn side(&self) -> Side {
         self.0.lock_without_waking("side").inner.side()

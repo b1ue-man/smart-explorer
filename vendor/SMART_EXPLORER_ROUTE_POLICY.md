@@ -286,13 +286,16 @@ Production changes are confined to:
   Existing connect/accept/TLS paths remain.
 - Iroh `src/socket.rs`: revoke enabled policies before a detected event rebinds
   transports; preserve the potential hint and existing readiness/recovery path.
-- Iroh `src/socket/remote_map/remote_state.rs`: policy-enabled connections keep
-  direct candidates instead of closing every nonselected IP path, with the
-  bounded capacity-recovery helper `application_path_retirement.rs`. Existing
-  Noq concurrent-path limits remain; disabled connections keep the original
-  direct-path closing rule. The selector never creates a grant.
+- Iroh `src/socket/remote_map/remote_state.rs`: policy-enabled client
+  connections keep every direct candidate only until the app's grant holds;
+  then `application_path_pruning.rs` releases every IP path except the admitted
+  and the selected one (A7, section of 2026-11-06 below). The bounded
+  capacity-recovery helper `application_path_retirement.rs` is unchanged.
+  Existing Noq concurrent-path limits remain; disabled connections keep the
+  original direct-path closing rule. The selector never creates a grant.
 - Noq `src/lib.rs`, `src/connection.rs`: exports, serialized update methods and
-  generation/path-aware invalidation of a retained encrypted transmit. Original
+  generation/path-aware invalidation of a retained encrypted transmit, the
+  change signal and its fingerprint accessor. Original
   blocked-writer/read wakeups, path events, stream and datagram APIs remain.
 - Noq `src/endpoint.rs`: weak opt-in policy registration, synchronous preparation
   and completion under connection send mutexes, with the disabled event path
@@ -302,7 +305,11 @@ Production changes are confined to:
 - Noq-proto `src/connection/application_path_policy.rs`: new cohesive policy
   state, token/update/snapshot/error types, validation and generation boundaries.
 - Noq-proto `src/connection/application_path_revalidation.rs`: finite fresh-proof
-  rounds, failed-round retry and atomic redundant-path retirement protection.
+  rounds, failed-round retry, atomic redundant-path retirement protection and
+  the atomic candidate release after the route decision (A7).
+- Noq-proto `src/connection/application_path_policy_tests.rs`: the module's
+  `route_policy_task_` source cases, moved out unchanged on 2026-11-06 so the
+  policy module stays below 500 lines.
 - Noq-proto `src/connection/mod.rs`: application admission after path choice,
   distinct control scheduling, explicit network/migration invalidation and NAT
   timing hooks. Existing packet-space key selection, retransmit processing,
@@ -396,3 +403,80 @@ time alone (the finite collection/direct phase of a generation) and while
 application bytes move; otherwise it waits for this signal, a session that waits
 for its route, cancellation or the close of the connection. Disabled policy
 users never compute the fingerprint and keep the upstream behavior.
+
+## A7: release redundant candidates after the route decision (2026-11-06)
+
+Finding (battery plan `docs/plaene/2026-11-06-akku-rechte/plan.md`, A7): since
+v0.5.185 `apply_selected_path` skipped the upstream closing of nonselected IP
+paths for every policy-enabled connection, and every Share connection enables
+the policy. Every reachable candidate (IPv4, several IPv6 and privacy
+addresses, further interfaces; up to the eight-path budget) stayed open for the
+connection's lifetime, each with its own 5 s path keepalive on both sides, and
+each keepalive of a path awaiting a fresh proof started a new PATH_CHALLENGE
+round. Upstream keeps one IP path plus relay/custom paths per connection.
+
+Patch:
+
+- Noq-proto `ApplicationPathUpdate::ReleaseCandidate(token)`: under the
+  connection mutex it checks the token (connection, generation, revision, path
+  incarnation) like Allow, then requires an enabled policy, the client side, a
+  current, unabandoned path and a grant on another path that carries
+  application data now (`application_data_allowed_on_path`: established, no
+  network change or required generation, fresh proof, CIDs). It closes the path
+  through ordinary `close_path`; `abandon_path` advances the revision once and
+  leaves the grant on the surviving path. A refusal (`ProtectedPath`, or the
+  token errors) closes nothing. Unlike `RetireRedundantPath` it needs no full
+  path budget: it acts on the app's decision, not on capacity.
+- Noq-proto `ApplicationPathObservation::preferred`: local PATH_STATUS is
+  Available. Iroh sets Available on its selected path only. The fingerprint of
+  the change signal includes it, so a selection change wakes observers once.
+  It grants nothing.
+- Noq `Connection::application_path_policy_fingerprint()`: the current digest
+  under the driver mutex, for observers that create their `Notified` first and
+  then compare, so no change between two waits is lost.
+- Iroh `application_path_pruning.rs`, used by `apply_selected_path` (every
+  selection: path established/abandoned, connection added) and by one change
+  stream per policy-enabled client connection (grant, proof, abandonment or
+  preference changed): with a grant in force it releases, one atomic mutation
+  per path with a fresh observation each, every IP path that is neither the
+  admitted nor the selected path. Relay and custom paths stay, as upstream.
+  It releases nothing while no path carries data (collection, start before the
+  first grant, network change, fresh proofs of a new generation) and nothing
+  while the selected path of this connection is neither admitted nor freshly
+  validated (an upgrade still proving keeps the alternatives until its proof
+  ends). The change stream only releases: it opens no path and sets no status,
+  so it starts no new proof attempt. It holds the `Notify` and a weak handle,
+  yields only when the fingerprint differs from the one it last handled, and
+  ends when the connection is gone or closed (termination notifies).
+
+Kept contract: a later grant of any path still needs its own fresh on-path
+proof (unchanged Allow checks); a released candidate that is needed again is
+reopened by the existing selection/holepunch path (`check_connections`
+upgrade interval) and proves itself as a new path. The LAN → direct → relay
+choice stays in the app (`share/core/route_policy.rs`, `route_start.rs`);
+Iroh keeps exactly the path the app admitted, so the move between paths keeps
+its streams. Network changes revoke the grant first, so all candidates stay
+during the new generation's proofs. R03 retirement still runs before the first
+grant and when the budget is full. A concurrent Allow changes the revision, so
+the release of that path is refused (`StaleObservation`), and the Allow wakes
+the stream for a fresh pass. Server sides close no path (upstream rule); they
+follow the client's PATH_ABANDON. Disabled connections keep the upstream rule
+unchanged, start no stream and never compute the fingerprint.
+
+Result: after the decision a connection keeps the admitted path and the relay
+path, as upstream, plus the selected path while it differs from the admitted
+one. The app removes that difference by preferring `preferred` among validated
+paths of the same class (`route_start.rs`); until that app change, two IP paths
+can remain when the app and the selector rank two equal-class paths by
+slightly different RTT samples.
+
+Remote-suite oracle (prefix `route_policy_task_`, not executed locally):
+with relay and three reachable IP candidates on a client, before any grant all
+four stay; after Allow of the selected IP path exactly the admitted IP path and
+relay remain and the peer sees PATH_ABANDON for the others; a concurrent Allow
+of a candidate refuses its release; ReleaseCandidate of the admitted path, on
+the server side, without a grant, during a network change and with a stale
+token returns an error and closes nothing; after a network change no release
+happens until the new generation's Allow; a better path established later
+becomes selected, is kept, admitted after its fresh proof and then the old
+grant path is released; disabled policy prunes as upstream.

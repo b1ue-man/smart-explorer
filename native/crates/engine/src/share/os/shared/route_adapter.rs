@@ -118,6 +118,7 @@ impl RouteAdapter {
                 validation_pending: observed.validation_in_progress
                     || observed.previous_validation_in_progress,
                 rtt: connection.rtt(path.id()),
+                preferred: observed.preferred,
             });
             tokens.insert(key, observed.token);
         }
@@ -161,6 +162,7 @@ impl RouteAdapter {
                 validated: false,
                 validation_pending: false,
                 rtt: None,
+                preferred: false,
             });
         }
         Observation {

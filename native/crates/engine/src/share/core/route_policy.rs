@@ -25,6 +25,10 @@ pub struct RouteCandidate {
     pub validated: bool,
     pub validation_pending: bool,
     pub rtt: Option<Duration>,
+    /// The path the transport selected (local PATH_STATUS Available, A7):
+    /// orders validated paths of the same class, so the app admits the path
+    /// the transport keeps and the redundant ones can be released.
+    pub preferred: bool,
 }
 
 #[derive(Clone, Debug)]
