@@ -35,6 +35,10 @@ use crate::share::access_grant::Capability;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
 /// Interval of the viewer's `PING` (clock offset, liveness on the host).
 const PING_INTERVAL: Duration = Duration::from_secs(1);
+/// Interval while the viewer reported itself hidden: a third of the host's
+/// 15-s silence limit (`host_session.rs` `VIEWER_SILENCE`), so a hidden
+/// session stays alive without a wake-up every second on both devices.
+const HIDDEN_PING_INTERVAL: Duration = Duration::from_secs(5);
 /// Control frames queued for the writer, host frames for the reader.
 const CONTROL_QUEUE: usize = 256;
 /// Close code of a viewer that ends its session.
@@ -365,8 +369,13 @@ async fn handshake_for(
         std::time::Instant,
     >::new()));
     let sent_icons = pending_icons.clone();
+    let hidden = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let reported_hidden = hidden.clone();
     let writer = tokio::spawn(async move {
         while let Some(frame) = outgoing.recv().await {
+            if let ViewerFrame::Visibility(report) = &frame {
+                reported_hidden.store(report.hidden(), std::sync::atomic::Ordering::Release);
+            }
             if let ViewerFrame::IconRequest(request) = &frame {
                 if !icons_supported {
                     continue;
@@ -428,10 +437,8 @@ async fn handshake_for(
     };
     let pings = control.clone();
     let clock = tokio::spawn(async move {
-        let mut interval = tokio::time::interval(PING_INTERVAL);
         let mut sequence = 0u64;
         loop {
-            interval.tick().await;
             sequence += 1;
             let ping = Ping {
                 sequence,
@@ -440,6 +447,12 @@ async fn handshake_for(
             if pings.send(ViewerFrame::Ping(ping)).await.is_err() {
                 return;
             }
+            let interval = if hidden.load(std::sync::atomic::Ordering::Acquire) {
+                HIDDEN_PING_INTERVAL
+            } else {
+                PING_INTERVAL
+            };
+            tokio::time::sleep(interval).await;
         }
     });
     Ok(ViewerSession {

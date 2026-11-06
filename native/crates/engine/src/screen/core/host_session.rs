@@ -181,7 +181,9 @@ impl<'a> Session<'a> {
                     }
                     self.metadata.advance(self.context, self.principal);
                 }
-                _ = capture.tick() => {
+                // A hidden viewer gets no pictures: no capture tick until it is
+                // visible again, unless an acknowledgement or input release waits.
+                _ = capture.tick(), if self.visible || self.visibility_ack_pending || self.input_release.is_some() => {
                     let started = self.pipeline.work_started();
                     if let Some(ending) = self.produce().await {
                         break ending;
