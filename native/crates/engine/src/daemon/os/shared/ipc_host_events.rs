@@ -270,6 +270,7 @@ impl ShareHost {
 }
 
 /// The presence events of one drain (design 5.2 feed triggers, 3.1 T3).
+/// `ServerConnected` restarts lost device feeds at once (peer_feed, A5).
 fn presence_events(events: &[crate::share::ShareEvent]) -> Vec<crate::share::ShareEvent> {
     use crate::share::ShareEvent as Event;
     events
@@ -284,6 +285,7 @@ fn presence_events(events: &[crate::share::ShareEvent]) -> Vec<crate::share::Sha
                     | Event::RoomLeft { .. }
                     | Event::LanPeerSeen { .. }
                     | Event::LanPeerLost { .. }
+                    | Event::ServerConnected
             )
         })
         .cloned()
