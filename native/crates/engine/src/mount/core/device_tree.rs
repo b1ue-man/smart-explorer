@@ -9,7 +9,7 @@
 //! published. Names are `device_tree_names.rs`, the path resolution and the
 //! virtual folders `device_tree_routing.rs`, the frontend boundary
 //! `device_tree_fs.rs`.
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::Path;
 use std::sync::atomic::AtomicU64;
@@ -53,6 +53,9 @@ pub struct DeviceTree {
     pub(super) state: Mutex<State>,
     /// The shared folders of the devices browsed so far, by device key.
     pub(super) roots: Mutex<HashMap<String, Vec<ChildRoot>>>,
+    /// Devices a caller reached since the last background refresh. Only these
+    /// are refreshed: a drive nobody uses wakes no device (phones included).
+    pub(super) accessed: Mutex<HashSet<String>>,
     pub(super) children: Mutex<HashMap<ChildKey, Arc<ChildEngine>>>,
     gates: Mutex<HashMap<ChildKey, Arc<Mutex<()>>>>,
     book: Mutex<Vec<Record>>,
@@ -96,6 +99,7 @@ impl DeviceTree {
             factory,
             state: Mutex::new(State::default()),
             roots: Mutex::new(HashMap::new()),
+            accessed: Mutex::new(HashSet::new()),
             children: Mutex::new(HashMap::new()),
             gates: Mutex::new(HashMap::new()),
             book: Mutex::new(Vec::new()),

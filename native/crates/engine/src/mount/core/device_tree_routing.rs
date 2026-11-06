@@ -157,6 +157,11 @@ impl DeviceTree {
     }
 
     fn route_device(&self, key: &str, rest: &[String], fetch: bool) -> io::Result<Routed> {
+        if fetch {
+            // A caller reached this device: its next background refresh may
+            // read it again (`refresh_metadata_while`).
+            guard(&self.accessed).insert(key.to_string());
+        }
         let Some(first) = rest.first() else {
             return Ok(Routed::Virtual(Dir::Device(key.to_string())));
         };
@@ -201,7 +206,12 @@ impl DeviceTree {
     /// device; a device that cannot be reached is `HostUnreachable`, never
     /// an empty list. What was read stays known while the device is offline.
     pub(super) fn roots_of(&self, key: &str, fetch: bool) -> io::Result<Vec<ChildRoot>> {
-        if let Some(roots) = guard(&self.roots).get(key) {
+        // An empty list is read again on the next access: the device may have
+        // given its folders meanwhile (rights settled after a new pairing).
+        if let Some(roots) = guard(&self.roots)
+            .get(key)
+            .filter(|roots| !fetch || !roots.is_empty())
+        {
             return Ok(roots.clone());
         }
         if !fetch {

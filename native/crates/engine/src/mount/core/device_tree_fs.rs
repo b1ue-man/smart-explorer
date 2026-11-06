@@ -423,12 +423,14 @@ impl MountFilesystem for DeviceTree {
         Ok(total)
     }
 
+    /// Only devices reached since the last round: an unused drive wakes no device.
     fn refresh_metadata_while(&self, stopped: StopProbe<'_>) -> io::Result<()> {
+        let accessed = std::mem::take(&mut *guard(&self.accessed));
         for (key, child) in self.open_children() {
             if stopped() {
                 return Ok(());
             }
-            if self.online(&key.key) {
+            if accessed.contains(&key.key) && self.online(&key.key) {
                 let _ = MountFilesystem::refresh_metadata_while(&*child.engine, stopped);
             }
         }
@@ -437,7 +439,7 @@ impl MountFilesystem for DeviceTree {
             if stopped() {
                 break;
             }
-            if self.online(&key) {
+            if accessed.contains(&key) && self.online(&key) {
                 self.refresh_roots(&key);
             }
         }
