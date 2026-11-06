@@ -252,12 +252,20 @@ def part_workspace():
     env = dict(os.environ, SMART_EXPLORER_COPY_PASTE_TASK="1", SMART_EXPLORER_WINDOWS_REMOTE_TASK="1")
     # Tests that need resources only their own suites provide: real protocol
     # servers (SE_SYNC_PROVIDER_MANIFEST), a live Google account
-    # (SE_DRIVE_TEST_CLIENT_ID) and a candidate se binary installed by the
-    # remote runner (batches P13 retirement).
+    # (SE_DRIVE_TEST_CLIENT_ID), a candidate se binary installed by the
+    # remote runner (batches P13 retirement) and the network namespace with
+    # exactly one private interface of the review suite (S09 LAN-link
+    # transport: on a runner with several private interfaces the product
+    # refuses with "LAN-Link hat kein eindeutiges privates Interface").
     skips = ["sync_reliability_task_provider", "sync_reliability_task_options_share_private_versions",
              "sync_reliability_task_old_jobs_crossremote", "sync_reliability_task_live_",
              "batches_p13_linux_installed_cli_retirement_reexecs_only_with_its_bound_root",
-             "batches_p13_linux_retirement_handoff_cannot_select_a_foreign_installation"]
+             "batches_p13_linux_retirement_handoff_cannot_select_a_foreign_installation",
+             "review_task_s09_transport_close_withdraw_disable_discard_cached_facts",
+             "review_task_s09_transport_expired_or_unknown_facts_fail_closed",
+             "review_task_s09_transport_path_revisions_reject_returned_path_evidence",
+             "review_task_s09_transport_real_private_tls_round_has_only_status_rights",
+             "review_task_s09_transport_rejects_wrong_pin_and_replayed_confirm"]
     summary("Not run here, they need their suite's resources: " + ", ".join(f"`{name}`" for name in skips))
     skip_args = [arg for name in skips for arg in ("--skip", name)]
     # A test binary that did not compile is not run; its compile log above is the result.
