@@ -7,8 +7,8 @@ name: Crate split and shared task setup
 #                minutes is ended and named (native/.config/nextest.toml)
 #   windows-gnu  link every test binary and program for x86_64-pc-windows-gnu
 #                with GNU ld (MinGW-w64 on Linux)
-#   android      compile and link the Android JNI library (arm64-v8a, x86_64)
-#                and configure the Gradle app
+#   android      compile and link the Android JNI library (arm64-v8a, x86_64);
+#                arm64-v8a also compiles the Kotlin app and runs its JVM unit tests
 #   agent        build the SSH-agent bundles the release embeds
 # Input part=compile-timings runs only the compile stage of `workspace` on Linux
 # and Windows (no test runs, no other job), with Cargo's timing report, one line
@@ -161,8 +161,9 @@ jobs:
           - abi: x86_64
             target: x86_64-linux-android
     runs-on: ubuntu-24.04
-    # Measured: 8 and 11 min (run 41433803073).
-    timeout-minutes: 50
+    # Measured: 8 and 11 min without Kotlin (run 41433803073); arm64 adds the
+    # Kotlin compile and the JVM unit tests of the app.
+    timeout-minutes: 70
     steps:
       - uses: actions/checkout@v7
         with:
@@ -183,7 +184,7 @@ jobs:
           java-version: "17"
 
       - name: Android JNI library
-        timeout-minutes: 40
+        timeout-minutes: 60
         env:
           ABI: ${{ matrix.abi }}
         run: python3 native/test-crates-task.py --part android --abi "$ABI"

@@ -23,7 +23,8 @@ Parts:
              arm64-v8a also configure the Gradle app, which reads its version
              from the workspace manifest (version.workspace, D13), with the
              rustls verifier Maven repository the release build passes
-             (-PrustlsVerifierMaven, android/build-release-apk.sh).
+             (-PrustlsVerifierMaven, android/build-release-apk.sh), then
+             compile its Kotlin sources and run its JVM unit tests.
   agent      the SSH-agent bundles through native/build-agent-bundles.sh, the
              path the release's prepare job takes (se-agent includes the
              shared protocol sources from crates/storage and crates/core).
@@ -339,6 +340,10 @@ def part_android(abi):
             return False
         ok &= run("Gradle configuration of the Android app",
                   ["sh", "./gradlew", "--no-daemon", "--console=plain", "--stacktrace", ":app:help",
+                   f"-PrustlsVerifierMaven={maven}"], cwd=ROOT / "android")
+        ok &= run("Kotlin compile and JVM unit tests of the Android app",
+                  ["sh", "./gradlew", "--no-daemon", "--console=plain", "--stacktrace", "--continue",
+                   ":app:compileDebugKotlin", ":app:testDebugUnitTest",
                    f"-PrustlsVerifierMaven={maven}"], cwd=ROOT / "android")
     return ok
 
