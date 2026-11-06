@@ -1,0 +1,31 @@
+# cargo-nextest settings of the task suites (native/test-crates-task.py, part
+# workspace). Every test runs in its own process.
+#
+# A test still running after one period is reported as SLOW; after five
+# periods it is ended and counted as failed. A hanging test then costs five
+# minutes and is named, instead of holding the job until its limit: crates-task
+# run 41437549919 spent 3:50 h (the 230-minute step limit) in the Windows test
+# run of the programs without a line of output. The longest test binaries
+# measured on Linux (run 41488739503) ran 1783 s for some 3000 engine tests
+# and 163 s for all program tests, one test at a time.
+[profile.default]
+slow-timeout = { period = "60s", terminate-after = 5 }
+fail-fast = false
+retries = 0
+status-level = "slow"
+final-status-level = "fail"
+failure-output = "immediate-final"
+success-output = "never"
+
+[profile.default.junit]
+path = "junit.xml"
+
+# The tests of the programs start se workers and fixture servers with
+# deadlines and count the machine's waiting singleton processes; three of them
+# failed only when run in parallel (74b54fa9). They run one at a time.
+[test-groups]
+machine-wide = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'package(smart_explorer)'
+test-group = 'machine-wide'

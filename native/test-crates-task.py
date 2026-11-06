@@ -210,8 +210,11 @@ def run(title, command, cwd=NATIVE, env=None, cargo_json=False):
     elapsed = time.monotonic() - stream.started
     stream.close()
     lines = stream.lines
-    results = [line for line in lines if line.startswith("test result:")]
+    # libtest ("test result:", "... FAILED") and cargo-nextest ("Summary [",
+    # "FAIL [", "TIMEOUT [", "SIGSEGV [", "ABORT [") report lines.
+    results = [line for line in lines if line.startswith("test result:") or "Summary [" in line]
     failures = [line for line in lines if re.match(r"^test .+ \.\.\. FAILED$", line)
+                or re.match(r"^\s*(FAIL|TIMEOUT|SIGSEGV|SIGABRT|SIGKILL|ABORT|LEAK-FAIL) \[", line)
                 or line.startswith("error") or "panicked at" in line]
     summary(f"exit code {returncode} after {elapsed / 60:.1f} min")
     if results:
@@ -237,12 +240,24 @@ def part_timings():
     return all(compile_stage())
 
 
+def keep_junit(name):
+    """Keeps nextest's JUnit report (per-test times and outcomes) of the last run
+    beside the logs; the next run overwrites target/nextest/default/junit.xml."""
+    report = NATIVE / "target" / "nextest" / "default" / "junit.xml"
+    if report.is_file():
+        logs = NATIVE / "target" / "crates-task-logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        (logs / f"{name}.junit.xml").write_bytes(report.read_bytes())
+
+
 def part_workspace():
     crates_built, programs_built = compile_stage()
-    # One test thread on both systems, as build.yml: tests of the programs
-    # start se workers and fixture servers with deadlines and count the
-    # processes of the machine.
-    threads = ["--test-threads=1"]
+    # cargo-nextest runs every test in its own process with the limits of
+    # native/.config/nextest.toml: a test running five minutes is ended and
+    # named. The tests of the programs (package smart_explorer) run one at a
+    # time there (test group machine-wide); the crates' tests run in parallel
+    # processes.
+    nextest = ["cargo", "nextest", "run", "--locked", "--no-fail-fast"]
     # The crates' own tests build the layers with feature test-support (their
     # dev-dependencies); the programs and their integration tests build in a
     # separate invocation without it, so `se`/`smart_explorer` started by
@@ -269,12 +284,14 @@ def part_workspace():
     summary("Not run here, they need their suite's resources: " + ", ".join(f"`{name}`" for name in skips))
     skip_args = [arg for name in skips for arg in ("--skip", name)]
     # A test binary that did not compile is not run; its compile log above is the result.
-    ok = crates_built and run("Tests of every crate",
-                              ["cargo", "test", "--locked", *CRATES, "--no-fail-fast", "--", *threads, *skip_args],
-                              env=env)
+    ok = crates_built and run("Tests of every crate", [*nextest, *CRATES, "--", *skip_args], env=env)
+    keep_junit("tests-of-every-crate")
+    # nextest does not run doc tests; cargo test runs them (two in the core crate).
+    ok = (crates_built and run("Doc tests of every crate",
+                               ["cargo", "test", "--locked", *CRATES, "--doc", "--no-fail-fast"])) and ok
     ok = (programs_built and run("Programs and their integration tests",
-                                 ["cargo", "test", "--locked", "-p", "smart_explorer", "--no-fail-fast", "--",
-                                  *threads])) and ok
+                                 [*nextest, "-p", "smart_explorer"])) and ok
+    keep_junit("programs-and-their-integration-tests")
     return ok
 
 

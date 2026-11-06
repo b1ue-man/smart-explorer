@@ -3,6 +3,8 @@ name: Crate split and shared task setup
 # The task-level suite of the D13/D12 batch (docs/plaene/2026-11-01-idealzustand).
 # One entrypoint, native/test-crates-task.py:
 #   workspace    build every crate and target, run every test (Linux, Windows)
+#                with cargo-nextest: one process per test, a test running five
+#                minutes is ended and named (native/.config/nextest.toml)
 #   windows-gnu  link every test binary and program for x86_64-pc-windows-gnu
 #                with GNU ld (MinGW-w64 on Linux)
 #   android      compile and link the Android JNI library (arm64-v8a, x86_64)
@@ -48,7 +50,10 @@ jobs:
       matrix:
         os: [ubuntu-24.04, windows-2025]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ inputs.part == 'compile-timings' && 75 || 240 }}
+    # Measured (run 42290907758): compiling every test binary takes 28 min on
+    # Windows and 17 min on Linux; running the tests took 36 min on Linux one
+    # test at a time (run 41488739503). A hanging test is ended after 5 min.
+    timeout-minutes: ${{ inputs.part == 'compile-timings' && 75 || 130 }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -69,6 +74,12 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+
+      - name: cargo-nextest
+        if: inputs.part == 'suite'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest@0.9
 
       - name: Linux test packages
         if: runner.os == 'Linux'
@@ -93,7 +104,7 @@ jobs:
         run: nproc && free -h && df -h /
 
       - name: Every crate, every test
-        timeout-minutes: ${{ inputs.part == 'compile-timings' && 60 || 230 }}
+        timeout-minutes: ${{ inputs.part == 'compile-timings' && 60 || 120 }}
         env:
           PART: ${{ inputs.part == 'compile-timings' && 'timings' || 'workspace' }}
         run: python native/test-crates-task.py --part "$PART"
@@ -112,7 +123,8 @@ jobs:
   windows-gnu:
     if: inputs.part == 'suite'
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    # Measured: 15 min (run 41488739503).
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v7
         with:
@@ -127,7 +139,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y mingw-w64
 
       - name: Every test binary and program, GNU ld
-        timeout-minutes: 170
+        timeout-minutes: 40
         run: python3 native/test-crates-task.py --part windows-gnu
 
       - uses: actions/upload-artifact@v4
@@ -149,7 +161,8 @@ jobs:
           - abi: x86_64
             target: x86_64-linux-android
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    # Measured: 8 and 11 min (run 41433803073).
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v7
         with:
@@ -170,7 +183,7 @@ jobs:
           java-version: "17"
 
       - name: Android JNI library
-        timeout-minutes: 110
+        timeout-minutes: 40
         env:
           ABI: ${{ matrix.abi }}
         run: python3 native/test-crates-task.py --part android --abi "$ABI"
@@ -178,7 +191,8 @@ jobs:
   agent:
     if: inputs.part == 'suite'
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    # Measured: 2 min (run 41433803073).
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
         with:
@@ -194,5 +208,5 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - name: SSH-agent bundles
-        timeout-minutes: 50
+        timeout-minutes: 30
         run: python3 native/test-crates-task.py --part agent
