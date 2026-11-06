@@ -237,18 +237,19 @@ fn concurrent_fresh_share_status_commands_converge_on_one_worker() {
         );
     }
 
+    // One desktop worker is two `--sync-daemon` processes: the guardian and
+    // the child it supervises. Every further one is a start that did not end.
     let deadline = Instant::now() + Duration::from_secs(8);
-    let daemon_pids = loop {
-        let pids = sandbox_daemon_pids(&sandbox);
-        if pids.len() <= 1 || Instant::now() >= deadline {
-            break pids;
+    let daemons = loop {
+        let daemons = sandbox_daemons(&sandbox);
+        if daemons.is_one_supervised_worker() || Instant::now() >= deadline {
+            break daemons;
         }
         thread::sleep(Duration::from_millis(50));
     };
-    assert_eq!(
-        daemon_pids.len(),
-        1,
-        "concurrent starts left detached singleton waiters: {daemon_pids:?}"
+    assert!(
+        daemons.is_one_supervised_worker(),
+        "concurrent starts left detached singleton waiters: {daemons:?}"
     );
 }
 
@@ -334,33 +335,14 @@ fn active_standalone_worker_restarts_with_the_repaired_identity() {
     assert_success(&stopped.output);
 }
 
+/// A device paired with anything keeps an identity whose key left the secure
+/// store until the user repairs it, because every peer must confirm the new
+/// one (`share/os/shared/identity_store.rs`, `load_or_replace_unpaired`).
 #[test]
 fn legacy_identity_requires_explicit_repair_and_reloads_the_replacement() {
     let sandbox = Sandbox::new("share-identity-legacy-repair");
-    let metadata_path = sandbox.app_data_path("share_identity.json");
-    fs::create_dir_all(
-        metadata_path
-            .parent()
-            .expect("share identity metadata has a parent"),
-    )
-    .expect("create legacy identity directory");
-
-    let legacy_device_id = "255f2f14-5633-4baa-b46b-a33cc78e43ce";
-    let legacy_device_name = "Legacy Workstation";
-    let legacy_lookup_id = "00112233445566778899aabb";
-    let legacy_node_id = iroh::SecretKey::generate().public().to_string();
-    let legacy_fingerprint = fingerprint(&legacy_node_id);
-    let legacy = serde_json::json!({
-        "device_id": legacy_device_id,
-        "device_name": legacy_device_name,
-        "direct_lookup_id": legacy_lookup_id,
-        "public_key": legacy_node_id,
-        "fingerprint": legacy_fingerprint,
-        "node_id": legacy_node_id,
-    });
-    let original_metadata =
-        serde_json::to_vec_pretty(&legacy).expect("serialize v0.5.119 identity metadata");
-    fs::write(&metadata_path, &original_metadata).expect("write legacy identity metadata");
+    let legacy = write_legacy_identity(&sandbox);
+    write_profile_with_saved_room(&sandbox);
 
     let configure = sandbox
         .command()
@@ -387,8 +369,8 @@ fn legacy_identity_requires_explicit_repair_and_reloads_the_replacement() {
         "missing-secret error did not provide the explicit repair command"
     );
     assert_eq!(
-        fs::read(&metadata_path).expect("re-read legacy identity metadata"),
-        original_metadata,
+        fs::read(&legacy.metadata_path).expect("re-read legacy identity metadata"),
+        legacy.metadata,
         "normal identity lookup rewrote legacy metadata"
     );
     assert_no_identity_secret_records(&sandbox);
@@ -400,37 +382,7 @@ fn legacy_identity_requires_explicit_repair_and_reloads_the_replacement() {
             && stderr(&repaired).to_ascii_lowercase().contains("re-pair"),
         "identity replacement did not warn that peers require re-pairing"
     );
-    assert_eq!(repaired_identity.device_name, legacy_device_name);
-    assert!(
-        repaired_identity.device_id != legacy_device_id,
-        "repair retained the legacy device id"
-    );
-    assert!(
-        repaired_identity.node_id != legacy_node_id,
-        "repair retained the legacy Iroh node id"
-    );
-    assert!(
-        repaired_identity.fingerprint != legacy_fingerprint,
-        "repair retained the legacy fingerprint"
-    );
-    assert_direct_code_shape(&repaired_identity);
-
-    let repaired_metadata: serde_json::Value =
-        serde_json::from_slice(&fs::read(&metadata_path).expect("read repaired identity metadata"))
-            .expect("repaired identity metadata must be JSON");
-    assert!(
-        json_string(&repaired_metadata, "direct_lookup_id") != legacy_lookup_id,
-        "repair retained the legacy direct lookup id"
-    );
-    assert!(
-        json_string(&repaired_metadata, "public_key") != legacy_node_id,
-        "repair retained the legacy public key"
-    );
-    assert_eq!(
-        json_string(&repaired_metadata, "device_name"),
-        legacy_device_name
-    );
-    assert_exact_identity_secret_records(&sandbox);
+    assert_replaces_legacy_identity(&sandbox, &legacy, &repaired_identity);
 
     let reloaded = run_identity(&sandbox, false);
     let reloaded_identity = parse_identity(&reloaded);
@@ -440,6 +392,126 @@ fn legacy_identity_requires_explicit_repair_and_reloads_the_replacement() {
     );
     assert_same_identity(&repaired_identity, &reloaded_identity);
     assert_exact_identity_secret_records(&sandbox);
+}
+
+/// Paired with nothing, the same identity is replaced by the ordinary lookup:
+/// a new identity breaks no pairing, and Share starts at all.
+#[test]
+fn unpaired_legacy_identity_is_replaced_without_explicit_repair() {
+    let sandbox = Sandbox::new("share-identity-legacy-unpaired");
+    let legacy = write_legacy_identity(&sandbox);
+
+    let replaced = parse_identity(&run_identity(&sandbox, false));
+    assert_replaces_legacy_identity(&sandbox, &legacy, &replaced);
+
+    let reloaded = run_identity(&sandbox, false);
+    assert!(
+        reloaded.stderr.is_empty(),
+        "replaced identity reload warned"
+    );
+    assert_same_identity(&replaced, &parse_identity(&reloaded));
+    assert_exact_identity_secret_records(&sandbox);
+}
+
+/// A v0.5.119 identity file whose secrets never reached the secure store.
+struct LegacyIdentity {
+    metadata_path: PathBuf,
+    metadata: Vec<u8>,
+    device_id: &'static str,
+    device_name: &'static str,
+    lookup_id: &'static str,
+    node_id: String,
+    fingerprint: String,
+}
+
+fn write_legacy_identity(sandbox: &Sandbox) -> LegacyIdentity {
+    let metadata_path = sandbox.app_data_path("share_identity.json");
+    fs::create_dir_all(
+        metadata_path
+            .parent()
+            .expect("share identity metadata has a parent"),
+    )
+    .expect("create legacy identity directory");
+    let device_id = "255f2f14-5633-4baa-b46b-a33cc78e43ce";
+    let device_name = "Legacy Workstation";
+    let lookup_id = "00112233445566778899aabb";
+    let node_id = iroh::SecretKey::generate().public().to_string();
+    let fingerprint = fingerprint(&node_id);
+    let metadata = serde_json::to_vec_pretty(&serde_json::json!({
+        "device_id": device_id,
+        "device_name": device_name,
+        "direct_lookup_id": lookup_id,
+        "public_key": node_id,
+        "fingerprint": fingerprint,
+        "node_id": node_id,
+    }))
+    .expect("serialize v0.5.119 identity metadata");
+    fs::write(&metadata_path, &metadata).expect("write legacy identity metadata");
+    LegacyIdentity {
+        metadata_path,
+        metadata,
+        device_id,
+        device_name,
+        lookup_id,
+        node_id,
+        fingerprint,
+    }
+}
+
+/// One saved room, not joined automatically: the device counts as paired.
+fn write_profile_with_saved_room(sandbox: &Sandbox) {
+    let profile = serde_json::json!({
+        "schema_version": 8,
+        "rooms": [{
+            "id": "legacy-room",
+            "name": "Team",
+            "room_id": "r1",
+            "auto_join": false,
+            "last_seen": null,
+            "exports": {"roots": []},
+        }],
+    });
+    fs::write(
+        sandbox.app_data_path("share_profiles.json"),
+        serde_json::to_vec_pretty(&profile).expect("serialize paired Share profile"),
+    )
+    .expect("write paired Share profile");
+}
+
+fn assert_replaces_legacy_identity(
+    sandbox: &Sandbox,
+    legacy: &LegacyIdentity,
+    replacement: &PublicIdentity,
+) {
+    assert_eq!(replacement.device_name, legacy.device_name);
+    assert!(
+        replacement.device_id != legacy.device_id,
+        "replacement retained the legacy device id"
+    );
+    assert!(
+        replacement.node_id != legacy.node_id,
+        "replacement retained the legacy Iroh node id"
+    );
+    assert!(
+        replacement.fingerprint != legacy.fingerprint,
+        "replacement retained the legacy fingerprint"
+    );
+    assert_direct_code_shape(replacement);
+
+    let metadata: serde_json::Value = serde_json::from_slice(
+        &fs::read(&legacy.metadata_path).expect("read replaced identity metadata"),
+    )
+    .expect("replaced identity metadata must be JSON");
+    assert!(
+        json_string(&metadata, "direct_lookup_id") != legacy.lookup_id,
+        "replacement retained the legacy direct lookup id"
+    );
+    assert!(
+        json_string(&metadata, "public_key") != legacy.node_id,
+        "replacement retained the legacy public key"
+    );
+    assert_eq!(json_string(&metadata, "device_name"), legacy.device_name);
+    assert_exact_identity_secret_records(sandbox);
 }
 
 #[test]
@@ -678,11 +750,28 @@ fn wait_for_readiness(paths: &[PathBuf], timeout: Duration) -> bool {
     false
 }
 
-fn sandbox_daemon_pids(sandbox: &Sandbox) -> Vec<u32> {
+/// The `--sync-daemon` processes of one sandbox: guardians, and the workers
+/// a guardian started (`SE_SYNC_GUARDIAN_CHILD`) with their parent process.
+#[derive(Debug, Default)]
+struct SandboxDaemons {
+    guardians: Vec<u32>,
+    workers: Vec<(u32, u32)>,
+}
+
+impl SandboxDaemons {
+    fn is_one_supervised_worker(&self) -> bool {
+        matches!(
+            (self.guardians.as_slice(), self.workers.as_slice()),
+            ([guardian], [(_, parent)]) if guardian == parent
+        )
+    }
+}
+
+fn sandbox_daemons(sandbox: &Sandbox) -> SandboxDaemons {
     let expected_data = format!("XDG_DATA_HOME={}", sandbox.path("app-data").display());
-    let mut pids = Vec::new();
+    let mut daemons = SandboxDaemons::default();
     let Ok(processes) = fs::read_dir("/proc") else {
-        return pids;
+        return daemons;
     };
     for process in processes.flatten() {
         let Some(pid) = process
@@ -704,15 +793,32 @@ fn sandbox_daemon_pids(sandbox: &Sandbox) -> Vec<u32> {
         let Ok(environment) = fs::read(process.path().join("environ")) else {
             continue;
         };
-        if environment
-            .split(|byte| *byte == 0)
-            .any(|entry| entry == expected_data.as_bytes())
+        let entries: Vec<&[u8]> = environment.split(|byte| *byte == 0).collect();
+        if !entries.contains(&expected_data.as_bytes()) {
+            continue;
+        }
+        if entries
+            .iter()
+            .any(|entry| entry.starts_with(b"SE_SYNC_GUARDIAN_CHILD="))
         {
-            pids.push(pid);
+            // A worker that ended between the reads has no parent left to show.
+            if let Some(parent) = parent_pid(&process.path()) {
+                daemons.workers.push((pid, parent));
+            }
+        } else {
+            daemons.guardians.push(pid);
         }
     }
-    pids.sort_unstable();
-    pids
+    daemons.guardians.sort_unstable();
+    daemons.workers.sort_unstable();
+    daemons
+}
+
+/// The fourth field of `/proc/<pid>/stat`, after the parenthesized name.
+fn parent_pid(process: &Path) -> Option<u32> {
+    let stat = fs::read_to_string(process.join("stat")).ok()?;
+    let (_, fields) = stat.rsplit_once(')')?;
+    fields.split_whitespace().nth(1)?.parse().ok()
 }
 
 struct DaemonStopGuard<'a> {
