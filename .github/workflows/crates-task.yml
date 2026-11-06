@@ -8,6 +8,9 @@ name: Crate split and shared task setup
 #   android      compile and link the Android JNI library (arm64-v8a, x86_64)
 #                and configure the Gradle app
 #   agent        build the SSH-agent bundles the release embeds
+# Input part=compile-timings runs only the compile stage of `workspace` on Linux
+# and Windows (no test runs, no other job), with Cargo's timing report, one line
+# per finished unit and a resource line every 30 s, to measure the build time.
 
 on:
   workflow_dispatch:
@@ -16,6 +19,14 @@ on:
         description: Full pushed candidate SHA, matching the selected ref
         required: true
         type: string
+      part:
+        description: suite (every job) or compile-timings (the workspace compile stage only)
+        required: false
+        default: suite
+        type: choice
+        options:
+          - suite
+          - compile-timings
 
 permissions:
   contents: read
@@ -37,7 +48,7 @@ jobs:
       matrix:
         os: [ubuntu-24.04, windows-2025]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 240
+    timeout-minutes: ${{ inputs.part == 'compile-timings' && 75 || 240 }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -66,19 +77,40 @@ jobs:
           sudo apt-get install -y build-essential pkg-config xvfb libegl1 libgl1 libx11-6 libx11-xcb1 \
             libxcursor1 libxi6 libxkbcommon0 libxkbcommon-x11-0 libxrandr2
 
+      - name: Runner resources and Defender state
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Get-CimInstance Win32_ComputerSystem | Format-List NumberOfLogicalProcessors, TotalPhysicalMemory
+          Get-CimInstance Win32_PageFileUsage | Format-List Name, AllocatedBaseSize, CurrentUsage, PeakUsage
+          Get-CimInstance Win32_LogicalDisk | Format-Table DeviceID, FileSystem, Size, FreeSpace
+          Get-MpComputerStatus | Format-List AMRunningMode, AMServiceEnabled, RealTimeProtectionEnabled, OnAccessProtectionEnabled, IoavProtectionEnabled, BehaviorMonitorEnabled
+          Get-MpPreference | Format-List DisableRealtimeMonitoring, ExclusionPath, ExclusionProcess
+
+      - name: Runner resources
+        if: runner.os == 'Linux'
+        run: nproc && free -h && df -h /
+
       - name: Every crate, every test
-        timeout-minutes: 230
-        run: python native/test-crates-task.py --part workspace
+        timeout-minutes: ${{ inputs.part == 'compile-timings' && 60 || 230 }}
+        env:
+          PART: ${{ inputs.part == 'compile-timings' && 'timings' || 'workspace' }}
+        run: python native/test-crates-task.py --part "$PART"
+        shell: bash
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: crates-task-workspace-${{ runner.os }}
-          path: native/target/crates-task-logs
+          path: |
+            native/target/crates-task-logs
+            native/target/cargo-timings
           if-no-files-found: warn
           retention-days: 7
 
   windows-gnu:
+    if: inputs.part == 'suite'
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     steps:
@@ -107,6 +139,7 @@ jobs:
           retention-days: 7
 
   android:
+    if: inputs.part == 'suite'
     strategy:
       fail-fast: false
       matrix:
@@ -143,6 +176,7 @@ jobs:
         run: python3 native/test-crates-task.py --part android --abi "$ABI"
 
   agent:
+    if: inputs.part == 'suite'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:

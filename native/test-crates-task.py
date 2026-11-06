@@ -28,8 +28,16 @@ Parts:
              path the release's prepare job takes (se-agent includes the
              shared protocol sources from crates/storage and crates/core).
 
-Every command's tail goes to the step summary; a failing command fails the
-part after all of its commands ran.
+  timings    only the compile stage of `workspace` (no test runs), for measuring
+             where the build time goes (workflow input part=compile-timings).
+
+Every command streams its output into the step log as it runs, each line with
+the seconds since the command started, and into its log file under
+native/target/crates-task-logs; a resource line (memory, commit/swap, CPU,
+the largest compiler and linker processes) follows every 30 s. The compile
+stage reports each finished unit with its time and writes Cargo's timing
+report (native/target/cargo-timings). Every command's tail goes to the step
+summary; a failing command fails the part after all of its commands ran.
 """
 import argparse
 import json
@@ -38,6 +46,8 @@ import platform
 import re
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -54,29 +64,181 @@ def summary(text):
             handle.write(text + "\n")
 
 
-def run(title, command, cwd=NATIVE, env=None):
+RESOURCE_PERIOD = 30
+# Compilers, linkers (MSVC link, rust-lld, GNU ld through cc/collect2, MinGW ld as
+# ps truncates it) and the Windows Defender engine.
+WATCHED = ("rustc", "cargo", "link", "lld", "rust-lld", "cc", "collect2", "ld", "x86_64-w64-ming",
+           "msmpeng", "mpdefendercoreservice")
+
+
+def resources_windows():
+    import ctypes
+    from ctypes import wintypes
+
+    class MemoryStatus(ctypes.Structure):
+        _fields_ = [("dwLength", wintypes.DWORD), ("dwMemoryLoad", wintypes.DWORD),
+                    ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+    status = MemoryStatus()
+    status.dwLength = ctypes.sizeof(MemoryStatus)
+    if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+        return "memory: GlobalMemoryStatusEx failed"
+    gib = 1024 ** 3
+    memory = (f"memory load {status.dwMemoryLoad}%, physical free {status.ullAvailPhys / gib:.1f} of "
+              f"{status.ullTotalPhys / gib:.1f} GiB, commit free {status.ullAvailPageFile / gib:.1f} of "
+              f"{status.ullTotalPageFile / gib:.1f} GiB")
+    # Hard page faults and the CPU of the processes that compile, link or scan files.
+    script = ("$ErrorActionPreference='SilentlyContinue';"
+              "$c=(Get-Counter '\\Memory\\Pages Input/sec','\\Processor(_Total)\\% Processor Time').CounterSamples;"
+              "'pages-in/s {0:N0}, cpu {1:N0}%' -f $c[0].CookedValue,$c[1].CookedValue;"
+              "Get-Process | Where-Object { @('" + "','".join(WATCHED) + "') -contains $_.ProcessName.ToLower() } |"
+              " Sort-Object WorkingSet64 -Descending | Select-Object -First 8 |"
+              " ForEach-Object { '{0}({1}) ws {2:N0} MiB cpu {3:N0} s' -f $_.ProcessName,$_.Id,($_.WorkingSet64/1MB),$_.CPU }")
+    probe = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                           encoding="utf-8", errors="replace", timeout=25)
+    return memory + "; " + "; ".join(line.strip() for line in probe.stdout.splitlines() if line.strip())
+
+
+def cpu_times_linux():
+    fields = [int(value) for value in Path("/proc/stat").read_text().split("\n", 1)[0].split()[1:]]
+    return fields[3] + fields[4], sum(fields)
+
+
+def resources_linux(previous):
+    info = {}
+    for line in Path("/proc/meminfo").read_text().splitlines():
+        key, value = line.split(":", 1)
+        info[key] = int(value.split()[0]) * 1024
+    gib = 1024 ** 3
+    idle, total = cpu_times_linux()
+    busy = ""
+    if previous[0] is not None:
+        spent = total - previous[0][1]
+        if spent > 0:
+            busy = f", cpu {100 * (1 - (idle - previous[0][0]) / spent):.0f}%"
+    previous[0] = (idle, total)
+    processes = subprocess.run(["ps", "-eo", "comm,pid,rss,time", "--sort=-rss"], stdout=subprocess.PIPE,
+                               stderr=subprocess.DEVNULL, text=True, errors="replace").stdout.splitlines()[1:]
+    top = [line.split() for line in processes if line.split() and line.split()[0].lower() in WATCHED][:8]
+    return (f"memory free {info.get('MemAvailable', 0) / gib:.1f} of {info.get('MemTotal', 0) / gib:.1f} GiB, "
+            f"swap used {(info.get('SwapTotal', 0) - info.get('SwapFree', 0)) / gib:.1f} of "
+            f"{info.get('SwapTotal', 0) / gib:.1f} GiB{busy}; "
+            + "; ".join(f"{name}({pid}) rss {int(rss) // 1024} MiB cpu {cpu}" for name, pid, rss, cpu in top))
+
+
+class Stream:
+    """One command's output: every line to the step log with the seconds since the
+    command started, to its log file, and kept for the summary."""
+
+    def __init__(self, title):
+        log = NATIVE / "target" / "crates-task-logs"
+        log.mkdir(parents=True, exist_ok=True)
+        self.path = log / (re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-") + ".log")
+        self.handle = open(self.path, "w", encoding="utf-8")
+        self.lines = []
+        self.started = time.monotonic()
+        self.lock = threading.Lock()
+
+    def write(self, line, keep=True):
+        stamped = f"[{time.monotonic() - self.started:7.0f}s] {line}"
+        with self.lock:
+            print(stamped, flush=True)
+            self.handle.write(stamped + "\n")
+            self.handle.flush()
+            if keep:
+                self.lines.append(line)
+
+    def close(self):
+        self.handle.close()
+
+
+def sample_resources(stream, stop):
+    previous = [None]
+    while not stop.wait(RESOURCE_PERIOD):
+        try:
+            text = resources_windows() if WINDOWS else resources_linux(previous)
+        except Exception as error:  # the sampler must never end the suite
+            text = f"resource sample failed: {error!r}"
+        stream.write("[resources] " + text, keep=False)
+
+
+def cargo_message(stream, line):
+    """Renders one line of `cargo --message-format json`: diagnostics as the
+    compiler printed them, each finished unit as one line."""
+    try:
+        message = json.loads(line)
+    except ValueError:
+        stream.write(line)
+        return
+    reason = message.get("reason")
+    if reason == "compiler-message":
+        for rendered in (message.get("message", {}).get("rendered") or "").rstrip().splitlines():
+            stream.write(rendered)
+    elif reason == "compiler-artifact":
+        target = message.get("target", {})
+        profile = message.get("profile", {})
+        kind = "+".join(target.get("kind", []))
+        test = " (test)" if profile.get("test") else ""
+        if message.get("fresh"):
+            return
+        stream.write(f"finished {message.get('package_id', '?').split('#')[-1]} {kind} {target.get('name')}{test}")
+    elif reason == "build-finished":
+        stream.write(f"build finished, success={message.get('success')}")
+
+
+def run(title, command, cwd=NATIVE, env=None, cargo_json=False):
     summary(f"### {title}\n`{' '.join(command)}`")
-    process = subprocess.run(command, cwd=cwd, env=env, stdout=subprocess.PIPE,
-                             stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
-    output = process.stdout
-    log = NATIVE / "target" / "crates-task-logs"
-    log.mkdir(parents=True, exist_ok=True)
-    (log / (re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-") + ".log")).write_text(output, encoding="utf-8")
-    sys.stdout.write(output[-20000:])
-    lines = output.splitlines()
+    stream = Stream(title)
+    stop = threading.Event()
+    sampler = threading.Thread(target=sample_resources, args=(stream, stop), daemon=True)
+    sampler.start()
+    process = subprocess.Popen(command, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                               text=True, encoding="utf-8", errors="replace", bufsize=1)
+    for raw in process.stdout:
+        line = raw.rstrip("\n")
+        if cargo_json and line.startswith("{"):
+            cargo_message(stream, line)
+        else:
+            stream.write(line)
+    returncode = process.wait()
+    stop.set()
+    sampler.join(timeout=RESOURCE_PERIOD)
+    elapsed = time.monotonic() - stream.started
+    stream.close()
+    lines = stream.lines
     results = [line for line in lines if line.startswith("test result:")]
     failures = [line for line in lines if re.match(r"^test .+ \.\.\. FAILED$", line)
                 or line.startswith("error") or "panicked at" in line]
-    summary(f"exit code {process.returncode}")
+    summary(f"exit code {returncode} after {elapsed / 60:.1f} min")
     if results:
         summary("\n".join(f"- {line}" for line in results[-40:]))
-    if process.returncode != 0:
+    if returncode != 0:
         tail = failures[-80:] or lines[-60:]
         summary("```\n" + "\n".join(tail) + "\n```")
-    return process.returncode == 0
+    return returncode == 0
+
+
+def compile_stage():
+    """Builds every test binary of the crates and of the programs without running
+    them, with Cargo's timing report and one line per finished unit, so the time
+    of each unit is known even when the job is cut off."""
+    timed = ["--no-run", "--timings", "--message-format", "json"]
+    crates = run("Compile the tests of every crate", ["cargo", "test", "--locked", *CRATES, *timed], cargo_json=True)
+    programs = run("Compile the programs and their integration tests",
+                   ["cargo", "test", "--locked", "-p", "smart_explorer", *timed], cargo_json=True)
+    return crates, programs
+
+
+def part_timings():
+    return all(compile_stage())
 
 
 def part_workspace():
+    crates_built, programs_built = compile_stage()
     # One test thread on both systems, as build.yml: tests of the programs
     # start se workers and fixture servers with deadlines and count the
     # processes of the machine.
@@ -98,10 +260,13 @@ def part_workspace():
              "batches_p13_linux_retirement_handoff_cannot_select_a_foreign_installation"]
     summary("Not run here, they need their suite's resources: " + ", ".join(f"`{name}`" for name in skips))
     skip_args = [arg for name in skips for arg in ("--skip", name)]
-    ok = run("Tests of every crate",
-             ["cargo", "test", "--locked", *CRATES, "--no-fail-fast", "--", *threads, *skip_args], env=env)
-    ok &= run("Programs and their integration tests",
-              ["cargo", "test", "--locked", "-p", "smart_explorer", "--no-fail-fast", "--", *threads])
+    # A test binary that did not compile is not run; its compile log above is the result.
+    ok = crates_built and run("Tests of every crate",
+                              ["cargo", "test", "--locked", *CRATES, "--no-fail-fast", "--", *threads, *skip_args],
+                              env=env)
+    ok = (programs_built and run("Programs and their integration tests",
+                                 ["cargo", "test", "--locked", "-p", "smart_explorer", "--no-fail-fast", "--",
+                                  *threads])) and ok
     return ok
 
 
@@ -158,12 +323,15 @@ def part_agent():
 
 
 def main():
+    # The step log takes UTF-8; Python on a Windows runner would otherwise encode the
+    # piped output with the ANSI code page and fail on the first character outside it.
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser()
-    parser.add_argument("--part", required=True, choices=["workspace", "windows-gnu", "android", "agent"])
+    parser.add_argument("--part", required=True, choices=["workspace", "timings", "windows-gnu", "android", "agent"])
     parser.add_argument("--abi", choices=["arm64-v8a", "x86_64"], default="arm64-v8a")
     args = parser.parse_args()
     summary(f"## crates-task: {args.part} ({platform.system()})")
-    parts = {"workspace": part_workspace, "windows-gnu": part_windows_gnu,
+    parts = {"workspace": part_workspace, "timings": part_timings, "windows-gnu": part_windows_gnu,
              "android": lambda: part_android(args.abi), "agent": part_agent}
     ok = parts[args.part]()
     summary("**passed**" if ok else "**failed**")
