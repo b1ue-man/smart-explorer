@@ -31,6 +31,14 @@ ist 0.5.193.
 
 ## Aufgabe 1: Ursache der rund 4 h im Windows-Job von `crates-task` finden und beheben
 
+**Stand 2026-11-06, erledigt:** Der Windows-Schritt von Lauf `41437549919` lief 3:50:08, genau seine Grenze von
+230 min. Nach dem Compile-Fehler des Crate-Teils lief der Programm-Teil (`cargo test -p smart_explorer`) und
+hing in der Testausführung, bis die Grenze den Schritt beendete; sein Log entstand nie, weil `run()` die
+Ausgabe bis zum Ende sammelte. Kompilieren ist nicht die Ursache: Messlauf `42290907758` (Modus
+`compile-timings`) baute alle Testprogramme unter Windows in 28 min (Crates 19,5 min, Programme 8,2 min),
+unter Linux in 17 min. Behoben: Ausgabe live mit Zeitstempel und Ressourcenzeile (`6f21a546`), Tests über
+cargo-nextest mit 5-min-Frist je Test und JUnit-Bericht, Jobgrenzen nach Messung (`8b50eefb`).
+
 **Messwerte** (GitHub-API-Schrittzeiten und gespeicherte Logs):
 
 | Lauf | Job / Schritt | Dauer | Ergebnis |

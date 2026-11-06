@@ -109,5 +109,8 @@ Testen; `android/check-background-power.sh` bleibt das Messwerkzeug für den Nut
 
 ## Stand
 
-- A1 erledigt (`cc514a6e`), A2 erledigt (`d2c00459`), S09-Ausnahme (`40d25919`), Messlauf der 4 h:
-  Run `42290907758` (läuft).
+- A1 erledigt (`cc514a6e`), A2 erledigt (`d2c00459`), A3 erledigt (`db7eb5bf`, dazu leere Freigabenliste
+  wird beim nächsten Zugriff neu gelesen: Teil von R2).
+- Pakete A, A2, B, C, D und S laufen (Agenten, 2026-11-06).
+- Übergabe Aufgabe 1 (4 h): Ursache belegt, Suite umgestellt (`8b50eefb`), siehe dort. Aufgabe 2: `40d25919`.
+  Aufgabe 3: sechs von acht erledigt (`d2c00459`, `21903963`); die zwei `se_cli`-Tests folgen nach Paket D.
