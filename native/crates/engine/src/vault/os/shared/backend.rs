@@ -13,7 +13,7 @@
 //!
 //! Error texts never carry cleartext names (K24); errors of the storage
 //! pass through with their encrypted paths.
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
@@ -39,29 +39,59 @@ pub struct VaultBackend {
     pub(super) cache: Arc<DirCache>,
 }
 
-/// Only a backend's explicit opt-in may replace its local I/O. Unknown
-/// wrappers retain their permission, cancellation and provider behavior.
-pub(super) fn confine_storage(inner: BackendHandle, root: &str) -> BackendHandle {
-    let confined = inner
-        .extensions()
-        .and_then(|extension| extension.confined_local_root(root).ok().flatten());
-    confined.unwrap_or(inner)
+/// The storage a vault works with: the backend's held local root at the
+/// vault folder where it offers one (`BackendExtensions::confined_local_root`).
+///
+/// `inner` stays unchanged only where it offers no held root, so nothing
+/// stronger is given up: remote and provider backends, wrappers that keep
+/// their own permission, cancellation and provider behavior, and local
+/// filesystems that cannot carry an enforced root
+/// (`ConfinedLocalBackend::open_supported`). Those report
+/// `RootConfinement::Unverified`, so mounting needs the stored root consent
+/// (`open_policy::mount_access`). A held root the backend offers but cannot
+/// establish (folder missing or unreadable, qualification failed, a nested
+/// selection outside the held authority) refuses the vault: the unconfined
+/// backend would reach outside the vault folder.
+pub(super) fn confine_storage(inner: BackendHandle, root: &str) -> io::Result<BackendHandle> {
+    let Some(extensions) = inner.extensions() else {
+        return Ok(inner);
+    };
+    match extensions.confined_local_root(root) {
+        Ok(Some(confined)) => Ok(confined),
+        Ok(None) => Ok(inner),
+        Err(error) => Err(io::Error::new(
+            error.kind(),
+            format!(
+                "Der Speicherort des Tresors lässt sich nicht auf den Tresorordner begrenzen; \
+                 der Tresor wird deshalb nicht geöffnet ({error})"
+            ),
+        )),
+    }
 }
 
 impl VaultBackend {
     /// The cleartext view of the vault whose root folder is `root` on
-    /// `inner`, unlocked by `session` (contract of VLT-M2).
-    pub fn new(inner: BackendHandle, root: &str, session: Arc<VaultSession>) -> Self {
-        let inner = confine_storage(inner, root);
+    /// `inner`, unlocked by `session` (contract of VLT-M2). Fails when the
+    /// storage offers a held root at `root` but cannot establish it
+    /// (`confine_storage`).
+    pub fn open(inner: BackendHandle, root: &str, session: Arc<VaultSession>) -> io::Result<Self> {
+        let inner = confine_storage(inner, root)?;
         let cache = Arc::new(DirCache::default());
         let listener: Arc<dyn LockListener> = cache.clone();
         session.watch(Arc::downgrade(&listener));
-        Self {
+        Ok(Self {
             inner,
             root: Arc::from(root),
             session,
             cache,
-        }
+        })
+    }
+
+    /// `open` for test fixtures, whose vault folder always opens.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn new(inner: BackendHandle, root: &str, session: Arc<VaultSession>) -> Self {
+        Self::open(inner, root, session)
+            .unwrap_or_else(|error| panic!("test vault storage: {error}"))
     }
 
     pub fn session(&self) -> &Arc<VaultSession> {

@@ -51,7 +51,7 @@ pub fn mount_policy(site: &str) -> Result<MountPolicy, String> {
     let store = RegistryStore::open_default();
     let record = store.resolve(site)?;
     let (inner, root) = crate::connect::resolve_endpoint(&record.location)?;
-    let inner = super::backend::confine_storage(inner, &root);
+    let inner = super::backend::confine_storage(inner, &root).map_err(|error| error.to_string())?;
     policy_for(&record, inner.as_ref(), &root)
 }
 
@@ -201,10 +201,7 @@ fn refused() -> io::Error {
 /// The backend must be the just-resolved cleartext view of this exact binding.
 /// Config::Trusted alone is deliberately insufficient for vaults: old records
 /// carry no historical account/root evidence and cannot safely migrate silently.
-pub fn mount_access(
-    backend: &BackendHandle,
-    enforced: bool,
-) -> io::Result<Option<MountAccess>> {
+pub fn mount_access(backend: &BackendHandle, enforced: bool) -> io::Result<Option<MountAccess>> {
     let site = match super::local_store::vault_site_of(backend.as_ref()) {
         None => return Ok(None),
         Some(Some(site)) => site,
@@ -238,9 +235,7 @@ pub fn mount_access(
 
 /// The provider keeps this exact consent for its engine and every proxy handle,
 /// checking it before cached cleartext as well as backend operations.
-pub fn authorize_provider(
-    backend: BackendHandle,
-) -> io::Result<(BackendHandle, MountAccess)> {
+pub fn authorize_provider(backend: BackendHandle) -> io::Result<(BackendHandle, MountAccess)> {
     let enforced = backend
         .mount_path_capabilities("/")?
         .root_confinement

@@ -25,14 +25,33 @@ impl ConfinedLocalBackend {
     pub fn open(root: &str) -> io::Result<Self> {
         let held = ConfinedDirectory::open_root(&super::local_platform::to_os(root))?;
         platform::qualify(&held)?;
+        Ok(Self::from_held(held, root))
+    }
+    /// `Ok(None)` only when the filesystem cannot carry an enforced root:
+    /// `qualify` answers `Unsupported` for filesystems outside its verified
+    /// list (FUSE and network filesystems, Android shared storage), for a
+    /// kernel without mount IDs or descriptor reopen, and for remote Windows
+    /// volumes. Those keep their unverified local/provider contract
+    /// (`LocalBackend` reports `RootConfinement::Unverified`).
+    /// A root that cannot be opened or qualified for any other reason is an
+    /// error, never a silent unconfined view.
+    pub fn open_supported(root: &str) -> io::Result<Option<Self>> {
+        let held = ConfinedDirectory::open_root(&super::local_platform::to_os(root))?;
+        match platform::qualify(&held) {
+            Ok(()) => Ok(Some(Self::from_held(held, root))),
+            Err(error) if error.kind() == io::ErrorKind::Unsupported => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+    fn from_held(held: ConfinedDirectory, root: &str) -> Self {
         let original = super::LocalBackend::new(root);
-        Ok(Self {
+        Self {
             root: held,
             prefix: root.trim_end_matches('/').to_string(),
             identity: original.state_identity(),
             display: original.root_display(),
             flow: original.flow_key(root),
-        })
+        }
     }
     pub(super) fn restrict(&self, root: &str) -> io::Result<Self> {
         Ok(Self {

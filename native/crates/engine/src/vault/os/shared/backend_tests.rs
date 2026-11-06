@@ -457,7 +457,8 @@ fn vault_task_backend_identity_distinct_from_inner_and_other_vaults() {
     // The vault names the storage it actually holds: the local root confined
     // to the vault folder (since e6ebf92f), the same identity the opening
     // consent binds (`open_policy::mount_policy`, `mount_access`).
-    let storage = super::backend::confine_storage(Arc::new(LocalBackend::new("/")), &first.root);
+    let storage = super::backend::confine_storage(Arc::new(LocalBackend::new("/")), &first.root)
+        .expect("the test vault folder is confined");
     let identity = first.backend.state_identity();
     assert_eq!(
         identity,

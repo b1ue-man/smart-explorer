@@ -154,10 +154,7 @@ pub fn unlocked_session(site: &str) -> Option<Arc<VaultSession>> {
 
 /// `vault://<SITE>/<path>` for `connect::resolve_endpoint`: with the
 /// session of this process, else through the worker (VLT-M4).
-pub fn open_vault_location(
-    site: &str,
-    path: &str,
-) -> Result<(BackendHandle, String), String> {
+pub fn open_vault_location(site: &str, path: &str) -> Result<(BackendHandle, String), String> {
     let resolve = |location: &str| crate::connect::resolve_endpoint(location);
     let worker: WorkerOpen<'_> = &worker_open;
     // A unit test never starts a worker; the worker never asks itself.
@@ -238,7 +235,10 @@ pub fn open_with(
     }
     let _nesting = Nesting::enter()?;
     let (inner, root) = resolve(&site.location).map_err(VaultOpenError::Failed)?;
-    let backend: BackendHandle = Arc::new(VaultBackend::new(inner, &root, Arc::clone(&session)));
+    let backend: BackendHandle = Arc::new(
+        VaultBackend::open(inner, &root, Arc::clone(&session))
+            .map_err(|error| VaultOpenError::Failed(error.to_string()))?,
+    );
     // K20/K21: logs about this backend seal their fields with the site's key.
     super::local_store::note_vault_backend(backend.as_ref(), &site.id);
     Ok(OpenedVault {

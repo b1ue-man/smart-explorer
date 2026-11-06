@@ -32,6 +32,10 @@ type Md5Many = VfsResult<Option<Vec<Option<String>>>>;
 /// guard access (export roots, mounts) must not hand out the extensions of
 /// the backend they wrap unchanged.
 pub trait BackendExtensions: Backend {
+    /// A backend whose local I/O is held to `root`. `Ok(None)`: this backend
+    /// offers no held root there and keeps its own contract. `Err`: it offers
+    /// one but could not establish it; a caller that requires confinement
+    /// refuses instead of continuing with the less confined backend.
     fn confined_local_root(&self, root: &str) -> VfsResult<Option<super::BackendHandle>> {
         let _ = root;
         Ok(None)

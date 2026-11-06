@@ -12,9 +12,13 @@ use super::{
 use crate::local_access::{self, FinalLink};
 
 impl BackendExtensions for LocalBackend {
+    /// `None` only for a filesystem that cannot carry an enforced root
+    /// (`ConfinedLocalBackend::open_supported`); every other failure stays an
+    /// error, so a caller never mistakes it for that unverified contract.
     fn confined_local_root(&self, root: &str) -> VfsResult<Option<super::BackendHandle>> {
-        super::ConfinedLocalBackend::open(root)
-            .map(|backend| Some(std::sync::Arc::new(backend) as super::BackendHandle))
+        super::ConfinedLocalBackend::open_supported(root).map(|backend| {
+            backend.map(|backend| std::sync::Arc::new(backend) as super::BackendHandle)
+        })
     }
 
     fn directory_reservation_supported(&self, _root: &str) -> bool {
