@@ -272,7 +272,7 @@ impl ChildLink for HostChildLink {
     }
 
     fn roots(&self, target: &PeerMountTarget) -> io::Result<Vec<ChildRoot>> {
-        self.session.child_roots(target).map_err(io::Error::other)
+        self.session.child_roots(target)
     }
 
     fn acquire_lease(&self, spool_root: &Path, id: &MountId) -> io::Result<Box<dyn Any + Send>> {

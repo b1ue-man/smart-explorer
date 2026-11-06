@@ -87,13 +87,16 @@ pub(super) fn child_backend(
 /// The shared folders and connections of a device (U17-19): the same
 /// reading as the drive window, without the root „Alle freigegebenen
 /// Bereiche“. The stream ends when the listing is read.
+/// The kind of a refusal by the device (`PermissionDenied` with its reason
+/// and the way to a grant) reaches the devices drive unchanged.
 pub(super) fn child_roots(
     session: &MountHostSession,
     target: &PeerMountTarget,
-) -> Result<Vec<ChildRoot>, String> {
-    let (stream, capabilities, _) = open_child(session, target, "/")?;
-    let backend = backend_over(stream, capabilities)?;
-    let listings = list_peer_roots(&*backend).map_err(|error| error.to_string())?;
+) -> std::io::Result<Vec<ChildRoot>> {
+    let (stream, capabilities, _) =
+        open_child(session, target, "/").map_err(std::io::Error::other)?;
+    let backend = backend_over(stream, capabilities).map_err(std::io::Error::other)?;
+    let listings = list_peer_roots(&*backend)?;
     Ok(peer_root_choices(listings)
         .into_iter()
         .filter(|choice| choice.root.as_str() != "/")

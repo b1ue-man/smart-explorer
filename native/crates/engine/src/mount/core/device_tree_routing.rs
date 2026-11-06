@@ -218,7 +218,16 @@ impl DeviceTree {
             return Err(not_found());
         }
         let (target, _) = self.target_of(key)?;
-        let read = self.link.roots(&target).map_err(|_| unreachable())?;
+        // A refusal of the device keeps its kind and reason (no folders for
+        // this device, reconfirmation pending, …) and is not cached; every
+        // other failure is "device not reachable".
+        let read = self.link.roots(&target).map_err(|error| {
+            if error.kind() == io::ErrorKind::PermissionDenied {
+                error
+            } else {
+                unreachable()
+            }
+        })?;
         let roots = self.usable_roots(read);
         guard(&self.roots).insert(key.to_string(), roots.clone());
         Ok(roots)

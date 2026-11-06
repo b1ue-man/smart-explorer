@@ -23,6 +23,8 @@ pub const DEVICES_MOUNT_ID: &str = "se-devices";
 pub const ROOMS_FOLDER: &str = "Räume";
 const ROOMS_CLASH: &str = "Räume (Gerät)";
 const FALLBACK: &str = "Gerät";
+/// Name of a shared folder whose own name has nothing showable.
+const SHARE_FALLBACK: &str = "Freigabe";
 const WINDOWS_NAME_UNITS: usize = 255;
 
 /// `direct~<contact_id>` or `room~<room_id>~<device_id>`; every byte outside
@@ -248,6 +250,26 @@ fn assign(items: &[(String, String)], dialect: PathDialect, devices_level: bool)
         }
     }
     names
+}
+
+/// One segment of a shared-folder name as the client's file system can show
+/// it: a valid segment stays unchanged, an invalid one is made valid like the
+/// device folder names (forbidden characters, trailing blank or dot, DOS
+/// device names, length).
+pub fn showable_segment(raw: &str, dialect: PathDialect) -> String {
+    if dialect.validate_component(raw).is_ok() {
+        return raw.to_string();
+    }
+    let name = if raw.trim().is_empty() {
+        SHARE_FALLBACK.to_string()
+    } else {
+        sanitize(raw, dialect)
+    };
+    if dialect.validate_component(&name).is_ok() {
+        name
+    } else {
+        SHARE_FALLBACK.to_string()
+    }
 }
 
 /// Forbidden characters, length, trailing blank or dot and DOS device names.

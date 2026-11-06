@@ -302,7 +302,7 @@ class AbgleichTaskRightsSheetTest {
         assertTrue(acceptRightsText(preset(PRESET_NONE), null).contains("ohne Rechte"))
         // The line of the Direct code and the hint of the request policy say the same.
         assertTrue(codeRightsText(null).contains("wartet ohne Rechte"))
-        assertTrue(codeRightsText(Rights()).contains("vergibt keine Rechte"))
+        assertTrue(codeRightsText(Rights()).contains("erhalten keine Rechte"))
         assertTrue(codeRightsText(code).contains("Dateien nur lesen"))
         assertEquals("Neue Zugriffsanfragen warten auf deine Zustimmung.", requestPolicyHint("Ask", code))
         assertTrue(requestPolicyHint("AutoAccept", null).contains("wartet danach ohne Rechte"))

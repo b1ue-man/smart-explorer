@@ -444,11 +444,14 @@ internal fun acceptRightsText(chosen: RightsPresetInfo?, codeRights: Rights?): S
 internal fun grantsAnything(rights: Rights): Boolean = rights.folders.kind != FOLDERS_NONE || rights.write ||
     listOf(rights.commands, rights.terminal, rights.screenView, rights.screenControl).any { it != ACCESS_OFF }
 
-/** What the Direct code gives (also to automatically accepted devices), for its line. */
+/**
+ * What new connections get (Direct code, PIN pairing, "open my shares" and repair; also automatically
+ * accepted devices), for its line.
+ */
 internal fun codeRightsText(codeRights: Rights?): String = when {
     codeRights == null -> "Wird beim Verbinden erfragt: das Gerät wartet ohne Rechte („Rechte offen“), bis du sie bestätigst."
-    !grantsAnything(codeRights) -> "Dieser Code vergibt keine Rechte: Geräte sind verbunden, mehr nicht."
-    else -> "Dieser Code vergibt sofort: ${rightsSummary(codeRights)}."
+    !grantsAnything(codeRights) -> "Neue Verbindungen (Direkt-Code, PIN-Kopplung) erhalten keine Rechte: Geräte sind verbunden, mehr nicht."
+    else -> "Neue Verbindungen (Direkt-Code, PIN-Kopplung) erhalten sofort: ${rightsSummary(codeRights)}."
 }
 
 /**

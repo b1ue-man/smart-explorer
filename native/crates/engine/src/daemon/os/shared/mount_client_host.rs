@@ -153,7 +153,7 @@ impl MountHostSession {
     }
 
     /// DRV-M6: the shared folders and connections of a device.
-    pub fn child_roots(&self, target: &PeerMountTarget) -> Result<Vec<ChildRoot>, String> {
+    pub fn child_roots(&self, target: &PeerMountTarget) -> std::io::Result<Vec<ChildRoot>> {
         devices::child_roots(self, target)
     }
 

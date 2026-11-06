@@ -20,7 +20,7 @@ use super::device_tree_backend::{guard, unreachable, LazyChildBackend};
 use super::device_tree_children::{
     kind_id, load_book, store_book, ChildEngine, ChildFactory, ChildKey, Pin, Record,
 };
-use super::device_tree_names::{layout, Layout};
+use super::device_tree_names::{layout, showable_segment, sort_key, Layout};
 use super::device_tree_routing::{drop_roots, layout_paths, root_paths, ChildRef};
 use super::device_tree_types::{ChildLink, ChildRoot, DeviceKind, DeviceRow, TreeConfig};
 use super::metadata_cache::MetadataChange;
@@ -313,13 +313,40 @@ impl DeviceTree {
     }
 
     /// Only folders every segment of which the dialect can name.
+    /// A name this file system cannot show is replaced, not dropped: the share
+    /// stays reachable under a showable name (routing reaches the device
+    /// through `root`); a replaced name never takes the name of another one.
     pub(super) fn usable_roots(&self, roots: Vec<ChildRoot>) -> Vec<ChildRoot> {
+        let dialect = self.dialect;
+        let valid = |root: &ChildRoot| {
+            root.name
+                .split('/')
+                .all(|segment| dialect.validate_component(segment).is_ok())
+        };
+        let mut taken: HashSet<String> = roots
+            .iter()
+            .filter(|root| valid(root))
+            .map(|root| sort_key(dialect, &root.name))
+            .collect();
         roots
             .into_iter()
-            .filter(|root| {
-                root.name
-                    .split('/')
-                    .all(|segment| self.dialect.validate_component(segment).is_ok())
+            .map(|mut root| {
+                if !valid(&root) {
+                    let base = root
+                        .name
+                        .split('/')
+                        .map(|segment| showable_segment(segment, dialect))
+                        .collect::<Vec<_>>()
+                        .join("/");
+                    let mut name = base.clone();
+                    let mut number = 2;
+                    while !taken.insert(sort_key(dialect, &name)) {
+                        name = format!("{base} ({number})");
+                        number += 1;
+                    }
+                    root.name = name;
+                }
+                root
             })
             .collect()
     }
