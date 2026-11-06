@@ -21,7 +21,8 @@ impl Reporter {
             return;
         }
         self.last = Some(Instant::now());
-        let mut remote = engine.capacity_snapshot();
+        // The report runs every 2 s; reading must not request provider refreshes.
+        let mut remote = engine.capacity_report_snapshot();
         remote.read_only |= engine.volume_facts().read_only;
         let budget = space
             .available_bytes()

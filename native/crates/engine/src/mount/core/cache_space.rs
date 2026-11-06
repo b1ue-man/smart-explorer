@@ -56,8 +56,17 @@ impl MountEngine {
         self
     }
 
-    /// No backend or network I/O: suitable for native filesystem callbacks.
+    /// No backend or network I/O: suitable for native filesystem callbacks. The
+    /// read asks the capacity worker for a refresh when the snapshot is missing
+    /// or older than its freshness window (`capacity_refresh.rs`).
     pub fn capacity_snapshot(&self) -> crate::vfs::CapacitySnapshot {
+        self.cache_space.capacity.demand();
+        self.capacity_snapshot_cached()
+    }
+
+    /// The last snapshot without asking for a refresh: for periodic status
+    /// reports, which must not turn into periodic provider requests.
+    pub fn capacity_snapshot_cached(&self) -> crate::vfs::CapacitySnapshot {
         self.cache_space
             .capacity
             .value

@@ -21,6 +21,9 @@ impl MountFilesystem for MountEngine {
     fn capacity_snapshot(&self) -> crate::vfs::CapacitySnapshot {
         MountEngine::capacity_snapshot(self)
     }
+    fn capacity_report_snapshot(&self) -> crate::vfs::CapacitySnapshot {
+        MountEngine::capacity_snapshot_cached(self)
+    }
     fn cache_capacity_budget(&self, available_bytes: u64) -> u64 {
         MountEngine::cache_capacity_budget(self, available_bytes)
     }

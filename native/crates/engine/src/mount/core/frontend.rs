@@ -74,6 +74,11 @@ pub trait MountFilesystem: Send + Sync {
         value.read_only = facts.read_only;
         value
     }
+    /// The snapshot for a periodic status report: like `capacity_snapshot`, but
+    /// it never asks for a refresh, so the report causes no provider request.
+    fn capacity_report_snapshot(&self) -> crate::vfs::CapacitySnapshot {
+        self.capacity_snapshot()
+    }
     fn cache_capacity_budget(&self, available_bytes: u64) -> u64 {
         available_bytes.saturating_sub(super::cache_space::CACHE_RESERVE_BYTES)
     }
