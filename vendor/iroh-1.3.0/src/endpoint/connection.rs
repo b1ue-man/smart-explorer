@@ -1195,6 +1195,14 @@ impl Connection<HandshakeCompleted> {
         self.inner.application_data_allowed()
     }
 
+    /// Signalled after the facts of [`Self::application_path_policy`] changed through
+    /// a transport or policy event, and when the connection terminates. Register a
+    /// `Notified` (`enable`) before taking the snapshot, then await it instead of
+    /// polling. Holding the `Notify` does not keep the connection alive.
+    pub fn application_path_policy_changes(&self) -> std::sync::Arc<tokio::sync::Notify> {
+        self.inner.application_path_policy_changes()
+    }
+
     /// Returns the currently open network paths for this connection.
     ///
     /// A connection typically has one path via the relay server and,

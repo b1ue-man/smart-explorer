@@ -363,3 +363,36 @@ and [Apache-2.0](https://raw.githubusercontent.com/n0-computer/iroh/0072d7d84b23
 Every modified vendor source carries a prominent patch notice referring to this
 contract; original notices remain. The license-file addition is outside the
 worker's assigned write surface and was explicitly handed to the parent.
+
+## Change signal for idle observers (2026-11-06)
+
+Finding: the app's route observer (`share/os/shared/route_monitor.rs`) took a
+policy snapshot every 25 ms for the whole lifetime of every QUIC connection,
+because the policy facts had no change signal. On an idle phone connection that
+is 40 wake-ups per second per connection, each with a snapshot allocation and a
+LAN interface check once per second (extreme background battery use since
+v0.5.185).
+
+Patch:
+
+- noq-proto `Connection::application_path_policy_fingerprint()` digests every
+  snapshot fact that changes only through a transport or policy event:
+  enablement, generation, revision, `requires_new_generation`, pending network
+  change, network-change count, admission, established/closed state, and per
+  path its id, incarnation, validation, abandonment, pending app proof, data
+  admission, retirement eligibility and on-path validation of the current and
+  previous incarnation. Clocks, deadlines, PTOs and byte counters are excluded:
+  they move without such an event.
+- noq compares the fingerprint after every connection-driver poll (every
+  packet, timer, endpoint event and policy mutation runs through it) and calls
+  `notify_waiters` on `Connection::application_path_policy_changes()` only when
+  it changed; termination notifies as well. An unchanged poll wakes nobody, so
+  the signal adds no wake-up. The returned `Arc<Notify>` does not keep the
+  connection alive.
+- Iroh forwards it as `Connection::application_path_policy_changes()`.
+
+The app observer still observes every 25 ms while its decision can change with
+time alone (the finite collection/direct phase of a generation) and while
+application bytes move; otherwise it waits for this signal, a session that waits
+for its route, cancellation or the close of the connection. Disabled policy
+users never compute the fingerprint and keep the upstream behavior.

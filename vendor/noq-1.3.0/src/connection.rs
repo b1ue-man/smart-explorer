@@ -280,6 +280,7 @@ impl Future for ConnectionDriver {
         keep_going |= conn.drive_timer(cx);
         conn.forward_endpoint_events();
         conn.forward_app_events(&self.0.shared);
+        conn.forward_application_policy_change(&self.0.shared);
 
         if !conn.inner.is_drained() {
             if keep_going {
@@ -807,6 +808,16 @@ impl Connection {
     /// the gate inside the serializer. Existing send-window limits remain active.
     pub fn application_data_allowed(&self) -> bool {
         self.0.lock_without_waking("application_data_allowed").inner.application_data_allowed()
+    }
+
+    /// Signalled (`notify_waiters`) after a driver poll in which the facts of
+    /// [`Self::application_path_policy`] changed through an event (see
+    /// `proto::Connection::application_path_policy_fingerprint`), and when the
+    /// connection terminates. Register with `Notified::enable` before taking the
+    /// snapshot. Holding the `Notify` does not keep the connection alive
+    /// (Smart Explorer patch 2026-11-06).
+    pub fn application_path_policy_changes(&self) -> Arc<Notify> {
+        self.0.shared.application_policy_changed.clone()
     }
 
     /// The side of the connection (client or server)
@@ -1563,6 +1574,8 @@ pub(crate) struct Shared {
     datagrams_unblocked: Notify,
     closed: Notify,
     connected: Notify,
+    /// Notified when the application path policy facts changed (Smart Explorer patch)
+    application_policy_changed: Arc<Notify>,
     /// Number of live handles that can be used to initiate or handle I/O; excludes the driver
     ref_count: AtomicUsize,
 }
@@ -1613,6 +1626,8 @@ pub(crate) struct State {
     pub(crate) observed_external_addr: watch::Sender<Option<SocketAddr>>,
     pub(crate) nat_traversal_updates: tokio::sync::broadcast::Sender<n0_nat_traversal::Event>,
     on_closed: Vec<oneshot::Sender<Closed>>,
+    /// Last `application_path_policy_fingerprint` reported to observers
+    application_policy_fingerprint: u64,
 }
 
 impl State {
@@ -1655,6 +1670,20 @@ impl State {
             on_closed: Vec::new(),
             final_path_stats: Default::default(),
             path_refs: Default::default(),
+            application_policy_fingerprint: 0,
+        }
+    }
+
+    /// Wakes the application's route observers when this poll changed the facts
+    /// of the application path policy; an unchanged poll wakes nobody.
+    fn forward_application_policy_change(&mut self, shared: &Shared) {
+        if !self.inner.application_path_policy_enabled() {
+            return;
+        }
+        let fingerprint = self.inner.application_path_policy_fingerprint();
+        if fingerprint != self.application_policy_fingerprint {
+            self.application_policy_fingerprint = fingerprint;
+            shared.application_policy_changed.notify_waiters();
         }
     }
 
@@ -1945,6 +1974,7 @@ impl State {
         shared.stream_incoming[Dir::Bi as usize].notify_waiters();
         shared.datagram_received.notify_waiters();
         shared.datagrams_unblocked.notify_waiters();
+        shared.application_policy_changed.notify_waiters();
         if let Some(x) = self.on_connected.take() {
             let _ = x.send(false);
         }

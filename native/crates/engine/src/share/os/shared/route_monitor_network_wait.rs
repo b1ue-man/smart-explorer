@@ -96,6 +96,8 @@ mod tests {
                 status,
                 budget: Mutex::new(RouteBudget::default()),
                 clock: Mutex::new((Duration::ZERO, Some(tokio::time::Instant::now()))),
+                changes: sender.application_path_policy_changes(),
+                wake: tokio::sync::Notify::new(),
             });
             assert!(registry()
                 .lock()
@@ -109,20 +111,35 @@ mod tests {
                 .unwrap();
             assert!(sender.application_path_policy().requires_new_generation);
             assert!(
-                tokio::time::timeout(Duration::from_millis(50), wait_application_route(&sender, None))
-                    .await
-                    .is_err(),
+                tokio::time::timeout(
+                    Duration::from_millis(50),
+                    wait_application_route(&sender, None)
+                )
+                .await
+                .is_err(),
                 "old Offline must not win over the current network epoch"
             );
-            let generation = sender.application_path_policy().generation.checked_add(1).unwrap();
-            sender
-                .update_application_path_policy(iroh::endpoint::ApplicationPathUpdate::BeginGeneration(generation))
+            let generation = sender
+                .application_path_policy()
+                .generation
+                .checked_add(1)
                 .unwrap();
-            assert_ne!(sender.application_path_policy().generation, old.status().generation);
+            sender
+                .update_application_path_policy(
+                    iroh::endpoint::ApplicationPathUpdate::BeginGeneration(generation),
+                )
+                .unwrap();
+            assert_ne!(
+                sender.application_path_policy().generation,
+                old.status().generation
+            );
             assert!(
-                tokio::time::timeout(Duration::from_millis(50), wait_application_route(&sender, None))
-                    .await
-                    .is_err(),
+                tokio::time::timeout(
+                    Duration::from_millis(50),
+                    wait_application_route(&sender, None)
+                )
+                .await
+                .is_err(),
                 "Offline from a prior generation must stay outdated"
             );
             let error = wait_application_route(&sender, Some(Instant::now()))
@@ -135,7 +152,10 @@ mod tests {
                 .unwrap()
                 .unwrap_err();
             assert_eq!(error.kind(), ErrorKind::NotConnected);
-            assert_eq!(error.to_string(), "Verbindungsaufbau oder Sitzung abgebrochen");
+            assert_eq!(
+                error.to_string(),
+                "Verbindungsaufbau oder Sitzung abgebrochen"
+            );
             assert!(
                 !pause(&entry),
                 "network waiting must not overwrite cancellation"

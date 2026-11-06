@@ -88,6 +88,13 @@ impl RoutePolicy {
         self.had_route = true;
     }
 
+    /// Whether the time-bounded part of this generation is over: candidates are
+    /// frozen and the absolute direct deadline has passed. From then on the
+    /// decision changes only with the observed transport facts, never with time.
+    pub fn decided(&self, now_ms: u64) -> bool {
+        self.frozen && now_ms >= self.direct_until
+    }
+
     pub fn include_validation_pto(&mut self, pto: Duration) {
         if !self.frozen {
             let wait = milliseconds(pto.saturating_mul(3));

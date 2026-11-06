@@ -229,6 +229,48 @@ impl Connection {
         }
     }
 
+    /// Digest of every snapshot fact that changes only through a transport or
+    /// policy event: generation, revision, network-change state, admission, the
+    /// path set and each path's validation and admission state. Clocks,
+    /// deadlines, PTOs and byte counters are excluded; they move without an event.
+    ///
+    /// Noq compares it after every driver poll and wakes waiting observers only
+    /// when it changed, so an idle route observer needs no periodic polling
+    /// (Smart Explorer patch 2026-11-06, see SMART_EXPLORER_ROUTE_POLICY.md).
+    pub fn application_path_policy_fingerprint(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let policy = &self.application_path_policy;
+        (
+            self.config.application_path_policy,
+            policy.generation,
+            policy.revision,
+            policy.requires_new_generation,
+            self.application_network_change_pending(),
+            policy.network_change_count,
+            policy.admitted.map(|(id, generation)| (id.0, generation)),
+            self.state.is_established(),
+            self.state.is_closed(),
+        )
+            .hash(&mut hasher);
+        for (&id, path) in self.paths.iter() {
+            let data = &path.data;
+            (
+                id.0,
+                data.generation(),
+                data.validated,
+                self.abandoned_paths.contains(&id),
+                policy.pending_validation.contains(&id),
+                self.application_data_allowed_on_path(id),
+                self.application_path_retirement_allowed(id),
+                data.is_validating_path(),
+                path.prev.as_ref().is_some_and(|(_, prev)| prev.is_validating_path()),
+            )
+                .hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
     /// Select or revoke application sending under an explicitly enabled policy.
     ///
     /// This must share the send-path serialization boundary. Noq supplies that

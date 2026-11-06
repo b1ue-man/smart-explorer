@@ -1,6 +1,14 @@
 //! One policy actor per QUIC connection. Weak handles preserve normal connection lifetime.
+//!
+//! The actor observes every `TICK` only while its observation can change with time
+//! alone: during the finite collection/direct phase of a generation and while
+//! application bytes move (route samples, RTT order between validated paths).
+//! Otherwise it sleeps until the transport reports changed path-policy facts
+//! (`Connection::application_path_policy_changes`), a session waits for a route
+//! (`wait_application_route`), the start is cancelled, or the connection closes,
+//! so an idle connection causes no periodic wake-ups.
 use super::route_adapter::RouteAdapter;
-use super::route_diagnostics::{milliseconds, RouteBudget, RouteDiagnostics, RouteMeasurement};
+use super::route_diagnostics::{milliseconds, RouteBudget, RouteDiagnostics};
 use super::route_policy::RoutePolicy;
 use super::route_state::{RemoteRouteGuarantee, RoutePhase, RouteStatus};
 use iroh::endpoint::{ApplicationPathUpdate, Connection, WeakConnectionHandle};
@@ -9,11 +17,13 @@ use std::io;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tokio::sync::watch;
+use std::time::{Duration, Instant};
+use tokio::sync::{watch, Notify};
 
 #[path = "route_monitor_network_wait.rs"]
 mod network_wait;
+#[path = "route_monitor_samples.rs"]
+mod samples;
 
 const MAX_CONNECTIONS: usize = 256;
 const TICK: Duration = Duration::from_millis(25);
@@ -30,6 +40,10 @@ struct Entry {
     status: watch::Sender<RouteStatus>,
     budget: Mutex<RouteBudget>,
     clock: Mutex<(Duration, Option<tokio::time::Instant>)>,
+    /// The transport's signal for changed path-policy facts.
+    changes: Arc<Notify>,
+    /// Wakes an idle actor: a session waits for its route, or the start was cancelled.
+    wake: Notify,
 }
 
 fn registry() -> &'static Mutex<HashMap<usize, Arc<Entry>>> {
@@ -100,6 +114,8 @@ pub(super) fn start(
         status,
         budget: Mutex::new(RouteBudget::default()),
         clock: Mutex::new((Duration::ZERO, Some(tokio::time::Instant::now()))),
+        changes: connection.application_path_policy_changes(),
+        wake: Notify::new(),
     });
     entries.insert(connection.stable_id(), entry.clone());
     tokio::spawn(run(connection.stable_id(), entry, hints));
@@ -138,6 +154,16 @@ pub fn cancelled(connection: &Connection) {
                 status.reason = "Verbindungsaufbau oder Sitzung abgebrochen".into();
                 status.revision = status.revision.saturating_add(1);
             });
+            entry.wake.notify_one();
+        }
+    }
+}
+
+/// Lets an idle actor observe at once: a session is about to use the connection.
+fn wake(connection: &Connection) {
+    if let Ok(entries) = registry().lock() {
+        if let Some(entry) = entries.get(&connection.stable_id()) {
+            entry.wake.notify_one();
         }
     }
 }
@@ -209,6 +235,7 @@ pub async fn wait_application_route(
 ) -> io::Result<RouteStatus> {
     let mut receiver =
         subscribe(connection).ok_or_else(|| failed("Verbindung hat keinen Routemonitor"))?;
+    wake(connection);
     loop {
         if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
             return Err(io::Error::new(
@@ -256,7 +283,18 @@ async fn run(id: usize, entry: Arc<Entry>, hints: Vec<SocketAddr>) {
     let mut policy: Option<RoutePolicy> = None;
     let mut previous_sample = None;
     let mut previous_path = None;
+    let mut previous_bytes = None;
+    // Registered once: every call adds a close listener to the connection.
+    let closed = entry.handle.closed();
+    tokio::pin!(closed);
     loop {
+        // Registered before the observation, so a change during it is not lost.
+        let changed = entry.changes.notified();
+        tokio::pin!(changed);
+        changed.as_mut().enable();
+        let woken = entry.wake.notified();
+        tokio::pin!(woken);
+        woken.as_mut().enable();
         let Some(connection) = entry.handle.upgrade() else {
             break;
         };
@@ -271,7 +309,12 @@ async fn run(id: usize, entry: Arc<Entry>, hints: Vec<SocketAddr>) {
             previous_sample = None;
             previous_path = None;
             drop(connection);
-            tokio::time::sleep(TICK).await;
+            // The transport signals the end of the network change.
+            tokio::select! {
+                _ = changed => {}
+                _ = woken => {}
+                _ = &mut closed => break,
+            }
             continue;
         }
         let mut reset_policy = policy
@@ -364,10 +407,7 @@ async fn run(id: usize, entry: Arc<Entry>, hints: Vec<SocketAddr>) {
             old.pause_epoch
         };
         if status.phase == RoutePhase::Offline
-            && network_wait::offline_is_outdated(
-                &status,
-                &connection.application_path_policy(),
-            )
+            && network_wait::offline_is_outdated(&status, &connection.application_path_policy())
         {
             drop(connection);
             tokio::time::sleep(TICK).await;
@@ -401,10 +441,22 @@ async fn run(id: usize, entry: Arc<Entry>, hints: Vec<SocketAddr>) {
         if let Ok(mut budget) = entry.budget.lock() {
             *budget = policy.budget().clone();
         }
-        record_measurement(&entry, &connection, &status, &mut previous_sample);
+        samples::record_measurement(&entry, &connection, &status, &mut previous_sample);
+        let bytes = (snapshot.application_tx_bytes, snapshot.application_rx_bytes);
+        let moving = previous_bytes.is_some_and(|previous| previous != bytes);
+        previous_bytes = Some(bytes);
+        let timed = !policy.decided(milliseconds(origin.elapsed()));
         // Do not retain a strong connection while idle; cancellation/drop still closes it.
         drop(connection);
-        tokio::time::sleep(TICK).await;
+        if timed || moving {
+            tokio::time::sleep(TICK).await;
+        } else {
+            tokio::select! {
+                _ = changed => {}
+                _ = woken => {}
+                _ = &mut closed => break,
+            }
+        }
     }
     entry.status.send_modify(|status| {
         if status.application_allowed {
@@ -421,74 +473,4 @@ async fn run(id: usize, entry: Arc<Entry>, hints: Vec<SocketAddr>) {
     if let Ok(mut entries) = registry().lock() {
         entries.remove(&id);
     }
-}
-
-struct PreviousSample {
-    at: Instant,
-    tx: u64,
-    rx: u64,
-    generation: u64,
-    path: String,
-    class: Option<super::route_state::RouteClass>,
-}
-
-fn record_measurement(
-    entry: &Entry,
-    connection: &Connection,
-    status: &RouteStatus,
-    previous: &mut Option<PreviousSample>,
-) {
-    let now = Instant::now();
-    let snapshot = connection.application_path_policy();
-    let Some(path) = snapshot.paths.iter().find(|path| path.data_allowed) else {
-        *previous = None;
-        return;
-    };
-    let current = PreviousSample {
-        at: now,
-        tx: path.application_tx_bytes,
-        rx: path.application_rx_bytes,
-        generation: status.generation,
-        path: format!("{}/{}", path.token.path_id(), path.token.path_generation()),
-        class: status.class,
-    };
-    if previous
-        .as_ref()
-        .is_some_and(|previous| previous.at.elapsed() < Duration::from_secs(2))
-    {
-        return;
-    }
-    let Some(before) = previous.replace(current) else {
-        return;
-    };
-    let current = previous.as_ref().unwrap_or(&before);
-    let Some(pair) = entry.pair.as_deref() else {
-        return;
-    };
-    let Some(class) = before.class.filter(|class| {
-        Some(*class) == status.class
-            && before.generation == status.generation
-            && before.path == current.path
-    }) else {
-        return;
-    };
-    if current.tx == before.tx && current.rx == before.rx {
-        return;
-    }
-    let rtt = connection.rtt(path.token.path_id());
-    super::route_history::schedule_record(
-        pair.into(),
-        RouteMeasurement {
-            observed_at_unix_ms: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(milliseconds)
-                .unwrap_or(0),
-            generation: status.generation,
-            class,
-            rtt_us: rtt.map(|rtt| u64::try_from(rtt.as_micros()).unwrap_or(u64::MAX)),
-            application_tx_bytes: current.tx.saturating_sub(before.tx),
-            application_rx_bytes: current.rx.saturating_sub(before.rx),
-            elapsed_ms: milliseconds(now.saturating_duration_since(before.at)),
-        },
-    );
 }
