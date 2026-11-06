@@ -209,8 +209,10 @@ fn drive_task_vault_requires_unlock_after_crash() {
     engine.write(handle, 0, MARKER).unwrap();
     drop(engine);
 
-    // The vault is locked when the host starts again: nothing mounts, the
-    // sealed change is counted without the key.
+    // The vault is locked when the host starts again: nothing mounts and the
+    // journal stays untouched. Opaque sealed state cannot be counted without
+    // the key (e6ebf92f, recovery_state.rs `awaiting_unlock`): the recovery
+    // stays unknown, so the cache is retained, until the unlock.
     let control = KeyControl::new(SpoolKeyAnswer::Locked(
         "Tresor Privat ist gesperrt: se vault unlock 0123".into(),
     ));
@@ -222,10 +224,7 @@ fn drive_task_vault_requires_unlock_after_crash() {
     match reports.last() {
         Some((MountStatus::Failed { detail }, recovery)) => {
             assert!(detail.starts_with("vault_locked: "), "{detail}");
-            assert_eq!(
-                *recovery,
-                Some(MountRecovery::RequiresUnlock { pending: 1 })
-            );
+            assert_eq!(*recovery, Some(MountRecovery::Unknown));
         }
         other => panic!("unexpected report {other:?}"),
     }

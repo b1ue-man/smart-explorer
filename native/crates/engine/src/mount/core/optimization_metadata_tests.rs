@@ -215,7 +215,11 @@ fn mount_optimization_task_speculative_admission_preserves_demand() -> io::Resul
         1, None, Admission::Speculative)?);
     assert_eq!(cache.usage()?, before);
     assert_eq!(cache.revision("/demand")?, demand_revision);
-    assert_eq!(descendant.revision(), descendant_revision);
+    // The refused image still publishes its fresh authority (df56c854): an
+    // unretained snapshot cannot reject a stale point publication by serving
+    // itself, so the direct child's running load is invalidated
+    // (metadata_cache_support.rs `reconcile_loads`). Demand data stays intact.
+    assert!(descendant.revision() > descendant_revision);
     assert_eq!(cache.directory("/demand")?.map(|entries| entries.len()), Some(files));
     assert!(cache.directory("/speculative")?.is_none());
     assert!(cache.preload_targets(2, 8)?.is_empty());

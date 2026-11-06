@@ -6,8 +6,10 @@
 //! daemon hands over on request (`Vault::SpoolKey`, checked with the host's
 //! session token); every other drive keeps the plain storage and the bytes
 //! of every earlier release. Without the key (the vault locked meanwhile)
-//! the host mounts nothing and reports how many sealed changes wait for the
-//! unlock (`MountRecovery::RequiresUnlock`); its journal stays untouched.
+//! the host mounts nothing and leaves its journal untouched; it reports how
+//! many sealed changes wait for the unlock (`MountRecovery::RequiresUnlock`)
+//! only where an authorized engine counted them, opaque offline ciphertext
+//! stays `MountRecovery::Unknown`.
 //!
 //! Lock: the daemon is the lock participant of the drive; its order reaches
 //! the control loop (`HostControl::lock_order`). The host publishes what it

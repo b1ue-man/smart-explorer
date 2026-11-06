@@ -1,5 +1,6 @@
 //! Same-process retirement handoff, bound to the image's own installation.
 use crate::mcp_launcher::installation::{handle_sha256, verify_handle, RetirementRoot};
+use std::cell::Cell;
 use std::fs::{File, OpenOptions};
 use std::os::fd::FromRawFd;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
@@ -55,7 +56,8 @@ pub(in crate::mcp_launcher) fn retirement_root() -> Result<Option<RetirementRoot
     // MCP files. Clean only our bound image and then the empty private directory.
     let stage = OwnStage { directory: stage.into(), image: image.clone(),
         directory_object: (stage_metadata.dev(), stage_metadata.ino()),
-        image_object: Some(object(&running.metadata().map_err(|e| e.to_string())?)),
+        image_object: Cell::new(Some(object(&running.metadata().map_err(|e| e.to_string())?))),
+        finished: Cell::new(false),
     };
     stage.cleanup()?;
     Ok(Some(RetirementRoot { root: root.into(), snapshot_sha256: snapshot }))
@@ -74,12 +76,12 @@ pub(in crate::mcp_launcher) fn retirement_handoff(root: &Path, expected: &str, s
     std::fs::DirBuilder::new().mode(0o700).create(&directory)
         .map_err(|e| format!("uninstall_handoff_stage_create: {}: {e}", directory.display()))?;
     let metadata = std::fs::symlink_metadata(&directory).map_err(|e| e.to_string())?;
-    let mut stage = OwnStage { image: directory.join(super::CLI_NAME), directory,
-        directory_object: object(&metadata), image_object: None };
+    let stage = OwnStage { image: directory.join(super::CLI_NAME), directory,
+        directory_object: object(&metadata), image_object: Cell::new(None), finished: Cell::new(false) };
     let mut output = OpenOptions::new().read(true).write(true).create_new(true).mode(0o700)
         .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW).open(&stage.image)
         .map_err(|e| e.to_string())?;
-    stage.image_object = Some(object(&output.metadata().map_err(|e| e.to_string())?));
+    stage.image_object.set(Some(object(&output.metadata().map_err(|e| e.to_string())?)));
     std::io::copy(&mut source, &mut output).map_err(|e| e.to_string())?;
     output.sync_all().map_err(|e| e.to_string())?;
     verify_handle(&mut output, expected)?;
@@ -97,10 +99,18 @@ struct OwnStage {
     directory: PathBuf,
     image: PathBuf,
     directory_object: (u64, u64),
-    image_object: Option<(u64, u64)>,
+    /// Identity of our image; `None` once removed. Linux may give a removed
+    /// inode at once to the next new file, also to one a user later puts at
+    /// this path, so a removed identity must never match again.
+    image_object: Cell<Option<(u64, u64)>>,
+    /// Our directory is removed: a later cleanup (Drop) touches nothing.
+    finished: Cell<bool>,
 }
 impl OwnStage {
     fn cleanup(&self) -> Result<(), String> {
+        if self.finished.get() {
+            return Ok(());
+        }
         let directory = match std::fs::symlink_metadata(&self.directory) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(e) => return Err(e.to_string()), Ok(metadata) => metadata,
@@ -111,15 +121,18 @@ impl OwnStage {
         }
         match std::fs::symlink_metadata(&self.image) {
             Ok(image) if image.is_file() && !image.file_type().is_symlink()
-                && self.image_object == Some(object(&image)) => {
+                && self.image_object.get() == Some(object(&image)) => {
                 std::fs::remove_file(&self.image).map_err(|e| e.to_string())?;
+                self.image_object.set(None);
             }
             Ok(_) => return Err("uninstall_handoff_stage_image_replaced".into()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => self.image_object.set(None),
             Err(e) => return Err(e.to_string()),
         }
         std::fs::remove_dir(&self.directory)
-            .map_err(|e| format!("uninstall_handoff_stage_cleanup: {}: {e}", self.directory.display()))
+            .map_err(|e| format!("uninstall_handoff_stage_cleanup: {}: {e}", self.directory.display()))?;
+        self.finished.set(true);
+        Ok(())
     }
 }
 impl Drop for OwnStage {
@@ -139,7 +152,8 @@ mod tests {
         std::fs::write(&image, b"owned").unwrap();
         let stage = OwnStage { directory: directory.clone(), image: image.clone(),
             directory_object: object(&std::fs::symlink_metadata(&directory).unwrap()),
-            image_object: Some(object(&std::fs::symlink_metadata(&image).unwrap())) };
+            image_object: Cell::new(Some(object(&std::fs::symlink_metadata(&image).unwrap()))),
+            finished: Cell::new(false) };
         let foreign = directory.join("user-note");
         std::fs::write(&foreign, b"keep").unwrap();
         assert!(stage.cleanup().unwrap_err().contains("uninstall_handoff_stage_cleanup:"));

@@ -141,7 +141,17 @@ fn mount_recovery_cache_task_fallback_and_rw_keep_whole_file_semantics() {
         assert_eq!(backend.full_reads.load(Ordering::SeqCst), 1);
         assert_eq!(fs_count(&dir), 1);
         engine.close(handle).unwrap();
-        assert_eq!(fs_count(&dir), 0);
+        // The whole-file download may still run on its thread after close; its
+        // end schedules the retirement, which the next operation or cache
+        // maintenance (the drive's refresh worker) carries out.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while {
+            engine.maintain_cache().unwrap();
+            fs_count(&dir) != 0
+        } {
+            assert!(std::time::Instant::now() < deadline, "whole-file spool not retired");
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
     }
 }
 

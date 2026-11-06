@@ -97,7 +97,9 @@ fn mount_recovery_cache_task_incomplete_audit_cannot_clean_from_drop() {
     fs::write(&orphan, b"preserve until complete audit").unwrap();
     fs::remove_file(files.join(&name)).unwrap();
     fs::create_dir(files.join(&name)).unwrap();
-    assert!(spool::audit_recovery(dir.path(), &config().id).is_err());
+    // The audit is a read-only inventory (e6ebf92f): the dirty journal entry
+    // keeps the cache "recovery required", never clean, and nothing is removed.
+    assert_eq!(spool::audit_recovery(dir.path(), &config().id).unwrap(), MountRecovery::Required);
     assert_eq!(fs::read(orphan).unwrap(), b"preserve until complete audit");
 }
 
