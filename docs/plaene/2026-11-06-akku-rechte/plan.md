@@ -44,7 +44,7 @@ Spalte „seit“: erste Version mit der Ursache. Spalte „Paket“: Verantwort
 | A2 | Kapazitäts-Worker je Mount-Engine fragt alle 30 s den Anbieter (Desktop-Laufwerke, Kinder des Geräte-Laufwerks, jede Android-Dokumenten-Engine) (`mount/os/shared/capacity_refresh.rs`) | v0.5.185 | nur auf Nachfrage eines Lesers, höchstens alle 30 s; Statusbericht fragt nie. **erledigt** `d2c00459` | H |
 | A3 | Geräte-Laufwerk liest alle 20 s Freigabenliste und Ordner jedes einmal geöffneten Geräts neu (`mount/core/device_tree_fs.rs` `refresh_metadata_while`, `mount/os/*/metadata_refresh`) | v0.5.183 | Auffrischen nur nach Zugriff seit der letzten Auffrischung; ein ruhendes Laufwerk weckt kein Gerät | H |
 | A4 | Gerätefeed: dauerhafte Screen-Verbindung zu jedem anwesenden Gerät, vom Low-Power-Sweep nicht erfasst (`share/os/shared/peer_feed.rs`, `node.rs:308`, `node_idle.rs:218`) | v0.5.189 | Feeds in Low-Power beenden, bei Sichtbarkeit/Presence/Serververbindung neu starten | A |
-| A5 | Feed-Neustart bei jeder Profiländerung irgendeines Geräts, ohne Backoff (`peer_feed.rs:148,193`) | v0.5.189 | Neustart je Gerät nur bei Änderung dieser Beziehung; Backoff nach Verlust | A |
+| A5 | Feed-Neustart bei jeder Profiländerung irgendeines Geräts, ohne Backoff (`peer_feed.rs:148,193`) | v0.5.189 | Neustart je Gerät bei Änderung dieser Beziehung, Rückkehr in die App oder nach Pause (abgelehnt 1 min bis 30 min, verloren 5 s bis 10 min, Ruhe des Gegenübers 10 min) | A, Review B3/B4 |
 | A6 | Feed-Host tastet jede Sekunde ab, auf Android ohne abtastbare Quelle (`screen/core/feed_host.rs:29`) | v0.5.189 | auf Hosts ohne abtastbare Quelle einmal senden, danach nur bei Rechteänderung | A |
 | A7 | Alle direkten Kandidatenpfade bleiben offen, je Pfad 5-s-Keepalive (`vendor/iroh-1.3.0/src/socket/remote_map/remote_state.rs:715-722`) | v0.5.185 | nach der Routenentscheidung nicht gewählte IP-Pfade wie upstream zurückbauen | B |
 | A8 | mdns-sd 0.21 prüft Schnittstellen alle 5 s statt 30 s (`share/os/shared/lan_presence.rs:47-58`) | v0.5.187 | Intervall 30 s wie zuvor | A2 |
@@ -55,7 +55,7 @@ Spalte „seit“: erste Version mit der Ursache. Spalte „Paket“: Verantwort
 | A13 | Hintergrund-Poller meldet `share`-Ereignisse bei jeder Zeitänderung im Statustext (`mobile/os/shared/domains/share_state.rs:343-388`) | vor v0.5.180 | Vergleich ohne zeitabhängige Felder | A2 |
 | A14 | `sys.watchHints` macht jeden Cursor einmalig (`mobile/os/shared/sys_platform.rs:81-86`) → jede Sonde gilt als Änderung jeder Echtzeit-Wurzel | vor v0.5.180 | Cursor nur bei echter Änderung | A2 |
 | A15 | `next_due` ignoriert Aktivzeitfenster → „fällig jetzt“ außerhalb des Fensters (`daemon/os/shared/due.rs:117-163`) | v0.5.182 | nächster Fensterbeginn | A2 |
-| A16 | LAN-Link-Statusrunden alle 2 s auch im Low-Power (`share/os/shared/lan_link_transport.rs:25-30`) | v0.5.170 | im Low-Power längere Runde mit passend verlängerter Fakt-Gültigkeit | A2 |
+| A16 | LAN-Link-Statusrunden alle 2 s auch im Low-Power (`share/os/shared/lan_link_transport.rs:25-30`) | v0.5.170 | im Low-Power keine LAN-Link-Sitzung in beide Richtungen; Fakten behalten ihre 6-s-Gültigkeit (sie autorisieren Uplink-Leases), neue Uplink-Leases warten auf die sichtbare App | A2, Review B11 |
 
 ### Akku, Kotlin-App
 
@@ -76,8 +76,8 @@ Spalte „seit“: erste Version mit der Ursache. Spalte „Paket“: Verantwort
 
 | Nr | Ursache | seit | Behebung | Paket |
 |---|---|---|---|---|
-| R1 | Einseitige PIN-Kopplung: die eingebende Seite legt keinen Grant an, die andere hält den Kontakt für freigegeben (`share/core/discovery_exchange_port_impl.rs:433-437`, `direct_reciprocal.rs:288-297,404`); erneutes Koppeln aktiviert `Reconfirm` nicht (`:392-395`) | v0.5.170 | Kopplung öffnet beide Seiten (sichtbare Gegenwahl „nur in eine Richtung“), aktiviert `Reconfirm`; Kontakt zeigt „Gegenseite hat dich noch nicht freigegeben“ | D |
-| R2 | Neuer Grant startet ohne Ordner, Code-Rechte gelten nicht für Kopplung/Gegenfreigabe/Reparatur; Host liefert leere Wurzel ohne Fehler (`share/core/connection_rights_apply.rs:139-153`, `export_device_folders.rs:35-60`, `fs.rs:63-72`) | v0.5.190 | eingestellte Code-Rechte auch dort; Host meldet „Rechte offen/keine Ordner“; Geräte-Laufwerk frischt leere Wurzeln auf | D |
+| R1 | Einseitige PIN-Kopplung: die eingebende Seite legt keinen Grant an, die andere hält den Kontakt für freigegeben (`share/core/discovery_exchange_port_impl.rs:433-437`, `direct_reciprocal.rs:288-297,404`); erneutes Koppeln aktiviert `Reconfirm` nicht (`:392-395`) | v0.5.170 | Kopplung öffnet beide Seiten (sichtbare Gegenwahl „nur in eine Richtung“); nur die Kopplung in beide Richtungen hebt `Reconfirm` auf; Kontakt zeigt „Gegenseite hat dich noch nicht freigegeben“ | D, Review B5 |
+| R2 | Neuer Grant startet ohne Ordner, Code-Rechte gelten nicht für Kopplung/Gegenfreigabe/Reparatur; Host liefert leere Wurzel ohne Fehler (`share/core/connection_rights_apply.rs:139-153`, `export_device_folders.rs:35-60`, `fs.rs:63-72`) | v0.5.190 | eingestellte Rechte gelten für jede neue Verbindung; eine berechtigte leere Wurzel nennt den Grund; das Geräte-Laufwerk öffnet das Gerät, liest leere Wurzeln neu und zeigt Ablehnungen als „Zugriff verweigert“ mit Grund | D, Review B6/B7 |
 | R3 | Jede Ablehnung erreicht das Gegenüber nur als „nicht autorisiert“ (`share/core/server.rs:140-158`, Exec/Bildschirm/TCP gleich) | — | Ablehnungsklassen ohne Geheimnisse auf allen Oberflächen; Host-Ereignis mit Aktion „Freigeben“ | D |
 | R4 | Grants ohne Knoten-ID: Dateien gehen, Exec/Bildschirm/TCP/Apps nicht, dazu Strafsperre (`relation_proof.rs:163-170`, `access_authorize.rs:25-31`) | v0.5.183 | Migration `node_id = public_key` beim Laden | D |
 | R5 | Schreibschalter ohne Ordnerwahl; Ordnerwahl hängt an exakter Pfadschreibweise | v0.5.190 | Schreibschalter zeigt/öffnet Ordnerwahl; Vergleich normalisiert, Umzug bei geänderten Exporten | D |
@@ -109,8 +109,6 @@ Testen; `android/check-background-power.sh` bleibt das Messwerkzeug für den Nut
 
 ## Stand
 
-- A1 erledigt (`cc514a6e`), A2 erledigt (`d2c00459`), A3 erledigt (`db7eb5bf`, dazu leere Freigabenliste
-  wird beim nächsten Zugriff neu gelesen: Teil von R2).
-- Pakete A, A2, B, C, D und S laufen (Agenten, 2026-11-06).
-- Übergabe Aufgabe 1 (4 h): Ursache belegt, Suite umgestellt (`8b50eefb`), siehe dort. Aufgabe 2: `40d25919`.
-  Aufgabe 3: sechs von acht erledigt (`d2c00459`, `21903963`); die zwei `se_cli`-Tests folgen nach Paket D.
+- Umgesetzt und integriert (2026-11-06): A1–A16, F1–F10, R1–R10, A9, N5, dazu Tresor-Begrenzung ohne Rückfall
+  (`eeebd71d`) und der Guardian-Fehler (`2114d411`). Opus-Gesamtreview: 11 Befunde behoben (`1adf6045`).
+- Übergabe Aufgaben 1–4 erledigt; Aufgabe 5 (ein `crates-task`-Lauf) folgt.
