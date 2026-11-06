@@ -454,10 +454,18 @@ fn vault_task_backend_identity_distinct_from_inner_and_other_vaults() {
     let first = TestVault::new(CipherCombo::SivGcm, 220);
     let second = TestVault::new(CipherCombo::SivGcm, 220);
     let inner = LocalBackend::new("/");
+    // The vault names the storage it actually holds: the local root confined
+    // to the vault folder (since e6ebf92f), the same identity the opening
+    // consent binds (`open_policy::mount_policy`, `mount_access`).
+    let storage = super::backend::confine_storage(Arc::new(LocalBackend::new("/")), &first.root);
     let identity = first.backend.state_identity();
     assert_eq!(
         identity,
-        format!("vault:{}#{}", inner.state_identity(), first.root)
+        format!("vault:{}#{}", storage.state_identity(), first.root)
+    );
+    assert_eq!(
+        first.backend.namespace_identity(),
+        format!("vault:{}#{}", storage.namespace_identity(), first.root)
     );
     assert_ne!(identity, inner.state_identity());
     assert_ne!(

@@ -339,6 +339,9 @@ fn transfer_engine_task_sync_lists_destination_once_instead_of_stat_per_file() {
 
     calls.stat.store(0, Ordering::SeqCst);
     calls.list.store(0, Ordering::SeqCst);
+    // The first run's folder creations are counted above; the second run
+    // creates none.
+    calls.mkdir_all.store(0, Ordering::SeqCst);
     calls
         .stat_paths
         .lock()
