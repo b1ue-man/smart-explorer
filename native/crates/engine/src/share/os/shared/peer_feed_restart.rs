@@ -8,11 +8,18 @@
 //! - A paused feed starts again once this device no longer runs in
 //!   low-power operation.
 //! - A refused feed (rights, „Nachfragen“, older version, invalid update)
-//!   starts again only when this device's relation to that device changed
-//!   (contact, grant, room membership; presence and routes do not count).
+//!   starts again when this device's relation to that device changed
+//!   (contact, grant, room membership; presence and routes do not count),
+//!   when this app becomes visible, or after its refusal backoff
+//!   (`refused_backoff`): the other device's user may have allowed this one
+//!   meanwhile, and that change reaches this device by no event of its own.
 //! - A lost feed (connection, unreachable device, thread start) starts again
 //!   at once on an arrival of that device or this service's server
-//!   connection, otherwise after its backoff.
+//!   connection, otherwise after its backoff. A feed the host ended as idle
+//!   in its low-power operation (`host_rested`) is no loss: presence events
+//!   of that device, which a resting phone still sends every few minutes,
+//!   do not restart it; only this service's server connection, a relation
+//!   change, this app becoming visible or `RESTED_RETRY` do.
 use std::time::Duration;
 
 /// Backoff of the first retry after a lost feed: one QUIC keepalive
@@ -24,6 +31,16 @@ const FIRST_RETRY: Duration = Duration::from_secs(5);
 /// without any event of its own (no presence, no LAN sighting) is asleep
 /// or unreachable, and any such event retries at once anyway.
 const LONGEST_RETRY: Duration = Duration::from_secs(10 * 60);
+/// Wait before a feed the host ended as idle starts again: the host closes a
+/// quiet feed after two quiet minutes of low-power operation, so a sooner
+/// restart would wake the resting device in a loop.
+pub(super) const RESTED_RETRY: Duration = LONGEST_RETRY;
+/// First retry after a refusal: long enough that a refusing host is not asked
+/// again at once, short enough that a right just allowed there shows soon.
+const FIRST_REFUSED_RETRY: Duration = Duration::from_secs(60);
+/// Longest wait between two retries of a refused feed: at most two probe
+/// handshakes an hour on the refusing device.
+const LONGEST_REFUSED_RETRY: Duration = Duration::from_secs(30 * 60);
 
 /// How a device's feed session stands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -31,7 +48,8 @@ pub(super) enum Phase {
     Running,
     /// Ended by this device's low-power operation; no connection.
     Paused,
-    /// Ended by the host's answer; only a relation change retries.
+    /// Ended by the host's answer; a relation change, the app or the
+    /// refusal backoff retries.
     Refused,
     /// Ended by the connection or a failed start; retried with backoff.
     Lost,
@@ -77,7 +95,7 @@ pub(super) fn step(facts: &Facts) -> Step {
         Phase::Running => Step::Keep,
         Phase::Paused if !facts.low_power => Step::Start,
         Phase::Paused => Step::Keep,
-        Phase::Refused if !facts.same || facts.relation_changed => renew,
+        Phase::Refused if !facts.same || facts.relation_changed || facts.backoff_over => renew,
         Phase::Refused => Step::Keep,
         Phase::Lost if !facts.same || facts.device_event || facts.backoff_over => renew,
         Phase::Lost => Step::Keep,
@@ -89,6 +107,15 @@ pub(super) fn step(facts: &Facts) -> Step {
 pub(super) fn backoff(failures: u32) -> Duration {
     let factor = 1u32.checked_shl(failures).unwrap_or(u32::MAX);
     FIRST_RETRY.saturating_mul(factor).min(LONGEST_RETRY)
+}
+
+/// The wait before the next attempt after `refusals` refused attempts in a
+/// row before the last one: doubling from one minute, bounded.
+pub(super) fn refused_backoff(refusals: u32) -> Duration {
+    let factor = 1u32.checked_shl(refusals).unwrap_or(u32::MAX);
+    FIRST_REFUSED_RETRY
+        .saturating_mul(factor)
+        .min(LONGEST_REFUSED_RETRY)
 }
 
 #[cfg(test)]
@@ -111,10 +138,9 @@ mod tests {
     fn akku_task_refused_feed_waits_for_a_relation_change_of_that_device() {
         let refused = facts(Phase::Refused);
         assert_eq!(step(&refused), Step::Keep);
-        // Presence, arrivals and time are no reason for a refused feed.
+        // Presence and arrivals are no reason for a refused feed.
         let arrived = Facts {
             device_event: true,
-            backoff_over: true,
             ..refused
         };
         assert_eq!(step(&arrived), Step::Keep);
@@ -123,6 +149,17 @@ mod tests {
             ..refused
         };
         assert_eq!(step(&changed), Step::Start);
+        // The other device's user may have allowed this one since: after its
+        // refusal backoff the feed asks once more (rights change unseen here).
+        let waited = Facts {
+            backoff_over: true,
+            ..refused
+        };
+        assert_eq!(step(&waited), Step::Start);
+        assert_eq!(refused_backoff(0), Duration::from_secs(60));
+        assert_eq!(refused_backoff(1), Duration::from_secs(120));
+        assert_eq!(refused_backoff(10), LONGEST_REFUSED_RETRY);
+        assert_eq!(refused_backoff(u32::MAX), LONGEST_REFUSED_RETRY);
         let low_power = Facts {
             low_power: true,
             ..changed

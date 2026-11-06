@@ -18,9 +18,16 @@ pub(super) struct LeaseAnchor {
 pub(super) struct PeerMountLeaseClient {
     token: Mutex<Option<String>>,
     anchor: Mutex<Option<LeaseAnchor>>,
+    /// Held while a forgotten lease is renewed (R6), so requests that failed
+    /// together renew it once and the others retry with the new token.
+    renewal: Mutex<()>,
 }
 
 impl PeerMountLeaseClient {
+    pub(super) fn renewal(&self) -> Option<std::sync::MutexGuard<'_, ()>> {
+        self.renewal.lock().ok()
+    }
+
     pub(super) fn anchor(&self) -> Option<LeaseAnchor> {
         self.anchor.lock().ok().and_then(|anchor| anchor.clone())
     }

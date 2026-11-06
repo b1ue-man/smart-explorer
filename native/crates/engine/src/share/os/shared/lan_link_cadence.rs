@@ -4,12 +4,29 @@
 //! original rhythm: one round every 2 s inside sessions of 45 s. While the
 //! host reports low-power operation (Android in the background, see
 //! `share::power`) every round costs radio and CPU wake-ups for nothing the
-//! user can see, so the rhythm is stretched to one round every 30 s inside
-//! sessions of 11 minutes. A fact keeps its 6-s validity in every rhythm: the
-//! facts authorize short uplink leases of the privileged worker
+//! user can see: a session that is still open then rests 30 s between
+//! rounds until it ends, and an accepting peer waits as long for the next
+//! round. A fact keeps its 6-s validity in every rhythm: the facts authorize
+//! short uplink leases of the privileged worker
 //! (`lan_uplink_evidence::authorize`), so a slower rhythm leaves them absent
 //! between rounds (uplink fails closed) instead of stretching their freshness.
+//!
+//! A device in low-power operation keeps no session at all, in neither
+//! direction: every open QUIC connection sends a keepalive every 5 s
+//! (`share/core/keepalive.rs`), so a session of any rhythm kept the phone's
+//! radio awake, and a peer that dials it chose its own 2-s rhythm. It ends
+//! its sessions when low power begins, dials nobody, and closes an inbound
+//! session at once with `RESTING_CLOSE_CODE`; a dialling peer of this
+//! version then leaves it alone for `RESTING_COOLDOWN` (the resting device
+//! dials itself once it is visible again), an older one after its cooldown.
+//! The facts only authorize short uplink leases, which fail closed meanwhile.
 use super::*;
+use iroh::endpoint::ConnectionError;
+
+/// Application close code of a session a resting device does not keep ("RS").
+const RESTING_CLOSE_CODE: u32 = 0x5253;
+/// How long a dialling device leaves a resting peer alone.
+pub(super) const RESTING_COOLDOWN: Duration = Duration::from_secs(30 * 60);
 
 /// Gap between two rounds while the host is in low-power operation.
 const LOW_POWER_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
@@ -68,10 +85,37 @@ impl Cached {
 
 impl LanLinkTransport {
     /// Remembers the host's power mode; a change ends the running rests so
-    /// the next round follows the new rhythm at once.
+    /// the next round follows the new rhythm at once, and low power ends
+    /// every session (module text).
     pub(super) fn note_power(&self, low_power: bool) {
         if self.low_power.swap(low_power, Ordering::AcqRel) != low_power {
             self.power_changed.notify_waiters();
+            if low_power {
+                if let Ok(state) = self.state.lock() {
+                    for channel in state.channels.values() {
+                        rest(&channel.connection);
+                    }
+                }
+            }
+        }
+    }
+
+    /// This device rests in low-power operation: no session, no dial.
+    pub(super) fn resting(&self) -> bool {
+        self.low_power.load(Ordering::Acquire)
+    }
+
+    /// After a dialled session: the peer ended it because it rests.
+    pub(super) fn note_peer_rest(&self, connection: &Connection, peer: String) {
+        let rested = matches!(
+            connection.close_reason(),
+            Some(ConnectionError::ApplicationClosed(close))
+                if close.error_code == VarInt::from_u32(RESTING_CLOSE_CODE)
+        );
+        if rested {
+            if let Ok(mut state) = self.state.lock() {
+                state.rested.insert(peer, Instant::now());
+            }
         }
     }
 
@@ -83,6 +127,14 @@ impl LanLinkTransport {
             _ = self.power_changed.notified() => {}
         }
     }
+}
+
+/// Ends `connection` as a resting device.
+pub(super) fn rest(connection: &Connection) {
+    connection.close(
+        VarInt::from_u32(RESTING_CLOSE_CODE),
+        b"paired link rests in low power",
+    );
 }
 
 #[cfg(test)]

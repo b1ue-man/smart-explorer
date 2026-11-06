@@ -4,9 +4,11 @@
 //! shared services and RDP short state; surfaces read
 //! `ShareWorkerSnapshot.peer_feeds`. No timer of its own (A4, A5 of plan
 //! 2026-11-06-akku-rechte, `peer_feed_restart.rs`): a refused feed starts
-//! again when this device's relation to that device changes; a lost one at
-//! once on an arrival of that device or this service's server connection,
-//! otherwise after its backoff, which every look of `observe` checks. In
+//! again on a change of this device's relation to that device, a return to
+//! the app or after its refusal backoff; a lost one at once on an arrival of
+//! that device or this service's server connection, otherwise after its
+//! backoff (which every look of `observe` checks; a host that ended the feed
+//! as idle is no arrival while it rests). In
 //! low-power operation (app not visible) no feed holds a connection unless
 //! a mapped service of its device is in use; the paused and lost feeds
 //! start again when the app is visible (`peer_feed_power.rs`). A probe
@@ -72,6 +74,9 @@ pub struct PeerFeedView {
     /// after its backoff or on an event of that device (review B7, A5).
     #[serde(skip)]
     pub retry_on_network: bool,
+    /// The host ended the quiet feed as idle in low power (`peer_feed_restart.rs`).
+    #[serde(skip)]
+    pub host_rested: bool,
 }
 
 struct Session {
@@ -125,9 +130,21 @@ impl Session {
         }
     }
 
-    fn backoff_over(&mut self, now: Instant) -> bool {
-        let wait = restart::backoff(self.lost_in_a_row().saturating_sub(1));
+    /// Whether the wait of a lost or refused session (from its first look) is over.
+    fn backoff_over(&mut self, phase: Phase, now: Instant) -> bool {
+        let before = self.lost_in_a_row().saturating_sub(1);
+        let wait = match phase {
+            Phase::Refused => restart::refused_backoff(before),
+            _ if self.host_rested() => restart::RESTED_RETRY,
+            _ => restart::backoff(before),
+        };
         now >= *self.retry_at.get_or_insert(now + wait)
+    }
+
+    /// The host ended this session as idle (see `PeerFeedView::host_rested`).
+    fn host_rested(&self) -> bool {
+        let view = self.view.lock().unwrap_or_else(PoisonError::into_inner);
+        view.host_rested
     }
 
     fn identity(&self) -> Identity {
@@ -189,7 +206,10 @@ pub fn observe(service: Option<&ShareService>, profiles: &ShareProfiles, events:
             None => (restart::first(low_power), 0),
             Some(session) => {
                 let phase = session.phase();
-                let device_event = network || arrived.contains(&identity.0);
+                // A resting host still sends presence: no arrival for its feed.
+                let device_event = network
+                    || (!(phase == Phase::Lost && session.host_rested())
+                        && arrived.contains(&identity.0));
                 let facts = Facts {
                     phase,
                     same: Arc::ptr_eq(&session.service.iroh, &service.iroh)
@@ -198,7 +218,8 @@ pub fn observe(service: Option<&ShareService>, profiles: &ShareProfiles, events:
                     tunnel_in_use: phase == Phase::Running && low_power && tunnel_in_use(&identity),
                     relation_changed: session.relation != relation,
                     device_event,
-                    backoff_over: phase == Phase::Lost && session.backoff_over(now),
+                    backoff_over: matches!(phase, Phase::Lost | Phase::Refused)
+                        && session.backoff_over(phase, now),
                 };
                 let step = restart::step(&facts);
                 if step == Step::Keep && matches!(phase, Phase::Running | Phase::Paused) {
@@ -206,8 +227,9 @@ pub fn observe(service: Option<&ShareService>, profiles: &ShareProfiles, events:
                 }
                 // Only a retry the backoff allowed keeps counting; an event
                 // of the device or a new relation starts from the beginning.
-                let backoff_only =
-                    phase == Phase::Lost && facts.same && !device_event && !facts.relation_changed;
+                let backoff_only = facts.same
+                    && !facts.relation_changed
+                    && (phase == Phase::Refused || (phase == Phase::Lost && !device_event));
                 let failures = if backoff_only {
                     session.lost_in_a_row()
                 } else {
@@ -237,23 +259,24 @@ pub fn observe(service: Option<&ShareService>, profiles: &ShareProfiles, events:
     }
 }
 
-/// The app became visible: every paused and lost feed starts at once with
-/// the service and target it last had; the next `observe` corrects both.
+/// The app became visible: every paused, lost and refused feed starts at
+/// once with the service and target it last had; the next `observe`
+/// corrects both.
 fn resume() {
     if !crate::share::power::low_power() {
         resume_locked(&mut feeds(), true);
     }
 }
 
-/// Starts the paused sessions and, with `lost`, the lost ones.
+/// Starts the paused sessions and, with `lost`, the lost and refused ones.
 fn resume_locked(state: &mut Feeds, lost: bool) {
     let waiting: Vec<String> = state
         .sessions
         .iter()
         .filter(|(_, session)| match session.phase() {
             Phase::Paused => true,
-            Phase::Lost => lost,
-            Phase::Running | Phase::Refused => false,
+            Phase::Lost | Phase::Refused => lost,
+            Phase::Running => false,
         })
         .map(|(key, _)| key.clone())
         .collect();
@@ -467,6 +490,7 @@ fn run(context: Context, stopped: watch::Receiver<bool>) {
             view.rdp = None;
             view.unavailable = Some(ended.reason);
             view.retry_on_network = ended.connection_lost;
+            view.host_rested = ended.host_rested;
         });
     }
 }

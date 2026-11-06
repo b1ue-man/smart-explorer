@@ -12,7 +12,9 @@ use crate::mount::{
 };
 use crate::vfs::{BackendHandle, Scheme};
 
-use super::super::drive_modules::ipc_protocol_mount_host::{MountHostReply, MountHostRequest};
+use super::super::drive_modules::ipc_protocol_mount_host::{
+    MountHostReply, MountHostRequest, CHILD_REFUSED_CODE,
+};
 use super::super::ipc_protocol::{
     read_response, set_stream_timeout, write_request, IpcRequest, IpcResponse,
     MountBackendCapabilities,
@@ -27,15 +29,17 @@ const WATCH_TIMEOUT: Duration = Duration::from_secs(35);
 
 /// A connection to the shared folder `root` of a device, once the daemon
 /// opened it: the stream, what the device's backend can, and whether the
-/// device lets this contact write.
+/// device lets this contact write. A device that rejected this device's
+/// session answers `PermissionDenied` with its reason (R3).
 fn open_child(
     session: &MountHostSession,
     target: &PeerMountTarget,
     root: &str,
-) -> Result<(TcpStream, MountBackendCapabilities, bool), String> {
-    let mut stream = host_stream(session.ipc_addr, OPEN_TIMEOUT)?;
+) -> std::io::Result<(TcpStream, MountBackendCapabilities, bool)> {
+    let failed = |message: String| std::io::Error::other(message);
+    let mut stream = host_stream(session.ipc_addr, OPEN_TIMEOUT).map_err(failed)?;
     super::super::mount_proxy::prepare_stream(&stream)
-        .map_err(|error| format!("Geräte-Backend-Transport: {error}"))?;
+        .map_err(|error| failed(format!("Geräte-Backend-Transport: {error}")))?;
     let request = IpcRequest::MountHostExt {
         id: session.id.clone(),
         session_token: session.session_token.clone(),
@@ -44,8 +48,11 @@ fn open_child(
             root: root.to_string(),
         },
     };
-    write_request(&mut stream, &request).map_err(|error| format!("Gerät anfragen: {error}"))?;
-    match read_response(&mut stream).map_err(|error| format!("Geräte-Antwort lesen: {error}"))? {
+    write_request(&mut stream, &request)
+        .map_err(|error| failed(format!("Gerät anfragen: {error}")))?;
+    match read_response(&mut stream)
+        .map_err(|error| failed(format!("Geräte-Antwort lesen: {error}")))?
+    {
         IpcResponse::MountHostExt(MountHostReply::ChildReady {
             capabilities,
             writable,
@@ -53,8 +60,11 @@ fn open_child(
             set_stream_timeout(&stream, None);
             Ok((stream, capabilities, writable))
         }
-        IpcResponse::Err { msg, .. } => Err(msg),
-        _ => Err("Unerwartete Antwort auf ChildBackend".into()),
+        IpcResponse::Err { msg, code } if code.as_deref() == Some(CHILD_REFUSED_CODE) => Err(
+            std::io::Error::new(std::io::ErrorKind::PermissionDenied, msg),
+        ),
+        IpcResponse::Err { msg, .. } => Err(failed(msg)),
+        _ => Err(failed("Unerwartete Antwort auf ChildBackend".into())),
     }
 }
 
@@ -80,7 +90,8 @@ pub(super) fn child_backend(
     target: &PeerMountTarget,
     root: &BackendRoot,
 ) -> Result<(BackendHandle, bool), String> {
-    let (stream, capabilities, writable) = open_child(session, target, root.as_str())?;
+    let (stream, capabilities, writable) =
+        open_child(session, target, root.as_str()).map_err(|error| error.to_string())?;
     Ok((backend_over(stream, capabilities)?, writable))
 }
 
@@ -93,8 +104,7 @@ pub(super) fn child_roots(
     session: &MountHostSession,
     target: &PeerMountTarget,
 ) -> std::io::Result<Vec<ChildRoot>> {
-    let (stream, capabilities, _) =
-        open_child(session, target, "/").map_err(std::io::Error::other)?;
+    let (stream, capabilities, _) = open_child(session, target, "/")?;
     let backend = backend_over(stream, capabilities).map_err(std::io::Error::other)?;
     let listings = list_peer_roots(&*backend)?;
     Ok(peer_root_choices(listings)

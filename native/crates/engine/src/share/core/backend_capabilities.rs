@@ -125,15 +125,22 @@ impl PeerBackend {
     }
 
     /// R6 (plan 2026-11-06): `error` says the host forgot this backend's
-    /// lease (it restarted) and did not run the request. Acquires a new
-    /// lease for the same root under the host's current rights; keeps it
-    /// only when it names the same directory. Returns whether the request
-    /// may be sent once more.
-    pub(super) fn renew_forgotten_lease(&self, error: &io::Error) -> bool {
+    /// lease `used` (it restarted) and did not run the request. Acquires a
+    /// new lease for the same root under the host's current rights; keeps it
+    /// only when it names the same directory. Requests that failed together
+    /// renew once: a later one finds the lease already replaced and retries
+    /// with it. Returns whether the request may be sent once more.
+    pub(super) fn renew_forgotten_lease(&self, error: &io::Error, used: Option<&str>) -> bool {
         if error.kind() != io::ErrorKind::PermissionDenied
             || error.to_string() != super::mount_lease::UNKNOWN_LEASE
         {
             return false;
+        }
+        let Some(_renewal) = self.mount_lease.renewal() else {
+            return false;
+        };
+        if self.mount_lease.current().ok().flatten().as_deref() != used {
+            return self.mount_lease.anchor().is_some();
         }
         let Some(before) = self.mount_lease.anchor() else {
             return false;

@@ -201,7 +201,11 @@ impl<'a> Session<'a> {
                     if crate::share::route_protocol::active_now().saturating_duration_since(heard) > VIEWER_SILENCE {
                         break LOST;
                     }
-                    if self.second().await.is_err() {
+                    // A hidden viewer shows neither statistics nor family
+                    // changes: no frame every second that wakes its device.
+                    // Its pings (every 5 s) keep the silence check above
+                    // fed; showing again resumes this at the next second.
+                    if self.visible && self.second().await.is_err() {
                         break LOST;
                     }
                 }

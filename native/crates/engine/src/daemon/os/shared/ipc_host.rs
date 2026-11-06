@@ -390,7 +390,8 @@ impl ShareHost {
             match service.probe_backend_for_target(&target) {
                 Ok(opened) => return Ok(opened),
                 Err(error) => {
-                    if Instant::now() >= deadline {
+                    // A rejection of the device is final (A9): no 45-s wait.
+                    if Instant::now() >= deadline || service.session_rejected_for_target(&target) {
                         return Err(error);
                     }
                     std::thread::sleep(Duration::from_millis(750));

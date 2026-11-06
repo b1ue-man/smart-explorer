@@ -32,6 +32,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -138,7 +139,11 @@ internal object ScreenHostControl {
         scope.launch { reportPrereqs() }
     }
 
-    suspend fun reportPrereqs() {
+    /**
+     * Off the main thread: the window list waits for the link to `:access` ([AccessLink]), which a
+     * call on the main thread cannot (it delivers the connection), and would report no window.
+     */
+    suspend fun reportPrereqs(): Unit = withContext(Dispatchers.Default) {
         try {
             ScreenApi.prereqs(
                 accessibility = ScreenControlService.state(app),

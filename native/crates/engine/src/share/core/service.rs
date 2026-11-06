@@ -142,7 +142,15 @@ impl ShareService {
         if legacy_confirmed {
             be.current_endpoint().map_err(|error| error.to_string())?;
         } else {
-            be.probe_root().map_err(|e| e.to_string())?;
+            match be.probe_root() {
+                Ok(_) => {}
+                // R2: an accepted session whose root says why it shows no
+                // folder (`session_root_notice.rs`) opens; its listings say it.
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::PermissionDenied
+                        && super::session::denial::peer_denial_of(&error).is_none() => {}
+                Err(error) => return Err(error.to_string()),
+            }
         }
         let status = be.transport_status();
         Ok((label, Arc::new(be), status))

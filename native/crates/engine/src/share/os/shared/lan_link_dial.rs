@@ -4,6 +4,10 @@ use super::*;
 impl LanLinkTransport {
     pub(super) fn probe(self: &Arc<Self>, node: Arc<ShareIrohNode>) -> io::Result<()> {
         self.host()?;
+        // A device in low-power operation dials nobody (`cadence`).
+        if self.resting() {
+            return Ok(());
+        }
         let auth = node.auth.try_lock().map_err(|_| busy())?;
         let now = now_secs();
         let mut peers = Vec::new();
@@ -42,6 +46,9 @@ impl LanLinkTransport {
         state.probes.retain(|id, at| {
             at.elapsed() < cooldown && peers.iter().any(|(pin, _)| &pin.node_id == id)
         });
+        state
+            .rested
+            .retain(|_, at| at.elapsed() < cadence::RESTING_COOLDOWN);
         let count = peers.len();
         if count > 0 {
             let offset = state.cursor % count;
@@ -54,6 +61,7 @@ impl LanLinkTransport {
                 .probes
                 .get(&pin.node_id)
                 .is_some_and(|at| at.elapsed() < cooldown)
+                || state.rested.contains_key(&pin.node_id)
                 || state.channels.values().any(|channel| {
                     channel.connection.close_reason().is_none()
                         && channel.connection.remote_id().to_string() == pin.node_id
@@ -96,6 +104,7 @@ impl LanLinkTransport {
                     close(&connection);
                     return;
                 }
+                let peer = pin.node_id.clone();
                 let _ = super::super::lan_link_exchange::run(
                     task_node,
                     transport.clone(),
@@ -103,6 +112,7 @@ impl LanLinkTransport {
                     Some(pin),
                 )
                 .await;
+                transport.note_peer_rest(&connection, peer);
                 transport.remove(&connection);
             });
         }

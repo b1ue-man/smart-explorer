@@ -1393,9 +1393,11 @@ Versions-Rollback; Google-Play-Veröffentlichung; Storage-Access-Framework-Bäum
   alle 5 Minuten). Bei verdeckter App ruht die
   Verbindung akkuschonend: der Share-Server (ab 0.5.169, Fähigkeit
   `idle_keepalive_v1`) hält sie mit einem Keepalive alle 3 Minuten wach und
-  bündelt Statusmeldungen, leere Peer-Verbindungen werden geschlossen, der
-  WLAN-Multicast bleibt aus (außer ohne Share-Server, dann ist mDNS der einzige
-  Weg). Ein älterer Share-Server funktioniert weiter, kostet aber mehr Akku und
+  bündelt Statusmeldungen, leere Peer-Verbindungen werden geschlossen (auch
+  ruhige Gerätefeeds anderer Geräte, die diese dann erst nach einer Pause neu
+  aufbauen), die LAN-Link-Statusverbindung für das Internet-Teilen ruht in
+  beide Richtungen, der WLAN-Multicast bleibt aus (außer ohne Share-Server,
+  dann ist mDNS der einzige Weg). Ein älterer Share-Server funktioniert weiter, kostet aber mehr Akku und
   verliert die Verbindung im Tiefschlaf häufiger; die Einstellungen zeigen das.
   Nach der Erstinstallation oder „Beenden erzwingen“ muss die App einmal
   geöffnet werden (Android-Regel). Ein am Desktop als Laufwerk eingebundenes

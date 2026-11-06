@@ -177,6 +177,16 @@ pub(super) fn child_gate(share_allowed: bool) -> Option<IpcResponse> {
     })
 }
 
+/// A9/R3: the device rejected this device's session, and the pause of that
+/// rejection still runs (the open failed for that reason).
+fn session_rejected(host: &ShareHost, target: &PeerMountTarget) -> bool {
+    let service = match host.state.lock() {
+        Ok(state) => state.service.clone(),
+        Err(_) => return false,
+    };
+    service.is_some_and(|service| service.session_rejected_for_target(&open_target_of(target)))
+}
+
 /// Whether the device lets this contact write: a Direct device that offers
 /// a backend with all mounted-write guarantees and has not refused the
 /// contact. An unknown grant counts as allowed; the device refuses then.
@@ -230,7 +240,11 @@ pub(super) fn serve_child(
         });
     let backend = match opened {
         Ok(backend) => backend,
-        Err(msg) => return write_response(&mut stream, &IpcResponse::Err { msg, code: None }),
+        Err(msg) => {
+            let code = session_rejected(host, &target)
+                .then(|| super::ipc_protocol_mount_host::CHILD_REFUSED_CODE.to_string());
+            return write_response(&mut stream, &IpcResponse::Err { msg, code });
+        }
     };
     let capabilities = MountBackendCapabilities::from_backend(&backend);
     let writable = writable_for(host, &target, capabilities);

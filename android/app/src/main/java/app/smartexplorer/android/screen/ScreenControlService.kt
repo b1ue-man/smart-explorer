@@ -11,6 +11,7 @@ import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
+import app.smartexplorer.android.launcher.gestures.GestureAvailability
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -152,11 +153,14 @@ class ScreenControlService : AccessibilityService() {
         /** The running service, `null` while the user has not switched it on. */
         fun current(): ScreenControlService? = instance
 
-        /** Whether the user switched the service on in the Android settings. */
+        /**
+         * Whether the user switched the service on in the Android settings. The system writes the
+         * entry in full or in the short form `<package>/.<rest>` ([GestureAvailability.listed]); the
+         * main process has no service object of its own to fall back on (it runs in `:access`).
+         */
         fun enabled(context: Context): Boolean {
-            val list = Settings.Secure.getString(context.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES).orEmpty()
-            val name = "${context.packageName}/${ScreenControlService::class.java.name}"
-            return list.split(':').any { it.equals(name, ignoreCase = true) }
+            val list = Settings.Secure.getString(context.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
+            return GestureAvailability.listed(list, context.packageName, ScreenControlService::class.java.name)
         }
 
         /**

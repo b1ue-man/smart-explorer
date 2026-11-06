@@ -86,6 +86,9 @@ struct State {
     channels: HashMap<usize, Channel>,
     cache: HashMap<usize, Cached>,
     probes: HashMap<String, Instant>,
+    /// Peers that ended this device's session because they rest in
+    /// low-power operation (`cadence::RESTING_CLOSE_CODE`), with the time.
+    rested: HashMap<String, Instant>,
     cursor: usize,
 }
 
@@ -111,6 +114,7 @@ impl Default for LanLinkTransport {
                 channels: HashMap::new(),
                 cache: HashMap::new(),
                 probes: HashMap::new(),
+                rested: HashMap::new(),
                 cursor: 0,
             }),
             inbound: Arc::new(Semaphore::new(8)),
@@ -371,6 +375,11 @@ impl ShareIrohNode {
 
     pub(super) async fn accept_lan_link(self: Arc<Self>, connection: Connection) -> io::Result<()> {
         let transport = self.lan_links.clone();
+        // A device in low-power operation keeps no LAN-link session (`cadence`).
+        if self.power().low_power() {
+            cadence::rest(&connection);
+            return Ok(());
+        }
         let permit = match transport.inbound.clone().try_acquire_owned() {
             Ok(permit) => permit,
             Err(_) => {

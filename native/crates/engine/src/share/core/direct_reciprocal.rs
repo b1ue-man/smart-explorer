@@ -389,10 +389,11 @@ impl ShareProfiles {
                 grant.updated_at = now;
                 changed = true;
             }
-            // R1: any deliberate pairing confirms the device again.
+            // R1: a deliberate pairing in both directions confirms the device
+            // again; „nur in eine Richtung“ and the repair reactivate nothing.
             let reactivates = match grant.state {
                 DirectGrantState::Accepted | DirectGrantState::Ignored => false,
-                DirectGrantState::Reconfirm => origin.is_user(),
+                DirectGrantState::Reconfirm => origin == PairingOrigin::UserPairing,
             };
             if reactivates {
                 grant.state = DirectGrantState::Accepted;

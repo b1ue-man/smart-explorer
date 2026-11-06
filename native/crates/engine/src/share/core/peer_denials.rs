@@ -177,6 +177,16 @@ pub(in crate::share) fn guarded<T>(
     result
 }
 
+/// Whether a rejection by the host `node_id` of a key of `local_node` still
+/// pauses: a final answer of that host, which a caller waiting for the device
+/// to appear (`ShareHost::open_share`) does not wait out.
+pub(in crate::share) fn host_rejects(local_node: &str, node_id: &str) -> bool {
+    let now = Instant::now();
+    book().outgoing.values().any(|entry| {
+        entry.local_node == local_node && entry.node_id == node_id && now < entry.until
+    })
+}
+
 /// A session of `key` was accepted.
 pub(in crate::share) fn clear_outgoing(local_node: &str, key: &str) {
     book().outgoing.remove(&book_key(local_node, key));

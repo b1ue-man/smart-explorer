@@ -1,7 +1,7 @@
 //! Plan 2026-11-06 R1/R2: a PIN pairing, „Eigene Freigaben öffnen“ and the
 //! repair take the rights the user set for new connections; a new key of a
-//! known device never does; any deliberate pairing confirms a grant waiting
-//! for re-confirmation; one-way pairing still opens nothing new.
+//! known device never does; a pairing in both directions confirms a grant
+//! waiting for re-confirmation; one-way pairing opens and reactivates nothing.
 use super::*;
 use crate::share::relation_rights::SessionAuthorization;
 use crate::share::{
@@ -60,7 +60,7 @@ fn rechte_task_pairing_takes_the_rights_of_new_connections() {
 }
 
 #[test]
-fn rechte_task_one_way_pairing_opens_nothing_but_reconfirms() {
+fn rechte_task_one_way_pairing_opens_nothing_and_both_ways_reconfirms() {
     let mut profiles = profiles(Some(RightsPreset::All.rights()));
     profiles
         .apply_reciprocal_direct_peer(&peer(), "c-pin", NOW, PairingOrigin::UserPairingOneWay)
@@ -69,8 +69,9 @@ fn rechte_task_one_way_pairing_opens_nothing_but_reconfirms() {
         profiles.direct_grants.is_empty(),
         "one way creates no grant"
     );
-    // A grant suspended after this device's code rotation: a deliberate
-    // pairing, one way included, confirms it again (Exec stays off).
+    // A grant suspended after this device's code rotation: neither the
+    // repair nor a pairing „nur in eine Richtung“ (the user's explicit choice
+    // not to open this device's exports) reactivates it.
     profiles
         .apply_reciprocal_direct_peer(&peer(), "c-pin", NOW, PairingOrigin::UserPairing)
         .unwrap();
@@ -81,6 +82,11 @@ fn rechte_task_one_way_pairing_opens_nothing_but_reconfirms() {
     assert_eq!(profiles.direct_grants[0].state, DirectGrantState::Reconfirm);
     profiles
         .apply_reciprocal_direct_peer(&peer(), "c-pin", NOW, PairingOrigin::UserPairingOneWay)
+        .unwrap();
+    assert_eq!(profiles.direct_grants[0].state, DirectGrantState::Reconfirm);
+    // A pairing in both directions (the default) confirms it again, Exec off.
+    profiles
+        .apply_reciprocal_direct_peer(&peer(), "c-pin", NOW, PairingOrigin::UserPairing)
         .unwrap();
     assert_eq!(profiles.direct_grants[0].state, DirectGrantState::Accepted);
     assert!(!profiles.direct_grants[0].exec.enabled);

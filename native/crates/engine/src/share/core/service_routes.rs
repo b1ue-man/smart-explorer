@@ -93,6 +93,19 @@ pub struct RouteMeasurementView {
 }
 
 impl ShareService {
+    /// A9: whether the host of `target` rejected this device's session and
+    /// the pause of that rejection still runs (`peer_denials.rs`): a final
+    /// answer, which a caller waiting for the device to appear does not
+    /// wait out (`ShareHost::open_share`).
+    pub fn session_rejected_for_target(&self, target: &super::types::PeerOpenTarget) -> bool {
+        self.endpoint_for_target(target).is_ok_and(|endpoint| {
+            super::session::peer_denials::host_rejects(
+                &self.identity.node_id,
+                &endpoint.presence.node_id,
+            )
+        })
+    }
+
     pub fn route_diagnostics(&self) -> ShareRouteSnapshot {
         let state = match self.auth.lock() {
             Ok(state) => state.clone(),

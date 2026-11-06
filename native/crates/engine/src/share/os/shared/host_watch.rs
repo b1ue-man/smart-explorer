@@ -52,7 +52,8 @@ pub(in crate::share) async fn serve(
     access.register_cancel(&p.cancel)?;
     let authority = access.clone();
     let _stop = crate::share::host_stream::Stop(p.cancel.clone());
-    let hold = crate::share::analysis_resources::Reservation::metadata(
+    // Not named `hold`: that would shadow `hold()` for the change loop below.
+    let reservation = crate::share::analysis_resources::Reservation::metadata(
         4096 + request.path.capacity() as u64,
     )?;
     let stopped = send.stopped();
@@ -75,7 +76,7 @@ pub(in crate::share) async fn serve(
         .name("share-watch-setup".into())
         .spawn(move || {
             let _permit = permit;
-            let prepared = setup(request, access, worker_progress, hold);
+            let prepared = setup(request, access, worker_progress, reservation);
             let _ = result.send(prepared);
         })?;
     let session = loop {

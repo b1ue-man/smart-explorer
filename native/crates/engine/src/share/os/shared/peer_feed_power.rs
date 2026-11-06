@@ -1,4 +1,4 @@
-//! Restarts the paused and lost device feeds as soon as this device leaves
+//! Restarts the paused, lost and refused device feeds as soon as this device leaves
 //! low-power operation (A4 of plan 2026-11-06-akku-rechte): the app became
 //! visible. `observe` runs only after events and reloads (on Android at
 //! least once a minute), which is too late for a person who just opened

@@ -24,25 +24,41 @@ const OLDER_VERSION: &str = "Gerät hat eine ältere Version";
 
 /// Why a feed session ended and whether the connection was lost (a lost
 /// connection restarts after its backoff or on an event of that device; a
-/// refusal waits for a change of the relation to that device).
+/// refusal waits for a change of the relation to that device or its refusal
+/// backoff).
 pub(super) struct Ended {
     pub(super) reason: String,
     pub(super) connection_lost: bool,
+    /// The host closed the quiet feed as idle in its low-power operation
+    /// (`node::closed_idle`): it rests, it did not fail.
+    pub(super) host_rested: bool,
 }
 impl Ended {
     fn refused(reason: impl Into<String>) -> Self {
         Self {
             reason: reason.into(),
             connection_lost: false,
+            host_rested: false,
         }
     }
     fn lost(reason: impl Into<String>) -> Self {
         Self {
             reason: reason.into(),
             connection_lost: true,
+            host_rested: false,
+        }
+    }
+    fn rested() -> Self {
+        Self {
+            reason: RESTED.into(),
+            connection_lost: true,
+            host_rested: true,
         }
     }
 }
+
+const RESTED: &str =
+    "Das Gerät ruht im Energiesparbetrieb und hat den Gerätefeed beendet; er läuft wieder, sobald dieses Gerät neu verbunden ist, spätestens nach zehn Minuten";
 
 fn viewer_request(mode: SessionMode) -> ViewerRequest {
     ViewerRequest {
@@ -179,6 +195,9 @@ async fn subscribed(context: &Context, link: ScreenLink) -> Ended {
     let ended = loop {
         let (tag, payload) = match wire::read_frame(&mut recv, MAX_WINDOWS_BYTES).await {
             Ok(frame) => frame,
+            // A host in low-power operation closes a quiet feed (A4); a
+            // restart at its next presence would wake it in a loop.
+            Err(_) if crate::share::node::closed_idle(&connection) => break Ended::rested(),
             Err(error) => break Ended::lost(format!("Gerätefeed beendet: {error}")),
         };
         if tag == wire::ERROR {

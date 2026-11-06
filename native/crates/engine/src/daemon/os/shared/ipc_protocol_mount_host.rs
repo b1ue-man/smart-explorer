@@ -28,6 +28,10 @@ use super::super::ipc_protocol::MountBackendCapabilities;
 pub const MAX_WATCH_MS: u64 = 30_000;
 /// Longest `LockPrepared` line the daemon reads.
 pub const MAX_PREPARED_LINE: usize = 64 * 1024;
+/// `IpcResponse::Err::code` of a `ChildBackend` whose device rejected this
+/// device's session (R3): the drive answers "access denied" with the
+/// device's reason, not "device not reachable".
+pub const CHILD_REFUSED_CODE: &str = "share_refused";
 
 /// One request of a drive host on its extension channel.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
