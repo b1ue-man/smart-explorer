@@ -6,6 +6,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -17,6 +18,8 @@ import app.smartexplorer.android.api.ShareExport
 import app.smartexplorer.android.api.SharePolicyApi
 import app.smartexplorer.android.api.ShareRoom
 import app.smartexplorer.android.api.ShareWriteGrant
+import app.smartexplorer.android.core.Core
+import app.smartexplorer.android.core.CoreException
 
 internal fun accessLabel(access: String?): String = when (access) {
     SHARE_READ_ONLY -> "Nur lesen"
@@ -74,6 +77,16 @@ internal fun ExportAccessDialog(scope: String, export: ShareExport, vm: ShareVie
 internal fun ContactWriteDialog(grant: ShareWriteGrant, vm: ShareViewModel, onDismiss: () -> Unit) {
     val action = rememberShareAction()
     var write by remember { mutableStateOf(grant.write) }
+    // R5 (plan 2026-11-06): the write right is shown with the folders the device sees.
+    var folders by remember { mutableStateOf<DeviceFolders?>(null) }
+    LaunchedEffect(grant.deviceId, grant.publicKey) {
+        folders = try {
+            Core.request<AccessFacts>("share.access").deviceFolders
+                .firstOrNull { it.deviceId == grant.deviceId && it.publicKey == grant.publicKey }
+        } catch (e: CoreException) {
+            null
+        }
+    }
     ShareActionDialog(
         title = "Schreibrecht für ${grant.name.ifBlank { "Gerät" }}",
         state = action,
@@ -87,6 +100,15 @@ internal fun ContactWriteDialog(grant: ShareWriteGrant, vm: ShareViewModel, onDi
         SelectionContainer { Text("Fingerabdruck: ${grant.fingerprint}") }
         IdentityDiagnostic("Geräte-ID: ${grant.deviceId}\nKnoten: ${grant.nodeId.ifEmpty { "Legacy (leer)" }}\nSchlüssel: ${grant.publicKey}")
         ShareChoice("Schreiben auf schreibbaren Freigaben erlauben", write, !action.saving && (grant.active || write)) { write = it }
+        folders?.let { seen ->
+            Text(
+                when (seen.choice) {
+                    "none" -> "Sieht keinen deiner Ordner (Rechte offen oder „Keine Ordner“): das Schreibrecht bewirkt nichts, bis du über ⋮ → „Rechte festlegen…“ Ordner wählst."
+                    "selected" -> "Sieht ${seen.count} ausgewählte Ordner. Ändern über ⋮ → „Rechte einstellen…“."
+                    else -> if (seen.count == 0) "Sieht alle Ordner – du gibst aber noch keinen Ordner frei." else "Sieht alle deine ${seen.count} Direkt-Ordner."
+                },
+            )
+        }
         Text(if (grant.active) "Nur diese gespeicherte Identität erhält das Recht. Nur-lesbare Freigaben bleiben geschützt." else "Die Freigabe ist inaktiv. Ein altes Schreibrecht kann entzogen werden; neue Rechte erst nach ausdrücklichem Wiederzulassen.")
         Text("Dieses Recht erlaubt keine Befehle.")
     }

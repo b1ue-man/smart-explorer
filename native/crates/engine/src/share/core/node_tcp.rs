@@ -129,12 +129,20 @@ impl ShareIrohNode {
             }
         };
         if let Err(error) = client.request.validate_for(version) {
-            self.auth_penalties().record(
-                &remote,
-                super::auth_penalty::PenaltyKind::AuthFailure,
-                std::time::Instant::now(),
-            );
-            return Err(eio(error));
+            // R10 (plan 2026-11-06): a request this version does not take
+            // (another version's lifetime rule) proves nothing about the
+            // identity. Paired devices are not locked out for it; unknown
+            // endpoints still count it.
+            if !self.known_endpoint(&remote) {
+                self.auth_penalties().record(
+                    &remote,
+                    super::auth_penalty::PenaltyKind::NoAuthentication,
+                    std::time::Instant::now(),
+                );
+            }
+            return Err(eio(format!(
+                "TCP-Anfrage wird von dieser Version nicht angenommen ({error}); Smart Explorer auf beiden Geräten aktualisieren"
+            )));
         }
         let principal = {
             let state = self
@@ -261,7 +269,9 @@ impl ShareIrohNode {
                     let mut revoked = access.revoked();
                     let authority = access.clone();
                     let initial_socket = initial_socket.take();
-                    let hold = self.incoming_stream_started(&activity);
+                    // Counted for the sweep; the CPU is held per chunk of
+                    // data in `tcp_pump`, not for a quiet socket's lifetime.
+                    let hold = self.incoming_watch_started(&activity);
                     let (auth, leases) = (self.auth.clone(), self.access_registry().clone());
                     children.spawn(async move {
                         let _slot = slot;

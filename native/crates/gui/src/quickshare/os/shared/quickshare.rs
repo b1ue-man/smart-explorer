@@ -25,6 +25,10 @@ pub struct QsDevice {
     pub addr: String,
 }
 
+/// Interval of the mDNS interface check, the same as the Share LAN presence
+/// (`share/os/shared/lan_presence.rs`, `IP_CHECK_INTERVAL_SECS`).
+const QUICK_SHARE_IP_CHECK_SECS: u32 = 30;
+
 /// Live Quick Share discovery. Drop to stop browsing/advertising.
 pub struct QuickShare {
     /// Latest full device list (replaced on each change).
@@ -38,6 +42,11 @@ impl QuickShare {
     pub fn start(my_name: &str) -> Result<QuickShare, String> {
         let daemon = mdns_sd::ServiceDaemon::new()
             .map_err(|error| format!("mDNS-Dienst konnte nicht gestartet werden: {error}"))?;
+        // mdns-sd 0.21 checks the interfaces every 5 s by default; keep the
+        // 30 s of mdns-sd 0.11 like the Share LAN presence (plan 2026-11-06, A8).
+        daemon
+            .set_ip_check_interval(QUICK_SHARE_IP_CHECK_SECS)
+            .map_err(|error| format!("mDNS-Dienst konnte nicht eingerichtet werden: {error}"))?;
         // mdns-sd >= 0.17 also uses loopback interfaces by default; 0.11 did
         // not. Keep discovery on the LAN interfaces only.
         daemon

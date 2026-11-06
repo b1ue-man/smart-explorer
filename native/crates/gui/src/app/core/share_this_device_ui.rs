@@ -127,7 +127,7 @@ fn identity(app: &mut App, ui: &mut egui::Ui) {
             app.share_tab = super::pages_ui::TAB_EXPORTS;
         }
     });
-    super::pages_ui::heading(ui, "RECHTE DIESES CODES");
+    super::pages_ui::heading(ui, "RECHTE NEUER VERBINDUNGEN (CODE UND KOPPLUNG)");
     crate::app::share_rights_choice_ui::code_row(app, ui);
 }
 

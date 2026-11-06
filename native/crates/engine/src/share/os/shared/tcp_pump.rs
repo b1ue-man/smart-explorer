@@ -81,6 +81,9 @@ async fn copy<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
         .await?;
         count.fetch_add(length as u64, Ordering::Relaxed);
         progress.send_replace(crate::share::route_protocol::active_now());
+        // While data flows the CPU stays awake in low power (a bounded,
+        // deduplicated hold); a quiet tunnel holds nothing.
+        crate::share::power::request_hold(crate::share::power::STREAM_HOLD_MS);
     }
 }
 async fn idle(mut progress: watch::Receiver<tokio::time::Instant>) -> io::Error {

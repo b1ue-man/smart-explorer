@@ -278,7 +278,7 @@ impl PeerBackend {
                 }
             }
             // The host refused before it accepted anything (`Busy`).
-            Ok(FsResponse::Err { kind, msg }) => {
+            Ok(FsResponse::Err { kind, msg, .. }) => {
                 io_deadline::abort(&mut opened.send, &mut opened.recv);
                 return Some(PartOutcome::Refused {
                     error: before_commit(into_io(kind, msg)),
@@ -355,7 +355,7 @@ impl PeerBackend {
                     ),
                 );
                 match reason {
-                    Ok(FsResponse::Err { kind, msg }) => into_io(kind, msg),
+                    Ok(FsResponse::Err { kind, msg, .. }) => into_io(kind, msg),
                     _ => {
                         let _ = self
                             .node

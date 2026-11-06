@@ -96,11 +96,7 @@ pub struct Gate {
 impl Gate {
     /// `Ok` when the connection from `peer` to `listener` may be forwarded.
     /// The owner lookup reads OS tables and runs on the blocking pool.
-    pub async fn admit(
-        &mut self,
-        peer: SocketAddr,
-        listener: SocketAddr,
-    ) -> Result<(), String> {
+    pub async fn admit(&mut self, peer: SocketAddr, listener: SocketAddr) -> Result<(), String> {
         let check = match self.admission {
             ListenerAdmission::AnyLocal => return Ok(()),
             _ => self.check.clone().ok_or_else(|| {
@@ -258,11 +254,7 @@ impl TcpRegistration {
         self.registry.clone()
     }
     /// The admission gate of this listener tunnel.
-    pub fn gate(
-        &self,
-        admission: ListenerAdmission,
-        check: Option<Arc<dyn OriginCheck>>,
-    ) -> Gate {
+    pub fn gate(&self, admission: ListenerAdmission, check: Option<Arc<dyn OriginCheck>>) -> Gate {
         Gate {
             admission,
             check,
@@ -412,7 +404,8 @@ async fn run_link(
             let Some(current) = node.upgrade() else {
                 break 'run;
             };
-            let hold = current.incoming_stream_started(&activity);
+            // Counted for the sweep; `tcp_pump` holds the CPU per chunk.
+            let hold = current.incoming_watch_started(&activity);
             drop(current);
             let connection = connection.clone();
             let id = registration.id.clone();

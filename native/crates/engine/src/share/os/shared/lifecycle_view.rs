@@ -5,6 +5,10 @@ use crate::share::{
     DirectRetryState, ShareProfiles,
 };
 
+/// R1/R9: paired devices that cannot open this device's exports.
+#[path = "access_gaps.rs"]
+pub mod access_gaps;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LifecycleFact {
     pub label: String,

@@ -66,7 +66,7 @@ pub(super) async fn recv_resp_wire(recv: &mut RecvStream) -> io::Result<FsRespon
 
 pub(super) fn decode_resp(resp: FsResponse) -> io::Result<FsResponse> {
     match resp {
-        FsResponse::Err { kind, msg } => Err(super::fs_error::into_io(kind, msg)),
+        FsResponse::Err { kind, msg, .. } => Err(super::fs_error::into_io(kind, msg)),
         response => Ok(response),
     }
 }

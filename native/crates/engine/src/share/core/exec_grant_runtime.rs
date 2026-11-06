@@ -50,6 +50,7 @@ pub(super) fn mutate(
     install(registry, &principal, policy, &next_policy, next_epoch)?;
     *policy = next_policy.clone();
     state.authorization_epoch = next_epoch;
+    crate::screen::core::feed_host::rights_changed();
     Ok(ExecGrantMutation {
         target,
         principal,
@@ -118,6 +119,7 @@ pub(super) fn apply_exact_with_access(
     install(registry, &principal, current, &policy, next_epoch)?;
     *current = policy.clone();
     candidate.authorization_epoch = next_epoch;
+    crate::screen::core::feed_host::rights_changed();
     if let Some(access) = access {
         access.recheck(&candidate, super::core::now_secs());
     }

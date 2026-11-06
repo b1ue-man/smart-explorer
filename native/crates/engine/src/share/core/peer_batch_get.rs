@@ -119,7 +119,9 @@ impl PeerBackend {
             .map_err(GetFailure::Transport)?;
         match self.next_response(&mut opened.recv, opened.generation)? {
             FsResponse::Ready => {}
-            FsResponse::Err { kind, msg } => return Err(GetFailure::Refused(into_io(kind, msg))),
+            FsResponse::Err { kind, msg, .. } => {
+                return Err(GetFailure::Refused(into_io(kind, msg)))
+            }
             _ => {
                 return Err(GetFailure::Transport(eio(
                     "unerwartete Antwort auf das Paket",
@@ -159,7 +161,7 @@ impl PeerBackend {
                 receiver.evidence(self, index, evidence)?;
                 size
             }
-            FsResponse::Err { kind, msg } => {
+            FsResponse::Err { kind, msg, .. } => {
                 return receiver
                     .sink
                     .failed(index, into_io(kind, msg))
@@ -202,7 +204,7 @@ impl PeerBackend {
         }
         let result = match self.next_response(recv, generation)? {
             FsResponse::Ok => Ok(()),
-            FsResponse::Err { kind, msg } => Err(into_io(kind, msg)),
+            FsResponse::Err { kind, msg, .. } => Err(into_io(kind, msg)),
             _ => {
                 return Err(GetFailure::Transport(eio(
                     "unerwartetes Ende eines Paketeintrags",
@@ -219,7 +221,7 @@ fn early_failure(tag: u8, payload: &[u8]) -> Result<io::Error, GetFailure> {
     }
     match serde_json::from_slice::<Ctrl>(payload) {
         Ok(Ctrl::FsResp {
-            resp: FsResponse::Err { kind, msg },
+            resp: FsResponse::Err { kind, msg, .. },
         }) => Ok(into_io(kind, msg)),
         Ok(_) => Err(GetFailure::Transport(eio("Paketeintrag endet zu früh"))),
         Err(error) => Err(GetFailure::Transport(eio(error))),

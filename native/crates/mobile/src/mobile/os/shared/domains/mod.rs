@@ -61,6 +61,8 @@ mod route_status;
 #[cfg(test)]
 #[path = "settings_parity_tests.rs"]
 mod settings_parity_tests;
+#[path = "share_access_notices.rs"]
+mod share_access_notices;
 #[path = "share_device_settings.rs"]
 mod share_device_settings;
 #[cfg(test)]
@@ -281,6 +283,8 @@ fn share_method(rt: &Runtime, method: &str, args: &Value) -> Option<Result<Value
         "share.withdrawGrant" => share_policy::withdraw_grant(rt, args),
         "share.setRoomMember" => share_policy::set_room_member(rt, args),
         "share.setShareBack" => share_policy::set_share_back(rt, args),
+        "share.access" => share_access_notices::access(),
+        "share.reconfirmAll" => share_access_notices::reconfirm_all(rt),
         "share.setRoomPolicy" => share_policy::set_room_policy(rt, args),
         "share.policy" => share_policy::policy(),
         "share.setPolicy" => share_policy::set_policy(args),

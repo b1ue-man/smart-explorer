@@ -49,6 +49,14 @@ pub(super) fn handle_server_msg(
             presence,
         } => {
             if verify_direct_presence(&lookup_id, &presence, auth) {
+                // A9: a fresh presence of a host that rejected this device
+                // (it may have granted access since) is tried at once.
+                if let Ok(state) = auth.lock() {
+                    super::session::peer_denials::forget_outgoing_node(
+                        &state.identity.node_id,
+                        &presence.node_id,
+                    );
+                }
                 let _ = events.send(ShareEvent::DirectAvailable {
                     lookup_id,
                     presence: presence.with_local_fingerprint(),

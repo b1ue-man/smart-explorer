@@ -99,6 +99,10 @@ impl RuntimeConfiguration<'_> {
         if !restrictions.is_empty() {
             self.direct_requests_sent.clear();
         }
+        // A9: a changed relation of this device retries rejected hosts now.
+        super::session::peer_denials::forget_outgoing_pauses(&snapshot.identity.node_id);
+        // A6: every new configuration may widen or narrow what a feed shows.
+        crate::screen::core::feed_host::rights_changed();
         drop(transition);
         if let Some((granted, revoked, steering)) = steering_change {
             apply_steering_change(granted, revoked, steering);

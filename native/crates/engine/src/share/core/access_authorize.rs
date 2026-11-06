@@ -40,12 +40,18 @@ pub fn principal_grant<'a>(
                 .direct_grants
                 .iter()
                 .find(|grant| {
+                    // R4: a grant without node pin names the node of its key.
+                    let node = if grant.pins_node(&principal.node_id) {
+                        principal.node_id.as_str()
+                    } else {
+                        grant.node_id.as_str()
+                    };
                     grant.state == DirectGrantState::Accepted
                         && exact(
                             &grant.device_id,
                             &grant.public_key,
                             &grant.fingerprint,
-                            &grant.node_id,
+                            node,
                         )
                 })
                 .map(|grant| &grant.exec)

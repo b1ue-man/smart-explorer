@@ -128,6 +128,10 @@ fn json_value(
             "lines": setup.lines(),
         })),
     });
+    // R1/R9 (plan 2026-11-06): paired devices that cannot open this
+    // device's exports, with the action that allows them. The rejected
+    // sessions themselves are `routes.access`.
+    value["access_gaps"] = access_gaps_value(profiles);
     // F1 „Rechte offen“ and the Direct code's rights (plan 2026-10-31).
     value["rights_pending"] = grants::grants_rights::pending_value(profiles);
     value["code_rights"] = serde_json::json!(profiles
@@ -165,6 +169,7 @@ fn print_text(
         println!("rdp_setup\t{}", clean(&line));
     }
     print_routes(snapshot);
+    print_access(snapshot, profiles);
     for contact in &profiles.direct_contacts {
         println!(
             "peer\t{}\t{}\t{}\t{}\tconnectivity={}\tauthorization={}\tlast_seen={}\tlast_error={}",
@@ -274,6 +279,51 @@ fn option_i64(value: Option<i64>) -> String {
 
 fn clean(value: &str) -> String {
     value.replace(['\t', '\r', '\n'], " ")
+}
+
+fn access_gaps_value(profiles: &crate::share::ShareProfiles) -> serde_json::Value {
+    crate::share::lifecycle_view::access_gaps::access_gaps(profiles)
+        .into_iter()
+        .map(|gap| {
+            serde_json::json!({
+                "kind": gap.kind.code(),
+                "device_id": gap.device_id,
+                "device_name": gap.device_name,
+                "contact_id": gap.contact_id,
+                "message": gap.message,
+                "action": gap.action,
+            })
+        })
+        .collect()
+}
+
+/// `access_notice` (rejected sessions, both directions) and `access_gap`.
+fn print_access(
+    snapshot: &crate::daemon::ShareWorkerSnapshot,
+    profiles: &crate::share::ShareProfiles,
+) {
+    for notice in snapshot.routes.iter().flat_map(|routes| &routes.access) {
+        println!(
+            "access_notice\t{}\t{}\t{}\treason={}\tcount={}\t{}\t{}",
+            notice.direction,
+            clean(notice.contact_id.as_deref().unwrap_or(&notice.device_id)),
+            clean(notice.device_name.as_deref().unwrap_or("-")),
+            notice.reason,
+            notice.count,
+            clean(&notice.message),
+            clean(&notice.remedy),
+        );
+    }
+    for gap in crate::share::lifecycle_view::access_gaps::access_gaps(profiles) {
+        println!(
+            "access_gap\t{}\t{}\t{}\t{}\taction={}",
+            gap.kind.code(),
+            clean(gap.contact_id.as_deref().unwrap_or(&gap.device_id)),
+            clean(&gap.device_name),
+            clean(&gap.message),
+            clean(&gap.action),
+        );
+    }
 }
 
 fn print_routes(snapshot: &crate::daemon::ShareWorkerSnapshot) {

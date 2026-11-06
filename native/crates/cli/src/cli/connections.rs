@@ -51,8 +51,10 @@ Targets can then use @label:/path shorthand, for example:
 const ADD_PEER_HELP: &str = "\
 Save a Smart Explorer direct peer from the other client's direct code.
 
-The command is one-sided: paste the code here, and the other Smart Explorer
-client receives the normal confirmation request in its CLI or GUI. Re-running the
+Paste the code here, and the other Smart Explorer client receives the normal
+confirmation request in its CLI or GUI. A newly saved peer also gets this
+device's exports (both directions) with the rights of new connections, or it
+waits for `se share rights confirm`; --one-way keeps them closed. Re-running the
 same command with an already-saved code requeues the request when access is still
 needed. Its output includes the exact selector and copyable share:// endpoint for
 later file operations or removal.";
@@ -206,6 +208,11 @@ struct PeerAddArgs {
         help = "Only save the peer locally; do not wake the share worker now"
     )]
     request: bool,
+    #[arg(
+        long,
+        help = "Only this device reaches the peer; do not open this device's exports to it (default: both directions)"
+    )]
+    one_way: bool,
 }
 
 #[derive(Args)]
@@ -267,7 +274,7 @@ pub(super) fn run(args: ConnectionsArgs) -> Result<i32, String> {
             Ok(0)
         }
         Some(Command::AddPeer(args)) => {
-            let output = setup::add_peer(&args.code, &args.name, args.request)?;
+            let output = setup::add_peer(&args.code, &args.name, args.request, !args.one_way)?;
             println!("{}", output.render(args.json)?);
             Ok(0)
         }

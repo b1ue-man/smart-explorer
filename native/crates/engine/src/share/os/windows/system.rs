@@ -7,7 +7,55 @@ const FIREWALL_RULE: &str = "Smart Explorer Share Peer Listener";
 
 pub fn ensure_firewall_rule() -> io::Result<String> {
     let exe = std::env::current_exe()?;
-    ensure_firewall_rule_for(&exe)
+    let message = ensure_firewall_rule_for(&exe)?;
+    // R8 (plan 2026-11-06): the rule covers private and domain networks
+    // only, as Windows intends; on a network classified „Öffentlich“ the
+    // firewall still drops incoming UDP and every device reaches this one
+    // over the relay only. That is reported, never changed silently.
+    Ok(match public_networks() {
+        names if names.is_empty() => message,
+        names => format!("{message}. {}", public_network_notice(&names)),
+    })
+}
+
+/// Marker the desktop recognizes in the status line (`share_drain.rs`).
+pub const PUBLIC_NETWORK_NOTICE: &str = "Netzwerk ist als „Öffentlich“ eingestuft";
+
+fn public_network_notice(names: &[String]) -> String {
+    format!(
+        "{PUBLIC_NETWORK_NOTICE} ({}): eingehende Direkt- und LAN-Verbindungen sperrt die Windows-Firewall, andere Geräte erreichen dieses Gerät nur über das Relay (langsamer, Zeitüberschreitungen möglich). Abhilfe: in den Windows-Einstellungen unter Netzwerk und Internet dieses Netz auf „Privates Netzwerk“ stellen",
+        names.join(", ")
+    )
+}
+
+/// Names of the connected networks Windows classifies as public; empty when
+/// none is or the query fails (no claim without evidence).
+fn public_networks() -> Vec<String> {
+    use std::os::windows::process::CommandExt;
+
+    let Ok(engine) = crate::net::system_powershell() else {
+        return Vec::new();
+    };
+    let script = "Get-NetConnectionProfile -ErrorAction SilentlyContinue \
+        | Where-Object { $_.NetworkCategory -eq 'Public' } \
+        | ForEach-Object { $_.Name }";
+    let Ok(output) = std::process::Command::new(engine)
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(|name| name.chars().take(80).collect())
+        .take(4)
+        .collect()
 }
 
 pub fn ensure_firewall_rule_for(exe: &std::path::Path) -> io::Result<String> {

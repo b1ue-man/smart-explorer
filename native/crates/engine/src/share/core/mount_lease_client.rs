@@ -6,12 +6,31 @@ use super::wire::{FsResponse, MOUNT_PATH_CAPABILITY_CONTRACT_VERSION};
 
 const MAX_MOUNT_LEASE_LENGTH: usize = 128;
 
+/// The root a lease was acquired for and the identity of the directory it
+/// named then (R6): a renewed lease must name the same directory.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct LeaseAnchor {
+    pub(super) root: String,
+    pub(super) identity: String,
+}
+
 #[derive(Default)]
 pub(super) struct PeerMountLeaseClient {
     token: Mutex<Option<String>>,
+    anchor: Mutex<Option<LeaseAnchor>>,
 }
 
 impl PeerMountLeaseClient {
+    pub(super) fn anchor(&self) -> Option<LeaseAnchor> {
+        self.anchor.lock().ok().and_then(|anchor| anchor.clone())
+    }
+
+    pub(super) fn set_anchor(&self, anchor: Option<LeaseAnchor>) {
+        if let Ok(mut current) = self.anchor.lock() {
+            *current = anchor;
+        }
+    }
+
     pub(super) fn current(&self) -> io::Result<Option<String>> {
         self.token
             .lock()
@@ -101,6 +120,7 @@ impl PeerMountLeaseClient {
     /// advertises the release-capable token generation. Older peers use
     /// unprefixed, connection-scoped tokens and do not understand ReleaseLease.
     pub(super) fn take_releasable(&self) -> io::Result<Option<String>> {
+        self.set_anchor(None);
         self.token
             .lock()
             .map(|mut lease| {
@@ -112,6 +132,9 @@ impl PeerMountLeaseClient {
     }
 
     fn replace(&self, lease: Option<String>) -> io::Result<()> {
+        if lease.is_none() {
+            self.set_anchor(None);
+        }
         *self
             .token
             .lock()

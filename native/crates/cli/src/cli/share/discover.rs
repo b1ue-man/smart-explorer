@@ -10,7 +10,9 @@ Pair using the OFFER discovery ID printed by list and exactly one PIN source.\n\
 --pin-stdin reads all UTF-8 bytes up to EOF, including spaces and line endings.\n\
 --pin-prompt requires an interactive terminal and hides the typed PIN.\n\
 Pairing waits for the shared daemon's result; Ctrl+C cancels only this exchange.\n\
-Exports are shared back only with the explicit --share-back option."
+Pairing a device opens this device's exports to it as well (both directions);\n\
+the paired device gets the rights set with `se share identity --preset ...`\n\
+(rights of new connections), otherwise it waits for `se share rights confirm`. --one-way keeps this device's exports closed."
 )]
 pub(super) struct DiscoverArgs {
     #[command(subcommand)]
@@ -42,9 +44,15 @@ struct PairArgs {
     pin_prompt: bool,
     #[arg(
         long,
-        help = "Explicitly open this device's exports to the paired direct device"
+        conflicts_with = "one_way",
+        help = "Open this device's exports to the paired direct device (the default)"
     )]
     share_back: bool,
+    #[arg(
+        long,
+        help = "Only this device reaches the other one; keep this device's exports closed"
+    )]
+    one_way: bool,
     #[arg(long)]
     json: bool,
 }
@@ -62,6 +70,12 @@ pub(super) fn run(args: DiscoverArgs) -> Result<i32, String> {
     })
 }
 
+/// R1 (plan 2026-11-06): both directions unless `--one-way`; `--share-back`
+/// stays accepted for scripts written before.
+fn share_back(args: &PairArgs) -> bool {
+    args.share_back || !args.one_way
+}
+
 fn pair(args: PairArgs) -> i32 {
     let pin = match discover_input::read_pin(args.pin_stdin, args.pin_prompt) {
         Ok(pin) => pin,
@@ -76,7 +90,7 @@ fn pair(args: PairArgs) -> i32 {
         }
     };
     let session =
-        match crate::daemon::start_discovery_pairing(args.offer.clone(), pin, args.share_back) {
+        match crate::daemon::start_discovery_pairing(args.offer.clone(), pin, share_back(&args)) {
             Ok(session) => session,
             Err(error) => {
                 return discover_output::failure(Some(&args.offer), None, error, args.json)

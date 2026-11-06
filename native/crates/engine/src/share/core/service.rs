@@ -398,6 +398,9 @@ impl ShareService {
         iroh.install_direct_repair_coordinator(&reciprocal)?;
         super::exec_grant_runtime::seed_registry(&auth, iroh.exec_registry())?;
         super::configuration_runtime::schedule_current(&auth, &iroh)?;
+        // A6: this host reports every change of its rights to the device
+        // feeds from now on (configuration, Exec grants, grant ends).
+        crate::screen::core::feed_host::rights_reported();
         let _ = ev_tx.send(ShareEvent::Status(format!(
             "Iroh bereit: node={}, relay={}",
             identity.node_id,

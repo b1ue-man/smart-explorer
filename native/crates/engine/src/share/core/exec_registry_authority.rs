@@ -135,6 +135,7 @@ fn install_policy(
             .map_or(epoch, |policy| policy.minimum_epoch)
     };
     state.authorization_epoch = epoch;
+    crate::screen::core::feed_host::rights_changed();
     state.policies.insert(
         identity.clone(),
         PolicyAuthority {
@@ -156,6 +157,7 @@ fn install_policy(
 /// narrowing of a screen capability alone leaves Exec jobs running.
 fn restrict_state(state: &mut RegistryState, epoch: u64, restrictions: &RestrictionSet) {
     state.authorization_epoch = epoch;
+    crate::screen::core::feed_host::rights_changed();
     for (principal, policy) in &mut state.policies {
         if restrictions.affects_exec(&principal.0, &principal.1, &principal.3, &principal.5) {
             policy.minimum_epoch = epoch;

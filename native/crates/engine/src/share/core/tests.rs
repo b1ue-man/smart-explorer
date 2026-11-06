@@ -86,7 +86,7 @@ fn fs_error_wire_accepts_legacy_message_only_response() {
     let encoded = br#"{"r":"err","msg":"legacy missing"}"#;
     let response = serde_json::from_slice::<FsResponse>(encoded).unwrap();
     match response {
-        FsResponse::Err { kind, msg } => {
+        FsResponse::Err { kind, msg, .. } => {
             assert_eq!(kind, None);
             assert_eq!(msg, "legacy missing");
         }
@@ -105,6 +105,7 @@ fn typed_not_found_error_remains_readable_by_legacy_peer() {
     let response = FsResponse::Err {
         kind: Some(FsErrorKind::NotFound),
         msg: "missing".to_string(),
+        denial: None,
     };
     let encoded = serde_json::to_vec(&response).unwrap();
     assert!(encoded
@@ -119,7 +120,7 @@ fn typed_not_found_error_remains_readable_by_legacy_peer() {
 fn remote_drive_task_fs_error_wire_tolerates_future_error_kind() {
     let encoded = br#"{"r":"err","kind":"future_error_kind","msg":"future failure"}"#;
     match serde_json::from_slice::<FsResponse>(encoded).unwrap() {
-        FsResponse::Err { kind, msg } => {
+        FsResponse::Err { kind, msg, .. } => {
             assert_eq!(kind, Some(FsErrorKind::Unknown));
             assert_eq!(msg, "future failure");
         }

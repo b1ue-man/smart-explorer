@@ -141,21 +141,16 @@ pub(super) async fn handle_connection(
         Ok(session) => session,
         Err(error) => {
             penalize_unknown(&node, &remote_node, PenaltyKind::AuthFailure);
+            // R3: the reason class and the way to the grant, never a secret.
+            let (resp, detail) =
+                super::session::peer_denials::host_rejection(&hello, &node.auth, &error);
             super::route_protocol::run_until_active(
                 handshake_deadline,
                 "Session-Ablehnung Timeout",
-                send_ctrl(
-                    &mut send,
-                    &Ctrl::FsResp {
-                        resp: super::fs_error::response(&io::Error::new(
-                            io::ErrorKind::PermissionDenied,
-                            "Share-Anmeldung nicht autorisiert",
-                        )),
-                    },
-                ),
+                send_ctrl(&mut send, &Ctrl::FsResp { resp }),
             )
             .await?;
-            return Err(error);
+            return Err(detail);
         }
     };
     node.bind_incoming_principal(&conn, session.principal())
@@ -185,6 +180,7 @@ pub(super) async fn handle_connection(
         "Iroh-Session akzeptiert: {} ({})",
         hello.device_id, remote_node
     )));
+    super::session::peer_denials::clear_incoming(&hello.device_id, &hello.public_key);
     let session = Arc::new(session);
     // Unfinished stages of ranged uploads go when this connection ends.
     let connection_stages = fs_dispatch::stage_ranges::ConnectionStages::start();
@@ -332,8 +328,7 @@ async fn handle_peer_stream(
         _ => return Err(eio("Dateioperation erwartet")),
     };
     let principal = session.principal();
-    let _awake = crate::keep_awake::hold(crate::keep_awake::Reason::PeerService);
-    let _stream_hold = node.incoming_stream_started(&context.activity);
+    let _holds = admission::stream_holds(&node, &context.activity, &req);
     if req.mutates_filesystem() && !session_rights.may_write {
         // A stage of a ranged upload this connection holds goes with the
         // right to write it.

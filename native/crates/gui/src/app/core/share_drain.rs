@@ -191,6 +191,13 @@ impl App {
                         if s.starts_with("Firewall-Regel fuer Peer-Listener nicht gesetzt") {
                             ask_firewall_once();
                         }
+                        // R8: a network Windows classifies as public keeps
+                        // other devices on the relay; shown, not only logged.
+                        if let Some(index) = s.find("Netzwerk ist als „Öffentlich“ eingestuft")
+                        {
+                            self.share_lan_notice = Some(s[index..].to_string());
+                            self.notice = Some((s[index..].to_string(), std::time::Instant::now()));
+                        }
                         self.share_status = s.clone();
                         self.append_share_diag(s);
                     }

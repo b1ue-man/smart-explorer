@@ -262,7 +262,11 @@ impl ShareIrohNode {
         connection: Connection,
         permit: ApplicationHandshakePermit,
     ) -> io::Result<()> {
-        let _incoming = self.track_incoming(&connection)?;
+        // Counted for the low-power idle sweep like a file connection; a
+        // visible session holds it (see below), so only quiet list, icon and
+        // device-feed connections can be closed by a sweep.
+        let (_incoming, activity) = self.track_incoming_fs(&connection)?;
+        let _handshake = self.incoming_watch_started(&activity);
         self.require_sharing_active()?;
         self.await_route(&connection, None, None).await?;
         let remote = connection.remote_id().to_string();
@@ -364,6 +368,11 @@ impl ShareIrohNode {
         let stored = context.authority.stored_names(&principal).0;
         let device_name = shown_name(stored.as_deref().unwrap_or(&principal.device_name));
         self.ensure_screen_expiry();
+        // A visible session (encoder, capture, input) stays counted until it
+        // ends; a metadata-only one (device feed, lists, icons) may be closed
+        // by a low-power sweep once quiet, like an idle file connection.
+        let _session = (!client.metadata_only).then_some(_handshake);
+        let idle = connection.clone();
         let viewer = ProvenViewer {
             connection,
             send,
@@ -372,7 +381,16 @@ impl ShareIrohNode {
             device_name,
             hello: client,
         };
-        serve(context, viewer).await
+        tokio::select! {
+            result = serve(context, viewer) => result,
+            () = close_when_idle(&activity) => {
+                idle.close(
+                    iroh::endpoint::VarInt::from_u32(super::node::IDLE_CLOSE_CODE),
+                    super::node::IDLE_CLOSE_REASON,
+                );
+                Ok(())
+            }
+        }
     }
 
     /// Starts the expiry timer of the screen sessions unless it runs: it
@@ -384,6 +402,17 @@ impl ShareIrohNode {
         }
         let node = Arc::downgrade(self);
         self.rt.spawn(screen_expiry(node));
+    }
+}
+
+/// Resolves when a sweep asked to close this quiet connection and nothing
+/// holds it any more.
+async fn close_when_idle(activity: &super::node::IncomingActivity) {
+    loop {
+        activity.close_requested().await;
+        if activity.idle_close_allowed() {
+            return;
+        }
     }
 }
 
@@ -416,6 +445,8 @@ async fn screen_expiry(node: Weak<ShareIrohNode>) {
             let restrictions = expired_restrictions(&state, since, now);
             if !restrictions.is_empty() {
                 registry.restrict_authorization(state.authorization_epoch, &restrictions);
+                // A6: a screen grant reached its end.
+                crate::screen::core::feed_host::rights_changed();
             }
         }
         since = now;

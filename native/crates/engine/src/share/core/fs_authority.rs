@@ -90,6 +90,12 @@ impl AccessAuthority {
             ))
         }
     }
+    /// R2: why an authorized, empty root listing is empty (see
+    /// `session_root_notice.rs`); `None` keeps the empty listing.
+    pub(in crate::share) fn empty_root_error(&self) -> Option<io::Error> {
+        let state = self.auth.lock().ok()?;
+        self.session.empty_root_error(&state)
+    }
     pub(in crate::share) fn revision(&self) -> u64 {
         self.generation.revision()
     }

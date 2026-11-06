@@ -13,16 +13,32 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import app.smartexplorer.android.R
+import app.smartexplorer.android.core.Core
+import app.smartexplorer.android.core.CoreException
+import app.smartexplorer.android.system.Permissions
+import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import app.smartexplorer.android.api.PendingRights
 import app.smartexplorer.android.api.RightsTarget
 import app.smartexplorer.android.api.ShareDevice
@@ -86,9 +102,138 @@ private fun screenEntries(screen: ScreenDevice?, screens: ScreenLinks): List<Pai
     return if (screen.control == "off") listOf(open) else listOf(open, control)
 }
 
+/** One rejected session the worker reports (`share.access`, R3 of plan 2026-11-06). */
+@Serializable
+internal data class AccessNotice(
+    val direction: String,
+    val deviceId: String,
+    val deviceName: String? = null,
+    val contactId: String? = null,
+    val reason: String = "",
+    val message: String = "",
+    val remedy: String = "",
+    val count: Long = 0,
+    val retryInSecs: Long? = null,
+)
+
+/** A paired device that cannot open this phone's exports (R1/R9). */
+@Serializable
+internal data class AccessGap(
+    val kind: String,
+    val deviceId: String,
+    val deviceName: String = "",
+    val contactId: String? = null,
+    val message: String = "",
+    val action: String = "",
+)
+
+/** Which of this phone's folders one Direct grant sees (R5). */
+@Serializable
+internal data class DeviceFolders(
+    val deviceId: String,
+    val publicKey: String,
+    /** `all`, `none` or `selected`. */
+    val choice: String,
+    val count: Int = 0,
+)
+
+@Serializable
+internal data class AccessFacts(
+    val deviceFolders: List<DeviceFolders> = emptyList(),
+    val notices: List<AccessNotice> = emptyList(),
+    val gaps: List<AccessGap> = emptyList(),
+    val reconfirm: Int = 0,
+    val storageAccess: Boolean? = null,
+    /** Whether this phone shares any folder (Direct or in a room). */
+    val sharesFolders: Boolean = false,
+    val workerError: String? = null,
+)
+
+private const val ACCESS_REFRESH_MS = 15_000L
+
+/**
+ * „Zugriff“: rejected sessions in both directions with reason and way to allow them, grants
+ * waiting for re-confirmation („Alle neu bestätigen“), one-way pairings („Eigene Freigaben
+ * öffnen“) and a missing „Zugriff auf alle Dateien“ while this phone shares folders. Read only
+ * while the app is visible; nothing is shown when everything is allowed.
+ */
+@Composable
+internal fun AccessSection() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val owner = LocalLifecycleOwner.current
+    var facts by remember { mutableStateOf<AccessFacts?>(null) }
+    var failure by remember { mutableStateOf<String?>(null) }
+    var reloads by remember { mutableIntStateOf(0) }
+    LaunchedEffect(owner, reloads) {
+        owner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                try {
+                    facts = Core.request<AccessFacts>("share.access")
+                } catch (cancel: CancellationException) {
+                    throw cancel
+                } catch (e: CoreException) {
+                    failure = e.message ?: e.kind
+                }
+                delay(ACCESS_REFRESH_MS)
+            }
+        }
+    }
+    fun act(method: String, args: kotlinx.serialization.json.JsonObject) {
+        scope.launch {
+            failure = try {
+                Core.call(method, args)
+                null
+            } catch (e: CoreException) {
+                e.message ?: e.kind
+            }
+            reloads++
+        }
+    }
+    val current = facts ?: return
+    val storageMissing = current.sharesFolders && current.storageAccess == false
+    val gaps = current.gaps.filter { it.kind != "rights_pending" }
+    if (current.notices.isEmpty() && gaps.isEmpty() && !storageMissing && failure == null) return
+    SectionHeader("Zugriff")
+    if (storageMissing) {
+        HintLine("„Zugriff auf alle Dateien“ fehlt: andere Geräte sehen in deinen Freigaben im gemeinsamen Speicher nur einen Teil der Dateien (oft leere Ordner).")
+        TextButton(onClick = { Permissions.openAllFilesAccessSettings(context) }, modifier = Modifier.padding(horizontal = 8.dp)) {
+            Text("Zugriff auf alle Dateien erlauben …")
+        }
+    }
+    if (current.reconfirm > 0) {
+        HintLine("${current.reconfirm} Gerät(e) warten auf die erneute Bestätigung (Direkt-Code erneuert oder Identität repariert) und erreichen deine Freigaben bis dahin nicht.")
+        TextButton(onClick = { act("share.reconfirmAll", buildJsonObject { }) }, modifier = Modifier.padding(horizontal = 8.dp)) {
+            Text("Alle neu bestätigen")
+        }
+    }
+    gaps.filter { it.kind == "not_shared" }.forEach { gap ->
+        HintLine(gap.message)
+        val contact = gap.contactId
+        if (contact != null) {
+            TextButton(
+                onClick = { act("share.setShareBack", buildJsonObject { put("contactId", contact); put("shareBack", true) }) },
+                modifier = Modifier.padding(horizontal = 8.dp),
+            ) { Text(gap.action.ifBlank { "Eigene Freigaben öffnen" }) }
+        }
+    }
+    current.notices.forEach { notice ->
+        val name = notice.deviceName?.takeIf { it.isNotBlank() } ?: notice.deviceId
+        val title = if (notice.direction == "outgoing") "$name lehnt dieses Telefon ab" else "$name wurde hier abgelehnt"
+        val retry = notice.retryInSecs?.let { " · nächster Versuch in $it s" } ?: ""
+        ListItem(
+            headlineContent = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            supportingContent = { Text("${notice.message}. ${notice.remedy}. (${notice.count}×$retry)") },
+            leadingContent = { SeIcon(R.drawable.ic_device, contentDescription = null) },
+        )
+    }
+    failure?.let { HintLine("Zugriffsstand nicht lesbar: $it") }
+}
+
 /** Section "Geräte": Direct devices; tap opens the device's files. */
 @Composable
 internal fun DevicesSection(devices: List<ShareDevice>, pending: List<PendingRights>, actions: PeerActions) {
+    AccessSection()
     SectionHeader("Geräte")
     if (devices.isEmpty()) {
         HintLine("Noch keine Geräte. „Gerät verbinden“ koppelt per PIN, „Direct-Code hinzufügen“ per Code.")

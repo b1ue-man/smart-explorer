@@ -419,3 +419,7 @@ impl RightsTarget {
 #[cfg(test)]
 #[path = "abgleich_task_connection_rights_tests.rs"]
 mod abgleich_task_tests;
+
+#[cfg(test)]
+#[path = "rechte_task_pairing_tests.rs"]
+mod rechte_task_pairing_tests;

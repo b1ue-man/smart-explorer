@@ -97,7 +97,10 @@ internal fun CodeDialog(
 ) {
     var code by rememberSaveable { mutableStateOf("") }
     var name by rememberSaveable { mutableStateOf(nameDefault) }
-    var shareBack by rememberSaveable { mutableStateOf(false) }
+    // R1 (plan 2026-11-06): connecting sets up both directions unless the user picks
+    // "Nur in eine Richtung".
+    var oneWay by rememberSaveable { mutableStateOf(false) }
+    val shareBack = !oneWay
     AlertDialog(
         onDismissRequest = { if (action?.saving != true) onDismiss() },
         title = { Text(title) },
@@ -121,8 +124,14 @@ internal fun CodeDialog(
                     modifier = Modifier.fillMaxWidth(),
                 )
                 if (showShareBack) {
-                    ShareChoice("Auch meine Freigaben für dieses Gerät öffnen", shareBack, action?.saving != true) { shareBack = it }
-                    Text("Ohne diese Wahl entsteht kein neuer Zugriff auf deine Freigaben. Vorhandene bewusste Rechte bleiben erhalten. Mit der Wahl öffnet sich danach das Menü „Rechte für …“; bis du bestätigst, hat das Gerät keine Rechte.")
+                    ShareChoice("Nur in eine Richtung (meine Freigaben nicht öffnen)", oneWay, action?.saving != true) { oneWay = it }
+                    Text(
+                        if (oneWay) {
+                            "Nur dieses Telefon greift auf das Gerät zu; auf deine Freigaben entsteht kein neuer Zugriff. Vorhandene bewusste Rechte bleiben erhalten."
+                        } else {
+                            "Beide Geräte erreichen einander. Das Gerät erhält die Rechte, die unter „Rechte neuer Verbindungen“ eingestellt sind; ist dort nichts gewählt, öffnet sich danach „Rechte für …“, und bis du bestätigst, hat das Gerät keine Rechte."
+                        },
+                    )
                 } else {
                     Text("Der Raum startet ohne eigene Freigaben. Danach öffnet sich das Menü „Rechte für <Raum>“, in dem du Freigaben und Rechte ausdrücklich wählst.")
                 }

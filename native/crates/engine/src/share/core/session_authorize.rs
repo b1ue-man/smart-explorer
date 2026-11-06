@@ -27,7 +27,8 @@ use zeroize::Zeroizing;
 use super::super::core::{eio, verify_hmac};
 use super::super::profiles::{fingerprint_matches, ShareProfiles};
 use super::super::relation_rights::SessionAuthorization;
-use super::super::types::{DirectGrant, RoomProfile, ShareAuthState};
+use super::super::types::{DirectGrant, DirectGrantState, RoomProfile, ShareAuthState};
+use super::denial::{denied, SessionDenial};
 use super::{session_payload, IncomingSession};
 
 /// The key material one proof verification used.
@@ -158,7 +159,10 @@ impl IncomingSession {
         match hello.relation_kind.as_str() {
             "direct" if hello.relation_id == state.identity.direct_lookup_id => {
                 if !state.direct_online {
-                    return Err(eio("Direktverbindung ist offline"));
+                    return Err(denied(
+                        SessionDenial::Offline,
+                        "Direktverbindung ist offline",
+                    ));
                 }
                 let grant = state
                     .direct_grants
@@ -166,7 +170,12 @@ impl IncomingSession {
                     .find(|g| {
                         g.authorizes_session(&hello.device_id, &hello.public_key, &hello.node_id)
                     })
-                    .ok_or_else(|| eio("Direktfreigabe nicht akzeptiert"))?;
+                    .ok_or_else(|| {
+                        denied(
+                            direct_denial(state, hello),
+                            "Direktfreigabe nicht akzeptiert",
+                        )
+                    })?;
                 let inputs = ProofInputs {
                     local_device_id: &state.identity.device_id,
                     local_node_id: &state.identity.node_id,
@@ -176,11 +185,17 @@ impl IncomingSession {
                 };
                 if !self.memo.verified(&inputs) {
                     if !fingerprint_matches(&grant.public_key, &grant.fingerprint) {
-                        return Err(eio("Direktfreigabe hat ungueltigen Fingerprint"));
+                        return Err(denied(
+                            SessionDenial::Identity,
+                            "Direktfreigabe hat ungueltigen Fingerprint",
+                        ));
                     }
                     let payload = self.payload("direct", state);
                     if !verify_hmac(&state.direct_secret, &payload, &hello.session_proof) {
-                        return Err(eio("Session-Proof ungueltig"));
+                        return Err(denied(
+                            SessionDenial::Authentication,
+                            "Session-Proof ungueltig",
+                        ));
                     }
                     self.memo.remember(&inputs);
                 }
@@ -191,16 +206,19 @@ impl IncomingSession {
                     .rooms
                     .iter()
                     .find(|r| r.room_id == hello.relation_id && r.auto_join)
-                    .ok_or_else(|| eio("Unbekannter Raum"))?;
+                    .ok_or_else(|| denied(SessionDenial::RoomUnknown, "Unbekannter Raum"))?;
                 let member = room
                     .members
                     .iter()
                     .find(|m| {
                         m.authorizes_session(&hello.device_id, &hello.public_key, &hello.node_id)
                     })
-                    .ok_or_else(|| eio("Geraet nicht im Raum"))?;
+                    .ok_or_else(|| denied(SessionDenial::RoomAdmission, "Geraet nicht im Raum"))?;
                 if member.node_id != hello.node_id || member.public_key != hello.public_key {
-                    return Err(eio("Raumgeraet hat Identitaetskonflikt"));
+                    return Err(denied(
+                        SessionDenial::Identity,
+                        "Raumgeraet hat Identitaetskonflikt",
+                    ));
                 }
                 let inputs = ProofInputs {
                     local_device_id: &state.identity.device_id,
@@ -211,7 +229,10 @@ impl IncomingSession {
                 };
                 if !self.memo.verified(&inputs) {
                     if !fingerprint_matches(&member.public_key, &member.fingerprint) {
-                        return Err(eio("Raumgeraet hat ungueltigen Fingerprint"));
+                        return Err(denied(
+                            SessionDenial::Identity,
+                            "Raumgeraet hat ungueltigen Fingerprint",
+                        ));
                     }
                     let secret = Zeroizing::new(
                         ShareProfiles::room_secret_checked(room)
@@ -220,13 +241,25 @@ impl IncomingSession {
                     );
                     let payload = self.payload("room", state);
                     if !verify_hmac(&secret, &payload, &hello.session_proof) {
-                        return Err(eio("Session-Proof ungueltig"));
+                        return Err(denied(
+                            SessionDenial::Authentication,
+                            "Session-Proof ungueltig",
+                        ));
                     }
                     self.memo.remember(&inputs);
                 }
                 Ok(Granted::Room(room))
             }
-            _ => Err(eio("Unbekannte oder nicht autorisierte Relation")),
+            // A Direct hello naming another lookup id than this host's
+            // current one: the peer kept a code this host replaced.
+            "direct" => Err(denied(
+                SessionDenial::CodeChanged,
+                "Unbekannte oder nicht autorisierte Relation",
+            )),
+            _ => Err(denied(
+                SessionDenial::Authentication,
+                "Unbekannte oder nicht autorisierte Relation",
+            )),
         }
     }
 
@@ -246,6 +279,23 @@ impl IncomingSession {
     #[cfg(any(test, feature = "test-support"))]
     pub(in crate::share) fn memo_is_empty(&self) -> bool {
         self.memo.is_empty()
+    }
+}
+
+/// Why no grant authorizes this Direct hello: a grant of exactly this
+/// identity that is suspended or blocked, otherwise none at all. Only the
+/// state of the peer's own grant is named; the peer proved this key over TLS.
+fn direct_denial(state: &ShareAuthState, hello: &super::super::wire::PeerHello) -> SessionDenial {
+    let own = state.direct_grants.iter().find(|grant| {
+        grant.device_id == hello.device_id
+            && grant.public_key == hello.public_key
+            && grant.pins_node(&hello.node_id)
+    });
+    match own.map(|grant| &grant.state) {
+        Some(DirectGrantState::Reconfirm) => SessionDenial::Reconfirm,
+        Some(DirectGrantState::Ignored) => SessionDenial::Blocked,
+        Some(DirectGrantState::Accepted) => SessionDenial::Identity,
+        None => SessionDenial::NotGranted,
     }
 }
 

@@ -39,10 +39,11 @@ pub(super) struct IdentityArgs {
         help = "Confirm --rotate-code without a prompt"
     )]
     yes: bool,
-    // Rights of devices that connect with this direct code, chosen in advance (F5)
+    // Rights of new connections, chosen in advance (F5; since R2 of plan
+    // 2026-11-06 also PIN pairing, share-back and repair, not a new key)
     #[command(flatten)]
     code_rights: super::rights_args::RightsArgs,
-    /// Devices that connect with this direct code get no rights in advance; they wait for a confirmation
+    /// New connections (direct code, PIN pairing, share-back) get no rights in advance; they wait for a confirmation
     #[arg(long, conflicts_with_all = ["preset", "folders", "all_folders", "no_folders", "write", "read_only", "commands", "terminal", "screen_view", "screen_control", "duration", "no_expiry", "account"])]
     clear_code_rights: bool,
 }

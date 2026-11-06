@@ -53,10 +53,7 @@ impl PeerBackend {
         self.endpoint_source.legacy_direct(&endpoint)
     }
 
-    pub fn probe_mount_path_capabilities(
-        &self,
-        root: &str,
-    ) -> VfsResult<MountPathCapabilities> {
+    pub fn probe_mount_path_capabilities(&self, root: &str) -> VfsResult<MountPathCapabilities> {
         self.probe_mount_path_capabilities_until(
             root,
             Instant::now() + MOUNT_CAPABILITY_PROBE_TIMEOUT,
@@ -100,8 +97,61 @@ impl PeerBackend {
             },
             deadline,
         )?;
-        self.mount_lease
-            .accept_capabilities(response, acquire_lease)
+        let capabilities = self
+            .mount_lease
+            .accept_capabilities(response, acquire_lease)?;
+        if acquire_lease && self.mount_lease.current()?.is_some() {
+            self.anchor_lease(root);
+        }
+        Ok(capabilities)
+    }
+
+    /// R6: remembers which directory the new lease names, so a lease the
+    /// host forgot (restart) can be renewed for exactly that directory.
+    /// Without a directory identity (older host) nothing is renewed.
+    fn anchor_lease(&self, root: &str) {
+        let identity = match self.request(FsRequest::DirectoryIdentity { path: root.into() }) {
+            Ok(FsResponse::DirectoryIdentity {
+                identity: Some(identity),
+            }) => Some(identity),
+            _ => None,
+        };
+        self.mount_lease.set_anchor(identity.map(|identity| {
+            super::mount_lease_client::LeaseAnchor {
+                root: root.to_string(),
+                identity,
+            }
+        }));
+    }
+
+    /// R6 (plan 2026-11-06): `error` says the host forgot this backend's
+    /// lease (it restarted) and did not run the request. Acquires a new
+    /// lease for the same root under the host's current rights; keeps it
+    /// only when it names the same directory. Returns whether the request
+    /// may be sent once more.
+    pub(super) fn renew_forgotten_lease(&self, error: &io::Error) -> bool {
+        if error.kind() != io::ErrorKind::PermissionDenied
+            || error.to_string() != super::mount_lease::UNKNOWN_LEASE
+        {
+            return false;
+        }
+        let Some(before) = self.mount_lease.anchor() else {
+            return false;
+        };
+        let deadline = Instant::now() + MOUNT_CAPABILITY_PROBE_TIMEOUT;
+        if self
+            .query_mount_path_capabilities(&before.root, true, deadline)
+            .is_err()
+        {
+            return false;
+        }
+        if self.mount_lease.anchor().as_ref() == Some(&before) {
+            return true;
+        }
+        // Another directory (or none provable) under that root now: no
+        // silent rebinding; the drive must be connected again.
+        self.release_current_mount_lease();
+        false
     }
 }
 

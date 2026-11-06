@@ -46,7 +46,12 @@ impl ShareExportConfig {
             roots: self
                 .roots
                 .iter()
-                .filter(|root| entry.paths.contains(&root.path))
+                .filter(|root| {
+                    entry
+                        .paths
+                        .iter()
+                        .any(|path| same_export_path(path, &root.path))
+                })
                 .cloned()
                 .collect(),
             include_connections: entry.connections && self.include_connections,
@@ -90,10 +95,12 @@ impl ShareExportConfig {
                 connections: false,
             }),
             FolderChoice::Selected { paths, connections } => {
-                if let Some(missing) = paths
-                    .iter()
-                    .find(|path| !self.roots.iter().any(|root| &root.path == *path))
-                {
+                if let Some(missing) = paths.iter().find(|path| {
+                    !self
+                        .roots
+                        .iter()
+                        .any(|root| same_export_path(path, &root.path))
+                }) {
                     return Err(format!(
                         "Ordner ist keine Direkt-Freigabe: {missing}; zuerst mit `se share export add` freigeben"
                     ));
@@ -120,5 +127,55 @@ impl ShareExportConfig {
         let before = self.device_folders.len();
         self.device_folders.retain(|entry| keep(entry));
         before != self.device_folders.len()
+    }
+}
+
+/// R5 (plan 2026-11-06): whether a chosen folder names the export `root`.
+/// The same spelling always does. Otherwise only spellings of one folder
+/// count: `\\` and `/`, a trailing separator, the `\\?\` prefix, and on
+/// Windows-style paths (drive letter, UNC) the letter case, which Windows
+/// file systems ignore. Paths of other systems stay case-sensitive, so a
+/// device never sees a second folder that differs only in case.
+pub(crate) fn same_export_path(chosen: &str, root: &str) -> bool {
+    chosen == root || folder_key(chosen) == folder_key(root)
+}
+
+fn folder_key(path: &str) -> String {
+    let slashed = path.trim().replace('\\', "/");
+    let plain = if let Some(tail) = slashed.strip_prefix("//?/UNC/") {
+        format!("//{tail}")
+    } else if let Some(tail) = slashed.strip_prefix("//?/") {
+        tail.to_string()
+    } else {
+        slashed
+    };
+    let trimmed = plain.trim_end_matches('/');
+    let key = if trimmed.is_empty() { "/" } else { trimmed };
+    let bytes = key.as_bytes();
+    let windows_style = key.starts_with("//")
+        || (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':');
+    if windows_style {
+        key.to_ascii_lowercase()
+    } else {
+        key.to_string()
+    }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::same_export_path;
+
+    #[test]
+    fn rechte_task_export_spellings_of_one_folder_match() {
+        assert!(same_export_path("C:\\Daten\\", "c:/daten"));
+        assert!(same_export_path("\\\\?\\C:\\Daten", "C:\\Daten"));
+        assert!(same_export_path(
+            "\\\\?\\UNC\\nas\\Fotos",
+            "\\\\NAS\\fotos\\"
+        ));
+        assert!(same_export_path("/home/u/Docs/", "/home/u/Docs"));
+        assert!(!same_export_path("/home/u/docs", "/home/u/Docs"));
+        assert!(!same_export_path("C:\\Daten", "C:\\Daten2"));
+        assert!(same_export_path("/", "/"));
     }
 }

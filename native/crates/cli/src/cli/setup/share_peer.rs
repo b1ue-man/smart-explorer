@@ -111,7 +111,16 @@ impl PeerAddOutput {
     }
 }
 
-pub(crate) fn add_peer(code: &str, name: &str, request: bool) -> Result<PeerAddOutput, String> {
+/// `share_back`: a newly saved peer also gets this device's exports (R1,
+/// plan 2026-11-06: connecting two devices sets up both directions; the
+/// grant takes the rights of new connections or waits for them). An already
+/// saved peer keeps its earlier choice.
+pub(crate) fn add_peer(
+    code: &str,
+    name: &str,
+    request: bool,
+    share_back: bool,
+) -> Result<PeerAddOutput, String> {
     let mut profiles = crate::share::ShareProfiles::load_checked(Some(default_home()))
         .map_err(|error| format!("share profile laden: {error}"))?;
     let existing = profiles.direct_contact_id_from_code(code)?;
@@ -131,6 +140,13 @@ pub(crate) fn add_peer(code: &str, name: &str, request: bool) -> Result<PeerAddO
                 name,
             )?;
             profiles = committed;
+            if share_back {
+                profiles = crate::share::set_direct_share_back(Some(default_home()), &id, true)
+                    .map_err(|error| {
+                        format!("peer contact {id} saved, but its share-back was not set: {error}")
+                    })?
+                    .profiles;
+            }
             (id, true)
         }
     };

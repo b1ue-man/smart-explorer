@@ -70,6 +70,11 @@ fn share_summary(status: &Value) -> Value {
         "rooms": status["rooms"],
         "routes": status["routes"],
         "route_measurement_note": status["route_measurement_note"],
+        // R3/R9 (plan 2026-11-06): rejected sessions with reason and way to
+        // allow them are `routes.access`; devices that cannot open this
+        // device's exports and open rights are these two.
+        "access_gaps": status["access_gaps"],
+        "rights_pending": status["rights_pending"],
         "pending_requests": status["pending_requests"],
         "requests": count("requests"),
         "grants": count("grants"),

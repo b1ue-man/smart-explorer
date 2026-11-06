@@ -406,12 +406,15 @@ pub(in crate::app) fn auto_accept_text(code_rights: Option<&ConnectionRights>) -
 /// One line for the Direct code: what a device that connects with it gets.
 pub(in crate::app) fn code_rights_text(code_rights: Option<&ConnectionRights>) -> String {
     match code_rights {
-        None => "Wird beim Verbinden erfragt: das Gerät wartet ohne Rechte, bis du sie bestätigst."
+        None => "Wird beim Verbinden erfragt: das Gerät wartet ohne Rechte, bis du sie bestätigst. Gilt für Direkt-Code, PIN-Kopplung und „Eigene Freigaben öffnen“."
             .to_string(),
         Some(rights) if !rights.grants_anything() => {
-            "Dieser Code vergibt keine Rechte: Geräte sind verbunden, mehr nicht.".to_string()
+            "Neue Verbindungen (Direkt-Code, PIN-Kopplung) erhalten keine Rechte: Geräte sind verbunden, mehr nicht.".to_string()
         }
-        Some(rights) => format!("Dieser Code vergibt: {}.", rights.summary()),
+        Some(rights) => format!(
+            "Neue Verbindungen (Direkt-Code, PIN-Kopplung, „Eigene Freigaben öffnen“) erhalten: {}.",
+            rights.summary()
+        ),
     }
 }
 

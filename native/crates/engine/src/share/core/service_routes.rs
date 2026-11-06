@@ -5,6 +5,10 @@ use super::service::ShareService;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+#[path = "service_access_notices.rs"]
+mod access_notices;
+pub use access_notices::AccessNotice;
+
 pub const ROUTE_PAYLOAD_MEASUREMENT_NOTE: &str = "Frame-Nutzlast: TX zählt serialisierte STREAM-/DATAGRAM-Bytes einschließlich Wiederholungen und verworfener Sendepläne; RX zählt authentifiziert verarbeitete Bytes einschließlich Wiederholungen. Kein bestätigter Nutzdurchsatz und keine Leitungsrate.";
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -15,6 +19,11 @@ pub struct ShareRouteSnapshot {
     pub error: Option<String>,
     #[serde(default)]
     pub truncated: bool,
+    /// Additive (R3, 2026-11-06): rejected sessions of this device in both
+    /// directions with reason and way to allow them; absent from older
+    /// workers and ignored by older readers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub access: Vec<AccessNotice>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -157,6 +166,7 @@ impl ShareService {
         }
         ShareRouteSnapshot {
             peers,
+            access: access_notices::notices(&state),
             ..Default::default()
         }
     }

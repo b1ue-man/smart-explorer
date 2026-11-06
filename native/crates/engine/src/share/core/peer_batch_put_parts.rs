@@ -52,7 +52,7 @@ pub(super) fn put_header(
 pub(super) async fn read_reply(recv: &mut RecvStream) -> io::Result<Reply> {
     match recv_resp_wire(recv).await? {
         FsResponse::Ready => {}
-        FsResponse::Err { kind, msg } => return Ok(Reply::Refused(into_io(kind, msg))),
+        FsResponse::Err { kind, msg, .. } => return Ok(Reply::Refused(into_io(kind, msg))),
         _ => return Err(eio("unerwartete Antwort auf das Paket")),
     }
     read_outcome(recv).await
@@ -69,7 +69,7 @@ pub(super) async fn read_outcome(recv: &mut RecvStream) -> io::Result<Reply> {
             "unerwarteter Paketstatus: {}",
             status.summary()
         ))),
-        FsResponse::Err { kind, msg } => Ok(Reply::Refused(into_io(kind, msg))),
+        FsResponse::Err { kind, msg, .. } => Ok(Reply::Refused(into_io(kind, msg))),
         _ => Err(eio("unerwartete Antwort auf den Paketabschluss")),
     }
 }

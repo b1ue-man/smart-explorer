@@ -207,14 +207,18 @@ fn discovery_list_ui(
     if entries.is_empty() {
         ui.label(format!("Keine auffindbaren {}e.", kind.label()));
     } else if kind == DiscoveryUiKind::Direct {
+        // R1: pairing sets up both directions unless the user opts out.
+        let mut one_way = !state.share_back;
         ui.checkbox(
-            &mut state.share_back,
-            "Beim Verbinden auch meine Freigaben für das Gerät öffnen",
+            &mut one_way,
+            "Nur in eine Richtung (meine Freigaben für das Gerät nicht öffnen)",
         )
         .on_hover_text(
-            "Aus (Standard): nur ich greife auf das andere Gerät zu. An: das andere \
-             Gerät bekommt zusätzlich Zugriff auf meine Freigaben.",
+            "Aus (Standard): beide Geräte erreichen einander; das andere Gerät bekommt \
+             die unter „Rechte neuer Verbindungen“ eingestellten Rechte, sonst \
+             wartet es auf „Rechte festlegen“. An: nur ich greife auf das andere Gerät zu.",
         );
+        state.share_back = !one_way;
     }
     for entry in entries {
         ui.group(|ui| {
@@ -266,7 +270,7 @@ fn discovery_list_ui(
                         pin: crate::share::DiscoveryPin::new(pin.take()),
                         share_back: entry.kind == DiscoveryUiKind::Direct && state.share_back,
                     });
-                    state.share_back = false;
+                    state.share_back = true;
                 }
             });
             if let Some(pin) = state.entry_pins.get(&entry.discovery_id) {

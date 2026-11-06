@@ -56,6 +56,18 @@ impl Attempts {
 
 impl PeerBackend {
     pub(super) fn request(&self, req: FsRequest) -> io::Result<FsResponse> {
+        if self.mount_lease.anchor().is_none() {
+            return self.request_once_leased(req);
+        }
+        // R6: a host that restarted forgot the lease and ran nothing; one
+        // renewed lease for the same directory, then the request once more.
+        match self.request_once_leased(req.clone()) {
+            Err(error) if self.renew_forgotten_lease(&error) => self.request_once_leased(req),
+            result => result,
+        }
+    }
+
+    fn request_once_leased(&self, req: FsRequest) -> io::Result<FsResponse> {
         let lease = self.mount_lease.current()?;
         let budget = if is_retryable_read(&req) {
             IDEMPOTENT_CONTROL_BUDGET
@@ -95,6 +107,10 @@ impl PeerBackend {
                     .open_stream_until(&endpoint, &self.identity, connect_deadline)
                 {
                     Ok(opened) => opened,
+                    // A9: a rejected hello is rejected the same way again.
+                    Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+                        return Err(error)
+                    }
                     Err(error) => {
                         last_error = Some(error);
                         continue;
@@ -267,6 +283,10 @@ impl PeerBackend {
             let attempt_deadline = control_attempt_deadline(deadline)?;
             let mut opened = match self.transfer_stream(&endpoint, attempt_deadline) {
                 Ok(opened) => opened,
+                // A9: a rejected hello is rejected the same way again.
+                Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+                    return Err(error.into())
+                }
                 Err(error) => {
                     last_error = Some(error);
                     continue;

@@ -196,5 +196,10 @@ pub enum FsResponse {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         kind: Option<FsErrorKind>,
         msg: String,
+        /// Additive (R3, 2026-11-06): why a session hello was rejected.
+        /// Only the hello rejection sets it; older peers ignore it and
+        /// older hosts omit it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        denial: Option<super::session::denial::SessionDenial>,
     },
 }

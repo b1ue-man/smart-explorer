@@ -16,8 +16,9 @@ use super::framing::{recv_ctrl, send_ctrl};
 use super::identity::ShareIdentity;
 use super::io_deadline;
 use super::node::{ShareIrohNode, ALPN};
+use super::session::denial::client_rejection;
 use super::session::{
-    endpoint_addr, relation_kind_id, session_key, session_payload, transport_label,
+    endpoint_addr, peer_denials, relation_kind_id, session_key, session_payload, transport_label,
     AuthorizedDirectRepair,
 };
 use super::types::{PeerEndpoint, ShareEvent};
@@ -281,7 +282,10 @@ impl ShareIrohNode {
             return Ok(connection);
         }
         generation.check()?;
-        let connection = self.connect_session_until(endpoint, identity, deadline)?;
+        // A9: no new handshake while a rejection of this key pauses it.
+        let connection = peer_denials::guarded(&identity.node_id, key, &endpoint.presence, || {
+            self.connect_session_until(endpoint, identity, deadline)
+        })?;
         self.cache_session(key.to_string(), connection.clone(), generation.clone())?;
         Ok(connection)
     }
@@ -413,8 +417,8 @@ impl ShareIrohNode {
                         Ok(connection)
                     }
                     Ctrl::FsResp {
-                        resp: FsResponse::Err { msg, .. },
-                    } => Err(io::Error::new(io::ErrorKind::PermissionDenied, msg)),
+                        resp: FsResponse::Err { msg, denial, .. },
+                    } => Err(client_rejection(denial, msg, &endpoint.presence)),
                     _ => Err(eio("Peer akzeptiert die Iroh-Session nicht")),
                 }
             },

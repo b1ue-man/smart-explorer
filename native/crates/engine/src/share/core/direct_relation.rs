@@ -85,16 +85,20 @@ impl DirectGrant {
     /// this identity: accepted, same device and key, and the pinned node (a
     /// grant without node pin accepts only `node_id == public_key`). The
     /// caller still checks the fingerprint and the session proof.
-    pub fn authorizes_session(
-        &self,
-        device_id: &str,
-        public_key: &str,
-        node_id: &str,
-    ) -> bool {
+    pub fn authorizes_session(&self, device_id: &str, public_key: &str, node_id: &str) -> bool {
         self.state == DirectGrantState::Accepted
             && self.device_id == device_id
             && self.public_key == public_key
-            && (self.node_id == node_id || (self.node_id.is_empty() && self.public_key == node_id))
+            && self.pins_node(node_id)
+    }
+
+    /// Whether the grant names the Iroh node `node_id`: its pin, or for a
+    /// grant persisted without pin the node of its key (`node_id ==
+    /// public_key`, `identity.rs`). R4 (plan 2026-11-06): files, Exec,
+    /// screen, TCP and apps judge a grant without pin the same way; the TLS
+    /// identity of the node is checked by each caller before.
+    pub fn pins_node(&self, node_id: &str) -> bool {
+        self.node_id == node_id || (self.node_id.is_empty() && self.public_key == node_id)
     }
 }
 

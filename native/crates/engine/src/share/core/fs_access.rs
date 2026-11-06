@@ -173,6 +173,13 @@ impl FsAccess {
                 authority.check()?;
                 let entries = access.list_dir(path)?;
                 authority.check()?;
+                // R2: an empty root of an authorized relation says why
+                // (rights still open, no folder chosen, nothing shared).
+                if entries.is_empty() && fs::split_clean(path).is_ok_and(|parts| parts.is_empty()) {
+                    if let Some(error) = authority.empty_root_error() {
+                        return Err(error);
+                    }
+                }
                 Ok(entries)
             }
             Self::Mounted(_) => {

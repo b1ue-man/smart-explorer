@@ -14,6 +14,14 @@
 //! would run anyway, so it starts unrestricted. Every other start keeps the
 //! behaviour of v0.5.182.
 //!
+//! R7 (plan 2026-11-06): a restricted worker still starts the Share host
+//! (and with it the Exec host, which follows its grants) when this device
+//! has relations other devices rely on: an accepted Direct grant or a room
+//! it joins automatically. The user set those up for other devices to reach
+//! this one; without Share the device was offline for all of them until the
+//! app opened (Windows login with background sync off). Sync runs stay off
+//! until the promotion as before.
+//!
 //! The marker travels in the environment variable `SE_DAEMON_START_REASON`:
 //! the `--sync-daemon` process first runs as guardian and starts its worker
 //! child with `--sync-daemon` only; the child inherits the environment.
@@ -32,6 +40,8 @@ const DRIVE_RESTORE_FLAG: &str = "--drive-restore";
 
 /// Restricted worker (module comment); false in every other process.
 static RESTRICTED: AtomicBool = AtomicBool::new(false);
+/// R7: a restricted worker that started Share for the relations of others.
+static SHARE_STARTED: AtomicBool = AtomicBool::new(false);
 /// Serializes the promotion, so a second request waits until Share runs.
 static PROMOTION: Mutex<()> = Mutex::new(());
 
@@ -74,8 +84,12 @@ pub fn begin(share_host: &ShareHost) {
     );
     RESTRICTED.store(restricted, Ordering::SeqCst);
     if restricted {
-        log("daemon started for the drive restore at login: Share and Exec stay off until the app, se or the background-sync autostart asks for them");
-        return;
+        if !relations_rely_on_share() {
+            log("daemon started for the drive restore at login: Share and Exec stay off until the app, se or the background-sync autostart asks for them");
+            return;
+        }
+        log("daemon started for the drive restore at login: Share and Exec start for the accepted devices and rooms of this device; sync runs wait for the app, se or the background-sync autostart");
+        SHARE_STARTED.store(true, Ordering::SeqCst);
     }
     if let Err(error) = share_host.reload_now() {
         log(&format!("share worker initial load failed: {error}"));
@@ -93,13 +107,42 @@ pub fn sync_enabled() -> bool {
 
 /// Whether drives that reach other devices through Share may mount.
 pub fn share_allowed() -> bool {
-    !RESTRICTED.load(Ordering::SeqCst)
+    !RESTRICTED.load(Ordering::SeqCst) || SHARE_STARTED.load(Ordering::SeqCst)
+}
+
+/// R7: whether other devices rely on this device's Share host: an accepted
+/// Direct grant or a room joined automatically. Unreadable profiles keep
+/// the restriction (the app's promotion reports their error).
+fn relations_rely_on_share() -> bool {
+    match crate::share::ShareProfiles::load_checked(Some(super::super::ipc_host::default_home())) {
+        Ok(profiles) => relations_wanted(&profiles),
+        Err(error) => {
+            log(&format!(
+                "drive-restore daemon: share profiles not readable, Share waits: {error}"
+            ));
+            false
+        }
+    }
+}
+
+fn relations_wanted(profiles: &crate::share::ShareProfiles) -> bool {
+    profiles
+        .direct_grants
+        .iter()
+        .any(|grant| grant.state == crate::share::DirectGrantState::Accepted)
+        || profiles.rooms.iter().any(|room| room.auto_join)
 }
 
 /// One worker tick, in place of `ShareHost::tick`.
 pub fn tick(share_host: &ShareHost) {
     if RESTRICTED.load(Ordering::SeqCst) {
         if !crate::autostart::is_enabled() || crate::autostart::disabled_by_system() {
+            if SHARE_STARTED.load(Ordering::SeqCst) {
+                // R7: Share runs for the relations of others; sync runs
+                // still wait (`sync_enabled`).
+                share_host.tick();
+                return;
+            }
             // Only the drive hosts are supervised; Share reloads, LAN
             // presence and Share events wait for the promotion.
             share_host.mounts.tick();
@@ -152,8 +195,11 @@ fn promote(host: &ShareHost, cause: &str) {
         log(&format!("share worker initial load failed: {error}"));
     }
     RESTRICTED.store(false, Ordering::SeqCst);
-    // Drives on other devices waited for Share.
-    restore_drives(host);
+    // Drives on other devices waited for Share, unless Share ran already
+    // for the relations of others (R7) and restored them at the start.
+    if !SHARE_STARTED.load(Ordering::SeqCst) {
+        restore_drives(host);
+    }
 }
 
 fn reason_from(value: Option<&OsStr>) -> RunStartReason {
@@ -272,6 +318,32 @@ mod tests {
             "--drive-restore",
             "x"
         ]));
+    }
+
+    #[test]
+    fn rechte_task_relations_of_others_start_share_without_sync() {
+        use crate::share::{DirectGrant, DirectGrantState, ShareProfiles};
+        let mut profiles = ShareProfiles::default();
+        assert!(!relations_wanted(&profiles), "nothing relies on Share");
+        profiles.direct_grants.push(DirectGrant {
+            device_id: "phone".into(),
+            device_name: "Phone".into(),
+            public_key: "key".into(),
+            fingerprint: "fp".into(),
+            node_id: "key".into(),
+            state: DirectGrantState::Ignored,
+            updated_at: 1,
+            exec: Default::default(),
+            write: false,
+        });
+        assert!(
+            !relations_wanted(&profiles),
+            "a blocked grant relies on nothing"
+        );
+        profiles.direct_grants[0].state = DirectGrantState::Accepted;
+        assert!(relations_wanted(&profiles));
+        // Sync runs still need the promotion of a restricted worker.
+        assert!(!sync_allowed(true, false));
     }
 
     #[test]

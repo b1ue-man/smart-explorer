@@ -173,6 +173,8 @@ impl ShareIrohNode {
 /// between the read and wait remains an unseen watch update.
 async fn access_expiry(auth: Weak<Mutex<ShareAuthState>>, registry: Arc<AccessLeaseRegistry>) {
     let mut changed = registry.changes();
+    // The end the last round waited for; reaching it ended a grant (A6).
+    let mut awaited: Option<i64> = None;
     loop {
         let wait = {
             if registry.is_closed() {
@@ -188,6 +190,9 @@ async fn access_expiry(auth: Weak<Mutex<ShareAuthState>>, registry: Arc<AccessLe
             };
             let now = now_secs();
             registry.recheck(&state, now);
+            if awaited.is_some_and(|end| end <= now) {
+                crate::screen::core::feed_host::rights_changed();
+            }
             // A steering grant's own `valid_until` is an event of its own: the
             // loop wakes at that instant and rotates se-managed RDP credentials
             // (threat T-R2), even when no lease runs.
@@ -196,6 +201,7 @@ async fn access_expiry(auth: Weak<Mutex<ShareAuthState>>, registry: Arc<AccessLe
                 .into_iter()
                 .flatten()
                 .min();
+            awaited = next;
             let seconds = next.map_or(30, |end| {
                 u64::try_from(end.saturating_sub(now)).unwrap_or(0).min(30)
             });

@@ -8,6 +8,7 @@ pub(super) fn response(error: &io::Error) -> FsResponse {
     FsResponse::Err {
         kind: kind_of(error),
         msg: error.to_string(),
+        denial: None,
     }
 }
 
@@ -36,6 +37,7 @@ pub(super) fn message(message: impl Into<String>) -> FsResponse {
     FsResponse::Err {
         kind: None,
         msg: message.into(),
+        denial: None,
     }
 }
 
@@ -72,7 +74,7 @@ mod tests {
     #[test]
     fn not_found_round_trip_becomes_absence() {
         let response = response(&io::Error::new(io::ErrorKind::NotFound, "missing"));
-        let FsResponse::Err { kind, msg } = response else {
+        let FsResponse::Err { kind, msg, .. } = response else {
             panic!("error response expected");
         };
         let result = exists_from_stat::<()>(Err(into_io(kind, msg)));
@@ -90,13 +92,14 @@ mod tests {
     #[test]
     fn transfer_engine_task_busy_reply_becomes_congestion() {
         let busy = crate::vfs::congestion_error("Share-Host ausgelastet", None);
-        let FsResponse::Err { kind, msg } = response(&busy) else {
+        let FsResponse::Err { kind, msg, .. } = response(&busy) else {
             panic!("error response expected");
         };
         assert_eq!(kind, Some(FsErrorKind::Busy));
         let encoded = serde_json::to_string(&FsResponse::Err {
             kind,
             msg: msg.clone(),
+            denial: None,
         })
         .unwrap();
         assert!(encoded.contains("\"kind\":\"busy\""), "{encoded}");
@@ -128,13 +131,16 @@ mod tests {
             (io::ErrorKind::FileTooLarge, "file_too_large"),
             (io::ErrorKind::InvalidFilename, "invalid_name"),
         ] {
-            let FsResponse::Err { kind: sent, msg } = response(&io::Error::new(kind, "Ziel"))
+            let FsResponse::Err {
+                kind: sent, msg, ..
+            } = response(&io::Error::new(kind, "Ziel"))
             else {
                 panic!("error response expected");
             };
             let encoded = serde_json::to_string(&FsResponse::Err {
                 kind: sent,
                 msg: msg.clone(),
+                denial: None,
             })
             .unwrap();
             assert!(
@@ -149,7 +155,7 @@ mod tests {
 
     #[test]
     fn legacy_message_only_error_remains_an_error() {
-        let FsResponse::Err { kind, msg } = message("transport failed") else {
+        let FsResponse::Err { kind, msg, .. } = message("transport failed") else {
             panic!("error response expected");
         };
         let result = exists_from_stat::<()>(Err(into_io(kind, msg))).unwrap_err();

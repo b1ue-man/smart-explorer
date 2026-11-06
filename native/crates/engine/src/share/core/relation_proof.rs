@@ -120,10 +120,7 @@ impl From<&ExecPrincipal> for ProvenPrincipal {
 
 /// The text the client's proof is an HMAC over: the protocol prefix, the
 /// fresh challenge and nonce, both identities and the protocol capability.
-pub fn relation_transcript(
-    server: &RelationServerHello,
-    client: &RelationClientHello,
-) -> String {
+pub fn relation_transcript(server: &RelationServerHello, client: &RelationClientHello) -> String {
     format!(
         "{}{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|client-to-server|{}",
         server.transcript_prefix,
@@ -165,7 +162,7 @@ pub fn prove_relation(
                     grant.device_id == client.device_id
                         && grant.public_key == client.public_key
                         && grant.fingerprint == client.fingerprint
-                        && grant.node_id == client.node_id
+                        && grant.pins_node(&client.node_id)
                         && grant.state == DirectGrantState::Accepted
                 })
                 .ok_or(RelationRejection::Authentication)?;

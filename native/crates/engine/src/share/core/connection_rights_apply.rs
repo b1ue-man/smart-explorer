@@ -110,11 +110,15 @@ impl ShareProfiles {
 
     /// F1: the grant of `device_id` was just created, or now belongs to a new
     /// key, by a new connection. It has no right at all; an accepted grant
-    /// takes `advance` (rights chosen in advance: PIN offer) or, for an
+    /// takes `advance` (rights chosen in advance: PIN offer) or the rights
+    /// the user set for new connections („Direkt-Code vergibt“): for an
     /// accepted request (also the new request of a revoked or ignored
-    /// device, `Readmitted`, W6), the rights of the Direct code, else it
-    /// waits for confirmation. Rights chosen in advance that no longer apply (a folder
-    /// is no longer exported) leave it waiting without rights.
+    /// device, `Readmitted`, W6) and, since R2 (plan 2026-11-06), for a PIN
+    /// pairing, „Auch meine Freigaben öffnen“ and the background repair too.
+    /// A new key of a known device (`IdentityReplaced`) never takes them.
+    /// Without such rights it waits for confirmation. Rights chosen in
+    /// advance that no longer apply (a folder is no longer exported) leave
+    /// it waiting without rights.
     pub fn settle_new_direct_grant(
         &mut self,
         device_id: &str,
@@ -147,9 +151,16 @@ impl ShareProfiles {
             return;
         }
         let advance = advance.cloned().or_else(|| {
-            matches!(origin, RightsOrigin::Request | RightsOrigin::Readmitted)
-                .then(|| self.code_rights.clone())
-                .flatten()
+            matches!(
+                origin,
+                RightsOrigin::Request
+                    | RightsOrigin::Readmitted
+                    | RightsOrigin::Pairing
+                    | RightsOrigin::ShareBack
+                    | RightsOrigin::Repair
+            )
+            .then(|| self.code_rights.clone())
+            .flatten()
         });
         if let Some(rights) = advance {
             // Commands, terminal and screen of rights chosen in advance

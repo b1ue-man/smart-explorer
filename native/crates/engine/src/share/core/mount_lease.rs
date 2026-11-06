@@ -307,9 +307,7 @@ impl PeerMountLeases {
             .map_err(|_| eio("Peer-Mount-Lease-Tabelle ist gesperrt"))?
             .get(token)
             .cloned()
-            .ok_or_else(|| {
-                permission_denied("Peer-Mount-Lease ist unbekannt; Laufwerk neu verbinden")
-            })?;
+            .ok_or_else(|| permission_denied(UNKNOWN_LEASE))?;
         lease.authorize(exports, principal, legacy_connection, authorization_epoch)?;
         Ok(lease)
     }
@@ -459,6 +457,11 @@ pub(super) fn run_authorized<T>(
         None => operation(),
     }
 }
+
+/// The answer to a lease this host does not know (it restarted): the
+/// request was not run. Clients since R6 (plan 2026-11-06) renew the lease
+/// once on exactly this text; every host version sends it.
+pub(super) const UNKNOWN_LEASE: &str = "Peer-Mount-Lease ist unbekannt; Laufwerk neu verbinden";
 
 fn permission_denied(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::PermissionDenied, message.into())

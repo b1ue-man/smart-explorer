@@ -10,6 +10,8 @@ use super::pages_ui::{self, SharePage, TAB_DEVICES, TAB_REQUESTS};
 use super::*;
 use crate::app::device_page_layout as layout;
 
+#[path = "share_device_access_ui.rs"]
+mod access;
 #[path = "share_device_connection_ui.rs"]
 mod connection;
 use crate::app::share_rights_choice_ui as rights_ui;
@@ -130,6 +132,7 @@ fn overview(app: &mut App, ui: &mut egui::Ui) {
             next = Some((TAB_DEVICES, SharePage::RemovedDevices));
         }
     });
+    access::overview_banner(app, ui);
     let now = crate::share::core_now_secs();
     let profiles = &app.share_profiles;
     let unlinked: Vec<&crate::share::DirectGrant> = profiles
@@ -264,6 +267,7 @@ fn contact_page(app: &mut App, ui: &mut egui::Ui, contact_id: &str) {
     let grant = grant_of(&app.share_profiles, &contact).cloned();
     if let Some((device, key)) = &identity {
         rights_ui::device_card(app, ui, device, key);
+        access::device_notices(app, ui, device);
     }
     layout::card(ui, "Was dieses Gerät bei mir darf", None, |ui| {
         let mut share_back = contact.relation.share_back;
@@ -283,7 +287,7 @@ fn contact_page(app: &mut App, ui: &mut egui::Ui, contact_id: &str) {
             }
         }
         match &grant {
-            Some(grant) => grant_rights(app, ui, grant),
+            Some(grant) => access::grant_rights(app, ui, grant),
             None => {
                 ui.label("Dieses Gerät hat noch keine Direktfreigabe für meine Dateien.");
                 if let Some((device, key)) = &identity {
@@ -333,8 +337,9 @@ fn grant_page(app: &mut App, ui: &mut egui::Ui, device_id: &str) {
             .color(theme::muted(ui)),
     );
     rights_ui::device_card(app, ui, &grant.device_id, &grant.public_key);
+    access::device_notices(app, ui, &grant.device_id);
     layout::card(ui, "Was dieses Gerät bei mir darf", None, |ui| {
-        grant_rights(app, ui, &grant);
+        access::grant_rights(app, ui, &grant);
     });
     uses_card(app, ui, &grant.device_id, &grant.public_key);
     layout::card(ui, "Verbindung", None, |ui| {
@@ -352,42 +357,6 @@ fn grant_page(app: &mut App, ui: &mut egui::Ui, device_id: &str) {
             },
         );
     });
-}
-
-/// Files (authorization, write right), then screen and commands.
-fn grant_rights(app: &mut App, ui: &mut egui::Ui, grant: &crate::share::DirectGrant) {
-    ui.label(RichText::new("Dateien").strong());
-    super::lifecycle_ui::ui_authorized_device(app, ui, &grant.device_id);
-    let mut write = grant.write;
-    let editable = grant.write || grant.state == crate::share::DirectGrantState::Accepted;
-    if ui
-        .add_enabled(
-            editable,
-            egui::Checkbox::new(&mut write, "Darf in meine Freigaben schreiben"),
-        )
-        .changed()
-    {
-        let peer = crate::share::DirectPeerIdentity {
-            device_id: grant.device_id.clone(),
-            device_name: grant.device_name.clone(),
-            public_key: grant.public_key.clone(),
-            node_id: grant.node_id.clone(),
-            fingerprint: grant.fingerprint.clone(),
-        };
-        match crate::share::set_direct_peer_write(home(), &peer, write) {
-            Ok(change) => {
-                app.share_profiles = change.profiles;
-                let _ = app.configure_share_service();
-            }
-            Err(error) => app.error_msg = Some(format!("Schreibrecht: {error}")),
-        }
-    }
-    if !editable {
-        ui.label("Freigabe inaktiv; zuerst ausdrücklich wieder erlauben.");
-    }
-    ui.add_space(6.0);
-    ui.label(RichText::new("Bildschirm und Befehle").strong());
-    crate::app::device_rights_ui::ui(app, ui, &grant.device_id, &grant.public_key);
 }
 
 /// What I use on the other device.

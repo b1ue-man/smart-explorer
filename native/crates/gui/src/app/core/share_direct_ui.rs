@@ -5,18 +5,20 @@ use super::*;
 impl App {
     /// „Per Direkt-Code des anderen Geraets“ on the page „Geraet hinzufuegen“.
     pub(super) fn ui_share_add_device(&mut self, ui: &mut egui::Ui) {
-        let choice_id = egui::Id::new("share_direct_code_share_back");
-        let mut share_back =
-            ui.data_mut(|data| data.get_temp::<bool>(choice_id).unwrap_or_default());
+        // R1 (plan 2026-11-06): connecting sets up both directions unless
+        // the user chooses „nur in eine Richtung“ (stored as that choice).
+        let choice_id = egui::Id::new("share_direct_code_one_way");
+        let mut one_way = ui.data_mut(|data| data.get_temp::<bool>(choice_id).unwrap_or_default());
         if ui
             .checkbox(
-                &mut share_back,
-                "Auch meine Freigaben fuer dieses Geraet oeffnen",
+                &mut one_way,
+                "Nur in eine Richtung (meine Freigaben fuer dieses Geraet nicht oeffnen)",
             )
             .changed()
         {
-            ui.data_mut(|data| data.insert_temp(choice_id, share_back));
+            ui.data_mut(|data| data.insert_temp(choice_id, one_way));
         }
+        let share_back = !one_way;
         ui.label(RichText::new("Direkt-Code").small().color(theme::muted(ui)));
         ui.horizontal_wrapped(|ui| {
             ui.add(

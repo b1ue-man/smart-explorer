@@ -184,7 +184,9 @@ pub struct DiscoveryUiState {
     pub dispatcher: super::discovery_events::DiscoveryCommandDispatcher,
     /// "Unsichere PIN erlauben" for the next offer (FC2).
     pub allow_weak_pin: bool,
-    /// "Auch meine Freigaben für dieses Gerät öffnen" for the next connect.
+    /// The next connect also opens this device's exports to the paired
+    /// device. On by default since R1 (plan 2026-11-06: pairing two devices
+    /// is the whole setup); „Nur in eine Richtung“ turns it off.
     pub share_back: bool,
     /// Pairings installed without confirmation, by exchange id (S24).
     pub unconfirmed: std::collections::HashMap<String, crate::share::DiscoveryRelationOutcome>,
@@ -213,7 +215,7 @@ impl Default for DiscoveryUiState {
             status,
             dispatcher,
             allow_weak_pin: false,
-            share_back: false,
+            share_back: true,
             unconfirmed: std::collections::HashMap::new(),
         }
     }

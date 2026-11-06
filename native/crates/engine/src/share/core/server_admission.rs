@@ -14,8 +14,10 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::share::core::eio;
 use crate::share::keepalive::TRANSFER_STREAMS_PER_CONNECTION;
+use crate::share::node::{IncomingActivity, ShareIrohNode};
 use crate::share::server_transfer::STREAM_BUFFER_CHUNKS;
 use crate::share::session::{PeerDeviceKey, PeerPrincipal};
+use crate::share::wire::FsRequest;
 use crate::transfer::MemoryReservation;
 
 /// Transfers across all connections: half of the 512 blocking threads Tokio
@@ -177,3 +179,23 @@ async fn wait_for_memory() -> MemoryReservation {
 #[cfg(test)]
 #[path = "server_admission_tests.rs"]
 mod tests;
+
+/// What one incoming request holds while it runs: the CPU and the stream
+/// count of its connection. A folder watch (A12 of plan 2026-11-06) waits
+/// for changes as long as its subscriber keeps it: it is counted for the
+/// idle sweep but holds no CPU; `host_watch` holds it while it works.
+pub(super) fn stream_holds(
+    node: &ShareIrohNode,
+    activity: &Arc<IncomingActivity>,
+    req: &FsRequest,
+) -> (Option<crate::keep_awake::KeepAwake>, Box<dyn Send>) {
+    if matches!(req, FsRequest::WatchExport(_)) {
+        return (None, Box::new(node.incoming_watch_started(activity)));
+    }
+    (
+        Some(crate::keep_awake::hold(
+            crate::keep_awake::Reason::PeerService,
+        )),
+        Box::new(node.incoming_stream_started(activity)),
+    )
+}

@@ -182,7 +182,7 @@ fn body(
         (None, RightsSubject::Code) => {
             ui.label(
                 RichText::new(
-                    "Diese Rechte bekommt jedes Gerät, das mit deinem Direkt-Code verbindet.",
+                    "Diese Rechte bekommt jedes Gerät, das mit deinem Direkt-Code verbindet, sich per PIN koppelt oder dem du deine Freigaben öffnest.",
                 )
                 .color(theme::muted(ui)),
             );

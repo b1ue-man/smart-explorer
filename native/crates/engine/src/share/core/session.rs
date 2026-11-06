@@ -16,6 +16,12 @@ use super::wire::PeerHello;
 
 #[path = "session_authorize.rs"]
 mod authorize;
+#[path = "session_denial.rs"]
+pub(super) mod denial;
+#[path = "peer_denials.rs"]
+pub(super) mod peer_denials;
+#[path = "session_root_notice.rs"]
+mod root_notice;
 
 #[derive(Clone, Debug)]
 pub(super) struct IncomingSession {

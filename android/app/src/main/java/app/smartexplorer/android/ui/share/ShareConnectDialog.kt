@@ -28,6 +28,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import app.smartexplorer.android.R
 import app.smartexplorer.android.api.DiscoveryAdvert
 import app.smartexplorer.android.api.SHARE_DIRECT
@@ -36,6 +39,7 @@ import app.smartexplorer.android.core.CoreException
 import app.smartexplorer.android.ui.common.Format
 import app.smartexplorer.android.ui.common.SeIcon
 import app.smartexplorer.android.ui.common.Snackbars
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -44,7 +48,8 @@ private const val CONNECT_TIMEOUT_MS = 60_000L
 
 /**
  * "Gerät verbinden" (spec F18): discoverable devices and rooms (name, expiry) → tap → PIN →
- * "Verbinde …" (1–10 s, [Abbrechen]) → result. The list refreshes itself while the dialog is open.
+ * "Verbinde …" (1–10 s, [Abbrechen]) → result. The list refreshes itself while the dialog is open
+ * and the app is visible (F7, plan 2026-11-06: no mDNS search in the background).
  */
 @Composable
 internal fun ConnectDeviceDialog(vm: ShareViewModel, onDismiss: () -> Unit) {
@@ -59,7 +64,8 @@ internal fun ConnectDeviceDialog(vm: ShareViewModel, onDismiss: () -> Unit) {
     var previousExchange by remember { mutableStateOf<String?>(null) }
     var attempted by remember { mutableStateOf(false) }
     var failure by remember { mutableStateOf<String?>(null) }
-    var shareBack by remember { mutableStateOf(false) }
+    // R1 (plan 2026-11-06): pairing sets up both directions unless "Nur in eine Richtung".
+    var oneWay by remember { mutableStateOf(false) }
     var unconfirmedEnd by remember { mutableStateOf(false) }
     var checkingResult by remember { mutableStateOf(false) }
     val discovery = vm.status?.discovery
@@ -67,15 +73,22 @@ internal fun ConnectDeviceDialog(vm: ShareViewModel, onDismiss: () -> Unit) {
 
     fun cancelExchange(exchangeId: String) = vm.act("Nicht abgebrochen") { ShareApi.cancelConnect(exchangeId) }
 
-    LaunchedEffect(Unit) {
-        while (true) {
-            try {
-                ShareApi.discover()
-            } catch (e: CoreException) {
-                failure = "Suche nicht gestartet: ${e.message ?: e.kind}"
+    val owner = LocalLifecycleOwner.current
+    LaunchedEffect(owner) {
+        // Searches only while the app is at least STARTED; leaving the app with the dialog open
+        // stops the search, returning resumes it at once.
+        owner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                try {
+                    ShareApi.discover()
+                } catch (cancel: CancellationException) {
+                    throw cancel
+                } catch (e: CoreException) {
+                    failure = "Suche nicht gestartet: ${e.message ?: e.kind}"
+                }
+                vm.reload()
+                delay(DISCOVER_INTERVAL_MS)
             }
-            vm.reload()
-            delay(DISCOVER_INTERVAL_MS)
         }
     }
     LaunchedEffect(attempt?.exchangeId, attempt?.state, vm.unconfirmed, vm.pairingsKnown, connecting, checkingResult) {
@@ -183,8 +196,14 @@ internal fun ConnectDeviceDialog(vm: ShareViewModel, onDismiss: () -> Unit) {
                             modifier = Modifier.fillMaxWidth(),
                         )
                         if (target.kind == SHARE_DIRECT) {
-                            ShareChoice("Auch meine Freigaben für dieses Gerät öffnen", shareBack, !unconfirmedEnd && !checkingResult) { shareBack = it }
-                            Text("Ohne diese Wahl entsteht kein neuer Zugriff auf deine Freigaben. Vorhandene bewusste Rechte bleiben erhalten. Mit der Wahl öffnet sich nach dem Koppeln das Menü „Rechte für …“; bis du bestätigst, hat das Gerät keine Rechte.")
+                            ShareChoice("Nur in eine Richtung (meine Freigaben nicht öffnen)", oneWay, !unconfirmedEnd && !checkingResult) { oneWay = it }
+                            Text(
+                                if (oneWay) {
+                                    "Nur dieses Telefon greift auf das Gerät zu; auf deine Freigaben entsteht kein neuer Zugriff. Vorhandene bewusste Rechte bleiben erhalten."
+                                } else {
+                                    "Beide Geräte erreichen einander. Das Gerät erhält die Rechte, die unter „Rechte neuer Verbindungen“ eingestellt sind; ist dort nichts gewählt, öffnet sich nach dem Koppeln „Rechte für …“, und bis du bestätigst, hat das Gerät keine Rechte."
+                                },
+                            )
                         } else {
                             Text("Raumbeitritt legt keine eigenen Freigaben an. Danach öffnet sich das Menü „Rechte für <Raum>“, in dem du festlegst, was du dem Raum gibst.")
                         }
@@ -195,7 +214,7 @@ internal fun ConnectDeviceDialog(vm: ShareViewModel, onDismiss: () -> Unit) {
                             chosen = it
                             pin = ""
                             failure = null
-                            shareBack = false
+                            oneWay = false
                             unconfirmedEnd = false
                             attempted = false
                             checkingResult = false
@@ -227,7 +246,7 @@ internal fun ConnectDeviceDialog(vm: ShareViewModel, onDismiss: () -> Unit) {
                         connecting = true
                         attempted = true
                         val selectedPin = pin
-                        val selectedShareBack = target.kind == SHARE_DIRECT && shareBack
+                        val selectedShareBack = target.kind == SHARE_DIRECT && !oneWay
                         scope.launch {
                             try {
                                 ShareApi.connect(target.discoveryId, selectedPin, selectedShareBack)
@@ -250,7 +269,7 @@ internal fun ConnectDeviceDialog(vm: ShareViewModel, onDismiss: () -> Unit) {
                 TextButton(onClick = {
                     chosen = null
                     failure = null
-                    shareBack = false
+                    oneWay = false
                     unconfirmedEnd = false
                     attempted = false
                     checkingResult = false

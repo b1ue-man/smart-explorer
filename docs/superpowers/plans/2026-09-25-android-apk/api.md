@@ -730,6 +730,8 @@ Request {requestId, contactId:String?, name, stateText, canAccept, canReject, ca
   kein freies Secretcleanup und kein stilles Löschen der Widerrufshistorie.
 - `share.setShareBack {contactId,shareBack:Boolean}` → `{persisted:true,changed:Boolean}`:
   bewusst an kann erneut freigeben, aus entfernt keine frühere ausdrückliche Freigabe. Entzug ist separat.
+- `share.access {}` → `{deviceFolders:[{deviceId,publicKey,choice:"all"|"none"|"selected",count}], notices:[{direction:"outgoing"|"incoming",deviceId,deviceName?,contactId?,reason,message,remedy,count,lastAt,retryInSecs?}], gaps:[{kind:"not_shared"|"reconfirm"|"rights_pending",deviceId,deviceName,contactId?,message,action}], reconfirm:Int, storageAccess:Boolean?, sharesFolders:Boolean, workerError:String?}` (Plan 2026-11-06, R1/R3/R5/R9/R10): abgelehnte Sitzungen in beiden Richtungen aus dem Worker, Geräte ohne Zugriff auf die eigenen Freigaben aus den Profilen. Ein nicht lesbarer Worker ergibt leere `notices` und `workerError`, nie einen Fehler.
+- `share.reconfirmAll {}` → `{persisted:true,changed:Boolean}`: jede Freigabe im Zustand „neu bestätigen“ wird wieder aktiv (Exec aus, ohne Rechte wartet sie auf „Rechte festlegen“); gesperrte bleiben gesperrt.
 - `share.setRoomPolicy {profileId,roomId,membersMayWrite:Boolean?,confirmNewMembers:Boolean?}` →
   `{persisted:true,changed:Boolean}`; mindestens ein Feld. Exakte Profil-/Raumidentität erforderlich;
   Android sendet nur die geänderten Felder, damit die Bestätigungswahl kein unverändertes altes
