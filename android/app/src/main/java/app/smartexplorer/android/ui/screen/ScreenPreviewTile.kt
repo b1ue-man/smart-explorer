@@ -43,6 +43,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.currentStateAsState
 import app.smartexplorer.android.R
 import app.smartexplorer.android.api.DecoderOffer
 import app.smartexplorer.android.api.ScreenDevice
@@ -65,7 +68,9 @@ private enum class TileGate { Probing, Offline, Unsupported, Off, Ask, Allow, Fa
  * `tiles` session of the long edge [PREVIEW_EDGE]; [intervalMs] 2 s and 5 s ask the host for one
  * picture a second and show every second or fifth. Tapping calls [onOpen] with the preview session
  * (only with `allow`), which the full view raises to the full stream. A tile whose session [adoptedBy]
- * a full view holds stops decoding until it is given back.
+ * a full view holds stops decoding until it is given back. Below STARTED (app in the background) a
+ * tile closes its own session – one peer connection and one decoder thread each – and opens it
+ * again on the return, as on the first opening; a session a full view adopted stays with it.
  */
 @Composable
 fun ScreenPreviewTile(
@@ -109,7 +114,17 @@ fun ScreenPreviewTile(
             TileGate.Failed
         }
     }
-    LaunchedEffect(gate) {
+    val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
+    val started = lifecycleState.isAtLeast(Lifecycle.State.STARTED)
+    LaunchedEffect(gate, started) {
+        if (!started) {
+            val running = session
+            if (running != null && adoptedBy !== running) {
+                running.close()
+                session = null
+            }
+            return@LaunchedEffect
+        }
         if (gate != TileGate.Allow) return@LaunchedEffect
         // One connection per tile: a probe that answers `allow` again (the device list follows the
         // Share status) keeps the running session; only an ended one is closed and replaced.

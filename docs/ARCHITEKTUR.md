@@ -133,6 +133,28 @@ durch die gemeinsame Remote-Suite oder einen terminalen Release bestätigt.
   `job::run_one` → `bisync::run`; Dauerbetrieb oder „Share im Hintergrund erreichbar“ hält den Prozess mit
   `BackgroundService` (specialUse); `system/KeepAlive*.kt` (Wach-Alarm 10 min → `share.wake`, Netzwechsel),
   `WakeKeeper` (Ereignis `wake` → Partial-Wakelock), `HostMonitor` → `sys.hostState` (Ruhemodus, `deferScheduling`).
+  Hintergrund-Auslöser (Stand 2026-11-06, Plan `docs/plaene/2026-11-06-akku-rechte/plan.md`, F1–F10):
+  `BackgroundController.refreshSchedule` plant den Weckalarm (`SyncScheduleAlarm`) nur für eine künftige
+  Jobfälligkeit; ein überfälliger Job bekommt keinen Alarm, sondern wird einmal an den Nachhol-Lauf
+  (`SCHEDULE_WORK`) übergeben, den WorkManager bei erfüllten Bedingungen startet (Merker `overdue-handed`
+  bis keine Fälligkeit mehr überfällig ist). Der Wach-Alarm reiht einen Nachhol-Lauf nur ein, wenn der
+  Dienst nicht lief oder ein Job überfällig ist. `system/MediaStoreSync.kt` beobachtet MediaStore und hält
+  den Content-Auslöser nur, solange ein aktivierter Echtzeit-Job eine lokale Wurzel hat; eine Änderung zählt
+  nur unter diesen Wurzeln (Zeilenzahl und Generation je Wurzel), und nur sie reiht einen Nachhol-Lauf ein
+  bzw. lässt den Content-Worker abgleichen. `AndroidHostFigures` misst die Speicherstatistik aller Pakete
+  im Hintergrund höchstens alle 6 h und nur bei laufendem Share (sichtbar alle 5 min, sofort bei
+  Sichtbarkeit und Datenträgerereignis). `BackgroundService` (Dauerbetrieb) prüft ohne Zeitschleife bei
+  Pause, automatischer Pause und überfälligem Job; `DocsCommitWorker` startet beim Prozessstart nur für
+  wiederholbare Journaleinträge (versiegelter Tresor-Cache: beim Entsperren). UI-Abfrageschleifen und
+  Bildschirm-Decoder laufen nur bei Lebenszyklus ≥ STARTED.
+- Bedienungshilfe Android: `screen/ScreenControlService.kt` läuft im eigenen Prozess `:access`
+  (`SmartExplorerApp` startet dort nichts), weil das System eine eingeschaltete Bedienungshilfe dauernd
+  gebunden hält. Der Hauptprozess erreicht Gesten, Text, Enter, globale Aktionen, Standbilder
+  (`HardwareBuffer` über Binder) und die Fensterliste über `screen/AccessLink.kt` →
+  `screen/AccessLinkService.kt` (nicht exportiert, nur eigene UID); gebunden nur, solange eine
+  Bildschirmsitzung (`ScreenHostControl`), die Launcher-Brücke (`LauncherBridgeService`, Launcher-Gesten)
+  oder eine Fensterlisten-Lesung sie braucht. Ein/Aus liest der Hauptprozess aus der Systemeinstellung
+  `enabled_accessibility_services`.
 - Desktop: GUI ↔ Daemon-Prozess über Loopback-TCP-IPC (`daemon/os/shared/ipc*.rs`); Share-/Agent-Anfragen
   mit Kredit je Anfrage (`agent_proto/core/credit.rs`), damit eine langsame Übertragung kein Blättern blockiert.
 - KI-Agent: Host startet `se mcp` (stdio) → rmcp (`initialize` 2025-06-18 bzw. `server/discover`

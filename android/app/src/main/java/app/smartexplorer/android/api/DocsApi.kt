@@ -88,9 +88,30 @@ data class DocsPending(
     val pending: Int? = null,
     val failed: List<String> = emptyList(),
     val knownPending: Int = 0,
+    /** Caches whose waiting count is unknown, by root label (`devices/<key>`, `conn:<hex>`, `gdrive`, `vault:<site>`) or a reason. */
     val unknown: List<String> = emptyList(),
 ) {
     val isClean: Boolean get() = pending == 0 && unknown.isEmpty() && failed.isEmpty()
+
+    /**
+     * Vault sites among [unknown]: a vault's cache is sealed (`spool-key.wrapped`), so its count is
+     * unknown until the vault is unlocked; only then can a retry open it.
+     */
+    val sealedVaults: Set<String>
+        get() = unknown.filter { it.startsWith(VAULT_ROOT_PREFIX) }.map { it.removePrefix(VAULT_ROOT_PREFIX) }.toSet()
+
+    /** A retry can upload something now: counted waiting changes, or an unknown cache that is not a sealed vault. */
+    val retryableNow: Boolean
+        get() = knownPending > 0 || unknown.any { !it.startsWith(VAULT_ROOT_PREFIX) }
+
+    /** The same waiting state compares equal (known count and unknown caches; not the per-run [failed]). */
+    val fingerprint: String
+        get() = "$knownPending|${unknown.sorted().joinToString(",")}"
+
+    companion object {
+        /** Prefix of a vault root label (native `docs_ids.rs`, `VAULT_PREFIX`). */
+        const val VAULT_ROOT_PREFIX = "vault:"
+    }
 }
 
 /** Created or renamed document (`docs.rename`). */

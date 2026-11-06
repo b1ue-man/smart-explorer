@@ -4,7 +4,6 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.content.Context
 import android.content.Intent
-import android.graphics.Bitmap
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -21,7 +20,14 @@ import java.util.concurrent.atomic.AtomicBoolean
  * (at most one per 333 ms). The user switches it on in the Android settings; nothing here turns it
  * on. Input comes only from the core's input channel, which carries the input of the one viewer
  * that holds control with the `ScreenControl` right while a full stream runs. It reads no event
- * content and logs nothing of the screen. [performGlobal] serves the launcher gestures (V6).
+ * content and logs nothing of the screen. Global actions also serve the launcher gestures (V6).
+ *
+ * It runs in its own process `:access` (manifest): Android keeps an enabled accessibility service
+ * bound for good, and with it its process, so in the main process it kept the Rust core, the
+ * daemon and Share alive without any foreground service. The main process reaches it only through
+ * [AccessLinkService], bound while a screen session, the launcher bridge or the window list needs
+ * it ([AccessLink]); the main process learns on/off from the system setting ([enabled]). Nothing
+ * here touches the core.
  */
 class ScreenControlService : AccessibilityService() {
     private val shots = Executors.newSingleThreadExecutor()
@@ -32,12 +38,10 @@ class ScreenControlService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        ScreenHostControl.accessibilityChanged(applicationContext)
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
         instance = null
-        ScreenHostControl.accessibilityChanged(applicationContext)
         return super.onUnbind(intent)
     }
 
@@ -102,12 +106,11 @@ class ScreenControlService : AccessibilityService() {
     }
 
     /**
-     * One still of the whole display as ARGB_8888 (secure windows show black there, A12), or `null`
-     * when Android refused it (more than one per 333 ms, no display).
+     * One screenshot of the whole display (secure windows show black there, A12) for [AccessLinkService]:
+     * [done] gets Android's result, whose buffer the caller closes, or `null` when Android refused it
+     * (more than one per 333 ms, no display). The main process turns it into a picture (`AccessLink.still`).
      */
-    internal fun still(budget: ScreenCaptureBudget, expectedWidth: Int, expectedHeight: Int,
-        done: (ScreenCaptureBitmap?) -> Unit) {
-        val expected=ScreenFrameLimits.checkedBytes(expectedWidth,expectedHeight).toLong()
+    internal fun screenshot(done: (ScreenshotResult?) -> Unit) {
         val finished=AtomicBoolean(false)
         synchronized(shotLock) {
             if(stoppingShots) {done(null);return}
@@ -117,51 +120,19 @@ class ScreenControlService : AccessibilityService() {
             if(!finished.compareAndSet(false,true)) return
             synchronized(shotLock) {shotRequests--;if(stoppingShots && shotRequests==0) shots.shutdown()}
         }
-        val hardware=try {budget.claim(ScreenCaptureBudget.NATIVE_SURFACE,expected)}
-            catch(error: Throwable) {finish();throw error}
-        val software=try {budget.claim(ScreenCaptureBudget.READBACK,expected)}
-            catch(error: Throwable) {hardware.close();finish();throw error}
         try {takeScreenshot(
             Display.DEFAULT_DISPLAY,
             shots,
             object : TakeScreenshotCallback {
                 override fun onSuccess(screenshot: ScreenshotResult) {
-                    val buffer = screenshot.hardwareBuffer
-                    var wrapper: Bitmap?=null
-                    var bitmap: Bitmap?=null
-                    var delivered=false
-                    var notified=false
-                    fun deliver(value: ScreenCaptureBitmap?) {notified=true;done(value)}
-                    try {
-                        // A rotated result may use the same pixel count. A
-                        // larger result is closed before any product copy.
-                        val actual=ScreenFrameLimits.checkedBytes(buffer.width,buffer.height).toLong()
-                        if(actual>expected) {deliver(null);return}
-                        wrapper=Bitmap.wrapHardwareBuffer(buffer,screenshot.colorSpace)
-                        val source=wrapper ?: run {deliver(null);return}
-                        if(source.byteCount.toLong()>expected) {deliver(null);return}
-                        bitmap=source.copy(Bitmap.Config.ARGB_8888,false)
-                        val result=bitmap ?: run {deliver(null);return}
-                        if(result.allocationByteCount.toLong()>expected) {deliver(null);return}
-                        val owned=ScreenCaptureBitmap(result,software)
-                        bitmap=null;delivered=true
-                        deliver(owned)
-                    } catch(error: RuntimeException) {
-                        if(!notified) deliver(null)
-                    } finally {
-                        bitmap?.recycle()
-                        // wrapHardwareBuffer owns a distinct hardware reference.
-                        wrapper?.recycle();buffer.close();hardware.close()
-                        if(!delivered) software.close()
-                        finish()
-                    }
+                    try {done(screenshot)} finally {finish()}
                 }
 
                 override fun onFailure(errorCode: Int) {
-                    try {done(null)} finally {software.close();hardware.close();finish()}
+                    try {done(null)} finally {finish()}
                 }
             },
-        )} catch(error: Throwable) {software.close();hardware.close();finish();throw error}
+        )} catch(error: RuntimeException) {finish();done(null)}
     }
 
     /** The apps with a window on screen (package, label), the focused one first. */
@@ -181,9 +152,6 @@ class ScreenControlService : AccessibilityService() {
         /** The running service, `null` while the user has not switched it on. */
         fun current(): ScreenControlService? = instance
 
-        /** A global action (`GLOBAL_ACTION_*`); `false` when the service does not run (V6). */
-        fun performGlobal(action: Int): Boolean = instance?.performGlobalAction(action) ?: false
-
         /** Whether the user switched the service on in the Android settings. */
         fun enabled(context: Context): Boolean {
             val list = Settings.Secure.getString(context.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES).orEmpty()
@@ -194,10 +162,11 @@ class ScreenControlService : AccessibilityService() {
         /**
          * `on`, `off` or `restricted`: a sideloaded app on Android 13+ can only be switched on after
          * „Eingeschränkte Einstellungen zulassen“ in its app info. Android names no such state, so
-         * `restricted` means: off, and the app was not installed from a store.
+         * `restricted` means: off, and the app was not installed from a store. Read from the system
+         * setting: the main process asks it, and the service itself runs in `:access`.
          */
         fun state(context: Context): String = when {
-            instance != null || enabled(context) -> "on"
+            enabled(context) -> "on"
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && sideloaded(context) -> "restricted"
             else -> "off"
         }

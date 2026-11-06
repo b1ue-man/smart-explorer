@@ -16,6 +16,7 @@ import app.smartexplorer.android.prefs.AppPrefs
 import app.smartexplorer.android.service.BackgroundController
 import app.smartexplorer.android.service.ServiceNotifications
 import app.smartexplorer.android.system.HostMonitor
+import app.smartexplorer.android.system.MediaStoreSync
 import app.smartexplorer.android.system.Notifications
 import app.smartexplorer.android.system.WakeKeeper
 import kotlinx.coroutines.CancellationException
@@ -41,6 +42,13 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
     override suspend fun doWork(): Result {
         val mode = AppPrefs.bgMode.value
         if (mode == BackgroundController.MODE_OFF) return Result.success()
+        // The content trigger fires for a MediaStore change of any app; only a change below the
+        // local root of a real-time job is worth a catch-up run (which compares every real-time
+        // job). Otherwise the trigger is armed again (or not, without such a root) and nothing runs.
+        if (inputData.getBoolean(BackgroundController.CONTENT_HINT, false) && !MediaStoreSync.contentChanged(applicationContext)) {
+            BackgroundController.armContentWake(applicationContext, afterCurrent = true)
+            return Result.success()
+        }
         try {
             // Inside the try: a stop while the host state is sent still closes the gate below.
             HostMonitor.beginWorkerRun(applicationContext)

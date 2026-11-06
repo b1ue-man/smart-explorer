@@ -26,7 +26,7 @@ internal sealed interface PhoneAction {
 /**
  * Turns the input events of the controlling viewer (the core's `InputEvent`, C5: pointer and touch
  * positions 0–65535 across the source, wheel in 1/120 notches) into gestures, text and global
- * actions of the accessibility service. Key events are left out (`no_key_events`). A pressed
+ * actions of the accessibility service ([AccessLink.perform]). Key events are left out (`no_key_events`). A pressed
  * button or finger becomes one stroke when it is released. Not thread-safe: the input thread of
  * [ScreenHostControl] owns it.
  */
@@ -119,15 +119,6 @@ internal class GestureMapper(private val width: () -> Int, private val height: (
             return GestureDescription.Builder()
                 .addStroke(GestureDescription.StrokeDescription(path, 0, stroke.durationMs))
                 .build()
-        }
-
-        /** Runs [action] through [service]; `false` when Android refused it. */
-        fun perform(service: ScreenControlService, action: PhoneAction, done: (Boolean) -> Unit) {
-            when (action) {
-                is PhoneAction.Stroke -> service.gesture(gestureOf(action), done)
-                is PhoneAction.Text -> done(if (action.text == "\n") service.imeEnter() else service.appendText(action.text))
-                is PhoneAction.Global -> done(service.performGlobalAction(action.action))
-            }
         }
     }
 }

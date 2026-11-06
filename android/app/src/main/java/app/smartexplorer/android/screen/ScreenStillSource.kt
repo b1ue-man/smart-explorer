@@ -29,7 +29,8 @@ internal class ScreenStillSource(
     fun waitMs(now: Long=SystemClock.uptimeMillis()): Long =
         if(lastAt==0L) 0 else (MIN_INTERVAL_MS+MARGIN_MS-(now-lastAt)).coerceAtLeast(0)
 
-    fun capture(service: ScreenControlService, done: (Int?) -> Unit) {
+    /** One still through the accessibility service in `:access` ([AccessLink.still]); [done] gets the push result or `null`. */
+    fun capture(done: (Int?) -> Unit) {
         val admittedGeneration=generation
         if(!active) {done(null);return}
         val wait=waitMs()
@@ -46,7 +47,7 @@ internal class ScreenStillSource(
             lastAt=SystemClock.uptimeMillis();inFlight=true
             try {
                 // Both requested hardware and software claims precede takeScreenshot.
-                service.still(admitted,expected.first,expected.second) {result ->
+                AccessLink.still(admitted,expected.first,expected.second) {result ->
                     try {
                         val code=if(result==null) null else synchronized(this) {
                             if(active && generation==admittedGeneration) push(result,admitted) else null

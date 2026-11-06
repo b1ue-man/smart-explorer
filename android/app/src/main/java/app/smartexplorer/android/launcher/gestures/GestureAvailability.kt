@@ -10,7 +10,7 @@ enum class Availability { On, Off }
  * Reads, from the launcher process, whether the person switched on the app's accessibility service
  * (`ScreenControlService`, SCR-M8). Both gestures run through that service (`GLOBAL_ACTION` of the bridge); without it
  * they do nothing but say why (U40-18, E7). The class name is a string, so the launcher process loads no class of the main
- * process, and the check reads only the system setting, not the service object (which lives in the main process).
+ * process, and the check reads only the system setting, not the service object (which lives in the process `:access`).
  */
 object GestureAvailability {
     const val SERVICE_CLASS = "app.smartexplorer.android.screen.ScreenControlService"

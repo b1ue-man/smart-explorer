@@ -15,6 +15,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import app.smartexplorer.android.api.ConnectionRoute
 import app.smartexplorer.android.api.DeviceRoute
 import app.smartexplorer.android.api.RouteApi
@@ -30,15 +33,17 @@ import kotlin.coroutines.cancellation.CancellationException
 internal fun RouteDetails(contactId: String? = null, deviceId: String? = null, publicKey: String? = null) {
     var snapshot by remember(contactId, deviceId, publicKey) { mutableStateOf<RouteStatus?>(null) }
     var error by remember(contactId, deviceId, publicKey) { mutableStateOf<String?>(null) }
-    LaunchedEffect(contactId, deviceId, publicKey) {
+    val owner = LocalLifecycleOwner.current
+    // Read only while the app is at least STARTED; an open page in the background asks nothing.
+    LaunchedEffect(contactId, deviceId, publicKey, owner) {
         if (contactId == null && (deviceId == null || publicKey == null)) return@LaunchedEffect
-        while (true) {
+        owner.repeatOnLifecycle(Lifecycle.State.STARTED) { while (true) {
             try {
                 snapshot = RouteApi.status(contactId, deviceId, publicKey)
                 error = null
             } catch (cancel: CancellationException) { throw cancel } catch (failure: CoreException) { snapshot = null; error = failure.message ?: failure.kind } catch (failure: Exception) { snapshot = null; error = failure.message ?: "Routediagnose konnte nicht gelesen werden" }
             delay(2_000)
-        }
+        } }
     }
     Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text("Verbindungsweg", style = MaterialTheme.typography.titleMedium)

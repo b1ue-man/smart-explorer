@@ -14,6 +14,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import app.smartexplorer.android.api.DeviceFeed
 import app.smartexplorer.android.api.FamilyApi
 import app.smartexplorer.android.api.FamilyListing
@@ -33,14 +36,16 @@ fun FamilyPicker(target: ScreenTarget, deviceName: String, onSelect: (ScreenTarg
     var asked by remember(target) { mutableStateOf<FamilyListing?>(null) }
     var error by remember(target) { mutableStateOf<String?>(null) }
     var busy by remember(target) { mutableStateOf(true) }
-    LaunchedEffect(target) {
+    val owner = LocalLifecycleOwner.current
+    LaunchedEffect(target, owner) {
         try {
             val key = TcpApi.devices().firstOrNull {
                 it.relation == target.relation && it.relationId == target.relationId && it.deviceId == target.deviceId
             }?.publicKey
             var fetched = false
-            // Reads only this phone's background state; the feed itself is event-driven.
-            while (true) {
+            // Reads only this phone's background state; the feed itself is event-driven. Only while
+            // the app is at least STARTED: a dialog left open in the background reads nothing.
+            owner.repeatOnLifecycle(Lifecycle.State.STARTED) { while (true) {
                 val current = if (key != null && target.deviceId != null) FamilyApi.feed(target.deviceId, key) else null
                 feed = current
                 if (current?.known != true && !fetched) {
@@ -55,7 +60,7 @@ fun FamilyPicker(target: ScreenTarget, deviceName: String, onSelect: (ScreenTarg
                 }
                 busy = false
                 delay(1000)
-            }
+            } }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

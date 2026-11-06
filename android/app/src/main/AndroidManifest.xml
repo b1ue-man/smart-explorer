@@ -250,12 +250,15 @@
             android:name=".screen.ScreenHostService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
-        <!-- Switched on only by the user in the Android settings; the system alone may bind it -->
+        <!-- Switched on only by the user in the Android settings; the system alone may bind it.
+             Own process: the system keeps an enabled accessibility service bound for good, which
+             in the main process kept the Rust core, the daemon and Share alive in the background. -->
         <service
             android:name=".screen.ScreenControlService"
             android:exported="true"
             android:label="@string/screen_control_label"
-            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:process=":access">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
             </intent-filter>
@@ -263,6 +266,11 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/screen_control_service" />
         </service>
+        <!-- The main process's link to the accessibility service, in its process (only this app binds it) -->
+        <service
+            android:name=".screen.AccessLinkService"
+            android:exported="false"
+            android:process=":access" />
         <!-- Wake alarm of the background service (explicit PendingIntent only) -->
         <receiver
             android:name=".system.KeepAliveReceiver"

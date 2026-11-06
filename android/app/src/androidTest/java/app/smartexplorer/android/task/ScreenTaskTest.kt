@@ -52,6 +52,7 @@ import app.smartexplorer.android.api.ScreenDevice
 import app.smartexplorer.android.api.ScreenProbe
 import app.smartexplorer.android.core.ScreenHostStart
 import app.smartexplorer.android.core.ScreenViewEvent
+import app.smartexplorer.android.screen.AccessLink
 import app.smartexplorer.android.screen.EncoderConfig
 import app.smartexplorer.android.screen.GestureMapper
 import app.smartexplorer.android.screen.ScreenConsentActivity
@@ -99,7 +100,9 @@ import org.junit.runner.RunWith
  * this phone as screen host. The Rust side of the bridge runs as host tests
  * (`screen_task_android_bridge_shapes`, `bridge_tests.rs`); here the app's parts run for real:
  * MediaCodec with the test picture, MediaProjection after the system dialog (the suite allows
- * `PROJECT_MEDIA` with appops), the accessibility service's stills, gestures and text, and the
+ * `PROJECT_MEDIA` with appops), the accessibility service's stills, gestures and text (the service
+ * runs in the process `:access`; every call crosses the process boundary through [AccessLink], as
+ * in the app), and the
  * consent actions as activity intents. No second device takes part.
  */
 @RunWith(AndroidJUnit4::class)
@@ -152,14 +155,27 @@ class ScreenTaskTest {
             line.contains(ScreenControlService::class.java.simpleName)
     }
 
-    /** The connected se service: waits up to [timeoutMs] for it and gives `null` when there is none. */
-    private fun connectedService(timeoutMs: Long): ScreenControlService? {
+    /** Whether this test holds the link to `:access` (released in [releaseLink]). */
+    private var linkHeld = false
+
+    @org.junit.After
+    fun releaseLink() {
+        if (linkHeld) AccessLink.release()
+        linkHeld = false
+    }
+
+    /**
+     * Whether the se service runs in `:access`, asked across the process boundary like the app does
+     * ([AccessLink.running]); waits up to [timeoutMs].
+     */
+    private fun connectedService(timeoutMs: Long): Boolean {
+        if (!linkHeld) { AccessLink.acquire(appContext); linkHeld = true }
         val deadline = SystemClock.uptimeMillis() + timeoutMs
         do {
-            ScreenControlService.current()?.let { return it }
+            if (AccessLink.running()) return true
             SystemClock.sleep(100)
         } while (SystemClock.uptimeMillis() < deadline)
-        return ScreenControlService.current()
+        return AccessLink.running()
     }
 
     /**
@@ -171,28 +187,28 @@ class ScreenTaskTest {
      * services, and only a service that left the enabled list is taken off that list again („users
      * may toggle the on/off switch to retry“). Writing the same value again changes nothing, so
      * the setting is deleted, the system's answer is awaited, and then the service is put back.
+     * Afterwards the link to the service in `:access` is held until the test ends.
      */
-    private fun accessibilityOn(): ScreenControlService {
+    private fun accessibilityOn() {
         automation()
-        connectedService(1_500)?.let { return it }
+        if (connectedService(1_500)) return
         val name = "${appContext.packageName}/${ScreenControlService::class.java.name}"
         shell("settings delete secure enabled_accessibility_services")
         val deadline = SystemClock.uptimeMillis() + 10_000
         while (systemListsService() && SystemClock.uptimeMillis() < deadline) SystemClock.sleep(200)
         shell("settings put secure enabled_accessibility_services $name")
         shell("settings put secure accessibility_enabled 1")
-        return connectedService(15_000)
-            ?: throw AssertionError("Bedienungshilfe nicht verbunden: ${accessibilityLines()}")
+        if (!connectedService(15_000)) throw AssertionError("Bedienungshilfe nicht verbunden: ${accessibilityLines()}")
     }
 
-    /** One still of the accessibility service, after the 333 ms interval. */
-    private fun still(service: ScreenControlService, fixture: ScreenCaptureFixture): ScreenCaptureBitmap {
+    /** One still of the accessibility service in `:access` ([AccessLink.still]), after the 333 ms interval. */
+    private fun still(fixture: ScreenCaptureFixture): ScreenCaptureBitmap {
         var shot: ScreenCaptureBitmap? = null
         var expired = false
         val lock = Any()
         val done = CountDownLatch(1)
         SystemClock.sleep(ScreenStillSource.MIN_INTERVAL_MS)
-        service.still(fixture.budget(),fixture.width,fixture.height) { bitmap ->
+        AccessLink.still(fixture.budget(),fixture.width,fixture.height) { bitmap ->
             synchronized(lock) {
                 if(expired) bitmap?.close() else shot=bitmap
                 done.countDown()
@@ -342,7 +358,7 @@ class ScreenTaskTest {
 
     @Test
     fun screen_task_android_still_interval_respected() {
-        val service = accessibilityOn()
+        accessibilityOn()
         // The connection may have answered a still of an earlier test a moment ago.
         SystemClock.sleep(2 * ScreenStillSource.MIN_INTERVAL_MS)
         val requested = mutableListOf<Long>()
@@ -364,7 +380,7 @@ class ScreenTaskTest {
                 repeat(4) { round ->
                     val done = CountDownLatch(1)
                     var code: Int? = null
-                    stills.capture(service) {code=it;done.countDown()}
+                    stills.capture {code=it;done.countDown()}
                     requested += SystemClock.uptimeMillis()
                     assertTrue("Standbild ${round + 1} ohne Antwort", done.await(5, TimeUnit.SECONDS))
                     failure.get()?.let {throw AssertionError("Real still transfer failed",it)}
@@ -379,7 +395,7 @@ class ScreenTaskTest {
 
     @Test
     fun screen_task_android_still_secure_window_black() {
-        val service = accessibilityOn()
+        accessibilityOn()
         var top = 0
         compose.setContent { Box(Modifier.fillMaxSize().onGloballyPositioned { top = it.boundsInWindow().top.toInt() }) { Text("Geheim") } }
         compose.runOnUiThread { compose.activity.window.addFlags(WindowManager.LayoutParams.FLAG_SECURE) }
@@ -388,7 +404,7 @@ class ScreenTaskTest {
             SystemClock.sleep(500)
             val (width,height)=displaySize()
             ScreenCaptureFixture.open(width,height,ScreenCaptureBudget.ACCESSIBILITY).use { fixture ->
-                still(service,fixture).use {shot ->
+                still(fixture).use {shot ->
                     val dark = darkShare(shot.bitmap, 0, top + shot.bitmap.height / 4, shot.bitmap.width, shot.bitmap.height * 3 / 4)
                     TaskReport.note("screen.host.secure", "dark=%.2f".format(dark))
                     assertTrue("sicheres Fenster nicht schwarz: $dark", dark > 0.9)
@@ -399,7 +415,7 @@ class ScreenTaskTest {
 
     @Test
     fun screen_task_android_gesture_tap_lands() {
-        val service = accessibilityOn()
+        accessibilityOn()
         var taps by mutableStateOf(0)
         var center = 0f to 0f
         compose.setContent {
@@ -424,7 +440,7 @@ class ScreenTaskTest {
         val mapper = GestureMapper({ bounds.width() }, { bounds.height() })
         val done = CountDownLatch(1)
         var completed = false
-        GestureMapper.perform(service, mapper.map(events, now = 0).single()) {
+        AccessLink.perform(mapper.map(events, now = 0).single()) {
             completed = it
             done.countDown()
         }
@@ -436,7 +452,7 @@ class ScreenTaskTest {
 
     @Test
     fun screen_task_android_text_set() {
-        val service = accessibilityOn()
+        accessibilityOn()
         var text by mutableStateOf("")
         val focus = FocusRequester()
         compose.setContent {
@@ -450,13 +466,57 @@ class ScreenTaskTest {
         val mapper = GestureMapper({ 1 }, { 1 })
         val done = CountDownLatch(1)
         var set = false
-        GestureMapper.perform(service, mapper.map(events).single()) {
+        AccessLink.perform(mapper.map(events).single()) {
             set = it
             done.countDown()
         }
         assertTrue(done.await(5, TimeUnit.SECONDS))
         assertTrue("ACTION_SET_TEXT abgelehnt", set)
         compose.waitUntil(5_000) { text == "hallo" }
+    }
+
+    @Test
+    fun screen_task_android_text_enter() {
+        accessibilityOn()
+        var text by mutableStateOf("")
+        var entered by mutableStateOf(false)
+        val focus = FocusRequester()
+        compose.setContent {
+            TextField(
+                value = text, onValueChange = { text = it },
+                modifier = Modifier.fillMaxWidth().height(64.dp).focusRequester(focus),
+                singleLine = true,
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Done),
+                keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { entered = true }),
+            )
+        }
+        compose.runOnIdle { focus.requestFocus() }
+        compose.waitForIdle()
+        val events = Json.parseToJsonElement("""[{"type":"text","text":"\n"}]""") as JsonArray
+        val done = CountDownLatch(1)
+        var pressed = false
+        AccessLink.perform(GestureMapper({ 1 }, { 1 }).map(events).single()) {
+            pressed = it
+            done.countDown()
+        }
+        assertTrue(done.await(5, TimeUnit.SECONDS))
+        assertTrue("ACTION_IME_ENTER abgelehnt", pressed)
+        compose.waitUntil(5_000) { entered }
+    }
+
+    @Test
+    fun screen_task_android_window_list_names_this_app() {
+        accessibilityOn()
+        compose.setContent { Text("Fensterliste") }
+        compose.waitForIdle()
+        val deadline = SystemClock.uptimeMillis() + 5_000
+        var apps = AccessLink.windowApps()
+        while (apps.none { it.first == appContext.packageName } && SystemClock.uptimeMillis() < deadline) {
+            SystemClock.sleep(200)
+            apps = AccessLink.windowApps()
+        }
+        TaskReport.note("screen.host.windows", "apps=${apps.map { it.first }}")
+        assertTrue("eigene App fehlt in der Fensterliste: $apps", apps.any { it.first == appContext.packageName })
     }
 
     /** The PendingIntent of [action] is an activity intent of [intent] (works on API 30 too). */

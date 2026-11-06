@@ -22,6 +22,7 @@ import app.smartexplorer.android.core.Core
 import app.smartexplorer.android.core.CoreException
 import app.smartexplorer.android.core.CoreState
 import app.smartexplorer.android.core.DocsChanged
+import app.smartexplorer.android.core.VaultChanged
 import app.smartexplorer.android.prefs.AppPrefs
 import java.io.FileNotFoundException
 import java.io.IOException
@@ -63,10 +64,23 @@ class SeDocumentsProvider : DocumentsProvider() {
         return true
     }
 
-    /** `docs.changed` → content notifications; a pending upload from an earlier process → worker. */
+    /**
+     * `docs.changed` → content notifications; a pending upload from an earlier process → worker.
+     *
+     * Every start of the main process creates this provider (while its part is on), so the start
+     * queues the worker only for work a retry can do now ([DocsPending.retryableNow]). A vault's
+     * sealed cache waits for that vault's unlock, which queues the worker then. A state the
+     * worker already gave up on, or a failed `docs.pending`, gets a single attempt per start
+     * instead of the full series ([DocsCommitWorker.enqueueAtStart]).
+     */
     private fun watch(app: Application) {
         scope.launch {
             Core.events.filterIsInstance<DocsChanged>().collect { onDocsChanged(app, it) }
+        }
+        scope.launch {
+            Core.events.filterIsInstance<VaultChanged>().collect { event ->
+                if (event.state == "unlocked" && sealedVaults.remove(event.site)) DocsCommitWorker.enqueue(app)
+            }
         }
         scope.launch {
             if (Core.ready.first { it !is CoreState.Starting } !is CoreState.Ready) return@launch
@@ -76,9 +90,11 @@ class SeDocumentsProvider : DocumentsProvider() {
                 Log.w(TAG, "docs.pending: ${e.kind}")
                 null
             }
+            if (pending?.isClean == true) return@launch
             // Unknown is retained work, not an empty queue. The authorized
             // retry can open a sealed cache after its vault is unlocked.
-            if (pending?.isClean != true) DocsCommitWorker.enqueue(app)
+            pending?.let { sealedVaults.addAll(it.sealedVaults) }
+            if (pending == null || pending.retryableNow) DocsCommitWorker.enqueueAtStart(app, pending)
         }
     }
 
@@ -182,6 +198,9 @@ class SeDocumentsProvider : DocumentsProvider() {
     companion object {
         private const val TAG = "SmartExplorerDocs"
         private val watching = AtomicBoolean(false)
+
+        /** Vault sites whose sealed cache waited at the start; the unlock of one queues the worker once. */
+        private val sealedVaults: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
         /** The core behind the provider; the Robolectric tests pass their own. */
         @VisibleForTesting

@@ -29,6 +29,9 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import app.smartexplorer.android.api.AppReceiptResult
 import app.smartexplorer.android.api.AppsApi
 import app.smartexplorer.android.api.FamilyApi
@@ -114,16 +117,18 @@ internal fun AppsDialog(
             } catch (cancel: CancellationException) { throw cancel } catch (failure: Exception) { error = "Startergebnis wird geklärt; se fragt erneut, sobald das Gerät wieder erscheint: ${failure.message}" } finally { busy = false; pending = null }
         }
     }
-    // Host events from this phone's background state: presence and the device's open windows.
-    LaunchedEffect(selectedKey) {
+    // Host events from this phone's background state: presence and the device's open windows,
+    // read only while the app is at least STARTED.
+    val owner = LocalLifecycleOwner.current
+    LaunchedEffect(selectedKey, owner) {
         val target = selected ?: return@LaunchedEffect
-        while (true) {
+        owner.repeatOnLifecycle(Lifecycle.State.STARTED) { while (true) {
             try {
                 val feed = FamilyApi.feed(target.deviceId, target.publicKey)
                 hostEvent = Pair(feed.present, feed.families?.entries.orEmpty().map { it.source })
             } catch (cancel: CancellationException) { throw cancel } catch (failure: Exception) { hostEvent = Pair(false, emptyList()) }
             delay(2000)
-        }
+        } }
     }
     // Immediately after an unclear result, then on every host event; never on a timer.
     LaunchedEffect(hostEvent, saved, result) {

@@ -25,6 +25,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import app.smartexplorer.android.api.TCP_ANY_APP_NOTICE
 import app.smartexplorer.android.api.TcpApi
 import app.smartexplorer.android.api.TcpServices
@@ -56,19 +59,21 @@ internal fun TcpDialog(selector: ShareDialog.Tcp, onDismiss: () -> Unit) {
     var info by remember(selector) { mutableStateOf<String?>(null) }
     var reload by remember(selector) { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
-    LaunchedEffect(selector, reload) {
+    val owner = LocalLifecycleOwner.current
+    LaunchedEffect(selector, reload, owner) {
         try {
             targets = TcpApi.devices().filter { target ->
                 (selector.contactId != null && target.relation == "direct" && target.relationId == selector.contactId) ||
                     (selector.deviceId != null && selector.publicKey != null && target.deviceId == selector.deviceId && target.publicKey == selector.publicKey)
             }
-            // The display follows the background service; this loop only reads local state.
-            while (true) {
+            // The display follows the background service; this loop only reads local state, and
+            // only while the app is at least STARTED.
+            owner.repeatOnLifecycle(Lifecycle.State.STARTED) { while (true) {
                 val identity = targets.firstOrNull()
                 if (identity != null) services = TcpApi.services(identity.deviceId, identity.publicKey)
                 tunnels = TcpApi.list().filter { tunnel -> targets.any { it.nodeId.isNotEmpty() && it.nodeId == tunnel.remoteNode } }
                 delay(2000)
-            }
+            } }
         } catch (cancel: CancellationException) { throw cancel
         } catch (e: CoreException) { error = "TCP-Status nicht geladen: ${e.message ?: e.kind}" }
     }

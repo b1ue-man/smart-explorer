@@ -67,6 +67,8 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.currentStateAsState
 import app.smartexplorer.android.R
 import app.smartexplorer.android.core.CoreException
 import kotlin.math.ceil
@@ -218,9 +220,14 @@ fun ScreenViewScreen(target: ScreenTarget, title: String, onClose: () -> Unit, a
     LaunchedEffect(nativePixels, ui.stream?.width, ui.stream?.height) {
         transform.nativePixels(if (nativePixels) ui.stream?.width else null, if (nativePixels) ui.stream?.height else null)
     }
-    DisposableEffect(session, surface) {
+    // The decoder (a thread polling the session's pictures) runs only while the app is at least
+    // STARTED; the session itself stays open, so the return needs no new connection and the new
+    // decoder asks for a key frame below.
+    val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
+    val decoding = lifecycleState.isAtLeast(Lifecycle.State.STARTED)
+    DisposableEffect(session, surface, decoding) {
         val active = session
-        if (active == null || active.id == 0L) return@DisposableEffect onDispose { }
+        if (active == null || active.id == 0L || !decoding) return@DisposableEffect onDispose { }
         val activeDecoder = java.util.concurrent.atomic.AtomicBoolean(true)
         val main = android.os.Handler(android.os.Looper.getMainLooper())
         val decoder = ScreenDecoder(

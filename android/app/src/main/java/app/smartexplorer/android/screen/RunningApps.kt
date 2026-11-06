@@ -33,8 +33,9 @@ internal object RunningApps {
         ScreenAppEntry(pkg, label(context, pkg) ?: title, icon = AppIcons.reference(context, pkg))
 
     private fun current(context: Context): List<ScreenAppEntry> {
-        ScreenControlService.current()?.let { service ->
-            val windows = service.windowApps()
+        if (ScreenControlService.enabled(context)) {
+            // The service runs in `:access`; one reading holds the link only for itself.
+            val windows = AccessLink.held(context) { AccessLink.windowApps() }
             if (windows.isNotEmpty()) return windows.take(MAX_APPS).map { (pkg, title) -> entry(context, pkg, title) }
         }
         if (!usageAccess(context)) return emptyList()

@@ -264,7 +264,8 @@ der Desktop-App, `se screen grid` die Gruppenansicht, `se screen snapshot` speic
 verlustfreies Standbild als PNG. Die übrigen Befehle sind `devices`, `probe`, `windows`,
 `input`, `bench`, `codec`, `portal forget`, `sessions` und `stop`. Eingaben (`se screen input`)
 gehen an den Windows-Host, unter X11, unter Wayland mit RemoteDesktop-Portal und an
-Android-Hosts mit eingeschalteter Bedienungshilfe. Ein Android-Host nimmt keine Tastenereignisse
+Android-Hosts mit eingeschalteter Bedienungshilfe (sie läuft im eigenen Prozess `:access` und hält
+den Rest der App im Hintergrund nicht wach). Ein Android-Host nimmt keine Tastenereignisse
 an; die Systemtasten Zurück, Home, Übersicht, Benachrichtigungen, Schnelleinstellungen, Sperren
 und Ausschaltmenü gehen. Ohne grafische Sitzung auf dem Gerät gibt es kein Bild
 (`no_display`). Der Relay-Server verwirft Pakete, wenn die Warteschlange eines Ziels voll ist
@@ -1370,7 +1371,13 @@ Versions-Rollback; Google-Play-Veröffentlichung; Storage-Access-Framework-Bäum
   „Mit App öffnen“. Bilder werden in Bildschirmgröße dekodiert, starkes
   Hineinzoomen wird dadurch unscharf.
 - Echtzeit-Jobs laufen nur im Dauerbetrieb oder bei geöffneter App; im Modus
-  „Periodisch“ holt der Worker sie einmal je Lauf nach.
+  „Periodisch“ holt der Worker sie einmal je Lauf nach, dazu nach einer
+  Medienänderung unter der lokalen Wurzel eines Echtzeit-Jobs (Medienänderungen
+  anderer Ordner lösen nichts aus).
+- Ein überfälliger Job, der gerade nicht laufen darf (zum Beispiel „Nur WLAN“
+  im Mobilnetz, schwacher Akku, außerhalb des Aktivzeitfensters), weckt das
+  Telefon nicht wiederholt: er läuft, sobald die Bedingungen des Workers erfüllt
+  sind; künftige Fälligkeiten bekommen genau einen Weckalarm.
 - Kalender-Jobs sind nur im Dauerbetrieb minutengenau; „Periodisch“ holt
   Termine im Abstand von mindestens 15 Minuten nach, Android kann Läufe
   verschieben.
@@ -1379,7 +1386,11 @@ Versions-Rollback; Google-Play-Veröffentlichung; Storage-Access-Framework-Bäum
   („Share erreichbar“) das Telefon für gekoppelte Geräte erreichbar, auch nach
   einem Neustart oder Update ohne die App zu öffnen; ein Wach-Alarm alle
   10 Minuten startet ihn neu, falls Android ihn beendet hat (dafür die
-  Akku-Optimierung für Smart Explorer ausschalten). Bei verdeckter App ruht die
+  Akku-Optimierung für Smart Explorer ausschalten); einen Nachhol-Lauf der
+  Sync-Jobs startet dieser Alarm nur, wenn der Dienst nicht lief oder ein Job
+  fällig ist. Die Speicherzahlen der Apps für die Analyse durch andere Geräte
+  misst das Telefon im Hintergrund höchstens alle 6 Stunden (bei geöffneter App
+  alle 5 Minuten). Bei verdeckter App ruht die
   Verbindung akkuschonend: der Share-Server (ab 0.5.169, Fähigkeit
   `idle_keepalive_v1`) hält sie mit einem Keepalive alle 3 Minuten wach und
   bündelt Statusmeldungen, leere Peer-Verbindungen werden geschlossen, der

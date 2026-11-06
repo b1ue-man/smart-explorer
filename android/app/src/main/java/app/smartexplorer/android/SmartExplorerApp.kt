@@ -18,12 +18,15 @@ import app.smartexplorer.android.widget.DevicesWidgetFeed
  * launcher is on) the feed of the devices widget.
  *
  * The launcher process (`<package>:launcher`, DSK-M9) runs none of these steps: it has no Rust core
- * and no settings of the main process (U35-11).
+ * and no settings of the main process (U35-11). Neither does `<package>:access`, the process of the
+ * accessibility service ([app.smartexplorer.android.screen.ScreenControlService]): Android keeps it
+ * alive while the service is on, so it must hold nothing but that service and its link.
  */
 class SmartExplorerApp : Application() {
     override fun onCreate() {
         super.onCreate()
-        if (Application.getProcessName() == packageName + LauncherSwitch.PROCESS_SUFFIX) return
+        val process = Application.getProcessName()
+        if (process == packageName + LauncherSwitch.PROCESS_SUFFIX || process == packageName + ACCESS_PROCESS_SUFFIX) return
         AppPrefs.init(this)
         Notifications.ensureChannels(this)
         WakeKeeper.init(this)
@@ -33,5 +36,10 @@ class SmartExplorerApp : Application() {
         BackgroundController.onAppStart(this)
         // DSK-M13 (U40-17): only with the widget part on; otherwise it returns at once and nothing runs.
         DevicesWidgetFeed.startIfEnabled(this)
+    }
+
+    companion object {
+        /** `android:process` of the accessibility service and its link (manifest). */
+        const val ACCESS_PROCESS_SUFFIX = ":access"
     }
 }

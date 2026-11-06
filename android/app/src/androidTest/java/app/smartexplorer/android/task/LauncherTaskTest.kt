@@ -50,6 +50,7 @@ import app.smartexplorer.android.launcher.model.LayoutReadResult
 import app.smartexplorer.android.launcher.search.LauncherSearch
 import app.smartexplorer.android.launcher.search.SearchHit
 import app.smartexplorer.android.launcher.search.SearchSource
+import app.smartexplorer.android.screen.AccessLink
 import app.smartexplorer.android.screen.ScreenControlService
 import app.smartexplorer.android.launcher.se.OpenInFiles
 import app.smartexplorer.android.launcher.se.SeActions
@@ -1383,6 +1384,12 @@ class LauncherTaskTest {
             .toList()
     }
 
+    /**
+     * Whether the se service runs: it lives in the process `:access`, so this asks it across the
+     * process boundary, as the launcher bridge does ([AccessLink.running]).
+     */
+    private fun serviceRunning(): Boolean = AccessLink.held(appContext) { AccessLink.running() }
+
     /** Whether the system still lists the se service as enabled or as crashed. */
     private fun systemListsService(): Boolean = accessibilityLines().any { line ->
         (line.startsWith("Enabled services:") || line.startsWith("Crashed services:")) &&
@@ -1399,14 +1406,14 @@ class LauncherTaskTest {
      */
     private fun accessibilityOn(name: String) {
         automation()
-        if (waitFor(1_500) { ScreenControlService.current() != null }) return
+        if (waitFor(1_500) { serviceRunning() }) return
         shell("settings delete secure $accessibilitySetting")
         waitFor(10_000) { !systemListsService() }
         shell("settings put secure $accessibilitySetting $name")
         shell("settings put secure accessibility_enabled 1")
         assertTrue(
             "the accessibility service did not start: ${accessibilityLines()}",
-            waitFor(30_000) { ScreenControlService.current() != null },
+            waitFor(30_000) { serviceRunning() },
         )
     }
 
@@ -1415,7 +1422,7 @@ class LauncherTaskTest {
         automation()
         shell("settings delete secure $accessibilitySetting")
         waitFor(10_000) { !systemListsService() }
-        waitFor(10_000) { ScreenControlService.current() == null }
+        waitFor(10_000) { !serviceRunning() }
     }
 
     /** Runs [body] with the accessibility service of the app on ([value] is its name) or off (`null`) and puts the earlier setting back afterwards. */
@@ -1479,7 +1486,7 @@ class LauncherTaskTest {
             compose.onNodeWithText("Wischen nach unten öffnet die Benachrichtigungen, Doppeltippen sperrt den Bildschirm.").assertExists()
 
             startEmptyLauncher()
-            assertTrue("the accessibility service is gone again: ${accessibilityLines()}", waitFor(30_000) { ScreenControlService.current() != null })
+            assertTrue("the accessibility service is gone again: ${accessibilityLines()}", waitFor(30_000) { serviceRunning() })
             swipeDownOnEmptyPage()
             assertTrue("the notification shade did not open", device.wait(Until.hasObject(By.pkg("com.android.systemui")), 10_000))
             device.pressBack()

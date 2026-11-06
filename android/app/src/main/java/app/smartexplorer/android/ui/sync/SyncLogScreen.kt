@@ -24,6 +24,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import app.smartexplorer.android.R
 import app.smartexplorer.android.api.SyncApi
 import app.smartexplorer.android.api.SyncApi.displayText
@@ -38,7 +41,8 @@ private const val REFRESH_MS = 1_000L
 
 /**
  * Live log of one sync job: every listed folder, comparison and action of every runner
- * (background worker, "Jetzt", desktop and terminal on this device), refreshed every second.
+ * (background worker, "Jetzt", desktop and terminal on this device), refreshed every second while
+ * the screen is at least STARTED; after the return the next read continues at the kept cursor.
  */
 @Composable
 internal fun SyncLogScreen(job: SyncJob, onBack: () -> Unit) {
@@ -50,8 +54,9 @@ internal fun SyncLogScreen(job: SyncJob, onBack: () -> Unit) {
     var follow by remember { mutableStateOf(true) }
     var filter by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(job.id) {
-        while (true) {
+    val owner = LocalLifecycleOwner.current
+    LaunchedEffect(job.id, owner) {
+        owner.repeatOnLifecycle(Lifecycle.State.STARTED) { while (true) {
             try {
                 val chunk = SyncApi.log(job.id, next)
                 if (chunk.restarted) lines.clear()
@@ -70,7 +75,7 @@ internal fun SyncLogScreen(job: SyncJob, onBack: () -> Unit) {
                 error = e.displayText()
             }
             delay(REFRESH_MS)
-        }
+        } }
     }
     val shown = if (filter.isBlank()) lines.toList() else lines.filter { it.contains(filter, ignoreCase = true) }
     val listState = rememberLazyListState()

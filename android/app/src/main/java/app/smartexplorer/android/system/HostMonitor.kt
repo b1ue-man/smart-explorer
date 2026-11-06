@@ -137,7 +137,7 @@ object HostMonitor {
         scope.launch { shareRefreshes.collect { refreshShare(app) } }
         scope.launch { Core.events.collect { event -> when (event) {
             is CoreEvent.Share -> requestShareRefresh()
-            is CoreEvent.Jobs -> BackgroundController.refreshSchedule(app)
+            is CoreEvent.Jobs -> { BackgroundController.refreshSchedule(app); MediaStoreSync.jobsChanged(app) }
             is CoreEvent.Volumes -> { MediaStoreSync.probe(app, signal = true); AndroidHostFigures.refresh(app, force = true) }
             is CoreEvent.SyncProblem -> Notifications.syncProblem(app, event)
             else -> Unit
@@ -150,6 +150,10 @@ object HostMonitor {
             delay(60_000)
         } }
     }
+
+    /** The UI is visible (last [setForeground]). */
+    val uiVisible: Boolean
+        get() = foreground
 
     /** UI visibility (from `BackgroundController.onUiVisible`). */
     fun setForeground(visible: Boolean) {

@@ -35,7 +35,9 @@ import kotlinx.coroutines.launch
  * ending here wakes the Share poller at once, which then sends one, so the notification follows
  * within one `share.execJobs` round trip (the poller's own cadence – up to 60 s in the background –
  * applies only if that wake-up is missed). While a notification is shown it is also re-checked
- * every [RECHECK_MS]. Runs for the whole process once [start]ed. The same `share` events wake the
+ * every [RECHECK_MS]; a notification is posted again only when its title or text changed (or the
+ * person swiped it away), never unchanged per round, so neither SystemUI nor the launcher's
+ * notification listener wakes for nothing. Runs for the whole process once [start]ed. The same `share` events wake the
  * [AccessApprovalNotifier], which shows the questions of other devices that wait for this phone's
  * user (the core sends one when a question opens or ends).
  */
@@ -44,6 +46,7 @@ object ExecHostNotifier {
     private const val RECHECK_MS = 5_000L
     private const val CODE_OPEN_SHARE = 2005
     internal const val ACTION_STOP = "app.smartexplorer.android.action.STOP_EXEC"
+    internal const val ACTION_DISMISSED = "app.smartexplorer.android.action.EXEC_DISMISSED"
     internal const val EXTRA_EXEC_ID = "execId"
     internal const val EXTRA_PEER = "peerDeviceId"
 
@@ -55,6 +58,9 @@ object ExecHostNotifier {
 
     /** Notification id per running command (`execId`). */
     private val shown = LinkedHashMap<String, Int>()
+
+    /** What was last posted per `execId` (title and text); an equal content is not posted again. */
+    private val posted = HashMap<String, String>()
 
     fun start(context: Context) {
         if (!started.compareAndSet(false, true)) return
@@ -82,6 +88,14 @@ object ExecHostNotifier {
         refreshes.update { it + 1 }
     }
 
+    /** The person swiped the notification of [execId] away while it runs: the next round shows it again. */
+    internal fun dismissed(execId: String) {
+        scope.launch {
+            posted.remove(execId)
+            requestRefresh()
+        }
+    }
+
     /** [Stopp] of a notification ([ExecHostStopReceiver]); [done] ends the broadcast. */
     internal fun stop(execId: String, peerDeviceId: String, done: () -> Unit) {
         scope.launch {
@@ -106,11 +120,15 @@ object ExecHostNotifier {
         }
         val running = runningOnThisPhone(jobs).associateBy { it.execId }
         shown.keys.filter { it !in running }.forEach { execId ->
+            posted.remove(execId)
             shown.remove(execId)?.let { Notifications.cancel(context, it) }
         }
         running.values.forEach { job ->
             val id = shown[job.execId] ?: freeExecNotificationId(shown.values)?.also { shown[job.execId] = it }
-            if (id != null) Notifications.notify(context, id, notification(context, job, id))
+            val content = execNotificationContent(job)
+            if (id != null && posted[job.execId] != content) {
+                if (Notifications.notify(context, id, notification(context, job, id))) posted[job.execId] = content
+            }
         }
     }
 
@@ -130,12 +148,20 @@ object ExecHostNotifier {
             AppNav.intentFor(context, NavRequest.SelectTab(MainTab.Share)),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        val startedText = job.startedAt?.let { "Gestartet ${Format.time(it * 1000)}" }
+        val dismissed = PendingIntent.getBroadcast(
+            context,
+            id,
+            Intent(context, ExecHostStopReceiver::class.java)
+                .setAction(ACTION_DISMISSED)
+                .putExtra(EXTRA_EXEC_ID, job.execId),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
         return NotificationCompat.Builder(context, Notifications.CHANNEL_EXEC)
             .setSmallIcon(R.drawable.ic_terminal)
             .setContentTitle(execNotificationTitle(job))
-            .setContentText(listOfNotNull(execProgramText(job), startedText).joinToString(" · "))
+            .setContentText(execNotificationText(job))
             .setOngoing(true)
+            .setDeleteIntent(dismissed)
             .setOnlyAlertOnce(true)
             .setCategory(NotificationCompat.CATEGORY_STATUS)
             .setContentIntent(open)
@@ -144,9 +170,13 @@ object ExecHostNotifier {
     }
 }
 
-/** [Stopp] in the notification of a running command (not exported). */
+/** [Stopp] in the notification of a running command and its removal by the person (not exported). */
 class ExecHostStopReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action == ExecHostNotifier.ACTION_DISMISSED) {
+            intent.getStringExtra(ExecHostNotifier.EXTRA_EXEC_ID)?.let { ExecHostNotifier.dismissed(it) }
+            return
+        }
         if (intent.action != ExecHostNotifier.ACTION_STOP) return
         val execId = intent.getStringExtra(ExecHostNotifier.EXTRA_EXEC_ID) ?: return
         val peer = intent.getStringExtra(ExecHostNotifier.EXTRA_PEER) ?: return
@@ -160,6 +190,13 @@ internal fun runningOnThisPhone(jobs: ExecJobs): List<ExecJob> = jobs.active.fil
 
 /** "Laptop führt einen Befehl aus". */
 internal fun execNotificationTitle(job: ExecJob): String = "${job.peerName.ifBlank { "Ein Gerät" }} führt einen Befehl aus"
+
+/** "Shell-Befehl · Gestartet 14:03": the text line of the notification. */
+internal fun execNotificationText(job: ExecJob): String =
+    listOfNotNull(execProgramText(job), job.startedAt?.let { "Gestartet ${Format.time(it * 1000)}" }).joinToString(" · ")
+
+/** What the notification of [job] shows; a new post is needed only when it changes. */
+internal fun execNotificationContent(job: ExecJob): String = execNotificationTitle(job) + "\n" + execNotificationText(job)
 
 /** "Shell-Befehl" or the program of an argument list. */
 internal fun execProgramText(job: ExecJob): String =

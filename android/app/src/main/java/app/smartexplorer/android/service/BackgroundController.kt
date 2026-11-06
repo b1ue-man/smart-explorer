@@ -20,6 +20,7 @@ import app.smartexplorer.android.core.CoreException
 import app.smartexplorer.android.prefs.AppPrefs
 import app.smartexplorer.android.system.HostMonitor
 import app.smartexplorer.android.system.KeepAliveAlarm
+import app.smartexplorer.android.system.MediaStoreSync
 import app.smartexplorer.android.system.SyncScheduleAlarm
 import app.smartexplorer.android.system.Permissions
 import app.smartexplorer.android.work.SyncWorker
@@ -69,6 +70,12 @@ object BackgroundController {
     private const val SCHEDULE_WORK = "sync-scheduled-window"
     private const val CONTENT_WORK = "sync-media-hints"
     const val CONTENT_HINT = "content-hint"
+
+    /** Private settings of the job schedule (not shown anywhere). */
+    private const val SCHEDULE_PREFS = "sync-schedule"
+
+    /** An overdue deadline was handed to the catch-up work once; cleared when no deadline is overdue. */
+    private const val OVERDUE_HANDED = "overdue-handed"
 
     /** Ticks when the UI changed the daemon's pause or auto-pause ([BackgroundService] reloads). */
     internal val statusChanged: StateFlow<Long> = statusChanges.asStateFlow()
@@ -146,6 +153,11 @@ object BackgroundController {
     /**
      * Wake alarm delivery ([KeepAliveAlarm]): plans the next alarm and restarts the service when
      * the system ended it. `false` (alarm cancelled) when the service is no longer wanted.
+     *
+     * A catch-up run is queued only where it replaces something: the service was not running
+     * when the alarm came (the worker stands in for it), or a job deadline already passed. A
+     * catch-up run takes every real-time job through a full compare, so queuing one with every
+     * alarm (6 per hour) without either reason would compare all of them six times an hour.
      */
     internal fun onKeepAlive(context: Context): Boolean {
         val app = context.applicationContext
@@ -154,10 +166,12 @@ object BackgroundController {
             return false
         }
         KeepAliveAlarm.schedule(app)
+        val wasRunning = BackgroundService.isRunning
         // An inexact alarm gives no FGS-start exemption. A battery-exempt
         // app has its own exemption; otherwise the worker remains available.
         if (Permissions.isIgnoringBatteryOptimizations(app)) startBackgroundService(app)
-        enqueueCatchUp(app)
+        val due = nextJobRun.value
+        if (!wasRunning || due != null && due <= System.currentTimeMillis()) enqueueCatchUp(app)
         return true
     }
 
@@ -194,12 +208,22 @@ object BackgroundController {
 
     @Volatile private var appContextForSchedule: Context? = null
 
+    /**
+     * Plans the wake alarm for the earliest future job deadline. A deadline that already passed
+     * (the core reports an overdue job as due "now", in whole seconds) gets no alarm: the job waits
+     * for something the alarm cannot bring (the worker's Wi-Fi, charging or battery condition, the
+     * auto-pause, a block). It is handed once to the catch-up work instead, which WorkManager starts
+     * as soon as its conditions hold; "Dauerbetrieb" runs it in the daemon itself. A new alarm for
+     * "now + 30 s" on every call woke the phone every 30 s for as long as the job stayed overdue.
+     * The hand-over is remembered across process starts until no deadline is overdue any more, so
+     * a catch-up run that ends with the job still overdue does not queue the next one at once.
+     */
     fun refreshSchedule(context: Context) {
         val app = context.applicationContext
         appContextForSchedule = app
         scope.launch { scheduleLock.withLock {
             if (AppPrefs.bgMode.value == MODE_OFF) {
-                nextJobRun.value = null; SyncScheduleAlarm.schedule(app, null); return@withLock
+                nextJobRun.value = null; SyncScheduleAlarm.schedule(app, null); setOverdueHanded(app, false); return@withLock
             }
             try {
                 val status = SyncApi.status()
@@ -208,9 +232,26 @@ object BackgroundController {
                     status.autopauseBattery && host.powerSave || status.autopauseMetered && host.metered
                 val due = if (paused) null else status.nextScheduledRunMs?.let { maxOf(it, status.pausedUntilMs ?: 0) }
                 nextJobRun.value = due
-                SyncScheduleAlarm.schedule(app, due)
+                if (due != null && due <= System.currentTimeMillis()) {
+                    SyncScheduleAlarm.schedule(app, null)
+                    if (!overdueHanded(app)) {
+                        enqueueCatchUp(app)
+                        setOverdueHanded(app, true)
+                    }
+                } else {
+                    setOverdueHanded(app, false)
+                    SyncScheduleAlarm.schedule(app, due)
+                }
             } catch (e: CoreException) { Log.w(TAG, "Echte Jobzeit nicht verfügbar; periodischer Fallback bleibt", e) }
         } }
+    }
+
+    private fun overdueHanded(context: Context): Boolean =
+        context.getSharedPreferences(SCHEDULE_PREFS, Context.MODE_PRIVATE).getBoolean(OVERDUE_HANDED, false)
+
+    private fun setOverdueHanded(context: Context, handed: Boolean) {
+        val prefs = context.getSharedPreferences(SCHEDULE_PREFS, Context.MODE_PRIVATE)
+        if (prefs.getBoolean(OVERDUE_HANDED, false) != handed) prefs.edit().putBoolean(OVERDUE_HANDED, handed).apply()
     }
 
     fun enqueueCatchUp(context: Context) {
@@ -226,9 +267,14 @@ object BackgroundController {
         refreshSchedule(context)
     }
 
+    /**
+     * The content trigger: a worker run after MediaStore changes. Armed only while an enabled
+     * real-time job has a local root ([MediaStoreSync.contentWanted]); the run itself first asks
+     * whether the change lies below such a root ([SyncWorker]).
+     */
     fun armContentWake(context: Context, afterCurrent: Boolean = false, replace: Boolean = false) {
         val work = WorkManager.getInstance(context.applicationContext)
-        if (AppPrefs.bgMode.value == MODE_OFF) { work.cancelUniqueWork(CONTENT_WORK); return }
+        if (AppPrefs.bgMode.value == MODE_OFF || !MediaStoreSync.contentWanted()) { work.cancelUniqueWork(CONTENT_WORK); return }
         val request = OneTimeWorkRequestBuilder<SyncWorker>()
             .setInputData(workDataOf(CONTENT_HINT to true))
             .setConstraints(constraints().addContentUriTrigger(MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL), true)

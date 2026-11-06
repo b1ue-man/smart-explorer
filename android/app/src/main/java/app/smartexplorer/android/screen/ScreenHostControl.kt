@@ -2,6 +2,8 @@ package app.smartexplorer.android.screen
 
 import android.app.KeyguardManager
 import android.content.Context
+import android.database.ContentObserver
+import android.provider.Settings
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.projection.MediaProjection
@@ -44,7 +46,8 @@ import kotlinx.serialization.json.longOrNull
  * only after the system dialog („Freigeben“ → [ScreenConsentActivity] → [ScreenHostService]). One
  * thread per session follows the core's control messages (`configure`, `keyframe`, `bitrate`,
  * `still`, `consent`, `stop`); one thread hands the controlling viewer's input to
- * [ScreenControlService]. Logs name sessions and operations only, never screen content.
+ * [ScreenControlService] in `:access`, which every session reaches through [AccessLink] while it
+ * lasts. Logs name sessions and operations only, never screen content.
  *
  * The keyguard does not end a session here: Android decides. On Android 15 QPR1+ the system stops
  * a running MediaProjection when the screen locks (`onStop`, reported as `host_locked`) unless the
@@ -120,12 +123,18 @@ internal object ScreenHostControl {
                 }
             }
         }
-        scope.launch { reportPrereqs() }
-    }
-
-    /** The accessibility service went on or off: the core learns it at once. */
-    fun accessibilityChanged(context: Context) {
-        if (!started.get()) start(context)
+        // The accessibility service runs in `:access` and does not call this process: switching it
+        // on or off changes the system setting, which the core learns from here at once.
+        try {
+            app.contentResolver.registerContentObserver(
+                Settings.Secure.getUriFor(Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES), false,
+                object : ContentObserver(null) {
+                    override fun onChange(selfChange: Boolean) { scope.launch { reportPrereqs() } }
+                },
+            )
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "Bedienungshilfe-Einstellung wird nicht beobachtet: ${e.javaClass.simpleName}")
+        }
         scope.launch { reportPrereqs() }
     }
 
@@ -161,6 +170,8 @@ internal object ScreenHostControl {
 
     private suspend fun onStart(start: ScreenHostStart) {
         val session = HostSession(start)
+        // Held until [teardown]: stills and input reach the accessibility service through it.
+        AccessLink.acquire(app)
         sessions[start.session] = session
         thread(name = "screen-control-${start.session}", isDaemon = true) { controlLoop(session) }
         ensureInput()
@@ -169,7 +180,7 @@ internal object ScreenHostControl {
                 start.source == "synthetic" -> ScreenApi.ready(start.session, start.maxWidth, start.maxHeight, "synthetic", false, false)
                 ScreenProjectionIdentity.requiresPackageProof(start.source) -> requestConsent(start)
                 start.still -> {
-                    if (ScreenControlService.current() == null) {
+                    if (!AccessLink.running()) {
                         ScreenApi.ended(start.session, "accessibility_off")
                     } else {
                         val (width, height) = displaySize()
@@ -279,7 +290,7 @@ internal object ScreenHostControl {
                     }
                     // An app chosen in MediaProjection must never fall back to a full-display screenshot.
                     if(projected==null && session.start.still && session.projection==null && !session.ended)
-                        ScreenControlService.current()?.let { service -> session.still.capture(service) {} }
+                        if (AccessLink.running()) session.still.capture {}
                 }
                 "consent" -> scope.launch { requestConsent(session.start) }
                 "stop" -> teardown(session)
@@ -618,6 +629,7 @@ internal object ScreenHostControl {
         }
         val id = session.start.session
         sessions.remove(id)
+        AccessLink.release()
         pendingConsent.remove(id)
         claimed.remove(id)
         ScreenHostNotifier.cancelConsent(app, id)
@@ -655,10 +667,9 @@ internal object ScreenHostControl {
                     null
                 } ?: continue
                 val events = message["events"] as? JsonArray ?: continue
-                val service = ScreenControlService.current() ?: continue
                 for (action in mapper.map(events)) {
                     val done = CountDownLatch(1)
-                    GestureMapper.perform(service, action) { done.countDown() }
+                    AccessLink.perform(action) { done.countDown() }
                     val wait = (action as? PhoneAction.Stroke)?.durationMs ?: 0
                     done.await(wait + STROKE_GRACE_MS, TimeUnit.MILLISECONDS)
                 }

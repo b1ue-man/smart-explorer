@@ -159,19 +159,24 @@ class BackgroundService : Service() {
 
     /**
      * The only timed re-checks: the end of a timed pause, a running job (its end may come without
-     * a `jobs` event) and a status that failed to load. Everything else follows events.
+     * a `jobs` event), a future job deadline and a status that failed to load. Everything else
+     * follows events: a pause without end and an auto-pause end through the UI or the host state
+     * (`statusChanged`, `hostState`), and an overdue job that does not run yet (worker conditions,
+     * auto-pause, active-hours window) starts with a `jobs` event. Re-reading an overdue deadline,
+     * which the core reports as "now", would otherwise repeat every [PAUSE_END_MARGIN_MS] + 1 s.
      */
     private fun followUpMs(): Long? {
         if (!persistentRole()) return null
         val current = status ?: return RETRY_MS
         val pausedUntil = current.pausedUntilMs
-        if (current.paused && pausedUntil != null) {
-            return (pausedUntil - System.currentTimeMillis()).coerceAtLeast(0) + PAUSE_END_MARGIN_MS
+        if (current.paused) {
+            return pausedUntil?.let { (it - System.currentTimeMillis()).coerceAtLeast(0) + PAUSE_END_MARGIN_MS }
         }
         if (current.activeJob != null) return ACTIVE_JOB_RECHECK_MS
-        return current.nextScheduledRunMs?.let {
-            (it - System.currentTimeMillis()).coerceAtLeast(1_000) + PAUSE_END_MARGIN_MS
-        }
+        val host = HostMonitor.hostState.value
+        if (host != null && (current.autopauseBattery && host.powerSave || current.autopauseMetered && host.metered)) return null
+        val wait = current.nextScheduledRunMs?.let { it - System.currentTimeMillis() } ?: return null
+        return if (wait > 0) wait + PAUSE_END_MARGIN_MS else null
     }
 
     private fun render() {

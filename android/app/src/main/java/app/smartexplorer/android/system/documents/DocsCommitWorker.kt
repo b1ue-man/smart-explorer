@@ -16,6 +16,8 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import androidx.work.workDataOf
+import app.smartexplorer.android.api.DocsPending
 import app.smartexplorer.android.R
 import app.smartexplorer.android.api.DocsApi
 import app.smartexplorer.android.core.Core
@@ -30,7 +32,9 @@ import java.util.concurrent.TimeUnit
  * after a process end, retries what the journal still holds (`docs.retryPending`). The provider
  * process has no exemption to start a foreground service, so the job brings its own
  * [getForegroundInfo] (dataSync, required for expedited work below Android 12). After
- * [MAX_ATTEMPTS] failed runs it tells the person; the changes stay queued.
+ * [MAX_ATTEMPTS] failed runs it tells the person; the changes stay queued. The waiting state it
+ * gave up on is remembered: a later process start retries that same state once
+ * ([enqueueAtStart]) rather than with the full series and a second notice.
  */
 class DocsCommitWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun getForegroundInfo(): ForegroundInfo =
@@ -44,17 +48,21 @@ class DocsCommitWorker(context: Context, params: WorkerParameters) : CoroutineWo
             DocsApi.retryPending()
         } catch (e: CoreException) {
             Log.w(TAG, "docs.retryPending: ${e.kind}")
-            return retryOrGiveUp()
+            return retryOrGiveUp(null)
         }
         if (pending.isClean) {
             Notifications.cancel(applicationContext, ID_FAILED)
+            givenUp(applicationContext, null)
             return Result.success()
         }
-        return retryOrGiveUp()
+        return retryOrGiveUp(pending)
     }
 
-    private fun retryOrGiveUp(): Result {
+    private fun retryOrGiveUp(pending: DocsPending?): Result {
+        // A single attempt of a state already given up on ends quietly: the person was told.
+        if (inputData.getBoolean(KEY_SINGLE, false)) return Result.failure()
         if (runAttemptCount + 1 < MAX_ATTEMPTS) return Result.retry()
+        givenUp(applicationContext, fingerprintOf(pending))
         failed(applicationContext)
         return Result.failure()
     }
@@ -65,10 +73,35 @@ class DocsCommitWorker(context: Context, params: WorkerParameters) : CoroutineWo
         const val ID_RUNNING = 1500
         const val ID_FAILED = 1501
         const val MAX_ATTEMPTS = 6
+        private const val KEY_SINGLE = "single-attempt"
+        private const val PREFS = "docs-commit"
+        private const val GIVEN_UP = "given-up"
 
         /** Queues a run after the current one (each run waits for the uploads in flight). */
-        fun enqueue(context: Context) {
+        fun enqueue(context: Context) = enqueue(context, single = false)
+
+        /**
+         * The process start found [pending] (`null`: `docs.pending` failed). The full series, unless
+         * the worker already gave up on this same state (or the state is unknown): then one attempt.
+         */
+        fun enqueueAtStart(context: Context, pending: DocsPending?) {
+            val known = pending != null && context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getString(GIVEN_UP, null) != fingerprintOf(pending)
+            enqueue(context, single = !known)
+        }
+
+        private fun fingerprintOf(pending: DocsPending?): String = pending?.fingerprint ?: "?"
+
+        /** Remembers the waiting state the series gave up on (`null`: none, after a clean run). */
+        private fun givenUp(context: Context, fingerprint: String?) {
+            val editor = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            if (fingerprint == null) editor.remove(GIVEN_UP) else editor.putString(GIVEN_UP, fingerprint)
+            editor.apply()
+        }
+
+        private fun enqueue(context: Context, single: Boolean) {
             val request = OneTimeWorkRequestBuilder<DocsCommitWorker>()
+                .setInputData(workDataOf(KEY_SINGLE to single))
                 .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)

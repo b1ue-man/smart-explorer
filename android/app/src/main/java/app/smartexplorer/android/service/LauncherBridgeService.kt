@@ -20,6 +20,7 @@ import app.smartexplorer.android.launcher.bridge.BridgeProtocol
 import app.smartexplorer.android.launcher.bridge.DevicesJson
 import app.smartexplorer.android.launcher.bridge.GlobalResult
 import app.smartexplorer.android.launcher.bridge.ResultJson
+import app.smartexplorer.android.screen.AccessLink
 import app.smartexplorer.android.screen.ScreenControlService
 import app.smartexplorer.android.ui.AppNav
 import java.util.concurrent.CopyOnWriteArrayList
@@ -51,6 +52,9 @@ class LauncherBridgeService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        // The gestures' global actions run in the accessibility service (process `:access`); the
+        // link is held as long as the launcher is bound here, so a gesture finds it connected.
+        AccessLink.acquire(this)
         thread.start()
         messenger = Messenger(
             object : Handler(thread.looper) {
@@ -67,6 +71,7 @@ class LauncherBridgeService : Service() {
     override fun onBind(intent: Intent?): IBinder = messenger.binder
 
     override fun onDestroy() {
+        AccessLink.release()
         scope.cancel()
         clients.clear()
         thread.quitSafely()
@@ -147,7 +152,7 @@ class LauncherBridgeService : Service() {
             else -> return GlobalResult(false, BridgeProtocol.REASON_UNSUPPORTED)
         }
         if (!ScreenControlService.enabled(this)) return GlobalResult(false, BridgeProtocol.REASON_ACCESSIBILITY_OFF)
-        return if (ScreenControlService.performGlobal(code)) GlobalResult(true) else GlobalResult(false, BridgeProtocol.REASON_UNSUPPORTED)
+        return if (AccessLink.global(code)) GlobalResult(true) else GlobalResult(false, BridgeProtocol.REASON_UNSUPPORTED)
     }
 
     private fun message(what: Int, json: String): Message = Message.obtain(null, what).apply {
