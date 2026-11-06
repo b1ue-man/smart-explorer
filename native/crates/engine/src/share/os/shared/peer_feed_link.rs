@@ -23,8 +23,8 @@ const HANDSHAKE: Duration = Duration::from_secs(20);
 const OLDER_VERSION: &str = "Gerät hat eine ältere Version";
 
 /// Why a feed session ended and whether the connection was lost (a lost
-/// connection restarts on the next network event; a refusal waits for a
-/// presence event or a new profile revision).
+/// connection restarts after its backoff or on an event of that device; a
+/// refusal waits for a change of the relation to that device).
 pub(super) struct Ended {
     pub(super) reason: String,
     pub(super) connection_lost: bool,
@@ -167,6 +167,10 @@ async fn subscribed(context: &Context, link: ScreenLink) -> Ended {
     if let Err(error) = send_subscribe_feed(&mut send).await {
         return Ended::lost(format!("Gerätefeed nicht abonniert: {error}"));
     }
+    // A later loss starts the backoff from the beginning (A5).
+    context
+        .subscribed
+        .store(true, std::sync::atomic::Ordering::Release);
     context.show(|view| {
         view.live = true;
         view.unavailable = None;

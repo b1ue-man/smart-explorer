@@ -1,4 +1,11 @@
 //! Watch sessions retain native handles and preserve overflow and partial coverage.
+//!
+//! The system is kept awake only while the watch works (A12 of plan
+//! 2026-11-06-akku-rechte): while it waits for admission, sets up and
+//! reports `Ready`, and while changes are read and sent. A quiet watch holds
+//! nothing: a change on this device happens only while it is awake, and a
+//! subscriber that hears nothing for `SILENT_SECS` subscribes again and
+//! rescans (`Ready` says earlier changes are not all known).
 use crate::{
     analytics::Progress,
     share::{
@@ -39,7 +46,8 @@ pub(in crate::share) async fn serve(
     access: FsAccess,
     principal: PeerPrincipal,
 ) -> io::Result<()> {
-    let _awake = crate::keep_awake::hold(crate::keep_awake::Reason::PeerService);
+    // Admission, setup and the first `Ready` are work.
+    let mut awake = Some(hold());
     let p = Progress::default();
     access.register_cancel(&p.cancel)?;
     let authority = access.clone();
@@ -117,7 +125,9 @@ pub(in crate::share) async fn serve(
                 authority.check_read()?;
                 p.check_cancel()?;
                 let mut changed = Vec::new(); let mut overflow = false;
+                let mut working = !announced;
                 for message in rx.try_iter() {
+                    working = true;
                     let prefix = paths.get(&message.id).map_or("",String::as_str);
                     match message.event {
                         watch::WatchEvent::Ready(coverage) => {
@@ -130,6 +140,7 @@ pub(in crate::share) async fn serve(
                 }
                 for (index,(prefix,receiver)) in remote_rx.iter().enumerate() {
                     for notice in receiver.try_iter() {
+                        working = true;
                         match notice {
                             crate::vfs::ChangeNotice::Ready { .. } => { remote_ready.insert(index); }
                             crate::vfs::ChangeNotice::ReadyPartial { .. } => { remote_ready.insert(index); complete=false; }
@@ -141,6 +152,9 @@ pub(in crate::share) async fn serve(
                         }
                     }
                 }
+                // Held from the first message of a batch until a tick finds
+                // nothing more to read or send.
+                if working { let _ = awake.get_or_insert_with(hold); } else { awake = None; }
                 if !announced && ready.len()==local.len() && remote_ready.len()==remote.len() {
                     notify(&mut send,&authority,FsWatchEvent::Ready { generation,complete }).await?; announced=true;
                 }
@@ -156,6 +170,10 @@ pub(in crate::share) async fn serve(
             }
         }
     }
+}
+
+fn hold() -> crate::keep_awake::KeepAwake {
+    crate::keep_awake::hold(crate::keep_awake::Reason::PeerService)
 }
 
 fn setup(

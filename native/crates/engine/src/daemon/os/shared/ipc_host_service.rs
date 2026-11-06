@@ -3,6 +3,12 @@ use std::time::{Duration, Instant};
 
 use super::{default_home, log, ShareHostState};
 
+/// Backoff of the waiting Exec follow-ups (A11).
+#[path = "ipc_host_follow_up_backoff.rs"]
+mod follow_up_backoff;
+
+use follow_up_backoff::FollowUpBackoff;
+
 /// Shortest distance between periodic reloads (desktop: every reload).
 const RELOAD_INTERVAL: Duration = Duration::from_secs(5);
 /// Embedded worker: longest distance between periodic reloads.
@@ -26,6 +32,8 @@ pub(super) struct ReloadGate {
     repair_deferred: bool,
     /// The last configuration asked for a running service.
     service_wanted: bool,
+    /// Pacing of a waiting Exec follow-up that failed (A11).
+    pub(super) follow_up: FollowUpBackoff,
 }
 
 impl ReloadGate {
@@ -102,10 +110,15 @@ fn needs_attempt(state: &ShareHostState) -> bool {
         || !state.profiles.legacy_direct_requests.is_empty()
 }
 
+/// Entries of the app data directory that are no Share input: the route
+/// history (`share/os/shared/route_history.rs`, `DIRECTORY`), written while
+/// data flows, would otherwise reload the whole worker (A10).
+const NOT_INPUTS: &[&str] = &["share-routes"];
+
 /// Fingerprint of the Share inputs: the app data directory's direct entries
-/// (name, kind, size, modification time). `share_server.txt` is one of them
-/// and the exec-grant journal lives in its `sync` folder, whose time changes
-/// with every atomic replacement there.
+/// (name, kind, size, modification time) except `NOT_INPUTS`.
+/// `share_server.txt` is one of them and the exec-grant journal lives in its
+/// `sync` folder, whose time changes with every atomic replacement there.
 pub(super) fn input_fingerprint() -> u64 {
     directory_fingerprint(&crate::support_dirs::app_data_dir())
 }
@@ -117,6 +130,7 @@ fn directory_fingerprint(directory: &std::path::Path) -> u64 {
         Ok(entries) => {
             let mut names: Vec<std::ffi::OsString> = entries
                 .filter_map(|entry| entry.ok().map(|entry| entry.file_name()))
+                .filter(|name| !NOT_INPUTS.iter().any(|skipped| name == *skipped))
                 .collect();
             names.sort();
             for name in names {
@@ -424,7 +438,15 @@ mod tests {
 
         pause();
         std::fs::write(root.path().join("profiles.json"), "{}").unwrap();
-        assert_ne!(directory_fingerprint(root.path()), journaled);
+        let profiled = directory_fingerprint(root.path());
+        assert_ne!(profiled, journaled);
+
+        // The route history is no input: writing it reloads nothing (A10).
+        pause();
+        let routes = root.path().join("share-routes");
+        std::fs::create_dir(&routes).unwrap();
+        std::fs::write(routes.join("route-history.json"), "{}").unwrap();
+        assert_eq!(directory_fingerprint(root.path()), profiled);
     }
 
     #[test]

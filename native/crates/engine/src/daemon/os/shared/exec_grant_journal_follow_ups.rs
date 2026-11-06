@@ -19,8 +19,10 @@
 //!
 //! A record that can never be applied (the grant is gone, not active or
 //! without a fully pinned identity) is dropped with a visible error. Every
-//! other failure keeps the record; the periodic reload tries again after
-//! `RETRY_AFTER`.
+//! other failure keeps the record; the reload tries again after a backoff
+//! that starts at `RETRY_AFTER` and doubles up to `LONGEST_RETRY`, and at
+//! once when the profiles change beyond runtime data (A11 of plan
+//! 2026-11-06-akku-rechte): each attempt is a complete reload.
 use std::time::{Duration, Instant};
 
 use super::load_pending;
@@ -28,8 +30,20 @@ use crate::share::access_grant::{AccessGrantChange, AccountProfile, Capability};
 use crate::share::exec_follow_up::{FollowUpKey, FollowUpWork};
 use crate::share::{ExecGrantMutation, ShareEvent, ShareProfiles};
 
-/// How long a failed record waits before the next attempt.
+/// How long a failed record waits before the second attempt.
 const RETRY_AFTER: Duration = Duration::from_secs(10);
+/// Longest wait. The failures that remain after the final ones are dropped
+/// are a pending journal entry (its own retry stores the profiles, which
+/// retries this at once) and storage errors of the profiles or the journal;
+/// a profile change retries at once, so the bound only paces a storage
+/// error that persists without any change.
+const LONGEST_RETRY: Duration = Duration::from_secs(30 * 60);
+
+/// The wait after `failures` earlier failed attempts in a row.
+fn retry_after(failures: u32) -> Duration {
+    let factor = 1u32.checked_shl(failures).unwrap_or(u32::MAX);
+    RETRY_AFTER.saturating_mul(factor).min(LONGEST_RETRY)
+}
 
 /// Why this host can never apply `change`, as the rights menu checks it
 /// when the change is chosen (`validate_rights_for_this_host`).
@@ -129,34 +143,51 @@ impl super::ShareHost {
     /// Whether a waiting change is due for an attempt: the periodic reload
     /// calls `reload_now`, which applies it.
     pub fn exec_follow_ups_due(&self) -> bool {
-        self.state.lock().is_ok_and(|state| {
-            state.profiles.exec_follow_ups_waiting()
-                && state.service.is_some()
-                && state
-                    .follow_up_retry_at
-                    .is_none_or(|at| Instant::now() >= at)
-        })
+        let Ok(mut guard) = self.state.lock() else {
+            return false;
+        };
+        let state = &mut *guard;
+        if !state.profiles.exec_follow_ups_waiting() {
+            state.reload_gate.follow_up.settled();
+            return false;
+        }
+        if state.service.is_none() {
+            return false;
+        }
+        if state
+            .reload_gate
+            .follow_up
+            .profiles_changed(&state.profiles)
+        {
+            state.follow_up_retry_at = None;
+        }
+        state
+            .follow_up_retry_at
+            .is_none_or(|at| Instant::now() >= at)
     }
 
     /// The attempt of every reload (`reload_now`, with `exec_grant_lock`
     /// held): nothing to do without a waiting change or a running worker;
-    /// a failure is shown once per reason and tried again after
-    /// `RETRY_AFTER`. It never fails the reload.
+    /// a failure is shown once per reason and tried again after its
+    /// backoff (`retry_after`). It never fails the reload.
     pub fn drain_exec_follow_ups_quietly(&self) {
         if !self.exec_follow_ups_due() {
             return;
         }
         let outcome = self.drain_exec_follow_ups_locked();
-        let Ok(mut state) = self.state.lock() else {
+        let Ok(mut guard) = self.state.lock() else {
             return;
         };
+        let state = &mut *guard;
         match outcome {
             Ok(_) => {
                 state.follow_up_retry_at = None;
                 state.follow_up_error = None;
+                state.reload_gate.follow_up.settled();
             }
             Err(error) => {
-                state.follow_up_retry_at = Some(Instant::now() + RETRY_AFTER);
+                let failures = state.reload_gate.follow_up.failed(&state.profiles);
+                state.follow_up_retry_at = Some(Instant::now() + retry_after(failures));
                 if state.follow_up_error.as_deref() != Some(error.as_str()) {
                     super::super::ui_events::push(
                         &mut state.ui_events,

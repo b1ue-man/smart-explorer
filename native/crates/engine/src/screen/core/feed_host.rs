@@ -5,6 +5,10 @@
 //! services, the RDP short state — and sends `FEED_UPDATE` only on change.
 //! The second is a sampling rate, not a deadline: neither Windows nor Linux
 //! signals new listening sockets, and the window adapter polls anyway.
+//! A host where none of the three can change by itself (families and
+//! listening services unsupported, no RDP host, or no right to them: the
+//! Android device) sends its state once and samples again only when its
+//! rights change (`feed_host_rights.rs`, A6 of plan 2026-11-06-akku-rechte).
 //! Rights per send: windows need „Bildschirm ansehen: Erlauben“, services
 //! and RDP need steering. The 15 s receive limit of the single-request
 //! metadata channel does not apply; QUIC's idle detection (20 s) watches it.
@@ -24,6 +28,12 @@ use std::io;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
+
+/// Rights changes that wake a feed without a sampleable source.
+#[path = "feed_host_rights.rs"]
+mod rights;
+
+pub use rights::{rights_changed, rights_reported};
 
 /// Sampling rate of the feed (design 7: a rate, no time limit).
 pub const FEED_RATE: Duration = Duration::from_secs(1);
@@ -101,7 +111,9 @@ fn allowed(context: &HostContext, principal: &ProvenPrincipal, capability: Capab
         .is_some_and(|state| state.decision == CapabilityDecision::Allow)
 }
 
-type Listing = Result<Vec<LoopbackService>, String>;
+/// A service listing; `Err(reason, unsupported)`: `unsupported` when this
+/// OS cannot list listening sockets at all (Android, assumption A7).
+type Listing = Result<Vec<LoopbackService>, (String, bool)>;
 
 /// One service listing per rate for every subscribed viewer of this host.
 static SERVICES: Mutex<Option<(Instant, Listing)>> = Mutex::new(None);
@@ -114,13 +126,27 @@ async fn services() -> Listing {
             }
         }
     }
-    let listing = tokio::task::spawn_blocking(crate::share::tcp_sockets::local_services)
-        .await
-        .unwrap_or_else(|error| Err(format!("service listing ended: {error}")));
+    let listing = tokio::task::spawn_blocking(|| {
+        crate::share::tcp_sockets::local_services().map_err(|reason| {
+            // The reason is text; the facade says whether the OS has no
+            // socket table at all (cheap there: it answers before reading).
+            let unsupported = crate::share::os_sockets::listeners()
+                .is_err_and(|error| error.kind() == io::ErrorKind::Unsupported);
+            (reason, unsupported)
+        })
+    })
+    .await
+    .unwrap_or_else(|error| Err((format!("service listing ended: {error}"), false)));
     if let Ok(mut cached) = SERVICES.lock() {
         *cached = Some((Instant::now(), listing.clone()));
     }
     listing
+}
+
+/// One sample and whether any of its sources can change by itself.
+struct Sample {
+    update: FeedUpdate,
+    sampleable: bool,
 }
 
 /// One complete feed state for `principal`, under the rights of this moment.
@@ -130,8 +156,9 @@ async fn sample(
     connection: &Connection,
     stop: &watch::Receiver<Option<EndReason>>,
     families_supported: bool,
-) -> io::Result<FeedUpdate> {
+) -> io::Result<Sample> {
     let mut update = FeedUpdate::default();
+    let mut sampleable = false;
     if !families_supported {
         update.families_unavailable = Some("Fensterfamilien bietet dieses Gerät nicht an".into());
     } else if allowed(context, principal, Capability::ScreenView) {
@@ -143,20 +170,39 @@ async fn sample(
         );
         let until = super::host_metadata::until(connection, Some(stop.clone()), job.result());
         match until.await {
-            Ok(listing) => update.families = Some(listing),
+            Ok(listing) => {
+                update.families = Some(listing);
+                sampleable = true;
+            }
             Err(error) if error.kind() == io::ErrorKind::PermissionDenied => return Err(error),
             Err(error) if error.kind() == io::ErrorKind::Interrupted => return Err(error),
-            Err(error) => update.families_unavailable = Some(error.to_string()),
+            Err(error) => {
+                sampleable |= error.kind() != io::ErrorKind::Unsupported;
+                update.families_unavailable = Some(error.to_string());
+            }
         }
     }
     if allowed(context, principal, Capability::ScreenControl) {
         match services().await {
-            Ok(services) => update.services = Some(services),
-            Err(reason) => update.services_unavailable = Some(reason),
+            Ok(services) => {
+                update.services = Some(services);
+                sampleable = true;
+            }
+            Err((reason, unsupported)) => {
+                sampleable |= !unsupported;
+                update.services_unavailable = Some(reason);
+            }
         }
         update.rdp = crate::rdp::core::host_summary();
+        // An RDP host may come up (setup, probe); a platform that hosts
+        // none says so for good. Without any summary yet, only a host with
+        // another sampleable source exists (Windows, Linux) or none at all.
+        sampleable |= update
+            .rdp
+            .as_ref()
+            .is_some_and(|rdp| rdp.startable || rdp.setup.setup_possible());
     }
-    Ok(update)
+    Ok(Sample { update, sampleable })
 }
 
 /// Serves a subscribed metadata channel until the viewer leaves, the
@@ -185,6 +231,9 @@ pub async fn run(
     let _reader = AbortOnDrop(reader);
     let mut tick = tokio::time::interval(FEED_RATE);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut rights = rights::subscribe();
+    // A feed without a sampleable source waits for a rights change.
+    let mut waiting = false;
     let mut last: Option<Vec<u8>> = None;
     loop {
         tokio::select! {
@@ -215,25 +264,52 @@ pub async fn run(
                 Some(Err(error)) => return Err(error),
                 None => return Ok(()),
             },
-            _ = tick.tick() => {
-                let sampled = sample(context, principal, connection, &stop, families_supported);
-                let update = sampled.await?;
-                let bytes = encode_feed_update(&update)?;
-                if last.as_ref() != Some(&bytes) {
-                    let mut writer = super::host_metadata::AuthorizedWriter {
-                        writer: &mut *send,
-                        context,
-                        principal,
-                        mode: SessionMode::View,
-                        stop: Some(&stop),
-                    };
-                    let written = write_frame(&mut writer, FEED_UPDATE, &bytes);
-                    super::host_metadata::until(connection, Some(stop.clone()), written).await?;
-                    last = Some(bytes);
+            changed = rights.changed(), if waiting => {
+                if changed.is_err() {
+                    // No more reports: back to the rate.
+                    waiting = false;
+                    continue;
                 }
+                let _ = rights.borrow_and_update();
+                waiting = publish(context, principal, connection, send, &stop, families_supported, &mut last).await?;
+                if !waiting {
+                    tick.reset();
+                }
+            }
+            _ = tick.tick(), if !waiting => {
+                let _ = rights.borrow_and_update();
+                waiting = publish(context, principal, connection, send, &stop, families_supported, &mut last).await?;
             }
         }
     }
+}
+
+/// Samples, sends the state if it changed and says whether the feed may
+/// wait for a rights change instead of the next tick.
+async fn publish(
+    context: &HostContext,
+    principal: &ProvenPrincipal,
+    connection: &Connection,
+    send: &mut SendStream,
+    stop: &watch::Receiver<Option<EndReason>>,
+    families_supported: bool,
+    last: &mut Option<Vec<u8>>,
+) -> io::Result<bool> {
+    let sampled = sample(context, principal, connection, stop, families_supported).await?;
+    let bytes = encode_feed_update(&sampled.update)?;
+    if last.as_ref() != Some(&bytes) {
+        let mut writer = super::host_metadata::AuthorizedWriter {
+            writer: &mut *send,
+            context,
+            principal,
+            mode: SessionMode::View,
+            stop: Some(stop),
+        };
+        let written = write_frame(&mut writer, FEED_UPDATE, &bytes);
+        super::host_metadata::until(connection, Some(stop.clone()), written).await?;
+        *last = Some(bytes);
+    }
+    Ok(!sampled.sampleable && rights::reported())
 }
 
 struct AbortOnDrop(tokio::task::JoinHandle<()>);

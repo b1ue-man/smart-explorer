@@ -2,9 +2,14 @@
 //! background service keeps one metadata session to every known device with
 //! a present relation (design 2.2) and subscribes to its window families,
 //! shared services and RDP short state; surfaces read
-//! `ShareWorkerSnapshot.peer_feeds`. No timer retries: an ended session
-//! starts again only on a presence event of that device, a new profile
-//! revision or, after a lost connection, this service's reconnect. A probe
+//! `ShareWorkerSnapshot.peer_feeds`. No timer of its own (A4, A5 of plan
+//! 2026-11-06-akku-rechte, `peer_feed_restart.rs`): a refused feed starts
+//! again when this device's relation to that device changes; a lost one at
+//! once on an arrival of that device or this service's server connection,
+//! otherwise after its backoff, which every look of `observe` checks. In
+//! low-power operation (app not visible) no feed holds a connection unless
+//! a mapped service of its device is in use; the paused and lost feeds
+//! start again when the app is visible (`peer_feed_power.rs`). A probe
 //! handshake learns the rights first, so the background never makes the
 //! host ask its user („Nachfragen“ is reported instead).
 use crate::rdp::core::RdpFeedSummary;
@@ -12,19 +17,39 @@ use crate::screen::core::family_protocol::FamilyListing;
 use crate::share::auto_forward::{self, MappedService};
 use crate::share::loopback_services::LoopbackService;
 use crate::share::peer_select::present_relation;
-use crate::share::{DirectContact, PeerOpenTarget, ShareEvent, ShareProfiles, ShareService};
+use crate::share::{PeerOpenTarget, ShareEvent, ShareProfiles, ShareService};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::time::Instant;
 use tokio::sync::watch;
 
+/// The known devices and the events that report an arrival.
+#[path = "peer_feed_devices.rs"]
+mod devices;
 /// Handshake, subscription and update loop of one feed session.
 #[path = "peer_feed_link.rs"]
 mod link;
+/// Restarts after visibility returns.
+#[path = "peer_feed_power.rs"]
+mod power;
+/// The relation to one device, without runtime data.
+#[path = "peer_feed_relation.rs"]
+mod relation;
+/// When a session starts, stays, pauses or waits.
+#[path = "peer_feed_restart.rs"]
+mod restart;
+
+use devices::{arrived_devices, identities, tunnel_in_use, Identity};
+use relation::Relation;
+use restart::{Facts, Phase, Step};
 
 /// Share of the 2 MiB IPC line for the feeds of all devices.
 const MAX_SNAPSHOT_BYTES: usize = 768 * 1024;
 const TOO_LARGE: &str = "Zu groß für den Statuskanal; `se screen families` ruft einzeln ab";
+const PAUSED: &str =
+    "Gerätefeed ruht, solange diese App im Hintergrund ist; er läuft wieder, sobald sie sichtbar ist";
 
 /// The feed state of one device, as every surface shows it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,7 +69,7 @@ pub struct PeerFeedView {
     /// Why there is no feed (older version, rights, connection).
     pub unavailable: Option<String>,
     /// The feed ended by a lost connection (not a refusal): it starts again
-    /// on the next reconnect of this service to the network (review B7).
+    /// after its backoff or on an event of that device (review B7, A5).
     #[serde(skip)]
     pub retry_on_network: bool,
 }
@@ -54,16 +79,70 @@ struct Session {
     target: PeerOpenTarget,
     generation: u64,
     stop: watch::Sender<bool>,
-    /// `None`: the thread did not start (shown in the view).
+    /// `None`: the thread did not start (shown in the view) or the session
+    /// is paused.
     thread: Option<std::thread::JoinHandle<()>>,
     view: Arc<Mutex<PeerFeedView>>,
+    /// Ended by this device's low-power operation.
+    paused: bool,
+    /// The relation this session last ran or ended under.
+    relation: Relation,
+    /// Lost attempts in a row before this one that never subscribed.
+    failures: u32,
+    /// The subscription was reached once.
+    subscribed: Arc<AtomicBool>,
+    /// When a lost session may start again; set when `observe` first sees
+    /// it lost.
+    retry_at: Option<Instant>,
+}
+
+impl Session {
+    fn phase(&self) -> Phase {
+        if self.paused {
+            return Phase::Paused;
+        }
+        if self
+            .thread
+            .as_ref()
+            .is_some_and(|thread| !thread.is_finished())
+        {
+            return Phase::Running;
+        }
+        let view = self.view.lock().unwrap_or_else(PoisonError::into_inner);
+        if self.thread.is_none() || view.retry_on_network {
+            Phase::Lost
+        } else {
+            Phase::Refused
+        }
+    }
+
+    /// Lost attempts in a row, this one included unless it subscribed.
+    fn lost_in_a_row(&self) -> u32 {
+        if self.subscribed.load(Ordering::Acquire) {
+            0
+        } else {
+            self.failures.saturating_add(1)
+        }
+    }
+
+    fn backoff_over(&mut self, now: Instant) -> bool {
+        let wait = restart::backoff(self.lost_in_a_row().saturating_sub(1));
+        now >= *self.retry_at.get_or_insert(now + wait)
+    }
+
+    fn identity(&self) -> Identity {
+        let view = self.view.lock().unwrap_or_else(PoisonError::into_inner);
+        (
+            view.device_id.clone(),
+            view.public_key.clone(),
+            view.name.clone(),
+        )
+    }
 }
 
 #[derive(Default)]
 struct Feeds {
     sessions: BTreeMap<String, Session>,
-    retry: BTreeSet<String>,
-    revision: Option<crate::share::ProfileRevision>,
     generation: u64,
 }
 
@@ -76,102 +155,21 @@ fn feeds() -> std::sync::MutexGuard<'static, Feeds> {
         .unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Device ID, public key, name.
-type Identity = (String, String, String);
-
-fn identities(profiles: &ShareProfiles) -> BTreeMap<String, Identity> {
-    let mut known = BTreeMap::new();
-    for contact in &profiles.direct_contacts {
-        if let (Some(device), Some(key)) = (&contact.remote_device_id, &contact.remote_public_key) {
-            let identity = (device.clone(), key.clone(), contact.display_name.clone());
-            known.insert(auto_forward::device_key(device, key), identity);
-        }
-    }
-    for room in profiles.rooms.iter().filter(|room| room.auto_join) {
-        for member in room.members.iter().filter(|member| !member.blocked) {
-            let key = auto_forward::device_key(&member.device_id, &member.public_key);
-            known.entry(key).or_insert_with(|| {
-                let name = member.device_name.clone();
-                (member.device_id.clone(), member.public_key.clone(), name)
-            });
-        }
-    }
-    known
-}
-
-/// Device IDs named by presence events (design 5.2 retry triggers).
-fn present_devices(profiles: &ShareProfiles, events: &[ShareEvent]) -> BTreeSet<String> {
-    let contact = |pick: &dyn Fn(&DirectContact) -> bool| {
-        profiles
-            .direct_contacts
-            .iter()
-            .find(|contact| pick(contact))
-            .and_then(|contact| contact.remote_device_id.clone())
-    };
-    let mut devices = BTreeSet::new();
-    for event in events {
-        match event {
-            ShareEvent::DirectAvailable { presence, .. }
-            | ShareEvent::RoomJoined { presence, .. } => {
-                devices.insert(presence.device_id.clone());
-            }
-            ShareEvent::RoomRoster { members, .. } => {
-                devices.extend(members.iter().map(|member| member.device_id.clone()));
-            }
-            ShareEvent::RoomLeft { device_id, .. } => {
-                devices.insert(device_id.clone());
-            }
-            ShareEvent::DirectOffline { lookup_id } => {
-                devices.extend(contact(&|c: &DirectContact| &c.lookup_id == lookup_id));
-            }
-            ShareEvent::LanPeerSeen { contact_id, .. } | ShareEvent::LanPeerLost { contact_id } => {
-                devices.extend(contact(&|c: &DirectContact| &c.id == contact_id));
-            }
-            _ => {}
-        }
-    }
-    devices
-}
-
 /// After every event drain and profile reload of the background service:
-/// starts, keeps or ends the feed session of every known device.
-pub fn observe(
-    service: Option<&ShareService>,
-    profiles: &ShareProfiles,
-    events: &[ShareEvent],
-) {
+/// starts, keeps, pauses or ends the feed session of every known device.
+pub fn observe(service: Option<&ShareService>, profiles: &ShareProfiles, events: &[ShareEvent]) {
     let Some(service) = service else {
         stop_all();
         return;
     };
-    let mut state = feeds();
-    let revision_changed = state.revision.as_ref() != Some(&profiles.storage_revision);
-    state.revision = Some(profiles.storage_revision.clone());
-    let moved = present_devices(profiles, events);
-    let known = identities(profiles);
-    for (key, (device_id, _, _)) in &known {
-        if moved.contains(device_id) {
-            state.retry.insert(key.clone());
-        }
-    }
-    // Event, not timer: a feed lost with the connection starts again once
-    // this service is back on the network.
-    if events
+    let low_power = crate::share::power::low_power();
+    let network = events
         .iter()
-        .any(|event| matches!(event, ShareEvent::ServerConnected))
-    {
-        let lost: Vec<String> = state
-            .sessions
-            .iter()
-            .filter(|(_, session)| {
-                let ended = session.thread.as_ref().is_none_or(|t| t.is_finished());
-                let view = session.view.lock().unwrap_or_else(PoisonError::into_inner);
-                ended && view.retry_on_network
-            })
-            .map(|(key, _)| key.clone())
-            .collect();
-        state.retry.extend(lost);
-    }
+        .any(|event| matches!(event, ShareEvent::ServerConnected));
+    let arrived = arrived_devices(profiles, events);
+    let known = identities(profiles);
+    let now = Instant::now();
+    let mut state = feeds();
     let gone: Vec<String> = state
         .sessions
         .keys()
@@ -182,27 +180,91 @@ pub fn observe(
         end_session(&mut state, &key);
     }
     for (key, identity) in known {
-        let target = present_relation(profiles, &identity.0, &identity.1);
-        let decision = match (&target, state.sessions.get(&key)) {
-            (None, Some(_)) => Some(false),
-            (None, None) => None,
-            (Some(target), Some(session)) => {
-                let same =
-                    Arc::ptr_eq(&session.service.iroh, &service.iroh) && &session.target == target;
-                let running = session.thread.as_ref().is_some_and(|t| !t.is_finished());
-                let retry = revision_changed || state.retry.contains(&key);
-                (!(same && running) && (running || retry)).then_some(true)
-            }
-            (Some(_), None) => Some(true),
+        let Some(target) = present_relation(profiles, &identity.0, &identity.1) else {
+            end_session(&mut state, &key);
+            continue;
         };
-        match (decision, target) {
-            (Some(true), Some(target)) => {
-                end_session(&mut state, &key);
-                start_session(&mut state, service, key, identity, target);
+        let relation = Relation::of(profiles, &identity.0, &identity.1);
+        let (step, failures) = match state.sessions.get_mut(&key) {
+            None => (restart::first(low_power), 0),
+            Some(session) => {
+                let phase = session.phase();
+                let device_event = network || arrived.contains(&identity.0);
+                let facts = Facts {
+                    phase,
+                    same: Arc::ptr_eq(&session.service.iroh, &service.iroh)
+                        && session.target == target,
+                    low_power,
+                    tunnel_in_use: phase == Phase::Running && low_power && tunnel_in_use(&identity),
+                    relation_changed: session.relation != relation,
+                    device_event,
+                    backoff_over: phase == Phase::Lost && session.backoff_over(now),
+                };
+                let step = restart::step(&facts);
+                if step == Step::Keep && matches!(phase, Phase::Running | Phase::Paused) {
+                    session.relation = relation.clone();
+                }
+                // Only a retry the backoff allowed keeps counting; an event
+                // of the device or a new relation starts from the beginning.
+                let backoff_only =
+                    phase == Phase::Lost && facts.same && !device_event && !facts.relation_changed;
+                let failures = if backoff_only {
+                    session.lost_in_a_row()
+                } else {
+                    0
+                };
+                (step, failures)
             }
-            (Some(_), _) => end_session(&mut state, &key),
-            (None, _) => {}
+        };
+        match step {
+            Step::Keep => {}
+            Step::Start => {
+                end_session(&mut state, &key);
+                start_session(
+                    &mut state, service, key, identity, target, relation, failures,
+                );
+            }
+            Step::Pause => {
+                end_session(&mut state, &key);
+                pause_session(&mut state, service, key, identity, target, relation);
+            }
         }
+    }
+    // Low-power operation may have ended while this look paused a feed; the
+    // visibility thread then found nothing to start.
+    if low_power && !crate::share::power::low_power() {
+        resume_locked(&mut state, false);
+    }
+}
+
+/// The app became visible: every paused and lost feed starts at once with
+/// the service and target it last had; the next `observe` corrects both.
+fn resume() {
+    if !crate::share::power::low_power() {
+        resume_locked(&mut feeds(), true);
+    }
+}
+
+/// Starts the paused sessions and, with `lost`, the lost ones.
+fn resume_locked(state: &mut Feeds, lost: bool) {
+    let waiting: Vec<String> = state
+        .sessions
+        .iter()
+        .filter(|(_, session)| match session.phase() {
+            Phase::Paused => true,
+            Phase::Lost => lost,
+            Phase::Running | Phase::Refused => false,
+        })
+        .map(|(key, _)| key.clone())
+        .collect();
+    for key in waiting {
+        let Some(session) = state.sessions.get(&key) else {
+            continue;
+        };
+        let (service, target) = (session.service.clone(), session.target.clone());
+        let (identity, relation) = (session.identity(), session.relation.clone());
+        end_session(state, &key);
+        start_session(state, &service, key, identity, target, relation, 0);
     }
 }
 
@@ -224,23 +286,61 @@ fn end_session(state: &mut Feeds, key: &str) {
     }
 }
 
+fn new_view(identity: Identity) -> Arc<Mutex<PeerFeedView>> {
+    let (device_id, public_key, name) = identity;
+    Arc::new(Mutex::new(PeerFeedView {
+        device_id,
+        public_key,
+        name,
+        ..PeerFeedView::default()
+    }))
+}
+
+/// A paused session holds no thread and no connection; its view keeps
+/// nothing of the device (threat T-W1) and says why.
+fn pause_session(
+    state: &mut Feeds,
+    service: &ShareService,
+    key: String,
+    identity: Identity,
+    target: PeerOpenTarget,
+    relation: Relation,
+) {
+    state.generation += 1;
+    let view = new_view(identity);
+    view.lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .unavailable = Some(PAUSED.into());
+    let session = Session {
+        service: service.clone(),
+        target,
+        generation: state.generation,
+        stop: watch::channel(false).0,
+        thread: None,
+        view,
+        paused: true,
+        relation,
+        failures: 0,
+        subscribed: Arc::new(AtomicBool::new(false)),
+        retry_at: None,
+    };
+    state.sessions.insert(key, session);
+    power::follow_visibility();
+}
+
 fn start_session(
     state: &mut Feeds,
     service: &ShareService,
     key: String,
     identity: Identity,
     target: PeerOpenTarget,
+    relation: Relation,
+    failures: u32,
 ) {
-    state.retry.remove(&key);
     state.generation += 1;
     let generation = state.generation;
-    let (device_id, public_key, name) = identity;
-    let view = Arc::new(Mutex::new(PeerFeedView {
-        device_id,
-        public_key,
-        name,
-        ..PeerFeedView::default()
-    }));
+    let view = new_view(identity);
+    let subscribed = Arc::new(AtomicBool::new(false));
     let (stop, stopped) = watch::channel(false);
     let context = Context {
         service: service.clone(),
@@ -248,11 +348,12 @@ fn start_session(
         key: key.clone(),
         generation,
         view: view.clone(),
+        subscribed: subscribed.clone(),
     };
     let spawned = std::thread::Builder::new()
         .name("share-peer-feed".into())
         .spawn(move || run(context, stopped));
-    // A failed start is shown and retried like an ended session.
+    // A failed start is shown and retried like a lost session.
     let thread = spawned
         .map_err(|error| {
             let mut shown = view.lock().unwrap_or_else(PoisonError::into_inner);
@@ -266,6 +367,11 @@ fn start_session(
         stop,
         thread,
         view,
+        paused: false,
+        relation,
+        failures,
+        subscribed,
+        retry_at: None,
     };
     state.sessions.insert(key, session);
 }
@@ -310,6 +416,8 @@ struct Context {
     key: String,
     generation: u64,
     view: Arc<Mutex<PeerFeedView>>,
+    /// Set once the subscription stands (`link::subscribed`).
+    subscribed: Arc<AtomicBool>,
 }
 impl Context {
     fn current_in(&self, state: &Feeds) -> bool {
@@ -362,4 +470,3 @@ fn run(context: Context, stopped: watch::Receiver<bool>) {
         });
     }
 }
-

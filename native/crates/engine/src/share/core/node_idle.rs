@@ -302,10 +302,7 @@ impl ShareIrohNode {
 
     /// Counts one incoming stream; in low power it also holds the CPU for
     /// `STREAM_HOLD_MS`, renewed every 30 s while any stream runs.
-    pub fn incoming_stream_started(
-        &self,
-        activity: &Arc<IncomingActivity>,
-    ) -> impl Send + 'static {
+    pub fn incoming_stream_started(&self, activity: &Arc<IncomingActivity>) -> impl Send + 'static {
         activity.open_streams.fetch_add(1, Ordering::AcqRel);
         let holds = self.idle.holds.clone();
         holds.active.fetch_add(1, Ordering::AcqRel);
@@ -320,6 +317,28 @@ impl ShareIrohNode {
             activity: activity.clone(),
             holds,
         }
+    }
+}
+
+/// Keeps one incoming watch stream counted (its connection stays busy for
+/// the sweep) without a CPU hold.
+struct WatchStreamGuard(Arc<IncomingActivity>);
+
+impl Drop for WatchStreamGuard {
+    fn drop(&mut self) {
+        self.0.stream_finished();
+    }
+}
+
+impl ShareIrohNode {
+    /// Counts an incoming folder watch like any stream, so a sweep never
+    /// closes its connection, but holds no CPU (A12 of plan
+    /// 2026-11-06-akku-rechte): a watch waits for changes for as long as
+    /// the subscriber keeps it, and `host_watch` holds the CPU itself while
+    /// it sets up and while it reads and sends changes.
+    pub fn incoming_watch_started(&self, activity: &Arc<IncomingActivity>) -> impl Send + 'static {
+        activity.open_streams.fetch_add(1, Ordering::AcqRel);
+        WatchStreamGuard(activity.clone())
     }
 }
 
