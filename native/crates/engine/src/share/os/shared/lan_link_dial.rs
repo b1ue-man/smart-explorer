@@ -37,10 +37,10 @@ impl LanLinkTransport {
             }
         }
         drop(auth);
+        let cooldown = cadence::probe_cooldown(node.power().low_power());
         let mut state = self.state.try_lock().map_err(|_| busy())?;
         state.probes.retain(|id, at| {
-            at.elapsed() < SESSION_DEADLINE + PROBE_BACKOFF
-                && peers.iter().any(|(pin, _)| &pin.node_id == id)
+            at.elapsed() < cooldown && peers.iter().any(|(pin, _)| &pin.node_id == id)
         });
         let count = peers.len();
         if count > 0 {
@@ -53,7 +53,7 @@ impl LanLinkTransport {
             if state
                 .probes
                 .get(&pin.node_id)
-                .is_some_and(|at| at.elapsed() < SESSION_DEADLINE + PROBE_BACKOFF)
+                .is_some_and(|at| at.elapsed() < cooldown)
                 || state.channels.values().any(|channel| {
                     channel.connection.close_reason().is_none()
                         && channel.connection.remote_id().to_string() == pin.node_id

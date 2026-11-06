@@ -11,7 +11,7 @@ use tokio::time::Instant;
 use super::core::{eio, random_bytes};
 use super::lan_link_facts::{self, LanPeerPin};
 use super::lan_link_transport::{
-    self, LanLinkTransport, SelectedIpPath, REFRESH_INTERVAL, ROUND_DEADLINE, SESSION_DEADLINE,
+    self, LanLinkTransport, SelectedIpPath, ROUND_DEADLINE, SERVER_SESSION_DEADLINE,
 };
 use super::lan_link_wire::{self, LinkFrame, MAX_LINK_FRAME};
 use super::node::ShareIrohNode;
@@ -24,6 +24,13 @@ pub(super) async fn run(
 ) -> io::Result<()> {
     node.await_route(&connection, None, None).await?;
     let mut paths = std::pin::pin!(connection.path_events());
+    // The dialling side picks the rhythm of the rounds and with it the length
+    // of the session; the accepting side only bounds it by the longest one.
+    let session = if expected.is_some() {
+        lan_link_transport::session_deadline(node.power().low_power())
+    } else {
+        SERVER_SESSION_DEADLINE
+    };
     let work = async {
         if let Some(pin) = expected {
             client(&node, &transport, &connection, pin).await
@@ -44,7 +51,7 @@ pub(super) async fn run(
     };
     super::route_protocol::scope(
         connection.clone(),
-        tokio::time::timeout(SESSION_DEADLINE, async {
+        tokio::time::timeout(session, async {
             tokio::select! {
                 biased;
                 result = monitor => result,
@@ -145,7 +152,7 @@ async fn client(
             continue; // Fresh stream/nonces, same absolute deadline and attempt budget.
         }
         result?;
-        tokio::time::sleep(REFRESH_INTERVAL).await;
+        transport.rest(connection, node.power().low_power()).await;
         deadline = active_now() + ROUND_DEADLINE;
     }
     Ok(())
@@ -156,71 +163,86 @@ async fn server(
     transport: &LanLinkTransport,
     connection: &Connection,
 ) -> io::Result<()> {
-    let mut deadline = active_now() + ROUND_DEADLINE;
     for _ in 0..24 {
         node.await_route(connection, None, None).await?;
         node.require_sharing_active()?;
-        let result = timeout_until(deadline, async {
-            check_deadline(deadline)?;
-            let (mut send, mut recv) = connection.accept_bi().await.map_err(eio)?;
-            let (echo, identity) = match recv_frame(&mut recv).await? {
-                LinkFrame::Challenge { nonce, identity } => (nonce, identity),
-                _ => return Err(eio("LAN-Link erwartet Challenge")),
-            };
-            let pin = snapshot(deadline, || {
-                lan_link_transport::current_pin(node, connection, &identity)
-            })
-            .await?;
-            let (path, revision) = snapshot(deadline, || {
-                Ok((
-                    checked_path(transport, connection)?,
-                    transport.path_revision(connection)?,
-                ))
-            })
-            .await?;
-            let nonce = random_bytes::<32>().map_err(eio)?;
-            let own = snapshot(deadline, || lan_link_transport::local_identity(node)).await?;
-            let uplink = snapshot(deadline, || Ok(transport.host()?.own_uplink)).await?;
-            send_frame(
-                &mut send,
-                &LinkFrame::Answer {
-                    echo,
-                    nonce,
-                    identity: own,
-                    uplink,
-                },
-            )
-            .await?;
-            send.finish().map_err(eio)?;
-            let peer_uplink = match recv_frame(&mut recv).await? {
-                LinkFrame::Confirm { echo, uplink } => {
-                    lan_link_wire::check_echo(&nonce, &echo)?;
-                    uplink
-                }
-                _ => return Err(eio("LAN-Link erwartet Bestaetigung")),
-            };
-            snapshot(deadline, || {
-                transport.confirm(
-                    node,
-                    connection,
-                    pin.clone(),
-                    path.clone(),
-                    revision,
-                    nonce,
-                    peer_uplink,
-                )
-            })
-            .await
-        })
-        .await
-        .map_err(|_| challenge_timeout())?;
+        let result = server_round(node, transport, connection).await;
         if discarded_revision(&result) {
             continue;
         }
         result?;
-        deadline = active_now() + ROUND_DEADLINE;
     }
     Ok(())
+}
+
+/// One round on the accepting side. The wait for the peer's next challenge
+/// is bounded by the longest rhythm a peer may keep (`server_idle_wait`);
+/// from the first byte of the challenge on, the round has `ROUND_DEADLINE`
+/// as before, so a stalled or malformed frame still ends within 3 s.
+async fn server_round(
+    node: &ShareIrohNode,
+    transport: &LanLinkTransport,
+    connection: &Connection,
+) -> io::Result<()> {
+    let idle = active_now() + lan_link_transport::server_idle_wait();
+    let (mut send, mut recv) = timeout_until(idle, connection.accept_bi())
+        .await
+        .map_err(|_| challenge_timeout())?
+        .map_err(eio)?;
+    let deadline = active_now() + ROUND_DEADLINE;
+    timeout_until(deadline, async {
+        check_deadline(deadline)?;
+        let (echo, identity) = match recv_frame(&mut recv).await? {
+            LinkFrame::Challenge { nonce, identity } => (nonce, identity),
+            _ => return Err(eio("LAN-Link erwartet Challenge")),
+        };
+        let pin = snapshot(deadline, || {
+            lan_link_transport::current_pin(node, connection, &identity)
+        })
+        .await?;
+        let (path, revision) = snapshot(deadline, || {
+            Ok((
+                checked_path(transport, connection)?,
+                transport.path_revision(connection)?,
+            ))
+        })
+        .await?;
+        let nonce = random_bytes::<32>().map_err(eio)?;
+        let own = snapshot(deadline, || lan_link_transport::local_identity(node)).await?;
+        let uplink = snapshot(deadline, || Ok(transport.host()?.own_uplink)).await?;
+        send_frame(
+            &mut send,
+            &LinkFrame::Answer {
+                echo,
+                nonce,
+                identity: own,
+                uplink,
+            },
+        )
+        .await?;
+        send.finish().map_err(eio)?;
+        let peer_uplink = match recv_frame(&mut recv).await? {
+            LinkFrame::Confirm { echo, uplink } => {
+                lan_link_wire::check_echo(&nonce, &echo)?;
+                uplink
+            }
+            _ => return Err(eio("LAN-Link erwartet Bestaetigung")),
+        };
+        snapshot(deadline, || {
+            transport.confirm(
+                node,
+                connection,
+                pin.clone(),
+                path.clone(),
+                revision,
+                nonce,
+                peer_uplink,
+            )
+        })
+        .await
+    })
+    .await
+    .map_err(|_| challenge_timeout())?
 }
 
 fn discarded_revision(result: &io::Result<()>) -> bool {

@@ -228,7 +228,11 @@ pub fn run_daemon_with(handoff: Option<Handoff>) {
         super::problem_notify::notify(&configured_jobs, now);
         write_heartbeat();
         // Sleep one tick in 2 s slices so a stop request is honoured promptly.
-        let tick = if sync_enabled {
+        // A host that defers scheduling (Android) evaluates no due job here, so
+        // the full pass (job files, states, watchers) runs at its configured
+        // cadence instead of every 2 s; the slices below keep polling running
+        // jobs and catch-up runs.
+        let tick = if sync_enabled && !controls.defer_scheduling {
             controls.tick_secs.min(2)
         } else {
             controls.tick_secs

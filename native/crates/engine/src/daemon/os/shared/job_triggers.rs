@@ -133,6 +133,25 @@ mod tests {
         assert_eq!(connect_failure("Authentication failed"), FailureKind::Auth);
     }
     #[test]
+    fn battery_task_host_cursor_of_a_job_moves_only_when_the_host_cursor_moves() {
+        let root = std::env::temp_dir().join("battery-task-host-cursor");
+        let endpoint = root.to_string_lossy().into_owned();
+        let mut job = SyncJob::new("x".into(), endpoint.clone(), endpoint);
+        job.direction = Direction::AtoB;
+        let scope = super::super::schedule::local_root(&job.source).expect("local root");
+        crate::watch::set_host_cursor(&scope, Some("partial:1:vol:1:10".into()));
+        let first = host_cursor(&job).expect("cursor of a reported volume");
+        // A probe that found nothing new hands over the same cursor.
+        crate::watch::set_host_cursor(&scope, Some("partial:1:vol:1:10".into()));
+        assert_eq!(host_cursor(&job), Some(first.clone()));
+        // Only a moved host cursor shows up as a different value.
+        crate::watch::set_host_cursor(&scope, Some("partial:2:vol:1:11".into()));
+        assert_ne!(host_cursor(&job), Some(first));
+        crate::watch::set_host_cursor(&scope, None);
+        assert_eq!(host_cursor(&job), None);
+    }
+
+    #[test]
     fn review_task_pending_generation_moves_beyond_a_running_attempt() {
         let mut state = JobState {
             running: Some(crate::syncjobs::RunMark {

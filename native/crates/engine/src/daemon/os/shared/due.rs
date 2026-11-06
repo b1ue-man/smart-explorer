@@ -7,9 +7,12 @@
 //! confirmation, verification) survive restarts. Real-time changes are timed
 //! by the real-time watcher (debounce and maximum wait), not here.
 
+use chrono::{TimeZone, Timelike};
+
 use crate::syncjobs::{JobState, PendingKind, RunCause, Runner, SyncJob, Trigger};
 
 pub(super) const NEEDS_USER_PROBE_SECS: i64 = 86_400; // legacy test constant; no auth probes
+const MINUTES_PER_DAY: i32 = 24 * 60;
 /// Plausible creation times encoded in job ids (2020 … 2100).
 const CREATED_MIN: i64 = 1_577_836_800;
 const CREATED_MAX: i64 = 4_102_444_800;
@@ -115,10 +118,46 @@ pub(super) fn due_now(
     None
 }
 
-/// When the job is next due by the clock (at the earliest `now`), for the
-/// host's wake alarm; `None` when only events start it. The active-hours
-/// window is not applied (the worker waits for it when the time comes).
+/// When the job is next due (at the earliest `now`), for the host's wake
+/// alarm; `None` when only events start it. A job with an active-hours
+/// window is never due outside of it (`due_now`): a time that falls outside
+/// the window moves to the next start of the window, so the alarm neither
+/// fires "now" again and again nor wakes the device for a start that cannot
+/// happen.
 pub(super) fn next_due(job: &SyncJob, state: &JobState, now: i64) -> Option<i64> {
+    next_due_unwindowed(job, state, now).map(|at| next_active_at(job, at))
+}
+
+/// First instant at or after `at` inside the job's active-hours window
+/// (`at` itself without a window or inside it).
+fn next_active_at(job: &SyncJob, at: i64) -> i64 {
+    if job.active_now(at) {
+        return at;
+    }
+    // Outside the window, so its start differs from the current local
+    // minute of day (a window with `from == to` is always active).
+    let current = chrono::Local
+        .timestamp_opt(at, 0)
+        .single()
+        .map_or(0, |time| (time.hour() * 60 + time.minute()) as i32);
+    let ahead = i64::from((job.active_from_min - current).rem_euclid(MINUTES_PER_DAY));
+    let minute_start = at - at.rem_euclid(60);
+    let mut start = minute_start.saturating_add(ahead * 60);
+    // A daylight-saving change between `at` and the start shifts the local
+    // minute: step back to the first active minute, or forward to the next.
+    let mut steps = 0;
+    while steps < MINUTES_PER_DAY && start - 60 > at && job.active_now(start - 60) {
+        start -= 60;
+        steps += 1;
+    }
+    while steps < 2 * MINUTES_PER_DAY && !job.active_now(start) {
+        start = start.saturating_add(60);
+        steps += 1;
+    }
+    start
+}
+
+fn next_due_unwindowed(job: &SyncJob, state: &JobState, now: i64) -> Option<i64> {
     if !job.enabled {
         return None;
     }
@@ -270,6 +309,81 @@ mod tests {
         let mut disabled = job.clone();
         disabled.enabled = false;
         assert_eq!(due_now(&disabled, &state, NOW, None), None);
+    }
+
+    fn local(day: u32, hour: u32, minute: u32) -> i64 {
+        chrono::Local
+            .with_ymd_and_hms(2026, 6, day, hour, minute, 0)
+            .earliest()
+            .expect("a June instant exists in every time zone")
+            .timestamp()
+    }
+
+    fn confirmed_block() -> JobState {
+        JobState {
+            blocked: Some(Blocked {
+                kind: BlockKind::Other,
+                detail: String::new(),
+                since: NOW,
+                confirmed: true,
+            }),
+            ..JobState::default()
+        }
+    }
+
+    #[test]
+    fn battery_task_next_due_outside_the_active_window_is_the_next_window_start() {
+        let mut windowed = job(Trigger::Interval);
+        windowed.active_from_min = 9 * 60;
+        windowed.active_to_min = 17 * 60;
+        let state = confirmed_block();
+        // Due now, but the window is closed: the alarm waits for 09:00.
+        let evening = local(10, 20, 30);
+        assert_eq!(due_now(&windowed, &state, evening, None), None);
+        assert_eq!(next_due(&windowed, &state, evening), Some(local(11, 9, 0)));
+        let night = local(10, 2, 0);
+        assert_eq!(next_due(&windowed, &state, night), Some(local(10, 9, 0)));
+        // Inside the window the job is due now, as before.
+        let noon = local(10, 12, 0);
+        assert_eq!(next_due(&windowed, &state, noon), Some(noon));
+        // A window that wraps past midnight starts in the evening.
+        windowed.active_from_min = 22 * 60;
+        windowed.active_to_min = 6 * 60;
+        assert_eq!(next_due(&windowed, &state, noon), Some(local(10, 22, 0)));
+        assert_eq!(
+            next_due(&windowed, &state, local(10, 23, 0)),
+            Some(local(10, 23, 0))
+        );
+        // No window (from == to): never moved.
+        windowed.active_to_min = windowed.active_from_min;
+        assert_eq!(next_due(&windowed, &state, noon), Some(noon));
+    }
+
+    #[test]
+    fn battery_task_a_timer_time_outside_the_window_moves_to_the_window_start() {
+        let mut windowed = job(Trigger::Interval);
+        windowed.interval_min = 60;
+        windowed.active_from_min = 9 * 60;
+        windowed.active_to_min = 17 * 60;
+        let now = local(10, 12, 0);
+        let state = JobState {
+            last_success: Some(now - 60),
+            ..JobState::default()
+        };
+        // The next interval time (13:00) is inside the window: unchanged.
+        assert_eq!(next_due(&windowed, &state, now), Some(now - 60 + 3_600));
+        // The next interval time (20:30) is outside: it moves to 09:00.
+        let late = JobState {
+            last_success: Some(local(10, 19, 30)),
+            ..JobState::default()
+        };
+        assert_eq!(
+            next_due(&windowed, &late, local(10, 19, 40)),
+            Some(local(11, 9, 0))
+        );
+        // Event-only triggers still have no clock time.
+        windowed.trigger = Trigger::OnConnect;
+        assert_eq!(next_due(&windowed, &JobState::default(), now), None);
     }
 
     #[test]

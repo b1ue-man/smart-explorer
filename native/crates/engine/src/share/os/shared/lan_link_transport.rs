@@ -19,12 +19,15 @@ use super::lan_link_wire::LAN_LINK_ALPN;
 use super::node::ShareIrohNode;
 use super::types::ShareAuthState;
 
+#[path = "lan_link_cadence.rs"]
+mod cadence;
 #[path = "lan_link_dial.rs"]
 mod dial;
+pub(super) use cadence::{server_idle_wait, session_deadline, SERVER_SESSION_DEADLINE};
 
 pub(super) const ROUND_DEADLINE: Duration = Duration::from_secs(3);
-pub(super) const SESSION_DEADLINE: Duration = Duration::from_secs(45);
-pub(super) const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
+const SESSION_DEADLINE: Duration = Duration::from_secs(45);
+const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 const FACT_MONOTONIC_TTL: Duration = Duration::from_secs(6);
 const HOST_FACT_TTL: Duration = Duration::from_secs(6);
 const PROBE_BACKOFF: Duration = Duration::from_secs(5);
@@ -92,6 +95,10 @@ pub struct LanLinkTransport {
     state: Mutex<State>,
     inbound: Arc<Semaphore>,
     outbound: Arc<Semaphore>,
+    /// Last power mode reported by `update_lan_link_host`; a change wakes
+    /// the rests of the status rounds.
+    low_power: AtomicBool,
+    power_changed: tokio::sync::Notify,
 }
 
 impl Default for LanLinkTransport {
@@ -108,6 +115,8 @@ impl Default for LanLinkTransport {
             }),
             inbound: Arc::new(Semaphore::new(8)),
             outbound: Arc::new(Semaphore::new(4)),
+            low_power: AtomicBool::new(false),
+            power_changed: tokio::sync::Notify::new(),
         }
     }
 }
@@ -245,10 +254,11 @@ impl LanLinkTransport {
             lan_link_facts::private_interface(path.local, path.remote, &host.interfaces)
                 .ok_or_else(|| eio("LAN-Link-Interface ist nicht eindeutig privat"))?;
         let mut state = self.state.try_lock().map_err(|_| busy())?;
+        let epoch = self.control_epoch.load(Ordering::Acquire);
         let channel = state
             .channels
-            .get(&connection.stable_id())
-            .filter(|channel| channel.control_epoch == self.control_epoch.load(Ordering::Acquire))
+            .get_mut(&connection.stable_id())
+            .filter(|channel| channel.control_epoch == epoch)
             .ok_or_else(|| eio("LAN-Link geschlossen"))?;
         if channel.revision != revision {
             return Err(io::Error::new(
@@ -293,8 +303,8 @@ impl LanLinkTransport {
             .cache
             .iter()
             .filter_map(|(id, cached)| {
-                let valid = cached.confirmed.elapsed() <= FACT_MONOTONIC_TTL
-                    && cached.fact.current(
+                let valid = cached.confirmed.elapsed() <= cached.validity()
+                    && cached.lease(now).current(
                         now,
                         &auth.direct_contacts,
                         &auth.direct_grants,
@@ -331,19 +341,17 @@ impl LanLinkTransport {
             .cache
             .values()
             .take(MAX_LINK_PEERS)
-            .map(|cached| cached.fact.clone())
+            .map(|cached| cached.lease(now))
             .collect()
     }
 }
 
 impl ShareIrohNode {
     /// Parent exposes this through ShareService; performs no network I/O.
-    pub fn update_lan_link_host(
-        self: &Arc<Self>,
-        facts: LanLinkHostFacts,
-    ) -> io::Result<()> {
+    pub fn update_lan_link_host(self: &Arc<Self>, facts: LanLinkHostFacts) -> io::Result<()> {
         self.require_sharing_active()?;
         self.lan_links.update(facts)?;
+        self.lan_links.note_power(self.power().low_power());
         if self.lan_links.enabled.load(Ordering::Acquire) {
             self.lan_links.probe(self.clone())?;
         }

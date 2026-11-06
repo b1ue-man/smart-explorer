@@ -16,6 +16,17 @@ use super::lan_privacy::{LanProof, MAX_ADDRESSES};
 const SERVICE: &str = "_se-share._udp.local.";
 const INSTANCE_PREFIX: &str = "se-";
 
+/// Seconds between the mDNS daemon's checks of the network interfaces.
+///
+/// mdns-sd 0.11.5 checked every 30 s (`IP_CHECK_INTERVAL_MILLIS`); 0.21.6
+/// defaults to `IP_CHECK_INTERVAL_IN_SECS_DEFAULT = 5` and so wakes the
+/// daemon thread and reads all interfaces six times as often, around the
+/// clock, also on a phone in the background. The owner (`lan_runtime.rs`)
+/// gathers interface facts every few seconds itself and restarts or
+/// re-announces on its own; the daemon check only has to pick up new
+/// addresses for the auto-address announcement, which 30 s serves as before.
+pub(crate) const IP_CHECK_INTERVAL_SECS: u32 = 30;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LanAnnouncement {
     pub hashed_id: String,
@@ -46,14 +57,7 @@ impl LanPresence {
     pub fn start() -> Result<Self, String> {
         let daemon = mdns_sd::ServiceDaemon::new()
             .map_err(|error| format!("mDNS-Dienst konnte nicht gestartet werden: {error}"))?;
-        // mdns-sd >= 0.17 also uses loopback interfaces by default; 0.11 did
-        // not. Keep announcing and browsing on the LAN interfaces only.
-        daemon
-            .disable_interface(vec![
-                mdns_sd::IfKind::LoopbackV4,
-                mdns_sd::IfKind::LoopbackV6,
-            ])
-            .map_err(|error| format!("mDNS-Dienst konnte nicht eingerichtet werden: {error}"))?;
+        configure_daemon(&daemon)?;
         let browse = daemon
             .browse(SERVICE)
             .map_err(|error| format!("mDNS-Suche konnte nicht gestartet werden: {error}"))?;
@@ -196,6 +200,23 @@ impl Drop for LanPresence {
     }
 }
 
+/// Options every daemon of this module runs with.
+fn configure_daemon(daemon: &mdns_sd::ServiceDaemon) -> Result<(), String> {
+    let setup_error =
+        |error: mdns_sd::Error| format!("mDNS-Dienst konnte nicht eingerichtet werden: {error}");
+    daemon
+        .set_ip_check_interval(IP_CHECK_INTERVAL_SECS)
+        .map_err(setup_error)?;
+    // mdns-sd >= 0.17 also uses loopback interfaces by default; 0.11 did
+    // not. Keep announcing and browsing on the LAN interfaces only.
+    daemon
+        .disable_interface(vec![
+            mdns_sd::IfKind::LoopbackV4,
+            mdns_sd::IfKind::LoopbackV6,
+        ])
+        .map_err(setup_error)
+}
+
 fn sighting_from(info: &mdns_sd::ResolvedService) -> Option<LanSighting> {
     let id = info
         .get_property_val_str("id")
@@ -282,6 +303,20 @@ fn valid_id(id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn battery_task_mdns_interface_check_runs_every_30_seconds() {
+        let daemon = mdns_sd::ServiceDaemon::new().expect("mDNS daemon starts without a network");
+        configure_daemon(&daemon).expect("options are accepted");
+        assert_eq!(IP_CHECK_INTERVAL_SECS, 30);
+        assert_eq!(
+            daemon
+                .get_ip_check_interval()
+                .expect("interval is readable"),
+            30
+        );
+        let _ = daemon.shutdown();
+    }
 
     #[test]
     fn lan_cleanup_task_instance_names_carry_the_hashed_id() {
