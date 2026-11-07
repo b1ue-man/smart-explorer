@@ -49,10 +49,7 @@ pub struct ResolvedTarget {
     _net: Option<crate::net::NetConnection>,
 }
 
-pub fn list_dir(
-    path: &str,
-    exports: &Arc<Mutex<ShareExportConfig>>,
-) -> io::Result<Vec<FsMeta>> {
+pub fn list_dir(path: &str, exports: &Arc<Mutex<ShareExportConfig>>) -> io::Result<Vec<FsMeta>> {
     if super::fs_policy::private_path(path) {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
@@ -158,10 +155,7 @@ pub fn promote_staged(
         .promote_staged(&staged.path, &destination.path)
 }
 
-pub fn resolve(
-    path: &str,
-    exports: &Arc<Mutex<ShareExportConfig>>,
-) -> io::Result<ResolvedTarget> {
+pub fn resolve(path: &str, exports: &Arc<Mutex<ShareExportConfig>>) -> io::Result<ResolvedTarget> {
     if super::fs_policy::private_path(path) {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
@@ -200,7 +194,11 @@ pub fn resolve(
     else {
         return Err(eio("Ungueltiges Freigabeziel"));
     };
+    // R-FS-3: errors sent to the peer name this root by its virtual path.
+    let virtual_root = format!("/{head}");
+    super::fs_error::note_export_root(&root, &virtual_root);
     let (root, target) = local_paths::secure_local_resolved(&root, rest)?;
+    super::fs_error::note_export_root(&root, &virtual_root);
     guard_target(
         ResolvedTarget {
             backend: Arc::new(LocalBackend::new(&root)),
@@ -455,3 +453,7 @@ mod tests {
         assert!(split_clean("/root/ok").is_ok());
     }
 }
+
+#[cfg(test)]
+#[path = "fs_vault_task_tests.rs"]
+mod vault_task_tests;

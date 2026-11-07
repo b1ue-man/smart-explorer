@@ -11,8 +11,12 @@ use std::{
 };
 use tokio::sync::mpsc;
 
+/// Names no peer sees in listings, hash walks or watches: the app's own
+/// trash, engine and stage names, and the Share-private names the file
+/// operations refuse (`.se-versions`, `.held.se-recycle-<16 hex>`; R-FS-5).
 pub(in crate::share) fn hidden(name: &str) -> bool {
-    crate::apptrash::excluded_name(name)
+    crate::share::fs_policy::private_name(name)
+        || crate::apptrash::excluded_name(name)
         || crate::bisync::is_engine_name(name)
         || crate::vfs::is_staging_name(name)
 }
@@ -164,3 +168,7 @@ pub(in crate::share) fn run(
         },
     )
 }
+
+#[cfg(test)]
+#[path = "host_list_task_tests.rs"]
+mod task_tests;

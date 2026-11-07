@@ -2,6 +2,7 @@ use crate::share::{DirectContact, RoomProfile, ShareProfiles, ShareStatus};
 
 #[path = "profile_export_edits.rs"]
 mod export_edits;
+pub(in crate::share) use export_edits::{export_roots, refuse_vault_exports};
 
 /// Rebase only user-owned configuration fields onto the latest daemon-owned
 /// profile. Runtime presence and lifecycle updates are intentionally left on

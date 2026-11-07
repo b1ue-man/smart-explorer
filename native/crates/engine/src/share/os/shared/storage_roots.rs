@@ -38,6 +38,15 @@ impl Plan {
             Self::Leaf(_) => {}
         }
     }
+
+    /// The error kind of the first failure `failures` lists.
+    pub(in crate::share) fn first_failure_kind(&self) -> Option<io::ErrorKind> {
+        match self {
+            Self::Branch(_, children) => children.iter().find_map(Self::first_failure_kind),
+            Self::Failed { kind, .. } => Some(*kind),
+            Self::Leaf(_) => None,
+        }
+    }
 }
 pub(in crate::share) struct Roots {
     pub plan: Plan,
@@ -153,11 +162,8 @@ pub(in crate::share) fn excluded() -> Vec<PathBuf> {
     if let Some(host) = crate::support_dirs::host() {
         paths.push(host.cache_dir.clone());
     }
-    paths.extend(
-        crate::vault::vault_mount_roots()
-            .into_iter()
-            .map(|(_, root)| root),
-    );
+    // The same reading as every other Share file operation (E11).
+    paths.extend(crate::share::fs_host_policy::vault_roots());
     paths
         .into_iter()
         .map(|p| std::fs::canonicalize(&p).unwrap_or(p))

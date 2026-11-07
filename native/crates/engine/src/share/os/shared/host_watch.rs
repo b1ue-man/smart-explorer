@@ -11,6 +11,7 @@ use crate::{
     share::{
         framing,
         fs_access::FsAccess,
+        fs_policy::{normalized, within},
         fs_response::FsWatchEvent,
         host_list, io_deadline,
         session::PeerPrincipal,
@@ -187,7 +188,12 @@ fn setup(
     let mut failures = Vec::new();
     roots.plan.failures(&mut failures);
     if let Some(failure) = failures.first() {
-        return Err(io::Error::other(failure.clone()));
+        // A refused root stays a refusal on the wire (E11: a vault drive).
+        let kind = roots
+            .plan
+            .first_failure_kind()
+            .unwrap_or(io::ErrorKind::Other);
+        return Err(io::Error::new(kind, failure.clone()));
     }
     hold.add(roots.roots.len() as u64 * 4096)?;
     let (tx, rx) = crossbeam_channel::bounded(64);
@@ -210,8 +216,12 @@ fn setup(
             .to_owned();
         if let Some(physical) = &target.physical {
             let pin = storage_roots::open_local(&target.target)?;
-            let filter =
-                watch::WatchFilter::new(|entry| !entry.rel.split('/').any(host_list::hidden));
+            let excluded = private_forms(&storage_roots::excluded());
+            let base = physical.clone();
+            let filter = watch::WatchFilter::new(move |entry| {
+                !entry.rel.split('/').any(host_list::hidden)
+                    && !watch_excluded(&base, entry.rel, &excluded)
+            });
             match watch::watch_confined(
                 &pin,
                 physical,
@@ -260,6 +270,26 @@ fn setup(
         rx,
     })
 }
+/// The normalized spellings of host places no peer may see.
+fn private_forms(places: &[std::path::PathBuf]) -> Vec<String> {
+    places
+        .iter()
+        .map(|place| normalized(&place.to_string_lossy()))
+        .collect()
+}
+
+/// R-FS-2, E11: whether `rel` below the watched `base` lies in a host place
+/// no peer may see: the private places of the watch start, or a vault drive
+/// mounted since (as published; the filter runs on the watch service
+/// thread and does no I/O). A folder answered `true` is not watched below.
+fn watch_excluded(base: &std::path::Path, rel: &str, excluded: &[String]) -> bool {
+    let path = normalized(&format!("{}/{rel}", base.to_string_lossy()));
+    excluded.iter().any(|place| within(&path, place))
+        || private_forms(&crate::share::fs_host_policy::vault_roots())
+            .iter()
+            .any(|place| within(&path, place))
+}
+
 fn relative(prefix: &str, rel: &str) -> String {
     match (prefix.is_empty(), rel.is_empty()) {
         (true, _) => rel.into(),
@@ -279,3 +309,7 @@ async fn notify(send: &mut SendStream, access: &FsAccess, event: FsWatchEvent) -
     )
     .await
 }
+
+#[cfg(test)]
+#[path = "host_watch_task_tests.rs"]
+mod task_tests;

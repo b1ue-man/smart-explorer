@@ -2,6 +2,9 @@
 //!
 //! Z-H2: what does not change per request is resolved once. The private
 //! roots (app data, cache) and their canonical forms are process constants;
+//! the unlocked vault drives (E11, plan 2026-11-07: an unlocked vault is
+//! never shared, a locked vault container stays an ordinary folder) come and
+//! go and are read again for every policy and every handle check;
 //! a directory whose ancestor walk proved it outside every private root is
 //! remembered by its canonical path *and* physical identity for
 //! `VERIFIED_FOR`, so the next request into the same folder pays one
@@ -36,7 +39,11 @@ pub(super) struct TargetPolicy {
 
 impl TargetPolicy {
     pub(super) fn new(access: ExportAccess, allow_system_writes: bool, local: bool) -> Self {
-        let private_roots = private_root_forms();
+        let private_roots = if local {
+            with_vault_forms(&private_root_forms())
+        } else {
+            private_root_forms()
+        };
         Self {
             access,
             allow_system_writes,
@@ -206,8 +213,61 @@ fn private_root_forms() -> Arc<Vec<String>> {
     forms
 }
 
+/// The places where an unlocked vault drive shows cleartext now
+/// (`crate::vault::vault_mount_roots`, read at every call: drives are
+/// mounted and unmounted while the host runs). A locked vault container is
+/// an ordinary encrypted folder and is not among them.
+pub(in crate::share) fn vault_roots() -> Vec<PathBuf> {
+    crate::vault::vault_mount_roots()
+        .into_iter()
+        .map(|(_, root)| root)
+        .collect()
+}
+
+/// Whether `path` (a local host path, any spelling) lies in an unlocked
+/// vault drive, compared as given and canonical like the private roots.
+pub(in crate::share) fn in_vault_drive(path: &str) -> bool {
+    let forms = with_vault_forms(&Arc::new(Vec::new()));
+    if forms.is_empty() {
+        return false;
+    }
+    let mut candidates = vec![normalized(path)];
+    if let Some(effective) = effective(path) {
+        candidates.push(normalized(&effective.to_string_lossy()));
+    }
+    candidates
+        .iter()
+        .any(|candidate| forms.iter().any(|root| within(candidate, root)))
+}
+
+/// `constant` plus the normalized spellings (as given and canonical) of the
+/// vault drives mounted now.
+fn with_vault_forms(constant: &Arc<Vec<String>>) -> Arc<Vec<String>> {
+    let vaults = vault_roots();
+    if vaults.is_empty() {
+        return constant.clone();
+    }
+    let mut forms = constant.as_ref().clone();
+    for root in vaults {
+        forms.push(normalized(&root.to_string_lossy()));
+        if let Ok(real) = std::fs::canonicalize(&root) {
+            forms.push(normalized(&real.to_string_lossy()));
+        }
+    }
+    Arc::new(forms)
+}
+
 pub(super) fn ensure_handle_allowed(handle: &DirectoryHandle) -> io::Result<()> {
-    if handle.is_within_any(private_roots())? {
+    let mut roots = private_roots().to_vec();
+    // Only drives this process can reach: one it cannot stat (another
+    // user's FUSE mount, an ended drive) shows it nothing, and a failed
+    // open must not turn every ordinary request into an error.
+    roots.extend(
+        vault_roots()
+            .into_iter()
+            .filter(|root| std::fs::metadata(root).is_ok()),
+    );
+    if handle.is_within_any(&roots)? {
         Err(denied())
     } else {
         Ok(())

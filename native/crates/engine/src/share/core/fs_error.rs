@@ -1,15 +1,99 @@
-use std::io;
+use std::{
+    io,
+    sync::{Mutex, OnceLock, PoisonError},
+};
 
 use super::wire::{FsErrorKind, FsResponse};
 
 /// Preserve legacy message detail while typing the cases that callers need for
-/// safe control flow and fail-closed mount authorization.
+/// safe control flow and fail-closed mount authorization. A physical export
+/// root in the text reads as the virtual path the peer asked for (R-FS-3).
 pub(super) fn response(error: &io::Error) -> FsResponse {
     FsResponse::Err {
         kind: kind_of(error),
-        msg: error.to_string(),
+        msg: virtual_text(&error.to_string()),
         denial: None,
     }
+}
+
+/// Physical export roots remembered at most; the oldest goes first.
+const MAX_ROOT_NAMES: usize = 256;
+
+fn root_names() -> &'static Mutex<Vec<(String, String)>> {
+    static NAMES: OnceLock<Mutex<Vec<(String, String)>>> = OnceLock::new();
+    NAMES.get_or_init(Default::default)
+}
+
+/// The local export root `physical` was resolved for peers as
+/// `virtual_root` (`/<Freigabe>`). A root of the whole volume (`/`, `C:/`)
+/// names nothing about the host and is not rewritten.
+pub(super) fn note_export_root(physical: &str, virtual_root: &str) {
+    let physical = physical.replace('\\', "/");
+    let physical = physical.trim_end_matches('/');
+    if physical.len() < 3 || virtual_root.is_empty() {
+        return;
+    }
+    let mut names = root_names().lock().unwrap_or_else(PoisonError::into_inner);
+    if names
+        .iter()
+        .any(|(known, name)| known == physical && name == virtual_root)
+    {
+        return;
+    }
+    if names.len() >= MAX_ROOT_NAMES {
+        names.remove(0);
+    }
+    names.push((physical.to_owned(), virtual_root.to_owned()));
+}
+
+/// `message` with every spelling of a remembered physical export root
+/// (slashes, backslashes, `\\?\` prefix) replaced by its virtual path; the
+/// longest root wins, a root continued by another name character stays.
+pub(super) fn virtual_text(message: &str) -> String {
+    let names = root_names()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    if names.is_empty() {
+        return message.to_owned();
+    }
+    let mut spellings: Vec<(String, String)> = names
+        .iter()
+        .flat_map(|(physical, name)| {
+            let back = physical.replace('/', "\\");
+            [
+                format!("\\\\?\\{back}"),
+                format!("//?/{physical}"),
+                back,
+                physical.clone(),
+            ]
+            .into_iter()
+            .map(move |spelling| (spelling, name.clone()))
+        })
+        .collect();
+    spellings.sort_by(|left, right| right.0.len().cmp(&left.0.len()));
+    let mut text = message.to_owned();
+    for (spelling, name) in &spellings {
+        text = replace_bounded(&text, spelling, name);
+    }
+    text
+}
+
+fn replace_bounded(text: &str, spelling: &str, name: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(spelling) {
+        let after = &rest[at + spelling.len()..];
+        let bounded = after
+            .chars()
+            .next()
+            .is_none_or(|next| !(next.is_alphanumeric() || matches!(next, '_' | '-' | '.')));
+        out.push_str(&rest[..at]);
+        out.push_str(if bounded { name } else { spelling });
+        rest = after;
+    }
+    out.push_str(rest);
+    out
 }
 
 /// The wire kind of `error`; congestion (a full host, a rate-limited backend
@@ -163,3 +247,7 @@ mod tests {
         assert_eq!(result.to_string(), "transport failed");
     }
 }
+
+#[cfg(test)]
+#[path = "fs_error_task_tests.rs"]
+mod task_tests;

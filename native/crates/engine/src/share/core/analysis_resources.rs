@@ -26,11 +26,10 @@ impl Reservation {
         }
     }
     pub(super) fn add(&mut self, bytes: u64) -> io::Result<()> {
-        let memory = crate::transfer::memory_budget() as u64;
         let limit = if self.disk {
-            memory.saturating_mul(4)
+            disk_limit()
         } else {
-            memory / 16
+            crate::transfer::memory_budget() as u64 / 16
         };
         let counter = if self.disk { &DISK } else { &META };
         counter
@@ -49,6 +48,10 @@ impl Reservation {
             .ok_or_else(|| io::Error::other("Analyse-Reservierung übergelaufen"))?;
         Ok(())
     }
+}
+/// The bytes all retained analysis results may hold on disk together.
+pub(super) fn disk_limit() -> u64 {
+    (crate::transfer::memory_budget() as u64).saturating_mul(4)
 }
 impl Drop for Reservation {
     fn drop(&mut self) {

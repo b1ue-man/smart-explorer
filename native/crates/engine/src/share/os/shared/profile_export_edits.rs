@@ -1,6 +1,38 @@
 //! Rebase only the exports the user edited. Concurrent additions and unrelated
 //! rights changes remain in the latest persisted profile.
-use crate::share::{ShareExportConfig, SharedConnection, SharedRoot};
+use crate::share::{ShareExportConfig, ShareProfiles, SharedConnection, SharedRoot};
+
+/// Every exported folder of `profiles` (Direct default and every room).
+pub(in crate::share) fn export_roots(profiles: &ShareProfiles) -> Vec<SharedRoot> {
+    profiles
+        .default_direct_exports
+        .roots
+        .iter()
+        .chain(profiles.rooms.iter().flat_map(|room| &room.exports.roots))
+        .cloned()
+        .collect()
+}
+
+/// E11 (plan 2026-11-07): an unlocked vault drive is never shared, so no
+/// export may be added in it or changed there; exports already stored stay
+/// as they are and can be removed (their peers are refused on access).
+/// A locked vault container is an ordinary folder and stays exportable.
+pub(in crate::share) fn refuse_vault_exports(
+    before: &[SharedRoot],
+    after: &ShareProfiles,
+) -> Result<(), String> {
+    match export_roots(after)
+        .into_iter()
+        .filter(|root| !before.contains(root))
+        .find(|root| crate::share::fs_host_policy::in_vault_drive(&root.path))
+    {
+        Some(root) => Err(format!(
+            "Ein entsperrter Tresor wird nicht freigegeben: {}",
+            root.path
+        )),
+        None => Ok(()),
+    }
+}
 
 pub(super) fn merge(
     latest: &mut ShareExportConfig,
@@ -138,3 +170,7 @@ fn unique_connections(connections: &[SharedConnection]) -> Result<(), String> {
         Err("Verbindungsfreigabe ist nicht eindeutig".into())
     }
 }
+
+#[cfg(test)]
+#[path = "profile_export_edits_task_tests.rs"]
+mod task_tests;

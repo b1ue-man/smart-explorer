@@ -29,6 +29,10 @@ use std::{
 pub(in crate::share) const CANCEL_CODE: u32 = 0x5345;
 const GRACE: Duration = Duration::from_secs(10 * 60);
 const HEARTBEAT: Duration = Duration::from_millis(250);
+
+#[path = "analysis_tasks_retention.rs"]
+mod retention;
+use retention::make_room;
 type Key = (PeerPrincipal, String);
 type ResultState = Option<Result<Arc<Spool>, Failure>>;
 
@@ -131,6 +135,9 @@ fn task(work: Work, access: FsAccess, principal: PeerPrincipal) -> io::Result<Ar
             ));
         }
         return Ok(existing.clone());
+    }
+    if key.is_some() {
+        make_room(&mut table, &principal)?;
     }
     let hold = crate::share::analysis_resources::Reservation::metadata(
         (binding.len() as u64)

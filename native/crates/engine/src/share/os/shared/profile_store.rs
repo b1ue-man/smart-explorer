@@ -177,16 +177,21 @@ impl ShareProfiles {
     /// and save. In that case `mutation` runs again against the newer profile,
     /// so it must not perform external side effects or depend on being called
     /// exactly once. Mutation and precondition errors are returned immediately.
+    /// No mutation adds or changes an export in an unlocked vault (E11).
     pub fn mutate_persisted<F>(
         default_home: Option<String>,
-        mutation: F,
+        mut mutation: F,
     ) -> Result<ShareProfiles, String>
     where
         F: FnMut(&mut ShareProfiles) -> Result<(), String>,
     {
         profile_transaction::run(
             || Self::load_checked(default_home.clone()),
-            mutation,
+            |profiles: &mut ShareProfiles| {
+                let before = super::profile_edits::export_roots(profiles);
+                mutation(profiles)?;
+                super::profile_edits::refuse_vault_exports(&before, profiles)
+            },
             commit_transaction_candidate,
         )
         .map_err(|error| error.to_string())
